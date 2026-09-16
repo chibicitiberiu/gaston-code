@@ -58,7 +58,7 @@ Linux side first, so the guest develops against something real.
 | # | Item | State |
 |---|---|---|
 | 2a | Streaming raw text + `enc=deflate` bridge→guest | **done** — verified both link regimes |
-| 2b | Styled runs (markdown → `CHARFORMAT2`) | |
+| 2b | Styled runs (markdown → `CHARFORMAT2`) | **done** — 66 tests, verified over the wire |
 | 2c | Pagination | |
 | 2d | Session list | |
 
@@ -88,6 +88,20 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-16 — coalesce first, THEN parse markdown
+Ordering was an open question. Coalescing first is right: the parser receives
+~2KB of whole lines instead of single tokens, which lets it merge adjacent
+same-style runs. Each run costs an `EM_SETCHARFORMAT` + `EM_REPLACESEL` pair on
+the guest, and that pair is RichEdit's expensive path.
+
+Found by a test: `_merge` only coalesces within one `feed()`, so char-by-char
+input produced more runs with identical content. Harmless, but it made the
+ordering decision obvious.
+
+### 2026-09-16 — no italic style
+RichEdit could do it, but italic bitmap text at 8pt on a 640x480 CRT is hard to
+read. `*emphasis*` degrades to plain with the markers stripped.
 
 ### 2026-09-16 — the coalescer's interval, not its target, sets frame size
 First implementation targeted 2KB frames and **never compressed anything**: at

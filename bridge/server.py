@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from . import fold
 from .coalesce import Coalescer
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
+from .markdown import MarkdownStream
 from .protocol import (
     MAX_FRAME,
     PROTO_VERSION,
@@ -54,9 +55,13 @@ class GuestSession:
     zip_out: StreamCompressor = field(default_factory=StreamCompressor)
     link_bps: float | None = None
 
-    # One coalescer per style. Text of different styles cannot share a buffer
-    # without losing the style boundary.
+    # One coalescer per source stream (assistant text, thinking). Coalescing
+    # happens BEFORE markdown parsing, so the parser receives whole lines in
+    # ~2KB batches rather than single tokens -- which is what lets it merge
+    # adjacent same-style runs and keeps the expensive
+    # EM_SETCHARFORMAT/EM_REPLACESEL pair count down on the guest.
     coalescers: dict = field(default_factory=dict)
+    markdown: MarkdownStream = field(default_factory=MarkdownStream)
 
     @property
     def connected(self) -> bool:
@@ -299,8 +304,17 @@ class Bridge:
     def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
         c = guest.coalescers.get(style)
         if c is None:
-            async def sink(text: str, _s=style) -> None:
-                await self._write_text(guest, text, style=_s)
+            if style == "plain":
+                # Assistant prose goes through the markdown parser, which emits
+                # its own styles.
+                async def sink(text: str) -> None:
+                    for run in guest.markdown.feed(text):
+                        await self._write_text(guest, run.text, style=run.style)
+            else:
+                # Thinking and anything else is pre-styled; pass it straight
+                # through rather than parsing markdown out of it.
+                async def sink(text: str, _s=style) -> None:
+                    await self._write_text(guest, text, style=_s)
             c = Coalescer(sink)
             c.set_link_speed(guest.link_bps)
             c.start()
@@ -317,6 +331,10 @@ class Bridge:
     async def _flush_text(self, guest: GuestSession) -> None:
         for c in list(guest.coalescers.values()):
             await c.flush()
+        # A model can stop mid-sentence; whatever the parser is holding for
+        # lookahead has to come out or the last line is silently lost.
+        for run in guest.markdown.flush():
+            await self._write_text(guest, run.text, style=run.style)
 
     async def _write_text(self, guest: GuestSession, text: str,
                           *, style: str) -> None:

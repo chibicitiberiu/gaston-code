@@ -1,4 +1,4 @@
-17:47:03.016 === retroclaude starting ===
-17:47:04.339 net: connected to 127.0.0.1:7895
-17:47:09.517 net: reader thread exiting (rx=594 tx=171)
-17:47:09.567 === retroclaude exiting ===
+17:50:04.927 === retroclaude starting ===
+17:50:06.287 net: connected to 127.0.0.1:7896
+17:50:08.939 net: reader thread exiting (rx=623 tx=209)
+17:50:08.989 === retroclaude exiting ===
