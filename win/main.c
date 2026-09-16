@@ -40,6 +40,8 @@
 #define PAGEBAR_H     24
 #define PGBTN_W       28
 #define CHATS_W      170
+#define CHAT_INDENT   10   /* session rows sit under their date header */
+#define CHAT_ROW_H    15
 
 static rc_config     g_cfg;
 static rc_net        g_net;
@@ -53,6 +55,11 @@ static HWND  g_chats, g_refresh;
  * fixed 64KB that does not scale with RAM. */
 #define MAX_CHATS 64
 static char g_chat_ids[MAX_CHATS][64];
+/* 0 = a session row, 1 = a date-group header. Headers are drawn differently
+ * and refuse to be opened. */
+static char g_chat_is_header[MAX_CHATS];
+static char g_chat_group[40];       /* last group emitted, to spot changes */
+static int  g_chat_current = -1;    /* row of the conversation that is open */
 static int  g_chat_count = 0;
 static int  g_chat_widest = 0;      /* px, for LB_SETHORIZONTALEXTENT */
 
@@ -80,7 +87,9 @@ static int   g_total = 1;      /* pages that exist */
 static int   g_is_live = 1;
 static int   g_loading_page = 0;
 static HFONT g_ui_font;
+static HFONT g_ui_font_bold;
 static WNDPROC g_input_oldproc;
+static WNDPROC g_chats_oldproc;
 static int   g_turn_active = 0;
 static int   g_backoff_ms = 1000;
 static char  g_exe_dir[MAX_PATH];
@@ -153,6 +162,30 @@ static void page_goto_n(int n)
     page_goto(buf);
 }
 
+/* Free physical memory, as the system sees it.
+ *
+ * GlobalMemoryStatus rather than GetProcessMemoryInfo: the latter is psapi,
+ * which is NT-only and would not even load here. System-wide free memory
+ * measured with and without the app running is what actually answers "does
+ * this fit on a 32MB machine", and it counts everything -- heap, the GDI and
+ * USER objects, the RichEdit's own storage, riched20 itself -- rather than
+ * only what we allocated on purpose. */
+static void log_mem(const char *when)
+{
+    MEMORYSTATUS ms;
+
+    memset(&ms, 0, sizeof(ms));
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatus(&ms);
+    rc_log("mem [%s]: %luK free of %luK phys, %luK free of %luK page, load %lu%%",
+           when,
+           (unsigned long)(ms.dwAvailPhys / 1024),
+           (unsigned long)(ms.dwTotalPhys / 1024),
+           (unsigned long)(ms.dwAvailPageFile / 1024),
+           (unsigned long)(ms.dwTotalPageFile / 1024),
+           (unsigned long)ms.dwMemoryLoad);
+}
+
 static void chats_request(void)
 {
     rc_net_send(&g_net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
@@ -162,9 +195,18 @@ static void chats_switch(void)
 {
     int sel = (int)SendMessageA(g_chats, LB_GETCURSEL, 0, 0);
     const char *keys[1]; const char *vals[1];
+
     if (sel == LB_ERR || sel < 0 || sel >= g_chat_count) return;
+    if (g_chat_is_header[sel]) return;          /* a date header, not a chat */
+    if (strcmp(g_chat_ids[sel], g_net.sess) == 0) return;   /* already open */
+
     keys[0] = "id"; vals[0] = g_chat_ids[sel];
     rc_log("switching to session %s", g_chat_ids[sel]);
+    /* Loading a conversation means closing the live client, resuming, and
+     * replaying its history, which is not instant. Say so rather than looking
+     * frozen. */
+    SetWindowTextA(g_main, RC_TITLE "  -  loading...");
+    status_set(2, " loading conversation...");
     rc_net_send(&g_net, "SWITCH", keys, vals, 1, NULL, 0);
 }
 
@@ -204,7 +246,8 @@ static void render_frame(rc_frame *f)
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
         rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, "Connected to bridge.\r\n", RC_STYLE_TOOL);
+        rc_transcript_append(&g_tr, "Connected to bridge.\r\n",
+                             RC_STYLE_THINKING);
         rc_transcript_end(&g_tr);
         status_refresh();
 
@@ -238,6 +281,10 @@ static void render_frame(rc_frame *f)
             char buf[96];
             think_hide();
             ui_set_busy(0);
+            /* Now, and only now, re-fetch the list. Sending a message is what
+             * makes a conversation the most recent one, so this is where the
+             * reordering belongs -- not on merely opening one. */
+            chats_request();
             v = rc_frame_get(f, "cost_usd");
             _snprintf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
             status_set(2, buf);
@@ -251,22 +298,42 @@ static void render_frame(rc_frame *f)
         SendMessageA(g_chats, LB_RESETCONTENT, 0, 0);
         g_chat_count = 0;
         g_chat_widest = 0;
+        g_chat_group[0] = '\0';
+        g_chat_current = -1;
 
     } else if (strcmp(f->type, "SESSION") == 0) {
         const char *id = rc_frame_get(f, "id");
         const char *title = rc_frame_get(f, "title");
         const char *cur = rc_frame_get(f, "current");
+        const char *grp = rc_frame_get(f, "group");
         if (id && g_chat_count < MAX_CHATS) {
             char label[160];
-            _snprintf(label, sizeof(label) - 1, "%s%s",
-                      (cur && *cur == '1') ? "* " : "  ",
-                      title ? title : id);
+
+            /* A header row whenever the bucket changes. The list arrives
+             * newest first, so these come out in order on their own. */
+            if (grp && *grp && strcmp(grp, g_chat_group) != 0
+                && g_chat_count < MAX_CHATS - 1) {
+                _snprintf(g_chat_group, sizeof(g_chat_group) - 1, "%s", grp);
+                g_chat_group[sizeof(g_chat_group) - 1] = '\0';
+                g_chat_ids[g_chat_count][0] = '\0';
+                g_chat_is_header[g_chat_count] = 1;
+                SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)g_chat_group);
+                g_chat_count++;
+            }
+
+            /* No "* " marker any more: the selection highlight already says
+             * which conversation is open, and a marker meant every switch had
+             * to relabel the whole list. */
+            _snprintf(label, sizeof(label) - 1, "%s", title ? title : id);
             label[sizeof(label) - 1] = '\0';
             _snprintf(g_chat_ids[g_chat_count], 63, "%s", id);
-            fit_label(label, sizeof(label), chats_text_width());
+            g_chat_is_header[g_chat_count] = 0;
+            fit_label(label, sizeof(label), chats_text_width() - CHAT_INDENT);
             SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)label);
-            if (cur && *cur == '1')
+            if (cur && *cur == '1') {
+                g_chat_current = g_chat_count;
                 SendMessageA(g_chats, LB_SETCURSEL, g_chat_count, 0);
+            }
             {
                 int px = label_width_px(label);
                 if (px > g_chat_widest) g_chat_widest = px;
@@ -282,11 +349,34 @@ static void render_frame(rc_frame *f)
                      RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
         rc_log("chat list: %d sessions, widest %dpx", g_chat_count,
                g_chat_widest);
+        log_mem("chat list loaded");
 
     } else if (strcmp(f->type, "SWITCHED") == 0) {
         v = rc_frame_get(f, "total");
         if (v) g_total = atoi(v);
-        chats_request();       /* refresh the "current" marker */
+        v = rc_frame_get(f, "id");
+        if (v) _snprintf(g_net.sess, sizeof(g_net.sess) - 1, "%s", v);
+        /* Deliberately NOT refreshing the list here. Resuming a session
+         * rewrites its file, so a refresh re-sorts by modification time and
+         * yanks whatever you just opened to the top -- which is startling when
+         * all you did was look at it. The list is re-fetched when a turn ends
+         * instead, so it reorders only once you have actually said something.
+         * The selection already shows which conversation is open. */
+        {   /* Mark the newly opened conversation in place. Re-fetching the
+             * list would reorder it, which is exactly what we are avoiding. */
+            int i;
+            g_chat_current = -1;
+            for (i = 0; i < g_chat_count; i++) {
+                if (!g_chat_is_header[i]
+                    && strcmp(g_chat_ids[i], g_net.sess) == 0) {
+                    g_chat_current = i;
+                    break;
+                }
+            }
+            InvalidateRect(g_chats, NULL, TRUE);
+        }
+        SetWindowTextA(g_main, RC_TITLE);
+        status_set(2, "");
 
     } else if (strcmp(f->type, "PAGESTART") == 0) {
         v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
@@ -307,6 +397,7 @@ static void render_frame(rc_frame *f)
     } else if (strcmp(f->type, "PAGEEND") == 0) {
         if (g_loading_page) { rc_transcript_end(&g_tr); g_loading_page = 0; }
         page_update_ui();
+        log_mem("page loaded");
 
     } else if (strcmp(f->type, "PAGESEALED") == 0) {
         v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
@@ -509,6 +600,25 @@ static void do_stop(void)
     rc_net_send(&g_net, "INTERRUPT", NULL, NULL, 0, NULL, 0);
 }
 
+/* Open a conversation on a plain click.
+ *
+ * Not via LBN_SELCHANGE: that also fires for arrow keys, and switching on those
+ * would tear down a live session every time the list was scrolled with the
+ * keyboard. Testing the mouse button state inside the notification was tried
+ * and is unreliable -- by the time it arrives the button may already be up.
+ * Handling the button release directly is unambiguous. The switch is POSTED
+ * rather than done here so the listbox finishes with the click (and releases
+ * capture) before the transcript is torn down and rebuilt. */
+#define WM_RC_OPENCHAT (WM_APP + 20)
+
+static LRESULT CALLBACK chats_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    LRESULT r = CallWindowProc(g_chats_oldproc, h, m, w, l);
+    if (m == WM_LBUTTONUP)
+        PostMessageA(GetParent(h), WM_RC_OPENCHAT, 0, 0);
+    return r;
+}
+
 /* Enter sends; Shift+Enter inserts a newline. */
 static LRESULT CALLBACK input_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -575,10 +685,18 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     memset(&ncm, 0, sizeof(ncm));
     ncm.cbSize = sizeof(ncm);
-    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
         g_ui_font = CreateFontIndirectA(&ncm.lfMessageFont);
-    else
+        /* A bold companion, used for the conversation that is currently open.
+         * Without it the only cue is the selection highlight, which Win98
+         * greys out the moment the list loses focus -- so as soon as you click
+         * into the input box you can no longer tell which chat you are in. */
+        ncm.lfMessageFont.lfWeight = FW_BOLD;
+        g_ui_font_bold = CreateFontIndirectA(&ncm.lfMessageFont);
+    } else {
         g_ui_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        g_ui_font_bold = g_ui_font;
+    }
 
     if (rc_transcript_create(&g_tr, hwnd, ID_TRANSCRIPT, inst) != 0)
         MessageBoxA(hwnd, "Could not create the RichEdit control.\n"
@@ -604,6 +722,11 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      *   size and ours disagree.
      * WS_CLIPSIBLINGS: keeps neighbours out of its rectangle.
      *
+     * LBS_OWNERDRAWFIXED with LBS_HASSTRINGS: the listbox still stores and
+     *   searches the strings, we only take over the painting. That is what
+     *   lets a date-group header look like a header rather than like a
+     *   conversation called "Today".
+     *
      * No WS_HSCROLL: labels are truncated to fit instead, see fit_label().
      * An item wider than the client area makes Win98's listbox paint over its
      * own WS_EX_CLIENTEDGE border -- measured as white pixels at x=8,9 where
@@ -611,7 +734,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * overflowed, surviving both a scroll and a minimise/restore. */
     g_chats = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-        WS_CLIPSIBLINGS | LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
+        WS_CLIPSIBLINGS | LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT |
+        LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, hwnd, (HMENU)ID_CHATS, inst, NULL);
 
     g_refresh = CreateWindowExA(0, "BUTTON", "Refresh",
@@ -656,6 +780,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     SendMessageA(g_refresh, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     page_update_ui();
 
+    g_chats_oldproc = (WNDPROC)SetWindowLongA(g_chats, GWL_WNDPROC,
+                                              (LONG)(LONG_PTR)chats_proc);
     g_input_oldproc = (WNDPROC)SetWindowLongA(g_input, GWL_WNDPROC,
                                               (LONG)input_proc);
 }
@@ -704,6 +830,89 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetFocus(g_input);
         return 0;
 
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lp;
+        if (mis && mis->CtlID == ID_CHATS) mis->itemHeight = CHAT_ROW_H;
+        return TRUE;
+    }
+
+    case WM_DRAWITEM: {
+        /* Owner-draw so a date header reads as a header instead of as a
+         * conversation named "Today". Everything else about the control is
+         * still the stock listbox: LBS_HASSTRINGS keeps the strings, so this
+         * only replaces the painting. */
+        DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
+        char text[192];
+        RECT rc;
+        int header, selected;
+        COLORREF oldfg;
+        int oldbk;
+
+        if (!dis || dis->CtlID != ID_CHATS || (int)dis->itemID < 0)
+            return TRUE;
+
+        text[0] = '\0';
+        SendMessageA(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
+        header = ((int)dis->itemID < g_chat_count
+                  && g_chat_is_header[dis->itemID]);
+        selected = (dis->itemState & ODS_SELECTED) && !header;
+        rc = dis->rcItem;
+
+        if (header) {
+            /* A quiet band with a rule under it: visible as structure without
+             * competing with the conversation titles. */
+            HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+            FillRect(dis->hDC, &rc, br);
+            DeleteObject(br);
+            oldfg = SetTextColor(dis->hDC, GetSysColor(COLOR_BTNSHADOW));
+            oldbk = SetBkMode(dis->hDC, TRANSPARENT);
+            rc.left += 3;
+            rc.top += 1;
+            DrawTextA(dis->hDC, text, -1, &rc,
+                      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SetBkMode(dis->hDC, oldbk);
+            SetTextColor(dis->hDC, oldfg);
+            rc = dis->rcItem;
+            {   /* hairline under the band */
+                HBRUSH line = CreateSolidBrush(GetSysColor(COLOR_BTNSHADOW));
+                RECT r2 = rc;
+                r2.top = r2.bottom - 1;
+                FillRect(dis->hDC, &r2, line);
+                DeleteObject(line);
+            }
+            return TRUE;
+        }
+
+        {
+            HBRUSH br = CreateSolidBrush(GetSysColor(
+                selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+            FillRect(dis->hDC, &rc, br);
+            DeleteObject(br);
+        }
+        oldfg = SetTextColor(dis->hDC, GetSysColor(
+            selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
+        oldbk = SetBkMode(dis->hDC, TRANSPARENT);
+        rc.left += CHAT_INDENT;
+        {
+            HFONT want = ((int)dis->itemID == g_chat_current && g_ui_font_bold)
+                         ? g_ui_font_bold : g_ui_font;
+            HFONT oldf = (HFONT)SelectObject(dis->hDC, want);
+            DrawTextA(dis->hDC, text, -1, &rc,
+                      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SelectObject(dis->hDC, oldf);
+        }
+        SetBkMode(dis->hDC, oldbk);
+        SetTextColor(dis->hDC, oldfg);
+
+        if (dis->itemState & ODS_FOCUS)
+            DrawFocusRect(dis->hDC, &dis->rcItem);
+        return TRUE;
+    }
+
+    case WM_RC_OPENCHAT:
+        chats_switch();
+        return 0;
+
     case WM_TIMER:
         if (wp == TIMER_RECONNECT) {
             KillTimer(hwnd, TIMER_RECONNECT);
@@ -746,6 +955,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_CHATS:
             /* Double-click to switch. Single-click would make an accidental
              * arrow-key press tear down a live session. */
+            /* Open on a single click, but only a click.
+             *
+             * LBN_SELCHANGE also fires for arrow keys, and switching on those
+             * would tear down a live session every time someone scrolled the
+             * list with the keyboard. During a mouse click the button is still
+             * down when the notification arrives, which separates the two
+             * cheaply and without subclassing the control. Keyboard users get
+             * Enter, and double-click still works for muscle memory. */
+            /* A click is handled by the subclass; this is only the
+             * double-click, kept for muscle memory. */
             if (HIWORD(wp) == LBN_DBLCLK) chats_switch();
             return 0;
         }
@@ -760,6 +979,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, TIMER_RECONNECT);
         rc_net_stop(&g_net);
         rc_transcript_destroy(&g_tr);
+        /* Both fonts, and only once: the fallback path points both at the
+         * same stock object, which must not be deleted at all. */
+        if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
+            DeleteObject(g_ui_font_bold);
+        g_ui_font_bold = NULL;
         if (g_ui_font) DeleteObject(g_ui_font);
         PostQuitMessage(0);
         return 0;
@@ -807,17 +1031,28 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         NULL, NULL, inst, NULL);
     if (!g_main) { rc_log("CreateWindowEx failed"); return 1; }
     rc_log("main window hwnd=%p", (void *)g_main);
+    log_mem("window created");
 
     ShowWindow(g_main, show);
     UpdateWindow(g_main);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        /* Enter opens the highlighted conversation. Caught here rather than by
+         * subclassing the listbox, because IsDialogMessage would otherwise
+         * route it to the default pushbutton and the keyboard would have no
+         * way to open a chat at all. */
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
+            && msg.hwnd == g_chats) {
+            chats_switch();
+            continue;
+        }
         if (!IsDialogMessageA(g_main, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
     }
 
+    log_mem("exiting");
     rc_log_close();
     return (int)msg.wParam;
 }

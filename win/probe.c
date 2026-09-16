@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <objbase.h>
 #include "miniz.h"
 
 static FILE *g_log;
@@ -513,6 +514,89 @@ static void probe_deflate(void)
     say("  rate above comfortably exceeds it. At ~5 KB/s dialup it always is.");
 }
 
+/* ------------------------------------------------------------------ html */
+/* What does hosting the HTML engine actually cost on this machine?
+ *
+ * The plan rejected MSHTML partly on a "multi-MB DLL tax", which was an
+ * estimate. It is measurable, and the estimate is probably pessimistic: on
+ * Win9x the code pages of a DLL are shared between processes, and Explorer and
+ * the shell have already mapped most of this. What our process pays for is its
+ * own data, not mshtml.dll's size on disk.
+ *
+ * Free physical memory before and after is the honest measure, because it
+ * counts everything the engine drags in rather than only what we asked for. */
+static unsigned long free_kb(void)
+{
+    MEMORYSTATUS ms;
+    memset(&ms, 0, sizeof(ms));
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatus(&ms);
+    return (unsigned long)(ms.dwAvailPhys / 1024);
+}
+
+/* Defined locally rather than pulled from uuid.lib, so this costs nothing at
+ * link time if the idea is dropped. */
+static const GUID CLSID_HTMLDocument_ =
+    {0x25336920,0x03F9,0x11CF,{0x8F,0xD0,0x00,0xAA,0x00,0x68,0x6F,0x13}};
+static const GUID CLSID_WebBrowser_ =
+    {0x8856F961,0x340A,0x11D0,{0xA9,0x6B,0x00,0xC0,0x4F,0xD7,0x05,0xA2}};
+static const GUID IID_IUnknown_ =
+    {0x00000000,0x0000,0x0000,{0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}};
+
+static void one_step(const char *what, unsigned long *prev)
+{
+    unsigned long now = free_kb();
+    long delta = (long)*prev - (long)now;
+    say("  %-34s %7lu KB free   (%+ld KB)", what, now, -delta ? delta : 0);
+    *prev = now;
+}
+
+static void probe_html(void)
+{
+    unsigned long start, prev;
+    HMODULE m;
+    IUnknown *doc = NULL, *web = NULL;
+    HRESULT hr;
+
+    head("HTML  cost of hosting MSHTML (is an HTML transcript affordable?)");
+
+    start = prev = free_kb();
+    say("  %-34s %7lu KB free", "baseline", start);
+
+    if (FAILED(CoInitialize(NULL))) { say("  CoInitialize FAILED"); return; }
+    one_step("CoInitialize", &prev);
+
+    m = LoadLibraryA("mshtml.dll");
+    if (!m) {
+        say("  mshtml.dll NOT PRESENT -- no HTML engine on this install");
+        CoUninitialize();
+        return;
+    }
+    one_step("LoadLibrary(mshtml.dll)", &prev);
+
+    hr = CoCreateInstance(&CLSID_HTMLDocument_, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IUnknown_, (void **)&doc);
+    if (FAILED(hr)) say("  CoCreateInstance(HTMLDocument) failed hr=%08lX",
+                        (unsigned long)hr);
+    else one_step("CoCreateInstance(HTMLDocument)", &prev);
+
+    hr = CoCreateInstance(&CLSID_WebBrowser_, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IUnknown_, (void **)&web);
+    if (FAILED(hr)) say("  CoCreateInstance(WebBrowser) failed hr=%08lX",
+                        (unsigned long)hr);
+    else one_step("CoCreateInstance(WebBrowser)", &prev);
+
+    say("");
+    say("  TOTAL COST: %ld KB", (long)start - (long)free_kb());
+    say("  Budget: the GUI itself measured ~1.4 MB, and a 32MB Win98 has");
+    say("  roughly 9 MB free at the desktop.");
+
+    if (web) web->lpVtbl->Release(web);
+    if (doc) doc->lpVtbl->Release(doc);
+    CoUninitialize();
+    say("  after releasing everything:       %7lu KB free", free_kb());
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -530,6 +614,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "exec"))     probe_exec();
     if (!only || !strcmp(only, "screen"))   probe_screen();
     if (!only || !strcmp(only, "deflate"))  probe_deflate();
+    if (!only || !strcmp(only, "html"))     probe_html();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");

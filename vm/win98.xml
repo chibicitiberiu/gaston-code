@@ -5,10 +5,11 @@
   <description>Win98 SE guest for RetroClaude. Hardware follows docs/PLAN.md:
 i440fx (Win98 predates q35), pcnet NIC (most consistently reported working on
 Win98), Cirrus VGA (in-box driver), PS/2 input (Win98 has no HID tablet
-driver, so a usb-tablet would silently do nothing). Installed with 128MB for
-speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</description>
-  <memory unit='MiB'>128</memory>
-  <currentMemory unit='MiB'>128</currentMemory>
+driver, so a usb-tablet would silently do nothing). Installed with 128MB for speed and now running at 32MB, which is the actual
+target: the point of the whole design is that it fits on that machine, so
+developing on a roomier one would quietly hide the moment it stops fitting.</description>
+  <memory unit='MiB'>32</memory>
+  <currentMemory unit='MiB'>32</currentMemory>
   <vcpu placement='static'>1</vcpu>
   <os>
     <type arch='i686' machine='pc-i440fx-9.2'>hvm</type>

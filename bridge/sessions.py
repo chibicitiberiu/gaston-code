@@ -10,13 +10,57 @@ that format is internal and changes between releases. Use the SDK accessors.
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 
 from claude_agent_sdk import get_session_messages, list_sessions
 
-from .markdown import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
+from .markdown import (
+    STYLE_CODE,
+    STYLE_PLAIN,
+    STYLE_TOOL,
+    STYLE_USER,
+    MarkdownStream,
+    user_block,
+)
 
 log = logging.getLogger("bridge.sessions")
+
+
+def _age_group(when) -> str:
+    """Which bucket a session falls in, computed here because the guest has no
+    date library worth the name and no business having one."""
+    if when is None:
+        return "Older"
+    try:
+        if isinstance(when, (int, float)):
+            # The SDK reports milliseconds since the epoch. Seconds would be a
+            # perfectly reasonable guess and gives a date in the year 58000,
+            # which fromtimestamp rejects and which silently became "Older".
+            if when > 1e11:
+                when = when / 1000.0
+            when = _dt.datetime.fromtimestamp(when)
+        elif isinstance(when, str):
+            when = _dt.datetime.fromisoformat(when)
+        if not isinstance(when, _dt.datetime):
+            return "Older"
+        if when.tzinfo is not None:
+            when = when.astimezone().replace(tzinfo=None)
+    except (ValueError, OSError, OverflowError):
+        return "Older"
+
+    today = _dt.date.today()
+    day = when.date()
+    delta = (today - day).days
+    if delta <= 0:
+        return "Today"
+    if delta == 1:
+        return "Yesterday"
+    if delta < 7:
+        return "This week"
+    if delta < 31:
+        return "This month"
+    return "Older"
 
 
 def listing(cwd: str | None = None, limit: int = 50) -> list[dict]:
@@ -35,11 +79,13 @@ def listing(cwd: str | None = None, limit: int = 50) -> list[dict]:
                  or getattr(r, "summary", None)
                  or (getattr(r, "first_prompt", "") or "")[:60]
                  or "(untitled)")
+        modified = getattr(r, "last_modified", None)
         out.append({
             "id": r.session_id,
             "title": title,
             "cwd": getattr(r, "cwd", "") or "",
-            "modified": str(getattr(r, "last_modified", "") or ""),
+            "modified": str(modified or ""),
+            "group": _age_group(modified),
             "bytes": str(getattr(r, "file_size", "") or ""),
         })
     return out
@@ -99,9 +145,26 @@ def history_runs(session_id: str, limit: int = 2000) -> list[tuple[str, str]]:
     runs: list[tuple[str, str]] = []
     for m in msgs:
         msg = getattr(m, "message", None)
+        # A fresh parser per message: a stored message is complete, and fence
+        # state must not leak from one into the next.
+        md = MarkdownStream()
         for style, text in _text_of(msg):
-            if text:
+            if not text:
+                continue
+            if style == STYLE_USER:
+                # Exactly what a live turn renders, so scrolling back through
+                # an old conversation looks like the one you just had.
+                runs.append((STYLE_USER, user_block(text)))
+            elif style == STYLE_PLAIN:
+                # Assistant prose is markdown. Replaying it raw was the reason
+                # an old conversation lost its bullets, bold and code blocks
+                # while the live one had them.
+                for r in md.feed(text):
+                    runs.append((r.style, r.text))
+            else:
                 runs.append((style, text))
-        if getattr(m, "type", "") == "user":
-            runs.append((STYLE_PLAIN, "\n"))
+        for r in md.flush():
+            runs.append((r.style, r.text))
+        if getattr(m, "type", "") == "assistant":
+            runs.append((STYLE_PLAIN, "\r\n"))
     return runs

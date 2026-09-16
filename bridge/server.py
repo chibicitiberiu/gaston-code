@@ -438,6 +438,7 @@ class Bridge:
                     "id": r["id"],
                     "title": r["title"][:120],
                     "cwd": r["cwd"][:120],
+                    "group": r.get("group", ""),
                     "current": "1" if (guest.claude and
                                        guest.claude.session_id == r["id"])
                                else "0",
