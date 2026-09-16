@@ -57,20 +57,20 @@ class GuestSession:
     # reset on reconnect -- see _attach.
     zip_out: StreamCompressor = field(default_factory=StreamCompressor)
     link_bps: float | None = None
+    # Chosen from the Model and Effort menus. Held per guest rather than per
+    # process so a reconnect or an effort fork keeps the choice.
+    model: str = ""
+    effort: str = ""
 
     # Which page the guest is showing. None means LIVE (follow the last page).
     # In HISTORY mode the bridge keeps buffering silently; the page counter
     # ticking up in the status bar is the new-content notification.
     view_page: int | None = None
 
-    # Which page the guest is showing. None means LIVE (follow the last page).
-    view_page: int | None = None
-
     # One coalescer per source stream (assistant text, thinking). Coalescing
-    # happens BEFORE markdown parsing, so the parser receives whole lines in
-    # ~2KB batches rather than single tokens -- which is what lets it merge
-    # adjacent same-style runs and keeps the expensive
-    # EM_SETCHARFORMAT/EM_REPLACESEL pair count down on the guest.
+    # happens BEFORE rendering, so the renderer receives whole lines in ~2KB
+    # batches rather than single tokens -- which is what lets it close blocks
+    # properly and keeps the number of DOM updates on the guest down.
     coalescers: dict = field(default_factory=dict)
     render: HtmlStream = field(default_factory=HtmlStream)
 
@@ -280,6 +280,7 @@ class Bridge:
         # the guest, so the look can be changed by restarting the bridge
         # instead of rebuilding and re-deploying a binary.
         await self._send(guest, Frame("DOC", {}, fold.encode(H.document())))
+        await self._send_options(guest)
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
         return guest
@@ -287,7 +288,8 @@ class Bridge:
     # --- Claude session ----------------------------------------------------
 
     async def _make_session(self, guest: GuestSession,
-                            resume: str | None = None) -> Session:
+                            resume: str | None = None,
+                            fork: bool = False) -> Session:
         async def on_text(t: str) -> None:
             await self._emit_text(guest, t, style="plain")
 
@@ -312,9 +314,12 @@ class Bridge:
 
         s = Session(
             cwd=self.cwd,
-            model=self.model,
-            effort=self.effort,
+            # The per-guest values, not the process defaults: the menu changes
+            # these and a later reconnect or fork has to keep the choice.
+            model=guest.model or self.model,
+            effort=guest.effort or self.effort,
             resume=resume,
+            fork=fork,
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -497,11 +502,22 @@ class Bridge:
         elif f.type == "PING":
             await self._send(guest, Frame("PONG", {}), stamp=False)
 
+        elif f.type == "GETOPTIONS":
+            await self._send_options(guest)
+
         elif f.type == "SETMODEL":
             model = f.headers.get("model", "")
-            if guest.claude and model:
+            if guest.claude:
                 await guest.claude.set_model(model)
-                await self._send(guest, Frame("STATUS", {"model": model}))
+                guest.model = model
+                log.info("model -> %s", model or "(default)")
+                await self._write_block(
+                    guest, H.notice("Model set to "
+                                    + (_label(MODELS, model) or "default")))
+            await self._send_options(guest)
+
+        elif f.type == "SETEFFORT":
+            await self._set_effort(guest, f.headers.get("effort", ""))
 
         else:
             log.warning("unknown frame type from guest: %s", f.type)
@@ -546,6 +562,58 @@ class Bridge:
             "cost_usd": f"{turn.cost_usd:.4f}" if turn.cost_usd else "",
             "ms": str(turn.duration_ms),
         }))
+
+    async def _send_options(self, guest: GuestSession) -> None:
+        """The model and effort menus, with the current one marked.
+
+        Sent from here rather than compiled into the guest so the lists can
+        change without rebuilding a Win98 binary, and so "which one is
+        current" has exactly one source of truth.
+        """
+        for kind, rows, cur in (("model", MODELS, guest.model),
+                                ("effort", EFFORTS, guest.effort)):
+            for ident, label in rows:
+                await self._send(guest, Frame("OPTION", {
+                    "kind": kind,
+                    "id": ident,
+                    "label": label,
+                    "current": "1" if ident == (cur or "") else "0",
+                }))
+        await self._send(guest, Frame("OPTIONSEND", {}))
+
+    async def _set_effort(self, guest: GuestSession, effort: str) -> None:
+        """Change effort, which means reopening the session.
+
+        There is no set_effort() on the client -- effort is fixed when the
+        session starts -- so this closes the current client and resumes the
+        same conversation with fork_session=True. The fork is why the history
+        survives and why the session id changes.
+        """
+        if not guest.claude:
+            return
+        old = guest.claude.session_id
+        guest.effort = effort
+        label = _label(EFFORTS, effort) or "default"
+        log.info("effort -> %s (forking %s)", effort or "(default)", old)
+
+        await self._write_block(guest, H.notice(
+            "Effort set to " + label
+            + ". Effort cannot be changed on a running session, so this "
+              "conversation has been forked -- the history is intact and "
+              "replies from here use the new setting."))
+
+        await guest.claude.close()
+        try:
+            guest.claude = await self._make_session(guest, resume=old,
+                                                    fork=True)
+        except Exception as exc:
+            log.exception("effort change failed")
+            await self._write_block(guest, H.error(
+                "Could not reopen the session: " + str(exc)[:160]))
+            await self._send_options(guest)
+            return
+        guest.sess_id = guest.claude.session_id or guest.sess_id
+        await self._send_options(guest)
 
     async def _switch(self, guest: GuestSession, session_id: str) -> None:
         """Close the live client and reopen on a stored session.
@@ -643,6 +711,38 @@ class Bridge:
             await writer.drain()
         except Exception:
             pass
+
+
+# The model menu. Hardcoded because there is no list_models() in the SDK, but
+# hardcoded HERE rather than in the guest: model names change, and changing a
+# string should not mean rebuilding and re-deploying a Win98 binary.
+MODELS = [
+    ("", "Default (whatever the CLI picks)"),
+    ("claude-opus-5", "Opus 5"),
+    ("claude-sonnet-5", "Sonnet 5"),
+    ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+    ("claude-fable-5-1", "Fable 5.1"),
+]
+
+# Effort cannot be changed on a live client: the SDK has set_model() and no
+# set_effort(), so it is an option fixed when the session starts. Changing it
+# means reopening on the same conversation with fork_session=True, which the
+# plan anticipated and which _set_effort below actually does.
+EFFORTS = [
+    ("", "Default"),
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("xhigh", "Extra high"),
+    ("max", "Maximum"),
+]
+
+
+def _label(rows: list, ident: str) -> str:
+    for i, label in rows:
+        if i == (ident or ""):
+            return label
+    return ident
 
 
 def _summarise(args: dict) -> str:

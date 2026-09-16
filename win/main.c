@@ -32,6 +32,16 @@
 #define ID_CHATS      1012
 #define ID_REFRESH    1013
 
+/* Menu. Model and effort entries are numbered from a base because the lists
+ * come from the bridge and are not known at compile time. */
+#define IDM_EXPORT    1100
+#define IDM_CLOSE     1101
+#define IDM_HOST      1110
+#define IDM_ABOUT     1120
+#define IDM_MODEL0    1200      /* .. IDM_MODEL0 + MAX_OPTS */
+#define IDM_EFFORT0   1300      /* .. IDM_EFFORT0 + MAX_OPTS */
+#define MAX_OPTS      16
+
 #define TIMER_RECONNECT 1
 #define TIMER_STATUS    2
 /* Navigation is asynchronous, so the document is polled for readiness until it
@@ -65,10 +75,21 @@ static char g_chat_ids[MAX_CHATS][64];
 static char g_chat_is_header[MAX_CHATS];
 static char g_chat_group[40];       /* last group emitted, to spot changes */
 static int  g_chat_current = -1;    /* row of the conversation that is open */
+
+/* The Model and Effort menus are built from what the bridge sends, so the
+ * lists can change without rebuilding this binary. */
+static HMENU g_menu_model, g_menu_effort;
+static char  g_opt_model[MAX_OPTS][64];
+static char  g_opt_effort[MAX_OPTS][64];
+static int   g_n_model, g_n_effort;
+static int   g_opts_open;   /* mid-batch, so the next model row appends */
 static int  g_chat_count = 0;
 static int  g_chat_widest = 0;      /* px, for LB_SETHORIZONTALEXTENT */
 
-#define RC_TITLE "Claude Code"
+/* Not "Claude Code": that is Anthropic's product name and this is a
+ * third-party client for it. Gaston is a French given name of roughly the
+ * right vintage for the machine it runs on. */
+#define RC_TITLE "Gaston Code"
 
 /* -1 means the "thinking" indicator is not currently shown. */
 static long  g_think_mark = -1;
@@ -199,6 +220,43 @@ static void log_mem(const char *when)
            (unsigned long)ms.dwMemoryLoad);
 }
 
+/* Build the menu bar in code rather than from a resource: it is a dozen
+ * items, and the two interesting menus are filled in at runtime anyway. */
+static void build_menu(HWND hwnd)
+{
+    HMENU bar = CreateMenu();
+    HMENU file = CreatePopupMenu();
+    HMENU cfg = CreatePopupMenu();
+    HMENU help = CreatePopupMenu();
+
+    AppendMenuA(file, MF_STRING, IDM_EXPORT, "&Export as HTML...");
+    AppendMenuA(file, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(file, MF_STRING, IDM_CLOSE, "&Close");
+
+    AppendMenuA(cfg, MF_STRING, IDM_HOST, "&Server Host...");
+
+    g_menu_model = CreatePopupMenu();
+    g_menu_effort = CreatePopupMenu();
+    AppendMenuA(g_menu_model, MF_STRING | MF_GRAYED, 0, "(not connected)");
+    AppendMenuA(g_menu_effort, MF_STRING | MF_GRAYED, 0, "(not connected)");
+
+    AppendMenuA(help, MF_STRING, IDM_ABOUT, "&About...");
+
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)file, "&File");
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)cfg, "&Configure");
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_menu_model, "&Model");
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_menu_effort, "&Effort");
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
+    SetMenu(hwnd, bar);
+}
+
+/* Empty a popup without destroying it: the menu bar holds the handle. */
+static void clear_popup(HMENU m)
+{
+    while (DeleteMenu(m, 0, MF_BYPOSITION))
+        ;
+}
+
 static void chats_request(void)
 {
     rc_net_send(&g_net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
@@ -306,6 +364,42 @@ static void render_frame(rc_frame *f)
             status_set(2, buf);
 
         }
+
+    } else if (strcmp(f->type, "OPTION") == 0) {
+        const char *kind = rc_frame_get(f, "kind");
+        const char *id = rc_frame_get(f, "id");
+        const char *label = rc_frame_get(f, "label");
+        const char *cur = rc_frame_get(f, "current");
+        int on = (cur && *cur == '1');
+        /* The first model row of a batch resets both menus. The bridge
+         * always sends models before efforts, so this is a reliable start
+         * marker and saves a frame type. */
+        if (kind && strcmp(kind, "model") == 0 && g_opts_open == 0) {
+            g_opts_open = 1;
+            clear_popup(g_menu_model);
+            clear_popup(g_menu_effort);
+            g_n_model = 0;
+            g_n_effort = 0;
+        }
+        if (kind && id && label) {
+            if (strcmp(kind, "model") == 0 && g_n_model < MAX_OPTS) {
+                _snprintf(g_opt_model[g_n_model], 63, "%s", id);
+                AppendMenuA(g_menu_model,
+                            MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
+                            IDM_MODEL0 + g_n_model, label);
+                g_n_model++;
+            } else if (strcmp(kind, "effort") == 0 && g_n_effort < MAX_OPTS) {
+                _snprintf(g_opt_effort[g_n_effort], 63, "%s", id);
+                AppendMenuA(g_menu_effort,
+                            MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
+                            IDM_EFFORT0 + g_n_effort, label);
+                g_n_effort++;
+            }
+        }
+
+    } else if (strcmp(f->type, "OPTIONSEND") == 0) {
+        g_opts_open = 0;
+        DrawMenuBar(g_main);
 
     } else if (strcmp(f->type, "SESSIONS") == 0) {
         SendMessageA(g_chats, WM_SETREDRAW, FALSE, 0);
@@ -974,9 +1068,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
-    case WM_COMMAND:
-        switch (LOWORD(wp)) {
+    case WM_COMMAND: {
+        int id = (int)LOWORD(wp);
+        switch (id) {
         case ID_SEND:  do_send(); return 0;
+
         case ID_STOP:  do_stop(); return 0;
         case ID_LIVE:  page_goto("live");      return 0;
         case ID_FIRST: page_goto_n(1);         return 0;
@@ -984,23 +1080,78 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_NEXT:  page_goto_n(g_view + 1); return 0;
         case ID_LAST:  page_goto_n(g_total);   return 0;
         case ID_REFRESH: chats_request();      return 0;
-        case ID_CHATS:
-            /* Double-click to switch. Single-click would make an accidental
-             * arrow-key press tear down a live session. */
-            /* Open on a single click, but only a click.
-             *
-             * LBN_SELCHANGE also fires for arrow keys, and switching on those
-             * would tear down a live session every time someone scrolled the
-             * list with the keyboard. During a mouse click the button is still
-             * down when the notification arrives, which separates the two
-             * cheaply and without subclassing the control. Keyboard users get
-             * Enter, and double-click still works for muscle memory. */
-            /* A click is handled by the subclass; this is only the
-             * double-click, kept for muscle memory. */
-            if (HIWORD(wp) == LBN_DBLCLK) chats_switch();
+
+        case IDM_CLOSE:
+            PostMessageA(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+
+        case IDM_EXPORT:
+            /* Wired, not implemented: exporting the whole conversation means
+             * asking the bridge for every page, which is a chunked transfer
+             * and belongs with the rest of that work. */
+            MessageBoxA(hwnd,
+                        "Not implemented yet.\n\n"
+                        "This will ask the bridge for the whole conversation "
+                        "and save it as a single HTML file.",
+                        RC_TITLE, MB_OK | MB_ICONINFORMATION);
+            return 0;
+
+        case IDM_HOST: {
+            char msg[320];
+            _snprintf(msg, sizeof(msg) - 1,
+                      "Currently connecting to %s:%d.\n\n"
+                      "Set this in retroclaude.ini next to the program:\n\n"
+                      "  [bridge]\n  host=%s\n  port=%d\n\n"
+                      "A dialog for this is still to come.",
+                      g_cfg.host, g_cfg.port, g_cfg.host, g_cfg.port);
+            msg[sizeof(msg) - 1] = '\0';
+            MessageBoxA(hwnd, msg, RC_TITLE, MB_OK | MB_ICONINFORMATION);
             return 0;
         }
+
+        case IDM_ABOUT: {
+            char msg[420];
+            _snprintf(msg, sizeof(msg) - 1,
+                      RC_TITLE "\n\n"
+                      "A native Windows 98 client for Claude Code.\n"
+                      "Built with Open Watcom; the transcript is MSHTML.\n\n"
+                      "Not affiliated with Anthropic.\n\n"
+                      "Bridge: %s:%d (%s)",
+                      g_cfg.host, g_cfg.port, rc_state_name(g_net.state));
+            msg[sizeof(msg) - 1] = '\0';
+            MessageBoxA(hwnd, msg, "About " RC_TITLE,
+                        MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        case ID_CHATS:
+            /* A plain click is handled by the listbox subclass, which opens on
+             * button release; this is only the double-click, kept for muscle
+             * memory. LBN_SELCHANGE is deliberately not used: it also fires
+             * for arrow keys, and switching on those would tear down a live
+             * session every time the list was scrolled from the keyboard. */
+            if (HIWORD(wp) == LBN_DBLCLK) chats_switch();
+            return 0;
+
+        default:
+            /* Model and effort are numbered ranges rather than fixed ids,
+             * because the two lists are sent by the bridge and are not known
+             * when this is compiled. */
+            if (id >= IDM_MODEL0 && id < IDM_MODEL0 + g_n_model) {
+                const char *keys[1], *vals[1];
+                keys[0] = "model"; vals[0] = g_opt_model[id - IDM_MODEL0];
+                rc_net_send(&g_net, "SETMODEL", keys, vals, 1, NULL, 0);
+                return 0;
+            }
+            if (id >= IDM_EFFORT0 && id < IDM_EFFORT0 + g_n_effort) {
+                const char *keys[1], *vals[1];
+                keys[0] = "effort"; vals[0] = g_opt_effort[id - IDM_EFFORT0];
+                rc_net_send(&g_net, "SETEFFORT", keys, vals, 1, NULL, 0);
+                return 0;
+            }
+            break;
+        }
         return 0;
+    }
 
     case WM_CLOSE:
         DestroyWindow(hwnd);
@@ -1075,6 +1226,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     rc_log("main window hwnd=%p", (void *)g_main);
     log_mem("window created");
 
+    build_menu(g_main);
     ShowWindow(g_main, show);
     UpdateWindow(g_main);
 

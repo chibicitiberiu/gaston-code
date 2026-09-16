@@ -120,6 +120,42 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — menu bar, and the app is called Gaston Code
+
+**The name.** "Claude Code" is Anthropic's product name and this is a
+third-party client for it, so shipping under that name is not on. Gaston is a
+French given name of roughly the right vintage for the machine it runs on. The
+About box says "Not affiliated with Anthropic" for the same reason.
+
+**The menu bar** is built with CreateMenu/AppendMenu rather than from a
+resource: it is a dozen items, and the two interesting menus are filled in at
+runtime anyway.
+
+  File      Export as HTML... (wired, not implemented), Close
+  Configure Server Host... (shows the current setting; dialog still to come)
+  Model     from the bridge, with a checkmark
+  Effort    from the bridge, with a checkmark
+  Help      About...
+
+**Model and effort lists come from the bridge**, the same argument as the
+stylesheet: model names change, and changing a string should not mean
+rebuilding and re-deploying a Win98 binary. The guest numbers the menu entries
+from a base (IDM_MODEL0, IDM_EFFORT0) because the lists are not known at
+compile time, and "which one is current" has exactly one source of truth.
+
+**Effort cannot be changed on a live session, and that is now confirmed rather
+than assumed.** The installed SDK has `set_model()` and **no** `set_effort()`;
+effort is a field of ClaudeAgentOptions, fixed when the session starts. So the
+plan's fork dance is what actually happens: close the client, resume the same
+conversation with `fork_session=True`, and tell the reader in the transcript
+that the conversation was forked and why. Model changes are live.
+
+Both verified on the guest: selecting Sonnet 5 moved the checkmark and logged
+`model -> claude-sonnet-5`; selecting High logged `effort -> high (forking ...)`
+and reconnected as `model=claude-sonnet-5 effort=high`, so the per-guest choice
+survives the fork rather than reverting to the process defaults.
+
+
 ### 2026-09-17 — what HTML bought, and what it cost
 
 Things the transcript can now do that RichEdit 2.0 could not do at all:
