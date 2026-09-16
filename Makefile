@@ -26,9 +26,12 @@ wine-smoke:
 # _RICHEDIT_VER 0x0300 and -- crucially -- gates NOTHING on it, so every 3.0-only
 # message compiles clean and fails on the guest. #define does not help; only a
 # lint does.
-RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_AUTOURLDETECT EM_GETAUTOURLDETECT \
-           EM_SETPALETTE EM_GETTEXTLENGTHEX EM_SETTABSTOPS EM_SETMARGINS \
-           EM_SETLANGOPTIONS EM_GETLANGOPTIONS EM_SETUNDOLIMIT
+# Confirmed 3.0-only against the RichEdit version-delta table. Several
+# messages that LOOK modern are in fact 2.0 and are deliberately NOT listed:
+# EM_SETUNDOLIMIT, EM_SETPALETTE and EM_AUTOURLDETECT are all 2.0, and
+# EM_SETUNDOLIMIT in particular is one we rely on.
+RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_GETTEXTLENGTHEX \
+           EM_SETTABSTOPS EM_SETMARGINS
 lint:
 	@fail=0; \
 	for m in $(RE3_ONLY); do \

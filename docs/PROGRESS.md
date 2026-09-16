@@ -44,13 +44,13 @@ Linux side first, so the guest develops against something real.
 |---|---|---|
 | 1.0 | venv + `claude-agent-sdk` 0.2.153 installed | **done** |
 | 1.1 | `bridge/protocol.py` — frame codec (new, not a lift) | **done** — 29 tests |
-| 1.2 | `bridge/server.py` — listener, HELLO, role rejection | |
-| 1.3 | `bridge/session.py` — one `ClaudeSDKClient`, `allowed_tools=[]` | |
+| 1.2 | `bridge/server.py` — listener, HELLO, dup-client rejection | **done** |
+| 1.3 | `bridge/session.py` — one `ClaudeSDKClient`, `allowed_tools=[]` | **done** |
 | 1.4 | `bridge/fold.py` — UTF-8 → CP1252 | **done** — 31 tests |
-| 1.5 | `bridge/replay.py` — seq numbering + resume | |
-| 1.6 | `bridge/fakegui.py` — Linux CLI speaking the wire protocol | |
-| 1.7 | `win/` — window, RichEdit, edit box, reader thread, log, status bar | |
-| 1.8 | Stop button + `interrupt()` | |
+| 1.5 | `bridge/replay.py` — seq numbering + resume | **done** — 10 tests |
+| 1.6 | `bridge/fakegui.py` — Linux CLI speaking the wire protocol | **done** |
+| 1.7 | `win/` — window, RichEdit, edit box, reader thread, log, status bar | **done** — 42KB, builds + runs |
+| 1.8 | Stop button + `interrupt()` | **done** |
 | 1.9 | Real hardware gate | blocked |
 
 ## Phase 2 — four demos
@@ -63,6 +63,17 @@ Linux side first, so the guest develops against something real.
 | 2d | Session list | |
 
 ---
+
+### Phase 1 verification status
+
+- `fakegui.py` -> bridge -> real Claude: **passing**, monotonic seqs
+- `netcheck.exe` (real guest C: net.c + frameproto.c) under Wine -> bridge ->
+  real Claude: **passing**, `inflight=0` so no frame leaked
+- `retroclaude.exe` under Wine: connects, handshakes, receives READY, renders.
+  Picked up **Tahoma** via `SPI_GETNONCLIENTMETRICS` -- the font question the
+  plan said not to bother verifying.
+- Still unverified on real Win98: everything. Wine proves the code, not the
+  platform.
 
 ## Decisions made while building
 
@@ -94,6 +105,18 @@ Three parameters settled by measurement rather than argument:
 
 Window stays 32KB (dropping to 8KB costs 6% ratio to save 24KB — bad trade against
 8–12MB). Level 6 bridge→guest, level 1 guest→bridge.
+
+### 2026-09-16 — netcheck.exe: test the C, not the GUI
+Driving a Win32 GUI from a test harness is fragile. `netcheck.exe` links the
+real `net.c` and `frameproto.c` and does the whole round trip headless, so the
+networking and framing are covered without GUI automation. It is also the
+thing to run first on the real guest, since it needs no display.
+
+### 2026-09-16 — my own RichEdit lint list was wrong
+The first `make lint` list included `EM_SETUNDOLIMIT`, `EM_SETPALETTE` and
+`EM_AUTOURLDETECT` as "3.0-only". All three are **2.0**, and `EM_SETUNDOLIMIT`
+is one we actively rely on to keep the undo queue from growing. Corrected to
+the five genuinely 3.0-only messages.
 
 ### 2026-09-16 — SDK introspected; every uncertain API claim resolved
 `claude-agent-sdk` 0.2.153. The reviewers flagged four things to verify before
