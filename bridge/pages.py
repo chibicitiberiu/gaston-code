@@ -73,18 +73,21 @@ class Page:
     def text(self) -> str:
         return "".join(r.text for r in self.runs)
 
-    def over_soft_cap(self) -> bool:
-        return (self.lines >= MAX_LINES or self.nbytes >= MAX_BYTES
-                or self.blocks >= MAX_BLOCKS)
+    # Caps are passed in rather than read from the module, because they are
+    # sized to the guest's memory and two guests can differ.
+    def over_soft_cap(self, max_bytes: int = MAX_BYTES,
+                      max_blocks: int = MAX_BLOCKS) -> bool:
+        return (self.lines >= MAX_LINES or self.nbytes >= max_bytes
+                or self.blocks >= max_blocks)
 
-    def over_hard_cap(self) -> bool:
+    def over_hard_cap(self, hard_bytes: int = HARD_BYTES) -> bool:
         # Blocks are deliberately not here: this governs splitting INSIDE a
         # run, and a block cap is satisfied by sealing between blocks, which
         # add() does before it starts.
-        return self.lines >= HARD_LINES or self.nbytes >= HARD_BYTES
+        return self.lines >= HARD_LINES or self.nbytes >= hard_bytes
 
-    def over_hard_blocks(self) -> bool:
-        return self.blocks >= HARD_BLOCKS
+    def over_hard_blocks(self, hard_blocks: int = HARD_BLOCKS) -> bool:
+        return self.blocks >= hard_blocks
 
 
 @dataclass
@@ -96,8 +99,32 @@ class Anchor:
     preview: str         # first ~40 characters
 
 
+def limits_for(mem_kb: int) -> tuple[int, int]:
+    """Page caps for a machine with this much RAM.
+
+    32MB is the floor the whole design is built around and gets the original
+    numbers. Anything roomier can hold a bigger page, and being forced to page
+    every 90 blocks on a 128MB machine is an artificial restriction inherited
+    from a machine it is not running on. Scaled by memory and clamped, because
+    the point is to fit the host, not to grow without limit.
+    """
+    if mem_kb <= 0:
+        return MAX_BYTES, MAX_BLOCKS
+    factor = mem_kb / (32 * 1024)
+    if factor < 1.0:
+        factor = 1.0
+    if factor > 4.0:
+        factor = 4.0
+    return int(MAX_BYTES * factor), int(MAX_BLOCKS * factor)
+
+
 class Paginator:
-    def __init__(self) -> None:
+    def __init__(self, max_bytes: int = MAX_BYTES,
+                 max_blocks: int = MAX_BLOCKS) -> None:
+        self.max_bytes = max_bytes
+        self.max_blocks = max_blocks
+        self.hard_bytes = max_bytes * 2
+        self.hard_blocks = max_blocks * 2
         self._pages: list[Page] = [Page(number=1)]
         self._anchors: list[Anchor] = []
 
@@ -131,18 +158,18 @@ class Paginator:
         # A page holding too many elements is sealed before the next one is
         # added. Unlike the byte cap this needs no splitting: a block boundary
         # is already a clean place to stop.
-        if self.live.over_hard_blocks() and self.live.runs:
+        if self.live.over_hard_blocks(self.hard_blocks) and self.live.runs:
             sealed.append(self._seal(continued=True))
 
         while text:
             page = self.live
-            room = HARD_BYTES - page.nbytes
+            room = self.hard_bytes - page.nbytes
 
             if room <= 0:
                 sealed.append(self._seal(continued=True))
                 continue
 
-            if len(text) <= room and not page.over_hard_cap():
+            if len(text) <= room and not page.over_hard_cap(self.hard_bytes):
                 page.add(style, text)
                 text = ""
             else:
@@ -164,7 +191,8 @@ class Paginator:
         This is what keeps a turn from being split mid-sentence while the
         reader is watching it stream.
         """
-        if self.live.over_soft_cap() and self.live.runs:
+        if self.live.over_soft_cap(self.max_bytes, self.max_blocks) \
+                and self.live.runs:
             return self._seal(continued=False)
         return None
 

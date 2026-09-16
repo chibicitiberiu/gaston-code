@@ -254,3 +254,34 @@ def test_block_count_is_bounded_on_every_page():
             p.message_boundary()
     for n in range(1, p.count + 1):
         assert p.page(n).blocks <= HARD_BLOCKS, f"page {n}"
+
+
+# --- page size scales with the guest's memory -------------------------------
+
+
+def test_page_limits_scale_with_memory():
+    """A 128MB machine can hold a bigger page than the 32MB floor the design
+    is built around; making it page every 90 blocks would be a restriction
+    inherited from a machine it is not running on."""
+    from bridge.pages import limits_for, MAX_BYTES, MAX_BLOCKS
+    assert limits_for(32 * 1024) == (MAX_BYTES, MAX_BLOCKS)
+    assert limits_for(64 * 1024) == (MAX_BYTES * 2, MAX_BLOCKS * 2)
+    assert limits_for(128 * 1024) == (MAX_BYTES * 4, MAX_BLOCKS * 4)
+
+
+def test_a_smaller_machine_never_gets_smaller_pages_than_the_floor():
+    from bridge.pages import limits_for, MAX_BYTES, MAX_BLOCKS
+    assert limits_for(16 * 1024) == (MAX_BYTES, MAX_BLOCKS)
+    assert limits_for(0) == (MAX_BYTES, MAX_BLOCKS)
+
+
+def test_page_limits_are_clamped_so_a_big_machine_does_not_grow_forever():
+    from bridge.pages import limits_for
+    assert limits_for(256 * 1024) == limits_for(1024 * 1024)
+
+
+def test_a_paginator_honours_its_own_limits():
+    p = Paginator(max_bytes=1024, max_blocks=4)
+    for i in range(5):
+        p.add("html", "<p>x</p>")
+    assert p.live.over_soft_cap(p.max_bytes, p.max_blocks)

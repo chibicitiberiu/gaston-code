@@ -230,8 +230,10 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret)
 {
     WSADATA wsa;
-    char maxframe[16], ver[16];
-    const char *keys[4]; const char *vals[4];
+    char maxframe[16], ver[16], memkb[16];
+    /* Sized with room to spare: ver, secret, max_frame, mem_kb and sess is
+     * already five, and this array overflowed the moment mem_kb was added. */
+    const char *keys[8]; const char *vals[8];
     int nkv = 0;
     unsigned tid;
 
@@ -261,6 +263,18 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     keys[nkv] = "ver";       vals[nkv++] = ver;
     keys[nkv] = "secret";    vals[nkv++] = n->secret;
     keys[nkv] = "max_frame"; vals[nkv++] = maxframe;
+    /* How much memory this machine has, so the bridge can size pages to it.
+     * A 128MB box can hold a far bigger page than a 32MB one, and the bridge
+     * has no other way to know which it is talking to. */
+    {
+        MEMORYSTATUS ms;
+        memset(&ms, 0, sizeof(ms));
+        ms.dwLength = sizeof(ms);
+        GlobalMemoryStatus(&ms);
+        _snprintf(memkb, sizeof(memkb), "%lu",
+                  (unsigned long)(ms.dwTotalPhys / 1024));
+        keys[nkv] = "mem_kb"; vals[nkv++] = memkb;
+    }
     if (n->sess[0]) { keys[nkv] = "sess"; vals[nkv++] = n->sess; }
 
     if (rc_net_send(n, "HELLO", keys, vals, nkv, NULL, 0) != 0) {

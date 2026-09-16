@@ -24,7 +24,7 @@ from .coalesce import Coalescer
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
 from . import html as H
 from .html import APPEND, LIVE, HtmlStream
-from .pages import Paginator
+from .pages import Paginator, limits_for
 from .protocol import (
     MAX_FRAME,
     PROTO_VERSION,
@@ -61,6 +61,9 @@ class GuestSession:
     # process so a reconnect or an effort fork keeps the choice.
     model: str = ""
     effort: str = ""
+    # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
+    page_bytes: int = 0
+    page_blocks: int = 0
 
     # Which page the guest is showing. None means LIVE (follow the last page).
     # In HISTORY mode the bridge keeps buffering silently; the page counter
@@ -235,6 +238,14 @@ class Bridge:
                 "busy", "another client holds this session"))
             return None
 
+        # Page size is scaled to the guest's RAM. A 128MB machine can hold a
+        # far bigger page than the 32MB floor the design is built around, and
+        # the handshake is the only place the bridge learns which it has.
+        mem_kb = int(h.get("mem_kb", "0") or 0)
+        page_bytes, page_blocks = limits_for(mem_kb)
+        log.info("guest has %d MB; pages capped at %d bytes / %d blocks",
+                 mem_kb // 1024, page_bytes, page_blocks)
+
         # A fresh connection means a fresh inflater on the guest, so the
         # compressor must restart in lockstep or the first frame is garbage.
         if self._guest is not None:
@@ -242,9 +253,13 @@ class Bridge:
 
         resumed = False
         if self._guest is None:
-            self._guest = GuestSession(sess_id=str(uuid.uuid4()))
+            self._guest = GuestSession(
+                sess_id=str(uuid.uuid4()),
+                pages=Paginator(page_bytes, page_blocks))
         guest = self._guest
         guest.writer = writer
+        guest.page_bytes = page_bytes
+        guest.page_blocks = page_blocks
 
         guest.link_bps = self.link_bps
         for c in guest.coalescers.values():
@@ -427,14 +442,20 @@ class Bridge:
         if mode == LIVE and len(data) > budget:
             return
 
-        for i in range(0, len(data), budget):
+        total = len(data)
+        for i in range(0, total, budget):
             chunk = data[i:i + budget]
             enc = ENC_RAW
             if should_compress(chunk, guest.link_bps):
                 chunk = guest.zip_out.compress(chunk)
                 enc = ENC_DEFLATE
+            # total/off are in DECOMPRESSED bytes and are on every chunk, not
+            # just the first: the guest shows a progress figure from them, and
+            # a reconnect mid-transfer would otherwise leave it with a
+            # denominator it never received.
             await self._send(guest, Frame(
-                "TEXT", {"mode": mode, "enc": enc, "page": str(page_no)},
+                "TEXT", {"mode": mode, "enc": enc, "page": str(page_no),
+                         "total": str(total), "off": str(i)},
                 chunk))
 
     # --- frame pump --------------------------------------------------------
@@ -511,9 +532,7 @@ class Bridge:
                 await guest.claude.set_model(model)
                 guest.model = model
                 log.info("model -> %s", model or "(default)")
-                await self._write_block(
-                    guest, H.notice("Model set to "
-                                    + (_label(MODELS, model) or "default")))
+                await self._write_block(guest, H.notice("Model set to " + model))
             await self._send_options(guest)
 
         elif f.type == "SETEFFORT":
@@ -564,20 +583,57 @@ class Bridge:
         }))
 
     async def _send_options(self, guest: GuestSession) -> None:
-        """The model and effort menus, with the current one marked.
+        """The model and effort menus, with the one in use marked.
 
-        Sent from here rather than compiled into the guest so the lists can
-        change without rebuilding a Win98 binary, and so "which one is
-        current" has exactly one source of truth.
+        The list comes from the CLI rather than from a table here, so the names
+        stay correct without a release. There is deliberately no "Default"
+        entry: it is not a model, it is an alias, and a menu that says
+        "Default" does not tell you what you are talking to. The alias is
+        resolved and the real model it points at is the one ticked.
         """
-        for kind, rows, cur in (("model", MODELS, guest.model),
-                                ("effort", EFFORTS, guest.effort)):
-            for ident, label in rows:
+        if not guest.claude:
+            return
+        models = await guest.claude.server_models()
+
+        # What is actually in effect, as a concrete model name.
+        def resolved_of(value: str) -> str:
+            for m in models:
+                if m.get("value") == value:
+                    return m.get("resolvedModel") or value
+            return value
+
+        in_use = resolved_of(guest.model or "default")
+
+        chosen = None
+        for m in models:
+            value = m.get("value") or ""
+            if value == "default":
+                continue        # an alias, not a model
+            label = m.get("displayName") or value
+            current = (m.get("resolvedModel") or value) == in_use
+            if current and chosen is None:
+                chosen = m
+            await self._send(guest, Frame("OPTION", {
+                "kind": "model", "id": value, "label": label,
+                "current": "1" if current else "0",
+            }))
+
+        # Effort is a property of the model: Haiku has none at all, so an
+        # Effort menu offering five levels would be lying.
+        levels = (chosen or {}).get("supportedEffortLevels") or []
+        if not levels:
+            await self._send(guest, Frame("OPTION", {
+                "kind": "effort", "id": "", "label": "(not available for this model)",
+                "current": "0", "disabled": "1",
+            }))
+        else:
+            for lvl in EFFORT_ORDER:
+                if lvl not in levels:
+                    continue
                 await self._send(guest, Frame("OPTION", {
-                    "kind": kind,
-                    "id": ident,
-                    "label": label,
-                    "current": "1" if ident == (cur or "") else "0",
+                    "kind": "effort", "id": lvl,
+                    "label": EFFORT_LABEL.get(lvl, lvl),
+                    "current": "1" if lvl == (guest.effort or "") else "0",
                 }))
         await self._send(guest, Frame("OPTIONSEND", {}))
 
@@ -593,7 +649,7 @@ class Bridge:
             return
         old = guest.claude.session_id
         guest.effort = effort
-        label = _label(EFFORTS, effort) or "default"
+        label = EFFORT_LABEL.get(effort, effort or "default")
         log.info("effort -> %s (forking %s)", effort or "(default)", old)
 
         await self._write_block(guest, H.notice(
@@ -634,7 +690,8 @@ class Bridge:
             await guest.claude.close()
 
         # Fresh transcript state. Anything the old session had is on disk.
-        guest.pages = Paginator()
+        guest.pages = Paginator(guest.page_bytes or None or 16384,
+                                guest.page_blocks or 90)
         guest.render = HtmlStream()
         for c in guest.coalescers.values():
             await c.stop()
@@ -713,36 +770,11 @@ class Bridge:
             pass
 
 
-# The model menu. Hardcoded because there is no list_models() in the SDK, but
-# hardcoded HERE rather than in the guest: model names change, and changing a
-# string should not mean rebuilding and re-deploying a Win98 binary.
-MODELS = [
-    ("", "Default (whatever the CLI picks)"),
-    ("claude-opus-5", "Opus 5"),
-    ("claude-sonnet-5", "Sonnet 5"),
-    ("claude-haiku-4-5-20251001", "Haiku 4.5"),
-    ("claude-fable-5-1", "Fable 5.1"),
-]
-
-# Effort cannot be changed on a live client: the SDK has set_model() and no
-# set_effort(), so it is an option fixed when the session starts. Changing it
-# means reopening on the same conversation with fork_session=True, which the
-# plan anticipated and which _set_effort below actually does.
-EFFORTS = [
-    ("", "Default"),
-    ("low", "Low"),
-    ("medium", "Medium"),
-    ("high", "High"),
-    ("xhigh", "Extra high"),
-    ("max", "Maximum"),
-]
-
-
-def _label(rows: list, ident: str) -> str:
-    for i, label in rows:
-        if i == (ident or ""):
-            return label
-    return ident
+# Effort levels, in the order they should appear. Which of these a given model
+# actually offers comes from the CLI, not from here.
+EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"]
+EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
+                "xhigh": "Extra high", "max": "Maximum"}
 
 
 def _summarise(args: dict) -> str:

@@ -161,6 +161,26 @@ class Session:
         if self._client and self._busy.is_set():
             await self._client.interrupt()
 
+    async def server_models(self) -> list[dict]:
+        """The model list the CLI itself offers, with what each resolves to.
+
+        Better than a hardcoded table in three ways: the names stay correct
+        without a release, `resolvedModel` says what "default" actually is, and
+        `supportedEffortLevels` says which effort settings a given model even
+        has -- Haiku, for instance, has none.
+        """
+        if not self._client:
+            return []
+        try:
+            info = await self._client.get_server_info()
+        except Exception:
+            log.exception("get_server_info failed")
+            return []
+        if not isinstance(info, dict):
+            return []
+        models = info.get("models")
+        return models if isinstance(models, list) else []
+
     async def set_model(self, model: str) -> None:
         """Live, no fork needed -- verified against SDK 0.2.153."""
         if self._client:

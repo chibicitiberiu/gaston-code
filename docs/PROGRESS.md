@@ -120,6 +120,53 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — the model list comes from the CLI, and "Default" is gone
+
+The first version of the Model menu was a hardcoded table on the bridge. It is
+now `get_server_info()["models"]`, which is better in three ways that all
+matter: the names stay correct without a release, `resolvedModel` says what an
+alias actually points at, and `supportedEffortLevels` says which effort
+settings a given model even has -- **Haiku has none**, so an Effort menu
+offering five levels was lying about it.
+
+**There is deliberately no "Default" entry.** Default is not a model, it is an
+alias, and a menu that says "Default" does not tell you what you are talking
+to. The alias is resolved and the real model behind it is the one ticked: with
+nothing selected the menu shows a tick against "Opus (1M context)", because
+that is what the CLI resolves default to today.
+
+### 2026-09-17 — the status bar shows transfers, not totals
+
+The byte counters used to sit there permanently as a running total, which told
+you nothing. What is worth knowing is whether something is moving right now and
+how big it is, so the pane is empty when idle and fills in during a transfer.
+
+Two shapes, because there are two kinds of traffic. A chunked transfer carries
+`total` and `off` (in decompressed bytes, on every chunk rather than only the
+first, so a reconnect mid-transfer does not leave the guest with a denominator
+it never received) and shows as `rx 12k/64k`. Streamed text arrives as many
+small frames whose "total" is just their own length, so showing a fraction of
+each would be meaningless -- those accumulate into a running count for the
+burst instead. Under 10K the exact figure is shown, because "rx 412/900" says
+something that "rx 0k/0k" does not, which is what the first attempt displayed.
+
+The pane clears after 1.2s of silence rather than instantly, which is also what
+makes a stalled transfer visible: the numbers stop but the pane stays.
+
+### 2026-09-17 — page size is scaled to the guest's RAM
+
+The 32MB floor is what the whole design is built around, but making a 128MB
+machine page every 90 blocks is a restriction inherited from a machine it is
+not running on. The guest reports `GlobalMemoryStatus().dwTotalPhys` in HELLO
+and the bridge sizes that guest's paginator from it: 32MB keeps the original
+16KB/90, and it scales linearly to a 4x cap at 128MB. Below 32MB it stays at
+the floor rather than shrinking further.
+
+Found while adding it: the HELLO key/value arrays were `[4]`, and `ver`,
+`secret`, `max_frame`, `mem_kb` and `sess` is five. It had been overflowing the
+stack the moment a session id was present.
+
+
 ### 2026-09-17 — menu bar, and the app is called Gaston Code
 
 **The name.** "Claude Code" is Anthropic's product name and this is a

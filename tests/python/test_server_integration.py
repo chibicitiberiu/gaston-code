@@ -36,6 +36,20 @@ class FakeSession:
     async def set_model(self, m):
         self.model = m
 
+    async def server_models(self):
+        """Shaped like what the CLI returns, including the "default" alias
+        that the menu is expected to resolve away rather than show."""
+        return [
+            {"value": "default", "resolvedModel": "fake-opus",
+             "displayName": "Default (recommended)", "supportsEffort": True,
+             "supportedEffortLevels": ["low", "high"]},
+            {"value": "opus", "resolvedModel": "fake-opus",
+             "displayName": "Opus", "supportsEffort": True,
+             "supportedEffortLevels": ["low", "high"]},
+            {"value": "haiku", "resolvedModel": "fake-haiku",
+             "displayName": "Haiku"},
+        ]
+
     async def send(self, prompt):
         from bridge.session import Turn
         if self.on_text:
@@ -399,4 +413,33 @@ async def test_history_mode_suppresses_live_streaming(harness):
     assert "1" not in text_pages, (
         "new text leaked onto the history page the reader is looking at"
     )
+    await harness.close(w)
+
+
+# --- the model menu ---------------------------------------------------------
+
+
+async def test_option_frames_resolve_the_default_alias_away(harness):
+    """"Default" is an alias, not a model, and a menu that says "Default" does
+    not tell you what you are talking to. The alias is resolved and the real
+    model behind it is the one ticked."""
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    models = [f for f in frames if f.type == "OPTION"
+              and f.headers.get("kind") == "model"]
+    assert models, "no model options sent"
+    assert all(f.headers["id"] != "default" for f in models)
+    ticked = [f.headers["id"] for f in models
+              if f.headers.get("current") == "1"]
+    assert ticked == ["opus"], "the alias should resolve onto the real model"
+    await harness.close(w)
+
+
+async def test_effort_options_follow_the_selected_model(harness):
+    """Haiku has no effort levels at all, so offering five would be lying."""
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    efforts = [f.headers["id"] for f in frames if f.type == "OPTION"
+               and f.headers.get("kind") == "effort"]
+    assert efforts == ["low", "high"]
     await harness.close(w)
