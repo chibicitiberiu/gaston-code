@@ -45,3 +45,6 @@ vm/watch/
 vm/tools-stage/
 vm/*.bak.*
 vm/*.partial.*
+
+# Open Watcom per-file error listings
+*.err

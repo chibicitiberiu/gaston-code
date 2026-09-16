@@ -19,8 +19,11 @@ machine; a single corrupted length prefix would be fatal.
 
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass, field
+
+from . import fold
 
 PROTO_VERSION = 1
 
@@ -36,27 +39,53 @@ class ProtocolError(Exception):
     a byte stream whose framing you have already lost."""
 
 
+# Header values are printable ASCII on the wire. Everything else -- control
+# characters and every byte a CP1252 text would use above 0x7E -- is
+# percent-encoded.
+#
+# Escaping only %, LF and CR was not enough, and the gap was not theoretical:
+# SESSION frames carry session titles, which are arbitrary user text, so the
+# first real chat list from the guest crashed the bridge with
+#   UnicodeEncodeError: 'ascii' codec can't encode character '\u2442'
+# on every reconnect attempt.
+_SAFE = frozenset(range(0x20, 0x7F)) - {ord("%")}
+
+_PCT = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
 def _quote(value: str) -> str:
-    """Escape the three characters that would break header parsing.
+    """Escape a header value to printable ASCII.
+
+    Folded to CP1252 first, so a header and the body it describes agree about
+    what a character is -- the guest has one codepage and it is not Unicode.
 
     Percent-encoding rather than backslashes because the guest reads these with
     strchr and backslash escaping is exactly the tar pit claudewin9x fell into
     (its system prompt needed a section on quadrupling backslashes).
     """
-    return (
-        value.replace("%", "%25")
-        .replace("\n", "%0A")
-        .replace("\r", "%0D")
-    )
+    out = []
+    for b in fold.encode(value):
+        out.append(chr(b) if b in _SAFE else "%%%02X" % b)
+    return "".join(out)
 
 
 def _unquote(value: str) -> str:
-    # %25 last, so a literal "%0A" in the original survives the round trip.
-    return (
-        value.replace("%0A", "\n")
-        .replace("%0D", "\r")
-        .replace("%25", "%")
-    )
+    """Inverse of _quote. Never raises: a header is not worth a dropped link.
+
+    Decoded in a single pass, so a literal "%25" that was encoded as "%2525"
+    comes back as "%25" rather than being unescaped twice.
+    """
+    raw = bytearray()
+    i = 0
+    while i < len(value):
+        m = _PCT.match(value, i)
+        if m:
+            raw.append(int(m.group(1), 16))
+            i = m.end()
+        else:
+            raw.extend(value[i].encode("cp1252", errors="replace"))
+            i += 1
+    return fold.decode(bytes(raw))
 
 
 @dataclass

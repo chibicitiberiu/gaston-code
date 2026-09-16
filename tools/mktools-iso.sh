@@ -14,14 +14,39 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 
 # 8.3 names throughout: the guest may see this via a driver that does not
 # surface long filenames, and a truncated name is a confusing failure.
+cp "$HERE/win/probe.exe"       "$STAGE/PROBE.EXE"  2>/dev/null || true
 cp "$HERE/win/retroclaude.exe" "$STAGE/RETROCL.EXE" 2>/dev/null || true
 cp "$HERE/win/netcheck.exe"    "$STAGE/NETCHECK.EXE" 2>/dev/null || true
 cp "$HERE/spike/hello98.exe"   "$STAGE/HELLO98.EXE" 2>/dev/null || true
+# vm/retrocl.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
+# the Wine-tier default of 127.0.0.1 when it exists.
 cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true
+cp "$HERE/vm/retrocl.ini"      "$STAGE/RETROCL.INI" 2>/dev/null || true
+
+# One command to type blind through QMP send-key, rather than six.
+cat > "$STAGE/SETUP.BAT" <<'BAT'
+@ECHO OFF
+REM COMMAND.COM rejects a trailing backslash on a COPY destination
+REM ("Invalid directory"), so C:\RETRO is written without one below.
+IF NOT EXIST C:\RETRO\NUL MD C:\RETRO
+COPY D:\*.EXE C:\RETRO > NUL
+COPY D:\*.INI C:\RETRO > NUL
+C:
+CD \RETRO
+ECHO Copied to C:\RETRO.  Run PROBE to start the Phase 0 experiments.
+BAT
+sed -i 's/$/\r/' "$STAGE/SETUP.BAT"
 
 cat > "$STAGE/README.TXT" <<'TXT'
 RetroClaude test payload
 ========================
+
+SETUP.BAT     copies everything to C:\RETRO and cd's there.
+
+PROBE.EXE     the Phase 0 experiments: W-suffix imports, threads under -bm,
+              16-bit EXEC capture, BI_RLE8, deflate throughput. Writes
+              PROBE.LOG beside itself. "No PROBE.LOG" is itself the result:
+              it means the image died at load.
 
 HELLO98.EXE   minimal Win32 GUI app. If this does not start, the Open Watcom
               CRT's GetCommandLineW / GetModuleFileNameW imports are the

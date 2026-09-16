@@ -20,8 +20,8 @@ Win98 install is an hour to redo; a snapshot is seconds.
 | Snapshot | When | State |
 |---|---|---|
 | `clean-install` | Win98 SE booted to desktop, drivers settled, before anything is installed | **done 2026-09-16 20:53** |
-| `networked` | TCP/IP reaching the bridge | pending |
-| `tools` | RetroClaude binaries copied to C:\RETRO | pending |
+| `networked` | TCP/IP reaching the bridge | **done 2026-09-16 22:04** |
+| `tools` | RetroClaude binaries copied to C:\RETRO | **done 2026-09-16 22:57** |
 
 ## Blockers
 
@@ -29,6 +29,7 @@ Win98 install is an hour to redo; a snapshot is seconds.
 |---|---|---|
 | ~~Win98 SE install media~~ | — | **RESOLVED 2026-09-16.** User supplied `Win98SE_bootable.iso` + product key. Unattended install running under libvirt. |
 | Real hardware access | end-of-Phase-1 gate | The physical P200MMX on the LAN |
+| Samba server not installed | 0.8 (LFN over `vers=1.0`) | `sudo dnf install samba` on the bridge host. `samba-common` is present but there is no `smbd`, and this session has no passwordless sudo. Everything else in Phase 3 is unaffected until then. |
 
 Everything Linux-side proceeds without these.
 
@@ -44,13 +45,13 @@ Everything Linux-side proceeds without these.
 | 0.4 | **Experiment C** — compile retro-agent sources under `wcc386` | **done** | **All five clean, zero errors, zero warnings, unchanged** |
 | 0.5a | miniz builds + runs under OW | **done** | Vendored at `win/third_party/miniz/`; round-trip verified as a Win32 PE |
 | 0.5b | Compression ratios measured | **done** | **~2.16:1**, not the ~3:1 assumed. Plan corrected |
-| 0.5c | Deflate throughput on the real P200MMX | **blocked** | Sets the adaptive-codec thresholds |
+| 0.5c | Deflate throughput on the real P200MMX | **provisional** | Ran on the guest: L1 7707 KB/s compress, 16379 KB/s inflate, round trip PASS. **Not usable as a threshold**: TCG on a modern host is nothing like a P200, and `probe.c`'s sample is a two-line block repeated (164:1), which flatters deflate badly. Needs a real corpus and real hardware |
 | 0.6 | Win98 SE guest under QEMU | **done** | Unattended via MSBATCH.INF. Required config: TCG (not KVM), no APIC, no ACPI |
-| 0.7 | W-suffix import load test (`GetCommandLineW`/`GetModuleFileNameW`) | **blocked** | Last unverified toolchain assumption |
-| 0.8 | Samba LFN over `vers=1.0` | partial | Server side can be set up now; guest half blocked |
-| 0.9 | 16-bit `EXEC` capture — **correct non-empty output**, not "no hang" | **blocked** | May reshape Phase 3 |
-| 0.10 | `GetDIBits` → `BI_RLE8`? | **blocked** | Free screenshot compression if yes |
-| 0.11 | `_beginthreadex` vs `CreateThread` under `-bm`, with a message loop | **blocked** | Folds into the Phase 1 reader thread |
+| 0.7 | W-suffix import load test (`GetCommandLineW`/`GetModuleFileNameW`) | **done — PASS** | The image loads on Win98 SE 4.10.2222 A. Both symbols resolve against Win98's kernel32. The last unverified toolchain assumption is settled; Open Watcom stands |
+| 0.8 | Samba LFN over `vers=1.0` | **blocked** | No `smbd` on the host (see blockers). Guest-side LFN itself does work: `copy retrocl.ini "retroclaude.ini"` created and read a long name from COMMAND.COM |
+| 0.9 | 16-bit `EXEC` capture — **correct non-empty output**, not "no hang" | **done — PASS** | `command.com /c ver` 36B, `dir c:\ /w` 352B, and `echo hello \| find "hello"` 8B first line `hello`. Non-empty **and correct**, including the known-bad 16-bit FIND. **Phase 3's EXEC design survives**; the claudewin9x temp-file fallback is not needed |
+| 0.10 | `GetDIBits` → `BI_RLE8`? | **done — PASS** | 640x480 8bpp: 307,200B raw -> **27,088B in 14ms, 11.3:1**, done by GDI. Beats the plan's 3-8:1 estimate for hand-rolled RLE, and the ~40 lines of RLE8 are not needed |
+| 0.11 | `_beginthreadex` vs `CreateThread` under `-bm`, with a message loop | **done — PASS** | 3/3 `_beginthreadex` threads plus a message sink window, 275 `PostMessage` round trips. **Correction to the plan**: `CreateThread(lpThreadId=NULL)` was *accepted* on this Win98 SE, so retro-agent's hardware note does not reproduce. `_beginthreadex` stays, on the OW per-thread-data argument, which is independent |
 
 ## Phase 1 — "I typed on Win98 and Claude answered"
 
@@ -67,16 +68,20 @@ Linux side first, so the guest develops against something real.
 | 1.6 | `bridge/fakegui.py` — Linux CLI speaking the wire protocol | **done** |
 | 1.7 | `win/` — window, RichEdit, edit box, reader thread, log, status bar | **done** — 42KB, builds + runs |
 | 1.8 | Stop button + `interrupt()` | **done** |
-| 1.9 | Real hardware gate | blocked |
+| 1.9 | Real hardware gate (period PC) | blocked |
+| 1.10 | **Guest gate: `netcheck.exe` on real Win98 -> bridge -> Claude** | **done — PASS** |
+| 1.11 | **Guest gate: `retroclaude.exe` GUI on real Win98** | **done — PASS** |
 
 ## Phase 2 — four demos
 
 | # | Item | State |
 |---|---|---|
-| 2a | Streaming raw text + `enc=deflate` bridge→guest | **done** — verified both link regimes |
-| 2b | Styled runs (markdown → `CHARFORMAT2`) | **done** — 66 tests, verified over the wire |
-| 2c | Pagination | **done** — 32 tests incl. wire-level integration |
-| 2d | Session list | **done** — 16 tests, verified against real sessions |
+| 2a | Streaming raw text + `enc=deflate` bridge→guest | **done** — verified on the guest |
+| 2b | Styled runs (markdown → `CHARFORMAT2`) | **done** — verified on the guest |
+| 2c | Pagination | **done** — verified on the guest, sealed at a message boundary |
+| 2d | Session list | **done** — verified on the guest, switch replays history |
+
+All four demoed on real Windows 98 SE on 2026-09-16, not just under Wine.
 
 ---
 
@@ -114,6 +119,187 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-16 — the blank transcript: riched20 must be primed with real text
+
+The single worst bug of the guest bring-up, and the one the Wine tier was least
+able to catch.
+
+**Symptom.** On real Win98 the transcript control stayed blank forever. Not
+"wrong font", not "wrong colour" — nothing at all, while everything else in the
+window worked.
+
+**What it was not.** Ruled out, in order, each by measurement rather than
+argument:
+
+- not insertion: `WM_GETTEXTLENGTH` returned 22 and `WM_GETTEXT` returned
+  `Connected to bridge.`, so the text really was in the control;
+- not geometry: `GetWindowRect` gave `162,51 470x345` and `EM_GETRECT` gave a
+  formatting rectangle of `3,4,463,338`, both correct, with `IsWindowVisible`
+  true;
+- not the character format: `EM_SETCHARFORMAT` was accepted and
+  `sizeof(CHARFORMAT2A)` is 84, the RichEdit 2.0 value;
+- not redraw batching: putting `WM_SETREDRAW` behind a switch and turning it off
+  changed nothing;
+- not `ES_READONLY` swallowing `EM_REPLACESEL`, though that was a real latent
+  bug and is fixed too (the style is now applied with `EM_SETREADONLY` and
+  lifted around each batch).
+
+**What it was.** Win98's `riched20` does not lay out or paint what
+`EM_REPLACESEL` puts into a control that has never held text. Two details, both
+found the hard way:
+
+- an **empty** `WM_SETTEXT` does not count. The control needs actual
+  characters, which is why the priming `\r\n` is left in place rather than
+  deleted afterwards;
+- priming must happen with **redraw enabled and followed by an actual paint**.
+  Priming from inside an append batch (which runs under `WM_SETREDRAW FALSE`)
+  does nothing, which is why page loads stayed blank after the live page had
+  been fixed — `clear()` -> `prime()` -> `begin()` disabled redraw before the
+  control ever painted.
+
+So `prime()` sets real text, forces `InvalidateRect` + `UpdateWindow`, and is
+called from `rc_transcript_create` and from `rc_transcript_clear`, never
+mid-batch.
+
+**The lesson is about the Wine tier, not about RichEdit.** Wine's `riched20`
+paints without any of this, so `make wine-smoke` passed the entire time. The
+plan already said Wine proves code sanity and never platform behaviour; this is
+what that sentence costs when you find out the hard way.
+
+### 2026-09-16 — three process bugs that each cost more than the code bug
+
+Recording these because all three made a *fixed* bug look unfixed.
+
+1. **`win/Makefile` had no header dependencies.** Adding two fields to
+   `rc_transcript` in `transcript.h` did not rebuild `main.o`, so `main.c`
+   still allocated the old struct while `transcript.c` wrote the new fields
+   past the end of it, corrupting the next global. The symptom was
+   `PostMessage` failing on a valid HWND with `inflight=0` — nowhere near the
+   change, and a dead ringer for a Win9x message-queue limit. Every object now
+   depends on every header.
+2. **`virsh change-media --update` with the same source path is a no-op.** The
+   drive keeps the file it already has, so a rebuilt `tools.iso` is never seen
+   and the guest quietly keeps running the previous binary. Several "the fix
+   did not work" cycles were testing a stale exe; the guest's copy was 131,584
+   bytes while the build was 132,096. `tools/vmship.sh` now ejects first and
+   prints both sizes.
+3. **`pkill -f` matches the shell running it.** Killed my own session, exit
+   144, twice. Find the process by its listening port instead.
+
+### 2026-09-16 — header values are CP1252, percent-encoded to ASCII
+
+`_quote` escaped only `%`, LF and CR. `SESSION` frames carry session titles,
+which are arbitrary user text, so the first real chat list sent to the guest
+crashed the bridge with
+
+    UnicodeEncodeError: 'ascii' codec can't encode character '\u2442'
+
+on every reconnect, in a loop, so the client could never populate its chat
+list. Header values are now folded to CP1252 and percent-encoded for anything
+outside printable ASCII, decoded in a single pass so `%25` does not unescape
+twice. Six regression tests, including control characters and a stray `%` with
+no hex digits after it.
+
+The general point: the guest has one codepage and it is not Unicode, so a
+header and the body it describes have to agree about what a character is.
+
+### 2026-09-16 — Win98 has no PCI bus here, so the NIC is ISA
+
+The PCnet would not enumerate. `C:\DETLOG.TXT` said why, and said it about the
+machine rather than the driver:
+
+    Checking for: System Bus
+    CheckInt86xCrash: int 1a,AX=b101,rc=0
+    SetVar: PCIBUS=
+    MatchAcpiOemIdRule: ACPI not detected
+    Detected: *PNP0C00\0000 = [1] Plug and Play BIOS
+    SetVar: PNPBIOS=
+
+`INT 1Ah/AX=B101` is the PCI BIOS installation check; it came back empty, so
+Win98 concluded there is no PCI bus and enumerated not one PCI device. Device
+Manager has no `PCI bus` node at all and the PnP BIOS node sits at Code 24.
+Both `DETLOG.TXT` and `DETLOG.OLD` agree, so it has been true since install.
+
+SeaBIOS is not at fault: `_32_` at 0xf6100, `$PnP` at 0xf6120 and `$PIR` at
+0xf55c0 are all present, 16-byte aligned, with valid checksums.
+
+Rather than chase it, the NIC is now an **ISA NE2000**, which needs no
+enumeration at all — and is period-correct for the Pentium MMX 200 this guest
+stands in for. Two gotchas: libvirt assigns a PCI slot unless an
+`<address type='isa'/>` is given (QEMU then refuses with "Device 'ne2k_isa'
+can't go on PCI bus"), and the card sits at **0x200/IRQ3** rather than the
+NE2000 factory 0x300 because that is what Win98's "Basic Configuration 0" pins
+the driver to and the Resources tab will not step off it. Moving the emulated
+card was cheaper than fighting the dialog.
+
+### 2026-09-16 — the APIC was never actually removed
+
+The IRQ0 hang came back the moment the guest rebooted after the network
+install, at the same EIP as before. `<features/>` with no `<apic/>` only drops
+libvirt's own hint; the `pentium2` CPU model still carries the CPUID APIC bit,
+so QEMU built a local APIC and an IOAPIC anyway. `info lapic` showed
+`SPIV 0x000000ff APIC disabled` with `LVT0` masked — Win98 had software
+disabled the LAPIC, and the 8259's ExtINT then had nowhere to go:
+`pic0: irr=01 imr=b8 isr=00` with `IF=1`.
+
+The fix that actually removes it is a CPU feature, not a machine feature:
+
+    <cpu mode='custom' match='exact' check='none'>
+      <model fallback='allow'>pentium2</model>
+      <feature policy='disable' name='apic'/>
+    </cpu>
+
+After that `info lapic` reports "local apic state not available" and the guest
+boots.
+
+### 2026-09-16 — `virsh define` restored the floppy and Setup ran again
+
+`vm/win98.xml` still had `<boot dev='fd'/>` and a floppy device from install
+day. Redefining the domain from that file under a working installation put
+Setup back on screen at "Preparing to run Windows 98 Setup". Caught at 90% and
+restored from a backup taken two minutes earlier, so nothing was lost.
+
+The floppy device is now deleted from the XML outright rather than ejected —
+ejecting does not survive a restart — and `tools/vmdefine.sh` refuses to define
+any config that boots `fd` first or still carries a floppy, and validates the
+XML first (libvirt rejects `--` inside a comment and points at the wrong line
+when it does).
+
+### 2026-09-16 — driving the guest: what works
+
+- **Keyboard is the reliable path.** `Ctrl+Esc`, `r`, type, Enter reaches
+  anything through Start->Run. Control Panel applets by name:
+  `control netcpl.cpl` for Network, and Add New Hardware is applet 1 of
+  `sysdm.cpl`, reached with
+  `rundll32.exe shell32.dll,Control_RunDLL sysdm.cpl,@1`.
+- **The mouse needed calibrating.** QEMU's PS/2 mouse is relative, so
+  `tools/qmp.py` homes the pointer into a corner and walks to the target. A
+  step of 4 overshot by almost exactly 2x (a requested `100,100` landed at
+  `197,192`); a step of 1 is exact. The queue is short, so the walk is paced.
+- **The pointer is not in `screendump` output**, so position has to be found by
+  differencing two raw PPMs rather than by looking for a cursor.
+- **`COMMAND.COM` rejects a trailing backslash on a COPY destination**
+  ("Invalid directory"). `COPY D:\*.EXE C:\RETRO` works, `C:\RETRO\` does not.
+- **Reading a guest file from the host mid-run does not work**: the qcow2 shows
+  allocated-but-unwritten clusters (all zeros) because Win98's cache has not
+  flushed, and the running app holds the log open ("Sharing violation"). Use
+  `find /v "..." C:\RETRO\retroclaude.log` inside the guest instead.
+
+### 2026-09-16 — known cosmetic issues in the chat list
+
+Not fixed, and both predate the guest bring-up — they are visible in the first
+screenshots of the original binary:
+
+- **A 1px vertical line at x=9** inside the list, three pixels into the client
+  area and inside the first character cell, spanning *contiguous groups* of
+  rows (1-5, 8-12, 14-15, 19, 22-23, 26 in one capture) with clean gaps
+  between groups. The wire bytes are plain ASCII, so it is not corrupt text,
+  and contiguous multi-row runs with no inter-row gaps argue for a partially
+  overdrawn border rather than a per-row glyph. Root cause still open.
+- **Titles are clipped** at the listbox width with no horizontal extent and no
+  tooltip, so long names cannot be read at all.
+
 
 ### 2026-09-16 — Win98 needs TCG, and needs APIC/ACPI OFF
 

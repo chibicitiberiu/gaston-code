@@ -458,6 +458,12 @@ static void probe_deflate(void)
     static char src[256 * 1024];
     static unsigned char comp[300 * 1024];
     static unsigned char dec[256 * 1024];
+    /* NOTE: this sample is one two-line block repeated, so it compresses
+     * ~164:1 and the throughput below is flattered badly -- deflate on near
+     * pure repetition barely has to search. Measured on the guest it gave
+     * 7707 KB/s at level 1, which is NOT a usable threshold. Before 0.5c can
+     * be closed this needs a realistic corpus (the project's own prose and
+     * code, which measured 2.16:1) read from a file next to the exe. */
     static const char *SAMPLE =
         "The bridge owns markdown, so the wire carries pre-styled runs.\r\n"
         "if (len > RC_MAX_FRAME) return -1;  /* 64KB, not 32MB */\r\n";
@@ -512,7 +518,10 @@ int main(int argc, char **argv)
 {
     const char *only = (argc > 1) ? argv[1] : NULL;
 
-    g_log = fopen("PROBE.LOG", "w");
+    /* Append, not truncate: the sections are usually run one at a time
+     * ("probe threads", "probe exec", ...) and a truncating open means the
+     * log only ever holds whichever section ran last. */
+    g_log = fopen("PROBE.LOG", "a");
     say("RetroClaude Phase 0 probe");
     say("built %s %s", __DATE__, __TIME__);
 

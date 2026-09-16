@@ -28,6 +28,11 @@ typedef struct {
     HMODULE  riched;
     int      batching;
     int      was_at_bottom;
+    int      appends;        /* appends attempted in this batch */
+    long     len_at_begin;   /* to notice an append the control swallowed */
+    int      fmt_warned;     /* EM_SETCHARFORMAT rejection, logged once */
+    int      diag_done;      /* first-content diagnostics, logged once */
+    int      primed;         /* has had real text via WM_SETTEXT since clear */
 } rc_transcript;
 
 int  rc_transcript_create(rc_transcript *t, HWND parent, int id, HINSTANCE inst);

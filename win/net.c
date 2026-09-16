@@ -175,7 +175,8 @@ static unsigned __stdcall reader_thread(void *arg)
              * will never free it. Freeing it here is the whole reason the
              * inflight counter exists. */
             InterlockedDecrement(&n->inflight);
-            rc_log("net: PostMessage failed, freeing frame (inflight=%ld)",
+            rc_log("net: PostMessage(hwnd=%p, WM_RC_FRAME) failed: err=%lu "
+                   "(inflight=%ld)", (void *)n->notify, GetLastError(),
                    n->inflight);
             rc_frame_free(f);
             HeapFree(GetProcessHeap(), 0, f);

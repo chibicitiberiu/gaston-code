@@ -29,6 +29,14 @@ static const style_def STYLES[RC_STYLE__COUNT] = {
 
 static int g_font_height = 0;   /* twips, from the system message font */
 
+/* Suppressing redraw around a batch of appends is an optimisation; drawing the
+ * text at all is not. Kept as a switch because separating the two is what
+ * found the priming bug above -- with it off, the control was still blank,
+ * which ruled out redraw batching as the cause. */
+static int g_batch_redraw = 1;
+
+static void prime(rc_transcript *t);
+
 static void pick_ui_font(char *face, unsigned n, int *height_twips)
 {
     NONCLIENTMETRICSA ncm;
@@ -70,8 +78,17 @@ int rc_transcript_create(rc_transcript *t, HWND parent, int id, HINSTANCE inst)
 
     t->hwnd = CreateWindowExA(
         WS_EX_CLIENTEDGE, RICHEDIT_CLASSA, "",
+        /* NOT ES_READONLY at create time. A read-only RichEdit silently
+         * ignores EM_REPLACESEL, which is the only way to append a formatted
+         * run -- the control stays empty and nothing reports an error.
+         * Read-only is applied with EM_SETREADONLY below and lifted around
+         * each append batch instead.
+         *
+         * Wine does not enforce this, so `make wine-smoke` passed throughout
+         * and the transcript was blank the first time it ran on real Win98.
+         * A reminder that the Wine tier checks code sanity, never behaviour. */
         WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE |
-        ES_READONLY | ES_AUTOVSCROLL | ES_NOHIDESEL,
+        ES_AUTOVSCROLL | ES_NOHIDESEL,
         0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, inst, NULL);
 
     if (!t->hwnd) {
@@ -92,13 +109,23 @@ int rc_transcript_create(rc_transcript *t, HWND parent, int id, HINSTANCE inst)
      * into our WndProc on every single append. */
     SendMessageA(t->hwnd, EM_SETEVENTMASK, 0, 0);
 
+    /* TEMPORARY: a distinctive background answers "is the white rectangle we
+     * are looking at actually this control?" without a debugger. */
     SendMessageA(t->hwnd, EM_SETBKGNDCOLOR, 0, (LPARAM)RGB(255, 255, 255));
+
+
+
+    /* The transcript is not user-editable; see the note at CreateWindowEx for
+     * why this is a message and not a window style. */
+    SendMessageA(t->hwnd, EM_SETREADONLY, TRUE, 0);
 
     {
         char face[LF_FACESIZE];
         pick_ui_font(face, sizeof(face), &g_font_height);
-        rc_log("transcript: ui font '%s' %d twips", face, g_font_height);
+        rc_log("transcript: hwnd=%p ui font '%s' %d twips",
+               (void *)t->hwnd, face, g_font_height);
     }
+    prime(t);
     return 0;
 }
 
@@ -127,7 +154,10 @@ void rc_transcript_begin(rc_transcript *t)
      * deliberately scrolled up is the single thing that most makes a streaming
      * UI unusable. */
     t->was_at_bottom = rc_transcript_at_bottom(t);
-    SendMessageA(t->hwnd, WM_SETREDRAW, FALSE, 0);
+    t->appends = 0;
+    t->len_at_begin = (long)SendMessageA(t->hwnd, WM_GETTEXTLENGTH, 0, 0);
+    SendMessageA(t->hwnd, EM_SETREADONLY, FALSE, 0);
+    if (g_batch_redraw) SendMessageA(t->hwnd, WM_SETREDRAW, FALSE, 0);
 }
 
 void rc_transcript_end(rc_transcript *t)
@@ -135,7 +165,35 @@ void rc_transcript_end(rc_transcript *t)
     if (--t->batching > 0) return;
     t->batching = 0;
 
-    SendMessageA(t->hwnd, WM_SETREDRAW, TRUE, 0);
+    if (g_batch_redraw) SendMessageA(t->hwnd, WM_SETREDRAW, TRUE, 0);
+    SendMessageA(t->hwnd, EM_SETREADONLY, TRUE, 0);
+
+    /* A swallowed append is invisible by definition: no error, no exception,
+     * just a control that stays empty. Say so once per batch rather than
+     * leaving the next person to diagnose a blank window by screenshot. */
+    if (t->appends) {
+        long now = (long)SendMessageA(t->hwnd, WM_GETTEXTLENGTH, 0, 0);
+        if (now == t->len_at_begin)
+            rc_log("transcript: %d appends changed nothing (len still %ld) -- "
+                   "the control is refusing EM_REPLACESEL", t->appends, now);
+        else if (!t->diag_done) {
+            /* Once per session: says whether the text is actually in the
+             * control and where the control is. Cheap, and it is what
+             * separated "not inserted" from "inserted but never painted"
+             * when the transcript came up blank on real Win98. */
+            RECT r;
+            char head[48];
+            t->diag_done = 1;
+            memset(head, 0, sizeof(head));
+            SendMessageA(t->hwnd, WM_GETTEXT, sizeof(head) - 1, (LPARAM)head);
+            GetWindowRect(t->hwnd, &r);
+            rc_log("transcript: first content len=%ld vis=%d rect=%ld,%ld %ldx%ld"
+                   " head=[%s]",
+                   now, IsWindowVisible(t->hwnd) ? 1 : 0,
+                   (long)r.left, (long)r.top,
+                   (long)(r.right - r.left), (long)(r.bottom - r.top), head);
+        }
+    }
 
     if (t->was_at_bottom) {
         SendMessageA(t->hwnd, WM_VSCROLL, SB_BOTTOM, 0);
@@ -144,28 +202,14 @@ void rc_transcript_end(rc_transcript *t)
     UpdateWindow(t->hwnd);
 }
 
-void rc_transcript_append(rc_transcript *t, const char *text, rc_style style)
+/* Apply a style to the current selection. With a zero-length selection this
+ * sets the "typing" format that EM_REPLACESEL then inserts with: there is no
+ * single call to append a formatted run in RichEdit 2.0, so mixed formatting
+ * is always this alternating pair. */
+static void apply_format(rc_transcript *t, const style_def *sd)
 {
     CHARFORMAT2A cf;
-    CHARRANGE cr;
-    LONG len;
-    const style_def *sd;
 
-    if (!t->hwnd || !text || !*text) return;
-    if (style < 0 || style >= RC_STYLE__COUNT) style = RC_STYLE_PLAIN;
-    sd = &STYLES[style];
-
-    /* Move an EMPTY selection to the end. Do NOT use (-1,-1): "end of text" is
-     * not a documented meaning for it, only "deselect". Compute the length. */
-    len = (LONG)SendMessageA(t->hwnd, WM_GETTEXTLENGTH, 0, 0);
-    cr.cpMin = len;
-    cr.cpMax = len;
-    SendMessageA(t->hwnd, EM_EXSETSEL, 0, (LPARAM)&cr);
-
-    /* Set the format of the zero-length selection -- this becomes the "typing"
-     * format that EM_REPLACESEL inserts with. There is no single call to
-     * append a formatted run in RichEdit 2.0, so mixed formatting is always
-     * this alternating pair. */
     memset(&cf, 0, sizeof(cf));
     cf.cbSize = sizeof(cf);
     cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_COLOR | CFM_SIZE;
@@ -176,13 +220,87 @@ void rc_transcript_append(rc_transcript *t, const char *text, rc_style style)
         cf.dwMask |= CFM_FACE;
         _snprintf(cf.szFaceName, LF_FACESIZE - 1, "%s", sd->face);
     }
-    SendMessageA(t->hwnd, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
 
+    if (!SendMessageA(t->hwnd, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf)
+        && !t->fmt_warned) {
+        t->fmt_warned = 1;
+        rc_log("transcript: EM_SETCHARFORMAT rejected, cbSize=%u",
+               (unsigned)sizeof(CHARFORMAT2A));
+    }
+}
+
+void rc_transcript_append(rc_transcript *t, const char *text, rc_style style)
+{
+    CHARRANGE cr;
+    LONG len;
+    const style_def *sd;
+
+    if (!t->hwnd) { rc_log("transcript: append with no control"); return; }
+    if (!text || !*text) return;
+    t->appends++;
+    if (style < 0 || style >= RC_STYLE__COUNT) style = RC_STYLE_PLAIN;
+    sd = &STYLES[style];
+
+    /* The first run after creation (or after a clear) goes in with WM_SETTEXT,
+     * and that is load-bearing rather than a shortcut.
+     *
+     * On Win98's riched20, a RichEdit that has never held text does not lay
+     * out or paint what EM_REPLACESEL puts into it. Every call reports
+     * success, WM_GETTEXTLENGTH and WM_GETTEXT show the text really is there,
+     * the window is visible with a sane formatting rectangle -- and the client
+     * area stays blank forever. Priming with an EMPTY string is not enough:
+     * the control needs actual characters. Once primed, every later
+     * EM_REPLACESEL paints normally.
+     *
+     * Wine's riched20 paints without this, so `make wine-smoke` passed the
+     * whole time and the transcript was blank the first time it ran on real
+     * Win98. Do not "tidy this away". */
+    /* Move an EMPTY selection to the end. Do NOT use (-1,-1): "end of text"
+     * is not a documented meaning for it, only "deselect". */
+    len = (LONG)SendMessageA(t->hwnd, WM_GETTEXTLENGTH, 0, 0);
+    cr.cpMin = len;
+    cr.cpMax = len;
+    SendMessageA(t->hwnd, EM_EXSETSEL, 0, (LPARAM)&cr);
+    apply_format(t, sd);
     /* wParam FALSE: do not add an undo record. */
     SendMessageA(t->hwnd, EM_REPLACESEL, FALSE, (LPARAM)text);
+
+}
+
+/* Give the control real text, once, with redraw enabled.
+ *
+ * On Win98's riched20 a RichEdit that has never held text does not lay out or
+ * paint what EM_REPLACESEL puts into it. Every call reports success,
+ * WM_GETTEXTLENGTH and WM_GETTEXT show the text really is there, the window is
+ * visible with a sane formatting rectangle -- and the client area stays blank
+ * forever. Two details, both found the hard way:
+ *
+ *   * an EMPTY WM_SETTEXT does not count; it needs actual characters, which
+ *     is why the priming newline is left in place rather than deleted;
+ *   * it must happen with redraw ENABLED, so priming from inside an append
+ *     batch (which runs under WM_SETREDRAW FALSE) does nothing.
+ *
+ * Hence: prime at creation and after every clear, never mid-batch. Wine's
+ * riched20 paints without any of this, so the Wine tier passed throughout and
+ * the transcript was blank the first time it ran on real Win98.
+ */
+static void prime(rc_transcript *t)
+{
+    SendMessageA(t->hwnd, EM_SETREADONLY, FALSE, 0);
+    SendMessageA(t->hwnd, WM_SETREDRAW, TRUE, 0);
+    SetWindowTextA(t->hwnd, "\r\n");
+    /* Setting the text is not enough; the control has to actually PAINT once
+     * before it will render anything appended later. Without this, a page
+     * load (clear -> prime -> begin -> append -> end) primes the control and
+     * then disables redraw before any paint happens, and the page comes up
+     * blank exactly as an unprimed control does. */
+    InvalidateRect(t->hwnd, NULL, TRUE);
+    UpdateWindow(t->hwnd);
+    SendMessageA(t->hwnd, EM_SETREADONLY, TRUE, 0);
+    t->primed = 1;
 }
 
 void rc_transcript_clear(rc_transcript *t)
 {
-    SetWindowTextA(t->hwnd, "");
+    prime(t);
 }

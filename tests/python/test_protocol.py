@@ -193,3 +193,51 @@ def test_error_frame_has_its_own_type():
     f = roundtrip(error("bad_version", "guest speaks 2, bridge speaks 1"))
     assert f.type == "ERROR"
     assert f.headers["code"] == "bad_version"
+
+
+# --- non-ASCII header values -----------------------------------------------
+#
+# Not hypothetical. SESSION frames carry session titles, which are arbitrary
+# user text; the first real chat list sent to the Win98 guest crashed the
+# bridge with UnicodeEncodeError on every reconnect, so the client could never
+# populate its chat list.
+
+
+def test_non_ascii_header_value_survives_encode():
+    f = Frame("SESSION", {"title": "café ⑂ naïve"})
+    wire = f.encode()
+    assert wire.isascii(), "the header section must be ASCII on the wire"
+
+
+def test_non_ascii_header_round_trips_through_cp1252():
+    """CP1252 carries these, so they come back unchanged."""
+    f = Frame("SESSION", {"title": "café naïve — €5"})
+    back = Frame.decode(f.encode()[4:])
+    assert back.headers["title"] == "café naïve — €5"
+
+
+def test_header_value_outside_cp1252_is_folded_not_fatal():
+    f = Frame("ANCHOR", {"preview": "emoji \U0001f600 and ⑂"})
+    back = Frame.decode(f.encode()[4:])
+    assert back.headers["preview"].startswith("emoji ")
+
+
+def test_percent_is_not_double_decoded():
+    """A literal '%25' in the value must come back as '%25', not '%'."""
+    f = Frame("ANCHOR", {"preview": "100%25 sure"})
+    back = Frame.decode(f.encode()[4:])
+    assert back.headers["preview"] == "100%25 sure"
+
+
+def test_control_characters_in_a_header_are_escaped():
+    f = Frame("ANCHOR", {"preview": "a\tb\x00c"})
+    wire = f.encode()
+    assert b"\t" not in wire[4:].split(b"\n\n")[0]
+    back = Frame.decode(wire[4:])
+    assert back.headers["preview"] == "a\tb\x00c"
+
+
+def test_a_stray_percent_without_hex_digits_is_left_alone():
+    """Decoding must never raise on input the guest may have mangled."""
+    f = Frame.decode(b"ANCHOR\npreview=50%\n\n")
+    assert f.headers["preview"] == "50%"

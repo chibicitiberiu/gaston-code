@@ -616,9 +616,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (!RegisterClassA(&wc)) { rc_log("RegisterClass failed"); return 1; }
 
     g_main = CreateWindowExA(0, "RetroClaudeWnd", "Claude Code",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
+        /* WS_CLIPCHILDREN: without it the parent's background erase paints
+         * over its own children, which on a window that is almost entirely
+         * children means flicker at best and erased controls at worst. */
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
         NULL, NULL, inst, NULL);
     if (!g_main) { rc_log("CreateWindowEx failed"); return 1; }
+    rc_log("main window hwnd=%p", (void *)g_main);
 
     ShowWindow(g_main, show);
     UpdateWindow(g_main);

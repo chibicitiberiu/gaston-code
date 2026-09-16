@@ -65,10 +65,18 @@ netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
 	@echo "built $@"
 
-%.o: %.c
+# Every object depends on every header. Coarse, but there are seven of them
+# and the failure it prevents is vicious: adding two fields to rc_transcript
+# did not rebuild main.o, so main.c still allocated the OLD struct while
+# transcript.c wrote the new fields past the end of it, corrupting the next
+# global. The symptom was PostMessage failing on a valid HWND -- nowhere near
+# the change, and it looked exactly like a Win9x message-queue limit.
+HDRS = $(wildcard *.h)
+
+%.o: %.c $(HDRS)
 	@$(WCC) $(CFLAGS) -fo=$@ $<
 
-miniz.o: third_party/miniz/miniz.c
+miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h
 	@$(WCC) $(CFLAGS) -fo=$@ third_party/miniz/miniz.c
 
 retroclaude.exe: $(OBJS)

@@ -42,9 +42,14 @@ lint:
 	if [ $$fail -eq 0 ]; then echo "lint: no RichEdit 3.0-only messages"; fi; \
 	exit $$fail
 
+# The venv is where claude-agent-sdk and pytest live; the system python has
+# neither, and falling back to it turns "tests pass" into "no module named
+# pytest" at the exact moment you want the tests.
+PY = $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+
 test:
 	@if [ -d tests/python ] && ls tests/python/*.py >/dev/null 2>&1; then \
-	  python3 -m pytest tests/python -q; \
+	  $(PY) -m pytest tests/python -q; \
 	else echo "test: no tests yet"; fi
 
 clean:

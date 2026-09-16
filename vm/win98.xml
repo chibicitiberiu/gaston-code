@@ -1,5 +1,6 @@
 <domain type='qemu'>
   <name>retroclaude-win98</name>
+  <uuid>cab8e9d4-6352-464a-8d4d-924f59c34f6a</uuid>
   <title>RetroClaude Windows 98 SE</title>
   <description>Win98 SE guest for RetroClaude. Hardware follows docs/PLAN.md:
 i440fx (Win98 predates q35), pcnet NIC (most consistently reported working on
@@ -11,15 +12,15 @@ speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</descri
   <vcpu placement='static'>1</vcpu>
   <os>
     <type arch='i686' machine='pc-i440fx-9.2'>hvm</type>
-    <!-- Hard disk only. The floppy ran once to `sys c:` and launch Setup;
-         leaving it in the boot order means Setup's reboot lands back on it
-         and starts over, and ejecting mid-boot is a race that loses. -->
-    <!-- Floppy first, for the single boot that runs `sys c:` and starts
-         Setup. The sitter then ejects it from the running domain AND from
-         this persistent config: a live-only eject is undone by the next
-         restart, which re-inserts the media and puts Setup into an endless
-         restart loop. -->
-    <boot dev='fd'/>
+    <!-- Hard disk only, and there is no floppy device at all any more.
+         The boot floppy ran exactly once, to `sys c:` and launch Setup. Any
+         later boot that reaches it re-runs Setup over the installed system:
+         that has now happened twice, the second time because `virsh define`
+         of this file silently restored the floppy and the fd-first boot
+         order under a running installation. Ejecting the media is not
+         enough, because a live-only eject is undone by the next restart. The
+         device is gone. If a future task needs a floppy, add it for that
+         task and take it out again. -->
     <boot dev='hd'/>
     <bootmenu enable='no'/>
   </os>
@@ -37,8 +38,18 @@ speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</descri
        SHELL32 failed to link against a byte-identical SHLWAPI here. TCG is
        slower but correct, and still far faster than the Pentium MMX 200 this
        is ultimately emulating. -->
+  <!-- Disabling the APIC *here* is what actually removes it. An empty
+       <features/> only drops libvirt's own apic/acpi hints; the pentium2 CPU
+       model still carries the CPUID APIC bit, so QEMU built a local APIC and
+       an IOAPIC anyway. Win98 then software-disabled the LAPIC with LINT0
+       masked (SPIV=0xff, LVT0=0x10000), at which point the 8259's ExtINT had
+       nowhere to go: pic0 sat at irr=01 imr=b8 isr=00 with IF=1 and the
+       BIOS tick at 0040:006C frozen, while the guest spun in the boot-time
+       speed-calibration loop. With no APIC at all the 8259 wires straight to
+       INTR, which is what Win9x expects. -->
   <cpu mode='custom' match='exact' check='none'>
     <model fallback='allow'>pentium2</model>
+    <feature policy='disable' name='apic'/>
   </cpu>
   <clock offset='localtime'/>
   <on_poweroff>destroy</on_poweroff>
@@ -51,21 +62,41 @@ speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</descri
       <source file='/home/tibi/Dev/RetroAI/vm/win98.qcow2'/>
       <target dev='hda' bus='ide'/>
     </disk>
+    <!-- The install source now lives on C:\WIN98 inside the guest, so this
+         drive is free for tools.iso and Windows never asks for the CD. -->
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
-      <source file='/home/tibi/Dev/RetroAI/vm/win98se.iso'/>
+      <source file='/home/tibi/Dev/RetroAI/vm/tools.iso'/>
       <target dev='hdc' bus='ide'/>
       <readonly/>
     </disk>
-    <disk type='file' device='floppy'>
-      <driver name='qemu' type='raw'/>
-      <source file='/home/tibi/Dev/RetroAI/vm/boot98.img'/>
-      <target dev='fda' bus='fdc'/>
-    </disk>
 
     <controller type='ide' index='0'/>
-    <controller type='fdc' index='0'/>
-    <interface type='user'><model type='pcnet'/></interface>
+    <!-- ISA NE2000, not the PCI pcnet, and the reason is in DETLOG.TXT:
+         this guest has no PCI bus at all. Win98's detection logs
+           Checking for: System Bus
+           CheckInt86xCrash: int 1a,AX=b101,rc=0
+           SetVar: PCIBUS=
+         so the INT 1Ah PCI BIOS check comes back empty and not one PCI
+         device is ever enumerated, which is why a hand-installed PCnet
+         landed with a Code 24 node and no resources. SeaBIOS is not at
+         fault: _32_, $PnP and $PIR are all present at 0xf6100/0xf6120/
+         0xf55c0 with valid checksums. An ISA NIC sidesteps enumeration
+         entirely (fixed IO 0x300, IRQ 3) and is period-correct for the
+         Pentium MMX 200 this is a stand-in for. -->
+    <interface type='user'>
+      <model type='ne2k_isa'/>
+      <!-- An explicit ISA address is required, not cosmetic: without it
+           libvirt assigns a PCI slot and QEMU refuses with
+           "Device 'ne2k_isa' can't go on PCI bus".
+
+           0x200/IRQ3 rather than the NE2000 factory 0x300, because that is
+           what Win98's "Basic Configuration 0" pins the driver to and the
+           Resources tab will not step off it. Cheaper to move the emulated
+           card than to fight the dialog. Nothing else claims 0x200 here:
+           that range is the game port, and this guest has no sound card. -->
+      <address type='isa' iobase='0x200' irq='0x3'/>
+    </interface>
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
     <graphics type='vnc' port='-1' listen='127.0.0.1'/>
