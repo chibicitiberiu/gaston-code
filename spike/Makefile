@@ -20,7 +20,7 @@ WLINK   = $(OWBIN)/wlink
 # -bt=nt   target Win32
 # -5       Pentium scheduling (no CMOV; that is 686+)
 # -otexan  optimise for time/size, no stack frames
-OWCFLAGS = -bt=nt -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt" -zq -otexan -5 -wx
+OWCFLAGS = -bt=nt -bm -zq -otexan -5 -wx -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt"
 
 # osversion=4.0 puts "Windows 4.00" in the PE header, which is the Win95/98/NT4 gate
 OWLFLAGS = system nt_win option quiet, osversion=4.0

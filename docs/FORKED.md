@@ -13,6 +13,17 @@ retro-agent moves, this is how you work out what changed under you.
 
 Nothing forked yet. Phase 3 and Phase 6 bring code in.
 
+**Experiment C result (2026-09-16): the fork risk is lower than assumed.**
+`protocol.c`, `util.c`, `log.c`, `exec.c` and `handlers.c` all compile under
+Open Watcom **unchanged, with zero errors and zero warnings**:
+
+    wcc386 -bt=nt -bm -zq -otexan -5 -DWINVER=0x0400 -D_WIN32_WINNT=0x0400
+
+The plan assumed "should compile nearly unchanged, port work is the build
+system only". That is now verified, and stronger than assumed -- the sources
+needed no edits at all. The remaining work is genuinely confined to the build
+system and to reshaping the response path onto our frame grammar.
+
 ## Planned
 
 | Upstream file | Lines | Destination | Planned changes |

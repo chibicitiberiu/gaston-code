@@ -201,13 +201,35 @@ Cheap, decisive, and it produces the actual quality/bytes curve for *this* conte
 of a general prior. Do it once, at the start of Phase 6; the numbers above are reasoning,
 not measurement.
 
-#### Text: keep the dictionary across frames
+#### Text: keep the dictionary across frames — **[MEASURED 2026-09-16]**
 
-Per-frame deflate on small chat frames compresses badly. Use one persistent deflate stream
-per direction with `Z_SYNC_FLUSH` per frame — the dictionary stays warm across frames,
-which matters a lot for chat text and code, both highly repetitive. The 32KB inflate window
-is nothing against 8–12MB. (A preset dictionary of common markdown/code tokens helps only
-the first few KB of a session; not worth a phase.)
+One persistent deflate stream per direction with `Z_SYNC_FLUSH` per frame. Measured on
+this project's own prose-plus-code documents with zlib, which is what the guest will see:
+
+| Config | Ratio |
+|---|---|
+| Independent deflate per 512B frame | 1.47:1 |
+| Persistent stream, 512B frames, L1 | 1.83:1 |
+| Persistent stream, 2KB frames, L1 | 2.04:1 |
+| **Persistent stream, 2KB frames, L6** | **2.16:1** |
+| Persistent stream, 8KB frames, L6 | 2.11:1 |
+
+Settled configuration:
+
+- **Persistent stream, never per-frame.** Independent deflate per frame is 1.27× worse.
+- **Coalesce to ≥2KB frames.** Frame size is the biggest single lever: 256B gives 1.68:1,
+  2KB gives 2.04:1, and it flattens after that. **The 10fps coalescer therefore buys ~21%
+  bandwidth on top of the latency win** — a second-order benefit worth knowing.
+- **Level 6 bridge→guest** (free on a modern CPU, 6% better than L1), **level 1
+  guest→bridge** (the P200 pays there).
+- **32KB window.** Dropping to 8KB costs 6% ratio to save 24KB of guest RAM — a bad trade
+  against 8–12MB.
+- **No preset dictionary.** Measured 2.16:1 either way; 1.86→1.89 on a cold 4KB start.
+  Not worth the complexity. *(The first draft guessed this was marginal; it is.)*
+
+**[CORRECTION]** An earlier draft assumed ~3:1 on prose and ~4:1 on code. **Real is
+~2.1:1.** Still worth doing — it nearly halves dialup time — but the tables below use the
+measured figure.
 
 #### Adaptive, not fixed
 
@@ -229,12 +251,15 @@ Guest→bridge, assuming ~4:1 on an 8bpp desktop capture:
 | `DOWNLOAD` 2MB log | 2 MB | 2.7 s | ~500 KB | 0.7 s | 400 s | 100 s |
 | 10MB local attachment | 10 MB | 13 s | varies | — | 33 min | — |
 
-Bridge→guest text, ~3:1 on prose and ~4:1 on code, for essentially free on the guest:
+Bridge→guest text at the **measured 2.16:1**, essentially free on the guest:
 
-| Payload | Raw | @750 KB/s | @5 KB/s raw | @5 KB/s compressed |
-|---|---|---|---|---|
-| 16KB page load | 16 KB | 20 ms | 3.2 s | **~1 s** |
-| A long streamed turn, 40KB | 40 KB | 53 ms | 8 s | **~2.7 s** |
+| Payload | Raw | @750 KB/s | Compressed | @5 KB/s raw | @5 KB/s compressed |
+|---|---|---|---|---|---|
+| 16KB page load | 16 KB | 20 ms | 7.4 KB | 3.2 s | **1.5 s** |
+| A long streamed turn, 40KB | 40 KB | 53 ms | 18.5 KB | 8 s | **3.7 s** |
+
+Screenshot ratios below remain **estimates** — they need a real Win98 capture to measure,
+and flat 8bpp UI should compress far better than prose.
 
 **Capture depth is therefore a wall-clock decision, not a taste one**: 8bpp+RLE at 800×600
 is a fifth of 24bpp raw on the wire and a fraction of the memory.
@@ -243,9 +268,10 @@ is a fifth of 24bpp raw on the wire and a fraction of the memory.
 level-1 deflate of a 480KB frame is a visible fraction of a second during which the box is
 fully loaded, on a machine that is probably also swapping.
 
-**Library:** `miniz` (single .c file, C89-clean) or zlib, whichever builds cleanly under
-Open Watcom — a Phase 0 build check. Win98's own `LZ32.DLL`/LZExpand is decompress-only
-and weak; ignore it.
+**Library: miniz 3.0.2, vendored at `win/third_party/miniz/`. [VERIFIED 2026-09-16]**
+Compiles under Open Watcom with zero errors and zero warnings, and a round-trip test runs
+correctly as a Win32 PE (subsystem 4.00, 0 CMOV, imports only KERNEL32/USER32). Adds ~95KB
+to a linked binary. Win98's own `LZ32.DLL`/LZExpand is decompress-only and weak; ignored.
 
 **Chunk size falls out of the same arithmetic.** A 64KB frame is ~85ms on the LAN wire, so
 per-frame progress updates land at ~12/sec — smooth without flooding the UI thread. On
