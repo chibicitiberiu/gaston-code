@@ -59,7 +59,7 @@ Linux side first, so the guest develops against something real.
 |---|---|---|
 | 2a | Streaming raw text + `enc=deflate` bridge→guest | **done** — verified both link regimes |
 | 2b | Styled runs (markdown → `CHARFORMAT2`) | **done** — 66 tests, verified over the wire |
-| 2c | Pagination | |
+| 2c | Pagination | **done** — 32 tests incl. wire-level integration |
 | 2d | Session list | |
 
 ---
@@ -88,6 +88,28 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-16 — three test-harness bugs that all looked like server bugs
+Worth recording because each wasted time and each was in the *test*, not the
+code under test:
+
+1. `Server.wait_closed()` since Python 3.12 waits for existing **connections**,
+   not just the listener. A test leaving a connection open hangs teardown
+   forever. Bound it with `wait_for`.
+2. A fresh `FrameReader` per receive call discards whatever partial frame the
+   previous call buffered.
+3. Returning on the first matching frame drops the rest of that `read()` batch
+   — several frames normally arrive together.
+
+Symptom in all three cases was "the server never sent TEXT". It always had.
+Confirmed by reproducing the exchange in a standalone script, which worked
+first try and pointed the finger squarely at the harness.
+
+### 2026-09-16 — HISTORY mode must not receive live text
+`_write_text` streams only when `view_page` is None or matches the live page.
+There is a test asserting new text never carries `page=1` while the reader is
+on page 1 — without it, text silently appears in the middle of a page the user
+is reading.
 
 ### 2026-09-16 — coalesce first, THEN parse markdown
 Ordering was an open question. Coalescing first is right: the parser receives

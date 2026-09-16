@@ -22,6 +22,12 @@
 #define ID_SEND       1003
 #define ID_STOP       1004
 #define ID_STATUS     1005
+#define ID_LIVE       1006
+#define ID_FIRST      1007
+#define ID_PREV       1008
+#define ID_NEXT       1009
+#define ID_LAST       1010
+#define ID_PAGELBL    1011
 
 #define TIMER_RECONNECT 1
 #define TIMER_STATUS    2
@@ -29,11 +35,26 @@
 #define INPUT_HEIGHT  56
 #define BUTTON_WIDTH  64
 #define GUTTER        4
+#define PAGEBAR_H     24
+#define PGBTN_W       28
 
 static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_transcript g_tr;
 static HWND  g_main, g_input, g_send, g_stop, g_status;
+static HWND  g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
+
+/* Pagination state.
+ *
+ * The control holds exactly ONE page, which is what bounds memory by page size
+ * rather than by conversation length -- the whole reason a 32MB box can run
+ * this. g_view == g_total means LIVE: new text appends as it streams. On any
+ * earlier page nothing appends at all, which also removes the
+ * append-while-scrolled-up case that RichEdit handles worst. */
+static int   g_view = 1;       /* page currently displayed */
+static int   g_total = 1;      /* pages that exist */
+static int   g_is_live = 1;
+static int   g_loading_page = 0;
 static HFONT g_ui_font;
 static WNDPROC g_input_oldproc;
 static int   g_turn_active = 0;
@@ -69,6 +90,36 @@ static void status_refresh(void)
     status_set(1, buf);
 }
 
+static void page_update_ui(void)
+{
+    char lbl[64];
+    _snprintf(lbl, sizeof(lbl), "Page %d/%d%s",
+              g_view, g_total, g_is_live ? " (Live)" : "");
+    SetWindowTextA(g_pagelbl, lbl);
+
+    EnableWindow(g_first, g_view > 1);
+    EnableWindow(g_prev,  g_view > 1);
+    EnableWindow(g_next,  g_view < g_total);
+    EnableWindow(g_last,  g_view < g_total);
+    EnableWindow(g_live,  !g_is_live);
+}
+
+static void page_goto(const char *which)
+{
+    const char *keys[1]; const char *vals[1];
+    keys[0] = "page"; vals[0] = which;
+    rc_net_send(&g_net, "GETPAGE", keys, vals, 1, NULL, 0);
+}
+
+static void page_goto_n(int n)
+{
+    char buf[16];
+    if (n < 1) n = 1;
+    if (n > g_total) n = g_total;
+    _snprintf(buf, sizeof(buf), "%d", n);
+    page_goto(buf);
+}
+
 static void ui_set_busy(int busy)
 {
     g_turn_active = busy;
@@ -96,6 +147,10 @@ static void render_frame(rc_frame *f)
         if (v) _snprintf(g_net.sess, sizeof(g_net.sess) - 1, "%s", v);
         v = rc_frame_get(f, "next_seq");
         if (v) g_net.next_seq = (unsigned)atoi(v);
+        v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
+        v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
+        g_is_live = 1;
+        page_update_ui();
         g_backoff_ms = 1000;
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
@@ -136,6 +191,37 @@ static void render_frame(rc_frame *f)
             rc_transcript_append(&g_tr, "\r\n", RC_STYLE_PLAIN);
             rc_transcript_end(&g_tr);
         }
+
+    } else if (strcmp(f->type, "PAGESTART") == 0) {
+        v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
+        v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
+        v = rc_frame_get(f, "live");  g_is_live = (v && *v == '1');
+        g_loading_page = 1;
+        /* One page in, one page out: clear before rendering, so the control
+         * never holds two. */
+        rc_transcript_clear(&g_tr);
+        rc_transcript_begin(&g_tr);
+        v = rc_frame_get(f, "continued");
+        if (v && *v == '1')
+            rc_transcript_append(&g_tr,
+                "[continued from the previous page]\r\n", RC_STYLE_TOOL);
+        page_update_ui();
+
+    } else if (strcmp(f->type, "PAGEEND") == 0) {
+        if (g_loading_page) { rc_transcript_end(&g_tr); g_loading_page = 0; }
+        page_update_ui();
+
+    } else if (strcmp(f->type, "PAGESEALED") == 0) {
+        v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
+        /* On the live page, follow the seal forward. On an older page, the
+         * counter simply ticks up -- that IS the new-content notification. */
+        if (g_is_live) g_view = g_total;
+        page_update_ui();
+
+    } else if (strcmp(f->type, "ANCHOR") == 0) {
+        rc_log("anchor: page=%s preview=%s",
+               rc_frame_get(f, "page") ? rc_frame_get(f, "page") : "?",
+               rc_frame_get(f, "preview") ? rc_frame_get(f, "preview") : "");
 
     } else if (strcmp(f->type, "ERROR") == 0) {
         char line[512];
@@ -225,7 +311,18 @@ static void layout(HWND hwnd)
     h = rc.bottom - rc.top - sb_h;
     y = h - INPUT_HEIGHT - GUTTER;
 
-    MoveWindow(g_tr.hwnd, GUTTER, GUTTER, w - 2 * GUTTER, y - GUTTER, TRUE);
+    {   /* Page bar across the top. */
+        int x = GUTTER, by = GUTTER;
+        MoveWindow(g_live,  x, by, 40, PAGEBAR_H - 2, TRUE); x += 40 + GUTTER;
+        MoveWindow(g_first, x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
+        MoveWindow(g_prev,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
+        MoveWindow(g_pagelbl, x, by + 4, 130, PAGEBAR_H - 4, TRUE); x += 130;
+        MoveWindow(g_next,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
+        MoveWindow(g_last,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE);
+    }
+
+    MoveWindow(g_tr.hwnd, GUTTER, GUTTER + PAGEBAR_H,
+               w - 2 * GUTTER, y - GUTTER - PAGEBAR_H, TRUE);
     MoveWindow(g_input, GUTTER, y,
                w - 3 * GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
     MoveWindow(g_send, w - GUTTER - BUTTON_WIDTH, y, BUTTON_WIDTH, 24, TRUE);
@@ -263,15 +360,41 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         0, 0, 0, 0, hwnd, (HMENU)ID_STOP, inst, NULL);
     EnableWindow(g_stop, FALSE);
 
+    g_live = CreateWindowExA(0, "BUTTON", "Live",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_LIVE, inst, NULL);
+    g_first = CreateWindowExA(0, "BUTTON", "|<",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_FIRST, inst, NULL);
+    g_prev = CreateWindowExA(0, "BUTTON", "<",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_PREV, inst, NULL);
+    g_pagelbl = CreateWindowExA(0, "STATIC", "Page 1/1",
+        WS_CHILD | WS_VISIBLE | SS_CENTER, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_PAGELBL, inst, NULL);
+    g_next = CreateWindowExA(0, "BUTTON", ">",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_NEXT, inst, NULL);
+    g_last = CreateWindowExA(0, "BUTTON", ">|",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_LAST, inst, NULL);
+
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
     parts[0] = 220; parts[1] = 340; parts[2] = -1;
     SendMessageA(g_status, SB_SETPARTS, 3, (LPARAM)parts);
 
-    SendMessageA(g_input, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_send,  WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_stop,  WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_input,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_send,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_stop,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_live,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_first,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_prev,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_next,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_last,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_pagelbl, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    page_update_ui();
 
     g_input_oldproc = (WNDPROC)SetWindowLongA(g_input, GWL_WNDPROC,
                                               (LONG)input_proc);
@@ -352,8 +475,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_COMMAND:
         switch (LOWORD(wp)) {
-        case ID_SEND: do_send(); return 0;
-        case ID_STOP: do_stop(); return 0;
+        case ID_SEND:  do_send(); return 0;
+        case ID_STOP:  do_stop(); return 0;
+        case ID_LIVE:  page_goto("live");      return 0;
+        case ID_FIRST: page_goto_n(1);         return 0;
+        case ID_PREV:  page_goto_n(g_view - 1); return 0;
+        case ID_NEXT:  page_goto_n(g_view + 1); return 0;
+        case ID_LAST:  page_goto_n(g_total);   return 0;
         }
         return 0;
 

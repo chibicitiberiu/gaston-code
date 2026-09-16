@@ -23,6 +23,7 @@ from . import fold
 from .coalesce import Coalescer
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
 from .markdown import MarkdownStream
+from .pages import Paginator
 from .protocol import (
     MAX_FRAME,
     PROTO_VERSION,
@@ -55,6 +56,14 @@ class GuestSession:
     zip_out: StreamCompressor = field(default_factory=StreamCompressor)
     link_bps: float | None = None
 
+    # Which page the guest is showing. None means LIVE (follow the last page).
+    # In HISTORY mode the bridge keeps buffering silently; the page counter
+    # ticking up in the status bar is the new-content notification.
+    view_page: int | None = None
+
+    # Which page the guest is showing. None means LIVE (follow the last page).
+    view_page: int | None = None
+
     # One coalescer per source stream (assistant text, thinking). Coalescing
     # happens BEFORE markdown parsing, so the parser receives whole lines in
     # ~2KB batches rather than single tokens -- which is what lets it merge
@@ -62,6 +71,11 @@ class GuestSession:
     # EM_SETCHARFORMAT/EM_REPLACESEL pair count down on the guest.
     coalescers: dict = field(default_factory=dict)
     markdown: MarkdownStream = field(default_factory=MarkdownStream)
+
+    # The transcript lives here, in full. The guest only ever holds one page,
+    # which is what bounds its memory by page size rather than by conversation
+    # length.
+    pages: Paginator = field(default_factory=Paginator)
 
     @property
     def connected(self) -> bool:
@@ -242,6 +256,8 @@ class Bridge:
             "ver": str(PROTO_VERSION),
             "model": guest.claude.model or "(default)",
             "next_seq": str(guest.replay.next_seq),
+            "page": str(guest.pages.live.number),
+            "total": str(guest.pages.count),
         }), stamp=False)
 
         # Replay anything missed while disconnected.
@@ -338,6 +354,26 @@ class Bridge:
 
     async def _write_text(self, guest: GuestSession, text: str,
                           *, style: str) -> None:
+        """Record into the paginator, then stream to the guest if it is on the
+        live page."""
+        if not text:
+            return
+
+        page_no = guest.pages.live.number
+        sealed = guest.pages.add(style, text)
+
+        # Only stream when the guest is watching the live page. In HISTORY mode
+        # the bridge keeps buffering silently and the page counter ticking up
+        # is the notification.
+        if guest.view_page is None or guest.view_page == page_no:
+            await self._emit_runs(guest, style, text, page_no)
+
+        for pg in sealed:
+            await self._send(guest, Frame("PAGESEALED", {
+                "page": str(pg.number), "total": str(guest.pages.count)}))
+
+    async def _emit_runs(self, guest: GuestSession, style: str, text: str,
+                         page_no: int) -> None:
         """Fold to CP1252, compress if worthwhile, chunk under the frame cap.
 
         Chunking here rather than at the socket keeps the send lock free
@@ -354,7 +390,8 @@ class Bridge:
                 chunk = guest.zip_out.compress(chunk)
                 enc = ENC_DEFLATE
             await self._send(guest, Frame(
-                "TEXT", {"style": style, "enc": enc}, chunk))
+                "TEXT", {"style": style, "enc": enc, "page": str(page_no)},
+                chunk))
 
     # --- frame pump --------------------------------------------------------
 
@@ -380,6 +417,9 @@ class Bridge:
         elif f.type == "INTERRUPT":
             if guest.claude:
                 await guest.claude.interrupt()
+
+        elif f.type == "GETPAGE":
+            await self._send_page(guest, f.headers.get("page", ""))
 
         elif f.type == "STAT":
             # The guest measures its own throughput for the progress UI; the
@@ -411,6 +451,11 @@ class Bridge:
     async def _run_turn(self, guest: GuestSession, text: str) -> None:
         if not guest.claude:
             return
+        # User turns are the landmarks a reader navigates by.
+        anchor = guest.pages.mark_user_turn(text)
+        await self._send(guest, Frame("ANCHOR", {
+            "page": str(anchor.page), "off": str(anchor.offset),
+            "preview": anchor.preview}))
         await self._send(guest, Frame("TURN", {"state": "start"}))
         try:
             turn = await guest.claude.send(text)
@@ -421,6 +466,12 @@ class Bridge:
                 "state": "error", "msg": str(exc)[:200]}))
             return
         await self._flush_text(guest)
+        # Seal only at a message boundary, so a turn is never split
+        # mid-sentence while the reader is watching it stream.
+        sealed = guest.pages.message_boundary()
+        if sealed:
+            await self._send(guest, Frame("PAGESEALED", {
+                "page": str(sealed.number), "total": str(guest.pages.count)}))
         raw, comp = guest.zip_out.stats
         if comp:
             log.info("deflate so far: %d -> %d bytes (%.2f:1)",
@@ -432,6 +483,35 @@ class Bridge:
             "cost_usd": f"{turn.cost_usd:.4f}" if turn.cost_usd else "",
             "ms": str(turn.duration_ms),
         }))
+
+    async def _send_page(self, guest: GuestSession, want: str) -> None:
+        """Render one page to the guest. LIVE is requested as page=live."""
+        if want == "live":
+            number = guest.pages.live.number
+            guest.view_page = None
+        else:
+            try:
+                number = int(want)
+            except ValueError:
+                await self._send(guest, error("bad_page", want))
+                return
+            guest.view_page = (None if number == guest.pages.live.number
+                               else number)
+
+        page = guest.pages.page(number)
+        if page is None:
+            await self._send(guest, error("no_such_page", want))
+            return
+
+        await self._send(guest, Frame("PAGESTART", {
+            "page": str(page.number),
+            "total": str(guest.pages.count),
+            "live": "1" if guest.view_page is None else "0",
+            "continued": "1" if page.continued else "0",
+        }))
+        for run in page.runs:
+            await self._emit_runs(guest, run.style, run.text, page.number)
+        await self._send(guest, Frame("PAGEEND", {"page": str(page.number)}))
 
     # --- sending -----------------------------------------------------------
 
