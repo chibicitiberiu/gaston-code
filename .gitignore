@@ -1,0 +1,29 @@
+# Wine prefix (221MB, disposable, recreated by `make wine`)
+spike/.wineprefix/
+.wineprefix/
+
+# Build output
+*.exe
+*.o
+*.obj
+*.lst
+*.map
+
+# Timestamped backups (git is the backup now)
+*.bak.*
+
+# VM images
+vm/*.qcow2
+vm/*.img
+vm/*.iso
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+*.swp
+.vscode/
+.idea/
