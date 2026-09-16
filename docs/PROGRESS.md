@@ -42,10 +42,11 @@ Linux side first, so the guest develops against something real.
 
 | # | Item | State |
 |---|---|---|
-| 1.1 | `bridge/protocol.py` — frame codec (new, not a lift) | |
+| 1.0 | venv + `claude-agent-sdk` 0.2.153 installed | **done** |
+| 1.1 | `bridge/protocol.py` — frame codec (new, not a lift) | **done** — 29 tests |
 | 1.2 | `bridge/server.py` — listener, HELLO, role rejection | |
 | 1.3 | `bridge/session.py` — one `ClaudeSDKClient`, `allowed_tools=[]` | |
-| 1.4 | `bridge/fold.py` — UTF-8 → CP1252 | |
+| 1.4 | `bridge/fold.py` — UTF-8 → CP1252 | **done** — 31 tests |
 | 1.5 | `bridge/replay.py` — seq numbering + resume | |
 | 1.6 | `bridge/fakegui.py` — Linux CLI speaking the wire protocol | |
 | 1.7 | `win/` — window, RichEdit, edit box, reader thread, log, status bar | |
@@ -93,6 +94,33 @@ Three parameters settled by measurement rather than argument:
 
 Window stays 32KB (dropping to 8KB costs 6% ratio to save 24KB — bad trade against
 8–12MB). Level 6 bridge→guest, level 1 guest→bridge.
+
+### 2026-09-16 — SDK introspected; every uncertain API claim resolved
+`claude-agent-sdk` 0.2.153. The reviewers flagged four things to verify before
+Phase 4 rather than trust the plan on. All four came back favourable:
+
+- `PermissionResultAllow.updated_permissions` is `list[PermissionUpdate]` — the
+  plan's list comprehension is right (docs rendered it as `dict` in one place).
+- **`ClaudeSDKClient.set_model()` exists**, so the model dropdown changes live.
+- **`effort` is an option, not a setter** (`Literal['low','medium','high','xhigh','max']`),
+  so changing effort *does* need `fork_session=True`. The plan guessed both correctly.
+- `SDKSessionInfo` carries `summary`, `first_prompt`, `custom_title` — no title
+  derivation needed.
+
+Bonus, not in the plan: `get_context_usage()` and `stop_task()` exist.
+`get_context_usage()` is a free context-fill indicator for the status bar.
+
+### 2026-09-16 — header values are percent-encoded, not backslash-escaped
+Three characters only (`%`, `\n`, `\r`). claudewin9x needed a section of its
+system prompt teaching the model to quadruple backslashes across four
+interpreter layers; percent-encoding removes that class of bug, and the guest
+can still parse headers with `strchr`.
+
+### 2026-09-16 — fold(): explicit map must precede the CP1252 passthrough
+First version checked "can CP1252 represent this?" first, which silently skipped
+every deliberate override. Curly quotes, the ellipsis, the bullet and nbsp *are*
+in CP1252 but are overridden anyway, because they render poorly in a fixed-pitch
+bitmap font at 640x480. Caught by tests, which is the argument for writing them.
 
 ### 2026-09-16 — vendored miniz rather than zlib
 Two files, MIT, no build system, and it compiled clean under OW first try. Vendored

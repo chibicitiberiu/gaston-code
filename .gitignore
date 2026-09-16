@@ -27,3 +27,6 @@ venv/
 *.swp
 .vscode/
 .idea/
+
+# Local venv
+.venv/

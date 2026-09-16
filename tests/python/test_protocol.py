@@ -1,0 +1,195 @@
+"""Frame codec tests.
+
+The guest parses these frames in C with strchr and fixed buffers, so the cases
+that matter most are the malformed ones: anything that gets past the bridge and
+confuses the guest is a hang or a crash on a machine with no debugger.
+"""
+
+import struct
+
+import pytest
+
+from bridge.protocol import (
+    MAX_FRAME,
+    PROTO_VERSION,
+    Frame,
+    FrameReader,
+    ProtocolError,
+    error,
+    hello,
+    text,
+)
+
+
+def roundtrip(f: Frame) -> Frame:
+    wire = f.encode()
+    (length,) = struct.unpack_from("<I", wire, 0)
+    assert length == len(wire) - 4
+    return Frame.decode(wire[4:])
+
+
+def test_roundtrip_plain():
+    got = roundtrip(Frame("TEXT", {"seq": "1", "style": "plain"}, b"hello"))
+    assert got.type == "TEXT"
+    assert got.headers == {"seq": "1", "style": "plain"}
+    assert got.body == b"hello"
+
+
+def test_roundtrip_empty_body():
+    got = roundtrip(Frame("INTERRUPT", {}))
+    assert got.type == "INTERRUPT"
+    assert got.body == b""
+
+
+def test_body_may_contain_the_header_terminator():
+    """A body containing \\n\\n must not be mistaken for the end of headers --
+    only the FIRST occurrence terminates."""
+    body = b"line one\n\nline two\n\nline three"
+    got = roundtrip(Frame("TEXT", {"seq": "9"}, body))
+    assert got.body == body
+
+
+def test_body_may_be_arbitrary_binary():
+    body = bytes(range(256))
+    got = roundtrip(Frame("BLOB", {"n": "1"}, body))
+    assert got.body == body
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "plain",
+        "has spaces",
+        "has=equals",
+        "has\nnewline",
+        "has\r\ncrlf",
+        "100% literal",
+        "%0A not really a newline",
+        "",
+    ],
+)
+def test_header_values_survive_quoting(value):
+    """Header values are percent-encoded rather than backslash-escaped.
+
+    claudewin9x needed a section of its system prompt explaining how to
+    quadruple backslashes across four interpreter layers. Percent-encoding
+    three characters avoids that entire class of problem.
+    """
+    got = roundtrip(Frame("TEXT", {"v": value}, b""))
+    assert got.headers["v"] == value
+
+
+def test_seq_accessor():
+    assert Frame("TEXT", {"seq": "42"}).seq == 42
+    assert Frame("TEXT", {}).seq is None
+
+
+def test_enc_defaults_to_raw():
+    assert Frame("TEXT", {}).enc == "raw"
+    assert Frame("TEXT", {"enc": "deflate"}).enc == "deflate"
+
+
+# --- malformed input --------------------------------------------------------
+
+
+def test_missing_header_terminator_rejected():
+    with pytest.raises(ProtocolError, match="terminator"):
+        Frame.decode(b"TEXT\nseq=1\n")
+
+
+def test_empty_type_rejected():
+    with pytest.raises(ProtocolError, match="empty frame type"):
+        Frame.decode(b"\n\n")
+
+
+def test_header_without_equals_rejected():
+    with pytest.raises(ProtocolError, match="without"):
+        Frame.decode(b"TEXT\ngarbage\n\n")
+
+
+def test_duplicate_header_rejected():
+    """Silently taking the last value would make a spoofed seq= trivially
+    injectable into an otherwise valid frame."""
+    with pytest.raises(ProtocolError, match="duplicate"):
+        Frame.decode(b"TEXT\nseq=1\nseq=2\n\n")
+
+
+def test_lowercase_type_rejected_on_encode():
+    with pytest.raises(ProtocolError, match="uppercase"):
+        Frame("text").encode()
+
+
+def test_bad_header_key_rejected_on_encode():
+    with pytest.raises(ProtocolError, match="bad header key"):
+        Frame("TEXT", {"has space": "1"}).encode()
+
+
+def test_oversized_frame_rejected_on_encode():
+    with pytest.raises(ProtocolError, match="cap"):
+        Frame("TEXT", {}, b"x" * MAX_FRAME).encode()
+
+
+# --- incremental reassembly -------------------------------------------------
+
+
+def test_reader_handles_split_across_reads():
+    """TCP gives you arbitrary fragments, and the guest's recv() will too."""
+    wire = text(b"abc", seq=1).encode() + text(b"def", seq=2).encode()
+    reader = FrameReader()
+    out = []
+    for i in range(0, len(wire), 3):
+        out.extend(reader.feed(wire[i : i + 3]))
+    assert [f.body for f in out] == [b"abc", b"def"]
+    assert [f.seq for f in out] == [1, 2]
+
+
+def test_reader_returns_nothing_on_partial_header():
+    assert FrameReader().feed(b"\x10") == []
+
+
+def test_reader_yields_multiple_frames_from_one_read():
+    wire = b"".join(text(b"%d" % i, seq=i).encode() for i in range(5))
+    assert len(FrameReader().feed(wire)) == 5
+
+
+def test_reader_rejects_oversized_length_prefix():
+    """The single most dangerous malformed input: a corrupted length prefix on
+    a 32MB machine. retro-agent's MAX_FRAME_SIZE is 32MB -- inheriting that
+    constant would let one bad frame allocate the whole box away.
+    """
+    reader = FrameReader()
+    with pytest.raises(ProtocolError, match="cap is"):
+        reader.feed(struct.pack("<I", 32 * 1024 * 1024) + b"TEXT\n\n")
+
+
+def test_reader_does_not_allocate_on_huge_claim():
+    """Rejection must happen from the length prefix alone, before any attempt
+    to buffer the claimed size."""
+    reader = FrameReader()
+    with pytest.raises(ProtocolError):
+        reader.feed(struct.pack("<I", 0xFFFFFFFF))
+    # 4 bytes in, nothing buffered beyond them.
+    assert len(reader._buf) <= 4
+
+
+# --- constructors -----------------------------------------------------------
+
+
+def test_hello_carries_version_and_cap():
+    f = hello("s3cret")
+    assert f.type == "HELLO"
+    assert f.headers["ver"] == str(PROTO_VERSION)
+    assert int(f.headers["max_frame"]) == MAX_FRAME
+
+
+def test_hello_resume_is_optional():
+    assert "sess" not in hello("x").headers
+    f = hello("x", sess="abc", from_seq=17)
+    assert f.headers["sess"] == "abc"
+    assert f.headers["from"] == "17"
+
+
+def test_error_frame_has_its_own_type():
+    f = roundtrip(error("bad_version", "guest speaks 2, bridge speaks 1"))
+    assert f.type == "ERROR"
+    assert f.headers["code"] == "bad_version"
