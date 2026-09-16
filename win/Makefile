@@ -40,7 +40,17 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib
 
 OBJS = main.o net.o frameproto.o log.o ini.o transcript.o miniz.o
 
-.PHONY: all clean check run netcheck probe
+.PHONY: all clean check run netcheck probe htmlspike
+
+# Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
+# move to HTML, which the 512 KB measured cost says is affordable.
+HTMLSPIKE_OBJS = htmlspike.o
+htmlspike: htmlspike.exe
+htmlspike.exe: $(HTMLSPIKE_OBJS)
+	@$(WLINK) $(LFLAGS) library ole32.lib, oleaut32.lib, uuid.lib \
+	  name $@ file {$(HTMLSPIKE_OBJS)}
+	@echo "built $@"
+	@objdump -p $@ | grep -i 'DLL Name'
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.

@@ -120,6 +120,48 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — MSHTML is affordable after all, and it looks far better
+
+The plan rejected MSHTML for v1 partly on a "multi-MB DLL tax ... fixed per
+process so pagination doesn't reduce it". That was an estimate, and the user
+pointed out the obvious counter: **Windows 98's own Explorer hosts MSHTML** for
+folder Web View, so the engine is already resident in the shell and a second
+host pays only for its own instance data.
+
+Measured on the 32MB guest rather than argued about:
+
+| | free of 32288 KB | cost |
+|---|---|---|
+| baseline, no app | 9928 KB | — |
+| RichEdit client, large chat loaded | 8688 KB | **~1.4 MB** |
+| CoInitialize | 8312 KB | 0 KB |
+| + LoadLibrary(mshtml.dll) | 8028 KB | 284 KB |
+| + CoCreateInstance(HTMLDocument) | 7932 KB | 96 KB |
+| + CoCreateInstance(WebBrowser) | 7800 KB | 132 KB |
+| **spike hosting a rendered document** | **5832 KB** | **~4 MB** |
+
+Two numbers matter and they are different: **512 KB to instantiate** the engine,
+**~4 MB with a document actually laid out and painted**. Quoting the first as
+the cost of an HTML transcript would be wrong.
+
+~4 MB against a 20 MB budget, with ~5.9 MB physical still free, so it fits. It
+is ~2.6 MB more than RichEdit, and it buys padding, margins, borders,
+background tints, real bulleted lists, tables, and eventually inline
+screenshots -- none of which RichEdit 2.0 can do, and all of which the
+transcript visibly wants.
+
+**The spike** (`win/htmlspike.c`, ~360 lines) hosts the WebBrowser control from
+plain C89: IOleClientSite, IOleInPlaceSite and IOleInPlaceFrame as embedded
+structs with static vtables, recovered to the host by fixed offsets. It
+activates and paints on real Win98 SE. Open Watcom has `mshtml.h`, `exdisp.h`,
+`docobj.h`, `oleidl.h` and `uuid.lib`, so nothing had to be vendored.
+
+One gap: OW ships `mshtml.h` but **not `mshtmhst.h`**, so `IDocHostUIHandler`
+has to be hand-declared. It only controls chrome -- the 3D border, the
+scrollbars, the context menu -- so the spike does without it and answers the
+question that actually gated the decision.
+
+
 ### 2026-09-16 — the transcript was never broken; autoscroll was overshooting
 
 Chasing "the chat window has rendering issues" produced one genuinely
