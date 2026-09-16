@@ -7,11 +7,27 @@ that gets re-planned once Phase 0 answers land.
 
 ---
 
+## VM checkpoints
+
+Snapshot after each milestone, before anything else touches the disk. A ruined
+Win98 install is an hour to redo; a snapshot is seconds.
+
+    export LIBVIRT_DEFAULT_URI=qemu:///session
+    virsh snapshot-create-as retroclaude-win98 <name> "<description>"
+    virsh snapshot-list       retroclaude-win98
+    virsh snapshot-revert     retroclaude-win98 <name>
+
+| Snapshot | When | State |
+|---|---|---|
+| `clean-install` | Win98 SE booted to desktop, drivers settled, before anything is installed | pending |
+| `networked` | TCP/IP reaching the bridge | pending |
+| `tools` | RetroClaude binaries copied to C:\RETRO | pending |
+
 ## Blockers
 
 | Blocker | Blocks | Needs |
 |---|---|---|
-| **Win98 SE install media** | every guest-side experiment, all of Phase 0's gates, Phase 1 validation | An ISO or disk image from the user. Not something that can be sourced automatically. |
+| ~~Win98 SE install media~~ | — | **RESOLVED 2026-09-16.** User supplied `Win98SE_bootable.iso` + product key. Unattended install running under libvirt. |
 | Real hardware access | end-of-Phase-1 gate | The physical P200MMX on the LAN |
 
 Everything Linux-side proceeds without these.
@@ -29,7 +45,7 @@ Everything Linux-side proceeds without these.
 | 0.5a | miniz builds + runs under OW | **done** | Vendored at `win/third_party/miniz/`; round-trip verified as a Win32 PE |
 | 0.5b | Compression ratios measured | **done** | **~2.16:1**, not the ~3:1 assumed. Plan corrected |
 | 0.5c | Deflate throughput on the real P200MMX | **blocked** | Sets the adaptive-codec thresholds |
-| 0.6 | Win98 SE guest under QEMU + `hello98` socket/log artifact | **blocked** | Needs media |
+| 0.6 | Win98 SE guest under QEMU + `hello98` socket/log artifact | **in progress** | Unattended via MSBATCH.INF; no keystrokes needed so far |
 | 0.7 | W-suffix import load test (`GetCommandLineW`/`GetModuleFileNameW`) | **blocked** | Last unverified toolchain assumption |
 | 0.8 | Samba LFN over `vers=1.0` | partial | Server side can be set up now; guest half blocked |
 | 0.9 | 16-bit `EXEC` capture — **correct non-empty output**, not "no hang" | **blocked** | May reshape Phase 3 |

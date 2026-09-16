@@ -40,7 +40,21 @@ LIBS   = library wsock32.lib, comctl32.lib
 
 OBJS = main.o net.o frameproto.o log.o ini.o transcript.o miniz.o
 
-.PHONY: all clean check run netcheck
+.PHONY: all clean check run netcheck probe
+
+# Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
+# and its output read without a GUI.
+PROBE_OBJS = probe.o miniz.o
+probe: probe.exe
+probe.exe: $(PROBE_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(PROBE_OBJS)}
+	@echo "built $@"
+	@echo "--- import audit (an NT-only symbol here would kill it at load) ---"
+	@objdump -p $@ | grep -i 'DLL Name'
+	@objdump -p $@ | grep -E '^\s+[0-9a-f]+\s+<none>' | awk '{print $$NF}' \
+	  | grep -E 'SetHandleInformation|OpenSCManager|CM_Get|GetGuiResources' \
+	  && echo "  ^^ NT-ONLY IMPORT -- WILL NOT LOAD ON WIN9X" || echo "  clean"
+
 all: retroclaude.exe
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises

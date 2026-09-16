@@ -30,3 +30,18 @@ venv/
 
 # Local venv
 .venv/
+
+# VM artifacts: images, screenshots, extracted media
+vm/*.qcow2
+vm/*.raw
+vm/*.img
+vm/*.iso
+vm/*.ppm
+vm/*.png
+vm/*.pid
+vm/*.log
+vm/sitter/
+vm/watch/
+vm/tools-stage/
+vm/*.bak.*
+vm/*.partial.*

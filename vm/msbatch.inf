@@ -1,0 +1,67 @@
+[BatchSetup]
+Version=3.0 (32-bit)
+
+[Setup]
+Express=1
+InstallDir=C:\WINDOWS
+InstallType=3
+ProductKey="K4HVD-Q9TJ9-6CRX9-C9G68-RQ2D3"
+EBD=0
+ShowEula=0
+ChangeDir=0
+OptionalComponents=1
+Network=1
+System=0
+CCP=0
+CleanBoot=0
+Display=0
+PenWinWarning=0
+InstallLocationsMRU=0
+DevicePath=0
+Uninstall=0
+NoPrompt2Boot=1
+TimeZone="GMT"
+VRC=0
+
+[NameAndOrg]
+Name="RetroClaude"
+Org="RetroAI"
+Display=0
+
+[Network]
+ComputerName="RETRO98"
+Workgroup="WORKGROUP"
+Description="RetroClaude guest"
+Display=0
+PrimaryLogon=VREDIR
+Clients=VREDIR
+Protocols=MSTCP
+Security=SHARE
+
+[MSTCP]
+LMHOSTS=0
+DHCP=1
+DNS=0
+
+[VREDIR]
+ValidatedLogon=0
+
+[OptionalComponents]
+"Accessibility Options"=0
+"Desktop Wallpaper"=0
+"Document Templates"=0
+"Games"=0
+"Imaging"=0
+"Mouse Pointers"=0
+"Paint"=1
+"Screen Savers"=0
+"Windows Scripting Host"=1
+"Dial-Up Networking"=0
+"Direct Cable Connection"=0
+"HyperTerminal"=0
+"Phone Dialer"=0
+"Audio Compression"=0
+"Video Compression"=0
+"Volume Control"=0
+"Sound Recorder"=0
+"Media Player"=0
