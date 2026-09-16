@@ -149,13 +149,29 @@ SYS C: > NUL
 ECHO done > C:\SYSDONE.TXT
 
 :SETUP
+REM Copy the answer file to C: FIRST.
+REM
+REM Setup reads the batch file lazily, not at launch, so referencing
+REM A:\MSBATCH.INF means the floppy has to stay inserted for an unknown
+REM length of time. It also must NOT be inserted when Setup reboots, or the
+REM reboot lands back here and the install restarts from zero. Putting the
+REM answer file on C: removes that race completely: the floppy becomes
+REM disposable the moment this line finishes.
+COPY A:\MSBATCH.INF C:\MSBATCH.INF > NUL
+IF NOT EXIST C:\MSBATCH.INF GOTO NOBATCH
+
 REM Find the CD. The RAM drive takes a letter, so it is not always D:.
 FOR %%d IN (D E F G H I) DO IF EXIST %%d:\WIN98\SETUP.EXE SET SRC=%%d
 IF "%SRC%"=="" GOTO NOCD
 ECHO Source: %SRC%:\WIN98
+ECHO Answer file: C:\MSBATCH.INF
 ECHO Starting Setup (unattended)...
 ECHO.
-%SRC%:\WIN98\SETUP.EXE A:\MSBATCH.INF /IS /IM /IQ /NR
+%SRC%:\WIN98\SETUP.EXE C:\MSBATCH.INF /IS /IM
+GOTO END
+
+:NOBATCH
+ECHO Could not copy MSBATCH.INF to C:
 GOTO END
 
 :NOCD

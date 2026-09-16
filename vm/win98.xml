@@ -1,4 +1,4 @@
-<domain type='kvm'>
+<domain type='qemu'>
   <name>retroclaude-win98</name>
   <title>RetroClaude Windows 98 SE</title>
   <description>Win98 SE guest for RetroClaude. Hardware follows docs/PLAN.md:
@@ -11,11 +11,32 @@ speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</descri
   <vcpu placement='static'>1</vcpu>
   <os>
     <type arch='i686' machine='pc-i440fx-9.2'>hvm</type>
+    <!-- Hard disk only. The floppy ran once to `sys c:` and launch Setup;
+         leaving it in the boot order means Setup's reboot lands back on it
+         and starts over, and ejecting mid-boot is a race that loses. -->
+    <!-- Floppy first, for the single boot that runs `sys c:` and starts
+         Setup. The sitter then ejects it from the running domain AND from
+         this persistent config: a live-only eject is undone by the next
+         restart, which re-inserts the media and puts Setup into an endless
+         restart loop. -->
     <boot dev='fd'/>
     <boot dev='hd'/>
     <bootmenu enable='no'/>
   </os>
-  <features><acpi/><apic/></features>
+  <!-- No APIC, and no ACPI.
+       Win98 is a PIC-era OS: it never programs the IOAPIC. With <apic/>
+       enabled, QEMU routes IRQ0 to an IOAPIC whose pins Win98 leaves masked,
+       so the timer interrupt is swallowed. Observed directly: pic0 irr=43
+       (IRQ0 pending) imr=b8 (IRQ0 unmasked) isr=00 (nothing blocking) while
+       the CPU spun with IF=1, and the BIOS tick at 0040:006C never advanced.
+       Win98's real-mode boot waits on exactly that counter. -->
+  <features/>
+  <!-- TCG, not KVM, deliberately.
+       Win98 guests are reported to suffer "missing DLL" / missing-export
+       crashes under KVM even when the files on disk are provably correct:
+       SHELL32 failed to link against a byte-identical SHLWAPI here. TCG is
+       slower but correct, and still far faster than the Pentium MMX 200 this
+       is ultimately emulating. -->
   <cpu mode='custom' match='exact' check='none'>
     <model fallback='allow'>pentium2</model>
   </cpu>
@@ -41,6 +62,7 @@ speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</descri
       <source file='/home/tibi/Dev/RetroAI/vm/boot98.img'/>
       <target dev='fda' bus='fdc'/>
     </disk>
+
     <controller type='ide' index='0'/>
     <controller type='fdc' index='0'/>
     <interface type='user'><model type='pcnet'/></interface>

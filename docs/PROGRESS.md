@@ -19,7 +19,7 @@ Win98 install is an hour to redo; a snapshot is seconds.
 
 | Snapshot | When | State |
 |---|---|---|
-| `clean-install` | Win98 SE booted to desktop, drivers settled, before anything is installed | pending |
+| `clean-install` | Win98 SE booted to desktop, drivers settled, before anything is installed | **done 2026-09-16 20:53** |
 | `networked` | TCP/IP reaching the bridge | pending |
 | `tools` | RetroClaude binaries copied to C:\RETRO | pending |
 
@@ -45,7 +45,7 @@ Everything Linux-side proceeds without these.
 | 0.5a | miniz builds + runs under OW | **done** | Vendored at `win/third_party/miniz/`; round-trip verified as a Win32 PE |
 | 0.5b | Compression ratios measured | **done** | **~2.16:1**, not the ~3:1 assumed. Plan corrected |
 | 0.5c | Deflate throughput on the real P200MMX | **blocked** | Sets the adaptive-codec thresholds |
-| 0.6 | Win98 SE guest under QEMU + `hello98` socket/log artifact | **in progress** | Unattended via MSBATCH.INF; no keystrokes needed so far |
+| 0.6 | Win98 SE guest under QEMU | **done** | Unattended via MSBATCH.INF. Required config: TCG (not KVM), no APIC, no ACPI |
 | 0.7 | W-suffix import load test (`GetCommandLineW`/`GetModuleFileNameW`) | **blocked** | Last unverified toolchain assumption |
 | 0.8 | Samba LFN over `vers=1.0` | partial | Server side can be set up now; guest half blocked |
 | 0.9 | 16-bit `EXEC` capture — **correct non-empty output**, not "no hang" | **blocked** | May reshape Phase 3 |
@@ -114,6 +114,46 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-16 — Win98 needs TCG, and needs APIC/ACPI OFF
+
+Two separate emulation faults, both diagnosed from guest CPU state rather than
+guessed at. Recording them because neither is obvious and both cost hours.
+
+**1. KVM corrupts Win98's loader.** Under `domain type='kvm'` the install
+completed but Explorer died and then:
+
+    The SHELL32.DLL file is linked to missing export SHLWAPI.DLL:...FileAttributesA
+
+Both DLLs on the guest disk were **byte-identical to the install media** (md5
+compared against the files extracted from the ISO's cabinets). A missing export
+is impossible when both files are correct, so the import resolution itself was
+executing wrongly. Fix: `domain type='qemu'` (TCG). Slower, correct, and still
+far faster than the Pentium MMX 200 being emulated.
+
+**2. `<apic/>` sends IRQ0 into a black hole.** Win98 then hung in real mode,
+spinning forever at a fixed EIP. `info registers` and `info pic` gave it away:
+
+    EIP=00009dfb  CR0=00000010 (PE clear -> real mode)  EFL=0x246 (IF set)
+    pic0: irr=43 (IRQ0 PENDING) imr=b8 (IRQ0 UNMASKED) isr=00 (nothing blocking)
+    IRQ0 delta: 92 interrupts in 5s = 18.4Hz -- the PIT was perfect
+
+Disassembling the hang site showed Win98's CPU speed-calibration loop:
+
+    0x8ee4b:  movw %es:0x46c, %dx   ; BIOS tick counter at 0040:006C
+    0x8ee50:  cmpw %ax, %dx
+    0x8ee52:  je   0x8ee4b          ; wait for it to change -- it never did
+
+A pending, unmasked, unblocked interrupt was never delivered to a CPU with
+IF=1, because `<apic/>` gives QEMU an IOAPIC whose pins Win98 (a PIC-era OS)
+never unmasks. Removing `<apic/>` and `<acpi/>` fixed it: the tick immediately
+resumed at 18.25Hz.
+
+**Lesson for the install procedure:** guest CPU state via
+`virsh qemu-monitor-command --hmp 'info registers' / 'info pic' / 'x/24i'` is
+the tool that settles "hung or slow", and it works when the guest is wedged.
+Screenshot md5s do NOT settle it -- ImageMagick stamps PNG metadata, so
+identical screens produce different hashes. Compare raw PPM bytes instead.
 
 ### 2026-09-16 — switching chats is close + resume, not a pool
 One live `ClaudeSDKClient`. Switching closes it, reopens with `resume=<id>`, and

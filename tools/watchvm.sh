@@ -1,29 +1,59 @@
 #!/usr/bin/env bash
-# Poll the guest's screen and log what it is doing.
+# Passive monitor for the Win98 guest: screenshot, read the screen, log change.
 #
-# Screenshots come from QEMU's device model, not from anything inside the
-# guest, so this keeps working when the guest is wedged -- which is the point.
+# Reads QEMU's device model rather than anything inside the guest, so it keeps
+# working when the guest is wedged -- which is when it matters most. This is
+# the same mechanism the plan relies on for detecting a hung guest or a BSOD.
 set -uo pipefail
 export LIBVIRT_DEFAULT_URI=qemu:///session
 DOM="${DOM:-retroclaude-win98}"
 OUT="${OUT:-vm/watch}"
 EVERY="${EVERY:-20}"
-N="${N:-90}"
+N="${N:-900}"
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$OUT"
+echo $$ > vm/watch.pid
+
+have_ocr=0
+if command -v tesseract >/dev/null 2>&1; then have_ocr=1; fi
+
+last_dim=""
+last_note=""
+
 for i in $(seq 1 "$N"); do
     ts=$(date +%H:%M:%S)
-    if ! virsh domstate "$DOM" 2>/dev/null | grep -q running; then
-        echo "$ts  domain not running: $(virsh domstate "$DOM" 2>&1 | head -1)"
-        break
+    state=$(virsh domstate "$DOM" 2>/dev/null | head -1)
+    if [ "$state" != "running" ]; then
+        echo "$ts  state=$state"
+        sleep "$EVERY"
+        continue
     fi
-    f=$(printf "%s/%03d" "$OUT" "$i")
+
+    f=$(printf "%s/%04d" "$OUT" "$i")
     if virsh screenshot "$DOM" "$f.ppm" >/dev/null 2>&1; then
         magick "$f.ppm" "$f.png" 2>/dev/null && rm -f "$f.ppm"
-        # Cheap change detector so the log shows when something happened.
-        sum=$(md5sum "$f.png" 2>/dev/null | cut -c1-8)
-        echo "$ts  shot $i  $sum"
     else
-        echo "$ts  screenshot failed"
+        sleep "$EVERY"
+        continue
+    fi
+
+    dim=$(magick identify -format '%wx%h' "$f.png" 2>/dev/null)
+    if [ "$dim" != "$last_dim" ]; then
+        echo "$ts  video mode $dim"
+        last_dim="$dim"
+    fi
+
+    if [ "$have_ocr" -eq 1 ]; then
+        # Win98 Setup is white on blue; tesseract needs it inverted.
+        magick "$f.png" -colorspace gray -negate -resize 180% "$TMP/o.png" 2>/dev/null
+        txt=$(tesseract "$TMP/o.png" - 2>/dev/null | tr -d '\r')
+        pct=$(printf '%s' "$txt" | grep -oE '[0-9]+%' | head -1)
+        key=$(printf '%s' "$txt" | grep -oiE 'Setup is preparing|Setting up hardware|Restarting|Welcome to Windows|Enter Network Password|invalid command|error|Windows Protection' | head -1)
+        note="${key:-} ${pct:-}"
+        if [ -n "${note// /}" ] && [ "$note" != "$last_note" ]; then
+            echo "$ts  $note"
+            last_note="$note"
+        fi
     fi
     sleep "$EVERY"
 done
