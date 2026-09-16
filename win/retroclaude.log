@@ -1,4 +1,7 @@
-17:50:04.927 === retroclaude starting ===
-17:50:06.287 net: connected to 127.0.0.1:7896
-17:50:08.939 net: reader thread exiting (rx=623 tx=209)
-17:50:08.989 === retroclaude exiting ===
+18:05:09.450 === retroclaude starting ===
+18:05:09.453 os version: c0000a04
+18:05:09.455 config: bridge=127.0.0.1:7897 autoscroll=1
+18:05:09.681 transcript: ui font 'Tahoma' 165 twips
+18:05:09.725 net: connected to 127.0.0.1:7897
+18:05:10.527 ready: sess=8e9b4425-59b1-4c10-8135-42fc9e92a8ee model=(default)
+18:05:10.533 chat list: 1 sessions

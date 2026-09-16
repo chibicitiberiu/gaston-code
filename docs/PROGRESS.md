@@ -60,9 +60,19 @@ Linux side first, so the guest develops against something real.
 | 2a | Streaming raw text + `enc=deflate` bridge→guest | **done** — verified both link regimes |
 | 2b | Styled runs (markdown → `CHARFORMAT2`) | **done** — 66 tests, verified over the wire |
 | 2c | Pagination | **done** — 32 tests incl. wire-level integration |
-| 2d | Session list | |
+| 2d | Session list | **done** — 16 tests, verified against real sessions |
 
 ---
+
+### Phase 2 verification status
+
+- 2a streaming + adaptive deflate: verified both link regimes over Wine
+- 2b markdown -> styled runs: verified over the wire; no markdown syntax
+  reaches the guest
+- 2c pagination: 32 tests including wire-level integration; history pages never
+  receive live text
+- 2d session list: `list_sessions()` against real on-disk sessions, chat list
+  renders in the client under Wine
 
 ### Phase 1 verification status
 
@@ -88,6 +98,23 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-16 — switching chats is close + resume, not a pool
+One live `ClaudeSDKClient`. Switching closes it, reopens with `resume=<id>`, and
+replays the stored history into a fresh `Paginator` so the guest can page back
+through it exactly as if it had streamed. A warm pool is ~3x the work and
+invisible on a single-user box.
+
+### 2026-09-16 — ListBox, not ListView, and double-click to switch
+ListBox costs fewer GDI objects, and the 16-bit USER/GDI heaps on 9x are a fixed
+64KB that does not scale with RAM. Double-click rather than selection-change,
+because an accidental arrow key would otherwise tear down a live session.
+
+### 2026-09-16 — stored history is replayed defensively
+`_text_of` walks persisted message data whose shape is not guaranteed across
+releases. Every branch tolerates missing keys and wrong types, because a
+KeyError there breaks the whole chat list rather than one message. Thinking
+blocks are skipped on replay: long, and never the point of scrolling back.
 
 ### 2026-09-16 — three test-harness bugs that all looked like server bugs
 Worth recording because each wasted time and each was in the *test*, not the

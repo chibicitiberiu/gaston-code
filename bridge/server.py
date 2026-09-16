@@ -33,6 +33,7 @@ from .protocol import (
     error,
 )
 from .replay import Replay
+from . import sessions as sesslist
 from .session import Session
 
 log = logging.getLogger("bridge.server")
@@ -279,7 +280,8 @@ class Bridge:
 
     # --- Claude session ----------------------------------------------------
 
-    async def _make_session(self, guest: GuestSession) -> Session:
+    async def _make_session(self, guest: GuestSession,
+                            resume: str | None = None) -> Session:
         async def on_text(t: str) -> None:
             await self._emit_text(guest, t, style="plain")
 
@@ -308,6 +310,7 @@ class Bridge:
             cwd=self.cwd,
             model=self.model,
             effort=self.effort,
+            resume=resume,
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -418,6 +421,25 @@ class Bridge:
             if guest.claude:
                 await guest.claude.interrupt()
 
+        elif f.type == "GETSESSIONS":
+            rows = sesslist.listing(cwd=self.cwd)
+            await self._send(guest, Frame("SESSIONS",
+                                          {"count": str(len(rows))}))
+            for i, r in enumerate(rows):
+                await self._send(guest, Frame("SESSION", {
+                    "i": str(i),
+                    "id": r["id"],
+                    "title": r["title"][:120],
+                    "cwd": r["cwd"][:120],
+                    "current": "1" if (guest.claude and
+                                       guest.claude.session_id == r["id"])
+                               else "0",
+                }))
+            await self._send(guest, Frame("SESSIONSEND", {}))
+
+        elif f.type == "SWITCH":
+            await self._switch(guest, f.headers.get("id", ""))
+
         elif f.type == "GETPAGE":
             await self._send_page(guest, f.headers.get("page", ""))
 
@@ -483,6 +505,50 @@ class Bridge:
             "cost_usd": f"{turn.cost_usd:.4f}" if turn.cost_usd else "",
             "ms": str(turn.duration_ms),
         }))
+
+    async def _switch(self, guest: GuestSession, session_id: str) -> None:
+        """Close the live client and reopen on a stored session.
+
+        One live ClaudeSDKClient at a time, so this is a close + resume rather
+        than a pool lookup. The history is replayed into a fresh paginator so
+        the guest can page back through it exactly as if it had streamed.
+        """
+        if not session_id:
+            await self._send(guest, error("bad_session", "no id"))
+            return
+
+        log.info("switching to session %s", session_id)
+        await self._send(guest, Frame("NOTICE", {"kind": "switching"},
+                                      fold.encode("Loading conversation...")))
+
+        if guest.claude:
+            await guest.claude.close()
+
+        # Fresh transcript state. Anything the old session had is on disk.
+        guest.pages = Paginator()
+        guest.markdown = MarkdownStream()
+        for c in guest.coalescers.values():
+            await c.stop()
+        guest.coalescers.clear()
+
+        try:
+            guest.claude = await self._make_session(guest, resume=session_id)
+        except Exception as exc:
+            log.exception("resume failed")
+            await self._send(guest, error("resume_failed", str(exc)[:200]))
+            return
+
+        for style, text in sesslist.history_runs(session_id):
+            guest.pages.add(style, text)
+            if guest.pages.live.over_soft_cap():
+                guest.pages.message_boundary()
+
+        guest.view_page = None
+        await self._send(guest, Frame("SWITCHED", {
+            "id": session_id,
+            "total": str(guest.pages.count),
+        }))
+        await self._send_page(guest, "live")
 
     async def _send_page(self, guest: GuestSession, want: str) -> None:
         """Render one page to the guest. LIVE is requested as page=live."""

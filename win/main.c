@@ -28,6 +28,8 @@
 #define ID_NEXT       1009
 #define ID_LAST       1010
 #define ID_PAGELBL    1011
+#define ID_CHATS      1012
+#define ID_REFRESH    1013
 
 #define TIMER_RECONNECT 1
 #define TIMER_STATUS    2
@@ -37,12 +39,21 @@
 #define GUTTER        4
 #define PAGEBAR_H     24
 #define PGBTN_W       28
+#define CHATS_W      150
 
 static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_transcript g_tr;
 static HWND  g_main, g_input, g_send, g_stop, g_status;
 static HWND  g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
+static HWND  g_chats, g_refresh;
+
+/* Session ids, parallel to the list box. A ListBox rather than a ListView
+ * deliberately: fewer GDI objects, and the 16-bit USER/GDI heaps on 9x are a
+ * fixed 64KB that does not scale with RAM. */
+#define MAX_CHATS 64
+static char g_chat_ids[MAX_CHATS][64];
+static int  g_chat_count = 0;
 
 /* Pagination state.
  *
@@ -120,6 +131,21 @@ static void page_goto_n(int n)
     page_goto(buf);
 }
 
+static void chats_request(void)
+{
+    rc_net_send(&g_net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
+}
+
+static void chats_switch(void)
+{
+    int sel = (int)SendMessageA(g_chats, LB_GETCURSEL, 0, 0);
+    const char *keys[1]; const char *vals[1];
+    if (sel == LB_ERR || sel < 0 || sel >= g_chat_count) return;
+    keys[0] = "id"; vals[0] = g_chat_ids[sel];
+    rc_log("switching to session %s", g_chat_ids[sel]);
+    rc_net_send(&g_net, "SWITCH", keys, vals, 1, NULL, 0);
+}
+
 static void ui_set_busy(int busy)
 {
     g_turn_active = busy;
@@ -151,6 +177,7 @@ static void render_frame(rc_frame *f)
         v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
         g_is_live = 1;
         page_update_ui();
+        chats_request();
         g_backoff_ms = 1000;
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
@@ -191,6 +218,35 @@ static void render_frame(rc_frame *f)
             rc_transcript_append(&g_tr, "\r\n", RC_STYLE_PLAIN);
             rc_transcript_end(&g_tr);
         }
+
+    } else if (strcmp(f->type, "SESSIONS") == 0) {
+        SendMessageA(g_chats, LB_RESETCONTENT, 0, 0);
+        g_chat_count = 0;
+
+    } else if (strcmp(f->type, "SESSION") == 0) {
+        const char *id = rc_frame_get(f, "id");
+        const char *title = rc_frame_get(f, "title");
+        const char *cur = rc_frame_get(f, "current");
+        if (id && g_chat_count < MAX_CHATS) {
+            char label[160];
+            _snprintf(label, sizeof(label) - 1, "%s%s",
+                      (cur && *cur == '1') ? "* " : "  ",
+                      title ? title : id);
+            label[sizeof(label) - 1] = '\0';
+            _snprintf(g_chat_ids[g_chat_count], 63, "%s", id);
+            SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)label);
+            if (cur && *cur == '1')
+                SendMessageA(g_chats, LB_SETCURSEL, g_chat_count, 0);
+            g_chat_count++;
+        }
+
+    } else if (strcmp(f->type, "SESSIONSEND") == 0) {
+        rc_log("chat list: %d sessions", g_chat_count);
+
+    } else if (strcmp(f->type, "SWITCHED") == 0) {
+        v = rc_frame_get(f, "total");
+        if (v) g_total = atoi(v);
+        chats_request();       /* refresh the "current" marker */
 
     } else if (strcmp(f->type, "PAGESTART") == 0) {
         v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
@@ -311,8 +367,14 @@ static void layout(HWND hwnd)
     h = rc.bottom - rc.top - sb_h;
     y = h - INPUT_HEIGHT - GUTTER;
 
-    {   /* Page bar across the top. */
-        int x = GUTTER, by = GUTTER;
+    {   /* Chat list down the left, with its Refresh button under it. */
+        int lh = h - 2 * GUTTER - 24;
+        MoveWindow(g_chats, GUTTER, GUTTER, CHATS_W, lh, TRUE);
+        MoveWindow(g_refresh, GUTTER, GUTTER + lh + 2, CHATS_W, 22, TRUE);
+    }
+
+    {   /* Page bar across the top of the transcript column. */
+        int x = GUTTER * 2 + CHATS_W, by = GUTTER;
         MoveWindow(g_live,  x, by, 40, PAGEBAR_H - 2, TRUE); x += 40 + GUTTER;
         MoveWindow(g_first, x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
         MoveWindow(g_prev,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
@@ -321,10 +383,14 @@ static void layout(HWND hwnd)
         MoveWindow(g_last,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE);
     }
 
-    MoveWindow(g_tr.hwnd, GUTTER, GUTTER + PAGEBAR_H,
-               w - 2 * GUTTER, y - GUTTER - PAGEBAR_H, TRUE);
-    MoveWindow(g_input, GUTTER, y,
-               w - 3 * GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
+    {
+        int cx = GUTTER * 2 + CHATS_W;
+        int cw = w - cx - GUTTER;
+        MoveWindow(g_tr.hwnd, cx, GUTTER + PAGEBAR_H,
+                   cw, y - GUTTER - PAGEBAR_H, TRUE);
+        MoveWindow(g_input, cx, y,
+                   cw - GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
+    }
     MoveWindow(g_send, w - GUTTER - BUTTON_WIDTH, y, BUTTON_WIDTH, 24, TRUE);
     MoveWindow(g_stop, w - GUTTER - BUTTON_WIDTH, y + 28, BUTTON_WIDTH, 24, TRUE);
 }
@@ -360,6 +426,15 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         0, 0, 0, 0, hwnd, (HMENU)ID_STOP, inst, NULL);
     EnableWindow(g_stop, FALSE);
 
+    g_chats = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+        LBS_NOTIFY | LBS_HASSTRINGS,
+        0, 0, 0, 0, hwnd, (HMENU)ID_CHATS, inst, NULL);
+
+    g_refresh = CreateWindowExA(0, "BUTTON", "Refresh",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+        hwnd, (HMENU)ID_REFRESH, inst, NULL);
+
     g_live = CreateWindowExA(0, "BUTTON", "Live",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_LIVE, inst, NULL);
@@ -394,6 +469,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     SendMessageA(g_next,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_last,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_pagelbl, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_chats,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_refresh, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     page_update_ui();
 
     g_input_oldproc = (WNDPROC)SetWindowLongA(g_input, GWL_WNDPROC,
@@ -482,6 +559,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_PREV:  page_goto_n(g_view - 1); return 0;
         case ID_NEXT:  page_goto_n(g_view + 1); return 0;
         case ID_LAST:  page_goto_n(g_total);   return 0;
+        case ID_REFRESH: chats_request();      return 0;
+        case ID_CHATS:
+            /* Double-click to switch. Single-click would make an accidental
+             * arrow-key press tear down a live session. */
+            if (HIWORD(wp) == LBN_DBLCLK) chats_switch();
+            return 0;
         }
         return 0;
 
