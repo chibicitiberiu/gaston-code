@@ -172,9 +172,22 @@ Memory on the 32MB guest, free of 32288 KB:
 | app running, 200-line answer | 20-48 KB | app + document ~2.5 MB on top |
 
 Total ~9.7 MB against the 20 MB budget, so the gate passes, but the engine is
-7.4 MB of it and that part is fixed. The remaining lever, if it ever needs to
-be smaller, is hosting `CLSID_HTMLDocument` directly instead of the WebBrowser
-control, which would avoid shdocvw and urlmon.
+7.4 MB of it and that part is fixed.
+
+**The obvious lever was tried and does not work yet.** Hosting
+`CLSID_HTMLDocument` directly instead of `CLSID_WebBrowser` should avoid
+shdocvw and urlmon along with navigation, history and the WinInet cache, none
+of which a transcript needs. It compiles, activates, and paints nothing: MSHTML
+hosted directly is a **document object**, not an ordinary embedded control, so
+it does not simply create a window on `DoVerb`. It calls back through
+`IOleDocumentSite::ActivateMe` and hands over an `IOleDocumentView`, which the
+host must then `SetInPlaceSite` / `UIActivate` / `SetRect` / `Show`. That was
+implemented -- and it still came up blank, so something else in the DocObject
+contract is missing.
+
+Reverted to the WebBrowser control, which does that plumbing and works. If the
+~2 MB is ever needed, this is where to start, and the missing piece is in the
+activation sequence rather than in the interfaces themselves.
 
 Worth stating plainly: `dwAvailPhys` on Win9x excludes the disk cache, which
 shrinks under pressure, so "48 KB free" is the edge of the cache being
