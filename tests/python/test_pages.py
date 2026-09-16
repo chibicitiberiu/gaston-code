@@ -48,18 +48,20 @@ def test_adjacent_same_style_runs_merge_within_a_page():
 
 def test_soft_cap_alone_does_not_seal():
     """A page over the soft cap keeps taking text until a message boundary --
-    that is what stops a turn being split mid-sentence."""
+    that is what stops a turn being split mid-sentence.
+
+    Added as one run rather than one call per line, so this exercises the LINE
+    cap without also tripping the block cap, which is a separate override
+    tested below."""
     p = Paginator()
-    for i in range(MAX_LINES + 50):
-        p.add("plain", line(i))
+    p.add("plain", "".join(line(i) for i in range(MAX_LINES + 50)))
     assert p.count == 1, "no boundary yet, so no seal"
     assert p.live.over_soft_cap()
 
 
 def test_message_boundary_seals_when_over_the_soft_cap():
     p = Paginator()
-    for i in range(MAX_LINES + 5):
-        p.add("plain", line(i))
+    p.add("plain", "".join(line(i) for i in range(MAX_LINES + 5)))
     sealed = p.message_boundary()
     assert sealed is not None
     assert sealed.number == 1
@@ -115,8 +117,7 @@ def test_continued_flag_marks_a_mid_run_split():
 
 def test_boundary_seal_is_not_marked_continued():
     p = Paginator()
-    for i in range(MAX_LINES + 5):
-        p.add("plain", line(i))
+    p.add("plain", "".join(line(i) for i in range(MAX_LINES + 5)))
     p.message_boundary()
     assert p.page(2).continued is False
 
@@ -212,3 +213,44 @@ def test_realistic_session_stays_bounded():
     for n in range(1, p.count + 1):
         assert p.page(n).nbytes <= HARD_BYTES
     assert [a.page for a in p.anchors] == sorted(a.page for a in p.anchors)
+
+
+# --- block count ------------------------------------------------------------
+#
+# The cap that matters now the transcript is HTML. MSHTML's cost scales with
+# element count, not text length: 200 one-word paragraphs cost far more than
+# one paragraph of 200 words, and a byte cap cannot tell those apart. Measured
+# on the 32MB guest, a 200-element page took it down to 48 KB free.
+
+
+def test_the_block_cap_seals_between_blocks_not_inside_one():
+    """A block boundary is already a clean stopping point, so unlike the byte
+    cap this override never splits a run."""
+    from bridge.pages import HARD_BLOCKS
+    p = Paginator()
+    for i in range(HARD_BLOCKS + 10):
+        p.add("html", f"<p>{i}</p>")
+    assert p.count > 1
+    for n in range(1, p.count + 1):
+        assert "<p>" in p.page(n).text
+        assert not p.page(n).text.startswith("<p>" + "</p>")
+
+
+def test_many_tiny_blocks_still_seal():
+    from bridge.pages import MAX_BLOCKS
+    p = Paginator()
+    for i in range(MAX_BLOCKS + 5):
+        p.add("html", f"<p>{i}</p>")
+    assert p.live.over_soft_cap(), "a byte cap alone would not have noticed"
+    assert p.message_boundary() is not None
+
+
+def test_block_count_is_bounded_on_every_page():
+    from bridge.pages import HARD_BLOCKS
+    p = Paginator()
+    for i in range(700):
+        p.add("html", f"<p>{i}</p>")
+        if i % 31 == 0:
+            p.message_boundary()
+    for n in range(1, p.count + 1):
+        assert p.page(n).blocks <= HARD_BLOCKS, f"page {n}"

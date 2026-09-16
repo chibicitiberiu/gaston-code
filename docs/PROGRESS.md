@@ -120,6 +120,69 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — what HTML bought, and what it cost
+
+Things the transcript can now do that RichEdit 2.0 could not do at all:
+
+  * **tables.** Markdown tables render as real tables with a tinted header
+    row, borders and wrapping cells. The styled-run renderer could only ever
+    have shown the pipe characters.
+  * **ordered lists.** `1.` becomes `<ol>` rather than silently turning into a
+    bullet and losing the numbering the model meant.
+  * a code block with a language label bar that **scrolls inside its own box**
+    rather than giving the whole transcript a horizontal scrollbar.
+  * padding, margins, borders and background tints, which is most of what made
+    the old view look like a text dump.
+
+Two rendering bugs found by reading the screen rather than the tests:
+
+  * **`code` inside `**bold**` was escaped rather than parsed**, so backticks
+    appeared literally. The inline matcher now recurses into the emphasis
+    span; the delimiters are stripped first, so it cannot re-match itself.
+  * **underscores inside identifiers were emphasis.** `BPB_RsvdSecCnt and
+    BPB_NumFATs` rendered as one italic run from the first underscore to the
+    last, mangling exactly the identifiers this project talks about all day.
+    Underscore emphasis now requires a word boundary on both sides, which is
+    what every markdown implementation does; asterisks are unrestricted.
+
+### 2026-09-17 — pages are bounded by element count now, not just bytes
+
+The byte cap alone is the wrong bound for an HTML renderer, because MSHTML's
+cost scales with **element count**: a hundred one-line paragraphs cost far more
+than one paragraph of a hundred lines, and a byte cap cannot tell those apart.
+`MAX_BLOCKS = 90` (hard cap 180) now sits alongside the line and byte caps.
+Unlike the byte cap it never splits a run -- a block boundary is already a
+clean place to stop, so `add()` seals between blocks before starting the next.
+
+**It did not help the case that prompted it, and the reason is worth keeping.**
+A 200-line answer was assumed to be 200 elements. It is not: consecutive
+non-blank lines are one markdown paragraph, so it renders as a single `<p>`
+with 199 `<br>` separators -- one block, one element, and the cap never fires.
+Measured either way, the guest sat at 20-48 KB free, so the document was never
+the expensive part. The cap is still correct for a conversation made of many
+separate blocks; it simply was not the lever for this workload, and the "200
+elements" reading of the first measurement was wrong.
+
+Memory on the 32MB guest, free of 32288 KB:
+
+| | free | reading |
+|---|---|---|
+| desktop, before MSHTML has ever loaded | 9928 KB | the honest baseline |
+| engine resident, app closed | 2548 KB | the engine holds ~7.4 MB and **does not give it back** |
+| app running, 200-line answer | 20-48 KB | app + document ~2.5 MB on top |
+
+Total ~9.7 MB against the 20 MB budget, so the gate passes, but the engine is
+7.4 MB of it and that part is fixed. The remaining lever, if it ever needs to
+be smaller, is hosting `CLSID_HTMLDocument` directly instead of the WebBrowser
+control, which would avoid shdocvw and urlmon.
+
+Worth stating plainly: `dwAvailPhys` on Win9x excludes the disk cache, which
+shrinks under pressure, so "48 KB free" is the edge of the cache being
+squeezed out rather than the edge of failure -- the app stayed responsive
+throughout. It is still much tighter than the RichEdit version's 1.4 MB, and
+that is the price of the look.
+
+
 ### 2026-09-17 — the transcript is HTML now
 
 RichEdit 2.0 is gone. `win/transcript.c` is deleted, `win/htmlview.c` hosts

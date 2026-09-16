@@ -153,3 +153,62 @@ def test_inline_code_inside_bold_is_parsed_not_escaped():
 
 def test_inline_code_inside_italics_too():
     assert "<code>x</code>" in inline("*see `x` here*")
+
+
+# --- tables and ordered lists -----------------------------------------------
+#
+# Both are things the styled-run renderer could never show. A table could only
+# ever have come out as its own pipe characters.
+
+
+def test_markdown_table_becomes_a_table():
+    out = "".join(appended(run("| a | b |\n|---|---|\n| 1 | 2 |\n\n")))
+    assert out == ("<table><tr><th>a</th><th>b</th></tr>"
+                   "<tr><td>1</td><td>2</td></tr></table>")
+
+
+def test_a_table_without_a_separator_has_no_header():
+    out = "".join(appended(run("| 1 | 2 |\n| 3 | 4 |\n\n")))
+    assert "<th>" not in out
+    assert out.count("<tr>") == 2
+
+
+def test_table_cells_are_escaped_and_take_inline_markup():
+    out = "".join(appended(run("| `x` | <b> |\n|---|---|\n| **y** | z |\n\n")))
+    assert "<code>x</code>" in out
+    assert "&lt;b&gt;" in out
+    assert "<b>y</b>" in out
+
+
+def test_numbered_list_is_ordered():
+    out = "".join(appended(run("1. one\n2. two\n\n")))
+    assert out == "<ol><li>one</li><li>two</li></ol>"
+
+
+def test_dash_list_is_still_unordered():
+    assert "<ul>" in "".join(appended(run("- one\n\n")))
+
+
+def test_switching_marker_type_starts_a_new_list():
+    out = "".join(appended(run("- a\n\n1. b\n\n")))
+    assert "<ul><li>a</li></ul>" in out and "<ol><li>b</li></ol>" in out
+
+
+def test_underscores_inside_identifiers_are_not_emphasis():
+    """BPB_RsvdSecCnt and BPB_NumFATs became one italic run, which mangles
+    exactly the identifiers this project talks about all day."""
+    out = inline("Pull BPB_RsvdSecCnt and BPB_NumFATs now")
+    assert "<i>" not in out
+    assert "BPB_RsvdSecCnt" in out and "BPB_NumFATs" in out
+
+
+def test_underscore_emphasis_still_works_at_word_boundaries():
+    assert inline("_really_ now") == "<i>really</i> now"
+
+
+def test_asterisk_emphasis_is_unaffected():
+    assert inline("a *b* c") == "a <i>b</i> c"
+
+
+def test_snake_case_in_a_code_span_is_untouched():
+    assert inline("`a_b_c`") == "<code>a_b_c</code>"

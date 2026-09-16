@@ -73,9 +73,14 @@ static int  g_chat_widest = 0;      /* px, for LB_SETHORIZONTALEXTENT */
 /* -1 means the "thinking" indicator is not currently shown. */
 static long  g_think_mark = -1;
 static DWORD g_turn_start_ms = 0;
+/* Output has started arriving for this turn. "Thinking" and "receiving" are
+ * different things to be waiting on, and saying "thinking" while text is
+ * visibly streaming is just wrong. */
+static int   g_streaming = 0;
 
 static int  label_width_px(const char *text);
 static void think_show(void);
+static void turn_done(void);
 static void esc_html(const char *in, char *out, unsigned cap);
 static void layout(HWND hwnd);
 static void fit_label(char *label, unsigned cap, int avail_px);
@@ -133,7 +138,8 @@ static void status_refresh(void)
      * is the difference between "working" and "hung", and it costs one
      * SB_SETTEXT a second rather than touching the transcript. */
     if (g_turn_active && g_turn_start_ms) {
-        _snprintf(buf, sizeof(buf), " Claude is thinking... %lus",
+        _snprintf(buf, sizeof(buf), " %s %lus",
+                  g_streaming ? "receiving..." : "Claude is thinking...",
                   (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000));
         status_set(2, buf);
     }
@@ -289,7 +295,7 @@ static void render_frame(rc_frame *f)
             think_show();
         } else {
             char buf[96];
-            think_hide();
+            turn_done();
             ui_set_busy(0);
             /* Now, and only now, re-fetch the list. Sending a message is what
              * makes a conversation the most recent one, so this is where the
@@ -536,13 +542,24 @@ static void think_show(void)
 {
     if (g_think_mark >= 0) return;
     g_think_mark = 1;
-    SetWindowTextA(g_main, RC_TITLE "  -  thinking...");
+    g_streaming = 0;
+    SetWindowTextA(g_main, RC_TITLE "  -  working...");
 }
 
+/* First output of the turn. The title stays as it is until the turn actually
+ * ends -- the window is still busy -- but the wording in the status bar
+ * changes, because there is now something to look at. */
 static void think_hide(void)
 {
     if (g_think_mark < 0) return;
     g_think_mark = -1;
+    g_streaming = 1;
+}
+
+static void turn_done(void)
+{
+    g_think_mark = -1;
+    g_streaming = 0;
     SetWindowTextA(g_main, RC_TITLE);
 }
 

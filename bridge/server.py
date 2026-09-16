@@ -72,7 +72,7 @@ class GuestSession:
     # adjacent same-style runs and keeps the expensive
     # EM_SETCHARFORMAT/EM_REPLACESEL pair count down on the guest.
     coalescers: dict = field(default_factory=dict)
-    markdown: HtmlStream = field(default_factory=HtmlStream)
+    render: HtmlStream = field(default_factory=HtmlStream)
 
     # The transcript lives here, in full. The guest only ever holds one page,
     # which is what bounds its memory by page size rather than by conversation
@@ -331,7 +331,7 @@ class Bridge:
                 # Assistant prose is markdown; the renderer turns it into
                 # finished HTML blocks plus the block still being written.
                 async def sink(text: str) -> None:
-                    await self._write_updates(guest, guest.markdown.feed(text))
+                    await self._write_updates(guest, guest.render.feed(text))
             else:
                 # Thinking and anything else is not markdown; wrap it rather
                 # than parsing it.
@@ -356,7 +356,7 @@ class Bridge:
             await c.flush()
         # A model can stop mid-sentence; whatever the parser is holding for
         # lookahead has to come out or the last line is silently lost.
-        await self._write_updates(guest, guest.markdown.flush())
+        await self._write_updates(guest, guest.render.flush())
 
     async def _write_updates(self, guest: GuestSession,
                              updates: list) -> None:
@@ -567,7 +567,7 @@ class Bridge:
 
         # Fresh transcript state. Anything the old session had is on disk.
         guest.pages = Paginator()
-        guest.markdown = HtmlStream()
+        guest.render = HtmlStream()
         for c in guest.coalescers.values():
             await c.stop()
         guest.coalescers.clear()

@@ -31,9 +31,17 @@ from dataclasses import dataclass, field
 MAX_LINES = 200
 MAX_BYTES = 16 * 1024
 
+# And a cap on the number of BLOCKS, which is the one that matters now the
+# transcript is HTML. MSHTML's cost scales with element count rather than with
+# text length: 200 one-word paragraphs cost far more than one paragraph of 200
+# words, and the byte cap cannot tell them apart. Measured on the 32MB guest, a
+# 200-element page took the machine down to 48 KB free.
+MAX_BLOCKS = 90
+
 # Hard cap. Break mid-run rather than let one huge code block defeat the bound.
 HARD_BYTES = MAX_BYTES * 2
 HARD_LINES = MAX_LINES * 2
+HARD_BLOCKS = MAX_BLOCKS * 2
 
 
 @dataclass
@@ -48,6 +56,7 @@ class Page:
     runs: list[PageRun] = field(default_factory=list)
     lines: int = 0
     nbytes: int = 0
+    blocks: int = 0
     sealed: bool = False
     continued: bool = False       # split mid-run from the previous page
 
@@ -58,16 +67,24 @@ class Page:
             self.runs.append(PageRun(style, text))
         self.lines += text.count("\n")
         self.nbytes += len(text)
+        self.blocks += 1
 
     @property
     def text(self) -> str:
         return "".join(r.text for r in self.runs)
 
     def over_soft_cap(self) -> bool:
-        return self.lines >= MAX_LINES or self.nbytes >= MAX_BYTES
+        return (self.lines >= MAX_LINES or self.nbytes >= MAX_BYTES
+                or self.blocks >= MAX_BLOCKS)
 
     def over_hard_cap(self) -> bool:
+        # Blocks are deliberately not here: this governs splitting INSIDE a
+        # run, and a block cap is satisfied by sealing between blocks, which
+        # add() does before it starts.
         return self.lines >= HARD_LINES or self.nbytes >= HARD_BYTES
+
+    def over_hard_blocks(self) -> bool:
+        return self.blocks >= HARD_BLOCKS
 
 
 @dataclass
@@ -110,6 +127,12 @@ class Paginator:
         sealed: list[Page] = []
         if not text:
             return sealed
+
+        # A page holding too many elements is sealed before the next one is
+        # added. Unlike the byte cap this needs no splitting: a block boundary
+        # is already a clean place to stop.
+        if self.live.over_hard_blocks() and self.live.runs:
+            sealed.append(self._seal(continued=True))
 
         while text:
             page = self.live

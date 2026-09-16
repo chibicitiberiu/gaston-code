@@ -44,12 +44,19 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 _QUOTE = re.compile(r"^\s*>\s?(.*)$")
 _RULE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
+_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_SEP = re.compile(r"^\s*:?-{2,}:?\s*$")
 
 # Longest delimiter first, so ** beats *.
+# Underscore emphasis only counts at a word boundary. Without the lookarounds,
+# `BPB_RsvdSecCnt ... BPB_NumFATs` becomes one italic run from the first
+# underscore to the last, which mangles exactly the identifiers this project
+# talks about all day. Asterisk emphasis has no such restriction, which matches
+# how every markdown implementation behaves.
 _INLINE = re.compile(
     r"(?P<code>`[^`\n]+`)"
-    r"|(?P<bold>\*\*[^*\n]+\*\*|__[^_\n]+__)"
-    r"|(?P<em>\*[^*\n]+\*|_[^_\n]+_)"
+    r"|(?P<bold>\*\*[^*\n]+\*\*|(?<![A-Za-z0-9_])__[^_\n]+__(?![A-Za-z0-9_]))"
+    r"|(?P<em>\*[^*\n]+\*|(?<![A-Za-z0-9_])_[^_\n]+_(?![A-Za-z0-9_]))"
 )
 
 
@@ -109,6 +116,38 @@ def notice(text: str) -> str:
 
 def error(text: str) -> str:
     return '<div class="err">' + esc(text) + "</div>"
+
+
+def _cells(row: str) -> list[str]:
+    row = row.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|"):
+        row = row[:-1]
+    return [c.strip() for c in row.split("|")]
+
+
+def _table(lines: list[str]) -> str:
+    """Render a markdown table.
+
+    The separator row (|---|---|) is what marks the row above it as a header;
+    without one every row is a body row, which is what a model emitting a
+    pipe-delimited list without a header expects.
+    """
+    rows = [_cells(l) for l in lines]
+    header = None
+    body = rows
+    if len(rows) >= 2 and all(_SEP.match(c) for c in rows[1] if c):
+        header, body = rows[0], rows[2:]
+
+    out = ["<table>"]
+    if header:
+        out.append("<tr>" + "".join(f"<th>{inline(c)}</th>" for c in header)
+                   + "</tr>")
+    for r in body:
+        out.append("<tr>" + "".join(f"<td>{inline(c)}</td>" for c in r) + "</tr>")
+    out.append("</table>")
+    return "".join(out)
 
 
 class HtmlStream:
@@ -210,9 +249,21 @@ class HtmlStream:
             self._kind = None
             return out
 
+        m = _ROW.match(line)
+        if m:
+            # A markdown table. Worth having now that the transcript can
+            # actually draw one; the styled-run renderer could only ever have
+            # shown the pipes.
+            out = [] if self._kind == "table" else self._start("table")
+            self._lines.append(line)
+            return out
+
         m = _BULLET.match(line)
         if m:
-            out = [] if self._kind == "ul" else self._start("ul")
+            # Numbered markers get <ol>, so "1." does not silently become a
+            # bullet and lose the numbering the model meant.
+            kind = "ol" if m.group(2)[:1].isdigit() else "ul"
+            out = [] if self._kind == kind else self._start(kind)
             self._lines.append(m.group(3))
             return out
 
@@ -245,8 +296,12 @@ class HtmlStream:
             label = (f'<div class="lang">{esc(self._lang)}</div>'
                      if self._lang else "")
             return f'<div class="codewrap">{label}<pre>{body}</pre></div>'
-        if self._kind == "ul":
-            return "<ul>" + "".join(f"<li>{inline(x)}</li>" for x in lines) + "</ul>"
+        if self._kind in ("ul", "ol"):
+            tag = self._kind
+            return (f"<{tag}>" + "".join(f"<li>{inline(x)}</li>" for x in lines)
+                    + f"</{tag}>")
+        if self._kind == "table":
+            return _table(lines)
         if self._kind == "quote":
             return "<blockquote>" + "<br>".join(inline(x) for x in lines) + "</blockquote>"
         if self._kind == "p":
@@ -295,7 +350,12 @@ pre { font: 8pt 'Courier New', monospace; color: #000080;
 code { font: 8pt 'Courier New', monospace; color: #000080;
        background: #f4f4f4; padding: 0 2px; }
 
-ul { margin: 5px 0 8px 0; padding-left: 22px; }
+table { border-collapse: collapse; margin: 8px 0; font-size: 8pt; }
+th, td { border: 1px solid #c0c0c0; padding: 2px 6px; text-align: left;
+         vertical-align: top; }
+th { background: #e8e8f0; font-weight: bold; }
+
+ul, ol { margin: 5px 0 8px 0; padding-left: 22px; }
 li { margin: 2px 0; line-height: 1.3; }
 blockquote { margin: 7px 0; padding: 3px 8px; border-left: 2px solid #c0c0c0;
              color: #505050; }

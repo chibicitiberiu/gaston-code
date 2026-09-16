@@ -17,7 +17,14 @@ from claude_agent_sdk import get_session_messages, list_sessions
 
 from . import html as H
 from .html import APPEND, HtmlStream
-from .markdown import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
+
+# How a piece of a stored message is tagged on the way to the renderer. These
+# are internal to the replay path -- the wire carries HTML, not styles -- and
+# they live here because _text_of is the only thing that produces them.
+STYLE_PLAIN = "plain"
+STYLE_CODE = "code"
+STYLE_TOOL = "tool"
+STYLE_USER = "user"
 
 log = logging.getLogger("bridge.sessions")
 
