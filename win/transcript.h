@@ -43,4 +43,10 @@ void rc_transcript_append(rc_transcript *t, const char *text, rc_style style);
 void rc_transcript_clear(rc_transcript *t);
 int  rc_transcript_at_bottom(rc_transcript *t);
 
+/* There is deliberately no mark()/truncate() pair here. Deleting with
+ * EM_REPLACESEL stops Win98's riched20 painting at all, and the "accurate"
+ * way to find the end of the text is a select-all that wedges it just as
+ * badly when redraw is off. Anything that has to disappear again -- a
+ * progress indicator, say -- belongs outside this control. */
+
 #endif

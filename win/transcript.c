@@ -195,11 +195,23 @@ void rc_transcript_end(rc_transcript *t)
         }
     }
 
-    if (t->was_at_bottom) {
-        SendMessageA(t->hwnd, WM_VSCROLL, SB_BOTTOM, 0);
-    }
     InvalidateRect(t->hwnd, NULL, TRUE);
     UpdateWindow(t->hwnd);
+
+    /* Follow the tail, but with EM_SCROLLCARET rather than WM_VSCROLL/
+     * SB_BOTTOM, and only after the repaint.
+     *
+     * SB_BOTTOM overshot: it is computed from scroll metrics that are still
+     * stale immediately after WM_SETREDRAW is turned back on, so the view
+     * ended up roughly a screen BELOW the last line. The transcript looked
+     * blank while holding a perfectly rendered answer, which is a remarkably
+     * convincing impression of a broken control. It only showed once a turn
+     * grew past one screenful.
+     *
+     * Every append leaves the selection collapsed at the end, so scrolling the
+     * caret into view is exactly "show the newest text" and cannot overshoot. */
+    if (t->was_at_bottom)
+        SendMessageA(t->hwnd, EM_SCROLLCARET, 0, 0);
 }
 
 /* Apply a style to the current selection. With a zero-length selection this
@@ -212,7 +224,12 @@ static void apply_format(rc_transcript *t, const style_def *sd)
 
     memset(&cf, 0, sizeof(cf));
     cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_COLOR | CFM_SIZE;
+    /* CFM_CHARSET matters: without it RichEdit picks a default that need not
+     * be Windows-1252, and the bridge folds everything to CP1252 on the way
+     * out. Saying so explicitly is what makes an accented byte render as the
+     * accent rather than as whatever the font's default mapping has there. */
+    cf.dwMask = CFM_BOLD | CFM_ITALIC | CFM_COLOR | CFM_SIZE | CFM_CHARSET;
+    cf.bCharSet = ANSI_CHARSET;
     cf.dwEffects = sd->effects;
     cf.crTextColor = sd->colour;
     cf.yHeight = g_font_height ? g_font_height : 160;
@@ -256,7 +273,15 @@ void rc_transcript_append(rc_transcript *t, const char *text, rc_style style)
      * whole time and the transcript was blank the first time it ran on real
      * Win98. Do not "tidy this away". */
     /* Move an EMPTY selection to the end. Do NOT use (-1,-1): "end of text"
-     * is not a documented meaning for it, only "deselect". */
+     * is not a documented meaning for it, only "deselect".
+     *
+     * WM_GETTEXTLENGTH over-counts, because it counts a line break as CRLF
+     * while selection positions count it as one, so this asks for a position
+     * past the end. That is deliberate: EM_EXSETSEL clamps, which lands
+     * exactly where an append wants to be. The tempting "accurate" version --
+     * select 0..-1, read the range back, collapse it -- is a select-all on
+     * every single append, and doing that while WM_SETREDRAW is off (which it
+     * is, inside a batch) leaves the control never painting again. */
     len = (LONG)SendMessageA(t->hwnd, WM_GETTEXTLENGTH, 0, 0);
     cr.cpMin = len;
     cr.cpMax = len;

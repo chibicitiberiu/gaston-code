@@ -30,6 +30,26 @@ STYLE_ERROR = "error"
 STYLE_USER = "user"
 
 
+# How a user turn is rendered in the transcript.
+#
+# Defined here because BOTH ends render it. The guest echoes it locally the
+# instant Send is pressed, so a slow link never swallows your own typing; the
+# bridge records the identical string into the paginator, so paging back to a
+# sealed page still shows the question above the answer. If the two ever drift
+# apart, the live view and the paged-back view of the same turn stop matching.
+#
+# CRLF rather than LF: this is built on both sides and RichEdit is the only
+# consumer that matters.
+USER_RULE = "-" * 58
+
+
+def user_block(text: str) -> str:
+    """A rule, the prompt lines, a blank line. Reads like a terminal session."""
+    lines = text.strip().splitlines() or [""]
+    body = "\r\n".join("> " + ln for ln in lines)
+    return "\r\n" + USER_RULE + "\r\n" + body + "\r\n\r\n"
+
+
 @dataclass
 class Run:
     style: str

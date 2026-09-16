@@ -63,6 +63,26 @@ _EXPLICIT: dict[str, str] = {
     "∑": "sum", "∏": "prod", "√": "sqrt",
     "∈": "in", "∉": "not in", "∅": "empty",
     "∧": "and", "∨": "or", "¬": "not",
+    # The CP1252 0x80-0x9F range.
+    #
+    # These all have real CP1252 codepoints, so the passthrough below would
+    # keep them -- and on Win98 that is wrong. 0x80-0x9F is where Windows put
+    # the extra typographic characters, and the stock bitmap UI font has no
+    # glyphs there: an em dash rendered as a vertical bar and a euro sign as a
+    # capital I. Everything from 0xA0 up is Latin-1 and renders correctly, so
+    # this range is the whole of the problem. Verified on the guest.
+    "\u2014": "--",   # em dash
+    "\u2013": "-",    # en dash
+    "\u20ac": "EUR",  # euro
+    "\u0192": "f",    # florin
+    "\u02c6": "^",    # modifier circumflex
+    "\u2030": "o/oo", # per mille
+    "\u0160": "S", "\u0161": "s",    # S/s caron
+    "\u017d": "Z", "\u017e": "z",    # Z/z caron
+    "\u0152": "OE", "\u0153": "oe",  # OE/oe ligature
+    "\u02dc": "~",    # small tilde
+    "\u2122": "(tm)",
+    "\u0178": "Y",    # Y diaeresis
     # Typography
     "…": "...",    # CP1252 has 0x85; '...' is clearer in a bitmap font
     "′": "'", "″": '"',

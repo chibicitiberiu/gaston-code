@@ -39,7 +39,7 @@
 #define GUTTER        4
 #define PAGEBAR_H     24
 #define PGBTN_W       28
-#define CHATS_W      150
+#define CHATS_W      170
 
 static rc_config     g_cfg;
 static rc_net        g_net;
@@ -54,6 +54,19 @@ static HWND  g_chats, g_refresh;
 #define MAX_CHATS 64
 static char g_chat_ids[MAX_CHATS][64];
 static int  g_chat_count = 0;
+static int  g_chat_widest = 0;      /* px, for LB_SETHORIZONTALEXTENT */
+
+#define RC_TITLE "Claude Code"
+
+/* -1 means the "thinking" indicator is not currently shown. */
+static long  g_think_mark = -1;
+static DWORD g_turn_start_ms = 0;
+
+static int  label_width_px(const char *text);
+static void think_show(void);
+static void fit_label(char *label, unsigned cap, int avail_px);
+static int  chats_text_width(void);
+static void think_hide(void);
 
 /* Pagination state.
  *
@@ -99,6 +112,15 @@ static void status_refresh(void)
     _snprintf(buf, sizeof(buf), " rx %luk  tx %luk",
               g_net.rx_bytes / 1024, g_net.tx_bytes / 1024);
     status_set(1, buf);
+
+    /* Tick the elapsed seconds while a turn is in flight. A counter that moves
+     * is the difference between "working" and "hung", and it costs one
+     * SB_SETTEXT a second rather than touching the transcript. */
+    if (g_turn_active && g_turn_start_ms) {
+        _snprintf(buf, sizeof(buf), " Claude is thinking... %lus",
+                  (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000));
+        status_set(2, buf);
+    }
 }
 
 static void page_update_ui(void)
@@ -188,6 +210,7 @@ static void render_frame(rc_frame *f)
 
     } else if (strcmp(f->type, "TEXT") == 0) {
         rc_style st = style_from_name(rc_frame_get(f, "style"));
+        think_hide();
         /* Body is not NUL-terminated by the protocol; the reader over-allocates
          * by one and terminates it, so this is safe. */
         rc_transcript_begin(&g_tr);
@@ -196,6 +219,7 @@ static void render_frame(rc_frame *f)
 
     } else if (strcmp(f->type, "TOOL") == 0) {
         char line[512];
+        think_hide();
         _snprintf(line, sizeof(line) - 1, "\r\n  -> %s  %.*s\r\n",
                   rc_frame_get(f, "name") ? rc_frame_get(f, "name") : "?",
                   (int)f->body_len, f->body);
@@ -207,9 +231,12 @@ static void render_frame(rc_frame *f)
         const char *state = rc_frame_get(f, "state");
         if (state && strcmp(state, "start") == 0) {
             ui_set_busy(1);
-            status_set(2, " thinking...");
+            g_turn_start_ms = GetTickCount();
+            status_set(2, " Claude is thinking...");
+            think_show();
         } else {
             char buf[96];
+            think_hide();
             ui_set_busy(0);
             v = rc_frame_get(f, "cost_usd");
             _snprintf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
@@ -220,8 +247,10 @@ static void render_frame(rc_frame *f)
         }
 
     } else if (strcmp(f->type, "SESSIONS") == 0) {
+        SendMessageA(g_chats, WM_SETREDRAW, FALSE, 0);
         SendMessageA(g_chats, LB_RESETCONTENT, 0, 0);
         g_chat_count = 0;
+        g_chat_widest = 0;
 
     } else if (strcmp(f->type, "SESSION") == 0) {
         const char *id = rc_frame_get(f, "id");
@@ -234,14 +263,25 @@ static void render_frame(rc_frame *f)
                       title ? title : id);
             label[sizeof(label) - 1] = '\0';
             _snprintf(g_chat_ids[g_chat_count], 63, "%s", id);
+            fit_label(label, sizeof(label), chats_text_width());
             SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)label);
             if (cur && *cur == '1')
                 SendMessageA(g_chats, LB_SETCURSEL, g_chat_count, 0);
+            {
+                int px = label_width_px(label);
+                if (px > g_chat_widest) g_chat_widest = px;
+            }
             g_chat_count++;
         }
 
     } else if (strcmp(f->type, "SESSIONSEND") == 0) {
-        rc_log("chat list: %d sessions", g_chat_count);
+        /* RDW_FRAME as well as the client: the frame is what draws the
+         * client edge, and repainting only the interior leaves it stale. */
+        SendMessageA(g_chats, WM_SETREDRAW, TRUE, 0);
+        RedrawWindow(g_chats, NULL, NULL,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
+        rc_log("chat list: %d sessions, widest %dpx", g_chat_count,
+               g_chat_widest);
 
     } else if (strcmp(f->type, "SWITCHED") == 0) {
         v = rc_frame_get(f, "total");
@@ -253,6 +293,7 @@ static void render_frame(rc_frame *f)
         v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
         v = rc_frame_get(f, "live");  g_is_live = (v && *v == '1');
         g_loading_page = 1;
+        g_think_mark = -1;      /* the control is about to be cleared */
         /* One page in, one page out: clear before rendering, so the control
          * never holds two. */
         rc_transcript_clear(&g_tr);
@@ -304,6 +345,140 @@ static void render_frame(rc_frame *f)
 
 /* ------------------------------------------------------------------ input */
 
+/* Width of a list label in the actual UI font. Cheaper than it looks: called
+ * once per session while the list is rebuilt, ~36 times. */
+static int label_width_px(const char *text)
+{
+    HDC dc;
+    HFONT old;
+    SIZE sz;
+    int n;
+
+    if (!g_chats || !text) return 0;
+    n = (int)strlen(text);
+    if (n <= 0) return 0;
+    dc = GetDC(g_chats);
+    if (!dc) return 0;
+    old = (HFONT)SelectObject(dc, g_ui_font);
+    sz.cx = 0;
+    GetTextExtentPoint32A(dc, text, n, &sz);
+    SelectObject(dc, old);
+    ReleaseDC(g_chats, dc);
+    return (int)sz.cx;
+}
+
+/* Width available for an item's text: the client area less the vertical
+ * scrollbar and the couple of pixels the listbox insets text by. */
+static int chats_text_width(void)
+{
+    RECT rc;
+
+    if (!g_chats) return 0;
+    GetClientRect(g_chats, &rc);
+    return (rc.right - rc.left) - GetSystemMetrics(SM_CXVSCROLL) - 6;
+}
+
+/* Shorten a label with an ellipsis until it fits.
+ *
+ * Two reasons, and the cosmetic one is the lesser. A label wider than the
+ * client area makes Win98's listbox overdraw its own client edge (see the
+ * CreateWindowEx comment). And silently cutting a name off at the frame reads
+ * as a rendering glitch, where "..." reads as "there is more".
+ *
+ * GetTextExtentExPointA answers "how many characters fit in N pixels" in one
+ * call, so this stays one GDI round trip per label rather than a search. */
+static void fit_label(char *label, unsigned cap, int avail_px)
+{
+    HDC dc;
+    HFONT old;
+    SIZE sz;
+    INT fit = 0;
+    int n;
+    char buf[192];
+
+    if (!g_chats || avail_px <= 0) return;
+    n = (int)strlen(label);
+    if (n <= 0) return;
+
+    dc = GetDC(g_chats);
+    if (!dc) return;
+    old = (HFONT)SelectObject(dc, g_ui_font);
+    sz.cx = 0;
+    if (GetTextExtentExPointA(dc, label, n, avail_px, &fit, NULL, &sz)
+        && fit < n) {
+        if (fit > 3) fit -= 3; else fit = 1;
+        _snprintf(buf, sizeof(buf) - 1, "%.*s...", fit, label);
+        buf[sizeof(buf) - 1] = '\0';
+        _snprintf(label, cap - 1, "%s", buf);
+        label[cap - 1] = '\0';
+    }
+    SelectObject(dc, old);
+    ReleaseDC(g_chats, dc);
+}
+
+/* A turn is running and nothing has come back yet. Without this the window
+ * just sits there: Send greys out, but on a slow link or a long think that is
+ * indistinguishable from a hang. */
+/* Deliberately NOT in the transcript.
+ *
+ * The obvious design is to append "Claude is thinking..." and delete it again
+ * when output arrives. It works everywhere except here: deleting with
+ * EM_REPLACESEL puts Win98's riched20 back into the state where it stops
+ * painting altogether, the same failure as an unprimed control, and the whole
+ * answer then streams in invisibly. Measured twice, including with the
+ * selection positions corrected -- `truncate to 152 from 174 left 153`, right
+ * range, dead control.
+ *
+ * So the indicator lives in the title bar and the status bar, neither of which
+ * needs the transcript touched. The title says that something is happening,
+ * the status pane ticks the seconds so it is visibly not a hang, and both
+ * clear themselves. */
+static void think_show(void)
+{
+    if (g_think_mark >= 0) return;
+    g_think_mark = 1;
+    SetWindowTextA(g_main, RC_TITLE "  -  thinking...");
+}
+
+static void think_hide(void)
+{
+    if (g_think_mark < 0) return;
+    g_think_mark = -1;
+    SetWindowTextA(g_main, RC_TITLE);
+}
+
+/* Echo the user's own line. Must match bridge/markdown.py user_block(): the
+ * bridge records the identical string into the paginator so that paging back
+ * to a sealed page still shows the question above the answer. Echoing locally
+ * rather than waiting for the bridge to send it back is what keeps typing
+ * responsive on a dialup link. */
+#define RC_USER_RULE "----------------------------------------------------------"
+
+static void echo_user_block(const char *text)
+{
+    const char *p = text;
+    const char *nl;
+    char line[1024];
+    int len;
+
+    rc_transcript_append(&g_tr, "\r\n" RC_USER_RULE "\r\n", RC_STYLE_USER);
+    for (;;) {
+        nl = strchr(p, '\n');
+        len = nl ? (int)(nl - p) : (int)strlen(p);
+        while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == ' '))
+            len--;
+        if (len > (int)sizeof(line) - 1) len = (int)sizeof(line) - 1;
+        memcpy(line, p, (size_t)len);
+        line[len] = '\0';
+        rc_transcript_append(&g_tr, "> ", RC_STYLE_USER);
+        rc_transcript_append(&g_tr, line, RC_STYLE_USER);
+        rc_transcript_append(&g_tr, "\r\n", RC_STYLE_USER);
+        if (!nl) break;
+        p = nl + 1;
+    }
+    rc_transcript_append(&g_tr, "\r\n", RC_STYLE_USER);
+}
+
 static void do_send(void)
 {
     char buf[4096];
@@ -314,9 +489,7 @@ static void do_send(void)
     if (n <= 0) return;
 
     rc_transcript_begin(&g_tr);
-    rc_transcript_append(&g_tr, "\r\n> ", RC_STYLE_USER);
-    rc_transcript_append(&g_tr, buf, RC_STYLE_USER);
-    rc_transcript_append(&g_tr, "\r\n\r\n", RC_STYLE_USER);
+    echo_user_block(buf);
     rc_transcript_end(&g_tr);
 
     if (rc_net_send(&g_net, "INPUT", NULL, NULL, 0, buf, (unsigned)n) == 0) {
@@ -426,9 +599,19 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         0, 0, 0, 0, hwnd, (HMENU)ID_STOP, inst, NULL);
     EnableWindow(g_stop, FALSE);
 
+    /* LBS_NOINTEGRALHEIGHT: otherwise the control silently resizes itself to
+     *   a whole number of rows after every MoveWindow, so its idea of its own
+     *   size and ours disagree.
+     * WS_CLIPSIBLINGS: keeps neighbours out of its rectangle.
+     *
+     * No WS_HSCROLL: labels are truncated to fit instead, see fit_label().
+     * An item wider than the client area makes Win98's listbox paint over its
+     * own WS_EX_CLIENTEDGE border -- measured as white pixels at x=8,9 where
+     * (128,128,128) and (0,0,0) should be, on exactly the rows whose text
+     * overflowed, surviving both a scroll and a minimise/restore. */
     g_chats = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-        LBS_NOTIFY | LBS_HASSTRINGS,
+        WS_CLIPSIBLINGS | LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
         0, 0, 0, 0, hwnd, (HMENU)ID_CHATS, inst, NULL);
 
     g_refresh = CreateWindowExA(0, "BUTTON", "Refresh",
@@ -615,7 +798,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     wc.lpszClassName = "RetroClaudeWnd";
     if (!RegisterClassA(&wc)) { rc_log("RegisterClass failed"); return 1; }
 
-    g_main = CreateWindowExA(0, "RetroClaudeWnd", "Claude Code",
+    g_main = CreateWindowExA(0, "RetroClaudeWnd", RC_TITLE,
         /* WS_CLIPCHILDREN: without it the parent's background erase paints
          * over its own children, which on a window that is almost entirely
          * children means flicker at best and erased controls at worst. */

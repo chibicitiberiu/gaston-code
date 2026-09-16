@@ -16,9 +16,14 @@ def test_ascii_is_untouched():
 
 
 def test_cp1252_extras_survive():
-    """CP1252 is richer than ASCII and we should use it: curly quotes, dashes,
-    the ellipsis and the bullet all have real codepoints."""
-    for ch in "éüñçß£€°½":
+    """CP1252 is richer than ASCII and we should use it.
+
+    Latin-1 only, though: everything here is 0xA0 or above, which Win98's
+    bitmap UI font renders correctly. The 0x80-0x9F range is representable in
+    CP1252 but has no glyphs in that font, so it is folded instead -- see
+    test_nothing_in_the_80_9f_range_survives_folding. The euro used to be in
+    this list and is not, because on the guest it rendered as a capital I."""
+    for ch in "éüñçß£°½¼¾":
         assert fold(ch) == ch, f"{ch!r} is in CP1252 and should pass through"
 
 
@@ -142,3 +147,42 @@ def test_realistic_model_output():
     assert "+-- bridge/" in out
     assert "<=" in out
     assert "\U0001f680" not in out
+
+
+# --- the CP1252 0x80-0x9F range ---------------------------------------------
+#
+# Every character here IS representable in CP1252, so the passthrough would
+# keep it. They are folded anyway because Win98's stock bitmap UI font has no
+# glyphs in that range: on the guest an em dash came out as a vertical bar and
+# a euro sign as a capital I. 0xA0 and up is Latin-1 and renders fine.
+
+
+def test_em_and_en_dashes_become_ascii():
+    assert fold("a — b") == "a -- b"
+    assert fold("a – b") == "a - b"
+
+
+def test_euro_becomes_letters():
+    assert fold("€10") == "EUR10"
+
+
+def test_trademark_and_ligatures():
+    assert fold("Acme™") == "Acme(tm)"
+    assert fold("Œuvre") == "OEuvre"
+
+
+def test_nothing_in_the_80_9f_range_survives_folding():
+    """The property that matters, rather than a list of examples."""
+    import codecs
+    for b in range(0x80, 0xA0):
+        try:
+            ch = bytes([b]).decode("cp1252")
+        except UnicodeDecodeError:
+            continue          # 0x81/0x8D/0x8F/0x90/0x9D are undefined
+        folded = fold(ch)
+        assert folded.isascii(), f"U+{ord(ch):04X} folded to {folded!r}"
+
+
+def test_latin1_accents_are_left_alone():
+    """Above 0xA0 the font is fine, so folding there would be vandalism."""
+    assert fold("café naïve über") == "café naïve über"

@@ -120,6 +120,95 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-16 — the transcript was never broken; autoscroll was overshooting
+
+Chasing "the chat window has rendering issues" produced one genuinely
+misleading bug and several real ones.
+
+**The misleading one.** After a turn the transcript went blank, with a
+scrollbar showing content. It looked exactly like the riched20 priming failure
+all over again, and three plausible causes were investigated and cleared
+before the actual answer turned up: scrolling to the top with Ctrl+Home showed
+**the answer had rendered perfectly all along**. `WM_VSCROLL`/`SB_BOTTOM` was
+parking the view about a screenful BELOW the last line, because it is computed
+from scroll metrics that are still stale immediately after `WM_SETREDRAW` is
+turned back on. It only appeared once a turn grew past one screenful, which is
+why short replies had looked fine all evening.
+
+Fixed by scrolling the caret instead: every append already leaves the
+selection collapsed at the end, so `EM_SCROLLCARET` after the repaint is
+exactly "show the newest text" and cannot overshoot.
+
+**Two things that really do wedge riched20**, both found while hunting the
+above, and both worth knowing because they look like the same symptom:
+
+- **Deleting with `EM_REPLACESEL` stops the control painting.** The obvious
+  design for a progress indicator is to append "Claude is thinking..." and
+  remove it when output arrives. The delete lands on the right range and the
+  control never draws again. Measured twice, including with the selection
+  positions corrected: `truncate to 152 from 174 left 153`.
+- **So does a select-all, when redraw is off.** `WM_GETTEXTLENGTH` counts a
+  line break as CRLF while selection positions count it as one, so the two
+  disagree by the number of lines. The "accurate" fix -- select `0..-1`, read
+  the range back, collapse -- is a select-all on every append, and inside a
+  batch (`WM_SETREDRAW FALSE`) that wedges the control too. The over-count is
+  harmless for appending because `EM_EXSETSEL` clamps, so appending
+  deliberately keeps using it.
+
+Consequence: **nothing that has to disappear again goes in the transcript.**
+The thinking indicator lives in the title bar ("Claude Code - thinking...")
+and in a status pane that ticks the elapsed seconds, neither of which requires
+touching the control.
+
+### 2026-09-16 — the chat list was overdrawing its own border
+
+The stray vertical marks were the listbox's `WS_EX_CLIENTEDGE` border being
+painted over. Measured rather than guessed: x=8 should be `(128,128,128)` and
+x=9 `(0,0,0)`, and on 152 of 365 rows both were white instead. The bands were
+row-height multiples, stayed put when the list was scrolled, and survived a
+minimise/restore.
+
+They lined up exactly with the rows whose label was **wider than the client
+area**: Win98's listbox overdraws its own client edge when an item overflows.
+Labels are now truncated to fit with `GetTextExtentExPointA` (one GDI call per
+label, not a search) and an explicit "...", which fixes the artifact and also
+replaces silent truncation at the frame with something that reads as "there is
+more". The list went 150px -> 170px while we were there, and the rebuild is
+batched under `WM_SETREDRAW` rather than repainting once per `LB_ADDSTRING`.
+
+Result: 360/360 rows now carry the correct border colours.
+
+### 2026-09-16 — CP1252 0x80-0x9F has no glyphs in the stock bitmap font
+
+An em dash rendered as a vertical bar and a euro sign as a capital I. Both are
+perfectly valid CP1252, which is why `fold()` passed them straight through.
+
+0x80-0x9F is where Windows put the extra typographic characters, and Win98's
+stock UI font has nothing there; everything from 0xA0 up is Latin-1 and renders
+correctly. The whole range is now folded to ASCII -- em dash to `--`, euro to
+`EUR`, trademark to `(tm)` and so on -- with a test that walks all 32
+codepoints rather than listing examples. Two older tests asserted the euro
+survived; they were asserting something the guest disagrees with, and were
+corrected.
+
+Separately, `CFM_CHARSET` with `ANSI_CHARSET` is now set on every run. Without
+it RichEdit picks a default that need not be Windows-1252, and accented Latin-1
+bytes render as whatever the font's default mapping has there. With it,
+`café naïve über` comes out right.
+
+### 2026-09-16 — one definition of what a user turn looks like
+
+`user_block()` in `bridge/markdown.py` renders a rule, the prompt lines each
+prefixed `> `, and a blank line. Both ends build it: the guest echoes it the
+instant Send is pressed, so a slow link never swallows your own typing, and the
+bridge records the identical string into the paginator **without streaming it**
+(`_write_text(..., stream=False)`).
+
+Recording it is the point. A sealed page is re-sent in full when the reader
+pages back, and before this the paginator only held an anchor, so paging back
+gave a transcript of answers with no questions in it.
+
+
 ### 2026-09-16 — the blank transcript: riched20 must be primed with real text
 
 The single worst bug of the guest bring-up, and the one the Wine tier was least

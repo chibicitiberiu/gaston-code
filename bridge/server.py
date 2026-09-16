@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from . import fold
 from .coalesce import Coalescer
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
-from .markdown import MarkdownStream
+from .markdown import MarkdownStream, STYLE_USER, user_block
 from .pages import Paginator
 from .protocol import (
     MAX_FRAME,
@@ -356,9 +356,16 @@ class Bridge:
             await self._write_text(guest, run.text, style=run.style)
 
     async def _write_text(self, guest: GuestSession, text: str,
-                          *, style: str) -> None:
+                          *, style: str, stream: bool = True) -> None:
         """Record into the paginator, then stream to the guest if it is on the
-        live page."""
+        live page.
+
+        `stream=False` records without sending. That is for text the guest has
+        already put on screen itself -- the echo of the user's own line -- which
+        still has to reach the paginator, because a sealed page is re-sent in
+        full when the reader pages back and a transcript of answers with no
+        questions in it is close to useless.
+        """
         if not text:
             return
 
@@ -368,7 +375,7 @@ class Bridge:
         # Only stream when the guest is watching the live page. In HISTORY mode
         # the bridge keeps buffering silently and the page counter ticking up
         # is the notification.
-        if guest.view_page is None or guest.view_page == page_no:
+        if stream and (guest.view_page is None or guest.view_page == page_no):
             await self._emit_runs(guest, style, text, page_no)
 
         for pg in sealed:
@@ -475,6 +482,11 @@ class Bridge:
             return
         # User turns are the landmarks a reader navigates by.
         anchor = guest.pages.mark_user_turn(text)
+        # The guest echoed this line itself the moment Send was pressed, so it
+        # is recorded but not streamed. USER_BLOCK is shared with the guest so
+        # the two renderings are the same string, not merely similar.
+        await self._write_text(guest, user_block(text), style=STYLE_USER,
+                               stream=False)
         await self._send(guest, Frame("ANCHOR", {
             "page": str(anchor.page), "off": str(anchor.offset),
             "preview": anchor.preview}))

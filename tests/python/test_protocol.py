@@ -210,10 +210,14 @@ def test_non_ascii_header_value_survives_encode():
 
 
 def test_non_ascii_header_round_trips_through_cp1252():
-    """CP1252 carries these, so they come back unchanged."""
-    f = Frame("SESSION", {"title": "café naïve — €5"})
+    """Latin-1 characters survive the header encoding unchanged.
+
+    Kept to Latin-1 deliberately. The em dash and euro this test used to carry
+    are folded to ASCII now, because Win98's bitmap UI font has no glyphs in
+    the CP1252 0x80-0x9F range -- see test_fold.py."""
+    f = Frame("SESSION", {"title": "café naïve ½ £5"})
     back = Frame.decode(f.encode()[4:])
-    assert back.headers["title"] == "café naïve — €5"
+    assert back.headers["title"] == "café naïve ½ £5"
 
 
 def test_header_value_outside_cp1252_is_folded_not_fatal():
