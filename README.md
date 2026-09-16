@@ -1,0 +1,55 @@
+# RetroClaude
+
+A native Windows 98 GUI client for Claude Code.
+
+The Win98 machine is both the terminal you sit at and the workspace Claude
+operates on. A bridge process on a modern Linux box runs Claude Code via the
+Agent SDK and speaks a small framed protocol over the LAN to a single
+executable on the guest.
+
+Nobody has built this. The closest prior art each solves half of it:
+[claudewin9x](https://github.com/ryandeering/claudewin9x) proxies the real CLI
+but its client is a console REPL; [retro-agent](https://github.com/voidsstr/retro-agent)
+has a complete guest tool surface and a hardened protocol but is headless and
+drives the Agent SDK rather than Claude Code.
+
+## Constraints that shape everything
+
+- **32MB RAM**, ~8–12MB free after boot. Win98 swaps on a period IDE disk, so
+  working-set size matters more than CPU.
+- **Pentium MMX 200MHz.** Compression is a tradeoff, not a freebie.
+- **10Mbps LAN (~750 KB/s), sometimes dialup (~5 KB/s).** Bandwidth is a
+  first-class design input.
+- **Open Watcom 2.0**, plain C, ANSI Win32 APIs only.
+
+## Layout
+
+```
+docs/       PLAN.md, FEASIBILITY.md, FORKED.md, PROGRESS.md
+make/       ow.mk -- shared Open Watcom rules
+win/        the single guest executable
+bridge/     Python: Agent SDK, MCP tools, pagination, markdown, compression
+spike/      verified minimal OW build, kept as a toolchain reference
+tests/      protocol, markdown, encoding, PE import allowlist
+tools/      qmp.py, vm scripts
+vm/         QEMU run scripts (images gitignored)
+```
+
+## Status
+
+Phase 0. See `docs/PROGRESS.md`.
+
+## Build
+
+```sh
+make spike        # build and audit the reference binary
+make check        # static PE audit: version gate, imports, CMOV, size
+make wine-smoke   # run under Wine (code sanity only, NOT a Win98 proof)
+```
+
+Requires Open Watcom 2.0 at `/usr/bin/watcom` (override with `WATCOM=`).
+
+## Licence
+
+MIT. Portions of the guest agent derive from retro-agent (MIT) — see `NOTICE`
+and `docs/FORKED.md`.
