@@ -15,7 +15,8 @@
 #include "ini.h"
 #include "log.h"
 #include "net.h"
-#include "transcript.h"
+#include <ole2.h>
+#include "htmlview.h"
 
 #define ID_TRANSCRIPT 1001
 #define ID_INPUT      1002
@@ -33,6 +34,9 @@
 
 #define TIMER_RECONNECT 1
 #define TIMER_STATUS    2
+/* Navigation is asynchronous, so the document is polled for readiness until it
+ * arrives, then the timer stops. */
+#define TIMER_HTMLPOLL  3
 
 #define INPUT_HEIGHT  56
 #define BUTTON_WIDTH  64
@@ -45,7 +49,8 @@
 
 static rc_config     g_cfg;
 static rc_net        g_net;
-static rc_transcript g_tr;
+static rc_html *g_html;
+static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_input, g_send, g_stop, g_status;
 static HWND  g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
 static HWND  g_chats, g_refresh;
@@ -71,6 +76,8 @@ static DWORD g_turn_start_ms = 0;
 
 static int  label_width_px(const char *text);
 static void think_show(void);
+static void esc_html(const char *in, char *out, unsigned cap);
+static void layout(HWND hwnd);
 static void fit_label(char *label, unsigned cap, int avail_px);
 static int  chats_text_width(void);
 static void think_hide(void);
@@ -219,15 +226,6 @@ static void ui_set_busy(int busy)
 
 /* ------------------------------------------------------------ frame render */
 
-static rc_style style_from_name(const char *s)
-{
-    if (!s)                          return RC_STYLE_PLAIN;
-    if (strcmp(s, "code") == 0)      return RC_STYLE_CODE;
-    if (strcmp(s, "bold") == 0)      return RC_STYLE_BOLD;
-    if (strcmp(s, "thinking") == 0)  return RC_STYLE_THINKING;
-    return RC_STYLE_PLAIN;
-}
-
 static void render_frame(rc_frame *f)
 {
     const char *v;
@@ -245,30 +243,42 @@ static void render_frame(rc_frame *f)
         g_backoff_ms = 1000;
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, "Connected to bridge.\r\n",
-                             RC_STYLE_THINKING);
-        rc_transcript_end(&g_tr);
+        rc_html_append(g_html, "<div class=\"notice\">Connected to bridge.</div>");
         status_refresh();
 
+    } else if (strcmp(f->type, "DOC") == 0) {
+        /* The stylesheet and skeleton come from the bridge, so the look can be
+         * changed by restarting it rather than by rebuilding and re-deploying
+         * the guest binary. */
+        if (!g_doc_sent) {
+            g_doc_sent = 1;
+            rc_html_set_document(g_html, f->body);
+            /* The control is created here rather than with the other children,
+             * because it needs the skeleton first -- so it has missed every
+             * layout so far and is still sized to whatever DoVerb was given. */
+            layout(g_main);
+            SetTimer(g_main, TIMER_HTMLPOLL, 100, NULL);
+        }
+
     } else if (strcmp(f->type, "TEXT") == 0) {
-        rc_style st = style_from_name(rc_frame_get(f, "style"));
+        /* Body is not NUL-terminated by the protocol; the reader
+         * over-allocates by one and terminates it, so this is safe.
+         *
+         * "live" replaces the block still being written; anything else is a
+         * finished block appended to the end and never touched again. */
+        const char *mode = rc_frame_get(f, "mode");
+        int at_bottom = rc_html_at_bottom(g_html);
         think_hide();
-        /* Body is not NUL-terminated by the protocol; the reader over-allocates
-         * by one and terminates it, so this is safe. */
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, f->body, st);
-        rc_transcript_end(&g_tr);
+        if (mode && strcmp(mode, "live") == 0)
+            rc_html_live(g_html, f->body);
+        else
+            rc_html_append(g_html, f->body);
+        if (at_bottom) rc_html_scroll_bottom(g_html);
 
     } else if (strcmp(f->type, "TOOL") == 0) {
-        char line[512];
+        /* The bridge sends tool activity as a finished block now; this branch
+         * only survives for older bridges. */
         think_hide();
-        _snprintf(line, sizeof(line) - 1, "\r\n  -> %s  %.*s\r\n",
-                  rc_frame_get(f, "name") ? rc_frame_get(f, "name") : "?",
-                  (int)f->body_len, f->body);
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, line, RC_STYLE_TOOL);
-        rc_transcript_end(&g_tr);
 
     } else if (strcmp(f->type, "TURN") == 0) {
         const char *state = rc_frame_get(f, "state");
@@ -288,9 +298,7 @@ static void render_frame(rc_frame *f)
             v = rc_frame_get(f, "cost_usd");
             _snprintf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
             status_set(2, buf);
-            rc_transcript_begin(&g_tr);
-            rc_transcript_append(&g_tr, "\r\n", RC_STYLE_PLAIN);
-            rc_transcript_end(&g_tr);
+
         }
 
     } else if (strcmp(f->type, "SESSIONS") == 0) {
@@ -386,16 +394,15 @@ static void render_frame(rc_frame *f)
         g_think_mark = -1;      /* the control is about to be cleared */
         /* One page in, one page out: clear before rendering, so the control
          * never holds two. */
-        rc_transcript_clear(&g_tr);
-        rc_transcript_begin(&g_tr);
+        rc_html_clear(g_html);
         v = rc_frame_get(f, "continued");
         if (v && *v == '1')
-            rc_transcript_append(&g_tr,
-                "[continued from the previous page]\r\n", RC_STYLE_TOOL);
+            rc_html_append(g_html, "<div class=\"notice\">"
+                           "continued from the previous page</div>");
         page_update_ui();
 
     } else if (strcmp(f->type, "PAGEEND") == 0) {
-        if (g_loading_page) { rc_transcript_end(&g_tr); g_loading_page = 0; }
+        if (g_loading_page) { g_loading_page = 0; rc_html_scroll_bottom(g_html); }
         page_update_ui();
         log_mem("page loaded");
 
@@ -417,17 +424,18 @@ static void render_frame(rc_frame *f)
                   rc_frame_get(f, "code") ? rc_frame_get(f, "code") : "error",
                   rc_frame_get(f, "msg") ? rc_frame_get(f, "msg") : "");
         rc_log("bridge error: %s", line);
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, line, RC_STYLE_ERROR);
-        rc_transcript_end(&g_tr);
+        rc_html_append(g_html, line);
         ui_set_busy(0);
 
     } else if (strcmp(f->type, "NOTICE") == 0) {
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, "\r\n", RC_STYLE_PLAIN);
-        rc_transcript_append(&g_tr, f->body, RC_STYLE_TOOL);
-        rc_transcript_append(&g_tr, "\r\n", RC_STYLE_PLAIN);
-        rc_transcript_end(&g_tr);
+        {
+            char esc[1024], div[1200];
+            esc_html(f->body, esc, sizeof(esc));
+            _snprintf(div, sizeof(div) - 1,
+                      "<div class=\"notice\">%s</div>", esc);
+            div[sizeof(div) - 1] = '\0';
+            rc_html_append(g_html, div);
+        }
 
     } else {
         rc_log("unhandled frame type: %s", f->type);
@@ -545,29 +553,40 @@ static void think_hide(void)
  * responsive on a dialup link. */
 #define RC_USER_RULE "----------------------------------------------------------"
 
+/* Escape for HTML. The guest builds exactly one piece of markup itself -- the
+ * echo of the user's own line -- and it still has to escape, because what gets
+ * typed into the input box is not trusted to be free of '<'. */
+static void esc_html(const char *in, char *out, unsigned cap)
+{
+    unsigned o = 0;
+
+    for (; *in && o + 8 < cap; in++) {
+        const char *rep = NULL;
+        if (*in == '&')      rep = "&amp;";
+        else if (*in == '<') rep = "&lt;";
+        else if (*in == '>') rep = "&gt;";
+        else if (*in == '\n') rep = "<br>";
+        else if (*in == '\r') continue;
+        if (rep) {
+            unsigned n = (unsigned)strlen(rep);
+            memcpy(out + o, rep, n);
+            o += n;
+        } else {
+            out[o++] = *in;
+        }
+    }
+    out[o] = '\0';
+}
+
 static void echo_user_block(const char *text)
 {
-    const char *p = text;
-    const char *nl;
-    char line[1024];
-    int len;
+    char esc[4096], div[4400];
 
-    rc_transcript_append(&g_tr, "\r\n" RC_USER_RULE "\r\n", RC_STYLE_USER);
-    for (;;) {
-        nl = strchr(p, '\n');
-        len = nl ? (int)(nl - p) : (int)strlen(p);
-        while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == ' '))
-            len--;
-        if (len > (int)sizeof(line) - 1) len = (int)sizeof(line) - 1;
-        memcpy(line, p, (size_t)len);
-        line[len] = '\0';
-        rc_transcript_append(&g_tr, "> ", RC_STYLE_USER);
-        rc_transcript_append(&g_tr, line, RC_STYLE_USER);
-        rc_transcript_append(&g_tr, "\r\n", RC_STYLE_USER);
-        if (!nl) break;
-        p = nl + 1;
-    }
-    rc_transcript_append(&g_tr, "\r\n", RC_STYLE_USER);
+    esc_html(text, esc, sizeof(esc));
+    _snprintf(div, sizeof(div) - 1, "<div class=\"you\">%s</div>", esc);
+    div[sizeof(div) - 1] = '\0';
+    rc_html_append(g_html, div);
+    rc_html_scroll_bottom(g_html);
 }
 
 static void do_send(void)
@@ -579,17 +598,13 @@ static void do_send(void)
     n = GetWindowTextA(g_input, buf, sizeof(buf));
     if (n <= 0) return;
 
-    rc_transcript_begin(&g_tr);
     echo_user_block(buf);
-    rc_transcript_end(&g_tr);
 
     if (rc_net_send(&g_net, "INPUT", NULL, NULL, 0, buf, (unsigned)n) == 0) {
         SetWindowTextA(g_input, "");
         ui_set_busy(1);
     } else {
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, "[not connected]\r\n", RC_STYLE_ERROR);
-        rc_transcript_end(&g_tr);
+        rc_html_append(g_html, "<div class=\"err\">Not connected.</div>");
     }
     SetFocus(g_input);
 }
@@ -669,8 +684,8 @@ static void layout(HWND hwnd)
     {
         int cx = GUTTER * 2 + CHATS_W;
         int cw = w - cx - GUTTER;
-        MoveWindow(g_tr.hwnd, cx, GUTTER + PAGEBAR_H,
-                   cw, y - GUTTER - PAGEBAR_H, TRUE);
+        rc_html_move(g_html, cx, GUTTER + PAGEBAR_H,
+                     cw, y - GUTTER - PAGEBAR_H);
         MoveWindow(g_input, cx, y,
                    cw - GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
     }
@@ -698,10 +713,10 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         g_ui_font_bold = g_ui_font;
     }
 
-    if (rc_transcript_create(&g_tr, hwnd, ID_TRANSCRIPT, inst) != 0)
-        MessageBoxA(hwnd, "Could not create the RichEdit control.\n"
-                          "riched20.dll may be missing.",
-                    "retroclaude", MB_ICONERROR);
+    g_html = rc_html_create(hwnd);
+    if (!g_html)
+        MessageBoxA(hwnd, "Could not create the HTML view.", "RetroClaude",
+                    MB_OK | MB_ICONERROR);
 
     g_input = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
@@ -796,9 +811,7 @@ static void try_connect(HWND hwnd)
         _snprintf(msg, sizeof(msg),
                   "Cannot reach %s:%d - retrying in %ds\r\n",
                   g_cfg.host, g_cfg.port, g_backoff_ms / 1000);
-        rc_transcript_begin(&g_tr);
-        rc_transcript_append(&g_tr, msg, RC_STYLE_ERROR);
-        rc_transcript_end(&g_tr);
+        rc_html_append(g_html, msg);
 
         /* Backoff on a timer, never a sleeping loop -- the message queue has
          * to keep pumping or the window is a dead rectangle. */
@@ -919,6 +932,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             try_connect(hwnd);
         } else if (wp == TIMER_STATUS) {
             status_refresh();
+        } else if (wp == TIMER_HTMLPOLL) {
+            if (rc_html_poll(g_html)) KillTimer(hwnd, TIMER_HTMLPOLL);
         }
         return 0;
 
@@ -978,7 +993,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, TIMER_STATUS);
         KillTimer(hwnd, TIMER_RECONNECT);
         rc_net_stop(&g_net);
-        rc_transcript_destroy(&g_tr);
+        rc_html_destroy(g_html);
+        g_html = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
         if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
@@ -1022,6 +1038,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     wc.lpszClassName = "RetroClaudeWnd";
     if (!RegisterClassA(&wc)) { rc_log("RegisterClass failed"); return 1; }
 
+    /* OleInitialize, not CoInitialize: in-place activation of an embedded
+     * control needs the full OLE apartment. */
+    if (FAILED(OleInitialize(NULL))) {
+        rc_log("OleInitialize failed");
+        MessageBoxA(NULL, "OLE could not start.", "RetroClaude",
+                    MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
     g_main = CreateWindowExA(0, "RetroClaudeWnd", RC_TITLE,
         /* WS_CLIPCHILDREN: without it the parent's background erase paints
          * over its own children, which on a window that is almost entirely
@@ -1053,6 +1078,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
 
     log_mem("exiting");
+    OleUninitialize();
     rc_log_close();
     return (int)msg.wParam;
 }

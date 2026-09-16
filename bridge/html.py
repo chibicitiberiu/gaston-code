@@ -1,0 +1,324 @@
+"""Markdown -> HTML, incrementally, for the MSHTML transcript.
+
+The guest hosts the HTML engine and does nothing else with the text: it takes
+finished fragments and puts them in the document. All parsing, escaping and
+styling happens here, which is the same division of labour the styled-run
+renderer had -- only now the wire carries HTML instead of (style, text) pairs,
+and the guest gets padding, borders, background tints and real lists for free.
+
+Two shapes of update, because a transcript is both a log and a live thing:
+
+  * ``append`` -- a finished block. It is inserted at the end of the
+    transcript and never touched again.
+  * ``live``   -- the block currently being written, re-rendered in place as
+    more of it arrives. Without this a paragraph would only appear once it
+    was complete, which reads as a stall rather than as streaming.
+
+The incremental rule is the one that made the run renderer tractable and it
+carries over unchanged: **only complete lines are classified.** Anything after
+the last newline is held, because a line starting ``*`` might be a bullet or
+might be the start of ``**bold**`` and you cannot tell yet.
+"""
+
+from __future__ import annotations
+
+import html as _html
+import re
+from dataclasses import dataclass
+
+APPEND = "append"
+LIVE = "live"
+
+
+@dataclass
+class Update:
+    mode: str
+    html: str
+
+    def __repr__(self) -> str:
+        return f"Update({self.mode}, {self.html!r})"
+
+
+_FENCE = re.compile(r"^\s*(```|~~~)\s*([A-Za-z0-9_+-]*)\s*$")
+_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+_BULLET = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
+_QUOTE = re.compile(r"^\s*>\s?(.*)$")
+_RULE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
+
+# Longest delimiter first, so ** beats *.
+_INLINE = re.compile(
+    r"(?P<code>`[^`\n]+`)"
+    r"|(?P<bold>\*\*[^*\n]+\*\*|__[^_\n]+__)"
+    r"|(?P<em>\*[^*\n]+\*|_[^_\n]+_)"
+)
+
+
+def esc(text: str) -> str:
+    """Escape for HTML. Everything the model emits goes through this.
+
+    Not optional and not only about tidiness: a transcript that renders
+    ``<script>`` from model output would be executing it.
+    """
+    return _html.escape(text, quote=False)
+
+
+def inline(text: str) -> str:
+    """Inline spans within one line."""
+    out = []
+    pos = 0
+    for m in _INLINE.finditer(text):
+        if m.start() > pos:
+            out.append(esc(text[pos:m.start()]))
+        if m.group("code"):
+            out.append("<code>" + esc(m.group("code")[1:-1]) + "</code>")
+        elif m.group("bold"):
+            # Recurse: `code` inside **bold** is common, and escaping the inner
+            # span instead of parsing it puts literal backticks on screen.
+            # The delimiters are stripped first, so this cannot re-match the
+            # span it is already inside.
+            out.append("<b>" + inline(m.group("bold")[2:-2]) + "</b>")
+        else:
+            out.append("<i>" + inline(m.group("em")[1:-1]) + "</i>")
+        pos = m.end()
+    if pos < len(text):
+        out.append(esc(text[pos:]))
+    return "".join(out)
+
+
+def user_turn(text: str) -> str:
+    """One user message, as its own block.
+
+    The styled-run version drew a row of dashes and a ``>`` prefix because that
+    was the most a bitmap-font transcript could manage. Here it is a tinted box
+    with a rule down the side, which is what the dashes were imitating.
+    """
+    lines = text.strip().splitlines() or [""]
+    return ('<div class="you">'
+            + "<br>".join(esc(ln) for ln in lines)
+            + "</div>")
+
+
+def tool_call(name: str, summary: str) -> str:
+    return ('<div class="tool"><span class="toolname">' + esc(name)
+            + "</span> " + esc(summary) + "</div>")
+
+
+def notice(text: str) -> str:
+    return '<div class="notice">' + esc(text) + "</div>"
+
+
+def error(text: str) -> str:
+    return '<div class="err">' + esc(text) + "</div>"
+
+
+class HtmlStream:
+    """Feed model text in, get HTML updates out."""
+
+    def __init__(self) -> None:
+        self._pending = ""          # after the last newline, not yet classified
+        self._lines: list[str] = []  # lines of the block being built
+        self._kind: str | None = None
+        self._lang = ""
+
+    # --- public ------------------------------------------------------------
+
+    def feed(self, text: str) -> list[Update]:
+        self._pending += text
+        if "\n" not in self._pending:
+            return self._live_only()
+        head, _, self._pending = self._pending.rpartition("\n")
+        out: list[Update] = []
+        for line in (head + "\n").splitlines():
+            out.extend(self._line(line))
+        out.extend(self._live_only())
+        return out
+
+    def flush(self) -> list[Update]:
+        """The turn is over: close whatever is open."""
+        out: list[Update] = []
+        if self._pending:
+            rest, self._pending = self._pending, ""
+            out.extend(self._line(rest))
+        closed = self._close()
+        if closed:
+            out.append(Update(APPEND, closed))
+        out.append(Update(LIVE, ""))
+        return out
+
+    # --- internals ---------------------------------------------------------
+
+    def _live_only(self) -> list[Update]:
+        return [Update(LIVE, self._render(partial=True))]
+
+    def _start(self, kind: str, lang: str = "") -> list[Update]:
+        """Close the open block and begin a new one."""
+        out: list[Update] = []
+        closed = self._close()
+        if closed:
+            out.append(Update(APPEND, closed))
+        self._kind = kind
+        self._lang = lang
+        self._lines = []
+        return out
+
+    def _close(self) -> str:
+        if self._kind is None:
+            return ""
+        rendered = self._render(partial=False)
+        self._kind = None
+        self._lines = []
+        return rendered
+
+    def _line(self, raw: str) -> list[Update]:
+        line = raw.rstrip("\n")
+
+        m = _FENCE.match(line)
+        if m:
+            if self._kind == "pre":
+                out = []
+                closed = self._close()
+                if closed:
+                    out.append(Update(APPEND, closed))
+                return out
+            return self._start("pre", m.group(2))
+
+        # Inside a fence everything is literal, which is why fence state has to
+        # survive across feeds.
+        if self._kind == "pre":
+            self._lines.append(line)
+            return []
+
+        if not line.strip():
+            out = []
+            closed = self._close()
+            if closed:
+                out.append(Update(APPEND, closed))
+            return out
+
+        m = _RULE.match(line)
+        if m:
+            out = self._start("hr")
+            out.append(Update(APPEND, "<hr>"))
+            self._kind = None
+            return out
+
+        m = _HEADING.match(line)
+        if m:
+            out = self._start("h")
+            level = min(len(m.group(1)) + 2, 6)
+            out.append(Update(APPEND, f"<h{level}>{inline(m.group(2))}</h{level}>"))
+            self._kind = None
+            return out
+
+        m = _BULLET.match(line)
+        if m:
+            out = [] if self._kind == "ul" else self._start("ul")
+            self._lines.append(m.group(3))
+            return out
+
+        m = _QUOTE.match(line)
+        if m:
+            out = [] if self._kind == "quote" else self._start("quote")
+            self._lines.append(m.group(1))
+            return out
+
+        out = [] if self._kind == "p" else self._start("p")
+        self._lines.append(line)
+        return out
+
+    def _render(self, *, partial: bool) -> str:
+        lines = list(self._lines)
+        if partial and self._pending:
+            lines.append(self._pending)
+        if not lines:
+            return ""
+
+        if self._kind is None:
+            # Text arrived before any complete line, so no block is open yet.
+            # Show it as a paragraph anyway: this is the first thing the reader
+            # sees of a turn, and holding it back until a newline arrives is
+            # exactly the stall the live block exists to avoid.
+            return "<p>" + "<br>".join(inline(x) for x in lines) + "</p>"
+
+        if self._kind == "pre":
+            body = esc("\n".join(lines))
+            label = (f'<div class="lang">{esc(self._lang)}</div>'
+                     if self._lang else "")
+            return f'<div class="codewrap">{label}<pre>{body}</pre></div>'
+        if self._kind == "ul":
+            return "<ul>" + "".join(f"<li>{inline(x)}</li>" for x in lines) + "</ul>"
+        if self._kind == "quote":
+            return "<blockquote>" + "<br>".join(inline(x) for x in lines) + "</blockquote>"
+        if self._kind == "p":
+            return "<p>" + "<br>".join(inline(x) for x in lines) + "</p>"
+        return ""
+
+
+# --- the document the guest hosts ------------------------------------------
+#
+# Colours lean on the Win98 system palette. The display is 8bpp, so a colour
+# outside the 20 system entries is dithered, and large flat areas of a dithered
+# tint look like noise. White, silver (#C0C0C0), grey (#808080) and navy
+# (#000080) are exact; the two light tints are close enough to white and silver
+# to dither cleanly.
+#
+# Sizes are in points against an 8pt UI font, because the whole layout has to
+# work in a 470px column on a 640x480 screen.
+STYLESHEET = """
+body { font: 8pt 'MS Sans Serif', sans-serif; background: #ffffff;
+       color: #000000; margin: 0; padding: 6px 9px 24px 9px; }
+p  { margin: 0 0 7px 0; line-height: 1.35; }
+h3, h4, h5, h6 { font-size: 9pt; margin: 12px 0 5px 0; padding-bottom: 2px;
+       border-bottom: 1px solid #c0c0c0; }
+b { font-weight: bold; }
+i { font-style: italic; }
+
+/* A user turn. The styled-run transcript drew a row of dashes and a '>' to
+   imitate exactly this, because it had no other way to box anything. */
+.you { background: #e8e8f0; border-left: 3px solid #000080;
+       padding: 5px 7px; margin: 12px 0 9px 0; color: #000080;
+       font-weight: bold; }
+
+/* Code. The label sits on the block rather than floating above it as the
+   bracketed "[c]" used to. */
+.codewrap { margin: 7px 0; border: 1px solid #c0c0c0; background: #f4f4f4;
+             overflow: auto; width: 100%; }
+.lang { font-size: 7pt; color: #808080; background: #ececec;
+        border-bottom: 1px solid #d8d8d8; padding: 1px 5px; }
+/* The code block scrolls inside its own box. Without `overflow: auto` on the
+   wrapper a single long line gives the whole transcript a horizontal
+   scrollbar, and then every paragraph is being panned to read one line of C.
+   IE5 has no pre-wrap and no word-wrap, so scrolling the box is the option
+   that exists. */
+pre { font: 8pt 'Courier New', monospace; color: #000080;
+      margin: 0; padding: 5px 6px; white-space: pre; }
+code { font: 8pt 'Courier New', monospace; color: #000080;
+       background: #f4f4f4; padding: 0 2px; }
+
+ul { margin: 5px 0 8px 0; padding-left: 22px; }
+li { margin: 2px 0; line-height: 1.3; }
+blockquote { margin: 7px 0; padding: 3px 8px; border-left: 2px solid #c0c0c0;
+             color: #505050; }
+hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
+
+.tool { font: 8pt 'Courier New', monospace; color: #006000;
+        background: #f2f7f2; border-left: 2px solid #008000;
+        padding: 3px 6px; margin: 6px 0; }
+.toolname { font-weight: bold; }
+.notice { color: #808080; font-style: italic; margin: 6px 0; }
+.err { color: #a00000; background: #fff0f0; border-left: 3px solid #a00000;
+       padding: 4px 6px; margin: 7px 0; font-weight: bold; }
+"""
+
+# Two containers: finished blocks accumulate in #t, and #l holds the one block
+# still being written, replaced wholesale on each update. Keeping them separate
+# is what lets the guest stream without ever re-parsing what is already there.
+SKELETON = ("<html><head>"
+            "<meta http-equiv=\"Content-Type\" "
+            "content=\"text/html; charset=windows-1252\">"
+            "<style>%s</style></head>"
+            "<body><div id=\"t\"></div><div id=\"l\"></div></body></html>")
+
+
+def document(css: str | None = None) -> str:
+    return SKELETON % (css if css is not None else STYLESHEET)

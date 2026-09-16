@@ -22,7 +22,8 @@ from dataclasses import dataclass, field
 from . import fold
 from .coalesce import Coalescer
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
-from .markdown import MarkdownStream, STYLE_USER, user_block
+from . import html as H
+from .html import APPEND, LIVE, HtmlStream
 from .pages import Paginator
 from .protocol import (
     MAX_FRAME,
@@ -71,7 +72,7 @@ class GuestSession:
     # adjacent same-style runs and keeps the expensive
     # EM_SETCHARFORMAT/EM_REPLACESEL pair count down on the guest.
     coalescers: dict = field(default_factory=dict)
-    markdown: MarkdownStream = field(default_factory=MarkdownStream)
+    markdown: HtmlStream = field(default_factory=HtmlStream)
 
     # The transcript lives here, in full. The guest only ever holds one page,
     # which is what bounds its memory by page size rather than by conversation
@@ -275,6 +276,11 @@ class Bridge:
                 for f in missed:
                     await self._send(guest, f, stamp=False)
 
+        # The stylesheet and the document skeleton live here rather than in
+        # the guest, so the look can be changed by restarting the bridge
+        # instead of rebuilding and re-deploying a binary.
+        await self._send(guest, Frame("DOC", {}, fold.encode(H.document())))
+
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
         return guest
 
@@ -292,8 +298,7 @@ class Bridge:
             # Flush buffered text first: a tool line that jumps ahead of the
             # prose that introduced it reads as a non sequitur.
             await self._flush_text(guest)
-            await self._send(guest, Frame("TOOL", {"name": name},
-                                          fold.encode(_summarise(args))))
+            await self._write_block(guest, H.tool_call(name, _summarise(args)))
 
         async def on_tool_result(tool_id: str, body: str, is_err: bool) -> None:
             await self._send(guest, Frame(
@@ -303,8 +308,7 @@ class Bridge:
 
         async def on_system(subtype: str, data: dict) -> None:
             if subtype == "compact_boundary":
-                await self._send(guest, Frame("NOTICE", {"kind": "compacted"},
-                                              fold.encode("History condensed.")))
+                await self._write_block(guest, H.notice("History condensed."))
 
         s = Session(
             cwd=self.cwd,
@@ -324,16 +328,16 @@ class Bridge:
         c = guest.coalescers.get(style)
         if c is None:
             if style == "plain":
-                # Assistant prose goes through the markdown parser, which emits
-                # its own styles.
+                # Assistant prose is markdown; the renderer turns it into
+                # finished HTML blocks plus the block still being written.
                 async def sink(text: str) -> None:
-                    for run in guest.markdown.feed(text):
-                        await self._write_text(guest, run.text, style=run.style)
+                    await self._write_updates(guest, guest.markdown.feed(text))
             else:
-                # Thinking and anything else is pre-styled; pass it straight
-                # through rather than parsing markdown out of it.
+                # Thinking and anything else is not markdown; wrap it rather
+                # than parsing it.
                 async def sink(text: str, _s=style) -> None:
-                    await self._write_text(guest, text, style=_s)
+                    await self._write_block(
+                        guest, f'<div class="{_s}">' + H.esc(text) + "</div>")
             c = Coalescer(sink)
             c.set_link_speed(guest.link_bps)
             c.start()
@@ -352,47 +356,72 @@ class Bridge:
             await c.flush()
         # A model can stop mid-sentence; whatever the parser is holding for
         # lookahead has to come out or the last line is silently lost.
-        for run in guest.markdown.flush():
-            await self._write_text(guest, run.text, style=run.style)
+        await self._write_updates(guest, guest.markdown.flush())
 
-    async def _write_text(self, guest: GuestSession, text: str,
-                          *, style: str, stream: bool = True) -> None:
-        """Record into the paginator, then stream to the guest if it is on the
-        live page.
+    async def _write_updates(self, guest: GuestSession,
+                             updates: list) -> None:
+        """Send a batch of renderer updates.
 
-        `stream=False` records without sending. That is for text the guest has
-        already put on screen itself -- the echo of the user's own line -- which
+        Only APPEND blocks are recorded: a LIVE block is the paragraph still
+        being written, and it is replaced on every update, so storing it would
+        put a dozen half-finished copies of the same sentence into the page.
+        The final state of that block always arrives as an APPEND.
+        """
+        for u in updates:
+            if u.mode == APPEND:
+                await self._write_block(guest, u.html)
+            else:
+                await self._send_html(guest, u.html, LIVE,
+                                      guest.pages.live.number)
+
+    async def _write_block(self, guest: GuestSession, html: str,
+                           *, stream: bool = True) -> None:
+        """Record a finished block into the paginator, then send it.
+
+        `stream=False` records without sending, for a block the guest has
+        already put on screen itself -- the echo of the user's own line. It
         still has to reach the paginator, because a sealed page is re-sent in
-        full when the reader pages back and a transcript of answers with no
+        full when the reader pages back, and a transcript of answers with no
         questions in it is close to useless.
         """
-        if not text:
+        if not html:
             return
 
         page_no = guest.pages.live.number
-        sealed = guest.pages.add(style, text)
+        sealed = guest.pages.add("html", html)
 
         # Only stream when the guest is watching the live page. In HISTORY mode
         # the bridge keeps buffering silently and the page counter ticking up
         # is the notification.
         if stream and (guest.view_page is None or guest.view_page == page_no):
-            await self._emit_runs(guest, style, text, page_no)
+            await self._send_html(guest, html, APPEND, page_no)
 
         for pg in sealed:
             await self._send(guest, Frame("PAGESEALED", {
                 "page": str(pg.number), "total": str(guest.pages.count)}))
 
-    async def _emit_runs(self, guest: GuestSession, style: str, text: str,
+    async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:
         """Fold to CP1252, compress if worthwhile, chunk under the frame cap.
 
-        Chunking here rather than at the socket keeps the send lock free
-        between chunks, so a long turn cannot delay a keystroke or a Stop.
+        Chunking keeps the send lock free between chunks, so a long block
+        cannot delay a keystroke or a Stop. A LIVE update is never chunked --
+        it replaces an element wholesale, so half of one is meaningless; an
+        oversized one is simply dropped and the APPEND that follows carries the
+        whole thing.
         """
-        data = fold.encode(text)
+        data = fold.encode(html)
         if not data:
+            if mode == LIVE:
+                await self._send(guest, Frame(
+                    "TEXT", {"mode": LIVE, "enc": ENC_RAW,
+                             "page": str(page_no)}, b""))
             return
-        budget = MAX_FRAME - 1024  # headroom for headers and deflate overhead
+
+        budget = MAX_FRAME - 1024   # headroom for headers and deflate overhead
+        if mode == LIVE and len(data) > budget:
+            return
+
         for i in range(0, len(data), budget):
             chunk = data[i:i + budget]
             enc = ENC_RAW
@@ -400,7 +429,7 @@ class Bridge:
                 chunk = guest.zip_out.compress(chunk)
                 enc = ENC_DEFLATE
             await self._send(guest, Frame(
-                "TEXT", {"style": style, "enc": enc, "page": str(page_no)},
+                "TEXT", {"mode": mode, "enc": enc, "page": str(page_no)},
                 chunk))
 
     # --- frame pump --------------------------------------------------------
@@ -486,8 +515,7 @@ class Bridge:
         # The guest echoed this line itself the moment Send was pressed, so it
         # is recorded but not streamed. USER_BLOCK is shared with the guest so
         # the two renderings are the same string, not merely similar.
-        await self._write_text(guest, user_block(text), style=STYLE_USER,
-                               stream=False)
+        await self._write_block(guest, H.user_turn(text), stream=False)
         await self._send(guest, Frame("ANCHOR", {
             "page": str(anchor.page), "off": str(anchor.offset),
             "preview": anchor.preview}))
@@ -539,7 +567,7 @@ class Bridge:
 
         # Fresh transcript state. Anything the old session had is on disk.
         guest.pages = Paginator()
-        guest.markdown = MarkdownStream()
+        guest.markdown = HtmlStream()
         for c in guest.coalescers.values():
             await c.stop()
         guest.coalescers.clear()
@@ -551,8 +579,8 @@ class Bridge:
             await self._send(guest, error("resume_failed", str(exc)[:200]))
             return
 
-        for style, text in sesslist.history_runs(session_id):
-            guest.pages.add(style, text)
+        for block in sesslist.history_html(session_id):
+            guest.pages.add("html", block)
             if guest.pages.live.over_soft_cap():
                 guest.pages.message_boundary()
 
@@ -589,7 +617,7 @@ class Bridge:
             "continued": "1" if page.continued else "0",
         }))
         for run in page.runs:
-            await self._emit_runs(guest, run.style, run.text, page.number)
+            await self._send_html(guest, run.text, APPEND, page.number)
         await self._send(guest, Frame("PAGEEND", {"page": str(page.number)}))
 
     # --- sending -----------------------------------------------------------

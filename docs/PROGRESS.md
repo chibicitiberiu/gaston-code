@@ -120,6 +120,74 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — the transcript is HTML now
+
+RichEdit 2.0 is gone. `win/transcript.c` is deleted, `win/htmlview.c` hosts
+MSHTML, and the bridge emits HTML instead of styled runs.
+
+**Why, given the plan said no.** The plan's objection was a "multi-MB DLL tax
+... fixed per process so pagination doesn't reduce it", which was an estimate,
+and the counter-argument is that Windows 98's own Explorer hosts MSHTML for
+folder Web View. Measured rather than argued (32MB guest, all figures free of
+32288 KB):
+
+| | free | marginal |
+|---|---|---|
+| desktop, nothing running | 9928 KB | — |
+| RichEdit client, chat loaded | 8688 KB | ~1.4 MB |
+| **HTML client, chat loaded** | **700 KB** | **~9.2 MB** |
+| after closing the HTML client | 3236 KB | engine stays resident: ~6.7 MB |
+
+So ~9.2 MB against a 20 MB budget: it passes, and it is ~7.8 MB more than
+RichEdit. Most of that is the engine itself, which **stays loaded after the
+app exits** -- free memory does not return to the 9928 KB baseline. Physical
+free drops to ~700 KB while running, so the machine leans on its swap file;
+`dwAvailPhys` excludes the disk cache, so the real headroom is better than that
+number looks, but it is not comfortable.
+
+**What it buys**, all of which RichEdit 2.0 cannot do at all: padding and
+margins, borders, background tints, real bulleted lists, a language label bar
+on code blocks, a code block that scrolls inside its own box, and inline
+screenshots later. The look is not a marginal improvement.
+
+**Architecture.** Unchanged where it matters: pagination still bounds memory,
+the coalescer still batches at ~10fps, compression is untouched, and the guest
+still transforms nothing. Two changes:
+
+  * **The stylesheet lives on the bridge**, sent once in a `DOC` frame. The
+    look can be changed by restarting the bridge instead of rebuilding and
+    re-deploying a binary, which turned a 4-minute iteration into a 30-second
+    one while tuning the CSS.
+  * **Two containers, `#t` and `#l`.** Finished blocks accumulate in `#t` and
+    are never touched again; `#l` holds the block still being written and is
+    replaced wholesale as it grows. Without the second one a paragraph would
+    only appear once complete, which reads as a stall rather than as
+    streaming. Only `#t` blocks are recorded in the paginator -- storing the
+    live one would put a dozen half-finished copies of the same sentence into
+    the page.
+
+**Three things that cost time:**
+
+  * `oaidl.h` declares VARIANT with **named** unions under `__STDC__`, but
+    `oleauto.h`'s `V_VT`/`V_UNION` macros only follow when `NONAMELESSUNION`
+    is defined. Left alone the two disagree and every VARIANT access fails to
+    compile. Define `NONAMELESSUNION` before the OLE headers.
+  * The control is created late, when the `DOC` frame arrives, so it has
+    missed every layout and is still sized to whatever `DoVerb` was handed.
+    The document loaded, `insertAdjacentHTML` returned `S_OK`, the DOM read
+    back the right content -- and nothing painted, because the window was the
+    wrong size. Call `layout()` right after creating it.
+  * IE5 has no `pre-wrap` and no `word-wrap`, so one long line in a code block
+    gives the **whole transcript** a horizontal scrollbar and every paragraph
+    has to be panned to read one line of C. `overflow: auto` plus an explicit
+    `width: 100%` on the wrapper confines the scrolling to the code block.
+
+Open Watcom ships `mshtml.h`, `exdisp.h`, `docobj.h`, `oleidl.h` and
+`uuid.lib`, so nothing was vendored. It does not ship `mshtmhst.h`, so
+`IDocHostUIHandler` is unavailable without hand-declaring it; it only controls
+chrome, and the scrollbars it would suppress are ones the transcript wants.
+
+
 ### 2026-09-17 — MSHTML is affordable after all, and it looks far better
 
 The plan rejected MSHTML for v1 partly on a "multi-MB DLL tax ... fixed per

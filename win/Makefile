@@ -36,9 +36,9 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
 # forwarder to ws2_32). comctl32 is for the status bar.
-LIBS   = library wsock32.lib, comctl32.lib, ole32.lib
+LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
-OBJS = main.o net.o frameproto.o log.o ini.o transcript.o miniz.o
+OBJS = main.o net.o frameproto.o log.o ini.o htmlview.o miniz.o
 
 .PHONY: all clean check run netcheck probe htmlspike
 

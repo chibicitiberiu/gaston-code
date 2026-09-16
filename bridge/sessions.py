@@ -15,14 +15,9 @@ import logging
 
 from claude_agent_sdk import get_session_messages, list_sessions
 
-from .markdown import (
-    STYLE_CODE,
-    STYLE_PLAIN,
-    STYLE_TOOL,
-    STYLE_USER,
-    MarkdownStream,
-    user_block,
-)
+from . import html as H
+from .html import APPEND, HtmlStream
+from .markdown import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
 
 log = logging.getLogger("bridge.sessions")
 
@@ -134,37 +129,40 @@ def _text_of(message) -> list[tuple[str, str]]:
     return runs
 
 
-def history_runs(session_id: str, limit: int = 2000) -> list[tuple[str, str]]:
-    """Replay a stored session as styled runs, for repopulating the pages."""
+def history_html(session_id: str, limit: int = 2000) -> list[str]:
+    """Replay a stored session as HTML blocks, for repopulating the pages.
+
+    Deliberately the same renderer the live path uses. Replaying stored text
+    through a different one is exactly how an old conversation ended up flat
+    while the conversation you were having had bullets, bold and code blocks.
+    """
     try:
         msgs = get_session_messages(session_id, limit=limit)
     except Exception:
         log.exception("get_session_messages failed for %s", session_id)
         return []
 
-    runs: list[tuple[str, str]] = []
+    blocks: list[str] = []
     for m in msgs:
         msg = getattr(m, "message", None)
-        # A fresh parser per message: a stored message is complete, and fence
-        # state must not leak from one into the next.
-        md = MarkdownStream()
+        # A fresh renderer per message: a stored message is complete, and
+        # fence state must not leak from one into the next.
+        md = HtmlStream()
         for style, text in _text_of(msg):
             if not text:
                 continue
             if style == STYLE_USER:
-                # Exactly what a live turn renders, so scrolling back through
-                # an old conversation looks like the one you just had.
-                runs.append((STYLE_USER, user_block(text)))
+                blocks.append(H.user_turn(text))
             elif style == STYLE_PLAIN:
-                # Assistant prose is markdown. Replaying it raw was the reason
-                # an old conversation lost its bullets, bold and code blocks
-                # while the live one had them.
-                for r in md.feed(text):
-                    runs.append((r.style, r.text))
+                blocks.extend(u.html for u in md.feed(text)
+                              if u.mode == APPEND and u.html)
+            elif style == STYLE_TOOL:
+                blocks.append(H.tool_call("tool", text))
+            elif style == STYLE_CODE:
+                blocks.append('<div class="codewrap"><pre>'
+                              + H.esc(text) + "</pre></div>")
             else:
-                runs.append((style, text))
-        for r in md.flush():
-            runs.append((r.style, r.text))
-        if getattr(m, "type", "") == "assistant":
-            runs.append((STYLE_PLAIN, "\r\n"))
-    return runs
+                blocks.append("<p>" + H.esc(text) + "</p>")
+        blocks.extend(u.html for u in md.flush()
+                      if u.mode == APPEND and u.html)
+    return blocks
