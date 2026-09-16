@@ -28,7 +28,8 @@ export WLINK_LNK = $(OWBIN)/wlink.lnk
 CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
          -DWIN32_LEAN_AND_MEAN \
-         -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt" -i="$(CURDIR)"
+         -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt" -i="$(CURDIR)" \
+         -i="$(CURDIR)/third_party/miniz"
 
 LFLAGS = system nt_win option quiet, osversion=4.0
 
@@ -37,14 +38,14 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # forwarder to ws2_32). comctl32 is for the status bar.
 LIBS   = library wsock32.lib, comctl32.lib
 
-OBJS = main.o net.o frameproto.o log.o ini.o transcript.o
+OBJS = main.o net.o frameproto.o log.o ini.o transcript.o miniz.o
 
 .PHONY: all clean check run netcheck
 all: retroclaude.exe
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
-NETCHECK_OBJS = netcheck.o net.o frameproto.o log.o
+NETCHECK_OBJS = netcheck.o net.o frameproto.o log.o miniz.o
 netcheck: netcheck.exe
 netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
@@ -52,6 +53,9 @@ netcheck.exe: $(NETCHECK_OBJS)
 
 %.o: %.c
 	@$(WCC) $(CFLAGS) -fo=$@ $<
+
+miniz.o: third_party/miniz/miniz.c
+	@$(WCC) $(CFLAGS) -fo=$@ third_party/miniz/miniz.c
 
 retroclaude.exe: $(OBJS)
 	@$(WLINK) $(LFLAGS) $(LIBS) name $@ file {$(OBJS)}

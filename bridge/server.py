@@ -20,6 +20,8 @@ import uuid
 from dataclasses import dataclass, field
 
 from . import fold
+from .coalesce import Coalescer
+from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
 from .protocol import (
     MAX_FRAME,
     PROTO_VERSION,
@@ -46,6 +48,16 @@ class GuestSession:
     writer: asyncio.StreamWriter | None = None
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
+    # One persistent deflate stream for the whole connection. Resetting it
+    # mid-connection would desynchronise the guest's inflater, so it is only
+    # reset on reconnect -- see _attach.
+    zip_out: StreamCompressor = field(default_factory=StreamCompressor)
+    link_bps: float | None = None
+
+    # One coalescer per style. Text of different styles cannot share a buffer
+    # without losing the style boundary.
+    coalescers: dict = field(default_factory=dict)
+
     @property
     def connected(self) -> bool:
         return self.writer is not None and not self.writer.is_closing()
@@ -61,8 +73,13 @@ class Bridge:
         cwd: str | None = None,
         model: str | None = None,
         effort: str | None = None,
+        link_bps: float | None = None,
     ) -> None:
         self.secret = secret
+        # Measured link speed. None means "unknown, assume it might be slow".
+        # Set from the guest's STAT frames; overridable for testing so the
+        # dialup path can be exercised without a modem.
+        self.link_bps = link_bps
         self.host = host
         self.port = port
         self.cwd = cwd
@@ -197,11 +214,20 @@ class Bridge:
                 "busy", "another client holds this session"))
             return None
 
+        # A fresh connection means a fresh inflater on the guest, so the
+        # compressor must restart in lockstep or the first frame is garbage.
+        if self._guest is not None:
+            self._guest.zip_out.reset()
+
         resumed = False
         if self._guest is None:
             self._guest = GuestSession(sess_id=str(uuid.uuid4()))
         guest = self._guest
         guest.writer = writer
+
+        guest.link_bps = self.link_bps
+        for c in guest.coalescers.values():
+            c.set_link_speed(guest.link_bps)
 
         if guest.claude is None:
             guest.claude = await self._make_session(guest)
@@ -240,6 +266,9 @@ class Bridge:
             await self._emit_text(guest, t, style="thinking")
 
         async def on_tool(name: str, args: dict) -> None:
+            # Flush buffered text first: a tool line that jumps ahead of the
+            # prose that introduced it reads as a non sequitur.
+            await self._flush_text(guest)
             await self._send(guest, Frame("TOOL", {"name": name},
                                           fold.encode(_summarise(args))))
 
@@ -267,9 +296,31 @@ class Bridge:
         await s.start()
         return s
 
+    def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
+        c = guest.coalescers.get(style)
+        if c is None:
+            async def sink(text: str, _s=style) -> None:
+                await self._write_text(guest, text, style=_s)
+            c = Coalescer(sink)
+            c.set_link_speed(guest.link_bps)
+            c.start()
+            guest.coalescers[style] = c
+        return c
+
     async def _emit_text(self, guest: GuestSession, text: str,
                          *, style: str) -> None:
-        """Fold to CP1252 and chunk to stay under the frame cap.
+        """Buffer a delta. The coalescer decides when it goes out."""
+        if not text:
+            return
+        await self._coalescer(guest, style).add(text)
+
+    async def _flush_text(self, guest: GuestSession) -> None:
+        for c in list(guest.coalescers.values()):
+            await c.flush()
+
+    async def _write_text(self, guest: GuestSession, text: str,
+                          *, style: str) -> None:
+        """Fold to CP1252, compress if worthwhile, chunk under the frame cap.
 
         Chunking here rather than at the socket keeps the send lock free
         between chunks, so a long turn cannot delay a keystroke or a Stop.
@@ -277,10 +328,15 @@ class Bridge:
         data = fold.encode(text)
         if not data:
             return
-        budget = MAX_FRAME - 512  # headroom for headers
+        budget = MAX_FRAME - 1024  # headroom for headers and deflate overhead
         for i in range(0, len(data), budget):
-            await self._send(guest, Frame("TEXT", {"style": style},
-                                          data[i:i + budget]))
+            chunk = data[i:i + budget]
+            enc = ENC_RAW
+            if should_compress(chunk, guest.link_bps):
+                chunk = guest.zip_out.compress(chunk)
+                enc = ENC_DEFLATE
+            await self._send(guest, Frame(
+                "TEXT", {"style": style, "enc": enc}, chunk))
 
     # --- frame pump --------------------------------------------------------
 
@@ -307,6 +363,20 @@ class Bridge:
             if guest.claude:
                 await guest.claude.interrupt()
 
+        elif f.type == "STAT":
+            # The guest measures its own throughput for the progress UI; the
+            # sender uses it to pick a codec. This is what makes one build work
+            # on both a 10Mbit LAN and a modem.
+            try:
+                bps = float(f.headers.get("bps", "0"))
+            except ValueError:
+                bps = 0.0
+            if bps > 0:
+                guest.link_bps = bps
+                for c in guest.coalescers.values():
+                    c.set_link_speed(bps)
+                log.info("guest reports %.0f B/s", bps)
+
         elif f.type == "PING":
             await self._send(guest, Frame("PONG", {}), stamp=False)
 
@@ -328,9 +398,15 @@ class Bridge:
             turn = await guest.claude.send(text)
         except Exception as exc:
             log.exception("turn failed")
+            await self._flush_text(guest)
             await self._send(guest, Frame("TURN", {
                 "state": "error", "msg": str(exc)[:200]}))
             return
+        await self._flush_text(guest)
+        raw, comp = guest.zip_out.stats
+        if comp:
+            log.info("deflate so far: %d -> %d bytes (%.2f:1)",
+                     raw, comp, guest.zip_out.ratio)
         await self._send(guest, Frame("TURN", {
             "state": "end",
             "ok": "1" if turn.ok else "0",
@@ -383,6 +459,9 @@ def main() -> None:
     ap.add_argument("--model", default=None)
     ap.add_argument("--effort", default=None, choices=[None, "low", "medium",
                                                        "high", "xhigh", "max"])
+    ap.add_argument("--link-bps", type=float, default=None,
+                    help="assume this link speed in bytes/sec (testing: "
+                         "5000 simulates dialup and forces the slow-link path)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -398,7 +477,8 @@ def main() -> None:
         log.warning("RETROCLAUDE_SECRET unset; using %r (development only)", secret)
 
     bridge = Bridge(secret, host=args.host, port=args.port,
-                    cwd=args.cwd, model=args.model, effort=args.effort)
+                    cwd=args.cwd, model=args.model, effort=args.effort,
+                    link_bps=args.link_bps)
     try:
         asyncio.run(bridge.serve_forever())
     except KeyboardInterrupt:

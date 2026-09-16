@@ -94,6 +94,10 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
 
 void rc_frame_free(rc_frame *f)
 {
+    if (f->_body_alloc) {
+        HeapFree(GetProcessHeap(), 0, f->_body_alloc);
+        f->_body_alloc = NULL;
+    }
     if (f->_raw) { HeapFree(GetProcessHeap(), 0, f->_raw); f->_raw = NULL; }
     f->body = NULL;
     f->body_len = 0;

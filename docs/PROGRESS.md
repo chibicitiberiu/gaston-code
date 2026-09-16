@@ -57,7 +57,7 @@ Linux side first, so the guest develops against something real.
 
 | # | Item | State |
 |---|---|---|
-| 2a | Streaming raw text + `enc=deflate` bridge→guest | |
+| 2a | Streaming raw text + `enc=deflate` bridge→guest | **done** — verified both link regimes |
 | 2b | Styled runs (markdown → `CHARFORMAT2`) | |
 | 2c | Pagination | |
 | 2d | Session list | |
@@ -75,7 +75,37 @@ Linux side first, so the guest develops against something real.
 - Still unverified on real Win98: everything. Wine proves the code, not the
   platform.
 
+### Phase 2a measured (2026-09-16)
+
+Same prompt, same code, two link regimes, via `--link-bps`:
+
+| link | frames | deflate | bytes on wire | ratio |
+|---|---|---|---|---|
+| fast (default) | 33 | 1 | 2437 | — |
+| 5 KB/s (dialup) | **6** | **6** | **594** | **6.27:1** |
+
+All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
+deliberately repetitive test text; real prose measured 2.16:1.)
+
 ## Decisions made while building
+
+### 2026-09-16 — the coalescer's interval, not its target, sets frame size
+First implementation targeted 2KB frames and **never compressed anything**: at
+realistic token rates a 100ms window accumulates only ~35 bytes. The target was
+unreachable by construction.
+
+Fix is to trade latency for ratio as the link slows: 100ms on a LAN, 600ms below
+~2 Mbit/s. Buffering longer is *free* when the wire is the bottleneck -- at
+5 KB/s a frame already takes seconds to send, so 600ms more is invisible and
+buys a much better ratio. At LAN speed the opposite holds and latency wins.
+
+This is also why `MIN_WORTH_COMPRESSING` is only 64 bytes: because the stream is
+persistent, even small frames ride the warm dictionary.
+
+### 2026-09-16 — streaming duplicates text unless you suppress completed blocks
+With `include_partial_messages=True` the SDK emits **both** token deltas and the
+completed `AssistantMessage` blocks. Rendering both prints every word twice.
+`Session` skips the completed blocks while streaming.
 
 ### 2026-09-16 — `-bm` does not change the PE
 Re-ran `make check` after adding `-bm`. Byte-identical result: 45 imports across

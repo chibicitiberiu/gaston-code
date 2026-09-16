@@ -5,6 +5,7 @@
 #include <string.h>
 #include "net.h"
 #include "log.h"
+#include "miniz.h"
 
 /* Cap on frames posted to the UI thread but not yet freed.
  *
@@ -13,6 +14,70 @@
  * reader keeps recv-ing while the UI drains slowly. Without a cap the reader
  * outruns the UI and every failed post leaks. */
 #define RC_MAX_INFLIGHT 256
+
+/* One persistent inflate stream for the whole connection.
+ *
+ * The bridge compresses with a persistent deflate stream and Z_SYNC_FLUSH per
+ * frame, which keeps the dictionary warm across frames -- worth 1.27x over
+ * compressing each frame alone. That only works if this side keeps its state
+ * too, so this is deliberately NOT per-frame. Both sides reset on reconnect,
+ * in lockstep. */
+static mz_stream g_inf;
+static int       g_inf_ready = 0;
+
+static void inflate_begin(void)
+{
+    if (g_inf_ready) { mz_inflateEnd(&g_inf); g_inf_ready = 0; }
+    memset(&g_inf, 0, sizeof(g_inf));
+    if (mz_inflateInit(&g_inf) == MZ_OK) g_inf_ready = 1;
+    else rc_log("net: mz_inflateInit failed");
+}
+
+static void inflate_finish(void)
+{
+    if (g_inf_ready) { mz_inflateEnd(&g_inf); g_inf_ready = 0; }
+}
+
+/* Inflates f->body in place-ish: allocates a new buffer, points body at it,
+ * and records it for rc_frame_free. Returns 0 on success. */
+static int inflate_body(rc_frame *f)
+{
+    /* Bounded so a malicious or corrupt frame cannot expand without limit.
+     * 16x the wire cap is far more than any real page needs. */
+    unsigned cap = RC_MAX_FRAME * 4;
+    char *out;
+    int rc;
+
+    if (!g_inf_ready) { rc_log("net: deflate frame but no inflater"); return -1; }
+    if (f->body_len == 0) return 0;
+
+    out = (char *)HeapAlloc(GetProcessHeap(), 0, cap + 1);
+    if (!out) return -1;
+
+    g_inf.next_in   = (const unsigned char *)f->body;
+    g_inf.avail_in  = f->body_len;
+    g_inf.next_out  = (unsigned char *)out;
+    g_inf.avail_out = cap;
+
+    rc = mz_inflate(&g_inf, MZ_SYNC_FLUSH);
+    if (rc != MZ_OK && rc != MZ_STREAM_END) {
+        rc_log("net: mz_inflate failed: %d", rc);
+        HeapFree(GetProcessHeap(), 0, out);
+        return -1;
+    }
+    if (g_inf.avail_in != 0) {
+        rc_log("net: inflate left %u bytes unconsumed (output cap hit)",
+               g_inf.avail_in);
+        HeapFree(GetProcessHeap(), 0, out);
+        return -1;
+    }
+
+    f->_body_alloc = out;
+    f->body_len = cap - g_inf.avail_out;
+    out[f->body_len] = '\0';
+    f->body = out;
+    return 0;
+}
 
 const char *rc_state_name(rc_state s)
 {
@@ -86,6 +151,16 @@ static unsigned __stdcall reader_thread(void *arg)
             HeapFree(GetProcessHeap(), 0, payload);
             HeapFree(GetProcessHeap(), 0, f);
             break;
+        }
+
+        {
+            const char *enc = rc_frame_get(f, "enc");
+            if (enc && strcmp(enc, "deflate") == 0 && inflate_body(f) != 0) {
+                rc_log("net: cannot inflate frame, dropping link");
+                rc_frame_free(f);
+                HeapFree(GetProcessHeap(), 0, f);
+                break;
+            }
         }
 
         /* Backpressure: if the UI is not keeping up, wait for it rather than
@@ -177,6 +252,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
 
     if (do_connect(n) != 0) { set_state(n, RC_FAILED); return -1; }
 
+    inflate_begin();
     n->running = 1;
 
     _snprintf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
@@ -256,6 +332,7 @@ void rc_net_stop(rc_net *n)
         CloseHandle(n->thread);
         n->thread = NULL;
     }
+    inflate_finish();
     DeleteCriticalSection(&n->send_lock);
     WSACleanup();
 }

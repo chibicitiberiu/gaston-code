@@ -4,10 +4,13 @@ One live ClaudeSDKClient at a time. Switching chats closes it and reopens with
 resume=<id>; the chat list is read-only history. A warm client pool is roughly
 three times the work and nobody notices on a single-user box.
 
-Phase 1 consumes complete message blocks only. include_partial_messages and the
-token-level StreamEvent path land in Phase 2a, which is why on_text is called
-with whole blocks here and will be called with deltas later -- the callback
-signature is the same either way.
+With streaming=True (the default since Phase 2a) on_text is called with token
+deltas from StreamEvent; with streaming=False it is called once per completed
+text block. Same callback either way, so the bridge does not care.
+
+The one trap: with include_partial_messages the SDK emits BOTH the deltas and
+the completed AssistantMessage blocks. Rendering both duplicates every word on
+screen, so the completed blocks are skipped while streaming.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -72,6 +76,7 @@ class Session:
         permission_mode: str = "default",
         can_use_tool=None,
         mcp_servers: dict | None = None,
+        streaming: bool = True,
         on_text: Callable[[str], Awaitable[None]] | None = None,
         on_tool: Callable[[str, dict], Awaitable[None]] | None = None,
         on_tool_result: Callable[[str, str, bool], Awaitable[None]] | None = None,
@@ -94,8 +99,9 @@ class Session:
             permission_mode=permission_mode,
             can_use_tool=can_use_tool,
             mcp_servers=mcp_servers or {},
-            include_partial_messages=False,  # Phase 2a flips this
+            include_partial_messages=streaming,
         )
+        self._streaming = streaming
         self._client: ClaudeSDKClient | None = None
         self._pump: asyncio.Task | None = None
         self._session_id: str | None = None
@@ -197,12 +203,30 @@ class Session:
                 await self.on_system(getattr(msg, "subtype", ""), data)
             return
 
+        if isinstance(msg, StreamEvent):
+            # Token-level deltas. Only present with include_partial_messages.
+            # StreamEvent.event is the raw Anthropic SSE event dict.
+            ev = msg.event or {}
+            if ev.get("type") == "content_block_delta":
+                delta = ev.get("delta") or {}
+                dtype = delta.get("type")
+                if dtype == "text_delta" and self.on_text:
+                    await self.on_text(delta.get("text", ""))
+                elif dtype == "thinking_delta" and self.on_thinking:
+                    await self.on_thinking(delta.get("thinking", ""))
+            return
+
         if isinstance(msg, AssistantMessage):
             for block in msg.content:
-                if isinstance(block, TextBlock) and self.on_text:
-                    await self.on_text(block.text)
-                elif isinstance(block, ThinkingBlock) and self.on_thinking:
-                    await self.on_thinking(getattr(block, "thinking", ""))
+                if isinstance(block, TextBlock):
+                    # When streaming, the deltas already carried this text --
+                    # rendering the completed block too would duplicate every
+                    # word on screen.
+                    if not self._streaming and self.on_text:
+                        await self.on_text(block.text)
+                elif isinstance(block, ThinkingBlock):
+                    if not self._streaming and self.on_thinking:
+                        await self.on_thinking(getattr(block, "thinking", ""))
                 elif isinstance(block, ToolUseBlock) and self.on_tool:
                     await self.on_tool(block.name, block.input or {})
             return

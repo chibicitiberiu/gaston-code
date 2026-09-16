@@ -30,9 +30,10 @@ typedef struct {
     char       type[RC_MAX_TYPE];
     rc_header  headers[RC_MAX_HEADERS];
     int        nheaders;
-    char      *body;        /* points into the frame's own buffer */
+    char      *body;        /* into _raw, or into _body_alloc if inflated */
     unsigned   body_len;
     char      *_raw;        /* owning allocation; free with rc_frame_free */
+    char      *_body_alloc; /* set only when the body was inflated */
 } rc_frame;
 
 const char *rc_frame_get(const rc_frame *f, const char *key);
