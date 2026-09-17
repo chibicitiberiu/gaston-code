@@ -50,6 +50,11 @@ UNREADABLE = ("the machine can see this file but cannot open it -- it may be "
 #: Out of the scan set, and silent by design.
 IGNORED = "ignored"
 
+#: Inside a directory a side could not list. Silent too: the directory itself
+#: is announced through UNREADABLE, and repeating that per descendant would
+#: turn one problem into a hundred messages.
+UNDER_UNREADABLE = "inside a directory the machine could not list"
+
 
 class Type(str, Enum):
     FILE = "f"
@@ -283,8 +288,23 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
     # `ignored` is in the union deliberately: an ignored path may exist on
     # neither side right now, and it still has to be visitable so it can be
     # reported and so un-ignoring it later resumes from the real ancestor.
+    # A directory reported unreadable has NO descendants in that manifest --
+    # the side that could not list it could not enumerate what is inside it
+    # either. Without this, every file under it looks absent, which is row 12:
+    # "deleted on the guest, kept here", once per file, for a directory nobody
+    # touched. One unreadable directory would announce its whole subtree as
+    # deletions.
+    unreadable_dirs = tuple(
+        k + "/" for k, e in list(guest.items()) + list(bridge.items())
+        if e is not None and e.type is Type.UNREADABLE)
+
     for key in sorted(set(guest) | set(bridge) | set(base.rows)
                       | set(base.tombs) | set(base.ignored)):
+        # 0. Under something we could not list. Not absent -- unknown.
+        if unreadable_dirs and key.startswith(unreadable_dirs):
+            out.append(Decision(key, Act.SKIP, UNDER_UNREADABLE))
+            continue
+
         g, b = guest.get(key), bridge.get(key)
         a = base.rows.get(key)
         t = base.tombs.get(key)

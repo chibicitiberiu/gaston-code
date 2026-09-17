@@ -296,6 +296,29 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             memset(&st, 0, sizeof(st));
+            /* Can this directory's own listing pattern even be formed?
+             * root + '\' + child + "\*" + NUL. If not, both ways of finding
+             * out are silent and both are wrong:
+             *
+             *   - one byte short, and strncat appends only the backslash;
+             *     FindFirstFileA then fails and the ENTIRE SUBTREE vanishes
+             *     from the manifest, which the bridge reads as the user having
+             *     deleted every file in it.
+             *   - exactly full, and strncat appends nothing; FindFirstFileA
+             *     succeeds on the bare directory path, returns the directory's
+             *     own entry, and walk recurses on the same truncated pattern
+             *     to RC_SYNC_MAX_DEPTH -- inventing a chain of directories the
+             *     bridge then dutifully creates with os.makedirs.
+             *
+             * `u` says what is true: it is there and we cannot read it. */
+            if (strlen(root) + 1 + strlen(child) + 3 > sizeof(pattern)) {
+                rc_log("sync: cannot list %s -- no room for a search pattern",
+                       child);
+                st.type = 'u';
+                w->sink(w->ctx, child, &st);
+                w->count++;
+                continue;                       /* and do NOT recurse */
+            }
             st.type = 'd';
             w->sink(w->ctx, child, &st);
             w->count++;

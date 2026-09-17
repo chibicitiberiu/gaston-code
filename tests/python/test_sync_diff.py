@@ -288,3 +288,38 @@ def test_parents_are_created_before_children():
     got = order([Decision("a/b/c", Act.MKDIR), Decision("a", Act.MKDIR),
                  Decision("a/b", Act.MKDIR)])
     assert [g.key for g in got] == ["a", "a/b", "a/b/c"]
+
+
+def test_an_unreadable_directory_does_not_delete_its_whole_subtree():
+    """A directory the machine cannot list has no descendants in that manifest
+    -- it could not enumerate what is inside it either.
+
+    Read naively, every file under it is absent, which is row 12 once per
+    file: "deleted on the guest, kept here". One directory whose search
+    pattern will not fit would announce its entire subtree as deletions, and
+    the agent would be told a hundred files had been removed by a user who
+    touched nothing.
+    """
+    b = Baseline(rows={"deep": d(), "deep/a.c": f(1), "deep/b/c.c": f(2)})
+    got = {dec.key: dec for dec in diff({"deep": Entry(type=Type.UNREADABLE)},
+                                        {"deep": d(),
+                                         "deep/a.c": f(1),
+                                         "deep/b/c.c": f(2)}, b)}
+    assert got["deep"].act is Act.SKIP
+    assert got["deep"].reason is S.UNREADABLE
+    for child in ("deep/a.c", "deep/b/c.c"):
+        assert got[child].act is Act.SKIP, got[child]
+        assert got[child].act is not Act.REPORT
+        # Silent: the directory is announced once, not once per file inside it.
+        assert got[child].reason is S.UNDER_UNREADABLE
+
+
+def test_a_path_merely_sharing_a_prefix_is_not_swept_up():
+    """`deep` must not silence `deeper.c`. Prefix matching on a bare string
+    would, and that is a file quietly ceasing to sync."""
+    b = Baseline(rows={"deep": d(), "deeper.c": f(1)})
+    got = {dec.key: dec for dec in diff({"deep": Entry(type=Type.UNREADABLE),
+                                         "deeper.c": f(1)},
+                                        {"deep": d(), "deeper.c": f(2)}, b)}
+    assert got["deeper.c"].act is Act.PUSH
+    assert got["deeper.c"].reason is not S.UNDER_UNREADABLE
