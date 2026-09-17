@@ -125,6 +125,50 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — 3.0 planned against the real API, not the sketch
+
+Checking `can_use_tool`'s actual signature against the installed SDK before
+designing around it turned out to be worth doing three times over.
+
+**`ToolPermissionContext` already carries everything the prompt needs.**
+`tool_use_id` is a correlation id, so there is no counter to invent.
+`title` / `display_name` / `description` are human-readable text the CLI has
+already written, so the bridge does not summarise. And `suggestions` is a list
+of `PermissionUpdate` that the CLI itself proposes.
+
+That last one killed a bad idea before it was built. An earlier draft of 3.0
+proposed remembering "always allow" by keying on the first token of a command
+line -- which would have been a second, worse permission model sitting beside
+the real one. Returning `context.suggestions` in `updated_permissions` **is**
+"remember this", in the CLI's own format.
+
+**`updated_permissions` is a `list`**, settling a question this plan has
+carried as "documented inconsistently" since the first review.
+
+**"Always" defaults to session scope.** `PermissionUpdate.destination` can
+write to userSettings, projectSettings or localSettings; a dialog on a Win98
+box quietly editing the developer's settings files is a surprise nobody asked
+for.
+
+### 2026-09-17 — the permission prompt will be modeless, against the plan
+
+The plan has said "permission requests as real modal dialogs" since the first
+draft, and that is the one part of 3.0 being built differently. Three reasons,
+in order of weight:
+
+1. **A modal pumps messages.** The plan already flagged this: `WM_RC_FRAME`
+   dispatches *during* the modal, re-entering the transcript mid-stream.
+   Modeless has no nested message loop, so the problem does not exist.
+2. **The obvious fix costs memory that is not there.** Deferring frames for the
+   duration means holding heap blocks, and the guest has **28 KB free**.
+3. **It behaves better.** A modal freezes the window while the model waits; a
+   bar lets the transcript keep streaming behind it, which is how you can see
+   *why* the tool was requested.
+
+Disabling Send while a prompt is pending keeps the property the modal existed
+for: the request cannot be ignored.
+
+
 ### 2026-09-17 — re-planning Phase 3 with Phase 0's answers in hand
 
 The plan's own instruction was "plan two phases deep, rolling ... re-plan at

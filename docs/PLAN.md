@@ -631,23 +631,85 @@ programs on the user's computer without `can_use_tool` is `bypassPermissions`,
 which is exactly what FEASIBILITY condemns in claudewin9x and says not to
 inherit.
 
-- `can_use_tool` -> `PERMREQ` frame -> native modal -> `PERMRESP`.
-- Allow / Always allow / Deny, with a reason field on deny.
+**What the SDK actually provides**, checked against the installed 0.2.153
+rather than taken from this document:
+
+```
+can_use_tool(tool_name, input: dict, context: ToolPermissionContext)
+
+ToolPermissionContext:
+    tool_use_id      correlation id, already unique -- do not invent one
+    suggestions      list[PermissionUpdate] the CLI itself proposes
+    title            } human-readable, already written
+    display_name     } -- the bridge does not need to summarise
+    description      }
+    blocked_path, decision_reason, agent_id, signal
+
+-> PermissionResultAllow(updated_input=None, updated_permissions=list|None)
+-> PermissionResultDeny(message=str, interrupt=bool)
+```
+
+Three consequences, all of which make this smaller than the original sketch:
+
+- **`tool_use_id` is the correlation id.** No counter, no uuid.
+- **`suggestions` is what "Always" applies.** The CLI proposes the rule it
+  would add; returning it in `updated_permissions` is the whole of "remember
+  this". **Do not invent a rule format** -- an earlier draft of this section
+  proposed keying on the first token of a command line, which would have been
+  a second, worse permission model sitting beside the real one.
+- **`title` / `display_name` / `description` are the prompt text.** The bridge's
+  `_summarise()` is for the tool-activity line, not for this.
+
+**"Always" is session-scoped by default.** `PermissionUpdate.destination` can
+write to `userSettings`, `projectSettings` or `localSettings`; a dialog on a
+Win98 box quietly editing the developer's settings files is a surprise nobody
+asked for. Default to the session, and leave anything more permanent to the
+settings UI in Phase 4.
+
+**Deny sends `PermissionResultDeny(message=..., interrupt=False)`.** A single
+refusal is not a reason to tear down the turn -- the model should be told no
+and allowed to carry on. v1 sends a fixed message; a typed reason is friction
+on a 640x480 screen and can wait.
+
+##### The prompt is modeless, and that is a deliberate deviation
+
+This document has said "permission requests as real modal dialogs" since the
+first draft. Build it modeless instead -- a prompt bar above the input box,
+with Allow / Always / Deny, Send disabled while one is pending, Esc to deny.
+Three reasons, in order of weight:
+
+1. **A modal pumps messages.** This document already flagged it: `WM_RC_FRAME`
+   dispatches *during* the modal, so the transcript is re-entered while Claude
+   is mid-stream. Modeless has no nested message loop and the problem does not
+   arise.
+2. **Deferring frames costs memory we do not have.** The obvious fix for (1) is
+   to queue frames for the duration -- but they are heap blocks, and the guest
+   has **28 KB free**. A thinking-heavy turn could queue a lot.
+3. **It is better behaviour anyway.** A modal freezes the window while the
+   model waits; a bar lets the transcript keep streaming behind it, which is
+   how you can actually see *why* the tool was requested.
+
+Disabling Send while a prompt is pending keeps the one property the modal was
+there for: the request cannot be ignored.
+
+##### Sequencing and failure
+
+- **One prompt at a time.** The model can request tools in parallel; a single
+  guest can show one bar. The bridge queues them and sends the next when the
+  previous resolves. No second UI state to design.
 - **`can_use_tool` has no timeout and a pending prompt wedges the session
   forever.** Both mitigations are required: a bridge-side deadline (~10 min)
   that auto-denies with an explanatory message, and `fakegui.py` as the manual
   escape hatch for a wedged prompt.
-- **Modal dialogs pump messages**, so `WM_RC_FRAME` will dispatch *during* the
-  prompt and re-enter the transcript. `rc_html_append` already has a queue for
-  frames that arrive before the document is ready; reuse it. A flag set around
-  the modal defers appends into that queue rather than making the DOM calls
-  reentrant.
-- "Always allow" decisions are remembered **on the bridge**, which is the side
-  that enforces them, persisted like `bridge/registry.py`. Not in the guest's
-  INI: a rule that lives on the machine being protected is the wrong way round.
+- **A guest that disconnects with a prompt pending is denied immediately**, not
+  after the deadline. Waiting ten minutes for a machine that has gone away is
+  the failure mode the deadline exists to prevent, not one to reproduce.
+- The pending request survives a **reconnect** the same way display frames do,
+  through the replay buffer: the bar reappears.
 
-*Demo: ask for something that needs a tool, get a real Win98 dialog, deny it,
-and see Claude say so.*
+*Demo: ask for something that needs a tool. The bar appears with the CLI's own
+description of what is being requested, the transcript keeps streaming behind
+it, Deny is pressed, and Claude says it was refused and carries on.*
 
 #### 3.1 — The tool surface
 
@@ -744,38 +806,51 @@ Win98 box a moment later.*
 ### Phase 4 — settings and the rest of the surface *(revised 2026-09-17)*
 
 **Permissions moved to 3.0** and are a prerequisite of Phase 3, not a successor
-to it: the tool surface cannot ship without them. What is left here is smaller
-than the original text, and some of it is already done.
+to it: the tool surface cannot ship without them.
 
-**Done, ahead of schedule:**
+Several items here shipped a first version early, during Phase 2 polish. They
+are **still Phase 4 items** -- a first version is not a finished one, and each
+has known work left.
 
-- Model and effort selection, from the menu bar. The list comes from
-  `get_server_info()["models"]` rather than a hardcoded table, so it carries
-  `resolvedModel` and `supportedEffortLevels` with it.
-- The SDK questions this section said to verify are answered: `set_model()`
-  **exists**, `set_effort()` **does not**, so effort is session-start-only and
-  changing it does the fork dance -- `resume=<id>, fork_session=True` -- with
-  the transcript saying so. Model changes are live.
-- Settings in an INI via `GetPrivateProfileString`, not the registry.
-- The model list is **not** hardcoded after all, and there is no "Default"
-  entry: default is an alias, not a model, so it is resolved and the model it
-  points at is the one ticked.
+- **Model selection.** *Shipped:* menu built from
+  `get_server_info()["models"]`, with the `default` alias resolved away and a
+  tick on the model actually in use.
+  *Still to do:* per-client model once R7 lands; surface each model's
+  `description` so they can be told apart on a 640x480 screen; decide what to
+  do with `supportsFastMode`, `supportsAdaptiveThinking` and
+  `supportsAutoMode`, which arrive in the model data and are currently
+  ignored; handle the list changing under a running session.
 
-**Still outstanding:**
+- **Effort selection.** *Shipped:* levels filtered by the selected model's
+  `supportedEffortLevels`, with a greyed entry for models that have none, and
+  the fork dance -- `resume=<id>, fork_session=True` -- because `set_effort()`
+  does not exist.
+  *Still to do:* the fork produces a **new session id**, and the chat list and
+  registry do not follow it until the next turn writes a file, so the old
+  conversation stays listed and the new one is briefly invisible. The
+  transcript says the conversation was forked; the list does not.
 
-- `PermissionResultAllow.updated_permissions` is documented inconsistently
-  (one rendering says `dict`, an older snippet passes a list). **Check the
-  installed SDK when 3.0 is written**, not this document.
-- No API reads the effective permission rule table, so parse
-  `.claude/settings*.json` on the bridge and push a read-only view.
-- **Configure -> Server Host...** is a message box today and wants a real
-  dialog. `wrc` is available for a proper resource, or a runtime
-  `DialogBoxIndirectParam` template.
-- **File -> Export as HTML** is wired and unimplemented. It needs every page
-  from the bridge as one document, which is a chunked transfer.
-- R5 (icons), R7 (multiple clients) and R8 (the Command menu) land here unless
-  they are pulled forward.
+- **Settings.** *Shipped:* an INI read with `GetPrivateProfileString`, not the
+  registry.
+  *Still to do:* **Configure -> Server Host...** is a message box telling the
+  user to edit the file. It wants a real dialog -- `wrc` is available for a
+  resource, or a runtime `DialogBoxIndirectParam` template.
 
+- **File -> Export as HTML.** Wired to a "not implemented" box. Needs every
+  page from the bridge assembled into one document, which is a chunked
+  transfer.
+
+- **The permission rule table.** No API reads the effective rules, so parse
+  `.claude/settings*.json` on the bridge and push a read-only view. Untouched.
+
+- **R5 (icons), R7 (multiple clients), R8 (Command menu)** land here unless
+  pulled forward.
+
+**One SDK question from the original text is now answered** rather than
+guessed, checked against the installed 0.2.153:
+`PermissionResultAllow.updated_permissions` is a **`list[PermissionUpdate]`**.
+The rendering that called it a `dict` was wrong; the snippet passing a list was
+right.
 
 ### Phase 5 — Attach *(1–2 weekends)*
 
