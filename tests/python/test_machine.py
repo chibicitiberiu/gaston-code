@@ -34,18 +34,58 @@ def test_nonsense_numbers_do_not_raise():
     assert "unknown" in describe({"mem_kb": "not a number"})
 
 
-def test_prompt_does_not_promise_file_sync():
-    """This test used to assert the opposite, and the assertion was wrong.
+def test_prompt_does_not_promise_file_sync_when_there_is_none():
+    """Sync is OFF unless a root is named, and the prompt must say so.
 
-    The prompt claimed edits were "synchronised to the connected machine
-    automatically". No sync layer exists -- it is a later stage -- so the
-    moment Edit and Write became reachable the model would have edited files
-    on Linux and told the user they had landed on the Windows box.
+    This assertion has now been correct in both directions and wrong in both.
+    It first claimed edits were "synchronised to the connected machine
+    automatically" when no sync layer existed, so the model would have edited
+    files on Linux and reported them as delivered. The fix was to say the
+    opposite -- which became equally wrong the day sync shipped, because then
+    it refuses a thing it can do.
+
+    So it is not a fact about the release any more, it is a fact about THIS
+    SESSION: what the prompt says depends on whether a sync root was given.
     """
     out = system_prompt(HELLO, "/work")
     assert "/work" in out
     assert "NOT yet copied" in out
-    assert "synchronised to the connected machine" not in out
+    assert "there is no tool\nthat transfers them" in out
+
+
+def test_prompt_names_the_mirrored_folder_when_sync_is_on():
+    """"Your edits reach the user" without naming the folder is useless.
+
+    `off_limits` confines the agent to cwd, and the sync root is a directory
+    inside it. An edit outside that directory succeeds and achieves nothing,
+    and the agent has no way to tell unless the prompt says which one it is.
+    """
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK")
+    assert "machine/" in out
+    assert "C:\\WORK" in out
+    assert "NOT yet copied" not in out
+    assert "never leaves this proxy" in out
+
+
+def test_prompt_warns_about_names_that_cannot_cross():
+    """The single most common way an agent achieves nothing and reports
+    success: writing `aux.c`, or a path Windows cannot hold."""
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK")
+    assert "aux.c" in out
+    assert "skipped and reported rather than renamed" in out
+
+
+def test_prompt_says_the_users_copy_wins():
+    """And that the refusal is mechanical, so the agent does not try to argue
+    with it by writing again."""
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK")
+    low = out.lower()
+    assert "machine's version is kept" in low
+    assert "stop editing that file" in low
+    assert "refuse your writes" in low
 
 
 def test_prompt_does_not_promise_tools_that_do_not_exist():

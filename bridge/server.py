@@ -174,6 +174,12 @@ class Bridge:
         #: working directory would point it at .venv and vm/*.qcow2.
         self.sync_dir: str | None = None
         self.sync_state: str = ""
+        #: The guest's own path for the mirror, learned from SYNCEND. Held here
+        #: so the system prompt can NAME the folder rather than say "the sync
+        #: folder" -- an agent told only that its edits reach the user has no
+        #: way to know which of its edits do.
+        self.guest_sync_root: str | None = None
+        self._last_sync_reports: list[str] = []
         # How long a pending permission request survives a dropped link. Long
         # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
         # of the 10 minute answer deadline.
@@ -452,8 +458,15 @@ class Bridge:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": machine.system_prompt(guest.hello,
-                                                self.cwd or os.getcwd()),
+                # The sync root and the guest's own path for it, because the
+                # prompt has to say WHICH directory is mirrored. Saying "your
+                # edits reach the user" without naming the folder is how an
+                # agent writes outside it and reports success.
+                "append": machine.system_prompt(
+                    guest.hello, self.cwd or os.getcwd(),
+                    sync_dir=self.sync_dir,
+                    guest_root=guest.hello.get("sync_root")
+                    or self.guest_sync_root),
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.
@@ -1054,6 +1067,11 @@ class Bridge:
                 from .syncrun import Pass
                 p = Pass(self, guest, self.sync_dir, self.sync_state)
                 got = await p.run()
+                self.guest_sync_root = p.guest_root
+                # Kept so sync_status can answer without re-running a pass --
+                # which would be a scan of the whole tree on a 200MHz machine
+                # every time the agent wondered whether its file had arrived.
+                self._last_sync_reports = list(got.get("reports", []))
                 log.info("sync (%s): %s", why,
                          {k: v for k, v in got.items()
                           if k not in ("reports", "notices")})
@@ -1070,6 +1088,140 @@ class Bridge:
                 return {"error": str(exc)}
             finally:
                 guest.sync_active = False
+
+    # --- what the agent can ask about sync ---------------------------------
+
+    def _load_baseline(self):
+        from .sync import Baseline
+        return Baseline.load(os.path.join(self.sync_state, "base.json"))
+
+    def sync_status_text(self) -> str:
+        """Everything the agent cannot otherwise find out.
+
+        Writing a file on the bridge always succeeds. Whether it reached the
+        user's machine is a completely separate question, and without this
+        there is no way to ask it -- so the agent reports a file as delivered
+        because the write returned, which is true and useless.
+        """
+        if not self.sync_dir:
+            return ("File synchronisation is not switched on for this session. "
+                    "Nothing you write here reaches the user's machine, and "
+                    "there is no tool that would copy it.")
+        try:
+            base = self._load_baseline()
+        except Exception as exc:
+            return (f"The synchronisation baseline could not be read ({exc}). "
+                    f"No pass will run until that is fixed; tell the user.")
+
+        out = [f"Mirrored: {self.sync_dir} here <-> "
+               f"{self.guest_sync_root or '(not reported yet)'} on the "
+               f"machine.",
+               f"Last pass: generation {base.generation}."
+               + (f"  Bound to tree {base.tree_id}." if base.tree_id else "")]
+
+        if base.latched:
+            out.append("\nREFUSING YOUR WRITES -- these conflicted and the "
+                       "user's copy won. Your version is preserved under "
+                       f"{self.sync_dir.rstrip('/')}/../.gaston/conflict/ with "
+                       "the common ancestor beside it. Read it, merge, ask the "
+                       "user whether they have finished with the file, and "
+                       "only then call sync_resolve:")
+            for k, why in sorted(base.latched.items()):
+                out.append(f"  {k} -- {why}")
+
+        if self._last_sync_reports:
+            out.append("\nFrom the last pass (skips are permanent until the "
+                       "name or the path changes -- a skipped file NEVER "
+                       "reaches the user, however many times you write it):")
+            for line in self._last_sync_reports:
+                out.append(f"  {line}")
+
+        if base.tombs:
+            out.append(f"\nDeleted on both sides and not tracked: "
+                       f"{len(base.tombs)} path(s).")
+        if base.ignored:
+            out.append(f"Out of scope (.gitignore/.gastonignore): "
+                       f"{len(base.ignored)} path(s), frozen at their last "
+                       f"agreed content.")
+
+        stray = self._edits_outside_the_mirror()
+        if stray:
+            out.append("\nEDITED HERE BUT OUTSIDE THE MIRRORED FOLDER, so "
+                       "these have not reached the user and never will where "
+                       "they are:")
+            out.extend(f"  {p}" for p in stray)
+
+        if len(out) == 2:
+            out.append("\nNothing outstanding: no conflicts, no skips, "
+                       "nothing withheld.")
+        return "\n".join(out)
+
+    def _edits_outside_the_mirror(self, limit: int = 20) -> list[str]:
+        """Files under cwd but outside the sync root, newest first.
+
+        The other way an agent achieves nothing and reports success:
+        `off_limits` confines it to cwd, the mirror is a directory inside cwd,
+        and an edit anywhere else succeeds and stays here forever.
+        """
+        cwd = self.cwd or os.getcwd()
+        if not self.sync_dir or os.path.realpath(cwd) == os.path.realpath(
+                self.sync_dir):
+            return []
+        mirror = os.path.realpath(self.sync_dir)
+        found: list[tuple[float, str]] = []
+        for dirpath, dirnames, filenames in os.walk(cwd):
+            real = os.path.realpath(dirpath)
+            if real == mirror or real.startswith(mirror + os.sep):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".") and d != "__pycache__"]
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                try:
+                    found.append((os.stat(full).st_mtime,
+                                  os.path.relpath(full, cwd)))
+                except OSError:
+                    continue
+        found.sort(reverse=True)
+        return [p for _, p in found[:limit]]
+
+    def sync_resolve(self, path: str, action: str) -> str:
+        """Lift one halt. Recorded in the baseline BEFORE it takes effect."""
+        if not self.sync_dir:
+            return "File synchronisation is not switched on for this session."
+        try:
+            base = self._load_baseline()
+        except Exception as exc:
+            return f"The baseline could not be read ({exc}); nothing changed."
+
+        from . import paths as P
+        key = P.canonical(path.replace("\\", "/").strip("/"))
+        state = os.path.join(self.sync_state, "base.json")
+
+        if action == "release":
+            if key not in base.latched:
+                return (f"{path} is not withheld. Nothing to release; if a "
+                        f"write is not arriving, call sync_status -- it is "
+                        f"more likely a skipped name than a conflict.")
+            why = base.latched.pop(key)
+            base.save(state)
+            log.info("sync: %s released by the agent (was: %s)", key, why)
+            return (f"Released {path}. Your next write to it will be copied to "
+                    f"the user's machine on the next pass. If they change it "
+                    f"again in the meantime, it will conflict again -- which "
+                    f"is correct, not a failure.")
+
+        # forget
+        removed = (base.tombs.pop(key, None) is not None
+                   or base.rows.pop(key, None) is not None)
+        base.latched.pop(key, None)
+        base.save(state)
+        if not removed:
+            return f"{path} was not tracked; nothing to forget."
+        log.info("sync: %s forgotten by the agent", key)
+        return (f"Stopped tracking {path}. If it reappears on either side it "
+                f"will be treated as new.")
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""

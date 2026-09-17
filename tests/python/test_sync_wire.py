@@ -13,6 +13,8 @@ import zlib
 
 import pytest
 
+from bridge import ignores as I
+from bridge import sync as S
 from bridge import paths as P
 from bridge.protocol import Frame
 from bridge.sync import Baseline, Entry, Type
@@ -581,3 +583,68 @@ def test_neither_scanner_reports_its_own_working_files(tmp_path):
     rows = Pass.scan_bridge(p)
     assert "real.md" in rows
     assert not any(".gaston-" in k for k in rows), sorted(rows)
+
+
+def test_adding_a_gitignore_line_freezes_rows_rather_than_deleting_them(
+        tmp_path):
+    """The failure this prevents is a mass deletion nobody asked for.
+
+    Editing `.gitignore` is routine, and one line can remove a thousand paths
+    from the scan. Read as "present last pass, absent now" that is a thousand
+    deletions, and under guest-wins the bridge would report every one of them
+    -- or, with the tombstone rule applied naively, make them permanently
+    unsyncable. The row has to FREEZE at its last agreed content instead, and
+    come back with that same ancestor when the line is removed.
+    """
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "keep.c").write_bytes(b"int x;\n")
+    (root / "out.log").write_bytes(b"noise\n")
+    state = tmp_path / "state"
+    state.mkdir()
+
+    p = Pass.__new__(Pass)
+    p.root = str(root)
+    p.state = str(state / "base.json")
+    p.base = S.Baseline()
+    p.reports = []
+    p.base.rows["keep.c"] = Entry(type=Type.FILE, crc=1, display="keep.c")
+    p.base.rows["out.log"] = Entry(type=Type.FILE, crc=2, display="out.log")
+
+    (root / ".gitignore").write_text("*.log\n")
+    p._ignores(None)
+    assert "out.log" not in p.base.rows
+    assert p.base.ignored["out.log"].crc == 2, "the ancestor was lost"
+    assert "keep.c" in p.base.rows
+    assert any("scope changed" in r and "frozen" in r for r in p.reports)
+
+    # And back again: un-ignoring resumes from the stored ancestor rather than
+    # looking like a first sync, which would conflict the whole set.
+    (root / ".gitignore").write_text("")
+    p.reports = []
+    p._ignores(None)
+    assert p.base.rows["out.log"].crc == 2
+    assert not p.base.ignored
+    assert any("no longer ignored" in r for r in p.reports)
+
+
+def test_a_default_ignore_keeps_a_venv_off_the_guest(tmp_path):
+    """--sync-dir is mandatory for this reason, and the defaults are the
+    second line of it."""
+    root = tmp_path / "tree"
+    (root / ".venv" / "lib").mkdir(parents=True)
+    (root / ".venv" / "lib" / "big.py").write_bytes(b"x" * 100)
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "m.pyc").write_bytes(b"\x00\x01")
+    (root / "main.py").write_bytes(b"print(1)\n")
+
+    class FakePass(Pass):
+        def __init__(self, root):
+            self.root = str(root)
+            self.reports = []
+
+    p = FakePass(root)
+    rows = Pass.scan_bridge(p, I.load(str(root)))
+    assert "main.py" in rows
+    assert not any(k.startswith(".venv") or k.startswith("__pycache__")
+                   for k in rows), sorted(rows)

@@ -12,6 +12,8 @@ describe the machine actually connected.
 
 from __future__ import annotations
 
+import os
+
 
 def describe(h: dict) -> str:
     """One readable block of machine facts, from HELLO headers."""
@@ -34,7 +36,54 @@ def describe(h: dict) -> str:
     return "\n".join(bits)
 
 
-def system_prompt(h: dict, workdir: str) -> str:
+def _sync_paragraph(workdir: str, sync_dir: str | None,
+                    guest_root: str | None) -> str:
+    """What to say about files, which depends on whether sync is configured.
+
+    Two paragraphs, and only one of them is ever true at a time. Getting this
+    wrong in either direction costs the user real work: promising a transfer
+    that does not exist means the model reports a file as delivered when it is
+    sitting on a Linux box the user cannot see, and denying one that does exist
+    means it refuses a thing it could have done.
+    """
+    if not sync_dir:
+        return f"""Your file editing tools operate on the working copy at `{workdir}` on this
+proxy, which exists to stage files for the user's machine. Use them normally
+within it. **These files are NOT yet copied to the connected machine** --
+synchronisation is not switched on for this session, and **there is no tool
+that transfers them**. If a file needs to end up on the user's machine, say so
+plainly and say that moving it is not something you can do. Do not offer to
+transfer it -- an offer you cannot keep is worse than the limitation."""
+
+    where = guest_root or "the machine's sync folder"
+    rel = os.path.relpath(sync_dir, workdir) if sync_dir != workdir else "."
+    inside = "the whole working directory" if rel == "." else f"`{rel}/`"
+    return f"""Your file editing tools operate on `{workdir}` on this proxy. Within it,
+**{inside} is mirrored to `{where}` on the user's machine** -- and nothing else
+is. A file you write there reaches them within about half a minute; a file they
+edit there reaches you the same way.
+
+Three things follow, and none of them is optional:
+
+- **An edit outside the mirrored folder never leaves this proxy.** It will
+  succeed, and it will achieve nothing. If the user wants a file on their
+  machine, it has to go in the mirrored folder.
+- **Some names cannot cross**, because Windows will not hold them: `aux.c`,
+  `con.txt` and their kind in any directory, names containing `< > : " \\ | ?
+  *`, names ending in a dot or a space, paths over about 260 characters once
+  prefixed, and anything the machine's codepage cannot represent. These are
+  skipped and reported rather than renamed. If you need such a file to reach
+  the user, pick a different name -- do not write it and assume it arrived.
+- **The user's copy wins.** If you and the user both change the same file, the
+  machine's version is kept and yours is moved aside where you can still read
+  it. You will be told when this happens. When you are, STOP editing that file,
+  tell the user, and merge only once they say they have finished with it -- the
+  bridge will refuse your writes to it until then, so continuing is not a
+  disagreement you can win."""
+
+
+def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
+                  guest_root: str | None = None) -> str:
     """Text appended to Claude Code's own system prompt.
 
     APPENDED, never substituted: the preset is what makes Claude Code work,
@@ -73,13 +122,7 @@ though the file you read was real.
 
 ## What this means in practice
 
-Your file editing tools operate on the working copy at `{workdir}` on this
-proxy, which exists to stage files for the user's machine. Use them normally
-within it. **These files are NOT yet copied to the connected machine** --
-automatic synchronisation is not built, and **there is no tool that transfers
-them**. If a file needs to end up on the user's machine, say so plainly and
-say that moving it is not something you can do yet. Do not offer to transfer
-it -- an offer you cannot keep is worse than the limitation.
+{_sync_paragraph(workdir, sync_dir, guest_root)}
 
 To interact with the connected machine itself, use the tools whose names begin
 `mcp__machine__`. Only the tools actually offered to you exist: do not assume

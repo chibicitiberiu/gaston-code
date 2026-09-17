@@ -107,8 +107,60 @@ def build(bridge) -> dict:
         return await bridge.run_on_guest(command, timeout_ms=timeout_ms,
                                          shell=shell, cwd=cwd)
 
+    @tool(
+        "sync_status",
+        "Report the state of file synchronisation with the connected machine: "
+        "which of your files could not be copied there and why, which are in "
+        "conflict, and which are currently refusing your writes.\n\n"
+        "Read this when a file you wrote does not seem to have arrived, before "
+        "concluding that it did. Writing a file always succeeds here; whether "
+        "it reached the user's machine is a separate question and this is the "
+        "only way to answer it. Read-only and free to call.",
+        {},
+    )
+    async def machine_sync_status(args: dict) -> dict:
+        return _text(bridge.sync_status_text())
+
+    @tool(
+        "sync_resolve",
+        "Resolve one halted synchronisation decision, after the user has "
+        "confirmed they are finished with the file.\n\n"
+        "When you and the user both change the same file, their copy wins and "
+        "yours is moved aside -- and the path then REFUSES your writes, "
+        "mechanically, until this is called. That is deliberate: you cannot "
+        "usefully react to a conflict during the turn in which it happened, "
+        "so the bridge stops you rather than asking you to stop.\n\n"
+        "Do not call this to make an error go away. Call it once you have read "
+        "the preserved copy, merged what you need, and the user has said they "
+        "have finished with the file. The user approves every call on their "
+        "own screen.",
+        {
+            "path": Annotated[
+                str,
+                "The path, relative to the mirrored folder, exactly as "
+                "sync_status reported it.",
+            ],
+            "action": Annotated[
+                str,
+                "release (default) -- lift the write refusal on this path, "
+                "having merged; forget -- stop tracking a path that is gone "
+                "from both sides and should not come back.",
+            ],
+        },
+    )
+    async def machine_sync_resolve(args: dict) -> dict:
+        path = ((args or {}).get("path") or "").strip()
+        if not path:
+            return _text("No path was given.", error=True)
+        action = ((args or {}).get("action") or "release").strip().lower()
+        if action not in ("release", "forget"):
+            return _text(f"Unknown action {action!r}; use release or forget.",
+                         error=True)
+        return _text(bridge.sync_resolve(path, action))
+
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
-                                   tools=[machine_exec])
+                                   tools=[machine_exec, machine_sync_status,
+                                          machine_sync_resolve])
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

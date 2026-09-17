@@ -16,6 +16,7 @@ import logging
 import os
 import zlib
 
+from . import ignores as I
 from . import paths as P
 from . import sync as S
 from .protocol import Frame
@@ -418,6 +419,43 @@ class Pass:
 
     # --- the whole pass ----------------------------------------------------
 
+    def _ignores(self, ignore):
+        """The matcher for this pass, and the bookkeeping a change to it needs.
+
+        A path that was syncing and is now ignored must FREEZE at its last
+        agreed `(class, crc)`, not disappear. Adding one line to `.gitignore`
+        is routine and can remove a thousand paths from the scan; read as
+        "present last pass, absent now" that is a mass deletion, and the bridge
+        would act on it.
+        """
+        if ignore is None:
+            ignore = I.load(self.root)
+
+        # The trailing slash is load-bearing: `build/` is a pattern about a
+        # DIRECTORY and will not match the string "build". A row's type is the
+        # only thing that knows which question to ask.
+        def ig(row) -> bool:
+            return ignore(row.display + ("/" if row.type is S.Type.DIR else ""))
+
+        newly = [k for k, row in self.base.rows.items() if ig(row)]
+        for key in newly:
+            self.base.ignored[key] = self.base.rows.pop(key)
+        if newly:
+            self.reports.append(
+                f"scope changed: {len(newly)} path(s) are now ignored and have "
+                f"been frozen at their last agreed content, not deleted")
+
+        # And the reverse. Un-ignoring resumes from the real ancestor rather
+        # than looking like a first sync, which would conflict the whole set.
+        back = [k for k, row in self.base.ignored.items() if not ig(row)]
+        for key in back:
+            self.base.rows[key] = self.base.ignored.pop(key)
+        if back:
+            self.reports.append(
+                f"scope changed: {len(back)} path(s) are no longer ignored and "
+                f"resume from their stored ancestor")
+        return ignore
+
     async def run(self, ignore=None) -> dict:
         """One reconciliation, start to finish.
 
@@ -425,6 +463,7 @@ class Pass:
         buffered until SYNCEND.
         """
         guest_rows = await self.scan_guest()
+        ignore = await asyncio.to_thread(self._ignores, ignore)
         bridge_rows = await asyncio.to_thread(self.scan_bridge, ignore)
 
         decisions = S.order(S.diff(guest_rows, bridge_rows, self.base))
