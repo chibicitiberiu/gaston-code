@@ -86,12 +86,17 @@ class _Default:
     illegal = 1
     eol = 1
     dirreserve = 12
+    workreserve = 11
     maxpath = 260
     maxcomp = 255
 
     @property
     def maxdirpath(self):
         return self.maxpath - self.dirreserve
+
+    @property
+    def maxfilepath(self):
+        return self.maxpath - self.workreserve
 
 
 DEFAULT = _Default()
@@ -194,15 +199,25 @@ def check(relpath: str, *, guest_root: str, caps=DEFAULT,
     except (UnicodeEncodeError, LookupError):
         root_n, rel_n = len(guest_root.rstrip("/\\")), len(relpath)
     full = root_n + 1 + rel_n + 1
-    limit = caps.maxdirpath if is_dir else caps.maxpath
+    limit = caps.maxdirpath if is_dir else caps.maxfilepath
     if full > limit:
+        if is_dir and caps.dirreserve:
+            why = (f" (a directory stops {caps.dirreserve} short of "
+                   f"{caps.maxpath}, so a short name still fits inside it)")
+        elif not is_dir and caps.workreserve:
+            # Not padding: below this the machine's own working names collide
+            # with the file or with each other, and the write reports success
+            # having changed nothing -- or destroys the file outright. See
+            # caps.WORKRESERVE_GASTON.
+            why = (f" (a file stops {caps.workreserve} short of "
+                   f"{caps.maxpath}, so the machine can still write "
+                   f"{'{name}'}.gaston-tmp beside it)")
+        else:
+            why = ""
         return Skip(
             "path too long",
             f"{full} bytes once prefixed with {guest_root!r}; the limit is "
-            f"{limit} including the NUL"
-            + (f" (a directory stops {caps.dirreserve} short of {caps.maxpath},"
-               f" so a short name still fits inside it)"
-               if is_dir and caps.dirreserve else ""),
+            f"{limit} including the NUL" + why,
         )
 
     # The single most common reason a Linux tree cannot cross. Checked LAST so

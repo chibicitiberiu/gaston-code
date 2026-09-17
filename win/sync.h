@@ -18,6 +18,24 @@
 #define RC_SYNC_MAX_FILES 2000
 #define RC_SYNC_CHUNK     8192
 
+/* The longest working name we form beside a target. `.gaston-tmp` and
+ * `.gaston-old` are both eleven characters, and both are built by appending to
+ * the target's own path.
+ *
+ * This is declared to the bridge as `workreserve` in HELLO so it can stop
+ * short BEFORE pushing, which is the only place the problem can actually be
+ * prevented. Without the reserve, a target path of 251..257 characters makes
+ * the two names truncate to the SAME string: rc_sync_commit then deletes its
+ * own temp file, moves the user's file aside and straight back, and returns
+ * success while this machine still holds the old bytes -- so the bridge
+ * advances its baseline on that ack and the next pass pulls the stale content
+ * back over the agent's edit. At 258 and 259 the temp name resolves to the
+ * target itself, because Win32 strips a trailing dot, and CREATE_ALWAYS
+ * truncates the user's file in place before a single byte has been verified.
+ *
+ * Neither outcome is recoverable and neither is reported. Hence: refuse. */
+#define RC_SYNC_WORK_SUFFIX 11
+
 typedef struct {
     char  type;             /* 'f', 'd', or 'u' (unreadable -- NOT absent) */
     char  cls;              /* RC_CLS_* */

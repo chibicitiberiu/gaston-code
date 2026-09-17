@@ -472,6 +472,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("eol",        RC_STR(RC_CAP_EOL));
     HDR("shortnames", RC_STR(RC_CAP_SHORTNAMES));
     HDR("dirreserve", RC_STR(RC_CAP_DIRRESERVE));
+    HDR("workreserve", RC_STR(RC_CAP_WORKRESERVE));
     HDR("maxpath",    RC_STR(RC_CAP_MAXPATH));
     HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
     HDR("manifest",   RC_STR(RC_CAP_MANIFEST));

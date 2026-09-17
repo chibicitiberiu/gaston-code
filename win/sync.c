@@ -331,8 +331,31 @@ HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
                            unsigned tmp_cap)
 {
     char full[MAX_PATH];
+    unsigned need;
 
     if (!rc_sync_contained(rel)) return INVALID_HANDLE_VALUE;
+
+    /* Refuse rather than truncate, and refuse BEFORE anything is opened.
+     *
+     * Measured from the inputs rather than from the joined string, because the
+     * join itself truncates silently and would hide the very thing being
+     * tested. See RC_SYNC_WORK_SUFFIX for what a truncated working name does:
+     * at some lengths it reports success having written nothing, and at others
+     * it destroys the user's file outright.
+     *
+     * ERROR_FILENAME_EXCED_RANGE because do_put maps it to `too_long`. Setting
+     * it explicitly also stops that classifier reading a STALE error from
+     * whatever ran last, which is what a bare failing return would leave it
+     * doing -- reporting `readonly` or `no_space` at random. */
+    need = (unsigned)strlen(root) + 1 + (unsigned)strlen(rel);
+    if (need + RC_SYNC_WORK_SUFFIX > sizeof(full) - 1 ||
+        need + RC_SYNC_WORK_SUFFIX > tmp_cap - 1) {
+        rc_log("sync: refusing %s -- %u chars leaves no room for a "
+               ".gaston-tmp beside it", rel, need);
+        SetLastError(ERROR_FILENAME_EXCED_RANGE);
+        return INVALID_HANDLE_VALUE;
+    }
+
     join(full, sizeof(full), root, rel);
     _snprintf(tmp_out, tmp_cap - 1, "%s.gaston-tmp", full);
     tmp_out[tmp_cap - 1] = '\0';
@@ -380,6 +403,18 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
      * instant with no file at the path -- MoveFileExA(REPLACE_EXISTING) is
      * NT-only so this cannot be made atomic -- but every intermediate state
      * now holds a full copy under a name rc_sync_recover knows. */
+    /* The same reserve as begin_write, checked again here because THIS is the
+     * function that deletes and renames. If `aside` were to alias `tmp`, the
+     * DeleteFileA below would destroy the verified new bytes and the two moves
+     * would put the user's old file straight back -- and we would return 0,
+     * telling the bridge to advance its baseline over content this machine
+     * never took. Refusing costs a retry; not refusing costs the edit. */
+    if (strlen(full) + RC_SYNC_WORK_SUFFIX > sizeof(aside) - 1) {
+        rc_log("sync: refusing to commit %s -- no room for a .gaston-old", rel);
+        DeleteFileA(tmp);
+        return -4;
+    }
+
     _snprintf(aside, sizeof(aside) - 1, "%s.gaston-old", full);
     aside[sizeof(aside) - 1] = '\0';
     DeleteFileA(aside);

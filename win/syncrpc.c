@@ -326,6 +326,10 @@ static void do_putend(rc_net *net, rc_frame *f)
     g_put.active = 0;
 
     if (rc == -2) { put_fail(net, id, "crc_mismatch"); return; }
+    /* -4 is the working-name reserve, and it is NOT `no_space`: the disk is
+     * fine and retrying will never help. The bridge stops pushing the path and
+     * reports it instead, which is the only useful answer. */
+    if (rc == -4) { put_fail(net, id, "too_long");     return; }
     if (rc != 0)  { put_fail(net, id, "no_space");     return; }
 
     /* The bridge advances its baseline from THIS crc, never from a re-scan --

@@ -96,6 +96,27 @@ SHORTNAMES_83 = 1           #: 8.3 aliases exist alongside long names
 DIRRESERVE_NONE = 0
 DIRRESERVE_WIN32 = 12
 
+#: How many characters short of the path limit a FILE must stop, so that the
+#: client can still form its own working names beside it. The Win9x guest
+#: writes `<path>.gaston-tmp` and renames the old file to `<path>.gaston-old`,
+#: both eleven characters longer than the target.
+#:
+#: This is not symmetry with `dirreserve` for its own sake. Without it a path
+#: of 251..257 bytes passes this check, and then BOTH working names truncate to
+#: the same 259-byte string -- so the commit deletes its own temp file, moves
+#: the user's file aside and straight back, and returns SUCCESS while the guest
+#: still holds the old bytes. The bridge advances the baseline on that ack and
+#: the next pass pulls the stale content back over the agent's edit. At 258 and
+#: 259 it is worse: the temp name resolves to the target itself (Win32 strips a
+#: trailing dot), so CREATE_ALWAYS truncates the user's file in place, at the
+#: first chunk, before the compare-and-swap that exists to protect it ever
+#: runs.
+#:
+#: Declared rather than assumed, like every other client rule: a client that
+#: writes in place, or uses a shorter suffix, says so and gets the bytes back.
+WORKRESERVE_NONE = 0
+WORKRESERVE_GASTON = 11     #: len(".gaston-tmp") == len(".gaston-old")
+
 
 @dataclass(frozen=True)
 class Caps:
@@ -109,6 +130,7 @@ class Caps:
     eol: int = EOL_CRLF
     shortnames: int = SHORTNAMES_83
     dirreserve: int = DIRRESERVE_WIN32
+    workreserve: int = WORKRESERVE_GASTON
     maxpath: int = 260
     maxcomp: int = 255
     #: Which manifest row format the client sends. 1 carries one checksum,
@@ -129,6 +151,15 @@ class Caps:
     def maxdirpath(self) -> int:
         return self.maxpath - self.dirreserve
 
+    @property
+    def maxfilepath(self) -> int:
+        """The limit for a FILE, leaving the client room for its working name.
+
+        Directories had a reserve from the start and files did not, which is
+        the whole of the bug in `workreserve`'s note above.
+        """
+        return self.maxpath - self.workreserve
+
     def summary(self) -> str:
         """For the log, because "why did that not sync" starts here."""
         how = "declared" if self.declared else "assumed (client did not say)"
@@ -136,6 +167,7 @@ class Caps:
                 f"devices={'dos' if self.devices else 'none'} "
                 f"eol={('lf', 'crlf', 'cr')[self.eol]} "
                 f"maxpath={self.maxpath} maxdir={self.maxdirpath} "
+                f"maxfile={self.maxfilepath} "
                 f"maxcomp={self.maxcomp} manifest=v{self.manifest}")
 
 
@@ -186,7 +218,7 @@ def from_hello(h: dict) -> Caps:
 
     declared = any(k in h for k in (
         "acp", "case", "devices", "trailing", "illegal", "eol", "shortnames",
-        "dirreserve", "maxpath", "maxcomp", "manifest"))
+        "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest"))
 
     return Caps(
         acp=acp or "cp1252",
@@ -199,6 +231,7 @@ def from_hello(h: dict) -> Caps:
         shortnames=_enum(h, "shortnames", (SHORTNAMES_NONE, SHORTNAMES_83),
                          SHORTNAMES_83),
         dirreserve=_num(h, "dirreserve", DIRRESERVE_WIN32, 0, 64),
+        workreserve=_num(h, "workreserve", WORKRESERVE_GASTON, 0, 64),
         maxpath=_num(h, "maxpath", 260, 64, 65536),
         maxcomp=_num(h, "maxcomp", 255, 12, 65536),
         manifest=_num(h, "manifest", 1, 1, 2),
@@ -211,6 +244,10 @@ def from_hello(h: dict) -> Caps:
 POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              trailing=TRAILING_KEPT, illegal=ILLEGAL_POSIX, eol=EOL_LF,
              shortnames=SHORTNAMES_NONE, dirreserve=DIRRESERVE_NONE,
+             # Not a Windows rule: the `.gaston-tmp` convention is OURS, so a
+             # POSIX client that commits by temp-and-rename needs the same room
+             # even though nothing about its filesystem is constrained.
+             workreserve=WORKRESERVE_GASTON,
              maxpath=4096, maxcomp=255, manifest=2, declared=True)
 
 WIN9X = Caps(manifest=2, declared=True)

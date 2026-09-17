@@ -157,3 +157,55 @@ def test_the_selected_checksum_is_one_of_the_two(guest_answers):
     for name, (_t, cls, _s, crc, crc_norm, crc_raw) in guest_answers.items():
         if name in CORPUS:
             assert crc == (crc_norm if cls == CLASS_TEXT else crc_raw), name
+
+
+# --- the working-name reserve ----------------------------------------------
+#
+# The bridge refuses a file path with fewer than WORKRESERVE_GASTON characters
+# to spare, and the guest refuses to open one. Those are two numbers in two
+# languages describing one rule, which is exactly the shape that drifts. The
+# test below reads the guest's real boundary and compares it against
+# bridge/caps.py rather than against a constant written here.
+
+@pytest.fixture(scope="module")
+def guest_limits():
+    env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
+    out = subprocess.run([WINE, EXE, "--limits"], capture_output=True,
+                         timeout=300, env=env)
+    rows = {}
+    for line in out.stdout.decode("latin-1").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3:
+            rows[int(parts[0])] = parts[1]
+    assert rows, out.stderr.decode("latin-1", "replace")[:800]
+    return rows
+
+
+def test_the_guest_refuses_a_path_with_no_room_for_its_temp_name(guest_limits):
+    """The boundary the guest actually enforces, not the one it documents.
+
+    A path of 251..257 makes `.gaston-tmp` and `.gaston-old` truncate to the
+    same string, and the commit then deletes its own temp, moves the user's
+    file aside and straight back, and reports success -- so the bridge advances
+    its baseline over bytes the guest never took. At 258 and 259 the temp name
+    resolves to the target itself and CREATE_ALWAYS truncates the user's file
+    before anything is verified. Both are silent, so the boundary is the fix.
+    """
+    from bridge import caps as C
+
+    limit = C.Caps().maxpath - C.WORKRESERVE_GASTON       # 249
+    # `full` here counts root + separator + rel, with no NUL -- one less than
+    # the bridge's `full`, which includes it. Compare like for like.
+    for length, verdict in sorted(guest_limits.items()):
+        if length + 1 <= limit:
+            assert verdict == "allowed", (length, verdict)
+        else:
+            assert verdict == "refused", (length, verdict)
+
+
+def test_the_guest_never_builds_a_truncated_working_name(guest_limits):
+    """Whatever it accepts, it must not have silently shortened."""
+    assert any(v == "refused" for v in guest_limits.values()), \
+        "nothing was refused; the reserve is not being enforced at all"
+    assert any(v == "allowed" for v in guest_limits.values()), \
+        "everything was refused; the boundary is in the wrong place"

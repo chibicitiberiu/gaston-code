@@ -49,6 +49,17 @@
 #define RC_DIRRESERVE_WIN32 12
 #define RC_DIRRESERVE_NONE  0
 
+/* How many characters short of the path limit a FILE must stop, so that this
+ * client can still form its own working names beside it. Ours are
+ * `.gaston-tmp` and `.gaston-old`, eleven characters each -- see
+ * RC_SYNC_WORK_SUFFIX in sync.h for what happens when they do not fit, which
+ * is worse than a failed write.
+ *
+ * Directories had a reserve from the first day and files did not, which is the
+ * entire bug. A client that commits in place declares 0 and gets the bytes. */
+#define RC_WORKRESERVE_GASTON 11
+#define RC_WORKRESERVE_NONE   0
+
 /* This client. A Windows 3.1 or MS-DOS build changes these lines and nothing
  * else; a Unix build sets them all to the permissive value. */
 #define RC_CAP_CASE        RC_CASE_FOLD
@@ -58,6 +69,7 @@
 #define RC_CAP_EOL         RC_EOL_CRLF
 #define RC_CAP_SHORTNAMES  RC_SHORTNAMES_83
 #define RC_CAP_DIRRESERVE  RC_DIRRESERVE_WIN32
+#define RC_CAP_WORKRESERVE RC_WORKRESERVE_GASTON
 #define RC_CAP_MAXPATH     MAX_PATH
 #define RC_CAP_MAXCOMP     255
 

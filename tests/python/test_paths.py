@@ -232,18 +232,71 @@ def test_a_name_that_survives_check_can_be_put_on_the_wire():
         assert P.wire_decode(P.wire_encode(name)) == name
 
 
+def _rel_of(n: int) -> str:
+    """A nested relative path exactly `n` characters long."""
+    parts, left = [], n
+    while left > 31:
+        parts.append("d" * 30)
+        left -= 31                                      # 30 plus a separator
+    parts.append("d" * left)
+    rel = "/".join(parts)
+    assert len(rel) == n, (len(rel), n)
+    return rel
+
+
 def test_a_directory_stops_twelve_characters_short_of_max_path():
     """CreateDirectory refuses within 12 of MAX_PATH, to leave room for an
-    8.3 name inside. Measured against the real guest: a 256-byte path passed
-    the file rule here and came back `too_long` from the SYNCMKDIR."""
-    root = "C:\\WORK"
-    rel = "/".join("d" * 30 for _ in range(8))          # 255 chars once joined
+    8.3 name inside. Measured against the real guest: a path that passed the
+    file rule here came back `too_long` from the SYNCMKDIR.
+
+    The two reserves differ, so there is a band where a file is fine and a
+    directory of the same length is not. That band is what this pins.
+    """
+    root = "C:\\WORK"                                   # 7 chars
+    # full = 7 + 1 + rel + 1. 240 puts it at 249: the file limit exactly,
+    # and one past the directory limit of 248.
+    rel = _rel_of(240)
     assert P.check(rel, guest_root=root) is None
     bad = P.check(rel, guest_root=root, is_dir=True)
     assert bad is not None and "too long" in bad.reason
 
-    short = "/".join("d" * 30 for _ in range(7))
+    short = _rel_of(239)
     assert P.check(short, guest_root=root, is_dir=True) is None
+
+
+def test_a_file_stops_short_enough_for_the_guest_to_name_its_temp_file():
+    """The guest commits by writing `<path>.gaston-tmp` and renaming the old
+    file to `<path>.gaston-old`. Both are eleven characters longer than the
+    target, and both are built with a truncating _snprintf into MAX_PATH.
+
+    So a path this check lets through at 251..257 makes the two working names
+    truncate to the SAME string: the commit deletes its own temp, moves the
+    user's file aside and straight back, and returns success while the guest
+    still holds the old bytes. The bridge advances the baseline on that ack and
+    the next pass pulls the stale content back over the agent's edit. At 258
+    and 259 the temp name resolves to the target itself -- Win32 strips a
+    trailing dot -- so CREATE_ALWAYS truncates the user's file in place, at the
+    first chunk, before the compare-and-swap that exists to protect it runs.
+
+    None of that is recoverable and none of it is reported, so the only place
+    to stop it is here, before the push.
+    """
+    root = "C:\\WORK"
+    for n in range(240, 253):                           # full = 249 .. 261
+        full = len(root) + 1 + n + 1
+        got = P.check(_rel_of(n), guest_root=root)
+        if full <= 260 - C.WORKRESERVE_GASTON:
+            assert got is None, (n, full, got)
+        else:
+            assert got is not None and "too long" in got.reason, (n, full)
+
+
+def test_the_file_reserve_is_declared_not_assumed():
+    """A client that writes in place says so and gets the bytes back."""
+    inplace = _caps(workreserve=C.WORKRESERVE_NONE)
+    rel = _rel_of(251)                                  # full = 260 exactly
+    assert P.check(rel, guest_root="C:\\WORK", caps=inplace) is None
+    assert P.check(rel, guest_root="C:\\WORK") is not None
 
 
 # --- the codepage, which is the one silent failure in this layer ------------
