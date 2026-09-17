@@ -107,6 +107,42 @@ Recorded so they are not rediscovered. None are reachable in normal use today.
 - **`rc_rpc_submit` can race shutdown** and leak one frame without sending an
   `EXECRESULT`. Narrow, and only at exit.
 
+## 4. Deferred from the sync layer
+
+Recorded after Phase 3.3 was verified on the real machine. None blocks normal
+use; each is a known limit rather than something forgotten.
+
+- **No non-Windows client has ever connected.** The capability negotiation
+  (`bridge/caps.py`, `win/caps.h`) is exercised by tests and by the Win98 guest
+  declaring its own rules, but `C.POSIX` has never been on the other end of a
+  socket. Until one is, "the bridge survives being pointed at MS-DOS" is a
+  design claim, not a measurement.
+- **`sync_resolve` implements `release` and `forget` only.** The plan named
+  `accept-class`, `accept-revert` and `rebind` as well. Each corresponds to a
+  halt that cannot currently happen: a class change is now resolved as an
+  ordinary content change, and the two tree-identity halts need a second guest
+  or a restored backup to reach.
+- **Restore-from-backup is still the one unresolved silent-loss path.** A guest
+  whose tree is older than its own INI is indistinguishable, per path, from a
+  deliberate mass revert. The plan's mitigation is a persisted generation
+  counter plus an aggregate heuristic; neither is built. `.gaston/base/` is
+  retained as history, so a wrong mass pull is recoverable by hand.
+- **`eol=cr` is declarable and not implemented.** `_EOL` has the entry and
+  `to_guest` would use it, but no classifier treats a lone CR as the native
+  ending, so a client declaring it would fail the class cross-check on every
+  text file. Loud, not silent -- but it should be refused at handshake rather
+  than failing per file.
+- **Deletions do not propagate.** By decision, not omission: a rename is a
+  create plus a delete, and the delete does not travel, so `git mv` leaves the
+  old path on the guest. It is reported and never silently resurrected or
+  removed. Closing it needs `SYNCDEL` and a decision about what a re-delivered
+  delete means.
+- **The `_snprintf` truncation sweep.** Every call in the guest uses
+  `sizeof(x) - 1` plus an explicit NUL, which prevents the overrun and still
+  truncates silently -- how `del c:\temp\*.tmp` became `del c:\temp\*`. Only
+  `win/exec.c` checks the return. A silently shortened PATH in the sync layer
+  writes to the wrong file.
+
 Phase 4's own list (model per-client, the effort fork leaving the chat list on
 the pre-fork session id, the real Server Host dialog, Export as HTML, the
 permission rule table, icons, multi-client, the command menu) lives in

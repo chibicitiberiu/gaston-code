@@ -1318,6 +1318,84 @@ machinery once thread functions are referenced. **Re-verify after the first
 system only"; the sources needed no edits at all. Phase 3's main remaining work is
 reshaping the response path onto our frame grammar, not portability.
 
+### 2026-09-17 — sync on the real machine, and the fourteen defects that found
+
+The layer passed 1925 unit tests and a Wine cross-check before it ever touched
+the Windows 98 box. Pointing it at the actual machine found fourteen things,
+and not one of them was visible from either side's logs. Worth recording as a
+class, because "green under Wine" will be tempting again:
+
+**Two stopped it working at all.** `rc_config_load` never read `[sync] root` --
+`save` wrote the key and `load` did not read it, so the guest ran with an empty
+sync root and the whole layer was silently off. And `net.c`'s reader never
+routed `SYNC*` to the worker; they fell through to the UI thread's "unhandled
+frame type" branch, so the guest never answered a scan while the bridge sat on
+a 600s timeout holding the lock.
+
+**One killed the process.** An invalid page fault at `sub $0x202c,%esp`: the RPC
+worker gets the image's 64KB stack commit, the scan had a ~62KB manifest buffer
+plus two 8KB buffers in one call chain, and Open Watcom emits no stack probe, so
+the frame stepped over the guard page. It presented as intermittent -- the same
+build ran a whole session against a flat tree and died the first time the tree
+gained a subdirectory, because one more `walk` frame moved the skip past the
+guard. `make check` now gates on frame size using a linker map.
+
+**Four lost or corrupted data.** `Act.MKDIR` and `Act.PULL` had no handler at
+all in `Pass.run` -- decided correctly, ranked correctly, then off the end of an
+if/elif chain, with the pass reporting success. Conflicts staged the agent's
+copy and never applied the user's, so the same conflict re-staged every thirty
+seconds forever. Paths went on the wire as UTF-8, so `café.md` arrived as
+`cafÃ©.md` and the tree grew a filename every pass. And the name filter ran on
+files but not directories, so the bridge asked Windows 98 to create
+`C:\WORK\con`.
+
+**The lesson worth keeping:** every one of these was a gap between a decision
+and its application, or between two sides of a protocol. The unit tests proved
+each half in isolation and the halves did not meet. The tripwire that now fails
+if any `Act` loses its handler is the shape of test that would have caught four
+of them.
+
+### 2026-09-17 — driving the guest directly, because the bridge cannot
+
+Most of the guest's SYNC statuses are unreachable from the bridge on purpose.
+`changed` needs a save to land between the scan and the commit; `crc_mismatch`
+needs a corrupted transfer; `is_directory` needs a push at a path the guest
+holds as a directory. The bridge will never produce any of them deliberately,
+so on the real machine that code had never executed.
+
+Racing for them does not work: a 2.4MB push over loopback finishes in about a
+second, and `--link-bps` throttles the bridge's sending logic rather than the
+wire. Two attempts produced results that turned out to be reading state left
+over from the previous attempt.
+
+`tools/syncprobe.py` is a bridge stub instead -- enough handshake to satisfy
+the client, then handcrafted frames. 43 checks against the shipping binary over
+a real socket. It found two bugs in `SYNCGET` the same afternoon: a missing
+file and a directory both answered `locked`, which the bridge treats as
+transient, so a pull of something just deleted would retry forever and report
+nothing.
+
+### 2026-09-17 — the client declares what it is; the bridge stops assuming
+
+One HELLO header per option, each a small integer enum, decided against packed
+bits. `devices=1` answers "why did that file not sync" in a log and `caps=0x7F`
+does not; a bit can only answer yes or no, so a client that is neither CRLF nor
+LF needs a second bit and the hope that the pair is read together; and a value
+the bridge does not recognise must be distinguishable from a bit that is clear,
+which is the permissive reading arrived at silently. ~120 bytes once per
+connection.
+
+Defaults lean restrictive because the two errors are not comparable: guessing
+`devices=none` on a DOS box pushes `aux.c`, and CreateFileA on AUX with nothing
+asserting DSR blocks with no timeout. Guessing `devices=dos` on Unix skips one
+file and prints why.
+
+The codepage is the one field never guessed, because it is the only silent
+failure in the layer: the wrong table encodes a name, the guest stores those
+bytes, reports them back, and the bridge decodes with the same wrong table and
+sees what it sent. Self-consistent forever, with the user's file called
+something else on their own disk.
+
 ### 2026-09-16 — compression: measured, and the plan was optimistic
 Real ratio on prose-plus-code is **~2.16:1**, against the ~3:1 the plan assumed.
 Corrected in PLAN.md. Still clearly worth doing (dialup 8s → 3.7s for a 40KB turn).
