@@ -1075,13 +1075,22 @@ class Bridge:
                 log.info("sync (%s): %s", why,
                          {k: v for k, v in got.items()
                           if k not in ("reports", "notices")})
-                # Reports are the only record of a path that did NOT move, and
-                # a counter of zero says nothing about why. Logging them is how
-                # "six of seven files transferred" stops looking like success.
-                for line in got.get("reports", []):
+                # Reports are the only record of a path that did NOT move,
+                # and a counter of zero says nothing about why. Logging them is
+                # how "six of seven files transferred" stops looking like
+                # success -- but only what CHANGED, because this pass runs
+                # every thirty seconds and an unfixable name would otherwise
+                # print until nobody reads the warnings.
+                for line in got.get("new_reports", []):
                     log.warning("sync: %s", line)
+                delivered = []
                 for note in got.get("notices", []):
                     await self._write_block(guest, H.notice(note))
+                    delivered.append(note)
+                # Only after they are on the wire. The queue is pending work,
+                # not a log: leaving them on it re-delivered every notice on
+                # every pass, which buries the next real one.
+                p.notices_delivered(delivered)
                 return got
             except Exception as exc:
                 log.warning("sync pass aborted: %s", exc)

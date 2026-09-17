@@ -648,3 +648,109 @@ def test_a_default_ignore_keeps_a_venv_off_the_guest(tmp_path):
     assert "main.py" in rows
     assert not any(k.startswith(".venv") or k.startswith("__pycache__")
                    for k in rows), sorted(rows)
+
+
+async def test_an_unresolvable_divergence_is_announced_once(harness, tmp_path):
+    """Not every pass, and the pass runs every thirty seconds.
+
+    The agent deletes `old.c` as half of a `git mv`; the user still has it.
+    There is no delete primitive, so resurrecting it here or removing it there
+    would both lose work -- the honest answer is to report and change nothing,
+    which means the condition STANDS. Repeating it forever trains the agent to
+    ignore the channel that also carries conflicts.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    user = b"still here\n"
+    p = a_pass(harness, tmp_path)
+    p.base.rows["old.c"] = Entry(type=Type.FILE, cls="t",
+                                 crc=zlib.crc32(user), display="old.c")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {"old.c": user})
+    first = await asyncio.wait_for(task, 10)
+    assert first["reported"] == 1
+    assert any("old.c" in n for n in first["notices"])
+    assert any("old.c" in r for r in first["new_reports"])
+    # What `run_sync` does once the notices are actually on the wire.
+    p.notices_delivered(first["notices"])
+
+    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    task = asyncio.create_task(p2.run())
+    await fake_scan(harness, reader, writer, {"old.c": user})
+    second = await asyncio.wait_for(task, 10)
+
+    assert second["reported"] == 1, "the condition still stands"
+    assert not second["notices"], "but the agent was told twice"
+    assert not second["new_reports"], "and the log would repeat it"
+    # sync_status still wants the whole standing set, every time it is asked.
+    assert any("old.c" in r for r in second["reports"])
+    await harness.close(writer)
+
+
+async def test_the_same_path_changing_is_news_again(harness, tmp_path):
+    """The fingerprint carries the content, so 'you deleted main.c and the
+    user still has it' is said again once the user EDITS it -- a different
+    fact about a different file."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    v1, v2 = b"first\n", b"the user changed it\n"
+    p = a_pass(harness, tmp_path)
+    p.base.rows["old.c"] = Entry(type=Type.FILE, cls="t",
+                                 crc=zlib.crc32(v1), display="old.c")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {"old.c": v1})
+    await asyncio.wait_for(task, 10)
+
+    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    task = asyncio.create_task(p2.run())
+    await fake_scan(harness, reader, writer, {"old.c": v2})
+    second = await asyncio.wait_for(task, 10)
+    assert any("old.c" in n for n in second["notices"])
+    await harness.close(writer)
+
+
+async def test_a_notice_is_delivered_once_and_then_cleared(harness, tmp_path):
+    """`pending_notice` is a queue of work, not a log.
+
+    Nothing cleared it, so every notice ever raised was re-sent on every pass.
+    The user would have seen the same conflict message twice a minute -- worse
+    than not reporting it, because it buries the next real one. It is still
+    written BEFORE the baseline advances, so a crash between the two leaves the
+    notice to be delivered on startup rather than lost.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    p.note("SYNC: something happened")
+    assert p.base.pending_notice == ["SYNC: something happened"]
+
+    # Survives a reload, which is the point of writing it before acting.
+    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    assert p2.base.pending_notice == ["SYNC: something happened"]
+
+    p2.notices_delivered(["SYNC: something happened"])
+    p3 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    assert p3.base.pending_notice == []
+    await harness.close(writer)
+
+
+async def test_clearing_does_not_drop_a_notice_raised_meanwhile(
+        harness, tmp_path):
+    """Cleared by value, not by emptying the list.
+
+    A pass can raise a new notice while the previous batch is being written to
+    the wire; truncating would discard it with nobody told, which is the exact
+    failure the durable queue exists to prevent.
+    """
+    p = a_pass(harness, tmp_path)
+    p.note("first")
+    delivering = list(p.base.pending_notice)
+    p.note("raised while the first was being sent")
+    p.notices_delivered(delivering)
+    assert p.base.pending_notice == ["raised while the first was being sent"]

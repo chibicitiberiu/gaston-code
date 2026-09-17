@@ -140,6 +140,19 @@ class Baseline:
     generation: int = 0
     pending_notice: list = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
+    #: What has already been announced, per path, as a fingerprint of the
+    #: situation. A divergence that cannot be resolved -- `aux.c`, a path the
+    #: agent deleted that the user still has -- is a STANDING condition, and
+    #: the pass that finds it runs every thirty seconds. Without this the agent
+    #: is told about the same unresolvable thing forever, which trains it to
+    #: ignore the channel that also carries conflicts. The fingerprint, rather
+    #: than a bare flag, so that the situation CHANGING is announced again.
+    reported: dict[str, str] = field(default_factory=dict)
+    #: Every report line the last pass produced. `sync_status` wants the whole
+    #: standing set every time it is asked; the LOG wants only what changed,
+    #: or an unfixable `aux.c` prints a warning twice a minute until the
+    #: warnings stop being read.
+    reported_lines: list = field(default_factory=list)
 
     # --- persistence -------------------------------------------------------
 
@@ -161,6 +174,8 @@ class Baseline:
                 "generation": self.generation,
                 "pending_notice": self.pending_notice,
                 "latched": self.latched,
+                "reported": self.reported,
+                "reported_lines": self.reported_lines,
             },
             indent=1,
         )
@@ -190,6 +205,8 @@ class Baseline:
             generation=int(d.get("generation", 0)),
             pending_notice=list(d.get("pending_notice", [])),
             latched=dict(d.get("latched", {})),
+            reported=dict(d.get("reported", {})),
+            reported_lines=list(d.get("reported_lines", [])),
         )
         for name, dest in (("rows", out.rows), ("ignored", out.ignored),
                            ("prev", out.prev)):

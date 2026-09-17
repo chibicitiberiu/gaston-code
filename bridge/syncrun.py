@@ -388,6 +388,24 @@ class Pass:
                 b.write(a.read())
         return mine
 
+    def first_report(self, key: str, reason: str, g, b) -> bool:
+        """Is this situation new, or the same one we announced last pass?
+
+        Fingerprinted on the reason AND the content of whichever side still
+        holds the path, so "the user deleted main.c and you still have it"
+        is said once -- but said again if one of them then changes it, which
+        is a different fact about a different file.
+        """
+        fp = "|".join([
+            reason,
+            f"g:{g.cls}:{g.crc}" if g is not None else "g:-",
+            f"b:{b.cls}:{b.crc}" if b is not None else "b:-",
+        ])
+        if self.base.reported.get(key) == fp:
+            return False
+        self.base.reported[key] = fp
+        return True
+
     def note(self, text: str) -> None:
         """Record a notice durably BEFORE acting on it.
 
@@ -396,6 +414,31 @@ class Pass:
         agreement and says nothing.
         """
         self.base.pending_notice.append(text)
+        self.base.save(self.state)
+
+    def notices_delivered(self, texts: list) -> None:
+        """Called once the caller has actually put them on the wire.
+
+        The queue is PENDING, not a log. Nothing cleared it, so every notice
+        ever raised was re-delivered on every pass -- the user would have seen
+        the same conflict message every thirty seconds, which is worse than not
+        reporting it, because it buries the next real one.
+
+        Cleared by value rather than by emptying the list: a pass can raise a
+        new notice while the previous batch is being written, and truncating
+        would drop it with nobody told, which is the exact failure `note` is
+        durable to prevent.
+        """
+        if not texts:
+            return
+        gone = list(texts)
+        keep = []
+        for t in self.base.pending_notice:
+            if t in gone:
+                gone.remove(t)
+            else:
+                keep.append(t)
+        self.base.pending_notice = keep
         self.base.save(self.state)
 
     def keep_ancestor(self, rel: str, data: bytes) -> None:
@@ -481,7 +524,15 @@ class Pass:
             elif dec.act is S.Act.REPORT:
                 done["reported"] += 1
                 self.reports.append(f"{dec.key}: {dec.reason}")
-                self.note(f"SYNC: {dec.key} -- {dec.reason}")
+                # Announced ONCE per distinct situation. A divergence the
+                # design cannot resolve -- the agent deleted a file the user
+                # still has -- is a standing condition, and this pass runs
+                # every thirty seconds. Telling the agent about the same
+                # unresolvable thing forever trains it to ignore the channel
+                # that also carries conflicts. The fingerprint includes the
+                # content, so the user EDITING that file is news again.
+                if self.first_report(dec.key, dec.reason, g, b):
+                    self.note(f"SYNC: {dec.key} -- {dec.reason}")
             elif dec.act is S.Act.CONFLICT:
                 done["conflicts"] += 1
                 rel = (b.display if b else dec.key)
@@ -599,7 +650,21 @@ class Pass:
                           f"which the bridge has no code to apply. Nothing was "
                           f"transferred for this path.")
 
+        # A path that resolved is no longer "already reported": if it diverges
+        # again later, that is new and must be said again.
+        live = {d.key for d in decisions
+                if d.act in (S.Act.REPORT, S.Act.SKIP)}
+        for key in [k for k in self.base.reported if k not in live]:
+            del self.base.reported[key]
+
         self.base.generation += 1
+        # What the log should say. The full set goes to sync_status, which is
+        # asked on demand; the log wants the delta, or a name that can never
+        # be fixed prints a warning twice a minute until warnings stop being
+        # read at all.
+        was = set(self.base.reported_lines)
+        done["new_reports"] = [r for r in self.reports if r not in was]
+        self.base.reported_lines = list(self.reports)
         self.base.save(self.state)
         done["reports"] = list(self.reports)
         done["notices"] = list(self.base.pending_notice)
