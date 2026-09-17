@@ -86,6 +86,40 @@ Linux side first, so the guest develops against something real.
 | 2c | Pagination | **done** — verified on the guest, sealed at a message boundary |
 | 2d | Session list | **done** — verified on the guest, switch replays history |
 
+## Phase 3 — the guest becomes a workspace
+
+| # | Item | State |
+|---|---|---|
+| 3.0 | **Stage A — permission prompts** | **done — verified on real Win98 SE** |
+| 3.0a | `can_use_tool` wired into every session, `bridge/permissions.py` | done |
+| 3.0b | PERMREQ / PERMEND / PERMSTATE / PERMWAIT / PERMREPLY | done |
+| 3.0c | Modeless prompt bar on the guest, Send gated, Esc denies | done |
+| 3.0d | P1 — PERMSTATE, because the guest never sends `from=` | done |
+| 3.0e | P2 — idle reaper, so a crashed guest stops locking the bridge out | done |
+| 3.0f | P4 — `_send` refuses unencodable frames before stamping replay | done |
+| 3.0g | Cancellation: PERMEND scheduled, never awaited in a cancelled scope | done |
+| 3.0h | Client machine is the subject of every request; off-limits guard | done |
+| 3.1 | Stage B — `mcp__machine__exec`, `bridge/tools.py`, `paths.py` | not started |
+| 3.2 | Stage B — `win/exec.c`, `win/rpc.c`, the RPC worker thread | not started |
+| 3.3 | File sync layer | not started |
+
+### Stage A verification (2026-09-17)
+
+Run on real Windows 98 SE, not Wine:
+
+- permission bar appears with the CLI's own description, transcript keeps
+  streaming behind it, Send greyed, Stop live
+- **Allow** -> tool runs -> answer returns (`$0.1974`), and the model
+  volunteered *"That's the proxy box, not the Windows 98 machine you're
+  sitting at"*
+- **Deny** -> bar clears, Send returns (but see the decision note: the turn
+  ends silently, which the plan did not predict)
+- **Stop while the bar is up** -> `PERMEND reason=cancelled`, bar clears, app
+  still usable. This is the regression test for the worst bug review found
+- cable-pull then reconnect -> `PERMSTATE` restores the bar, answered on the
+  new connection (verified on Linux; the grace period is 60s)
+- 212 bridge tests
+
 All four demoed on real Windows 98 SE on 2026-09-16, not just under Wine.
 
 ---
