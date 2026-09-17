@@ -291,12 +291,20 @@ static void do_putend(rc_net *net, rc_frame *f)
         memset(&cur, 0, sizeof(cur));
         rc_sync_stat_file(full, &cur);
         if (strcmp(ifc, "absent") == 0) {
-            if (cur.type == 'f') { put_fail(net, id, "changed"); return; }
+            /* Anything at all at the path contradicts "absent". */
+            if (cur.type != 0) { put_fail(net, id, "changed"); return; }
         } else if (cur.type == 'u') {
             put_fail(net, id, "locked");
             return;
-        } else if (cur.type == 'f' &&
-                   cur.crc != (unsigned long)strtoul(ifc, NULL, 10)) {
+        } else if (cur.type != 'f') {
+            /* The bridge expected a file with a specific checksum and the path
+             * now holds a directory, or nothing at all because the user
+             * deleted it between the scan and here. Both mean the world moved
+             * under the decision, which is exactly what `changed` is for.
+             * Falling through instead would commit over it. */
+            put_fail(net, id, "changed");
+            return;
+        } else if (cur.crc != (unsigned long)strtoul(ifc, NULL, 10)) {
             put_fail(net, id, "changed");
             return;
         }
@@ -397,8 +405,9 @@ static void do_get(rc_net *net, rc_frame *f)
 
         memset(&st, 0, sizeof(st));
         rc_sync_stat_file(full, &st);
-        if (st.type == 'u')      status = "locked";
-        else if (st.type != 'f') status = "missing";
+        if (st.type == 'u')      status = "locked";        /* held open */
+        else if (st.type == 'd') status = "is_directory";
+        else if (st.type != 'f') status = "missing";       /* nothing there */
         else {
             h = CreateFileA(full, GENERIC_READ,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,

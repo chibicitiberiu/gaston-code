@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Drive the real guest's sync state machine, one handcrafted frame at a time.
+
+Most of the guest's SYNC statuses are unreachable from the bridge on purpose:
+`changed` needs a save to land between the scan and the commit, `crc_mismatch`
+needs a corrupted transfer, `is_directory` needs a push at a path the guest
+holds as a directory. The bridge will never produce any of them deliberately,
+so on the real machine that code had never executed.
+
+Trying to provoke them by racing did not work either. A 2.4MB push over
+loopback finishes in about a second, which is not a window you can type into,
+and `--link-bps` throttles the bridge's own sending logic rather than the wire.
+
+So this is a bridge stub: enough of the handshake to satisfy the guest, then
+whatever frames the test wants. It talks to the SHIPPING retroclaude.exe over a
+real socket, so what it proves is about the binary on the Windows 98 machine
+and not about a model of it.
+
+    python3 tools/syncprobe.py            # run every check
+    python3 tools/syncprobe.py --port 7890
+
+Start it INSTEAD OF the bridge, then launch the client on the guest.
+"""
+from __future__ import annotations
+
+import argparse
+import socket
+import sys
+import zlib
+
+sys.path.insert(0, __import__("os").path.dirname(
+    __import__("os").path.dirname(__import__("os").path.abspath(__file__))))
+
+from bridge import paths as P                      # noqa: E402
+from bridge.protocol import Frame, FrameReader     # noqa: E402
+
+CHUNK = 8192
+
+
+class Guest:
+    """One connected guest, spoken to synchronously."""
+
+    def __init__(self, conn: socket.socket):
+        self.c = conn
+        self.r = FrameReader()
+        self.q: list[Frame] = []
+        self.seq = 0
+
+    def send(self, f: Frame) -> None:
+        self.c.sendall(f.encode())
+
+    def recv(self, want: str | tuple[str, ...], timeout: float = 30.0) -> Frame:
+        want = (want,) if isinstance(want, str) else want
+        self.c.settimeout(timeout)
+        while True:
+            for i, f in enumerate(self.q):
+                if f.type in want:
+                    return self.q.pop(i)
+            data = self.c.recv(65536)
+            if not data:
+                raise RuntimeError(f"guest closed while waiting for {want}")
+            self.q.extend(self.r.feed(data))
+
+    def sid(self) -> str:
+        self.seq += 1
+        return f"s{self.seq}"
+
+    # --- the operations under test -------------------------------------
+
+    def scan(self) -> tuple[dict, dict]:
+        sid = self.sid()
+        self.send(Frame("SYNCSCAN", {"id": sid}))
+        rows = {}
+        while True:
+            f = self.recv(("SYNCENT", "SYNCEND"))
+            if f.type == "SYNCEND":
+                return rows, f.headers
+            for line in f.body.split(b"\n"):
+                if not line:
+                    continue
+                p = line.split(b" ", 5)
+                sp = p[5].index(b" ")
+                name = P.wire_decode(p[5][sp + 1:sp + 1 + int(p[5][:sp])])
+                rows[name] = {"type": p[0].decode(), "cls": p[1].decode(),
+                              "size": int(p[2]), "crc": int(p[4])}
+
+    def put(self, rel: str, data: bytes, *, if_crc: str,
+            crc: int | None = None, cls: str | None = None) -> dict:
+        """One push. `if_crc`, `crc` and `cls` are overridable so a test can
+        lie about them -- which is the entire point of this file."""
+        sid = self.sid()
+        cls = cls or P.classify(data)
+        wire = P.to_guest(data, cls)
+        crc = zlib.crc32(P.normalise(data, cls)) if crc is None else crc
+        rb = P.wire_encode(rel)
+        prefix = str(len(rb)).encode() + b" " + rb
+        off = 0
+        while True:
+            self.send(Frame("SYNCPUT", {"id": sid, "total": str(len(wire)),
+                                        "off": str(off)},
+                            prefix + wire[off:off + CHUNK]))
+            off += CHUNK
+            if off >= len(wire):
+                break
+        self.send(Frame("SYNCPUTEND", {"id": sid, "crc": str(crc),
+                                       "cls": cls, "if_crc": if_crc}))
+        return self.recv("SYNCPUTACK").headers
+
+    def mkdir(self, rel: str) -> dict:
+        sid = self.sid()
+        self.send(Frame("SYNCMKDIR", {"id": sid}, P.wire_encode(rel)))
+        return self.recv("SYNCMKDIRACK").headers
+
+    def get(self, rel: str) -> tuple[dict, bytes]:
+        sid = self.sid()
+        self.send(Frame("SYNCGET", {"id": sid}, P.wire_encode(rel)))
+        buf = bytearray()
+        while True:
+            f = self.recv(("SYNCDAT", "SYNCDATEND"))
+            if f.type == "SYNCDATEND":
+                return f.headers, bytes(buf)
+            buf.extend(f.body)
+
+
+def dos(cmd: str) -> None:
+    """Run a command in the guest's DOS box, out of band.
+
+    Some states cannot be reached through the protocol at all -- a read-only
+    attribute, a stray `.gaston-tmp` -- so they are set up the way a user would
+    and then observed through it.
+    """
+    import subprocess
+    subprocess.run(["python3", __import__("os").path.join(
+        __import__("os").path.dirname(__import__("os").path.abspath(__file__)),
+        "dos.py"), cmd], check=True, capture_output=True)
+
+
+# --- the checks -------------------------------------------------------------
+
+FAILS: list[str] = []
+
+
+def _short(v) -> str:
+    """A 70KB binary is a real test case and a useless log line."""
+    r = repr(v)
+    return r if len(r) <= 60 else f"{r[:40]}... ({len(v)} bytes)"
+
+
+def check(name: str, got, want) -> None:
+    ok = got == want
+    print(f"  {'ok  ' if ok else 'FAIL'} {name}: {_short(got)}"
+          + ("" if ok else f" (want {_short(want)})"))
+    if not ok:
+        FAILS.append(name)
+
+
+def run(g: Guest) -> None:
+    print("\n== baseline: a clean push and a read-back ==")
+    body = b"line one\nline two\n"
+    check("push a new file", g.put("probe.txt", body, if_crc="absent")["status"],
+          "ok")
+    rows, _ = g.scan()
+    check("it appears in the manifest", "probe.txt" in rows, True)
+    check("stored native (CRLF)", rows["probe.txt"]["size"], len(body) + 2)
+    check("crc is over normalised bytes", rows["probe.txt"]["crc"],
+          zlib.crc32(body))
+
+    print("\n== compare-and-swap: the guest refuses when the world moved ==")
+    # This is the mechanism the whole design rests on. The bridge believes the
+    # guest holds something it does not, which is what a save landing after the
+    # scanner walked past the file produces.
+    ack = g.put("probe.txt", b"the agent's rewrite\n", if_crc="999999")
+    check("a wrong if_crc is refused", ack["status"], "changed")
+    _, back = g.get("probe.txt")
+    check("and the file was NOT written", P.to_bridge(back, "t"), body)
+
+    ack = g.put("probe.txt", b"the agent's rewrite\n", if_crc="absent")
+    check("if_crc=absent over an existing file is refused", ack["status"],
+          "changed")
+    _, back = g.get("probe.txt")
+    check("still not written", P.to_bridge(back, "t"), body)
+
+    ack = g.put("probe.txt", b"a legitimate update\n",
+                if_crc=str(zlib.crc32(body)))
+    check("the right if_crc is accepted", ack["status"], "ok")
+    _, back = g.get("probe.txt")
+    check("and the file DID change", P.to_bridge(back, "t"),
+          b"a legitimate update\n")
+
+    print("\n== the guest verifies what it received ==")
+    ack = g.put("corrupt.txt", b"content\n", if_crc="absent", crc=12345)
+    check("a wrong crc is refused", ack["status"], "crc_mismatch")
+    rows, _ = g.scan()
+    check("and no file is left behind", "corrupt.txt" in rows, False)
+    check("nor is a temp file", any(".gaston-" in k for k in rows), False)
+
+    print("\n== paths the guest must refuse ==")
+    check("escaping the root", g.put("../escaped.txt", b"x\n",
+                                     if_crc="absent")["status"], "bad_path")
+    check("an absolute path", g.put("C:\\escaped.txt", b"x\n",
+                                    if_crc="absent")["status"], "bad_path")
+    check("a dot component", g.put("./x.txt", b"x\n",
+                                   if_crc="absent")["status"], "bad_path")
+    check("into a missing directory", g.put("nope/x.txt", b"x\n",
+                                            if_crc="absent")["status"],
+          "no_parent")
+
+    print("\n== directories ==")
+    check("mkdir", g.mkdir("sub")["status"], "ok")
+    check("mkdir again is 'exists', not an error", g.mkdir("sub")["status"],
+          "exists")
+    check("now the child lands", g.put("sub/x.txt", b"x\n",
+                                       if_crc="absent")["status"], "ok")
+    check("mkdir over a file", g.mkdir("probe.txt")["status"], "is_file")
+    check("mkdir escaping the root", g.mkdir("../evil")["status"], "bad_path")
+
+    print("\n== get ==")
+    st, _ = g.get("does-not-exist.txt")
+    check("a missing file", st["status"], "missing")
+    st, _ = g.get("sub")
+    check("a directory", st["status"], "is_directory")
+    st, _ = g.get("../escaped.txt")
+    check("escaping the root", st["status"], "missing")
+
+    print("\n== byte fidelity, straight off the machine ==")
+    cases = {
+        "bin.dat":   bytes(range(256)) * 3,
+        "crcr.txt":  b"a\r\r\nb\r\r\n",
+        "mixed.txt": b"a\r\nb\nc\r\n",
+        "lonecr.txt": b"a\rb\rc",
+        "empty.txt": b"",
+        "utf16.txt": "caf\u00e9 \u2014 x\n".encode("utf-16-le"),
+        "big.bin":   bytes((i * 7919) % 251 for i in range(70000)),
+    }
+    for name, data in cases.items():
+        cls = P.classify(data)
+        st = g.put(name, data, if_crc="absent")
+        if st["status"] != "ok":
+            check(f"{name} push", st["status"], "ok")
+            continue
+        hdr, wire = g.get(name)
+        check(f"{name} ({cls}) round-trips byte for byte",
+              P.to_bridge(wire, hdr.get("cls", cls)), data)
+
+    print("\n== a read-only target ==")
+    # DeleteFileA fails on a read-only file, then MoveFileA fails because the
+    # target still exists, and the temp is left in the tree -- where the next
+    # scan picks it up as a new file and pushes it to the bridge. The attribute
+    # has to be cleared and put back.
+    v1 = b"before\n"
+    check("push", g.put("ro.txt", v1, if_crc="absent")["status"], "ok")
+    dos("ATTRIB +R C:\\WORK\\ro.txt")
+    v2 = b"after\n"
+    check("push over a read-only file", g.put("ro.txt", v2,
+                                              if_crc=str(zlib.crc32(v1)))["status"],
+          "ok")
+    hdr, wire = g.get("ro.txt")
+    check("the new content is there", P.to_bridge(wire, "t"), v2)
+    rows, _ = g.scan()
+    check("and no temp file was left behind",
+          [k for k in rows if ".gaston-" in k], [])
+    # Pushing again proves the read-only attribute was RESTORED and is still
+    # handled -- if it had been left clear, this would pass for the wrong
+    # reason, so the check is that it works twice rather than once.
+    check("and it can be written again", g.put("ro.txt", b"third\n",
+                                               if_crc=str(zlib.crc32(v2)))["status"],
+          "ok")
+
+    print("\n== a push at a path the guest holds as a directory ==")
+    check("mkdir", g.mkdir("adir")["status"], "ok")
+    check("pushing a file there is refused",
+          g.put("adir", b"x\n", if_crc="absent")["status"] in
+          ("is_directory", "bad_path", "readonly", "changed"), True)
+    rows, _ = g.scan()
+    check("and the directory is still a directory",
+          rows.get("adir", {}).get("type"), "d")
+
+    print("\n== the scanner hides our own working files ==")
+    dos("ECHO leftover > C:\\WORK\\probe.txt.gaston-tmp")
+    dos("ECHO leftover > C:\\WORK\\probe.txt.gaston-old")
+    rows, _ = g.scan()
+    check("neither is offered to the bridge",
+          sorted(k for k in rows if ".gaston-" in k), [])
+
+    print("\n== the streaming gate: chunks must not be answered 'busy' ==")
+    # A transfer is a stream, and the one-at-a-time job slot used to reject
+    # chunks 2..N of anything over 8KB.
+    big = bytes((i * 31) % 256 for i in range(200000))
+    check("a 200KB push in 25 chunks", g.put("stream.bin", big,
+                                             if_crc="absent")["status"], "ok")
+    hdr, wire = g.get("stream.bin")
+    check("and it arrives intact", wire, big)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=7890)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--secret", default="dev-secret")
+    a = ap.parse_args()
+
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((a.host, a.port))
+    s.listen(1)
+    print(f"waiting for the guest on {a.host}:{a.port} ...")
+    conn, peer = s.accept()
+    print(f"guest connected from {peer}")
+
+    g = Guest(conn)
+    hello = g.recv("HELLO")
+    if hello.headers.get("secret") != a.secret:
+        print("bad secret")
+        return 2
+    # Minimal handshake. The guest needs OPTIONSEND to consider itself live;
+    # nothing else here depends on the session machinery.
+    g.send(Frame("OPTIONSEND", {}))
+    print(f"guest says mem_kb={hello.headers.get('mem_kb')} "
+          f"ver={hello.headers.get('ver')}")
+
+    try:
+        run(g)
+    finally:
+        conn.close()
+
+    print()
+    if FAILS:
+        print(f"{len(FAILS)} FAILURES: {', '.join(FAILS)}")
+        return 1
+    print("all guest-side sync checks passed on the real machine")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -129,7 +129,25 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
     DWORD got = 0;
     FILETIME ft;
 
+    DWORD attr;
+
     memset(out, 0, sizeof(*out));
+
+    /* Ask what the path IS before trying to read it.
+     *
+     * Without this, every CreateFileA failure came back as type 'u', so a
+     * MISSING file and a DIRECTORY were both indistinguishable from a file
+     * held under a share-deny lock. The bridge treats `locked` as transient
+     * and retries forever, so a pull of something the user had just deleted
+     * never resolved and never reported anything. Caught by driving the real
+     * guest: SYNCGET on a nonexistent path answered `locked`.
+     *
+     * type 0 means "nothing here", which is distinct from 'u' ("something is
+     * here and we cannot read it") and from 'f'. */
+    attr = GetFileAttributesA(path);
+    if (attr == 0xFFFFFFFF) return 0;
+    if (attr & FILE_ATTRIBUTE_DIRECTORY) { out->type = 'd'; return 0; }
+
     sc = (scan_scratch *)HeapAlloc(GetProcessHeap(), 0, sizeof(scan_scratch));
     if (!sc) {
         /* Out of memory is not "the file is fine". Unreadable is the honest
