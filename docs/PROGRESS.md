@@ -3,7 +3,12 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: complete phases 0–2.**
+**Current goal: Phase 3 — the guest becomes a workspace.**
+
+Phases 0-2 are done and demoed on the real guest. Phase 3 is now planned in
+detail in `PLAN.md`: permissions first (3.0), then the tool surface (3.1), the
+RPC worker thread (3.2), strip-based screenshots (3.3) and the file sync layer
+(3.4) that replaces Samba.
 
 ---
 
@@ -119,6 +124,39 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-17 — re-planning Phase 3 with Phase 0's answers in hand
+
+The plan's own instruction was "plan two phases deep, rolling ... re-plan at
+the Phase 2 boundary with real answers in hand". This is that.
+
+**The two answers that mattered both came back favourable.** 0.9 settled the
+one that could have reshaped the phase: `exec.c`'s capture was suspected of
+returning nothing, with a rewrite budgeted as the fallback. It returns correct
+non-empty output, including `echo hello | find "hello"` through the 16-bit
+shell, so the design holds and the rewrite is not needed. 0.10 settled the
+other: `GetDIBits` emits `BI_RLE8` directly at 11.3:1, so screenshot
+compression is free and GDI does it.
+
+**The one that came back badly is memory.** Measured with only the app running
+-- no DOS box, no probe -- the guest goes 2420 KB free at window creation, 1060
+KB after the chat list, and **28 KB after a turn**. The plan was written around
+"8-12MB free after boot" and the HTML transcript now spends nearly all of it.
+
+That kills one assumption outright: a full-screen capture needs a 307 KB DIB
+and there is no room for it. Capture becomes **strip-based**, a few scanlines
+at a time into a small fixed buffer, which also means a new gate before that
+work starts -- **0.12, does `GetDIBits` produce valid `BI_RLE8` for a scanline
+RANGE?** RLE8 is row-oriented so it ought to, but "ought to" is exactly what
+0.9 and 0.10 existed to replace.
+
+**Permissions moved out of Phase 4 and into Phase 3 as 3.0**, where the plan
+always said they belonged: a tool surface that runs programs on the user's
+computer without `can_use_tool` is `bypassPermissions`. Phase 4 shrinks to
+settings and polish, and several of its items are already done -- model and
+effort selection shipped early, and the SDK questions it told us to verify are
+now answered rather than assumed.
+
 
 ### 2026-09-17 — the model list comes from the CLI, and "Default" is gone
 

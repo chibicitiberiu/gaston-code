@@ -591,78 +591,191 @@ project stalls.**
 **[R] Deferred to later polish: the anchor list** (per-message `(page, offset, first 40
 chars)` + dropdown + `EM_EXSETSEL`/`EM_SCROLLCARET`). `[<<] [<] [>] [>>]` is enough.
 
-### Phase 3 — Workspace: Samba + EXEC *(5–7 weekends)*
+### Phase 3 — the guest becomes a workspace *(detailed 2026-09-17)*
 
-**[R] Prerequisite, moved up from Phase 4: a minimal allow/deny permission prompt.** Phase 3
-hands Claude `win98_exec` on the guest and a share of real project files. Without
-`can_use_tool` that is `bypassPermissions` — precisely the threat model FEASIBILITY
-condemns in claudewin9x and says not to inherit. The first draft inherited it for three
-phases silently.
+Phase 0 answered the two questions this phase was gated on, and both answers
+were favourable, so the shape below is firmer than the original sketch.
 
-- Samba share (`server min protocol = NT1`, `ntlm auth = ntlmv1-permitted`,
-  `lanman auth = yes`), mounted `P:\`. LFN already proven in Phase 0.
-- **[R2] No separate agent binary.** Lift handlers into the existing exe as an `rpc.c`
-  module dispatched on the RPC worker thread. `main.c` is *not* forked at all — its 1,381
-  lines are listener/multiplex/discovery/service/watchdog scaffolding that the single-binary
-  design already deleted. What is lifted: `exec.c` (361) and a pruned handler table
-  (~130), against a connection and framing layer that already exists from Phase 1.
-- **[R2] Revised size: ~600–900 lines**, down from the 1,600–2,400 of the two-binary
-  design. The saving is `main.c` surgery, a second build target, a second shutdown path,
-  and `util.c`'s JSON builder.
-- **[R] "`exec.c` lifted verbatim" is false twice over.** It calls
-  `send_error_response(sock, ...)` directly, so it assumes retro-agent's request/response
-  grammar — *keep the `send_response(SOCKET, ...)` signature and replace only its body*,
-  and then it really is untouched. And `handle_launch` pulls in `util.c`'s JSON builder
-  (~200 of its 259 lines), contradicting "no JSON on the guest" — **drop `LAUNCH`** (it
-  isn't in the verb list) and `util.c` is not needed at all.
-- `bridge/rpc.py`, `bridge/tools.py` (`create_sdk_mcp_server`, `win98_exec`),
-  `bridge/paths.py` (Linux ↔ DOS translation at the MCP tool boundary)
-- **[R] `MCP_TOOL_TIMEOUT` does not cover in-process SDK servers** (docs cover stdio and
-  WebSocket; ours is `create_sdk_mcp_server`). Wrap the tool body in `asyncio.wait_for`.
-  The guest's own `EXEC_TIMEOUT_MS`/`EXEC_MAX_MS` is the real protection.
-- Line endings: no translation layer; put "write CRLF for files the guest consumes" in the
-  system prompt. Decide, don't drift.
+**What 0.9 settled.** The original text warned that `exec.c`'s capture might
+return nothing and that the fallback was a rewrite. Measured on the guest:
+`command.com /c ver` returned 36 bytes, `dir c:\ /w` 352 bytes, and
+`echo hello | find "hello"` returned `hello` -- the known-bad 16-bit tool,
+through the 16-bit shell. **Capture works, the design holds, and the rewrite
+is not needed.**
 
-**[R] The risk that may invalidate this phase — tested in Phase 0, not here.** The first
-draft said `exec.c`'s `PeekNamedPipe` loop "already handles" 16-bit console tools. **It does
-not.** There is no 16-bit-specific code in the file; the loop's own comment says its purpose
-is preventing a hung child from blocking the agent's multiplex loop. It **avoids hanging
-while still failing to capture output**, then kills the child at 60s. Worse, on Win9x
-`exec.c:48-50` shells *every* command through `command.com`, which is itself 16-bit — so
-this isn't just `FIND`/`SORT`/`FC`, it's everything.
+**What changed underneath it.** Samba is gone (R6): the file layer is a sync
+layer now. And the memory position is far tighter than this document assumed.
 
-The proposed verification ("EXEC `FIND`, confirm no hang") **would have passed while the
-feature was broken**: no hang, empty output, 60-second wait. The assertion must be
-**"output is non-empty and correct."** If it fails, the fallback is known and proven —
-claudewin9x redirects to a temp file on 9x and reads it back — so budget that rewrite of
-`exec.c`'s capture path rather than assuming the fork works.
+#### The budget, measured
 
-Two bugs to fix while forking: `taskkill` is shelled unconditionally on timeout and doesn't
-exist on 9x; `HeapReAlloc` failure leaks the original block at two sites.
+With ONLY the app running on the 32MB guest -- no DOS box, no probe:
 
-### Phase 4 — Permissions + settings *(3–4 weekends)*
+| | free of 32288 KB |
+|---|---|
+| window created | 2420 KB |
+| chat list loaded | 1060 KB |
+| after one turn | **28 KB** |
 
-- `can_use_tool` → `PERMREQ` → native modal → `PERMRESP`. Allow / Allow-and-remember /
-  Deny-with-message.
-- **[R] Modal dialogs pump messages**, so `WM_APP` transcript appends dispatch *during* the
-  permission modal. Decide this deliberately: either disable transcript appends for the
-  duration, or accept reentrancy and make `transcript.c` reentrant.
-- **`can_use_tool` has no timeout and a pending prompt wedges the session forever.** Both
-  mitigations required: a bridge-side ~10 min deadline → auto-deny with an explanatory
-  message, and `fakegui` as the manual escape hatch.
-- **[R] Verify against the installed SDK before writing this phase**, not from the plan:
-  `PermissionResultAllow.updated_permissions` is documented inconsistently (one rendering
-  says `dict`, the plan's snippet passes a list); whether `set_model()` exists; whether
-  effort is session-start-only. Current `claude-agent-sdk` is **0.2.153** — the first
-  draft's `>= 0.1.80` floor is stale for a 0.2.x API.
-- Whichever of model/effort can't change mid-session gets the fork dance —
-  `resume=<id>, fork_session=True` — with the dialog saying so. The first draft specified
-  this for effort only.
-- Settings in an INI via `GetPrivateProfileString`, not the registry — deletes
-  `registry.c` (507 lines) for zero loss.
-- Model list hardcoded; there is no `list_models()`.
-- No API reads the effective permission rule table — parse `.claude/settings*.json` in the
-  bridge and push a read-only view.
+The original Phase 6 text worried about a 4.4MB `SCREENDIFF` peak on a machine
+with "8-12MB free". There is no longer 8-12MB free; the HTML transcript spends
+almost all of it. `dwAvailPhys` excludes the disk cache, which Win98 shrinks
+under pressure, so this is the cache being squeezed rather than allocation
+failing -- the app stays responsive. But **every allocation in this phase has
+to be bounded and small**, and the one place the old plan still assumed
+otherwise is the screenshot buffer.
+
+#### 3.0 — Permission prompts *(prerequisite, not optional)*
+
+Nothing else in this phase may land first. Handing Claude a tool that runs
+programs on the user's computer without `can_use_tool` is `bypassPermissions`,
+which is exactly what FEASIBILITY condemns in claudewin9x and says not to
+inherit.
+
+- `can_use_tool` -> `PERMREQ` frame -> native modal -> `PERMRESP`.
+- Allow / Always allow / Deny, with a reason field on deny.
+- **`can_use_tool` has no timeout and a pending prompt wedges the session
+  forever.** Both mitigations are required: a bridge-side deadline (~10 min)
+  that auto-denies with an explanatory message, and `fakegui.py` as the manual
+  escape hatch for a wedged prompt.
+- **Modal dialogs pump messages**, so `WM_RC_FRAME` will dispatch *during* the
+  prompt and re-enter the transcript. `rc_html_append` already has a queue for
+  frames that arrive before the document is ready; reuse it. A flag set around
+  the modal defers appends into that queue rather than making the DOM calls
+  reentrant.
+- "Always allow" decisions are remembered **on the bridge**, which is the side
+  that enforces them, persisted like `bridge/registry.py`. Not in the guest's
+  INI: a rule that lives on the machine being protected is the wrong way round.
+
+*Demo: ask for something that needs a tool, get a real Win98 dialog, deny it,
+and see Claude say so.*
+
+#### 3.1 — The tool surface
+
+- `bridge/tools.py` with `create_sdk_mcp_server` and one tool, `win98_exec`.
+- **Wrap the tool body in `asyncio.wait_for`.** `MCP_TOOL_TIMEOUT` documents
+  stdio and WebSocket servers; ours is in-process and is not covered.
+- A guest that disconnects mid-call gets a **structured error, not a hang**.
+  This is the cost of the single-binary merge and was accepted on the
+  condition that it is handled here.
+- `bridge/paths.py` translates Linux <-> DOS paths at the tool boundary, so
+  neither side ever sees the other's spelling.
+- `LAUNCH` is dropped, which is what keeps `util.c`'s JSON builder out of the
+  guest entirely.
+
+#### 3.2 — The RPC worker thread
+
+The third thread, and the split is mandatory: an `EXEC` can run 60 seconds, so
+running it on the UI thread freezes the window and running it on the reader
+thread stops display frames being read.
+
+- `_beginthreadex`, verified by 0.11 along with a message loop.
+- `exec.c` forked with the `send_response(SOCKET, ...)` signature kept and only
+  its body replaced -- that is what makes "lifted verbatim" nearly true.
+- Two bugs to fix while forking, both already identified: `taskkill` is shelled
+  unconditionally on timeout and does not exist on 9x (use `TerminateProcess`,
+  which `probe.c` already does), and `HeapReAlloc` failure leaks the original
+  block at two sites.
+- Output is capped at 32KB and streamed in frames beyond that. On a machine
+  with 28KB free, an unbounded capture buffer is not a performance question.
+
+*Demo: "what is the volume label on C:?" -> `vol c:` runs on the Win98 box,
+the permission dialog appears, and the answer comes back.*
+
+#### 3.3 — Screenshots, in strips
+
+0.10 measured `GetDIBits` producing `BI_RLE8` directly: 640x480x8 went
+307,200 -> 27,088 bytes in 14ms, **11.3:1, done by GDI**. So the compression is
+free. The problem is the buffer.
+
+**A full-screen DIB is 307KB and there are 28KB free.** The old plan's
+"capture one frame into one buffer" no longer fits, so capture proceeds in
+**strips** of N scanlines into a small fixed buffer, each strip compressed and
+sent as it is taken. Region capture stays the default -- `WINLIST` already
+returns window rects, so "read this dialog" sends ~10KB instead of ~120KB and
+costs ~80 vision tokens instead of ~850.
+
+**New Phase 0-style gate, because this is an assumption and not a measurement:**
+
+> **0.12 — does `GetDIBits` produce valid `BI_RLE8` for a scanline RANGE?**
+> RLE8 is row-oriented so it ought to, but "ought to" is what 0.9 and 0.10
+> were there to replace. If it does not, capture strips as `BI_RGB` 8bpp and
+> RLE them on the bridge, which costs guest CPU but no extra memory.
+
+`screen_palette_for_capture()` is still the one piece of `screen.c` worth
+keeping: on an 8bpp display a fresh memory DC has only the 20 static colours,
+so `GetDIBits` needs the live hardware palette selected in or the result is
+colour-index noise. Hardware-verified, non-obvious, easy to lose.
+
+#### 3.4 — The file sync layer *(replaces the Samba share -- see R6)*
+
+- A manifest per side: `path -> (size, mtime, crc32)`. **CRC32 comes from
+  miniz**, which is already vendored and already linked.
+- Reconcile by exchanging manifests and diffing; transfer whole files
+  compressed, since source files are a few KB and a patch format can wait.
+- **The client wins on conflict.** The guest is the machine being worked on;
+  the bridge holds a working copy.
+- The manifest must **stream**, not be assembled whole in guest memory. A few
+  hundred entries at ~50 bytes is fine; a whole-tree structure is not.
+- Win9x specifics, recorded so they are not rediscovered: `ReadDirectoryChangesW`
+  is NT-only and would kill the image at load, so watching is
+  `FindFirstChangeNotification` plus a rescan of a small tree; FAT timestamps
+  have **2-second granularity**, so mtime comparison needs a tolerance or
+  everything looks modified; the filesystem is case-insensitive, has no
+  symlinks, and 8.3 aliasing means one file can arrive spelled two ways.
+- Line endings stay as decided: CRLF for files the guest consumes, stated in
+  the system prompt rather than translated in a layer.
+
+*Demo: Claude edits a file with its own Edit tool and the change appears on the
+Win98 box a moment later.*
+
+#### Verification gates for the phase
+
+- **0.12** answered before 3.3 is built.
+- A denied permission produces a refusal, not a hang, and a prompt left
+  unanswered auto-denies rather than wedging the session.
+- `EXEC` of a 16-bit tool returns correct non-empty output *through the GUI
+  binary on the RPC thread*, not only through `probe.exe`.
+- Guest free memory is measured again at the end of the phase, the same way as
+  above, and compared against the 28KB baseline. A phase that quietly spends
+  another megabyte needs to know it did.
+- Every demo run once over `tc netem rate 40kbit`, per the standing rule.
+
+
+### Phase 4 — settings and the rest of the surface *(revised 2026-09-17)*
+
+**Permissions moved to 3.0** and are a prerequisite of Phase 3, not a successor
+to it: the tool surface cannot ship without them. What is left here is smaller
+than the original text, and some of it is already done.
+
+**Done, ahead of schedule:**
+
+- Model and effort selection, from the menu bar. The list comes from
+  `get_server_info()["models"]` rather than a hardcoded table, so it carries
+  `resolvedModel` and `supportedEffortLevels` with it.
+- The SDK questions this section said to verify are answered: `set_model()`
+  **exists**, `set_effort()` **does not**, so effort is session-start-only and
+  changing it does the fork dance -- `resume=<id>, fork_session=True` -- with
+  the transcript saying so. Model changes are live.
+- Settings in an INI via `GetPrivateProfileString`, not the registry.
+- The model list is **not** hardcoded after all, and there is no "Default"
+  entry: default is an alias, not a model, so it is resolved and the model it
+  points at is the one ticked.
+
+**Still outstanding:**
+
+- `PermissionResultAllow.updated_permissions` is documented inconsistently
+  (one rendering says `dict`, an older snippet passes a list). **Check the
+  installed SDK when 3.0 is written**, not this document.
+- No API reads the effective permission rule table, so parse
+  `.claude/settings*.json` on the bridge and push a read-only view.
+- **Configure -> Server Host...** is a message box today and wants a real
+  dialog. `wrc` is available for a proper resource, or a runtime
+  `DialogBoxIndirectParam` template.
+- **File -> Export as HTML** is wired and unimplemented. It needs every page
+  from the bridge as one document, which is a chunked transfer.
+- R5 (icons), R7 (multiple clients) and R8 (the Command menu) land here unless
+  they are pulled forward.
+
 
 ### Phase 5 — Attach *(1–2 weekends)*
 
