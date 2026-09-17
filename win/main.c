@@ -970,7 +970,7 @@ static LRESULT CALLBACK input_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 static void layout(HWND hwnd)
 {
     RECT rc;
-    int sb_h = 0, y, w, h;
+    int sb_h = 0, y, ybar, w, h;
     RECT srect;
 
     GetClientRect(hwnd, &rc);
@@ -982,12 +982,13 @@ static void layout(HWND hwnd)
 
     w = rc.right - rc.left;
     h = rc.bottom - rc.top - sb_h;
+    /* The input row NEVER moves. An earlier version shifted it up to make room
+     * and drew the bar below it, which covered the Stop button completely --
+     * so the one control you need while a request is pending was the one that
+     * disappeared. The bar docks to the bottom of the transcript instead, and
+     * only the transcript gets shorter. */
     y = h - INPUT_HEIGHT - GUTTER;
-    /* The bar eats into the transcript, not the input box: the input box is
-     * where the user's attention already is. `y` is the single hinge for
-     * everything below the transcript, so moving it moves the whole row. */
-    if (g_perm_pending)
-        y -= PERM_H + GUTTER;
+    ybar = g_perm_pending ? (y - PERM_H - GUTTER) : y;
 
     {   /* Chat list down the left, with its Refresh button under it. */
         int lh = h - 2 * GUTTER - 24;
@@ -1009,19 +1010,18 @@ static void layout(HWND hwnd)
         int cx = GUTTER * 2 + CHATS_W;
         int cw = w - cx - GUTTER;
         rc_html_move(g_html, cx, GUTTER + PAGEBAR_H,
-                     cw, y - GUTTER - PAGEBAR_H);
+                     cw, ybar - GUTTER - PAGEBAR_H);
         if (g_perm_pending) {
             /* Right-to-left: the buttons are fixed width and the label takes
              * whatever is left, so a long tool description truncates rather
              * than pushing Deny off the edge. */
-            int by = y + INPUT_HEIGHT + GUTTER - (PERM_H + GUTTER);
             int bx = w - GUTTER - PERMBTN_W;
-            MoveWindow(g_perm_deny, bx, by, PERMBTN_W, PERM_H - 4, TRUE);
+            MoveWindow(g_perm_deny, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
             bx -= PERMBTN_W + 2;
-            MoveWindow(g_perm_always, bx, by, PERMBTN_W, PERM_H - 4, TRUE);
+            MoveWindow(g_perm_always, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
             bx -= PERMBTN_W + 2;
-            MoveWindow(g_perm_allow, bx, by, PERMBTN_W, PERM_H - 4, TRUE);
-            MoveWindow(g_perm_text, cx, by + 4, bx - cx - GUTTER,
+            MoveWindow(g_perm_allow, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
+            MoveWindow(g_perm_text, cx, ybar + 4, bx - cx - GUTTER,
                        PERM_H - 6, TRUE);
         }
         MoveWindow(g_input, cx, y,

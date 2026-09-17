@@ -466,6 +466,18 @@ class Bridge:
                     message="Internal error: the request had no id.",
                     interrupt=False)
 
+            # The proxy is infrastructure, not the subject of the
+            # conversation. A path tool reaching outside the working copy is
+            # refused without troubling the user: they asked about THEIR
+            # machine, and answering with the proxy's files would be wrong
+            # even when the file is real.
+            refuse = perms.off_limits(tool_name, args,
+                                      self.cwd or os.getcwd())
+            if refuse is not None:
+                log.info("auto-refused %s outside the working copy: %s",
+                         tool_name, str(args)[:120])
+                return PermissionResultDeny(message=refuse, interrupt=False)
+
             loop = asyncio.get_running_loop()
             prompt = PendingPrompt(
                 tool_use_id=tool_use_id,

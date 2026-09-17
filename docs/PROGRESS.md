@@ -125,6 +125,64 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — everything the user says refers to THEIR machine
+
+Watching it run on the guest produced the change. Asked to read
+`/etc/hostname`, the model read the *proxy's* file and answered with the
+proxy's hostname. The file was real and the answer was wrong: the user is
+sitting at a Windows 98 box and asked about that.
+
+Two halves, because either alone is insufficient:
+
+  * **The system prompt now leads with the rule** rather than burying it.
+    "My machine", "this computer", "the disk" always mean the connected
+    machine. The proxy is infrastructure -- not the subject of the
+    conversation, and its hostname, OS and packages are nobody's business. A
+    request implying a path that cannot exist on the user's machine (a Unix
+    path on a Windows box) means *the path is not valid for their machine*,
+    not *go read the proxy's copy*.
+  * **`permissions.off_limits()` refuses path tools outside the working
+    copy** without troubling the user, because they should not have to
+    adjudicate a request they never made.
+
+There is a neat symmetry worth recording. The containment check deleted
+earlier in this stage -- auto-ALLOW inside cwd -- was dead code, because
+Claude Code approves those locally and never asks us. **The same check
+inverted is not dead at all**: by the time a path tool reaches the callback,
+the path is already somewhere it should not be. `commonpath`, not
+`startswith`, so `/tmp/work` does not match `/tmp/workspace`.
+
+Verified on the guest: "What is the hostname of my machine?" now answers *"I
+can't read it from here ... the box I'm running on is just a proxy, so its
+hostname would be the wrong answer"*, followed by `net config` and `winipcfg`
+-- Win98-specific advice, for the right machine.
+
+### 2026-09-17 — a denied tool ends the turn, and the deny message is discarded
+
+Measured on the guest, and it contradicts what this plan has said since the
+first draft. `PermissionResultDeny(message=..., interrupt=False)` was supposed
+to mean "the model is told no and carries on".
+
+What the stored transcript actually shows after a Deny:
+
+    tool_result: "The user doesn't want to proceed with this tool use. ...
+                  STOP what you are doing and wait for the user to tell you
+                  how to proceed."
+    user text:   "[Request interrupted by user for tool use]"
+
+So **the CLI substitutes its own boilerplate and our `message` never reaches
+the model**, and the turn is terminated regardless of `interrupt=False`.
+`query.py` does put the message on the wire (`{"behavior": "deny", "message":
+...}`), so the CLI receives it and chooses not to inject it.
+
+Consequences: the carefully worded refusal text in `_perm_reply` is currently
+decoration, and the plan's demo -- "Deny is pressed, and Claude says it was
+refused and carries on" -- does not describe the product. The turn ends
+silently. Not worth fighting; worth writing down, because the next person will
+otherwise spend an afternoon wondering why their message never appears.
+
+
+
 ### 2026-09-17 — the auto-allow policy was deleted, because Claude Code already does it
 
 The plan carried an auto-allow policy so that a `Grep` would not cost a

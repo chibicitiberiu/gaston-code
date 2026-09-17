@@ -22,6 +22,7 @@ deleted work:
 from __future__ import annotations
 
 import dataclasses
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -181,3 +182,68 @@ def summary(tool_name: str, ctx) -> str:
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)
     line = display if not desc else f"{display}: {desc}"
     return _clip(line, 160)
+
+
+# Tools whose input names a filesystem path on the proxy, and which key holds
+# it. Bash is deliberately absent: a command line cannot be parsed for paths
+# reliably, and a guard that is wrong half the time is worse than the system
+# prompt telling the model the rule.
+_PATH_TOOLS = {
+    "Read": "file_path",
+    "Edit": "file_path",
+    "Write": "file_path",
+    "NotebookEdit": "notebook_path",
+    "Glob": "path",
+    "Grep": "path",
+    "LS": "path",
+}
+
+
+def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
+    """Why this call must be refused outright, or None to ask the user.
+
+    The proxy is infrastructure, not the subject of the conversation. Every
+    request the user makes is about THEIR machine, so a tool call reaching into
+    the proxy's filesystem is either a mistake or an attempt to answer a
+    question about the user's computer with the proxy's answer -- which is
+    wrong even when the file it read was real.
+
+    Note the symmetry with what was deleted from this module: the plan wanted a
+    containment check to auto-ALLOW reads inside the working copy, and that was
+    dead code, because Claude Code approves those locally and never asks us.
+    The same check inverted is not dead at all -- by the time a path tool
+    reaches this callback, the path is already somewhere it should not be.
+    """
+    if not workdir:
+        return None
+    key = _PATH_TOOLS.get(tool_name)
+    if key is None:
+        return None
+    raw = (args or {}).get(key)
+    if not raw:
+        # Glob and Grep default to the working directory when path is absent,
+        # which is exactly where they are allowed to be.
+        return None
+
+    try:
+        root = os.path.realpath(workdir)
+        target = os.path.realpath(str(raw))
+    except (OSError, ValueError):
+        return None
+
+    # commonpath rather than startswith: "/work" must not match "/workspace".
+    try:
+        inside = os.path.commonpath([root, target]) == root
+    except ValueError:      # different drives, or a relative/absolute mix
+        inside = False
+    if inside:
+        return None
+
+    return (f"`{raw}` is on the proxy, not on the user's machine, and the "
+            f"proxy is not what this conversation is about. Refused "
+            f"automatically -- the user did not see this request.\n\n"
+            f"If you were answering a question about the user's computer, that "
+            f"machine is reached only through the `mcp__machine__` tools, and "
+            f"this path very likely does not exist there. Say the path is not "
+            f"valid for their machine rather than substituting the proxy's "
+            f"copy. If you need a staging file, work inside `{workdir}`.")

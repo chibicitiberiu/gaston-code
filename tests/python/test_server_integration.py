@@ -750,3 +750,36 @@ async def test_frame_pipelined_behind_hello_is_not_dropped(harness):
     f = await _recv(harness, reader, "PONG", 5.0)
     assert f.type == "PONG"
     await harness.close(writer)
+
+
+async def test_path_outside_the_working_copy_is_refused_without_asking(harness):
+    """The proxy is infrastructure, not the subject of the conversation.
+
+    Every request the user makes is about THEIR machine, so answering "what is
+    my hostname" by reading the proxy's /etc/hostname is wrong even though the
+    file is real. Refused before it ever reaches the bar -- the user should not
+    have to adjudicate a request they did not make.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = harness.bridge._guest.claude.ask(
+        tool_name="Read", args={"file_path": "/etc/hostname"})
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultDeny)
+    assert "not on the user's machine" in result.message
+    assert harness.bridge._guest.perm_pending is None, "no bar should appear"
+    await harness.close(writer)
+
+
+async def test_path_inside_the_working_copy_still_asks(harness):
+    """The guard must not swallow legitimate staging work."""
+    import os as _os
+    inside = _os.path.join(harness.bridge.cwd or _os.getcwd(), "staged.txt")
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = harness.bridge._guest.claude.ask(
+        tool_name="Write", args={"file_path": inside, "content": "x"})
+    f = await _recv(harness, reader, "PERMREQ")
+    assert f.headers["tool"] == "Write"
+    task.cancel()
+    await harness.close(writer)
