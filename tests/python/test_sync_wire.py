@@ -382,9 +382,25 @@ def test_the_bridge_scan_does_not_follow_symlinks_out_of_the_tree(tmp_path):
             self.root = str(root)
             self.reports = []
 
+    # A real directory outside the tree, so os.walk sees a symlinked DIR and
+    # the dirnames branch runs; a dangling link is a file to os.walk and takes
+    # the other branch, which is why both are here.
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "inside.txt").write_bytes(b"not ours\n")
+    os.symlink(str(tmp_path / "elsewhere"), str(root / "linkdir"))
+    os.symlink(str(tmp_path / "nothing-here"), str(root / "dangling.txt"))
+
     p = FakePass(root)
     rows = Pass.scan_bridge(p)
     assert "link.txt" not in rows
+    assert "linkdir" not in rows
+    # Containment was never the whole job. An agent that writes into a
+    # symlinked directory is told the write succeeded and, without this,
+    # never learns that none of it is going to the machine.
+    assert any("link.txt" in r and "symbolic link" in r for r in p.reports)
+    assert any("linkdir/" in r and "symbolic link" in r for r in p.reports)
+    assert "linkdir/inside.txt" not in rows
+    assert any("dangling.txt" in r and "symbolic link" in r for r in p.reports)
 
 
 # --- conflicts and the full pass -------------------------------------------
@@ -857,4 +873,73 @@ async def test_a_stale_resume_is_ignored(harness, tmp_path):
     await asyncio.sleep(0.3)
     assert not sent
     assert guest.halt_id == "h999"
+    await harness.close(writer)
+
+
+async def test_a_file_where_we_hold_a_directory_does_not_abort_the_pass(
+        harness, tmp_path):
+    """The guest puts a file at a path we hold as a directory.
+
+    Two bugs lived here. `stage_conflict` did `open(src, "rb")` on what was a
+    directory, and IsADirectoryError is caught nowhere below `run_sync` -- so
+    one such collision aborted the WHOLE pass, taking every unrelated file with
+    it, on every pass, forever. And because a type change resolves to nothing
+    (applying it would mean deleting a subtree, and there is no delete
+    primitive), the conflict was re-decided every pass: a fresh mine.N and a
+    fresh notice every thirty seconds.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+
+    # We hold notes/ as a directory with a child in it; the child is the thing
+    # row 3 says must be preserved before anything is resolved.
+    os.makedirs(os.path.join(p.root, "notes"))
+    open(os.path.join(p.root, "notes", "kept.txt"), "wb").write(b"agent work\n")
+    open(os.path.join(p.root, "other.txt"), "wb").write(b"unrelated\n")
+    p.base.rows["notes"] = Entry(type=Type.DIR, display="notes")
+    p.base.rows["notes/kept.txt"] = Entry(
+        type=Type.FILE, crc=zlib.crc32(b"agent work\n"), display="notes/kept.txt")
+
+    # other.txt already agrees on both sides, so it needs no transfer -- it is
+    # here to prove an unrelated path survives the collision, not to move.
+    p.base.rows["other.txt"] = Entry(
+        type=Type.FILE, crc=zlib.crc32(b"unrelated\n"), display="other.txt")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {
+        "notes": b"user made this a file\n",
+        "other.txt": b"unrelated\n"})
+    got = await asyncio.wait_for(task, 10)
+
+    # The pass completed rather than raising -- that is the half that made this
+    # severe, because the abort took every unrelated path with it.
+    assert "error" not in got
+    assert "other.txt" in p.base.rows
+
+    # The subtree is preserved, descendants included.
+    mine = os.path.join(p.conflict_dir, "notes", "mine.1")
+    assert os.path.isdir(mine)
+    assert open(os.path.join(mine, "kept.txt"), "rb").read() == b"agent work\n"
+
+    # Nothing was deleted here and nothing was applied.
+    assert os.path.isdir(os.path.join(p.root, "notes"))
+
+    # The notice says what is actually wrong, and does not tell the agent to
+    # merge a directory against a file.
+    note = next(n for n in got["notices"] if "notes" in n)
+    assert "directory" in note and "Merge the two" not in note
+
+    # Said once. The server delivers the batch and clears it, exactly as
+    # run_sync does, and a second pass over the same unchanged collision
+    # re-decides it -- it must NOT stage mine.2 or say it again.
+    p.notices_delivered(got["notices"])
+    p2 = a_pass(harness, tmp_path, root=p.root)
+    task = asyncio.create_task(p2.run())
+    await fake_scan(harness, reader, writer, {
+        "notes": b"user made this a file\n",
+        "other.txt": b"unrelated\n"})
+    got2 = await asyncio.wait_for(task, 10)
+    assert not os.path.exists(os.path.join(p.conflict_dir, "notes", "mine.2"))
+    assert not [n for n in got2["notices"] if "SYNC CONFLICT notes" in n]
     await harness.close(writer)

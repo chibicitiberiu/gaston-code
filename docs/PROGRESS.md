@@ -1455,3 +1455,45 @@ bitmap font at 640x480. Caught by tests, which is the argument for writing them.
 ### 2026-09-16 — vendored miniz rather than zlib
 Two files, MIT, no build system, and it compiled clean under OW first try. Vendored
 rather than submoduled so the guest build is reproducible offline.
+
+### 2026-09-17 — auditing the plan against the code found a total-stop bug
+
+The sync phase was verified end to end on the real machine and the tests were
+green, so the remaining question was not "does it work" but "does it do what
+the plan said". Auditing the twelve mechanisms the plan named against the code
+turned up one defect that no amount of running would have surfaced, because
+nothing in the test tree ever had a file and a directory collide at one path.
+
+`stage_conflict` did `open(src, "rb")` on the bridge's side of a conflict. When
+the guest puts a file where we hold a directory -- the user typing
+`ECHO x > C:\WORK\notes` while the agent has `notes/` -- `src` is a directory,
+`open` raises `IsADirectoryError`, and nothing below `run_sync` catches it. One
+such collision therefore aborted **the entire pass**, taking every unrelated
+file with it, on every pass, until someone renamed the file by hand. The only
+symptom was a `sync pass aborted` line at warning level.
+
+The fix is `shutil.copytree`, which is also what row 3 always asked for: the
+subtree is the thing being preserved, and copying only the leaf would have lost
+every descendant.
+
+Underneath it was a quieter one. A type change cannot be applied -- a pull
+writes a file and cannot replace a directory without a delete primitive we
+deliberately do not have -- so nothing advances, so the next pass decides it
+again. Staging it every time produced a fresh `mine.N` and a fresh notice every
+thirty seconds: the same "say it once" bug the standing divergences had,
+wearing a type change as a disguise. It now goes through `first_report`, and
+the end-of-pass pruning keeps the fingerprint for a conflict that will never
+resolve instead of forgetting it announced it.
+
+Two smaller things from the same audit. The conflict notice told the agent to
+"merge the two" even when one side was a directory, which sends it looking for
+a file that is not there; unapplyable conflicts now say what is actually wrong
+and that every other path keeps syncing. And symlinks were contained but
+skipped in silence -- an agent writing into a symlinked directory was told the
+write succeeded and never learned that none of it was going to the machine.
+
+**What this says about the method.** Fourteen defects came from running on real
+hardware; this one came from reading the plan beside the code and asking which
+of the plan's named mechanisms actually exist. The two techniques do not
+overlap. Running finds what the tree happens to contain. Reading finds the
+branch the tree has never had.

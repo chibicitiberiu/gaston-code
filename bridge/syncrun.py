@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import zlib
 
 from . import caps as C
@@ -155,11 +156,23 @@ class Pass:
         for dirpath, dirnames, filenames in os.walk(self.root):
             # Symlinks are not followed: one pointing outside the workdir would
             # have its target's CONTENTS pushed, bypassing off_limits entirely.
-            dirnames[:] = [d for d in dirnames
-                           if not os.path.islink(os.path.join(dirpath, d))
-                           and not (ignore and ignore(
-                               P.rel_from_posix(self.root,
-                                                os.path.join(dirpath, d)) + "/"))]
+            keep_dirs = []
+            for d in dirnames:
+                full = os.path.join(dirpath, d)
+                rel = P.rel_from_posix(self.root, full)
+                if os.path.islink(full):
+                    # Say so. Containment was always right, but silence here
+                    # meant an agent could write into a symlinked directory,
+                    # be told the write succeeded, and never learn that not
+                    # one byte of it was going to the machine.
+                    self.reports.append(
+                        f"skipped {rel}/: a symbolic link, which is not "
+                        f"followed -- its contents never reach the machine")
+                    continue
+                if ignore and ignore(rel + "/"):
+                    continue
+                keep_dirs.append(d)
+            dirnames[:] = keep_dirs
             # Directories go through exactly the same filter as files, and
             # this used to be file-only. `con/x.c` was correctly refused as a
             # file while `con` itself went out as a SYNCMKDIR -- so the bridge
@@ -185,6 +198,10 @@ class Pass:
             for name in filenames:
                 full = os.path.join(dirpath, name)
                 if os.path.islink(full):
+                    self.reports.append(
+                        f"skipped {P.rel_from_posix(self.root, full)}: a "
+                        f"symbolic link, which is not followed -- it never "
+                        f"reaches the machine")
                     continue
                 if name.endswith(WORKING_SUFFIXES):
                     continue
@@ -401,13 +418,22 @@ class Pass:
             n += 1
         mine = os.path.join(d, f"mine.{n}")
         src = os.path.join(self.root, rel)
-        if os.path.exists(src):
+        if os.path.isdir(src):
+            # A type change: the guest put a file where we hold a directory.
+            # The whole subtree is the thing being protected -- row 3 preserves
+            # descendants, and copying only the leaf would lose every file
+            # under it. `open(src, "rb")` used to run here and raised
+            # IsADirectoryError, which the caller does not catch, so ONE such
+            # collision aborted the entire pass -- every other path with it,
+            # on every pass, until someone renamed the file by hand.
+            shutil.copytree(src, mine, symlinks=True)
+        elif os.path.exists(src):
             with open(src, "rb") as fh:
                 data = fh.read()
             with open(mine, "wb") as fh:
                 fh.write(data)
         anc = os.path.join(self.base_dir, rel)
-        if os.path.exists(anc):
+        if os.path.isfile(anc):
             with open(anc, "rb") as a, open(os.path.join(d, f"base.{n}"), "wb") as b:
                 b.write(a.read())
         return mine
@@ -534,6 +560,10 @@ class Pass:
         bridge_rows = await asyncio.to_thread(self.scan_bridge, ignore)
 
         decisions = S.order(S.diff(guest_rows, bridge_rows, self.base))
+        #: Conflicts that CANNOT be applied -- a file on one side, a directory
+        #: on the other. They never resolve, so the pruning below must not
+        #: forget it announced them or they are announced again every pass.
+        standing: set[str] = set()
         done = {"pushed": 0, "pulled": 0, "dirs": 0, "conflicts": 0,
                 "reported": 0, "skipped": 0, "latched": 0, "unhandled": 0}
 
@@ -577,6 +607,26 @@ class Pass:
                 # Invariant 1. Advancing it earlier and then crashing inverts
                 # the direction on the next pass and overwrites the user's file
                 # on their own machine, with no copy of it anywhere.
+
+                # Can the guest's side actually be applied here? Only if it
+                # is a plain file AND we do not hold a directory at that path
+                # -- a pull writes a file, and it cannot replace a directory
+                # without a delete primitive we deliberately do not have.
+                applicable = (
+                    g is not None and g.type is S.Type.FILE
+                    and (b is None or b.type is S.Type.FILE))
+
+                # An unapplyable conflict never resolves, so nothing advances,
+                # so the next pass decides it again. Staging it every time gave
+                # a fresh mine.N -- and a fresh notice -- every thirty seconds
+                # forever, which is the same "say it once" bug the standing
+                # divergences had, wearing a type change as a disguise.
+                if not applicable:
+                    standing.add(dec.key)
+                    if not self.first_report(dec.key, dec.reason, g, b):
+                        done["latched"] += 1
+                        continue
+
                 mine = self.stage_conflict(dec.key, rel)
 
                 # A latched path REFUSES pushes. The agent's in-flight turn
@@ -584,17 +634,31 @@ class Pass:
                 # so "the agent stops" is enforced here rather than requested.
                 self.base.latched[dec.key] = dec.reason
                 done["latched"] += 1
-                self.note(
-                    f"SYNC CONFLICT {rel} -- {dec.reason}. The user's version "
-                    f"is kept, here and on their machine. Yours is preserved "
-                    f"at {mine}, with the ancestor both came from beside it. "
-                    f"Merge the two: read the current file, then that copy, "
-                    f"then the ancestor, and keep both changes where they do "
-                    f"not contradict. The user has already confirmed they are "
-                    f"finished with the file, so do not ask them again -- say "
-                    f"what each side changed and what you kept.")
+                if applicable:
+                    self.note(
+                        f"SYNC CONFLICT {rel} -- {dec.reason}. The user's "
+                        f"version is kept, here and on their machine. Yours is "
+                        f"preserved at {mine}, with the ancestor both came "
+                        f"from beside it. Merge the two: read the current "
+                        f"file, then that copy, then the ancestor, and keep "
+                        f"both changes where they do not contradict. The user "
+                        f"has already confirmed they are finished with the "
+                        f"file, so do not ask them again -- say what each side "
+                        f"changed and what you kept.")
+                else:
+                    # Telling the agent to "merge the two" here would send it
+                    # looking for a file that is a directory on one side. The
+                    # situation needs a human decision about which shape the
+                    # path should have, so say exactly that instead.
+                    self.note(
+                        f"SYNC CONFLICT {rel} -- {dec.reason}. One side holds "
+                        f"a file and the other a directory, so nothing was "
+                        f"applied and nothing was deleted. Your side is "
+                        f"preserved at {mine}. Sync for this path is stopped "
+                        f"until the user decides which shape it should have; "
+                        f"every other path keeps syncing.")
 
-                if g is not None and g.type is S.Type.FILE:
+                if applicable:
                     if await self.pull(dec.key, g.display or dec.key, b):
                         done["pulled"] += 1
                         self.base.rows[dec.key] = self._pulled[dec.key]
@@ -607,12 +671,14 @@ class Pass:
                             f"{rel}: conflict staged, but the machine's version "
                             f"could not be fetched; nothing here was changed")
                 else:
-                    # A type change, or the guest side is a directory. There is
-                    # no file to fetch and no delete primitive to apply, so the
-                    # honest outcome is the staged copy plus the report.
+                    # A type change in either direction. There is no file to
+                    # fetch, or we hold a directory where the machine holds a
+                    # file and applying it would mean deleting that subtree.
+                    # The honest outcome is the staged copy plus the report --
+                    # said once, because nothing here will change it.
                     self.reports.append(
-                        f"{rel}: conflict staged; the machine's side is not a "
-                        f"plain file, so it was not applied here")
+                        f"{rel}: conflict staged; a file on one side and a "
+                        f"directory on the other, so nothing here was changed")
             elif dec.act is S.Act.PUSH:
                 if dec.key in self.base.latched:
                     done["latched"] += 1
@@ -680,7 +746,7 @@ class Pass:
         # A path that resolved is no longer "already reported": if it diverges
         # again later, that is new and must be said again.
         live = {d.key for d in decisions
-                if d.act in (S.Act.REPORT, S.Act.SKIP)}
+                if d.act in (S.Act.REPORT, S.Act.SKIP)} | standing
         for key in [k for k in self.base.reported if k not in live]:
             del self.base.reported[key]
 
