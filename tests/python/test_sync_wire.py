@@ -47,7 +47,7 @@ def manifest_line(rel: str, data: bytes, typ=b"f", v=1) -> bytes:
 
 
 async def fake_scan(harness, reader, writer, files: dict, *, tree_id="VOL-1",
-                    status="ok", claim=None, v=1):
+                    status="ok", claim=None, v=1, root="C:\\WORK"):
     """Answer one SYNCSCAN the way the guest would."""
     req = await _recv(harness, reader, "SYNCSCAN")
     sid = req.headers["id"]
@@ -58,7 +58,10 @@ async def fake_scan(harness, reader, writer, files: dict, *, tree_id="VOL-1",
     await harness.send(writer, Frame("SYNCEND", {
         "id": sid, "status": status,
         "files": str(len(files) if claim is None else claim),
-        "tree_id": tree_id}))
+        "tree_id": tree_id,
+        # The real guest always sends this; omitting it here meant the root
+        # guard was never exercised by any test that used this helper.
+        "root": root}))
     return sid
 
 
@@ -1551,4 +1554,65 @@ async def test_recovery_is_announced_too(harness, tmp_path):
     assert got.get("recovered") == "something stopped it earlier"
     assert not harness.bridge._load_baseline().aborted
     assert any("working again" in n for n in got["notices"]), got["notices"]
+    await harness.close(writer)
+
+
+async def test_two_roots_sharing_a_long_prefix_are_not_one_tree(harness,
+                                                                tmp_path):
+    """tree_id is "%08lX-%s" % (volume serial, root) built into 64 bytes on
+    the guest, so only the first 54 characters of the root survive. Two roots
+    on one volume sharing that prefix produce the SAME id, and the mismatch
+    guard -- the thing standing between a baseline and the wrong tree -- passes.
+
+    Fixed by comparing `root=`, which has always been on the wire in full and
+    was never compared to anything. Not by lengthening the guest's buffer:
+    that changes the id for every existing baseline with a long root, which
+    would then refuse every pass with no way to say "this is the same tree".
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+
+    long_a = "C:\\" + "W" * 51 + "\\ALPHA"
+    long_b = "C:\\" + "W" * 51 + "\\BETA"
+    same_id = "1A2B3C4D-" + (long_a[:54])
+    assert same_id == "1A2B3C4D-" + long_b[:54], "the premise: ids collide"
+
+    task = asyncio.create_task(p.scan_guest())
+    req = await _recv(harness, reader, "SYNCSCAN")
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": req.headers["id"], "status": "ok", "files": "0",
+        "tree_id": same_id, "root": long_a}))
+    await asyncio.wait_for(task, 5)
+    p.base.save(p.state)
+
+    # A different root, an identical tree_id. The old guard saw nothing.
+    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    task = asyncio.create_task(p2.scan_guest())
+    req = await _recv(harness, reader, "SYNCSCAN")
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": req.headers["id"], "status": "ok", "files": "0",
+        "tree_id": same_id, "root": long_b}))
+    with pytest.raises(SyncError, match="relative to the root"):
+        await asyncio.wait_for(task, 5)
+    await harness.close(writer)
+
+
+async def test_the_same_root_is_not_refused(harness, tmp_path):
+    """The guard must not fire on the ordinary case, or sync stops for good."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    task = asyncio.create_task(p.scan_guest())
+    await fake_scan(harness, reader, writer, {})
+    await asyncio.wait_for(task, 5)
+    assert p.base.guest_root == "C:\\WORK"
+    p.base.save(p.state)
+
+    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    task = asyncio.create_task(p2.scan_guest())
+    await fake_scan(harness, reader, writer, {})
+    await asyncio.wait_for(task, 5)
     await harness.close(writer)

@@ -154,6 +154,23 @@ class Pass:
         if not self.base.tree_id and tree_id:
             self.base.tree_id = tree_id
 
+        # The root, compared in full, because tree_id cannot be trusted to
+        # differ when the root does. The guest builds it as
+        # "%08lX-%s" % (serial, root) into 64 bytes, so only the first 54
+        # characters of the root survive -- two roots on one volume sharing
+        # that prefix give the SAME id and the check above passes. A changed
+        # root also means the baseline's paths, which are relative to it,
+        # describe different files: adopting it silently would reconcile one
+        # tree against another's history.
+        if root and self.base.guest_root and root != self.base.guest_root:
+            raise SyncError(
+                f"this baseline was built against {self.base.guest_root!r} "
+                f"and the machine now reports {root!r}. Refusing: the stored "
+                f"paths are relative to the root, so continuing would compare "
+                f"one tree against another tree's history.")
+        if root and not self.base.guest_root:
+            self.base.guest_root = root
+
         if root:
             self.guest_root = root
         self._guest_display = display

@@ -176,6 +176,18 @@ class Baseline:
     #: editor buffer detectable -- see diff().
     prev: dict[str, Entry] = field(default_factory=dict)
     tree_id: str = ""
+    #: The sync root the guest reported, in full. `tree_id` is
+    #: "%08lX-%s" % (volume serial, root) built into a 64-byte buffer on the
+    #: guest, so it keeps only the first 54 characters of the root -- two roots
+    #: on one volume sharing a 54-character prefix produce the SAME id and the
+    #: mismatch guard passes when it should refuse.
+    #:
+    #: Compared here rather than lengthening the guest's buffer, because
+    #: changing how the id is computed changes it for every existing baseline
+    #: with a long root, which would then refuse every pass afterwards with no
+    #: way to say "this is the same tree". `root=` is already on the wire, in
+    #: full, and was never compared to anything.
+    guest_root: str = ""
     #: The codepage the matching keys were folded through. Changing it re-keys
     #: every row, so the pass refuses rather than re-keying in place.
     acp: str = ""
@@ -226,6 +238,7 @@ class Baseline:
                 "ignored": {k: asdict(v) for k, v in self.ignored.items()},
                 "prev": {k: asdict(v) for k, v in self.prev.items()},
                 "tree_id": self.tree_id,
+                "guest_root": self.guest_root,
                 "acp": self.acp,
                 "generation": self.generation,
                 "pending_notice": self.pending_notice,
@@ -260,6 +273,7 @@ class Baseline:
             d = json.load(fh)          # a JSONDecodeError here must propagate
         out = cls(
             tree_id=d.get("tree_id", ""),
+            guest_root=d.get("guest_root", ""),
             acp=d.get("acp", ""),
             generation=int(d.get("generation", 0)),
             pending_notice=list(d.get("pending_notice", [])),
