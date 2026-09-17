@@ -1497,3 +1497,78 @@ hardware; this one came from reading the plan beside the code and asking which
 of the plan's named mechanisms actually exist. The two techniques do not
 overlap. Running finds what the tree happens to contain. Reading finds the
 branch the tree has never had.
+
+### 2026-09-18 — the tree's own rules, and a starvation bug that measured 128/128
+
+Four gaps from the plan-versus-code audit, closed. Three were small. The fourth
+turned into the honest version of a feature the plan had only sketched.
+
+**`.gitattributes`, read natively.** `.gastonattributes` was the plan's idea and
+it was the wrong one to build first: a source tree already states which files
+are text, which are binary and what endings they take, the statement is already
+correct because the build depends on it, and asking someone to write it a second
+time in our own file invites the two to disagree. So `.gitattributes` is read
+with git's nesting rules, `-text`, `binary`, `text`, `text=auto` and `eol=` are
+honoured, everything else (`diff=`, `merge=`, `filter=`) is parsed and ignored
+so a real one needs no editing, and `.gastonattributes` remains for what a tree
+wants to say to sync without saying it to git.
+
+Two decisions inside that are not obvious:
+
+*`text` cannot force the unsafe cases.* Normalisation must be idempotent or the
+algorithm oscillates, and `N("\r\r\n") == "\r\n"` while `N("\r\n") == "\n"`. A
+lone CR, a `\r\r\n` or a mixed file therefore stays byte-exact whatever the
+attributes say -- and says so, because a user who wrote `text` and silently got
+the opposite would trust a guarantee they do not have. `-text` has no such
+limit: refusing to touch something is always safe.
+
+*`-text` and `eol=lf` are different requests.* `eol=lf` keeps the path in the
+text class, where the sides are compared after folding, so they may
+legitimately differ in endings and only the content has to agree -- that is the
+Makefile a cross toolchain reads. `-text` says the bytes themselves must match,
+so applying it to a file that is LF here and CRLF there makes them genuinely
+different and one side loses. Both are correct; reaching for the wrong one is
+the easy mistake, so `sync_status` explains the difference to the agent.
+
+**The manifest carries both checksums, and that is a capability.** The guest was
+already computing the raw and the normalised CRC in one read and throwing one
+away. It had to stop, because an override means the bridge asks for a checksum
+the guest's own classifier would not have chosen -- and the two cannot be
+derived from each other. Which format a client speaks is `manifest=2` in HELLO
+rather than something sniffed from the row: a path may contain spaces and the
+rows are length-prefixed, so six fields and seven both parse, and a sniff would
+guess wrong on some trees and not others. A v1 client is not overridden at all,
+and is told why, on both sides -- overriding one side and not the other is
+worse than not overriding, because it is a permanent disagreement rather than a
+missing feature.
+
+`win/synccheck.exe` now prints both, and the corpus asserts both against
+Python. The old gate would have passed a raw checksum that was correct only for
+files the classifier already called byte-exact -- which is every file the old
+code ever used it for.
+
+**Sync was not competing for the wire, it was starving the event loop.** The
+backlog entry said a permission prompt could queue behind sync traffic because
+`_send` holds `send_lock` across `drain()`. Measured, that was the wrong
+diagnosis and the real one is worse: an uncontended `asyncio.Lock` does not
+suspend, and `drain()` below the high-water mark does not either, so a chunk
+loop contains no await point that yields. A probe put the number at **128 of
+128 chunks** before another task ran at all. The prompt was not queued behind
+sync; it had not been composed yet, and FIFO lock fairness cannot help a task
+that is never scheduled.
+
+So the yield is explicit, between chunks as well as between files, and while
+the user has a prompt open sync stops the pass rather than pushing past it --
+safe because each path commits on its own ack, so a pass cut short is a
+consistent resting state. The test had to be rewritten once after it passed
+with the fix removed: it was only observing the per-file yield. It now asserts
+a turn was taken *part way through* a file, and without the chunk yield it
+fails with `observed only [0, 9] of 9 frames`.
+
+**The cache exists now, so its guard is not dead code.** `Entry.cacheable` was
+implemented, unit-tested and never called. The bridge caches the classification
+INPUTS -- both checksums and what the content says on its own -- rather than a
+class and one checksum, so changing `.gitattributes` re-decides every path
+without invalidating anything. Entries are stored only when the read cannot
+have raced a save in a tick that was still open, which is the half of the
+settle window that matters and the half the plan originally got wrong.

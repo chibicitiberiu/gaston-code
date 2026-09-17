@@ -474,6 +474,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("dirreserve", RC_STR(RC_CAP_DIRRESERVE));
     HDR("maxpath",    RC_STR(RC_CAP_MAXPATH));
     HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
+    HDR("manifest",   RC_STR(RC_CAP_MANIFEST));
 
     if (rc_net_send(n, "HELLO", keys, vals, nkv, NULL, 0) != 0) {
         rc_log("net: HELLO failed");

@@ -304,7 +304,7 @@ def normalise(data: bytes, cls: str) -> bytes:
 _EOL = (b"\n", b"\r\n", b"\r")
 
 
-def to_guest(data: bytes, cls: str, caps=DEFAULT) -> bytes:
+def to_guest(data: bytes, cls: str, caps=DEFAULT, *, eol: int | None = None) -> bytes:
     """Bridge form -> client form. Normalise FIRST, then expand.
 
     Expanding directly would turn `a\\r\\nb` into `a\\r\\r\\nb` and add another CR
@@ -319,7 +319,12 @@ def to_guest(data: bytes, cls: str, caps=DEFAULT) -> bytes:
     if cls != CLASS_TEXT:
         return data
     flat = data.replace(b"\r\n", b"\n")
-    native = _EOL[caps.eol] if 0 <= caps.eol < len(_EOL) else b"\n"
+    # `eol` overrides the client's convention for ONE path, which is what
+    # `.gitattributes` `eol=lf` asks for: the file still compares as text, so
+    # an ending-only difference is not an edit, but what lands on the client is
+    # what the tree said rather than what the client prefers.
+    want = caps.eol if eol is None else eol
+    native = _EOL[want] if 0 <= want < len(_EOL) else b"\n"
     return flat if native == b"\n" else flat.replace(b"\n", native)
 
 

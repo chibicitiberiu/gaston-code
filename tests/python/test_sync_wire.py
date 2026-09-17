@@ -25,21 +25,32 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from test_server_integration import _recv, harness  # noqa: E402,F401
 
 
-def manifest_line(rel: str, data: bytes, typ=b"f") -> bytes:
-    """Exactly the format win/syncrpc.c emits."""
+def manifest_line(rel: str, data: bytes, typ=b"f", v=1) -> bytes:
+    """Exactly the format win/syncrpc.c emits, for either version.
+
+    v1 carries the checksum the CLIENT's own classification selected; v2
+    carries the normalised and the raw one side by side, which is what lets
+    `.gitattributes` re-classify the row here.
+    """
     cls = P.classify(data)
-    crc = zlib.crc32(P.normalise(data, cls))
-    raw = rel.encode("cp1252")
+    norm = zlib.crc32(P.normalise(data, P.CLASS_TEXT))
+    raw_crc = zlib.crc32(data)
+    rb = rel.encode("cp1252")
+    if v >= 2:
+        return (b"%s %s %d %d %d %d %d %s\n"
+                % (typ, cls.encode(), len(data), 0, norm, raw_crc,
+                   len(rb), rb))
+    crc = norm if cls == P.CLASS_TEXT else raw_crc
     return (b"%s %s %d %d %d %d %s\n" % (typ, cls.encode(), len(data), 0, crc,
-                                         len(raw), raw))
+                                         len(rb), rb))
 
 
 async def fake_scan(harness, reader, writer, files: dict, *, tree_id="VOL-1",
-                    status="ok", claim=None):
+                    status="ok", claim=None, v=1):
     """Answer one SYNCSCAN the way the guest would."""
     req = await _recv(harness, reader, "SYNCSCAN")
     sid = req.headers["id"]
-    body = b"".join(manifest_line(r, d) for r, d in files.items())
+    body = b"".join(manifest_line(r, d, v=v) for r, d in files.items())
     if body:
         await harness.send(writer, Frame("SYNCENT", {"id": sid,
                                                      "n": str(len(files))}, body))
@@ -942,4 +953,246 @@ async def test_a_file_where_we_hold_a_directory_does_not_abort_the_pass(
     got2 = await asyncio.wait_for(task, 10)
     assert not os.path.exists(os.path.join(p.conflict_dir, "notes", "mine.2"))
     assert not [n for n in got2["notices"] if "SYNC CONFLICT notes" in n]
+    await harness.close(writer)
+
+
+# --- .gitattributes over the wire -------------------------------------------
+
+async def test_a_minus_text_file_is_pushed_without_conversion(
+        harness, tmp_path):
+    """`-text` means the two sides hold the same bytes. No CRLF expansion, and
+    the checksum the client is asked to match is over the raw bytes."""
+    reader, writer = await harness.connect(hdrs={"manifest": 2})
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    open(os.path.join(p.root, ".gitattributes"), "wb").write(b"*.mk -text\n")
+    body = b"all:\n\tmake\n"
+    open(os.path.join(p.root, "rules.mk"), "wb").write(body)
+
+    sent = {}
+
+    async def guest():
+        await fake_scan(harness, reader, writer, {}, v=2)
+        for _ in range(2):          # .gitattributes and rules.mk, either order
+            put = await _recv(harness, reader, "SYNCPUT")
+            end = await _recv(harness, reader, "SYNCPUTEND")
+            name = put.body.split(b" ", 1)[1][:int(put.body.split(b" ", 1)[0])]
+            sent[name.decode()] = (put.body[len(put.body.split(b" ", 1)[0]) + 1
+                                            + len(name):],
+                                   end.headers["cls"], end.headers["crc"])
+            await harness.send(writer, Frame("SYNCPUTACK", {
+                "id": put.headers["id"], "status": "ok",
+                "crc": end.headers["crc"]}))
+
+    task = asyncio.create_task(p.run())
+    await asyncio.wait_for(guest(), 10)
+    got = await asyncio.wait_for(task, 10)
+    assert got["pushed"] == 2
+
+    wire, cls, crc = sent["rules.mk"]
+    assert cls == P.CLASS_EXACT
+    assert wire == body, "a -text file must cross unconverted"
+    assert int(crc) == zlib.crc32(body)
+    await harness.close(writer)
+
+
+async def test_eol_lf_keeps_one_path_lf_on_a_crlf_client(harness, tmp_path):
+    """The Makefile a cross toolchain has to read. Everything else still gets
+    the client's own convention, which is what makes this worth a per-path
+    rule rather than a global switch."""
+    reader, writer = await harness.connect(hdrs={"manifest": 2})
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    open(os.path.join(p.root, ".gitattributes"), "wb").write(b"Makefile eol=lf\n")
+    open(os.path.join(p.root, "Makefile"), "wb").write(b"all:\n\tcc x.c\n")
+    open(os.path.join(p.root, "notes.txt"), "wb").write(b"one\ntwo\n")
+
+    sent = {}
+
+    async def guest():
+        await fake_scan(harness, reader, writer, {}, v=2)
+        for _ in range(3):
+            put = await _recv(harness, reader, "SYNCPUT")
+            end = await _recv(harness, reader, "SYNCPUTEND")
+            plen, rest = put.body.split(b" ", 1)
+            name = rest[:int(plen)].decode()
+            sent[name] = rest[int(plen):]
+            await harness.send(writer, Frame("SYNCPUTACK", {
+                "id": put.headers["id"], "status": "ok",
+                "crc": end.headers["crc"]}))
+
+    task = asyncio.create_task(p.run())
+    await asyncio.wait_for(guest(), 10)
+    await asyncio.wait_for(task, 10)
+
+    assert sent["Makefile"] == b"all:\n\tcc x.c\n", "eol=lf must not expand"
+    assert sent["notes.txt"] == b"one\r\ntwo\r\n", "the client's own default"
+    await harness.close(writer)
+
+
+async def test_a_minus_text_file_pulls_back_byte_for_byte(harness, tmp_path):
+    """The user edits it on their machine and it arrives here EXACTLY.
+
+    Without the override this file is uniform CRLF, so it would be folded to LF
+    on the way in -- correct for source, wrong for a fixture whose endings are
+    the thing being tested, and invisible either way because the normalised
+    checksum does not change.
+    """
+    reader, writer = await harness.connect(hdrs={"manifest": 2})
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    open(os.path.join(p.root, ".gitattributes"), "wb").write(
+        b"fixtures/* -text\n")
+    os.makedirs(os.path.join(p.root, "fixtures"))
+    open(os.path.join(p.root, "fixtures", "crlf.txt"), "wb").write(b"old\r\n")
+    theirs = b"line one\r\nline two\r\n"
+    p.base.rows["fixtures/crlf.txt"] = Entry(
+        type=Type.FILE, cls=P.CLASS_EXACT, crc=zlib.crc32(b"old\r\n"),
+        crc_raw=zlib.crc32(b"old\r\n"), dual=True, display="fixtures/crlf.txt")
+
+    async def guest():
+        await fake_scan(harness, reader, writer, {
+            "fixtures/crlf.txt": theirs,
+            ".gitattributes": b"fixtures/* -text\n",
+            "fixtures": b""}, v=2)
+        await fake_get(harness, reader, writer, theirs)
+
+    task = asyncio.create_task(p.run())
+    await asyncio.wait_for(guest(), 10)
+    got = await asyncio.wait_for(task, 10)
+
+    assert got["pulled"] == 1
+    on_disk = open(os.path.join(p.root, "fixtures", "crlf.txt"), "rb").read()
+    assert on_disk == theirs, "a -text pull must not fold CRLF"
+    assert p.base.rows["fixtures/crlf.txt"].crc == zlib.crc32(theirs)
+    await harness.close(writer)
+
+
+async def test_a_v1_client_is_not_overridden_and_is_told_why(harness, tmp_path):
+    """A client that sends one checksum computed it for its own reading of the
+    bytes, and the other is not derivable -- a pure-LF file has them equal, so
+    equality proves nothing. Honouring `-text` against such a client would
+    compare a normalised checksum to a raw one on every pass, forever."""
+    reader, writer = await harness.connect()          # no manifest header: v1
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    open(os.path.join(p.root, ".gitattributes"), "wb").write(b"*.txt -text\n")
+    same = b"hello\r\nthere\r\n"
+    open(os.path.join(p.root, "a.txt"), "wb").write(same)
+    # Both already agreed, so nothing needs to transfer: the point of the test
+    # is which class the rows are compared under, not the transfer.
+    p.base.rows[".gitattributes"] = Entry(
+        type=Type.FILE, crc=zlib.crc32(b"*.txt -text\n"),
+        display=".gitattributes")
+    p.base.rows["a.txt"] = Entry(
+        type=Type.FILE, crc=zlib.crc32(b"hello\nthere\n"), display="a.txt")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {
+        "a.txt": same, ".gitattributes": b"*.txt -text\n"})
+    got = await asyncio.wait_for(task, 10)
+
+    assert any("v1 manifest" in r for r in got["reports"]), got["reports"]
+    # And it stayed in the class the client can actually speak, rather than
+    # being forced into a comparison neither side can satisfy.
+    assert got["conflicts"] == 0
+    await harness.close(writer)
+
+
+# --- sync must not hold the wire --------------------------------------------
+
+async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
+    """A permission prompt must not wait for a megabyte to finish.
+
+    The failure this guards is not lock contention -- it is that a chunk loop
+    over an uncontended lock, with a drain() below the high-water mark, has no
+    await point that actually suspends. Measured before the fix: the other task
+    first ran after chunk 128 of 128, so the prompt was not queued behind sync,
+    it had not been composed yet.
+
+    Counted at the bridge's own send, because the client reads several frames
+    per syscall and counting batches would measure the harness instead.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    open(os.path.join(p.root, "big.bin"), "wb").write(b"x" * (64 * 1024))
+
+    sent = 0
+    ran_after = None
+    real_send = harness.bridge._send
+
+    async def counting_send(guest, frame, **kw):
+        nonlocal sent
+        if frame.type.startswith("SYNCPUT"):
+            sent += 1
+        return await real_send(guest, frame, **kw)
+
+    harness.bridge._send = counting_send
+
+    seen = []
+
+    async def other_work():
+        nonlocal ran_after
+        ran_after = sent
+        # Keep looking. One observation only proves the loop yielded BEFORE
+        # the file started, which the per-file check already guarantees; what
+        # has to be shown is a turn taken WHILE the chunks are going out.
+        for _ in range(200):
+            seen.append(sent)
+            await asyncio.sleep(0)
+
+    async def guest():
+        frames = await harness.recv_until(reader, {"SYNCPUTEND"}, 20)
+        put = next(f for f in frames if f.type == "SYNCPUT")
+        end = next(f for f in frames if f.type == "SYNCPUTEND")
+        await harness.send(writer, Frame("SYNCPUTACK", {
+            "id": put.headers["id"], "status": "ok",
+            "crc": end.headers["crc"]}))
+
+    try:
+        task = asyncio.create_task(p.run())
+        await fake_scan(harness, reader, writer, {})
+        side = asyncio.create_task(other_work())
+        await asyncio.wait_for(guest(), 20)
+        await asyncio.wait_for(task, 20)
+        await side
+    finally:
+        harness.bridge._send = real_send
+
+    assert sent > 2, "the test needs a multi-chunk push to mean anything"
+    assert ran_after is not None and ran_after <= 1, (
+        f"other work first ran after {ran_after} of {sent} sync frames; sync "
+        f"is starving the event loop rather than sharing it")
+    # The real property: a turn taken PART WAY THROUGH the file, not only
+    # before it. Without the yield between chunks this set is {0, sent} -- the
+    # loop runs to completion and everything else resumes afterwards.
+    midway = [o for o in seen if 0 < o < sent]
+    assert midway, (
+        f"no turn was taken during the push; observed only {sorted(set(seen))} "
+        f"of {sent} frames, so the chunk loop ran to completion uninterrupted")
+    await harness.close(writer)
+
+
+async def test_sync_stands_aside_while_the_user_has_a_prompt_open(
+        harness, tmp_path):
+    """The second half of the rule. A pass cut short is a consistent state --
+    every path commits on its own ack -- so the honest thing is to stop and let
+    the next pass finish, not to push a megabyte past someone's dialog."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    for name in ("a.txt", "b.txt"):
+        open(os.path.join(p.root, name), "wb").write(b"new\n")
+
+    harness.bridge._guest.perm_pending = object()      # a dialog is on screen
+    try:
+        task = asyncio.create_task(p.run())
+        await fake_scan(harness, reader, writer, {})
+        got = await asyncio.wait_for(task, 10)
+    finally:
+        harness.bridge._guest.perm_pending = None
+
+    assert got["pushed"] == 0
+    assert any("permission prompt" in r for r in got["reports"])
     await harness.close(writer)

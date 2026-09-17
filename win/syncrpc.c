@@ -61,10 +61,14 @@ static void manifest_add(void *ctx, const char *rel, const rc_sync_stat *st)
     unsigned hn, rn;
 
     rn = (unsigned)strlen(rel);
-    _snprintf(head, sizeof(head), "%c %c %lu %lu %lu %u ",
+    /* Both checksums. The bridge decides the class -- it is the side that
+     * reads .gitattributes -- so it must be able to pick either one without
+     * asking again. A sixth field the older bridge did not send; that bridge
+     * parses a fixed six and this is seven, so the two ship together. */
+    _snprintf(head, sizeof(head), "%c %c %lu %lu %lu %lu %u ",
               st->type, st->cls ? st->cls : '-',
               (unsigned long)st->size, (unsigned long)st->mtime,
-              st->crc, rn);
+              st->crc_norm, st->crc_raw, rn);
     hn = (unsigned)strlen(head);
 
     if (m->len + hn + rn + 1 > sizeof(m->buf)) manifest_flush(m);
@@ -304,7 +308,13 @@ static void do_putend(rc_net *net, rc_frame *f)
              * Falling through instead would commit over it. */
             put_fail(net, id, "changed");
             return;
-        } else if (cur.crc != (unsigned long)strtoul(ifc, NULL, 10)) {
+        } else if (RC_CRC_FOR(cur, cls && *cls ? *cls : RC_CLS_TEXT)
+                   != (unsigned long)strtoul(ifc, NULL, 10)) {
+            /* Compare-and-swap against the checksum the BRIDGE's class
+             * selects. Using our own classification here compared the output
+             * of one function against the other whenever the bridge had a
+             * `-text` override for the path, so every push was refused as
+             * `changed` and the file never moved again. */
             put_fail(net, id, "changed");
             return;
         }

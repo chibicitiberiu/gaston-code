@@ -111,6 +111,17 @@ class Caps:
     dirreserve: int = DIRRESERVE_WIN32
     maxpath: int = 260
     maxcomp: int = 255
+    #: Which manifest row format the client sends. 1 carries one checksum,
+    #: computed for the client's OWN classification; 2 carries the normalised
+    #: and the raw one side by side, which is what lets `.gitattributes`
+    #: re-classify a path here without asking the client to scan again.
+    #:
+    #: A version rather than a sniff. The two formats cannot be told apart by
+    #: counting fields -- a path may contain spaces, and the length-prefix
+    #: makes a six-field row and a seven-field row both parse -- so guessing
+    #: would mean reading a checksum as a path length on some trees and not
+    #: others. This is the case the handshake exists for.
+    manifest: int = 1
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -125,7 +136,7 @@ class Caps:
                 f"devices={'dos' if self.devices else 'none'} "
                 f"eol={('lf', 'crlf', 'cr')[self.eol]} "
                 f"maxpath={self.maxpath} maxdir={self.maxdirpath} "
-                f"maxcomp={self.maxcomp}")
+                f"maxcomp={self.maxcomp} manifest=v{self.manifest}")
 
 
 class CapsError(Exception):
@@ -175,7 +186,7 @@ def from_hello(h: dict) -> Caps:
 
     declared = any(k in h for k in (
         "acp", "case", "devices", "trailing", "illegal", "eol", "shortnames",
-        "dirreserve", "maxpath", "maxcomp"))
+        "dirreserve", "maxpath", "maxcomp", "manifest"))
 
     return Caps(
         acp=acp or "cp1252",
@@ -190,6 +201,7 @@ def from_hello(h: dict) -> Caps:
         dirreserve=_num(h, "dirreserve", DIRRESERVE_WIN32, 0, 64),
         maxpath=_num(h, "maxpath", 260, 64, 65536),
         maxcomp=_num(h, "maxcomp", 255, 12, 65536),
+        manifest=_num(h, "manifest", 1, 1, 2),
         declared=declared,
     )
 
@@ -199,6 +211,6 @@ def from_hello(h: dict) -> Caps:
 POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              trailing=TRAILING_KEPT, illegal=ILLEGAL_POSIX, eol=EOL_LF,
              shortnames=SHORTNAMES_NONE, dirreserve=DIRRESERVE_NONE,
-             maxpath=4096, maxcomp=255, declared=True)
+             maxpath=4096, maxcomp=255, manifest=2, declared=True)
 
-WIN9X = Caps(declared=True)
+WIN9X = Caps(manifest=2, declared=True)

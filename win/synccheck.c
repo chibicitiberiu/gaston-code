@@ -18,8 +18,14 @@
 static void emit(void *ctx, const char *rel, const rc_sync_stat *st)
 {
     (void)ctx;
-    printf("%c\t%c\t%lu\t%lu\t%s\n", st->type, st->cls ? st->cls : '-',
-           (unsigned long)st->size, st->crc, rel);
+    /* Both checksums, because both now cross the wire and either can be the
+     * one a path is compared under -- `.gitattributes` decides, not the
+     * content. A raw checksum that is right only for the files the classifier
+     * already called byte-exact would pass every test here and still make
+     * every `-text` override a permanent disagreement. */
+    printf("%c\t%c\t%lu\t%lu\t%lu\t%lu\t%s\n",
+           st->type, st->cls ? st->cls : '-',
+           (unsigned long)st->size, st->crc, st->crc_norm, st->crc_raw, rel);
 }
 
 int main(int argc, char **argv)

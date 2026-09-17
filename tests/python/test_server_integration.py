@@ -133,7 +133,7 @@ class Harness:
         return b"".join(out)
 
     async def connect(self, secret="s", *, ver=None, cap=None,
-                      sess=None, from_seq=None):
+                      sess=None, from_seq=None, hdrs=None):
         r, w = await asyncio.open_connection("127.0.0.1", self.port)
         # Fresh connection means the bridge resets its compressor, so reset
         # in lockstep. Same for the frame reader.
@@ -145,6 +145,11 @@ class Harness:
             f.headers["ver"] = str(ver)
         if cap is not None:
             f.headers["max_frame"] = str(cap)
+        # Capability headers, for the tests that care which client this is.
+        # Absent means the deployed Win9x client's documented defaults, which
+        # is what every other test wants.
+        if hdrs:
+            f.headers.update({k: str(v) for k, v in hdrs.items()})
         w.write(f.encode())
         await w.drain()
         return r, w

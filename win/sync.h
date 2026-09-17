@@ -23,8 +23,23 @@ typedef struct {
     char  cls;              /* RC_CLS_* */
     DWORD size;             /* bytes on THIS side; never compared cross-side */
     DWORD mtime;            /* unix seconds, local; a per-side cache key only */
-    unsigned long crc;      /* over the class-appropriate bytes */
+    unsigned long crc;      /* over the bytes `cls` selects; a convenience */
+    /* BOTH checksums, always. The guest classifies from content alone, but
+     * content is not the only input any more: the bridge honours .gitattributes
+     * and may declare a path byte-exact that we would have called text. It has
+     * no way to ask for the other checksum after the fact and we are already
+     * computing both in the same read, so both go on the wire and the bridge
+     * picks. Sending one was what made a `-text` override impossible: our
+     * normalised CRC against their raw one never matches, and the path
+     * conflicts on every pass forever. */
+    unsigned long crc_raw;  /* over the file's literal bytes */
+    unsigned long crc_norm; /* over the bytes with CRLF folded to LF */
 } rc_sync_stat;
+
+/* Which of the two a given class wants. One place, because getting it wrong
+ * in one of the four call sites is a permanent disagreement, not a glitch. */
+#define RC_CRC_FOR(st, cls) \
+    ((cls) == RC_CLS_TEXT ? (st).crc_norm : (st).crc_raw)
 
 /* Called once per entry during a walk. `rel` is relative to the root with '/'
  * separators, in the guest's ANSI bytes -- never decoded, never folded. */

@@ -61,4 +61,16 @@
 #define RC_CAP_MAXPATH     MAX_PATH
 #define RC_CAP_MAXCOMP     255
 
+/* Manifest row format. v2 carries both checksums per row -- the normalised one
+ * and the raw one -- so the bridge can honour a .gitattributes `-text` without
+ * asking us to scan the tree a second time under a different rule. v1 carried
+ * whichever one our own classifier chose, and the other was not derivable, so
+ * an override compared the output of one function against the other and the
+ * path conflicted on every pass forever.
+ *
+ * Declared rather than sniffed: a path may contain spaces and the rows are
+ * length-prefixed, so both formats parse either way and the bridge would guess
+ * wrong on some trees and not others. */
+#define RC_CAP_MANIFEST    2
+
 #endif

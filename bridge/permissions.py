@@ -219,6 +219,11 @@ _PATH_TOOLS = {
 }
 
 
+#: Of those, the ones that MODIFY. Reading inside `.gaston/` is the whole
+#: reason it sits within the agent's reach; writing there is never right.
+_WRITE_TOOLS = {"Edit", "Write", "NotebookEdit"}
+
+
 def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
     """Why this call must be refused outright, or None to ask the user.
 
@@ -257,7 +262,7 @@ def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
     except ValueError:      # different drives, or a relative/absolute mix
         inside = False
     if inside:
-        return None
+        return _inside_gaston(tool_name, raw, root, target)
 
     return (f"`{raw}` is on the proxy, not on the user's machine, and the "
             f"proxy is not what this conversation is about. Refused "
@@ -267,3 +272,37 @@ def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
             f"this path very likely does not exist there. Say the path is not "
             f"valid for their machine rather than substituting the proxy's "
             f"copy. If you need a staging file, work inside `{workdir}`.")
+
+
+def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
+    """Refuse a WRITE into `.gaston/`, which containment cannot catch.
+
+    `.gaston/` is inside the working directory deliberately, so the agent can
+    read a conflict copy and the ancestor beside it without a new permission
+    path. The containment check above only refuses what is OUTSIDE, so the same
+    placement that lets the agent read a staged copy also let it overwrite one
+    -- and a staged copy exists precisely because the user's version won and
+    theirs was about to be lost. Destroying it is the one outcome this whole
+    layer is built to prevent.
+
+    Reads are untouched. So is Bash, which this module deliberately does not
+    parse: the baseline itself is out of its reach by PLACEMENT instead, since
+    `--sync-state` must resolve outside the working directory.
+    """
+    if tool_name not in _WRITE_TOOLS:
+        return None
+    gaston = os.path.join(root, ".gaston")
+    try:
+        if os.path.commonpath([gaston, target]) != gaston:
+            return None
+    except ValueError:
+        return None
+    return (f"`{raw}` is inside `.gaston/`, which belongs to the sync layer "
+            f"rather than to the project. Refused automatically -- the user "
+            f"did not see this request.\n\n"
+            f"The copies under `.gaston/conflict/` exist because a conflict "
+            f"was resolved in the user's favour and your version would "
+            f"otherwise have been lost; they are the only remaining copy of "
+            f"it. Read them freely -- that is what they are for -- but write "
+            f"your merge to the real file in the sync root, which is what "
+            f"reaches the user's machine.")

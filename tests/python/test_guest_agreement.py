@@ -87,9 +87,10 @@ def guest_answers(tmp_path_factory):
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
         parts = line.split("\t")
-        if len(parts) == 5:
-            rows[parts[4].strip()] = (parts[0], parts[1], int(parts[2]),
-                                      int(parts[3]))
+        if len(parts) == 7:
+            rows[parts[6].strip()] = (parts[0], parts[1], int(parts[2]),
+                                      int(parts[3]), int(parts[4]),
+                                      int(parts[5]))
     assert rows, out.stderr.decode("latin-1", "replace")[:800]
     return rows
 
@@ -97,7 +98,7 @@ def guest_answers(tmp_path_factory):
 @pytest.mark.parametrize("name", sorted(CORPUS))
 def test_class_matches_the_bridge(name, guest_answers):
     assert name in guest_answers, "the guest did not report this file at all"
-    _type, cls, _size, _crc = guest_answers[name]
+    _type, cls, _size, _crc, _n, _r = guest_answers[name]
     assert cls == classify(CORPUS[name]), (
         f"{name}: guest says {cls!r}, bridge says {classify(CORPUS[name])!r} -- "
         "the two sides would compare different functions forever"
@@ -106,7 +107,7 @@ def test_class_matches_the_bridge(name, guest_answers):
 
 @pytest.mark.parametrize("name", sorted(CORPUS))
 def test_crc_matches_the_bridge(name, guest_answers):
-    _type, cls, _size, crc = guest_answers[name]
+    _type, cls, _size, crc, _n, _r = guest_answers[name]
     data = CORPUS[name]
     expect = zlib.crc32(normalise(data, classify(data)))
     assert crc == expect, (
@@ -130,3 +131,29 @@ def test_the_corpus_actually_covers_both_classes():
     """A corpus that happens to be all one class would pass vacuously."""
     seen = {classify(v) for v in CORPUS.values()}
     assert seen == {CLASS_TEXT, CLASS_EXACT}
+
+
+@pytest.mark.parametrize("name", sorted(CORPUS))
+def test_both_checksums_match_the_bridge(name, guest_answers):
+    """Not just the one the guest's own classifier selected.
+
+    `.gitattributes` can declare a path byte-exact that the content reads as
+    text, and then the bridge compares against the RAW checksum of a file the
+    guest called text -- a number that, before v2, was computed and thrown
+    away. A raw checksum that happened to be right only for files already
+    classified byte-exact would pass every other test in this file and still
+    make every `-text` override a permanent disagreement.
+    """
+    _type, _cls, _size, _crc, crc_norm, crc_raw = guest_answers[name]
+    data = CORPUS[name]
+    assert crc_raw == zlib.crc32(data), f"{name}: raw checksum"
+    assert crc_norm == zlib.crc32(normalise(data, CLASS_TEXT)), \
+        f"{name}: normalised checksum"
+
+
+def test_the_selected_checksum_is_one_of_the_two(guest_answers):
+    """`crc` is a convenience, and a convenience that drifts from the pair it
+    summarises is worse than not having it."""
+    for name, (_t, cls, _s, crc, crc_norm, crc_raw) in guest_answers.items():
+        if name in CORPUS:
+            assert crc == (crc_norm if cls == CLASS_TEXT else crc_raw), name

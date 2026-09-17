@@ -1248,6 +1248,26 @@ class Bridge:
                f"Last pass: generation {base.generation}."
                + (f"  Bound to tree {base.tree_id}." if base.tree_id else "")]
 
+        # Why a file is treated the way it is. Without this the agent can see
+        # that a path is byte-exact and has no way to learn that the tree ASKED
+        # for that -- so a deliberate `-text` reads as a misclassification and
+        # invites it to "fix" something that is already correct.
+        try:
+            from . import attrs as A
+            at = A.load(self.sync_dir)
+        except Exception:
+            at = None
+        if at is not None and len(at):
+            where = ", ".join(sorted(
+                os.path.relpath(f, self.sync_dir) for f in at.sources)) or "?"
+            out.append(
+                f"\nLine-ending and text rules: {len(at)} in force, from "
+                f"{where}. `-text`/`binary` means the two sides hold identical "
+                f"bytes and nothing is converted; `eol=lf` or `eol=crlf` sets "
+                f"what lands on the machine for that path. These are the "
+                f"tree's own instructions -- do not override them to make a "
+                f"file look tidier.")
+
         if base.latched:
             out.append("\nREFUSING YOUR WRITES -- these conflicted and the "
                        "user's copy won. Your version is preserved under "
@@ -1415,11 +1435,21 @@ class Bridge:
                 if not line:
                     continue
                 try:
-                    head, rest = line.split(b" ", 5)[:5], line
-                    parts = rest.split(b" ", 5)
-                    typ, cls, size, mtime, crc = (parts[0], parts[1], parts[2],
-                                                  parts[3], parts[4])
-                    plen_and_path = parts[5]
+                    # Seven fields, or six from a client that predates
+                    # .gitattributes support. A client sending one checksum
+                    # cannot have a class overridden from here -- it computed
+                    # that number for its own classification and there is no
+                    # way to derive the other -- so both slots take the same
+                    # value and `effective_class` refuses to move it.
+                    if caps.manifest >= 2:
+                        parts = line.split(b" ", 6)
+                        crc_norm, crc_raw = parts[4], parts[5]
+                        plen_and_path = parts[6]
+                    else:
+                        parts = line.split(b" ", 5)
+                        crc_norm = crc_raw = parts[4]
+                        plen_and_path = parts[5]
+                    typ, cls, size, mtime = parts[0], parts[1], parts[2], parts[3]
                     sp = plen_and_path.index(b" ")
                     plen = int(plen_and_path[:sp])
                     raw = plen_and_path[sp + 1:sp + 1 + plen]
@@ -1433,10 +1463,14 @@ class Bridge:
                 # encoded back to ask the guest for the file.
                 rel = P.wire_decode(raw, acp=caps.acp)
                 key = P.canonical(rel, caps=caps)
+                auto = cls.decode() if cls != b"-" else P.CLASS_TEXT
                 entry["rows"][key] = SyncEntry(
                     type=SyncType(typ.decode()),
-                    cls=cls.decode() if cls != b"-" else P.CLASS_TEXT,
-                    size=int(size), mtime=float(mtime), crc=int(crc),
+                    cls=auto,
+                    size=int(size), mtime=float(mtime),
+                    crc=int(crc_norm if auto == P.CLASS_TEXT else crc_raw),
+                    crc_norm=int(crc_norm), crc_raw=int(crc_raw),
+                    dual=caps.manifest >= 2,
                     display=rel)
                 entry["display"][key] = rel
 
@@ -1857,6 +1891,26 @@ class Bridge:
             except (ConnectionResetError, BrokenPipeError):
                 guest.writer = None
 
+    async def wire_yield(self, guest: GuestSession) -> bool:
+        """Give everything else a turn on the wire. True if sync should pause.
+
+        Measured, because the obvious reasoning is wrong: a chunk loop over an
+        UNCONTENDED lock, with a `drain()` below the high-water mark, contains
+        no await point that actually suspends. 128 chunks of a one-megabyte
+        push therefore run to completion before any other task runs at all --
+        so a permission prompt is not queued behind sync, it has not been
+        composed yet. FIFO lock fairness cannot help with a task that never
+        gets scheduled.
+
+        `sleep(0)` is what reschedules us behind whatever is already runnable.
+        The return value is the second half of the rule: while the user has a
+        prompt in front of them, sync does not start another file. The pass
+        ends early and the next one finishes the job -- every path commits
+        independently, so a partially applied pass is a consistent state.
+        """
+        await asyncio.sleep(0)
+        return guest.perm_pending is not None
+
     async def _try_send_raw(self, writer: asyncio.StreamWriter,
                             frame: Frame) -> None:
         try:
@@ -1933,6 +1987,25 @@ def main() -> None:
             raise SystemExit(
                 "--sync-state must be OUTSIDE --sync-dir: a baseline inside "
                 "the tree it describes gets mirrored to the guest and recurses")
+        # And it must not live inside the WORKING DIRECTORY either, which is a
+        # different requirement that happened to hold by default. off_limits
+        # refuses paths outside cwd; it does not cover Bash, and nothing else
+        # guards the baseline. A state directory under cwd is therefore one
+        # `sed -i` away from a baseline that still parses and is wrong -- and a
+        # three-way diff reaches confident conclusions from it, in whichever
+        # direction the corruption points.
+        if bridge.cwd:
+            wd = os.path.realpath(bridge.cwd)
+            try:
+                under_cwd = os.path.commonpath(
+                    [os.path.realpath(bridge.sync_state), wd]) == wd
+            except ValueError:
+                under_cwd = False
+            if under_cwd:
+                raise SystemExit(
+                    "--sync-state must be OUTSIDE --cwd: the agent can reach "
+                    "anything under the working directory with Bash, and a "
+                    "baseline that has been edited still parses")
         os.makedirs(bridge.sync_state, exist_ok=True)
         log.info("sync: %s <-> guest, baseline in %s",
                  bridge.sync_dir, bridge.sync_state)

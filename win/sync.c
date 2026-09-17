@@ -196,7 +196,9 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
 
     out->type = 'f';
     out->cls = scan_class(stp);
-    out->crc = (out->cls == RC_CLS_TEXT) ? stp->crc_norm : stp->crc_raw;
+    out->crc_raw  = stp->crc_raw;
+    out->crc_norm = stp->crc_norm;
+    out->crc = RC_CRC_FOR(*out, out->cls);
     HeapFree(GetProcessHeap(), 0, sc);
     return 0;
 }
@@ -354,7 +356,15 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
     /* Verify before replacing anything. A transfer that cannot establish
      * crc(guest) == what was sent is reported, never retried. */
     if (rc_sync_stat_file(tmp, &got) != 0 || got.type != 'f') return -1;
-    if (got.crc != want_crc || got.cls != cls) {
+    /* Against the checksum the DECLARED class selects, not against our own
+     * classification of the bytes. `got.cls != cls` used to be a hard failure
+     * here, which made a bridge-side `-text` override unusable: the bridge
+     * declares byte-exact, we look at the content and call it text, and every
+     * transfer comes back crc_mismatch forever. The bridge is the side that
+     * knows about .gitattributes; our classifier is a default, not a veto.
+     * The checksum comparison is what actually proves the bytes arrived
+     * intact, and it still runs. */
+    if (RC_CRC_FOR(got, cls) != want_crc) {
         DeleteFileA(tmp);
         return -2;
     }

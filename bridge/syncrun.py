@@ -17,6 +17,7 @@ import os
 import shutil
 import zlib
 
+from . import attrs as A
 from . import caps as C
 from . import ignores as I
 from . import paths as P
@@ -36,6 +37,12 @@ WORKING_SUFFIXES = (".gaston-tmp", ".gaston-old")
 #: One file must never hold the wire for long. The guest has one sender thread
 #: and one outbound queue, so a big transfer starves permission prompts and exec
 #: output behind it.
+#: The acts that actually put bytes on the wire, and therefore the ones that
+#: have to yield first. A REPORT or a TOMBSTONE touches nothing and pausing
+#: before one would only make a pass slower for no benefit.
+_MOVES_BYTES = frozenset((S.Act.PUSH, S.Act.PULL, S.Act.MKDIR,
+                          S.Act.CONFLICT))
+
 MAX_FILE = 1024 * 1024
 
 
@@ -97,6 +104,10 @@ class Pass:
         #: own tree -- a re-scan could pick up a write the agent made during
         #: the transfer, and the next pass would then pull over it.
         self._pulled: dict[str, S.Entry] = {}
+        #: The tree's `.gitattributes`/`.gastonattributes`, loaded once per
+        #: pass. None until `run` loads it, so a caller driving scan_bridge
+        #: directly gets content-only classification.
+        self.attrs = None
         #: Inside the agent's reach so it can read a conflict and its ancestor
         #: without a new permission path -- unlike the baseline itself, which
         #: lives outside cwd because off_limits does not cover Bash.
@@ -150,9 +161,12 @@ class Pass:
 
     # --- the bridge's half -------------------------------------------------
 
-    def scan_bridge(self, ignore=None) -> dict[str, S.Entry]:
+    def scan_bridge(self, ignore=None, attrs=None) -> dict[str, S.Entry]:
         rows: dict[str, S.Entry] = {}
         seen: dict[str, str] = {}
+        base = getattr(self, "base", None)
+        cache = base.scan_cache if base is not None else None
+        fresh: dict[str, tuple] = {}
         for dirpath, dirnames, filenames in os.walk(self.root):
             # Symlinks are not followed: one pointing outside the workdir would
             # have its target's CONTENTS pushed, bypassing off_limits entirely.
@@ -223,17 +237,57 @@ class Pass:
                     continue
                 seen[key] = rel
                 try:
-                    data = open(full, "rb").read()
+                    st = os.stat(full)
                 except OSError as exc:
                     rows[key] = S.Entry(type=S.Type.UNREADABLE, display=rel)
                     self.reports.append(f"unreadable {rel}: {exc}")
                     continue
-                cls = P.classify(data)
-                st = os.stat(full)
-                rows[key] = S.Entry(type=S.Type.FILE, cls=cls, size=len(data),
-                                    mtime=st.st_mtime,
-                                    crc=zlib.crc32(P.normalise(data, cls)),
-                                    display=rel)
+
+                # The cache holds the CLASSIFICATION INPUTS -- both checksums
+                # and what the content says on its own -- rather than a class
+                # and one checksum. An attributes change can then re-decide a
+                # path without re-reading it, and the cached value cannot be
+                # stale with respect to a rule the file knows nothing about.
+                hit = cache.get(key) if cache is not None else None
+                if hit and hit[0] == st.st_size and hit[1] == st.st_mtime:
+                    auto, craw, cnorm, size = hit[2], hit[3], hit[4], hit[5]
+                else:
+                    try:
+                        data = open(full, "rb").read()
+                    except OSError as exc:
+                        rows[key] = S.Entry(type=S.Type.UNREADABLE, display=rel)
+                        self.reports.append(f"unreadable {rel}: {exc}")
+                        continue
+                    auto = P.classify(data)
+                    craw = zlib.crc32(data)
+                    cnorm = zlib.crc32(P.normalise(data, P.CLASS_TEXT))
+                    size = len(data)
+                    fresh[key] = (st.st_size, st.st_mtime,
+                                  auto, craw, cnorm, size)
+
+                cls = auto
+                if attrs is not None:
+                    cls, refused = attrs.effective_class(rel, auto)
+                    if refused and self.first_report(
+                            key, f"attrs:{refused}", None, None):
+                        self.reports.append(f"{rel}: {refused}")
+                rows[key] = S.Entry(
+                    type=S.Type.FILE, cls=cls, size=size, mtime=st.st_mtime,
+                    crc=cnorm if cls == P.CLASS_TEXT else craw,
+                    crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
+
+        # Only now, and only the entries whose read cannot have raced a save in
+        # a tick that was still open. Gating the LOOKUP is the obvious half and
+        # the wrong one: a read taken inside the window is correct for the pass
+        # that took it and can be superseded a moment later at the same size,
+        # so what must never happen is STORING it.
+        if cache is not None:
+            for key, val in fresh.items():
+                probe = S.Entry(type=S.Type.FILE, mtime=val[1])
+                if probe.cacheable:
+                    cache[key] = val
+            for gone in [k for k in cache if k not in rows]:
+                del cache[gone]
         return rows
 
     # --- applying ----------------------------------------------------------
@@ -247,8 +301,16 @@ class Pass:
                 f"skipped {rel}: {len(data)} bytes exceeds the {MAX_FILE} cap; "
                 f"one file must not hold the wire")
             return False
+        # The tree's rules, not just the content's. `-text` turns off both the
+        # conversion and the folded comparison; `eol=lf` keeps the folded
+        # comparison and changes only what lands on the client -- which is the
+        # whole point for a Makefile a cross toolchain has to read.
         cls = P.classify(data)
-        wire = P.to_guest(data, cls, self.caps)
+        eol = self.caps.eol
+        if self.attrs is not None:
+            cls, _ = self.attrs.effective_class(rel, cls)
+            eol = self.attrs.eol_for(rel, eol)
+        wire = P.to_guest(data, cls, self.caps, eol=eol)
         crc = zlib.crc32(P.normalise(data, cls))
 
         sid = self._next_id()
@@ -269,6 +331,9 @@ class Pass:
                 off += CHUNK
                 if off >= len(wire):
                     break
+                # Between chunks, not merely between files. A megabyte is 128
+                # chunks and none of them suspends on its own.
+                await self.bridge.wire_yield(self.guest)
             await self.bridge._send(
                 self.guest,
                 Frame("SYNCPUTEND", {
@@ -331,8 +396,17 @@ class Pass:
             self.reports.append(f"pull {rel} refused: {status}")
             return False
 
-        data = P.to_bridge(wire, cls)
-        got = zlib.crc32(P.normalise(data, cls))
+        # `cls` is the client's own reading of the bytes, and it is the right
+        # thing to interpret the wire with and to verify the transfer against:
+        # it is what the client checksummed. The tree's attributes decide what
+        # we STORE and compare under, which can differ -- and when it says
+        # byte-exact, the client's bytes are kept exactly as they arrived
+        # rather than folded on the way in.
+        want = cls
+        if self.attrs is not None:
+            want, _ = self.attrs.effective_class(rel, cls)
+        data = wire if want == P.CLASS_EXACT else P.to_bridge(wire, cls)
+        got = zlib.crc32(P.normalise(wire, cls))
         if got != crc:
             # Invariant 2: after a transfer the two sides agree, or it is
             # reported. Never retried -- retrying the same transfer is how a
@@ -344,7 +418,7 @@ class Pass:
                       f"that does not match what the machine reported. The "
                       f"file was NOT updated here.")
             return False
-        if P.classify(data) != cls:
+        if want == cls and P.classify(data) != cls:
             # The guest's judgement and ours must agree on the bytes we now
             # hold, or the next pass CRCs different functions on each side and
             # the path never converges.
@@ -363,9 +437,13 @@ class Pass:
         os.replace(tmp, full)
 
         self.keep_ancestor(rel, data)
-        self._pulled[key] = S.Entry(type=S.Type.FILE, cls=cls, size=len(data),
-                                    mtime=os.stat(full).st_mtime, crc=crc,
-                                    display=rel)
+        craw = zlib.crc32(data)
+        cnorm = zlib.crc32(P.normalise(data, P.CLASS_TEXT))
+        self._pulled[key] = S.Entry(
+            type=S.Type.FILE, cls=want, size=len(data),
+            mtime=os.stat(full).st_mtime,
+            crc=cnorm if want == P.CLASS_TEXT else craw,
+            crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
         return True
 
     async def mkdir(self, key: str, rel: str) -> bool:
@@ -437,6 +515,44 @@ class Pass:
             with open(anc, "rb") as a, open(os.path.join(d, f"base.{n}"), "wb") as b:
                 b.write(a.read())
         return mine
+
+    def _apply_attrs(self, rows: dict, usable: bool = True) -> dict:
+        """Re-read the client's manifest rows under the tree's attributes.
+
+        The client classifies from content, which is the only thing it can see.
+        `.gitattributes` lives here, so the override is applied here -- to BOTH
+        sides, or the two are compared under different rules and the path never
+        converges. This is why a v2 manifest carries both checksums: re-reading
+        a row is free, asking the client to scan again under a new rule is not.
+        """
+        if self.attrs is None or not len(self.attrs):
+            return rows
+        out = {}
+        for key, row in rows.items():
+            if row.type is not S.Type.FILE:
+                out[key] = row
+                continue
+            want, refused = self.attrs.effective_class(
+                row.display or key, row.cls)
+            if want == row.cls:
+                out[key] = row
+            elif not usable or not row.dual:
+                # The client sent one checksum for its own classification and
+                # the other cannot be derived -- a pure-LF file has them equal,
+                # so equality proves nothing. Honouring the override here would
+                # compare a normalised checksum against a raw one forever.
+                out[key] = row
+                if self.first_report(key, "attrs:v1-client", None, None):
+                    self.reports.append(
+                        f"{row.display or key}: the attributes ask for "
+                        f"{want!r} but this client sends a v1 manifest, which "
+                        f"carries only its own checksum. Left as {row.cls!r}.")
+            else:
+                out[key] = row.as_class(want)
+            if refused and self.first_report(
+                    key, f"attrs-guest:{refused}", None, None):
+                self.reports.append(f"{row.display or key}: {refused}")
+        return out
 
     def first_report(self, key: str, reason: str, g, b) -> bool:
         """Is this situation new, or the same one we announced last pass?
@@ -557,7 +673,15 @@ class Pass:
         """
         guest_rows = await self.scan_guest()
         ignore = await asyncio.to_thread(self._ignores, ignore)
-        bridge_rows = await asyncio.to_thread(self.scan_bridge, ignore)
+        self.attrs = await asyncio.to_thread(A.load, self.root)
+        # ONE decision, for both sides. Overriding here and not there is worse
+        # than not overriding at all: the two sides would then be compared as
+        # different classes, which is a permanent disagreement rather than a
+        # missing feature.
+        usable = self.caps.manifest >= 2
+        guest_rows = self._apply_attrs(guest_rows, usable)
+        bridge_rows = await asyncio.to_thread(
+            self.scan_bridge, ignore, self.attrs if usable else None)
 
         decisions = S.order(S.diff(guest_rows, bridge_rows, self.base))
         #: Conflicts that CANNOT be applied -- a file on one side, a directory
@@ -571,6 +695,20 @@ class Pass:
             if dec.act is S.Act.NOTHING:
                 continue
             g, b = guest_rows.get(dec.key), bridge_rows.get(dec.key)
+
+            # Sync never holds the wire for more than one file. A pass is a
+            # sequence of small operations that can be interleaved, never a
+            # batch that runs to completion -- and while the user is looking at
+            # a permission prompt, the next file waits for the pass after this
+            # one. Each path commits independently, so stopping here leaves
+            # some paths at the new agreement and the rest at the old one, and
+            # both are valid resting states.
+            if dec.act in _MOVES_BYTES and await self.bridge.wire_yield(
+                    self.guest):
+                self.reports.append(
+                    "pass cut short: the user has a permission prompt open, "
+                    "and sync does not compete with it for the link")
+                break
 
             if dec.act is S.Act.SKIP:
                 done["skipped"] += 1

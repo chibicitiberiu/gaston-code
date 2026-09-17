@@ -137,40 +137,24 @@ use; each is a known limit rather than something forgotten.
   old path on the guest. It is reported and never silently resurrected or
   removed. Closing it needs `SYNCDEL` and a decision about what a re-delivered
   delete means.
-- **Nothing stops the agent writing inside `.gaston/`.** `off_limits`
-  (`bridge/permissions.py:222`) refuses paths *outside* `cwd` only, and
-  `.gaston/` is inside it deliberately so the agent can read a conflict
-  ancestor. There is no inverse deny rule, so it can also overwrite a staged
-  `mine.N` -- the copy that exists because the user's version won. The baseline
-  itself is safe by placement rather than by permission: `--sync-state` is
-  validated as outside `--sync-dir` (`server.py:1931`), but nothing requires it
-  to be outside `--cwd`, so a launch that puts it under `cwd` puts `base.json`
-  within reach of `sed -i`. Two lines of defence to add: a deny list checked
-  before the containment test, and a refusal at startup if the state directory
-  is inside `cwd`.
-- **`.gastonattributes` was never built.** The plan's per-path `-text` override
-  is the escape hatch for a file that must keep LF on the Windows side -- a
-  cross-toolchain Makefile, a fixture whose endings are the thing under test.
-  Without it such a file is converted with no report, because the normalised
-  CRC does not change and the design cannot see it happen. `caps.eol` is a
-  per-client convention, not a per-path one, and does not substitute.
-- **There is no CRC cache, and the guard for one is dead code.**
-  `Entry.cacheable` (`bridge/sync.py:78`) implements the settle-window rule
-  exactly, and is unit-tested -- but nothing calls it. Both scanners re-read
-  and re-CRC every file on every pass (`syncrun.py:scan_bridge`,
-  `win/sync.c:rc_sync_stat_file`). No correctness bug follows, since a full
-  re-read cannot be stale; the cost is a full tree read every thirty seconds on
-  a 32MB machine with a FAT disk. The hazard is the test: it reads as proof
-  that the settle window works, and would go on passing if a cache were added
-  that never consulted it.
-- **Sync can still hold the wire in front of a permission prompt.** The rule
-  was "sync never holds the wire for more than one file", and what exists is a
-  size cap (`MAX_FILE`, `syncrun.py:35`), not a traffic check. No code inspects
-  pending prompt or exec traffic before starting the next file, and `_send`
-  still holds `guest.send_lock` across `await w.drain()`
-  (`server.py:1848-1852`), so a `PERMREQ` queues behind whatever sync is
-  sending. This is the same weakness the netem gate below was meant to make
-  routine, and it stays deferred with it.
+- **Bash can still reach `.gaston/`.** `Edit`, `Write` and `NotebookEdit` are
+  refused there now, and the baseline is outside `--cwd` by a startup check --
+  but `permissions.py` deliberately does not parse command lines, so `sed -i`
+  on a staged conflict copy is not caught. The copies are recoverable from
+  `.gaston/base/` history; the baseline is not reachable at all. Closing it
+  needs a sandbox for Bash rather than another path rule.
+- **`text=auto` is not what git means by it.** Git decides per blob and
+  remembers; this treats it as "a candidate for conversion" and lets the
+  content decide each pass, which is the same answer for every file that is
+  not already ambiguous. A file that flips between passes would be reported
+  rather than converted, so the difference is visible, not silent.
+- **The guest re-reads its whole tree on every pass.** The bridge caches
+  classification inputs against (size, mtime) and honours the settle window
+  before storing one; the guest has no cache at all, because a per-path entry
+  on a 32MB machine costs memory it does not have, and keying on a path hash
+  to save space trades a bounded cost for an unbounded one -- a collision
+  returns a confident wrong checksum. Measure the real cost on the box before
+  building anything.
 
 - **The `_snprintf` truncation sweep.** Every call in the guest uses
   `sizeof(x) - 1` plus an explicit NUL, which prevents the overrun and still

@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 
 from . import paths as P
@@ -70,6 +70,19 @@ class Entry:
     size: int = 0
     mtime: float = 0.0
     crc: int = 0
+    #: BOTH checksums, when the side that produced this row could supply them.
+    #: The class is no longer a property of the content alone -- `.gitattributes`
+    #: can declare a path byte-exact that the content reads as text -- so the
+    #: row has to be re-classifiable without re-reading the file, which on the
+    #: guest's side would mean a second scan over the wire.
+    crc_raw: int = 0
+    crc_norm: int = 0
+    #: Whether `crc_raw`/`crc_norm` are real. A client that sends one checksum
+    #: computed it for its OWN classification, and the other cannot be derived
+    #: from it -- a pure-LF file has them equal, so their being equal proves
+    #: nothing. Without this, an override against such a client compares a
+    #: normalised checksum to a raw one and the path conflicts forever.
+    dual: bool = False
     #: The spelling THIS side holds. The canonical key folds case for matching;
     #: this is what actually gets written, because writing at the folded path
     #: would create a second file beside README.md on a case-sensitive bridge.
@@ -85,6 +98,16 @@ class Entry:
         never be WRITTEN, not merely distrusted later.
         """
         return (time.time() - self.mtime) > SETTLE_S
+
+    def as_class(self, cls: str) -> "Entry":
+        """This row re-read under `cls`, for an attributes override.
+
+        Returns self when nothing moves, so the common path allocates nothing.
+        """
+        if cls == self.cls:
+            return self
+        crc = self.crc_norm if cls == P.CLASS_TEXT else self.crc_raw
+        return replace(self, cls=cls, crc=crc)
 
     def same_content(self, other: "Entry | None") -> bool:
         """Cross-side equality: (type, class, crc).
@@ -156,6 +179,12 @@ class Baseline:
     #: or an unfixable `aux.c` prints a warning twice a minute until the
     #: warnings stop being read.
     reported_lines: list = field(default_factory=list)
+    #: (size, mtime, auto_class, crc_raw, crc_norm, content_size) per path, so
+    #: an unchanged tree is not re-read end to end every thirty seconds. It
+    #: caches what the CONTENT says, never the effective class, so changing
+    #: `.gitattributes` re-decides every path without invalidating anything.
+    #: Entries are written only when `Entry.cacheable` allows it.
+    scan_cache: dict = field(default_factory=dict)
 
     # --- persistence -------------------------------------------------------
 
@@ -180,6 +209,7 @@ class Baseline:
                 "latched": self.latched,
                 "reported": self.reported,
                 "reported_lines": self.reported_lines,
+                "scan_cache": {k: list(v) for k, v in self.scan_cache.items()},
             },
             indent=1,
         )
@@ -212,13 +242,19 @@ class Baseline:
             latched=dict(d.get("latched", {})),
             reported=dict(d.get("reported", {})),
             reported_lines=list(d.get("reported_lines", [])),
+            scan_cache={k: tuple(v)
+                        for k, v in (d.get("scan_cache") or {}).items()},
         )
         for name, dest in (("rows", out.rows), ("ignored", out.ignored),
                            ("prev", out.prev)):
             for k, v in (d.get(name) or {}).items():
                 dest[k] = Entry(type=Type(v["type"]), cls=v["cls"],
                                 size=v["size"], mtime=v["mtime"],
-                                crc=v["crc"], display=v.get("display", ""))
+                                crc=v["crc"],
+                                crc_raw=v.get("crc_raw", 0),
+                                crc_norm=v.get("crc_norm", 0),
+                                dual=v.get("dual", False),
+                                display=v.get("display", ""))
         for k, v in (d.get("tombs") or {}).items():
             out.tombs[k] = Tomb(cls=v["cls"], crc=v["crc"],
                                 reported=v.get("reported", False))
