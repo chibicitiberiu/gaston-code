@@ -37,6 +37,42 @@ from claude_agent_sdk import (
 log = logging.getLogger("bridge.session")
 
 # Hand-maintained: there is no list_models() in the SDK. Checked 2026-09-16.
+# The tool surface this product offers, declared explicitly.
+#
+# Without this the session inherits whatever the OPERATOR's machine happens to
+# be configured with, which was measured to include CronCreate, Workflow,
+# Monitor, SendMessage, PushNotification, RemoteTrigger, ScheduleWakeup and
+# live claude.ai connectors for Gmail, Google Drive and Calendar. A Windows 98
+# client session has no business holding a tool that reads the operator's
+# email, and none of that is reproducible between machines.
+#
+# It also FIXES a real gap rather than only removing things: Glob and Grep were
+# not in the default set at all -- they sit behind ToolSearch as deferred tools,
+# so the model had to go looking for them and frequently did not. On the guest
+# this looked like "tool calls are failing".
+#
+# `tools` is the AVAILABILITY list. It is a different thing from
+# `allowed_tools`, which is the auto-approve list and stays empty.
+TOOLS = [
+    "Read", "Write", "Edit",      # the staging working copy
+    "Glob", "Grep",               # deferred by default; named here so they exist
+    "Bash",
+    "WebFetch", "WebSearch",      # finding period drivers and documentation
+]
+
+# Deliberately NOT offered, and why -- so the next person does not "restore"
+# them without knowing what they cost:
+#
+#   Task            parallel subagents raise parallel permission prompts, and
+#                   the guest has one bar on a 640x480 screen
+#   NotebookEdit    there is no Jupyter on Windows 98
+#   AskUserQuestion } need a UI the guest does not have
+#   EnterPlanMode   }
+#   Skill, Workflow, Cron*, Monitor, SendMessage, PushNotification,
+#   RemoteTrigger, ScheduleWakeup, ListAgents, Task{Output,Stop},
+#   Enter/ExitWorktree, DesignSync, ReportFindings
+#                   operator-environment features, not part of this product
+
 MODELS = [
     "claude-opus-5",
     "claude-sonnet-5",
@@ -74,6 +110,7 @@ class Session:
         resume: str | None = None,
         fork: bool = False,
         allowed_tools: list[str] | None = None,
+        tools: list[str] | None = None,
         permission_mode: str = "default",
         can_use_tool=None,
         mcp_servers: dict | None = None,
@@ -101,6 +138,16 @@ class Session:
             resume=resume,
             fork_session=fork,
             allowed_tools=allowed_tools if allowed_tools is not None else [],
+            # Availability, not permission. See TOOLS above.
+            tools=tools if tools is not None else list(TOOLS),
+            # Do not inherit the operator's ~/.claude settings: the tool set a
+            # Win98 client gets must not depend on whose laptop runs the
+            # bridge.
+            setting_sources=[],
+            # Only the MCP servers passed here, never the ones configured on
+            # the operator's account. Verified to keep our own in-process
+            # server while dropping the claude.ai connectors.
+            strict_mcp_config=True,
             permission_mode=permission_mode,
             can_use_tool=can_use_tool,
             mcp_servers=mcp_servers or {},

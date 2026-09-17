@@ -159,6 +159,63 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — the tool surface is declared, not inherited
+
+Reported from the guest as "tool calls are failing". They were not failing;
+the session had the wrong tools, and the cause was that it had never been told
+which ones to have.
+
+`ClaudeAgentOptions.tools` is the AVAILABILITY list and the bridge had never
+set it, so `setting_sources=None` loaded everything on the operator's machine.
+Measured on this one:
+
+    Task AskUserQuestion Bash CronCreate CronDelete CronList DesignSync Edit
+    EnterPlanMode EnterWorktree ExitPlanMode ExitWorktree ListAgents Monitor
+    NotebookEdit PushNotification Read RemoteTrigger ReportFindings
+    ScheduleWakeup SendMessage Skill TaskOutput TaskStop ToolSearch WebFetch
+    WebSearch Workflow Write
+    + live claude.ai connectors: Claude Docs (connected),
+      Gmail / Google Drive / Google Calendar (needs-auth)
+
+Two separate problems, and the second is the one that was visible:
+
+  * A Windows 98 client session should not hold tools that reach the
+    operator's email, calendar and drive, or that create cron jobs and trigger
+    remote sessions. None of it is reproducible between machines either.
+  * **`Glob` and `Grep` were absent.** They are deferred tools, reachable only
+    through `ToolSearch`, so the model had to go looking for them and often
+    gave up instead. On the guest that is indistinguishable from broken.
+
+Fixed by declaring three things on every session:
+
+    tools=TOOLS              Read Write Edit Glob Grep Bash WebFetch WebSearch
+    setting_sources=[]       do not inherit ~/.claude
+    strict_mcp_config=True   only MCP servers passed programmatically
+
+Measured after: exactly the eight, `mcp_servers: []`, nothing extra.
+
+**`strict_mcp_config` was checked against Stage B before being relied on**, since
+dropping our own server would have killed `mcp__machine__exec` on arrival. With
+an in-process server passed in, the init message shows
+`mcp tools: ['mcp__machine__exec']`, `servers: [machine connected]`, and the
+call routes through `can_use_tool` -- so the strict flag keeps ours and drops
+the rest, which is exactly the behaviour Stage B needs.
+
+What is deliberately NOT offered, with the cost each would carry: `Task`
+(parallel subagents raise parallel prompts, and the guest has one bar on a
+640x480 screen), `NotebookEdit` (no Jupyter on Windows 98), `AskUserQuestion`
+and the plan-mode tools (need a UI the guest does not have), and the
+operator-environment set (`Workflow`, `Cron*`, `Monitor`, `SendMessage`,
+`PushNotification`, `RemoteTrigger`, `ScheduleWakeup`, `DesignSync`, `Skill`).
+
+Verified on the guest end to end: Write prompts with its full argument table,
+Allow runs it, **Grep then runs** and reports the match. Claude also said
+unprompted that the file "exists only in the staging working copy on the
+proxy ... has not been copied to your Windows 98 machine" -- but then offered
+to transfer it, which nothing can do yet, so the prompt now forbids offering.
+
+
+
 ### 2026-09-17 — everything the user says refers to THEIR machine
 
 Watching it run on the guest produced the change. Asked to read
