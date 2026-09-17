@@ -4,7 +4,9 @@ A native Windows 98 GUI client for Claude Code (`win/`, C89, Open Watcom) talkin
 to a Python bridge (`bridge/`) on Linux over one TCP socket.
 
 `docs/PLAN.md` is the design. `docs/PROGRESS.md` is what is built and why
-decisions were made. Read both before changing direction.
+decisions were made. `docs/BACKLOG.md` is what was deliberately deferred and
+what it would take to close -- check it before assuming something was
+forgotten, and before starting late-phase work.
 
 ## Standing rules
 

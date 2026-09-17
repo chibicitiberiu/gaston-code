@@ -137,11 +137,13 @@ fix this crashed the guest with an invalid page fault in KERNEL32.
   growing ~6KB, BSS growing 7.8KB and a longer chat list account for. Not a
   like-for-like comparison (the list holds more conversations now), so read it
   as "nothing ran away", not as a precise delta.
-- **Every demo over `tc netem rate 40kbit`** — **NOT DONE.** `tc` needs root
-  and this environment has no passwordless sudo. The bridge's `--link-bps`
-  exercises the adaptive-codec decisions but throttles the bridge's own
-  sending logic rather than the wire, so it is a weaker test and does not
-  discharge this gate. Outstanding.
+- **Every demo over `tc netem rate 40kbit`** — **deferred to the backlog**
+  (`BACKLOG.md` §1). `tc` needs root and this environment has no passwordless
+  sudo. `--link-bps` throttles the bridge's own sending logic rather than the
+  wire, so it does not discharge the gate. Deferred by decision, with the three
+  weaknesses it would catch written down.
+- **Memory optimisation** — also deferred (`BACKLOG.md` §2). The *gate* (no
+  megabyte-scale regression) is closed; tuning is not, and is late-phase work.
 
 ### Stage A verification (2026-09-17)
 

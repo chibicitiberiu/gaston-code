@@ -852,6 +852,9 @@ Win98 box a moment later.*
   above, and compared against the 28KB baseline. A phase that quietly spends
   another megabyte needs to know it did.
 - Every demo run once over `tc netem rate 40kbit`, per the standing rule.
+  **Deferred 2026-09-17 to `BACKLOG.md` §1** -- `tc` needs root and this
+  environment has no passwordless sudo. It is the gate that would exercise the
+  sender thread's backpressure path, which has only ever run at LAN speed.
 
 
 ### Phase 4 — settings and the rest of the surface *(revised 2026-09-17)*
