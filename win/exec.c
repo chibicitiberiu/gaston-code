@@ -1,0 +1,220 @@
+/* Running a command on this machine and streaming its output back.
+ *
+ * Derived from run_capture() in probe.c, which is what experiment 0.9 proved
+ * on real Windows 98 SE: command.com /c ver returned 36 bytes, dir c:\ /w 352,
+ * and `echo hello | find "hello"` came back correct through the known-bad
+ * 16-bit FIND. Capture works; that was never the question.
+ *
+ * It is a rewrite rather than a lift, because probe.c's version has six
+ * defects that do not matter in a probe and matter a great deal here:
+ *
+ *   1. a hardcoded 20 second timeout with no parameter;
+ *   2. `char cmd[512]` filled with _snprintf, which TRUNCATES SILENTLY -- and
+ *      a truncated command is still executed, so `del c:\temp\*.tmp` cut short
+ *      becomes `del c:\temp\*`. Rejected here instead;
+ *   3. a drain loop that stops reading once the buffer is full, at which point
+ *      the child blocks writing to a pipe nobody empties and the whole thing
+ *      spins until the timeout. Streaming removes the buffer entirely;
+ *   4. hStdInput = NULL, so anything that asks "Are you sure (Y/N)?" hangs
+ *      until killed. A closed empty pipe answers EOF instead;
+ *   5. no working directory;
+ *   6. NUL-terminating the output, which truncates binary at the first zero.
+ *
+ * Memory: ONE 8KB static buffer, not the 32KB the plan assumed. Output is
+ * streamed as it is read, so the total is a counter rather than an
+ * allocation -- which is what makes this fit on a machine measured at 28KB
+ * free after a turn. It is static rather than a local because the default
+ * _beginthreadex stack commit is not somewhere to put 8KB.
+ */
+
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+#include "exec.h"
+#include "log.h"
+
+#define EXEC_CHUNK   8192
+#define EXEC_MAX_OUT (32u * 1024u)
+/* Long enough for any real command line; anything longer is rejected, never
+ * silently shortened. COMMAND.COM itself gives up well before this. */
+#define EXEC_MAX_CMD 1024
+
+static char g_chunk[EXEC_CHUNK];
+
+/* Set by rc_exec_cancel() from another thread to kill a running child. */
+static volatile LONG g_cancel;
+static HANDLE        g_child;      /* guarded by g_child_lock */
+static CRITICAL_SECTION g_child_lock;
+static int           g_child_lock_ready;
+
+void rc_exec_init(void)
+{
+    if (!g_child_lock_ready) {
+        InitializeCriticalSection(&g_child_lock);
+        g_child_lock_ready = 1;
+    }
+}
+
+void rc_exec_cancel(void)
+{
+    g_cancel = 1;
+    if (!g_child_lock_ready) return;
+    EnterCriticalSection(&g_child_lock);
+    if (g_child) TerminateProcess(g_child, 1);
+    LeaveCriticalSection(&g_child_lock);
+}
+
+static void set_child(HANDLE h)
+{
+    if (!g_child_lock_ready) { g_child = h; return; }
+    EnterCriticalSection(&g_child_lock);
+    g_child = h;
+    LeaveCriticalSection(&g_child_lock);
+}
+
+/* The shell for this OS. The only place the guest's vintage should appear:
+ * everything else here is OS-neutral. */
+static const char *shell_name(void)
+{
+    return (GetVersion() & 0x80000000) ? "command.com" : "cmd.exe";
+}
+
+int rc_exec_run(const char *command, const char *cwd, int use_shell,
+                DWORD timeout_ms, rc_exec_sink sink, void *ctx,
+                rc_exec_result *out)
+{
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    HANDLE rd = NULL, wr = NULL, in_rd = NULL, in_wr = NULL;
+    DWORD start;
+    char cmd[EXEC_MAX_CMD];
+    int n;
+
+    memset(out, 0, sizeof(*out));
+    out->status = RC_EXEC_SPAWN_FAILED;
+    g_cancel = 0;
+
+    if (!command || !*command) return -1;
+
+    /* Build the command line, and REFUSE rather than truncate. */
+    if (use_shell)
+        n = _snprintf(cmd, sizeof(cmd), "%s /c %s", shell_name(), command);
+    else
+        n = _snprintf(cmd, sizeof(cmd), "%s", command);
+    if (n < 0 || n >= (int)sizeof(cmd)) {
+        rc_log("exec: command too long (%u bytes), refused",
+               (unsigned)strlen(command));
+        out->status = RC_EXEC_TOO_LONG;
+        return -1;
+    }
+    cmd[sizeof(cmd) - 1] = '\0';
+
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    if (!CreatePipe(&rd, &wr, &sa, 16384)) return -1;
+
+    /* An empty, immediately-closed stdin. probe.c passed NULL, which leaves a
+     * child that prompts ("Are you sure (Y/N)?") blocked until the timeout
+     * kills it. Giving it a pipe at EOF makes those commands answer and exit. */
+    if (!CreatePipe(&in_rd, &in_wr, &sa, 256)) {
+        CloseHandle(rd); CloseHandle(wr);
+        return -1;
+    }
+    CloseHandle(in_wr);         /* EOF the moment the child reads */
+
+    /* The read end must not be inherited, or the pipe never reports EOF.
+     * SetHandleInformation is the obvious call and it is Win2000+ -- a single
+     * NT-only STATIC import kills the whole image at load on Win9x, before
+     * WinMain, with no log written and nothing to debug. DuplicateHandle is
+     * the pre-2000 way and works everywhere. */
+    {
+        HANDLE dup = NULL;
+        if (DuplicateHandle(GetCurrentProcess(), rd, GetCurrentProcess(),
+                            &dup, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            CloseHandle(rd);
+            rd = dup;
+        }
+    }
+
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;   /* CREATE_NO_WINDOW is invalid for 16-bit */
+    si.hStdOutput = wr;
+    si.hStdError  = wr;
+    si.hStdInput  = in_rd;
+
+    start = GetTickCount();
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL,
+                        (cwd && *cwd) ? cwd : NULL, &si, &pi)) {
+        out->error = GetLastError();
+        rc_log("exec: CreateProcess failed: %lu (%s)",
+               (unsigned long)out->error, cmd);
+        CloseHandle(rd); CloseHandle(wr); CloseHandle(in_rd);
+        return -1;
+    }
+    CloseHandle(wr);            /* so ReadFile ends when the child exits */
+    CloseHandle(in_rd);
+    set_child(pi.hProcess);
+    out->status = RC_EXEC_OK;
+
+    for (;;) {
+        DWORD avail = 0, got = 0;
+
+        if (g_cancel) { out->status = RC_EXEC_CANCELLED; break; }
+        if (GetTickCount() - start > timeout_ms) {
+            out->status = RC_EXEC_TIMEOUT;
+            break;
+        }
+
+        if (PeekNamedPipe(rd, NULL, 0, NULL, &avail, NULL) && avail > 0) {
+            DWORD want = avail > EXEC_CHUNK ? EXEC_CHUNK : avail;
+            if (ReadFile(rd, g_chunk, want, &got, NULL) && got) {
+                if (out->bytes >= EXEC_MAX_OUT) {
+                    /* Keep DRAINING past the cap. Stopping here is defect (3):
+                     * the child blocks writing to a pipe nobody empties and we
+                     * sit until the timeout with a half-finished command. */
+                    out->truncated = 1;
+                } else {
+                    DWORD room = EXEC_MAX_OUT - out->bytes;
+                    DWORD use = got > room ? room : got;
+                    if (sink) sink(ctx, g_chunk, use);
+                    if (use < got) out->truncated = 1;
+                }
+                out->bytes += got;
+                continue;       /* drain hard before waiting again */
+            }
+        }
+
+        if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) {
+            /* Drain whatever is still in the pipe after exit. */
+            while (PeekNamedPipe(rd, NULL, 0, NULL, &avail, NULL) && avail) {
+                DWORD want = avail > EXEC_CHUNK ? EXEC_CHUNK : avail;
+                if (!ReadFile(rd, g_chunk, want, &got, NULL) || !got) break;
+                if (out->bytes < EXEC_MAX_OUT) {
+                    DWORD room = EXEC_MAX_OUT - out->bytes;
+                    DWORD use = got > room ? room : got;
+                    if (sink) sink(ctx, g_chunk, use);
+                    if (use < got) out->truncated = 1;
+                } else {
+                    out->truncated = 1;
+                }
+                out->bytes += got;
+            }
+            break;
+        }
+    }
+
+    if (out->status == RC_EXEC_TIMEOUT || out->status == RC_EXEC_CANCELLED)
+        TerminateProcess(pi.hProcess, 1);
+
+    GetExitCodeProcess(pi.hProcess, &out->code);
+    out->ms = GetTickCount() - start;
+    set_child(NULL);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(rd);
+    return 0;
+}

@@ -5,6 +5,7 @@
 #include <string.h>
 #include "net.h"
 #include "log.h"
+#include "rpc.h"
 #include "miniz.h"
 
 /* Cap on frames posted to the UI thread but not yet freed.
@@ -95,6 +96,8 @@ static void set_state(rc_net *n, rc_state s)
     if (n->notify) PostMessage(n->notify, WM_RC_STATE, (WPARAM)s, 0);
 }
 
+static unsigned __stdcall sender_thread(void *arg);
+
 static int recv_exact(SOCKET s, char *buf, unsigned len, volatile LONG *running)
 {
     unsigned got = 0;
@@ -161,6 +164,23 @@ static unsigned __stdcall reader_thread(void *arg)
                 HeapFree(GetProcessHeap(), 0, f);
                 break;
             }
+        }
+
+        /* EXEC goes straight to the RPC worker and never reaches the UI
+         * thread. The type is already parsed here, so routing it now saves a
+         * hop and a copy -- and, more importantly, `inflight` is the wrong
+         * instrument for it: that counter measures UI QUEUE DEPTH for the
+         * backpressure gate below, and holding it for the sixty seconds a
+         * command might run would conflate two unrelated queues and stall
+         * display frames behind a compile. The worker has its own counter. */
+        if (strcmp(f->type, "EXEC") == 0) {
+            InterlockedIncrement(&n->rpcq);
+            if (rc_rpc_submit(f) != 0) {
+                InterlockedDecrement(&n->rpcq);
+                rc_frame_free(f);
+                HeapFree(GetProcessHeap(), 0, f);
+            }
+            continue;
         }
 
         /* Backpressure: if the UI is not keeping up, wait for it rather than
@@ -246,6 +266,14 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     n->inflight = 0;
 
     InitializeCriticalSection(&n->send_lock);
+    n->outq_head = n->outq_tail = NULL;
+    n->outq_bytes = 0;
+    n->rpcq = 0;
+    /* Auto-reset: the sender takes one item per wake and loops until empty. */
+    n->outq_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
+    /* Manual-reset would wake every blocked writer at once; auto-reset wakes
+     * one, which is what "a slot freed up" means. */
+    n->outq_room = CreateEventA(NULL, FALSE, FALSE, NULL);
     set_state(n, RC_CONNECTING);
 
     if (WSAStartup(MAKEWORD(1, 1), &wsa) != 0) {
@@ -345,6 +373,10 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * slot, which Win95/98 requires -- CreateThread(..., NULL) fails there
      * with ERROR_INVALID_PARAMETER while NT accepts it. */
     n->thread = (HANDLE)_beginthreadex(NULL, 0, reader_thread, n, 0, &tid);
+    if (n->thread)
+        n->sender = (HANDLE)_beginthreadex(NULL, 0, sender_thread, n, 0, &tid);
+    if (n->sender)
+        rc_rpc_start(n);
     if (!n->thread) {
         rc_log("net: _beginthreadex failed");
         set_state(n, RC_FAILED);
@@ -355,40 +387,152 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     return 0;
 }
 
+/* ------------------------------------------------------------- sending */
+/* rc_net_send no longer touches the socket. It builds the frame, puts it on a
+ * bounded queue and returns; one sender thread owns the wire.
+ *
+ * The old version held a CRITICAL_SECTION across a blocking send(), which had
+ * two failure modes waiting for a second sender to arrive. A 32KB exec result
+ * at 40kbit is ~6.5 seconds with the lock held, and the UI thread calls this
+ * from do_send, do_stop, chats_switch and the permission bar -- so the message
+ * pump stopped. And releasing the lock mid-frame to fix that would interleave
+ * two frames on a stream with no resync, which drops the link. */
+
+static void outq_free(rc_outq_item *it)
+{
+    HeapFree(GetProcessHeap(), 0, it);
+}
+
+/* Drop everything queued. Called on shutdown; the socket is already going. */
+static void outq_clear(rc_net *n)
+{
+    rc_outq_item *it;
+    EnterCriticalSection(&n->send_lock);
+    it = n->outq_head;
+    n->outq_head = n->outq_tail = NULL;
+    n->outq_bytes = 0;
+    LeaveCriticalSection(&n->send_lock);
+    while (it) {
+        rc_outq_item *next = it->next;
+        outq_free(it);
+        it = next;
+    }
+    if (n->outq_room) SetEvent(n->outq_room);
+}
+
+static unsigned __stdcall sender_thread(void *arg)
+{
+    rc_net *n = (rc_net *)arg;
+
+    while (n->running) {
+        rc_outq_item *it = NULL;
+
+        EnterCriticalSection(&n->send_lock);
+        if (n->outq_head) {
+            it = n->outq_head;
+            n->outq_head = it->next;
+            if (!n->outq_head) n->outq_tail = NULL;
+            n->outq_bytes -= it->len;
+        }
+        LeaveCriticalSection(&n->send_lock);
+
+        if (!it) {
+            /* Timed wait rather than infinite: `running` going to 0 must be
+             * noticed even if nothing is ever queued again. */
+            WaitForSingleObject(n->outq_wake, 200);
+            continue;
+        }
+        /* A writer may have been waiting for space. */
+        SetEvent(n->outq_room);
+
+        while (it->sent < it->len && n->running) {
+            int w;
+            SOCKET s = n->sock;
+            if (s == INVALID_SOCKET) break;
+            w = send(s, it->data + it->sent, (int)(it->len - it->sent), 0);
+            if (w == SOCKET_ERROR) {
+                rc_log("net: send failed: %d", WSAGetLastError());
+                n->running = 0;
+                break;
+            }
+            it->sent += (unsigned)w;
+            n->tx_bytes += (unsigned long)w;
+        }
+        outq_free(it);
+    }
+    outq_clear(n);
+    return 0;
+}
+
 int rc_net_send(rc_net *n, const char *type,
                 const char *const *keys, const char *const *vals, int nkv,
                 const void *body, unsigned body_len)
 {
-    static char buf[RC_MAX_FRAME + 1024];
-    int total, sent = 0;
+    /* Built on the caller's stack region via a heap block sized to the frame,
+     * so there is no shared build buffer to race over any more. */
+    static char build[RC_MAX_FRAME + 1024];
+    rc_outq_item *it;
+    int total;
+    int waited = 0;
 
-    if (n->sock == INVALID_SOCKET) return -1;
+    if (n->sock == INVALID_SOCKET || !n->running) return -1;
 
+    /* The build buffer is still shared, but only for the memcpy that follows,
+     * which cannot block. That is the whole difference. */
     EnterCriticalSection(&n->send_lock);
-    total = rc_frame_build(buf, sizeof(buf), type, keys, vals, nkv,
+    total = rc_frame_build(build, sizeof(build), type, keys, vals, nkv,
                            body, body_len);
     if (total < 0) {
         LeaveCriticalSection(&n->send_lock);
         rc_log("net: frame too large to build (%s, body=%u)", type, body_len);
         return -1;
     }
-    while (sent < total) {
-        int w = send(n->sock, buf + sent, total - sent, 0);
-        if (w == SOCKET_ERROR) {
-            LeaveCriticalSection(&n->send_lock);
-            rc_log("net: send failed: %d", WSAGetLastError());
-            return -1;
-        }
-        sent += w;
+    it = (rc_outq_item *)HeapAlloc(GetProcessHeap(), 0,
+                                   sizeof(rc_outq_item) + (unsigned)total);
+    if (!it) {
+        LeaveCriticalSection(&n->send_lock);
+        rc_log("net: out of memory queueing %s (%d bytes)", type, total);
+        return -1;
     }
-    n->tx_bytes += (unsigned long)total;
+    memcpy(it->data, build, (unsigned)total);
+    it->len = (unsigned)total;
+    it->sent = 0;
+    it->next = NULL;
+
+    /* Backpressure, in bytes. Wait for the sender to drain rather than letting
+     * the queue grow without bound on a machine with 28KB free. */
+    while (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES && n->running
+           && waited < 50) {
+        LeaveCriticalSection(&n->send_lock);
+        WaitForSingleObject(n->outq_room, 100);
+        waited++;
+        EnterCriticalSection(&n->send_lock);
+    }
+    if (!n->running) {
+        LeaveCriticalSection(&n->send_lock);
+        outq_free(it);
+        return -1;
+    }
+    if (n->outq_tail) n->outq_tail->next = it;
+    else              n->outq_head = it;
+    n->outq_tail = it;
+    n->outq_bytes += it->len;
     LeaveCriticalSection(&n->send_lock);
+
+    SetEvent(n->outq_wake);
     return 0;
 }
 
 void rc_net_stop(rc_net *n)
 {
+    DWORD rw = WAIT_OBJECT_0, sw = WAIT_OBJECT_0;
+
     n->running = 0;
+    /* Wake anything parked on the queue so it can notice `running`. */
+    if (n->outq_wake) SetEvent(n->outq_wake);
+    if (n->outq_room) SetEvent(n->outq_room);
+    rc_rpc_stop();              /* signals the worker and kills any child */
+
     if (n->sock != INVALID_SOCKET) {
         /* Graceful FIN before close. An abrupt RST is reported to crash
          * Win98's Winsock stack outright, taking the machine with it -- this
@@ -398,12 +542,38 @@ void rc_net_stop(rc_net *n)
         closesocket(n->sock);
         n->sock = INVALID_SOCKET;
     }
+
+    /* Join every thread that can touch send_lock BEFORE deleting it. The old
+     * code waited 2000ms, DISCARDED the result and deleted the section
+     * regardless -- so any exec longer than two seconds meant the worker's
+     * next EnterCriticalSection ran on a destroyed object, which on 9x is a
+     * GPF dialog at exit, every time. */
     if (n->thread) {
-        WaitForSingleObject(n->thread, 2000);
+        rw = WaitForSingleObject(n->thread, 5000);
         CloseHandle(n->thread);
         n->thread = NULL;
     }
+    if (n->sender) {
+        sw = WaitForSingleObject(n->sender, 5000);
+        CloseHandle(n->sender);
+        n->sender = NULL;
+    }
+    if (!rc_rpc_join(30000))
+        rc_log("net: RPC worker did not exit; leaking its lock deliberately");
+
+    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0) {
+        outq_clear(n);
+        DeleteCriticalSection(&n->send_lock);
+    } else {
+        /* A thread is still in there somewhere. Leaking a critical section at
+         * process exit costs nothing; destroying one out from under a live
+         * thread costs the user a crash dialog. */
+        rc_log("net: reader=%lu sender=%lu did not exit; not deleting the lock",
+               (unsigned long)rw, (unsigned long)sw);
+    }
+
+    if (n->outq_wake) { CloseHandle(n->outq_wake); n->outq_wake = NULL; }
+    if (n->outq_room) { CloseHandle(n->outq_room); n->outq_room = NULL; }
     inflate_finish();
-    DeleteCriticalSection(&n->send_lock);
     WSACleanup();
 }

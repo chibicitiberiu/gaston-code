@@ -30,6 +30,7 @@ from . import html as H
 from .html import APPEND, LIVE, HtmlStream
 from .pages import Paginator, limits_for
 from . import permissions as perms
+from . import tools as machine_tools
 from .permissions import PendingPrompt, render_request
 from .protocol import (
     MAX_FRAME,
@@ -104,6 +105,14 @@ class GuestSession:
     # When the link dropped, or None while connected. A prompt outlives a
     # brief disconnect so a reconnect can restore the bar.
     lost_at: float | None = None
+    # In-flight EXEC calls, keyed by our own id. Separate namespace from
+    # tool_use_id so a stray frame cannot cross-resolve against TOOLRESULT.
+    exec_pending: dict = field(default_factory=dict)
+    exec_seq: int = 0
+    # One worker thread on the guest means one command at a time. The model
+    # can request tools in parallel, and an "Always" rule would bypass the
+    # prompt queue that was implicitly serialising them.
+    exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
     def connected(self) -> bool:
@@ -223,6 +232,15 @@ class Bridge:
                 # back (PERMSTATE), miss it and the reaper denies with a
                 # message that says what actually happened.
                 self._guest.lost_at = time.monotonic()
+                # An in-flight command is a different matter from a pending
+                # prompt: the prompt can wait out a blip, but the command has
+                # already started over there and its output is gone with the
+                # link. Fail it now rather than holding the model for the
+                # whole MCP budget.
+                self._fail_execs(self._guest,
+                                 "The connected machine disconnected while "
+                                 "this command was running. It may or may not "
+                                 "have completed.")
                 if self._guest.perm_pending is not None:
                     log.info("link lost with a prompt pending; holding %.0fs",
                              self.perm_grace_s)
@@ -385,6 +403,8 @@ class Bridge:
         # longer exists.
         self._resolve_all(guest, "rebuild",
                           "The conversation changed before this was answered.")
+        self._fail_execs(guest, "The conversation changed while this command "
+                                "was running.")
         async def on_text(t: str) -> None:
             await self._emit_text(guest, t, style="plain")
 
@@ -427,6 +447,8 @@ class Bridge:
             # Every tool call the CLI does not resolve locally comes back
             # through here as a prompt on the guest's screen.
             can_use_tool=self._can_use_tool(guest),
+            # The key here becomes the mcp__<key>__<tool> prefix.
+            mcp_servers=machine_tools.build(self),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -488,7 +510,7 @@ class Bridge:
                 allows=perms.allows_always(
                     tool_name, getattr(ctx, "suggestions", None) or []),
             )
-            prompt.summary = perms.summary(tool_name, ctx)
+            prompt.summary = perms.summary(tool_name, ctx, args)
 
             try:
                 await self._enqueue_prompt(guest, prompt)
@@ -762,6 +784,12 @@ class Bridge:
             log.info("input: %s", text[:120])
             asyncio.create_task(self._run_turn(guest, text))
 
+        elif f.type == "EXECOUT":
+            await self._exec_out(guest, f)
+
+        elif f.type == "EXECRESULT":
+            await self._exec_result(guest, f)
+
         elif f.type == "PERMREPLY":
             await self._perm_reply(guest, f)
 
@@ -876,6 +904,118 @@ class Bridge:
             "cost_usd": f"{turn.cost_usd:.4f}" if turn.cost_usd else "",
             "ms": str(turn.duration_ms),
         }))
+
+    # --- running commands on the guest -------------------------------------
+
+    async def run_on_guest(self, command: str, *, timeout_ms: int,
+                           shell: bool, cwd: str) -> dict:
+        """Body of mcp__machine__exec. Returns an MCP tool result."""
+        guest = self._guest
+        if guest is None or not guest.connected:
+            # Structured error, never a hang. This is the cost of the
+            # single-binary design and it was accepted on condition it is
+            # handled here rather than left to the MCP timeout.
+            return {"content": [{"type": "text", "text":
+                    "The connected machine is not reachable right now -- it is "
+                    "not connected to this proxy. Nothing was run."}],
+                    "isError": True}
+
+        # One worker thread over there means one command at a time.
+        async with guest.exec_lock:
+            guest.exec_seq += 1
+            exec_id = f"x{guest.exec_seq}"
+            fut = asyncio.get_running_loop().create_future()
+            guest.exec_pending[exec_id] = {"future": fut, "out": bytearray()}
+
+            headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
+                       "shell": "1" if shell else "0"}
+            if cwd:
+                headers["cwd"] = cwd
+            # The command goes in the BODY. A header value is truncated at 255
+            # bytes silently, and a truncated command is still EXECUTED --
+            # `del c:\temp\*.tmp` cut short becomes `del c:\temp\*`.
+            await self._send(guest, Frame("EXEC", headers,
+                                          fold.encode(command)))
+            log.info("exec %s: %s", exec_id, command[:160])
+
+            # Above the guest's own limit, so a slow command produces a
+            # "timed out" result FROM the guest rather than the bridge
+            # abandoning it with the child still running over there.
+            budget = (timeout_ms / 1000.0) + 30.0
+            try:
+                return await asyncio.wait_for(fut, timeout=budget)
+            except asyncio.TimeoutError:
+                return {"content": [{"type": "text", "text":
+                        f"No reply from the connected machine after "
+                        f"{budget:.0f}s. The command may still be running "
+                        f"there."}], "isError": True}
+            finally:
+                guest.exec_pending.pop(exec_id, None)
+
+    async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
+        entry = guest.exec_pending.get(f.headers.get("id", ""))
+        if entry is None:
+            return          # late chunk for a call we gave up on
+        entry["out"].extend(f.body)
+
+    async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
+        exec_id = f.headers.get("id", "")
+        entry = guest.exec_pending.get(exec_id)
+        if entry is None:
+            log.info("EXECRESULT for unknown id %s", exec_id)
+            return
+        fut = entry["future"]
+        if fut.done():
+            return
+
+        status = f.headers.get("status", "ok")
+        code = f.headers.get("code", "")
+        truncated = f.headers.get("truncated", "0") == "1"
+
+        # COMMAND.COM writes the OEM codepage, not the ANSI one. Using
+        # fold.decode here instead is the classic Win9x encoding bug and turns
+        # a `dir` listing into mojibake.
+        text = fold.decode_oem(bytes(entry["out"]))
+
+        parts = []
+        if status == "spawn_failed":
+            parts.append("The command could not be started on the connected "
+                         "machine.")
+        elif status == "timeout":
+            parts.append(f"Timed out and was killed after the limit; partial "
+                         f"output follows.")
+        elif status == "busy":
+            parts.append("The connected machine is already running a command.")
+        elif status == "cancelled":
+            parts.append("Cancelled -- the machine is shutting down.")
+        if code not in ("", "0") and status == "ok":
+            parts.append(f"Exit code {code}.")
+        if truncated:
+            parts.append("Output was capped at 32KB and truncated.")
+
+        body = text if text.strip() else "(no output)"
+        head = (" ".join(parts) + "\n\n") if parts else ""
+        fut.set_result({
+            "content": [{"type": "text", "text": head + body}],
+            "isError": status in ("spawn_failed", "busy", "cancelled"),
+        })
+        log.info("exec %s finished: status=%s code=%s bytes=%d",
+                 exec_id, status, code, len(entry["out"]))
+
+    def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
+        """Resolve every in-flight EXEC, synchronously.
+
+        Called where the guest goes away or the session is rebuilt. A future
+        nobody will complete holds the model for the whole MCP budget.
+        """
+        if guest is None:
+            return
+        for exec_id, entry in list(guest.exec_pending.items()):
+            fut = entry["future"]
+            if not fut.done():
+                fut.set_result({"content": [{"type": "text", "text": why}],
+                                "isError": True})
+        guest.exec_pending.clear()
 
     async def _perm_reply(self, guest: GuestSession, f: Frame) -> None:
         """Answer from the guest's prompt bar."""

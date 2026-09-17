@@ -38,7 +38,8 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # forwarder to ws2_32). comctl32 is for the status bar.
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
-OBJS = main.o net.o frameproto.o log.o ini.o htmlview.o miniz.o
+OBJS = main.o net.o frameproto.o log.o ini.o htmlview.o miniz.o \
+       exec.o rpc.o
 
 .PHONY: all clean check run netcheck probe htmlspike
 
@@ -69,7 +70,10 @@ all: retroclaude.exe
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
-NETCHECK_OBJS = netcheck.o net.o frameproto.o log.o miniz.o
+# net.o now calls into the RPC worker, so netcheck must link it too or
+# the build breaks with unresolved externals.
+NETCHECK_OBJS = netcheck.o net.o frameproto.o log.o miniz.o \
+                exec.o rpc.o
 netcheck: netcheck.exe
 netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}

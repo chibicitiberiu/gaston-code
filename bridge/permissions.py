@@ -146,6 +146,12 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
     title = getattr(ctx, "title", None)
     desc = getattr(ctx, "description", None)
 
+    if not desc and isinstance(args, dict):
+        for key in ("command", "file_path", "path", "url", "pattern"):
+            if args.get(key):
+                desc = str(args[key])
+                break
+
     parts = ['<div class="perm">',
              '<div class="permhead">Permission required</div>',
              "<p><b>" + H.esc(_clip(title or display, 120)) + "</b>"]
@@ -173,13 +179,27 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
     return short[:MAX_BODY]
 
 
-def summary(tool_name: str, ctx) -> str:
+def summary(tool_name: str, ctx, args: dict | None = None) -> str:
     """The one line the guest puts in the bar's STATIC.
 
-    Must stand alone: this is all a user paging through history will see.
+    Must stand alone: this is all a user paging through history will see, and
+    the whole decision rests on it.
+
+    The CLI writes `description` for its own tools, but for an MCP tool it is
+    empty -- so the first version of this rendered the bar as just "Exec",
+    which asks someone to approve running a command without showing them the
+    command. When there is no description, fall back to the most telling
+    argument.
     """
     display = getattr(ctx, "display_name", None) or tool_name
+    if display.lower() == "exec" and tool_name.startswith("mcp__machine__"):
+        display = "Run on your machine"
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)
+    if not desc and args:
+        for key in ("command", "file_path", "path", "url", "pattern"):
+            if args.get(key):
+                desc = str(args[key])
+                break
     line = display if not desc else f"{display}: {desc}"
     return _clip(line, 160)
 

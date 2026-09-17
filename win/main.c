@@ -158,6 +158,8 @@ static WNDPROC g_input_oldproc;
 static WNDPROC g_chats_oldproc;
 static int   g_turn_active = 0;
 static int   g_backoff_ms = 1000;
+/* Whether this outage has already been announced in the transcript. */
+static int   g_retry_noted;
 static char  g_exe_dir[MAX_PATH];
 
 /* ------------------------------------------------------------------ utils */
@@ -475,6 +477,7 @@ static void render_frame(rc_frame *f)
         page_update_ui();
         chats_request();
         g_backoff_ms = 1000;
+        g_retry_noted = 0;
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
         rc_html_append(g_html, "<div class=\"notice\">Connected to bridge.</div>");
@@ -1165,11 +1168,22 @@ static void try_connect(HWND hwnd)
 {
     status_refresh();
     if (rc_net_start(&g_net, hwnd, g_cfg.host, g_cfg.port, g_cfg.secret) != 0) {
-        char msg[160];
-        _snprintf(msg, sizeof(msg),
-                  "Cannot reach %s:%d - retrying in %ds\r\n",
-                  g_cfg.host, g_cfg.port, g_backoff_ms / 1000);
-        rc_html_append(g_html, msg);
+        /* Say it ONCE per outage, not once per retry.
+         *
+         * Appending on every attempt filled the transcript with hundreds of
+         * identical "Cannot reach ... retrying in 15s" lines while the bridge
+         * was down -- which is not merely ugly: it is unbounded growth in the
+         * one structure this machine cannot afford to grow, on a box measured
+         * at 28KB free. The status bar already shows the live state, and that
+         * is the right place for something that changes every few seconds. */
+        if (!g_retry_noted) {
+            char msg[160];
+            _snprintf(msg, sizeof(msg),
+                      "Cannot reach %s:%d - retrying\r\n",
+                      g_cfg.host, g_cfg.port);
+            rc_html_append(g_html, msg);
+            g_retry_noted = 1;
+        }
 
         /* Backoff on a timer, never a sleeping loop -- the message queue has
          * to keep pumping or the window is a dead rectangle. */
