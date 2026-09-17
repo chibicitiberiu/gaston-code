@@ -1332,3 +1332,89 @@ async def test_the_agents_resolve_waits_for_the_pass_too(harness, tmp_path):
     assert "Released" in await asyncio.wait_for(task, 5)
     assert not harness.bridge._load_baseline().latched
     await harness.close(writer)
+
+
+async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
+                                                              tmp_path):
+    """A file on the guest where the bridge holds a directory cannot be
+    applied -- a pull writes a file and cannot replace a directory without a
+    delete primitive we do not have. Nothing advances, so every pass decides
+    it again.
+
+    Counting those towards the halt put the bar back up thirty seconds after
+    the user answered it, and spawned a "resolve the sync conflict" turn whose
+    preamble was EMPTY, because the notice had already been delivered. Then
+    again a minute later. Paid turns, and the purest form of asking twice.
+
+    Driven through run_sync, not through Pass.run: the halt is raised by the
+    wiring, so a test that reads the counter straight off a Pass passes with
+    the fix reverted. It did, when this was written that way.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    root = str(tmp_path / "tree")
+    os.makedirs(os.path.join(root, "notes"))
+    harness.bridge.sync_dir = root
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {"notes": b"a file now\n"})
+    first = await asyncio.wait_for(task, 10)
+    assert first["new_conflicts"] == 1
+    assert (await _recv(harness, reader, "HALT")) is not None
+
+    # Answer it, the way the user does.
+    guest = harness.bridge._guest
+    await harness.send(writer, Frame("RESUME", {"id": guest.halt_id}))
+    await asyncio.sleep(0.1)
+
+    # Same unresolvable conflict, next pass. No second bar.
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {"notes": b"a file now\n"})
+    second = await asyncio.wait_for(task, 10)
+    assert second["conflicts"] == 1, "it is still a conflict, and still true"
+    assert second["new_conflicts"] == 0, "but it is not news, so no new bar"
+    assert not guest.halt_id, "the bar went back up on a standing conflict"
+    await harness.close(writer)
+
+
+async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
+                                                                   tmp_path):
+    """_raise_halt is idempotent while a bar is up, so a conflict found in the
+    meantime puts nothing on screen. Releasing everything on the press lifted
+    the write refusal on a path the user had never seen and the agent had
+    never been told about -- so the agent writes, and it reaches their machine.
+
+    Driven through the RESUME frame for the same reason as above: the subset
+    is chosen by the handler.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    p = a_pass(harness, tmp_path)
+    harness.bridge.sync_dir = p.root
+    harness.bridge.sync_state = os.path.dirname(p.state)
+    state = os.path.join(harness.bridge.sync_state, "base.json")
+
+    base = harness.bridge._load_baseline()
+    base.latched["seen.c"] = "both sides moved"
+    base.save(state)
+    await harness.bridge._raise_halt(guest, "Stopped: 1 conflicting edit.",
+                                     paths=["seen.c"])
+    await _recv(harness, reader, "HALT")
+
+    # A second conflict lands while the bar is up. No new bar: there is one.
+    base = harness.bridge._load_baseline()
+    base.latched["unseen.c"] = "both sides moved"
+    base.save(state)
+    await harness.bridge._raise_halt(guest, "Stopped: 1 more.",
+                                     paths=["unseen.c"])
+
+    await harness.send(writer, Frame("RESUME", {"id": guest.halt_id}))
+    await asyncio.sleep(0.15)
+
+    left = harness.bridge._load_baseline().latched
+    assert "unseen.c" in left, "released a path the user was never shown"
+    assert "seen.c" not in left
+    await harness.close(writer)

@@ -689,7 +689,19 @@ class Pass:
         #: forget it announced them or they are announced again every pass.
         standing: set[str] = set()
         done = {"pushed": 0, "pulled": 0, "dirs": 0, "conflicts": 0,
-                "reported": 0, "skipped": 0, "latched": 0, "unhandled": 0}
+                "reported": 0, "skipped": 0, "latched": 0, "unhandled": 0,
+                # Conflicts ANNOUNCED this pass, which is not the same as
+                # conflicts found. A conflict that cannot be applied -- a file
+                # where we hold a directory -- never resolves, so every pass
+                # finds it again; counting those towards the halt put the bar
+                # back up every thirty seconds after the user had answered it.
+                # See run_sync, which raises the halt on this and not on the
+                # total.
+                "new_conflicts": 0}
+
+        # Which paths this pass is stopping the user for. The halt bar answers
+        # these and nothing else -- see GuestSession.halt_paths.
+        new_conflict_paths: set[str] = set()
 
         for dec in decisions:
             if dec.act is S.Act.NOTHING:
@@ -776,6 +788,12 @@ class Pass:
                         done["latched"] += 1
                         continue
 
+                # Past the gate above, so this one is genuinely news: either it
+                # can be applied (and therefore resolves, and cannot recur), or
+                # it cannot and first_report has just said so for the first
+                # time. Either way it is worth stopping the user for.
+                done["new_conflicts"] += 1
+                new_conflict_paths.add(dec.key)
                 mine = self.stage_conflict(dec.key, rel)
 
                 # A latched path REFUSES pushes. The agent's in-flight turn
@@ -910,4 +928,5 @@ class Pass:
         self.base.save(self.state)
         done["reports"] = list(self.reports)
         done["notices"] = list(self.base.pending_notice)
+        done["conflict_paths"] = sorted(new_conflict_paths)
         return done

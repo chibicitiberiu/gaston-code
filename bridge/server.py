@@ -78,6 +78,13 @@ class GuestSession:
     #: stopping the agent and handing the decision to the person at the
     #: keyboard; it clears when they press Continue, and never on a timer.
     halt_id: str = ""
+    #: The paths the bar on screen was raised FOR. Continue answers those and
+    #: nothing else: a conflict found while the bar is already up raises no new
+    #: bar (there is only one), so the user is never shown it -- and releasing
+    #: everything meant their press lifted the write refusal on a path they had
+    #: not seen. The agent then writes to it, having been told nothing, and the
+    #: write goes to the user's machine.
+    halt_paths: frozenset = frozenset()
     # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
     page_bytes: int = 0
     page_blocks: int = 0
@@ -857,7 +864,8 @@ class Bridge:
                 # screen, and the second one carries no information the first
                 # did not. `sync_resolve` stays for the case the user never
                 # sees: the agent finishing a merge on its own.
-                freed = await self._release_all_latches()
+                answered, guest.halt_paths = guest.halt_paths, frozenset()
+                freed = await self._release_all_latches(only=answered)
                 if freed:
                     log.info("sync: released %d latched path(s) on Continue",
                              freed)
@@ -1194,7 +1202,15 @@ class Bridge:
                 # finished with the file" has no confirmation -- the latch
                 # would sit there until the agent happened to call
                 # sync_resolve, which it has no reason to do unprompted.
-                if got.get("conflicts"):
+                # NEW conflicts, not the running total. An unapplyable conflict
+                # -- a file on the guest where the bridge holds a directory --
+                # is re-decided on every pass because nothing can advance, so
+                # raising on the total put the bar back up thirty seconds after
+                # the user had answered it, spawned a "resolve the conflict"
+                # turn with an empty preamble because the notice had already
+                # been delivered, and did it again a minute later. Asked twice,
+                # in the purest form the design has.
+                if got.get("new_conflicts"):
                     # Short, because the bar at 640x480 gives the label about
                     # seventy characters before SS_ENDELLIPSIS cuts it. The
                     # first version ended "...Press Continue when you have
@@ -1203,11 +1219,15 @@ class Bridge:
                     # on the one control the user needs. The button is labelled
                     # Continue and the whole explanation is in the transcript
                     # immediately above; the bar only has to say why it is up.
-                    n = got["conflicts"]
+                    # The new count too, not the total: a standing conflict the
+                    # user has already been told about should not inflate the
+                    # number they are being stopped for.
+                    n = got["new_conflicts"]
                     await self._raise_halt(
                         guest,
                         f"Stopped: {n} conflicting edit"
-                        f"{'' if n == 1 else 's'}. Your copy was kept.")
+                        f"{'' if n == 1 else 's'}. Your copy was kept.",
+                        paths=got.get("conflict_paths", ()))
                 # Only after they are on the wire. The queue is pending work,
                 # not a log: leaving them on it re-delivered every notice on
                 # every pass, which buries the next real one.
@@ -1403,13 +1423,21 @@ class Bridge:
         guest = self._guest
         return guest.sync_lock if guest is not None else contextlib.nullcontext()
 
-    async def _release_all_latches(self) -> int:
-        """Lift every write refusal. Called when the user presses Continue.
+    async def _release_all_latches(self, only=None) -> int:
+        """Lift the write refusals the user has just answered.
 
-        All of them, not one: the halt bar says "N conflicting edits" and the
-        user answers it once. Releasing a single path would leave the rest
-        withheld with no bar up to say so, and the agent silently unable to
-        write to files nobody has mentioned.
+        All the ones the BAR named, not one: the bar says "N conflicting
+        edits" and the user answers it once. Releasing a single path would
+        leave the rest withheld with no bar up to say so, and the agent
+        silently unable to write to files nobody has mentioned.
+
+        But not paths the bar never named either. `_raise_halt` is idempotent
+        while a bar is showing, so a conflict found in the meantime puts
+        nothing on screen -- and releasing it on a press that predates it lifts
+        the refusal on a path the agent has not been told about. It writes, and
+        that write reaches the user's machine. `only` is the set the bar was
+        raised for; None means everything, which is right when there is no bar
+        to have named a subset.
 
         UNDER sync_lock, and that is the whole point of it being a coroutine.
         A Pass loads the baseline into memory when it starts and writes the
@@ -1428,17 +1456,35 @@ class Bridge:
             except Exception as exc:
                 log.warning("could not release latches: %s", exc)
                 return 0
-            n = len(base.latched)
+            # Only what the bar was raised for. Anything latched since then
+            # has never been on screen, so the press cannot be an answer to it.
+            answered = set(only) if only is not None else set(base.latched)
+            n = 0
+            for key in answered:
+                if base.latched.pop(key, None) is not None:
+                    n += 1
             if n:
-                base.latched.clear()
                 base.save(os.path.join(self.sync_state, "base.json"))
+            left = len(base.latched)
+            if left:
+                log.info("sync: %d path(s) latched after the release; they "
+                         "were raised after the bar went up and will raise "
+                         "their own", left)
             return n
 
-    async def _raise_halt(self, guest: GuestSession, line: str) -> None:
-        """Put the Continue bar up. Idempotent while one is already showing."""
+    async def _raise_halt(self, guest: GuestSession, line: str,
+                          paths=()) -> None:
+        """Put the Continue bar up. Idempotent while one is already showing.
+
+        `paths` is what this bar is ANSWERING FOR. Continue releases those and
+        leaves anything latched later alone, because the idempotence above
+        means a later conflict puts nothing on screen and the user cannot have
+        answered a question they were never asked.
+        """
         if guest.halt_id:
             return
         guest.halt_id = f"h{uuid.uuid4().hex[:8]}"
+        guest.halt_paths = frozenset(paths)
         await self._send(guest, Frame("HALT", {"id": guest.halt_id},
                                       fold.encode(line)), stamp=False)
 
@@ -1448,6 +1494,7 @@ class Bridge:
         if not guest.halt_id:
             return
         hid, guest.halt_id = guest.halt_id, ""
+        guest.halt_paths = frozenset()
         await self._send(guest, Frame("HALTEND", {"id": hid}), stamp=False)
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
