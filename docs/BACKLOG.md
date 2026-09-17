@@ -93,17 +93,19 @@ Recorded so they are not rediscovered. None are reachable in normal use today.
 - **Concurrent turns.** `_handle` spawns a task per `INPUT` with no guard, so
   two `INPUT`s produce two turns on one client — and one prompt bar.
   Pre-existing; Stage A is just where it first has a visible failure mode.
-- **`bytes=` in `EXECRESULT` counts discarded bytes**, so it is not comparable
-  with the sum of `EXECOUT` payloads and cannot serve as an integrity check.
-  Either redefine it as "bytes delivered" and assert on it bridge-side, or drop
-  it from the frame.
+- ~~**`bytes=` in `EXECRESULT` counts discarded bytes**~~ **Closed
+  2026-09-18** by dropping it. It also counted chunks lost on the wire, so it
+  needed two fixes rather than one, and the bridge never read it. `truncated=`
+  already carries the only fact the model acts on.
 - **`cwd` travels as a header**, so it is silently truncated at 255 bytes — a
   milder version of the argument that put the command in the body. Unlikely on
   DOS paths, but unguarded.
-- **`RC_EXEC_TOO_LONG` is reported as `spawn_failed`**, so the model is told
-  "could not be started" when the truth is "your command exceeded 1024 bytes".
-- **`_exec_out` grows its buffer without a bridge-side cap.** The guest caps at
-  32 KB and the bridge trusts it.
+- ~~**`RC_EXEC_TOO_LONG` is reported as `spawn_failed`**~~ **Closed
+  2026-09-18.** It has its own status, and the message states the limit --
+  which is nearer 1009 than 1024, because the shell prefix counts.
+- ~~**`_exec_out` grows its buffer without a bridge-side cap.**~~ **Closed
+  2026-09-18.** Capped at 64 KB, and a cut here reports through the same
+  `truncated` the guest uses.
 - **`rc_rpc_submit` can race shutdown** and leak one frame without sending an
   `EXECRESULT`. Narrow, and only at exit.
 
@@ -127,11 +129,13 @@ use; each is a known limit rather than something forgotten.
   deliberate mass revert. The plan's mitigation is a persisted generation
   counter plus an aggregate heuristic; neither is built. `.gaston/base/` is
   retained as history, so a wrong mass pull is recoverable by hand.
-- **`eol=cr` is declarable and not implemented.** `_EOL` has the entry and
-  `to_guest` would use it, but no classifier treats a lone CR as the native
-  ending, so a client declaring it would fail the class cross-check on every
-  text file. Loud, not silent -- but it should be refused at handshake rather
-  than failing per file.
+- ~~**`eol=cr` is declarable and not implemented.**~~ **Closed 2026-09-18.**
+  Refused at the handshake AND per path -- attributes are consulted per path,
+  so `*.txt eol=cr` in a real `.gitattributes` would otherwise reach a client
+  that declared itself perfectly legally. The diagnosis in this entry was also
+  wrong: both classifiers already agree a lone-CR file is byte-exact, so the
+  failure was a CRC mismatch on every text file, with the log pointing at
+  corruption rather than at a capability.
 - **Deletions do not propagate.** By decision, not omission: a rename is a
   create plus a delete, and the delete does not travel, so `git mv` leaves the
   old path on the guest. It is reported and never silently resurrected or
@@ -166,3 +170,74 @@ Phase 4's own list (model per-client, the effort fork leaving the chat list on
 the pre-fork session id, the real Server Host dialog, Export as HTML, the
 permission rule table, icons, multi-client, the command menu) lives in
 `PLAN.md` and is not duplicated here.
+
+## 5. Found by the 3.4 review rounds, not yet closed
+
+Three adversarial rounds ran against the hardening plan before any code. Nine
+defects were fixed (see `PROGRESS.md`, 2026-09-18); these were found by the
+same rounds and deliberately left.
+
+- **`cwd` is still a header, still clipped at 255.** §3 records it; the review
+  added that it goes straight to `CreateProcessA` with no validation, so the
+  command runs in a *different existing directory* rather than failing. The fix
+  is a bridge-side length check before sending, not a move to the body — that
+  would be a lockstep protocol change wanting a declared capability, for a
+  value that is a short DOS path in every real case.
+- **A pass-level abort is invisible.** `SyncError` is caught by a bare
+  `except Exception` and becomes a `log.warning` — it never calls `note()`,
+  never latches, never reaches `sync_status_text`. So the two live
+  tree-identity refusals, and any future mass-revert refusal, stop the whole
+  pass with nothing said to either the user or the agent. Making it visible is
+  not just deleting the `log.warning`: a `tree_id` mismatch aborts *every*
+  pass, so it needs a persisted fingerprint written inside the handler, keyed
+  on the reason. Narrow the bare `except` while there — today a crash is
+  disguised as a deliberate refusal, which is how the `IsADirectoryError`
+  total-stop stayed hidden.
+- **Concurrent turns are still unguarded**, and the reachable route is the
+  *designed* conflict flow rather than a race: the Continue button is not
+  gated on `g_turn_active`, and a halt is raised by a sync pass while the agent
+  works. Two `_run_turn`s then run on a stream that can only have one consumer,
+  so one turn can consume the other's `ResultMessage` and the transcript is
+  corrupted. Both call sites are bare `create_task` — `:837` and `:863` — so
+  neither is even in the strong-reference set. Note `_release_all_latches` now
+  takes the lock, so the specific loss that made this urgent is closed; what
+  remains is the turn guard itself, and it must not defer the turn that carries
+  the conflict preamble past the latch release.
+- **The guest never re-requests page content on reconnect.** `READY` carries
+  `page` and `total`, and the guest updates both — but `DOC` is guarded by
+  `if (!g_doc_sent)`, set once per *process*, so the skeleton is not reset
+  either and the stale transcript simply persists under a new page number.
+  `page_goto("live")` already exists; this is one call in the `READY` handler.
+  It matters more if the replay buffer is ever retired.
+- **The replay buffer is still dead and still stamping.** The guest never sends
+  `from=`, so `replay.since()` is unreachable; `append()` still fills a
+  20,000-frame buffer, and `win/net.h`'s `next_seq` is parsed and never read,
+  which makes the feature look implemented. Retiring it is larger than it
+  looks: the oversized-frame guard exists *because* replay is append-only, so
+  its merit has to be restated rather than preserved, and the size probe
+  stamps a fake `seq` into every frame's budget including `stamp=False` ones.
+- **Directories deleted on either side are silently resurrected.** `diff` never
+  consults the ancestor for a directory, so guest-only becomes `ADOPT` plus
+  `os.makedirs` and bridge-only becomes `MKDIR`. §4's "reported and never
+  silently resurrected" is true for files and false for directories.
+- **`reject_sync_busy` answers every full-queue sync frame with
+  `SYNCPUTACK`.** MKDIR survives it — the bridge handles both acks in one
+  id-keyed branch — but SCAN and GET get a 2-tuple where they unpack six or
+  four, which surfaces as "sync pass aborted: not enough values to unpack".
+  A blocker for any new sync frame.
+- **`n->sock` is unserialised across four threads**, 14 accesses, none under a
+  lock — §1 names one instance; the review found `recv_exact`'s two and the
+  TOCTOU guard in `rc_net_send` are the same class. And the shutdown drain's
+  acks are *all* discarded, because `rc_net_stop` clears `running` before
+  calling `rc_rpc_stop` and `rc_net_send` bails on `!running`: the comment
+  promising queued frames are "answered, not silently dropped" is false on the
+  only path that reaches it.
+- **The netem gate is no longer blocked on sudo.** Verified: unprivileged user
+  namespaces work here, `tc qdisc add dev lo root netem rate 40kbit` succeeds
+  inside one, and `pasta --config-net` keeps outbound internet while leaving
+  `lo` shapeable. The live domain uses `-netdev user` with no `hostfwd`, so the
+  guest's connection is re-originated on host loopback — exactly what netem on
+  `lo` would shape. Not yet run end to end: QEMU inside the namespace is
+  unverified, and `tools/runvm.sh` specifies `pcnet` where the live domain is
+  `ne2k_isa`, so a run built on it would come up with no network and look like
+  a bridge bug.

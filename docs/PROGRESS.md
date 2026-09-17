@@ -105,7 +105,8 @@ Linux side first, so the guest develops against something real.
 | 3.2 | **Stage B — `win/exec.c`, `win/rpc.c`, sender thread** | **done — verified on real Win98 SE** |
 | 3.2a | `EXECKILL`, so Stop reaches the command | done |
 | 3.2b | Restart path: reader clears `running`, `try_connect` tears down first | done — reproduced the KERNEL32 fault, then fixed |
-| 3.3 | File sync layer | **not started** |
+| 3.3 | File sync layer | **done — verified on real Win98 SE** |
+| 3.4 | Hardening: the backlog worked down | **in progress** |
 
 ### Stage B verification (2026-09-17)
 
@@ -1587,3 +1588,67 @@ of its results and reported nine failures that were all stale state. The tell
 was `and the file DID change` passing while the checks around it failed. Start
 the probe with `-u`.
 
+
+### 2026-09-18 — three review rounds before any code, and what they were worth
+
+The backlog was the target and the method was the point. Three adversarial
+rounds ran against the plan before a line was written, and each overturned the
+one before it. That is not a ceremony: two of the nine bugs fixed below were
+introduced *by the plan* and removed by a later round, and the single worst
+defect in the tree was found by the third round in code nobody had flagged.
+
+**Round 1** found that the plan's own unifying idea would have caused the
+failure it was written to prevent. "A truncated string is a refusal, not a
+shorter string" is right for a write path and wrong for the scanner, where a
+refusal that omits a row reads as a deletion. **Round 2** then found round 1's
+evidence was dead code — `manifest_add`'s drop is unreachable, 314 bytes against
+a 63,488-byte buffer — while the conclusion survived on a different, live case.
+**Round 3** reversed round 2's fix for that live case, and was right to: round 2
+said skip the row, but the stat also fails *permanently* for a name carrying a
+byte outside the codepage, and skipping that tells the bridge a file the user
+can see in Explorer was deleted.
+
+Round 3 also dissolved an ordering constraint the previous round had called
+fatal. Fixing `tree_id`'s truncation would invalidate every baseline with a long
+root — but `root=` is already on the wire and never compared, so the collision
+the guard exists for is detectable bridge-side with no change to the guest
+string, no migration, and no ordering dependency at all.
+
+**The worst bug in the tree was not in the backlog.** `.gaston-tmp` and
+`.gaston-old` are both eleven characters longer than their target and both are
+built with a truncating `_snprintf` into `MAX_PATH`. The bridge reserved twelve
+characters for a *directory* from the first day and none at all for a file, so
+paths in the dangerous band passed the check and were pushed. At 251..257 the
+two working names truncate to the same string: the commit deletes its own
+verified temp file, moves the user's file aside and straight back, and returns
+**success**. The guest acks with the CRC it was sent, the bridge advances its
+baseline over bytes the machine never took, and the next pass reads the guest as
+having been edited by the user and pulls the stale content back over the agent's
+work. At 258 and 259 the temp name resolves to the target itself — Win32 strips
+a trailing dot — so `CREATE_ALWAYS` truncates the user's file in place at the
+first chunk, before the compare-and-swap that exists to protect it has run.
+
+Measured on the guest afterwards: 248 allowed, 249 refused, temp name 259
+characters and never shortened. `synccheck --limits` prints the boundary the
+guest actually enforces and the test diffs it against `bridge/caps.py`, because
+two numbers in two languages describing one rule is the shape that drifts.
+
+**Four bugs were in the halt/Continue contract, which had never been written
+down.** A file deleted between `FindNextFileA` and the stat produced a type-0
+row that formatted as a bare path, which the bridge could not parse, which made
+the count disagree with `files=`, which aborted the entire pass — with a log
+warning as the only symptom, the same shape as the directory/file crash. One
+Continue released latches raised after the bar went up, which the user was never
+shown. A standing type-change conflict re-raised the bar every thirty seconds
+after it had been answered, each time spawning a paid turn with an empty
+preamble. And the permission bar and the halt bar overwrote each other's state
+in both directions, either stranding every latched path forever or leaving a
+tool call unanswerable — reachable in the ordinary case, because the comment
+claiming the two were "mutually exclusive by construction" was simply false: a
+halt comes from a sync pass, and the agent writing files is what moves the tree.
+
+**A method note that cost a rewrite.** Two tests passed with their fix reverted.
+They asserted on counters inside `Pass`, and what the fixes changed was the
+wiring in `run_sync` and the RESUME handler. Rewritten to drive a real pass and
+a real frame, they fail as they should. Every fix here was checked by reverting
+it; that is cheap and it caught two tests that proved nothing.
