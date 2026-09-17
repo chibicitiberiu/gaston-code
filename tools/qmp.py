@@ -46,6 +46,9 @@ KEYMAP = {
     "!": "shift-1", "@": "shift-2", "#": "shift-3", "$": "shift-4",
     "%": "shift-5", "^": "shift-6", "&": "shift-7", "*": "shift-8",
     "(": "shift-9", ")": "shift-0", '"': "shift-apostrophe",
+    "<": "shift-comma", ">": "shift-dot", "{": "shift-bracket_left",
+    "}": "shift-bracket_right", "|": "shift-backslash",
+    "~": "shift-grave_accent",
 }
 
 
@@ -93,15 +96,32 @@ class Qmp:
             time.sleep(0.05)
 
     def type(self, text: str) -> None:
+        """Type `text` into the guest, or refuse.
+
+        It used to `continue` past anything it could not map, which is how
+        `ECHO x >> file` arrived in the guest as `ECHO x  file`: the two `>`
+        were dropped in silence, the command printed to the screen instead of
+        writing a file, and the sync pass that followed drew a perfectly
+        reasonable conclusion from a test that had never set up its own
+        precondition. A driver that silently types something other than what
+        you asked for is worse than one that does nothing.
+        """
+        # ASCII alnum only: 'é'.isalnum() is True in Python and there is no
+        # qcode for it, so the permissive test let it through to send-key.
+        missing = sorted({c for c in text
+                          if c not in KEYMAP
+                          and not (c.isascii() and c.isalnum())})
+        if missing:
+            raise ValueError(
+                f"no key mapping for {missing!r} in {text!r} -- add it to "
+                f"KEYMAP rather than letting it be dropped")
         for ch in text:
             if ch in KEYMAP:
                 self.key(KEYMAP[ch])
             elif ch.isupper():
                 self.key(f"shift-{ch.lower()}")
-            elif ch.isalnum():
-                self.key(ch)
             else:
-                continue
+                self.key(ch)
             time.sleep(0.02)
 
     # --- mouse -------------------------------------------------------------

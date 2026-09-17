@@ -33,6 +33,17 @@ from dataclasses import dataclass
 # always against the FULL path the guest would hold, never the relative part.
 MAX_PATH = 260
 
+# A DIRECTORY has to stop twelve characters earlier. CreateDirectory refuses a
+# path within 12 of MAX_PATH so that an 8.3 name still fits inside it -- an
+# ancient rule, still enforced, and not derivable from MAX_PATH.
+#
+# Found the honest way: the bridge measured 256 bytes, allowed it, and the
+# guest answered `too_long` to the SYNCMKDIR. Letting the receiver be the
+# limit check is exactly what the design says not to do -- the guest cannot
+# create the file in order to report the problem, so the report has to come
+# from here, with the path and the reason, before anything is sent.
+MAX_DIR_PATH = MAX_PATH - 12
+
 # VFAT and ext4 both stop here.
 MAX_COMPONENT = 255
 
@@ -96,12 +107,15 @@ def _component_ok(name: str) -> Skip | None:
     return None
 
 
-def check(relpath: str, *, guest_root: str, acp: str = "cp1252") -> Skip | None:
+def check(relpath: str, *, guest_root: str, acp: str = "cp1252",
+          is_dir: bool = False) -> Skip | None:
     """Can this relative path exist on the guest? None means yes.
 
     `relpath` uses "/" as the separator regardless of side; the guest joins with
     backslashes itself, which is why "\\" is on the illegal list -- it must never
     arrive inside a component.
+
+    `is_dir` tightens the length limit by twelve; see MAX_DIR_PATH.
     """
     # A drive spec is "X:" followed by a separator or nothing -- NOT any colon
     # in the second position. `a:b.txt` is an illegal-character case, and
@@ -118,11 +132,14 @@ def check(relpath: str, *, guest_root: str, acp: str = "cp1252") -> Skip | None:
 
     # The length that matters is what the guest would hold, prefix included.
     full = len(guest_root.rstrip("\\")) + 1 + len(relpath) + 1
-    if full > MAX_PATH:
+    limit = MAX_DIR_PATH if is_dir else MAX_PATH
+    if full > limit:
         return Skip(
             "path too long",
             f"{full} bytes once prefixed with {guest_root!r}; the limit is "
-            f"{MAX_PATH} including the NUL",
+            f"{limit} including the NUL"
+            + (" (a directory stops 12 short of MAX_PATH so an 8.3 name still "
+               "fits inside it)" if is_dir else ""),
         )
 
     # The single most common reason a Linux tree cannot cross. Checked LAST so
@@ -254,3 +271,37 @@ def rel_from_posix(root: str, path: str) -> str:
     """Bridge-side absolute path -> the wire's relative form."""
     rel = posixpath.relpath(path, root)
     return rel.replace("\\", "/")
+
+
+# --- the wire --------------------------------------------------------------
+#
+# A path's identity is the bytes the GUEST holds, and the guest speaks its ANSI
+# codepage. Encoding a path as UTF-8 on the way out is not a detail: `café.md`
+# goes out as `caf\xc3\xa9.md`, CreateFileA reads those bytes through CP1252,
+# and the guest ends up with a file called `cafÃ©.md`. The next manifest reports
+# that name, the bridge has never seen it, so it pulls it -- asking for
+# `cafÃ©.md` encoded as UTF-8, which is a third name that exists nowhere. The
+# tree grows a filename per pass and the original never syncs again.
+#
+# `check()` already refuses anything the codepage cannot carry. These two make
+# the transfer actually USE that representation.
+
+def wire_encode(relpath: str, *, acp: str = "cp1252") -> bytes:
+    """A relative path, as the bytes the guest will receive.
+
+    `surrogateescape` because `wire_decode` produces lone surrogates for the
+    five undefined CP1252 positions, which are legal in a VFAT long name. They
+    have to survive the trip back or the file can never be asked for again.
+    """
+    return relpath.encode(acp, "surrogateescape")
+
+
+def wire_decode(raw: bytes, *, acp: str = "cp1252") -> str:
+    """Guest bytes -> the string we key and display on.
+
+    NOT `errors="replace"`. That maps every undefined byte to U+FFFD, so two
+    distinct names collapse into one key -- one of them silently stops syncing
+    -- and neither can be encoded back to ask the guest for the file.
+    `surrogateescape` is exactly reversible by `wire_encode`.
+    """
+    return raw.decode(acp, "surrogateescape")

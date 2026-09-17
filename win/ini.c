@@ -22,9 +22,17 @@ void rc_config_load(rc_config *cfg, const char *exe_dir)
                              cfg->secret, sizeof(cfg->secret), path);
     cfg->font_size  = (int)GetPrivateProfileIntA("ui", "font_size", 0, path);
     cfg->autoscroll = (int)GetPrivateProfileIntA("ui", "autoscroll", 1, path);
+    /* "" disables sync. This line was missing for one real session on the
+     * guest: save() wrote the key, load() never read it back, so the sync root
+     * was empty on every launch and the whole layer was silently off. Exactly
+     * the font_size shape the comment in save() warns about, wearing the other
+     * face -- which is why inicheck.exe now asserts the round trip for every
+     * field rather than for the ones someone remembered. */
+    GetPrivateProfileStringA("sync", "root", "",
+                             cfg->sync_root, sizeof(cfg->sync_root), path);
 
-    rc_log("config: bridge=%s:%d autoscroll=%d", cfg->host, cfg->port,
-           cfg->autoscroll);
+    rc_log("config: bridge=%s:%d autoscroll=%d sync_root='%s'", cfg->host,
+           cfg->port, cfg->autoscroll, cfg->sync_root);
 
     /* Write the file back on first run so there is something to edit. */
     if (GetFileAttributesA(path) == 0xFFFFFFFF)
@@ -42,4 +50,9 @@ void rc_config_save(const rc_config *cfg, const char *exe_dir)
     WritePrivateProfileStringA("bridge", "secret", cfg->secret, path);
     _snprintf(num, sizeof(num), "%d", cfg->autoscroll);
     WritePrivateProfileStringA("ui", "autoscroll", num, path);
+    /* Every field that load() reads, save() must write. font_size was missed
+     * for months and the same omission would make a sync root vanish. */
+    _snprintf(num, sizeof(num), "%d", cfg->font_size);
+    WritePrivateProfileStringA("ui", "font_size", num, path);
+    WritePrivateProfileStringA("sync", "root", cfg->sync_root, path);
 }

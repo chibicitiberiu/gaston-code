@@ -31,7 +31,12 @@ REM COMMAND.COM rejects a trailing backslash on a COPY destination
 REM ("Invalid directory"), so C:\RETRO is written without one below.
 IF NOT EXIST C:\RETRO\NUL MD C:\RETRO
 COPY D:\*.EXE C:\RETRO > NUL
-COPY D:\*.INI C:\RETRO > NUL
+REM The app reads retroclaude.ini, NOT retrocl.ini. ISO level 1 forces the 8.3
+REM name on the CD, so a plain "COPY D:\*.INI" lands a file the client never
+REM opens -- it then falls back to its compiled-in defaults and, in the case
+REM that cost an hour, ran with an empty sync root and no error anywhere.
+REM Name the destination explicitly. The Win98 DOS box speaks long filenames.
+COPY D:\RETROCL.INI C:\RETRO\retroclaude.ini > NUL
 C:
 CD \RETRO
 ECHO Copied to C:\RETRO.  Run PROBE to start the Phase 0 experiments.

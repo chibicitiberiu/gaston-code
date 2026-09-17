@@ -20,15 +20,47 @@
 #include "rpc.h"
 #include "exec.h"
 #include "syncrpc.h"
+#include "sync.h"
 #include "log.h"
 
 static HANDLE           g_thread;
+/* The directory watcher, resolved dynamically. NULL is a supported outcome --
+ * the poll below is the mechanism and this only shortens the wait. Experiment
+ * 0.14 confirmed Win98 SE has it and that bWatchSubtree works on FAT, but a
+ * static import would kill the image at load on a guest that lacks it. */
+typedef HANDLE (WINAPI *FFCN)(LPCSTR, BOOL, DWORD);
+typedef BOOL   (WINAPI *FNCN)(HANDLE);
+typedef BOOL   (WINAPI *FCCN)(HANDLE);
+static FFCN   p_first_change;
+static FNCN   p_next_change;
+static FCCN   p_close_change;
+static HANDLE g_watch = INVALID_HANDLE_VALUE;
+static DWORD  g_last_poll;
+static DWORD  g_dirty_at;
 static HANDLE           g_wake;
 static CRITICAL_SECTION g_lock;
 static int              g_ready;
 static volatile LONG    g_running;
 static rc_frame        *g_queued;       /* at most one, guarded by g_lock */
 static rc_net          *g_net;
+
+/* SYNC* frames get their own FIFO, and that is not a refinement -- it is the
+ * difference between the layer working and not.
+ *
+ * A transfer is a STREAM: SYNCPUT off=0, off=8192, ... then SYNCPUTEND. Every
+ * chunk after the first arrives while the worker is inside the previous one,
+ * so the one-at-a-time job slot answers it `busy`. That rejects chunks 2..N of
+ * every transfer over 8KB -- which is most of them.
+ *
+ * Bounded, and the reader thread waits when it is full rather than the queue
+ * growing: this machine has 31MB and the bridge streams chunks without waiting
+ * for an ack, so an unbounded queue is a whole file in RAM. Blocking the
+ * reader closes the TCP window and the bridge's own drain() does the rest --
+ * the same mechanism net.c already uses for UI frames. */
+#define RPC_SYNCQ_MAX 24
+static rc_frame        *g_syncq[RPC_SYNCQ_MAX];
+static int              g_syncq_head;
+static int              g_syncq_n;
 
 /* Where the output of the command currently running goes. */
 typedef struct {
@@ -37,6 +69,58 @@ typedef struct {
 } exec_ctx;
 
 static int  is_sync(const rc_frame *f);
+static void reject_sync_busy(rc_frame *f);
+
+/* Generous, because the watcher shortens it when present -- and a brisk poll is
+ * CPU a 200MHz machine does not have to spare. */
+#define RPC_POLL_MS      200
+#define RPC_SETTLE_MS   2000
+#define RPC_SWEEP_MS   30000
+
+/* Tell the bridge the tree moved. It owns the baseline and decides what to do;
+ * the guest never reconciles anything itself. */
+static void rpc_maybe_nudge(void)
+{
+    DWORD now = GetTickCount();
+    int due = 0;
+
+    if (g_dirty_at && (now - g_dirty_at) > RPC_SETTLE_MS) {
+        due = 1;
+        g_dirty_at = 0;
+    } else if ((now - g_last_poll) > RPC_SWEEP_MS) {
+        due = 1;
+    }
+    if (!due || !rc_sync_root()[0]) return;
+
+    g_last_poll = now;
+    rc_net_send(g_net, "SYNCDIRTY", NULL, NULL, 0, NULL, 0);
+}
+
+static void rpc_watch_start(void)
+{
+    HMODULE k32 = GetModuleHandleA("kernel32.dll");
+    const char *root = rc_sync_root();
+
+    p_first_change = (FFCN)GetProcAddress(k32, "FindFirstChangeNotificationA");
+    p_next_change  = (FNCN)GetProcAddress(k32, "FindNextChangeNotification");
+    p_close_change = (FCCN)GetProcAddress(k32, "FindCloseChangeNotification");
+
+    if (!root[0] || !p_first_change || !p_next_change) {
+        rc_log("rpc: no directory watcher; polling every %dms", RPC_SWEEP_MS);
+        return;
+    }
+    g_watch = p_first_change(root, TRUE,
+                             FILE_NOTIFY_CHANGE_FILE_NAME |
+                             FILE_NOTIFY_CHANGE_LAST_WRITE |
+                             FILE_NOTIFY_CHANGE_SIZE);
+    if (g_watch == INVALID_HANDLE_VALUE || g_watch == NULL) {
+        rc_log("rpc: watcher failed on %s (err=%lu); polling instead",
+               root, (unsigned long)GetLastError());
+        g_watch = INVALID_HANDLE_VALUE;
+    } else {
+        rc_log("rpc: watching %s", root);
+    }
+}
 
 static void send_out(void *ctx, const char *data, unsigned len)
 {
@@ -164,25 +248,72 @@ static unsigned __stdcall rpc_thread(void *arg)
     while (g_running) {
         rc_frame *f = NULL;
 
+        /* Sync first, always. An EXEC runs for up to two minutes and a sync
+         * chunk queued behind it stalls a transfer the bridge is holding a
+         * future for; a sync frame, by contrast, is a few milliseconds of file
+         * I/O, so draining it first cannot starve anything. */
         EnterCriticalSection(&g_lock);
+        if (g_syncq_n) {
+            f = g_syncq[g_syncq_head];
+            g_syncq[g_syncq_head] = NULL;
+            g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
+            g_syncq_n--;
+            LeaveCriticalSection(&g_lock);
+            rc_sync_handle(g_net, f);
+            drop(f);
+            continue;
+        }
         f = g_queued;
         g_queued = NULL;
         LeaveCriticalSection(&g_lock);
 
         if (!f) {
-            /* Timed, so `running` going to 0 is noticed even with an idle
-             * queue. */
-            WaitForSingleObject(g_wake, 200);
+            /* The watcher is an ACCELERATOR. Polling is the mechanism, so the
+             * design is correct with the notification never firing -- which is
+             * what makes a guest without the export merely slower rather than
+             * broken.
+             *
+             * The branch matters: FindFirstChangeNotificationA returns
+             * INVALID_HANDLE_VALUE (-1), not NULL, on a missing root, and
+             * WaitForMultipleObjects on an invalid handle returns WAIT_FAILED
+             * IMMEDIATELY -- turning this loop into a 100% busy spin on a
+             * 200MHz machine. */
+            if (g_watch != INVALID_HANDLE_VALUE && g_watch != NULL) {
+                HANDLE hs[2];
+                DWORD r;
+                hs[0] = g_wake;
+                hs[1] = g_watch;
+                r = WaitForMultipleObjects(2, hs, FALSE, RPC_POLL_MS);
+                if (r == WAIT_OBJECT_0 + 1) {
+                    /* "Something under here changed" -- 9x gives no detail, so
+                     * note the time and rescan after the tree settles. A
+                     * compile would otherwise trigger a hundred passes. */
+                    g_dirty_at = GetTickCount();
+                    if (p_next_change) p_next_change(g_watch);
+                }
+            } else {
+                WaitForSingleObject(g_wake, RPC_POLL_MS);
+            }
+            rpc_maybe_nudge();
             continue;
         }
-        if (is_sync(f)) rc_sync_handle(g_net, f);
-        else            run_one(f);
+        run_one(f);
         drop(f);
     }
 
     /* Anything still queued at shutdown is answered, not silently dropped --
      * the bridge is holding a future for it. */
     EnterCriticalSection(&g_lock);
+    while (g_syncq_n) {
+        rc_frame *q = g_syncq[g_syncq_head];
+        g_syncq[g_syncq_head] = NULL;
+        g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
+        g_syncq_n--;
+        LeaveCriticalSection(&g_lock);
+        reject_sync_busy(q);
+        drop(q);
+        EnterCriticalSection(&g_lock);
+    }
     if (g_queued) {
         rc_frame *f = g_queued;
         g_queued = NULL;
@@ -216,6 +347,7 @@ int rc_rpc_start(rc_net *net)
         g_running = 0;
         return -1;
     }
+    rpc_watch_start();
     rc_log("rpc: worker started");
     return 0;
 }
@@ -259,6 +391,18 @@ static int id_matches_family(const rc_frame *f)
     return is_sync(f) ? (id[0] == 's') : (id[0] == 'x');
 }
 
+/* Reader-thread backpressure. The reader waits on this rather than the queue
+ * growing, so a stalled worker costs TCP window instead of heap. */
+int rc_rpc_syncq_full(void)
+{
+    int n;
+    if (!g_ready) return 0;
+    EnterCriticalSection(&g_lock);
+    n = g_syncq_n;
+    LeaveCriticalSection(&g_lock);
+    return n >= RPC_SYNCQ_MAX;
+}
+
 int rc_rpc_submit(rc_frame *f)
 {
     int busy = 0;
@@ -269,6 +413,28 @@ int rc_rpc_submit(rc_frame *f)
         rc_log("rpc: %s carries id %s, which belongs to another subsystem",
                f->type, rc_frame_get(f, "id") ? rc_frame_get(f, "id") : "(none)");
         drop(f);
+        return 0;
+    }
+
+    if (is_sync(f)) {
+        int full = 0;
+        EnterCriticalSection(&g_lock);
+        if (g_syncq_n >= RPC_SYNCQ_MAX) {
+            full = 1;
+        } else {
+            g_syncq[(g_syncq_head + g_syncq_n) % RPC_SYNCQ_MAX] = f;
+            g_syncq_n++;
+        }
+        LeaveCriticalSection(&g_lock);
+        if (full) {
+            /* The caller is rc_rpc_syncq_full()-aware and should not have got
+             * here; answering `busy` is better than dropping the frame, which
+             * would leave the bridge waiting out its whole timeout. */
+            reject_sync_busy(f);
+            drop(f);
+            return 0;
+        }
+        SetEvent(g_wake);
         return 0;
     }
 
@@ -300,6 +466,10 @@ void rc_rpc_stop(void)
 int rc_rpc_join(DWORD timeout_ms)
 {
     DWORD w;
+    if (g_watch != INVALID_HANDLE_VALUE && p_close_change) {
+        p_close_change(g_watch);
+        g_watch = INVALID_HANDLE_VALUE;
+    }
     if (!g_thread) return 1;
     w = WaitForSingleObject(g_thread, timeout_ms);
     if (w != WAIT_OBJECT_0) return 0;

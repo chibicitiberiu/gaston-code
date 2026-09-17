@@ -17,6 +17,8 @@ int  rc_rpc_start(rc_net *net);
 /* Hand a parsed EXEC frame to the worker. OWNERSHIP TRANSFERS: the worker
  * frees the frame and decrements net->rpcq. Returns 0 if queued. */
 int  rc_rpc_submit(rc_frame *f);
+/* True when the sync FIFO cannot take another frame; the reader waits. */
+int  rc_rpc_syncq_full(void);
 
 /* Ask the worker to stop and kill any child it is running. Returns at once. */
 void rc_rpc_stop(void);

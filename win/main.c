@@ -17,6 +17,8 @@
 #include "net.h"
 #include <ole2.h>
 #include "htmlview.h"
+#include "syncrpc.h"
+#include "sync.h"
 
 #define ID_TRANSCRIPT 1001
 #define ID_INPUT      1002
@@ -1479,6 +1481,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     InitCommonControlsEx(&icc);
 
     rc_config_load(&g_cfg, g_exe_dir);
+    rc_sync_set_root(g_cfg.sync_root);
+    if (g_cfg.sync_root[0]) {
+        /* Put back any file an interrupted commit left aside, BEFORE the first
+         * scan sees the path as missing and reports a deletion nobody made. */
+        rc_sync_recover(g_cfg.sync_root);
+        rc_log("sync: root is %s", g_cfg.sync_root);
+    }
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = wnd_proc;

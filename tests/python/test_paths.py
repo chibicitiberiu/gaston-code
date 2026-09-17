@@ -7,6 +7,8 @@ say which failure each prevents, because a test whose reason is forgotten gets
 
 import pytest
 
+from bridge import paths as P
+
 from bridge.paths import (CLASS_EXACT, CLASS_TEXT, canonical, case_collision,
                           check, classify, join_guest, normalise, to_bridge,
                           to_guest)
@@ -187,3 +189,53 @@ def test_a_real_edit_still_compares_different():
 def test_join_is_the_only_place_separators_convert():
     assert join_guest("C:\\WORK", "src/main.c") == "C:\\WORK\\src\\main.c"
     assert join_guest("C:\\WORK\\", "a.c") == "C:\\WORK\\a.c"
+
+
+# --- the wire representation ------------------------------------------------
+
+def test_wire_round_trip_is_exact_for_every_cp1252_byte():
+    """Including the five undefined positions, which are legal VFAT names.
+
+    `bytes.decode("cp1252", "replace")` maps 0x81, 0x8D, 0x8F, 0x90 and 0x9D
+    all to U+FFFD. Two files whose names differ only in one of those bytes then
+    share a key -- one of them silently stops syncing -- and neither name can
+    be encoded back to ask the guest for the file.
+    """
+    for b in range(0x20, 0x100):
+        raw = bytes([b]) + b".txt"
+        assert P.wire_encode(P.wire_decode(raw)) == raw, hex(b)
+
+
+def test_a_cp1252_name_goes_out_as_cp1252_not_utf8():
+    """The bug this closes grew a filename on the guest every single pass.
+
+    `café.md` encoded as UTF-8 is `caf\\xc3\\xa9.md`; CreateFileA reads those
+    bytes through the ANSI codepage and creates `cafÃ©.md`. The next manifest
+    reports that name, which the bridge has never seen, so it pulls it -- by
+    encoding `cafÃ©.md` as UTF-8, a third name that exists nowhere. Observed on
+    the real machine, exactly like that.
+    """
+    assert P.wire_encode("café.md") == b"caf\xe9.md"
+    assert P.wire_encode("café.md") != "café.md".encode("utf-8")
+    assert P.wire_decode(b"caf\xe9.md") == "café.md"
+
+
+def test_a_name_that_survives_check_can_be_put_on_the_wire():
+    """`check` passing and the transfer working must not be separate facts."""
+    for name in ("café.md", "naïve.txt", "£100.txt", "a b.txt", "ünïcödé.c"):
+        assert P.check(name, guest_root="C:\\WORK") is None
+        assert P.wire_decode(P.wire_encode(name)) == name
+
+
+def test_a_directory_stops_twelve_characters_short_of_max_path():
+    """CreateDirectory refuses within 12 of MAX_PATH, to leave room for an
+    8.3 name inside. Measured against the real guest: a 256-byte path passed
+    the file rule here and came back `too_long` from the SYNCMKDIR."""
+    root = "C:\\WORK"
+    rel = "/".join("d" * 30 for _ in range(8))          # 255 chars once joined
+    assert P.check(rel, guest_root=root) is None
+    bad = P.check(rel, guest_root=root, is_dir=True)
+    assert bad is not None and "too long" in bad.reason
+
+    short = "/".join("d" * 30 for _ in range(7))
+    assert P.check(short, guest_root=root, is_dir=True) is None

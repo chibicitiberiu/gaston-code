@@ -197,6 +197,30 @@ static unsigned __stdcall reader_thread(void *arg)
             continue;
         }
 
+        /* SYNC* goes to the worker too, and this line is load-bearing. Without
+         * it every sync frame falls through to the UI thread and lands in
+         * render_frame's "unhandled frame type" branch -- so the guest never
+         * answers a SYNCSCAN, the bridge waits out its 600s timeout holding
+         * the sync lock, and every later trigger logs "coalescing" forever.
+         * The symptom is a sync layer that looks wired up on both sides and
+         * transfers nothing, with no error on either.
+         *
+         * Backpressure before submit, not after: the worker can be inside a
+         * two-minute EXEC, and the bridge streams put chunks without waiting
+         * for an ack. Waiting here stops reading the socket, which is the one
+         * form of pushback that costs no memory. */
+        if (strncmp(f->type, "SYNC", 4) == 0) {
+            while (rc_rpc_syncq_full() && n->running)
+                Sleep(10);
+            InterlockedIncrement(&n->rpcq);
+            if (rc_rpc_submit(f) != 0) {
+                InterlockedDecrement(&n->rpcq);
+                rc_frame_free(f);
+                HeapFree(GetProcessHeap(), 0, f);
+            }
+            continue;
+        }
+
         /* Backpressure: if the UI is not keeping up, wait for it rather than
          * queueing without bound. Yielding here is correct -- the socket's
          * receive window does the rest. */

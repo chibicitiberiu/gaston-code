@@ -41,7 +41,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 OBJS = main.o net.o frameproto.o log.o ini.o htmlview.o miniz.o \
        exec.o rpc.o sync.o syncrpc.o
 
-.PHONY: synccheck all clean check run netcheck probe htmlspike
+.PHONY: synccheck inicheck all clean check run netcheck probe htmlspike
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
@@ -60,6 +60,16 @@ synccheck: synccheck.exe
 synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(SYNCCHECK_OBJS)}
+	@echo "built $@"
+
+# Asserts save() and load() agree on the field list. Two bugs of that exact
+# shape have shipped (font_size, then the sync root), and neither was visible
+# from reading the code.
+INICHECK_OBJS = inicheck.o ini.o log.o
+inicheck: inicheck.exe
+inicheck.exe: $(INICHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(INICHECK_OBJS)}
 	@echo "built $@"
 
 PROBE_OBJS = probe.o miniz.o
@@ -100,8 +110,10 @@ HDRS = $(wildcard *.h)
 miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h
 	@$(WCC) $(CFLAGS) -fo=$@ third_party/miniz/miniz.c
 
+# The map is not a debugging nicety: `make check` needs symbol names to gate on
+# stack frame sizes, and objdump cannot read Watcom's OMF objects.
 retroclaude.exe: $(OBJS)
-	@$(WLINK) $(LFLAGS) $(LIBS) name $@ file {$(OBJS)}
+	@$(WLINK) $(LFLAGS), map=retroclaude.map $(LIBS) name $@ file {$(OBJS)}
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # Known-good CMOV count. See the note in the check target: this is a data
@@ -132,6 +144,8 @@ check: retroclaude.exe
 	 if [ "$$n" -gt $(CMOV_BASELINE) ]; then \
 	   echo "   FAIL: $$n CMOV (baseline $(CMOV_BASELINE)) -- check -5 is still set"; exit 1; \
 	 else echo "   ok: $$n (baseline $(CMOV_BASELINE), known data false positive)"; fi
+	@echo "=== stack frames (a frame >= one page steps over the guard page) ==="
+	@$(PYTHON) $(TOP)/tools/stackframes.py retroclaude.exe retroclaude.map
 	@echo "=== static allocation (the guest has 28KB free after a turn) ==="
 	@# Uninitialised statics are committed at load and are spent before the
 	@# app does anything -- rc_net_send's frame build buffer alone is 66,560
@@ -146,4 +160,4 @@ rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII'
 print('   total committed at load: %d bytes' % sum(max(r[1],r[3]) for r in rows))"
 
 clean:
-	@rm -f *.o retroclaude.exe
+	@rm -f *.o *.map retroclaude.exe

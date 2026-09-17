@@ -80,26 +80,43 @@ static void manifest_add(void *ctx, const char *rel, const rc_sync_stat *st)
 static void do_scan(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
-    const char *keys[4];
-    const char *vals[4];
-    char files[16], tree[64];
+    const char *keys[5];
+    const char *vals[5];
+    char files[16], tree[64], sid[64];
     const char *status = "ok";
-    manifest_ctx m;
-    int n;
+    manifest_ctx *m;
+    int n, total = 0;
 
-    memset(&m, 0, sizeof(m));
-    m.net = net;
-    _snprintf(m.id, sizeof(m.id) - 1, "%s", id ? id : "");
+    /* On the heap. manifest_ctx holds a ~62KB frame buffer, and the RPC worker
+     * thread only has the image's 64KB stack commit -- so keeping it here left
+     * rc_sync_stat_file's 8KB frame, called from inside the scan, to land past
+     * the guard page and fault. See the long note in sync.c. */
+    m = (manifest_ctx *)HeapAlloc(GetProcessHeap(), 0, sizeof(manifest_ctx));
+    if (!m) {
+        const char *k[2]; const char *v[2];
+        k[0] = "id";     v[0] = id ? id : "?";
+        k[1] = "status"; v[1] = "too_many";   /* "abort the pass", which is right */
+        rc_log("sync: no memory for a manifest buffer");
+        rc_net_send(net, "SYNCEND", k, v, 2, NULL, 0);
+        return;
+    }
+    memset(m, 0, sizeof(*m));
+    m->net = net;
+    _snprintf(m->id, sizeof(m->id) - 1, "%s", id ? id : "");
 
     if (!g_root[0]) {
         status = "no_root";
         n = 0;
     } else {
-        n = rc_sync_scan(g_root, manifest_add, &m);
+        n = rc_sync_scan(g_root, manifest_add, m);
         if (n == -1)      status = "no_root";
         else if (n == -2) status = "too_many";
     }
-    manifest_flush(&m);
+    manifest_flush(m);
+    total = m->total;
+    _snprintf(sid, sizeof(sid) - 1, "%s", m->id);
+    sid[sizeof(sid) - 1] = '\0';
+    HeapFree(GetProcessHeap(), 0, m);
 
     /* The tree id is derived, never generated and stored: rc_config_save is
      * only ever called when the INI does not exist, so a generated id would be
@@ -114,14 +131,21 @@ static void do_scan(rc_net *net, rc_frame *f)
                   (unsigned long)serial, g_root);
         tree[sizeof(tree) - 1] = '\0';
     }
-    _snprintf(files, sizeof(files), "%d", m.total);
+    _snprintf(files, sizeof(files), "%d", total);
 
-    keys[0] = "id";      vals[0] = m.id;
+    /* The root travels explicitly. The bridge has to know it to apply the
+     * MAX_PATH test, which is on the FULL path the guest would hold -- and
+     * that test has to run bridge-side, before a push, because the guest
+     * cannot create the file in order to report the problem. It was hard-coded
+     * to "C:\\WORK" on the bridge, so any other root silently measured against
+     * the wrong prefix. */
+    keys[0] = "id";      vals[0] = sid;
     keys[1] = "status";  vals[1] = status;
     keys[2] = "files";   vals[2] = files;
     keys[3] = "tree_id"; vals[3] = tree;
-    rc_net_send(net, "SYNCEND", keys, vals, 4, NULL, 0);
-    rc_log("sync: scan %s -> %s, %d entries", m.id, status, m.total);
+    keys[4] = "root";    vals[4] = g_root;
+    rc_net_send(net, "SYNCEND", keys, vals, 5, NULL, 0);
+    rc_log("sync: scan %s -> %s, %d entries", sid, status, total);
 }
 
 /* --- receiving a file ---------------------------------------------------- */
@@ -134,10 +158,29 @@ static struct {
     int    active;
 } g_put;
 
+/* The transfer that most recently failed. A put is a STREAM -- chunks, then
+ * SYNCPUTEND -- so once one chunk fails, everything else carrying that id
+ * arrives at a state machine that is no longer active. Answering each of them
+ * sends one SYNCPUTACK per remaining frame; the bridge's future is resolved by
+ * the first and logs "SYNCPUTACK for s8, which nobody awaits" for the rest.
+ * Harmless here, but it is wire traffic and log noise proportional to file
+ * size, and it hides a genuine stray ack in the same message. Remember the id
+ * and stay quiet for it. */
+static char g_put_failed[64];
+
 static void put_fail(rc_net *net, const char *id, const char *why)
 {
     const char *keys[2];
     const char *vals[2];
+
+    /* Already answered for this transfer; the rest of the stream is noise. */
+    if (id && strcmp(g_put_failed, id) == 0) return;
+    if (id) {
+        _snprintf(g_put_failed, sizeof(g_put_failed) - 1, "%s", id);
+        g_put_failed[sizeof(g_put_failed) - 1] = '\0';
+    }
+    rc_log("sync: put %s failed: %s", id ? id : "(none)", why);
+
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = why;
     rc_net_send(net, "SYNCPUTACK", keys, vals, 2, NULL, 0);
@@ -170,6 +213,7 @@ static void do_put(rc_net *net, rc_frame *f)
 
     if (off && atol(off) == 0) {
         /* First chunk: open. */
+        g_put_failed[0] = '\0';     /* a new transfer, so answer again */
         if (g_put.active) { put_fail(net, id, "busy"); return; }
         if (!rc_sync_contained(rel)) { put_fail(net, id, "bad_path"); return; }
         _snprintf(g_put.id, sizeof(g_put.id) - 1, "%s", id);
@@ -177,7 +221,23 @@ static void do_put(rc_net *net, rc_frame *f)
         g_put.h = rc_sync_begin_write(g_root, g_put.rel,
                                       g_put.tmp, sizeof(g_put.tmp));
         if (g_put.h == INVALID_HANDLE_VALUE) {
-            put_fail(net, id, "readonly");
+            /* Reporting every open failure as `readonly` sent a real
+             * investigation after Win98 file permissions when the actual cause
+             * was a missing parent directory -- CreateFileA returns
+             * ERROR_PATH_NOT_FOUND for that, and the bridge had simply never
+             * sent the SYNCMKDIR. Pass the distinction on. */
+            DWORD err = GetLastError();
+            const char *why = "readonly";
+            if (err == ERROR_PATH_NOT_FOUND)      why = "no_parent";
+            else if (err == ERROR_DISK_FULL)      why = "no_space";
+            else if (err == ERROR_SHARING_VIOLATION ||
+                     err == ERROR_LOCK_VIOLATION) why = "locked";
+            else if (err == ERROR_FILENAME_EXCED_RANGE ||
+                     err == ERROR_BUFFER_OVERFLOW) why = "too_long";
+            else if (err == ERROR_INVALID_NAME)   why = "bad_path";
+            rc_log("sync: cannot open %s for writing: err=%lu (%s)",
+                   g_put.tmp, (unsigned long)err, why);
+            put_fail(net, id, why);
             return;
         }
         g_put.active = 1;
@@ -281,8 +341,19 @@ static void do_mkdir(rc_net *net, rc_frame *f)
             if (e == ERROR_ALREADY_EXISTS)
                 status = (a != 0xFFFFFFFF && (a & FILE_ATTRIBUTE_DIRECTORY))
                          ? "exists" : "is_file";
+            else if (e == ERROR_PATH_NOT_FOUND)
+                /* The parent is missing, which means the bridge sent these out
+                 * of order. Distinct from bad_path, which blames the name. */
+                status = "no_parent";
+            else if (e == ERROR_FILENAME_EXCED_RANGE ||
+                     e == ERROR_BUFFER_OVERFLOW)
+                status = "too_long";
+            else if (e == ERROR_DISK_FULL)
+                status = "no_space";
             else
                 status = "bad_path";
+            rc_log("sync: mkdir %s failed: err=%lu (%s)", full,
+                   (unsigned long)e, status);
         }
     }
     keys[0] = "id";     vals[0] = id ? id : "?";
@@ -300,11 +371,24 @@ static void do_get(rc_net *net, rc_frame *f)
     char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4], *q;
     rc_sync_stat st;
     HANDLE h;
-    char buf[RC_SYNC_CHUNK];
+    /* Heap, for the same reason as do_scan's manifest: this runs on the RPC
+     * worker and calls rc_sync_stat_file, which needs its own 16KB of scratch
+     * underneath. Two 8KB stack frames in one call chain is what faulted. */
+    char *buf;
     DWORD got = 0, sent = 0;
     const char *status = "ok";
 
     if (!id) return;
+    buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
+    if (!buf) {
+        const char *k[2]; const char *v[2];
+        k[0] = "id";     v[0] = id;
+        k[1] = "status"; v[1] = "locked";   /* retryable, and honest: we could
+                                             * not read it right now */
+        rc_log("sync: no memory for a get buffer");
+        rc_net_send(net, "SYNCDATEND", k, v, 2, NULL, 0);
+        return;
+    }
     if (!rc_sync_contained(f->body)) status = "missing";
     else {
         _snprintf(full, sizeof(full) - 1, "%s\\%s", g_root, f->body);
@@ -322,7 +406,7 @@ static void do_get(rc_net *net, rc_frame *f)
             if (h == INVALID_HANDLE_VALUE) status = "locked";
             else {
                 _snprintf(total, sizeof(total), "%lu", (unsigned long)st.size);
-                while (ReadFile(h, buf, sizeof(buf), &got, NULL) && got) {
+                while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
                     _snprintf(offs, sizeof(offs), "%lu", (unsigned long)sent);
                     keys[0] = "id";    vals[0] = id;
                     keys[1] = "total"; vals[1] = total;
@@ -346,6 +430,7 @@ static void do_get(rc_net *net, rc_frame *f)
     keys[2] = "crc";    vals[2] = crcs;
     keys[3] = "cls";    vals[3] = clss;
     rc_net_send(net, "SYNCDATEND", keys, vals, 4, NULL, 0);
+    HeapFree(GetProcessHeap(), 0, buf);
 }
 
 void rc_sync_handle(rc_net *net, rc_frame *f)

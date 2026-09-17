@@ -34,12 +34,16 @@ typedef struct {
     int  saw_bare_lf;
     int  saw_lone_cr;           /* a CR not followed by LF -- includes \r\r\n */
     int  pending_cr;            /* last byte of the previous chunk was CR */
+    /* The normalised copy of the chunk being scanned. It lives HERE, in a
+     * heap-allocated state block, and not as a local in scan_chunk -- see the
+     * note on rc_sync_stat_file. */
+    unsigned char nb[RC_SYNC_CHUNK];
 } scan_state;
 
 static void scan_chunk(scan_state *s, const unsigned char *buf, unsigned n)
 {
     unsigned i;
-    unsigned char nb[RC_SYNC_CHUNK];
+    unsigned char *nb = s->nb;
     unsigned nn = 0;
 
     s->crc_raw = mz_crc32(s->crc_raw, buf, n);
@@ -95,17 +99,49 @@ static DWORD to_unix(const FILETIME *ft)
     return (DWORD)((u.QuadPart / 10000000ULL) - 11644473600ULL);
 }
 
+/* The scratch for one file scan: the 8KB read buffer and the scan state, which
+ * carries another 8KB for the normalised copy.
+ *
+ * ON THE HEAP, DELIBERATELY, and this is not a micro-optimisation -- it is the
+ * fix for a real invalid-page-fault on the guest. The RPC worker thread gets
+ * the image's 64KB stack COMMIT, and do_scan already holds a ~62KB manifest
+ * buffer in its frame when it calls down here. Open Watcom emits a plain
+ * `sub esp, 0x202c` for an 8KB frame with no stack probe, so the next push
+ * lands BELOW the guard page rather than on it: the page is never committed,
+ * and the process dies with "invalid page fault in module RETROCL.EXE".
+ *
+ * It is also why this looked intermittent. It ran for a whole session against
+ * a flat tree and faulted the first time the tree gained a subdirectory --
+ * one more `walk` frame, about 1.1KB, was enough to move the skip past the
+ * guard. Nothing about the new directory was wrong; it just shifted the
+ * arithmetic. A bug you cannot reproduce by trying the same thing twice. */
+typedef struct {
+    scan_state    st;
+    unsigned char buf[RC_SYNC_CHUNK];
+} scan_scratch;
+
 int rc_sync_stat_file(const char *path, rc_sync_stat *out)
 {
     HANDLE h;
-    scan_state st;
-    unsigned char buf[RC_SYNC_CHUNK];
+    scan_scratch *sc;
+    scan_state *stp;
+    unsigned char *buf;
     DWORD got = 0;
     FILETIME ft;
 
-    memset(&st, 0, sizeof(st));
-    st.crc_raw = st.crc_norm = MZ_CRC32_INIT;
     memset(out, 0, sizeof(*out));
+    sc = (scan_scratch *)HeapAlloc(GetProcessHeap(), 0, sizeof(scan_scratch));
+    if (!sc) {
+        /* Out of memory is not "the file is fine". Unreadable is the honest
+         * answer and the one the bridge already knows to skip for a pass. */
+        out->type = 'u';
+        return 0;
+    }
+    stp = &sc->st;
+    buf = sc->buf;
+
+    memset(stp, 0, sizeof(*stp));
+    stp->crc_raw = stp->crc_norm = MZ_CRC32_INIT;
 
     /* FILE_SHARE_READ | FILE_SHARE_WRITE: a Win98 editor holds a share-deny
      * lock, and a file we cannot read must be reported UNREADABLE rather than
@@ -115,32 +151,35 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
                     NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         out->type = 'u';
+        HeapFree(GetProcessHeap(), 0, sc);
         return 0;
     }
 
     for (;;) {
-        if (!ReadFile(h, buf, sizeof(buf), &got, NULL)) {
+        if (!ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL)) {
             CloseHandle(h);
             out->type = 'u';
+            HeapFree(GetProcessHeap(), 0, sc);
             return 0;
         }
         if (!got) break;
-        scan_chunk(&st, buf, got);
+        scan_chunk(stp, buf, got);
         out->size += got;
     }
     /* A file ending in CR: the carry never resolved, so it is a lone CR. */
-    if (st.pending_cr) {
+    if (stp->pending_cr) {
         unsigned char cr = '\r';
-        st.saw_lone_cr = 1;
-        st.crc_norm = mz_crc32(st.crc_norm, &cr, 1);
+        stp->saw_lone_cr = 1;
+        stp->crc_norm = mz_crc32(stp->crc_norm, &cr, 1);
     }
 
     if (GetFileTime(h, NULL, NULL, &ft)) out->mtime = to_unix(&ft);
     CloseHandle(h);
 
     out->type = 'f';
-    out->cls = scan_class(&st);
-    out->crc = (out->cls == RC_CLS_TEXT) ? st.crc_norm : st.crc_raw;
+    out->cls = scan_class(stp);
+    out->crc = (out->cls == RC_CLS_TEXT) ? stp->crc_norm : stp->crc_raw;
+    HeapFree(GetProcessHeap(), 0, sc);
     return 0;
 }
 
@@ -187,6 +226,14 @@ typedef struct {
     int          overflow;
 } walk_ctx;
 
+int rc_sync_is_working_name(const char *name)
+{
+    unsigned len = (unsigned)strlen(name);
+    if (len > 11 && strcmp(name + len - 11, RC_SYNC_TMP_SUFFIX) == 0) return 1;
+    if (len > 11 && strcmp(name + len - 11, RC_SYNC_OLD_SUFFIX) == 0) return 1;
+    return 0;
+}
+
 static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
 {
     char pattern[MAX_PATH];
@@ -212,6 +259,11 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
             (fd.cFileName[1] == '\0' ||
              (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0')))
             continue;
+
+        /* Never report our own working files. rc_sync_recover knows these
+         * names; the scanner did not, so a half-written `.gaston-tmp` was
+         * offered to the bridge as an ordinary new file and pulled. */
+        if (rc_sync_is_working_name(fd.cFileName)) continue;
 
         /* ALWAYS the long name, never cAlternateFileName. The 8.3 alias is not
          * stable -- deleting one file renumbers ~1/~2 for the others -- so

@@ -170,6 +170,10 @@ class Bridge:
         # under load genuinely does pause.
         self.idle_timeout_s = 90.0
         self.idle_check_s = 15.0
+        #: Sync is OFF unless a root is named. Defaulting to the bridge's own
+        #: working directory would point it at .venv and vm/*.qcow2.
+        self.sync_dir: str | None = None
+        self.sync_state: str = ""
         # How long a pending permission request survives a dropped link. Long
         # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
         # of the 10 minute answer deadline.
@@ -797,6 +801,11 @@ class Bridge:
             log.info("input: %s", text[:120])
             asyncio.create_task(self._run_turn(guest, text))
 
+        elif f.type == "SYNCDIRTY":
+            # The guest noticed its tree move. It never reconciles anything
+            # itself -- the bridge owns the baseline and decides.
+            self._spawn(self.run_sync("the guest reported a change"))
+
         elif f.type in ("SYNCENT", "SYNCEND", "SYNCPUTACK", "SYNCMKDIRACK",
                         "SYNCDAT", "SYNCDATEND"):
             await self._sync_frame(guest, f)
@@ -1024,6 +1033,44 @@ class Bridge:
         self._spawn(self._send(guest, Frame("EXECKILL", {"id": exec_id}),
                                stamp=False))
 
+    async def run_sync(self, why: str) -> dict:
+        """One pass, serialised against every other trigger.
+
+        Three triggers -- the guest's watcher, a periodic sweep, and the agent
+        asking -- and no lock would let two passes both read the baseline and
+        both advance it, with the second carrying a generation the first is
+        about to invalidate.
+        """
+        guest = self._guest
+        if guest is None or not guest.connected or not self.sync_dir:
+            return {}
+        if guest.sync_lock.locked():
+            log.debug("sync already running; coalescing (%s)", why)
+            return {}
+
+        async with guest.sync_lock:
+            guest.sync_active = True
+            try:
+                from .syncrun import Pass
+                p = Pass(self, guest, self.sync_dir, self.sync_state)
+                got = await p.run()
+                log.info("sync (%s): %s", why,
+                         {k: v for k, v in got.items()
+                          if k not in ("reports", "notices")})
+                # Reports are the only record of a path that did NOT move, and
+                # a counter of zero says nothing about why. Logging them is how
+                # "six of seven files transferred" stops looking like success.
+                for line in got.get("reports", []):
+                    log.warning("sync: %s", line)
+                for note in got.get("notices", []):
+                    await self._write_block(guest, H.notice(note))
+                return got
+            except Exception as exc:
+                log.warning("sync pass aborted: %s", exc)
+                return {"error": str(exc)}
+            finally:
+                guest.sync_active = False
+
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""
         sid = f.headers.get("id", "")
@@ -1050,7 +1097,12 @@ class Bridge:
                 except (ValueError, IndexError):
                     log.warning("unparseable manifest line: %r", line[:80])
                     continue
-                rel = raw.decode("cp1252", "replace")
+                # surrogateescape, never "replace": the five undefined CP1252
+                # positions are legal in a VFAT long name, and "replace" maps
+                # them all to U+FFFD -- so two distinct files get one key, one
+                # of them silently stops syncing, and neither name can be
+                # encoded back to ask the guest for the file.
+                rel = P.wire_decode(raw)
                 key = P.canonical(rel)
                 entry["rows"][key] = SyncEntry(
                     type=SyncType(typ.decode()),
@@ -1065,6 +1117,7 @@ class Bridge:
                 fut.set_result((f.headers.get("status", "ok"),
                                 int(f.headers.get("files", "0")),
                                 f.headers.get("tree_id", ""),
+                                f.headers.get("root", ""),
                                 entry["rows"], entry["display"]))
 
         elif f.type in ("SYNCPUTACK", "SYNCMKDIRACK"):
@@ -1510,6 +1563,14 @@ def main() -> None:
     ap.add_argument("--model", default=None)
     ap.add_argument("--effort", default=None, choices=[None, "low", "medium",
                                                        "high", "xhigh", "max"])
+    # Deliberately separate from --cwd and never defaulted. Defaulting to the
+    # launch directory would point sync at the whole repo, .venv and
+    # vm/*.qcow2 included.
+    ap.add_argument("--sync-dir", default=None,
+                    help="the tree mirrored to the guest; sync is off without it")
+    ap.add_argument("--sync-state", default=None,
+                    help="where the baseline lives; MUST be outside --sync-dir, "
+                         "or it is mirrored to the guest and recurses")
     ap.add_argument("--link-bps", type=float, default=None,
                     help="assume this link speed in bytes/sec (testing: "
                          "5000 simulates dialup and forces the slow-link path)")
@@ -1530,6 +1591,22 @@ def main() -> None:
     bridge = Bridge(secret, host=args.host, port=args.port,
                     cwd=args.cwd, model=args.model, effort=args.effort,
                     link_bps=args.link_bps)
+    if args.sync_dir:
+        bridge.sync_dir = os.path.abspath(args.sync_dir)
+        bridge.sync_state = os.path.abspath(
+            args.sync_state
+            or os.path.join(bridge.sync_dir, os.pardir, ".gaston-state"))
+        # The baseline must not live inside the tree it describes, or a full
+        # second copy of every file is mirrored to the guest, then scanned,
+        # then copied again.
+        if os.path.commonpath([bridge.sync_state, bridge.sync_dir]) \
+                == bridge.sync_dir:
+            raise SystemExit(
+                "--sync-state must be OUTSIDE --sync-dir: a baseline inside "
+                "the tree it describes gets mirrored to the guest and recurses")
+        os.makedirs(bridge.sync_state, exist_ok=True)
+        log.info("sync: %s <-> guest, baseline in %s",
+                 bridge.sync_dir, bridge.sync_state)
     try:
         asyncio.run(bridge.serve_forever())
     except KeyboardInterrupt:

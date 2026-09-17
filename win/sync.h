@@ -52,6 +52,17 @@ HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
                            unsigned tmp_cap);
 int    rc_sync_commit(const char *root, const char *rel, const char *tmp,
                       unsigned long want_crc, char cls);
+/* Our own working names. The scanner must SKIP both, or an interrupted write
+ * leaves a file the next manifest reports as ordinary -- the bridge has never
+ * seen it, so it pulls it, and now both sides hold a permanent `.gaston-tmp`
+ * that syncs forever. Observed: the bridge's tree grew `cafÃ©.md.gaston-tmp`
+ * from a put that failed on a path bug, and nothing ever removed it. */
+#define RC_SYNC_TMP_SUFFIX  ".gaston-tmp"
+#define RC_SYNC_OLD_SUFFIX  ".gaston-old"
+
+/* Non-zero if `name` is one of ours and must not appear in a manifest. */
+int    rc_sync_is_working_name(const char *name);
+
 /* Recover an interrupted commit: if <p>.gaston-old exists and <p> does not,
  * put it back. Called once at startup, before the first scan. */
 void   rc_sync_recover(const char *root);

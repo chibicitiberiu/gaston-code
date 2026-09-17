@@ -12,6 +12,7 @@ typedef struct {
     char secret[128];
     int  font_size;
     int  autoscroll;
+    char sync_root[128];      /* "" disables sync entirely */
 } rc_config;
 
 void rc_config_load(rc_config *cfg, const char *exe_dir);

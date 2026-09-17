@@ -65,11 +65,22 @@ CORPUS = {
 }
 
 
+#: Names the guest scanner must NEVER report. They are its own working files,
+#: and reporting one makes the bridge treat a half-finished write as ordinary
+#: content: it has never seen that path, so it pulls it, and both sides then
+#: hold a permanent `x.md.gaston-tmp` beside `x.md`. That is not hypothetical
+#: -- a failed push on the real machine left one behind and the next pass
+#: copied it to the bridge.
+WORKING_NAMES = ("lf.gaston-tmp", "lf.gaston-old")
+
+
 @pytest.fixture(scope="module")
 def guest_answers(tmp_path_factory):
     d = tmp_path_factory.mktemp("corpus")
     for name, data in CORPUS.items():
         (d / name).write_bytes(data)
+    for name in WORKING_NAMES:
+        (d / name).write_bytes(b"should not be reported\n")
     env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
     out = subprocess.run([WINE, EXE, str(d)], capture_output=True,
                          timeout=300, env=env)
@@ -105,6 +116,14 @@ def test_crc_matches_the_bridge(name, guest_answers):
 
 def test_every_corpus_file_was_seen(guest_answers):
     assert set(guest_answers) >= set(CORPUS)
+
+
+def test_the_guest_scanner_hides_its_own_working_files(guest_answers):
+    """The shipping `walk` in win/sync.c, not a reimplementation of it."""
+    leaked = [n for n in WORKING_NAMES if n in guest_answers]
+    assert not leaked, (
+        f"the guest manifest offered {leaked} -- the bridge would pull them "
+        f"and they would then sync forever")
 
 
 def test_the_corpus_actually_covers_both_classes():
