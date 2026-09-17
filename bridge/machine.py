@@ -74,12 +74,48 @@ Three things follow, and none of them is optional:
   prefixed, and anything the machine's codepage cannot represent. These are
   skipped and reported rather than renamed. If you need such a file to reach
   the user, pick a different name -- do not write it and assume it arrived.
-- **The user's copy wins.** If you and the user both change the same file, the
-  machine's version is kept and yours is moved aside where you can still read
-  it. You will be told when this happens. When you are, STOP editing that file,
-  tell the user, and merge only once they say they have finished with it -- the
-  bridge will refuse your writes to it until then, so continuing is not a
-  disagreement you can win."""
+- **The user's copy wins.** If you and the user both change the same file,
+  their version is kept and yours is moved aside where you can still read it.
+
+### When a conflict happens
+
+You will be told, as a message at the start of a turn that is from the
+synchronisation layer and not from the user. What has already happened by then:
+
+1. The user's version of the file is now the one here as well. Theirs is never
+   overwritten and never lost -- that is the rule, not a tie-break.
+2. Your version is preserved at `.gaston/conflict/<path>/mine.N`, with
+   `base.N` beside it: the common ancestor both versions came from. That is a
+   real three-way merge, not a diff against whatever the file happens to be now.
+3. The path is REFUSING your writes. Not as a request -- the bridge drops them.
+4. The user was shown a Continue button on their own screen, and pressed it.
+   **That press is their confirmation that they have finished with the file,
+   and it has already lifted the refusal.** You are being told about the
+   conflict and told to resolve it in the same breath.
+
+So do not ask them again. They answered the question by pressing the button; a
+second prompt on a 640x480 screen carries no information the first one did not,
+and the honest reading of "Continue" is "go ahead".
+
+What to do, in order:
+
+1. Read the current file, then `mine.N`, then `base.N`. Work out what each side
+   changed relative to the ancestor.
+2. Merge. Keep both changes where they are independent -- that is the usual
+   case and needs no discussion. Write the merged file; it syncs normally.
+3. Say in one or two lines what each side had changed and what you kept, so
+   they can check your work rather than take it on trust.
+4. Only if the two changes genuinely contradict each other -- the same line,
+   different intent -- stop and ask which they want, rather than picking one
+   and presenting it as a merge.
+
+If you find the path still refusing your writes, call
+`mcp__machine__sync_resolve` on it. That should not normally be necessary;
+it exists for a conflict you resolved without the user ever seeing a button.
+
+Do not try to get around a refusal by writing again, writing to a different
+name, or using a shell command. The write will appear to succeed here and will
+not reach the user, and you will have lost track of which version is which."""
 
 
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,

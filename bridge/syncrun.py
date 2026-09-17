@@ -16,6 +16,7 @@ import logging
 import os
 import zlib
 
+from . import caps as C
 from . import ignores as I
 from . import paths as P
 from . import sync as S
@@ -48,13 +49,11 @@ class Pass:
     #: `scan_guest` overwrites it on the instance from the guest's own answer.
     guest_root = "C:\\WORK"
 
-    #: The guest's ANSI codepage. Every path on the wire is encoded with it,
-    #: and every path off the wire decoded with it, because that is the
-    #: representation the guest's filesystem actually stores. HELLO does not
-    #: carry GetACP() yet, so this is still an assumption -- a CP1250 guest
-    #: would case-fold through the wrong table -- but it is one assumption in
-    #: one place rather than UTF-8 scattered through the transfers.
-    acp = "cp1252"
+    #: What the client at the other end IS -- codepage, case rules, device
+    #: names, line endings, path limits. Read from HELLO; see `bridge/caps.py`.
+    #: The class-level value is the Win9x assumption, and applies only to a
+    #: client too old to declare anything.
+    caps = C.Caps()
 
     def __init__(self, bridge, guest, root: str, state_dir: str):
         self.bridge = bridge
@@ -62,6 +61,29 @@ class Pass:
         self.root = root
         self.state = os.path.join(state_dir, "base.json")
         self.base = S.Baseline.load(self.state)
+
+        # What the client says it is, or the Win9x assumption if it is too old
+        # to say. A value the bridge cannot honour stops the pass here.
+        try:
+            self.caps = C.from_hello(getattr(guest, "hello", {}) or {})
+        except C.CapsError as exc:
+            raise SyncError(str(exc)) from None
+
+        # A codepage or case-rule CHANGE re-keys the whole baseline, because
+        # `canonical` folds through both. Every row would then miss, read as
+        # "absent on both sides", and resolve as a tombstone or a first-sync
+        # conflict -- across the entire tree, in one pass, with the agent's
+        # work staged into conflict/ at best. Refuse, exactly like a tree_id
+        # mismatch, and let a human decide.
+        keying = f"{self.caps.acp}/{self.caps.case}"
+        if self.base.acp and self.base.acp != keying:
+            raise SyncError(
+                f"this baseline keys its paths as {self.base.acp} and the "
+                f"machine now reports {keying}. Refusing: the matching keys "
+                f"are folded through the codepage and the case rule, so "
+                f"continuing would miss every row and read the whole tree as "
+                f"deleted.")
+        self.base.acp = keying
         self.reports: list[str] = []
         #: Where the guest keeps the mirror. Reported by SYNCEND, because the
         #: MAX_PATH test measures the FULL path the guest would hold and has to
@@ -151,12 +173,14 @@ class Pass:
             keep = []
             for name in dirnames:
                 rel = P.rel_from_posix(self.root, os.path.join(dirpath, name))
-                bad = P.check(rel, guest_root=self.guest_root, is_dir=True)
+                bad = P.check(rel, guest_root=self.guest_root,
+                              caps=self.caps, is_dir=True)
                 if bad is not None:
                     self.reports.append(f"skipped {rel}/: {bad}")
                     continue
                 keep.append(name)
-                rows[P.canonical(rel)] = S.Entry(type=S.Type.DIR, display=rel)
+                rows[P.canonical(rel, caps=self.caps)] = S.Entry(
+                    type=S.Type.DIR, display=rel)
             dirnames[:] = keep
             for name in filenames:
                 full = os.path.join(dirpath, name)
@@ -167,11 +191,11 @@ class Pass:
                 rel = P.rel_from_posix(self.root, full)
                 if ignore and ignore(rel):
                     continue
-                bad = P.check(rel, guest_root=self.guest_root)
+                bad = P.check(rel, guest_root=self.guest_root, caps=self.caps)
                 if bad is not None:
                     self.reports.append(f"skipped {rel}: {bad}")
                     continue
-                key = P.canonical(rel)
+                key = P.canonical(rel, caps=self.caps)
                 clash = seen.get(key)
                 if clash is not None:
                     # The NEWCOMER is refused. Refusing both would retroactively
@@ -207,13 +231,13 @@ class Pass:
                 f"one file must not hold the wire")
             return False
         cls = P.classify(data)
-        wire = P.to_guest(data, cls)
+        wire = P.to_guest(data, cls, self.caps)
         crc = zlib.crc32(P.normalise(data, cls))
 
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
         self.guest.sync_pending[sid] = {"future": fut}
-        rb = P.wire_encode(rel, acp=self.acp)
+        rb = P.wire_encode(rel, acp=self.caps.acp)
         prefix = str(len(rb)).encode() + b" " + rb
 
         try:
@@ -278,7 +302,7 @@ class Pass:
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
         self.guest.sync_pending[sid] = {"future": fut}
-        rb = P.wire_encode(rel, acp=self.acp)
+        rb = P.wire_encode(rel, acp=self.caps.acp)
         try:
             await self.bridge._send(
                 self.guest, Frame("SYNCGET", {"id": sid}, rb), stamp=False)
@@ -340,7 +364,7 @@ class Pass:
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
         self.guest.sync_pending[sid] = {"future": fut}
-        rb = P.wire_encode(rel, acp=self.acp)
+        rb = P.wire_encode(rel, acp=self.caps.acp)
         try:
             await self.bridge._send(
                 self.guest, Frame("SYNCMKDIR", {"id": sid}, rb), stamp=False)
@@ -561,11 +585,14 @@ class Pass:
                 self.base.latched[dec.key] = dec.reason
                 done["latched"] += 1
                 self.note(
-                    f"SYNC CONFLICT {rel} -- {dec.reason}. The machine's "
-                    f"version wins. Yours is preserved at {mine} with the "
-                    f"common ancestor beside it. STOP editing this file, tell "
-                    f"the user, and merge only once they confirm they have "
-                    f"finished with it.")
+                    f"SYNC CONFLICT {rel} -- {dec.reason}. The user's version "
+                    f"is kept, here and on their machine. Yours is preserved "
+                    f"at {mine}, with the ancestor both came from beside it. "
+                    f"Merge the two: read the current file, then that copy, "
+                    f"then the ancestor, and keep both changes where they do "
+                    f"not contradict. The user has already confirmed they are "
+                    f"finished with the file, so do not ask them again -- say "
+                    f"what each side changed and what you kept.")
 
                 if g is not None and g.type is S.Type.FILE:
                     if await self.pull(dec.key, g.display or dec.key, b):

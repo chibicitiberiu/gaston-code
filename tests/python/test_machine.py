@@ -83,9 +83,50 @@ def test_prompt_says_the_users_copy_wins():
     out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
                         guest_root="C:\\WORK")
     low = out.lower()
-    assert "machine's version is kept" in low
-    assert "stop editing that file" in low
-    assert "refuse your writes" in low
+    assert "their version is kept" in low
+    assert "never overwritten and never lost" in " ".join(low.split())
+    assert "refusing your writes" in low
+
+
+def test_prompt_gives_the_conflict_procedure_in_order():
+    """Knowing a conflict happened is not the same as knowing what to do.
+
+    The agent has to read three files, merge, and say what it kept. Leave any
+    of it out and the likely behaviour is to rewrite the file -- which succeeds
+    here, reaches nobody, and loses track of which version is which.
+    """
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK")
+    assert "mine.N" in out and "base.N" in out
+    assert "common ancestor" in out
+    assert "Continue button" in out
+    assert "different name" in out, "the obvious workaround is not ruled out"
+
+
+def test_prompt_tells_the_agent_not_to_ask_for_a_second_confirmation():
+    """Pressing Continue IS the confirmation, and it has already lifted the
+    refusal by the time the agent is told anything.
+
+    An agent that asks again puts a second dialog in front of someone who just
+    answered the question, on a 640x480 screen, carrying no information the
+    first one did not.
+    """
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK")
+    flat = " ".join(out.split())
+    assert "already lifted the refusal" in flat
+    assert "do not ask them again" in flat.lower()
+    assert "Merge. Keep both changes where they are independent" in flat
+    # sync_resolve is still documented, but as the exception rather than a gate
+    assert "should not normally be necessary" in flat
+
+
+def test_prompt_says_the_conflict_message_is_not_from_the_user():
+    """It arrives as a turn preamble, and a model that reads it as the user
+    speaking will answer it conversationally instead of acting."""
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK")
+    assert "not from the user" in out
 
 
 def test_prompt_does_not_promise_tools_that_do_not_exist():

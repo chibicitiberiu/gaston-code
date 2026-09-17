@@ -7,13 +7,18 @@ say which failure each prevents, because a test whose reason is forgotten gets
 
 import pytest
 
+from bridge import caps as C
 from bridge import paths as P
-
 from bridge.paths import (CLASS_EXACT, CLASS_TEXT, canonical, case_collision,
                           check, classify, join_guest, normalise, to_bridge,
                           to_guest)
 
 ROOT = "C:\\WORK"
+
+
+def _caps(**kw):
+    """A client differing from the Win9x default in one respect."""
+    return C.Caps(**kw)
 
 
 def ok(rel, **kw):
@@ -82,7 +87,7 @@ def test_names_with_no_form_in_the_guest_codepage():
     missing from the filter entirely until round 3."""
     assert why("日本語.md") == "not representable on the guest"
     assert ok("café.md")                       # cp1252 can carry this
-    assert why("café.md", acp="cp437") is None or True   # depends on table
+    assert why("café.md", caps=_caps(acp="cp437")) is None or True   # depends on table
 
 
 def test_a_specific_reason_beats_a_generic_one():
@@ -239,3 +244,71 @@ def test_a_directory_stops_twelve_characters_short_of_max_path():
 
     short = "/".join("d" * 30 for _ in range(7))
     assert P.check(short, guest_root=root, is_dir=True) is None
+
+
+# --- the codepage, which is the one silent failure in this layer ------------
+#
+# Every other way of getting a path wrong is loud: a name the guest cannot hold
+# is skipped with a reason, a path too long comes back `too_long`, a case
+# collision refuses the newcomer. A wrong CODEPAGE is different. The bridge
+# encodes with the wrong table, the guest stores those bytes, reports them
+# back, and the bridge decodes with the same wrong table and sees the name it
+# sent. Perfectly self-consistent, stable across passes, and the user simply
+# has a file whose name is mangled on their own disk.
+
+def test_a_known_codepage_maps_to_a_real_codec():
+    assert P.codec_for_acp(1252) == "cp1252"
+    assert P.codec_for_acp("1250") == "cp1250"
+    assert P.codec_for_acp(932) == "cp932"
+    assert P.codec_for_acp(65001) == "utf-8"
+
+
+@pytest.mark.parametrize("bad", [None, "", "x", 1, 99999, 0, "1252x"])
+def test_an_unknown_codepage_is_None_not_a_guess(bad):
+    """None means the caller must SAY so. Returning cp1252 for something it
+    does not recognise is the whole failure this exists to prevent."""
+    assert P.codec_for_acp(bad) is None
+
+
+def test_the_same_name_encodes_differently_under_different_codepages():
+    """Why the wrong table is not a cosmetic problem."""
+    name = "zażółć.txt"
+    assert P.check(name, guest_root="C:\\WORK", caps=_caps(acp="cp1250")) is None
+    assert P.check(name, guest_root="C:\\WORK", caps=_caps(acp="cp1252")) is not None
+    assert P.wire_encode(name, acp="cp1250") != name.encode("utf-8")
+
+
+def test_component_length_is_measured_in_guest_bytes_not_utf8():
+    """A component is capped at 255 bytes on the guest's filesystem, in the
+    guest's codepage. Measuring in UTF-8 counts two bytes for a character
+    cp1252 stores in one, so it refuses names that fit -- and for a CP932 or
+    UTF-8 client it errs the other way and passes names that do not."""
+    name = "é" * 200 + ".txt"                 # 204 bytes in cp1252
+    assert len(name.encode("utf-8")) > 255
+    assert P.check(name, guest_root="C:\\WORK", caps=_caps(acp="cp1252")) is None
+
+
+def test_the_full_path_limit_is_measured_in_guest_bytes():
+    """`len()` on the decoded string equals the byte count only for a
+    single-byte codepage. On CP932 a 200-character path can be 300 bytes and
+    would sail past a character-based check."""
+    # Split across two components so neither hits the 255-byte component cap
+    # first -- the point is the FULL path, and the two limits have different
+    # reasons.
+    rel = "ソ" * 100 + "/" + "ソ" * 100 + ".txt"
+    assert len(rel) < 260, "a character count would let this through"
+    assert len(rel.encode("cp932")) > 260
+    bad = P.check(rel, guest_root="C:\\WORK", caps=_caps(acp="cp932"))
+    assert bad is not None and "too long" in bad.reason
+    # And the same path is fine on a single-byte guest, which is the whole
+    # reason the measurement has to be per-codepage rather than fixed.
+    assert P.check("a" * 100 + "/" + "a" * 100 + ".txt",
+                   guest_root="C:\\WORK") is None
+
+
+def test_a_root_written_with_a_forward_slash_is_still_stripped():
+    """The separator belongs to the guest, and a Unix client reporting
+    `/home/x/` is ordinary. Stripping only backslashes counted the slash."""
+    a = P.check("f.txt", guest_root="/home/x")
+    b = P.check("f.txt", guest_root="/home/x/")
+    assert a is None and b is None

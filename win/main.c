@@ -87,6 +87,23 @@ static HWND  g_perm_text, g_perm_allow, g_perm_always, g_perm_deny;
 static char g_perm_id[80];
 static int  g_perm_pending;
 
+/* The bar has two jobs and one set of controls.
+ *
+ * BAR_PERM is Allow / Always / Deny for a tool call. BAR_HALT is a single
+ * Continue, shown when the bridge has STOPPED the agent -- today that means a
+ * conflicting edit was found, the user's copy was kept, and the agent must not
+ * carry on until the user says they have finished with the file.
+ *
+ * One set of controls rather than two because the 16-bit USER/GDI heaps on 9x
+ * are a fixed 64KB that does not scale with RAM, and because the two states
+ * are mutually exclusive by construction: a halted agent is not running a tool
+ * and cannot be asking for permission. */
+#define BAR_NONE 0
+#define BAR_PERM 1
+#define BAR_HALT 2
+static int  g_bar_mode;
+static char g_halt_id[80];
+
 /* Session ids, parallel to the list box. A ListBox rather than a ListView
  * deliberately: fewer GDI objects, and the 16-bit USER/GDI heaps on 9x are a
  * fixed 64KB that does not scale with RAM. */
@@ -394,11 +411,13 @@ static void perm_layout(void)
     if (g_main) layout(g_main);
 }
 
-static void perm_hide(void)
+static void bar_hide(void)
 {
-    if (!g_perm_pending) return;
+    if (!g_bar_mode) return;
+    g_bar_mode = BAR_NONE;
     g_perm_pending = 0;
     g_perm_id[0] = '\0';
+    g_halt_id[0] = '\0';
     ShowWindow(g_perm_text,   SW_HIDE);
     ShowWindow(g_perm_allow,  SW_HIDE);
     ShowWindow(g_perm_always, SW_HIDE);
@@ -407,13 +426,50 @@ static void perm_hide(void)
     ui_set_busy(g_turn_active);
 }
 
+static void perm_hide(void)
+{
+    if (g_bar_mode != BAR_PERM) return;
+    bar_hide();
+}
+
+/* The agent has been stopped and needs the user to say "carry on". */
+static void halt_show(const char *id, const char *text)
+{
+    if (!id || !*id) return;
+    _snprintf(g_halt_id, sizeof(g_halt_id) - 1, "%s", id);
+    g_halt_id[sizeof(g_halt_id) - 1] = '\0';
+    g_bar_mode = BAR_HALT;
+    g_perm_pending = 0;
+
+    SetWindowTextA(g_perm_text, text && *text
+                   ? text : "Stopped: a conflicting edit was found");
+    /* The SAME button, relabelled, which is why perm_show sets it back. */
+    SetWindowTextA(g_perm_allow, "Continue");
+    ShowWindow(g_perm_text,   SW_SHOW);
+    ShowWindow(g_perm_allow,  SW_SHOW);
+    ShowWindow(g_perm_always, SW_HIDE);
+    ShowWindow(g_perm_deny,   SW_HIDE);
+    perm_layout();
+    ui_set_busy(g_turn_active);
+    SetFocus(g_perm_allow);
+}
+
+static void halt_hide(void)
+{
+    if (g_bar_mode != BAR_HALT) return;
+    bar_hide();
+}
+
 static void perm_show(const char *id, const char *text, int allows)
 {
     if (!id || !*id) return;
     _snprintf(g_perm_id, sizeof(g_perm_id) - 1, "%s", id);
     g_perm_id[sizeof(g_perm_id) - 1] = '\0';
     g_perm_pending = 1;
+    g_bar_mode = BAR_PERM;
 
+    /* Put the label back: halt_show borrows this button and renames it. */
+    SetWindowTextA(g_perm_allow, "Allow");
     SetWindowTextA(g_perm_text, text && *text ? text : "Permission required");
     ShowWindow(g_perm_text,   SW_SHOW);
     ShowWindow(g_perm_allow,  SW_SHOW);
@@ -708,6 +764,26 @@ static void render_frame(rc_frame *f)
         perm_show(id ? id : "", f->body ? f->body : "",
                   allows && *allows == '1');
 
+    } else if (strcmp(f->type, "HALT") == 0) {
+        /* The bridge has stopped the agent and wants the user to decide when
+         * it may go on. Today that is a conflicting edit: their copy was kept,
+         * the agent's was preserved, and it must not touch the file again
+         * until they have finished with it.
+         *
+         * The explanation is already in the transcript as a NOTICE -- this is
+         * only the button, so the text here is one short line rather than the
+         * whole story, which would not fit the bar at 640x480 anyway. */
+        const char *id = rc_frame_get(f, "id");
+        halt_show(id ? id : "", f->body ? f->body : "");
+
+    } else if (strcmp(f->type, "HALTEND") == 0) {
+        /* Keyed on the id for the same reason PERMEND is: the bridge can
+         * resolve a halt on its own -- the agent called sync_resolve, or the
+         * session was rebuilt -- while the bar is still up. */
+        const char *id = rc_frame_get(f, "id");
+        if (id && g_bar_mode == BAR_HALT && strcmp(id, g_halt_id) == 0)
+            halt_hide();
+
     } else if (strcmp(f->type, "PERMWAIT") == 0) {
         /* Only the queue depth changed; the request is the same one. */
         const char *id = rc_frame_get(f, "id");
@@ -993,7 +1069,7 @@ static void layout(HWND hwnd)
      * disappeared. The bar docks to the bottom of the transcript instead, and
      * only the transcript gets shorter. */
     y = h - INPUT_HEIGHT - GUTTER;
-    ybar = g_perm_pending ? (y - PERM_H - GUTTER) : y;
+    ybar = g_bar_mode ? (y - PERM_H - GUTTER) : y;
 
     {   /* Chat list down the left, with its Refresh button under it. */
         int lh = h - 2 * GUTTER - 24;
@@ -1016,15 +1092,22 @@ static void layout(HWND hwnd)
         int cw = w - cx - GUTTER;
         rc_html_move(g_html, cx, GUTTER + PAGEBAR_H,
                      cw, ybar - GUTTER - PAGEBAR_H);
-        if (g_perm_pending) {
+        if (g_bar_mode) {
             /* Right-to-left: the buttons are fixed width and the label takes
              * whatever is left, so a long tool description truncates rather
-             * than pushing Deny off the edge. */
+             * than pushing Deny off the edge.
+             *
+             * A halt has only Continue, and the hidden buttons must not be
+             * given screen space -- MoveWindow on a hidden control costs
+             * nothing, but leaving the gap would put Continue in the middle of
+             * the bar with a hole beside it. */
             int bx = w - GUTTER - PERMBTN_W;
-            MoveWindow(g_perm_deny, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
-            bx -= PERMBTN_W + 2;
-            MoveWindow(g_perm_always, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
-            bx -= PERMBTN_W + 2;
+            if (g_bar_mode == BAR_PERM) {
+                MoveWindow(g_perm_deny, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
+                bx -= PERMBTN_W + 2;
+                MoveWindow(g_perm_always, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
+                bx -= PERMBTN_W + 2;
+            }
             MoveWindow(g_perm_allow, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
             MoveWindow(g_perm_text, cx, ybar + 4, bx - cx - GUTTER,
                        PERM_H - 6, TRUE);
@@ -1345,7 +1428,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_SEND:  do_send(); return 0;
 
         case ID_STOP:  do_stop(); return 0;
-        case ID_PERM_ALLOW:  perm_reply("allow");  return 0;
+        case ID_PERM_ALLOW:
+            /* One button, two meanings -- see the BAR_* note. */
+            if (g_bar_mode == BAR_HALT) {
+                const char *k[1]; const char *v[1];
+                k[0] = "id"; v[0] = g_halt_id;
+                rc_net_send(&g_net, "RESUME", k, v, 1, NULL, 0);
+                halt_hide();
+                return 0;
+            }
+            perm_reply("allow");
+            return 0;
         case ID_PERM_ALWAYS: perm_reply("always"); return 0;
         case ID_PERM_DENY:   perm_reply("deny");   return 0;
         case ID_LIVE:  page_goto("live");      return 0;
@@ -1474,6 +1567,33 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     exe_dir(g_exe_dir, sizeof(g_exe_dir));
     rc_log_open(g_exe_dir);
     rc_log("os version: %08lx", GetVersion());
+
+    /* One instance. A second one is not a harmless duplicate: the bridge holds
+     * ONE session and refuses a second client with `busy` -- so the new window
+     * sits there saying "Cannot reach ... retrying" while the old one, often
+     * behind it, has the conversation. That looked like a network fault for a
+     * while, and it also explains a run of duplicated "Connected to bridge"
+     * lines that had been put down to reconnect churn.
+     *
+     * A named mutex rather than FindWindow alone, because the window does not
+     * exist yet during the seconds this actually matters -- two launches in
+     * quick succession. FindWindow then raises the one that is already there,
+     * so a second launch behaves like clicking the taskbar button. */
+    {
+        HANDLE once = CreateMutexA(NULL, FALSE, "RetroClaudeSingleInstance");
+        if (once && GetLastError() == ERROR_ALREADY_EXISTS) {
+            HWND other = FindWindowA("RetroClaudeWnd", NULL);
+            rc_log("another instance is running; raising it and exiting");
+            if (other) {
+                if (IsIconic(other)) ShowWindow(other, SW_RESTORE);
+                SetForegroundWindow(other);
+            }
+            CloseHandle(once);
+            return 0;
+        }
+        /* Deliberately never closed: the handle IS the lock, and it is
+         * released when the process exits, however it exits. */
+    }
 
     memset(&icc, 0, sizeof(icc));
     icc.dwSize = sizeof(icc);

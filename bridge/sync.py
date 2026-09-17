@@ -137,6 +137,9 @@ class Baseline:
     #: editor buffer detectable -- see diff().
     prev: dict[str, Entry] = field(default_factory=dict)
     tree_id: str = ""
+    #: The codepage the matching keys were folded through. Changing it re-keys
+    #: every row, so the pass refuses rather than re-keying in place.
+    acp: str = ""
     generation: int = 0
     pending_notice: list = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
@@ -171,6 +174,7 @@ class Baseline:
                 "ignored": {k: asdict(v) for k, v in self.ignored.items()},
                 "prev": {k: asdict(v) for k, v in self.prev.items()},
                 "tree_id": self.tree_id,
+                "acp": self.acp,
                 "generation": self.generation,
                 "pending_notice": self.pending_notice,
                 "latched": self.latched,
@@ -202,6 +206,7 @@ class Baseline:
             d = json.load(fh)          # a JSONDecodeError here must propagate
         out = cls(
             tree_id=d.get("tree_id", ""),
+            acp=d.get("acp", ""),
             generation=int(d.get("generation", 0)),
             pending_notice=list(d.get("pending_notice", [])),
             latched=dict(d.get("latched", {})),

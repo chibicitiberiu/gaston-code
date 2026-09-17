@@ -408,7 +408,14 @@ async def test_a_conflict_preserves_the_agents_version_and_latches(
     mine = os.path.join(p.conflict_dir, "a.txt", "mine.1")
     assert open(mine, "rb").read() == b"agent version\n"
     assert "a.txt" in p.base.latched
-    assert any("STOP editing" in n for n in got["notices"])
+    # The notice has to name the preserved copy AND the ancestor: a merge
+    # against "whatever the file is now" is not a three-way merge, and the
+    # ancestor is the only thing that says which side changed what.
+    note = next(n for n in got["notices"] if "a.txt" in n)
+    assert "mine.1" in note and "ancestor" in note
+    # And it must NOT send the agent back to the user for a confirmation they
+    # have already given by pressing Continue.
+    assert "do not ask them again" in note
 
     # Guest wins means the guest's bytes are HERE afterwards. Staging the
     # agent's copy and stopping is only half of it: for a while this branch did
@@ -754,3 +761,100 @@ async def test_clearing_does_not_drop_a_notice_raised_meanwhile(
     p.note("raised while the first was being sent")
     p.notices_delivered(delivering)
     assert p.base.pending_notice == ["raised while the first was being sent"]
+
+
+class _FakeClaude:
+    """Just enough session for the turn to start and be observed.
+
+    `close()` is here because the harness tears the bridge down after every
+    test and would otherwise fail on the fake rather than on the assertion --
+    which turns a passing test into an error and a failing one into a mystery.
+    """
+
+    session_id = "s"
+
+    def __init__(self, sink: list):
+        self.sink = sink
+
+    async def send(self, text):
+        self.sink.append(text)
+        raise RuntimeError("stop here; the turn machinery is not the point")
+
+    async def close(self):
+        pass
+
+
+async def test_a_conflict_puts_a_continue_bar_on_the_users_screen(
+        harness, tmp_path):
+    """"Wait for the user to confirm they have finished" needs a confirmation.
+
+    Until this existed the only inbound channels were INPUT and PERMREPLY, and
+    reading the confirmation off the next INPUT was worse than useless: the
+    most natural reaction to being told the agent stopped is to type "wait,
+    stop", which would have been the message that restarted it.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    harness.bridge.sync_dir = p.root
+    harness.bridge.sync_state = os.path.dirname(p.state)
+    open(os.path.join(p.root, "a.txt"), "wb").write(b"agent version\n")
+    p.base.rows["a.txt"] = Entry(type=Type.FILE, crc=111, display="a.txt")
+    p.base.save(p.state)
+
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {"a.txt": b"user version\n"})
+    await fake_get(harness, reader, writer, b"user version\n")
+    await asyncio.wait_for(task, 10)
+
+    halt = await _recv(harness, reader, "HALT")
+    assert halt.headers["id"]
+    assert b"conflicting edit" in halt.body
+    # The bar's label is clipped at roughly seventy characters on a 640x480
+    # screen, and a line that runs past that loses its end silently.
+    assert len(halt.body) <= 70, halt.body
+    assert harness.bridge._guest.halt_id == halt.headers["id"]
+    await harness.close(writer)
+
+
+async def test_continue_starts_the_agent_with_an_instruction_not_an_echo(
+        harness, tmp_path):
+    """The turn is the bridge's, not the user's.
+
+    Rendering "Resolve the sync conflict" as though they had typed it would put
+    words in their mouth in a transcript they can scroll back through later.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    guest.halt_id = "h123"
+
+    sent = []
+    guest.claude = _FakeClaude(sent)
+    await harness.send(writer, Frame("RESUME", {"id": "h123"}))
+    for _ in range(40):
+        if sent:
+            break
+        await asyncio.sleep(0.05)
+
+    assert sent and "Resolve the sync conflict" in sent[0]
+    assert guest.halt_id == "", "the halt must clear when it is answered"
+    await harness.close(writer)
+
+
+async def test_a_stale_resume_is_ignored(harness, tmp_path):
+    """A RESUME can lose a race with a halt the bridge cleared itself -- the
+    agent called sync_resolve, say. Acting on it would start a turn nobody
+    asked for."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    guest.halt_id = "h999"
+
+    sent = []
+    guest.claude = _FakeClaude(sent)
+    await harness.send(writer, Frame("RESUME", {"id": "h123"}))
+    await asyncio.sleep(0.3)
+    assert not sent
+    assert guest.halt_id == "h999"
+    await harness.close(writer)

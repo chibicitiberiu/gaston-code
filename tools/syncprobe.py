@@ -292,8 +292,83 @@ def run(g: Guest) -> None:
     check("and it arrives intact", wire, big)
 
 
+def run_recovery_check(g: Guest) -> None:
+    """What the guest did to the tree at STARTUP, before the first scan.
+
+    `rc_sync_commit` moves the old file aside to `<p>.gaston-old` and then
+    renames the temp in. `MoveFileExA(REPLACE_EXISTING)` is NT-only, so there
+    is a real instant with no file at the path -- that window is recoverable
+    rather than absent, and this is the recovery. Without it the first scan
+    after a crash reports the path as ABSENT, which the bridge reads as "the
+    user deleted it".
+
+    The tree is staged from the DOS box beforehand, because the states this
+    covers are ones a healthy guest never produces.
+    """
+    print("\n== recovery from an interrupted commit ==")
+    rows, _ = g.scan()
+    check("the tree was staged before the client restarted",
+          sorted(rows), ["finished.txt", "interrupted.txt", "sub",
+                         "sub/deep.txt"])
+    check("the aside file was put back", "interrupted.txt" in rows, True)
+    check("including one in a subdirectory", "sub/deep.txt" in rows, True)
+    check("an abandoned transfer's temp was deleted",
+          "abandoned.txt.gaston-tmp" in rows, False)
+    check("a finished commit's aside was dropped, not restored over it",
+          "finished.txt" in rows, True)
+    check("and nothing of ours is visible at all",
+          sorted(k for k in rows if ".gaston-" in k), [])
+    hdr, wire = g.get("interrupted.txt")
+    check("the recovered content is the one that was moved aside",
+          P.to_bridge(wire, hdr.get("cls", "t")),
+          b"the version that was moved aside\n")
+    hdr, wire = g.get("finished.txt")
+    check("and the committed file was NOT overwritten by its aside",
+          P.to_bridge(wire, hdr.get("cls", "t")),
+          b"the committed version\n")
+
+
+def stage_recovery(g: Guest) -> None:
+    """Put the tree into the state an interrupted commit leaves behind.
+
+    The DOS box cannot do this. `ECHO x > C:\\WORK\\a.txt.gaston-old` looks like
+    it works and silently writes a mangled 8.3 name instead, so the first run
+    of this test "passed" three of its checks by having created nothing at all.
+    Push the files through the protocol, where the names are exact, then rename
+    them with REN, which does speak long filenames.
+    """
+    print("staging an interrupted commit ...")
+    for rel, body in (
+            ("interrupted.txt", b"the version that was moved aside\n"),
+            ("abandoned.txt",   b"half a write\n"),
+            ("finished.txt",    b"the committed version\n"),
+            ("stale.txt",       b"stale aside\n")):
+        st = g.put(rel, body, if_crc="absent")["status"]
+        if st != "ok":
+            raise SystemExit(f"could not stage {rel}: {st}")
+    g.mkdir("sub")
+    g.put("sub/deep.txt", b"deep one\n", if_crc="absent")
+
+    # interrupted: the aside exists and the real file does not, which is the
+    # instant between the two renames -> must be put back
+    dos("REN C:\\WORK\\interrupted.txt interrupted.txt.gaston-old")
+    dos("REN C:\\WORK\\SUB\\deep.txt deep.txt.gaston-old")
+    # abandoned: a temp from a transfer that never finished -> deleted
+    dos("REN C:\\WORK\\abandoned.txt abandoned.txt.gaston-tmp")
+    # finished: the commit completed, so the aside is stale -> dropped, and
+    # the committed file must NOT be overwritten by it
+    dos("REN C:\\WORK\\stale.txt finished.txt.gaston-old")
+    print("staged; restart the client, then run --recovery")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--stage-recovery", action="store_true",
+                    help="put the guest tree into a post-crash state and exit")
+    ap.add_argument("--recovery", action="store_true",
+                    help="only the startup-recovery checks; the tree must be "
+                         "staged first and the client restarted after this "
+                         "starts listening")
     ap.add_argument("--port", type=int, default=7890)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--secret", default="dev-secret")
@@ -319,7 +394,12 @@ def main() -> int:
           f"ver={hello.headers.get('ver')}")
 
     try:
-        run(g)
+        if a.stage_recovery:
+            stage_recovery(g)
+        elif a.recovery:
+            run_recovery_check(g)
+        else:
+            run(g)
     finally:
         conn.close()
 

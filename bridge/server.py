@@ -21,6 +21,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 
+from . import caps as C
 from . import fold
 from . import machine
 from .registry import Registry
@@ -72,6 +73,10 @@ class GuestSession:
     # process so a reconnect or an effort fork keeps the choice.
     model: str = ""
     effort: str = ""
+    #: The halt currently on the user's screen, if any. A halt is the bridge
+    #: stopping the agent and handing the decision to the person at the
+    #: keyboard; it clears when they press Continue, and never on a timer.
+    halt_id: str = ""
     # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
     page_bytes: int = 0
     page_blocks: int = 0
@@ -180,6 +185,11 @@ class Bridge:
         #: way to know which of its edits do.
         self.guest_sync_root: str | None = None
         self._last_sync_reports: list[str] = []
+        #: Notices waiting to ride in on the agent's next turn. Separate from
+        #: the baseline's `pending_notice`, which is the USER's copy and is
+        #: cleared when it reaches their screen: the two audiences need the
+        #: same news and neither delivery implies the other.
+        self._agent_notices: list[str] = []
         # How long a pending permission request survives a dropped link. Long
         # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
         # of the 10 minute answer deadline.
@@ -353,6 +363,18 @@ class Bridge:
         page_bytes, page_blocks = limits_for(mem_kb)
         log.info("guest has %d MB; pages capped at %d bytes / %d blocks",
                  mem_kb // 1024, page_bytes, page_blocks)
+
+        # What the bridge now believes the machine IS. Logged at connect
+        # because "why did that file not sync" starts here, and because a
+        # client that declares nothing is indistinguishable from one that
+        # declares the defaults until someone can see which happened.
+        try:
+            log.info("client rules: %s", C.from_hello(h).summary())
+        except C.CapsError as exc:
+            log.warning("client declared rules this bridge cannot honour: %s",
+                        exc)
+            await self._try_send_raw(writer, error("bad_caps", str(exc)[:200]))
+            return None
 
         # A fresh connection means a fresh inflater on the guest, so the
         # compressor must restart in lockstep or the first frame is garbage.
@@ -814,6 +836,35 @@ class Bridge:
             log.info("input: %s", text[:120])
             asyncio.create_task(self._run_turn(guest, text))
 
+        elif f.type == "RESUME":
+            # The user pressed Continue on the halt bar. THAT is the signal the
+            # design has been waiting for -- not an INPUT, and not a timer.
+            #
+            # "The agent stops until the user confirms they have finished with
+            # the file" needs a confirmation, and until now the only inbound
+            # channels were INPUT and PERMREPLY. Reading it off the next INPUT
+            # was worse than useless: the most natural reaction to the notice
+            # is to type "wait, stop", which is precisely the message that
+            # would have restarted it.
+            if f.headers.get("id", "") == guest.halt_id and guest.halt_id:
+                guest.halt_id = ""
+                log.info("user pressed Continue on the sync halt")
+                # Pressing Continue IS the confirmation, so it lifts the
+                # refusal here. Making the agent ask again -- a permission
+                # prompt for sync_resolve -- would put a second dialog in front
+                # of a user who has just answered the question, on a 640x480
+                # screen, and the second one carries no information the first
+                # did not. `sync_resolve` stays for the case the user never
+                # sees: the agent finishing a merge on its own.
+                freed = self._release_all_latches()
+                if freed:
+                    log.info("sync: released %d latched path(s) on Continue",
+                             freed)
+                asyncio.create_task(self._run_turn(
+                    guest,
+                    "Resolve the sync conflict, then continue with what you "
+                    "were doing.", echo=False))
+
         elif f.type == "SYNCDIRTY":
             # The guest noticed its tree move. It never reconciles anything
             # itself -- the bridge owns the baseline and decides.
@@ -912,7 +963,35 @@ class Bridge:
             log.warning("unknown frame type from guest: %s", f.type)
             await self._send(guest, error("unknown_type", f.type), stamp=False)
 
-    async def _run_turn(self, guest: GuestSession, text: str) -> None:
+    def _with_sync_preamble(self, text: str) -> str:
+        """Prepend anything sync needs the agent to know, and mark it delivered.
+
+        Marked delivered when it is handed to the model, not when the model
+        acts on it -- there is no signal for the latter, and re-sending on every
+        turn until the agent happens to mention it would bury the next one.
+        """
+        if not self.sync_dir or not self._agent_notices:
+            return text
+        pending, self._agent_notices = self._agent_notices, []
+        lines = ["[Automatic message from the file synchronisation layer, not "
+                 "from the user.]", ""]
+        lines.extend(pending)
+        lines.append("")
+        lines.append(
+            "Deal with this before continuing with whatever was asked. A "
+            "conflicted path REFUSES your writes until you call "
+            "mcp__machine__sync_resolve on it, so writing to it again is not "
+            "something you can do -- read the preserved copy and the ancestor "
+            "beside it, work out the merge, and ask the user whether they have "
+            "finished with the file. They approve that call on their own "
+            "screen, which is how they tell you they are done.")
+        lines.append("")
+        lines.append("--- the user's message follows ---")
+        lines.append("")
+        return "\n".join(lines) + text
+
+    async def _run_turn(self, guest: GuestSession, text: str,
+                        *, echo: bool = True) -> None:
         if not guest.claude:
             return
         # User turns are the landmarks a reader navigates by.
@@ -920,11 +999,27 @@ class Bridge:
         # The guest echoed this line itself the moment Send was pressed, so it
         # is recorded but not streamed. USER_BLOCK is shared with the guest so
         # the two renderings are the same string, not merely similar.
-        await self._write_block(guest, H.user_turn(text), stream=False)
+        #
+        # `echo=False` for a turn the bridge started on the user's behalf --
+        # pressing Continue on a halt. Rendering it as though they had typed
+        # "Resolve the sync conflict" would put words in their mouth in a
+        # transcript they can scroll back through later.
+        if echo:
+            await self._write_block(guest, H.user_turn(text), stream=False)
         await self._send(guest, Frame("ANCHOR", {
             "page": str(anchor.page), "off": str(anchor.offset),
             "preview": anchor.preview}))
         await self._send(guest, Frame("TURN", {"state": "start"}))
+        # Anything sync found while the agent was idle rides in on this turn.
+        #
+        # `_run_turn` is the only path into a session, and it fires only on
+        # INPUT. A conflict found by the timer between turns therefore reaches
+        # the USER's screen -- which is right, they are the one who can act on
+        # it -- and reaches the agent nowhere at all. So it would never read
+        # the preserved copy, never merge, and never call sync_resolve, and the
+        # path would stay latched for the rest of the session with the agent
+        # quietly unable to write to it and no idea why.
+        text = self._with_sync_preamble(text)
         try:
             turn = await guest.claude.send(text)
         except Exception as exc:
@@ -1087,6 +1182,31 @@ class Bridge:
                 for note in got.get("notices", []):
                     await self._write_block(guest, H.notice(note))
                     delivered.append(note)
+                    # The agent needs the same news, and it has no other way to
+                    # get it: nothing reaches a session except an INPUT.
+                    self._agent_notices.append(note)
+
+                # A conflict STOPS the agent, and stopping it means saying so
+                # on the user's screen with a way to start it again. The
+                # transcript already carries the explanation; this is the
+                # button. Without it "wait for the user to confirm they have
+                # finished with the file" has no confirmation -- the latch
+                # would sit there until the agent happened to call
+                # sync_resolve, which it has no reason to do unprompted.
+                if got.get("conflicts"):
+                    # Short, because the bar at 640x480 gives the label about
+                    # seventy characters before SS_ENDELLIPSIS cuts it. The
+                    # first version ended "...Press Continue when you have
+                    # finished with the file(s)" and was truncated at "you
+                    # have" -- losing the half that said what the button does,
+                    # on the one control the user needs. The button is labelled
+                    # Continue and the whole explanation is in the transcript
+                    # immediately above; the bar only has to say why it is up.
+                    n = got["conflicts"]
+                    await self._raise_halt(
+                        guest,
+                        f"Stopped: {n} conflicting edit"
+                        f"{'' if n == 1 else 's'}. Your copy was kept.")
                 # Only after they are on the wire. The queue is pending work,
                 # not a log: leaving them on it re-delivered every notice on
                 # every pass, which buries the next real one.
@@ -1205,7 +1325,9 @@ class Bridge:
             return f"The baseline could not be read ({exc}); nothing changed."
 
         from . import paths as P
-        key = P.canonical(path.replace("\\", "/").strip("/"))
+        key = P.canonical(path.replace("\\", "/").strip("/"),
+                          caps=C.from_hello(
+                              self._guest.hello if self._guest else {}))
         state = os.path.join(self.sync_state, "base.json")
 
         if action == "release":
@@ -1216,6 +1338,11 @@ class Bridge:
             why = base.latched.pop(key)
             base.save(state)
             log.info("sync: %s released by the agent (was: %s)", key, why)
+            # If nothing else is withheld, the reason for the halt is gone and
+            # the bar must come down -- leaving it up would ask the user to
+            # press Continue for a conflict that no longer exists.
+            if not base.latched and self._guest is not None:
+                self._spawn(self._clear_halt(self._guest))
             return (f"Released {path}. Your next write to it will be copied to "
                     f"the user's machine on the next pass. If they change it "
                     f"again in the meantime, it will conflict again -- which "
@@ -1232,6 +1359,43 @@ class Bridge:
         return (f"Stopped tracking {path}. If it reappears on either side it "
                 f"will be treated as new.")
 
+    def _release_all_latches(self) -> int:
+        """Lift every write refusal. Called when the user presses Continue.
+
+        All of them, not one: the halt bar says "N conflicting edits" and the
+        user answers it once. Releasing a single path would leave the rest
+        withheld with no bar up to say so, and the agent silently unable to
+        write to files nobody has mentioned.
+        """
+        if not self.sync_dir:
+            return 0
+        try:
+            base = self._load_baseline()
+        except Exception as exc:
+            log.warning("could not release latches: %s", exc)
+            return 0
+        n = len(base.latched)
+        if n:
+            base.latched.clear()
+            base.save(os.path.join(self.sync_state, "base.json"))
+        return n
+
+    async def _raise_halt(self, guest: GuestSession, line: str) -> None:
+        """Put the Continue bar up. Idempotent while one is already showing."""
+        if guest.halt_id:
+            return
+        guest.halt_id = f"h{uuid.uuid4().hex[:8]}"
+        await self._send(guest, Frame("HALT", {"id": guest.halt_id},
+                                      fold.encode(line)), stamp=False)
+
+    async def _clear_halt(self, guest: GuestSession) -> None:
+        """Take it down because the reason went away, not because it was
+        answered -- the agent called sync_resolve itself, say."""
+        if not guest.halt_id:
+            return
+        hid, guest.halt_id = guest.halt_id, ""
+        await self._send(guest, Frame("HALTEND", {"id": hid}), stamp=False)
+
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""
         sid = f.headers.get("id", "")
@@ -1243,6 +1407,10 @@ class Bridge:
             return
 
         if f.type == "SYNCENT":
+            # The guest's own codepage, never an assumption. Decoding a
+            # manifest with the wrong table produces names that look right and
+            # cannot be encoded back to ask for the file.
+            caps = C.from_hello(guest.hello)
             for line in f.body.split(b"\n"):
                 if not line:
                     continue
@@ -1263,8 +1431,8 @@ class Bridge:
                 # them all to U+FFFD -- so two distinct files get one key, one
                 # of them silently stops syncing, and neither name can be
                 # encoded back to ask the guest for the file.
-                rel = P.wire_decode(raw)
-                key = P.canonical(rel)
+                rel = P.wire_decode(raw, acp=caps.acp)
+                key = P.canonical(rel, caps=caps)
                 entry["rows"][key] = SyncEntry(
                     type=SyncType(typ.decode()),
                     cls=cls.decode() if cls != b"-" else P.CLASS_TEXT,

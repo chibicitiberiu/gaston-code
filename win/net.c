@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "net.h"
+#include "caps.h"
 #include "log.h"
 #include "rpc.h"
 #include "exec.h"
@@ -297,15 +298,33 @@ static int do_connect(rc_net *n)
     return 0;
 }
 
+/* The only way to add a HELLO header. Drops rather than overruns, and says so.
+ * A dropped header degrades the bridge's picture of the machine; an overrun
+ * corrupts the stack while building the very first frame. */
+#define RC_HELLO_MAX 32
+/* Stringify a macro's VALUE, not its name -- RC_STR2 is the extra expansion
+ * pass without which HDR("eol", ...) would send the literal text
+ * "RC_CAP_EOL". */
+#define RC_STR2(x) #x
+#define RC_STR(x)  RC_STR2(x)
+#define HDR(k, v) do { \
+        if (nkv < RC_HELLO_MAX) { keys[nkv] = (k); vals[nkv++] = (v); } \
+        else rc_log("net: HELLO header '%s' dropped, array full", (k)); \
+    } while (0)
+
 int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret)
 {
     WSADATA wsa;
-    char maxframe[16], ver[16], memkb[16], memfree[16], disk[24];
+    char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
     char osver[96], cpu[64], screen[32];
-    /* Sized with room to spare: ver, secret, max_frame, mem_kb and sess is
-     * already five, and this array overflowed the moment mem_kb was added. */
-    const char *keys[16]; const char *vals[16];
+    /* This array overflowed the moment mem_kb was added, and the fix at the
+     * time was to make it bigger -- which left the same trap armed for the
+     * next field. There are eleven entries now and there was NO bounds check
+     * of any kind: overrunning it writes past two stack arrays in the HELLO
+     * path, on a machine with no guard pages worth the name. Use HDR() and
+     * nothing else. */
+    const char *keys[RC_HELLO_MAX]; const char *vals[RC_HELLO_MAX];
     int nkv = 0;
     unsigned tid;
 
@@ -350,9 +369,9 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
 
     _snprintf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
     _snprintf(maxframe, sizeof(maxframe), "%d", RC_MAX_FRAME);
-    keys[nkv] = "ver";       vals[nkv++] = ver;
-    keys[nkv] = "secret";    vals[nkv++] = n->secret;
-    keys[nkv] = "max_frame"; vals[nkv++] = maxframe;
+    HDR("ver", ver);
+    HDR("secret", n->secret);
+    HDR("max_frame", maxframe);
     /* What this machine actually is.
      *
      * Two consumers. The bridge sizes pages from mem_kb -- a 128MB box can
@@ -374,10 +393,10 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
         GlobalMemoryStatus(&ms);
         _snprintf(memkb, sizeof(memkb), "%lu",
                   (unsigned long)(ms.dwTotalPhys / 1024));
-        keys[nkv] = "mem_kb"; vals[nkv++] = memkb;
+        HDR("mem_kb", memkb);
         _snprintf(memfree, sizeof(memfree), "%lu",
                   (unsigned long)(ms.dwAvailPhys / 1024));
-        keys[nkv] = "mem_free_kb"; vals[nkv++] = memfree;
+        HDR("mem_free_kb", memfree);
 
         memset(&os, 0, sizeof(os));
         os.dwOSVersionInfoSize = sizeof(os);
@@ -388,7 +407,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                       (unsigned long)(os.dwBuildNumber & 0xFFFF),
                       os.szCSDVersion);
             osver[sizeof(osver) - 1] = '\0';
-            keys[nkv] = "os"; vals[nkv++] = osver;
+            HDR("os", osver);
         }
 
         memset(&si, 0, sizeof(si));
@@ -398,7 +417,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                   (unsigned)(si.wProcessorRevision >> 8),
                   (unsigned long)si.dwNumberOfProcessors);
         cpu[sizeof(cpu) - 1] = '\0';
-        keys[nkv] = "cpu"; vals[nkv++] = cpu;
+        HDR("cpu", cpu);
 
         dc = GetDC(NULL);
         if (dc) {
@@ -406,7 +425,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                       GetDeviceCaps(dc, HORZRES), GetDeviceCaps(dc, VERTRES),
                       GetDeviceCaps(dc, BITSPIXEL));
             screen[sizeof(screen) - 1] = '\0';
-            keys[nkv] = "screen"; vals[nkv++] = screen;
+            HDR("screen", screen);
             ReleaseDC(NULL, dc);
         }
 
@@ -417,10 +436,44 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
             _snprintf(disk, sizeof(disk) - 1, "%lu",
                       (unsigned long)((double)spc * bps * freec / 1024.0));
             disk[sizeof(disk) - 1] = '\0';
-            keys[nkv] = "disk_free_kb"; vals[nkv++] = disk;
+            HDR("disk_free_kb", disk);
         }
     }
-    if (n->sess[0]) { keys[nkv] = "sess"; vals[nkv++] = n->sess; }
+    if (n->sess[0]) HDR("sess", n->sess);
+
+    /* The ANSI codepage, and this one closes a SILENT corruption.
+     *
+     * The bridge encodes every path it sends with a codepage table, and it
+     * assumed cp1252. On a CP1250 or CP932 machine that assumption is wrong,
+     * and wrong in the one way nothing can catch: it encodes `cafe.md` with
+     * the wrong table, CreateFileA stores those bytes, the manifest reports
+     * them back, and the bridge decodes with the SAME wrong table and gets the
+     * name it started with. It round-trips perfectly, forever, and the user
+     * simply has a file whose name is mangled on their own disk.
+     *
+     * There is no detector for that at any layer -- the sync layer cannot see
+     * it, because every operation is self-consistent. The only thing that can
+     * tell is the machine itself, so it says. GetACP is in KERNEL32 on Win95
+     * onward, so it survives the import audit.
+     *
+     * ACP and not OEM: VFAT long names are stored in the ANSI codepage, and
+     * the scanner keys on long names only (never cAlternateFileName). The
+     * console codepage is a different question with a different answer. */
+    _snprintf(acp, sizeof(acp) - 1, "%u", (unsigned)GetACP());
+    acp[sizeof(acp) - 1] = '\0';
+    HDR("acp", acp);
+
+    /* The rest of what this machine is. Every one a literal from caps.h, so a
+     * Windows 3.1 or MS-DOS build changes that header and nothing here. */
+    HDR("case",       RC_STR(RC_CAP_CASE));
+    HDR("devices",    RC_STR(RC_CAP_DEVICES));
+    HDR("trailing",   RC_STR(RC_CAP_TRAILING));
+    HDR("illegal",    RC_STR(RC_CAP_ILLEGAL));
+    HDR("eol",        RC_STR(RC_CAP_EOL));
+    HDR("shortnames", RC_STR(RC_CAP_SHORTNAMES));
+    HDR("dirreserve", RC_STR(RC_CAP_DIRRESERVE));
+    HDR("maxpath",    RC_STR(RC_CAP_MAXPATH));
+    HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
 
     if (rc_net_send(n, "HELLO", keys, vals, nkv, NULL, 0) != 0) {
         rc_log("net: HELLO failed");

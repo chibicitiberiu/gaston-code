@@ -135,3 +135,79 @@ def test_resolve_survives_a_baseline_it_cannot_read(b):
     out = b.sync_resolve("a.c", "release")
     assert "could not be read" in out
     assert "nothing changed" in out
+
+
+# --- the preamble ----------------------------------------------------------
+#
+# The conflict flow only closes if the agent is actually told. `_run_turn` is
+# the only path into a session and fires only on INPUT, so a conflict found by
+# the timer between turns reaches the user's screen -- right, they are the one
+# who can act on it -- and reaches the agent nowhere.
+
+def test_no_preamble_when_there_is_nothing_to_say(b):
+    assert b._with_sync_preamble("hello") == "hello"
+
+
+def test_a_pending_notice_rides_in_on_the_next_turn(b):
+    b._agent_notices = ["SYNC CONFLICT src/main.c -- both sides moved."]
+    out = b._with_sync_preamble("carry on with the parser")
+
+    assert "src/main.c" in out
+    assert "carry on with the parser" in out
+    # Attributed, or the model reads a machine message as the user speaking.
+    assert "not \nfrom the user" in out or "not from the user" in out.replace("\n", " ")
+    assert "the user's message follows" in out
+
+
+def test_the_preamble_says_writing_again_is_not_an_option(b):
+    """The agent's natural move on being told about a conflict is to rewrite
+    the file. It cannot -- the path refuses pushes -- and the preamble has to
+    say so, or it will try, succeed locally, and report success."""
+    b._agent_notices = ["SYNC CONFLICT a.c"]
+    out = b._with_sync_preamble("go on")
+    assert "REFUSES your writes" in out
+    assert "sync_resolve" in out
+    assert "finished with the file" in out
+
+
+def test_a_notice_is_not_repeated_on_every_turn(b):
+    b._agent_notices = ["SYNC CONFLICT a.c"]
+    first = b._with_sync_preamble("one")
+    second = b._with_sync_preamble("two")
+    assert "a.c" in first
+    assert second == "two"
+
+
+def test_the_preamble_is_skipped_when_sync_is_off(tmp_path):
+    bridge = Bridge("s", host="127.0.0.1", port=0)
+    bridge._agent_notices = ["stale"]
+    assert bridge._with_sync_preamble("hello") == "hello"
+
+
+def test_continue_lifts_every_withheld_path(b):
+    """Pressing Continue is the confirmation, so it clears the refusal.
+
+    All of them, not one. The bar says "N conflicting edits" and the user
+    answers it once; releasing a single path would leave the rest withheld with
+    no bar up to say so, and the agent silently unable to write to files nobody
+    has mentioned.
+    """
+    path = os.path.join(b.sync_state, "base.json")
+    base = b._load_baseline()
+    base.latched["src/main.c"] = "both sides moved"
+    base.latched["src/util.c"] = "both sides moved"
+    base.save(path)
+
+    assert b._release_all_latches() == 2
+    assert not b._load_baseline().latched
+
+
+def test_releasing_when_nothing_is_withheld_is_harmless(b):
+    assert b._release_all_latches() == 0
+
+
+def test_releasing_survives_an_unreadable_baseline(b):
+    """Refuse to act, never treat it as empty -- and never raise into the
+    RESUME handler, which would leave the user pressing a dead button."""
+    open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
+    assert b._release_all_latches() == 0

@@ -62,7 +62,39 @@ _RESERVED = frozenset(
 )
 
 # Legal on ext4, rejected or misinterpreted by CreateFileA.
-_ILLEGAL = set('<>:"\\|?*') | {chr(c) for c in range(0x20)}
+_ILLEGAL_DOS = set('<>:"\\|?*')
+
+# Universal, and NOT a client property. NUL ends a C string; 0x0A ends a
+# manifest line, and the bridge splits the manifest body on "\n" before it ever
+# reads an entry's length prefix -- so a newline in a name breaks the parse
+# whatever the filesystem allows. "\\" stays illegal everywhere because the
+# wire separator is "/" and a backslash must never arrive inside a component.
+_ILLEGAL_ALWAYS = {chr(c) for c in range(0x20)} | {"\\"}
+
+
+class _Default:
+    """The Win9x rules, for a caller that has no client to ask.
+
+    Duck-typed rather than imported from `caps`, because `caps` imports THIS
+    module for the codepage table and a cycle here would be gratuitous.
+    """
+
+    acp = "cp1252"
+    case = 1
+    devices = 1
+    trailing = 1
+    illegal = 1
+    eol = 1
+    dirreserve = 12
+    maxpath = 260
+    maxcomp = 255
+
+    @property
+    def maxdirpath(self):
+        return self.maxpath - self.dirreserve
+
+
+DEFAULT = _Default()
 
 
 @dataclass(frozen=True)
@@ -76,7 +108,7 @@ class Skip:
         return f"{self.reason}: {self.detail}" if self.detail else self.reason
 
 
-def _component_ok(name: str) -> Skip | None:
+def _component_ok(name: str, caps=DEFAULT) -> Skip | None:
     if not name:
         return Skip("empty path component")
     if name in (".", ".."):
@@ -84,7 +116,7 @@ def _component_ok(name: str) -> Skip | None:
 
     # Reserved check is on the stem, because the extension does not save you.
     stem = name.split(".", 1)[0].lower()
-    if stem in _RESERVED:
+    if caps.devices and stem in _RESERVED:
         return Skip(
             "reserved device name",
             f"{name!r} -- on Windows 9x this is the {stem.upper()} device in "
@@ -92,30 +124,47 @@ def _component_ok(name: str) -> Skip | None:
             f"forever.",
         )
 
-    bad = sorted({c for c in name if c in _ILLEGAL})
+    illegal = _ILLEGAL_ALWAYS | (_ILLEGAL_DOS if caps.illegal else set())
+    bad = sorted({c for c in name if c in illegal})
     if bad:
         return Skip("illegal character", f"{name!r} contains {bad!r}")
 
     # Windows silently strips these, so `notes.` and `notes` become one file --
     # a silent overwrite followed by permanent oscillation.
-    if name[-1] in (".", " "):
+    if caps.trailing and name[-1] in (".", " "):
         return Skip("trailing dot or space",
                     f"{name!r} -- Windows strips it, colliding with {name.rstrip('. ')!r}")
 
-    if len(name.encode("utf-8", "replace")) > MAX_COMPONENT:
-        return Skip("component too long", f"{len(name)} characters")
+    # The limit is on the bytes the GUEST'S filesystem stores, which are its
+    # ANSI codepage, not UTF-8. Measuring in UTF-8 over-counts for cp1252
+    # (`café.md` is 9 bytes there and 10 in UTF-8) and under-counts nothing --
+    # but for a Shift-JIS or UTF-8 client it is wrong in the other direction,
+    # which would let a name through that the guest cannot hold.
+    try:
+        n = len(name.encode(caps.acp, "surrogateescape"))
+    except (UnicodeEncodeError, LookupError):
+        # Not representable at all. Fall through: the codepage check below
+        # gives a far more useful reason than "too long".
+        n = len(name)
+    if n > caps.maxcomp:
+        return Skip("component too long", f"{n} bytes in {caps.acp}")
     return None
 
 
-def check(relpath: str, *, guest_root: str, acp: str = "cp1252",
+def check(relpath: str, *, guest_root: str, caps=DEFAULT,
           is_dir: bool = False) -> Skip | None:
-    """Can this relative path exist on the guest? None means yes.
+    """Can this relative path exist on the client? None means yes.
 
-    `relpath` uses "/" as the separator regardless of side; the guest joins with
-    backslashes itself, which is why "\\" is on the illegal list -- it must never
-    arrive inside a component.
+    `relpath` uses "/" as the separator regardless of side; the client joins
+    with its own separator, which is why "\\" is illegal everywhere -- it must
+    never arrive inside a component.
 
-    `is_dir` tightens the length limit by twelve; see MAX_DIR_PATH.
+    `caps` is what the client said it is (`bridge/caps.py`). Every rule below
+    that varies between clients reads it; the ones that do not vary are stated
+    as constants and are deliberately NOT negotiable.
+
+    `is_dir` applies the client's directory reservation -- twelve characters on
+    Win32, so an 8.3 name still fits inside; none on Unix.
     """
     # A drive spec is "X:" followed by a separator or nothing -- NOT any colon
     # in the second position. `a:b.txt` is an illegal-character case, and
@@ -126,35 +175,49 @@ def check(relpath: str, *, guest_root: str, acp: str = "cp1252",
 
     parts = relpath.split("/")
     for part in parts:
-        bad = _component_ok(part)
+        bad = _component_ok(part, caps)
         if bad is not None:
             return bad
 
-    # The length that matters is what the guest would hold, prefix included.
-    full = len(guest_root.rstrip("\\")) + 1 + len(relpath) + 1
-    limit = MAX_DIR_PATH if is_dir else MAX_PATH
+    # The length that matters is what the guest would hold: its own BYTES,
+    # prefix included. `len()` on the decoded string is the same number only
+    # for a single-byte codepage -- on a CP932 guest a path of 200 characters
+    # can be 300 bytes and would sail past this check.
+    #
+    # rstrip("/\\") rather than "\\": the separator is the guest's, and a root
+    # written with a forward slash is a perfectly ordinary thing for a Unix
+    # client to report.
+    try:
+        root_n = len(guest_root.rstrip("/\\").encode(caps.acp,
+                                                     "surrogateescape"))
+        rel_n = len(relpath.encode(caps.acp, "surrogateescape"))
+    except (UnicodeEncodeError, LookupError):
+        root_n, rel_n = len(guest_root.rstrip("/\\")), len(relpath)
+    full = root_n + 1 + rel_n + 1
+    limit = caps.maxdirpath if is_dir else caps.maxpath
     if full > limit:
         return Skip(
             "path too long",
             f"{full} bytes once prefixed with {guest_root!r}; the limit is "
             f"{limit} including the NUL"
-            + (" (a directory stops 12 short of MAX_PATH so an 8.3 name still "
-               "fits inside it)" if is_dir else ""),
+            + (f" (a directory stops {caps.dirreserve} short of {caps.maxpath},"
+               f" so a short name still fits inside it)"
+               if is_dir and caps.dirreserve else ""),
         )
 
     # The single most common reason a Linux tree cannot cross. Checked LAST so
     # the more specific reasons win when several apply.
     try:
-        relpath.encode(acp)
+        relpath.encode(caps.acp)
     except (UnicodeEncodeError, LookupError):
         return Skip(
             "not representable on the guest",
-            f"{relpath!r} has no form in {acp}, the guest's ANSI codepage",
+            f"{relpath!r} has no form in {caps.acp}, the machine's codepage",
         )
     return None
 
 
-def canonical(relpath: str, *, acp: str = "cp1252") -> str:
+def canonical(relpath: str, *, caps=DEFAULT) -> str:
     """The matching key. NOT a path to write to.
 
     The guest's filesystem is case-insensitive and case-preserving, so two
@@ -169,12 +232,18 @@ def canonical(relpath: str, *, acp: str = "cp1252") -> str:
     other way (`CAFÉ.MD` and `café.md` do not match for us but DO match for
     Win32, so both push and the second silently overwrites the first).
     """
+    # A case-SENSITIVE client has nothing to fold, and folding would be
+    # actively wrong there: `Makefile` and `makefile` are two files on a Unix
+    # box, and collapsing them to one key makes one of them permanently
+    # invisible -- the silent-loss shape this module exists to avoid.
+    if not caps.case:
+        return relpath
     out = []
     for part in relpath.split("/"):
         try:
-            raw = part.encode(acp)
+            raw = part.encode(caps.acp)
             # Win32's ANSI case folding is byte-wise over the codepage.
-            out.append(raw.decode(acp).lower())
+            out.append(raw.decode(caps.acp).lower())
         except (UnicodeEncodeError, LookupError):
             out.append(part.lower())
     return "/".join(out)
@@ -229,17 +298,29 @@ def normalise(data: bytes, cls: str) -> bytes:
     return data.replace(b"\r\n", b"\n") if cls == CLASS_TEXT else data
 
 
-def to_guest(data: bytes, cls: str) -> bytes:
-    """Bridge form -> guest form. Normalise FIRST, then expand.
+#: The native ending for each `caps.eol` value. A tuple indexed by the enum, so
+#: adding a client convention is one entry rather than a new branch in three
+#: different functions.
+_EOL = (b"\n", b"\r\n", b"\r")
+
+
+def to_guest(data: bytes, cls: str, caps=DEFAULT) -> bytes:
+    """Bridge form -> client form. Normalise FIRST, then expand.
 
     Expanding directly would turn `a\\r\\nb` into `a\\r\\r\\nb` and add another CR
-    on every pass, forever. The guest must also write in BINARY mode -- text
+    on every pass, forever. The client must also write in BINARY mode -- text
     mode would translate on top of what we already did and reproduce exactly
     that.
+
+    For an LF-native client this is the identity and the whole class-`t`
+    machinery costs nothing. That is what a PDP running Unix does with the
+    line-ending layer: nothing at all.
     """
     if cls != CLASS_TEXT:
         return data
-    return data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    flat = data.replace(b"\r\n", b"\n")
+    native = _EOL[caps.eol] if 0 <= caps.eol < len(_EOL) else b"\n"
+    return flat if native == b"\n" else flat.replace(b"\n", native)
 
 
 def to_bridge(data: bytes, cls: str) -> bytes:
@@ -248,7 +329,7 @@ def to_bridge(data: bytes, cls: str) -> bytes:
 
 
 def case_collision(existing: dict[str, str], relpath: str,
-                   *, acp: str = "cp1252") -> str | None:
+                   *, caps=DEFAULT) -> str | None:
     """Does `relpath` collide, case-insensitively, with something already known?
 
     Returns the established path it collides with, or None.
@@ -257,7 +338,7 @@ def case_collision(existing: dict[str, str], relpath: str,
     retroactively break a path that has been syncing correctly for weeks because
     someone later added a file differing only in case.
     """
-    key = canonical(relpath, acp=acp)
+    key = canonical(relpath, caps=caps)
     other = existing.get(key)
     return other if other is not None and other != relpath else None
 
@@ -285,6 +366,50 @@ def rel_from_posix(root: str, path: str) -> str:
 #
 # `check()` already refuses anything the codepage cannot carry. These two make
 # the transfer actually USE that representation.
+
+#: What a Win32 GetACP() number means to Python. Only the pages a machine of
+#: this era can actually be set to; anything else is refused rather than
+#: guessed, because a wrong codepage is the one failure in this layer that
+#: round-trips perfectly and corrupts silently.
+_ACP_CODECS = {
+    437: "cp437", 850: "cp850", 852: "cp852", 855: "cp855", 857: "cp857",
+    858: "cp858", 860: "cp860", 861: "cp861", 862: "cp862", 863: "cp863",
+    865: "cp865", 866: "cp866", 869: "cp869", 874: "cp874",
+    932: "cp932", 936: "cp936", 949: "cp949", 950: "cp950",
+    1250: "cp1250", 1251: "cp1251", 1252: "cp1252", 1253: "cp1253",
+    1254: "cp1254", 1255: "cp1255", 1256: "cp1256", 1257: "cp1257",
+    1258: "cp1258",
+    65001: "utf-8",
+}
+
+
+def codec_for_acp(value: str | int | None) -> str | None:
+    """A guest's reported ANSI codepage -> a Python codec name, or None.
+
+    None means "I do not know what that is", and the caller must treat that as
+    a reason to say so rather than to assume. Assuming cp1252 for an unknown
+    number is exactly the silent path this function exists to close: the bridge
+    would encode a name with the wrong table, the guest would store those
+    bytes, report them back, and the bridge would decode with the same wrong
+    table and see the name it sent. Self-consistent, undetectable, and the
+    user's file is called something else on their own disk.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    name = _ACP_CODECS.get(n)
+    if name is None:
+        return None
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
 
 def wire_encode(relpath: str, *, acp: str = "cp1252") -> bytes:
     """A relative path, as the bytes the guest will receive.
