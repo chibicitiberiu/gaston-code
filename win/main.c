@@ -95,14 +95,37 @@ static int  g_perm_pending;
  * carry on until the user says they have finished with the file.
  *
  * One set of controls rather than two because the 16-bit USER/GDI heaps on 9x
- * are a fixed 64KB that does not scale with RAM, and because the two states
- * are mutually exclusive by construction: a halted agent is not running a tool
- * and cannot be asking for permission. */
+ * are a fixed 64KB that does not scale with RAM.
+ *
+ * The original note here also said the two states were "mutually exclusive by
+ * construction: a halted agent is not running a tool and cannot be asking for
+ * permission". THAT IS FALSE, and it cost both of them. A halt is raised by a
+ * sync pass, which runs on the guest's watcher and owes nothing to the agent's
+ * turn -- so a conflict is found precisely WHILE the agent works, because the
+ * agent writing files is what moves the tree. Each show() then overwrote the
+ * other's state:
+ *
+ *   PERMREQ over a halt -- the mode became BAR_PERM, so Continue answered the
+ *   permission instead, and PERMEND then cleared g_halt_id while the bridge
+ *   still held the halt. No further bar could be raised (the bridge's raise is
+ *   idempotent while one is outstanding) and RESUME could never be sent, so
+ *   every latched path refused the agent's writes forever.
+ *
+ *   HALT over a permission -- g_perm_pending was cleared, so Allow sent RESUME
+ *   and the permission request was never answered at all, leaving the model
+ *   waiting on a prompt nobody could reply to until the bridge's deadline.
+ *
+ * So the halt is REMEMBERED rather than shown-or-lost. A permission request
+ * takes the bar, because it is the one with a deadline; the halt waits behind
+ * it and comes back when it clears. */
 #define BAR_NONE 0
 #define BAR_PERM 1
 #define BAR_HALT 2
 static int  g_bar_mode;
 static char g_halt_id[80];
+/* The halt's text, kept so the bar can be put BACK after a permission request
+ * borrows it. Without this there is nothing to redisplay. */
+static char g_halt_text[256];
 
 /* Session ids, parallel to the list box. A ListBox rather than a ListView
  * deliberately: fewer GDI objects, and the 16-bit USER/GDI heaps on 9x are a
@@ -414,10 +437,13 @@ static void perm_layout(void)
 static void bar_hide(void)
 {
     if (!g_bar_mode) return;
+    /* Clear only what THIS bar owned. Clearing both is how a permission
+     * request ending took the halt down with it, leaving the bridge holding a
+     * halt the user could never answer. */
+    if (g_bar_mode == BAR_HALT) g_halt_id[0] = '\0';
     g_bar_mode = BAR_NONE;
     g_perm_pending = 0;
     g_perm_id[0] = '\0';
-    g_halt_id[0] = '\0';
     ShowWindow(g_perm_text,   SW_HIDE);
     ShowWindow(g_perm_allow,  SW_HIDE);
     ShowWindow(g_perm_always, SW_HIDE);
@@ -426,10 +452,16 @@ static void bar_hide(void)
     ui_set_busy(g_turn_active);
 }
 
+static void halt_show(const char *id, const char *text);
+
 static void perm_hide(void)
 {
     if (g_bar_mode != BAR_PERM) return;
     bar_hide();
+    /* A halt that arrived while this bar was up was remembered, not shown.
+     * Put it back now, or the bridge is left holding a halt with nothing on
+     * screen to answer it and every latched path refuses the agent forever. */
+    if (g_halt_id[0]) halt_show(g_halt_id, g_halt_text);
 }
 
 /* The agent has been stopped and needs the user to say "carry on". */
@@ -438,6 +470,16 @@ static void halt_show(const char *id, const char *text)
     if (!id || !*id) return;
     _snprintf(g_halt_id, sizeof(g_halt_id) - 1, "%s", id);
     g_halt_id[sizeof(g_halt_id) - 1] = '\0';
+    _snprintf(g_halt_text, sizeof(g_halt_text) - 1, "%s", text && *text
+              ? text : "Stopped: a conflicting edit was found");
+    g_halt_text[sizeof(g_halt_text) - 1] = '\0';
+
+    /* A permission request is on screen and has a deadline; this does not.
+     * Keep the id and the text and come back when that bar clears -- taking
+     * the bar here would clear g_perm_pending, so Allow would send RESUME and
+     * the tool call would never be answered at all. */
+    if (g_bar_mode == BAR_PERM) return;
+
     g_bar_mode = BAR_HALT;
     g_perm_pending = 0;
 
@@ -781,8 +823,17 @@ static void render_frame(rc_frame *f)
          * resolve a halt on its own -- the agent called sync_resolve, or the
          * session was rebuilt -- while the bar is still up. */
         const char *id = rc_frame_get(f, "id");
-        if (id && g_bar_mode == BAR_HALT && strcmp(id, g_halt_id) == 0)
-            halt_hide();
+        if (id && g_halt_id[0] && strcmp(id, g_halt_id) == 0) {
+            if (g_bar_mode == BAR_HALT) {
+                halt_hide();
+            } else {
+                /* Remembered behind a permission bar rather than shown. Forget
+                 * it, or perm_hide would put up a bar for a halt that has
+                 * already been answered. */
+                g_halt_id[0] = '\0';
+                g_halt_text[0] = '\0';
+            }
+        }
 
     } else if (strcmp(f->type, "PERMWAIT") == 0) {
         /* Only the queue depth changed; the request is the same one. */
@@ -1433,8 +1484,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_bar_mode == BAR_HALT) {
                 const char *k[1]; const char *v[1];
                 k[0] = "id"; v[0] = g_halt_id;
-                rc_net_send(&g_net, "RESUME", k, v, 1, NULL, 0);
-                halt_hide();
+                /* The bar comes down on HALTEND, not here -- the same rule
+                 * perm_reply follows, and for the same reason. rc_net_send
+                 * returns -1 on a closed link, a full queue or an oversized
+                 * frame, and hiding regardless meant a press that never left
+                 * the machine looked answered: the bridge still held the halt,
+                 * its raise is idempotent so no new bar could appear, and
+                 * every latched path refused the agent's writes for good. */
+                if (rc_net_send(&g_net, "RESUME", k, v, 1, NULL, 0) < 0)
+                    SetWindowTextA(g_perm_text,
+                                   "Not sent -- no link. Press Continue again.");
                 return 0;
             }
             perm_reply("allow");

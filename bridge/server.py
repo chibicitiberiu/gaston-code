@@ -855,8 +855,15 @@ class Bridge:
             # is to type "wait, stop", which is precisely the message that
             # would have restarted it.
             if f.headers.get("id", "") == guest.halt_id and guest.halt_id:
-                guest.halt_id = ""
+                hid, guest.halt_id = guest.halt_id, ""
                 log.info("user pressed Continue on the sync halt")
+                # Acknowledge, because the guest no longer takes its own bar
+                # down on the click. A press that never reached us used to look
+                # answered on their screen while we still held the halt -- and
+                # since raising is idempotent, no later bar could appear and
+                # every latched path refused the agent for good.
+                await self._send(guest, Frame("HALTEND", {"id": hid}),
+                                 stamp=False)
                 # Pressing Continue IS the confirmation, so it lifts the
                 # refusal here. Making the agent ask again -- a permission
                 # prompt for sync_resolve -- would put a second dialog in front

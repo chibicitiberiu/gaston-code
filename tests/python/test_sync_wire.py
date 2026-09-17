@@ -1418,3 +1418,32 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
     assert "unseen.c" in left, "released a path the user was never shown"
     assert "seen.c" not in left
     await harness.close(writer)
+
+
+async def test_continue_is_acknowledged_rather_than_assumed(harness, tmp_path):
+    """The guest no longer takes its own bar down on the click.
+
+    rc_net_send returns -1 on a closed link, a full queue or an oversized
+    frame. Hiding regardless meant a press that never left the machine looked
+    answered: the bridge still held the halt, its raise is idempotent so no
+    later bar could appear, and every latched path refused the agent's writes
+    for good. So the bridge must answer RESUME with HALTEND, or the bar the
+    guest is now keeping up would never come down.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    await harness.bridge._raise_halt(guest, "Stopped: 1 conflicting edit.")
+    halt = await _recv(harness, reader, "HALT")
+
+    await harness.send(writer, Frame("RESUME", {"id": halt.headers["id"]}))
+    end = await _recv(harness, reader, "HALTEND")
+    assert end.headers["id"] == halt.headers["id"]
+    assert not guest.halt_id
+    await harness.close(writer)
