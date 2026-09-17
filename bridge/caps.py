@@ -84,7 +84,12 @@ ILLEGAL_DOS = 1             #: also `< > : " \\ | ? *`
 
 EOL_LF = 0
 EOL_CRLF = 1
-EOL_CR = 2                  #: classic Mac. Declared, not yet implemented.
+#: Classic Mac. Declared so the number stays reserved, and REFUSED at the
+#: handshake -- see from_hello. `to_guest` would convert to lone CRs, but the
+#: guest normalises only CRLF, so its crc_norm still contains them, the
+#: compare-and-swap never matches, and every text file fails on every pass.
+#: A refusal names the capability; the failure names corruption instead.
+EOL_CR = 2
 
 SHORTNAMES_NONE = 0
 SHORTNAMES_83 = 1           #: 8.3 aliases exist alongside long names
@@ -227,7 +232,13 @@ def from_hello(h: dict) -> Caps:
         trailing=_enum(h, "trailing", (TRAILING_KEPT, TRAILING_STRIPPED),
                        TRAILING_STRIPPED),
         illegal=_enum(h, "illegal", (ILLEGAL_POSIX, ILLEGAL_DOS), ILLEGAL_DOS),
-        eol=_enum(h, "eol", (EOL_LF, EOL_CRLF, EOL_CR), EOL_CRLF),
+        # EOL_CR is a DECLARED value we cannot honour, so it is refused here
+        # rather than failing per file forever. `to_guest` would convert to
+        # lone CRs, but the guest's normaliser folds only CRLF -- so its
+        # crc_norm still contains those CRs, the compare-and-swap never
+        # matches, and every text file comes back crc_mismatch on every pass.
+        # Loud, but the log points at corruption rather than at a capability.
+        eol=_enum(h, "eol", (EOL_LF, EOL_CRLF), EOL_CRLF),
         shortnames=_enum(h, "shortnames", (SHORTNAMES_NONE, SHORTNAMES_83),
                          SHORTNAMES_83),
         dirreserve=_num(h, "dirreserve", DIRRESERVE_WIN32, 0, 64),

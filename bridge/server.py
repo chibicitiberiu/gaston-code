@@ -1646,10 +1646,26 @@ class Bridge:
         guest.sync_pending.clear()
         guest.sync_active = False
 
+    #: The bridge's own ceiling on captured output. The guest caps at 32KB, and
+    #: this is the same number with room to spare -- it exists because the cap
+    #: that mattered lived entirely in the OTHER binary. Nothing else here
+    #: trusts a length a guest supplies, and a client that lied, or a regression
+    #: in exec.c, could grow this buffer for as long as the call has left to
+    #: run: 64KB a frame for up to 150 seconds.
+    EXEC_OUT_MAX = 64 * 1024
+
     async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
         entry = guest.exec_pending.get(f.headers.get("id", ""))
         if entry is None:
             return          # late chunk for a call we gave up on
+        room = self.EXEC_OUT_MAX - len(entry["out"])
+        if room <= 0:
+            entry["capped"] = True
+            return
+        if len(f.body) > room:
+            entry["out"].extend(f.body[:room])
+            entry["capped"] = True
+            return
         entry["out"].extend(f.body)
 
     async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
@@ -1669,7 +1685,11 @@ class Bridge:
 
         status = f.headers.get("status", "ok")
         code = f.headers.get("code", "")
-        truncated = f.headers.get("truncated", "0") == "1"
+        # Either side may have cut it: the guest at its 32KB cap, or us at
+        # ours. Both mean the same thing to the model -- what arrived is not
+        # the whole of it -- so they are reported the same way.
+        truncated = (f.headers.get("truncated", "0") == "1"
+                     or bool(entry.get("capped")))
 
         # COMMAND.COM writes the OEM codepage, not the ANSI one. Using
         # fold.decode here instead is the classic Win9x encoding bug and turns
@@ -1680,6 +1700,16 @@ class Bridge:
         if status == "spawn_failed":
             parts.append("The command could not be started on the connected "
                          "machine.")
+        elif status == "too_long":
+            # Was reported as spawn_failed, which reads as an environment
+            # problem and invites a retry. It is a deterministic size
+            # rejection, so retrying the same command never succeeds -- and
+            # the model has no way to guess the limit unless it is told.
+            parts.append(
+                "The command line was too long for the connected machine and "
+                "was refused before it ran. The limit is about 1000 "
+                "characters including the shell prefix; shorten it, or write "
+                "the long part to a file and run that.")
         elif status == "timeout":
             parts.append(f"Timed out and was killed after the limit; partial "
                          f"output follows.")
@@ -1696,7 +1726,8 @@ class Bridge:
         head = (" ".join(parts) + "\n\n") if parts else ""
         fut.set_result({
             "content": [{"type": "text", "text": head + body}],
-            "isError": status in ("spawn_failed", "busy", "cancelled"),
+            "isError": status in ("spawn_failed", "too_long", "busy",
+                                  "cancelled"),
         })
         log.info("exec %s finished: status=%s code=%s bytes=%d",
                  exec_id, status, code, len(entry["out"]))

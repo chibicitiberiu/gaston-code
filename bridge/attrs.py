@@ -62,7 +62,15 @@ FILES = (".gitattributes", ".gastonattributes")
 
 #: What `eol=` may say, mapped to the `caps.eol` enum `paths._EOL` is indexed
 #: by. A value outside this table is ignored rather than guessed at.
-EOL_NAMES = {"lf": 0, "crlf": 1, "cr": 2}
+#:
+#: `cr` is absent deliberately, and refusing it at the handshake is not enough:
+#: this table is consulted per PATH, so `*.txt eol=cr` in a real
+#: .gitattributes would reach a CRLF client that declared itself perfectly
+#: legally. The guest's normaliser folds only CRLF, so a lone-CR file's
+#: crc_norm still contains the CRs, the compare-and-swap never matches, and
+#: the path fails on every pass forever. Ignoring the word leaves the file
+#: alone, which is the honest answer until someone implements it.
+EOL_NAMES = {"lf": 0, "crlf": 1}
 
 
 class PathAttrs:

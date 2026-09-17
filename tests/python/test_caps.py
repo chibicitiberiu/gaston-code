@@ -130,3 +130,30 @@ def test_the_summary_says_whether_it_was_declared_or_assumed():
     thought it was talking to."""
     assert "assumed" in C.from_hello({}).summary()
     assert "declared" in C.from_hello({"case": "1"}).summary()
+
+
+def test_eol_cr_is_refused_at_the_handshake():
+    """Declarable is not the same as implemented.
+
+    to_guest would convert to lone CRs, but the guest normalises only CRLF --
+    so its crc_norm still contains them, the compare-and-swap never matches,
+    and every text file comes back crc_mismatch on every pass, forever. Loud,
+    but the log points at corruption rather than at a capability the bridge
+    cannot honour.
+    """
+    with pytest.raises(C.CapsError) as e:
+        C.from_hello({"acp": "1252", "eol": str(C.EOL_CR)})
+    assert "eol" in str(e.value)
+
+
+def test_the_two_endings_we_do_implement_still_pass():
+    assert C.from_hello({"acp": "1252", "eol": "0"}).eol == C.EOL_LF
+    assert C.from_hello({"acp": "1252", "eol": "1"}).eol == C.EOL_CRLF
+
+
+def test_eol_cr_is_refused_per_path_too():
+    """A handshake refusal is only half of it: attrs are consulted per PATH,
+    so `*.txt eol=cr` in a real .gitattributes would reach a client that
+    declared itself perfectly legally."""
+    from bridge import attrs as A
+    assert "cr" not in A.EOL_NAMES

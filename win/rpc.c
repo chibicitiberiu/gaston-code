@@ -201,7 +201,7 @@ static void run_one(rc_frame *f)
     case RC_EXEC_TIMEOUT:      status = "timeout";      break;
     case RC_EXEC_SPAWN_FAILED: status = "spawn_failed"; break;
     case RC_EXEC_CANCELLED:    status = "cancelled";    break;
-    case RC_EXEC_TOO_LONG:     status = "spawn_failed"; break;
+    case RC_EXEC_TOO_LONG:     status = "too_long";     break;
     default:                   status = "ok";           break;
     }
 
@@ -215,7 +215,13 @@ static void run_one(rc_frame *f)
     keys[nkv] = "id";        vals[nkv++] = ctx.id;
     keys[nkv] = "status";    vals[nkv++] = status;
     keys[nkv] = "code";      vals[nkv++] = code;
-    keys[nkv] = "bytes";     vals[nkv++] = bytes;
+    /* `bytes` is GONE from the frame, deliberately. It counted bytes PRODUCED
+     * -- including everything discarded past the 32KB cap, and including
+     * chunks dropped on the wire -- so it could never equal what the bridge
+     * received, and an integrity check written against it would have failed on
+     * every truncated command. The bridge never read it. `truncated` already
+     * carries the only fact the model acts on. It stays in the log below,
+     * where "produced" is exactly the number worth having. */
     keys[nkv] = "truncated"; vals[nkv++] = trunc;
     rc_net_send(g_net, "EXECRESULT", keys, vals, nkv, NULL, 0);
 

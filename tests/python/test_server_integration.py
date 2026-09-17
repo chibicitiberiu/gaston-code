@@ -866,3 +866,48 @@ async def test_stop_kills_a_running_command(harness):
     result = await asyncio.wait_for(task, 5)
     assert result["isError"] is True
     await harness.close(writer)
+
+
+async def test_a_command_line_too_long_says_so_rather_than_spawn_failed(
+        harness):
+    """The guest refuses a command line over ~1000 characters before running
+    it. That was flattened onto `spawn_failed`, which reads as an environment
+    problem and invites a retry -- and retrying a deterministic size rejection
+    never succeeds. The model also has no way to guess the limit unless it is
+    told it."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = asyncio.create_task(harness.bridge.run_on_guest("x" * 2000, timeout_ms=5000,
+                                    shell=True, cwd=""))
+    req = await _recv(harness, reader, "EXEC")
+    await harness.send(writer, Frame("EXECRESULT", {
+        "id": req.headers["id"], "status": "too_long", "code": "0",
+        "truncated": "0"}))
+    got = await asyncio.wait_for(task, 5)
+    text = got["content"][0]["text"]
+    assert "too long" in text
+    assert "could not be started" not in text
+    assert got["isError"] is True
+    await harness.close(writer)
+
+
+async def test_output_is_capped_here_too_and_says_it_was(harness):
+    """The 32KB cap lives in the other binary. This is the only place the
+    bridge trusts a length a guest supplies, and a client that lied could grow
+    the buffer for as long as the call has left to run."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = asyncio.create_task(harness.bridge.run_on_guest("dir", timeout_ms=5000,
+                                    shell=True, cwd=""))
+    req = await _recv(harness, reader, "EXEC")
+    eid = req.headers["id"]
+    for _ in range(4):
+        await harness.send(writer, Frame("EXECOUT", {"id": eid},
+                                         b"A" * 32768))
+    await harness.send(writer, Frame("EXECRESULT", {
+        "id": eid, "status": "ok", "code": "0", "truncated": "0"}))
+    got = await asyncio.wait_for(task, 5)
+    text = got["content"][0]["text"]
+    assert len(text) < 4 * 32768, "the buffer grew past the bridge's own cap"
+    assert "truncated" in text, "capped without saying so"
+    await harness.close(writer)
