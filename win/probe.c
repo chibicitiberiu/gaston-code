@@ -597,6 +597,146 @@ static void probe_html(void)
     say("  after releasing everything:       %7lu KB free", free_kb());
 }
 
+
+/* ------------------------------------------------------------------ 0.14 */
+/* Does Windows 98 have a directory watcher, and does it actually work?
+ *
+ * Open Watcom's headers declare FindFirstChangeNotificationA and friends, but a
+ * header declaring a function proves it is part of Win32 -- NOT that this
+ * guest's KERNEL32 exports it. That distinction is what 0.7 existed for, and a
+ * static import the guest lacks kills the image before WinMain with no log.
+ *
+ * So this resolves it the way the product will: dynamically. A NULL here is a
+ * supported answer, not a failure -- the sync layer polls regardless and the
+ * notification is only an accelerator. What we are really measuring is whether
+ * the accelerator is worth wiring up, and whether bWatchSubtree means on FAT
+ * what the NT-era documentation says it means. */
+
+typedef HANDLE (WINAPI *FFCN)(LPCSTR, BOOL, DWORD);
+typedef BOOL   (WINAPI *FNCN)(HANDLE);
+typedef BOOL   (WINAPI *FCCN)(HANDLE);
+
+static FFCN p_first;
+static FNCN p_next;
+static FCCN p_close;
+
+/* Wait for the handle, report how long it took. Returns 1 if it signalled. */
+static int watch_wait(HANDLE h, const char *what, DWORD ms)
+{
+    DWORD t0 = GetTickCount();
+    DWORD r  = WaitForSingleObject(h, ms);
+    DWORD dt = GetTickCount() - t0;
+
+    if (r == WAIT_OBJECT_0) {
+        say("    %-34s SIGNALLED after %lums", what, (unsigned long)dt);
+        return 1;
+    }
+    if (r == WAIT_TIMEOUT) {
+        say("    %-34s no signal (waited %lums)", what, (unsigned long)dt);
+        return 0;
+    }
+    say("    %-34s wait failed r=%lu err=%lu", what,
+        (unsigned long)r, (unsigned long)GetLastError());
+    return 0;
+}
+
+static void touch_file(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "wb");
+    if (f) { fputs(text, f); fclose(f); }
+    else say("    (could not write %s)", path);
+}
+
+static void probe_watch(void)
+{
+    HMODULE k32;
+    HANDLE  h;
+    int     signalled = 0, total = 0;
+
+    head("0.14  directory change notification (sync layer accelerator)");
+
+    k32 = GetModuleHandleA("kernel32.dll");
+    p_first = (FFCN)GetProcAddress(k32, "FindFirstChangeNotificationA");
+    p_next  = (FNCN)GetProcAddress(k32, "FindNextChangeNotification");
+    p_close = (FCCN)GetProcAddress(k32, "FindCloseChangeNotification");
+
+    say("FindFirstChangeNotificationA : %s",
+        p_first ? "present" : "MISSING");
+    say("FindNextChangeNotification   : %s",
+        p_next ? "present" : "MISSING");
+    say("FindCloseChangeNotification  : %s",
+        p_close ? "present" : "MISSING");
+
+    if (!p_first || !p_next || !p_close) {
+        say("");
+        say("  -> not all present. The sync layer polls; nothing is lost but");
+        say("     latency. Do not add a static import for these.");
+        return;
+    }
+
+    /* A tree with a subdirectory, so bWatchSubtree can be tested honestly. */
+    CreateDirectoryA("C:\\WATCHTST", NULL);
+    CreateDirectoryA("C:\\WATCHTST\\SUB", NULL);
+    touch_file("C:\\WATCHTST\\SEED.TXT", "seed\r\n");
+
+    h = p_first("C:\\WATCHTST", TRUE,
+                FILE_NOTIFY_CHANGE_FILE_NAME |
+                FILE_NOTIFY_CHANGE_LAST_WRITE |
+                FILE_NOTIFY_CHANGE_SIZE);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) {
+        say("  FindFirstChangeNotificationA failed: err=%lu",
+            (unsigned long)GetLastError());
+        say("  -> polling only.");
+        return;
+    }
+    say("");
+    say("  watching C:\\WATCHTST with bWatchSubtree=TRUE");
+
+    /* Nothing has happened yet: it must NOT already be signalled, or every
+     * scan would be triggered by its own previous scan. */
+    total++;
+    if (watch_wait(h, "before any change (want: none)", 700))
+        say("      ^^ signalled with no change -- would cause a rescan loop");
+    else
+        signalled++;
+
+    touch_file("C:\\WATCHTST\\NEW1.TXT", "one\r\n");
+    total++;
+    signalled += watch_wait(h, "create in watched root", 5000);
+
+    if (!p_next(h)) say("    FindNextChangeNotification failed: err=%lu",
+                        (unsigned long)GetLastError());
+    touch_file("C:\\WATCHTST\\SEED.TXT", "changed content\r\n");
+    total++;
+    signalled += watch_wait(h, "modify existing file", 5000);
+
+    if (!p_next(h)) say("    FindNextChangeNotification failed (2)");
+    touch_file("C:\\WATCHTST\\SUB\\DEEP.TXT", "deep\r\n");
+    total++;
+    signalled += watch_wait(h, "create in SUBDIRECTORY", 5000);
+
+    if (!p_next(h)) say("    FindNextChangeNotification failed (3)");
+    DeleteFileA("C:\\WATCHTST\\NEW1.TXT");
+    total++;
+    signalled += watch_wait(h, "delete in watched root", 5000);
+
+    p_close(h);
+
+    say("");
+    say("  %d of %d checks behaved as the sync layer needs", signalled, total);
+    if (signalled == total)
+        say("  -> usable as an accelerator; poll interval can be generous.");
+    else
+        say("  -> unreliable here. Keep polling brisk; treat any signal as a"
+            " bonus.");
+
+    /* Tidy up so a re-run starts clean. */
+    DeleteFileA("C:\\WATCHTST\\SEED.TXT");
+    DeleteFileA("C:\\WATCHTST\\SUB\\DEEP.TXT");
+    RemoveDirectoryA("C:\\WATCHTST\\SUB");
+    RemoveDirectoryA("C:\\WATCHTST");
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -615,6 +755,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "screen"))   probe_screen();
     if (!only || !strcmp(only, "deflate"))  probe_deflate();
     if (!only || !strcmp(only, "html"))     probe_html();
+    if (!only || !strcmp(only, "watch"))    probe_watch();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");

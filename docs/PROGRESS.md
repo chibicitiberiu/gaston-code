@@ -56,6 +56,7 @@ Everything Linux-side proceeds without these.
 | 0.8 | Samba LFN over `vers=1.0` | **blocked** | No `smbd` on the host (see blockers). Guest-side LFN itself does work: `copy retrocl.ini "retroclaude.ini"` created and read a long name from COMMAND.COM |
 | 0.9 | 16-bit `EXEC` capture — **correct non-empty output**, not "no hang" | **done — PASS** | `command.com /c ver` 36B, `dir c:\ /w` 352B, and `echo hello \| find "hello"` 8B first line `hello`. Non-empty **and correct**, including the known-bad 16-bit FIND. **Phase 3's EXEC design survives**; the claudewin9x temp-file fallback is not needed |
 | 0.10 | `GetDIBits` → `BI_RLE8`? | **done — PASS** | 640x480 8bpp: 307,200B raw -> **27,088B in 14ms, 11.3:1**, done by GDI. Beats the plan's 3-8:1 estimate for hand-rolled RLE, and the ~40 lines of RLE8 are not needed |
+| 0.14 | **Does Win98 have a directory watcher?** (`FindFirstChangeNotification`) | **done — PASS** | All three symbols present in Win98 SE's KERNEL32. Watching `C:\WATCHTST` with `bWatchSubtree=TRUE`: no spurious signal before any change (702ms quiet), then **create / modify / create-in-SUBDIRECTORY / delete all signalled**. 5 of 5. Subtree watching works on FAT, which was the doubt. Resolved via `GetProcAddress`, and `make check` confirms it is **not** in the import table |
 | 0.11 | `_beginthreadex` vs `CreateThread` under `-bm`, with a message loop | **done — PASS** | 3/3 `_beginthreadex` threads plus a message sink window, 275 `PostMessage` round trips. **Correction to the plan**: `CreateThread(lpThreadId=NULL)` was *accepted* on this Win98 SE, so retro-agent's hardware note does not reproduce. `_beginthreadex` stays, on the OW per-thread-data argument, which is independent |
 
 ## Phase 1 — "I typed on Win98 and Claude answered"
@@ -200,6 +201,49 @@ All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
+
+### 2026-09-17 — 0.14: Windows 98 does have a directory watcher
+
+Asked before designing the sync layer's trigger, because the headers declaring
+`FindFirstChangeNotificationA` prove it is part of Win32, not that this guest's
+KERNEL32 exports it -- the distinction 0.7 existed for, and a static import the
+guest lacks kills the image before `WinMain` with no log.
+
+Measured on Win98 SE:
+
+    FindFirstChangeNotificationA : present
+    FindNextChangeNotification   : present
+    FindCloseChangeNotification  : present
+
+    watching C:\WATCHTST with bWatchSubtree=TRUE
+      before any change (want: none)   no signal (waited 702ms)
+      create in watched root           SIGNALLED
+      modify existing file             SIGNALLED
+      create in SUBDIRECTORY           SIGNALLED
+      delete in watched root           SIGNALLED
+
+**5 of 5.** The one most likely to disappoint -- `bWatchSubtree` on FAT -- works.
+So does the negative case: it does not fire before anything has happened, which
+matters because a watcher that signals spuriously would make every scan trigger
+the next one.
+
+**The two design decisions taken *before* the answer both stand, and are now
+cheap insurance rather than load-bearing:**
+
+  * **Resolved with `GetProcAddress`, never a static import.** `make check`
+    confirms nothing named `*ChangeNotification*` appears in the import table.
+    A Win98 variant without it degrades to polling instead of failing to load.
+  * **Polling remains the mechanism; the watcher is an accelerator.** What the
+    result changes is the *poll interval*, which can now be generous rather than
+    brisk -- which is CPU the P200 gets to keep.
+
+What this did NOT measure is latency. Every signal read "after 0ms" because the
+file operation completed before `WaitForSingleObject` was called, so the handle
+was already signalled. The experiment answers "does it fire reliably", which was
+the question; "how fast" would need the wait armed first and is not worth a
+second run, since the debounce dominates anyway.
+
+
 
 ### 2026-09-17 — the two open Stage B items, both settled by measuring
 

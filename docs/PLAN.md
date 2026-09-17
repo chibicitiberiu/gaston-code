@@ -830,7 +830,11 @@ the permission dialog appears, and the answer comes back.*
   hundred entries at ~50 bytes is fine; a whole-tree structure is not.
 - Win9x specifics, recorded so they are not rediscovered: `ReadDirectoryChangesW`
   is NT-only and would kill the image at load, so watching is
-  `FindFirstChangeNotification` plus a rescan of a small tree; FAT timestamps
+  `FindFirstChangeNotification` plus a rescan of a small tree -- **verified by
+  experiment 0.14 on Win98 SE: all three symbols present, and create / modify /
+  delete / create-in-subdirectory all signal with `bWatchSubtree=TRUE` on FAT.
+  Resolved via `GetProcAddress` anyway, so a guest without it polls instead of
+  failing to load**; FAT timestamps
   have **2-second granularity**, so mtime comparison needs a tolerance or
   everything looks modified; the filesystem is case-insensitive, has no
   symlinks, and 8.3 aliasing means one file can arrive spelled two ways.
