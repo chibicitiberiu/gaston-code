@@ -125,6 +125,64 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — the UI tier is one stage, and the control tree beats vision
+
+Screen capture had been sitting at 3.2 while everything that uses it sat three
+phases later. OCR was not in the plan at all. Both now live in **Phase 6, the UI
+tier**, so "look at the machine and drive it" is one coherent stage; Phase 3's
+file sync renumbered 3.4 -> 3.3.
+
+The design point that moved is which sense comes first. Modern computer-use
+agents lean on screenshots because modern UIs are custom-rendered. **Windows 98
+is the opposite**: almost every pixel is a standard USER32 control whose text is
+exactly queryable. A dialog's control tree is ~200 tokens and exact; a
+screenshot of the same dialog is ~850 tokens and inferred. So the ladder is
+control tree -> MSAA -> OCR -> vision, and vision is the fallback rather than
+the primary.
+
+Consequences worth keeping:
+
+  * `SendMessage(WM_GETTEXT)`, not `GetWindowText` -- cross-process the latter
+    returns only a caption, while `WM_GETTEXT` is marshalled by USER32 and
+    returns a control's contents.
+  * `LB_GETTEXT` / `LVM_GETITEMTEXT` / `TVM_GETITEM` are **not** marshalled, and
+    `VirtualAllocEx` does not exist on 9x. List *contents* are an MSAA-or-OCR
+    problem, not a message problem.
+  * `click(target)` resolves a control to its rect centre and then does the same
+    real `mouse_event` click as raw XY -- one execution path, two resolvers.
+    `WindowFromPoint` afterwards catches occlusion for free.
+  * `send_keys` hazards are not Ctrl+Alt+Del (the VMM owns that at ring 0). They
+    are cross-thread `SetFocus` silently failing without `AttachThreadInput`,
+    and the agent typing into Gaston's own input box in a self-feeding loop.
+  * `send_action_sequence` is worth it **only closed-loop**: per-step
+    preconditions, fail-fast with the state at the abort point, and conditional
+    waits (`WaitForInputIdle`) rather than fixed sleeps. It also means one
+    permission prompt instead of five, which matters because prompt fatigue is a
+    real security failure mode.
+
+New gate **0.13**: is `oleacc.dll` present on Win98 SE and does MSAA return a
+usable tree? Dynamically loaded, never a static import. ~40 lines in `probe.c`,
+which is already built and shipped to the guest.
+
+Three tools were added that are **not** reachable through `exec`, which is the
+test applied to every candidate: `launch` (because `exec` waits for exit, and you
+cannot drive Notepad's UI with a tool that blocks until Notepad closes),
+`get_clipboard`/`set_clipboard` (the escape hatch for text no message will give
+up), and `list_processes`/`kill_process` -- Win98 has no `tasklist` and no
+`taskkill` at all, so `CreateToolhelp32Snapshot` is the only route.
+`registry_read`, by contrast, stays out: `regedit /e` is ugly but works, and
+every tool costs context on every request.
+
+### 2026-09-17 — tool names are OS-neutral
+
+Nothing is called `win98_*`. The MCP server is `machine` and its tools are bare
+verbs, because only the guest binary is OS-specific and the codebase may be
+pointed at another machine -- MS-DOS was raised explicitly. Where the OS matters
+it is a runtime branch, not a name: `probe_exec` already picks `command.com` over
+`cmd.exe` from `GetVersion()`. `FEASIBILITY.md`'s `win98_*` sketch is superseded.
+
+
+
 ### 2026-09-17 — 3.0 planned against the real API, not the sketch
 
 Checking `can_use_tool`'s actual signature against the installed SDK before

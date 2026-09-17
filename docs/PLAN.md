@@ -64,7 +64,7 @@ frozen or dead, and the 64KB USER/GDI heaps reward thin layers.
 Win98 guest                        Linux bridge
   retroclaude.exe      --dial out-->   one listener, one secret, one port
    (one process:                         +-- Agent SDK (ClaudeSDKClient, streaming)
-    UI thread                            +-- in-process MCP server (win98_* tools)
+    UI thread                            +-- in-process MCP server (mcp__machine__* tools)
     reader thread                        +-- markdown -> styled runs
     RPC worker thread)                   +-- pagination + replay
                                          +-- screenshot diffing, scaling, encoding
@@ -314,6 +314,50 @@ added lazily and **never released on exit**. `_beginthreadex` (`process.h:156`) 
 a non-NULL `thrdaddr`, which is what Win9x requires anyway — `CreateThread(...,
 lpThreadId=NULL)` returns ERROR_INVALID_PARAMETER on 95/98 (hardware-verified in
 retro-agent's `docs/findings-dos-lane-2026-08-13.md`, single-source but credible).
+
+### Tool naming: nothing is called `win98_*` **[2026-09-17]**
+
+The guest happens to be Windows 98 today. The bridge, the protocol and the tool
+surface should survive a DOS box, a Windows 3.1 box or an NT 4 box on the other
+end -- **only the guest binary is OS-specific**, and the project may well be
+pointed at another machine.
+
+So the in-process MCP server is **`machine`** and its tools are bare verbs:
+
+    mcp__machine__exec            Phase 3
+    mcp__machine__read_file       } Phase 3, file sync
+    mcp__machine__write_file      }
+    mcp__machine__list_dir        }
+    mcp__machine__list_processes  } Phase 3+, see "the exec test"
+    mcp__machine__kill_process    }
+    mcp__machine__list_windows    } Phase 6, the UI tier
+    mcp__machine__screenshot      }
+    mcp__machine__ocr             }
+    mcp__machine__click           }
+    mcp__machine__send_keys       }
+    mcp__machine__send_action_sequence
+    mcp__machine__launch          }
+    mcp__machine__get_clipboard   }
+    mcp__machine__set_clipboard   }
+
+This matches vocabulary the codebase already uses -- `bridge/machine.py`
+describes the connected machine, and HELLO reports its `os`, `cpu`, `mem_kb` and
+`screen`. It is also unambiguous about direction in a way `host_*` or `remote_*`
+would not be: the bridge is not the machine; the thing on the far end of the
+socket is.
+
+**The prefix comes from the dict key in `mcp_servers`, not from the `name=`
+argument** (`subprocess_cli.py:664-670` keys the JSON by the dict key). They must
+match.
+
+Wire frame types were already OS-neutral verbs (`EXEC`, `INPUT`, `SWITCH`) and
+stay that way. **Where the OS actually matters it is a runtime branch, not a
+name**: `probe_exec` (`probe.c:339`) already does `GetVersion() & 0x80000000` to
+pick `command.com` over `cmd.exe`. That branch is the only place the guest's
+vintage should appear.
+
+`docs/FEASIBILITY.md:206-215` sketches a `win98_*` surface. That naming is
+**superseded**; the file is kept as the historical research document.
 
 ### The bridge owns markdown
 
@@ -622,7 +666,8 @@ almost all of it. `dwAvailPhys` excludes the disk cache, which Win98 shrinks
 under pressure, so this is the cache being squeezed rather than allocation
 failing -- the app stays responsive. But **every allocation in this phase has
 to be bounded and small**, and the one place the old plan still assumed
-otherwise is the screenshot buffer.
+otherwise was the screenshot buffer -- which is why screen capture moved out
+of this phase entirely and into Phase 6.
 
 #### 3.0 — Permission prompts *(prerequisite, not optional)*
 
@@ -713,16 +758,46 @@ it, Deny is pressed, and Claude says it was refused and carries on.*
 
 #### 3.1 — The tool surface
 
-- `bridge/tools.py` with `create_sdk_mcp_server` and one tool, `win98_exec`.
-- **Wrap the tool body in `asyncio.wait_for`.** `MCP_TOOL_TIMEOUT` documents
-  stdio and WebSocket servers; ours is in-process and is not covered.
+- `bridge/tools.py` with `create_sdk_mcp_server` and one tool,
+  `mcp__machine__exec`. See **Tool naming** under Architecture: nothing is
+  called `win98_*`.
+- **Three timeouts, and they must be ordered.** An earlier draft claimed
+  `MCP_TOOL_TIMEOUT` "documents stdio and WebSocket servers; ours is in-process
+  and is not covered". **That is backwards** -- the `sdk` server config carries a
+  `timeout` described as overriding `MCP_TOOL_TIMEOUT` *for this server*, and
+  only the *idle* timeout is disabled for `sdk`. Worse, `types.py:653-662`
+  records that on mcp 1.x an SDK server's tools are **not cancelled when Claude
+  Code abandons a call -- they run to completion**. So:
+  guest `run_capture` limit < bridge `asyncio.wait_for` < MCP server `timeout`
+  (`mcp_servers={"machine": {**server, "timeout": ...}}`; `subprocess_cli.py`
+  forwards every key except `instance`). Get it wrong and the CLI abandons the
+  call while the Python body runs on, the guest keeps running the child, and the
+  result arrives for a future nobody awaits.
 - A guest that disconnects mid-call gets a **structured error, not a hang**.
   This is the cost of the single-binary merge and was accepted on the
   condition that it is handled here.
 - `bridge/paths.py` translates Linux <-> DOS paths at the tool boundary, so
   neither side ever sees the other's spelling.
-- `LAUNCH` is dropped, which is what keeps `util.c`'s JSON builder out of the
-  guest entirely.
+- `LAUNCH` is dropped **as a lift**, which is what keeps `util.c`'s JSON builder
+  out of the guest entirely. A `launch` of our own comes back in Phase 6 -- see
+  the exec test below.
+
+**The exec test: a tool earns its place only if `exec` does the job badly.**
+Every tool costs context on *every* request, so the long tail belongs to `exec`.
+Candidates that pass, in rough order of when they are needed:
+
+| tool | why `exec` is not enough |
+|---|---|
+| `list_dir` | parsing `dir` on Win98 is hostile: 8.3 versus long names, CP437, localised headers. `FindFirstFile` returns structure instead. With no path, enumerate drives (`GetLogicalDrives`) |
+| `read_file` / `write_file` | needed for the sync layer anyway; binary-safe, chunked, encoding-explicit |
+| `list_processes` / `kill_process` | **Win98 has no `tasklist` and no `taskkill`.** There is no command line for this at all -- `CreateToolhelp32Snapshot` (which is 9x-only, and absent on NT 4) is the sole route. The single strongest case on this list |
+| `launch` | `exec` waits for exit. You cannot drive Notepad's UI with a tool that blocks until Notepad closes. `command.com /c start x` works but is fragile; `CreateProcess` without the wait is ~10 lines |
+| `get_clipboard` / `set_clipboard` | the escape hatch for text no message will surrender: Ctrl+A, Ctrl+C, read it. ~30 lines |
+
+Candidates that **fail** the test and stay out: `registry_read` / `registry_write`
+(`regedit /e` and `/s` are ugly but they work), `ini_read` / `ini_write`
+(`read_file` covers it), `find_files` (`dir /s /b`), and `sysinfo` (HELLO already
+sends it and the system prompt already states it).
 
 #### 3.2 — The RPC worker thread
 
@@ -743,32 +818,7 @@ thread stops display frames being read.
 *Demo: "what is the volume label on C:?" -> `vol c:` runs on the Win98 box,
 the permission dialog appears, and the answer comes back.*
 
-#### 3.3 — Screenshots, in strips
-
-0.10 measured `GetDIBits` producing `BI_RLE8` directly: 640x480x8 went
-307,200 -> 27,088 bytes in 14ms, **11.3:1, done by GDI**. So the compression is
-free. The problem is the buffer.
-
-**A full-screen DIB is 307KB and there are 28KB free.** The old plan's
-"capture one frame into one buffer" no longer fits, so capture proceeds in
-**strips** of N scanlines into a small fixed buffer, each strip compressed and
-sent as it is taken. Region capture stays the default -- `WINLIST` already
-returns window rects, so "read this dialog" sends ~10KB instead of ~120KB and
-costs ~80 vision tokens instead of ~850.
-
-**New Phase 0-style gate, because this is an assumption and not a measurement:**
-
-> **0.12 — does `GetDIBits` produce valid `BI_RLE8` for a scanline RANGE?**
-> RLE8 is row-oriented so it ought to, but "ought to" is what 0.9 and 0.10
-> were there to replace. If it does not, capture strips as `BI_RGB` 8bpp and
-> RLE them on the bridge, which costs guest CPU but no extra memory.
-
-`screen_palette_for_capture()` is still the one piece of `screen.c` worth
-keeping: on an 8bpp display a fresh memory DC has only the 20 static colours,
-so `GetDIBits` needs the live hardware palette selected in or the result is
-colour-index noise. Hardware-verified, non-obvious, easy to lose.
-
-#### 3.4 — The file sync layer *(replaces the Samba share -- see R6)*
+#### 3.3 — The file sync layer *(replaces the Samba share -- see R6)*
 
 - A manifest per side: `path -> (size, mtime, crc32)`. **CRC32 comes from
   miniz**, which is already vendored and already linked.
@@ -792,7 +842,8 @@ Win98 box a moment later.*
 
 #### Verification gates for the phase
 
-- **0.12** answered before 3.3 is built.
+- **0.12 and 0.13 are no longer Phase 3 gates** -- they moved to Phase 6 with
+  the screen tier. Nothing in this phase is blocked on either.
 - A denied permission produces a refusal, not a hang, and a prompt left
   unanswered auto-denies rather than wedging the session.
 - `EXEC` of a 16-bit tool returns correct non-empty output *through the GUI
@@ -862,41 +913,212 @@ right.
 - A file on the guest's local `C:\` is the only case needing a chunked upload — progress
   bar and Cancel required, since 10MB is ~13s at 750 KB/s.
 - Non-image files referenced by path (no arbitrary-file content block exists).
-- **The cheap win: "attach a screenshot of my desktop."** `GetDC(NULL)` + `GetDIBits` +
+- **The cheap win: "attach a screenshot of my desktop."** *(shares the capture
+  path with Phase 6; whichever lands first builds it.)* `GetDC(NULL)` + `GetDIBits` +
   `screen_palette_for_capture()` — ~60 lines, most of the value of the whole screen tier
   with no tile diffing, no coordinate space, no `input.c`. Capture at 8bpp (0.6s on the
   wire at 800×600, against 1.9s for 24bpp). The palette fix is non-obvious and
   hardware-verified: a fresh memory DC has only 20 static colours, so `GetDIBits` needs the
   live hardware palette selected in or you get colour-index noise.
 
-### Phase 6 — Computer-use tier *(3–4 weekends, defer)*
+### Phase 6 — the UI tier: seeing and driving the screen *(revised 2026-09-17)*
 
-`input.c` lifted mostly intact — `UICLICK`/`UIDRAG`/`UIKEY`/`WINLIST` are pure syscalls
-with no buffers, including the E0-extended-scancode table and the `VK_SNAPSHOT`-returns-0
-fallback to scancode 0x37.
+**Everything to do with the screen now lives here**, including screenshots, which
+used to sit at 3.2 and were pulled out so that "look at the machine" is one
+coherent stage rather than a capture primitive in Phase 3 and everything that
+uses it three phases later. OCR joins it for the same reason.
 
-**[R2] `screen.c` is not lifted; it is replaced by ~60 lines.** Under "the guest transforms
-nothing", the guest does `GetDC(NULL)` + `GetDIBits` into one buffer at reduced depth and
-chunks it out. `SCREENDIFF`, the 64×64 tiling, `g_prev_pixels` and `resp_buf` all move to
-the bridge, which has memory to spare and can diff against the previous frame there. The
-only part of `screen.c` worth keeping is `screen_palette_for_capture()`: on an 8bpp display
-a fresh memory DC carries only 20 static colours, so `GetDIBits` needs the live hardware
-palette selected in or you get colour-index noise. Non-obvious and hardware-verified.
+The old text for this phase was a lift plan for retro-agent's `input.c` plus a
+warning that the UX was unsolved. Both still apply. What is new is the design
+principle below, which changes what gets built first.
 
-**[R4] The capture tool takes a rect, and region capture is the default.** `WINLIST`
-already returns window rects, so "read this dialog" sends ~10 KB rather than ~120 KB and
-costs ~80 vision tokens rather than ~850. Full-screen is the explicit exception, not the
-default. Run the encoding-vs-legibility experiment (see Architecture) before fixing the
+#### The control tree is the primary sense; vision is the fallback
+
+Modern computer-use agents lean on screenshots because modern UIs are
+custom-rendered -- Electron, canvas, web. **Windows 98 is the opposite.** Almost
+every pixel is a standard USER32 control whose text can be queried exactly. A
+dialog's control tree is ~200 tokens and is *exact*; a screenshot of the same
+dialog is ~850 tokens and is *inferred*.
+
+That inverts the usual build order. The ladder, cheapest and most reliable first:
+
+1. **The control tree.** `EnumWindows` / `EnumChildWindows`, `GetClassName`,
+   `GetWindowRect`, `GetDlgCtrlID`, `GetWindowLong(GWL_STYLE)`. Always
+   available, no dependency, works on custom apps too.
+   Use **`SendMessage(WM_GETTEXT)`, not `GetWindowText`**: cross-process,
+   `GetWindowText` returns only a caption, while `WM_GETTEXT` is marshalled by
+   USER32 and returns a control's actual contents.
+2. **MSAA enrichment** -- roles, values and `accDoDefaultAction` where the app
+   supports it. Gated on 0.13 below.
+3. **OCR, on the bridge** -- for what neither can see.
+4. **A screenshot to the vision model** -- last, not first.
+
+**Known limitation, recorded so it is not rediscovered.** `LB_GETTEXT`,
+`LVM_GETITEMTEXT` and `TVM_GETITEM` are **not** marshalled cross-process, and
+the NT route (`VirtualAllocEx` / `WriteProcessMemory`) does not exist on 9x.
+Reading a list box's *items* from another process needs the
+shared-memory-above-2GB trick. Treat list contents as an MSAA-or-OCR problem,
+not a message problem.
+
+**Identity.** HWNDs are stable within a session and meaningless across one.
+Every node returns its HWND, its child-index path (`0/3/1`), its control id and
+its class. `GetDlgCtrlID` is the most stable handle inside a dialog; the path
+survives a repaint.
+
+> **New gate -- 0.13: is `oleacc.dll` present on Win98 SE, and does
+> `AccessibleObjectFromWindow` return a usable tree for a standard dialog?**
+> MSAA 1.3 is documented as shipping with Win98 (Win95 needed the RDK), and
+> UI Automation is Vista+ so it is not an option. `LoadLibraryA` +
+> `GetProcAddress`, **never a static import** -- a missing DLL as a static
+> import kills the image at load, before `WinMain`, with nothing to debug.
+> Walk one common dialog: `get_accChildCount`, `AccessibleChildren`,
+> `get_accName`, `get_accRole`, `get_accLocation`.
+>
+> This decides whether the semantic layer is MSAA-enriched or
+> `EnumChildWindows`-only, and it is ~40 lines in `probe.c`, which is already
+> built and already shipped to the guest. Answer it while that file is warm.
+
+#### Screenshots, in strips *(moved here from 3.2)*
+
+0.10 measured `GetDIBits` producing `BI_RLE8` directly: 640x480x8 went
+307,200 -> 27,088 bytes in 14ms, **11.3:1, done by GDI**. The compression is
+free. The problem is the buffer.
+
+**A full-screen DIB is 307KB and there are 28KB free.** So capture proceeds in
+**strips** of N scanlines into a small fixed buffer, each strip compressed and
+sent as it is taken. Region capture is the default -- the control tree already
+returns window rects, so "read this dialog" sends ~10KB instead of ~120KB and
+costs ~80 vision tokens instead of ~850. Full-screen is the explicit exception.
+
+> **0.12 -- does `GetDIBits` produce valid `BI_RLE8` for a scanline RANGE?**
+> RLE8 is row-oriented so it ought to, but "ought to" is what 0.9 and 0.10 were
+> there to replace. If it does not, capture strips as `BI_RGB` 8bpp and RLE them
+> on the bridge: guest CPU, but no extra memory.
+
+`screen_palette_for_capture()` is the one piece of retro-agent's `screen.c`
+worth keeping: on an 8bpp display a fresh memory DC has only the 20 static
+colours, so `GetDIBits` needs the live hardware palette selected in or the
+result is colour-index noise. Hardware-verified, non-obvious, easy to lose.
+
+**`screen.c` is otherwise not lifted.** Under "the guest transforms nothing",
+`SCREENDIFF`, the 64x64 tiling, `g_prev_pixels` and `resp_buf` all move to the
+bridge, which has memory to spare. That deletes the worst memory item the plan
+ever carried: a ~4.4MB guest peak to compute a diff the bridge computes free.
+
+Run the encoding-vs-legibility experiment (see Architecture) before fixing the
 default depth.
 
-**[R2] This deletes the worst memory item in the plan.** The first draft's `SCREENDIFF`
-peaked around 4.4MB on the guest (`g_prev_pixels` 1.37 + `curr_pixels` 1.37 live at once +
-`resp_buf` ~1.6) on a box with 8–12MB free — all of it to compute a diff the bridge can
-compute for free. (The earlier claim that `g_prev_pixels` was "resident permanently" was
-also wrong: it is lazily allocated and freed by `screendiff_reset()`.)
+#### OCR, on the bridge, as a fallback
 
-Gate honestly: the UI spec never asked for this, and Claude driving the mouse while you
-type into `retroclaude.exe` on the same desktop is an unsolved UX problem.
+Tesseract on the Linux side, consistent with "the guest transforms nothing" --
+the guest never ships an OCR engine and never could.
+
+OCR earns its keep exactly where the control tree cannot see: DOS full-screen
+boxes, custom-drawn installers, setup progress, games. For a standard control
+`WM_GETTEXT` is exact and free and beats OCR every time, so **OCR is third in
+the ladder, never first**. A tool that OCRs a dialog whose text was already
+retrievable has spent CPU and tokens to produce a worse answer.
+
+Practical notes: feed it the 8bpp capture before any scaling; Win98 does not
+antialias UI text by default, which is unusually good input for Tesseract;
+`--psm 6` (uniform block) suits dialog text better than the default.
+
+#### click: one execution path, two ways to resolve a point
+
+`click(target)` takes **either** `{x, y}` **or** a control reference. A control
+reference resolves to its rect centre and then performs the *same* real
+`mouse_event` click.
+
+Resolving and clicking are separate concerns. Branching the implementation would
+mean two input paths with different behaviour, and a synthesised `BM_CLICK`
+bypasses the real input stack in ways some apps notice. Raw XY stays as an
+escape hatch, but it is the degraded mode: a coordinate from a control rect is
+exact, a coordinate from a vision model on a 640x480 screenshot is a guess.
+
+**Occlusion check falls out for free.** After resolving, `WindowFromPoint` the
+result and refuse if it is not the intended control. Clicking the wrong thing
+confidently is the failure mode that makes an agent dangerous.
+
+#### send_keys: focus first, and the real hazards are not the famous one
+
+`send_keys(target, keys)` focuses, then synthesises with `keybd_event`.
+
+- **Focus is two calls, not one.** `SetForegroundWindow` works on 9x (there is
+  no NT5 foreground lock), but cross-thread `SetFocus` needs
+  `AttachThreadInput` first or focus silently never arrives.
+- **Never send keys to our own window.** Compare the target's thread against
+  ours and refuse. The agent typing into Gaston's own input box is a
+  self-feeding loop, and it is a far likelier accident than any hotkey.
+- **Block Ctrl+Alt+Del** and the power/sleep keys. On 9x Ctrl+Alt+Del is handled
+  by the VMM at ring 0 so `keybd_event` probably cannot synthesise it anyway --
+  but it is one line and the cost of being wrong is a reboot.
+
+`input.c` is lifted mostly intact for the mechanics: `UICLICK` / `UIDRAG` /
+`UIKEY` are pure syscalls with no buffers, and the E0-extended-scancode table
+and the `VK_SNAPSHOT`-returns-0 fallback to scancode `0x37` are both worth
+keeping.
+
+#### send_action_sequence: closed-loop, never open-loop
+
+Batching is worth real money here. A round trip to a 200MHz machine over a slow
+link is expensive, and filling one dialog -- focus, type, Tab, type, click OK --
+is five of them plus five permission prompts.
+
+But the reason computer-use tools are usually step-by-step is that **each step's
+outcome is uncertain and a blind sequence compounds errors**. If step 2 raises an
+unexpected dialog, steps 3-5 land somewhere nobody predicted -- and with
+`send_keys` in the list, that means typing into the wrong window. A naive batch
+trades round trips for exactly the failure this tier has to avoid.
+
+**So: per-step preconditions and fail-fast.**
+
+- Each step may carry an expectation -- the foreground window's class or title,
+  or that a named control exists. The sequence **aborts at the first mismatch**
+  and returns how far it got, which step failed, and the state at the abort
+  point, so the model re-plans rather than guesses.
+- **Waits are conditional, not fixed sleeps.** `wait_for(class=...)` and
+  **`WaitForInputIdle`** -- literally "the app has finished starting and is ready
+  for input" -- beat `sleep(500)`. On a 200MHz box under TCG a fixed sleep is
+  either too short or pure waste.
+- Cap the step count. Always return the per-step outcome log.
+
+**It is better for permissions, not worse.** One prompt describing the whole
+sequence beats five prompts the user starts rubber-stamping by the third; prompt
+fatigue is a genuine security failure mode, not a UX complaint. The cost is that
+the bar must render a multi-step summary on a 640x480 screen, so the sequence
+needs a compact human rendering (`type "hello" -> click [OK] -> wait "Notepad"`),
+not a JSON dump.
+
+The workflow this points the model at -- **enumerate the control tree, then batch
+against what you found** -- belongs in `bridge/machine.py`'s appended system
+prompt. Closed-loop batching only works when the batch is built from a fresh
+observation.
+
+#### The tools this stage adds
+
+| tool | why it is not just `exec` |
+|---|---|
+| `list_windows` | the semantic tree; the primary sense |
+| `screenshot(rect)` | region by default, strips underneath |
+| `ocr(rect)` | bridge-side, for what the tree cannot see |
+| `click(target)` | control-resolved or raw XY, one real input path |
+| `send_keys(target, keys)` | focus + synthesise, with the guards above |
+| `send_action_sequence(steps)` | closed-loop batching |
+| `launch(path, args)` | **`exec` waits for exit.** You cannot drive Notepad's UI with a tool that blocks until Notepad closes. `command.com /c start x` works but is fragile; `CreateProcess` without the wait is ~10 lines. *(The original plan dropped `LAUNCH` because retro-agent's version dragged in its JSON builder -- that reason does not apply to our own.)* |
+| `get_clipboard` / `set_clipboard` | the escape hatch for text no message will give up: Ctrl+A, Ctrl+C, read it. `OpenClipboard` / `GetClipboardData(CF_TEXT)`, ~30 lines |
+
+#### Permissions: this is where whole-tool "Always" is worst
+
+Every tool here goes through the 3.0 prompt bar. The rule from 3.0 that
+`allows=0` for all `mcp__machine__*` matters more in this stage than anywhere
+else: MCP permission rules cannot carry specifiers, so a single "Always" on
+`send_keys` or `click` grants unattended keyboard and mouse control of the
+machine for the rest of the session.
+
+**Gate honestly, as the original text did:** the UI spec never asked for this,
+and Claude driving the mouse while the user types into Gaston on the same desktop
+is an unsolved UX problem. A "the agent is driving, hands off" modal state is
+probably the answer, and it is not designed yet.
 
 ---
 
