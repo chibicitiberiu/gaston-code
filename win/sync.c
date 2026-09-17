@@ -303,6 +303,24 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
         } else {
             join(full, sizeof(full), root, child);
             rc_sync_stat_file(full, &st);
+            /* type 0 means the stat found nothing where FindNextFileA had just
+             * seen something. Emitting it as-is put a row on the wire whose
+             * first field was a NUL: _snprintf("%c", 0) writes an empty string,
+             * so the line carried no fields at all, the bridge failed to parse
+             * it, and the manifest count then disagreed with `files=` -- which
+             * aborts THE WHOLE PASS, with a log warning as the only symptom.
+             * Same shape as the directory-versus-file crash.
+             *
+             * `u` rather than skipping the row. Skipping is right for the race
+             * that suggests itself (the file really was deleted between the
+             * enumerate and the stat, so absent is true and the next pass
+             * agrees). But the stat also fails PERMANENTLY for a name
+             * FindFirstFileA returns with a substitute character for a byte
+             * outside the codepage -- and omitting that row tells the bridge
+             * the user deleted a file they can see in Explorer. `u` says
+             * "something is here and I cannot read it", which is true in both
+             * cases, keeps the count honest, and costs the race one pass. */
+            if (!st.type) st.type = 'u';
             w->sink(w->ctx, child, &st);
             w->count++;
         }

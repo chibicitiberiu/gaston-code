@@ -713,6 +713,17 @@ class Pass:
             if dec.act is S.Act.SKIP:
                 done["skipped"] += 1
                 self.reports.append(f"{dec.key}: {dec.reason}")
+                # An unreadable path is worth saying out loud; an ignored one
+                # is the normal state of most of a tree and would bury it.
+                #
+                # This went nowhere at all before: `reports` is only read if
+                # the agent thinks to call sync_status, so a file it had just
+                # written and could not deliver produced silence. Through
+                # first_report, so a name the machine can never open is
+                # announced once rather than every thirty seconds.
+                if dec.reason is S.UNREADABLE and self.first_report(
+                        dec.key, dec.reason, g, b):
+                    self.note(f"SYNC: {dec.key} -- {dec.reason}")
             elif dec.act is S.Act.REPORT:
                 done["reported"] += 1
                 self.reports.append(f"{dec.key}: {dec.reason}")

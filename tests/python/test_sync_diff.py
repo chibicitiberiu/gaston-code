@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from bridge import sync as S
 from bridge import paths as P
 from bridge.sync import (Act, Baseline, Decision, Entry, Tomb, Type, diff,
                          order)
@@ -179,7 +180,11 @@ def test_an_unreadable_file_is_skipped_not_treated_as_absent():
     b = Baseline(rows={"a": f(1)})
     dec = only({"a": Entry(type=Type.UNREADABLE)}, {"a": f(1)}, b)
     assert dec.act is Act.SKIP
-    assert "locked" in dec.reason
+    # Not "locked": that is one cause and the only transient one. The machine
+    # also reports `u` for a name it can enumerate but never open, and naming
+    # a lock sends the reader after a process that does not exist.
+    assert dec.reason is S.UNREADABLE
+    assert dec.reason is not S.IGNORED
 
 
 def test_ignored_paths_freeze_rather_than_looking_deleted():

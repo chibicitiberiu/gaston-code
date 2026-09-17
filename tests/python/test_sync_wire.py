@@ -8,6 +8,7 @@ covered by test_guest_agreement.py, which runs the shipping C.
 """
 
 import asyncio
+import pathlib
 import os
 import zlib
 
@@ -1199,4 +1200,75 @@ async def test_sync_stands_aside_while_the_user_has_a_prompt_open(
 
     assert got["pushed"] == 0
     assert any("permission prompt" in r for r in got["reports"])
+    await harness.close(writer)
+
+
+# --- unreadable paths, which used to go nowhere -----------------------------
+
+async def test_an_unreadable_path_reaches_the_agent_once(harness, tmp_path):
+    """`reports` is only read if the agent thinks to call sync_status.
+
+    So a file the agent had just written and the machine could not open
+    produced silence: the write succeeded here, never arrived there, and
+    nothing said so. That is the exact failure sync_status exists to prevent,
+    on the one path that never reached it.
+
+    Once, not every pass. The machine reports `u` for a name it can enumerate
+    but never open -- one carrying a byte with no form in its codepage -- and
+    that condition never clears, so announcing it on a thirty-second timer
+    would bury the conflicts that share the channel.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    p = a_pass(harness, tmp_path)
+    (pathlib.Path(p.root) / "held.c").write_bytes(b"int main(void){}\n")
+
+    task = asyncio.create_task(p.run())
+    req = await _recv(harness, reader, "SYNCSCAN")
+    sid = req.headers["id"]
+    body = manifest_line("held.c", b"", typ=b"u")
+    await harness.send(writer, Frame("SYNCENT", {"id": sid, "n": "1"}, body))
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": sid, "status": "ok", "files": "1", "tree_id": "VOL-1"}))
+    got = await asyncio.wait_for(task, 10)
+
+    assert any("held.c" in n for n in got["notices"]), got
+    # And the reason must not blame a lock, which is one cause of `u` and the
+    # only transient one. Naming it sends the reader after a process that may
+    # not exist.
+    assert any("cannot open it" in n for n in got["notices"]), got
+
+    # Second pass, same condition: said once.
+    #
+    # The queue is emptied first because marking a notice DELIVERED happens in
+    # run_sync, not in Pass.run, and this test drives Pass directly. Without
+    # this the pass-1 notice is simply still pending and would be mistaken for
+    # a second announcement -- which would make the test pass for the wrong
+    # reason if first_report ever stopped working.
+    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
+              os.path.dirname(p.state))
+    p2.base.pending_notice.clear()
+    task = asyncio.create_task(p2.run())
+    req = await _recv(harness, reader, "SYNCSCAN")
+    sid = req.headers["id"]
+    await harness.send(writer, Frame("SYNCENT", {"id": sid, "n": "1"},
+                                     manifest_line("held.c", b"", typ=b"u")))
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": sid, "status": "ok", "files": "1", "tree_id": "VOL-1"}))
+    second = await asyncio.wait_for(task, 10)
+    assert not any("held.c" in n for n in second["notices"]), second
+    await harness.close(writer)
+
+
+async def test_an_ignored_path_is_never_announced(harness, tmp_path):
+    """Most of a tree is ignored. Announcing that would bury everything else."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    p.base.ignored["build/x.o"] = S.Entry(type=S.Type.FILE, crc=1)
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {})
+    got = await asyncio.wait_for(task, 10)
+    assert not any("build/x.o" in n for n in got["notices"]), got
     await harness.close(writer)

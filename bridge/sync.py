@@ -39,6 +39,17 @@ from . import paths as P
 # silently never seen.
 SETTLE_S = 3.0
 
+#: Why a path was skipped when a side reported it unreadable. A constant rather
+#: than a literal because the apply loop has to tell this SKIP apart from an
+#: `ignored` one: this is worth telling the agent about, and `ignored` is the
+#: normal state of most of a tree.
+UNREADABLE = ("the machine can see this file but cannot open it -- it may be "
+              "open in another program, or its name may be one the machine "
+              "cannot address")
+
+#: Out of the scan set, and silent by design.
+IGNORED = "ignored"
+
 
 class Type(str, Enum):
     FILE = "f"
@@ -278,16 +289,23 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
         a = base.rows.get(key)
         t = base.tombs.get(key)
 
-        # 1. Locked. Not absent, not unchanged -- just not this pass.
+        # 1. Unreadable. Not absent, not unchanged -- just not this pass.
+        #
+        # The reason used to say "locked by another process", which is only one
+        # of the causes and the only transient one. The machine also reports
+        # `u` for a name it can enumerate but not open -- one carrying a byte
+        # with no form in its codepage, say -- and that never clears. Claiming
+        # a lock sends the reader after a process that does not exist, and
+        # because this was never announced at all, nobody found out either way.
         if (g and g.type is Type.UNREADABLE) or (b and b.type is Type.UNREADABLE):
-            out.append(Decision(key, Act.SKIP, "locked by another process"))
+            out.append(Decision(key, Act.SKIP, UNREADABLE))
             continue
 
         # 2. Out of the scan set. The row FREEZES with its last (class, crc) so
         #    editing .gitignore -- routine -- is never a mass deletion, and
         #    un-ignoring later resumes from the real ancestor.
         if key in base.ignored:
-            out.append(Decision(key, Act.SKIP, "ignored"))
+            out.append(Decision(key, Act.SKIP, IGNORED))
             continue
 
         # 3. Type change. Resolved over the subtree, guest wins, and every
