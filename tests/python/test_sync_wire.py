@@ -1131,14 +1131,16 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
     harness.bridge._send = counting_send
 
     seen = []
+    watching = True
 
     async def other_work():
         nonlocal ran_after
         ran_after = sent
-        # Keep looking. One observation only proves the loop yielded BEFORE
-        # the file started, which the per-file check already guarantees; what
-        # has to be shown is a turn taken WHILE the chunks are going out.
-        for _ in range(200):
+        # Until the pass is over, rather than a fixed number of turns. A fixed
+        # count is a race: 200 sleep(0)s finish long before the pass reaches
+        # the push, so every observation reads zero and the test fails for a
+        # reason that has nothing to do with the property.
+        while watching:
             seen.append(sent)
             await asyncio.sleep(0)
 
@@ -1156,8 +1158,10 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
         side = asyncio.create_task(other_work())
         await asyncio.wait_for(guest(), 20)
         await asyncio.wait_for(task, 20)
-        await side
+        watching = False
+        await asyncio.wait_for(side, 5)
     finally:
+        watching = False
         harness.bridge._send = real_send
 
     assert sent > 2, "the test needs a multi-chunk push to mean anything"
