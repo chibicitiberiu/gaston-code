@@ -85,6 +85,9 @@ class GuestSession:
     #: not seen. The agent then writes to it, having been told nothing, and the
     #: write goes to the user's machine.
     halt_paths: frozenset = frozenset()
+    #: What the bar says, kept so it can be put back after a reconnect. The id
+    #: alone is not enough to redisplay it.
+    halt_text: str = ""
     # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
     page_bytes: int = 0
     page_blocks: int = 0
@@ -441,6 +444,8 @@ class Bridge:
         # prompt explicitly instead of relying on replay.
         guest.lost_at = None
         await self._reissue_prompt(guest)
+        await self._reissue_halt(guest)
+        await self._reissue_turn(guest)
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
         return guest
@@ -631,6 +636,46 @@ class Bridge:
             "allows": "1" if prompt.allows else "0",
             "waiting": str(len(guest.perm_queue)),
         }, fold.encode(getattr(prompt, "summary", prompt.tool_name))))
+
+    async def _reissue_halt(self, guest: GuestSession) -> None:
+        """After a reconnect, put the Continue bar back.
+
+        The third leg of the same idea as _reissue_prompt, and the one whose
+        absence was worst. `halt_id` lives on the GuestSession and survives a
+        reconnect; `latched` lives on disk. So a guest that restarted while a
+        halt was up came back with NO BAR, a bridge still holding the halt, and
+        every latched path refusing the agent's writes -- unanswerable, because
+        RESUME is only accepted against a matching id and raising is idempotent
+        while one is outstanding. Nothing short of restarting the bridge or
+        hand-editing the baseline would have recovered it.
+
+        No new frame type: the guest's HALT handler is idempotent, so re-sending
+        the same one restores the bar.
+        """
+        if not guest.halt_id:
+            return
+        log.info("re-issuing halt %s after reconnect", guest.halt_id)
+        await self._send(guest, Frame("HALT", {"id": guest.halt_id},
+                                      fold.encode(guest.halt_text)),
+                         stamp=False)
+
+    async def _reissue_turn(self, guest: GuestSession) -> None:
+        """After a reconnect, restore the busy UI if a turn is still running.
+
+        Nothing re-sent TURN either, so a guest that blipped mid-turn came back
+        with Send enabled and `g_turn_active` clear while the bridge-side turn
+        was still streaming -- which is one of the ways two turns end up on one
+        session, on a stream that can only have one consumer.
+
+        Again no new frame: the guest's `TURN state=start` branch already sets
+        the busy UI and the thinking indicator, so re-sending it is the whole
+        fix. It restarts the elapsed timer, which is cosmetic.
+        """
+        session = guest.claude
+        if session is None or not getattr(session, "busy", False):
+            return
+        log.info("re-issuing turn state after reconnect")
+        await self._send(guest, Frame("TURN", {"state": "start"}), stamp=False)
 
     async def _send_waiting(self, guest: GuestSession) -> None:
         """Refresh the queue depth shown on the bar."""
@@ -1492,6 +1537,7 @@ class Bridge:
             return
         guest.halt_id = f"h{uuid.uuid4().hex[:8]}"
         guest.halt_paths = frozenset(paths)
+        guest.halt_text = line
         await self._send(guest, Frame("HALT", {"id": guest.halt_id},
                                       fold.encode(line)), stamp=False)
 
@@ -1502,6 +1548,7 @@ class Bridge:
             return
         hid, guest.halt_id = guest.halt_id, ""
         guest.halt_paths = frozenset()
+        guest.halt_text = ""
         await self._send(guest, Frame("HALTEND", {"id": hid}), stamp=False)
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:

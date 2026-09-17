@@ -1447,3 +1447,35 @@ async def test_continue_is_acknowledged_rather_than_assumed(harness, tmp_path):
     assert end.headers["id"] == halt.headers["id"]
     assert not guest.halt_id
     await harness.close(writer)
+
+
+async def test_a_halt_survives_a_reconnect(harness, tmp_path):
+    """The third leg beside PERMSTATE, and the one whose absence was worst.
+
+    halt_id lives on the GuestSession and survives a reconnect; `latched`
+    lives on disk. So a guest that restarted while a halt was up came back
+    with NO BAR, a bridge still holding the halt, and every latched path
+    refusing the agent's writes -- unanswerable, because RESUME is only
+    accepted against a matching id and raising is idempotent while one is
+    outstanding. Nothing short of restarting the bridge would recover it.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    await harness.bridge._raise_halt(guest, "Stopped: 1 conflicting edit.")
+    halt = await _recv(harness, reader, "HALT")
+    await harness.close(writer)
+    await asyncio.sleep(0.1)
+
+    # The client comes back, as it does after a GPF or a cable pull.
+    reader2, writer2 = await harness.connect()
+    again = await _recv(harness, reader2, "HALT")
+    assert again.headers["id"] == halt.headers["id"], "a NEW halt id would " \
+        "never match the RESUME the user is about to send"
+    assert again.body.decode("cp1252") == "Stopped: 1 conflicting edit."
+
+    # And it is answerable, which is the whole point.
+    await harness.send(writer2, Frame("RESUME", {"id": again.headers["id"]}))
+    await _recv(harness, reader2, "HALTEND")
+    assert not harness.bridge._guest.halt_id
+    await harness.close(writer2)

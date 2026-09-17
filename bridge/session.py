@@ -208,6 +208,16 @@ class Session:
         finally:
             self._busy.clear()
 
+    @property
+    def busy(self) -> bool:
+        """Is a turn running right now?
+
+        Read on reconnect to decide whether the guest's Send button should
+        come back disabled: nothing re-sent TURN, so a guest that blipped
+        mid-turn returned with Send live while this was still streaming.
+        """
+        return self._busy.is_set()
+
     async def interrupt(self) -> None:
         """The Stop button. Safe to call when idle."""
         if self._client and self._busy.is_set():
