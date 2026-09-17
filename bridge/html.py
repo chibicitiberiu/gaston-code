@@ -368,6 +368,17 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .notice { color: #808080; font-style: italic; margin: 6px 0; }
 .err { color: #a00000; background: #fff0f0; border-left: 3px solid #a00000;
        padding: 4px 6px; margin: 7px 0; font-weight: bold; }
+
+/* A permission request. Amber rather than red: this is a question, not a
+   failure, and the guest is asking rather than reporting. */
+.perm { background: #fffbe6; border: 1px solid #e0c060; border-left: 3px solid #c08000;
+        padding: 5px 7px; margin: 9px 0; }
+.permhead { font-weight: bold; color: #805000; font-size: 7pt;
+            text-transform: uppercase; margin-bottom: 3px; }
+.perm table { margin: 4px 0 0 0; }
+.perm th { background: #f6eccc; font-weight: normal; color: #604000;
+           white-space: nowrap; vertical-align: top; }
+.perm td { font-family: 'Courier New', monospace; }
 """
 
 # Two containers: finished blocks accumulate in #t, and #l holds the one block

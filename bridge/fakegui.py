@@ -37,6 +37,8 @@ class FakeGui:
         self.port = port
         self.secret = secret
         self.raw = raw
+        # The id of the permission request currently on screen, if any.
+        self.perm_id: str | None = None
         self.sess: str | None = None
         self.next_seq: int | None = None   # what to resume from
         self.reader: asyncio.StreamReader | None = None
@@ -151,6 +153,26 @@ class FakeGui:
             print(f"{RED}[{f.headers.get('code')}] {f.headers.get('msg')}{RESET}")
         elif t == "PONG":
             print(f"{DIM}pong{RESET}")
+        elif t in ("PERMREQ", "PERMSTATE"):
+            # The break-glass case this tool exists for. Without it a wedged
+            # prompt can only be cleared by restarting the bridge.
+            self.perm_id = f.headers.get("id")
+            again = " (re-issued)" if t == "PERMSTATE" else ""
+            waiting = f.headers.get("waiting", "0")
+            queued = f" {DIM}(+{waiting} queued){RESET}" if waiting != "0" else ""
+            print(f"\n{YELLOW}{BOLD}PERMISSION{RESET}{again} "
+                  f"{BOLD}{text}{RESET}{queued}")
+            opts = "/allow  /deny" if f.headers.get("allows") != "1" \
+                else "/allow  /always  /deny"
+            print(f"{DIM}  {opts}{RESET}")
+        elif t == "PERMWAIT":
+            print(f"{DIM}[{f.headers.get('waiting')} more request(s) queued]{RESET}")
+        elif t == "PERMEND":
+            if self.perm_id == f.headers.get("id"):
+                self.perm_id = None
+            reason = f.headers.get("reason", "")
+            if reason != "answered":
+                print(f"{DIM}[permission request {reason}]{RESET}")
         else:
             print(f"{DIM}[{t} {f.headers}] {text[:200]}{RESET}")
 
@@ -187,8 +209,16 @@ class FakeGui:
                 await self.connect(resume=True)
                 asyncio.create_task(self.pump())
                 continue
+            if line in ("/allow", "/always", "/deny"):
+                if not self.perm_id:
+                    print(f"{DIM}no permission request is pending{RESET}")
+                    continue
+                await self.send(Frame("PERMREPLY", {
+                    "id": self.perm_id, "action": line[1:]}))
+                continue
             if line.startswith("/"):
-                print(f"{DIM}commands: /quit /stop /ping /model <n> /resume /raw{RESET}")
+                print(f"{DIM}commands: /quit /stop /ping /model <n> /resume "
+                      f"/raw /allow /always /deny{RESET}")
                 continue
 
             await self.send(Frame("INPUT", {}, line.encode("cp1252",

@@ -54,14 +54,20 @@ one you are executing on.
 ## What this means in practice
 
 Your file editing tools operate on the working copy at `{workdir}` on this
-proxy. Use them normally. Changes are synchronised to the connected machine
-automatically, with a short delay -- you do not need to copy files across
-yourself, and you should not try to.
+proxy. Use them normally. **These files are NOT yet copied to the connected
+machine** -- automatic synchronisation is not built. If the user needs a file
+to end up on their machine, say so plainly rather than assuming it arrived.
 
-To interact with the connected machine itself -- running a program on it,
-looking at its screen, listing its windows -- use the tools provided for that
-purpose. Never assume a shell command you run here has run over there. They
-are different computers.
+To interact with the connected machine itself, use the tools whose names begin
+`mcp__machine__`. Only the tools actually offered to you exist: do not assume
+you can see its screen or list its windows unless a tool for that is present.
+Never assume a shell command you run here has run over there. They are
+different computers.
+
+Anything you do reach for on that machine will ask the user for permission
+first, on a 640x480 screen, one request at a time. Batch your work and explain
+what you are about to do -- a run of separate requests is slow and is how
+people start approving things without reading them.
 
 ## Keep the old machine in mind
 

@@ -7,12 +7,43 @@ model is exercised separately by netcheck.exe.
 """
 
 import asyncio
+from dataclasses import dataclass, field
 
 import pytest
+
+from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
+                              PermissionUpdate)
 
 from bridge.compress import StreamDecompressor
 from bridge.protocol import Frame, FrameReader, MAX_FRAME, PROTO_VERSION, hello
 from bridge.server import Bridge
+
+
+@dataclass
+class FakeRule:
+    tool_name: str = "Bash"
+    rule_content: str | None = "vol:*"
+
+
+@dataclass
+class FakeCtx:
+    """Shaped like ToolPermissionContext, with the values the spikes measured.
+
+    Note title=None and blocked_path=None: that is what a real Read of
+    /etc/hostname actually produced, and the plan had assumed otherwise.
+    """
+
+    tool_use_id: str = "toolu_test_1"
+    suggestions: list = field(default_factory=lambda: [
+        PermissionUpdate(type="addRules", behavior="allow",
+                         destination="session", rules=[FakeRule()])])
+    title: str | None = None
+    display_name: str | None = "Bash"
+    description: str | None = "vol c:"
+    blocked_path: str | None = None
+    decision_reason: str | None = None
+    agent_id: str | None = None
+    signal: object | None = None
 
 
 class FakeSession:
@@ -22,11 +53,26 @@ class FakeSession:
 
     def __init__(self, **kw):
         self.on_text = kw.get("on_text")
+        # Captured so permission tests can drive it. Deliberately NOT called
+        # inline from send(): in production the SDK runs it in its own
+        # cancellable task (query.py spawn_task), and a fixture that awaits it
+        # inline would pass while the cancellation wedge shipped.
+        self.can_use_tool = kw.get("can_use_tool")
         self.model = "fake-model"
         self.started = False
         self.interrupted = False
         FakeSession._seq += 1
         self.session_id = f"fake-session-{FakeSession._seq}"
+
+    def ask(self, tool_name="Bash", args=None, **ctx_kw):
+        """Spawn a permission request the way the SDK does: a detached task.
+
+        Returns the task, so a test can cancel it and assert the guest still
+        gets its PERMEND.
+        """
+        ctx = FakeCtx(**ctx_kw)
+        coro = self.can_use_tool(tool_name, args or {"command": "vol c:"}, ctx)
+        return asyncio.create_task(coro)
 
     async def start(self):
         self.started = True
@@ -451,3 +497,224 @@ async def test_effort_options_follow_the_selected_model(harness):
                and f.headers.get("kind") == "effort"]
     assert efforts == ["low", "high"]
     await harness.close(w)
+
+
+# --- permissions ------------------------------------------------------------
+#
+# The shape of these tests matters as much as their assertions. A permission
+# request is driven through FakeSession.ask(), which spawns a real detached
+# task, because production runs can_use_tool that way and the worst bug found
+# in review was only reachable when the task is CANCELLED. A fixture that
+# awaited the callback inline would pass while that bug shipped.
+
+
+async def _recv(harness, reader, type_, timeout=5.0):
+    """recv_until returns the whole batch; the frame we waited for is last."""
+    return (await harness.recv_until(reader, {type_}, timeout))[-1]
+
+
+async def _connect_and_ask(harness, **ctx_kw):
+    """Connect a guest, raise one prompt, and return (reader, writer, task)."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = harness.bridge._guest.claude.ask(**ctx_kw)
+    return reader, writer, task
+
+
+async def test_permission_request_reaches_the_guest(harness):
+    reader, writer, task = await _connect_and_ask(harness)
+    f = await _recv(harness, reader, "PERMREQ")
+    assert f.headers["id"] == "toolu_test_1"
+    assert f.headers["tool"] == "Bash"
+    # A built-in with a scoped suggestion may offer Always.
+    assert f.headers["allows"] == "1"
+    assert b"vol c:" in f.body
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_allow_resolves_the_callback(harness):
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+    await harness.send(writer, Frame("PERMREPLY",
+                               {"id": "toolu_test_1", "action": "allow"}))
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultAllow)
+    assert result.updated_permissions is None
+    end = await _recv(harness, reader, "PERMEND")
+    assert end.headers["reason"] == "answered"
+    await harness.close(writer)
+
+
+async def test_deny_does_not_interrupt_the_turn(harness):
+    """A single refusal should tell the model no, not tear the turn down."""
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+    await harness.send(writer, Frame("PERMREPLY",
+                               {"id": "toolu_test_1", "action": "deny"}))
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultDeny)
+    assert result.interrupt is False
+    assert result.message
+    await harness.close(writer)
+
+
+async def test_always_forces_session_scope(harness):
+    """PermissionUpdate.destination can name userSettings. A dialog on a Win98
+    box quietly rewriting the developer's settings files is a surprise nobody
+    asked for."""
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+    await harness.send(writer, Frame("PERMREPLY",
+                               {"id": "toolu_test_1", "action": "always"}))
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultAllow)
+    assert result.updated_permissions
+    assert all(u.destination == "session" for u in result.updated_permissions)
+    await harness.close(writer)
+
+
+async def test_always_is_suppressed_for_machine_tools(harness):
+    """MCP rules cannot carry specifiers, so the only rule expressible for
+    mcp__machine__exec is the WHOLE TOOL -- one press of Always would grant
+    silent arbitrary command execution on the user's computer for the rest of
+    the session. The suggestion list is non-empty either way, so keying the
+    button off it would light it up."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = harness.bridge._guest.claude.ask(tool_name="mcp__machine__exec")
+    f = await _recv(harness, reader, "PERMREQ")
+    assert f.headers["tool"] == "mcp__machine__exec"
+    assert f.headers["allows"] == "0", "Always must not be offered"
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_cancelled_callback_still_clears_the_bar(harness):
+    """The worst bug review found, and the one whose first fix was also wrong.
+
+    The CLI cancels a pending can_use_tool when the turn is interrupted. The
+    callback then dies inside a cancelled scope, where an await would abort
+    before it ran -- so the PERMEND must be scheduled, not awaited. Without
+    this the bar stays up and Send stays disabled forever.
+    """
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    end = await _recv(harness, reader, "PERMEND")
+    assert end.headers["id"] == "toolu_test_1"
+    assert end.headers["reason"] == "cancelled"
+    assert harness.bridge._guest.perm_pending is None
+    await harness.close(writer)
+
+
+async def test_disconnect_denies_immediately(harness):
+    """Waiting ten minutes for a machine that has gone away is the failure the
+    deadline exists to prevent, not one to reproduce."""
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+    await harness.close(writer)
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultDeny)
+    assert harness.bridge._guest.perm_pending is None
+
+
+async def test_prompt_is_reissued_after_reconnect(harness):
+    """P1: the guest never sends from=, so replay is dead code in production.
+    Without an explicit re-issue the guest reconnects with no bar while the
+    bridge still holds a live future, and the turn hangs to the deadline."""
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+
+    # Drop the link WITHOUT resolving: simulate the cable being pulled while
+    # the bridge keeps the session. (close() would trigger the deny path.)
+    harness.bridge._guest.writer = None
+    writer.close()
+
+    reader2, writer2 = await harness.connect()
+    f = await _recv(harness, reader2, "PERMSTATE")
+    assert f.headers["id"] == "toolu_test_1"
+    assert b"vol c:" in f.body
+    task.cancel()
+    await harness.close(writer2)
+
+
+async def test_second_request_queues_behind_the_first(harness):
+    """One guest can show one bar. The model can request tools in parallel."""
+    reader, writer, task1 = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+
+    task2 = harness.bridge._guest.claude.ask(tool_use_id="toolu_test_2")
+    wait = await _recv(harness, reader, "PERMWAIT")
+    assert wait.headers["waiting"] == "1"
+
+    await harness.send(writer, Frame("PERMREPLY",
+                               {"id": "toolu_test_1", "action": "allow"}))
+    await asyncio.wait_for(task1, 5)
+    nxt = await _recv(harness, reader, "PERMREQ")
+    assert nxt.headers["id"] == "toolu_test_2"
+    task2.cancel()
+    await harness.close(writer)
+
+
+async def test_reply_for_an_unknown_id_is_ignored(harness):
+    """A reply can race a deadline, a disconnect or a session rebuild.
+    Ignoring is right; raising would drop the connection."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    await harness.send(writer, Frame("PERMREPLY",
+                               {"id": "nobody", "action": "allow"}))
+    await harness.send(writer, Frame("PING", {}))
+    await harness.recv_until(reader, {"PONG"})   # still alive
+    await harness.close(writer)
+
+
+async def test_oversized_prompt_does_not_poison_replay(harness):
+    """_send stamps into the replay buffer, and Frame.encode raises above
+    MAX_FRAME -- so one unencodable frame would make EVERY future replay
+    raise, permanently, and the guest could never reconnect again."""
+    reader, writer, task = await _connect_and_ask(
+        harness, description="x" * 200_000)
+    f = await _recv(harness, reader, "PERMREQ")
+    assert len(f.body) < MAX_FRAME
+    # And the buffer still replays cleanly.
+    harness.bridge._guest.replay.since(1)
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_session_rebuild_denies_a_pending_prompt(harness):
+    """A prompt belongs to the session that raised it; NEWSESSION orphans it."""
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+    await harness.send(writer, Frame("NEWSESSION", {}))
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultDeny)
+    await harness.close(writer)
+
+
+async def test_idle_guest_is_reaped_so_it_can_reconnect(harness):
+    """P2: a guest that GPFs leaves no FIN behind, so _pump parks in read()
+    forever with `connected` still True -- and every reconnect is then refused
+    as "busy", permanently. The machine crashing is the expected case here.
+    """
+    harness.bridge.idle_timeout_s = 0.2
+    harness.bridge.idle_check_s = 0.05
+
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+
+    # Go silent without closing, the way a crashed guest does.
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultDeny), \
+        "the pending prompt must be denied, not left hanging"
+
+    # And the slot is free again: a fresh client is not told "busy".
+    reader2, writer2 = await harness.connect()
+    f = await _recv(harness, reader2, "READY")
+    assert f.type == "READY"
+    await harness.close(writer, writer2)

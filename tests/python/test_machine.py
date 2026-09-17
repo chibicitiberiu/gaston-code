@@ -34,10 +34,26 @@ def test_nonsense_numbers_do_not_raise():
     assert "unknown" in describe({"mem_kb": "not a number"})
 
 
-def test_prompt_states_the_edit_tools_are_relayed():
+def test_prompt_does_not_promise_file_sync():
+    """This test used to assert the opposite, and the assertion was wrong.
+
+    The prompt claimed edits were "synchronised to the connected machine
+    automatically". No sync layer exists -- it is a later stage -- so the
+    moment Edit and Write became reachable the model would have edited files
+    on Linux and told the user they had landed on the Windows box.
+    """
     out = system_prompt(HELLO, "/work")
     assert "/work" in out
-    assert "synchronised" in out
+    assert "NOT yet copied" in out
+    assert "synchronised to the connected machine" not in out
+
+
+def test_prompt_does_not_promise_tools_that_do_not_exist():
+    """It also advertised looking at the screen and listing windows, both of
+    which are a much later phase."""
+    out = system_prompt(HELLO, "/work").lower()
+    assert "listing its windows" not in out
+    assert "mcp__machine__" in out
 
 
 def test_prompt_warns_about_the_hardware():

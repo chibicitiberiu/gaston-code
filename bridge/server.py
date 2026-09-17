@@ -16,7 +16,9 @@ import asyncio
 import logging
 import os
 import secrets
+import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 
 from . import fold
@@ -27,6 +29,8 @@ from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
 from . import html as H
 from .html import APPEND, LIVE, HtmlStream
 from .pages import Paginator, limits_for
+from . import permissions as perms
+from .permissions import PendingPrompt, render_request
 from .protocol import (
     MAX_FRAME,
     PROTO_VERSION,
@@ -38,6 +42,7 @@ from .protocol import (
 from .replay import Replay
 from . import sessions as sesslist
 from .session import Session
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 log = logging.getLogger("bridge.server")
 
@@ -87,6 +92,16 @@ class GuestSession:
     # length.
     pages: Paginator = field(default_factory=Paginator)
 
+    # The permission prompt currently on the guest's screen, and the ones
+    # queued behind it. The model can request tools in parallel; a single
+    # guest can show one bar, so the rest wait rather than racing for it.
+    perm_pending: "PendingPrompt | None" = None
+    perm_queue: deque = field(default_factory=deque)
+    # When the guest was last heard from, for the idle reaper. A guest that
+    # GPFs leaves no FIN behind, so without this _on_client parks forever and
+    # `connected` stays True -- which rejects every reconnect as "busy".
+    last_seen: float = field(default_factory=time.monotonic)
+
     @property
     def connected(self) -> bool:
         return self.writer is not None and not self.writer.is_closing()
@@ -121,6 +136,15 @@ class Bridge:
         # One guest, one session. See PLAN.md "Multi-session".
         self._guest: GuestSession | None = None
         self._server: asyncio.Server | None = None
+        # Strong references to fire-and-forget tasks. asyncio holds only a
+        # weak one, so a bare create_task can be collected mid-flight.
+        self._tasks: set = set()
+        self._reaper: asyncio.Task | None = None
+        # The guest pings every few seconds, so silence much longer than that
+        # means it is gone rather than quiet. Generous, because a 200MHz box
+        # under load genuinely does pause.
+        self.idle_timeout_s = 90.0
+        self.idle_check_s = 15.0
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -134,6 +158,9 @@ class Bridge:
             await self._server.serve_forever()
 
     async def close(self) -> None:
+        if self._reaper is not None:
+            self._reaper.cancel()
+            self._reaper = None
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -148,6 +175,12 @@ class Bridge:
         peer = writer.get_extra_info("peername")
         log.info("connection from %s", peer)
         frames = FrameReader()
+        # Started here rather than in serve_forever() because that is not the
+        # only way a bridge gets clients -- the tests drive _on_client
+        # directly, and a liveness mechanism that depends on which entry point
+        # was used is a liveness mechanism you do not have.
+        if self._reaper is None:
+            self._reaper = asyncio.create_task(self._reap_idle())
 
         try:
             hello = await self._read_hello(reader, frames, writer)
@@ -173,6 +206,13 @@ class Bridge:
         finally:
             if self._guest and self._guest.writer is writer:
                 self._guest.writer = None
+                # Deny anything pending BEFORE the first await below.
+                # wait_closed() is a suspension point at which the next
+                # connection's _attach can run, and if the PERMEND were
+                # stamped after that the reconnect would replay a prompt the
+                # bridge had already resolved.
+                self._resolve_all(self._guest, "gone",
+                                  "The Windows machine disconnected.")
             # Graceful close. An abrupt RST is reported to crash Win98's
             # Winsock stack outright, taking the machine with it.
             try:
@@ -305,6 +345,11 @@ class Bridge:
         # instead of rebuilding and re-deploying a binary.
         await self._send(guest, Frame("DOC", {}, fold.encode(H.document())))
         await self._send_options(guest)
+        # P1: the guest never sends `from=`, so the replay path above is dead
+        # code in production and a reconnect would otherwise arrive with the
+        # bar gone and the future still pending bridge-side. Re-issue the
+        # prompt explicitly instead of relying on replay.
+        await self._reissue_prompt(guest)
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
         return guest
@@ -314,6 +359,12 @@ class Bridge:
     async def _make_session(self, guest: GuestSession,
                             resume: str | None = None,
                             fork: bool = False) -> Session:
+        # A prompt belongs to the session that raised it. Rebuilding the
+        # session -- switch, new, or the effort fork -- orphans its future, so
+        # deny first rather than leaving one pending against a client that no
+        # longer exists.
+        self._resolve_all(guest, "rebuild",
+                          "The conversation changed before this was answered.")
         async def on_text(t: str) -> None:
             await self._emit_text(guest, t, style="plain")
 
@@ -353,6 +404,9 @@ class Bridge:
             effort=guest.effort or self.effort,
             resume=resume,
             fork=fork,
+            # Every tool call the CLI does not resolve locally comes back
+            # through here as a prompt on the guest's screen.
+            can_use_tool=self._can_use_tool(guest),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -367,6 +421,174 @@ class Bridge:
         # again once it exists.
         self.registry.add(s.session_id)
         return s
+
+    # --- permissions -------------------------------------------------------
+
+    def _can_use_tool(self, guest: GuestSession):
+        """Build the can_use_tool callback for one guest.
+
+        Everything that reaches here gets a bar. There is deliberately no
+        auto-allow branch: measured against the real CLI, a Read or Grep inside
+        cwd never reaches this callback at all, and a Bash command its sandbox
+        can contain is approved without asking us either. The policy the plan
+        carried would have been dead code.
+        """
+
+        async def can_use_tool(tool_name: str, args: dict, ctx):
+            tool_use_id = getattr(ctx, "tool_use_id", None)
+            if not tool_use_id:
+                # types.py promises this is always a non-empty string here.
+                # If it is not, we have no way to correlate a reply, and
+                # guessing would approve the wrong call.
+                log.error("permission request with no tool_use_id: %s",
+                          tool_name)
+                return PermissionResultDeny(
+                    message="Internal error: the request had no id.",
+                    interrupt=False)
+
+            loop = asyncio.get_running_loop()
+            prompt = PendingPrompt(
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+                future=loop.create_future(),
+                suggestions=list(getattr(ctx, "suggestions", None) or []),
+                body=render_request(tool_name, args, ctx),
+                allows=perms.allows_always(
+                    tool_name, getattr(ctx, "suggestions", None) or []),
+            )
+            prompt.summary = perms.summary(tool_name, ctx)
+
+            try:
+                await self._enqueue_prompt(guest, prompt)
+                return await asyncio.wait_for(prompt.future,
+                                              timeout=perms.DEADLINE_S)
+            except asyncio.TimeoutError:
+                self._finish_prompt(guest, prompt, "timeout")
+                return PermissionResultDeny(
+                    message=("Nobody answered the permission request on the "
+                             "Windows machine within ten minutes, so it was "
+                             "denied. Ask again if you still need it."),
+                    interrupt=False)
+            except asyncio.CancelledError:
+                # The CLI cancelled us -- the turn was interrupted, or another
+                # client answered. We are inside a cancelled scope, so we may
+                # NOT await here: the send would abort before it happened and
+                # the guest would keep a bar it can never dismiss. Schedule it
+                # instead; create_task is synchronous and the new task is not
+                # in the cancelled scope.
+                self._finish_prompt(guest, prompt, "cancelled")
+                raise
+
+        return can_use_tool
+
+    async def _enqueue_prompt(self, guest: GuestSession,
+                              prompt: PendingPrompt) -> None:
+        """Show a prompt, or queue it behind the one already on screen."""
+        if guest.perm_pending is not None:
+            guest.perm_queue.append(prompt)
+            await self._send_waiting(guest)
+            return
+        guest.perm_pending = prompt
+        await self._show_prompt(guest, prompt)
+
+    async def _show_prompt(self, guest: GuestSession,
+                           prompt: PendingPrompt) -> None:
+        # The description goes into the transcript as a normal block so it
+        # paginates and survives paging away and back. The bar itself carries
+        # only the summary, because a guest in HISTORY mode never sees this.
+        await self._write_block(guest, prompt.body)
+        await self._send(guest, Frame("PERMREQ", {
+            "id": prompt.tool_use_id,
+            "tool": prompt.tool_name,
+            "allows": "1" if prompt.allows else "0",
+            "waiting": str(len(guest.perm_queue)),
+        }, fold.encode(getattr(prompt, "summary", prompt.tool_name))))
+
+    async def _reissue_prompt(self, guest: GuestSession) -> None:
+        """P1: after a reconnect, put the bar back."""
+        prompt = guest.perm_pending
+        if prompt is None:
+            return
+        log.info("re-issuing pending prompt %s after reconnect",
+                 prompt.tool_use_id)
+        await self._send(guest, Frame("PERMSTATE", {
+            "id": prompt.tool_use_id,
+            "tool": prompt.tool_name,
+            "allows": "1" if prompt.allows else "0",
+            "waiting": str(len(guest.perm_queue)),
+        }, fold.encode(getattr(prompt, "summary", prompt.tool_name))))
+
+    async def _send_waiting(self, guest: GuestSession) -> None:
+        """Refresh the queue depth shown on the bar."""
+        prompt = guest.perm_pending
+        if prompt is None:
+            return
+        await self._send(guest, Frame("PERMWAIT", {
+            "id": prompt.tool_use_id,
+            "waiting": str(len(guest.perm_queue)),
+        }))
+
+    def _finish_prompt(self, guest: GuestSession, prompt: PendingPrompt,
+                       reason: str) -> None:
+        """Synchronous bookkeeping plus a scheduled PERMEND.
+
+        Deliberately not a coroutine. It is called from a cancelled context,
+        where any await would be aborted before it ran.
+        """
+        if guest.perm_pending is not prompt:
+            # Already resolved by another path; nothing owed.
+            return
+        guest.perm_pending = None
+        self._spawn(self._after_prompt(guest, prompt.tool_use_id, reason))
+
+    async def _after_prompt(self, guest: GuestSession, tool_use_id: str,
+                            reason: str) -> None:
+        await self._send(guest, Frame("PERMEND",
+                                      {"id": tool_use_id, "reason": reason}))
+        await self._pump_queue(guest)
+
+    async def _pump_queue(self, guest: GuestSession) -> None:
+        """Show the next queued prompt, discarding any that died waiting."""
+        while guest.perm_pending is None and guest.perm_queue:
+            nxt = guest.perm_queue.popleft()
+            if nxt.future.done():
+                continue
+            guest.perm_pending = nxt
+            await self._show_prompt(guest, nxt)
+
+    def _resolve_all(self, guest: GuestSession | None, reason: str,
+                     message: str) -> None:
+        """Deny everything outstanding, synchronously.
+
+        Called from _on_client's finally before its first await, and from the
+        session-rebuild paths. Denying rather than leaving them pending is the
+        point: a future nobody will ever complete hangs the turn until the
+        deadline, on a machine that has already gone away.
+        """
+        if guest is None:
+            return
+        pending = []
+        if guest.perm_pending is not None:
+            pending.append(guest.perm_pending)
+            guest.perm_pending = None
+        while guest.perm_queue:
+            pending.append(guest.perm_queue.popleft())
+        for prompt in pending:
+            if not prompt.future.done():
+                prompt.future.set_result(
+                    PermissionResultDeny(message=message, interrupt=False))
+        if pending:
+            log.info("denied %d pending prompt(s): %s", len(pending), reason)
+
+    def _spawn(self, coro) -> None:
+        """Fire-and-forget, with a reference kept.
+
+        asyncio only holds a weak reference to a running task, so a bare
+        create_task can be garbage-collected mid-flight.
+        """
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
         c = guest.coalescers.get(style)
@@ -498,10 +720,14 @@ class Bridge:
                 await self._handle(guest, f)
 
     async def _handle(self, guest: GuestSession, f: Frame) -> None:
+        guest.last_seen = time.monotonic()
         if f.type == "INPUT":
             text = fold.decode(f.body)
             log.info("input: %s", text[:120])
             asyncio.create_task(self._run_turn(guest, text))
+
+        elif f.type == "PERMREPLY":
+            await self._perm_reply(guest, f)
 
         elif f.type == "INTERRUPT":
             if guest.claude:
@@ -614,6 +840,70 @@ class Bridge:
             "cost_usd": f"{turn.cost_usd:.4f}" if turn.cost_usd else "",
             "ms": str(turn.duration_ms),
         }))
+
+    async def _perm_reply(self, guest: GuestSession, f: Frame) -> None:
+        """Answer from the guest's prompt bar."""
+        want = f.headers.get("id", "")
+        action = f.headers.get("action", "deny")
+        prompt = guest.perm_pending
+
+        if prompt is None or prompt.tool_use_id != want:
+            # Not a bug on its own: the prompt may have been resolved by the
+            # deadline, by a disconnect, or by a session rebuild while the
+            # reply was in flight. Ignoring is right; crashing is not.
+            log.info("PERMREPLY for unknown id %s (action=%s)", want, action)
+            return
+
+        if prompt.future.done():
+            guest.perm_pending = None
+            await self._pump_queue(guest)
+            return
+
+        if action == "allow":
+            result = PermissionResultAllow()
+        elif action == "always":
+            result = PermissionResultAllow(
+                updated_permissions=perms.session_scoped(prompt.suggestions))
+        else:
+            result = PermissionResultDeny(
+                message=("The user declined this on the Windows machine. "
+                         "Do not retry it; consider another approach, or ask "
+                         "them what they would prefer."),
+                interrupt=False)
+
+        prompt.future.set_result(result)
+        guest.perm_pending = None
+        log.info("permission %s for %s (%s)", action, prompt.tool_name, want)
+        await self._send(guest, Frame("PERMEND",
+                                      {"id": want, "reason": "answered"}))
+        await self._pump_queue(guest)
+
+    async def _reap_idle(self) -> None:
+        """P2: a guest that stops talking must eventually be let go.
+
+        _pump blocks in read() with no timeout, so a guest that GPFs or is
+        reset leaves no FIN behind and _on_client parks forever -- with
+        `connected` still True, which rejects every reconnect as "busy". The
+        machine crashing is the expected case here, not the exotic one.
+        """
+        while True:
+            await asyncio.sleep(self.idle_check_s)
+            guest = self._guest
+            if guest is None or not guest.connected:
+                continue
+            idle = time.monotonic() - guest.last_seen
+            if idle < self.idle_timeout_s:
+                continue
+            log.warning("guest silent for %.0fs; closing so it can reconnect",
+                        idle)
+            self._resolve_all(guest, "idle",
+                              "The Windows machine stopped responding.")
+            w, guest.writer = guest.writer, None
+            try:
+                if w is not None:
+                    w.close()
+            except Exception:
+                pass
 
     async def _send_options(self, guest: GuestSession) -> None:
         """The model and effort menus, with the one in use marked.
@@ -811,14 +1101,33 @@ class Bridge:
 
     async def _send(self, guest: GuestSession, frame: Frame,
                     *, stamp: bool = True) -> None:
+        # P4: check encodability BEFORE stamping. Frame.encode raises above
+        # MAX_FRAME and the replay buffer is append-only, so stamping an
+        # oversized frame makes every future replay raise -- permanently, and
+        # the guest can then never reconnect.
+        #
+        # The check is on a copy because append() mutates headers["seq"], and
+        # encoding the real frame first would produce a payload with no seq in
+        # it. The placeholder is wider than any seq we will reach, so a copy
+        # that encodes guarantees the stamped original does too.
+        probe = Frame(frame.type, dict(frame.headers), frame.body)
+        probe.headers["seq"] = "9999999999"
+        try:
+            probe.encode()
+        except ProtocolError:
+            log.error("refusing to send oversized %s frame (%d byte body); "
+                      "it would poison the replay buffer",
+                      frame.type, len(frame.body))
+            return
         if stamp:
             guest.replay.append(frame)
+        payload = frame.encode()
         async with guest.send_lock:
             w = guest.writer
             if w is None or w.is_closing():
                 return  # buffered in replay; the guest will ask for it
             try:
-                w.write(frame.encode())
+                w.write(payload)
                 await w.drain()
             except (ConnectionResetError, BrokenPipeError):
                 guest.writer = None

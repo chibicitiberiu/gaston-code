@@ -125,6 +125,60 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — the auto-allow policy was deleted, because Claude Code already does it
+
+The plan carried an auto-allow policy so that a `Grep` would not cost a
+keystroke on a 640x480 screen: `Read`/`Glob`/`Grep` inside `cwd` would be
+approved silently by our own `can_use_tool`, everything else would raise the
+bar. The second review suspected the branch might be dead. Three spikes against
+the real CLI settled it.
+
+**Measured, not reasoned:**
+
+| probe | callback fired? |
+|---|---|
+| `Read hello.txt` inside cwd | **no** |
+| `Grep 'volume'` inside cwd | **no** |
+| `Read /etc/hostname` outside cwd | yes |
+| `Bash echo SPIKE_BASH_RAN` (no side effect) | **no** -- and it ran |
+| `Bash echo written > file` (side effect) | yes |
+
+Claude Code resolves read-tool permissions locally before consulting
+`can_use_tool`, and separately auto-approves Bash commands its own sandbox can
+contain. So the policy we were about to write was dead code for the in-cwd case
+and redundant everywhere else. **Deleted**: no path containment, no `realpath`,
+no `..`-escape handling, no `--cwd` validation for that purpose, and four
+planned tests removed. `allowed_tools` stays `[]` and everything that reaches
+the callback gets a bar.
+
+The feature the user asked for already exists upstream. That is the second time
+this stage that checking the real API deleted work instead of adding it.
+
+**Two corrections to the reviews, from the same spikes:**
+
+  * **`blocked_path` was `None`** on the `Read /etc/hostname` call. The second
+    review said it is "the field that matters" and that re-deriving from
+    `input` is "weaker" -- not for this case. The path arrived in
+    `input["file_path"]` and in `description`. Use `blocked_path` when present,
+    never rely on it.
+  * **`title` was `None`.** The plan said `title`/`display_name`/`description`
+    "are the prompt text". In practice `display_name` was `"Read"` and
+    `description` was `"/etc/hostname"`, with no title at all. The bar renders
+    from `display_name` + `description` and must tolerate a missing title.
+
+Also observed: the CLI's own `suggestions` already carried
+`destination="session"` and a rule of `Read` / `//etc/**`, so rewriting the
+destination is a no-op in the common case. Keep the rewrite as a guard, since
+nothing promises that default.
+
+**One consequence worth stating plainly.** The threat model is no longer "our
+bar gates every tool". It is "Claude Code's sandbox gates what it can contain,
+and our bar gates the rest". That is defensible -- a sandboxed `echo` is not a
+risk worth a round trip to Windows 98 -- but it is not what the plan said, and
+it means the guest user does not see everything the model does.
+
+
+
 ### 2026-09-17 — the UI tier is one stage, and the control tree beats vision
 
 Screen capture had been sitting at 3.2 while everything that uses it sat three

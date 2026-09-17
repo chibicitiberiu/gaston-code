@@ -1,0 +1,183 @@
+"""Tool permission prompts, rendered for a 640x480 screen.
+
+The guest shows ONE prompt at a time, as a modeless bar above the input box.
+Everything else queues. The model can request tools in parallel and a single
+guest cannot show two bars, so the alternative to a queue is a second UI state
+nobody has designed.
+
+Three things were measured against the real CLI rather than assumed, and each
+deleted work:
+
+  * A Read or Grep INSIDE cwd never reaches can_use_tool at all -- Claude Code
+    resolves read-tool permissions locally first. The auto-allow policy this
+    module was going to carry was dead code, so there is none. Everything that
+    arrives here gets a bar.
+  * `blocked_path` was None on a Read of /etc/hostname. It is a hint, not the
+    source of truth; the path arrived in input["file_path"] and in description.
+  * `title` was None, with display_name="Read" and description="/etc/hostname".
+    So the bar renders from display_name and description, and tolerates a
+    missing title rather than assuming the CLI wrote one.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from . import html as H
+
+# How long a prompt may sit unanswered before the bridge denies it for you.
+# can_use_tool has no timeout of its own, so without this a prompt nobody
+# answers wedges the session for as long as the process lives.
+DEADLINE_S = 600.0
+
+# What one prompt's HTML body may occupy. The frame cap is 64KB and _send
+# gets no headroom for headers, so the body is capped well below it: a Write
+# with a large `content`, a Task prompt or an Edit with a long new_string
+# would otherwise produce a frame that cannot be encoded -- and, because
+# _send stamps into the replay buffer BEFORE encoding, one of those poisons
+# every future replay permanently.
+MAX_BODY = 8 * 1024
+
+# Per-value cap inside the rendered argument table. Long enough for a real
+# path or a command line, short enough that ten of them still fit.
+MAX_VALUE = 400
+
+# Arguments worth showing first. The rest follow in whatever order they came,
+# because a tool we have never seen should still render something useful.
+_PREFERRED = ("command", "file_path", "path", "pattern", "url", "prompt",
+              "old_string", "new_string", "content")
+
+
+@dataclass
+class PendingPrompt:
+    """One outstanding permission request.
+
+    `future` is resolved by the PERMREPLY handler, by the deadline sweeper, by
+    the disconnect path, or not at all -- if the SDK cancels the callback the
+    coroutine simply dies and `future` is never read again.
+    """
+
+    tool_use_id: str
+    tool_name: str
+    future: Any                      # asyncio.Future[PermissionResult]
+    suggestions: list = field(default_factory=list)
+    created: float = field(default_factory=time.monotonic)
+    # The rendered body, kept so a reconnect can re-issue the prompt without
+    # re-rendering it from a context object that is long out of scope.
+    body: str = ""
+    allows: bool = False
+
+    @property
+    def expired(self) -> bool:
+        return (time.monotonic() - self.created) > DEADLINE_S
+
+
+def session_scoped(suggestions: list) -> list:
+    """Force every suggested rule to session scope.
+
+    PermissionUpdate.destination can name userSettings or projectSettings, and
+    a dialog on a Win98 box quietly rewriting the developer's settings files is
+    a surprise nobody asked for. The CLI already proposed "session" in every
+    case measured, so this is usually a no-op -- but nothing promises that, and
+    the failure mode is silent and permanent.
+    """
+    out = []
+    for s in suggestions or []:
+        try:
+            out.append(dataclasses.replace(s, destination="session"))
+        except Exception:
+            # An unknown shape is still better forwarded than dropped: the CLI
+            # authored it and the user pressed Always.
+            out.append(s)
+    return out
+
+
+def allows_always(tool_name: str, suggestions: list) -> bool:
+    """Whether the Always button should be offered at all.
+
+    MCP rule names cannot carry specifiers -- the CLI rejects them with "MCP
+    rules do not support patterns in parentheses" -- so the only rule that can
+    be expressed for mcp__machine__exec is the WHOLE TOOL. `suggestions` is
+    non-empty regardless, so keying the button off it would light it up, and
+    one press on "run vol c:" would grant silent arbitrary command execution on
+    the user's computer for the rest of the session.
+
+    For a built-in like Bash the suggestion is scoped to one command shape, so
+    Always means what it appears to mean and is offered.
+    """
+    if tool_name.startswith("mcp__machine__"):
+        return False
+    return bool(suggestions)
+
+
+def _clip(text: str, cap: int = MAX_VALUE) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= cap else text[: cap - 1] + "…"
+
+
+def _rows(args: dict) -> list[tuple[str, str]]:
+    """Tool arguments, most useful first, clipped."""
+    if not isinstance(args, dict):
+        return []
+    seen, rows = set(), []
+    for key in _PREFERRED:
+        if key in args and args[key] not in (None, ""):
+            rows.append((key, _clip(args[key])))
+            seen.add(key)
+    for key, value in args.items():
+        if key in seen or value in (None, "", [], {}):
+            continue
+        rows.append((key, _clip(value)))
+    return rows
+
+
+def render_request(tool_name: str, args: dict, ctx) -> str:
+    """The HTML block describing one request.
+
+    The bar itself only shows a one-line summary, because the transcript is not
+    guaranteed to be visible -- a user paging back through history would get a
+    bar and no context at all. This block is the elaboration, not the message.
+    """
+    display = getattr(ctx, "display_name", None) or tool_name
+    title = getattr(ctx, "title", None)
+    desc = getattr(ctx, "description", None)
+
+    parts = ['<div class="perm">',
+             '<div class="permhead">Permission required</div>',
+             "<p><b>" + H.esc(_clip(title or display, 120)) + "</b>"]
+    if desc:
+        parts.append(" &mdash; " + H.esc(_clip(desc)))
+    parts.append("</p>")
+
+    rows = _rows(args)
+    if rows:
+        parts.append("<table>")
+        for key, value in rows:
+            parts.append("<tr><th>" + H.esc(key) + "</th><td>"
+                         + H.esc(value) + "</td></tr>")
+        parts.append("</table>")
+    parts.append("</div>")
+
+    html = "".join(parts)
+    if len(html) <= MAX_BODY:
+        return html
+    # Losing the argument table is survivable; losing the connection is not.
+    short = ('<div class="perm">'
+             '<div class="permhead">Permission required</div>'
+             "<p><b>" + H.esc(_clip(title or display, 120)) + "</b></p>"
+             "<p><i>(arguments too large to display)</i></p></div>")
+    return short[:MAX_BODY]
+
+
+def summary(tool_name: str, ctx) -> str:
+    """The one line the guest puts in the bar's STATIC.
+
+    Must stand alone: this is all a user paging through history will see.
+    """
+    display = getattr(ctx, "display_name", None) or tool_name
+    desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)
+    line = display if not desc else f"{display}: {desc}"
+    return _clip(line, 160)
