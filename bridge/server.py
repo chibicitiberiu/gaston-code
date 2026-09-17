@@ -20,6 +20,8 @@ import uuid
 from dataclasses import dataclass, field
 
 from . import fold
+from . import machine
+from .registry import Registry
 from .coalesce import Coalescer
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
 from . import html as H
@@ -64,6 +66,9 @@ class GuestSession:
     # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
     page_bytes: int = 0
     page_blocks: int = 0
+    # The machine facts from HELLO, kept so every session this guest opens
+    # gets the same description of the computer it is acting for.
+    hello: dict = field(default_factory=dict)
 
     # Which page the guest is showing. None means LIVE (follow the last page).
     # In HISTORY mode the bridge keeps buffering silently; the page counter
@@ -100,6 +105,9 @@ class Bridge:
         link_bps: float | None = None,
     ) -> None:
         self.secret = secret
+        # Which sessions this bridge started, so the chat list can show those
+        # and not every conversation on the machine. See bridge/registry.py.
+        self.registry = Registry()
         # Measured link speed. None means "unknown, assume it might be slow".
         # Set from the guest's STAT frames; overridable for testing so the
         # dialup path can be exercised without a modem.
@@ -260,6 +268,7 @@ class Bridge:
         guest.writer = writer
         guest.page_bytes = page_bytes
         guest.page_blocks = page_blocks
+        guest.hello = dict(h)
 
         guest.link_bps = self.link_bps
         for c in guest.coalescers.values():
@@ -329,6 +338,15 @@ class Bridge:
 
         s = Session(
             cwd=self.cwd,
+            # APPENDED to Claude Code's own prompt, never substituted. Without
+            # it the model answers as though it were on this machine, and the
+            # machine that matters is the 200MHz one on the other end.
+            system_prompt={
+                "type": "preset",
+                "preset": "claude_code",
+                "append": machine.system_prompt(guest.hello,
+                                                self.cwd or os.getcwd()),
+            },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.
             model=guest.model or self.model,
@@ -342,6 +360,12 @@ class Bridge:
             on_system=on_system,
         )
         await s.start()
+        log.info("session for guest machine:\n%s",
+                 machine.describe(guest.hello))
+        # The id is usually not known yet -- the SDK assigns it when the first
+        # query goes out -- so this is a best effort and _run_turn registers it
+        # again once it exists.
+        self.registry.add(s.session_id)
         return s
 
     def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
@@ -484,7 +508,9 @@ class Bridge:
                 await guest.claude.interrupt()
 
         elif f.type == "GETSESSIONS":
-            rows = sesslist.listing(cwd=self.cwd)
+            # Only conversations this bridge started: the rest belong to a
+            # machine with a different way of working.
+            rows = self.registry.filter(sesslist.listing(cwd=self.cwd))
             await self._send(guest, Frame("SESSIONS",
                                           {"count": str(len(rows))}))
             for i, r in enumerate(rows):
@@ -522,6 +548,9 @@ class Bridge:
 
         elif f.type == "PING":
             await self._send(guest, Frame("PONG", {}), stamp=False)
+
+        elif f.type == "NEWSESSION":
+            await self._new_session(guest)
 
         elif f.type == "GETOPTIONS":
             await self._send_options(guest)
@@ -564,6 +593,10 @@ class Bridge:
                 "state": "error", "msg": str(exc)[:200]}))
             return
         await self._flush_text(guest)
+        # Register here, not at start(): the SDK assigns the session id when
+        # the first query goes out, so at start() there is nothing to record
+        # and the conversation would never appear in the chat list.
+        self.registry.add(guest.claude.session_id)
         # Seal only at a message boundary, so a turn is never split
         # mid-sentence while the reader is watching it stream.
         sealed = guest.pages.message_boundary()
@@ -669,6 +702,35 @@ class Bridge:
             await self._send_options(guest)
             return
         guest.sess_id = guest.claude.session_id or guest.sess_id
+        await self._send_options(guest)
+
+    async def _new_session(self, guest: GuestSession) -> None:
+        """Start a fresh conversation. There was no way to do this at all."""
+        log.info("new session requested")
+        if guest.claude:
+            await guest.claude.close()
+
+        guest.pages = Paginator(guest.page_bytes or 16384,
+                                guest.page_blocks or 90)
+        guest.render = HtmlStream()
+        for c in guest.coalescers.values():
+            await c.stop()
+        guest.coalescers.clear()
+        guest.view_page = None
+
+        try:
+            guest.claude = await self._make_session(guest)
+        except Exception as exc:
+            log.exception("new session failed")
+            await self._send(guest, error("new_failed", str(exc)[:200]))
+            return
+
+        guest.sess_id = guest.claude.session_id or guest.sess_id
+        await self._send(guest, Frame("SWITCHED", {
+            "id": guest.claude.session_id or "",
+            "total": str(guest.pages.count),
+        }))
+        await self._send_page(guest, "live")
         await self._send_options(guest)
 
     async def _switch(self, guest: GuestSession, session_id: str) -> None:

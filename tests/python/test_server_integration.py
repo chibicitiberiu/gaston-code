@@ -18,11 +18,15 @@ from bridge.server import Bridge
 class FakeSession:
     """Stands in for bridge.session.Session."""
 
+    _seq = 0
+
     def __init__(self, **kw):
         self.on_text = kw.get("on_text")
         self.model = "fake-model"
         self.started = False
         self.interrupted = False
+        FakeSession._seq += 1
+        self.session_id = f"fake-session-{FakeSession._seq}"
 
     async def start(self):
         self.started = True
@@ -165,7 +169,7 @@ _next_port = [7900]
 
 
 @pytest.fixture
-async def harness(monkeypatch):
+async def harness(monkeypatch, tmp_path):
     """One bridge on its own port per test.
 
     Ports are handed out sequentially rather than reused, because a socket in
@@ -174,6 +178,10 @@ async def harness(monkeypatch):
     """
     import bridge.server as srv
     monkeypatch.setattr(srv, "Session", FakeSession)
+    # The session registry must not touch the real one in $HOME, and each test
+    # needs to start from an empty one or the chat list depends on what ran
+    # before it.
+    monkeypatch.setenv("GASTON_STATE", str(tmp_path / "sessions.json"))
 
     server = None
     b = None

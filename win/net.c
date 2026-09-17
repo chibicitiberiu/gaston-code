@@ -230,10 +230,11 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret)
 {
     WSADATA wsa;
-    char maxframe[16], ver[16], memkb[16];
+    char maxframe[16], ver[16], memkb[16], memfree[16], disk[24];
+    char osver[96], cpu[64], screen[32];
     /* Sized with room to spare: ver, secret, max_frame, mem_kb and sess is
      * already five, and this array overflowed the moment mem_kb was added. */
-    const char *keys[8]; const char *vals[8];
+    const char *keys[16]; const char *vals[16];
     int nkv = 0;
     unsigned tid;
 
@@ -263,17 +264,72 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     keys[nkv] = "ver";       vals[nkv++] = ver;
     keys[nkv] = "secret";    vals[nkv++] = n->secret;
     keys[nkv] = "max_frame"; vals[nkv++] = maxframe;
-    /* How much memory this machine has, so the bridge can size pages to it.
-     * A 128MB box can hold a far bigger page than a 32MB one, and the bridge
-     * has no other way to know which it is talking to. */
+    /* What this machine actually is.
+     *
+     * Two consumers. The bridge sizes pages from mem_kb -- a 128MB box can
+     * hold a far bigger page than a 32MB one, and there is no other way for it
+     * to know which it is talking to. And the rest goes into the agent's
+     * system prompt, because a model that thinks it is on a modern machine
+     * cannot make good decisions about which tool to reach for: "just install
+     * this 400MB toolchain" is a wrong answer here however right it is
+     * elsewhere. */
     {
         MEMORYSTATUS ms;
+        OSVERSIONINFOA os;
+        SYSTEM_INFO si;
+        DWORD spc = 0, bps = 0, freec = 0, totalc = 0;
+        HDC dc;
+
         memset(&ms, 0, sizeof(ms));
         ms.dwLength = sizeof(ms);
         GlobalMemoryStatus(&ms);
         _snprintf(memkb, sizeof(memkb), "%lu",
                   (unsigned long)(ms.dwTotalPhys / 1024));
         keys[nkv] = "mem_kb"; vals[nkv++] = memkb;
+        _snprintf(memfree, sizeof(memfree), "%lu",
+                  (unsigned long)(ms.dwAvailPhys / 1024));
+        keys[nkv] = "mem_free_kb"; vals[nkv++] = memfree;
+
+        memset(&os, 0, sizeof(os));
+        os.dwOSVersionInfoSize = sizeof(os);
+        if (GetVersionExA(&os)) {
+            _snprintf(osver, sizeof(osver) - 1, "Windows %lu.%lu build %lu %s",
+                      (unsigned long)os.dwMajorVersion,
+                      (unsigned long)os.dwMinorVersion,
+                      (unsigned long)(os.dwBuildNumber & 0xFFFF),
+                      os.szCSDVersion);
+            osver[sizeof(osver) - 1] = '\0';
+            keys[nkv] = "os"; vals[nkv++] = osver;
+        }
+
+        memset(&si, 0, sizeof(si));
+        GetSystemInfo(&si);
+        _snprintf(cpu, sizeof(cpu) - 1, "x86 family %u model %u, %lu cpu",
+                  (unsigned)si.wProcessorLevel,
+                  (unsigned)(si.wProcessorRevision >> 8),
+                  (unsigned long)si.dwNumberOfProcessors);
+        cpu[sizeof(cpu) - 1] = '\0';
+        keys[nkv] = "cpu"; vals[nkv++] = cpu;
+
+        dc = GetDC(NULL);
+        if (dc) {
+            _snprintf(screen, sizeof(screen) - 1, "%dx%dx%d",
+                      GetDeviceCaps(dc, HORZRES), GetDeviceCaps(dc, VERTRES),
+                      GetDeviceCaps(dc, BITSPIXEL));
+            screen[sizeof(screen) - 1] = '\0';
+            keys[nkv] = "screen"; vals[nkv++] = screen;
+            ReleaseDC(NULL, dc);
+        }
+
+        /* GetDiskFreeSpaceEx is NT4+/OSR2 and a static import of it would kill
+         * the image at load on an older 9x. The old call is fine here: the
+         * numbers only have to be roughly right. */
+        if (GetDiskFreeSpaceA("C:\\", &spc, &bps, &freec, &totalc)) {
+            _snprintf(disk, sizeof(disk) - 1, "%lu",
+                      (unsigned long)((double)spc * bps * freec / 1024.0));
+            disk[sizeof(disk) - 1] = '\0';
+            keys[nkv] = "disk_free_kb"; vals[nkv++] = disk;
+        }
     }
     if (n->sess[0]) { keys[nkv] = "sess"; vals[nkv++] = n->sess; }
 

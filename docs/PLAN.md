@@ -712,6 +712,133 @@ type into `retroclaude.exe` on the same desktop is an unsolved UX problem.
 
 ---
 
+## Revisions — 2026-09-17
+
+Eight changes, in rough order of how much they disturb what is already built.
+Four are done; four are design work that lands in Phase 3 or later. The two
+architectural ones (**file sync** and **multiple clients**) each overturn a
+decision made earlier in this document, and the reasoning is recorded because
+"the plan said Samba" should not outlive the reason it said Samba.
+
+### R1 — the chat list shows only sessions this client started  *(done)*
+
+`list_sessions()` returns everything under the working directory, so the Win98
+list was full of conversations from a desktop with a completely different mode
+of working. Continuing one of those *from Win98* makes little sense: the
+machine has different tools, a different screen and a different idea of what a
+file path looks like.
+
+There is no settable tag in `ClaudeAgentOptions`, so the bridge keeps its own
+registry of the session ids it created and filters the listing through it.
+Crude but honest, and it survives restarts.
+
+### R2 — New session  *(done)*
+
+There was no way to start a fresh conversation at all, which is faintly absurd.
+File -> New Session.
+
+### R3 — a system prompt that says where the agent actually is  *(done)*
+
+The model has been answering as if it were on the machine it is running on. It
+is not: it is on a proxy acting for a 1998 PC, and nothing told it so.
+
+`SystemPromptPreset` takes an `append`, so this **extends** Claude Code's own
+prompt rather than replacing it -- replacing it would throw away everything
+that makes Claude Code work. The appended text covers:
+
+  * what the proxied machine is, from real values the guest sends in HELLO:
+    Windows version, CPU, total and free RAM, screen mode, free disk;
+  * that edit tools operate on the bridge's working copy and are relayed to
+    the guest, so they can be used normally;
+  * that the guest is the thing being worked *on*, reached only through the
+    MCP tools, never assumed;
+  * and that it is a 200MHz machine with ~10MB free, so an answer that says
+    "run this 400MB install" is a wrong answer however correct it is in
+    general.
+
+The last point is the one worth having: the model cannot make good decisions
+about which tool to reach for if it thinks it has a modern machine.
+
+### R4 — confirm before switching chats mid-turn  *(done)*
+
+Switching closes the live client, which silently kills a running request. Now
+it asks first.
+
+Background sessions were considered and rejected for the same reason the plan
+rejected a warm client pool: one live `ClaudeSDKClient` is a third of the work,
+and a machine with ~10MB free should not be running several at once.
+
+### R5 — icons  *(planned)*
+
+Windows 98 is a colourful system and this app is a grey rectangle. At minimum
+an application icon, so the title bar and taskbar are not generic; ideally a
+small toolbar. Open Watcom ships `wrc`, so a `.rc` with an `.ico` is the
+mechanism. Cheap, visible, and currently the largest gap between "works" and
+"looks like it belongs on the desktop".
+
+### R6 — **the file layer is a sync layer, not Samba**  *(planned, replaces Phase 3's share)*
+
+This overturns the Samba decision, and the reasons are not only aesthetic:
+
+  * **It was never verified.** 0.8 (long filenames over `vers=1.0`) is still
+    blocked, so the whole file architecture rests on an untested assumption.
+  * **The plan already named the real risk**: "SMB1 **round-trip latency**,
+    not bandwidth, is what makes guest-side builds slow -- a compiler opening
+    50 small headers over `vers=1.0` pays per-file latency."
+  * **SMB1 is disappearing.** It needs `server min protocol = NT1` and
+    `ntlm auth = ntlmv1-permitted` on a modern distro, and that is getting
+    harder to enable each year, not easier.
+  * And the decisive one: **Claude's native edit tools are fast and local on
+    the bridge.** Editing over a mounted SMB1 share means every read and write
+    crosses the wire; editing a local working copy and syncing the result does
+    not.
+
+**Shape.** One watched directory each side. Each keeps a manifest of
+`path -> (size, mtime, hash)`. Reconciliation is a manifest exchange and a
+diff; transfer is whole-file-compressed for small files, a patch for large
+ones. Source files are a few KB, so whole-file is the common case and a patch
+format can wait.
+
+**The client is the source of truth on conflict**, as specified. That is the
+right way round: the guest is the machine being worked on, and the bridge's
+copy is a working copy.
+
+**Win9x specifics that will bite, recorded now.** `ReadDirectoryChangesW` is
+NT-only and will not load; `FindFirstChangeNotification` works but only says
+"something under here changed", so the guest rescans a small tree rather than
+receiving per-file events. FAT timestamps have **2-second granularity**, so
+mtime comparison needs a tolerance or every file looks modified. The filesystem
+is case-insensitive, has no symlinks, and 8.3 aliasing means a path can arrive
+spelled two ways. Line endings are already a decided policy: CRLF for files the
+guest consumes.
+
+### R7 — the bridge should take multiple clients  *(planned)*
+
+Today `self._guest` is singular and a second client is rejected. That rejection
+was right for one guest and is wrong as a permanent design.
+
+**Shape.** `self._guests: dict[client_id, GuestSession]`, with `client_id` sent
+in HELLO and persisted in the guest's INI so a reconnect is recognised as the
+same client rather than a new one. Everything already per-guest stays that way:
+paginator, renderer, compressor, coalescers, model and effort. One live
+`ClaudeSDKClient` **per client**, not one globally -- the bridge is a modern
+machine and can afford several; the 32MB guest is the constrained side, and it
+only ever has one.
+
+The "second client is rejected, not evicted" rule stays, but narrows to its
+actual intent: **two connections claiming the same `client_id`** is the
+dangerous case, because one may be mid-turn. Two different clients are fine.
+
+R1's registry becomes per-client, which is also what makes R1 correct on a
+bridge serving more than one machine.
+
+### R8 — a Command menu  *(planned)*
+
+A menu of the slash commands that make sense here -- `/context`, `/goal`, and
+whichever others are useful and cheap -- inserted into the input box rather
+than invented as new protocol. Explicitly not all of them: anything needing a
+UI the guest does not have is not worth faking.
+
 ## Repo layout — one repo
 
 ```

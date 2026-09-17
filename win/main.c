@@ -34,6 +34,7 @@
 
 /* Menu. Model and effort entries are numbered from a base because the lists
  * come from the bridge and are not known at compile time. */
+#define IDM_NEW       1099
 #define IDM_EXPORT    1100
 #define IDM_CLOSE     1101
 #define IDM_HOST      1110
@@ -276,6 +277,8 @@ static void build_menu(HWND hwnd)
     HMENU cfg = CreatePopupMenu();
     HMENU help = CreatePopupMenu();
 
+    AppendMenuA(file, MF_STRING, IDM_NEW, "&New Session\tCtrl+N");
+    AppendMenuA(file, MF_SEPARATOR, 0, NULL);
     AppendMenuA(file, MF_STRING, IDM_EXPORT, "&Export as HTML...");
     AppendMenuA(file, MF_SEPARATOR, 0, NULL);
     AppendMenuA(file, MF_STRING, IDM_CLOSE, "&Close");
@@ -317,6 +320,20 @@ static void chats_switch(void)
     if (sel == LB_ERR || sel < 0 || sel >= g_chat_count) return;
     if (g_chat_is_header[sel]) return;          /* a date header, not a chat */
     if (strcmp(g_chat_ids[sel], g_net.sess) == 0) return;   /* already open */
+
+    /* Switching closes the live client, which kills a running request. Ask
+     * rather than doing it silently -- a click in the list is easy to make by
+     * accident and the reply that is lost took real time to produce. */
+    if (g_turn_active
+        && MessageBoxA(g_main,
+                       "A request is still running.\n\n"
+                       "Opening another conversation will stop it. Continue?",
+                       RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES) {
+        /* Put the highlight back on the conversation that is actually open. */
+        if (g_chat_current >= 0)
+            SendMessageA(g_chats, LB_SETCURSEL, g_chat_current, 0);
+        return;
+    }
 
     keys[0] = "id"; vals[0] = g_chat_ids[sel];
     rc_log("switching to session %s", g_chat_ids[sel]);
@@ -1159,6 +1176,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_LAST:  page_goto_n(g_total);   return 0;
         case ID_REFRESH: chats_request();      return 0;
 
+        case IDM_NEW:
+            if (g_turn_active
+                && MessageBoxA(hwnd,
+                               "A request is still running.\n\n"
+                               "Starting a new session will stop it. Continue?",
+                               RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES)
+                return 0;
+            SetWindowTextA(g_main, RC_TITLE "  -  new session...");
+            rc_net_send(&g_net, "NEWSESSION", NULL, NULL, 0, NULL, 0);
+            return 0;
+
         case IDM_CLOSE:
             PostMessageA(hwnd, WM_CLOSE, 0, 0);
             return 0;
@@ -1313,6 +1341,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
          * subclassing the listbox, because IsDialogMessage would otherwise
          * route it to the default pushbutton and the keyboard would have no
          * way to open a chat at all. */
+        if (msg.message == WM_KEYDOWN && msg.wParam == 'N'
+            && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            SendMessageA(g_main, WM_COMMAND, IDM_NEW, 0);
+            continue;
+        }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
             && msg.hwnd == g_chats) {
             chats_switch();

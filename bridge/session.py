@@ -70,6 +70,7 @@ class Session:
         cwd: str | None = None,
         model: str | None = None,
         effort: str | None = None,
+        system_prompt=None,
         resume: str | None = None,
         fork: bool = False,
         allowed_tools: list[str] | None = None,
@@ -93,6 +94,10 @@ class Session:
             cwd=cwd,
             model=model,
             effort=effort,
+            # A preset dict with an "append" extends Claude Code's own prompt.
+            # Passing a bare string here would REPLACE it, which would throw
+            # away everything that makes Claude Code work.
+            system_prompt=system_prompt,
             resume=resume,
             fork_session=fork,
             allowed_tools=allowed_tools if allowed_tools is not None else [],
