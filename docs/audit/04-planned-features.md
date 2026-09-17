@@ -1,0 +1,839 @@
+# Can the current architecture carry Phases 4, 5 and 6?
+
+Forward-looking design review, 2026-09-18. Not a bug hunt: everything below is
+about what the *shape* of the code does to work that has not started yet.
+Where a live defect turns up it is noted, but the question being asked is
+always "what does this cost when Phase N arrives".
+
+Read alongside `PLAN.md` (Phase 4-6, R5/R7/R8) and `BACKLOG.md`, which already
+owns the hardening list. Nothing here duplicates the backlog.
+
+---
+
+## Top findings
+
+1. **The MCP tool closure binds the *bridge*, not the guest.**
+   `machine_tools.build(self)` (`bridge/server.py:516`) is called from
+   `_make_session(guest)` and has a `guest` in scope, and does not use it.
+   Every tool body then re-derives the guest from `self._guest`
+   (`server.py:1120`, `1213`, `1555`). That is three call sites today and
+   eleven after Phase 6, and it is the single hardest blocker to R7. Fix it
+   now, while it is a ten-line change.
+
+2. **The sync baseline is bound to exactly one machine by construction, and
+   R7 does not say so.** `Pass.__init__`/`scan_guest` refuse on a `tree_id` or
+   `guest_root` change (`bridge/syncrun.py:149`, `:165`). Two clients sharing
+   one `--sync-state` do not degrade, they deadlock: every pass raises
+   `SyncError` and `_report_abort`'s once-only guard fails because the reason
+   alternates between the two machines. R7 needs a decision about the mirror
+   before it needs a dict.
+
+3. **There are already four ad-hoc chunked transfers, not one**, and Phases 4,
+   5 and 6 add three more. The guest side is the reusable half and it is
+   already written twice: `do_put` is a chunked *sink*
+   (`win/syncrpc.c:199-345`), `do_get` is a chunked *source*
+   (`win/syncrpc.c:388-457`). Export-as-HTML is `do_put` with a different
+   destination; the Phase 5 upload and the Phase 6 screenshot strips are
+   `do_get` with a different source. Extract the two before writing a fifth.
+
+4. **`CANCEL` does not exist anywhere**, although `PLAN.md` mandates it
+   ("Transfers are cancellable mid-stream via a `CANCEL\nid=` frame"), and
+   there is no progress bar in the guest — no `PBM_*`, and
+   `InitCommonControlsEx` asks for `ICC_BAR_CLASSES` only
+   (`win/main.c:1705`), not `ICC_PROGRESS_CLASS`. A 10 MB Phase 5 upload is
+   13 s on the LAN and 33 minutes on a modem, with no way to stop it and a
+   status-bar string as the only feedback.
+
+5. **The RPC worker has one job slot, and it conflates "runs for two minutes"
+   with "is a syscall".** `g_queued` holds at most one frame
+   (`win/rpc.c:44`, `:447-460`). A `list_windows` arriving while an `EXEC`
+   runs is answered `status=busy`. The sync layer already learned this lesson
+   and solved it with a second lane (`win/rpc.c:47-63`); Phase 6's eight tools
+   are the third case and need the lane generalised, not a third special case.
+
+6. **The permission bar is one single-line STATIC, three buttons and two
+   mutually-arbitrated modes** (`win/main.c:127-134`, `:474-533`,
+   `:1282-1283`). The arbitration between the two existing modes was four
+   data-loss bugs. Phase 6 wants a third mode ("the agent is driving") and a
+   multi-step summary, and the label is `SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS`
+   at roughly 45 characters on a 640x480 screen.
+
+7. **Frame dispatch is a hand-written if/elif chain in four places, with no
+   registry and no tripwire** (`server.py:885-1025`, `win/main.c:550-884`,
+   `win/net.c:183-223`, `win/syncrpc.c:459-467`). `test_sync_apply_coverage.py`
+   exists precisely because "decided correctly, ranked correctly, fell off the
+   end of the chain" cost four defects. That tripwire was never generalised to
+   frame types, and the next three phases add roughly ten of them.
+
+8. **`guest.sess_id` means two different things**, which is why the effort
+   fork strands the chat list. It is a bridge-minted uuid at attach
+   (`server.py:397-399`) and a Claude conversation id after a fork or a new
+   session (`server.py:1999`, `:2023`). `Session._session_id` is only set from
+   the init `SystemMessage` (`bridge/session.py:283`), which does not arrive
+   until a turn runs, so the assignment at `:1999` is a no-op and the registry
+   does not learn the forked id until `_run_turn` (`server.py:1096`).
+
+9. **`self._early` is process-global connection state** (`server.py:182`,
+   read at `:875`). A second connection's `_read_hello` overwrites it *before*
+   `_attach` rejects that connection, so frames pipelined behind the first
+   client's HELLO are silently dropped. Reachable today; routine under R7.
+
+10. **`make check` prints the import table but does not gate on it**
+    (`win/Makefile:130-133`). Phase 6 adds `oleacc.dll`, which must be
+    `LoadLibrary`/`GetProcAddress` or the image dies before `WinMain` with no
+    log. The one audit that exists for that failure mode is advisory.
+
+---
+
+## Cross-cutting: what should change before any of Phase 4 starts
+
+These are not owned by a phase. They are cheap now and expensive once eight
+more tools, three more transfers and a third bar mode exist.
+
+### C1. Bind the tool server to the guest
+
+`bridge/tools.py:40` — `def build(bridge) -> dict`. Each tool body calls
+`bridge.run_on_guest(...)`, `bridge.sync_status_text()`,
+`bridge.sync_resolve(...)`, and each of those re-derives the guest from
+`self._guest`.
+
+*Consequence.* With two clients, guest A's session calls a tool that runs the
+command on whichever guest happens to be in `self._guest`. That is not a race
+that shows up as an error; it is a command executing on the wrong person's
+computer with the right person's approval. It is also why `run_on_guest`
+cannot be tested against two guests today.
+
+*Shape of the fix.* `build(bridge, guest)`, and the three bridge methods take
+`guest` as their first parameter. `run_sync`, `sync_status_text`,
+`sync_resolve`, `_baseline_lock` and `_release_all_latches` all lose their
+`self._guest` lookups. `_reap_idle` becomes a loop. This is the whole of the
+R7 mechanical change and it is worth doing on its own merits before R7 is
+scheduled, because it makes the tool surface honest about what it acts on.
+
+### C2. Extract the generic guest call
+
+`run_on_guest` (`server.py:1117-1185`) is 70 lines, of which about ten are
+about `exec`. The rest is the pattern every Phase 6 tool needs: refuse if not
+connected, take the guest's worker lock, re-check after acquiring it, mint a
+correlation id in the right namespace, register a future, send, wait with a
+budget above the guest's own clamp, kill on cancellation, pop in `finally`.
+
+*Consequence of leaving it.* Eight Phase 6 tools each copy that dance, and
+each copy is an opportunity to omit the re-check after the lock (the comment
+at `:1132-1136` explains why that one matters), the `stamp=False`
+(`:1154-1158`, which exists so a future `from=` cannot re-run a command), or
+the `finally` pop.
+
+*Shape of the fix.* `async def call_guest(guest, frame_type, headers, body,
+*, budget_s, id_prefix) -> reply` on the Bridge, with `run_on_guest` becoming
+a caller that adds the exec-specific headers and the exec-specific result
+rendering. `_exec_result`'s status-to-prose table (`:1779-1804`) stays
+exec-specific; the transport does not.
+
+### C3. One chunked-transfer primitive on each side
+
+Existing implementations, all independent:
+
+| # | Direction | Where | Framing | Ack | Precondition | Cancel |
+|---|---|---|---|---|---|---|
+| 1 | bridge to guest | `_send_html` `server.py:828-864` | `total`/`off` | none | none | no |
+| 2 | bridge to guest | `Pass.push` `syncrun.py:339-364` | `total`/`off` + `SYNCPUTEND` | `SYNCPUTACK` | `if_crc` | no |
+| 3 | guest to bridge | `do_get` `syncrpc.c:432-455` | `total`/`off` + `SYNCDATEND` | n/a | n/a | no |
+| 4 | guest to bridge | `send_out` `rpc.c:125-146` | none at all | `EXECRESULT` | n/a | no |
+
+Phase 4 Export adds a fifth (bridge to guest), Phase 5 upload a sixth (guest
+to bridge), Phase 6 screenshot strips a seventh (guest to bridge).
+
+*The guest-side half is the valuable one*, because it is the half that must
+not hold the payload in memory. `do_put` already opens on `off=0`, writes each
+chunk straight to disk, and commits on END. Export-as-HTML has exactly that
+requirement: a full transcript is hundreds of kilobytes and the guest has tens
+of kilobytes free, so it must stream to a file and never assemble. `do_get`
+already reads a source in `RC_SYNC_CHUNK` pieces and sends each one; a
+screenshot strip is the same loop with a DIB row range instead of `ReadFile`.
+
+*Shape of the fix.* Two small structs in a new `win/xfer.c`:
+
+- a **sink** (`begin(dest) / write(chunk) / commit(crc) / abort(why)`) that
+  `do_put` becomes a caller of, and that Export and an inline-image write also
+  use;
+- a **source** (`open(reader_fn, total) / pump()`) that `do_get` becomes a
+  caller of, and that the Phase 5 upload and Phase 6 strips also use.
+
+Both carry `id`, `total`, `off` and an END frame with a status and a CRC,
+because that is what all three existing ones converged on independently. Add
+`CANCEL\nid=` while extracting: the sender checks between chunks, which is one
+line in each pump loop and impossible to retrofit into four separate loops.
+
+Do **not** unify #1 into this. `_send_html` is a display path with no ack by
+design, and giving it one would add a round trip per block to the streaming
+hot path.
+
+### C4. `_send` still starves the event loop outside sync
+
+`wire_yield` (`server.py:2140-2158`) exists because a chunk loop over an
+uncontended `asyncio.Lock` with a `drain()` below the high-water mark contains
+no await point that suspends. Measured at 128 of 128 chunks.
+
+The same is true of `_send_html`'s loop (`server.py:851-864`) and of
+`_send_page`'s run loop (`server.py:2101-2102`), neither of which calls
+`wire_yield`. Today a page is 16 KB and at most a couple of chunks, so it does
+not bite. **Export-as-HTML is the whole transcript**, and if it is written as
+`for page in pages: for run in page.runs: await self._send(...)` it reproduces
+the exact starvation the sync layer paid a rewrite to discover, on a path
+where the user is sitting and watching.
+
+*Shape of the fix.* `wire_yield` gets called from the generic transfer
+primitive in C3, so no future bulk sender can forget it. Note that its second
+job (return True to pause while a permission prompt is open) is right for sync
+and wrong for Export, so the pause and the yield want separating.
+
+### C5. Frame-type registry with a completeness tripwire
+
+Four dispatchers, no shared list of frame types anywhere. `bridge/protocol.py`
+defines the grammar and deliberately does not enumerate types.
+
+*Consequence.* The recorded failures are already of this class: `SYNC*`
+falling through to the guest's "unhandled frame type" branch (`PROGRESS.md`,
+sync-on-the-real-machine), and `Act.MKDIR`/`Act.PULL` falling off the end of
+`Pass.run`. Phase 4 adds at least `EXPORT`/`EXPORTDAT`/`EXPORTEND` and a
+settings frame; Phase 5 adds attach and upload; Phase 6 adds the UI-tier
+request/reply pairs.
+
+*Shape of the fix.* A single `FRAMES` table in `bridge/protocol.py` naming
+every type, its direction, and — for guest-bound types — its **lane** (see
+C6). Two tests in the shape of `test_sync_apply_coverage.py`: one asserting
+`Bridge._handle` has a branch for every guest-to-bridge type, one asserting
+`win/main.c`'s `render_frame` plus `win/net.c`'s router between them cover
+every bridge-to-guest type (source inspection is the right technique here for
+the same reason it was for `Pass.run` — a fake peer lets a missing branch look
+like "nothing to do").
+
+### C6. Make the guest's frame routing a table with lanes
+
+`win/net.c:183-223` routes by hand: `EXECKILL` handled inline on the reader,
+`EXEC` to the job slot, `strncmp(type, "SYNC", 4)` to the sync FIFO,
+everything else `PostMessage`d to the UI. `win/rpc.c:384-387` repeats the
+prefix test.
+
+The code has already discovered four lanes and named none of them:
+
+| lane | meaning | today |
+|---|---|---|
+| UI | render it | default `PostMessage` |
+| JOB | one at a time, may run minutes | `EXEC` |
+| STREAM | state-machine input, must never queue behind a JOB | `SYNC*` |
+| IMMEDIATE | must run on the reader, cannot wait for the worker | `EXECKILL` |
+
+*Consequence of leaving it.* Every Phase 6 tool needs a lane decision, and a
+wrong one is silent: put `list_windows` in JOB and it returns `busy` whenever
+a command is running; put `screenshot` in UI and it blocks the message pump
+for the duration of a capture; put a `CANCEL` frame anywhere but IMMEDIATE and
+it cannot cancel the transfer it is queued behind.
+
+*Shape of the fix.* One `{ "TYPE", LANE }` table in `frameproto.h`, consulted
+by the reader. Prefix matching goes away with it, which also closes the
+`id_matches_family` hard-coding at `rpc.c:393-398`.
+
+Explicitly **not** part of this: a second worker thread. Whether the UI-tier
+lane needs its own thread is a Phase 6 measurement, not a Phase 3 guess.
+
+---
+
+## Phase 4 — settings and the rest of the surface
+
+### 4.1 Server Host dialog
+
+**Blocker:** `rc_config_save` is called from exactly one place,
+`rc_config_load`, and only when the INI does not already exist
+(`win/ini.c:38-39`). There is no code path that persists a changed setting.
+
+**Consequence beyond the dialog.** R7 wants `client_id` "persisted in the
+guest's INI so a reconnect is recognised as the same client". With save wired
+only to first run, a `client_id` minted at startup is minted again on every
+launch. This is not hypothetical: `syncrpc.c:126-128` records the identical
+trap and works around it by deriving `tree_id` from the volume serial rather
+than storing one.
+
+**Fix:** the dialog's OK handler calls `rc_config_save` unconditionally, and
+that is the whole prerequisite for R7's identity field. Doing the dialog first
+makes R7's persistence free. `rc_config` (`win/ini.h:9-16`) gains
+`client_id[40]`; `inicheck.exe` already asserts a round trip per field, which
+is the test that catches the `sync_root` shape of bug.
+
+**Do it with `DialogBoxIndirectParam`, not `wrc`,** unless R5 lands first —
+see 4.6. One resource-bearing build step is worth adding once, not twice.
+
+### 4.2 Per-client model and effort
+
+Already per-guest (`GuestSession.model`, `.effort`, `server.py:75-76`), and
+`_make_session` reads them in preference to the process defaults
+(`server.py:508-509`). Nothing blocks this; it falls out of R7.
+
+One real gap: `_send_options` (`server.py:1913`) calls
+`guest.claude.server_models()` on every options refresh, which is a round trip
+to the CLI per reconnect per guest. Cache it on the Bridge — the model list is
+a property of the installed CLI, not of a guest.
+
+### 4.3 The effort fork strands the chat list
+
+**Blocker, traced.** `_set_effort` (`server.py:1968-2000`) closes the client,
+reopens with `resume=old, fork=True`, then does
+`guest.sess_id = guest.claude.session_id or guest.sess_id` at `:1999`.
+`Session._session_id` is assigned only in `_dispatch` on the init
+`SystemMessage` (`session.py:282-283`), which is consumed inside `send()` via
+`_consume`. After `start()` alone it is still `None`. So:
+
+- `:1999` is a no-op and `guest.sess_id` keeps the pre-fork value;
+- `_make_session`'s `self.registry.add(s.session_id)` at `:529` adds nothing
+  (`Registry.add` returns early on a falsy id, `registry.py:49`);
+- the registry learns the new id only at `_run_turn:1096`, one turn later;
+- the guest's `g_net.sess` is set only by `READY` and `SWITCHED`
+  (`win/main.c:577`, `:750`), neither of which is sent after a fork, so the
+  guest also holds the old id;
+- `SESSION current=` is computed as `guest.claude.session_id == r["id"]`
+  (`server.py:976-978`), which is correct once a turn has run, but the list is
+  not refreshed after `SETEFFORT` anyway.
+
+**Shape of the fix, and it is the same fix as item 8 in the top findings.**
+Separate the two meanings. `GuestSession` keeps `client_id` (who is connected,
+minted at attach or read from HELLO) and `conv_id` (which conversation is
+open). `conv_id` is *the bridge's own* identity for the conversation and
+survives a fork; the Claude session id is a property of the live client, read
+through `guest.claude.session_id` at the point of use and never copied. Then:
+
+- the chat list marks "current" from `conv_id`, not from an id the bridge may
+  not have yet;
+- `_set_effort` sends `SWITCHED` after the fork so the guest's own copy
+  follows;
+- `Registry` maps `conv_id -> {session ids}` so a forked conversation does not
+  appear twice, which is what "the old conversation stays listed" actually is.
+
+This is worth doing before R7, because `sess_id` is also the field R7 wants to
+overload with client identity, and overloading it a third time is how the
+effort-fork bug got here.
+
+### 4.4 Export as HTML
+
+**Blocker:** nothing exists. `IDM_EXPORT` is a message box
+(`win/main.c:1571-1580`).
+
+**What complicates it.** Three things the plan's one-line description hides:
+
+1. *It cannot be assembled in guest memory.* The guest holds one page at a
+   time by design; a whole transcript is many pages. Export must stream to a
+   file handle. That is the C3 sink.
+2. *`_send_html` is not reusable for it.* No END frame, no status, and LIVE
+   oversized frames are silently dropped (`server.py:847-848`). The guest
+   would have no way to know the export was complete, which for a file the
+   user then keeps is the wrong failure.
+3. *It starves the loop* unless it goes through `wire_yield` (C4). The whole
+   transcript is the largest single thing the bridge ever sends.
+
+**Fix:** implement Export *as the first caller of the C3 sink*, not before it.
+The bridge side is `Paginator.page(n).runs` for `n` in `1..count`, folded and
+chunked, plus a standalone `<html>` wrapper reusing `H.document()`
+(`bridge/html.py:394`) so the exported file looks like the transcript. Add
+`CANCEL` handling in the same change; a long export on a modem is the first
+transfer a user will want to stop.
+
+### 4.5 Read-only permission rule table
+
+**Blocker:** none in the code; it is unbuilt, and nothing in the current shape
+fights it. `bridge/permissions.py` already owns rendering for a 640x480
+screen, and `session_scoped` (`permissions.py:79-96`) already knows the
+destination vocabulary.
+
+**One thing to get right:** the effective rules are per-session, and with R7
+per-client. Parse `.claude/settings*.json` once on the Bridge and render per
+guest; do not cache the rendered table on the Bridge.
+
+**Worth stating:** the plan's framing ("no API reads the effective rules") is
+still true, but the threat model changed under it — `PROGRESS.md` records that
+Claude Code resolves read tools and sandboxed Bash locally and never consults
+`can_use_tool`. So a rule table read from settings files is *incomplete* by
+construction: it cannot show the CLI's own local resolutions. Say so in the
+dialog, or it will be read as "these are all the things that can happen
+without asking me", which is false.
+
+### 4.6 R5 — icons
+
+**Blocker:** no resource-compile step. `WRC` is defined in `make/ow.mk:13` and
+used nowhere; `win/Makefile` has no `.rc` rule.
+
+**Complication:** `make check`'s CMOV gate (`win/Makefile:140-146`) already
+works around objdump linearly disassembling data as code. Linking an `.ico`
+adds a lot more data to the image and will move that false-positive count. The
+baseline is 1; expect to re-baseline, and expect that to look like a
+regression if nobody is warned.
+
+**Fix:** add the `.rc` rule when the dialog in 4.1 needs it, and take the icon
+in the same change. Re-baseline CMOV with a comment saying why it moved.
+
+### 4.7 R7 — multiple clients
+
+This is the largest item and deserves its own section. See **"R7 in detail"**
+below.
+
+### 4.8 R8 — Command menu
+
+**Blocker:** none. The menu-building machinery already handles runtime-filled
+lists with a numbered id base (`IDM_MODEL0`, `win/main.c:52-54`, filled from
+`OPTION` frames at `:647-686`).
+
+**The right shape is the one already used:** a third `kind` on the `OPTION`
+frame (`kind=command`), so the command list comes from the bridge and changes
+without rebuilding a Win98 binary — the same argument that moved the model
+list and the stylesheet. Selecting one inserts text into the input box, which
+needs no protocol at all.
+
+**Watch:** `MAX_OPTS` is 16 and `g_opt_model`/`g_opt_effort` are fixed arrays
+(`main.c:150-152`). A commands array wants the same cap and the same
+silently-drop-past-the-cap behaviour, which is fine, but it is a third
+parallel array. If a fourth appears, make it one table.
+
+---
+
+## R7 in detail — what breaks, and what the migration is
+
+### The mechanical part is small
+
+`self._guest` appears 25 times, all in `server.py`, and no other module
+references it. `GuestSession` already holds everything the plan says stays
+per-guest: paginator, renderer, coalescers, compressor, model, effort,
+permission queue, exec and sync pending maps, locks. `bridge/caps.py`'s
+`from_hello` ignores unknown headers, so adding `client_id` to HELLO is
+backward compatible, and `RC_HELLO_MAX` is 32 with 22 headers in use
+(`win/net.c:304`, `:372-478`). None of that is the problem.
+
+### The parts that actually break
+
+**B1. The tool closure has no guest.** `server.py:516` — covered in C1. This
+is the one that silently runs a command on the wrong machine.
+
+**B2. The sync layer is singular in five places on the Bridge, not the
+guest.** `self.sync_dir`, `self.sync_state`, `self.guest_sync_root`,
+`self._last_sync_reports`, `self._agent_notices` (`server.py:191-203`), plus
+`run_sync(why)` taking no guest (`:1205`), `_baseline_lock` reaching for
+`self._guest` (`:1555`), `_release_all_latches` loading the one baseline
+(`:1558`), and `sync_status_text`/`sync_resolve` doing the same (`:1367`,
+`:1491`).
+
+**B3. And the baseline cannot be shared, by design.** This is the finding R7's
+text misses. `scan_guest` raises `SyncError` when the guest's `tree_id`
+differs from the baseline's (`syncrun.py:149-153`) and again when the reported
+root differs (`:165-171`). `tree_id` is `"%08lX-%s" % (volume serial, root)`
+(`win/syncrpc.c:129-137`), so two machines *always* differ.
+
+Trace the consequence: guest A's pass sets `base.tree_id`. Guest B's pass
+raises. `run_sync`'s `except SyncError` calls `_report_abort`
+(`server.py:1288-1295`), which writes `base.aborted` and returns early next
+time *only if the reason is identical* (`:1338-1339`). A and B produce
+different reasons, so they alternate: every pass from either machine
+announces a stop, in the transcript and into `_agent_notices`, every thirty
+seconds, for both users. And `sync_status_text` reports
+"SYNCHRONISATION IS STOPPED" to both agents permanently.
+
+*So the migration is not "make the baseline per-guest field".* It is a
+decision:
+
+- **One mirror per client** — `sync_dir`, `sync_state` and the baseline move
+  onto `GuestSession`, seeded from per-client config. Two clients on the same
+  project means two working copies and two baselines, which is correct and
+  which the three-way merge already assumes (the ancestor in `.gaston/base/`
+  is per-tree).
+- **One mirror shared** — needs a genuinely new design: N-way reconciliation,
+  a baseline per (tree, client) pair, and an answer to "A and B both edited
+  this and the client wins on conflict, but which client". Do not build this.
+
+Recommend the first, and record the second as explicitly out of scope, because
+"the bridge takes multiple clients" reads as though it is free and it is not.
+`--sync-dir` becoming per-client also means the CLI arguments become a config
+file or a per-client section, which is a Phase 4 settings question and is why
+this belongs with 4.1 rather than after it.
+
+**B4. `Registry` is process-wide.** One `~/.gaston-code/sessions.json`, one
+set (`registry.py:22-33`). R1's whole point was that a Win98 client should not
+see conversations from a machine with different tools. With two clients, each
+sees the other's. R7 says so; the fix is `{client_id: [session ids]}` in the
+same file, with `filter` taking the client. A one-file-per-client layout would
+be worse: the file is written on every new session id and an atomic replace of
+one small file is already the right cost.
+
+**B5. `self.cwd` is process-wide.** `sesslist.listing(cwd=self.cwd)`
+(`server.py:966`), `off_limits(..., self.cwd)` (`:562`),
+`_edits_outside_the_mirror` (`:1468`). If clients get separate mirrors (B3)
+they need separate working directories, or `off_limits` lets client A's agent
+read client B's staged files. This follows from B3 and should be decided with
+it.
+
+**B6. `self._early`.** `server.py:182`, set in `_read_hello:330`, consumed in
+`_pump:875`. Per-connection state on a per-process object. Live bug today: a
+second client that connects and is rejected as `busy` (`:365-368`) has already
+clobbered the first client's pipelined frames, because `_read_hello` runs
+before `_attach` decides. Fix by returning it from `_read_hello` and passing
+it to `_pump` — pure local, no behaviour change, and worth doing now
+independently of R7.
+
+**B7. Reconnect identity.** `_attach` never reads `sess` from HELLO, although
+the guest sends it (`win/net.c:442`) and stores it from `READY`
+(`win/main.c:576-577`). So the reconnect path works by "there is only one
+`GuestSession`, so it must be yours". Under R7 that is exactly the assumption
+that has to go. The vestigial `sess=` header is the natural place for
+`client_id`, and the code to send it already exists; what is missing is
+`rc_config_save` on a changed setting (4.1) so the id survives a restart.
+
+**B8. The "reject, do not evict" rule narrows correctly but needs a test.**
+`:365-368` currently rejects on `self._guest and self._guest.connected`. Under
+R7 it becomes "reject when a *live* connection already claims this
+`client_id`". Note that `client_id` is an unauthenticated assertion — the
+shared secret is the only credential — so a client claiming another's id
+inherits its transcript and its pending permission prompts. That is consistent
+with the existing accepted risk (one secret grants everything) and should be
+written down rather than fixed with per-client secrets.
+
+**B9. `_reap_idle` and `close`.** `server.py:1877` and `:227-228` each handle
+one guest. Mechanical.
+
+### Migration order that keeps each step demoable
+
+1. C1 (bind tools to guest) + B6 (`_early` local) — no behaviour change, tests
+   unaffected.
+2. 4.1 Server Host dialog with an unconditional save, and `client_id` in the
+   INI and in HELLO. Bridge reads it and logs it, still one guest.
+3. 4.3 split `sess_id` into `client_id` and `conv_id`. Fixes the effort fork
+   on its own.
+4. Decide B3/B5: mirror and cwd per client. Move `sync_dir`, `sync_state`,
+   baseline path and `cwd` onto `GuestSession`, still one entry in the dict.
+5. `self._guest` becomes `self._guests: dict[str, GuestSession]`. At this
+   point it is a rename plus a loop in `_reap_idle` and `close`.
+
+Steps 1-3 are worth doing even if R7 never happens.
+
+---
+
+## Phase 5 — attachments
+
+### 5.1 Toolbar dropdown
+
+**Blocker:** there is no toolbar. The guest has a menu bar built in code
+(`win/main.c:342-370`) and individual buttons, no `comctl32` toolbar. Two
+things are already right: `_WIN32_IE` is left at 0x0400 so `TBSTYLE_*` is
+available (`make/ow.mk:40-42`), and `ICC_BAR_CLASSES` (`win/main.c:1705`)
+already registers the toolbar class alongside the status bar.
+
+**Complication:** a toolbar with bitmaps is GDI objects on a fixed 64 KB USER
+heap, which is the reason the chat list is a ListBox and not a ListView
+(`main.c:136-139`) and the reason the permission bar reuses one set of
+controls. Adding a toolbar and R5's icon bitmaps at once is the first time
+this project spends real GDI. Measure `GetGuiResources`-equivalent by counting
+our own objects (the plan already rules out `GetFreeSystemResources`) before
+and after.
+
+### 5.2 Images read bridge-side by path
+
+**Blocker:** none — and this is the cheap one. The bridge reads the file and
+base64s it; the guest sends a path. Under R7-with-per-client-mirrors (B3) the
+path is relative to that client's mirror, which is another reason to settle B3
+early.
+
+**One thing that is not in the plan:** `off_limits` (`permissions.py:227`)
+refuses path tools outside cwd. An attachment path is not a tool call, so it
+does not go through that check at all. A guest sending
+`ATTACH path=/etc/shadow` would have the bridge read it and hand it to the
+model. Add the same containment check on the attach path — one call to the
+existing function's logic, not a new one.
+
+### 5.3 Chunked upload from the guest's local disk
+
+**Blocker:** C3 and item 4. There is no cancellable transfer and no progress
+bar.
+
+**What makes this the worst case in the plan.** `MAX_FILE` in the sync layer
+is 1 MB with an explicit reason ("one file must not hold the wire",
+`syncrun.py:46`, enforced at `:316-320`). A 10 MB attachment is ten times
+that, on a link where the guest has one sender thread and a 64 KB outbound
+queue (`win/net.h:59`). While it runs, the queue is full of upload chunks and
+`rc_net_send` blocks its callers for up to 5 s — `BACKLOG.md` §1 already names
+`do_send`, `do_stop`, `chats_switch` and the permission bar as the UI-thread
+callers that block there. So a 33-minute dialup upload makes Stop and the
+permission bar unresponsive in bursts, and that path *has never been executed*
+because the netem gate has never run.
+
+**Fix, in order:**
+1. Close the netem gate (`BACKLOG.md` §1 records it is no longer blocked on
+   sudo). Not optional before this feature: the upload is the first thing that
+   fills that queue.
+2. Build the C3 source primitive with `CANCEL` and a determinate progress bar.
+3. Cap the upload bridge-side *and* guest-side, as `MAX_FILE` does, and report
+   the cap rather than truncating.
+
+**Do not** make the upload adaptive-compressed in v1. The guest→bridge
+compression thresholds rest on `0.5c`, which `PROGRESS.md` explicitly marks
+"provisional, not usable as a threshold" (TCG is not a P200, and the sample
+was pathological at 164:1). Ship raw, measure on hardware, then decide.
+
+### 5.4 "Attach a screenshot of my desktop"
+
+**Blocker:** shares the capture path with Phase 6 and should be built there,
+not here. The plan says "whichever lands first builds it", and the honest
+answer now is that Phase 6 has the harder constraint (28 KB free against a
+307 KB full-screen DIB) and therefore owns the design. Building a
+non-strip-based capture here and then rewriting it in Phase 6 is the
+speculative-generality trap in reverse.
+
+**One piece is worth lifting regardless:** `screen_palette_for_capture()`. It
+is hardware-verified, non-obvious, and easy to lose.
+
+---
+
+## Phase 6 — the UI tier
+
+### 6.1 Eight tools through one job slot
+
+**Blocker:** `win/rpc.c:44` (`g_queued`, at most one) and `:447-460` (a second
+job is answered `busy`). `list_windows`, `screenshot`, `click`, `send_keys`,
+`launch`, `get_clipboard`, `set_clipboard` are all sub-second syscalls;
+`send_action_sequence` and `exec` are not.
+
+**Consequence.** The model's documented workflow is "enumerate the control
+tree, then batch against what you found". If a background `exec` is running —
+and on a 200 MHz machine a compile runs for minutes — every `list_windows` in
+that window returns `busy`, which the model reads as "the machine is broken"
+rather than "wait". The sync layer hit precisely this and the comment at
+`rpc.c:47-59` explains why a stream is not a job. UI-tier calls are a third
+category: not a stream, not a long job.
+
+**Fix:** the lane table from C6, with UI-tier frames in their own lane. Whether
+that lane needs its own thread is a measurement: a `list_windows` over
+`EnumChildWindows` plus a `WM_GETTEXT` per control on a 200 MHz box may be
+tens of milliseconds or may be hundreds if a target process is wedged (a
+cross-process `SendMessage` to a hung window blocks until it answers). Use
+`SendMessageTimeout`, not `SendMessage`, and then one extra lane on the
+existing worker is probably enough.
+
+### 6.2 The tool surface file
+
+**Blocker:** `bridge/tools.py` defines three tools inline in one `build()`
+function (`:48`, `:110`, `:124`) and registers them in one hand-written list
+at `:162-163`.
+
+**Consequence.** Adding a tool to `build()` and forgetting the registration
+list makes it silently absent — the `Act.PULL` shape, and there is no
+tripwire. `test_tools_surface.py` tests `session.TOOLS`, the built-in list; it
+never looks at the `machine` server's tools. At three tools the omission is
+visible on inspection. At eleven it is not.
+
+**Right shape, and the order matters:**
+
+1. **Now, with Phase 4:** `build(bridge, guest)` (C1), and a test asserting
+   every `@tool`-decorated function in the module appears in the registered
+   list. Both are small.
+2. **When Phase 6 starts, not before:** split into `bridge/tools/` with
+   `exec.py`, `sync.py`, `ui.py` and an `__init__.py` that composes them. Each
+   module exports a list; `build` concatenates. A single file is correct at
+   three tools and wrong at eleven, and splitting early is generality nobody
+   needs yet.
+3. **The argument coercion is the repeated part, not the descriptions.**
+   `machine_exec` spends ten lines on `int()`/`bool()`/default handling
+   (`tools.py:97-105`). Eight more tools with rects, coordinates, key strings
+   and step lists will repeat it eight times. A small `arg(args, "x", int,
+   default=0, clamp=(0, 4096))` helper pays for itself at tool four.
+4. **Keep the descriptions long.** They are the model's only guide to a
+   machine it cannot see, and the `exec` description's warning about
+   interactive prompts is the difference between a working tool and a
+   two-minute hang. Do not compress them into a shared template.
+
+**One tool-surface decision worth making early.** `list_windows` returns a
+tree, and the plan's own argument is that the tree is ~200 tokens against a
+screenshot's ~850. That is true for one dialog and false for a desktop. The
+tool needs a scope argument (foreground window / by class / by pid) and a node
+cap from day one, or the first call on a busy desktop returns every control on
+the screen and the token argument inverts.
+
+### 6.3 The permission bar
+
+**Blocker:** `win/main.c:1282-1283` — one `STATIC` with
+`SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS`, laid out at `PERM_H - 6` = 20 px high
+(`:1204-1205`) in the width left over after the chat list (170 px) and up to
+three 58 px buttons. At 640x480 in Tahoma 8 that is roughly 45 characters.
+`PROGRESS.md` already records this truncating a halt message at "you have".
+
+**What Phase 6 needs and what it costs:**
+
+*A multi-step summary.* `type "hello" -> click [OK] -> wait "Notepad"` is 40
+characters for three steps. The plan's own example. Six steps do not fit, and
+the plan says to cap the step count without saying at what — the bar's width
+is the actual constraint and nobody has measured it.
+
+*A "the agent is driving, hands off" state.* That is a third bar mode. The
+existing two modes share one control set and arbitrate in two functions:
+`halt_show` returns early if `g_bar_mode == BAR_PERM` (`:487`), and
+`perm_hide` re-shows a remembered halt (`:467-470`). The comment at
+`:100-120` records that the *pairwise* reasoning about these two modes was
+false and cost four bugs, two of which were permanent write refusals. A third
+mode makes it three pairs, and "driving" is not a request — it is a state with
+no answer button, which none of the current machinery models.
+
+**Shape of the fix.**
+
+1. **Make the bar a stack, not a mode.** One list of bar requests, each with
+   an id, a kind, a priority and whether it is answerable. `show()` picks the
+   highest-priority entry; `resolve(id)` removes that entry and re-picks.
+   That turns N² pairwise rules into one ordering, and the two existing bugs
+   become impossible rather than fixed. It is maybe 60 lines and it is the
+   single highest-value guest-side refactor before Phase 6.
+2. **Make the label height variable**, capped at three lines, with
+   `SS_LEFT` (wrapping) rather than `SS_LEFTNOWORDWRAP`. `layout()` already
+   recomputes everything when the bar shows or hides (`:1164`,
+   `perm_layout` at `:435-441`), so a variable `PERM_H` is a local change.
+3. **Cap `send_action_sequence` steps at what three lines hold**, measured,
+   and have the bridge render the compact form. The transcript keeps the full
+   step list (`render_request` already writes an argument table,
+   `permissions.py:162-168`) — but note `permissions.py:143` records that the
+   transcript is *not* guaranteed visible, so the bar must stand alone. Three
+   lines is the budget; design the rendering to it.
+4. **`allows_always` already refuses "Always" for `mcp__machine__*`**
+   (`permissions.py:112-113`), which is exactly the protection Phase 6 needs
+   and it is already right. Do not weaken it for the read-only UI tools
+   (`list_windows`, `screenshot`, `ocr`) without a specifier mechanism — a
+   whole-tool Always on `screenshot` is continuous unattended screen capture.
+   If those three ever want an Always, it wants to be a bridge-side rule
+   keyed on the tool name with its own storage, and that is new design, not a
+   tweak.
+
+**One thing the plan says that the code contradicts.** "Everything here goes
+through the 3.0 prompt bar" is true, but `PROGRESS.md` records that Claude
+Code resolves some tools locally and never consults `can_use_tool`. That
+applies to built-ins, not to `mcp__machine__*`, so the Phase 6 statement holds
+— worth verifying with a spike before relying on it, since the same assumption
+was wrong once already.
+
+### 6.4 Screenshots in strips
+
+**Blocker:** C3 again. This is the C3 *source* primitive with a DIB row range
+instead of a file read, and it is the case that proves the primitive is worth
+extracting: `do_get` already opens a source, loops `RC_SYNC_CHUNK` at a time,
+sends `total`/`off`, and closes with a status and a CRC
+(`win/syncrpc.c:426-455`). A strip sender is the same loop.
+
+**What complicates it beyond the plan:**
+
+*Inline images in the transcript cannot use `data:` URIs.* The transcript is
+MSHTML under IE5 (`win/htmlview.c`), and IE did not support `data:` URIs until
+IE8. `PROGRESS.md` lists "inline screenshots later" as one of the things HTML
+bought. They will need a real file on the guest's disk. The good news is the
+plumbing exists: `rc_html_set_document` writes `view.htm` beside the exe and
+navigates `file:///` (`htmlview.c:282-332`), so `<img src="shot1.png">`
+resolves relative to it. The image bytes must be written to that directory —
+which is the C3 *sink*, the same one Export needs. Two Phase 4/6 features, one
+primitive.
+
+*`queue_add` is unbounded.* `htmlview.c:248-266` doubles a heap buffer for
+fragments that arrive before the document is ready. On a machine the project
+describes as having tens of kilobytes free, that is the one allocation in the
+guest with no cap. It has never bitten because the document becomes ready in
+under a second, but an inline-image path that appends larger fragments makes
+it a real risk. Cap it and drop with a log line, as `manifest_add` does
+(`syncrpc.c:74-75`).
+
+*The import gate is advisory.* `win/Makefile:130-133` prints DLL names and
+W-suffix imports; nothing fails. Phase 6 adds `oleacc.dll`, which must be
+resolved dynamically, and the failure mode is the image not loading at all
+with no log. Turn the DLL list into an allowlist that exits non-zero on
+anything outside `{KERNEL32, USER32, GDI32, COMCTL32, OLE32, OLEAUT32,
+WSOCK32}`. Ten lines, and it is the only automated protection against the
+worst failure this project can have.
+
+*`make lint` is now dead.* It greps `win/` for RichEdit 3.0-only messages
+(`Makefile:33-43`) and RichEdit was deleted. It passes vacuously, which is
+worse than not existing — a green gate that cannot fail teaches people to
+trust gates. Either repoint it at the new hazards (a static `oleacc`/`mshtml`
+import, `ReadDirectoryChangesW`, `VirtualAllocEx`, `SetWindowLongPtr`) or
+delete it.
+
+### 6.5 OCR
+
+**Blocker:** none. It is bridge-side, consistent with "the guest transforms
+nothing", and it consumes whatever `screenshot(rect)` produces. Sequence it
+after the capture path and after the encoding-vs-legibility experiment the
+plan calls for.
+
+### 6.6 send_keys and click
+
+**Blocker:** none structural. Two guest-side details worth recording before
+they are rediscovered:
+
+- `send_keys` needs `AttachThreadInput` before a cross-thread `SetFocus`. If
+  it runs on the RPC worker (which it should, per C6), the attach is
+  worker-to-target, and the worker must detach afterwards or it inherits the
+  target's input queue state.
+- "Never send keys to our own window" is a thread comparison against the UI
+  thread, not against `g_main` — a child control has the same thread. Compare
+  `GetWindowThreadProcessId(target)` against our process id and refuse the
+  whole process, not one HWND.
+
+---
+
+## Do NOT build this yet
+
+Speculative generality is its own defect, and several of these look like
+obvious groundwork.
+
+- **A second RPC worker thread.** The lane table (C6) is the abstraction; a
+  second thread is an implementation choice that depends on a measurement
+  nobody has taken. Add the lane, keep one worker, measure `list_windows` on
+  the guest, then decide.
+- **A warm `ClaudeSDKClient` pool.** Already rejected twice with good reasons
+  (`PLAN.md` Multi-session, R4). R7 gives one live client *per client*, not a
+  pool per client.
+- **Per-client secrets or any authentication beyond the shared secret.** The
+  plaintext-secret-on-a-trusted-segment posture is an accepted, documented
+  risk. `client_id` is an identity assertion inside that boundary and adding
+  crypto to it protects nothing that is not already exposed.
+- **A shared sync mirror between two clients.** N-way reconciliation with
+  "the client wins on conflict" has no defined meaning for two clients. One
+  mirror per client, and write down that the other option was considered.
+- **A patch/delta format for sync transfers.** Already deferred with a reason
+  (source files are a few KB). Nothing in Phases 4-6 changes that; a 10 MB
+  attachment is a one-shot upload, not a synced file.
+- **Splitting `bridge/tools.py` into a package now.** Correct at eleven tools,
+  premature at three. Do it in the first Phase 6 commit.
+- **A generic "capability" negotiation for anything beyond paths and
+  encodings.** `caps.py`/`caps.h` is well-scoped to filesystem and text rules.
+  Do not stretch it into a feature-flag system for Export, attachments or the
+  UI tier — those are protocol version questions, and `PROTO_VERSION` already
+  exists.
+- **Guest-side markdown, image scaling, OCR, or diffing.** The standing rule
+  holds and Phase 6 is where it will be most tempting.
+- **Retiring the replay buffer.** `BACKLOG.md` §5 explains why it is larger
+  than it looks. It is dead code but it is *inert* dead code, and nothing in
+  Phases 4-6 is blocked by it. Leave it.
+- **A settings dialog framework.** One Server Host dialog. If Phase 6 wants
+  more settings, that is the moment to decide whether a tabbed dialog earns
+  its GDI objects.
+- **Compression on the Phase 5 upload path.** Ship raw, close the netem gate,
+  measure on the P200, then decide. The only throughput number on file is
+  marked unusable.
+
+---
+
+## Suggested order
+
+Everything in "Cross-cutting" is cheap now and expensive later, and none of it
+changes behaviour:
+
+1. C1 (tools bind the guest), B6 (`_early` local), C5's tripwire tests.
+2. 4.1 Server Host dialog with an unconditional `rc_config_save`, plus
+   `client_id` in the INI and HELLO.
+3. 4.3 split `sess_id` into `client_id` and `conv_id` — fixes the effort fork.
+4. C3 the two transfer primitives, with `CANCEL` and a progress bar, and
+   4.4 Export as their first caller.
+5. C6 the lane table on the guest.
+6. 6.3 the bar becomes a stack with a variable-height label.
+7. Close the netem gate, then R7, then Phase 5, then Phase 6.
+
+Items 1-3 are worth doing even if R7 is never scheduled. Item 4 is worth doing
+even if Export is never shipped, because Phase 5 and Phase 6 both need it.
+Item 6 is worth doing before anything adds a third bar state, which both
+Phase 5 (transfer progress with Cancel) and Phase 6 (agent driving) do.

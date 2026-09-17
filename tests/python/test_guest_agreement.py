@@ -24,14 +24,16 @@ BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
 EXE = os.path.join(BUILD, "synccheck.exe")
 
 #: The project uses Lutris's wine-ge build, not a system wine -- see
-#: spike/Makefile, which records that it is a standalone Wine with full 32-bit
-#: support rather than Proton.
+#: a standalone Wine with full 32-bit support rather than Proton. (This note
+#: used to cite spike/Makefile; the spike was a Phase-0 hello-world and has
+#: been deleted, so the reason is recorded here instead of pointed at.)
 WINE = os.environ.get(
     "WINE",
     os.path.expanduser(
         "~/.local/share/lutris/runners/wine/wine-ge-8-26-x86_64/bin/wine"),
 )
-PREFIX = os.path.join(HERE, "spike", ".wineprefix")
+PREFIX = os.environ.get("WINEPREFIX",
+                        os.path.join(HERE, ".wineprefix"))
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(EXE) or not os.path.exists(WINE),

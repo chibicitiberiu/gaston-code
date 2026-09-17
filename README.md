@@ -29,7 +29,6 @@ docs/       PLAN.md, FEASIBILITY.md, FORKED.md, PROGRESS.md
 make/       ow.mk -- shared Open Watcom rules
 win/        the single guest executable
 bridge/     Python: Agent SDK, MCP tools, pagination, markdown, compression
-spike/      verified minimal OW build, kept as a toolchain reference
 tests/      protocol, markdown, encoding, PE import allowlist
 tools/      qmp.py, vm scripts
 vm/         QEMU run scripts (images gitignored)
@@ -42,7 +41,8 @@ Phase 0. See `docs/PROGRESS.md`.
 ## Build
 
 ```sh
-make spike        # build and audit the reference binary
+make              # build the Win98 guest binary
+make check        # static PE audit of the guest
 make check        # static PE audit: version gate, imports, CMOV, size
 make wine-smoke   # run under Wine (code sanity only, NOT a Win98 proof)
 ```

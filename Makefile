@@ -15,35 +15,54 @@ include $(TOP)/make/ow.mk
 # complete clean with nothing left behind.
 BUILD_DIRS = build tmp
 
-.PHONY: all spike check wine-smoke lint test clean help
+# `help` is the first rule in this file, so without this it is also the
+# default goal -- `make` printed the help and built nothing.
+.DEFAULT_GOAL := all
+
+.PHONY: all guest check wine-smoke lint test clean help
 
 help:
-	@echo "spike       build the reference Win32 GUI binary"
-	@echo "check       static PE audit (version gate, imports, CMOV, size)"
-	@echo "wine-smoke  run under Wine -- code sanity only, NOT a Win98 proof"
-	@echo "lint        grep for RichEdit 3.0-only messages Win98 lacks"
+	@echo "all         build the Win98 guest binary"
+	@echo "check       static PE audit of the GUEST (imports, CMOV, frames, BSS)"
+	@echo "wine-smoke  run the shipping C under Wine -- code, never the platform"
 	@echo "test        python tests"
 	@echo "clean       remove build/ and tmp/ entirely"
 
-all: spike
+all: guest
 
-spike:
-	@$(MAKE) -C spike ow
+guest:
+	@$(MAKE) -C win all
 
+# The audit that matters, against the binary that ships.
+#
+# This used to be `$(MAKE) -C spike check`, which audited spike/hello98.exe --
+# a Phase-0 hello-world kept as a toolchain reference. So the top-level gate
+# passed on a program with none of our code in it, and the real audit was only
+# ever reachable as `make -C win check`. The spike has been deleted; this is
+# what it was standing in front of.
 check:
-	@$(MAKE) -C spike check
+	@$(MAKE) -C win check
 
+# The Wine gate, also repointed. It ran the hello-world's message loop for six
+# seconds. These two suites run the SHIPPING sync.c and ini.c under Wine and
+# diff their answers against the bridge's -- the only automated check that the
+# two implementations of the classifier and the INI round-trip agree.
+#
+# Wine proves the code and never the platform; the real gate is the guest.
 wine-smoke:
-	@$(MAKE) -C spike wine-smoke
+	@$(MAKE) -C win synccheck inicheck
+	@$(PY) -m pytest tests/python/test_guest_agreement.py \
+	                 tests/python/test_guest_config.py -q
 
-# RichEdit 2.0 is what ships with Win98. Open Watcom's richedit.h defaults to
-# _RICHEDIT_VER 0x0300 and -- crucially -- gates NOTHING on it, so every 3.0-only
-# message compiles clean and fails on the guest. #define does not help; only a
-# lint does.
-# Confirmed 3.0-only against the RichEdit version-delta table. Several
-# messages that LOOK modern are in fact 2.0 and are deliberately NOT listed:
-# EM_SETUNDOLIMIT, EM_SETPALETTE and EM_AUTOURLDETECT are all 2.0, and
-# EM_SETUNDOLIMIT in particular is one we rely on.
+# RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
+# that compile clean and fail on the guest. The transcript moved to MSHTML, so
+# there is no RichEdit left to lint and this cannot fail -- a green check that
+# proves nothing, which is worse than no check. Kept ONLY because the guest
+# could regain a RichEdit control (an input box, a dialog) and the trap would
+# be live again the same day.
+#
+# Not in `help`, and not part of any gate. See docs/audit/ for the list of
+# checks that should exist instead.
 RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_GETTEXTLENGTHEX \
            EM_SETTABSTOPS EM_SETMARGINS
 lint:
@@ -67,7 +86,6 @@ test:
 	else echo "test: no tests yet"; fi
 
 clean:
-	@$(MAKE) -C spike clean
 	@$(MAKE) -C win clean
 	@rm -rf $(BUILD_DIRS)
 	@echo "clean: removed $(BUILD_DIRS)"

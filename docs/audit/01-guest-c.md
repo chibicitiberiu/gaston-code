@@ -13,10 +13,14 @@ and the plan say it does.*
 
 ## Top findings
 
-1. **`main.c` is nine modules in a trench coat.** Thirteen distinct
-   responsibilities share one file, ~60 file-static globals and one 340-line
-   `if/else` chain. The seam is already drawn for you — by frame type family —
-   and four of the nine come out almost cleanly. (§1)
+1. **`main.c` is nine modules in a trench coat — and the plan said so.**
+   Thirteen distinct responsibilities share one file, ~60 file-static globals
+   and one 340-line `if/else` chain. `docs/PLAN.md:1259-1277` specifies
+   `w9x.c`, `dialogs.c`, `transcript.c` and `input.c`; none exist, `transcript.c`
+   was deleted with the RichEdit view, and `main.c` absorbed the menus, both
+   bars and the chat list. **No `PROGRESS.md` entry records that consolidation
+   as a decision** — every other structural change in this project has one.
+   The seam is already drawn for you, by frame type family. (§1)
 
 2. **The HTML view is an API, not a view.** Nine `rc_html_append` sites in
    `main.c`, three different markup conventions between them, two of which
@@ -39,11 +43,14 @@ and the plan say it does.*
    transport layer knows the tool vocabulary and `net.c ↔ rpc.c` is a real
    include cycle. Every Phase-6 tool adds a branch here. (§5)
 
-5. **`_snprintf` has three idioms across 86 call sites**, and the two unsafe
-   ones are the majority: 39 sites use `sizeof(x)-1` + explicit NUL, **15 use
-   `sizeof(x)-1` and no NUL**, 32 use the full size with no NUL. Two of the
-   15 are reachable from the wire (`g_put.rel`, `g_net.sess`). One helper
-   removes the whole class. (§4.1)
+5. **`_snprintf` has three idioms across 86 call sites, and `BACKLOG.md`'s
+   description of them is wrong.** `docs/BACKLOG.md:163-167` says "Every call
+   in the guest uses `sizeof(x) - 1` plus an explicit NUL, which prevents the
+   overrun". Measured: 39 do, **15 use `sizeof(x)-1` with no NUL**, and 32 use
+   the full size with no NUL. So the planned sweep is scoped to the wrong
+   defect — it looks for silent truncation, and would walk past the missing
+   terminators. Two of the 15 are reachable from the wire (`g_put.rel`,
+   `g_net.sess`). (§4.1)
 
 6. **`rc_net_send`'s return value is checked at 3 of ~20 call sites** — and the
    long comment explaining *why it must be checked* sits on `ID_PERM_ALLOW`'s
@@ -58,22 +65,56 @@ and the plan say it does.*
    session row whose only consumer is a log line. (§6)
 
 8. **The comment on `rc_net_send`'s build buffer flatly contradicts the next
-   line of code** (`net.c:592–596`): it claims there is no shared build buffer
+   line of code** (`net.c:601–605`): it claims there is no shared build buffer
    any more; the buffer is `static char build[RC_MAX_FRAME + 1024]`. (§7.1)
 
 9. **`make check` audits the wrong binary.** `CLAUDE.md` says "`make check`
    audits imports"; the top-level target runs `$(MAKE) -C spike check`, which
    audits `spike/hello98.exe`. The real audit is `make -C win check`. (§7.4)
 
-10. **Phase 5 and Phase 6 have no guest-side outbound path.** Attachments and
-    screenshot strips are guest→bridge bulk transfers initiated locally. Today
-    the only chunked outbound path is `do_get()` inside `syncrpc.c`, driven by
-    a bridge `SYNCGET`, and `rc_rpc_submit`'s family check hard-codes exactly
-    two id prefixes (`'x'`, `'s'`). (§8)
+10. **Phase 5 and Phase 6 have no guest-side outbound path, and the bar cannot
+    render what Phase 6 needs.** Attachments and screenshot strips are
+    guest→bridge bulk transfers initiated locally; the only chunked outbound
+    code is `do_get()` inside `syncrpc.c`, driven by a bridge `SYNCGET`, and
+    `rc_rpc_submit`'s family check hard-codes exactly two id prefixes (`'x'`,
+    `'s'`). Separately, `docs/PLAN.md:1092-1097` requires the permission bar to
+    show a multi-step action summary; `g_perm_text` is a single-line
+    `SS_ENDELLIPSIS` static in a bar of fixed height. Neither is hard; both are
+    in the way. (§8)
 
 ---
 
 ## 1. `main.c`: what lives there, and what should move
+
+### 1.0 The split was designed and then not built
+
+`docs/PLAN.md:1259-1277` gives the intended layout:
+
+```
+  win/                        # [R2] one binary, one target
+    frameproto.h  net.c  ini.c  log.c  w9x.c
+    main.c  transcript.c  dialogs.c
+    rpc.c  exec.c  input.c   # Phase 3 / Phase 6, same exe
+```
+
+As built: `w9x.c`, `dialogs.c` and `input.c` never appeared; `transcript.c` was
+deleted when the view moved to MSHTML (`docs/PROGRESS.md:821`) and its
+contents went into `main.c` rather than into `htmlview.c`; `sync.c`,
+`syncrpc.c`, `htmlview.c` and `caps.h` arrived unplanned and are, notably, the
+*well-factored* part of the tree. `main.c` grew from "window, edit box, Send,
+reader thread" (`docs/PLAN.md:586-588`) to 1783 lines owning the menu bar, two
+modal-ish bars, the chat list and the status bar.
+
+That is ordinary accretion and not a crisis. What makes it worth the first
+section is that **it is the only large structural change in the project with no
+entry in `PROGRESS.md`**. The RichEdit→MSHTML reversal has 60 lines of
+justification (`docs/PROGRESS.md:819-885`); the fourth thread has an entry; the
+manifest v2 format has one. The consolidation of `main.c` has none, so there is
+nothing recording whether it was a decision or a drift — and `PLAN.md` still
+names `dialogs.c` as the home for the Phase 4 settings dialog and `input.c` as
+the home for Phase 6's `click`/`send_keys`.
+
+### 1.1 What lives there now
 
 `main.c` is 1783 lines holding thirteen responsibilities. Listed with their
 globals and their frame types, because that is where the seams are.
@@ -94,7 +135,7 @@ globals and their frame types, because that is where the seams are.
 | 12 | Layout / control creation | 1143–1347 | every geometry constant | — |
 | 13 | `WinMain` / process setup | 1661–1783 | single-instance mutex, OLE, accelerators | — |
 
-### 1.1 What should move, concretely
+### 1.2 What should move, concretely
 
 **`chatlist.c` (~400 lines, the cleanest cut).** Takes `chats_request`,
 `chats_switch`, `label_width_px`, `chats_text_width`, `fit_label`,
@@ -142,7 +183,7 @@ That leaves `main.c` at roughly 600 lines: globals, `layout`,
 `create_children`, `wnd_proc`, `try_connect`, compose/send, turn state, and a
 dispatch table.
 
-### 1.2 `render_frame` should be a table, not a chain
+### 1.3 `render_frame` should be a table, not a chain
 
 `main.c:550–888` is a 340-line `if/else` over 23 frame types (`main.c:575, 592,
 606, 621, 626, 647, 684, 688, 696, 736, 746, 773, 788, 793, 800, 805, 815, 827,
@@ -685,8 +726,11 @@ Confirmed by grep across `win/` (excluding `.bak`, `probe.c`, `htmlspike.c`):
   cannot bring the bar back by itself"). The bridge's replay machinery
   (`bridge/replay.py`) exists and `bridge/fakegui.py:207` uses it. So this is
   not dead-by-accident, it is **an unimplemented feature with its state
-  plumbing already in place**. Worth a line in `BACKLOG.md` rather than a
-  deletion.
+  plumbing already in place** — and it is already logged as such at
+  `docs/BACKLOG.md:212-218`, which makes the sharper point: *"`win/net.h`'s
+  `next_seq` is parsed and never read, which makes the feature look
+  implemented."* Unlike `rpcq`, this one should stay until replay is retired or
+  finished; it just wants a `/* not sent yet -- see BACKLOG */` on the field.
 - `net.h:78–79` `rx_bytes` / `tx_bytes` — read only by `net.c:259`'s exit log
   and `netcheck.c:113`. The status bar uses `g_rx_done`/`g_tx_done` in `main.c`
   instead. Harmless, but two counters for one thing.
@@ -744,7 +788,7 @@ measuring that matters, in one `GetTextExtentExPointA` call.
 These matter more than usual here, because the comments in `win/` are the
 design record — several are the only place a measured result is written down.
 
-### 7.1 `net.c:592–596` — self-contradicting in three lines
+### 7.1 `net.c:601–605` — self-contradicting in three lines
 
 ```c
     /* Built on the caller's stack region via a heap block sized to the frame,
@@ -753,9 +797,9 @@ design record — several are the only place a measured result is written down.
 ```
 
 Neither clause is true: it is a `static`, it is shared, and the next comment
-(`net.c:600–601`) says so — *"The build buffer is still shared, but only for the
+(`net.c:609–610`) says so — *"The build buffer is still shared, but only for the
 memcpy that follows"*. The heap block is the queue item, allocated at
-`net.c:610`. The design is fine and the locking is correct; the comment is from
+`net.c:635`. The design is fine and the locking is correct; the comment is from
 a version that was rejected. It is also 66,560 bytes of BSS committed at load,
 which `win/Makefile:151` calls out by name as the single largest static
 allocation — so this is the comment somebody will read while trying to reclaim
@@ -785,7 +829,28 @@ enforces is the one described as "a single NT-only static import kills the image
 at load, before `WinMain`, with no log written", the top-level target should
 run both, or `spike`'s should be renamed.
 
-### 7.5 `rpc.h:19` — "Returns 0 if queued"
+### 7.5 `main.c:962–978` — a 17-line note about a control that no longer exists
+
+The comment explaining why the thinking indicator is not in the transcript is
+entirely about RichEdit:
+
+> deleting with `EM_REPLACESEL` puts Win98's riched20 back into the state where
+> it stops painting altogether […] Measured twice
+
+`riched20` is gone. The derived rule was written down as a standing one —
+`docs/PROGRESS.md:964-967`, *"nothing that has to disappear again goes in the
+transcript"* — but the mechanism that forced it does not apply to MSHTML, where
+`#l` is *designed* to be replaced wholesale (`rc_html_live`, `htmlview.c:415`)
+and `rc_html_clear` exists. So the constraint is now a choice, and it should be
+restated as one or dropped. `g_think_mark` being a `long` that only ever holds
+`-1` or `1` (§4.3) is the fossil of the offset it used to be.
+
+The measurement in that comment is worth keeping — it is the kind of thing this
+codebase is right to record — but it belongs in `PROGRESS.md` next to the rest
+of the RichEdit corpus, not in a live source file as justification for current
+behaviour.
+
+### 7.6 `rpc.h:19` — "Returns 0 if queued"
 
 `rc_rpc_submit` returns 0 when it queues the frame, **and** when it rejects it
 for a family mismatch (`rpc.c:421`), **and** when it answers `busy` and drops it
@@ -798,129 +863,240 @@ taken ownership (queued, rejected or dropped); -1 = it has not."
 
 ## 8. What will resist Phases 4, 5 and 6
 
-### 8.1 Phase 4 — settings dialog
+Requirements below are from `docs/PLAN.md` and `docs/BACKLOG.md`; the
+resistance is from the tree.
 
-`IDM_HOST` (`main.c:1568–1580`) is a `MessageBox` that prints the current host
-and says *"A dialog for this is still to come."* What the dialog will hit:
+### 8.1 Phase 4 — the settings dialog (`docs/PLAN.md:891-895`)
 
-- `rc_config_save` exists and is wired to nothing (§6). Fine — it is ready.
+> **Configure -> Server Host...** is a message box telling the user to edit the
+> file. It wants a real dialog — `wrc` is available for a resource, or a
+> runtime `DialogBoxIndirectParam` template.
+
+`IDM_HOST` (`main.c:1568–1580`) is that message box. What the dialog hits:
+
+- **There is no `dialogs.c`** and no `.rc` in `win/`. `win/Makefile` has a
+  `WRC` variable (`win/Makefile:12`) that is never used by any rule. So the
+  first dialog also brings the first resource step into the build — which is the
+  same prerequisite R5 (icons) needs (`docs/PLAN.md:1188-1194`), and the two
+  should land together.
 - **`cfg.autoscroll` and `cfg.font_size` are loaded, saved, round-trip-tested
-  and read by nobody.** A dialog that exposes them ships two controls with no
-  effect. `autoscroll` has an obvious home (§2.3); `font_size` has none — the
-  transcript's font comes from the bridge's stylesheet (`bridge/html.py:333+`),
-  which is the right design given "the guest transforms nothing", so `font_size`
-  should either be deleted or become a `HELLO` header the bridge folds into the
-  stylesheet it sends.
-- Changing host/port at runtime means `rc_net_stop` + `rc_net_start`.
-  `try_connect` (`main.c:1349`) already does exactly this and documents why the
-  order matters (`main.c:1351–1358`). So the dialog's OK handler is
-  `rc_config_save(); try_connect(hwnd);` — but `g_backoff_ms` and `g_retry_noted`
-  are not reset there, so a manual reconnect after a long outage waits up to 15
-  seconds before its first attempt. Small, but it is the first thing a user will
-  do after fixing a typo'd host.
-- The dialog needs a resource script or hand-built controls. `build_menu`
-  (`main.c:342`) establishes the "build in code" precedent and gives the reason;
-  a modal `DialogBox` also re-enters the message pump, which `main.c:34–37`
-  identifies as the thing the permission bar was made modeless to avoid. Worth
-  deciding deliberately: a settings dialog is modal and *should* be, because
-  unlike a permission request it is not racing the stream — but the reader
-  thread will keep posting `WM_RC_FRAME` into a window running a dialog loop,
-  which is precisely the `RC_MAX_INFLIGHT` backpressure case `net.c:14–18`
-  describes. That path has probably never been exercised.
+  and read by nobody** (§6). A dialog that exposes them ships two controls with
+  no effect. `autoscroll` has an obvious home (§2.3). `font_size` has none —
+  the transcript's font comes from the bridge's stylesheet
+  (`bridge/html.py:333+`), which is correct under "the guest transforms
+  nothing", so `font_size` should either go or become a `HELLO` header the
+  bridge folds into the stylesheet it sends.
+- **`rc_config_save` is only called when the INI does not exist** (`ini.c:38`).
+  A dialog's OK button is its second caller ever, and the first one that runs
+  against an existing file. Nothing is wrong with `rc_config_save` — but note
+  that `syncrpc.c:125-128` already documents the consequence of that
+  call pattern for a *generated* value, and R7 needs exactly such a value
+  (§8.2).
+- **Re-dialling after an edit.** `try_connect` (`main.c:1349`) already does
+  `rc_net_stop` + `rc_net_start` in the right order and says why
+  (`main.c:1351–1358`), so the OK handler is `rc_config_save(); try_connect();`.
+  But `g_backoff_ms` and `g_retry_noted` are not reset there, so a manual
+  reconnect after a long outage waits up to 15 seconds before its first attempt
+  — which is the first thing a user does after fixing a typo'd host.
+- **A modal re-enters the pump, and that is the argument the bar was built to
+  avoid** (`docs/PLAN.md:722-735`, restated at `main.c:34–37`). For a settings
+  dialog a modal is defensible — unlike a permission request it is not racing
+  the stream. But the reader thread keeps posting `WM_RC_FRAME` into a window
+  running a dialog loop, which is precisely the `RC_MAX_INFLIGHT` backpressure
+  case `net.c:14–18` describes and which has, as far as the code shows, never
+  been exercised. Worth deciding on purpose and worth testing with the bridge
+  streaming.
+- The rest of the Phase 4 list lands in `main.c` too and compounds the same
+  problem: **Export as HTML** (`docs/PLAN.md:897-899`) is a second consumer of
+  chunked transfer plus a Save-As; the **permission rule table**
+  (`docs/PLAN.md:901-902`) is a new read-only list surface; **R8's Command
+  menu** (`docs/PLAN.md:1252-1257`) is a menu that does `SetWindowText` on the
+  input box and must respect `EM_LIMITTEXT`/`RC_INPUT_MAX`; surfacing each
+  model's `description` (`docs/PLAN.md:875-877`) does not fit
+  `g_opt_model[16][64]` or a plain `AppendMenuA` label. Every one of those is
+  another 60–150 lines into a file that is already 1783.
 
-### 8.2 Phase 4 — multiple clients
+### 8.2 Phase 4 / R7 — multiple clients (`docs/PLAN.md:1232-1250`)
 
-`WinMain:1678–1699` takes a named mutex and refuses a second instance, with a
-good reason (the bridge holds one session and refuses a second client with
-`busy`). If "multiple clients" means several *guests* against one bridge, none
-of this matters and the guest is unaffected. If it means two windows on one
-guest, the blockers are, in order: the mutex; then every singleton in §5.4;
-then `rpc.c:45`'s single `g_net` (§5.4); then `exec.c`'s single `g_child` /
-`g_cancel`, which means "cancel" is global and one window's Stop kills the
-other's command.
+The guest-side requirement is precise:
 
-### 8.3 Phase 5 — attachments
+> `client_id` sent in HELLO and **persisted in the guest's INI** so a reconnect
+> is recognised as the same client rather than a new one.
 
-An attachment is a **guest-initiated bulk upload**. Today there is no such path:
+Three concrete blockers:
 
-- `do_send` (`main.c:1062`) builds the whole message in a `char buf[4096]` stack
-  frame and sends one `INPUT` frame. `RC_INPUT_MAX` is 4096 and enforced twice
-  (`EM_LIMITTEXT` at `main.c:1246`, re-checked at `main.c:1074`).
-- The only chunked outbound code is `do_get` (`syncrpc.c:388–457`), which reads
-  8KB at a time and emits `SYNCDAT` frames — **on the RPC worker thread, in
-  response to a bridge `SYNCGET`**. Nothing lets the UI thread start a transfer.
-- Doing it on the UI thread is not an option: `rc_net_send` blocks up to 5
-  seconds on queue backpressure (`net.c:621–627`, 50 × 100ms), so a large
-  attachment freezes the pump.
-- Doing it on the worker requires a third frame family, and `rc_rpc_submit`
-  hard-codes exactly two: `id_matches_family` (`rpc.c:393–398`) accepts only
-  `'x'` and `'s'` prefixes, `is_sync` (`rpc.c:384`) is a `strncmp(type,"SYNC",4)`,
-  and the queue choice is a binary sync/job decision (`rpc.c:425`). A third
-  family touches all three plus `net.c`'s router (§5.1).
+1. **The INI has no write-back path for a generated-once value.**
+   `rc_config_save` runs only on first run (`ini.c:38`). A `client_id` generated
+   at startup and not written would be regenerated every launch, and every
+   reconnect would look like a different client — which is *exactly* the failure
+   `syncrpc.c:125-128` already reasoned about for the tree id and solved by
+   deriving it from the volume serial instead. Either R7 derives `client_id` the
+   same way (volume serial + something), or `rc_config_load` gains a "generate
+   and persist if absent" path. Worth deciding before the bridge side is built,
+   because the two answers put the identity in different places.
+2. **The single-instance mutex** (`main.c:1688`,
+   `"RetroClaudeSingleInstance"`) forbids a second window on one guest. R7 as
+   specified is about several *guests*, so this may be fine — but the mutex name
+   and the `FindWindowA("RetroClaudeWnd")` raise (`main.c:1690`) are the two
+   places that would have to change, and the comment justifying the mutex
+   (`main.c:1678–1687`) cites the very rejection rule R7 narrows.
+3. **Every worker-side module is a hard singleton** (§5.4). If "multiple
+   clients" ever means two connections in one process, `rpc.c`'s single
+   `g_net`, `exec.c`'s single `g_child`/`g_cancel` and `syncrpc.c`'s single
+   `g_root`/`g_put` all break, and `exec.c`'s global cancel means one window's
+   Stop kills the other's command.
 
-The shape that unblocks it: a generic **job** abstraction on the worker —
-`rc_rpc_post(rc_job *j)` where a job is `{ family, id, run(), cancel() }` — with
-`is_sync`'s FIFO becoming "this family is a stream" and the one-at-a-time slot
-becoming "this family is a job". `EXEC`, `SYNC*`, attachments and Phase 6's
-tools then all fit without touching `net.c` or the family table.
+### 8.3 Phase 5 — attachments (`docs/PLAN.md:913-929`)
+
+The plan's central constraint is helpful here:
+
+> **Attachments never transit guest memory.** The GUI sends a *path*; the
+> bridge reads it and base64s it.
+
+So the common case is a path-bearing frame and costs the guest nothing. The
+resistance is in the other three bullets:
+
+- **`docs/PLAN.md:920-921`: "A file on the guest's local `C:\` is the only case
+  needing a chunked upload — progress bar and Cancel required."** Neither
+  exists. `InitCommonControlsEx` requests `ICC_BAR_CLASSES` only
+  (`main.c:1705`); a `PROGRESS_CLASS` control needs `ICC_PROGRESS_CLASS`, so the
+  first progress bar is also a change to process init. There is no Cancel
+  button anywhere and no `CANCEL\nid=` frame (`docs/PLAN.md:283-285`) on the
+  guest side.
+- **There is no guest-initiated bulk path at all.** The only chunked outbound
+  code is `do_get` (`syncrpc.c:388–457`) — 8KB reads emitting `SYNCDAT`, on the
+  RPC worker, *in response to a bridge `SYNCGET`*. Nothing lets the UI thread
+  start a transfer. Doing it on the UI thread is not an option: `rc_net_send`
+  blocks up to 5 seconds under queue backpressure (`net.c:646–652`, 50 × 100ms),
+  which `docs/BACKLOG.md:35-38` already lists as a known defect — *"The UI
+  thread can block up to 5 s in `rc_net_send` … The whole point of the sender
+  thread was that no caller blocks on the wire; this is the residue."* An
+  attachment upload makes that residue a freeze.
+- **A third frame family does not fit `rpc.c`.** `id_matches_family`
+  (`rpc.c:393–398`) accepts exactly two prefixes, `'x'` and `'s'`; `is_sync`
+  (`rpc.c:384`) is `strncmp(type,"SYNC",4)`; the queue choice is a binary
+  sync-or-job decision (`rpc.c:425`). A third family touches all three, plus
+  `net.c`'s router (§5.1).
+- **`docs/BACKLOG.md:223-227` is already flagged as "a blocker for any new sync
+  frame"**: `reject_sync_busy` answers *every* full-queue `SYNC*` frame with a
+  two-header `SYNCPUTACK`, but `SYNCSCAN` and `SYNCGET` are awaited as six- and
+  four-tuples on the bridge, surfacing as "sync pass aborted: not enough values
+  to unpack". See §9.9 — the same shape bites an attachment family.
+- **The toolbar.** `docs/PLAN.md:915-916` wants `TBSTYLE_DROPDOWN` with a
+  default item. There is no toolbar in `main.c`, and the `_WIN32_IE` pin
+  (`win/Makefile:27`, `docs/PLAN.md:491-494`) constrains which styles are
+  available. Note this bullet still says *"Attach from P:\\"* and *"the bridge
+  reads them off the share directly"* — the Samba share was replaced by the
+  sync layer in R6, so the *default item* in that dropdown is now "attach from
+  the mirrored folder", i.e. from `cfg.sync_root`. That is a doc drift
+  (`docs/PLAN.md:287-290`, `:113`, `:1296` carry the same residue) but it
+  changes what the guest has to send.
+
+The shape that unblocks all of it: a generic **job** abstraction on the worker —
+`rc_rpc_post(rc_job *j)` with `{ family, id, run(), cancel() }` — where
+`is_sync`'s FIFO becomes "this family is a stream" and the one-at-a-time slot
+becomes "this family is a job". `EXEC`, `SYNC*`, attachments and Phase 6's tools
+then all fit without touching `net.c` or the family table.
 
 ### 8.4 Phase 6 — `list_windows`, `screenshot`, `click`, `send_keys`
 
-Beyond the routing and family problems above:
+**The bar cannot render what `send_action_sequence` needs.**
+`docs/PLAN.md:1092-1097` makes this an explicit requirement:
 
-- **Thread affinity.** `EnumWindows`/`GetWindowTextA` are safe from the worker.
-  `keybd_event`/`mouse_event` are global and safe on 9x. `GetDC(NULL)` + `BitBlt`
-  is nominally safe, but the 16-bit GDI heap is the constraint this codebase
-  cites repeatedly (`main.c:37, 91, 1290`) and a screen-sized DIB is not a small
-  GDI object. Whether the capture belongs on the worker or on the UI thread is a
-  real decision that the current structure does not force anyone to make,
-  because `net.c`'s router will happily hand a `SCREENSHOT` frame to whichever
-  thread the branch is written on.
-- **Stack budget.** `sync.c:102–117` records an actual invalid-page-fault: the
-  worker gets the image's 64KB stack *commit*, Open Watcom emits `sub esp, N`
-  with no stack probe, and an 8KB local under a 62KB caller lands below the
-  guard page. Every Phase 6 job that needs a buffer must heap-allocate, and
-  the only thing enforcing that today is `tools/stackframes.py` in
-  `make -C win check` — which is good, and is the one place this class of bug
-  *is* mechanically caught. Keep that target in the loop when Phase 6 lands;
-  see §7.4 about it not being reachable from the top-level `make check`.
-- **Cancellation is per-process, not per-job.** `rc_exec_cancel` sets one
-  `g_cancel` and terminates one `g_child` (`exec.c:68–75`). A `screenshot` in
-  progress and an `exec` in progress cannot be cancelled independently, and
-  `EXECKILL` on the reader thread (`net.c:180`) calls `rc_exec_cancel()` without
-  checking the id against the running command — so an `EXECKILL` for a command
-  that already finished kills whatever started since. `rc_exec_arm()` narrows
-  the window (`exec.c:63–66`, and the ordering argument at `rpc.c:183–185` is
-  careful) but does not close it, because `EXECKILL` carries an `id`
-  (`net.c:181` logs it) that nothing compares.
-- **Strips.** `screenshot` in strips is the same guest→bridge bulk path as
-  attachments (§8.3), with the extra constraint that `RC_MAX_FRAME` is 64KB
-  (`frameproto.h:17`) — so a strip is a chunked stream, not a frame, and it
-  needs the same `off`/`total` accounting `do_get` already implements. That is
-  an argument for generalising `do_get`'s loop out of `syncrpc.c` now, before
-  there are three copies of it.
+> The cost is that **the bar must render a multi-step summary on a 640x480
+> screen**, so the sequence needs a compact human rendering
+> (`type "hello" -> click [OK] -> wait "Notepad"`), not a JSON dump.
 
-### 8.5 One protocol-level gap worth fixing before any of them
+`g_perm_text` is a single-line `STATIC` with `SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS`
+(`main.c:1293–1295`) in a bar of fixed height `PERM_H 26` (`main.c:69`), sized
+right-to-left so the label takes whatever the buttons leave (`main.c:1203–1205`).
+A three-step sequence will be ellipsised to `type "hel...`. The bar needs a
+variable height and a multi-line control, which means `PERM_H` stops being a
+constant and `layout()`'s `ybar` arithmetic (`main.c:1156`) has to ask the bar
+how tall it is — an argument for the descriptor table in §3.3, which can carry
+a height.
+
+**There is a third bar state named in the docs and designed nowhere.**
+`docs/PLAN.md:1125-1128`:
+
+> A **"the agent is driving, hands off" modal state** is probably the answer,
+> and it is not designed yet.
+
+That is the fourth thing `g_bar_mode` will have to be, after `NONE`, `PERM` and
+`HALT`, and the one most likely to need to *block input to our own window*
+rather than merely disable Send.
+
+**`net.c` gains a branch per tool** (§5.1). `list_windows`, `screenshot`,
+`click`, `send_keys`, `send_action_sequence`, `launch`, `get_clipboard`,
+`set_clipboard` (`docs/PLAN.md:1104-1115`) are eight new frame types, all routed
+on the reader thread today.
+
+**Thread affinity is not forced by the structure.** `EnumWindows` /
+`SendMessage(WM_GETTEXT)` are fine from the worker. `keybd_event` /
+`mouse_event` are global. But `docs/PLAN.md:1053-1056` requires
+`AttachThreadInput` before a cross-thread `SetFocus` — and which thread "ours"
+is matters for `docs/PLAN.md:1056-1058`'s rule, *"Never send keys to our own
+window. Compare the target's thread against ours and refuse."* With the router
+in `net.c` there is nothing making that decision explicit; whoever writes the
+branch picks the thread.
+
+**Stack budget.** `sync.c:102–117` records an actual invalid-page-fault: the
+worker gets the image's 64KB stack *commit*, Open Watcom emits `sub esp, N` with
+no stack probe, and an 8KB local under a 62KB caller lands below the guard page.
+Every Phase 6 job needing a buffer must heap-allocate. The only thing enforcing
+that is `tools/stackframes.py` in `make -C win check` — which is the one place
+this class of bug *is* caught mechanically, and which §7.4 notes is not
+reachable from the top-level `make check`.
+
+**Strips are the same missing outbound path as attachments.**
+`docs/PLAN.md:994-998` — *"A full-screen DIB is 307KB and there are 28KB free.
+So capture proceeds in strips of N scanlines into a small fixed buffer, each
+strip compressed and sent as it is taken."* That is `do_get`'s loop with a
+different source. Generalising `do_get`'s `total`/`off` chunking out of
+`syncrpc.c` now, before there are three copies of it, is the cheapest thing on
+this list. Note also that `docs/PLAN.md:924-929` (Phase 5's "attach a screenshot
+of my desktop") and Phase 6's capture are *explicitly the same primitive* —
+"whichever lands first builds it" — so wherever it goes, it must not go inside
+`syncrpc.c` or inside `main.c`.
+
+**Cancellation is per-process, not per-job.** `rc_exec_cancel` sets one
+`g_cancel` and terminates one `g_child` (`exec.c:68–75`). A `screenshot` and an
+`exec` cannot be cancelled independently. And `EXECKILL` on the reader thread
+(`net.c:180`) calls `rc_exec_cancel()` **without comparing its `id`** against the
+running command — `net.c:181` logs the id and then discards it — so an
+`EXECKILL` for a command that has already finished kills whatever started since.
+`rc_exec_arm()` narrows the window (`exec.c:63–66`, and `rpc.c:183–185`'s
+ordering argument is careful) but does not close it.
+
+### 8.5 One protocol-level gap worth closing before any of them
 
 `rc_frame_parse` percent-decodes header values (`frameproto.c:84`), but
 **`rc_frame_build` does not percent-encode them** (`frameproto.c:125–130`). The
-wire format is `key=value\n`, so any value containing `\n`, `%` or (for the
-first `=`) is ambiguous. Today every header the guest sends is either a
-compile-time literal, a number, or a value the bridge sent it — and the bridge
-*does* encode, so a bridge value containing a newline arrives decoded and is
-echoed back raw. `HELLO`'s `os` header interpolates `os.szCSDVersion`
-(`net.c:404`) and `sess` echoes a bridge-supplied id (`net.c:441`). No live path
-carries a newline, but Phase 6 will add tool arguments and window titles as
-header values, and window titles are user-controlled. Add the encoder now; it is
-fifteen lines and it mirrors code that already exists.
+wire format is `key=value\n`, so a value containing `\n` or `%` is ambiguous.
+Today every header the guest sends is a compile-time literal, a number, or a
+value the bridge sent — and the bridge *does* encode, so a bridge value
+containing a newline arrives decoded and is echoed back raw. `HELLO`'s `os`
+header interpolates `os.szCSDVersion` (`net.c:404`) and `sess` echoes a
+bridge-supplied id (`net.c:441`). No live path carries a newline. But Phase 6
+adds **window titles and control text as header values**
+(`docs/PLAN.md:970-973` requires HWND, child-index path, control id and class
+per node), and window titles are user-controlled. Add the encoder now; it is
+fifteen lines and mirrors code that already exists.
 
-Related and smaller: `rc_frame_parse` **silently drops** headers past
-`RC_MAX_HEADERS` (16) — `frameproto.c:76` skips the store but still advances
-`p`. The guest's own `HELLO` sends 24. Nothing inbound is near 16 today, but the
-failure mode is "a header the bridge sent was ignored, with no log line", which
-is the shape of bug this codebase has been bitten by twice (`ini.c:25–30`).
+Two smaller ones in the same file:
 
----
+- `rc_frame_parse` **silently drops** headers past `RC_MAX_HEADERS` (16) —
+  `frameproto.c:76` skips the store but still advances `p`. The guest's own
+  `HELLO` sends 24 in the other direction. Nothing inbound is near 16 today,
+  but the failure mode is "a header the bridge sent was ignored, with no log
+  line", which is the shape this codebase has been bitten by twice
+  (`ini.c:25–30`).
+- `RC_MAX_VAL` is 256 and `cwd` travels as a header
+  (`docs/BACKLOG.md:100-102`, `:180-185`), so it is silently clipped and then
+  handed to `CreateProcessA` (`exec.c:180`) with no validation — the command
+  runs in a *different existing directory* rather than failing. Already logged;
+  noted here because the same clipping now applies to anything Phase 6 puts in
+  a header.
 
 ## 9. Smaller bugs found along the way
 
@@ -965,13 +1141,57 @@ Not architecture, but found while reading and worth not losing.
 6. **`g_lock` in `rpc.c` is never deleted.** `g_ready` is set at `rpc.c:342` and
    never cleared; `rc_rpc_join` closes the thread and the event but not the
    critical section. Leaking one at process exit is harmless and arguably
-   deliberate (`net.c:697–701` makes exactly that argument), but it is
+   deliberate (`net.c:708–710` makes exactly that argument), but it is
    undocumented here where it is documented there.
 
 7. **`EXECKILL` ignores its `id`** (§8.4).
 
 8. **`try_connect` does not reset `g_backoff_ms`** when invoked from a path
    other than the timer (§8.1).
+
+9. **`reject_sync_busy` answers the wrong shape for `SYNCSCAN`/`SYNCGET`.**
+   `rpc.c:367–376` sends a two-header `SYNCPUTACK` for *any* `SYNC*` frame it
+   cannot take — including the shutdown drain (`rpc.c:319`) and the full-queue
+   path (`rpc.c:439`). The bridge awaits `SYNCEND` (six headers) for a scan and
+   `SYNCDATEND` (four) for a get, so both surface as "sync pass aborted: not
+   enough values to unpack". Already recorded at `docs/BACKLOG.md:223-227`, and
+   listed there as *"a blocker for any new sync frame"* — repeated here because
+   it is the same structural problem as §5.1: the rejection path knows one
+   frame family's vocabulary while the router accepts four.
+
+10. **The shutdown drain's acks never leave the machine.** `rpc.c:310–311`
+    promises *"Anything still queued at shutdown is answered, not silently
+    dropped — the bridge is holding a future for it."* It cannot be: `rc_net_stop`
+    sets `n->running = 0` (`net.c:665`) *before* calling `rc_rpc_stop`
+    (`net.c:669`), and `rc_net_send` bails on `!n->running` (`net.c:608`). Every
+    `reject_busy` / `reject_sync_busy` on that path returns `-1` unchecked.
+    Recorded at `docs/BACKLOG.md:228-235`; noted here because the comment is
+    still there asserting the opposite, which is §7's category.
+
+11. **`n->sock` is read and written across four threads with no lock** — 14
+    accesses, including `recv_exact`'s two and the TOCTOU guard at `net.c:608`.
+    `rc_net_stop` closes it while the sender may have captured it into a local
+    (`net.c:580`), and Winsock recycles handle values.
+    `docs/BACKLOG.md:39-40`, `:228-235`.
+
+12. **Inconsistent product name inside `main.c`.** `RC_TITLE` is
+    `"Gaston Code"` (`main.c:173`) and is used in seven places, but two
+    `MessageBox` captions are the literal `"RetroClaude"` — `main.c:1236`
+    ("Could not create the HTML view") and `main.c:1730` ("OLE could not
+    start"). Both are the *startup failure* boxes, i.e. the two a first-time
+    user is most likely to see. (The window class, mutex, INI, log and binary
+    names are all still `retroclaude*`, which is deliberate-looking and fine —
+    but these two are user-visible strings.)
+
+13. **`g_doc_sent` is per-process, so a reconnect keeps a stale transcript.**
+    `main.c:76` / `main.c:596–597`: the `DOC` skeleton is installed once and
+    never again. `READY` updates `g_view` and `g_total` (`main.c:580–581`) but
+    does not re-fetch the page, so after a reconnect the window shows the old
+    content under a new page number. Already at `docs/BACKLOG.md:206-211`, which
+    notes the fix is one `page_goto("live")` in the `READY` handler. Listed here
+    because it is also the only global in `main.c` whose lifetime is
+    deliberately the *process* rather than the connection, and nothing says so
+    at the declaration.
 
 ---
 
@@ -980,15 +1200,17 @@ Not architecture, but found while reading and worth not losing.
 If this were to be acted on, the order that unlocks the most with the least
 risk:
 
-1. §9's five small bugs, and §3.2's two bar holes (`bar_hide()` on disconnect
-   and on `SWITCHED`). All are small, all are live.
+1. §9.1, §9.2, §9.4, §9.5 and §9.12, plus §3.2's two bar holes (`bar_hide()`
+   on disconnect and on `SWITCHED`). All are small, all are live, none needs a
+   design decision. §9.9, §9.10, §9.11 and §9.13 are already in `BACKLOG.md`
+   and should be closed on its schedule, not this one.
 2. §2.3 — the htmlview class. It is self-contained, it deletes code from
    `main.c`, and it makes `autoscroll` mean something.
 3. §4.1 — the `rc_fmt`/`rc_cpy` helper plus the grep in `make -C win check`.
    Mechanical, and it closes the `g_put.rel` wire-reachable case.
-4. §1.2 — the dispatch table. Nothing can be split out of `main.c` until
+4. §1.3 — the dispatch table. Nothing can be split out of `main.c` until
    `render_frame` stops being a chain.
-5. §1.1 — `chatlist.c`, then `optmenu.c`, `pagebar.c`, `xferstat.c`.
+5. §1.2 — `chatlist.c`, then `optmenu.c`, `pagebar.c`, `xferstat.c`.
 6. §3.3 — the bar descriptor table, before Phase 6 adds states to it.
 7. §5.1 — `rc_rpc_route`, before Phase 6 adds branches to `net.c`.
 8. §8.3/§8.5 — the job abstraction and the header encoder, as Phase 5 starts.

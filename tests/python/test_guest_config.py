@@ -30,7 +30,8 @@ WINE = os.environ.get(
     os.path.expanduser(
         "~/.local/share/lutris/runners/wine/wine-ge-8-26-x86_64/bin/wine"),
 )
-PREFIX = os.path.join(HERE, "spike", ".wineprefix")
+PREFIX = os.environ.get("WINEPREFIX",
+                        os.path.join(HERE, ".wineprefix"))
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(EXE) or not os.path.exists(WINE),
