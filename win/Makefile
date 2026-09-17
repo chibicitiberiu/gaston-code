@@ -93,6 +93,11 @@ retroclaude.exe: $(OBJS)
 	@$(WLINK) $(LFLAGS) $(LIBS) name $@ file {$(OBJS)}
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
+# Known-good CMOV count. See the note in the check target: this is a data
+# false positive, not a real instruction. Any INCREASE is a real regression.
+CMOV_BASELINE = 1
+PYTHON ?= python3
+
 # Static PE audit. The import table is the gate that matters: a single NT-only
 # symbol kills the EXE at load on Win98, before WinMain, with no log written.
 check: retroclaude.exe
@@ -103,8 +108,31 @@ check: retroclaude.exe
 	@echo "=== W-suffix imports (stubs on Win9x) ==="
 	@objdump -p retroclaude.exe | grep -E '^\s+[0-9a-f]+\s+<none>' \
 	  | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
-	@echo "=== CMOV (must be 0) ==="
-	@objdump -d -m i386 retroclaude.exe 2>/dev/null | grep -cE '\scmov' || echo 0
+	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
+	@# objdump disassembles the whole AUTO section linearly, and that section
+	@# holds read-only data as well as code -- so string tables decode as
+	@# instructions and produce phantom CMOVs. There is one such false
+	@# positive today, at a repeating data pattern near 0x416d00 where the
+	@# surrounding "disassembly" is `push %cs; inc %ebx`, which no compiler
+	@# emits. Gating on 0 would therefore fail forever and the gate would
+	@# start being ignored, which is worse than not having it. Gate on the
+	@# baseline instead, so a real regression still trips it.
+	@n=$$(objdump -d -m i386 retroclaude.exe 2>/dev/null | grep -cE '\scmov'); \
+	 if [ "$$n" -gt $(CMOV_BASELINE) ]; then \
+	   echo "   FAIL: $$n CMOV (baseline $(CMOV_BASELINE)) -- check -5 is still set"; exit 1; \
+	 else echo "   ok: $$n (baseline $(CMOV_BASELINE), known data false positive)"; fi
+	@echo "=== static allocation (the guest has 28KB free after a turn) ==="
+	@# Uninitialised statics are committed at load and are spent before the
+	@# app does anything -- rc_net_send's frame build buffer alone is 66,560
+	@# bytes. `objdump -h` reports the RAW section size, which omits BSS
+	@# entirely and makes this look 7x smaller than it is, so read the PE
+	@# section headers directly.
+	@$(PYTHON) -c "import struct;d=open('retroclaude.exe','rb').read();\
+pe=struct.unpack_from('<I',d,0x3c)[0];\
+n=struct.unpack_from('<H',d,pe+6)[0];o=pe+24+struct.unpack_from('<H',d,pe+20)[0];\
+rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII',d,o+i*40+8) for i in range(n)];\
+[print('   %-8s image %7d  file %7d  bss %7d' % (r[0],r[1],r[3],max(0,r[1]-r[3]))) for r in rows];\
+print('   total committed at load: %d bytes' % sum(max(r[1],r[3]) for r in rows))"
 
 clean:
 	@rm -f *.o retroclaude.exe

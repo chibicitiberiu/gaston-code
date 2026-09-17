@@ -612,34 +612,50 @@ async def test_cancelled_callback_still_clears_the_bar(harness):
     await harness.close(writer)
 
 
-async def test_disconnect_denies_immediately(harness):
-    """Waiting ten minutes for a machine that has gone away is the failure the
-    deadline exists to prevent, not one to reproduce."""
+async def test_disconnect_holds_the_prompt_then_denies(harness):
+    """Not "denies immediately", which is what the plan said and what the first
+    implementation did.
+
+    Denying on any drop tells the model the user declined something the user
+    never saw -- on a flaky 1998 NIC a blip becomes a refusal. So the prompt is
+    held for a grace period and then denied with a message that says what
+    actually happened, rather than claiming a decision nobody made.
+    """
+    harness.bridge.perm_grace_s = 0.2
+    harness.bridge.idle_check_s = 0.05
+
     reader, writer, task = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
     await harness.close(writer)
+
     result = await asyncio.wait_for(task, 5)
     assert isinstance(result, PermissionResultDeny)
+    assert "disconnected" in result.message
+    assert "not refused on purpose" in result.message
     assert harness.bridge._guest.perm_pending is None
 
 
 async def test_prompt_is_reissued_after_reconnect(harness):
-    """P1: the guest never sends from=, so replay is dead code in production.
-    Without an explicit re-issue the guest reconnects with no bar while the
-    bridge still holds a live future, and the turn hangs to the deadline."""
+    """P1: the guest never sends from=, so the bridge's replay buffer cannot
+    bring the bar back by itself. Without an explicit re-issue the guest
+    reconnects with no bar while the bridge still holds a live future, and the
+    turn hangs until the answer deadline."""
+    harness.bridge.perm_grace_s = 30.0      # comfortably inside the grace
+
     reader, writer, task = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
-
-    # Drop the link WITHOUT resolving: simulate the cable being pulled while
-    # the bridge keeps the session. (close() would trigger the deny path.)
-    harness.bridge._guest.writer = None
-    writer.close()
+    await harness.close(writer)
 
     reader2, writer2 = await harness.connect()
     f = await _recv(harness, reader2, "PERMSTATE")
     assert f.headers["id"] == "toolu_test_1"
     assert b"vol c:" in f.body
-    task.cancel()
+
+    # And it is still answerable on the new connection.
+    await harness.send(writer2, Frame("PERMREPLY",
+                                      {"id": "toolu_test_1", "action": "allow"}))
+    result = await asyncio.wait_for(task, 5)
+    assert isinstance(result, PermissionResultAllow)
     await harness.close(writer2)
 
 
@@ -718,3 +734,19 @@ async def test_idle_guest_is_reaped_so_it_can_reconnect(harness):
     f = await _recv(harness, reader2, "READY")
     assert f.type == "READY"
     await harness.close(writer, writer2)
+
+
+async def test_frame_pipelined_behind_hello_is_not_dropped(harness):
+    """_read_hello returned on the first HELLO and discarded the rest of the
+    batch. Frames already parsed out of the FrameReader's buffer were gone --
+    silently, which is the worst way to lose one. Reachable whenever a guest
+    sends anything in the same TCP segment as its HELLO."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", harness.port)
+    # Both frames in a single write, so they land in one read() on the bridge.
+    writer.write(hello("s").encode() + Frame("PING", {}).encode())
+    await writer.drain()
+    harness._readers[id(reader)] = FrameReader()
+    harness._pending[id(reader)] = []
+    f = await _recv(harness, reader, "PONG", 5.0)
+    assert f.type == "PONG"
+    await harness.close(writer)

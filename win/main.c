@@ -31,6 +31,14 @@
 #define ID_PAGELBL    1011
 #define ID_CHATS      1012
 #define ID_REFRESH    1013
+/* The permission bar. Modeless, above the input box: a modal here would pump
+ * messages and re-enter the transcript while Claude is mid-stream, and the
+ * obvious fix -- queueing frames for the duration -- costs heap on a machine
+ * measured at 28KB free after a turn. */
+#define ID_PERM_TEXT  1014
+#define ID_PERM_ALLOW 1015
+#define ID_PERM_ALWAYS 1016
+#define ID_PERM_DENY  1017
 
 /* Menu. Model and effort entries are numbered from a base because the lists
  * come from the bridge and are not known at compile time. */
@@ -57,6 +65,8 @@
 #define CHATS_W      170
 #define CHAT_INDENT   10   /* session rows sit under their date header */
 #define CHAT_ROW_H    15
+#define PERM_H        26   /* the permission bar, when shown */
+#define PERMBTN_W     58
 
 static rc_config     g_cfg;
 static rc_net        g_net;
@@ -65,6 +75,15 @@ static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_input, g_send, g_stop, g_status;
 static HWND  g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
 static HWND  g_chats, g_refresh;
+static HWND  g_perm_text, g_perm_allow, g_perm_always, g_perm_deny;
+
+/* The permission request currently on screen. PERMREQ/PERMEND are a state
+ * machine keyed on this id, never a show/hide toggle: a PERMEND can arrive
+ * for a request we are not showing (the bridge resolved it while a reply was
+ * in flight, or a session rebuild cleared it), and toggling on that would
+ * leave the bar up during a live request or hidden during one. */
+static char g_perm_id[80];
+static int  g_perm_pending;
 
 /* Session ids, parallel to the list box. A ListBox rather than a ListView
  * deliberately: fewer GDI objects, and the 16-bit USER/GDI heaps on 9x are a
@@ -349,7 +368,73 @@ static void ui_set_busy(int busy)
 {
     g_turn_active = busy;
     EnableWindow(g_stop, busy ? TRUE : FALSE);
-    EnableWindow(g_send, busy ? FALSE : TRUE);
+    /* A pending permission request blocks Send too. That is the one property
+     * a modal dialog would have given us: the request cannot be ignored.
+     * Without the OR here a TURN end frame arriving mid-prompt would re-enable
+     * Send behind our back.
+     *
+     * Stop stays enabled deliberately. It is the only escape if the CLI itself
+     * has wedged, and it is how the cancellation path gets exercised at all --
+     * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
+     * which clears the bar. */
+    EnableWindow(g_send, (busy || g_perm_pending) ? FALSE : TRUE);
+}
+
+/* ------------------------------------------------------- permission bar */
+
+static void perm_layout(void)
+{
+    /* The bar changes the transcript's height, and the HTML view has no HWND
+     * to resize -- rc_html_move is the only lever it has, so the whole layout
+     * must be re-run rather than just showing the controls. */
+    if (g_main) layout(g_main);
+}
+
+static void perm_hide(void)
+{
+    if (!g_perm_pending) return;
+    g_perm_pending = 0;
+    g_perm_id[0] = '\0';
+    ShowWindow(g_perm_text,   SW_HIDE);
+    ShowWindow(g_perm_allow,  SW_HIDE);
+    ShowWindow(g_perm_always, SW_HIDE);
+    ShowWindow(g_perm_deny,   SW_HIDE);
+    perm_layout();
+    ui_set_busy(g_turn_active);
+}
+
+static void perm_show(const char *id, const char *text, int allows)
+{
+    if (!id || !*id) return;
+    _snprintf(g_perm_id, sizeof(g_perm_id) - 1, "%s", id);
+    g_perm_id[sizeof(g_perm_id) - 1] = '\0';
+    g_perm_pending = 1;
+
+    SetWindowTextA(g_perm_text, text && *text ? text : "Permission required");
+    ShowWindow(g_perm_text,   SW_SHOW);
+    ShowWindow(g_perm_allow,  SW_SHOW);
+    /* "Always" is offered only when the bridge says a rule can be expressed.
+     * For a machine tool it never can -- MCP rules cannot carry specifiers, so
+     * the only rule available is the whole tool, and pressing it once would
+     * hand over the machine for the rest of the session. */
+    ShowWindow(g_perm_always, allows ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_perm_deny,   SW_SHOW);
+    perm_layout();
+    ui_set_busy(g_turn_active);
+    SetFocus(g_perm_allow);
+}
+
+static void perm_reply(const char *action)
+{
+    const char *keys[2];
+    const char *vals[2];
+
+    if (!g_perm_pending) return;
+    keys[0] = "id";     vals[0] = g_perm_id;
+    keys[1] = "action"; vals[1] = action;
+    rc_net_send(&g_net, "PERMREPLY", keys, vals, 2, NULL, 0);
+    /* The bar comes down on PERMEND, not here: the bridge owns the state
+     * machine, and a reply can lose a race with a deadline or a disconnect. */
 }
 
 /* ------------------------------------------------------------ frame render */
@@ -608,6 +693,34 @@ static void render_frame(rc_frame *f)
                rc_frame_get(f, "page") ? rc_frame_get(f, "page") : "?",
                rc_frame_get(f, "preview") ? rc_frame_get(f, "preview") : "");
 
+    } else if (strcmp(f->type, "PERMREQ") == 0 ||
+               strcmp(f->type, "PERMSTATE") == 0) {
+        /* PERMSTATE is the same request re-issued after a reconnect. The
+         * guest never sends `from=`, so the bridge's replay buffer cannot
+         * bring the bar back by itself. */
+        const char *id = rc_frame_get(f, "id");
+        const char *allows = rc_frame_get(f, "allows");
+        perm_show(id ? id : "", f->body ? f->body : "",
+                  allows && *allows == '1');
+
+    } else if (strcmp(f->type, "PERMWAIT") == 0) {
+        /* Only the queue depth changed; the request is the same one. */
+        const char *id = rc_frame_get(f, "id");
+        const char *n = rc_frame_get(f, "waiting");
+        if (id && g_perm_pending && strcmp(id, g_perm_id) == 0 && n)
+            rc_log("perm: %s more request(s) queued", n);
+
+    } else if (strcmp(f->type, "PERMEND") == 0) {
+        /* Keyed on the id, never a blind hide: a PERMEND can arrive for a
+         * request we are not showing -- resolved by a deadline, a disconnect
+         * or a session rebuild while a reply was in flight -- and hiding on
+         * that would drop the bar during a live request. */
+        const char *id = rc_frame_get(f, "id");
+        if (id && g_perm_pending && strcmp(id, g_perm_id) == 0)
+            perm_hide();
+        else if (id)
+            rc_log("perm: PERMEND for %s, not the one on screen", id);
+
     } else if (strcmp(f->type, "ERROR") == 0) {
         char line[512];
         _snprintf(line, sizeof(line) - 1, "\r\n[%s] %s\r\n",
@@ -795,7 +908,7 @@ static void do_send(void)
     char buf[4096];
     int n;
 
-    if (g_turn_active) return;
+    if (g_turn_active || g_perm_pending) return;
     n = GetWindowTextA(g_input, buf, sizeof(buf));
     if (n <= 0) return;
 
@@ -870,6 +983,11 @@ static void layout(HWND hwnd)
     w = rc.right - rc.left;
     h = rc.bottom - rc.top - sb_h;
     y = h - INPUT_HEIGHT - GUTTER;
+    /* The bar eats into the transcript, not the input box: the input box is
+     * where the user's attention already is. `y` is the single hinge for
+     * everything below the transcript, so moving it moves the whole row. */
+    if (g_perm_pending)
+        y -= PERM_H + GUTTER;
 
     {   /* Chat list down the left, with its Refresh button under it. */
         int lh = h - 2 * GUTTER - 24;
@@ -892,6 +1010,20 @@ static void layout(HWND hwnd)
         int cw = w - cx - GUTTER;
         rc_html_move(g_html, cx, GUTTER + PAGEBAR_H,
                      cw, y - GUTTER - PAGEBAR_H);
+        if (g_perm_pending) {
+            /* Right-to-left: the buttons are fixed width and the label takes
+             * whatever is left, so a long tool description truncates rather
+             * than pushing Deny off the edge. */
+            int by = y + INPUT_HEIGHT + GUTTER - (PERM_H + GUTTER);
+            int bx = w - GUTTER - PERMBTN_W;
+            MoveWindow(g_perm_deny, bx, by, PERMBTN_W, PERM_H - 4, TRUE);
+            bx -= PERMBTN_W + 2;
+            MoveWindow(g_perm_always, bx, by, PERMBTN_W, PERM_H - 4, TRUE);
+            bx -= PERMBTN_W + 2;
+            MoveWindow(g_perm_allow, bx, by, PERMBTN_W, PERM_H - 4, TRUE);
+            MoveWindow(g_perm_text, cx, by + 4, bx - cx - GUTTER,
+                       PERM_H - 6, TRUE);
+        }
         MoveWindow(g_input, cx, y,
                    cw - GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
     }
@@ -959,6 +1091,22 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, hwnd, (HMENU)ID_CHATS, inst, NULL);
 
+    /* The permission bar. Created hidden and shown with ShowWindow rather
+     * than created on demand: the 16-bit USER/GDI heaps on 9x are a fixed
+     * 64KB, and churning window handles is exactly what this codebase avoids. */
+    g_perm_text = CreateWindowExA(0, "STATIC", "",
+        WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
+        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_TEXT, inst, NULL);
+    g_perm_allow = CreateWindowExA(0, "BUTTON", "Allow",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_ALLOW, inst, NULL);
+    g_perm_always = CreateWindowExA(0, "BUTTON", "Always",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_ALWAYS, inst, NULL);
+    g_perm_deny = CreateWindowExA(0, "BUTTON", "Deny",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_DENY, inst, NULL);
+
     g_refresh = CreateWindowExA(0, "BUTTON", "Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_REFRESH, inst, NULL);
@@ -999,6 +1147,10 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     SendMessageA(g_pagelbl, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_chats,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_refresh, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_perm_text,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_perm_allow,  WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_perm_always, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_perm_deny,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     page_update_ui();
 
     g_chats_oldproc = (WNDPROC)SetWindowLongA(g_chats, GWL_WNDPROC,
@@ -1169,6 +1321,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_SEND:  do_send(); return 0;
 
         case ID_STOP:  do_stop(); return 0;
+        case ID_PERM_ALLOW:  perm_reply("allow");  return 0;
+        case ID_PERM_ALWAYS: perm_reply("always"); return 0;
+        case ID_PERM_DENY:   perm_reply("deny");   return 0;
         case ID_LIVE:  page_goto("live");      return 0;
         case ID_FIRST: page_goto_n(1);         return 0;
         case ID_PREV:  page_goto_n(g_view - 1); return 0;
@@ -1349,6 +1504,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
             && msg.hwnd == g_chats) {
             chats_switch();
+            continue;
+        }
+        /* Esc denies a pending request. It has to be intercepted before
+         * IsDialogMessageA, which eats VK_ESCAPE and would never let it
+         * reach the bar. */
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
+            && g_perm_pending) {
+            perm_reply("deny");
             continue;
         }
         if (!IsDialogMessageA(g_main, &msg)) {

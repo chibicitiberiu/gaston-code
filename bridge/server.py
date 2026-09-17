@@ -101,6 +101,9 @@ class GuestSession:
     # GPFs leaves no FIN behind, so without this _on_client parks forever and
     # `connected` stays True -- which rejects every reconnect as "busy".
     last_seen: float = field(default_factory=time.monotonic)
+    # When the link dropped, or None while connected. A prompt outlives a
+    # brief disconnect so a reconnect can restore the bar.
+    lost_at: float | None = None
 
     @property
     def connected(self) -> bool:
@@ -139,12 +142,18 @@ class Bridge:
         # Strong references to fire-and-forget tasks. asyncio holds only a
         # weak one, so a bare create_task can be collected mid-flight.
         self._tasks: set = set()
+        # Frames pipelined behind HELLO in a single read, handed to _pump.
+        self._early: list = []
         self._reaper: asyncio.Task | None = None
         # The guest pings every few seconds, so silence much longer than that
         # means it is gone rather than quiet. Generous, because a 200MHz box
         # under load genuinely does pause.
         self.idle_timeout_s = 90.0
         self.idle_check_s = 15.0
+        # How long a pending permission request survives a dropped link. Long
+        # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
+        # of the 10 minute answer deadline.
+        self.perm_grace_s = 60.0
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -206,13 +215,17 @@ class Bridge:
         finally:
             if self._guest and self._guest.writer is writer:
                 self._guest.writer = None
-                # Deny anything pending BEFORE the first await below.
-                # wait_closed() is a suspension point at which the next
-                # connection's _attach can run, and if the PERMEND were
-                # stamped after that the reconnect would replay a prompt the
-                # bridge had already resolved.
-                self._resolve_all(self._guest, "gone",
-                                  "The Windows machine disconnected.")
+                # A pending prompt is NOT denied here. Denying on any drop
+                # tells the model "the user declined" for something the user
+                # never saw -- and on a 1998 NE2000 over a flaky link, a blip
+                # would become a refusal. Instead the prompt is held for a
+                # short grace period: reconnect inside it and the bar comes
+                # back (PERMSTATE), miss it and the reaper denies with a
+                # message that says what actually happened.
+                self._guest.lost_at = time.monotonic()
+                if self._guest.perm_pending is not None:
+                    log.info("link lost with a prompt pending; holding %.0fs",
+                             self.perm_grace_s)
             # Graceful close. An abrupt RST is reported to crash Win98's
             # Winsock stack outright, taking the machine with it.
             try:
@@ -240,13 +253,19 @@ class Bridge:
                     data = await reader.read(4096)
                     if not data:
                         return None
-                    for f in frames.feed(data):
+                    batch = frames.feed(data)
+                    for i, f in enumerate(batch):
                         if f.type != "HELLO":
                             await self._try_send_raw(
                                 writer, error("expected_hello",
                                               f"first frame was {f.type}")
                             )
                             return None
+                        # Anything pipelined behind HELLO in the same read has
+                        # already been parsed out of the FrameReader's buffer,
+                        # so returning here would drop it silently. Hand the
+                        # rest to _pump instead.
+                        self._early = batch[i + 1:]
                         return f
         except TimeoutError:
             await self._try_send_raw(writer, error("hello_timeout",
@@ -349,6 +368,7 @@ class Bridge:
         # code in production and a reconnect would otherwise arrive with the
         # bar gone and the future still pending bridge-side. Re-issue the
         # prompt explicitly instead of relying on replay.
+        guest.lost_at = None
         await self._reissue_prompt(guest)
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
@@ -712,6 +732,10 @@ class Bridge:
         reader: asyncio.StreamReader,
         frames: FrameReader,
     ) -> None:
+        # Frames that arrived in the same read as HELLO. See _read_hello.
+        early, self._early = self._early, []
+        for f in early:
+            await self._handle(guest, f)
         while True:
             data = await reader.read(8192)
             if not data:
@@ -889,7 +913,18 @@ class Bridge:
         while True:
             await asyncio.sleep(self.idle_check_s)
             guest = self._guest
-            if guest is None or not guest.connected:
+            if guest is None:
+                continue
+            if not guest.connected:
+                # Disconnected: expire any prompt whose grace has run out.
+                if (guest.perm_pending is not None and guest.lost_at is not None
+                        and time.monotonic() - guest.lost_at
+                        > self.perm_grace_s):
+                    self._resolve_all(
+                        guest, "gone",
+                        "The Windows machine disconnected before anyone could "
+                        "answer, so this was not approved. It was not refused "
+                        "on purpose -- ask again if you still need it.")
                 continue
             idle = time.monotonic() - guest.last_seen
             if idle < self.idle_timeout_s:
