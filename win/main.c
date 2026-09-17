@@ -118,6 +118,12 @@ static int  g_perm_pending;
  * So the halt is REMEMBERED rather than shown-or-lost. A permission request
  * takes the bar, because it is the one with a deadline; the halt waits behind
  * it and comes back when it clears. */
+/* The longest message that can be composed and sent in one go. The frame
+ * protocol would carry far more, but do_send builds it on the stack and the
+ * guard page on 9x is not something to find out about the hard way. Enforced
+ * at the control with EM_LIMITTEXT and checked again at send. */
+#define RC_INPUT_MAX 4096
+
 #define BAR_NONE 0
 #define BAR_PERM 1
 #define BAR_HALT 2
@@ -1026,21 +1032,56 @@ static void esc_html(const char *in, char *out, unsigned cap)
 
 static void echo_user_block(const char *text)
 {
-    char esc[4096], div[4400];
+    /* Sized for the worst case rather than for the common one. Escaping
+     * expands: '&' becomes five characters, '<' and '\n' four. A 4000-byte
+     * message of ampersands needs 20KB, so a 4096-byte buffer cut the echo
+     * silently -- esc_html simply stops at `o + 8 < cap` -- and the user saw a
+     * truncated copy of what they had just written while the full text went to
+     * the model. The same standing rule as do_send, one line later.
+     *
+     * On the heap because this is five times RC_INPUT_MAX and do_send's frame
+     * is already the largest in the program. Freed immediately; it is live
+     * only for the append. */
+    unsigned cap = RC_INPUT_MAX * 5 + 64;
+    char *esc = (char *)HeapAlloc(GetProcessHeap(), 0, cap);
+    char *div;
 
-    esc_html(text, esc, sizeof(esc));
-    _snprintf(div, sizeof(div) - 1, "<div class=\"you\">%s</div>", esc);
-    div[sizeof(div) - 1] = '\0';
-    rc_html_append(g_html, div);
-    rc_html_scroll_bottom(g_html);
+    if (!esc) return;                   /* the echo is cosmetic; the send is not */
+    esc_html(text, esc, cap);
+    div = (char *)HeapAlloc(GetProcessHeap(), 0, cap + 64);
+    if (div) {
+        _snprintf(div, cap + 63, "<div class=\"you\">%s</div>", esc);
+        div[cap + 63] = '\0';
+        rc_html_append(g_html, div);
+        rc_html_scroll_bottom(g_html);
+        HeapFree(GetProcessHeap(), 0, div);
+    }
+    HeapFree(GetProcessHeap(), 0, esc);
 }
 
 static void do_send(void)
 {
-    char buf[4096];
+    char buf[RC_INPUT_MAX];
     int n;
 
     if (g_turn_active || g_perm_pending) return;
+
+    /* Refuse rather than truncate. GetWindowTextA copies what fits and says
+     * nothing, so a pasted log longer than the buffer was silently cut and the
+     * SHORTENED text is what went to the model -- the person at the keyboard
+     * losing bytes on the one path where they are the author. EM_LIMITTEXT
+     * below normally stops it arriving at all; this is the check that makes
+     * that a guarantee rather than a hope. */
+    if (GetWindowTextLengthA(g_input) >= RC_INPUT_MAX) {
+        rc_html_append(g_html,
+                       "<div class=\"err\">That message is too long to send "
+                       "(the limit is about 4000 characters). Nothing was "
+                       "sent -- shorten it, or put the long part in a file "
+                       "under the mirrored folder.</div>");
+        rc_html_scroll_bottom(g_html);
+        return;
+    }
+
     n = GetWindowTextA(g_input, buf, sizeof(buf));
     if (n <= 0) return;
 
@@ -1199,6 +1240,11 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
         ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
         0, 0, 0, 0, hwnd, (HMENU)ID_INPUT, inst, NULL);
+    /* Stop an over-long message being composed at all, which is the only
+     * feedback that arrives at the moment the user does it rather than at
+     * send time. The default for a multiline EDIT is 32KB, well past what
+     * do_send can carry. */
+    SendMessageA(g_input, EM_LIMITTEXT, (WPARAM)(RC_INPUT_MAX - 1), 0);
 
     g_send = CreateWindowExA(0, "BUTTON", "Send",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
