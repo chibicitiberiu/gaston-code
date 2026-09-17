@@ -101,5 +101,16 @@ def build(bridge) -> dict:
         return await bridge.run_on_guest(command, timeout_ms=timeout_ms,
                                          shell=shell, cwd=cwd)
 
-    return {"machine": create_sdk_mcp_server(name="machine", version="0.1.0",
-                                            tools=[machine_exec])}
+    server = create_sdk_mcp_server(name="machine", version="0.1.0",
+                                   tools=[machine_exec])
+    # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
+    #
+    # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below
+    # both the guest's 120s ceiling and the bridge's own budget. The CLI would
+    # abandon the call, and an SDK server's tool is NOT cancelled when that
+    # happens (types.py:653-662): the Python body runs on, the guest keeps
+    # running the child, exec_lock stays held blocking the next call, and the
+    # result eventually resolves a future nobody is reading.
+    #
+    # Ordering: guest clamp (<=120s) < bridge budget (clamp + 30s) < this.
+    return {"machine": {**server, "timeout": 300_000}}

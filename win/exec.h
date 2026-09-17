@@ -30,6 +30,8 @@ typedef struct {
 typedef void (*rc_exec_sink)(void *ctx, const char *data, unsigned len);
 
 void rc_exec_init(void);
+/* Clear a stale cancel before a new command. See the note in exec.c. */
+void rc_exec_arm(void);
 /* Kill any running child. Safe from another thread; that is the point. */
 void rc_exec_cancel(void);
 

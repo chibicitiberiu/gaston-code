@@ -55,6 +55,15 @@ void rc_exec_init(void)
     }
 }
 
+/* Clear a stale cancel before starting a new command. Call it BEFORE
+ * re-checking whether you should still be running: that ordering means a
+ * cancel landing after the arm is seen by the run loop, and one landing before
+ * it is seen by the caller's own running check. */
+void rc_exec_arm(void)
+{
+    g_cancel = 0;
+}
+
 void rc_exec_cancel(void)
 {
     g_cancel = 1;
@@ -93,7 +102,11 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
 
     memset(out, 0, sizeof(*out));
     out->status = RC_EXEC_SPAWN_FAILED;
-    g_cancel = 0;
+    /* NOT `g_cancel = 0` here. Clearing the flag on entry swallowed a cancel
+     * raised between the worker dequeueing a frame and this call starting --
+     * shutdown would ask to stop, the flag would be wiped, and the command
+     * would spawn anyway and run its full clamp while the app tried to exit.
+     * rc_exec_arm() is called by the worker before it decides to run. */
 
     if (!command || !*command) return -1;
 
@@ -189,9 +202,27 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
         }
 
         if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) {
-            /* Drain whatever is still in the pipe after exit. */
+            /* Drain what is still in the pipe after exit -- but BOUNDED.
+             *
+             * Unbounded, this loop never ends if a grandchild inherited the
+             * write end and keeps writing: COMMAND.COM backgrounding
+             * something, or a pipeline's second stage outliving the shell.
+             * TerminateProcess kills the shell, not the grandchild, and the
+             * loop read no flag, so cancel could not break it either -- which
+             * made exec.h's "cancellable from another thread" false exactly
+             * here. The worker would hang and shutdown would GPF. */
             while (PeekNamedPipe(rd, NULL, 0, NULL, &avail, NULL) && avail) {
                 DWORD want = avail > EXEC_CHUNK ? EXEC_CHUNK : avail;
+                if (g_cancel) { out->status = RC_EXEC_CANCELLED; break; }
+                if (GetTickCount() - start > timeout_ms) {
+                    out->status = RC_EXEC_TIMEOUT;
+                    break;
+                }
+                if (out->bytes >= EXEC_MAX_OUT) {
+                    /* Past the cap there is nothing to gain by reading on. */
+                    out->truncated = 1;
+                    break;
+                }
                 if (!ReadFile(rd, g_chunk, want, &got, NULL) || !got) break;
                 if (out->bytes < EXEC_MAX_OUT) {
                     DWORD room = EXEC_MAX_OUT - out->bytes;

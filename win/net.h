@@ -10,7 +10,11 @@
  *       * a frame posted with WM_RC_FRAME is owned by the UI thread, which
  *         frees it and decrements `inflight`;
  *       * a frame handed to the RPC worker is owned by the WORKER, which
- *         frees it and decrements `rpcq`;
+ *         frees it and decrements `rpcq` -- EXCEPT on the two paths where the
+ *         worker refuses it (already busy, or not running), where the frame is
+ *         freed on the READER thread that offered it. The accounting balances
+ *         either way; the rule is "whoever ends up holding it frees it", not
+ *         "the worker always frees it";
  *       * if PostMessage fails the READER frees it -- otherwise the pointer
  *         leaks on a machine with single-digit MB free, at exactly the moment
  *         it is already struggling.
@@ -46,8 +50,12 @@ typedef struct rc_outq_item {
     char                 data[1];   /* len bytes follow */
 } rc_outq_item;
 
-/* Bounded in BYTES, not items. Sixteen 64KB frames would be a megabyte on a
- * machine measured at 28KB free after a turn. */
+/* Bounded in BYTES, not items: sixteen 64KB frames would be a megabyte.
+ *
+ * It is a SOFT cap. A writer that has waited its limit enqueues anyway rather
+ * than dropping the frame, because losing a frame on a stream with no resync
+ * is worse than overshooting the budget by one. So the true ceiling is
+ * RC_OUTQ_MAX_BYTES plus one frame per blocked writer. */
 #define RC_OUTQ_MAX_BYTES (64 * 1024)
 
 typedef struct {
@@ -70,6 +78,7 @@ typedef struct {
     unsigned long rx_bytes;
     unsigned long tx_bytes;
     unsigned      next_seq;     /* resume point */
+    int           started;      /* rc_net_start succeeded; needs teardown */
     char          sess[64];
 } rc_net;
 

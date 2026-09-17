@@ -159,6 +159,62 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — Stage B shipped, and the review found it had no restart path
+
+`mcp__machine__exec` works on real Windows 98 SE. Byte counts match experiment
+0.9 exactly -- `ver` 36B, `dir c:\ /w` 352B, `echo hello | find "hello"` 8B
+through the known-bad 16-bit FIND. Those numbers from the **windowed** binary
+also retire the gate the plan set: 0.9's evidence came from console-subsystem
+`probe.exe`, and spawning COMMAND.COM from a GUI process is not the same
+thing.
+
+**The review's headline finding was that the four-thread design had a start
+path and an exit path but no restart path**, and it was right. `reader_thread`
+never set `running = 0` when it exited, so `try_connect` called
+`rc_net_start` again with the sender and RPC worker still alive: a live
+critical section re-initialised, the outbound queue zeroed from under the
+sender, two sender threads on one socket. Two concurrent `send()`s interleave,
+the framing has no resync, the bridge drops the link -- which reconnects and
+adds a third sender.
+
+**Reproduced it, which is the part worth recording.** Bouncing the bridge
+three times crashed the guest with an invalid page fault in KERNEL32. The
+first fix (reader sets `running=0`, `try_connect` tears down first) was not
+enough: `rc_net_start` creates the critical section and both events at the
+TOP, and every `return -1` below leaves them behind while `started` was only
+set on success. So a bridge that is merely *down* -- the common case -- left
+`rc_net_stop` thinking there was nothing to clean up. Marking the connection
+as needing teardown before anything can fail is what actually fixed it.
+Verified: three more bridge restarts, no crash, then `ver` returned its 36
+bytes.
+
+Other findings fixed: the MCP server `timeout` was never set, so the CLI would
+have abandoned any exec past 30s while the Python body ran on (the plan wrote
+this out verbatim and it still shipped wrong); the idle reaper at 90s was
+shorter than the 120s max exec and would have reaped a quiet command mid-run;
+`DeleteCriticalSection` ran even when the RPC worker had not exited;
+`rc_exec_run` cleared the cancel flag on entry and could swallow a shutdown;
+the post-exit drain loop had no cancel check, deadline or cap, so a grandchild
+holding the pipe would hang the worker forever; `EXEC` was being stamped into
+the replay buffer, which would re-RUN commands the day `from=` is implemented;
+and a dropped `EXECOUT` left a hole in the output with nothing marking it, so
+the model would get an incomplete `dir` listing and no way to know.
+
+**The ownership question came back clean** -- every `rc_frame*` path traced,
+`inflight`/`rpcq` balanced in all six. The documented rule in `net.h` was
+wrong though: the worker does not always free the frame, since the busy and
+not-running paths free it on the reader. Corrected, because that comment
+exists specifically so the next person does not double-free.
+
+Still open, recorded rather than fixed: there is no `EXECKILL`, so cancelling
+a turn leaves the guest running the command and the next call gets
+`status=busy`; `si.hStdInput` was changed from NULL to an EOF pipe on the
+theory it answers "Are you sure (Y/N)?", and the review argues COMMAND.COM
+reads those from CON via INT 21h so the justification is probably wrong --
+`dir`, `ver` and the FIND pipe all still work, but it deserves its own test.
+
+
+
 ### 2026-09-17 — the tool surface is declared, not inherited
 
 Reported from the guest as "tool calls are failing". They were not failing;

@@ -922,6 +922,16 @@ class Bridge:
 
         # One worker thread over there means one command at a time.
         async with guest.exec_lock:
+            # Re-check: acquiring the lock can take as long as the command
+            # ahead of us, and _fail_execs in the disconnect path only covers
+            # entries that existed when it ran -- ours would be registered
+            # after it, and would then wait out the whole budget for a frame
+            # that was never transmitted.
+            if not guest.connected:
+                return {"content": [{"type": "text", "text":
+                        "The connected machine went away while this command "
+                        "was waiting to run. Nothing was run."}],
+                        "isError": True}
             guest.exec_seq += 1
             exec_id = f"x{guest.exec_seq}"
             fut = asyncio.get_running_loop().create_future()
@@ -934,8 +944,13 @@ class Bridge:
             # The command goes in the BODY. A header value is truncated at 255
             # bytes silently, and a truncated command is still EXECUTED --
             # `del c:\temp\*.tmp` cut short becomes `del c:\temp\*`.
+            # stamp=False: an EXEC must NEVER enter the replay buffer.
+            # Replay exists to redraw a transcript, and re-delivering this on
+            # reconnect would RE-RUN the command -- `del c:\temp\*` twice is
+            # not a redraw. Inert today only because the guest never sends
+            # `from=`; this is here so implementing that later cannot arm it.
             await self._send(guest, Frame("EXEC", headers,
-                                          fold.encode(command)))
+                                          fold.encode(command)), stamp=False)
             log.info("exec %s: %s", exec_id, command[:160])
 
             # Above the guest's own limit, so a slow command produces a
@@ -1077,6 +1092,14 @@ class Bridge:
                         "The Windows machine disconnected before anyone could "
                         "answer, so this was not approved. It was not refused "
                         "on purpose -- ask again if you still need it.")
+                continue
+            if guest.exec_pending:
+                # A command can run quietly for up to two minutes -- longer
+                # than the idle timeout -- and the guest has no keepalive of
+                # its own, so `last_seen` only moves when output happens to
+                # arrive. Reaping here would tear down the link mid-command,
+                # which then drives the guest into its reconnect path. A
+                # chatty command masks this; the first quiet one would not.
                 continue
             idle = time.monotonic() - guest.last_seen
             if idle < self.idle_timeout_s:

@@ -1167,6 +1167,14 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 static void try_connect(HWND hwnd)
 {
     status_refresh();
+    /* Tear the previous attempt down FIRST.
+     *
+     * rc_net_start is not idempotent: it re-initialises the critical section,
+     * zeroes the outbound queue and overwrites the thread handles. Calling it
+     * with the sender and worker from a dead connection still alive put two
+     * senders on one socket and corrupted the queue. rc_net_stop is a no-op
+     * when there is nothing to stop. */
+    rc_net_stop(&g_net);
     if (rc_net_start(&g_net, hwnd, g_cfg.host, g_cfg.port, g_cfg.secret) != 0) {
         /* Say it ONCE per outage, not once per retry.
          *

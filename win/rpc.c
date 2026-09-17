@@ -32,6 +32,7 @@ static rc_net          *g_net;
 /* Where the output of the command currently running goes. */
 typedef struct {
     char id[64];
+    int  lost;      /* an EXECOUT could not be queued */
 } exec_ctx;
 
 static void send_out(void *ctx, const char *data, unsigned len)
@@ -43,8 +44,18 @@ static void send_out(void *ctx, const char *data, unsigned len)
     if (!len) return;
     keys[0] = "id"; vals[0] = c->id;
     /* Straight onto the outbound queue; the sender thread owns the wire, so
-     * this does not block on a slow link. */
-    rc_net_send(g_net, "EXECOUT", keys, vals, 1, data, len);
+     * this does not block on a slow link.
+     *
+     * The return matters. rc_net_send fails on a dead socket, an oversized
+     * frame or a failed HeapAlloc, and silently dropping a chunk would leave
+     * a HOLE in the output that nothing marks -- the model would be handed a
+     * plausible-looking but incomplete `dir` listing and have no way to know.
+     * Flagging it here makes the EXECRESULT say so. */
+    if (rc_net_send(g_net, "EXECOUT", keys, vals, 1, data, len) != 0) {
+        c->lost = 1;
+        rc_log("rpc: EXECOUT %s dropped (%u bytes); output is incomplete",
+               c->id, len);
+    }
 }
 
 static void run_one(rc_frame *f)
@@ -63,6 +74,13 @@ static void run_one(rc_frame *f)
     int nkv = 0;
 
     if (!id) { rc_log("rpc: EXEC with no id, dropped"); return; }
+    /* Reject rather than truncate: a shortened id produces an EXECRESULT the
+     * bridge cannot match, and the caller then waits out its whole budget. */
+    if (strlen(id) >= sizeof(ctx.id)) {
+        rc_log("rpc: EXEC id too long, dropped");
+        return;
+    }
+    ctx.lost = 0;
     _snprintf(ctx.id, sizeof(ctx.id) - 1, "%s", id);
     ctx.id[sizeof(ctx.id) - 1] = '\0';
 
@@ -74,6 +92,18 @@ static void run_one(rc_frame *f)
      * at 255 bytes silently, and a truncated command would still be run. */
     rc_log("rpc: exec %s (%lums): %.120s", ctx.id,
            (unsigned long)timeout_ms, f->body ? f->body : "");
+
+    /* Arm first, then re-check: a cancel landing after the arm is caught by
+     * the run loop, and one landing before it is caught here. */
+    rc_exec_arm();
+    if (!g_running) {
+        const char *k[2]; const char *v[2];
+        k[0] = "id";     v[0] = ctx.id;
+        k[1] = "status"; v[1] = "cancelled";
+        rc_net_send(g_net, "EXECRESULT", k, v, 2, NULL, 0);
+        rc_log("rpc: exec %s abandoned, shutting down", ctx.id);
+        return;
+    }
 
     memset(&r, 0, sizeof(r));
     rc_exec_run(f->body ? f->body : "", cwd,
@@ -90,7 +120,10 @@ static void run_one(rc_frame *f)
 
     _snprintf(code, sizeof(code), "%lu", (unsigned long)r.code);
     _snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)r.bytes);
-    _snprintf(trunc, sizeof(trunc), "%d", r.truncated ? 1 : 0);
+    /* Output lost on the wire is reported the same way as output past the
+     * cap: either way the model must not treat what arrived as complete. */
+    _snprintf(trunc, sizeof(trunc), "%d",
+              (r.truncated || ctx.lost) ? 1 : 0);
 
     keys[nkv] = "id";        vals[nkv++] = ctx.id;
     keys[nkv] = "status";    vals[nkv++] = status;

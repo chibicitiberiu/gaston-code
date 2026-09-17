@@ -203,7 +203,20 @@ static unsigned __stdcall reader_thread(void *arg)
         }
     }
 
-    set_state(n, n->running ? RC_FAILED : RC_DISCONNECTED);
+    /* THE LINK IS DEAD, AND SAYING SO IS THIS THREAD'S JOB.
+     *
+     * Leaving `running` at 1 here was the single worst bug in the four-thread
+     * design: try_connect would call rc_net_start again with the sender and
+     * the RPC worker still alive, which re-initialised a HELD critical
+     * section, zeroed the outbound queue from under the sender, and left two
+     * sender threads calling send() on one socket. Two concurrent sends
+     * interleave, the bridge's framing has no resync, so it drops the link --
+     * which reconnects, adding a third sender. */
+    {
+        int was_running = n->running;
+        n->running = 0;
+        set_state(n, was_running ? RC_FAILED : RC_DISCONNECTED);
+    }
     rc_log("net: reader thread exiting (rx=%lu tx=%lu)", n->rx_bytes, n->tx_bytes);
     return 0;
 }
@@ -274,6 +287,16 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     /* Manual-reset would wake every blocked writer at once; auto-reset wakes
      * one, which is what "a slot freed up" means. */
     n->outq_room = CreateEventA(NULL, FALSE, FALSE, NULL);
+    /* Mark it needing teardown HERE, not on success.
+     *
+     * The critical section and both events now exist, and every `return -1`
+     * below leaves them behind. Setting this only on success meant a failed
+     * attempt -- a bridge that is simply down, which is the common case --
+     * left rc_net_stop thinking there was nothing to clean up, so the next
+     * try_connect re-initialised a LIVE critical section and overwrote both
+     * event handles. That is a fault inside KERNEL32, and it is what three
+     * bridge restarts reproduced. */
+    n->started = 1;
     set_state(n, RC_CONNECTING);
 
     if (WSAStartup(MAKEWORD(1, 1), &wsa) != 0) {
@@ -372,11 +395,25 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * gets one and never releases it. It also takes a non-NULL thread-id
      * slot, which Win95/98 requires -- CreateThread(..., NULL) fails there
      * with ERROR_INVALID_PARAMETER while NT accepts it. */
+    /* Order matters. The worker must exist before the reader can route an
+     * EXEC to it, or an early frame is dropped silently and the bridge waits
+     * out its whole budget for a command nobody ran. */
+    rc_rpc_start(n);
+    n->sender = (HANDLE)_beginthreadex(NULL, 0, sender_thread, n, 0, &tid);
+    if (!n->sender) {
+        /* Without a sender nothing can put a byte on the wire -- including the
+         * HELLO already queued. Reporting "connected" here would leave the app
+         * looking healthy forever. */
+        rc_log("net: could not start sender thread");
+        rc_rpc_stop();
+        rc_rpc_join(2000);
+        closesocket(n->sock);
+        n->sock = INVALID_SOCKET;
+        n->running = 0;
+        set_state(n, RC_FAILED);
+        return -1;
+    }
     n->thread = (HANDLE)_beginthreadex(NULL, 0, reader_thread, n, 0, &tid);
-    if (n->thread)
-        n->sender = (HANDLE)_beginthreadex(NULL, 0, sender_thread, n, 0, &tid);
-    if (n->sender)
-        rc_rpc_start(n);
     if (!n->thread) {
         rc_log("net: _beginthreadex failed");
         set_state(n, RC_FAILED);
@@ -526,7 +563,12 @@ int rc_net_send(rc_net *n, const char *type,
 void rc_net_stop(rc_net *n)
 {
     DWORD rw = WAIT_OBJECT_0, sw = WAIT_OBJECT_0;
+    int   rpcj;
 
+    /* Safe to call on a connection that never started, so the reconnect path
+     * can call it unconditionally rather than tracking state itself. */
+    if (!n->started) return;
+    n->started = 0;
     n->running = 0;
     /* Wake anything parked on the queue so it can notice `running`. */
     if (n->outq_wake) SetEvent(n->outq_wake);
@@ -558,10 +600,15 @@ void rc_net_stop(rc_net *n)
         CloseHandle(n->sender);
         n->sender = NULL;
     }
-    if (!rc_rpc_join(30000))
-        rc_log("net: RPC worker did not exit; leaking its lock deliberately");
+    rpcj = rc_rpc_join(30000);
+    if (!rpcj)
+        rc_log("net: RPC worker did not exit");
 
-    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0) {
+    /* The worker calls rc_net_send, so it holds send_lock as readily as the
+     * other two. An earlier version computed this join and then left it out of
+     * the condition, which destroyed the section under a live worker -- the
+     * exact GPF-at-exit the rewrite existed to remove. */
+    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0 && rpcj) {
         outq_clear(n);
         DeleteCriticalSection(&n->send_lock);
     } else {
@@ -572,8 +619,13 @@ void rc_net_stop(rc_net *n)
                (unsigned long)rw, (unsigned long)sw);
     }
 
-    if (n->outq_wake) { CloseHandle(n->outq_wake); n->outq_wake = NULL; }
-    if (n->outq_room) { CloseHandle(n->outq_room); n->outq_room = NULL; }
+    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0 && rpcj) {
+        /* Only once nothing can still be waiting on them. Closing these under
+         * a surviving thread turns its WaitForSingleObject into an instant
+         * WAIT_FAILED, i.e. a hot spin. */
+        if (n->outq_wake) { CloseHandle(n->outq_wake); n->outq_wake = NULL; }
+        if (n->outq_room) { CloseHandle(n->outq_room); n->outq_room = NULL; }
+    }
     inflate_finish();
     WSACleanup();
 }
