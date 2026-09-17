@@ -1,0 +1,59 @@
+/* Scanning and file I/O for the sync layer.
+ *
+ * The guest is STATELESS across restarts: it reports what it sees and holds no
+ * baseline. All history lives on the bridge, which has a real disk. The only
+ * durable guest state is the sync root and the tree id, both in the INI.
+ */
+#ifndef RC_SYNC_H
+#define RC_SYNC_H
+
+#include <windows.h>
+
+/* Comparison class. Must match bridge/paths.py exactly -- the two sides compare
+ * the outputs of these functions, so a disagreement is permanent. */
+#define RC_CLS_TEXT  't'    /* uniform line endings; compared normalised */
+#define RC_CLS_EXACT 'b'    /* binary, mixed endings, lone CR: byte-exact */
+
+#define RC_SYNC_MAX_DEPTH   16
+#define RC_SYNC_MAX_FILES 2000
+#define RC_SYNC_CHUNK     8192
+
+typedef struct {
+    char  type;             /* 'f', 'd', or 'u' (unreadable -- NOT absent) */
+    char  cls;              /* RC_CLS_* */
+    DWORD size;             /* bytes on THIS side; never compared cross-side */
+    DWORD mtime;            /* unix seconds, local; a per-side cache key only */
+    unsigned long crc;      /* over the class-appropriate bytes */
+} rc_sync_stat;
+
+/* Called once per entry during a walk. `rel` is relative to the root with '/'
+ * separators, in the guest's ANSI bytes -- never decoded, never folded. */
+typedef void (*rc_sync_sink)(void *ctx, const char *rel, const rc_sync_stat *st);
+
+void rc_sync_init(void);
+
+/* Walk the root. Returns the entry count, or -1 if the root is missing, or
+ * -2 if the tree exceeds RC_SYNC_MAX_FILES (which must abort the whole pass:
+ * a truncated manifest is indistinguishable from a mass deletion). */
+int  rc_sync_scan(const char *root, rc_sync_sink sink, void *ctx);
+
+/* Classify and checksum one file. Both CRCs are accumulated in a single read
+ * pass, because the class is not known until the last byte and this machine
+ * cannot afford to read twice. */
+int  rc_sync_stat_file(const char *path, rc_sync_stat *out);
+
+/* Is `rel` inside `root` and free of escapes? The guest checks too; the bridge
+ * checking is not enough when the bridge is what might be wrong. */
+int  rc_sync_contained(const char *rel);
+
+/* Open a file for writing through a temp; rc_sync_commit renames it into place,
+ * having first moved any existing file aside so no instant has no file at all. */
+HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
+                           unsigned tmp_cap);
+int    rc_sync_commit(const char *root, const char *rel, const char *tmp,
+                      unsigned long want_crc, char cls);
+/* Recover an interrupted commit: if <p>.gaston-old exists and <p> does not,
+ * put it back. Called once at startup, before the first scan. */
+void   rc_sync_recover(const char *root);
+
+#endif

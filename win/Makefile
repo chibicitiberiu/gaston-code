@@ -39,9 +39,9 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
 OBJS = main.o net.o frameproto.o log.o ini.o htmlview.o miniz.o \
-       exec.o rpc.o
+       exec.o rpc.o sync.o
 
-.PHONY: all clean check run netcheck probe htmlspike
+.PHONY: synccheck all clean check run netcheck probe htmlspike
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
@@ -55,6 +55,13 @@ htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
+SYNCCHECK_OBJS = synccheck.o sync.o log.o miniz.o
+synccheck: synccheck.exe
+synccheck.exe: $(SYNCCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(SYNCCHECK_OBJS)}
+	@echo "built $@"
+
 PROBE_OBJS = probe.o miniz.o
 probe: probe.exe
 probe.exe: $(PROBE_OBJS)
@@ -73,7 +80,7 @@ all: retroclaude.exe
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = netcheck.o net.o frameproto.o log.o miniz.o \
-                exec.o rpc.o
+                exec.o rpc.o sync.o
 netcheck: netcheck.exe
 netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
