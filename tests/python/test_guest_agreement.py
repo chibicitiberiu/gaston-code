@@ -20,7 +20,8 @@ import pytest
 from bridge.paths import CLASS_EXACT, CLASS_TEXT, classify, normalise
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-EXE = os.path.join(HERE, "win", "synccheck.exe")
+BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
+EXE = os.path.join(BUILD, "synccheck.exe")
 
 #: The project uses Lutris's wine-ge build, not a system wine -- see
 #: spike/Makefile, which records that it is a standalone Wine with full 32-bit
@@ -34,7 +35,7 @@ PREFIX = os.path.join(HERE, "spike", ".wineprefix")
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(EXE) or not os.path.exists(WINE),
-    reason="needs win/synccheck.exe and the Lutris wine-ge runner",
+    reason="needs build/win/synccheck.exe (make -C win synccheck) and the Lutris wine-ge runner",
 )
 
 #: Deliberately the nastiest content we can think of, because the cases that

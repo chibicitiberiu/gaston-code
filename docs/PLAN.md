@@ -34,7 +34,7 @@ The gap is the combination: comctl32 chrome, a streamed transcript, permission r
 real modal dialogs, and one machine being both the terminal you sit at and the workspace
 Claude operates on.
 
-Research: `/home/tibi/Dev/RetroAI/FEASIBILITY.md` (707 lines).
+Research: `docs/FEASIBILITY.md` (707 lines).
 
 ### Hard constraint
 
@@ -1263,17 +1263,21 @@ RetroAI/
   README.md  FEASIBILITY.md  NOTICE  LICENSE
   Makefile                    # exe test lint wine qemu
   make/ow.mk                  # -bm, WLINK_LNK, WINVER=0x0400, verified rules
-  win/                        # [R2] one binary, one target
-    frameproto.h  net.c  ini.c  log.c  w9x.c
-    main.c  transcript.c  dialogs.c
-    rpc.c  exec.c  input.c   # Phase 3 / Phase 6, same exe
-    FORKED.md
+  win/                        # [R2] one binary, one target -- SOURCE ONLY
+    frameproto.c/.h  net.c/.h  ini.c/.h  log.c/.h  caps.h
+    main.c  htmlview.c/.h
+    rpc.c/.h  exec.c/.h  sync.c/.h  syncrpc.c/.h
+    third_party/miniz/
+  build/                      # ALL generated output, gitignored
+    win/  spike/              # .o .exe .map .err, and the guest's runtime log
+  tmp/                        # scratch from the VM-driving scripts, gitignored
   bridge/     server.py session.py rpc.py tools.py markdown.py fold.py
               pages.py paths.py replay.py protocol.py fakegui.py
   tests/python/  test_pe_imports.py (Phase 3) test_protocol.py
                  test_markdown.py test_fold.py
-  tools/      qmp.py mkvm.sh
-  vm/         run scripts (gitignore *.qcow2)
+  tools/      qmp.py mkvm.sh vmship.sh dos.py syncprobe.py stackframes.py
+  vm/         disk images and run scripts (all images gitignored)
+  docs/       PLAN.md PROGRESS.md BACKLOG.md FEASIBILITY.md FORKED.md audit/
 ```
 
 `FORKED.md` records which retro-agent files at which commit with what changes — MIT

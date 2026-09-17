@@ -21,9 +21,10 @@
 set -uo pipefail
 export LIBVIRT_DEFAULT_URI=qemu:///session
 DOM=retroclaude-win98
-OUT=vm/sitter
+# Scratch under tmp/, not beside the disk images. See watchvm.sh.
+OUT=tmp/sitter
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$OUT"; echo $$ > vm/sitter.pid
+mkdir -p "$OUT"; echo $$ > tmp/sitter.pid
 
 have_ocr=0; command -v tesseract >/dev/null 2>&1 && have_ocr=1
 ejected=0; gui_seen=0; last_dim=""; last_note=""

@@ -6,6 +6,9 @@
 #   make wine        run under Wine (reuses Lutris wine-ge, version set to win98)
 #   make wine-smoke  non-interactive: alive after 6s == pass
 
+# All generated files live here; the source directory stays source only.
+BUILD ?= $(CURDIR)/../build/spike
+
 WATCOM ?= /usr/bin/watcom
 OWBIN   = $(WATCOM)/binl64
 # wlink searches PATH (not WATCOM) for its wlink.lnk config, which is what
@@ -35,35 +38,35 @@ MLFLAGS = -static -s -mwindows -Wl,--subsystem,windows:4.0 \
 
 all: ow
 
-ow: hello98.c
-	$(WCC) $(OWCFLAGS) hello98.c
-	$(WLINK) $(OWLFLAGS) name hello98.exe file hello98.o
-	@rm -f hello98.o
+ow: hello98.c | $(BUILD)
+	$(WCC) $(OWCFLAGS) -fo=$(BUILD)/hello98.o -fr=$(BUILD)/hello98.err hello98.c
+	$(WLINK) $(OWLFLAGS) name $(BUILD)/hello98.exe file $(BUILD)/hello98.o
+	@rm -f $(BUILD)/hello98.o
 
-mingw: hello98.c
-	$(MCC) $(MCFLAGS) -o hello98.exe hello98.c $(MLFLAGS)
+mingw: hello98.c | $(BUILD)
+	$(MCC) $(MCFLAGS) -o $(BUILD)/hello98.exe hello98.c $(MLFLAGS)
 
 check:
 	@echo "=== identity ==="
-	@file hello98.exe
+	@file $(BUILD)/hello98.exe
 	@echo
 	@echo "=== PE version gate (want OS 4.0 / Subsystem 4.0) ==="
-	@objdump -p hello98.exe | grep -iE 'OSystemVersion|SubsystemVersion|^Subsystem'
+	@objdump -p $(BUILD)/hello98.exe | grep -iE 'OSystemVersion|SubsystemVersion|^Subsystem'
 	@echo
 	@echo "=== imported DLLs (MSVCRT.DLL here means a CRT dependency to audit) ==="
-	@objdump -p hello98.exe | grep -i 'DLL Name'
+	@objdump -p $(BUILD)/hello98.exe | grep -i 'DLL Name'
 	@echo
 	@echo "=== every imported symbol ==="
-	@objdump -p hello98.exe | grep -E '^\s+[0-9a-f]+\s+<none>' | awk '{print "   "$$NF}'
+	@objdump -p $(BUILD)/hello98.exe | grep -E '^\s+[0-9a-f]+\s+<none>' | awk '{print "   "$$NF}'
 	@echo
 	@echo "=== W-suffix imports (stubs on Win9x; fine if version-guarded, fatal if not) ==="
-	@objdump -p hello98.exe | grep -E '^\s+[0-9a-f]+\s+<none>' | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
+	@objdump -p $(BUILD)/hello98.exe | grep -E '^\s+[0-9a-f]+\s+<none>' | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
 	@echo
 	@echo "=== CMOV count (must be 0 for Pentium-1 class hardware) ==="
-	@objdump -d -m i386 hello98.exe 2>/dev/null | grep -cE '\scmov' || echo 0
+	@objdump -d -m i386 $(BUILD)/hello98.exe 2>/dev/null | grep -cE '\scmov' || echo 0
 	@echo
 	@echo "=== size ==="
-	@ls -l hello98.exe | awk '{print "   "$$5" bytes"}'
+	@ls -l $(BUILD)/hello98.exe | awk '{print "   "$$5" bytes"}'
 
 # Reuse an existing Wine instead of installing one system-wide. Lutris's
 # wine-ge build is a standalone Wine (not Proton) with full 32-bit support
@@ -93,19 +96,22 @@ $(WINEPREFIX):
 # Wine fully implements W-functions that real Win98 only stubs, and its
 # comctl32 is a reimplementation. 'make check' is the load-time gate; a real
 # Win98 guest is the behavioural one.
-wine: hello98.exe | $(WINEPREFIX)
+wine: $(BUILD)/hello98.exe | $(WINEPREFIX)
 	@$(WINE) --version
-	$(WINE) hello98.exe 2>&1 | $(WNOISE)
+	$(WINE) $(BUILD)/hello98.exe 2>&1 | $(WNOISE)
 
 # Non-interactive smoke test for CI: alive after N seconds == pass.
-wine-smoke: hello98.exe | $(WINEPREFIX)
+wine-smoke: $(BUILD)/hello98.exe | $(WINEPREFIX)
 	@echo ">> running for 6s; staying alive is a pass"
-	@timeout 6 $(WINE) hello98.exe >/dev/null 2>&1; 	  if [ $$? -eq 124 ]; then echo "PASS: survived 6s in its message loop"; 	  else echo "FAIL: exited early"; exit 1; fi
+	@timeout 6 $(WINE) $(BUILD)/hello98.exe >/dev/null 2>&1; 	  if [ $$? -eq 124 ]; then echo "PASS: survived 6s in its message loop"; 	  else echo "FAIL: exited early"; exit 1; fi
 
 wine-clean:
 	rm -rf $(WINEPREFIX)
 
 clean:
-	rm -f hello98.exe hello98.o
+	rm -rf $(BUILD)
 
 .PHONY: all ow mingw check wine wine-smoke wine-clean clean
+
+$(BUILD):
+	@mkdir -p $(BUILD)

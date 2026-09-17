@@ -1,6 +1,20 @@
 TOP := $(CURDIR)
 include $(TOP)/make/ow.mk
 
+# Two generated trees, both gitignored, and nothing generated outside them:
+#
+#   build/   compiler and linker output -- objects, executables, maps, the
+#            per-file .err listings Open Watcom writes unless -fr= redirects
+#            them, and the guest's own runtime log and ini beside its exe.
+#   tmp/     scratch from the scripts that drive the VM -- screenshots, pids,
+#            OCR intermediates.
+#
+# Before this, all of it lived beside the source: `ls win/` showed fourteen
+# .o files, six .exe files, a .map, two stray .err listings and an orphaned
+# transcript.o whose source had been deleted. `rm -rf build tmp` is now a
+# complete clean with nothing left behind.
+BUILD_DIRS = build tmp
+
 .PHONY: all spike check wine-smoke lint test clean help
 
 help:
@@ -9,7 +23,7 @@ help:
 	@echo "wine-smoke  run under Wine -- code sanity only, NOT a Win98 proof"
 	@echo "lint        grep for RichEdit 3.0-only messages Win98 lacks"
 	@echo "test        python tests"
-	@echo "clean"
+	@echo "clean       remove build/ and tmp/ entirely"
 
 all: spike
 
@@ -54,3 +68,6 @@ test:
 
 clean:
 	@$(MAKE) -C spike clean
+	@$(MAKE) -C win clean
+	@rm -rf $(BUILD_DIRS)
+	@echo "clean: removed $(BUILD_DIRS)"

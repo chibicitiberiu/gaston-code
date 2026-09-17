@@ -1,21 +1,28 @@
-# Wine prefix (221MB, disposable, recreated by `make wine`)
+# Everything generated lives in build/ or tmp/ and nothing generated lives
+# anywhere else. That is the rule; the patterns below are the safety net for
+# when a tool ignores it.
+build/
+tmp/
+
+# Wine prefix: 221MB, disposable, recreated by `make wine`.
 spike/.wineprefix/
 .wineprefix/
 
-# Build output
+# Build output, wherever it escapes to. Open Watcom drops .err listings beside
+# the SOURCE unless -fr= says otherwise, which is how win/ collected two.
 *.exe
 *.o
 *.obj
 *.lst
 *.map
+*.err
 
-# Timestamped backups (git is the backup now)
+# Timestamped backups. Git is the backup -- every one of the 21 that
+# accumulated here had its source in history, including two whose source file
+# had been deleted entirely.
 *.bak.*
-
-# VM images
-vm/*.qcow2
-vm/*.img
-vm/*.iso
+*.bak[0-9].*
+*.pre-*
 
 # Python
 __pycache__/
@@ -28,12 +35,13 @@ venv/
 .vscode/
 .idea/
 
-# Local venv
-.venv/
-
-# VM artifacts: images, screenshots, extracted media
+# VM: disk images, install media, screenshots, and the scratch the driving
+# scripts leave behind. The images are gigabytes and are NOT reproducible from
+# this repo -- they are deliberately untracked, not deliberately disposable.
 vm/*.qcow2
+vm/*.qcow2.*
 vm/*.raw
+vm/*.raw.*
 vm/*.img
 vm/*.iso
 vm/*.ppm
@@ -43,8 +51,8 @@ vm/*.log
 vm/sitter/
 vm/watch/
 vm/tools-stage/
-vm/*.bak.*
 vm/*.partial.*
 
-# Open Watcom per-file error listings
-*.err
+# NOT ignored, deliberately: win/retroclaude.ini is the template config, and
+# the guest's own runtime copy now lands beside its exe in build/win/, which
+# is ignored by the first rule in this file.

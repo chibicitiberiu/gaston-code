@@ -7,6 +7,13 @@ TOP     := $(CURDIR)/..
 WATCOM  ?= /usr/bin/watcom
 OWBIN    = $(WATCOM)/binl64
 
+# Every generated file goes here and nothing generated goes anywhere else.
+# Source directories stay readable: `ls win/` used to show fourteen .o files,
+# six .exe files, a .map, a stray .err and an orphaned transcript.o whose
+# source had been deleted months earlier. One gitignored tree also means
+# `rm -rf build` is a complete clean with nothing left behind.
+BUILD   ?= $(TOP)/build/win
+
 WCC   = $(OWBIN)/wcc386
 WLINK = $(OWBIN)/wlink
 WRC   = $(OWBIN)/wrc
@@ -38,16 +45,16 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # forwarder to ws2_32). comctl32 is for the status bar.
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
-OBJS = main.o net.o frameproto.o log.o ini.o htmlview.o miniz.o \
-       exec.o rpc.o sync.o syncrpc.o
+OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
+       htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
 .PHONY: synccheck inicheck all clean check run netcheck probe htmlspike
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
-HTMLSPIKE_OBJS = htmlspike.o
-htmlspike: htmlspike.exe
-htmlspike.exe: $(HTMLSPIKE_OBJS)
+HTMLSPIKE_OBJS = $(BUILD)/htmlspike.o
+htmlspike: $(BUILD)/htmlspike.exe
+$(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 	@$(WLINK) $(LFLAGS) library ole32.lib, oleaut32.lib, uuid.lib \
 	  name $@ file {$(HTMLSPIKE_OBJS)}
 	@echo "built $@"
@@ -55,9 +62,9 @@ htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = synccheck.o sync.o log.o miniz.o
-synccheck: synccheck.exe
-synccheck.exe: $(SYNCCHECK_OBJS)
+SYNCCHECK_OBJS = $(addprefix $(BUILD)/,synccheck.o sync.o log.o miniz.o)
+synccheck: $(BUILD)/synccheck.exe
+$(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(SYNCCHECK_OBJS)}
 	@echo "built $@"
@@ -65,16 +72,16 @@ synccheck.exe: $(SYNCCHECK_OBJS)
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = inicheck.o ini.o log.o
-inicheck: inicheck.exe
-inicheck.exe: $(INICHECK_OBJS)
+INICHECK_OBJS = $(addprefix $(BUILD)/,inicheck.o ini.o log.o)
+inicheck: $(BUILD)/inicheck.exe
+$(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(INICHECK_OBJS)}
 	@echo "built $@"
 
-PROBE_OBJS = probe.o miniz.o
-probe: probe.exe
-probe.exe: $(PROBE_OBJS)
+PROBE_OBJS = $(addprefix $(BUILD)/,probe.o miniz.o)
+probe: $(BUILD)/probe.exe
+$(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(PROBE_OBJS)}
 	@echo "built $@"
 	@echo "--- import audit (an NT-only symbol here would kill it at load) ---"
@@ -83,16 +90,16 @@ probe.exe: $(PROBE_OBJS)
 	  | grep -E 'SetHandleInformation|OpenSCManager|CM_Get|GetGuiResources' \
 	  && echo "  ^^ NT-ONLY IMPORT -- WILL NOT LOAD ON WIN9X" || echo "  clean"
 
-all: retroclaude.exe
+all: $(BUILD)/retroclaude.exe
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
-NETCHECK_OBJS = netcheck.o net.o frameproto.o log.o miniz.o \
-                exec.o rpc.o sync.o syncrpc.o
-netcheck: netcheck.exe
-netcheck.exe: $(NETCHECK_OBJS)
+NETCHECK_OBJS = $(addprefix $(BUILD)/,netcheck.o net.o frameproto.o \
+                log.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+netcheck: $(BUILD)/netcheck.exe
+$(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
 	@echo "built $@"
 
@@ -104,16 +111,22 @@ netcheck.exe: $(NETCHECK_OBJS)
 # the change, and it looked exactly like a Win9x message-queue limit.
 HDRS = $(wildcard *.h)
 
-%.o: %.c $(HDRS)
-	@$(WCC) $(CFLAGS) -fo=$@ $<
+# -fr= puts the compiler's per-file error listing in the build tree. Without
+# it Open Watcom drops a .err next to the SOURCE, which is how win/ collected
+# frameproto.err and probe.err.
+$(BUILD)/%.o: %.c $(HDRS) | $(BUILD)
+	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/$*.err $<
 
-miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h
-	@$(WCC) $(CFLAGS) -fo=$@ third_party/miniz/miniz.c
+$(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)
+	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/miniz.err third_party/miniz/miniz.c
+
+$(BUILD):
+	@mkdir -p $(BUILD)
 
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
-retroclaude.exe: $(OBJS)
-	@$(WLINK) $(LFLAGS), map=retroclaude.map $(LIBS) name $@ file {$(OBJS)}
+$(BUILD)/retroclaude.exe: $(OBJS)
+	@$(WLINK) $(LFLAGS), map=$(BUILD)/retroclaude.map $(LIBS) name $@ file {$(OBJS)}
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # Known-good CMOV count. See the note in the check target: this is a data
@@ -123,13 +136,13 @@ PYTHON ?= python3
 
 # Static PE audit. The import table is the gate that matters: a single NT-only
 # symbol kills the EXE at load on Win98, before WinMain, with no log written.
-check: retroclaude.exe
-	@echo "=== identity ==="; file retroclaude.exe
+check: $(BUILD)/retroclaude.exe
+	@echo "=== identity ==="; file $(BUILD)/retroclaude.exe
 	@echo "=== version gate (want 4.0/4.0) ==="
-	@objdump -p retroclaude.exe | grep -iE 'OSystemVersion|SubsystemVersion'
-	@echo "=== DLLs ==="; objdump -p retroclaude.exe | grep -i 'DLL Name'
+	@objdump -p $(BUILD)/retroclaude.exe | grep -iE 'OSystemVersion|SubsystemVersion'
+	@echo "=== DLLs ==="; objdump -p $(BUILD)/retroclaude.exe | grep -i 'DLL Name'
 	@echo "=== W-suffix imports (stubs on Win9x) ==="
-	@objdump -p retroclaude.exe | grep -E '^\s+[0-9a-f]+\s+<none>' \
+	@objdump -p $(BUILD)/retroclaude.exe | grep -E '^\s+[0-9a-f]+\s+<none>' \
 	  | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
 	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
 	@# objdump disassembles the whole AUTO section linearly, and that section
@@ -140,19 +153,19 @@ check: retroclaude.exe
 	@# emits. Gating on 0 would therefore fail forever and the gate would
 	@# start being ignored, which is worse than not having it. Gate on the
 	@# baseline instead, so a real regression still trips it.
-	@n=$$(objdump -d -m i386 retroclaude.exe 2>/dev/null | grep -cE '\scmov'); \
+	@n=$$(objdump -d -m i386 $(BUILD)/retroclaude.exe 2>/dev/null | grep -cE '\scmov'); \
 	 if [ "$$n" -gt $(CMOV_BASELINE) ]; then \
 	   echo "   FAIL: $$n CMOV (baseline $(CMOV_BASELINE)) -- check -5 is still set"; exit 1; \
 	 else echo "   ok: $$n (baseline $(CMOV_BASELINE), known data false positive)"; fi
 	@echo "=== stack frames (a frame >= one page steps over the guard page) ==="
-	@$(PYTHON) $(TOP)/tools/stackframes.py retroclaude.exe retroclaude.map
+	@$(PYTHON) $(TOP)/tools/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map
 	@echo "=== static allocation (the guest has 28KB free after a turn) ==="
 	@# Uninitialised statics are committed at load and are spent before the
 	@# app does anything -- rc_net_send's frame build buffer alone is 66,560
 	@# bytes. `objdump -h` reports the RAW section size, which omits BSS
 	@# entirely and makes this look 7x smaller than it is, so read the PE
 	@# section headers directly.
-	@$(PYTHON) -c "import struct;d=open('retroclaude.exe','rb').read();\
+	@$(PYTHON) -c "import struct;d=open('$(BUILD)/retroclaude.exe','rb').read();\
 pe=struct.unpack_from('<I',d,0x3c)[0];\
 n=struct.unpack_from('<H',d,pe+6)[0];o=pe+24+struct.unpack_from('<H',d,pe+20)[0];\
 rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII',d,o+i*40+8) for i in range(n)];\
@@ -160,4 +173,4 @@ rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII'
 print('   total committed at load: %d bytes' % sum(max(r[1],r[3]) for r in rows))"
 
 clean:
-	@rm -f *.o *.map retroclaude.exe
+	@rm -rf $(BUILD)

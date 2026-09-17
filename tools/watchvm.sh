@@ -7,12 +7,14 @@
 set -uo pipefail
 export LIBVIRT_DEFAULT_URI=qemu:///session
 DOM="${DOM:-retroclaude-win98}"
-OUT="${OUT:-vm/watch}"
+# Scratch goes under tmp/, which is gitignored wholesale. It used to land in
+# vm/, beside the disk images, which made "what in here matters" unanswerable.
+OUT="${OUT:-tmp/watch}"
 EVERY="${EVERY:-20}"
 N="${N:-900}"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$OUT"
-echo $$ > vm/watch.pid
+echo $$ > tmp/watch.pid
 
 have_ocr=0
 if command -v tesseract >/dev/null 2>&1; then have_ocr=1; fi

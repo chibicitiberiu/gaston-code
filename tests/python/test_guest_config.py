@@ -22,7 +22,8 @@ import subprocess
 import pytest
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-EXE = os.path.join(HERE, "win", "inicheck.exe")
+BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
+EXE = os.path.join(BUILD, "inicheck.exe")
 
 WINE = os.environ.get(
     "WINE",
@@ -33,7 +34,7 @@ PREFIX = os.path.join(HERE, "spike", ".wineprefix")
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(EXE) or not os.path.exists(WINE),
-    reason="needs win/inicheck.exe and the Lutris wine-ge runner",
+    reason="needs build/win/inicheck.exe (make -C win inicheck) and the Lutris wine-ge runner",
 )
 
 
