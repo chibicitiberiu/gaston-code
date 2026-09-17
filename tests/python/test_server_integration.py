@@ -783,3 +783,81 @@ async def test_path_inside_the_working_copy_still_asks(harness):
     assert f.headers["tool"] == "Write"
     task.cancel()
     await harness.close(writer)
+
+
+async def test_cancelling_a_turn_tells_the_guest_to_kill_the_command(harness):
+    """Without EXECKILL, an interrupted turn leaves the command running on the
+    guest, and the NEXT call is answered `busy` -- so one interrupted turn
+    poisons the following one for a reason the model can neither see nor act
+    on. The send is scheduled rather than awaited because the cancellation
+    path cannot await.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    task = asyncio.create_task(
+        harness.bridge.run_on_guest("dir /s c:\\", timeout_ms=60000,
+                                    shell=True, cwd=""))
+    f = await _recv(harness, reader, "EXEC")
+    exec_id = f.headers["id"]
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    kill = await _recv(harness, reader, "EXECKILL")
+    assert kill.headers["id"] == exec_id
+    # And the slot is free, so the next call is not answered "busy".
+    assert not harness.bridge._guest.exec_pending
+    await harness.close(writer)
+
+
+async def test_exec_is_never_replayed(harness):
+    """Replay redraws a transcript. Re-delivering an EXEC would RE-RUN the
+    command -- `del c:\\temp\\*` twice is not a redraw."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    before = harness.bridge._guest.replay.next_seq
+
+    task = asyncio.create_task(
+        harness.bridge.run_on_guest("ver", timeout_ms=5000, shell=True, cwd=""))
+    await _recv(harness, reader, "EXEC")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    types = [fr.type for fr in harness.bridge._guest.replay.since(before)]
+    assert "EXEC" not in types
+    assert "EXECKILL" not in types
+    await harness.close(writer)
+
+
+async def test_stop_kills_a_running_command(harness):
+    """Pressing Stop must reach the command, not just the model.
+
+    run_on_guest's CancelledError path is largely unreachable: on mcp 1.x the
+    SDK does not cancel an in-flight tool call when a turn is interrupted, so
+    that coroutine never wakes up to send EXECKILL. Measured on the guest --
+    `pause` kept running for its full clamp after Stop. INTERRUPT is the
+    trigger that actually fires.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    task = asyncio.create_task(
+        harness.bridge.run_on_guest("pause", timeout_ms=90000,
+                                    shell=True, cwd=""))
+    f = await _recv(harness, reader, "EXEC")
+    exec_id = f.headers["id"]
+
+    await harness.send(writer, Frame("INTERRUPT", {}))
+    kill = await _recv(harness, reader, "EXECKILL")
+    assert kill.headers["id"] == exec_id
+
+    # The guest answers the kill; that resolves the call.
+    await harness.send(writer, Frame("EXECRESULT",
+                                     {"id": exec_id, "status": "cancelled",
+                                      "code": "1", "bytes": "0"}))
+    result = await asyncio.wait_for(task, 5)
+    assert result["isError"] is True
+    await harness.close(writer)

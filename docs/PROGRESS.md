@@ -159,6 +159,57 @@ deliberately repetitive test text; real prose measured 2.16:1.)
 
 ## Decisions made while building
 
+### 2026-09-17 — the two open Stage B items, both settled by measuring
+
+**The stdin change was wrong, and the review called it.** `exec.c` set
+`si.hStdInput` to a pipe at EOF instead of probe.c's `NULL`, with a comment
+claiming it answers COMMAND.COM's "Are you sure (Y/N)?". Measured on the
+guest:
+
+    del c:\stdintst\*.*   ->   status=timeout, killed at the limit
+
+It does **not** answer the prompt. Those confirmations are read from CON via
+INT 21h, not from handle 0, so no stdin arrangement reaches them. The comment
+was rewritten to say what was measured, and the EOF pipe is kept only for the
+reason it actually earns -- a child that genuinely reads handle 0 (`sort`,
+`more`, `find` with no pipe) gets a defined EOF rather than an invalid handle.
+
+The real consequence is a limitation, not a bug: an interactive command hangs
+until the timeout kills it, which the system handles correctly (partial
+output, `status=timeout`). So the fix is guidance. The tool description now
+tells the model plainly that prompting commands hang, and to pipe an answer
+in (`echo y | del c:\tmp\*.*`) or pick a form that does not ask.
+
+### 2026-09-17 — EXECKILL, and the cancellation path that never fires
+
+Without it, cancelling a turn left the command running on the guest and the
+next call was answered `status=busy` -- one interrupted turn poisoning the
+next for a reason the model could neither see nor act on.
+
+The first implementation hung it off `run_on_guest`'s `CancelledError`. **That
+path is largely unreachable**, and the guest proved it: `pause` started at
+17:15:40, Stop was pressed at 17:15:48, and 47 seconds later it was still
+running with no `EXECKILL` sent. On mcp 1.x the SDK does not cancel an
+in-flight tool call when a turn is interrupted (`types.py:653-662`) -- the
+same fact the review cited about abandoned calls, which turns out to cut both
+ways. The coroutine simply never wakes up.
+
+**`INTERRUPT` is the trigger that actually fires**, and it is the one the user
+meant: they pressed Stop, so stop. The handler now kills every in-flight exec
+before interrupting the model. Verified: `pause` with a 90s clamp died within
+seconds of Stop, the turn ended, and the app stayed responsive.
+
+`EXECKILL` is handled on the guest's READER thread and never queued -- the
+worker is busy running the very command it is meant to stop, so a queued kill
+would not be looked at until that command finished. `rc_exec_cancel` was built
+to be called from another thread for exactly this.
+
+Both triggers can fire for one Stop, so the kill is deduplicated, and the
+guest's `EXECRESULT` arriving for a call nobody is waiting on is now logged at
+debug -- it is the expected confirmation of a kill, not a fault.
+
+
+
 ### 2026-09-17 — Stage B shipped, and the review found it had no restart path
 
 `mcp__machine__exec` works on real Windows 98 SE. Byte counts match experiment

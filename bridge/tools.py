@@ -55,7 +55,13 @@ def build(bridge) -> dict:
         "work -- on Windows 9x that is COMMAND.COM, which is 16-bit. Output is "
         "captured as the console codepage and capped at 32KB. The user must "
         "approve every call on their own screen, so prefer one command that "
-        "answers the question over several that explore.",
+        "answers the question over several that explore.\n\n"
+        "IMPORTANT: the command must be non-interactive. Anything that stops "
+        "to ask a question -- `del *.*` and `format` ask 'Are you sure "
+        "(Y/N)?' -- will HANG until the timeout kills it, because on Windows "
+        "9x those prompts are read from the console device and cannot be fed "
+        "from here. Measured, not assumed. Pipe an answer in instead "
+        "(`echo y | del c:\\tmp\\*.*`), or use a form that does not ask.",
         {
             "command": Annotated[
                 str,

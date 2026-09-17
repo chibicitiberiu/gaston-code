@@ -794,6 +794,18 @@ class Bridge:
             await self._perm_reply(guest, f)
 
         elif f.type == "INTERRUPT":
+            # Stop must reach the command too, not just the model.
+            #
+            # The CancelledError path in run_on_guest turns out to be largely
+            # unreachable: on mcp 1.x the SDK does NOT cancel an in-flight
+            # tool call when a turn is interrupted (types.py:653-662), so the
+            # coroutine is never cancelled and never sends EXECKILL. Measured
+            # on the guest -- `pause` kept running for its full 90s clamp
+            # after Stop was pressed. Killing from here is the trigger that
+            # actually fires, and it is the one the user meant: they pressed
+            # Stop, so stop.
+            for exec_id in list(guest.exec_pending):
+                self._kill_exec(guest, exec_id)
             if guest.claude:
                 await guest.claude.interrupt()
 
@@ -960,12 +972,40 @@ class Bridge:
             try:
                 return await asyncio.wait_for(fut, timeout=budget)
             except asyncio.TimeoutError:
+                self._kill_exec(guest, exec_id)
                 return {"content": [{"type": "text", "text":
                         f"No reply from the connected machine after "
-                        f"{budget:.0f}s. The command may still be running "
-                        f"there."}], "isError": True}
+                        f"{budget:.0f}s; it has been asked to stop the "
+                        f"command."}], "isError": True}
+            except asyncio.CancelledError:
+                # The turn was interrupted. Without telling the guest, the
+                # command keeps running over there and the NEXT call is
+                # answered `busy` -- so one interrupted turn poisons the
+                # following one for a reason the model cannot see or act on.
+                # Scheduled rather than awaited: we are inside a cancelled
+                # scope, where an await aborts before it happens.
+                self._kill_exec(guest, exec_id)
+                raise
             finally:
                 guest.exec_pending.pop(exec_id, None)
+
+    def _kill_exec(self, guest: GuestSession, exec_id: str) -> None:
+        """Ask the guest to stop a command we are no longer waiting for.
+
+        Synchronous on purpose: the cancellation path cannot await.
+
+        Deduplicated because both triggers can fire for one Stop -- the
+        INTERRUPT handler always, and run_on_guest's CancelledError path when
+        the SDK happens to cancel the tool as well. One kill is enough.
+        """
+        entry = guest.exec_pending.get(exec_id)
+        if entry is not None:
+            if entry.get("killed"):
+                return
+            entry["killed"] = True
+        log.info("asking the guest to kill exec %s", exec_id)
+        self._spawn(self._send(guest, Frame("EXECKILL", {"id": exec_id}),
+                               stamp=False))
 
     async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
         entry = guest.exec_pending.get(f.headers.get("id", ""))
@@ -977,7 +1017,12 @@ class Bridge:
         exec_id = f.headers.get("id", "")
         entry = guest.exec_pending.get(exec_id)
         if entry is None:
-            log.info("EXECRESULT for unknown id %s", exec_id)
+            # Expected after a kill: the caller has already given up and
+            # cleaned up, and this is the guest confirming it stopped. Not a
+            # problem, so do not log it like one.
+            log.debug("EXECRESULT for %s, which nobody is waiting for "
+                      "(usually a kill that has already been handled)",
+                      exec_id)
             return
         fut = entry["future"]
         if fut.done():

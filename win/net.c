@@ -6,6 +6,7 @@
 #include "net.h"
 #include "log.h"
 #include "rpc.h"
+#include "exec.h"
 #include "miniz.h"
 
 /* Cap on frames posted to the UI thread but not yet freed.
@@ -173,6 +174,19 @@ static unsigned __stdcall reader_thread(void *arg)
          * backpressure gate below, and holding it for the sixty seconds a
          * command might run would conflate two unrelated queues and stall
          * display frames behind a compile. The worker has its own counter. */
+        /* EXECKILL is handled RIGHT HERE, on the reader thread, and never
+         * queued. Queueing it behind the worker would be useless: the worker
+         * is busy running the very command this is meant to stop, so the
+         * frame would not be looked at until that command finished.
+         * rc_exec_cancel is built to be called from another thread. */
+        if (strcmp(f->type, "EXECKILL") == 0) {
+            rc_log("net: EXECKILL for %s", rc_frame_get(f, "id"));
+            rc_exec_cancel();
+            rc_frame_free(f);
+            HeapFree(GetProcessHeap(), 0, f);
+            continue;
+        }
+
         if (strcmp(f->type, "EXEC") == 0) {
             InterlockedIncrement(&n->rpcq);
             if (rc_rpc_submit(f) != 0) {

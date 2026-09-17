@@ -15,8 +15,9 @@
  *   3. a drain loop that stops reading once the buffer is full, at which point
  *      the child blocks writing to a pipe nobody empties and the whole thing
  *      spins until the timeout. Streaming removes the buffer entirely;
- *   4. hStdInput = NULL, so anything that asks "Are you sure (Y/N)?" hangs
- *      until killed. A closed empty pipe answers EOF instead;
+ *   4. hStdInput = NULL, so a child that reads stdin gets an invalid handle
+ *      rather than a defined EOF. (This does NOT fix interactive prompts --
+ *      see the measured note at the CreatePipe call.);
  *   5. no working directory;
  *   6. NUL-terminating the output, which truncates binary at the first zero.
  *
@@ -128,9 +129,24 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
     sa.bInheritHandle = TRUE;
     if (!CreatePipe(&rd, &wr, &sa, 16384)) return -1;
 
-    /* An empty, immediately-closed stdin. probe.c passed NULL, which leaves a
-     * child that prompts ("Are you sure (Y/N)?") blocked until the timeout
-     * kills it. Giving it a pipe at EOF makes those commands answer and exit. */
+    /* An empty, immediately-closed stdin.
+     *
+     * The justification originally written here was WRONG, and measuring it
+     * is the only reason we know. The claim was that a pipe at EOF answers
+     * COMMAND.COM's "Are you sure (Y/N)?" where probe.c's NULL left the child
+     * hanging. Measured on the guest:
+     *
+     *     del c:\stdintst\*.*  ->  status=timeout, killed at the limit
+     *
+     * It does not answer the prompt. COMMAND.COM reads those confirmations
+     * from CON via INT 21h, not from handle 0, so no stdin arrangement
+     * reaches them. An interactive command WILL hang until the timeout kills
+     * it, and the tool description says so.
+     *
+     * The EOF pipe is kept anyway, for the reason it actually earns: a child
+     * that genuinely reads handle 0 (`sort`, `more`, `find` with no pipe)
+     * gets a defined immediate EOF instead of an invalid handle. That is a
+     * real improvement over NULL; answering prompts never was. */
     if (!CreatePipe(&in_rd, &in_wr, &sa, 256)) {
         CloseHandle(rd); CloseHandle(wr);
         return -1;
