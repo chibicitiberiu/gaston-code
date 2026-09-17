@@ -99,9 +99,49 @@ Linux side first, so the guest develops against something real.
 | 3.0f | P4 — `_send` refuses unencodable frames before stamping replay | done |
 | 3.0g | Cancellation: PERMEND scheduled, never awaited in a cancelled scope | done |
 | 3.0h | Client machine is the subject of every request; off-limits guard | done |
-| 3.1 | Stage B — `mcp__machine__exec`, `bridge/tools.py`, `paths.py` | not started |
-| 3.2 | Stage B — `win/exec.c`, `win/rpc.c`, the RPC worker thread | not started |
-| 3.3 | File sync layer | not started |
+| 3.1 | **Stage B — `mcp__machine__exec`, `bridge/tools.py`** | **done — verified on real Win98 SE** |
+| 3.1a | `bridge/paths.py` | **dropped** — `exec` takes a command line written for a DOS shell; there is nothing to translate. Belongs with 3.3, where paths actually cross |
+| 3.2 | **Stage B — `win/exec.c`, `win/rpc.c`, sender thread** | **done — verified on real Win98 SE** |
+| 3.2a | `EXECKILL`, so Stop reaches the command | done |
+| 3.2b | Restart path: reader clears `running`, `try_connect` tears down first | done — reproduced the KERNEL32 fault, then fixed |
+| 3.3 | File sync layer | **not started** |
+
+### Stage B verification (2026-09-17)
+
+On real Windows 98 SE, byte counts matching experiment 0.9 exactly:
+
+| command | bytes | note |
+|---|---|---|
+| `ver` | 36 | |
+| `vol C:` | 73 | |
+| `dir c:\ /w` | 352 | |
+| `echo hello \| find "hello"` | 8 | through the known-bad 16-bit FIND |
+| `dir c:\ /s` | 32768 | hit the cap; `truncated=1` reached the model, which then worked out *which* trees it never saw |
+| `del c:\stdintst\*.*` | 60 | `status=timeout` -- interactive prompts cannot be answered, see the decision note |
+| `pause` + Stop | — | killed within seconds via `EXECKILL` |
+
+Same numbers from the **windowed** binary also retire the gate that 0.9's
+evidence came from console-subsystem `probe.exe`.
+
+Three bridge restarts with the app connected: three clean attaches, no
+protocol errors, and `exec` still worked afterwards. Before the restart-path
+fix this crashed the guest with an invalid page fault in KERNEL32.
+
+### Phase 3 gates
+
+- **Denied permission refuses rather than hangs** — done.
+- **16-bit `EXEC` through the GUI binary on the RPC thread** — done, above.
+- **Memory re-measured against the 28KB baseline** — done, and no
+  megabyte-scale regression. Window created 2420K -> **2312K**, chat list
+  1060K -> **960K**. About 100KB lower at comparable points, which the binary
+  growing ~6KB, BSS growing 7.8KB and a longer chat list account for. Not a
+  like-for-like comparison (the list holds more conversations now), so read it
+  as "nothing ran away", not as a precise delta.
+- **Every demo over `tc netem rate 40kbit`** — **NOT DONE.** `tc` needs root
+  and this environment has no passwordless sudo. The bridge's `--link-bps`
+  exercises the adaptive-codec decisions but throttles the bridge's own
+  sending logic rather than the wire, so it is a weaker test and does not
+  discharge this gate. Outstanding.
 
 ### Stage A verification (2026-09-17)
 
