@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include "rpc.h"
 #include "exec.h"
+#include "syncrpc.h"
 #include "log.h"
 
 static HANDLE           g_thread;
@@ -34,6 +35,8 @@ typedef struct {
     char id[64];
     int  lost;      /* an EXECOUT could not be queued */
 } exec_ctx;
+
+static int  is_sync(const rc_frame *f);
 
 static void send_out(void *ctx, const char *data, unsigned len)
 {
@@ -172,7 +175,8 @@ static unsigned __stdcall rpc_thread(void *arg)
             WaitForSingleObject(g_wake, 200);
             continue;
         }
-        run_one(f);
+        if (is_sync(f)) rc_sync_handle(g_net, f);
+        else            run_one(f);
         drop(f);
     }
 
@@ -216,11 +220,57 @@ int rc_rpc_start(rc_net *net)
     return 0;
 }
 
+/* Reject a sync frame with the SYNC vocabulary, not EXECRESULT.
+ *
+ * Answering a SYNCPUT chunk with EXECRESULT was the defect that made the first
+ * design structurally unable to work: the bridge looks the id up in
+ * exec_pending, finds nothing, logs at debug and returns -- a branch added for
+ * EXECKILL -- so the transfer hangs forever holding a one-chunk temp file. */
+static void reject_sync_busy(rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    const char *keys[2];
+    const char *vals[2];
+    if (!id) return;
+    keys[0] = "id";     vals[0] = id;
+    keys[1] = "status"; vals[1] = "busy";
+    rc_net_send(g_net, "SYNCPUTACK", keys, vals, 2, NULL, 0);
+}
+
+/* Is this frame a JOB (one at a time, runs for a long time) or STATE MACHINE
+ * INPUT (a chunk in a stream that must never queue behind anything)?
+ *
+ * Streaming chunks are not jobs. Putting them through the one-at-a-time gate
+ * means chunk 1 is accepted and chunks 2..N are rejected while the worker is
+ * busy writing chunk 1 -- which is every transfer of more than 8KB. */
+static int is_sync(const rc_frame *f)
+{
+    return strncmp(f->type, "SYNC", 4) == 0;
+}
+
+/* Correlation-id namespaces are ENFORCED, not conventional. Exec ids are x<n>
+ * and sync ids are s<n>; today they differ only by a prefix nobody checks, and
+ * a stray frame answering the wrong subsystem's future is the kind of bug that
+ * takes a day to find. */
+static int id_matches_family(const rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    if (!id || !*id) return 0;
+    return is_sync(f) ? (id[0] == 's') : (id[0] == 'x');
+}
+
 int rc_rpc_submit(rc_frame *f)
 {
     int busy = 0;
 
     if (!g_thread || !g_running) return -1;
+
+    if (!id_matches_family(f)) {
+        rc_log("rpc: %s carries id %s, which belongs to another subsystem",
+               f->type, rc_frame_get(f, "id") ? rc_frame_get(f, "id") : "(none)");
+        drop(f);
+        return 0;
+    }
 
     EnterCriticalSection(&g_lock);
     if (g_queued) busy = 1;
@@ -228,10 +278,11 @@ int rc_rpc_submit(rc_frame *f)
     LeaveCriticalSection(&g_lock);
 
     if (busy) {
-        /* One worker, one command. Answer rather than queue: the bridge
-         * serialises already, so a second one means a bug, and queueing would
-         * hide it behind a mysterious delay. */
-        reject_busy(f);
+        /* Answer in the frame family's OWN vocabulary. The bridge is waiting on
+         * a sync future or an exec future, and only one of them understands
+         * EXECRESULT. */
+        if (is_sync(f)) reject_sync_busy(f);
+        else            reject_busy(f);
         drop(f);
         return 0;
     }

@@ -29,6 +29,7 @@ from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
 from . import html as H
 from .html import APPEND, LIVE, HtmlStream
 from .pages import Paginator, limits_for
+from . import paths as P
 from . import permissions as perms
 from . import tools as machine_tools
 from .permissions import PendingPrompt, render_request
@@ -42,6 +43,8 @@ from .protocol import (
 )
 from .replay import Replay
 from . import sessions as sesslist
+from .sync import Entry as SyncEntry, Type as SyncType
+from .syncrun import SyncError
 from .session import Session
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
@@ -113,6 +116,14 @@ class GuestSession:
     # can request tools in parallel, and an "Always" rule would bypass the
     # prompt queue that was implicitly serialising them.
     exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Sync transfers in flight, keyed by our own s<n> id -- a namespace the
+    # guest enforces, so an exec frame can never resolve a sync future.
+    sync_pending: dict = field(default_factory=dict)
+    sync_seq: int = 0
+    # One pass at a time. Three triggers (timer, watcher, sync_status) and no
+    # lock would let two passes both read the baseline and both advance it.
+    sync_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    sync_active: bool = False
 
     @property
     def connected(self) -> bool:
@@ -237,6 +248,8 @@ class Bridge:
                 # already started over there and its output is gone with the
                 # link. Fail it now rather than holding the model for the
                 # whole MCP budget.
+                self._fail_syncs(self._guest,
+                                 "The connected machine disconnected mid-sync.")
                 self._fail_execs(self._guest,
                                  "The connected machine disconnected while "
                                  "this command was running. It may or may not "
@@ -784,6 +797,10 @@ class Bridge:
             log.info("input: %s", text[:120])
             asyncio.create_task(self._run_turn(guest, text))
 
+        elif f.type in ("SYNCENT", "SYNCEND", "SYNCPUTACK", "SYNCMKDIRACK",
+                        "SYNCDAT", "SYNCDATEND"):
+            await self._sync_frame(guest, f)
+
         elif f.type == "EXECOUT":
             await self._exec_out(guest, f)
 
@@ -1007,6 +1024,77 @@ class Bridge:
         self._spawn(self._send(guest, Frame("EXECKILL", {"id": exec_id}),
                                stamp=False))
 
+    async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
+        """Route one SYNC* reply to whoever is waiting for it."""
+        sid = f.headers.get("id", "")
+        entry = guest.sync_pending.get(sid)
+        if entry is None:
+            # Expected after an abort: the caller gave up and cleaned up, and
+            # this is the guest finishing what it had already started.
+            log.debug("sync frame %s for %s, which nobody awaits", f.type, sid)
+            return
+
+        if f.type == "SYNCENT":
+            for line in f.body.split(b"\n"):
+                if not line:
+                    continue
+                try:
+                    head, rest = line.split(b" ", 5)[:5], line
+                    parts = rest.split(b" ", 5)
+                    typ, cls, size, mtime, crc = (parts[0], parts[1], parts[2],
+                                                  parts[3], parts[4])
+                    plen_and_path = parts[5]
+                    sp = plen_and_path.index(b" ")
+                    plen = int(plen_and_path[:sp])
+                    raw = plen_and_path[sp + 1:sp + 1 + plen]
+                except (ValueError, IndexError):
+                    log.warning("unparseable manifest line: %r", line[:80])
+                    continue
+                rel = raw.decode("cp1252", "replace")
+                key = P.canonical(rel)
+                entry["rows"][key] = SyncEntry(
+                    type=SyncType(typ.decode()),
+                    cls=cls.decode() if cls != b"-" else P.CLASS_TEXT,
+                    size=int(size), mtime=float(mtime), crc=int(crc),
+                    display=rel)
+                entry["display"][key] = rel
+
+        elif f.type == "SYNCEND":
+            fut = entry["future"]
+            if not fut.done():
+                fut.set_result((f.headers.get("status", "ok"),
+                                int(f.headers.get("files", "0")),
+                                f.headers.get("tree_id", ""),
+                                entry["rows"], entry["display"]))
+
+        elif f.type in ("SYNCPUTACK", "SYNCMKDIRACK"):
+            fut = entry["future"]
+            if not fut.done():
+                fut.set_result((f.headers.get("status", "ok"),
+                                int(f.headers.get("crc", "0"))))
+
+        elif f.type == "SYNCDAT":
+            entry.setdefault("data", bytearray()).extend(f.body)
+
+        elif f.type == "SYNCDATEND":
+            fut = entry["future"]
+            if not fut.done():
+                fut.set_result((f.headers.get("status", "ok"),
+                                int(f.headers.get("crc", "0")),
+                                f.headers.get("cls", P.CLASS_TEXT),
+                                bytes(entry.get("data", b""))))
+
+    def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
+        """Resolve every in-flight sync transfer, synchronously."""
+        if guest is None:
+            return
+        for sid, entry in list(guest.sync_pending.items()):
+            fut = entry.get("future")
+            if fut is not None and not fut.done():
+                fut.set_exception(SyncError(why))
+        guest.sync_pending.clear()
+        guest.sync_active = False
+
     async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
         entry = guest.exec_pending.get(f.headers.get("id", ""))
         if entry is None:
@@ -1138,7 +1226,7 @@ class Bridge:
                         "answer, so this was not approved. It was not refused "
                         "on purpose -- ask again if you still need it.")
                 continue
-            if guest.exec_pending:
+            if guest.exec_pending or guest.sync_active:
                 # A command can run quietly for up to two minutes -- longer
                 # than the idle timeout -- and the guest has no keepalive of
                 # its own, so `last_seen` only moves when output happens to
