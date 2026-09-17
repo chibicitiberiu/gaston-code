@@ -1272,3 +1272,63 @@ async def test_an_ignored_path_is_never_announced(harness, tmp_path):
     got = await asyncio.wait_for(task, 10)
     assert not any("build/x.o" in n for n in got["notices"]), got
     await harness.close(writer)
+
+
+async def test_continue_waits_for_the_pass_rather_than_racing_it(harness,
+                                                                 tmp_path):
+    """The user presses Continue while a pass is running.
+
+    A Pass loads the baseline when it starts and writes the WHOLE object back
+    when it finishes, and run_sync holds sync_lock across all of it. A release
+    that did not take that lock was therefore read-modify-written underneath:
+    the pass's save restored the latches a moment later, with no bar up to say
+    so and no notice. The user answered and nothing happened.
+
+    That is the likely case rather than the unlucky one -- the pass that
+    raised the bar is usually the one still running when the user reacts.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    p = a_pass(harness, tmp_path)
+    harness.bridge.sync_dir = p.root
+    harness.bridge.sync_state = os.path.dirname(p.state)
+    p.base.latched["src/main.c"] = "both sides moved"
+    p.base.save(p.state)
+
+    # Stand in for a pass in flight: run_sync holds this for its whole body.
+    await guest.sync_lock.acquire()
+    task = asyncio.create_task(harness.bridge._release_all_latches())
+    await asyncio.sleep(0.05)
+    assert not task.done(), "the release did not wait for the pass"
+
+    guest.sync_lock.release()
+    assert await asyncio.wait_for(task, 5) == 1
+    assert not harness.bridge._load_baseline().latched
+    await harness.close(writer)
+
+
+async def test_the_agents_resolve_waits_for_the_pass_too(harness, tmp_path):
+    """Same race on the route the design tells the agent to use, which makes
+    it the likelier of the two to be lost."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    p = a_pass(harness, tmp_path)
+    harness.bridge.sync_dir = p.root
+    harness.bridge.sync_state = os.path.dirname(p.state)
+    p.base.latched["src/main.c"] = "both sides moved"
+    p.base.save(p.state)
+
+    await guest.sync_lock.acquire()
+    task = asyncio.create_task(
+        harness.bridge.sync_resolve("src/main.c", "release"))
+    await asyncio.sleep(0.05)
+    assert not task.done(), "sync_resolve did not wait for the pass"
+
+    guest.sync_lock.release()
+    assert "Released" in await asyncio.wait_for(task, 5)
+    assert not harness.bridge._load_baseline().latched
+    await harness.close(writer)

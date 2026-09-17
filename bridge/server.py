@@ -13,6 +13,7 @@ approving permission prompts and, from Phase 3, feeding tool results to Claude.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import secrets
@@ -856,7 +857,7 @@ class Bridge:
                 # screen, and the second one carries no information the first
                 # did not. `sync_resolve` stays for the case the user never
                 # sees: the agent finishing a merge on its own.
-                freed = self._release_all_latches()
+                freed = await self._release_all_latches()
                 if freed:
                     log.info("sync: released %d latched path(s) on Continue",
                              freed)
@@ -1335,10 +1336,22 @@ class Bridge:
         found.sort(reverse=True)
         return [p for _, p in found[:limit]]
 
-    def sync_resolve(self, path: str, action: str) -> str:
-        """Lift one halt. Recorded in the baseline BEFORE it takes effect."""
+    async def sync_resolve(self, path: str, action: str) -> str:
+        """Lift one halt. Recorded in the baseline BEFORE it takes effect.
+
+        Under sync_lock for the same reason as _release_all_latches: a Pass
+        holds the baseline in memory and rewrites the whole of it at the end,
+        so a release landing mid-pass was silently undone. This is the route
+        the design tells the agent to use, which made it the likelier of the
+        two to be lost -- the agent calls it while a pass is in flight because
+        a pass is in flight most of the time.
+        """
         if not self.sync_dir:
             return "File synchronisation is not switched on for this session."
+        async with self._baseline_lock():
+            return self._sync_resolve_locked(path, action)
+
+    def _sync_resolve_locked(self, path: str, action: str) -> str:
         try:
             base = self._load_baseline()
         except Exception as exc:
@@ -1379,26 +1392,47 @@ class Bridge:
         return (f"Stopped tracking {path}. If it reappears on either side it "
                 f"will be treated as new.")
 
-    def _release_all_latches(self) -> int:
+    def _baseline_lock(self):
+        """The lock that serialises writers to base.json.
+
+        It lives on the guest because that is where `Pass` takes it, and a pass
+        cannot run without a guest -- so with no guest there is nothing to
+        serialise against and a null context is not a shortcut, it is the
+        accurate answer.
+        """
+        guest = self._guest
+        return guest.sync_lock if guest is not None else contextlib.nullcontext()
+
+    async def _release_all_latches(self) -> int:
         """Lift every write refusal. Called when the user presses Continue.
 
         All of them, not one: the halt bar says "N conflicting edits" and the
         user answers it once. Releasing a single path would leave the rest
         withheld with no bar up to say so, and the agent silently unable to
         write to files nobody has mentioned.
+
+        UNDER sync_lock, and that is the whole point of it being a coroutine.
+        A Pass loads the baseline into memory when it starts and writes the
+        WHOLE object back when it finishes -- so a release that lands in
+        between was simply overwritten a moment later: latches restored, no
+        bar up to say so, and no notice. The user pressed Continue and nothing
+        happened, which is the one outcome the halt bar exists to prevent.
+        And the press almost always lands mid-pass, because the pass that
+        raised the bar is usually still running.
         """
         if not self.sync_dir:
             return 0
-        try:
-            base = self._load_baseline()
-        except Exception as exc:
-            log.warning("could not release latches: %s", exc)
-            return 0
-        n = len(base.latched)
-        if n:
-            base.latched.clear()
-            base.save(os.path.join(self.sync_state, "base.json"))
-        return n
+        async with self._baseline_lock():
+            try:
+                base = self._load_baseline()
+            except Exception as exc:
+                log.warning("could not release latches: %s", exc)
+                return 0
+            n = len(base.latched)
+            if n:
+                base.latched.clear()
+                base.save(os.path.join(self.sync_state, "base.json"))
+            return n
 
     async def _raise_halt(self, guest: GuestSession, line: str) -> None:
         """Put the Continue bar up. Idempotent while one is already showing."""

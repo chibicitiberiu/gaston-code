@@ -156,7 +156,7 @@ def build(bridge) -> dict:
         if action not in ("release", "forget"):
             return _text(f"Unknown action {action!r}; use release or forget.",
                          error=True)
-        return _text(bridge.sync_resolve(path, action))
+        return _text(await bridge.sync_resolve(path, action))
 
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,

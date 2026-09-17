@@ -85,54 +85,54 @@ def test_status_lists_edits_that_missed_the_mirror(b):
     assert "real.c" not in out
 
 
-def test_resolve_release_lifts_the_refusal(b):
+async def test_resolve_release_lifts_the_refusal(b):
     path = os.path.join(b.sync_state, "base.json")
     base = b._load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(path)
 
-    out = b.sync_resolve("src/main.c", "release")
+    out = await b.sync_resolve("src/main.c", "release")
     assert "Released" in out
     assert not b._load_baseline().latched
 
 
-def test_resolve_release_is_honest_when_there_was_no_latch(b):
+async def test_resolve_release_is_honest_when_there_was_no_latch(b):
     """Otherwise the agent 'fixes' a missing file by releasing a path that was
     never withheld, and the real reason -- a skipped name -- goes unread."""
-    out = b.sync_resolve("src/main.c", "release")
+    out = await b.sync_resolve("src/main.c", "release")
     assert "not withheld" in out
     assert "sync_status" in out
 
 
-def test_resolve_matches_case_insensitively_like_the_guest_does(b):
+async def test_resolve_matches_case_insensitively_like_the_guest_does(b):
     path = os.path.join(b.sync_state, "base.json")
     base = b._load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(path)
 
-    assert "Released" in b.sync_resolve("SRC/MAIN.C", "release")
+    assert "Released" in await b.sync_resolve("SRC/MAIN.C", "release")
 
 
-def test_resolve_forget_drops_a_tombstone(b):
+async def test_resolve_forget_drops_a_tombstone(b):
     path = os.path.join(b.sync_state, "base.json")
     base = b._load_baseline()
     base.tombs["gone.c"] = Tomb(cls="t", crc=7)
     base.save(path)
 
-    out = b.sync_resolve("gone.c", "forget")
+    out = await b.sync_resolve("gone.c", "forget")
     assert "Stopped tracking" in out
     assert not b._load_baseline().tombs
 
 
-def test_resolve_forget_on_an_untracked_path_says_so(b):
-    assert "not tracked" in b.sync_resolve("never-existed.c", "forget")
+async def test_resolve_forget_on_an_untracked_path_says_so(b):
+    assert "not tracked" in await b.sync_resolve("never-existed.c", "forget")
 
 
-def test_resolve_survives_a_baseline_it_cannot_read(b):
+async def test_resolve_survives_a_baseline_it_cannot_read(b):
     """Refuse, never treat an unreadable baseline as an empty one -- that
     would make every file new on both sides."""
     open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
-    out = b.sync_resolve("a.c", "release")
+    out = await b.sync_resolve("a.c", "release")
     assert "could not be read" in out
     assert "nothing changed" in out
 
@@ -184,7 +184,7 @@ def test_the_preamble_is_skipped_when_sync_is_off(tmp_path):
     assert bridge._with_sync_preamble("hello") == "hello"
 
 
-def test_continue_lifts_every_withheld_path(b):
+async def test_continue_lifts_every_withheld_path(b):
     """Pressing Continue is the confirmation, so it clears the refusal.
 
     All of them, not one. The bar says "N conflicting edits" and the user
@@ -198,16 +198,16 @@ def test_continue_lifts_every_withheld_path(b):
     base.latched["src/util.c"] = "both sides moved"
     base.save(path)
 
-    assert b._release_all_latches() == 2
+    assert await b._release_all_latches() == 2
     assert not b._load_baseline().latched
 
 
-def test_releasing_when_nothing_is_withheld_is_harmless(b):
-    assert b._release_all_latches() == 0
+async def test_releasing_when_nothing_is_withheld_is_harmless(b):
+    assert await b._release_all_latches() == 0
 
 
-def test_releasing_survives_an_unreadable_baseline(b):
+async def test_releasing_survives_an_unreadable_baseline(b):
     """Refuse to act, never treat it as empty -- and never raise into the
     RESUME handler, which would leave the user pressing a dead button."""
     open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
-    assert b._release_all_latches() == 0
+    assert await b._release_all_latches() == 0
