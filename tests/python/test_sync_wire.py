@@ -1479,3 +1479,76 @@ async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     await _recv(harness, reader2, "HALTEND")
     assert not harness.bridge._guest.halt_id
     await harness.close(writer2)
+
+
+async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
+    """A tree_id mismatch stops the WHOLE layer -- no file moves in either
+    direction -- and it used to be a log warning and nothing else. Sync could
+    be dead for an hour with the agent still reporting files as delivered and
+    the user seeing no reason to doubt it.
+
+    Once, though. A refusal that aborts every pass would otherwise announce
+    itself twice a minute, which is the bug first_report exists to stop for a
+    single path. first_report cannot be reused here: an abort has no path key
+    and raises before the pass saves anything.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    base = Baseline()
+    base.tree_id = "VOL-ORIGINAL"
+    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {}, tree_id="VOL-OTHER")
+    got = await asyncio.wait_for(task, 10)
+    assert "error" in got
+
+    # The user is told, on their own screen. The block is deflated on the
+    # wire, so decompress rather than assert on ciphertext.
+    said = await _recv(harness, reader, "TEXT")
+    body = said.body
+    if said.headers.get("enc") == "deflate":
+        body = zlib.decompressobj().decompress(body)
+    assert b"stopped" in body.lower(), body[:200]
+    # And the agent, which would otherwise keep reporting files as delivered.
+    assert any("SYNC HAS STOPPED" in n
+               for n in harness.bridge._agent_notices)
+    assert harness.bridge._load_baseline().aborted
+
+    # sync_status leads with it, because it makes everything else stale.
+    status = harness.bridge.sync_status_text()
+    assert "SYNCHRONISATION IS STOPPED" in status
+
+    # Second pass, same refusal: silent.
+    harness.bridge._agent_notices.clear()
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {}, tree_id="VOL-OTHER")
+    await asyncio.wait_for(task, 10)
+    assert not harness.bridge._agent_notices, "announced the same abort twice"
+    await harness.close(writer)
+
+
+async def test_recovery_is_announced_too(harness, tmp_path):
+    """"Sync has stopped" with no matching "sync is working again" leaves the
+    user believing it is still down."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    base = Baseline()
+    base.aborted = "something stopped it earlier"
+    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {})
+    got = await asyncio.wait_for(task, 10)
+    assert got.get("recovered") == "something stopped it earlier"
+    assert not harness.bridge._load_baseline().aborted
+    assert any("working again" in n for n in got["notices"]), got["notices"]
+    await harness.close(writer)

@@ -1285,13 +1285,80 @@ class Bridge:
                 # every pass, which buries the next real one.
                 p.notices_delivered(delivered)
                 return got
+            except SyncError as exc:
+                # A DELIBERATE refusal: a tree_id mismatch, a re-keyed
+                # codepage, a manifest that arrived short. The whole pass
+                # stops, which is right -- and used to be a log warning and
+                # nothing else, so sync could be dead for an hour with the
+                # agent and the user both believing it was working.
+                await self._report_abort(guest, str(exc))
+                return {"error": str(exc)}
             except Exception as exc:
-                log.warning("sync pass aborted: %s", exc)
+                # NOT a refusal: a bug. The bare `except` here used to catch
+                # both and describe both as "aborted", which is how the
+                # directory-versus-file crash hid -- a total stop wearing the
+                # words of a considered decision. Log the traceback and say
+                # plainly that it was not deliberate.
+                log.exception("sync pass FAILED (not a refusal): %s", exc)
+                await self._report_abort(
+                    guest, f"an internal error in the sync layer: {exc}",
+                    bug=True)
                 return {"error": str(exc)}
             finally:
                 guest.sync_active = False
 
     # --- what the agent can ask about sync ---------------------------------
+
+    async def _report_abort(self, guest: GuestSession, reason: str, *,
+                            bug: bool = False) -> None:
+        """Say ONCE that a whole pass refused to run.
+
+        Once is the hard part. A `tree_id` mismatch aborts every pass, and a
+        pass runs every thirty seconds, so the obvious "stop swallowing the
+        exception" would have re-announced the same thing twice a minute --
+        exactly the bug that `first_report` exists to prevent for a single
+        path. `first_report` cannot be reused: an abort has no path key, and it
+        raises BEFORE the pass saves anything, so there is no write to hang the
+        fingerprint on. Hence a field on the baseline, written here.
+
+        Keyed on the reason, so a DIFFERENT abort is still news -- a second
+        machine connecting after a codepage change is not the same event as
+        the codepage change.
+        """
+        log.warning("sync pass aborted: %s", reason)
+        state = os.path.join(self.sync_state, "base.json")
+        try:
+            base = self._load_baseline()
+        except Exception:
+            # The baseline itself is what could not be read. Nothing to
+            # remember it with, so say it every time rather than never: this
+            # is the one abort that cannot be fixed by waiting.
+            base = None
+        if base is not None:
+            if base.aborted == reason:
+                return
+            base.aborted = reason
+            try:
+                base.save(state)
+            except Exception as exc:          # pragma: no cover - disk failure
+                log.warning("could not record the abort: %s", exc)
+
+        what = ("File synchronisation stopped because of a fault in the "
+                "bridge, not because of anything on your machine."
+                if bug else
+                "File synchronisation has stopped and is not copying "
+                "anything in either direction.")
+        text = (f"{what}\n\n{reason}\n\nNothing has been changed on either "
+                f"side. Files edited here and there will both be kept, and "
+                f"will reconcile once this is resolved.")
+        await self._write_block(guest, H.notice(text))
+        # The agent needs it too, and for the same reason the conflict notices
+        # go this way: it will otherwise report a file as delivered when the
+        # layer that delivers it has not run for an hour.
+        self._agent_notices.append(
+            f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
+            f"direction until this is resolved. Do not tell the user a file "
+            f"has reached their machine; it has not.")
 
     def _load_baseline(self):
         from .sync import Baseline
@@ -1320,6 +1387,19 @@ class Bridge:
                f"machine.",
                f"Last pass: generation {base.generation}."
                + (f"  Bound to tree {base.tree_id}." if base.tree_id else "")]
+
+        # First, and in capitals, because it makes everything below it stale.
+        # A pass-level abort stops the entire layer -- no file moves in either
+        # direction -- and it used to be a log line, so the honest answer to
+        # "did my file arrive" was unavailable to the agent AND the user.
+        if base.aborted:
+            out.append("")
+            out.append("SYNCHRONISATION IS STOPPED. No file is being copied "
+                       "in either direction, and nothing below this line has "
+                       "moved since it stopped.")
+            out.append(f"  Reason: {base.aborted}")
+            out.append("  Tell the user. Do not report any file as having "
+                       "reached their machine while this is the case.")
 
         # Why a file is treated the way it is. Without this the agent can see
         # that a path is byte-exact and has no way to learn that the tree ASKED

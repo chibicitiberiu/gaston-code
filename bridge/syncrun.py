@@ -922,6 +922,17 @@ class Pass:
         # asked on demand; the log wants the delta, or a name that can never
         # be fixed prints a warning twice a minute until warnings stop being
         # read at all.
+        # This pass ran, so whatever stopped the last one is over. Clearing it
+        # is what makes the next abort news again -- and a recovery worth
+        # saying, because "sync has stopped" with no matching "sync resumed"
+        # leaves the user believing it is still down.
+        if self.base.aborted:
+            log.info("sync: recovered from %r", self.base.aborted)
+            done["recovered"] = self.base.aborted
+            self.note("SYNC: file synchronisation is working again. It had "
+                      "stopped: " + self.base.aborted)
+            self.base.aborted = ""
+
         was = set(self.base.reported_lines)
         done["new_reports"] = [r for r in self.reports if r not in was]
         self.base.reported_lines = list(self.reports)

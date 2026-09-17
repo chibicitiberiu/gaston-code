@@ -195,6 +195,13 @@ class Baseline:
     #: or an unfixable `aux.c` prints a warning twice a minute until the
     #: warnings stop being read.
     reported_lines: list = field(default_factory=list)
+    #: The reason the last pass REFUSED to run, if it did. A pass-level abort
+    #: touches no row and raises before anything is saved, so it left no trace
+    #: at all -- it was a log warning and nothing else, on a timer that fires
+    #: every thirty seconds. Recorded here so it can be said once, so a
+    #: DIFFERENT abort is said again, and so sync_status can answer "why has
+    #: nothing moved for an hour" without the answer being "read the log".
+    aborted: str = ""
     #: (size, mtime, auto_class, crc_raw, crc_norm, content_size) per path, so
     #: an unchanged tree is not re-read end to end every thirty seconds. It
     #: caches what the CONTENT says, never the effective class, so changing
@@ -225,6 +232,7 @@ class Baseline:
                 "latched": self.latched,
                 "reported": self.reported,
                 "reported_lines": self.reported_lines,
+                "aborted": self.aborted,
                 "scan_cache": {k: list(v) for k, v in self.scan_cache.items()},
             },
             indent=1,
@@ -258,6 +266,7 @@ class Baseline:
             latched=dict(d.get("latched", {})),
             reported=dict(d.get("reported", {})),
             reported_lines=list(d.get("reported_lines", [])),
+            aborted=d.get("aborted", ""),
             scan_cache={k: tuple(v)
                         for k, v in (d.get("scan_cache") or {}).items()},
         )
