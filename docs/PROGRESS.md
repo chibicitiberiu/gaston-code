@@ -1572,3 +1572,18 @@ class and one checksum, so changing `.gitattributes` re-decides every path
 without invalidating anything. Entries are stored only when the read cannot
 have raced a save in a tick that was still open, which is the half of the
 settle window that matters and the half the plan originally got wrong.
+
+**Verified on the machine, not under Wine.** 50/50 guest-side probe checks,
+including the new ones: the manifest carries both checksums and both are
+correct; a byte-exact push is accepted against a file the guest's own
+classifier calls text; it comes back byte for byte; `if_crc` against the raw
+checksum is accepted and a wrong one is still refused. That last pair is the
+whole override, and both halves of it live in C that Wine cannot vouch for.
+
+One process note worth keeping. The first probe run was started with buffered
+stdout, produced no output, and was killed -- but it had already run to
+completion against the guest, so the next run started against a `C:\WORK` full
+of its results and reported nine failures that were all stale state. The tell
+was `and the file DID change` passing while the checks around it failed. Start
+the probe with `-u`.
+

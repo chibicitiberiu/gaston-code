@@ -78,11 +78,17 @@ class Guest:
             for line in f.body.split(b"\n"):
                 if not line:
                     continue
-                p = line.split(b" ", 5)
-                sp = p[5].index(b" ")
-                name = P.wire_decode(p[5][sp + 1:sp + 1 + int(p[5][:sp])])
+                # v2: both checksums per row. The bridge picks, because it is
+                # the side that reads .gitattributes.
+                p = line.split(b" ", 6)
+                sp = p[6].index(b" ")
+                name = P.wire_decode(p[6][sp + 1:sp + 1 + int(p[6][:sp])])
                 rows[name] = {"type": p[0].decode(), "cls": p[1].decode(),
-                              "size": int(p[2]), "crc": int(p[4])}
+                              "size": int(p[2]),
+                              "crc_norm": int(p[4]), "crc_raw": int(p[5])}
+                rows[name]["crc"] = (rows[name]["crc_norm"]
+                                     if rows[name]["cls"] == "t"
+                                     else rows[name]["crc_raw"])
 
     def put(self, rel: str, data: bytes, *, if_crc: str,
             crc: int | None = None, cls: str | None = None) -> dict:
@@ -164,6 +170,45 @@ def run(g: Guest) -> None:
     check("stored native (CRLF)", rows["probe.txt"]["size"], len(body) + 2)
     check("crc is over normalised bytes", rows["probe.txt"]["crc"],
           zlib.crc32(body))
+
+    print("\n== v2 manifest: both checksums, and they are both right ==")
+    # The override machinery rests entirely on this. The guest calls probe.txt
+    # text and reports the normalised checksum as its own; the RAW one is the
+    # number a `-text` rule would be compared against, and before v2 it was
+    # computed and thrown away -- so nothing ever checked it.
+    stored = body.replace(b"\n", b"\r\n")          # native on this machine
+    check("the row carries the normalised checksum", rows["probe.txt"]["crc_norm"],
+          zlib.crc32(body))
+    check("the row carries the raw checksum too", rows["probe.txt"]["crc_raw"],
+          zlib.crc32(stored))
+    check("and they differ for a CRLF file", 
+          rows["probe.txt"]["crc_norm"] != rows["probe.txt"]["crc_raw"], True)
+
+    print("\n== a -text override: byte-exact against a file it calls text ==")
+    # What `.gitattributes  *.txt -text` produces on the wire. The guest's own
+    # classifier says 't' for these bytes; the bridge declares 'b' and sends
+    # the RAW checksum. Both the commit check and the if_crc re-read have to
+    # follow the declared class, or every push comes back crc_mismatch (the
+    # commit) or changed (the compare-and-swap), forever.
+    exact = b"kept\r\nexactly\r\n"
+    ack = g.put("exact.txt", exact, if_crc="absent", cls="b",
+                crc=zlib.crc32(exact))
+    check("a byte-exact push is accepted", ack["status"], "ok")
+    _, back = g.get("exact.txt")
+    check("and arrives back byte for byte", back, exact)
+    rows, _ = g.scan()
+    check("the guest still calls it text on its own", rows["exact.txt"]["cls"],
+          "t")
+    check("but its raw checksum is what we sent", rows["exact.txt"]["crc_raw"],
+          zlib.crc32(exact))
+
+    nxt = b"second\r\nversion\r\n"
+    ack = g.put("exact.txt", nxt, if_crc=str(zlib.crc32(exact)), cls="b",
+                crc=zlib.crc32(nxt))
+    check("if_crc against the RAW checksum is accepted", ack["status"], "ok")
+    ack = g.put("exact.txt", b"no\r\n", if_crc=str(zlib.crc32(b"wrong")),
+                cls="b", crc=zlib.crc32(b"no\r\n"))
+    check("and a wrong raw if_crc is still refused", ack["status"], "changed")
 
     print("\n== compare-and-swap: the guest refuses when the world moved ==")
     # This is the mechanism the whole design rests on. The bridge believes the
