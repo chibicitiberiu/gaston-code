@@ -17,20 +17,27 @@ provides with `Session` replaced by `FakeSession` (echoes the prompt back).
 netcheck.c does not check the TEXT it gets back for content, only that some
 arrived and that the frame count balances, so the swap is invisible to it.
 
-Driving this for the first time surfaced a real disagreement, not a test
-artifact: netcheck.exe reports "FAIL: 1 frames leaked" against a real
-Bridge, every single run, with every one of the 13 frames sent (READY, DOC,
-4x OPTION, OPTIONSEND, ANCHOR, TURN start, 3x TEXT, TURN end) printed and
-freed by netcheck's own WM_RC_FRAME handler before it happens -- so this is
-not netcheck missing a frame type, and the raw wire trace (verified directly
-against the harness, bypassing the guest entirely) shows the bridge sends
-exactly those 13 and nothing after TURN end. That points at win/net/net.cpp's
-own `inflight` accounting or win/rpc/rpc.cpp's routing, neither of which is
-in this pass's file set -- see the standing rule at the top of win/net/net.h
-about net.c being "outside this pass's file set" before (01.24). Recorded
-here as a known, reproducible finding (xfail, strict, so a fix flips this
-loudly rather than by someone noticing a test vanished) rather than either
-silently weakening the assertion or leaving an out-of-scope bug red.
+Driving this for the first time surfaced a real bug, and it was in the
+HARNESS rather than in the guest -- which is worth recording, because the
+first diagnosis blamed net.cpp and was wrong.
+
+netcheck.exe reported "FAIL: 1 frames leaked" against a real Bridge on every
+run, with all 13 frames (READY, DOC, 4x OPTION, OPTIONSEND, ANCHOR, TURN
+start, 3x TEXT, TURN end) printed and freed by its own WM_RC_FRAME handler
+first. The count was CORRECT. netcheck's main loop sets `g_done` from inside
+the dispatch loop, so the instant the TURN end is handled it stops pumping,
+while the reader thread can still post a frame that arrived in the same
+breath. That frame is genuinely in flight, and `inflight` says so.
+
+So the assertion was demanding a quiescence the harness never waited for.
+netcheck now calls `rc_net_stop` FIRST -- which joins the reader, after which
+nothing further can be posted -- and drains the queue afterwards. Only then
+does `inflight == 0` mean what the check claims: every frame handed to the UI
+thread was freed by it.
+
+Kept as a cautionary note because the wrong diagnosis was the plausible one.
+A counter that reads 1 when you expect 0 looks like a leak, and the reflex is
+to go looking at the allocator.
 """
 from __future__ import annotations
 
@@ -86,15 +93,14 @@ def test_netcheck_gets_a_real_reply_and_a_clean_turn_end(netcheck_result):
     assert "echo: Reply with exactly: PONG-42" in text, (text, err)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="03.53: netcheck.exe reports one leaked frame against a real "
-           "Bridge on every run, even though all 13 frames sent are printed "
-           "and freed by netcheck's own handler -- see this module's "
-           "docstring. Root cause is in win/net/net.cpp or win/rpc/rpc.cpp, "
-           "outside this pass's scope; strict=True so a fix there flips "
-           "this to an unexpected pass instead of staying silently green.")
 def test_netcheck_reports_no_leaked_frames(netcheck_result):
+    """Every frame posted to the UI thread was freed by it.
+
+    This is net.h's three-way ownership rule asserted end to end against the
+    real net.cpp, which nothing else does. It was an xfail until the harness
+    learned to stop the link before counting; see the module docstring.
+    """
+
     text, err = netcheck_result
     assert "frames leaked" not in text, (text, err)
     assert "PASS: guest framing + networking round trip" in text, (text, err)

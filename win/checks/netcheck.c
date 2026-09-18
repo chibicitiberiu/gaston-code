@@ -105,7 +105,25 @@ int main(int argc, char **argv)
         Sleep(10);
     }
 
+    /* STOP FIRST, THEN DRAIN, AND THE ORDER IS THE WHOLE POINT.
+     *
+     * g_done is set from inside the dispatch loop above, so the instant it
+     * goes true this thread stops pumping -- while the reader thread may
+     * still post frames that arrived in the same breath as the TURN end.
+     * Those are counted in `inflight` (correctly: they ARE in flight) and
+     * were never dispatched, so the check below read one every single run
+     * and called it a leak. It was not a leak; it was this harness asserting
+     * a quiescence it never waited for.
+     *
+     * rc_net_stop joins the reader, so once it returns nothing further can
+     * be posted. Draining after that is what makes `inflight == 0` mean what
+     * the assertion says it means: every frame the UI thread was given, it
+     * freed. */
     rc_net_stop(&g_net);
+    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
     rc_log_close();
 
     printf("\n--- reply ---\n%s\n-------------\n", g_text);
