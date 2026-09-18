@@ -504,8 +504,8 @@ int rc_html::poll()
     }
     if (!d->doc.valid()) return 0;
 
-    d->slot_t.reset(find_id(d->doc.get(), "t"));
-    d->slot_l.reset(find_id(d->doc.get(), "l"));
+    d->slot_t.reset(find_id(d->doc.get(), RC_SLOT_DONE));
+    d->slot_l.reset(find_id(d->doc.get(), RC_SLOT_LIVE));
     if (!d->slot_t.valid() || !d->slot_l.valid()) {
         rc_log("html: document has no #t/#l containers");
         return 0;

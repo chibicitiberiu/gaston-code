@@ -41,6 +41,18 @@
  * Named here so there is something for a test to compare against, and
  * tests/python/test_guest_css.py asserts every one of them exists in the
  * stylesheet the bridge actually sends. */
+/* The two container ids the guest looks up in the document the bridge
+ * sends. Same kind of contract as the classes below and the same failure:
+ * the bridge writes <div id="t"> and <div id="l"> into its SKELETON, the
+ * guest finds them by literal, and nothing links the two. A typo on either
+ * side does not error -- find_id returns NULL, every append goes nowhere,
+ * and the transcript is simply blank forever.
+ *
+ * #t accumulates finished blocks; #l holds the block still being written
+ * and is replaced wholesale as it grows. */
+#define RC_SLOT_DONE   "t"
+#define RC_SLOT_LIVE   "l"
+
 #define RC_CSS_NOTICE  "notice"
 #define RC_CSS_ERROR   "err"
 #define RC_CSS_USER    "you"

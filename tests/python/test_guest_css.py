@@ -1,4 +1,4 @@
-"""The CSS classes the guest emits must exist in the bridge's stylesheet.
+"""The class names AND container ids the guest hard-codes must exist on the bridge.
 
 The bridge renders the transcript and owns the stylesheet, which the guest
 receives whole in the DOC frame. But the guest builds three blocks itself --
@@ -47,3 +47,36 @@ def test_the_guest_and_the_bridge_agree_on_what_each_class_means():
     assert names["RC_CSS_NOTICE"] in H.notice("x")
     assert names["RC_CSS_ERROR"] in H.error("x")
     assert names["RC_CSS_USER"] in H.user_turn("x")
+
+
+def guest_slots() -> dict:
+    src = open(HEADER, encoding="utf-8").read()
+    found = dict(re.findall(r'#define\s+(RC_SLOT_\w+)\s+"([a-z0-9-]+)"', src))
+    assert found, "no RC_SLOT_* defines found; did the header move?"
+    return found
+
+
+def test_the_container_ids_the_guest_looks_up_exist_in_the_skeleton():
+    """03.21: the guest finds #t and #l by literal in a document the bridge wrote.
+
+    This one is worse than an unstyled block. `find_id` returning NULL is not
+    an error anywhere -- every append then goes nowhere and the transcript is
+    blank forever, on a machine with no console to say so.
+    """
+    doc = H.document()
+    for macro, ident in guest_slots().items():
+        assert f'id="{ident}"' in doc, (
+            f'{macro} is "{ident}" and the bridge\'s skeleton has no '
+            f'element with that id -- the guest would find nothing and every '
+            f'append would land in no element at all')
+
+
+def test_the_two_slots_are_distinct():
+    """They do different jobs: one accumulates, one is replaced wholesale.
+
+    If both macros ever named the same element, finished blocks and the
+    in-progress block would share a container and each new live update would
+    wipe the transcript above it.
+    """
+    slots = guest_slots()
+    assert slots["RC_SLOT_DONE"] != slots["RC_SLOT_LIVE"]
