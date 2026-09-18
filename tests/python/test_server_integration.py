@@ -368,16 +368,35 @@ async def test_unknown_frame_type_gets_an_error_not_a_drop(harness):
 # --- resume -----------------------------------------------------------------
 
 
-async def test_resume_replays_missed_frames(harness):
-    """The guest will crash. The session must outlive it."""
+async def test_a_resume_after_a_compressor_reset_resyncs_rather_than_replays(
+        harness):
+    """The guest will crash. The session must outlive it -- but the REPLAY
+    buffer cannot.
+
+    _send stamps the frame it is about to write, and by then _write_block has
+    already run the body through the PERSISTENT deflate stream. A reconnect
+    resets that stream, because the guest's inflater is fresh. So every
+    deflated frame still in the buffer is output from a stream that no longer
+    exists: replaying one feeds garbage to a client that drops the link on a
+    malformed frame.
+
+    This test used to assert the replay happened, and passed -- because
+    nothing checked the guest could decode what it got. The correct answer to
+    "I missed frames I can no longer be sent" is RESYNC, which the protocol
+    already has and the guest now renders.
+
+    Latent today only because the guest has never sent `from=`. BACKLOG
+    records that as dead code; it did not record this consequence of bringing
+    it back, which is what makes it worth closing now rather than at the
+    moment someone finishes resume.
+    """
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"READY"})
     sess = [f for f in frames if f.type == "READY"][0].headers["sess"]
 
     await harness.send(w, Frame("INPUT", {}, b"first"))
-    got = await harness.recv_until(r, {"TURN"}, timeout=5)
-    got += await harness.recv_until(r, {"TURN"}, timeout=5)
-    last_seq = max(f.seq for f in got if f.seq is not None)
+    await harness.recv_until(r, {"TURN"}, timeout=5)
+    await harness.recv_until(r, {"TURN"}, timeout=5)
 
     # Guest dies.
     await harness.close(w)
@@ -385,11 +404,18 @@ async def test_resume_replays_missed_frames(harness):
 
     # Guest comes back asking for everything after what it saw.
     r2, w2 = await harness.connect(sess=sess, from_seq=1)
-    replayed = await harness.recv_until(r2, {"READY"})
-    replayed += await harness.recv_until(r2, {"TURN"}, timeout=3)
-    seqs = [f.seq for f in replayed if f.seq is not None]
-    assert seqs, "resume should replay something"
-    assert min(seqs) == 1
+    # READY comes first and RESYNC after it, so reading only to READY would
+    # stop one frame short of the thing being tested.
+    got = await harness.recv_until(r2, {"READY"}, timeout=3)
+    got += await harness.recv_until(r2, {"RESYNC", "DOC"}, timeout=3)
+    kinds = {f.type for f in got}
+    assert "RESYNC" in kinds, (
+        "a resume across a compressor reset must be refused with RESYNC, not "
+        "answered with frames from a stream the guest cannot decode")
+
+    # And the session itself survived: same conversation, still usable.
+    ready = [f for f in got if f.type == "READY"][0]
+    assert ready.headers["sess"] == sess
     await harness.close(w2)
 
 

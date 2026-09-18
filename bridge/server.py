@@ -417,8 +417,21 @@ class Bridge:
 
         # A fresh connection means a fresh inflater on the guest, so the
         # compressor must restart in lockstep or the first frame is garbage.
+        #
+        # And the replay buffer dies with it. _send stamps the frame it is
+        # about to write, by which point _write_block has already run the body
+        # through the PERSISTENT compressor -- so every deflated frame in that
+        # buffer is output from a stream that no longer exists. Replaying one
+        # into the guest's fresh inflater produces garbage, and net.c drops
+        # the link on a malformed frame. Latent only because the guest has
+        # never sent `from=`; BACKLOG records that as dead code and did not
+        # record this consequence of bringing it back.
         if self._guest is not None:
             self._guest.zip_out.reset()
+            lost = self._guest.replay.invalidate()
+            if lost:
+                log.debug("replay: dropped %d frame(s) the new inflater "
+                          "could not decode", lost)
 
         resumed = False
         if self._guest is None:

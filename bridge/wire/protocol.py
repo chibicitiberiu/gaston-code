@@ -188,8 +188,22 @@ class FrameReader:
 
 # --- frame constructors -----------------------------------------------------
 #
-# Kept as functions rather than subclasses so the guest and bridge agree on one
-# flat vocabulary that is easy to grep for.
+# NOT a declaration of the protocol's vocabulary. server.py builds the other
+# ~38 frame types the bridge sends inline with Frame(...) at the call site,
+# and converting those to constructors here is not obviously an improvement
+# (see docs/audit/02-bridge-python.md #1.1 -- the seam worth building is a
+# GuestLink owning the wire, not a pile of one-off functions). These two are
+# the ones worth a constructor because they are sent before a GuestSession
+# exists to hang a send helper off: HELLO is the first frame either peer ever
+# sends (both fakegui and the guest open a connection with it), and ERROR is
+# sent standalone by the bridge whenever a handshake step fails before any
+# session-scoped state exists to send it through.
+#
+# Four other constructors used to live here -- text(), user_input(), status(),
+# interrupt() -- and were dead: no caller anywhere in bridge/, win/ or tests/.
+# text()'s own `style=` parameter named a frame shape the bridge had already
+# stopped sending. Removed rather than fixed, in the same pass that reworked
+# fakegui.py to render TEXT by the `mode=` header the bridge actually sends.
 
 
 def hello(secret: str, sess: str | None = None, from_seq: int | None = None) -> Frame:

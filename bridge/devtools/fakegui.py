@@ -7,10 +7,30 @@ be built and tested before any Win98 code exists, and afterwards it stays as:
     the bug is in the C, not the bridge),
   - the break-glass tool when a permission prompt has the session wedged.
 
-It is a ~200 line script and should stay one. Resist making it a framework.
+Conformance means matching win/app/main.c's render_frame frame-for-frame: TEXT
+is rendered by `mode=`, never the `style=` header the bridge stopped sending
+when the run-based renderer was replaced by the HTML one, and a `deflate` body
+is inflated through ONE persistent stream per connection, created and torn down
+exactly where win/net/net.c's inflate_begin()/inflate_finish() do -- decoding
+out of order, or with a fresh stream per frame, is not what the guest does and
+would hide the very drift this tool exists to catch.
+
+EXEC*/SYNC* frames never reach render_frame on the real guest either --
+win/net/net.c's reader routes them straight to the RPC worker
+(win/rpc/rpc.c, win/sync/syncrpc.c) before the UI thread ever sees them -- so
+fakegui intercepts them the same way and answers them the way a guest with no
+configured sync root genuinely would: EXEC actually runs (a subprocess,
+streamed back as EXECOUT/EXECRESULT, killable by EXECKILL), and every SYNC*
+frame gets the honest `no_root`/equivalent answer, which is what SYNCSCAN
+already returns on a real guest with no root configured -- rather than this
+script reimplementing the manifest-and-CRC machinery in win/sync/syncrpc.c,
+which is not what a ~200 line break-glass tool is for.
+
+No longer ~200 lines -- restoring conformance cost the length back. Still
+resist making it a framework.
 
     python -m bridge.fakegui --port 7890
-    /quit  /stop  /model <name>  /resume  /raw
+    /quit  /stop  /model <name>  /resume  /raw  /continue  /allow  /always  /deny
 """
 
 from __future__ import annotations
@@ -20,6 +40,7 @@ import asyncio
 import os
 import sys
 
+from ..wire.compress import StreamDecompressor
 from ..wire.protocol import Frame, FrameReader, ProtocolError, hello
 
 RESET = "\033[0m"
@@ -30,6 +51,10 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 GREEN = "\033[32m"
 
+# win/rpc/exec.c's EXEC_MAX_OUT: the guest never reports more output than
+# this, so answering with more here would exercise a path the guest cannot.
+EXEC_MAX_OUT = 32 * 1024
+
 
 class FakeGui:
     def __init__(self, host: str, port: int, secret: str, *, raw: bool = False):
@@ -39,11 +64,27 @@ class FakeGui:
         self.raw = raw
         # The id of the permission request currently on screen, if any.
         self.perm_id: str | None = None
+        # The id of the sync halt bar currently on screen, if any -- the
+        # guest's g_halt_id. /continue answers it with RESUME.
+        self.halt_id: str | None = None
         self.sess: str | None = None
         self.next_seq: int | None = None   # what to resume from
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self._turn_active = False
+        # One persistent inflate stream per CONNECTION -- recreated in
+        # connect(), which runs on both the first connect and every /resume,
+        # exactly where win/net/net.c calls inflate_begin()/inflate_finish().
+        self.zip_in: StreamDecompressor | None = None
+        self._live_lines = 0   # terminal lines the current LIVE block occupies
+        self._doc_seen = False
+        self.page_no = 0
+        self.page_total = 0
+        # The one command the RPC worker runs at a time, mirroring
+        # win/rpc/rpc.c's one queued job slot: a second EXEC arriving while
+        # this is set is answered `busy`, never queued.
+        self._exec_task: asyncio.Task | None = None
+        self._exec_id: str | None = None
 
     # --- connection --------------------------------------------------------
 
@@ -51,6 +92,7 @@ class FakeGui:
         self.reader, self.writer = await asyncio.open_connection(
             self.host, self.port
         )
+        self.zip_in = StreamDecompressor()
         f = hello(
             self.secret,
             sess=self.sess if resume else None,
@@ -92,11 +134,34 @@ class FakeGui:
                     print(f"\n{DIM}-- bridge closed the connection --{RESET}")
                     return
                 for f in frames.feed(data):
-                    self.render(f)
+                    self._inflate(f)
+                    # EXEC*/SYNC* never reach render_frame on the real guest
+                    # either -- net.c's reader routes them to the RPC worker
+                    # before the UI thread sees them. Mirror that split here.
+                    if f.type in ("EXEC", "EXECKILL") or f.type.startswith("SYNC"):
+                        asyncio.create_task(self._handle_rpc(f))
+                    else:
+                        self.render(f)
         except ProtocolError as exc:
             print(f"\n{RED}protocol error: {exc}{RESET}")
         except (ConnectionResetError, asyncio.IncompleteReadError):
             print(f"\n{DIM}-- connection reset --{RESET}")
+
+    def _inflate(self, f: Frame) -> None:
+        """Inflate f.body in place if enc=deflate, through the one persistent
+        stream for this connection -- never a fresh one, never out of order.
+        A failure here is exactly what win/net/net.c treats as fatal: drop
+        the link rather than guess at a desynchronised stream."""
+        if f.headers.get("enc", "raw") != "deflate":
+            return
+        if self.zip_in is None:
+            raise ProtocolError("deflate frame arrived with no inflater")
+        try:
+            f.body = self.zip_in.decompress(f.body)
+        except Exception as exc:
+            raise ProtocolError(f"cannot inflate frame: {exc}") from exc
+
+    # --- rendering: mirrors win/app/main.c's render_frame ------------------
 
     def render(self, f: Frame) -> None:
         if f.seq is not None:
@@ -113,21 +178,34 @@ class FakeGui:
         if t == "READY":
             self.sess = f.headers.get("sess")
             self.next_seq = int(f.headers.get("next_seq", "1"))
+            self.page_no = int(f.headers.get("page", "0") or 0)
+            self.page_total = int(f.headers.get("total", "0") or 0)
             print(f"{GREEN}connected{RESET} {DIM}sess={self.sess} "
                   f"model={f.headers.get('model')}{RESET}")
+        elif t == "DOC":
+            # The stylesheet/skeleton for the MSHTML control. fakegui has no
+            # HTML control to hand it to; noted once, like g_doc_sent guards.
+            if not self._doc_seen:
+                self._doc_seen = True
+                print(f"{DIM}[document skeleton received, {len(f.body)}B]{RESET}")
         elif t == "TEXT":
-            style = f.headers.get("style", "plain")
-            if style == "thinking":
-                sys.stdout.write(f"{DIM}{text}{RESET}")
+            # "live" replaces the block still being written; anything else is
+            # a finished block, appended and never touched again -- the same
+            # split render_frame makes on `mode`, never the `style` header
+            # the bridge stopped sending.
+            mode = f.headers.get("mode", "append")
+            if mode == "live":
+                self._show_live(text)
             else:
+                self._clear_live()
                 sys.stdout.write(text)
-            sys.stdout.flush()
+                if text and not text.endswith("\n"):
+                    sys.stdout.write("\n")
+                sys.stdout.flush()
         elif t == "TOOL":
-            print(f"\n{CYAN}  -> {f.headers.get('name')}{RESET} {DIM}{text}{RESET}")
-        elif t == "TOOLRESULT":
-            colour = RED if f.headers.get("error") == "1" else DIM
-            first = text.strip().splitlines()[:1]
-            print(f"{colour}     {first[0] if first else ''}{RESET}")
+            # The bridge sends tool activity as a finished block now; this
+            # branch only survives for older bridges, same as the guest's.
+            pass
         elif t == "TURN":
             state = f.headers.get("state")
             if state == "start":
@@ -143,10 +221,48 @@ class FakeGui:
             elif state == "error":
                 self._turn_active = False
                 print(f"\n{RED}turn error: {f.headers.get('msg')}{RESET}\n")
+        elif t == "OPTION":
+            kind = f.headers.get("kind", "?")
+            oid = f.headers.get("id", "?")
+            label = f.headers.get("label", oid)
+            mark = "*" if f.headers.get("current") == "1" else " "
+            grey = " (unavailable)" if f.headers.get("disabled") == "1" else ""
+            print(f"{DIM}  [{kind}] {mark} {oid} {label}{grey}{RESET}")
+        elif t == "OPTIONSEND":
+            print(f"{DIM}[end of model/effort options]{RESET}")
+        elif t == "SESSIONS":
+            print(f"{DIM}-- chat list --{RESET}")
+        elif t == "SESSION":
+            sid = f.headers.get("id", "?")
+            title = f.headers.get("title") or sid
+            mark = "*" if f.headers.get("current") == "1" else " "
+            grp = f.headers.get("group")
+            group = f" [{grp}]" if grp else ""
+            print(f"{DIM} {mark} {sid}: {title}{group}{RESET}")
+        elif t == "SESSIONSEND":
+            print(f"{DIM}-- end of chat list --{RESET}")
+        elif t == "SWITCHED":
+            self.sess = f.headers.get("id") or self.sess
+            self.page_total = int(f.headers.get("total", "0") or 0)
+            self.halt_id = None   # a switch rebuilds the session; see below
+            print(f"{GREEN}switched{RESET} {DIM}sess={self.sess}{RESET}")
+        elif t == "PAGESTART":
+            self.page_no = int(f.headers.get("page", "0") or 0)
+            self.page_total = int(f.headers.get("total", "0") or 0)
+            cont = " (continued from the previous page)" \
+                if f.headers.get("continued") == "1" else ""
+            print(f"{DIM}-- page {self.page_no}/{self.page_total}{cont} --{RESET}")
+        elif t == "PAGEEND":
+            print(f"{DIM}-- end of page {self.page_no} --{RESET}")
+        elif t == "PAGESEALED":
+            self.page_total = int(f.headers.get("total", "0") or 0)
+            print(f"{DIM}[page {f.headers.get('page')} sealed; "
+                  f"{self.page_total} pages total]{RESET}")
+        elif t == "ANCHOR":
+            print(f"{DIM}[anchor page={f.headers.get('page')} "
+                  f"preview={f.headers.get('preview', '')!r}]{RESET}")
         elif t == "NOTICE":
             print(f"{YELLOW}[{f.headers.get('kind')}] {text}{RESET}")
-        elif t == "STATUS":
-            print(f"{DIM}[status {f.headers}]{RESET}")
         elif t == "RESYNC":
             print(f"{YELLOW}[resync needed: {f.headers.get('reason')}]{RESET}")
         elif t == "ERROR":
@@ -173,8 +289,153 @@ class FakeGui:
             reason = f.headers.get("reason", "")
             if reason != "answered":
                 print(f"{DIM}[permission request {reason}]{RESET}")
+        elif t == "HALT":
+            # The other wedge case: the bridge has stopped the agent over a
+            # sync conflict and is waiting for the user, not a permission
+            # reply. Continue on the real guest IS the confirmation; here
+            # that is /continue.
+            self.halt_id = f.headers.get("id")
+            print(f"\n{YELLOW}{BOLD}HALT{RESET} {BOLD}{text}{RESET}")
+            print(f"{DIM}  /continue{RESET}")
+        elif t == "HALTEND":
+            hid = f.headers.get("id")
+            if hid and self.halt_id == hid:
+                self.halt_id = None
+                print(f"{DIM}[halt cleared]{RESET}")
         else:
             print(f"{DIM}[{t} {f.headers}] {text[:200]}{RESET}")
+
+    def _clear_live(self) -> None:
+        """Undo _show_live's cursor move before an APPEND or a fresh LIVE
+        replaces it -- the terminal equivalent of the guest replacing one DOM
+        node in place rather than growing a new one per update."""
+        if self._live_lines:
+            sys.stdout.write(f"\033[{self._live_lines}A\033[J")
+            self._live_lines = 0
+
+    def _show_live(self, text: str) -> None:
+        self._clear_live()
+        if not text:
+            return
+        sys.stdout.write(text)
+        if not text.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._live_lines = text.count("\n") + (0 if text.endswith("\n") else 1)
+
+    # --- EXEC*/SYNC*: the RPC worker's job, not render_frame's -------------
+
+    async def _handle_rpc(self, f: Frame) -> None:
+        if f.type == "EXECKILL":
+            kid = f.headers.get("id")
+            print(f"{DIM}[EXECKILL {kid}]{RESET}")
+            if self._exec_task is not None and self._exec_id == kid:
+                self._exec_task.cancel()
+            return
+
+        if f.type == "EXEC":
+            eid = f.headers.get("id", "")
+            if self._exec_task is not None:
+                # win/rpc/rpc.c: one job at a time; a second EXEC while one
+                # runs is answered busy, not queued.
+                await self.send(Frame("EXECRESULT",
+                                      {"id": eid, "status": "busy",
+                                       "code": "0", "truncated": "0"}))
+                return
+            cwd = f.headers.get("cwd") or None
+            timeout_ms = int(f.headers.get("timeout_ms", "20000") or "20000")
+            cmd = f.body.decode("cp1252", errors="replace")
+            print(f"\n{CYAN}[exec {eid}]{RESET} {DIM}{cmd[:160]}{RESET}")
+            self._exec_id = eid
+            self._exec_task = asyncio.create_task(
+                self._exec_run(eid, cmd, cwd, timeout_ms))
+            return
+
+        # SYNC*: fakegui has no mirrored directory, so it answers exactly as
+        # a real guest with no configured sync root does. SYNCSCAN's `no_root`
+        # is enough on its own -- bridge/files/syncrun.py's scan_guest turns
+        # any non-"ok" status into a SyncError and aborts the whole pass
+        # before ever sending a SYNCPUT/SYNCGET/SYNCMKDIR -- so the rest of
+        # these replies exist only so a frame sent out of that order still
+        # gets an honest answer instead of the bridge waiting out a 600s
+        # timeout.
+        sid = f.headers.get("id", "")
+        print(f"{DIM}[{f.type} id={sid}]{RESET}")
+        if f.type == "SYNCSCAN":
+            await self.send(Frame("SYNCEND", {
+                "id": sid, "status": "no_root", "files": "0",
+                "tree_id": "", "root": ""}))
+        elif f.type in ("SYNCPUT", "SYNCPUTEND"):
+            await self.send(Frame("SYNCPUTACK", {"id": sid, "status": "readonly"}))
+        elif f.type == "SYNCMKDIR":
+            await self.send(Frame("SYNCMKDIRACK", {"id": sid, "status": "bad_path"}))
+        elif f.type == "SYNCGET":
+            await self.send(Frame("SYNCDATEND",
+                                  {"id": sid, "status": "missing",
+                                   "crc": "0", "cls": "t"}))
+
+    async def _exec_run(self, eid: str, cmd: str, cwd: str | None,
+                        timeout_ms: int) -> None:
+        """Actually run it. This is the one RPC frame family worth truly
+        implementing here: EXECOUT/EXECRESULT exercise the bridge's exec
+        plumbing end to end, and a subprocess is not a second implementation
+        of anything -- unlike SYNC*, there is no manifest format to agree
+        with, just bytes out and a status in."""
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd, cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT)
+        except Exception as exc:
+            print(f"{RED}[exec {eid}] spawn failed: {exc}{RESET}")
+            await self.send(Frame("EXECRESULT",
+                                  {"id": eid, "status": "spawn_failed",
+                                   "code": "0", "truncated": "0"}))
+            self._exec_task = None
+            self._exec_id = None
+            return
+
+        sent = 0
+        truncated = False
+        status = "ok"
+        code = 0
+        try:
+            async def pump_out() -> None:
+                nonlocal sent, truncated
+                assert proc.stdout is not None
+                while True:
+                    chunk = await proc.stdout.read(8192)
+                    if not chunk:
+                        return
+                    if sent >= EXEC_MAX_OUT:
+                        truncated = True
+                        continue
+                    room = EXEC_MAX_OUT - sent
+                    if len(chunk) > room:
+                        chunk = chunk[:room]
+                        truncated = True
+                    sent += len(chunk)
+                    await self.send(Frame("EXECOUT", {"id": eid}, chunk))
+
+            await asyncio.wait_for(pump_out(), timeout=timeout_ms / 1000.0)
+            code = await proc.wait()
+        except asyncio.TimeoutError:
+            status = "timeout"
+            proc.kill()
+            await proc.wait()
+        except asyncio.CancelledError:
+            status = "cancelled"
+            proc.kill()
+            await proc.wait()
+        finally:
+            self._exec_task = None
+            self._exec_id = None
+
+        await self.send(Frame("EXECRESULT", {
+            "id": eid, "status": status, "code": str(max(code, 0)),
+            "truncated": "1" if truncated else "0"}))
+        print(f"{DIM}[exec {eid}] {status} code={code}"
+              f"{' truncated' if truncated else ''}{RESET}")
 
     # --- input -------------------------------------------------------------
 
@@ -209,6 +470,12 @@ class FakeGui:
                 await self.connect(resume=True)
                 asyncio.create_task(self.pump())
                 continue
+            if line in ("/continue", "/c"):
+                if not self.halt_id:
+                    print(f"{DIM}no halt is pending{RESET}")
+                    continue
+                await self.send(Frame("RESUME", {"id": self.halt_id}))
+                continue
             if line in ("/allow", "/always", "/deny"):
                 if not self.perm_id:
                     print(f"{DIM}no permission request is pending{RESET}")
@@ -218,7 +485,7 @@ class FakeGui:
                 continue
             if line.startswith("/"):
                 print(f"{DIM}commands: /quit /stop /ping /model <n> /resume "
-                      f"/raw /allow /always /deny{RESET}")
+                      f"/raw /continue /allow /always /deny{RESET}")
                 continue
 
             await self.send(Frame("INPUT", {}, line.encode("cp1252",

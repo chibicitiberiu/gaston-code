@@ -61,6 +61,27 @@ class Replay:
 
         return frame
 
+    def invalidate(self) -> int:
+        """Drop everything, keeping the sequence counter.
+
+        Called when the outbound deflate stream restarts. Bodies in here are
+        already stream-compressed -- `_send` stamps the frame it is about to
+        write, and by then `_write_block` has run it through the persistent
+        compressor -- so after a reset NOTHING in this buffer can be decoded
+        by the guest's fresh inflater. Replaying it would feed garbage to a
+        client that drops the link on a malformed frame.
+
+        The counter is deliberately NOT reset. A resume asking for a sequence
+        older than `oldest_seq` then fails cleanly and the caller sends
+        RESYNC, which is the honest answer: those frames existed and cannot be
+        re-sent. Resetting the counter instead would make a gap look like a
+        fresh connection.
+        """
+        n = len(self._frames)
+        self._oldest_seq += n
+        self._frames.clear()
+        return n
+
     def since(self, from_seq: int) -> list[Frame]:
         """Frames with seq >= from_seq.
 
