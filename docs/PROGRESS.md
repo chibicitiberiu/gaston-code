@@ -106,7 +106,7 @@ Linux side first, so the guest develops against something real.
 | 3.2a | `EXECKILL`, so Stop reaches the command | done |
 | 3.2b | Restart path: reader clears `running`, `try_connect` tears down first | done — reproduced the KERNEL32 fault, then fixed |
 | 3.3 | File sync layer | **done — verified on real Win98 SE** |
-| 3.4 | Hardening: the backlog worked down | **in progress** -- 3.4-0/3.4a/3.4b/3.4d landed and verified; what is left is replay retirement, the netem gate (3.4c), `accept-revert`, the Bash characterisation test and all of 3.4e (`gen=` on the wire, the guest INI field, the aggregate-revert heuristic, `rebind`). `BACKLOG.md` §5 is the live list. |
+| 3.4 | Hardening: the backlog worked down | **done -- verified on real Win98 SE** | `BACKLOG.md` §5 is down to what was deliberately not built, each with its reason. `gen=` and the netem gate were dropped by decision, not omission. |
 
 ### Stage B verification (2026-09-17)
 
@@ -2199,3 +2199,79 @@ across the mirror produces a large bridge-side change, which is the
 mass-revert shape arriving from the other direction. The aggregate check does
 not look at bridge-side regressions today. It has not happened, and naming it
 is cheaper than building for it.
+
+
+### 2026-09-18 — Phase 3.4 closed
+
+The stage was planned across three adversarial review rounds and then worked
+against the code rather than against the plan, which mattered: six of the nine
+entries in `BACKLOG.md` §5 turned out to have been closed by the audit sweep
+and were still written up as open. A backlog that lists finished work is worse
+than none, so every entry now names where to read the fix.
+
+**What landed**
+
+| finding | what it was |
+|---|---|
+| `01.61` | `do_get`/`do_mkdir` joined a path off the wire without checking the join |
+| `01.62` | the outbound queue's byte cap was not soft, it was absent |
+| `01.63` | `make all` left every check binary stale while the suite ran them |
+| `02.45` | a directory you deleted came back on the next pass, and the next |
+| `02.46` | `accept-revert`, and an unknown action falling through to `forget` |
+| `02.47` | a tree restored from a backup, applied row by correct row |
+| `02.48` | a rate-limited turn that answered anyway reported `failed` |
+
+Plus the replay buffer retired, the Bash permission gap pinned as a
+characterisation, and `do_get` reading each file once instead of twice.
+
+**Three of the seven were found by running the thing, not by testing it.**
+`01.62` needed ~1.5-2MB pushed through before the kernel produced real
+backpressure, because socket-buffer autotuning absorbs that much first -- a
+small-payload test shows nothing and concludes the weakness is unreachable,
+which is what "the cap is soft" had been resting on. `01.63` was found because
+a new `netcheck` mode was "missing" from a binary that predated it. And `02.48`
+came from looking at the screen after a turn that had, by every other measure,
+succeeded.
+
+**`01.63` is the one worth carrying forward.** `all:` built `retroclaude.exe`
+and nothing else, so `tests/python` ran Wine binaries that could be hours older
+than the source and reported a pass. *Wine proves the code only if the code is
+the code* -- the standing rule's failure mode arriving through the build system
+rather than through the platform, and the more dangerous route of the two
+because nothing about it looks wrong.
+
+**Two departures from the plan, both deliberate.**
+
+`gen=` on the wire was not built. Working it through, it would not detect the
+case it was for: the INI lives in `C:\RETRO`, outside the synced tree, so
+restoring `C:\WORK` from a backup leaves the stored generation untouched and
+the comparison passes. Its real value was ruling out "a different machine",
+which `tree_id` and `guest_root` already refuse with their own message.
+
+The netem gate was discharged with the plan's own named fallback, a deliberate
+slow reader in the suite, rather than `tc netem` in a namespace. What that does
+not cover is stated in the backlog rather than left to be assumed: it shapes
+nothing, so the Phase 3 demos have still never run under real bandwidth limits.
+
+**The mistake worth keeping.** `02.48` is a regression in `02.44`, three days
+old, written by the same hand. The first fix generalised from a single
+observation -- a rate-limited turn that produced nothing -- and wrote the
+premise into its own comment as though it were general. It is not: the same
+event arrives on a turn the SDK retries and completes. The second reading put
+a full, correct answer on screen under the word "failed", which is the same
+transcript-versus-status-bar contradiction the first fix existed to remove,
+wearing the opposite sign, and the worse of the two. A verdict that easy to get
+backwards now lives in `turn_verdict()` where a test can reach it, instead of
+inline where only an actual rate limit could.
+
+**Verified on the real machine**, not under Wine: 54/54 on the sync probe
+including byte-fidelity round trips across every content class; `do_get`'s
+median GET 10.01ms -> 5.04ms; a full turn against the real bridge with the
+permission bar, `mcp__machine__exec` running `dir C:\RETRO`, the listing
+rendered and the chat list titled; clean exit under the new queue cap with no
+GPF; and a second turn confirming a degraded-but-completed turn now reads
+`done $0.0159` rather than `failed`.
+
+**2253 tests, four gates green, 303,044 bytes committed at load** -- unchanged
+across the whole stage, which is the number that decides what else fits on a
+32MB machine.
