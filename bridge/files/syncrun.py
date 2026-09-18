@@ -596,7 +596,8 @@ class Pass:
                 "new_conflicts": 0}
 
         # Which paths this pass is stopping the user for. The halt bar answers
-        # these and nothing else -- see GuestSession.halt_paths.
+        # these and nothing else -- see SyncCoordinator.halt_paths
+        # (bridge/synccoord.py).
         new_conflict_paths: set[str] = set()
 
         #: 03.45: directories whose MKDIR failed THIS pass, as key-prefixes

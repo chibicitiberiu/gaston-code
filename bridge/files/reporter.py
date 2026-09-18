@@ -6,19 +6,25 @@ were one idea spread across three places: the fingerprinting logic on
 and the `reported` fingerprint map on `Baseline`, and -- on the Bridge side
 -- `Bridge._agent_notices`, a deliberately separate in-memory cache of the
 agent queue (`server.py`, 02.20). This class gathers the `Pass`/`Baseline`
-half (docs/audit/02-bridge-python.md #4.2, fix item 4); `Bridge._agent_notices`
-stays where it is; see the note on that below.
+half (docs/audit/02-bridge-python.md #4.2, fix item 4); the Bridge half
+stayed where it was for the reason below, until 02.43.
 
-Why the Bridge half is not folded in too: `Reporter` is built per `Pass`,
-which is built per reconciliation pass against one guest, while
+Why the Bridge half was not folded in here too: `Reporter` is built per
+`Pass`, which is built per reconciliation pass against one guest, while
 `_agent_notices` is a Bridge-lifetime cache that outlives any single pass
 and is read by `_with_sync_preamble` between passes, on every turn. Giving
-`Reporter` a reference to Bridge state would mean either constructing a new
-one with the SAME cache every pass (indistinguishable from `_agent_notices`
-just living on `Bridge` as it does today), or making `Reporter` outlive a
-`Pass` (which is exactly the `SyncCoordinator` object the audit's #1.4
-describes, not assigned to this pass). Recorded here rather than done
-partway.
+`Reporter` a reference to Bridge state would have meant either constructing
+a new one with the SAME cache every pass (indistinguishable from
+`_agent_notices` just living on `Bridge`), or making `Reporter` outlive a
+`Pass` -- which is exactly the `SyncCoordinator` object the audit's #1.4
+describes. That type did not exist when this was written; it does now
+(`bridge/synccoord.py`), and owns `agent_notices` as `Bridge.synccoord`,
+not `Reporter`: `Reporter` still lives and dies with one `Pass`, unchanged
+by 02.43, and the queue it durably empties/fills
+(`pending_notice`/`pending_notice_agent` on `Baseline`) is what
+`SyncCoordinator.agent_notices` is a Bridge-lifetime cache OF -- the two
+objects still answer different questions, on different timelines, and
+neither was folded into the other.
 """
 
 from __future__ import annotations

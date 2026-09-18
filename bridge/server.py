@@ -17,7 +17,6 @@ import contextlib
 import logging
 import os
 import time
-import uuid
 from dataclasses import dataclass, field
 
 from . import handshake
@@ -37,6 +36,7 @@ from .agent import permissions as perms
 from .agent import tools as machine_tools
 from .agent.permdesk import PermissionDesk
 from .agent.identity import GuestIdentity
+from .synccoord import SyncCoordinator
 from .wire.protocol import (
                             MAX_HEADER_VALUE,
                             Frame,
@@ -116,40 +116,16 @@ class GuestSession:
     #: bridge/wire/link.py. `writer`/`send_lock`/`zip_out`/`link_bps` below
     #: forward here so the rest of the bridge did not have to change shape.
     link: GuestLink = field(default_factory=GuestLink)
-    #: The halt currently on the user's screen, if any. A halt is the bridge
-    #: stopping the agent and handing the decision to the person at the
-    #: keyboard; it clears when they press Continue, and never on a timer.
-    #:
-    #: LEFT HERE, deliberately not extracted into its own group, and that is
-    #: the decision 02.42 asks for rather than a move. The audit is right that
-    #: this trio is not really guest state -- it is the *display* of a fact
-    #: that lives on disk, `base.latched`, and `_reconcile_halt` already
-    #: derives `halt_id`/`halt_text` from exactly that on every attach and
-    #: every pass (server.py, near `_reconcile_halt`). What the audit's own
-    #: fix sketch (docs/audit/02-bridge-python.md #2, "the halt trio ... it
-    #: belongs with the latch set it answers for") wants is a home that also
-    #: owns the latch set and the baseline -- `SyncCoordinator`, audit #1.4 --
-    #: and that type does not exist yet; it is a separate, unassigned finding
-    #: (this pass's brief: "GuestSession's four remaining groups... follow
-    #: those three exactly as the pattern" names Link/View/Sync as the
-    #: precedent, not a fourth to invent here). Giving this trio a
-    #: `GuestHalt` of its own now would move three fields sideways on
-    #: `GuestSession` without fixing the thing the audit actually flags --
-    #: recovery after a BRIDGE restart still depends on `_reconcile_halt`
-    #: being called, not on which object the fields sit on -- so it stays a
-    #: plain field group here until `SyncCoordinator` exists to derive it
-    #: honestly.
-    halt_id: str = ""
-    #: The paths the bar on screen was raised FOR. Continue answers those and
-    #: nothing else: a conflict found while the bar is already up raises no new
-    #: bar (there is only one), so the user is never shown it -- and releasing
-    #: everything meant their press lifted the write refusal on a path they had
-    #: not seen. The agent then writes to it, having been told nothing, and the
-    #: write goes to the user's machine.
-    halt_paths: frozenset = frozenset()
-    #: What the bar says, kept so it can be put back after a reconnect. The id
-    #: alone is not enough to redisplay it.
-    halt_text: str = ""
+    #: The halt trio (`halt_id`/`halt_paths`/`halt_text`) that used to live
+    #: here moved to `Bridge.synccoord` (a `SyncCoordinator`,
+    #: bridge/synccoord.py) once that type existed to own the derivation as
+    #: well as the fields -- 02.42 left them here deliberately because
+    #: moving them without an owner for `_reconcile_halt`'s logic would have
+    #: fixed nothing; 02.43 is that owner. `Bridge._guest` is created once
+    #: per process and reused across every reconnect, the same lifetime
+    #: `Bridge.synccoord` has, so nothing about recovery after a reconnect
+    #: or a bridge restart changed by moving where the fields sit -- see
+    #: `Bridge._reconcile_halt`. docs/audit/02-bridge-python.md 02.43.
     # C.from_hello(hello), parsed once in _attach() rather than re-parsed at
     # every site that needs a path rule -- a re-parse cannot raise (already
     # validated at handshake) but silently re-derives what is already known,
@@ -459,11 +435,12 @@ class Bridge:
         #: way to know which of its edits do.
         self.guest_sync_root: str | None = None
         self._last_sync_reports: list[str] = []
-        #: Notices waiting to ride in on the agent's next turn. Separate from
-        #: the baseline's `pending_notice`, which is the USER's copy and is
-        #: cleared when it reaches their screen: the two audiences need the
-        #: same news and neither delivery implies the other.
-        self._agent_notices: list[str] = []
+        #: The halt bar's state and the agent's notice cache -- both outlive
+        #: a `Pass` and are Bridge-lifetime, which `Reporter` (built fresh
+        #: per `Pass`) and `GuestSession` (whose halt trio was a derived
+        #: view, not real guest state) could not honestly own. See
+        #: bridge/synccoord.py and docs/audit/02-bridge-python.md 02.43.
+        self.synccoord = SyncCoordinator()
         # How long a pending permission request survives a dropped link. Long
         # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
         # of the 10 minute answer deadline.
@@ -730,12 +707,13 @@ class Bridge:
         await guest.perms.reissue()
         await self._reissue_halt(guest)
         await self._reissue_turn(guest)
-        # _reissue_halt above handles a GUEST reconnect: the same
-        # GuestSession survives it, so guest.halt_id already agrees with
-        # base.latched. It does NOT handle a BRIDGE restart, which starts a
-        # brand new GuestSession with halt_id empty while base.latched is
-        # still whatever the old process left on disk (02.21) -- so derive
-        # it instead of trusting whichever path last had a chance to set it.
+        # _reissue_halt above handles a GUEST reconnect: the same Bridge (and
+        # its synccoord) survives it, so synccoord.halt_id already agrees
+        # with base.latched. It does NOT handle a BRIDGE restart, which
+        # starts a brand new SyncCoordinator with halt_id empty while
+        # base.latched is still whatever the old process left on disk
+        # (02.21) -- so derive it instead of trusting whichever path last
+        # had a chance to set it.
         await self._reconcile_halt(guest)
         # A guest that was away may have been edited while it was away, and
         # nothing reconciled that until its watcher next happened to fire.
@@ -911,22 +889,23 @@ class Bridge:
 
         The third leg of the same idea as `guest.perms.reissue()`, and the one
         whose
-        absence was worst. `halt_id` lives on the GuestSession and survives a
-        reconnect; `latched` lives on disk. So a guest that restarted while a
-        halt was up came back with NO BAR, a bridge still holding the halt, and
-        every latched path refusing the agent's writes -- unanswerable, because
-        RESUME is only accepted against a matching id and raising is idempotent
-        while one is outstanding. Nothing short of restarting the bridge or
-        hand-editing the baseline would have recovered it.
+        absence was worst. `synccoord.halt_id` lives on the SyncCoordinator
+        and survives a reconnect (same Bridge, same process); `latched` lives
+        on disk. So a guest that reconnected while a halt was up came back
+        with NO BAR, a bridge still holding the halt, and every latched path
+        refusing the agent's writes -- unanswerable, because RESUME is only
+        accepted against a matching id and raising is idempotent while one is
+        outstanding. Nothing short of restarting the bridge or hand-editing
+        the baseline would have recovered it.
 
         No new frame type: the guest's HALT handler is idempotent, so re-sending
         the same one restores the bar.
         """
-        if not guest.halt_id:
+        sc = self.synccoord
+        if not sc.halt_id:
             return
-        log.info("re-issuing halt %s after reconnect", guest.halt_id)
-        await self._send(guest, halt(guest.halt_id, guest.halt_text),
-                         stamp=False)
+        log.info("re-issuing halt %s after reconnect", sc.halt_id)
+        await self._send(guest, halt(sc.halt_id, sc.halt_text), stamp=False)
 
     async def _reissue_turn(self, guest: GuestSession) -> None:
         """After a reconnect, restore the busy UI if a turn is still running.
@@ -1097,9 +1076,10 @@ class Bridge:
         # was worse than useless: the most natural reaction to the notice
         # is to type "wait, stop", which is precisely the message that
         # would have restarted it.
-        if not (f.headers.get("id", "") == guest.halt_id and guest.halt_id):
+        sc = self.synccoord
+        if not (f.headers.get("id", "") == sc.halt_id and sc.halt_id):
             return
-        hid, guest.halt_id = guest.halt_id, ""
+        hid, sc.halt_id = sc.halt_id, ""
         log.info("user pressed Continue on the sync halt")
         # Acknowledge, because the guest no longer takes its own bar
         # down on the click. A press that never reached us used to look
@@ -1125,7 +1105,7 @@ class Bridge:
         # have to move together: _run_turn takes the lock, waits out
         # any turn ahead of it, and only then lifts the refusals it is
         # about to explain.
-        answered, guest.halt_paths = guest.halt_paths, frozenset()
+        answered, sc.halt_paths = sc.halt_paths, frozenset()
         self._spawn(self._resume_turn(guest, answered))
 
     async def _on_syncdirty(self, guest: GuestSession, f: Frame) -> None:
@@ -1235,7 +1215,7 @@ class Bridge:
     def _seed_agent_notices(self) -> None:
         """Fold whatever the baseline still owes the agent into memory.
 
-        `_agent_notices` is a Bridge-lifetime cache of
+        `synccoord.agent_notices` is a Bridge-lifetime cache of
         `base.pending_notice_agent` (02.20): the durable queue is the source
         of truth, and this is what makes a bridge that just restarted catch
         up on a notice a PREVIOUS process wrote and delivered to the user's
@@ -1250,8 +1230,8 @@ class Bridge:
         except Exception:
             return
         for text in base.pending_notice_agent:
-            if text not in self._agent_notices:
-                self._agent_notices.append(text)
+            if text not in self.synccoord.agent_notices:
+                self.synccoord.agent_notices.append(text)
 
     async def _with_sync_preamble(self, text: str) -> str:
         """Prepend anything sync needs the agent to know, and mark it delivered.
@@ -1268,9 +1248,9 @@ class Bridge:
         means they are handed over once more after a restart, which is the
         safe direction to err -- see 02.20.
         """
-        if not self.sync_dir or not self._agent_notices:
+        if not self.sync_dir or not self.synccoord.agent_notices:
             return text
-        pending, self._agent_notices = self._agent_notices, []
+        pending, self.synccoord.agent_notices = self.synccoord.agent_notices, []
         lines = ["[Automatic message from the file synchronisation layer, not "
                  "from the user.]", ""]
         lines.extend(pending)
@@ -1571,8 +1551,8 @@ class Bridge:
                 # agent's next turn) -- and a `not in` merge cannot drop one
                 # already waiting in memory for a turn that has not started.
                 for note in got.get("agent_notices", []):
-                    if note not in self._agent_notices:
-                        self._agent_notices.append(note)
+                    if note not in self.synccoord.agent_notices:
+                        self.synccoord.agent_notices.append(note)
 
                 # A conflict STOPS the agent, and stopping it means saying so
                 # on the user's screen with a way to start it again. The
@@ -1703,8 +1683,8 @@ class Bridge:
         # The agent needs it too, and for the same reason the conflict notices
         # go this way: it will otherwise report a file as delivered when the
         # layer that delivers it has not run for an hour.
-        if agent_text not in self._agent_notices:
-            self._agent_notices.append(agent_text)
+        if agent_text not in self.synccoord.agent_notices:
+            self.synccoord.agent_notices.append(agent_text)
 
     def _load_baseline(self):
         from .files.sync import Baseline
@@ -1995,32 +1975,32 @@ class Bridge:
         leaves anything latched later alone, because the idempotence above
         means a later conflict puts nothing on screen and the user cannot have
         answered a question they were never asked.
+
+        The state lives on `self.synccoord` (a `SyncCoordinator`), not here:
+        it decides and remembers, this method only sends the frame that
+        follows. docs/audit/02-bridge-python.md 02.43.
         """
-        if guest.halt_id:
+        hid = self.synccoord.raise_halt(line, paths)
+        if hid is None:
             return
-        guest.halt_id = f"h{uuid.uuid4().hex[:8]}"
-        guest.halt_paths = frozenset(paths)
-        guest.halt_text = line
-        await self._send(guest, halt(guest.halt_id, line), stamp=False)
+        await self._send(guest, halt(hid, line), stamp=False)
 
     async def _clear_halt(self, guest: GuestSession) -> None:
         """Take it down because the reason went away, not because it was
         answered -- the agent called sync_resolve itself, say."""
-        if not guest.halt_id:
+        hid = self.synccoord.clear_halt()
+        if hid is None:
             return
-        hid, guest.halt_id = guest.halt_id, ""
-        guest.halt_paths = frozenset()
-        guest.halt_text = ""
         await self._send(guest, haltend(hid), stamp=False)
 
     async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
         """The halt is a VIEW of base.latched, not independent state.
 
-        guest.halt_id is memory; base.latched is disk. Nothing but a fresh
-        conflict (the new_conflicts branch above) or a reconnect
-        (_reissue_halt) ever moved guest.halt_id to agree with it -- so a
+        synccoord.halt_id is memory; base.latched is disk. Nothing but a
+        fresh conflict (the new_conflicts branch above) or a reconnect
+        (_reissue_halt) ever moved synccoord.halt_id to agree with it -- so a
         BRIDGE restart with paths still latched came back with no bar, a
-        fresh GuestSession whose halt_id starts empty, and every latched
+        fresh SyncCoordinator whose halt_id starts empty, and every latched
         path going on refusing the agent's writes with nothing on the user's
         screen to explain why or let them clear it. The only way out used to
         be the agent proactively calling sync_status and sync_resolve.
@@ -2029,7 +2009,7 @@ class Bridge:
         (base is the Pass's own, already current) so both directions --
         a bar that should be up and is not, one that is up and should not
         be -- self-correct instead of depending on whichever call site last
-        had a chance to set guest.halt_id. docs/audit/02-bridge-python.md
+        had a chance to set synccoord.halt_id. docs/audit/02-bridge-python.md
         02.21.
         """
         if not self.sync_dir:
@@ -2039,14 +2019,14 @@ class Bridge:
                 base = self._load_baseline()
             except Exception:
                 return
-        if base.latched and not guest.halt_id:
+        if base.latched and not self.synccoord.halt_id:
             n = len(base.latched)
             await self._raise_halt(
                 guest,
                 f"Stopped: {n} conflicting edit{'' if n == 1 else 's'}. "
                 f"Your copy was kept.",
                 paths=base.latched.keys())
-        elif not base.latched and guest.halt_id:
+        elif not base.latched and self.synccoord.halt_id:
             await self._clear_halt(guest)
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:

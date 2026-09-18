@@ -185,7 +185,7 @@ async def test_no_preamble_when_there_is_nothing_to_say(b):
 
 
 async def test_a_pending_notice_rides_in_on_the_next_turn(b):
-    b._agent_notices = ["SYNC CONFLICT src/main.c -- both sides moved."]
+    b.synccoord.agent_notices = ["SYNC CONFLICT src/main.c -- both sides moved."]
     out = await b._with_sync_preamble("carry on with the parser")
 
     assert "src/main.c" in out
@@ -199,7 +199,7 @@ async def test_the_preamble_says_writing_again_is_not_an_option(b):
     """The agent's natural move on being told about a conflict is to rewrite
     the file. It cannot -- the path refuses pushes -- and the preamble has to
     say so, or it will try, succeed locally, and report success."""
-    b._agent_notices = ["SYNC CONFLICT a.c"]
+    b.synccoord.agent_notices = ["SYNC CONFLICT a.c"]
     out = await b._with_sync_preamble("go on")
     assert "REFUSES your writes" in out
     assert "sync_resolve" in out
@@ -207,7 +207,7 @@ async def test_the_preamble_says_writing_again_is_not_an_option(b):
 
 
 async def test_a_notice_is_not_repeated_on_every_turn(b):
-    b._agent_notices = ["SYNC CONFLICT a.c"]
+    b.synccoord.agent_notices = ["SYNC CONFLICT a.c"]
     first = await b._with_sync_preamble("one")
     second = await b._with_sync_preamble("two")
     assert "a.c" in first
@@ -216,7 +216,7 @@ async def test_a_notice_is_not_repeated_on_every_turn(b):
 
 async def test_the_preamble_is_skipped_when_sync_is_off(tmp_path):
     bridge = Bridge("s", host="127.0.0.1", port=0)
-    bridge._agent_notices = ["stale"]
+    bridge.synccoord.agent_notices = ["stale"]
     assert await bridge._with_sync_preamble("hello") == "hello"
 
 

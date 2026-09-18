@@ -268,11 +268,12 @@ class Baseline:
     pending_notice: list = field(default_factory=list)
     #: The AGENT's copy: cleared when it is actually handed to the model.
     #: Neither delivery implies the other. Before this the agent's copy lived
-    #: only in Bridge._agent_notices, in memory -- so a bridge restart between
-    #: a pass writing the user's notice and the agent's next turn silently
-    #: lost exactly the news the agent most needed (a conflict that latched
-    #: its writes), while the user's copy was already, correctly, gone.
-    #: docs/audit/02-bridge-python.md 02.20.
+    #: only in memory (`Bridge._agent_notices`, now
+    #: `Bridge.synccoord.agent_notices` -- 02.43) -- so a bridge restart
+    #: between a pass writing the user's notice and the agent's next turn
+    #: silently lost exactly the news the agent most needed (a conflict that
+    #: latched its writes), while the user's copy was already, correctly,
+    #: gone. docs/audit/02-bridge-python.md 02.20.
     pending_notice_agent: list = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
     #: What has already been announced, per path, as a fingerprint of the
