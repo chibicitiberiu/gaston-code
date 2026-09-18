@@ -175,8 +175,14 @@ def load(root: str) -> Attrs:
     Nested, because git applies them that way: a `tests/fixtures/` that states
     its own endings is the single most likely place for this file to appear,
     and honouring only the root one would quietly ignore it.
+
+    One walk, not two: `_sources` used to re-walk the whole tree afterwards
+    just to name the files `load` had already opened, so a single sync pass
+    paid for this tree twice before `ignores.load` or `scan_bridge` had even
+    started theirs. docs/audit/02-bridge-python.md 02.17(c).
     """
     rules: list = []
+    sources: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in (".git", ".hg", ".svn")]
         base = os.path.relpath(dirpath, root).replace(os.sep, "/")
@@ -186,17 +192,8 @@ def load(root: str) -> Attrs:
                 continue
             full = os.path.join(dirpath, name)
             rules.extend(_read(full, base))
-    return Attrs(rules, _sources(root))
-
-
-def _sources(root: str) -> list[str]:
-    out = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in (".git", ".hg", ".svn")]
-        for name in FILES:
-            if name in filenames:
-                out.append(os.path.join(dirpath, name))
-    return out
+            sources.append(full)
+    return Attrs(rules, sources)
 
 
 def _read(full: str, base: str) -> list:
