@@ -74,6 +74,7 @@ static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_html *g_html;
 static rc_xferstat *g_xfer;
+static rc_optmenu *g_optmenu;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
@@ -88,7 +89,9 @@ static HWND  g_main, g_status;
  * see app/input.h. */
 
 /* The Model and Effort menus (their HMENUs, id-keyed arrays and batch state)
- * moved to app/optmenu.cpp -- see app/optmenu.h. */
+ * moved to app/optmenu.cpp -- see app/optmenu.h. g_optmenu is the one
+ * instance, created in build_menu (menu order is this file's business) and
+ * destroyed in WM_DESTROY, the same shape as g_html. */
 
 /* Transfer progress (the rx/tx counters and their formatting) moved to
  * app/xferstat.cpp -- see app/xferstat.h. g_xfer is the one instance,
@@ -222,7 +225,7 @@ static void build_menu(HWND hwnd)
     /* The Model and Effort popups: created and appended to `bar` by
      * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
      * so the menu order is unchanged. */
-    rc_optmenu_create(hwnd, bar, ui_send);
+    g_optmenu = rc_optmenu::create(hwnd, bar, ui_send);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
 }
@@ -475,7 +478,7 @@ static void on_turn(rc_frame *f)
  * rc_optmenu_frame's own comments there for what each one does. */
 static void on_optmenu(rc_frame *f)
 {
-    rc_optmenu_frame(f);
+    if (g_optmenu) g_optmenu->frame(f);
 }
 
 /* app/chatlist.h's `switched` callback: a SWITCHED frame has already been
@@ -1078,7 +1081,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         default:
             /* The IDM_MODEL0/IDM_EFFORT0 ranges: app/optmenu.cpp's business
              * now -- see app/optmenu.h. */
-            if (rc_optmenu_command(id)) return 0;
+            if (g_optmenu && g_optmenu->command(id)) return 0;
             break;
         }
         return 0;
@@ -1096,6 +1099,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_html = NULL;
         delete g_xfer;
         g_xfer = NULL;
+        delete g_optmenu;
+        g_optmenu = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
         if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
