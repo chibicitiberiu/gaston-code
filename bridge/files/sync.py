@@ -452,15 +452,39 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             out.append(Decision(key, Act.CONFLICT, "type changed (file <-> directory)"))
             continue
 
-        # Directories carry no content; existence is the whole story.
+        # Directories carry no CONTENT, so there is nothing to merge -- but
+        # existence still has a history, and this branch used to read "no
+        # content" as "no history" and never look at the ancestor. Every
+        # one-sided absence therefore became a creation: a directory the user
+        # deleted on the machine was present on the bridge, absent on the
+        # guest, and MKDIR put it straight back. Thirty seconds later, again.
+        # Deleting a build directory on your own machine and watching it
+        # reappear until you give up is the "never asked twice" rule failing in
+        # the one shape nobody had enumerated, and `BACKLOG.md` §4's claim that
+        # deletions are "reported and never silently resurrected" was true for
+        # files and false here. (02.45)
+        #
+        # The ancestor answers it, exactly as rows 11-13 answer it for files,
+        # and the answer is the same one: REPORT. Propagating the deletion is
+        # not available -- there is no SYNCDEL and §4 defers it by decision --
+        # so the honest action is to say so and touch neither side.
         if (g and g.type is Type.DIR) or (b and b.type is Type.DIR):
-            if g and not b:
-                out.append(Decision(key, Act.ADOPT, "directory exists on the guest"))
-            elif b and not g:
-                out.append(Decision(key, Act.MKDIR, "directory only on the bridge",
-                                    display=b.display))
-            else:
+            if g and b:
                 out.append(Decision(key, Act.NOTHING))
+            elif g:
+                # No ancestor: genuinely new on the machine, so adopt it. With
+                # one, the BRIDGE is what lost it.
+                out.append(Decision(key, Act.ADOPT, "directory exists on the guest")
+                           if a is None else
+                           Decision(key, Act.REPORT,
+                                    "directory deleted on the bridge, still on "
+                                    "the machine"))
+            else:
+                out.append(Decision(key, Act.MKDIR, "directory only on the bridge",
+                                    display=b.display)
+                           if a is None else
+                           Decision(key, Act.REPORT,
+                                    "directory deleted on the machine, kept here"))
             continue
 
         # 4-6. Tombstoned.

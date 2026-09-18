@@ -174,6 +174,45 @@ def test_a_directory_only_on_the_bridge_is_created():
     assert only({}, {"a": d()}).act is Act.MKDIR
 
 
+def test_a_directory_only_on_the_guest_is_adopted():
+    """The other half of the row above, and the reason both must stay: the fix
+    below turns one-sided absences into reports, and it must not take the
+    genuinely-new case with it."""
+    assert only({"a": d()}, {}).act is Act.ADOPT
+
+
+def test_a_directory_deleted_on_the_machine_is_not_silently_recreated():
+    """The user deletes `build` on their own machine. The bridge still holds
+    it, so before the ancestor was consulted this was MKDIR -- it went
+    straight back, every pass, for as long as the bridge kept its copy.
+    Deleting something on your own machine and watching it reappear every
+    thirty seconds is "never asked twice" failing; the file rows have always
+    answered this with REPORT and directories skipped past them."""
+    b = Baseline(rows={"build": d()})
+    dec = only({}, {"build": d()}, b)
+    assert dec.act is Act.REPORT
+    assert "deleted on the machine" in dec.reason
+
+
+def test_a_directory_deleted_on_the_bridge_is_not_silently_adopted_back():
+    """The mirror image, and it resurrects the row rather than the directory:
+    ADOPT writes the guest's entry into the baseline and creates the directory
+    here, so the bridge-side deletion is undone with nothing said."""
+    b = Baseline(rows={"build": d()})
+    dec = only({"build": d()}, {}, b)
+    assert dec.act is Act.REPORT
+    assert "deleted on the bridge" in dec.reason
+
+
+def test_a_directory_recreated_after_both_sides_deleted_it_is_adopted():
+    """Deleted on both sides tombstones the row and POPS it from base.rows, so
+    a directory made again afterwards has no ancestor and is new. Without this
+    the fix above would answer REPORT forever for a directory that plainly
+    exists."""
+    b = Baseline(tombs={"build": Tomb(cls="", crc=0)})
+    assert only({"build": d()}, {}, b).act is Act.ADOPT
+
+
 def test_an_unreadable_file_is_skipped_not_treated_as_absent():
     """Treating a locked file as absent makes it a tombstone, and then the
     user's later edits are invisible forever."""
