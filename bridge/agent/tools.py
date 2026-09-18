@@ -37,8 +37,20 @@ def _text(body: str, *, error: bool = False) -> dict:
     return out
 
 
-def build(bridge) -> dict:
-    """Create the `machine` server bound to one bridge.
+def build(bridge, guest=None) -> dict:
+    """Create the `machine` server bound to one bridge AND ONE GUEST.
+
+    The guest matters. These closures used to capture only the Bridge and let
+    each tool resolve `bridge._guest` when it ran -- so the tool addressed
+    "whichever machine is attached right now" rather than the machine whose
+    conversation this is. With one client those are the same thing. With two
+    they are not, and the failure is the worst shape available: the command
+    runs on the wrong machine, and the permission prompt asking for it appears
+    on the right person's screen, so it looks approved because it WAS approved
+    -- for something else.
+
+    Passing it now, while there is one client, is what makes that impossible
+    later rather than something to remember during the multi-client work.
 
     Returns the value for `mcp_servers`, so the caller writes
     `mcp_servers=tools.build(self)` and the dict key is fixed here rather than
@@ -105,7 +117,7 @@ def build(bridge) -> dict:
         cwd = args.get("cwd") or ""
 
         return await bridge.run_on_guest(command, timeout_ms=timeout_ms,
-                                         shell=shell, cwd=cwd)
+                                         shell=shell, cwd=cwd, guest=guest)
 
     @tool(
         "sync_status",
@@ -119,7 +131,7 @@ def build(bridge) -> dict:
         {},
     )
     async def machine_sync_status(args: dict) -> dict:
-        return _text(bridge.sync_status_text())
+        return _text(bridge.sync_status_text(guest))
 
     @tool(
         "sync_resolve",
@@ -156,7 +168,7 @@ def build(bridge) -> dict:
         if action not in ("release", "forget"):
             return _text(f"Unknown action {action!r}; use release or forget.",
                          error=True)
-        return _text(await bridge.sync_resolve(path, action))
+        return _text(await bridge.sync_resolve(path, action, guest))
 
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,

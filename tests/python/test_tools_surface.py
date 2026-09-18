@@ -77,3 +77,28 @@ def test_no_connector_tools_leak_into_the_list():
 def test_caller_can_still_override():
     """Stage B needs to add mcp__machine__* without editing this module."""
     assert _opts(tools=["Read"]).tools == ["Read"]
+
+
+def test_the_tools_are_bound_to_a_guest_not_just_the_bridge():
+    """The MCP closures captured only the Bridge and resolved `_guest` at call
+    time, so a tool addressed "whichever machine is attached right now".
+
+    With one client that is the same machine. With two it is not, and the
+    failure is the worst shape available: the command runs on the WRONG
+    machine while the permission prompt asking for it appears on the RIGHT
+    person's screen -- so it looks approved because it was approved, for
+    something else. Three call sites today, eleven after Phase 6.
+    """
+    import inspect
+    from bridge.agent import tools
+
+    sig = inspect.signature(tools.build)
+    assert "guest" in sig.parameters, \
+        "tools.build must take the guest its tools address"
+
+    from bridge.server import Bridge
+    for name in ("run_on_guest", "sync_status_text", "sync_resolve"):
+        params = inspect.signature(getattr(Bridge, name)).parameters
+        assert "guest" in params, (
+            f"Bridge.{name} still resolves the guest itself, so the tool "
+            f"cannot say which machine it means")

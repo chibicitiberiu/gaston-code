@@ -571,7 +571,7 @@ class Bridge:
             # through here as a prompt on the guest's screen.
             can_use_tool=self._can_use_tool(guest),
             # The key here becomes the mcp__<key>__<tool> prefix.
-            mcp_servers=machine_tools.build(self),
+            mcp_servers=machine_tools.build(self, guest),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -1211,9 +1211,19 @@ class Bridge:
     # --- running commands on the guest -------------------------------------
 
     async def run_on_guest(self, command: str, *, timeout_ms: int,
-                           shell: bool, cwd: str) -> dict:
-        """Body of mcp__machine__exec. Returns an MCP tool result."""
-        guest = self._guest
+                           shell: bool, cwd: str,
+                           guest: "GuestSession | None" = None) -> dict:
+        """Body of mcp__machine__exec. Returns an MCP tool result.
+
+        `guest` is the session this tool belongs to. It defaults to the only
+        one there can be today, but passing it is what makes the tool address
+        A MACHINE rather than whichever machine happens to be attached when
+        the model calls it: the MCP closure captured the Bridge, so with two
+        clients this would run a command on the WRONG machine, with the right
+        person's approval on their own screen. Three call sites today, eleven
+        after Phase 6.
+        """
+        guest = guest or self._guest
         if guest is None or not guest.connected:
             # Structured error, never a hang. This is the cost of the
             # single-binary design and it was accepted on condition it is
@@ -1492,7 +1502,12 @@ class Bridge:
         from .files.sync import Baseline
         return Baseline.load(os.path.join(self.sync_state, "base.json"))
 
-    def sync_status_text(self) -> str:
+    def sync_status_text(self, guest: "GuestSession | None" = None) -> str:
+        # `guest` is which machine is being asked about. Unused beyond this
+        # note today because there is one; taking it means the tool addresses
+        # a machine rather than "whichever is attached", which is what R7
+        # needs and what makes the single-client assumption visible here
+        # rather than buried in a closure.
         """Everything the agent cannot otherwise find out.
 
         Writing a file on the bridge always succeeds. Whether it reached the
@@ -1616,7 +1631,8 @@ class Bridge:
         found.sort(reverse=True)
         return [p for _, p in found[:limit]]
 
-    async def sync_resolve(self, path: str, action: str) -> str:
+    async def sync_resolve(self, path: str, action: str,
+                           guest: "GuestSession | None" = None) -> str:
         """Lift one halt. Recorded in the baseline BEFORE it takes effect.
 
         Under sync_lock for the same reason as _release_all_latches: a Pass
@@ -1628,7 +1644,7 @@ class Bridge:
         """
         if not self.sync_dir:
             return "File synchronisation is not switched on for this session."
-        async with self._baseline_lock():
+        async with self._baseline_lock(guest):
             return self._sync_resolve_locked(path, action)
 
     def _sync_resolve_locked(self, path: str, action: str) -> str:
@@ -1672,7 +1688,7 @@ class Bridge:
         return (f"Stopped tracking {path}. If it reappears on either side it "
                 f"will be treated as new.")
 
-    def _baseline_lock(self):
+    def _baseline_lock(self, guest: "GuestSession | None" = None):
         """The lock that serialises writers to base.json.
 
         It lives on the guest because that is where `Pass` takes it, and a pass
@@ -1680,7 +1696,7 @@ class Bridge:
         serialise against and a null context is not a shortcut, it is the
         accurate answer.
         """
-        guest = self._guest
+        guest = guest or self._guest
         return guest.sync_lock if guest is not None else contextlib.nullcontext()
 
     async def _release_all_latches(self, only=None) -> int:
