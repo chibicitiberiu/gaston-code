@@ -1,4 +1,4 @@
-/* htmlview.c -- the transcript, hosted in MSHTML. See htmlview.h.
+/* htmlview.cpp -- the transcript, hosted in MSHTML. See htmlview.h.
  *
  * The COM host below is the one proven by win/htmlspike.c on real Win98 SE:
  * IOleClientSite, IOleInPlaceSite and IOleInPlaceFrame as embedded structs
@@ -19,14 +19,22 @@
 #include <windows.h>
 #include <ole2.h>
 #include <exdisp.h>
+/* Watcom's own mshtml.h has `typedef enum _BoolValue {...};` with no name
+ * bound to the typedef -- harmless under C, but C++ (which this file now is)
+ * diagnoses the dangling `typedef` as an unexpected storage class specifier
+ * (W146). Nothing here to fix; it is the shipped header, not our code.
+ * `#pragma warning 146 9` does not silence it in this Watcom build, so the
+ * Makefile passes -wcd=146 for this one translation unit instead. */
 #include <mshtml.h>
 #include <docobj.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include "app/htmlview.h"
+#include "app/comptr.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 
 typedef struct Host {
     IOleClientSite     site;
@@ -47,13 +55,13 @@ typedef struct Host {
 
 static HRESULT host_qi(Host *h, REFIID riid, void **out)
 {
-    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IOleClientSite))
+    if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IOleClientSite))
         *out = &h->site;
-    else if (IsEqualIID(riid, &IID_IOleInPlaceSite))
+    else if (IsEqualIID(riid, IID_IOleInPlaceSite))
         *out = &h->place;
-    else if (IsEqualIID(riid, &IID_IOleInPlaceFrame)
-             || IsEqualIID(riid, &IID_IOleInPlaceUIWindow)
-             || IsEqualIID(riid, &IID_IOleWindow))
+    else if (IsEqualIID(riid, IID_IOleInPlaceFrame)
+             || IsEqualIID(riid, IID_IOleInPlaceUIWindow)
+             || IsEqualIID(riid, IID_IOleWindow))
         *out = &h->frame;
     else { *out = NULL; return E_NOINTERFACE; }
     h->refs++;
@@ -90,11 +98,25 @@ static HRESULT STDMETHODCALLTYPE site_OnShowWindow(void *p, BOOL s)
 static HRESULT STDMETHODCALLTYPE site_RequestNewObjectLayout(void *p)
 { (void)p; return E_NOTIMPL; }
 
+/* Open Watcom's C++ mode requires an exact function-pointer type match to
+ * initialize a Vtbl struct field -- the (void *) cast that satisfies C (which
+ * allows an implicit void* <-> function-pointer round trip) does not satisfy
+ * C++. These typedefs name the real per-interface signature so each slot
+ * below can be cast to it explicitly; the reinterpret is the same one C did
+ * silently, same functions, same order, same values. */
+typedef HRESULT (STDMETHODCALLTYPE *Site_QI)(IOleClientSite *, REFIID, void **);
+typedef ULONG   (STDMETHODCALLTYPE *Site_Ref)(IOleClientSite *);
+typedef HRESULT (STDMETHODCALLTYPE *Site_Void)(IOleClientSite *);
+typedef HRESULT (STDMETHODCALLTYPE *Site_GetMoniker)(IOleClientSite *, DWORD, DWORD, IMoniker **);
+typedef HRESULT (STDMETHODCALLTYPE *Site_GetContainer)(IOleClientSite *, IOleContainer **);
+typedef HRESULT (STDMETHODCALLTYPE *Site_OnShowWindow)(IOleClientSite *, BOOL);
+
 static IOleClientSiteVtbl g_site_vtbl = {
-    (void *)site_QueryInterface, (void *)site_AddRef, (void *)site_Release,
-    (void *)site_SaveObject, (void *)site_GetMoniker, (void *)site_GetContainer,
-    (void *)site_ShowObject, (void *)site_OnShowWindow,
-    (void *)site_RequestNewObjectLayout
+    (Site_QI)site_QueryInterface, (Site_Ref)site_AddRef, (Site_Ref)site_Release,
+    (Site_Void)site_SaveObject, (Site_GetMoniker)site_GetMoniker,
+    (Site_GetContainer)site_GetContainer,
+    (Site_Void)site_ShowObject, (Site_OnShowWindow)site_OnShowWindow,
+    (Site_Void)site_RequestNewObjectLayout
 };
 
 /* --- IOleWindow / IOleInPlaceFrame ------------------------------------- */
@@ -123,14 +145,29 @@ static HRESULT STDMETHODCALLTYPE frame_EnableModeless(void *p, BOOL e)
 static HRESULT STDMETHODCALLTYPE frame_TranslateAccelerator(void *p, LPMSG m, WORD w)
 { (void)p; (void)m; (void)w; return S_FALSE; }
 
+/* Same reasoning as Site_* above, for IOleInPlaceFrame's slots. */
+typedef HRESULT (STDMETHODCALLTYPE *Frame_QI)(IOleInPlaceFrame *, REFIID, void **);
+typedef ULONG   (STDMETHODCALLTYPE *Frame_Ref)(IOleInPlaceFrame *);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_GetWindow)(IOleInPlaceFrame *, HWND *);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_BOOL)(IOleInPlaceFrame *, BOOL);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_GetBorder)(IOleInPlaceFrame *, LPRECT);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_BorderSpace)(IOleInPlaceFrame *, LPCBORDERWIDTHS);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_SetActiveObject)(IOleInPlaceFrame *, IOleInPlaceActiveObject *, LPCOLESTR);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_InsertMenus)(IOleInPlaceFrame *, HMENU, LPOLEMENUGROUPWIDTHS);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_SetMenu)(IOleInPlaceFrame *, HMENU, HOLEMENU, HWND);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_RemoveMenus)(IOleInPlaceFrame *, HMENU);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_SetStatusText)(IOleInPlaceFrame *, LPCOLESTR);
+typedef HRESULT (STDMETHODCALLTYPE *Frame_TranslateAccelerator)(IOleInPlaceFrame *, LPMSG, WORD);
+
 static IOleInPlaceFrameVtbl g_frame_vtbl = {
-    (void *)frame_QueryInterface, (void *)frame_AddRef, (void *)frame_Release,
-    (void *)frame_GetWindow, (void *)frame_ContextSensitiveHelp,
-    (void *)frame_GetBorder, (void *)frame_RequestBorderSpace,
-    (void *)frame_SetBorderSpace, (void *)frame_SetActiveObject,
-    (void *)frame_InsertMenus, (void *)frame_SetMenu, (void *)frame_RemoveMenus,
-    (void *)frame_SetStatusText, (void *)frame_EnableModeless,
-    (void *)frame_TranslateAccelerator
+    (Frame_QI)frame_QueryInterface, (Frame_Ref)frame_AddRef, (Frame_Ref)frame_Release,
+    (Frame_GetWindow)frame_GetWindow, (Frame_BOOL)frame_ContextSensitiveHelp,
+    (Frame_GetBorder)frame_GetBorder, (Frame_BorderSpace)frame_RequestBorderSpace,
+    (Frame_BorderSpace)frame_SetBorderSpace, (Frame_SetActiveObject)frame_SetActiveObject,
+    (Frame_InsertMenus)frame_InsertMenus, (Frame_SetMenu)frame_SetMenu,
+    (Frame_RemoveMenus)frame_RemoveMenus,
+    (Frame_SetStatusText)frame_SetStatusText, (Frame_BOOL)frame_EnableModeless,
+    (Frame_TranslateAccelerator)frame_TranslateAccelerator
 };
 
 /* --- IOleInPlaceSite --------------------------------------------------- */
@@ -173,26 +210,51 @@ static HRESULT STDMETHODCALLTYPE place_DeactivateAndUndo(void *p)
 static HRESULT STDMETHODCALLTYPE place_OnPosRectChange(void *p, LPCRECT r)
 { (void)p; (void)r; return S_OK; }
 
-static IOleInPlaceSiteVtbl g_place_vtbl = {
-    (void *)place_QueryInterface, (void *)place_AddRef, (void *)place_Release,
-    (void *)place_GetWindow, (void *)place_ContextSensitiveHelp,
-    (void *)place_CanInPlaceActivate, (void *)place_OnInPlaceActivate,
-    (void *)place_OnUIActivate, (void *)place_GetWindowContext,
-    (void *)place_Scroll, (void *)place_OnUIDeactivate,
-    (void *)place_OnInPlaceDeactivate, (void *)place_DiscardUndoState,
-    (void *)place_DeactivateAndUndo, (void *)place_OnPosRectChange
-};
+/* Same reasoning as Site_* above, for IOleInPlaceSite's slots. */
+typedef HRESULT (STDMETHODCALLTYPE *Place_QI)(IOleInPlaceSite *, REFIID, void **);
+typedef ULONG   (STDMETHODCALLTYPE *Place_Ref)(IOleInPlaceSite *);
+typedef HRESULT (STDMETHODCALLTYPE *Place_GetWindow)(IOleInPlaceSite *, HWND *);
+typedef HRESULT (STDMETHODCALLTYPE *Place_BOOL)(IOleInPlaceSite *, BOOL);
+typedef HRESULT (STDMETHODCALLTYPE *Place_Void)(IOleInPlaceSite *);
+typedef HRESULT (STDMETHODCALLTYPE *Place_GetWindowContext)(IOleInPlaceSite *,
+        IOleInPlaceFrame **, IOleInPlaceUIWindow **, LPRECT, LPRECT, LPOLEINPLACEFRAMEINFO);
+typedef HRESULT (STDMETHODCALLTYPE *Place_OnPosRectChange)(IOleInPlaceSite *, LPCRECT);
+typedef HRESULT (STDMETHODCALLTYPE *Place_Scroll)(IOleInPlaceSite *, SIZE);
 
+/* The Scroll slot takes SIZE BY VALUE, and Watcom's C++ front end emits W602
+ * ("class value used ... in converted function type") for it -- its own COM
+ * bookkeeping, not anything unsafe here: place_Scroll is declared with
+ * exactly the signature oleidl.h gives the slot. The build runs -wx, so a
+ * warning is an error, and the fix is one scoped flag in win/Makefile
+ * (-wcd=602 on htmlview.o only) rather than anything clever in this file.
+ *
+ * It was briefly something clever. An earlier version left this slot 0 and
+ * memcpy'd the pointer's bytes in at runtime from the constructor, on the
+ * belief that -wcd=602 did not work. It does. That version left a real
+ * vtable with a null entry in it between static init and the first
+ * rc_html_impl, which is a worse thing to own than a suppressed warning. */
+static IOleInPlaceSiteVtbl g_place_vtbl = {
+    (Place_QI)place_QueryInterface, (Place_Ref)place_AddRef, (Place_Ref)place_Release,
+    (Place_GetWindow)place_GetWindow, (Place_BOOL)place_ContextSensitiveHelp,
+    (Place_Void)place_CanInPlaceActivate, (Place_Void)place_OnInPlaceActivate,
+    (Place_Void)place_OnUIActivate, (Place_GetWindowContext)place_GetWindowContext,
+    (Place_Scroll)place_Scroll, (Place_BOOL)place_OnUIDeactivate,
+    (Place_Void)place_OnInPlaceDeactivate, (Place_Void)place_DiscardUndoState,
+    (Place_Void)place_DeactivateAndUndo, (Place_OnPosRectChange)place_OnPosRectChange
+};
 
 /* ----------------------------------------------------------------------- */
 
-struct rc_html {
-    Host           host;
-    IOleObject    *obj;
-    IWebBrowser2  *web;
-    IHTMLDocument2 *doc;
-    IHTMLElement  *slot_t;      /* finished blocks */
-    IHTMLElement  *slot_l;      /* the block being written */
+/* The state behind the pimpl. See htmlview.h for why it is hidden -- the
+ * short version is that ole2.h/mshtml.h/docobj.h together are a few thousand
+ * lines and main.cpp, the only caller, needs none of them. */
+struct rc_html_impl {
+    Host                    host;
+    ComPtr<IOleObject>      obj;
+    ComPtr<IWebBrowser2>    web;
+    ComPtr<IHTMLDocument2>  doc;
+    ComPtr<IHTMLElement>    slot_t;     /* finished blocks */
+    ComPtr<IHTMLElement>    slot_l;     /* the block being written */
     HWND           parent;
     int            ready;
     char          *queue;       /* appends that arrived before the document */
@@ -200,6 +262,33 @@ struct rc_html {
     char           path[MAX_PATH];
     int            diag;
     int            autoscroll;  /* the user's setting, finally consulted */
+
+    explicit rc_html_impl(HWND p)
+        : parent(p), ready(0), queue(0), queue_len(0), queue_cap(0), diag(0),
+          /* On unless the user says otherwise -- the same default
+           * rc_config_load uses. The struct is zero-filled, so without this
+           * the setting would be off by accident on the very first run. */
+          autoscroll(1)
+    {
+        path[0] = '\0';
+        memset(&host, 0, sizeof(Host));
+        host.site.lpVtbl  = &g_site_vtbl;
+        host.place.lpVtbl = &g_place_vtbl;
+        host.frame.lpVtbl = &g_frame_vtbl;
+        host.refs = 1;
+        host.hwnd = p;
+    }
+
+    ~rc_html_impl()
+    {
+        if (obj.valid()) {
+            IOleObject_Close(obj.get(), OLECLOSE_NOSAVE);
+            IOleObject_SetClientSite(obj.get(), NULL);
+        }
+        if (queue) HeapFree(GetProcessHeap(), 0, queue);
+        /* obj/web/doc/slot_t/slot_l release themselves here, in reverse
+         * declaration order, as the ComPtr members go out of scope. */
+    }
 };
 
 /* CP1252 in, UTF-16 out. The bridge folds everything to CP1252 and the
@@ -224,125 +313,136 @@ static BSTR to_bstr(const char *s)
 
 static IHTMLElement *find_id(IHTMLDocument2 *doc, const char *id)
 {
-    IHTMLElementCollection *all = NULL;
-    IDispatch *disp = NULL;
-    IHTMLElement *el = NULL;
+    ComPtr<IHTMLElementCollection> all;
+    ComPtr<IDispatch> disp;
+    ComPtr<IHTMLElement> el;
     VARIANT name, index;
+    Bstr idb;
 
-    if (FAILED(IHTMLDocument2_get_all(doc, &all)) || !all) return NULL;
+    {
+        IHTMLElementCollection *all_raw = NULL;
+        if (FAILED(IHTMLDocument2_get_all(doc, &all_raw)) || !all_raw)
+            return NULL;
+        all.reset(all_raw);
+    }
     VariantInit(&name);
     VariantInit(&index);
     /* V_VT / V_BSTR rather than the struct fields: Open Watcom declares
      * VARIANT with named unions, so v.vt does not compile. The macros are the
      * portable spelling and work either way. */
     V_VT(&name) = VT_BSTR;
-    V_BSTR(&name) = to_bstr(id);
+    idb.reset(to_bstr(id));
+    V_BSTR(&name) = idb.get();
     V_VT(&index) = VT_I4;
     V_I4(&index) = 0;
-    if (SUCCEEDED(IHTMLElementCollection_item(all, name, index, &disp)) && disp)
-        IDispatch_QueryInterface(disp, &IID_IHTMLElement, (void **)&el);
-    if (disp) IDispatch_Release(disp);
-    SysFreeString(V_BSTR(&name));
-    IHTMLElementCollection_Release(all);
-    return el;
+    {
+        IDispatch *disp_raw = NULL;
+        if (SUCCEEDED(IHTMLElementCollection_item(all.get(), name, index, &disp_raw))
+            && disp_raw) {
+            disp.reset(disp_raw);
+            IHTMLElement *el_raw = NULL;
+            IDispatch_QueryInterface(disp.get(), IID_IHTMLElement, (void **)&el_raw);
+            el.reset(el_raw);
+        }
+    }
+    return el.release();
 }
 
-static void queue_add(rc_html *v, const char *frag)
+static void queue_add(rc_html_impl *d, const char *frag)
 {
     unsigned n = (unsigned)strlen(frag);
-    if (v->queue_len + n + 1 > v->queue_cap) {
-        unsigned cap = v->queue_cap ? v->queue_cap * 2 : 4096;
+    if (d->queue_len + n + 1 > d->queue_cap) {
+        unsigned cap = d->queue_cap ? d->queue_cap * 2 : 4096;
         char *p;
-        while (cap < v->queue_len + n + 1) cap *= 2;
-        p = v->queue ? (char *)HeapReAlloc(GetProcessHeap(), 0, v->queue, cap)
+        while (cap < d->queue_len + n + 1) cap *= 2;
+        p = d->queue ? (char *)HeapReAlloc(GetProcessHeap(), 0, d->queue, cap)
                      : (char *)HeapAlloc(GetProcessHeap(), 0, cap);
         /* HeapReAlloc failing leaves the original block valid; dropping the
          * fragment loses a line of transcript, which beats leaking. */
         if (!p) return;
-        v->queue = p;
-        v->queue_cap = cap;
+        d->queue = p;
+        d->queue_cap = cap;
     }
-    memcpy(v->queue + v->queue_len, frag, n);
-    v->queue_len += n;
-    v->queue[v->queue_len] = '\0';
+    memcpy(d->queue + d->queue_len, frag, n);
+    d->queue_len += n;
+    d->queue[d->queue_len] = '\0';
 }
 
-rc_html *rc_html_create(HWND parent)
+rc_html *rc_html::create(HWND parent)
 {
-    rc_html *v = (rc_html *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                                      sizeof(rc_html));
+    rc_html_impl *v = new rc_html_impl(parent);
     if (!v) return NULL;
-    v->parent = parent;
-    /* On unless the user says otherwise -- the same default rc_config_load
-     * uses. The struct is zero-filled, so without this the setting would be
-     * off by accident on the very first run. */
-    v->autoscroll = 1;
-    v->host.site.lpVtbl  = &g_site_vtbl;
-    v->host.place.lpVtbl = &g_place_vtbl;
-    v->host.frame.lpVtbl = &g_frame_vtbl;
-    v->host.refs = 1;
-    v->host.hwnd = parent;
-    return v;
+    rc_html *h = new rc_html(v);
+    if (!h) { delete v; return NULL; }
+    return h;
 }
 
-void rc_html_set_document(rc_html *v, const char *doc)
+rc_html::~rc_html()
+{
+    delete d;
+}
+
+void rc_html::set_document(const char *doc)
 {
     RECT rc;
     HRESULT hr;
     FILE *f;
     VARIANT empty;
-    BSTR url;
     char dir[MAX_PATH];
 
-    if (!v || v->obj) return;
+    if (d->obj.valid()) return;
 
     /* A file rather than document.write: writing needs the document to exist
      * first, which means waiting for a navigation anyway, and this way there
      * is exactly one asynchronous step to wait on instead of two. */
     GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
     { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
-    rc_strf(v->path, sizeof(v->path), "%s\\view.htm", dir);
-    f = fopen(v->path, "wb");
-    if (!f) { rc_log("html: cannot write %s", v->path); return; }
+    rc_strf(d->path, sizeof(d->path), "%s\\view.htm", dir);
+    f = fopen(d->path, "wb");
+    if (!f) { rc_log("html: cannot write %s", d->path); return; }
     fputs(doc, f);
     fclose(f);
 
-    hr = CoCreateInstance(&CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER,
-                          &IID_IOleObject, (void **)&v->obj);
+    hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER,
+                          IID_IOleObject, (void **)d->obj.addr());
     if (FAILED(hr)) { rc_log("html: CoCreateInstance %08lX", (unsigned long)hr); return; }
 
-    IOleObject_SetClientSite(v->obj, &v->host.site);
-    OleSetContainedObject((IUnknown *)v->obj, TRUE);
+    IOleObject_SetClientSite(d->obj.get(), &d->host.site);
+    OleSetContainedObject((IUnknown *)d->obj.get(), TRUE);
 
-    GetClientRect(v->parent, &rc);
-    hr = IOleObject_DoVerb(v->obj, OLEIVERB_INPLACEACTIVATE, NULL,
-                           &v->host.site, 0, v->parent, &rc);
+    GetClientRect(d->parent, &rc);
+    hr = IOleObject_DoVerb(d->obj.get(), OLEIVERB_INPLACEACTIVATE, NULL,
+                           &d->host.site, 0, d->parent, &rc);
     if (FAILED(hr)) { rc_log("html: DoVerb %08lX", (unsigned long)hr); return; }
 
-    hr = IOleObject_QueryInterface(v->obj, &IID_IWebBrowser2, (void **)&v->web);
+    hr = IOleObject_QueryInterface(d->obj.get(), IID_IWebBrowser2,
+                                   (void **)d->web.addr());
     if (FAILED(hr)) { rc_log("html: QI IWebBrowser2 %08lX", (unsigned long)hr); return; }
 
     {
         char url8[MAX_PATH + 16];
         char *p;
-        rc_strf(url8, sizeof(url8), "file:///%s", v->path);
+        Bstr url;
+        rc_strf(url8, sizeof(url8), "file:///%s", d->path);
         for (p = url8; *p; p++) if (*p == '\\') *p = '/';
-        url = to_bstr(url8);
+        url.reset(to_bstr(url8));
+        VariantInit(&empty);
+        IWebBrowser2_Navigate(d->web.get(), url.get(), &empty, &empty, &empty, &empty);
     }
-    VariantInit(&empty);
-    IWebBrowser2_Navigate(v->web, url, &empty, &empty, &empty, &empty);
-    SysFreeString(url);
-    rc_log("html: navigating to %s", v->path);
+    rc_log("html: navigating to %s", d->path);
 
     {   /* Where did the control actually put its window? A control that is
          * hosting correctly but sized to nothing looks exactly like one that
          * is not hosting at all. */
-        IOleWindow *ow = NULL;
+        ComPtr<IOleWindow> ow;
         HWND h = NULL;
-        if (SUCCEEDED(IOleObject_QueryInterface(v->obj, &IID_IOleWindow,
-                                                (void **)&ow)) && ow) {
-            IOleWindow_GetWindow(ow, &h);
-            IOleWindow_Release(ow);
+        {
+            IOleWindow *ow_raw = NULL;
+            if (SUCCEEDED(IOleObject_QueryInterface(d->obj.get(), IID_IOleWindow,
+                                                    (void **)&ow_raw)) && ow_raw) {
+                ow.reset(ow_raw);
+                IOleWindow_GetWindow(ow.get(), &h);
+            }
         }
         if (h) {
             RECT r;
@@ -357,34 +457,40 @@ void rc_html_set_document(rc_html *v, const char *doc)
     }
 }
 
-int rc_html_poll(rc_html *v)
+int rc_html::poll()
 {
     READYSTATE rs = READYSTATE_UNINITIALIZED;
-    IDispatch *disp = NULL;
 
-    if (!v || v->ready) return v ? v->ready : 0;
-    if (!v->web) return 0;
-    if (FAILED(IWebBrowser2_get_ReadyState(v->web, &rs))) return 0;
+    if (d->ready) return d->ready;
+    if (!d->web.valid()) return 0;
+    if (FAILED(IWebBrowser2_get_ReadyState(d->web.get(), &rs))) return 0;
     if (rs != READYSTATE_COMPLETE) return 0;
 
-    if (FAILED(IWebBrowser2_get_Document(v->web, &disp)) || !disp) return 0;
-    IDispatch_QueryInterface(disp, &IID_IHTMLDocument2, (void **)&v->doc);
-    IDispatch_Release(disp);
-    if (!v->doc) return 0;
+    {
+        ComPtr<IDispatch> disp;
+        IDispatch *disp_raw = NULL;
+        if (FAILED(IWebBrowser2_get_Document(d->web.get(), &disp_raw)) || !disp_raw)
+            return 0;
+        disp.reset(disp_raw);
+        IHTMLDocument2 *doc_raw = NULL;
+        IDispatch_QueryInterface(disp.get(), IID_IHTMLDocument2, (void **)&doc_raw);
+        d->doc.reset(doc_raw);
+    }
+    if (!d->doc.valid()) return 0;
 
-    v->slot_t = find_id(v->doc, "t");
-    v->slot_l = find_id(v->doc, "l");
-    if (!v->slot_t || !v->slot_l) {
+    d->slot_t.reset(find_id(d->doc.get(), "t"));
+    d->slot_l.reset(find_id(d->doc.get(), "l"));
+    if (!d->slot_t.valid() || !d->slot_l.valid()) {
         rc_log("html: document has no #t/#l containers");
         return 0;
     }
-    v->ready = 1;
+    d->ready = 1;
     rc_log("html: document ready");
 
-    if (v->queue_len) {
-        rc_html_append(v, v->queue);
-        v->queue_len = 0;
-        v->queue[0] = '\0';
+    if (d->queue_len) {
+        append(d->queue);
+        d->queue_len = 0;
+        d->queue[0] = '\0';
     }
     return 1;
 }
@@ -425,70 +531,63 @@ static void esc_into(const char *in, char *out, unsigned cap)
 /* One policy, one place. Was: two call sites scrolled unconditionally, one
  * scrolled if already at the bottom, six never scrolled, and the user's
  * autoscroll setting was read by nothing. */
-static void settle(rc_html *v, int was_at_bottom)
+void rc_html::settle(int was_at_bottom)
 {
-    if (v->autoscroll && was_at_bottom) rc_html_scroll_bottom(v);
+    if (d->autoscroll && was_at_bottom) scroll_bottom();
 }
 
 /* Escape `text` into a heap block wrapped in `<div class="cls">`, append it,
  * and apply the scroll policy. Heap rather than stack because escaping can
  * expand five-fold and the largest frame in this program is already in
  * main.c. */
-static void say(rc_html *v, const char *cls, const char *text)
+void rc_html::say(const char *cls, const char *text)
 {
     unsigned n, cap;
-    char *esc, *div;
     int bottom;
 
-    if (!v || !text) return;
+    if (!text) return;
     n = (unsigned)strlen(text);
     cap = n * 6 + 64;                       /* '&' -> "&amp;" is the worst */
-    esc = (char *)HeapAlloc(GetProcessHeap(), 0, cap);
-    if (!esc) return;
-    esc_into(text, esc, cap);
+    HeapPtr<char> esc((char *)HeapAlloc(GetProcessHeap(), 0, cap));
+    if (!esc.valid()) return;
+    esc_into(text, esc.get(), cap);
 
-    div = (char *)HeapAlloc(GetProcessHeap(), 0, cap + 64);
-    if (!div) { HeapFree(GetProcessHeap(), 0, esc); return; }
-    rc_strf(div, cap + 64, "<div class=\"%s\">%s</div>", cls, esc);
+    HeapPtr<char> div((char *)HeapAlloc(GetProcessHeap(), 0, cap + 64));
+    if (!div.valid()) return;
+    rc_strf(div.get(), cap + 64, "<div class=\"%s\">%s</div>", cls, esc.get());
 
-    bottom = rc_html_at_bottom(v);
-    rc_html_append(v, div);
-    settle(v, bottom);
-
-    HeapFree(GetProcessHeap(), 0, div);
-    HeapFree(GetProcessHeap(), 0, esc);
+    bottom = at_bottom();
+    append(div.get());
+    settle(bottom);
 }
 
-void rc_html_notice(rc_html *v, const char *text)
-{ say(v, RC_CSS_NOTICE, text); }
-void rc_html_error(rc_html *v, const char *text)
-{ say(v, RC_CSS_ERROR, text); }
-void rc_html_user(rc_html *v, const char *text)
-{ say(v, RC_CSS_USER, text); }
+void rc_html::notice(const char *text)
+{ say(RC_CSS_NOTICE, text); }
+void rc_html::error(const char *text)
+{ say(RC_CSS_ERROR, text); }
+void rc_html::user(const char *text)
+{ say(RC_CSS_USER, text); }
 
-void rc_html_block(rc_html *v, const char *html)
+void rc_html::block(const char *html)
 {
     int bottom;
-    if (!v || !html || !*html) return;
-    bottom = rc_html_at_bottom(v);
-    rc_html_append(v, html);
-    settle(v, bottom);
+    if (!html || !*html) return;
+    bottom = at_bottom();
+    append(html);
+    settle(bottom);
 }
 
-void rc_html_set_autoscroll(rc_html *v, int on) { if (v) v->autoscroll = on; }
+void rc_html::set_autoscroll(int on) { d->autoscroll = on; }
 
-void rc_html_append(rc_html *v, const char *frag)
+void rc_html::append(const char *frag)
 {
-    BSTR where, html;
     HRESULT hr;
 
-    if (!v || !frag || !*frag) return;
-    if (!v->ready) { queue_add(v, frag); return; }
-    where = to_bstr("beforeEnd");
-    html = to_bstr(frag);
-    hr = IHTMLElement_insertAdjacentHTML(v->slot_t, where, html);
-    SysFreeString(html);
-    SysFreeString(where);
+    if (!frag || !*frag) return;
+    if (!d->ready) { queue_add(d, frag); return; }
+    Bstr where(to_bstr("beforeEnd"));
+    Bstr html(to_bstr(frag));
+    hr = IHTMLElement_insertAdjacentHTML(d->slot_t.get(), where.get(), html.get());
 
     /* Quiet unless something goes wrong. A failed insert is invisible by
      * definition: the call returns, nothing appears, and the window looks
@@ -496,103 +595,88 @@ void rc_html_append(rc_html *v, const char *frag)
     if (FAILED(hr))
         rc_log("html: append FAILED hr=%08lX len=%u [%.48s]",
                (unsigned long)hr, (unsigned)strlen(frag), frag);
-    else if (!v->diag) {
-        v->diag = 1;
+    else if (!d->diag) {
+        d->diag = 1;
         rc_log("html: first append ok, %u bytes", (unsigned)strlen(frag));
     }
 }
 
-void rc_html_live(rc_html *v, const char *frag)
+void rc_html::live(const char *frag)
 {
-    BSTR html;
-
-    if (!v || !v->ready) return;
-    html = to_bstr(frag ? frag : "");
+    if (!d->ready) return;
+    Bstr html(to_bstr(frag ? frag : ""));
     {
-        HRESULT hr = IHTMLElement_put_innerHTML(v->slot_l, html);
+        HRESULT hr = IHTMLElement_put_innerHTML(d->slot_l.get(), html.get());
         if (FAILED(hr))
             rc_log("html: live FAILED hr=%08lX", (unsigned long)hr);
     }
-    SysFreeString(html);
 }
 
-void rc_html_clear(rc_html *v)
+void rc_html::clear()
 {
-    BSTR empty;
-
-    if (!v) return;
-    v->queue_len = 0;
-    if (v->queue) v->queue[0] = '\0';
-    if (!v->ready) return;
-    empty = to_bstr("");
-    IHTMLElement_put_innerHTML(v->slot_t, empty);
-    IHTMLElement_put_innerHTML(v->slot_l, empty);
-    SysFreeString(empty);
+    d->queue_len = 0;
+    if (d->queue) d->queue[0] = '\0';
+    if (!d->ready) return;
+    Bstr empty(to_bstr(""));
+    IHTMLElement_put_innerHTML(d->slot_t.get(), empty.get());
+    IHTMLElement_put_innerHTML(d->slot_l.get(), empty.get());
 }
 
-void rc_html_scroll_bottom(rc_html *v)
+void rc_html::scroll_bottom()
 {
-    IHTMLWindow2 *win = NULL;
-
-    if (!v || !v->ready) return;
+    if (!d->ready) return;
     /* scrollBy with an absurd delta rather than computing the document height:
      * the window clamps, which is exactly the behaviour wanted and cannot
      * overshoot -- the mistake the RichEdit version made with SB_BOTTOM. */
-    if (SUCCEEDED(IHTMLDocument2_get_parentWindow(v->doc, &win)) && win) {
-        IHTMLWindow2_scrollBy(win, 0, 1000000);
-        IHTMLWindow2_Release(win);
+    ComPtr<IHTMLWindow2> win;
+    IHTMLWindow2 *win_raw = NULL;
+    if (SUCCEEDED(IHTMLDocument2_get_parentWindow(d->doc.get(), &win_raw)) && win_raw) {
+        win.reset(win_raw);
+        IHTMLWindow2_scrollBy(win.get(), 0, 1000000);
     }
 }
 
-int rc_html_at_bottom(rc_html *v)
+int rc_html::at_bottom() const
 {
-    IHTMLElement2 *b2 = NULL;
-    IHTMLElement *body = NULL;
     long top = 0, height = 0, client = 0;
     int at = 1;
 
-    if (!v || !v->ready) return 1;
-    if (FAILED(IHTMLDocument2_get_body(v->doc, &body)) || !body) return 1;
-    if (SUCCEEDED(IHTMLElement_QueryInterface(body, &IID_IHTMLElement2,
-                                              (void **)&b2)) && b2) {
-        IHTMLElement2_get_scrollTop(b2, &top);
-        IHTMLElement2_get_scrollHeight(b2, &height);
-        IHTMLElement2_get_clientHeight(b2, &client);
-        /* Within a couple of lines of the end counts as "at the bottom", so
-         * autoscroll does not stop following because of a rounding pixel. */
-        at = (top + client >= height - 24);
-        IHTMLElement2_Release(b2);
+    if (!d->ready) return 1;
+    ComPtr<IHTMLElement> body;
+    {
+        IHTMLElement *body_raw = NULL;
+        if (FAILED(IHTMLDocument2_get_body(d->doc.get(), &body_raw)) || !body_raw)
+            return 1;
+        body.reset(body_raw);
     }
-    IHTMLElement_Release(body);
+    ComPtr<IHTMLElement2> b2;
+    {
+        IHTMLElement2 *b2_raw = NULL;
+        if (SUCCEEDED(IHTMLElement_QueryInterface(body.get(), IID_IHTMLElement2,
+                                                  (void **)&b2_raw)) && b2_raw) {
+            b2.reset(b2_raw);
+            IHTMLElement2_get_scrollTop(b2.get(), &top);
+            IHTMLElement2_get_scrollHeight(b2.get(), &height);
+            IHTMLElement2_get_clientHeight(b2.get(), &client);
+            /* Within a couple of lines of the end counts as "at the bottom", so
+             * autoscroll does not stop following because of a rounding pixel. */
+            at = (top + client >= height - 24);
+        }
+    }
     return at;
 }
 
-void rc_html_move(rc_html *v, int x, int y, int w, int h)
+void rc_html::move(int x, int y, int w, int h)
 {
-    IOleInPlaceObject *ip = NULL;
     RECT rc;
 
-    if (!v || !v->obj) return;
+    if (!d->obj.valid()) return;
     rc.left = x; rc.top = y; rc.right = x + w; rc.bottom = y + h;
-    if (SUCCEEDED(IOleObject_QueryInterface(v->obj, &IID_IOleInPlaceObject,
-                                            (void **)&ip)) && ip) {
-        IOleInPlaceObject_SetObjectRects(ip, &rc, &rc);
-        IOleInPlaceObject_Release(ip);
+    ComPtr<IOleInPlaceObject> ip;
+    IOleInPlaceObject *ip_raw = NULL;
+    if (SUCCEEDED(IOleObject_QueryInterface(d->obj.get(), IID_IOleInPlaceObject,
+                                            (void **)&ip_raw)) && ip_raw) {
+        ip.reset(ip_raw);
+        IOleInPlaceObject_SetObjectRects(ip.get(), &rc, &rc);
     }
-}
-
-void rc_html_destroy(rc_html *v)
-{
-    if (!v) return;
-    if (v->slot_t) IHTMLElement_Release(v->slot_t);
-    if (v->slot_l) IHTMLElement_Release(v->slot_l);
-    if (v->doc) IHTMLDocument2_Release(v->doc);
-    if (v->web) IWebBrowser2_Release(v->web);
-    if (v->obj) {
-        IOleObject_Close(v->obj, OLECLOSE_NOSAVE);
-        IOleObject_SetClientSite(v->obj, NULL);
-        IOleObject_Release(v->obj);
-    }
-    if (v->queue) HeapFree(GetProcessHeap(), 0, v->queue);
-    HeapFree(GetProcessHeap(), 0, v);
 }

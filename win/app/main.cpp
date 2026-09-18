@@ -435,7 +435,7 @@ static void ui_set_busy(int busy)
 static void perm_layout(void)
 {
     /* The bar changes the transcript's height, and the HTML view has no HWND
-     * to resize -- rc_html_move is the only lever it has, so the whole layout
+     * to resize -- move() is the only lever it has, so the whole layout
      * must be re-run rather than just showing the controls. */
     if (g_main) layout(g_main);
 }
@@ -549,7 +549,7 @@ static int ui_send(const char *what, const char *type,
         rc_strf(msg, sizeof(msg),
                 "%s could not be sent -- the connection is down. It will not "
                 "have taken effect. Try again once it reconnects.", what);
-        rc_html_error(g_html, msg);
+        if (g_html) g_html->error(msg);
     }
     return 0;
 }
@@ -609,7 +609,7 @@ static void render_frame(rc_frame *f)
         g_retry_noted = 0;
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
-        rc_html_notice(g_html, "Connected to bridge.");
+        if (g_html) g_html->notice("Connected to bridge.");
         status_refresh();
 
     } else if (strcmp(f->type, "DOC") == 0) {
@@ -618,7 +618,7 @@ static void render_frame(rc_frame *f)
          * the guest binary. */
         if (!g_doc_sent) {
             g_doc_sent = 1;
-            rc_html_set_document(g_html, f->body);
+            if (g_html) g_html->set_document(f->body);
             /* The control is created here rather than with the other children,
              * because it needs the skeleton first -- so it has missed every
              * layout so far and is still sized to whatever DoVerb was given. */
@@ -638,10 +638,11 @@ static void render_frame(rc_frame *f)
          * so this is the one path that does NOT escape. The scroll decision
          * moved into the view, which is the only place that can apply it
          * consistently. */
-        if (mode && strcmp(mode, "live") == 0)
-            rc_html_live(g_html, f->body);
-        else
-            rc_html_block(g_html, f->body);
+        if (mode && strcmp(mode, "live") == 0) {
+            if (g_html) g_html->live(f->body);
+        } else {
+            if (g_html) g_html->block(f->body);
+        }
 
     } else if (strcmp(f->type, "TOOL") == 0) {
         /* The bridge sends tool activity as a finished block now; this branch
@@ -810,14 +811,14 @@ static void render_frame(rc_frame *f)
         g_think_mark = -1;      /* the control is about to be cleared */
         /* One page in, one page out: clear before rendering, so the control
          * never holds two. */
-        rc_html_clear(g_html);
+        if (g_html) g_html->clear();
         v = rc_frame_get(f, "continued");
-        if (v && *v == '1')
-            rc_html_notice(g_html, "continued from the previous page");
+        if (v && *v == '1' && g_html)
+            g_html->notice("continued from the previous page");
         page_update_ui();
 
     } else if (strcmp(f->type, "PAGEEND") == 0) {
-        if (g_loading_page) { g_loading_page = 0; rc_html_scroll_bottom(g_html); }
+        if (g_loading_page) { g_loading_page = 0; if (g_html) g_html->scroll_bottom(); }
         page_update_ui();
         log_mem("page loaded");
 
@@ -899,11 +900,11 @@ static void render_frame(rc_frame *f)
         /* Escaped, which it was not: this pushed the bridge's own `code` and
          * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
          * ended the document. */
-        rc_html_error(g_html, line);
+        if (g_html) g_html->error(line);
         ui_set_busy(0);
 
     } else if (strcmp(f->type, "NOTICE") == 0) {
-        rc_html_notice(g_html, f->body);
+        if (g_html) g_html->notice(f->body);
 
     } else if (strcmp(f->type, "RESYNC") == 0) {
         /* The bridge could not replay what we missed and is telling us the
@@ -918,7 +919,7 @@ static void render_frame(rc_frame *f)
                 "Some of the conversation could not be restored after the "
                 "reconnection%s%s. Use the page buttons to re-read it.",
                 (why && *why) ? ": " : "", (why && *why) ? why : "");
-        rc_html_notice(g_html, msg);
+        if (g_html) g_html->notice(msg);
 
     } else if (strcmp(f->type, "PONG") == 0) {
         /* The answer to a PING. We do not send PING yet -- see BACKLOG -- so
@@ -1039,7 +1040,7 @@ static void echo_user_block(const char *text)
     /* Was twenty lines of escaping and heap juggling here, with a buffer that
      * silently cut the echo at 4095 bytes while the full text went to the
      * model. The view owns its markup now, and sizes from the input. */
-    rc_html_user(g_html, text);
+    if (g_html) g_html->user(text);
 }
 
 static void do_send(void)
@@ -1056,7 +1057,8 @@ static void do_send(void)
      * below normally stops it arriving at all; this is the check that makes
      * that a guarantee rather than a hope. */
     if (GetWindowTextLengthA(g_input) >= RC_INPUT_MAX) {
-        rc_html_error(g_html,
+        if (g_html)
+            g_html->error(
                       "That message is too long to send (the limit is about "
                       "4000 characters). Nothing was sent -- shorten it, or "
                       "put the long part in a file under the mirrored folder.");
@@ -1077,7 +1079,7 @@ static void do_send(void)
         SetWindowTextA(g_input, "");
         ui_set_busy(1);
     } else {
-        rc_html_error(g_html, "Not connected.");
+        if (g_html) g_html->error("Not connected.");
     }
     SetFocus(g_input);
 }
@@ -1165,8 +1167,8 @@ static void layout(HWND hwnd)
     {
         int cx = GUTTER * 2 + CHATS_W;
         int cw = w - cx - GUTTER;
-        rc_html_move(g_html, cx, GUTTER + PAGEBAR_H,
-                     cw, ybar - GUTTER - PAGEBAR_H);
+        if (g_html)
+            g_html->move(cx, GUTTER + PAGEBAR_H, cw, ybar - GUTTER - PAGEBAR_H);
         if (g_bar_mode) {
             /* Right-to-left: the buttons are fixed width and the label takes
              * whatever is left, so a long tool description truncates rather
@@ -1214,7 +1216,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         g_ui_font_bold = g_ui_font;
     }
 
-    g_html = rc_html_create(hwnd);
+    g_html = rc_html::create(hwnd);
     if (!g_html)
         MessageBoxA(hwnd, "Could not create the HTML view.", "RetroClaude",
                     MB_OK | MB_ICONERROR);
@@ -1355,7 +1357,7 @@ static void try_connect(HWND hwnd)
                       g_cfg.host, g_cfg.port);
             /* Escaped now. The host comes from the INI, so this was
              * unescaped user-supplied text going into the document. */
-            rc_html_notice(g_html, msg);
+            if (g_html) g_html->notice(msg);
             g_retry_noted = 1;
         }
 
@@ -1479,7 +1481,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         } else if (wp == TIMER_STATUS) {
             status_refresh();
         } else if (wp == TIMER_HTMLPOLL) {
-            if (rc_html_poll(g_html)) KillTimer(hwnd, TIMER_HTMLPOLL);
+            if (g_html && g_html->poll()) KillTimer(hwnd, TIMER_HTMLPOLL);
         }
         return 0;
 
@@ -1641,7 +1643,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, TIMER_STATUS);
         KillTimer(hwnd, TIMER_RECONNECT);
         rc_net_stop(&g_net);
-        rc_html_destroy(g_html);
+        delete g_html;
         g_html = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */

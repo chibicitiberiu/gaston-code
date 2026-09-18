@@ -178,7 +178,7 @@ $(BUILD)/%.o: %.cpp $(HDRS) | $(BUILD)
 # the shipped header, not our code, and `#pragma warning 146 9` does not
 # silence it in this Watcom build, so it is disabled here instead, for this
 # one object only.
-$(BUILD)/htmlview.o: CFLAGS += -wcd=146
+$(BUILD)/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
 $(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)
 	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/miniz.err third_party/miniz/miniz.c
