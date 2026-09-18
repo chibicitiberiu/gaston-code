@@ -66,3 +66,4 @@ vm/*.partial.*
 # rpccheck.c's busy-JOB marker. Deleted at both ends of the run it takes part
 # in; this is only for the crash that skips the second delete.
 /rpccheck_marker.txt
+.claude/
