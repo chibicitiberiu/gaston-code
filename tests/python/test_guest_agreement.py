@@ -17,31 +17,20 @@ import zlib
 
 import pytest
 
-from bridge.files.paths import CLASS_EXACT, CLASS_TEXT, classify, normalise
+from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, classify,
+                                normalise)
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
-EXE = os.path.join(BUILD, "synccheck.exe")
+import conftest
+from conftest import wine_env
 
-#: The project uses Lutris's wine-ge build, not a system wine -- see
-#: a standalone Wine with full 32-bit support rather than Proton. (This note
-#: used to cite spike/Makefile; the spike was a Phase-0 hello-world and has
-#: been deleted, so the reason is recorded here instead of pointed at.)
-WINE = os.environ.get(
-    "WINE",
-    os.path.expanduser(
-        "~/.local/share/lutris/runners/wine/wine-ge-8-26-x86_64/bin/wine"),
-)
-PREFIX = os.environ.get("WINEPREFIX",
-                        os.path.join(HERE, ".wineprefix"))
+EXE_NAME = "synccheck.exe"
 
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(EXE) or not os.path.exists(WINE),
-    reason="needs build/win/synccheck.exe (make -C win synccheck) and the Lutris wine-ge runner",
-)
+# Only the genuinely-unsupported machine skips. A missing binary with
+# the toolchain present is a build omission and fails loudly -- see
+# conftest.guest_exe.
+pytestmark = conftest.needs_guest
 
-#: Deliberately the nastiest content we can think of, because the cases that
-#: broke this design were never the obvious ones.
+
 CORPUS = {
     "empty":            b"",
     "lf":               b"a\nb\nc\n",
@@ -84,8 +73,8 @@ def guest_answers(tmp_path_factory):
         (d / name).write_bytes(data)
     for name in WORKING_NAMES:
         (d / name).write_bytes(b"should not be reported\n")
-    env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
-    out = subprocess.run([WINE, EXE, str(d)], capture_output=True,
+    env = wine_env()
+    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), str(d)], capture_output=True,
                          timeout=300, env=env)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
@@ -172,8 +161,8 @@ def test_the_selected_checksum_is_one_of_the_two(guest_answers):
 
 @pytest.fixture(scope="module")
 def guest_limits():
-    env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
-    out = subprocess.run([WINE, EXE, "--limits"], capture_output=True,
+    env = wine_env()
+    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), "--limits"], capture_output=True,
                          timeout=300, env=env)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
@@ -218,8 +207,8 @@ def test_the_guest_never_builds_a_truncated_working_name(guest_limits):
 
 @pytest.fixture(scope="module")
 def guest_contained():
-    env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
-    out = subprocess.run([WINE, EXE, "--contained"], capture_output=True,
+    env = wine_env()
+    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), "--contained"], capture_output=True,
                          timeout=300, env=env)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():

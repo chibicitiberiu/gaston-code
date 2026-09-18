@@ -15,27 +15,21 @@ import subprocess
 
 import pytest
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
-EXE = os.path.join(BUILD, "cppcheck.exe")
+import conftest
+from conftest import wine_env
 
-WINE = os.environ.get(
-    "WINE",
-    os.path.expanduser(
-        "~/.local/share/lutris/runners/wine/wine-ge-8-26-x86_64/bin/wine"),
-)
-PREFIX = os.environ.get("WINEPREFIX", os.path.join(HERE, ".wineprefix"))
+EXE_NAME = "cppcheck.exe"
 
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(EXE) or not os.path.exists(WINE),
-    reason="needs build/win/cppcheck.exe (make -C win cppcheck) and wine-ge",
-)
+# Only the genuinely-unsupported machine skips. A missing binary with
+# the toolchain present is a build omission and fails loudly -- see
+# conftest.guest_exe.
+pytestmark = conftest.needs_guest
 
 
 @pytest.fixture(scope="module")
 def verdicts():
-    env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
-    out = subprocess.run([WINE, EXE], capture_output=True, timeout=300, env=env)
+    env = wine_env()
+    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME)], capture_output=True, timeout=300, env=env)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
         parts = line.split("\t")

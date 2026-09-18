@@ -19,7 +19,7 @@ BUILD_DIRS = build tmp
 # default goal -- `make` printed the help and built nothing.
 .DEFAULT_GOAL := all
 
-.PHONY: all guest check wine-smoke lint test clean help
+.PHONY: all guest guest-checks check wine-smoke lint test clean help
 
 help:
 	@echo "all         build the Win98 guest binary"
@@ -49,10 +49,19 @@ check:
 # two implementations of the classifier and the INI round-trip agree.
 #
 # Wine proves the code and never the platform; the real gate is the guest.
-wine-smoke:
-	@$(MAKE) -C win synccheck inicheck
+wine-smoke: guest-checks
 	@$(PY) -m pytest tests/python/test_guest_agreement.py \
-	                 tests/python/test_guest_config.py -q
+	                 tests/python/test_guest_config.py \
+	                 tests/python/test_guest_cpp.py -q
+
+# The binaries that run the SHIPPING guest C under Wine. `make test` builds
+# them first, because the alternative is what happened during the audit: a
+# `make clean` left them missing, 72 cross-language checks skipped in silence,
+# and the run reported "2031 passed" as though nothing were wrong. Those
+# checks are the only thing proving the guest's classifier and the bridge's
+# still agree, and a disagreement there is permanent rather than noisy.
+guest-checks:
+	@$(MAKE) -C win synccheck inicheck cppcheck
 
 # RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
 # that compile clean and fail on the guest. The transcript moved to MSHTML, so
@@ -80,7 +89,7 @@ lint:
 # pytest" at the exact moment you want the tests.
 PY = $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
-test:
+test: guest-checks
 	@if [ -d tests/python ] && ls tests/python/*.py >/dev/null 2>&1; then \
 	  $(PY) -m pytest tests/python -q; \
 	else echo "test: no tests yet"; fi
