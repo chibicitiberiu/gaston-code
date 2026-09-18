@@ -1124,10 +1124,17 @@ has known work left.
   `supportedEffortLevels`, with a greyed entry for models that have none, and
   the fork dance -- `resume=<id>, fork_session=True` -- because `set_effort()`
   does not exist.
-  *Still to do:* the fork produces a **new session id**, and the chat list and
-  registry do not follow it until the next turn writes a file, so the old
-  conversation stays listed and the new one is briefly invisible. The
-  transcript says the conversation was forked; the list does not.
+  *Still to do:* **[R -- 2026-09-18]** This used to say the chat list does not
+  follow a fork until the next turn writes a file, leaving the old
+  conversation listed and the new one briefly invisible. That symptom is
+  fixed: the new session id is now picked up in `on_system` the moment the
+  SDK's init `SystemMessage` reports it -- during the fork's first turn, not
+  after some later turn happens to write a registry file -- and the list is
+  pushed when it changes (commit `a805df3`). What is still open is the cause
+  underneath the symptom: `guest.sess_id` is one field for two concepts, the
+  client's connection identity and the conversation's identity, and splitting
+  it into `client_id` plus a bridge-owned `conv_id` is R7's job
+  (`BACKLOG.md` §7), not this stage's.
 
 - **Settings.** *Shipped:* an INI read with `GetPrivateProfileString`, not the
   registry.
@@ -1153,8 +1160,12 @@ right.
 
 ### Phase 5 — Attach *(1–2 weekends)*
 
-- Toolbar `TBSTYLE_DROPDOWN`, with **"Attach from P:\" as the default item** — those cost
-  nothing on the wire (the bridge reads them off the share directly).
+- Toolbar `TBSTYLE_DROPDOWN`, with **"Attach from the mirrored folder" as the default
+  item** -- those cost nothing on the wire (the bridge reads them from its own working
+  copy, `cfg.sync_root`, the same tree the sync layer already keeps current). **[R --
+  2026-09-18]** This used to say "Attach from P:\" / "the bridge reads them off the
+  share directly" -- Samba-era wording R6 (the sync layer replacing Samba) left behind
+  when it landed. No code changed here; the sentence was simply never revisited.
 - **Attachments never transit guest memory.** The GUI sends a *path*; the bridge reads it
   and base64s it. A 10MB image can't be held on a 32MB box, let alone base64'd. Enforce
   10MB / 8000px bridge-side by re-encoding.
