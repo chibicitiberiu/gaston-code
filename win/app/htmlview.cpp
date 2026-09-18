@@ -348,18 +348,44 @@ static IHTMLElement *find_id(IHTMLDocument2 *doc, const char *id)
     return el.release();
 }
 
+/* Fragments that arrive before the document is ready buffer here. This used
+ * to double with no ceiling -- the one allocation in the guest with no cap,
+ * on a machine that measures free memory in KB. The document normally becomes
+ * ready in under a second, so today this rarely holds more than a notice or
+ * two, but Phase 6's inline-image path appends fragments large enough to make
+ * "rarely" not a real bound. Capped here, and an overflow drops the fragment
+ * with a loud log line rather than growing forever -- the same drop-and-log
+ * shape manifest_add (win/sync/syncrpc.cpp) uses for its own bounded buffer.
+ * See audit finding 04.29. */
+#define RC_HTML_QUEUE_CAP (64u * 1024u)
+
 static void queue_add(rc_html_impl *d, const char *frag)
 {
     unsigned n = (unsigned)strlen(frag);
-    if (d->queue_len + n + 1 > d->queue_cap) {
+    unsigned need = d->queue_len + n + 1;
+
+    if (need > RC_HTML_QUEUE_CAP) {
+        rc_log("html: pre-ready queue would exceed %u bytes (have %u, this "
+               "fragment %u); dropping it",
+               (unsigned)RC_HTML_QUEUE_CAP, d->queue_len, n);
+        return;
+    }
+    if (need > d->queue_cap) {
         unsigned cap = d->queue_cap ? d->queue_cap * 2 : 4096;
         char *p;
-        while (cap < d->queue_len + n + 1) cap *= 2;
+        while (cap < need) cap *= 2;
+        if (cap > RC_HTML_QUEUE_CAP) cap = RC_HTML_QUEUE_CAP;
         p = d->queue ? (char *)HeapReAlloc(GetProcessHeap(), 0, d->queue, cap)
                      : (char *)HeapAlloc(GetProcessHeap(), 0, cap);
         /* HeapReAlloc failing leaves the original block valid; dropping the
-         * fragment loses a line of transcript, which beats leaking. */
-        if (!p) return;
+         * fragment loses a line of transcript, which beats leaking. Now also
+         * logged -- it was silent before, on a platform where the log is the
+         * only diagnostic. */
+        if (!p) {
+            rc_log("html: pre-ready queue realloc to %u bytes failed; "
+                   "dropping this fragment", cap);
+            return;
+        }
         d->queue = p;
         d->queue_cap = cap;
     }

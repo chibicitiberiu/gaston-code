@@ -86,6 +86,11 @@ static HWND  g_perm_text, g_perm_allow, g_perm_always, g_perm_deny;
  * leave the bar up during a live request or hidden during one. */
 static char g_perm_id[80];
 static int  g_perm_pending;
+/* The bar's own text, kept separately from what is on screen so PERMWAIT can
+ * append a queue-depth suffix without losing the original prompt, and drop it
+ * again if the queue empties. */
+static char g_perm_base_text[224];
+static int  g_perm_waiting;      /* other requests queued behind this one */
 
 /* The bar has two jobs and one set of controls.
  *
@@ -171,20 +176,27 @@ static int  g_chat_count = 0;
  * right vintage for the machine it runs on. */
 #define RC_TITLE "Gaston Code"
 
-/* -1 means the "thinking" indicator is not currently shown. */
-static long  g_think_mark = -1;
+/* Where the current turn is, for the title bar and status pane.
+ *
+ * Replaces g_think_mark, a `long` that only ever held -1 or 1 -- a leftover
+ * from the RichEdit era when it was a real character offset into the
+ * control -- and g_streaming, a boolean spelled backwards. Together the two
+ * were encoding this same three-way state ("nothing running" / "waiting on
+ * the model" / "text is arriving") as two booleans, one of them redundant
+ * with the other's negation. "Thinking" and "receiving" are different things
+ * to be waiting on, and saying "thinking" while text is visibly streaming is
+ * just wrong -- that distinction is the whole reason this needs three states
+ * and not two. */
+typedef enum { TURN_IDLE, TURN_THINKING, TURN_STREAMING } rc_turn_state;
+static rc_turn_state g_turn_state = TURN_IDLE;
 static DWORD g_turn_start_ms = 0;
-/* Output has started arriving for this turn. "Thinking" and "receiving" are
- * different things to be waiting on, and saying "thinking" while text is
- * visibly streaming is just wrong. */
-static int   g_streaming = 0;
 
 static void think_show(void);
 static void turn_done(void);
 static void layout(HWND hwnd);
 static void fit_label(char *label, unsigned cap, int avail_px);
 static int  chats_text_width(void);
-static void think_hide(void);
+static void turn_receiving(void);
 static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
@@ -277,7 +289,8 @@ static void status_refresh(void)
      * SB_SETTEXT a second rather than touching the transcript. */
     if (g_turn_active && g_turn_start_ms) {
         rc_strf(buf, sizeof(buf), " %s %lus",
-                  g_streaming ? "receiving..." : "Claude is thinking...",
+                  g_turn_state == TURN_STREAMING
+                      ? "receiving..." : "Claude is thinking...",
                   (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000));
         status_set(2, buf);
     }
@@ -450,6 +463,7 @@ static void bar_hide(void)
     g_bar_mode = BAR_NONE;
     g_perm_pending = 0;
     g_perm_id[0] = '\0';
+    g_perm_waiting = 0;
     ShowWindow(g_perm_text,   SW_HIDE);
     ShowWindow(g_perm_allow,  SW_HIDE);
     ShowWindow(g_perm_always, SW_HIDE);
@@ -506,16 +520,34 @@ static void halt_hide(void)
     bar_hide();
 }
 
+/* Puts g_perm_base_text on screen, with a queue-depth suffix from PERMWAIT
+ * when there is one to show. One place for this, so perm_show (which sets the
+ * base text) and the PERMWAIT handler (which only ever changes the count)
+ * cannot disagree about what is currently displayed. */
+static void perm_update_label(void)
+{
+    char buf[256];
+    if (g_perm_waiting > 0)
+        rc_strf(buf, sizeof(buf), "%s  (+%d waiting)",
+                  g_perm_base_text, g_perm_waiting);
+    else
+        rc_strf(buf, sizeof(buf), "%s", g_perm_base_text);
+    SetWindowTextA(g_perm_text, buf);
+}
+
 static void perm_show(const char *id, const char *text, int allows)
 {
     if (!id || !*id) return;
     rc_strf(g_perm_id, sizeof(g_perm_id), "%s", id);
     g_perm_pending = 1;
     g_bar_mode = BAR_PERM;
+    g_perm_waiting = 0;
 
     /* Put the label back: halt_show borrows this button and renames it. */
     SetWindowTextA(g_perm_allow, "Allow");
-    SetWindowTextA(g_perm_text, text && *text ? text : "Permission required");
+    rc_strf(g_perm_base_text, sizeof(g_perm_base_text), "%s",
+              text && *text ? text : "Permission required");
+    perm_update_label();
     ShowWindow(g_perm_text,   SW_SHOW);
     ShowWindow(g_perm_allow,  SW_SHOW);
     /* "Always" is offered only when the bridge says a rule can be expressed.
@@ -607,9 +639,20 @@ static void render_frame(rc_frame *f)
         chats_request();
         g_backoff_ms = 1000;
         g_retry_noted = 0;
-        rc_log("ready: sess=%s model=%s", g_net.sess,
-               rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
+        v = rc_frame_get(f, "model");
+        rc_log("ready: sess=%s model=%s", g_net.sess, v ? v : "?");
         if (g_html) g_html->notice("Connected to bridge.");
+        /* READY carries page/total for the session as it stands, but g_doc_sent
+         * (below) only installs the document skeleton once per PROCESS, not
+         * once per connection -- so on a reconnect this updates the page
+         * counters without the control's content agreeing with them, and the
+         * window keeps showing whatever the last connection left in it under
+         * the new page number. page_goto("live") re-requests the live page
+         * explicitly, which clears the control (PAGESTART) and repopulates it
+         * from what the bridge now has -- cheap and correct on a fresh session
+         * too, where it is a no-op over an empty page. See BACKLOG.md's note
+         * on this global. */
+        page_goto("live");
         status_refresh();
 
     } else if (strcmp(f->type, "DOC") == 0) {
@@ -630,10 +673,17 @@ static void render_frame(rc_frame *f)
         /* Body is not NUL-terminated by the protocol; the reader
          * over-allocates by one and terminates it, so this is safe.
          *
-         * "live" replaces the block still being written; anything else is a
-         * finished block appended to the end and never touched again. */
+         * "live" replaces the block still being written; anything else --
+         * including no mode= at all -- is a finished block appended to the
+         * end and never touched again. That "anything else" is deliberate
+         * for an absent header, but not for one that is PRESENT and wrong: a
+         * misspelled "live" would silently fall into the append branch below
+         * and grow the transcript by a full copy of the answer per token, on
+         * a 32MB guest that measures free memory in KB. So an unrecognized
+         * but non-empty mode= is logged loudly rather than swallowed -- see
+         * audit finding 03.22. */
         const char *mode = rc_frame_get(f, "mode");
-        think_hide();
+        turn_receiving();
         /* Finished markup from the bridge -- the guest transforms nothing --
          * so this is the one path that does NOT escape. The scroll decision
          * moved into the view, which is the only place that can apply it
@@ -641,13 +691,16 @@ static void render_frame(rc_frame *f)
         if (mode && strcmp(mode, "live") == 0) {
             if (g_html) g_html->live(f->body);
         } else {
+            if (mode && strcmp(mode, "append") != 0)
+                rc_log("TEXT: unrecognized mode=\"%s\" (want \"append\" or "
+                       "\"live\"); treating as a finished block", mode);
             if (g_html) g_html->block(f->body);
         }
 
     } else if (strcmp(f->type, "TOOL") == 0) {
         /* The bridge sends tool activity as a finished block now; this branch
          * only survives for older bridges. */
-        think_hide();
+        turn_receiving();
 
     } else if (strcmp(f->type, "TURN") == 0) {
         const char *state = rc_frame_get(f, "state");
@@ -657,17 +710,29 @@ static void render_frame(rc_frame *f)
             status_set(2, " Claude is thinking...");
             think_show();
         } else {
-            char buf[96];
             turn_done();
             ui_set_busy(0);
             /* Now, and only now, re-fetch the list. Sending a message is what
              * makes a conversation the most recent one, so this is where the
              * reordering belongs -- not on merely opening one. */
             chats_request();
-            v = rc_frame_get(f, "cost_usd");
-            rc_strf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
-            status_set(2, buf);
-
+            /* state=="error" used to fall into the same branch as a normal
+             * end and render identically -- turn_error() (protocol.py) sends
+             * `msg` and no `cost_usd`, so "done $?" is what a failed turn
+             * looked like. Distinguished now: an error goes to the transcript
+             * as an error and the status bar says so, instead of reading like
+             * a quiet success. See audit finding 03.50. */
+            if (state && strcmp(state, "error") == 0) {
+                v = rc_frame_get(f, "msg");
+                if (g_html)
+                    g_html->error(v && *v ? v : "The turn ended with an error.");
+                status_set(2, " error");
+            } else {
+                char buf[96];
+                v = rc_frame_get(f, "cost_usd");
+                rc_strf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
+                status_set(2, buf);
+            }
         }
 
     } else if (strcmp(f->type, "OPTION") == 0) {
@@ -808,7 +873,7 @@ static void render_frame(rc_frame *f)
         v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
         v = rc_frame_get(f, "live");  g_is_live = (v && *v == '1');
         g_loading_page = 1;
-        g_think_mark = -1;      /* the control is about to be cleared */
+        g_turn_state = TURN_IDLE;      /* the control is about to be cleared */
         /* One page in, one page out: clear before rendering, so the control
          * never holds two. */
         if (g_html) g_html->clear();
@@ -830,9 +895,10 @@ static void render_frame(rc_frame *f)
         page_update_ui();
 
     } else if (strcmp(f->type, "ANCHOR") == 0) {
-        rc_log("anchor: page=%s preview=%s",
-               rc_frame_get(f, "page") ? rc_frame_get(f, "page") : "?",
-               rc_frame_get(f, "preview") ? rc_frame_get(f, "preview") : "");
+        const char *page = rc_frame_get(f, "page");
+        const char *preview = rc_frame_get(f, "preview");
+        rc_log("anchor: page=%s preview=%s", page ? page : "?",
+               preview ? preview : "");
 
     } else if (strcmp(f->type, "PERMREQ") == 0 ||
                strcmp(f->type, "PERMSTATE") == 0) {
@@ -874,11 +940,19 @@ static void render_frame(rc_frame *f)
         }
 
     } else if (strcmp(f->type, "PERMWAIT") == 0) {
-        /* Only the queue depth changed; the request is the same one. */
+        /* Only the queue depth changed; the request is the same one. Was
+         * logged only -- never shown to the person actually waiting on the
+         * decision, although PLAN.md's modeless-bar design implies it should
+         * be. Now appended to the permission bar itself via
+         * perm_update_label(). See audit finding 03.30. */
         const char *id = rc_frame_get(f, "id");
         const char *n = rc_frame_get(f, "waiting");
-        if (id && g_perm_pending && strcmp(id, g_perm_id) == 0 && n)
+        if (id && g_perm_pending && strcmp(id, g_perm_id) == 0 && n) {
             rc_log("perm: %s more request(s) queued", n);
+            g_perm_waiting = atoi(n);
+            if (g_perm_waiting < 0) g_perm_waiting = 0;
+            perm_update_label();
+        }
 
     } else if (strcmp(f->type, "PERMEND") == 0) {
         /* Keyed on the id, never a blind hide: a PERMEND can arrive for a
@@ -893,9 +967,10 @@ static void render_frame(rc_frame *f)
 
     } else if (strcmp(f->type, "ERROR") == 0) {
         char line[512];
-        rc_strf(line, sizeof(line), "[%s] %s",
-                  rc_frame_get(f, "code") ? rc_frame_get(f, "code") : "error",
-                  rc_frame_get(f, "msg") ? rc_frame_get(f, "msg") : "");
+        const char *code = rc_frame_get(f, "code");
+        const char *msg = rc_frame_get(f, "msg");
+        rc_strf(line, sizeof(line), "[%s] %s", code ? code : "error",
+                  msg ? msg : "");
         rc_log("bridge error: %s", line);
         /* Escaped, which it was not: this pushed the bridge's own `code` and
          * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
@@ -993,48 +1068,59 @@ static void fit_label(char *label, unsigned cap, int avail_px)
  * indistinguishable from a hang. */
 /* Deliberately NOT in the transcript.
  *
- * The obvious design is to append "Claude is thinking..." and delete it again
- * when output arrives. It works everywhere except here: deleting with
- * EM_REPLACESEL puts Win98's riched20 back into the state where it stops
- * painting altogether, the same failure as an unprimed control, and the whole
- * answer then streams in invisibly. Measured twice, including with the
- * selection positions corrected -- `truncate to 152 from 174 left 153`, right
- * range, dead control.
+ * This used to be forced: the obvious design is to append "Claude is
+ * thinking..." and delete it again when output arrives, and that wedged
+ * Win98's riched20 -- EM_REPLACESEL put it back into the state where it
+ * stopped painting altogether, the same failure as an unprimed control, and
+ * the whole answer then streamed in invisibly. riched20 is gone; the
+ * transcript is MSHTML now, and rc_html can replace a block in place (live())
+ * or empty it (clear()) without that failure mode. The measurement that
+ * proved the wedge is kept in PROGRESS.md, not here, because it is no longer
+ * why this code looks the way it does.
  *
- * So the indicator lives in the title bar and the status bar, neither of which
- * needs the transcript touched. The title says that something is happening,
- * the status pane ticks the seconds so it is visibly not a hang, and both
- * clear themselves. */
+ * Keeping the indicator out of the transcript is now a deliberate choice, not
+ * a rendering constraint: it is transient status, not part of the
+ * conversation, and belongs in the title bar and status pane rather than in
+ * something a user might scroll back through or export. The title says that
+ * something is happening, the status pane ticks the seconds so it is visibly
+ * not a hang, and both clear themselves. */
 static void think_show(void)
 {
-    if (g_think_mark >= 0) return;
-    g_think_mark = 1;
-    g_streaming = 0;
+    if (g_turn_state != TURN_IDLE) return;
+    g_turn_state = TURN_THINKING;
     SetWindowTextA(g_main, RC_TITLE "  -  working...");
 }
 
 /* First output of the turn. The title stays as it is until the turn actually
  * ends -- the window is still busy -- but the wording in the status bar
- * changes, because there is now something to look at. */
-static void think_hide(void)
+ * changes, because there is now something to look at. Was think_hide(): that
+ * name was accurate when this deleted the indicator out of a RichEdit
+ * control; now it only advances a state enum, and nothing is hidden. */
+static void turn_receiving(void)
 {
-    if (g_think_mark < 0) return;
-    g_think_mark = -1;
-    g_streaming = 1;
+    if (g_turn_state == TURN_IDLE) return;
+    g_turn_state = TURN_STREAMING;
 }
 
 static void turn_done(void)
 {
-    g_think_mark = -1;
-    g_streaming = 0;
+    g_turn_state = TURN_IDLE;
     SetWindowTextA(g_main, RC_TITLE);
 }
 
-/* Echo the user's own line. Must match bridge/markdown.py user_block(): the
- * bridge records the identical string into the paginator so that paging back
- * to a sealed page still shows the question above the answer. Echoing locally
- * rather than waiting for the bridge to send it back is what keeps typing
- * responsive on a dialup link. */
+/* Echo the user's own line, meant to match bridge/view/html.py's user_turn()
+ * (not bridge/markdown.py -- that module is a .bak and user_block() does not
+ * exist): the bridge records that same string into the paginator so that
+ * paging back to a sealed page still shows the question above the answer.
+ * Echoing locally rather than waiting for the bridge to send it back is what
+ * keeps typing responsive on a dialup link.
+ *
+ * They do NOT in fact match: user_turn() does text.strip().splitlines()
+ * before escaping (html.py:102), and this side's esc_into() (htmlview.cpp)
+ * escapes the raw text without stripping -- so a message with a trailing
+ * blank line renders one line taller here than it does in the paginator-
+ * sealed copy shown after paging back. Recorded as audit finding 01.29;
+ * left as found rather than fixed here. */
 static void echo_user_block(const char *text)
 {
     /* Was twenty lines of escaping and heap juggling here, with a buffer that
@@ -1196,6 +1282,21 @@ static void layout(HWND hwnd)
     MoveWindow(g_stop, w - GUTTER - BUTTON_WIDTH, y + 28, BUTTON_WIDTH, 24, TRUE);
 }
 
+/* CreateWindowExA can fail, and on this platform that was never a theoretical
+ * concern: the comment above g_chats cites the 16-bit USER heap's fixed 64KB
+ * three times in this file as a reason a control might not be created. A NULL
+ * here was previously silent -- nothing logged, and every subsequent
+ * SendMessageA/MoveWindow/etc. against the handle becomes a quiet no-op,
+ * since the *A functions accept NULL and simply do nothing with it. The log
+ * is the only diagnostic on a machine with no console, so this is where the
+ * failure has to become visible. See audit finding 01.18. */
+static void check_child(const char *what, HWND h)
+{
+    if (!h)
+        rc_log("create_children: %s failed to create (GetLastError=%lu)",
+               what, (unsigned long)GetLastError());
+}
+
 static void create_children(HWND hwnd, HINSTANCE inst)
 {
     int parts[3];
@@ -1218,13 +1319,14 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     g_html = rc_html::create(hwnd);
     if (!g_html)
-        MessageBoxA(hwnd, "Could not create the HTML view.", "RetroClaude",
+        MessageBoxA(hwnd, "Could not create the HTML view.", RC_TITLE,
                     MB_OK | MB_ICONERROR);
 
     g_input = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
         ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
         0, 0, 0, 0, hwnd, (HMENU)ID_INPUT, inst, NULL);
+    check_child("input", g_input);
     /* Stop an over-long message being composed at all, which is the only
      * feedback that arrives at the moment the user does it rather than at
      * send time. The default for a multiline EDIT is 32KB, well past what
@@ -1234,10 +1336,12 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_send = CreateWindowExA(0, "BUTTON", "Send",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
         0, 0, 0, 0, hwnd, (HMENU)ID_SEND, inst, NULL);
+    check_child("send", g_send);
 
     g_stop = CreateWindowExA(0, "BUTTON", "Stop",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, (HMENU)ID_STOP, inst, NULL);
+    check_child("stop", g_stop);
     EnableWindow(g_stop, FALSE);
 
     /* LBS_NOINTEGRALHEIGHT: otherwise the control silently resizes itself to
@@ -1260,6 +1364,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         WS_CLIPSIBLINGS | LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT |
         LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, hwnd, (HMENU)ID_CHATS, inst, NULL);
+    check_child("chats", g_chats);
 
     /* The permission bar. Created hidden and shown with ShowWindow rather
      * than created on demand: the 16-bit USER/GDI heaps on 9x are a fixed
@@ -1267,42 +1372,54 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_perm_text = CreateWindowExA(0, "STATIC", "",
         WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
         0, 0, 0, 0, hwnd, (HMENU)ID_PERM_TEXT, inst, NULL);
+    check_child("perm_text", g_perm_text);
     g_perm_allow = CreateWindowExA(0, "BUTTON", "Allow",
         WS_CHILD | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, (HMENU)ID_PERM_ALLOW, inst, NULL);
+    check_child("perm_allow", g_perm_allow);
     g_perm_always = CreateWindowExA(0, "BUTTON", "Always",
         WS_CHILD | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, (HMENU)ID_PERM_ALWAYS, inst, NULL);
+    check_child("perm_always", g_perm_always);
     g_perm_deny = CreateWindowExA(0, "BUTTON", "Deny",
         WS_CHILD | BS_PUSHBUTTON,
         0, 0, 0, 0, hwnd, (HMENU)ID_PERM_DENY, inst, NULL);
+    check_child("perm_deny", g_perm_deny);
 
     g_refresh = CreateWindowExA(0, "BUTTON", "Refresh",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_REFRESH, inst, NULL);
+    check_child("refresh", g_refresh);
 
     g_live = CreateWindowExA(0, "BUTTON", "Live",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_LIVE, inst, NULL);
+    check_child("live", g_live);
     g_first = CreateWindowExA(0, "BUTTON", "|<",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_FIRST, inst, NULL);
+    check_child("first", g_first);
     g_prev = CreateWindowExA(0, "BUTTON", "<",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_PREV, inst, NULL);
+    check_child("prev", g_prev);
     g_pagelbl = CreateWindowExA(0, "STATIC", "Page 1/1",
         WS_CHILD | WS_VISIBLE | SS_CENTER, 0, 0, 0, 0,
         hwnd, (HMENU)ID_PAGELBL, inst, NULL);
+    check_child("pagelbl", g_pagelbl);
     g_next = CreateWindowExA(0, "BUTTON", ">",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_NEXT, inst, NULL);
+    check_child("next", g_next);
     g_last = CreateWindowExA(0, "BUTTON", ">|",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         hwnd, (HMENU)ID_LAST, inst, NULL);
+    check_child("last", g_last);
 
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
+    check_child("status", g_status);
     parts[0] = 220; parts[1] = 340; parts[2] = -1;
     SendMessageA(g_status, SB_SETPARTS, 3, (LPARAM)parts);
 
@@ -1732,7 +1849,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
      * control needs the full OLE apartment. */
     if (FAILED(OleInitialize(NULL))) {
         rc_log("OleInitialize failed");
-        MessageBoxA(NULL, "OLE could not start.", "RetroClaude",
+        MessageBoxA(NULL, "OLE could not start.", RC_TITLE,
                     MB_OK | MB_ICONERROR);
         return 1;
     }
