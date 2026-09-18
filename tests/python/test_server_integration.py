@@ -559,6 +559,46 @@ async def test_history_mode_suppresses_live_streaming(harness):
     await harness.close(w)
 
 
+async def test_view_page_resets_on_reconnect(harness):
+    """02.25: _attach reset zip_out and lost_at on a reconnect but never
+    view_page, so a guest that reconnected while paged back stayed in
+    HISTORY mode bridge-side forever. _write_block kept buffering new text
+    into the paginator silently -- the transcript looked frozen and the
+    bridge had no reason to think anything was wrong, because the flag that
+    says "the reader is watching an old page" was never cleared. The guest
+    itself has no memory of which page it was on across a reconnect (it
+    redraws from the fresh DOC just sent), so it is looking at LIVE again
+    regardless."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"READY"})
+    guest = harness.bridge._guest
+    for i in range(400):
+        guest.pages.add("plain", f"line {i}\n")
+        if i % 100 == 0:
+            guest.pages.message_boundary()
+
+    await harness.send(w, Frame("GETPAGE", {"page": "1"}))
+    await harness.recv_until(r, {"PAGEEND"}, timeout=5)
+    assert guest.view_page == 1, "test setup: guest must be paged back"
+
+    await harness.close(w)
+    r2, w2 = await harness.connect()
+    await harness.recv_until(r2, {"READY"})
+
+    assert guest.view_page is None, (
+        "a reconnect must drop back to LIVE, not keep buffering into a page "
+        "nobody -- guest-side -- is still looking at"
+    )
+
+    await harness.send(w2, Frame("INPUT", {}, b"after reconnect"))
+    frames = await harness.recv_until(r2, {"TURN"}, timeout=5)
+    frames += await harness.recv_until(r2, {"TURN"}, timeout=5)
+    assert any(f.type == "TEXT" for f in frames), (
+        "text must stream live again after a reconnect"
+    )
+    await harness.close(w2)
+
+
 # --- the model menu ---------------------------------------------------------
 
 
@@ -585,6 +625,44 @@ async def test_effort_options_follow_the_selected_model(harness):
     efforts = [f.headers["id"] for f in frames if f.type == "OPTION"
                and f.headers.get("kind") == "effort"]
     assert efforts == ["low", "high"]
+    await harness.close(w)
+
+
+async def test_model_menu_ticks_the_cli_default_not_a_generic_default(
+    harness,
+):
+    """02.23: _make_session runs the session on `guest.model or self.model`,
+    but _send_options used to read guest.model alone -- empty until the Model
+    menu is actually used. Starting the bridge with --model set (self.model)
+    therefore ran the session on that model while the menu ticked whatever
+    the "default" alias resolves to instead."""
+    harness.bridge.model = "haiku"
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    models = [f for f in frames if f.type == "OPTION"
+              and f.headers.get("kind") == "model"]
+    ticked = [f.headers["id"] for f in models
+              if f.headers.get("current") == "1"]
+    assert ticked == ["haiku"], (
+        "the menu must tick the CLI's --model default, not whatever "
+        "'default' resolves to"
+    )
+    await harness.close(w)
+
+
+async def test_effort_menu_ticks_the_cli_default(harness):
+    """Same bug as above, for --effort (02.23): the Effort menu used to read
+    guest.effort alone and show nothing ticked when only the CLI default was
+    set."""
+    harness.bridge.model = "opus"
+    harness.bridge.effort = "low"
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    efforts = [f for f in frames if f.type == "OPTION"
+               and f.headers.get("kind") == "effort"]
+    ticked = [f.headers["id"] for f in efforts
+              if f.headers.get("current") == "1"]
+    assert ticked == ["low"], "the effort menu must tick the CLI's --effort"
     await harness.close(w)
 
 
@@ -994,6 +1072,55 @@ async def test_output_is_capped_here_too_and_says_it_was(harness):
     text = got["content"][0]["text"]
     assert len(text) < 4 * 32768, "the buffer grew past the bridge's own cap"
     assert "truncated" in text, "capped without saying so"
+    # 03.16: this run sent 128KB against the bridge's own 64KB cap while the
+    # guest reported truncated=0 -- the BRIDGE cut it, not the guest's 32KB.
+    # The message must name the actual cause.
+    assert "64KB by this bridge" in text
+    assert "32KB by the connected machine" not in text
+    await harness.close(writer)
+
+
+async def test_guest_truncation_is_attributed_to_the_guest_not_the_bridge(
+        harness):
+    """03.16: server.py used to always say "Output was capped at 32KB and
+    truncated," which is the guest's own EXEC_MAX_OUT -- true when the guest
+    is the one that cut it (truncated=1, well under the bridge's 64KB cap),
+    but wrong whenever the bridge's own EXEC_OUT_MAX was the actual cause."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = asyncio.create_task(harness.bridge.run_on_guest("dir", timeout_ms=5000,
+                                    shell=True, cwd=""))
+    req = await _recv(harness, reader, "EXEC")
+    eid = req.headers["id"]
+    await harness.send(writer, Frame("EXECOUT", {"id": eid}, b"A" * 100))
+    await harness.send(writer, Frame("EXECRESULT", {
+        "id": eid, "status": "ok", "code": "0", "truncated": "1"}))
+    got = await asyncio.wait_for(task, 5)
+    text = got["content"][0]["text"]
+    assert "32KB by the connected machine" in text
+    assert "by this bridge" not in text
+    await harness.close(writer)
+
+
+async def test_a_timed_out_command_is_reported_as_an_error(harness):
+    """03.46: server.py's isError set used to be {spawn_failed, too_long,
+    busy, cancelled} -- a command killed at the timeout has status=timeout,
+    which was absent from that set, so it came back to the model as a
+    SUCCESS with only a prose preamble, unlike every other terminal exec
+    failure."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = asyncio.create_task(harness.bridge.run_on_guest("pause", timeout_ms=5000,
+                                    shell=True, cwd=""))
+    req = await _recv(harness, reader, "EXEC")
+    await harness.send(writer, Frame("EXECRESULT", {
+        "id": req.headers["id"], "status": "timeout", "code": "1",
+        "truncated": "0"}))
+    got = await asyncio.wait_for(task, 5)
+    assert got["isError"] is True, (
+        "a timed-out command must be reported as an error, not a success"
+    )
+    assert "Timed out" in got["content"][0]["text"]
     await harness.close(writer)
 
 

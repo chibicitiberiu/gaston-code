@@ -127,7 +127,7 @@ def build(bridge, guest=None) -> dict:
         "Read this when a file you wrote does not seem to have arrived, before "
         "concluding that it did. Writing a file always succeeds here; whether "
         "it reached the user's machine is a separate question and this is the "
-        "only way to answer it. Read-only and free to call.",
+        "only way to answer it. Read-only and cheap to call.",
         {},
     )
     async def machine_sync_status(args: dict) -> dict:

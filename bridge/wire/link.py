@@ -139,9 +139,14 @@ class GuestLink:
             # denominator it never received.
             await self.send(guest, text_frame(mode, enc, page_no, chunk,
                                               total=total, off=i))
+            if i + budget < total:
+                # Between chunks, not merely between calls (04.12): without
+                # this, a big page or a future transcript export starves the
+                # event loop exactly the way sync once did -- see wire_yield.
+                await self.wire_yield()
 
-    async def wire_yield(self, guest) -> bool:
-        """Give everything else a turn on the wire. True if sync should pause.
+    async def wire_yield(self) -> None:
+        """Give everything else a turn on the wire.
 
         Measured, because the obvious reasoning is wrong: a chunk loop over an
         UNCONTENDED lock, with a `drain()` below the high-water mark, contains
@@ -151,14 +156,16 @@ class GuestLink:
         composed yet. FIFO lock fairness cannot help with a task that never
         gets scheduled.
 
-        `sleep(0)` is what reschedules us behind whatever is already runnable.
-        The return value is the second half of the rule: while the user has a
-        prompt in front of them, sync does not start another file. The pass
-        ends early and the next one finishes the job -- every path commits
-        independently, so a partially applied pass is a consistent state.
+        `sleep(0)` is what reschedules us behind whatever is already
+        runnable. That is the whole of this function's job now (04.12): it
+        used to also return whether sync should pause for an open permission
+        prompt, which made it the wrong primitive for any OTHER bulk sender
+        to call -- a page or a future transcript export has no reason to cut
+        itself short because the user has a dialog open elsewhere. That
+        policy is sync's own to apply; see syncrun.py's `guest.perm_pending`
+        checks right after the calls to this.
         """
         await asyncio.sleep(0)
-        return guest.perm_pending is not None
 
     @staticmethod
     async def send_raw(writer: asyncio.StreamWriter, frame: Frame) -> None:

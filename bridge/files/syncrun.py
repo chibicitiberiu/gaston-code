@@ -67,12 +67,12 @@ class Pass:
         self.state = os.path.join(state_dir, "base.json")
         self.base = S.Baseline.load(self.state)
 
-        # What the client says it is, or the Win9x assumption if it is too old
-        # to say. A value the bridge cannot honour stops the pass here.
-        try:
-            self.caps = C.from_hello(getattr(guest, "hello", {}) or {})
-        except C.CapsError as exc:
-            raise SyncError(str(exc)) from None
+        # What the client says it is, parsed once at handshake and cached on
+        # the GuestSession (02.22) -- a value the bridge cannot honour already
+        # refused the CONNECTION in Bridge._attach, so there is nothing left
+        # to catch here. The class-level `caps = C.Caps()` fallback above is
+        # for the bare-subclass tests that skip __init__ entirely.
+        self.caps = getattr(guest, "caps", None) or C.Caps()
 
         # A codepage or case-rule CHANGE re-keys the whole baseline, because
         # `canonical` folds through both. Every row would then miss, read as
@@ -730,12 +730,20 @@ class Pass:
             # one. Each path commits independently, so stopping here leaves
             # some paths at the new agreement and the rest at the old one, and
             # both are valid resting states.
-            if dec.act in _MOVES_BYTES and await self.bridge.wire_yield(
-                    self.guest):
-                self.reports.append(
-                    "pass cut short: the user has a permission prompt open, "
-                    "and sync does not compete with it for the link")
-                break
+            #
+            # The pause-for-a-prompt decision is sync's own policy (04.12):
+            # wire_yield only yields the wire now, so the check against
+            # perm_pending happens here rather than inside it -- a future
+            # bulk sender that is not sync (an export) has no reason to
+            # inherit this behaviour just by calling the same primitive.
+            if dec.act in _MOVES_BYTES:
+                await self.bridge.wire_yield(self.guest)
+                if self.guest.perm_pending is not None:
+                    self.reports.append(
+                        "pass cut short: the user has a permission prompt "
+                        "open, and sync does not compete with it for the "
+                        "link")
+                    break
 
             if dec.act is S.Act.SKIP:
                 done["skipped"] += 1

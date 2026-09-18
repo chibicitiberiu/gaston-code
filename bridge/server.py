@@ -120,6 +120,13 @@ class GuestSession:
     # The machine facts from HELLO, kept so every session this guest opens
     # gets the same description of the computer it is acting for.
     hello: dict = field(default_factory=dict)
+    # C.from_hello(hello), parsed once in _attach() rather than re-parsed at
+    # every site that needs a path rule -- a re-parse cannot raise (already
+    # validated at handshake) but silently re-derives what is already known,
+    # and one prior re-parse site used to fall back to {} when this guest was
+    # merely unset, guessing Win9x defaults instead of reading what the
+    # client actually declared. See docs/audit/02-bridge-python.md #02.22.
+    caps: "C.Caps | None" = None
 
     # Which page the guest is showing. None means LIVE (follow the last page).
     # In HISTORY mode the bridge keeps buffering silently; the page counter
@@ -262,7 +269,13 @@ class Bridge:
         #: Sync is OFF unless a root is named. Defaulting to the bridge's own
         #: working directory would point it at .venv and vm/*.qcow2.
         self.sync_dir: str | None = None
-        self.sync_state: str = ""
+        # None, matching sync_dir's sentinel (02.36). Every caller of
+        # _load_baseline is guarded by `if not self.sync_dir`, and this used
+        # to default to "" instead -- so if that invariant ever broke,
+        # os.path.join("", "base.json") would silently read and WRITE
+        # ./base.json relative to the bridge PROCESS's cwd rather than
+        # failing loudly.
+        self.sync_state: str | None = None
         #: The guest's own path for the mirror, learned from SYNCEND. Held here
         #: so the system prompt can NAME the folder rather than say "the sync
         #: folder" -- an agent told only that its edits reach the user has no
@@ -460,12 +473,13 @@ class Bridge:
         # client that declares nothing is indistinguishable from one that
         # declares the defaults until someone can see which happened.
         try:
-            log.info("client rules: %s", C.from_hello(h).summary())
+            caps = C.from_hello(h)
         except C.CapsError as exc:
             log.warning("client declared rules this bridge cannot honour: %s",
                         exc)
             await self._try_send_raw(writer, error("bad_caps", str(exc)[:200]))
             return None
+        log.info("client rules: %s", caps.summary())
 
         # A fresh connection means a fresh inflater on the guest, so the
         # compressor must restart in lockstep or the first frame is garbage.
@@ -495,6 +509,7 @@ class Bridge:
         guest.page_bytes = page_bytes
         guest.page_blocks = page_blocks
         guest.hello = dict(h)
+        guest.caps = caps
 
         guest.link_bps = self.link_bps
         for c in guest.coalescers.values():
@@ -531,6 +546,15 @@ class Bridge:
         # bar gone and the future still pending bridge-side. Re-issue the
         # prompt explicitly instead of relying on replay.
         guest.lost_at = None
+        # A fresh connection shows the fresh DOC skeleton just sent above --
+        # the guest has no memory of which page it was reading before it
+        # dropped (BACKLOG: it never re-requests page content on reconnect
+        # either), so it is looking at LIVE now regardless of what it was
+        # doing before. Leaving view_page on its old HISTORY value here made
+        # _write_block (02.25) keep silently buffering into the paginator
+        # forever -- the guest sees nothing new and the bridge believes that
+        # is correct, because nothing ever reset the flag that says so.
+        guest.view_page = None
         await self._reissue_prompt(guest)
         await self._reissue_halt(guest)
         await self._reissue_turn(guest)
@@ -543,6 +567,22 @@ class Bridge:
         return guest
 
     # --- Claude session ----------------------------------------------------
+
+    def _effective_model(self, guest: GuestSession) -> str:
+        """What model this guest's session actually runs on.
+
+        `guest.model` is empty until the Model menu is used, so the CLI's
+        `--model` (`self.model`) is the fallback -- the same rule
+        `_make_session` applies. `_send_options` reads this too (02.23): it
+        used to read `guest.model` alone, so a bridge started with a CLI
+        default ticked "default" in the menu while the session actually ran
+        on the CLI's choice.
+        """
+        return guest.model or self.model or ""
+
+    def _effective_effort(self, guest: GuestSession) -> str:
+        """Effort's counterpart to `_effective_model` -- see there."""
+        return guest.effort or self.effort or ""
 
     async def _make_session(self, guest: GuestSession,
                             resume: str | None = None,
@@ -623,8 +663,8 @@ class Bridge:
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.
-            model=guest.model or self.model,
-            effort=guest.effort or self.effort,
+            model=self._effective_model(guest),
+            effort=self._effective_effort(guest),
             resume=resume,
             fork=fork,
             # Every tool call the CLI does not resolve locally comes back
@@ -1586,31 +1626,50 @@ class Bridge:
                        f"{len(base.ignored)} path(s), frozen at their last "
                        f"agreed content.")
 
-        stray = self._edits_outside_the_mirror()
+        stray, stray_truncated = self._edits_outside_the_mirror()
         if stray:
             out.append("\nEDITED HERE BUT OUTSIDE THE MIRRORED FOLDER, so "
                        "these have not reached the user and never will where "
                        "they are:")
             out.extend(f"  {p}" for p in stray)
+            if stray_truncated:
+                out.append(f"  (stopped after {self.STRAY_SCAN_BUDGET} files "
+                          f"outside the mirror; there may be more)")
 
         if len(out) == 2:
             out.append("\nNothing outstanding: no conflicts, no skips, "
                        "nothing withheld.")
         return "\n".join(out)
 
-    def _edits_outside_the_mirror(self, limit: int = 20) -> list[str]:
+    #: Upper bound on how many files under cwd _edits_outside_the_mirror will
+    #: stat in one call (02.34). It is called from sync_status, which tools.py
+    #: advertises to the model as "free to call" -- but an unbounded os.walk
+    #: of the whole working directory costs work that scales with a tree the
+    #: agent itself grows, on every call, which is not free at all. Bounded
+    #: like everything else here rather than assumed small.
+    STRAY_SCAN_BUDGET = 4000
+
+    def _edits_outside_the_mirror(
+        self, limit: int = 20
+    ) -> tuple[list[str], bool]:
         """Files under cwd but outside the sync root, newest first.
 
         The other way an agent achieves nothing and reports success:
         `off_limits` confines it to cwd, the mirror is a directory inside cwd,
         and an edit anywhere else succeeds and stays here forever.
+
+        Returns `(paths, truncated)`: `truncated` is True when the walk hit
+        STRAY_SCAN_BUDGET before finishing, so the caller can say the list may
+        be incomplete rather than imply it is exhaustive.
         """
         cwd = self.cwd or os.getcwd()
         if not self.sync_dir or os.path.realpath(cwd) == os.path.realpath(
                 self.sync_dir):
-            return []
+            return [], False
         mirror = os.path.realpath(self.sync_dir)
         found: list[tuple[float, str]] = []
+        seen = 0
+        truncated = False
         for dirpath, dirnames, filenames in os.walk(cwd):
             real = os.path.realpath(dirpath)
             if real == mirror or real.startswith(mirror + os.sep):
@@ -1619,14 +1678,20 @@ class Bridge:
             dirnames[:] = [d for d in dirnames
                            if not d.startswith(".") and d != "__pycache__"]
             for name in filenames:
+                seen += 1
+                if seen > self.STRAY_SCAN_BUDGET:
+                    truncated = True
+                    break
                 full = os.path.join(dirpath, name)
                 try:
                     found.append((os.stat(full).st_mtime,
                                   os.path.relpath(full, cwd)))
                 except OSError:
                     continue
+            if truncated:
+                break
         found.sort(reverse=True)
-        return [p for _, p in found[:limit]]
+        return [p for _, p in found[:limit]], truncated
 
     async def sync_resolve(self, path: str, action: str,
                            guest: "GuestSession | None" = None) -> str:
@@ -1642,18 +1707,24 @@ class Bridge:
         if not self.sync_dir:
             return "File synchronisation is not switched on for this session."
         async with self._baseline_lock(guest):
-            return self._sync_resolve_locked(path, action)
+            return self._sync_resolve_locked(path, action, guest or self._guest)
 
-    def _sync_resolve_locked(self, path: str, action: str) -> str:
+    def _sync_resolve_locked(
+        self, path: str, action: str, guest: "GuestSession | None" = None
+    ) -> str:
         try:
             base = self._load_baseline()
         except Exception as exc:
             return f"The baseline could not be read ({exc}); nothing changed."
 
         from .files import paths as P
-        key = P.canonical(path.replace("\\", "/").strip("/"),
-                          caps=C.from_hello(
-                              self._guest.hello if self._guest else {}))
+        # guest.caps was parsed once at handshake (02.22). No guest at all
+        # (never attached this process) is the one case with nothing to read
+        # -- from_hello({}) is the documented restrictive Win9x default for
+        # "no declaration", which is the honest answer here too.
+        caps = guest.caps if guest is not None and guest.caps is not None \
+            else C.from_hello({})
+        key = P.canonical(path.replace("\\", "/").strip("/"), caps=caps)
         state = os.path.join(self.sync_state, "base.json")
 
         if action == "release":
@@ -1793,9 +1864,9 @@ class Bridge:
                 return
             # The guest's own codepage, never an assumption. Decoding a
             # manifest with the wrong table produces names that look right and
-            # cannot be encoded back to ask for the file.
-            caps = C.from_hello(guest.hello)
-            rows, display = manifest.parse_rows(f.body, caps)
+            # cannot be encoded back to ask for the file. Parsed once at
+            # handshake (02.22) rather than re-derived here.
+            rows, display = manifest.parse_rows(f.body, guest.caps)
             entry.rows.update(rows)
             entry.display.update(display)
 
@@ -1847,6 +1918,18 @@ class Bridge:
     #: in exec.c, could grow this buffer for as long as the call has left to
     #: run: 64KB a frame for up to 150 seconds.
     EXEC_OUT_MAX = 64 * 1024
+
+    #: Prose restatement of the guest's own EXEC_MAX_CMD (win/rpc/exec.cpp,
+    #: currently 1024) for the message shown to the model (03.17). Named
+    #: rather than a bare literal in the string so a change on the guest side
+    #: is at least a grep away from here instead of two independent numbers
+    #: nothing ties together. Not enforced bridge-side before sending: the
+    #: guest prepends its own shell prefix (`command.com /c ` vs `cmd.exe
+    #: /c `, chosen by probe_exec from GetVersion()) whose length this side
+    #: does not know, so a bridge-side pre-check would either reject commands
+    #: that would have fit or pass some that would not -- the guest's own
+    #: too_long refusal is the only place that number is authoritative.
+    EXEC_MAX_CMD = 1024
 
     async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
         entry = guest.exec_pending.get(f.headers.get("id", ""))
@@ -1901,9 +1984,9 @@ class Bridge:
             # the model has no way to guess the limit unless it is told.
             parts.append(
                 "The command line was too long for the connected machine and "
-                "was refused before it ran. The limit is about 1000 "
-                "characters including the shell prefix; shorten it, or write "
-                "the long part to a file and run that.")
+                f"was refused before it ran. The limit is about "
+                f"{self.EXEC_MAX_CMD} characters including the shell prefix; "
+                f"shorten it, or write the long part to a file and run that.")
         elif status == "timeout":
             parts.append(f"Timed out and was killed after the limit; partial "
                          f"output follows.")
@@ -1914,14 +1997,25 @@ class Bridge:
         if code not in ("", "0") and status == "ok":
             parts.append(f"Exit code {code}.")
         if truncated:
-            parts.append("Output was capped at 32KB and truncated.")
+            # Whichever side actually cut it (03.16). entry["capped"] means
+            # OUR OWN EXEC_OUT_MAX bit first; the guest's own 32KB cap is the
+            # ordinary case and is what f.headers["truncated"] reports on its
+            # own. Blaming the guest's cap unconditionally was wrong whenever
+            # ours was the one that actually fired.
+            if entry.get("capped"):
+                parts.append(f"Output was capped at "
+                            f"{self.EXEC_OUT_MAX // 1024}KB by this bridge "
+                            f"and truncated.")
+            else:
+                parts.append("Output was capped at 32KB by the connected "
+                            "machine and truncated.")
 
         body = text if text.strip() else "(no output)"
         head = (" ".join(parts) + "\n\n") if parts else ""
         fut.set_result({
             "content": [{"type": "text", "text": head + body}],
             "isError": status in ("spawn_failed", "too_long", "busy",
-                                  "cancelled"),
+                                  "cancelled", "timeout"),
         })
         log.info("exec %s finished: status=%s code=%s bytes=%d",
                  exec_id, status, code, len(entry["out"]))
@@ -2054,7 +2148,7 @@ class Bridge:
                     return m.get("resolvedModel") or value
             return value
 
-        in_use = resolved_of(guest.model or "default")
+        in_use = resolved_of(self._effective_model(guest) or "default")
 
         chosen = None
         for m in models:
@@ -2080,7 +2174,7 @@ class Bridge:
                     continue
                 await self._send(guest, option(
                     "effort", lvl, EFFORT_LABEL.get(lvl, lvl),
-                    lvl == (guest.effort or "")))
+                    lvl == self._effective_effort(guest)))
         await self._send(guest, optionsend())
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
@@ -2209,6 +2303,10 @@ class Bridge:
             page.continued))
         for run in page.runs:
             await self._send_html(guest, run.text, APPEND, page.number)
+            # Between blocks, not just between chunks inside one (04.12): a
+            # page can hold many runs, and this loop had no await point that
+            # actually suspends any more than send_html's did on its own.
+            await self.wire_yield(guest)
         await self._send(guest, pageend(page.number))
 
     # --- sending -------------------------------------------------------
@@ -2226,8 +2324,8 @@ class Bridge:
                          page_no: int) -> None:
         await guest.link.send_html(guest, html, mode, page_no)
 
-    async def wire_yield(self, guest: GuestSession) -> bool:
-        return await guest.link.wire_yield(guest)
+    async def wire_yield(self, guest: GuestSession) -> None:
+        await guest.link.wire_yield()
 
     async def _try_send_raw(self, writer: asyncio.StreamWriter,
                             frame: Frame) -> None:

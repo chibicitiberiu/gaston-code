@@ -43,6 +43,42 @@ def test_status_says_so_plainly_when_sync_is_off(tmp_path):
     assert "no tool that would copy it" in out
 
 
+def test_sync_state_defaults_to_none_like_sync_dir(tmp_path):
+    """02.36: sync_state used to default to "", the one value that makes
+    os.path.join("", "base.json") silently resolve to a path relative to
+    the process's cwd instead of failing loudly. sync_dir already uses None
+    as its sentinel for "sync is off"; sync_state must match it."""
+    bridge = Bridge("s", host="127.0.0.1", port=0)
+    assert bridge.sync_dir is None
+    assert bridge.sync_state is None
+
+
+def test_stray_scan_is_bounded_and_says_so(b, monkeypatch):
+    """02.34: _edits_outside_the_mirror used to os.walk the whole working
+    directory with no ceiling, on every sync_status call, while tools.py
+    tells the model the tool is "free to call". Cost has to be bounded
+    regardless of how large cwd has grown, and a truncated scan must say so
+    rather than silently look exhaustive."""
+    monkeypatch.setattr(type(b), "STRAY_SCAN_BUDGET", 3)
+    for i in range(6):
+        open(os.path.join(b.cwd, f"stray{i}.txt"), "w").write("x")
+
+    stray, truncated = b._edits_outside_the_mirror()
+    assert truncated
+    assert len(stray) <= 3
+
+    out = b.sync_status_text()
+    assert "stopped after 3 files" in out
+
+
+def test_stray_scan_under_budget_is_not_flagged_truncated(b):
+    open(os.path.join(b.cwd, "stray.txt"), "w").write("x")
+    stray, truncated = b._edits_outside_the_mirror()
+    assert stray == ["stray.txt"]
+    assert not truncated
+    assert "stopped after" not in b.sync_status_text()
+
+
 def test_status_names_both_ends(b):
     out = b.sync_status_text()
     assert b.sync_dir in out
