@@ -607,7 +607,42 @@ void rc_html::notice(const char *text)
 void rc_html::error(const char *text)
 { say(RC_CSS_ERROR, text); }
 void rc_html::user(const char *text)
-{ say(RC_CSS_USER, text); }
+{
+    /* STRIP BEFORE ESCAPING, because the bridge does (01.56).
+     *
+     * This is the local echo of what the person just typed, and the bridge
+     * renders the SAME message into the sealed page with
+     * bridge/view/html.py's user_turn(), which does text.strip() first. The
+     * guest did not, so a message with a trailing blank line -- which is one
+     * stray Enter before Send -- rendered one line taller here than in the
+     * copy the user scrolls back to. Two renderings of one message that do
+     * not match, in a transcript whose whole job is to be the record.
+     *
+     * The bridge owns the rule, not this side: it renders the transcript and
+     * the guest transforms nothing, so where the two disagree the guest is
+     * what moves. Leading and trailing whitespace only -- Python's strip()
+     * with no argument -- and nothing about the interior, which user_turn
+     * splits into lines and this side keeps as-is. */
+    const char *b = text;
+    unsigned n;
+
+    if (!b) return;
+    while (*b == ' ' || *b == '\t' || *b == '\r' || *b == '\n') b++;
+    n = (unsigned)strlen(b);
+    while (n && (b[n - 1] == ' ' || b[n - 1] == '\t'
+                 || b[n - 1] == '\r' || b[n - 1] == '\n')) n--;
+
+    {
+        /* say() takes a C string, so the trimmed tail needs its own copy.
+         * Heap rather than stack: the input is the user's whole message and
+         * the largest frame in this program already lives in main. */
+        HeapPtr<char> t((char *)HeapAlloc(GetProcessHeap(), 0, n + 1));
+        if (!t.valid()) { say(RC_CSS_USER, b); return; }
+        memcpy(t.get(), b, n);
+        t.get()[n] = '\0';
+        say(RC_CSS_USER, t.get());
+    }
+}
 
 void rc_html::block(const char *html)
 {

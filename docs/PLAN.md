@@ -414,11 +414,25 @@ length prefix or an unparseable header genuinely closes the link on both sides. 
 two cases diverge, and the two sides diverge from *each other*, not just from this
 paragraph:
 
-- **Unknown `TYPE`.** The bridge (`bridge/server.py`, the `_handle` dispatch's final
-  `else`) logs a warning, replies `ERROR unknown_type`, and **leaves the connection open**.
-  The guest (`win/app/main.cpp`, `render_frame`'s final `else`) neither replies nor closes
-  -- it logs `"unhandled frame type: %s"` and drops the frame. Neither side does what this
-  paragraph says, and they don't do the same thing as each other.
+- **Unknown `TYPE`. [R] Decided 2026-09-18: IGNORE AND LOG, NEVER CLOSE -- and what
+  shipped was already right, so the paragraph above is what changes.**
+
+  The original rule (reply `ERROR` and close) makes adding a frame type a FLAG DAY: the
+  moment one side learns a new type, every older peer drops the link on first sight of it.
+  That is the opposite of what the capability handshake is for -- `HELLO` exists so an
+  option can be added without both ends shipping together, and a protocol that closes on
+  anything unrecognised throws that away at the frame layer.
+
+  So the receiving side logs the type and drops the frame, and the connection survives. The
+  bridge ALSO replies `ERROR unknown_type`, which is kept deliberately: it costs one frame,
+  it is how a developer finds out their new type is not wired up on the far side, and it
+  does not close anything. The guest does not reply, and that asymmetry is fine -- it has no
+  console, its log is the diagnostic, and a guest answering every stray frame would give a
+  confused bridge a second thing to be confused about.
+
+  Unchanged in the code. `bridge/server.py`'s dispatch `else` and `win/app/main.cpp`'s
+  `render_frame` default already do exactly this; the specification was the part that was
+  wrong, and it has been since before either side was written.
 - **Repeated header key.** The bridge (`bridge/wire/protocol.py`, `FrameReader.read`)
   raises `ProtocolError` and the connection is torn down, which matches the original
   design. The guest (`win/net/frameproto.cpp`, `rc_frame_parse`) has no duplicate check at
@@ -1034,10 +1048,12 @@ things, and only the first is handled the same way on both sides.** A bad length
 an unparseable header genuinely drops the link everywhere. The other two do not match each
 other:
 
-- **Unknown `TYPE`.** Bridge: logs a warning, replies `ERROR unknown_type`, keeps the
-  connection open (`bridge/server.py`, the dispatch's final `else`). Guest: neither replies
-  nor closes -- logs `"unhandled frame type: %s"` and drops the frame (`win/app/main.cpp`,
-  `render_frame`'s final `else`).
+- **Unknown `TYPE`. [R] Decided: ignore and log, never close.** Both sides already did
+  this; the original reply-and-close rule was the thing that was wrong, because it makes
+  adding a frame type a flag day and the `HELLO` handshake exists precisely so options can
+  be added without one. The bridge additionally replies `ERROR unknown_type` as a developer
+  diagnostic and keeps the link. The guest logs and drops. See "Protocol error handling"
+  above for the full reasoning.
 - **Duplicate header key.** **[R] Now the same on both sides.** Bridge: `FrameReader.read`
   raises `ProtocolError` and the connection is torn down, which is what this document always
   specified. Guest: `rc_frame_parse` had no duplicate check at all -- the second occurrence
