@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from .files import caps as C
 from .files import manifest
+from .status import EXEC_STATUS_PROSE, ExecStatus
 from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
@@ -82,6 +83,23 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 log = logging.getLogger("bridge.server")
 
 DEFAULT_PORT = 7890
+
+
+@dataclass
+class ExecCall:
+    """One outstanding EXEC, and what has happened to it so far.
+
+    Was an ad-hoc `{"future", "out"}` dict grown post-hoc with `"killed"`
+    (set by `_kill_exec`) and `"capped"` (set by `_exec_out`), so every read
+    was a defensive `entry.get(...)` because the key might not exist yet. A
+    dataclass makes both booleans False by construction -- the exec-side twin
+    of `sync.Wait` (02.4). docs/audit/02-bridge-python.md 02.13.
+    """
+
+    future: "asyncio.Future"
+    out: bytearray = field(default_factory=bytearray)
+    killed: bool = False
+    capped: bool = False
 
 
 @dataclass
@@ -159,7 +177,7 @@ class GuestSession:
     lost_at: float | None = None
     # In-flight EXEC calls, keyed by our own id. Separate namespace from
     # tool_use_id so a stray frame cannot cross-resolve against TOOLRESULT.
-    exec_pending: dict = field(default_factory=dict)
+    exec_pending: dict[str, ExecCall] = field(default_factory=dict)
     exec_seq: int = 0
     # One worker thread on the guest means one command at a time. The model
     # can request tools in parallel, and an "Always" rule would bypass the
@@ -1292,7 +1310,7 @@ class Bridge:
             guest.exec_seq += 1
             exec_id = f"x{guest.exec_seq}"
             fut = asyncio.get_running_loop().create_future()
-            guest.exec_pending[exec_id] = {"future": fut, "out": bytearray()}
+            guest.exec_pending[exec_id] = ExecCall(future=fut)
 
             if cwd:
                 # Refuse rather than let the guest drop the frame.
@@ -1358,9 +1376,9 @@ class Bridge:
         """
         entry = guest.exec_pending.get(exec_id)
         if entry is not None:
-            if entry.get("killed"):
+            if entry.killed:
                 return
-            entry["killed"] = True
+            entry.killed = True
         log.info("asking the guest to kill exec %s", exec_id)
         self._spawn(self._send(guest, exec_kill(exec_id), stamp=False))
 
@@ -1912,8 +1930,13 @@ class Bridge:
         if guest is None:
             return
         for sid, entry in list(guest.sync_pending.items()):
-            fut = entry.get("future")
-            if fut is not None and not fut.done():
+            # entry.future is a required field on S.Wait, not an optional
+            # one -- this used to be entry.get("future") from when
+            # sync_pending held ad-hoc dicts (pre-02.4), and calling .get on
+            # a Wait dataclass raises AttributeError instead of failing the
+            # transfer, which is the one thing this method exists to do.
+            fut = entry.future
+            if not fut.done():
                 fut.set_exception(SyncError(why))
         guest.sync_pending.clear()
         guest.sync_active = False
@@ -1942,15 +1965,15 @@ class Bridge:
         entry = guest.exec_pending.get(f.headers.get("id", ""))
         if entry is None:
             return          # late chunk for a call we gave up on
-        room = self.EXEC_OUT_MAX - len(entry["out"])
+        room = self.EXEC_OUT_MAX - len(entry.out)
         if room <= 0:
-            entry["capped"] = True
+            entry.capped = True
             return
         if len(f.body) > room:
-            entry["out"].extend(f.body[:room])
-            entry["capped"] = True
+            entry.out.extend(f.body[:room])
+            entry.capped = True
             return
-        entry["out"].extend(f.body)
+        entry.out.extend(f.body)
 
     async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
         exec_id = f.headers.get("id", "")
@@ -1963,53 +1986,35 @@ class Bridge:
                       "(usually a kill that has already been handled)",
                       exec_id)
             return
-        fut = entry["future"]
+        fut = entry.future
         if fut.done():
             return
 
-        status = f.headers.get("status", "ok")
+        status = ExecStatus.parse(f.headers.get("status", "ok"))
         code = f.headers.get("code", "")
         # Either side may have cut it: the guest at its 32KB cap, or us at
         # ours. Both mean the same thing to the model -- what arrived is not
         # the whole of it -- so they are reported the same way.
-        truncated = (f.headers.get("truncated", "0") == "1"
-                     or bool(entry.get("capped")))
+        truncated = f.headers.get("truncated", "0") == "1" or entry.capped
 
         # COMMAND.COM writes the OEM codepage, not the ANSI one. Using
         # fold.decode here instead is the classic Win9x encoding bug and turns
         # a `dir` listing into mojibake.
-        text = fold.decode_oem(bytes(entry["out"]))
+        text = fold.decode_oem(bytes(entry.out))
 
         parts = []
-        if status == "spawn_failed":
-            parts.append("The command could not be started on the connected "
-                         "machine.")
-        elif status == "too_long":
-            # Was reported as spawn_failed, which reads as an environment
-            # problem and invites a retry. It is a deterministic size
-            # rejection, so retrying the same command never succeeds -- and
-            # the model has no way to guess the limit unless it is told.
-            parts.append(
-                "The command line was too long for the connected machine and "
-                f"was refused before it ran. The limit is about "
-                f"{self.EXEC_MAX_CMD} characters including the shell prefix; "
-                f"shorten it, or write the long part to a file and run that.")
-        elif status == "timeout":
-            parts.append(f"Timed out and was killed after the limit; partial "
-                         f"output follows.")
-        elif status == "busy":
-            parts.append("The connected machine is already running a command.")
-        elif status == "cancelled":
-            parts.append("Cancelled -- the machine is shutting down.")
-        if code not in ("", "0") and status == "ok":
+        prose = EXEC_STATUS_PROSE.get(status)
+        if prose:
+            parts.append(prose.format(max_cmd=self.EXEC_MAX_CMD))
+        if code not in ("", "0") and status == ExecStatus.OK:
             parts.append(f"Exit code {code}.")
         if truncated:
-            # Whichever side actually cut it (03.16). entry["capped"] means
-            # OUR OWN EXEC_OUT_MAX bit first; the guest's own 32KB cap is the
+            # Whichever side actually cut it (03.16). entry.capped means OUR
+            # OWN EXEC_OUT_MAX bit first; the guest's own 32KB cap is the
             # ordinary case and is what f.headers["truncated"] reports on its
             # own. Blaming the guest's cap unconditionally was wrong whenever
             # ours was the one that actually fired.
-            if entry.get("capped"):
+            if entry.capped:
                 parts.append(f"Output was capped at "
                             f"{self.EXEC_OUT_MAX // 1024}KB by this bridge "
                             f"and truncated.")
@@ -2021,11 +2026,10 @@ class Bridge:
         head = (" ".join(parts) + "\n\n") if parts else ""
         fut.set_result({
             "content": [{"type": "text", "text": head + body}],
-            "isError": status in ("spawn_failed", "too_long", "busy",
-                                  "cancelled", "timeout"),
+            "isError": status.is_error,
         })
         log.info("exec %s finished: status=%s code=%s bytes=%d",
-                 exec_id, status, code, len(entry["out"]))
+                 exec_id, status.value, code, len(entry.out))
 
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
         """Resolve every in-flight EXEC, synchronously.
@@ -2036,7 +2040,7 @@ class Bridge:
         if guest is None:
             return
         for exec_id, entry in list(guest.exec_pending.items()):
-            fut = entry["future"]
+            fut = entry.future
             if not fut.done():
                 fut.set_result({"content": [{"type": "text", "text": why}],
                                 "isError": True})

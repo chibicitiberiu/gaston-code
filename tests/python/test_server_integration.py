@@ -831,6 +831,37 @@ async def test_cancelled_callback_still_clears_the_bar(harness):
     await harness.close(writer)
 
 
+async def test_a_disconnect_mid_sync_fails_the_transfer_not_the_connection(
+        harness):
+    """`_fail_syncs` read `entry.get("future")`, which was correct while
+    `sync_pending` held ad-hoc dicts and became `AttributeError: 'Wait'
+    object has no attribute 'get'` the moment 02.4 typed those entries as
+    `sync.Wait` -- so a guest that dropped mid-transfer crashed the
+    connection handler instead of failing the in-flight SYNCPUT/GET/SCAN/
+    MKDIR future, which then held the sync code waiting on a future nobody
+    would ever resolve.
+    """
+    from bridge.files import sync as S
+
+    reader, writer = await harness.connect()
+    await harness.recv_until(reader, {"READY"})
+    guest = harness.bridge._guest
+
+    fut = asyncio.get_event_loop().create_future()
+    guest.sync_pending["s1"] = S.Wait(kind="put", future=fut)
+
+    await harness.close(writer)
+    async with asyncio.timeout(5):
+        while not fut.done():
+            await asyncio.sleep(0.01)
+
+    assert fut.exception() is not None, (
+        "the in-flight sync future must be failed, not left to hang"
+    )
+    assert "disconnected" in str(fut.exception())
+    assert guest.sync_pending == {}, "the failed entry must be cleared"
+
+
 async def test_disconnect_holds_the_prompt_then_denies(harness):
     """Not "denies immediately", which is what the plan said and what the first
     implementation did.
