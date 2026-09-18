@@ -386,8 +386,18 @@ static void do_mkdir(rc_net *net, rc_frame *f)
     char full[MAX_PATH];
 
     if (!rc_sync_contained(f->body)) status = "bad_path";
+    /* rc_sync_contained checks the SHAPE of the relative path and says nothing
+     * about its length, and f->body is bounded only by RC_MAX_FRAME -- 64KB,
+     * not MAX_PATH. An unchecked join here writes a valid-looking path to a
+     * DIFFERENT directory, which is the whole reason rc_sync_join stopped
+     * returning void. The bridge's own P.check gates this for a conforming
+     * bridge; rc_sync_contained's comment says why that is not the test to
+     * lean on -- this function exists for the case where the bridge is the
+     * thing that is wrong, and it cannot rest on a guarantee made by the party
+     * it is checking. */
+    else if (!rc_sync_join(full, sizeof(full), g_root, f->body))
+        status = "too_long";
     else {
-        rc_sync_join(full, sizeof(full), g_root, f->body);
         if (!CreateDirectoryA(full, NULL)) {
             DWORD e = GetLastError();
             DWORD a = GetFileAttributesA(full);
@@ -455,9 +465,14 @@ static void do_get(rc_net *net, rc_frame *f)
      * wrong branch entirely: `missing` is something a retry can never fix,
      * `bad_path` is something the bridge sent that it should not have. */
     if (!rc_sync_contained(f->body)) status = "bad_path";
+    /* The same refusal as do_mkdir above, and the consequence here is worse: a
+     * truncated join stats and OPENS a different existing file, and its bytes
+     * go back to the bridge acked as the path that was asked for -- so the
+     * bridge writes one file's contents over another's, with a crc that
+     * matches what it received. */
+    else if (!rc_sync_join(full, sizeof(full), g_root, f->body))
+        status = "too_long";
     else {
-        rc_sync_join(full, sizeof(full), g_root, f->body);
-
         rc_sync_stat_file(full, &st);
         if (st.type == 'u')      status = "locked";        /* held open */
         else if (st.type == 'd') status = "is_directory";

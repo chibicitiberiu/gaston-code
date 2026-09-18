@@ -258,6 +258,13 @@ def run(g: Guest) -> None:
                                        if_crc="absent")["status"], "ok")
     check("mkdir over a file", g.mkdir("probe.txt")["status"], "is_file")
     check("mkdir escaping the root", g.mkdir("../evil")["status"], "bad_path")
+    # rc_sync_contained checks the path's SHAPE and says nothing about its
+    # length, and the frame body is bounded by RC_MAX_FRAME rather than
+    # MAX_PATH. Before do_mkdir checked rc_sync_join's return, this joined to
+    # a truncated name and created a DIFFERENT directory (or answered
+    # no_parent, which reads as "the bridge sent these out of order").
+    check("mkdir a path too long to form", g.mkdir("d" * 260)["status"],
+          "too_long")
 
     print("\n== get ==")
     st, _ = g.get("does-not-exist.txt")
@@ -265,7 +272,16 @@ def run(g: Guest) -> None:
     st, _ = g.get("sub")
     check("a directory", st["status"], "is_directory")
     st, _ = g.get("../escaped.txt")
-    check("escaping the root", st["status"], "missing")
+    # `bad_path`, not `missing`: the probe asked for `missing` here until the
+    # do_get comment explaining the difference was written and the code
+    # changed under it. `missing` is something a retry can never fix;
+    # `bad_path` blames the path the bridge sent.
+    check("escaping the root", st["status"], "bad_path")
+    # The worst case of an unchecked join: the truncated path names another
+    # file that EXISTS, so its bytes go back acked as the path that was asked
+    # for and the bridge writes one file over another with a crc that matches.
+    st, _ = g.get("d" * 260)
+    check("get a path too long to form", st["status"], "too_long")
 
     print("\n== byte fidelity, straight off the machine ==")
     cases = {

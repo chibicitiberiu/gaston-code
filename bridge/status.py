@@ -108,7 +108,8 @@ class SyncStatus(str, Enum):
                                 CRC_MISMATCH
       * mkdir (SYNCMKDIRACK):  OK, BAD_PATH, EXISTS, IS_FILE, NO_PARENT,
                                 TOO_LONG, NO_SPACE
-      * get (SYNCDATEND):      OK, BAD_PATH, LOCKED, IS_DIRECTORY, MISSING
+      * get (SYNCDATEND):      OK, BAD_PATH, LOCKED, IS_DIRECTORY, MISSING,
+                                TOO_LONG
     """
 
     OK = "ok"
