@@ -307,7 +307,23 @@ def turn_start() -> Frame:
 
 
 def turn_error(msg: str) -> Frame:
-    return Frame("TURN", {"state": "error", "msg": msg[:200]})
+    """A turn that raised. The message travels in the BODY, not a header.
+
+    It was a `msg=` header capped at 200 characters, and that was a trap with
+    a sharp edge. `_quote` expands every byte outside 0x20..0x7E to three, so
+    a 200-character message with about 28 newlines in it -- a stack trace, or
+    a JSON error blob, which is exactly what an API failure looks like --
+    crosses the guest's `RC_MAX_VAL` of 256. The guest REFUSES an over-long
+    header value rather than truncating it (audit 01.44, deliberately), and
+    `net.cpp` treats a frame that will not parse as a dead stream and drops
+    the link.
+
+    So the failure mode was: the longer and more informative the error, the
+    more likely the user saw a disconnection instead of the error. The body
+    has no such ceiling, and `HALT` already carries its text there for the
+    same reason.
+    """
+    return Frame("TURN", {"state": "error"}, fold.encode(msg[:2000]))
 
 
 def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int) -> Frame:

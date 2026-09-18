@@ -473,10 +473,43 @@ static void on_turn(rc_frame *f)
          * as an error and the status bar says so, instead of reading like
          * a quiet success. See audit finding 03.50. */
         if (state && strcmp(state, "error") == 0) {
-            v = rc_frame_get(f, "msg");
+            /* The message is in the BODY, not a header. It used to be a
+             * `msg=` header, and the more informative the error the more
+             * likely the user got a dropped LINK instead of the text: a
+             * multi-line message percent-encodes past RC_MAX_VAL, the guest
+             * refuses an over-long header value by design (01.44), and
+             * net.cpp treats an unparseable frame as a dead stream. See
+             * turn_error() in protocol.py. */
             if (g_html)
-                g_html->error(v && *v ? v : "The turn ended with an error.");
+                g_html->error((f->body && *f->body)
+                              ? f->body
+                              : "The turn ended with an error.");
             status_set(2, " error");
+        } else if (state && strcmp(state, "end") == 0
+                   && (v = rc_frame_get(f, "ok")) != NULL
+                   && strcmp(v, "0") == 0) {
+            /* A TURN THAT CAME BACK NOT-OK IS NOT A QUIET SUCCESS.
+             *
+             * 03.50 fixed state="error", which is the path an EXCEPTION
+             * takes. This is the other one, and it is the one a quota or
+             * rate-limit refusal actually takes: the SDK returns normally
+             * with ok=0 and nothing streamed, so the turn used to render as
+             * `done $?` with an empty transcript -- the user's own report was
+             * "i'm just getting interrupted with no message nothing".
+             *
+             * `subtype` is the SDK's own word for what went wrong and is the
+             * only thing here that carries any information, so it is shown
+             * rather than swallowed. Empty subtype still gets a sentence:
+             * "something failed and we do not know what" is a far better
+             * answer than a cost line for a turn that produced nothing. */
+            const char *why = rc_frame_get(f, "subtype");
+            char line[256];
+            rc_strf(line, sizeof(line),
+                    "The request did not complete%s%s. Nothing was returned "
+                    "-- it may not have run at all.",
+                    (why && *why) ? ": " : "", (why && *why) ? why : "");
+            if (g_html) g_html->error(line);
+            status_set(2, " failed");
         } else {
             char buf[96];
             v = rc_frame_get(f, "cost_usd");
