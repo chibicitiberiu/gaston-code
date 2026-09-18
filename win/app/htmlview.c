@@ -459,9 +459,12 @@ static void say(rc_html *v, const char *cls, const char *text)
     HeapFree(GetProcessHeap(), 0, esc);
 }
 
-void rc_html_notice(rc_html *v, const char *text) { say(v, "notice", text); }
-void rc_html_error(rc_html *v, const char *text)  { say(v, "err", text); }
-void rc_html_user(rc_html *v, const char *text)   { say(v, "you", text); }
+void rc_html_notice(rc_html *v, const char *text)
+{ say(v, RC_CSS_NOTICE, text); }
+void rc_html_error(rc_html *v, const char *text)
+{ say(v, RC_CSS_ERROR, text); }
+void rc_html_user(rc_html *v, const char *text)
+{ say(v, RC_CSS_USER, text); }
 
 void rc_html_block(rc_html *v, const char *html)
 {

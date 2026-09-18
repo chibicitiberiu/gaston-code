@@ -46,6 +46,20 @@ void     rc_html_set_document(rc_html *v, const char *doc);
  * Text arguments are PLAIN TEXT and are escaped here. `rc_html_block` is the
  * exception and takes finished markup, because the bridge renders the
  * transcript -- the guest transforms nothing. */
+/* The CSS classes this side emits. They are defined by the BRIDGE's
+ * stylesheet (bridge/view/html.py), which the guest receives whole in the DOC
+ * frame -- so these three names are a contract between two files in two
+ * languages with nothing linking them. Renaming one on the bridge silently
+ * unstyles the guest's blocks: no error, no log line, just plain text where
+ * there used to be a coloured box.
+ *
+ * Named here so there is something for a test to compare against, and
+ * tests/python/test_guest_css.py asserts every one of them exists in the
+ * stylesheet the bridge actually sends. */
+#define RC_CSS_NOTICE  "notice"
+#define RC_CSS_ERROR   "err"
+#define RC_CSS_USER    "you"
+
 void     rc_html_notice(rc_html *v, const char *text);
 void     rc_html_error(rc_html *v, const char *text);
 void     rc_html_user(rc_html *v, const char *text);
