@@ -49,12 +49,54 @@ CORPUS = {
     "cp1252_text":      "café\r\nnaïve\r\n".encode("cp1252"),
     "long_lf":          b"line\n" * 5000,
     "long_crlf":        b"line\r\n" * 5000,
-    #: Spans the 8192-byte read chunk with a CRLF straddling the boundary --
-    #: the carry logic is the only thing that gets this right.
+    #: Spans the guest's read chunk with a CRLF straddling the boundary --
+    #: the carry logic is the only thing that gets this right. Placeholder
+    #: lengths; `_pin_corpus_to_the_guests_real_chunk_size` below overwrites
+    #: these with lengths built from the guest's REAL RC_SYNC_CHUNK before
+    #: anything reads them (03.14), so this 8192 is not load-bearing -- it is
+    #: only what a test run without the guest toolchain (skipped) would show
+    #: someone reading the source.
     "chunk_boundary":   b"x" * 8191 + b"\r\n" + b"y" * 10,
     "chunk_cr_last":    b"x" * 8191 + b"\r" + b"\n" + b"z",
     "many_cr_boundary": b"a" * 8190 + b"\r\r\n" + b"b" * 10,
 }
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _pin_corpus_to_the_guests_real_chunk_size():
+    """03.14: the three entries above exist to straddle the guest's chunked
+    read, so they have to be built from the guest's REAL RC_SYNC_CHUNK
+    (win/sync/sync.h) rather than a copy of the number written here -- a
+    change to the chunk size would otherwise leave this corpus quietly
+    testing the OLD boundary while every test using it kept passing.
+
+    `synccheck --chunk` prints that constant (win/checks/synccheck.c); this
+    also cross-checks it against the bridge's OWN chunk size
+    (bridge/files/syncrun.py's CHUNK), since a disagreement there means the
+    guest's chunked read and the bridge's chunked send would carry at
+    different byte offsets, wire format aside.
+
+    autouse and module-scoped so it runs before `guest_answers` writes
+    CORPUS to disk and before any other test in this file reads CORPUS's
+    byte content -- this file has no fixed test order to rely on otherwise.
+    Guarded the same way `conftest.needs_guest` is, rather than relying on
+    that marker alone, because a skipped test must not still require Wine.
+    """
+    if not conftest.have_toolchain():
+        pytest.skip("needs Open Watcom and the Lutris wine-ge runner")
+    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), "--chunk"],
+                         capture_output=True, timeout=60, env=wine_env())
+    chunk = int(out.stdout.decode("latin-1").strip())
+
+    from bridge.files import syncrun
+    assert chunk == syncrun.CHUNK, (
+        f"guest RC_SYNC_CHUNK={chunk} but bridge/files/syncrun.py's "
+        f"CHUNK={syncrun.CHUNK} -- the guest's chunked read and the "
+        f"bridge's chunked send would carry at different byte offsets")
+
+    CORPUS["chunk_boundary"] = b"x" * (chunk - 1) + b"\r\n" + b"y" * 10
+    CORPUS["chunk_cr_last"] = b"x" * (chunk - 1) + b"\r" + b"\n" + b"z"
+    CORPUS["many_cr_boundary"] = b"a" * (chunk - 2) + b"\r\r\n" + b"b" * 10
 
 
 #: Names the guest scanner must NEVER report. They are its own working files,
@@ -67,7 +109,11 @@ WORKING_NAMES = ("lf.gaston-tmp", "lf.gaston-old")
 
 
 @pytest.fixture(scope="module")
-def guest_answers(tmp_path_factory):
+def guest_answers(tmp_path_factory, _pin_corpus_to_the_guests_real_chunk_size):
+    # The explicit dependency (on top of autouse) is belt-and-braces: CORPUS
+    # must already hold the guest's real chunk-boundary lengths by the time
+    # these files are written, and this makes that a fixture-graph guarantee
+    # rather than an autouse-ordering assumption.
     d = tmp_path_factory.mktemp("corpus")
     for name, data in CORPUS.items():
         (d / name).write_bytes(data)
