@@ -102,6 +102,17 @@ class ExecCall:
 class GuestSession:
     """Bridge-side state for one guest, surviving across reconnects."""
 
+    #: Set when the SDK reports something during a turn that means the answer
+    #: cannot be trusted as complete -- a RateLimitEvent today. Read and
+    #: cleared by _run_turn_locked when it sends TURN end.
+    #:
+    #: It exists because the SDK reports ok=True for a rate-limited turn that
+    #: streamed nothing, so the guest's status bar said "done $?" next to a
+    #: transcript notice explaining that the request may not have run. The
+    #: transcript and the status line disagreeing is worse than either being
+    #: wrong on its own, and the bridge is the side that knows.
+    turn_degraded: str = ""
+
     #: Which machine this is and which conversation is live -- `sess_id`,
     #: `hello`, `claude`, `model`, `effort` -- the audit's "Identity"
     #: GuestSession group (02.2), moved onto its own type in
@@ -792,6 +803,7 @@ class Bridge:
                 # so beats silence -- the turn may well produce nothing after
                 # it, and an unexplained no-op is the worst possible answer.
                 event = str(data.get("event", "")) or "an unknown event"
+                guest.turn_degraded = event
                 if event == "RateLimitEvent":
                     await self._write_block(guest, H.notice(
                         "The model provider is rate limiting this account. "
@@ -1386,7 +1398,15 @@ class Bridge:
         if comp:
             log.info("deflate so far: %d -> %d bytes (%.2f:1)",
                      raw, comp, guest.zip_out.ratio)
-        await self._send(guest, turn_end(turn.ok, turn.subtype,
+        # The SDK's own verdict, unless it told us something during the turn
+        # that contradicts it. A rate-limited turn comes back ok=True having
+        # produced nothing, and reporting that as a success puts "done" in the
+        # status bar directly beneath a notice saying the request may not have
+        # run. The bridge saw the event; it should not forget it here.
+        degraded = guest.turn_degraded
+        guest.turn_degraded = ""
+        await self._send(guest, turn_end(turn.ok and not degraded,
+                                         degraded or turn.subtype,
                                          turn.cost_usd, turn.duration_ms))
 
     # --- running commands on the guest -------------------------------------
