@@ -101,6 +101,22 @@ int    rc_sync_commit(const char *root, const char *rel, const char *tmp,
  * front of the string rather than producing a short one. */
 #define RC_SYNC_SUFFIX_LEN  (sizeof(RC_SYNC_TMP_SUFFIX) - 1)
 
+/* Format ONE manifest row into `out`, exactly as it goes on the wire.
+ *
+ * Extracted so there is one producer rather than two. The format was written
+ * four times -- here, the bridge's parser, the test suite's fake producer and
+ * syncprobe's fake parser -- and verified zero times, because synccheck.exe
+ * printed a DIFFERENT tab-separated format of its own. So it proved the
+ * classifier and the checksums and never touched the wire format, and a field
+ * added on one side passed the whole suite.
+ *
+ * `synccheck --wire` now emits through THIS function, and the Python side
+ * parses that output with the bridge's own parser, which closes the loop.
+ *
+ * Returns the number of bytes written, or 0 if the row would not fit. */
+unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
+                              const rc_sync_stat *st);
+
 /* Non-zero if `name` is one of ours and must not appear in a manifest. */
 int    rc_sync_is_working_name(const char *name);
 

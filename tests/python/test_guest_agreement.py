@@ -248,3 +248,74 @@ def test_names_that_merely_contain_dots_still_sync(guest_contained):
     prevent -- so the check must be on the whole component, not a substring."""
     for good in ("a", "a/b", "a/b/c.txt", "..a", "a..", "a/..b", "dot.dot/x"):
         assert guest_contained[good] == "allow", good
+
+
+# --- the wire format itself -------------------------------------------------
+
+def test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser(
+        tmp_path):
+    """The manifest row format was written four times and verified zero times.
+
+    win/sync/syncrpc.c produced it, the bridge parsed it, test_sync_wire.py
+    re-implemented the producer for the tests, and tools/syncprobe.py
+    re-implemented the parser. synccheck.exe -- the one thing that runs the
+    real C against the real Python -- printed a DIFFERENT, tab-separated
+    format of its own, so it proved the classifier and the checksums and
+    never touched the wire format. A field added on one side passed the
+    whole suite.
+
+    This closes it: `synccheck --wire` emits through rc_sync_manifest_row,
+    the same function do_scan puts on the wire, and those bytes are handed to
+    bridge.files.manifest.parse_rows, the same parser the frame handler uses.
+    """
+    from bridge.files import caps as C
+    from bridge.files import manifest
+
+    corpus = {
+        "crlf.txt":  b"a\r\nb\r\n",
+        "lf.txt":    b"a\nb\n",
+        "binary.dat": b"\x00\x01\x02",
+        "mixed.txt": b"a\r\nb\nc\r\n",
+        "empty.txt": b"",
+    }
+    d = tmp_path / "wire"
+    d.mkdir()
+    for name, data in corpus.items():
+        (d / name).write_bytes(data)
+
+    # Wine sees the Linux filesystem through Z:.
+    guest_path = "Z:" + str(d).replace("/", "\\")
+    out = subprocess.run(
+        [conftest.WINE, conftest.guest_exe(EXE_NAME), "--wire", guest_path],
+        capture_output=True, timeout=300, env=wine_env())
+    body = out.stdout
+    assert body, out.stderr.decode("latin-1", "replace")[:800]
+
+    rows, display = manifest.parse_rows(body, C.WIN9X)
+    assert set(display.values()) == set(corpus), (
+        "the bridge's parser did not recover the guest's own rows")
+
+    for name, data in corpus.items():
+        row = rows[name.lower()]
+        assert row.cls == classify(data), (
+            f"{name}: the guest and the bridge disagree about the class, "
+            f"which is a disagreement that never converges")
+        assert row.crc == zlib.crc32(normalise(data, classify(data))), (
+            f"{name}: checksum mismatch through the real wire format")
+
+
+def test_a_row_that_would_not_fit_is_refused_rather_than_truncated():
+    """rc_sync_manifest_row returns 0 rather than writing a short row.
+
+    A truncated row is not a short row, it is a DIFFERENT row: the length
+    prefix stops matching the bytes after it, so the parser reads the next
+    row's fields as this one's path. manifest_add flushes and retries, and
+    gives up only if a single row cannot fit an empty buffer.
+    """
+    from bridge.files import caps as C
+    from bridge.files import manifest
+    # A row whose length prefix disagrees with what follows is dropped, not
+    # guessed at -- the parser logs and skips, and the CALLER catches the
+    # short count against SYNCEND's files=.
+    rows, _ = manifest.parse_rows(b"f t 6 0 1 2 99 short\n", C.WIN9X)
+    assert rows == {} or all(r.type for r in rows.values())

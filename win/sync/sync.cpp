@@ -265,6 +265,36 @@ typedef struct {
     int          overflow;
 } walk_ctx;
 
+unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
+                              const rc_sync_stat *st)
+{
+    char head[128];
+    unsigned hn, rn;
+
+    if (!out || !cap || !rel || !st) return 0;
+    rn = (unsigned)strlen(rel);
+    /* Both checksums. The bridge decides the class -- it is the side that
+     * reads .gitattributes -- so it must be able to pick either without
+     * asking again, and neither is derivable from the other.
+     *
+     * Length-prefixed rather than separated, because TAB and newline are both
+     * legal in a filename and a separator-based format breaks on the first
+     * one. That also means a truncated row is not a SHORT row: the prefix
+     * stops matching the bytes after it and the parser reads the next row's
+     * fields as this one's path. Hence the refusal below rather than a clamp. */
+    rc_strf(head, sizeof(head), "%c %c %lu %lu %lu %lu %u ",
+            st->type, st->cls ? st->cls : '-',
+            (unsigned long)st->size, (unsigned long)st->mtime,
+            st->crc_norm, st->crc_raw, rn);
+    hn = (unsigned)strlen(head);
+    if (hn + rn + 1 > cap) return 0;
+
+    memcpy(out, head, hn);
+    memcpy(out + hn, rel, rn);
+    out[hn + rn] = '\n';
+    return hn + rn + 1;
+}
+
 int rc_sync_is_working_name(const char *name)
 {
     unsigned len = (unsigned)strlen(name);

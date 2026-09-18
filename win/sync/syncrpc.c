@@ -57,26 +57,18 @@ static void manifest_flush(manifest_ctx *m)
 static void manifest_add(void *ctx, const char *rel, const rc_sync_stat *st)
 {
     manifest_ctx *m = (manifest_ctx *)ctx;
-    char head[128];
-    unsigned hn, rn;
+    unsigned n;
 
-    rn = (unsigned)strlen(rel);
-    /* Both checksums. The bridge decides the class -- it is the side that
-     * reads .gitattributes -- so it must be able to pick either one without
-     * asking again. A sixth field the older bridge did not send; that bridge
-     * parses a fixed six and this is seven, so the two ship together. */
-    rc_strf(head, sizeof(head), "%c %c %lu %lu %lu %lu %u ",
-              st->type, st->cls ? st->cls : '-',
-              (unsigned long)st->size, (unsigned long)st->mtime,
-              st->crc_norm, st->crc_raw, rn);
-    hn = (unsigned)strlen(head);
-
-    if (m->len + hn + rn + 1 > sizeof(m->buf)) manifest_flush(m);
-    if (m->len + hn + rn + 1 > sizeof(m->buf)) return;   /* absurdly long */
-
-    memcpy(m->buf + m->len, head, hn);  m->len += hn;
-    memcpy(m->buf + m->len, rel, rn);   m->len += rn;
-    m->buf[m->len++] = '\n';
+    /* One producer, in sync.cpp, which synccheck --wire also uses -- so the
+     * format the tests check is literally the format that goes on the wire. */
+    n = rc_sync_manifest_row(m->buf + m->len, sizeof(m->buf) - m->len, rel, st);
+    if (!n) {
+        manifest_flush(m);
+        n = rc_sync_manifest_row(m->buf + m->len, sizeof(m->buf) - m->len,
+                                 rel, st);
+        if (!n) return;                          /* absurdly long */
+    }
+    m->len += n;
     m->n++;
     m->total++;
 }

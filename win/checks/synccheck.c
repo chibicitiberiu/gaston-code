@@ -13,6 +13,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <io.h>
+#include <fcntl.h>
 #include "sync/sync.h"
 
 static void emit(void *ctx, const char *rel, const rc_sync_stat *st)
@@ -93,12 +95,41 @@ static int contained(void)
     return 0;
 }
 
+/* Emit the manifest EXACTLY as it goes on the wire.
+ *
+ * The tab-separated `emit` above proves the classifier and the checksums and
+ * never touches the wire format -- which is why a field could be added on one
+ * side and pass the whole suite. This goes through rc_sync_manifest_row, the
+ * same function do_scan uses, so the Python side can parse this output with
+ * the BRIDGE's own parser and a divergence fails the build. */
+static void emit_wire(void *ctx, const char *rel, const rc_sync_stat *st)
+{
+    char row[MAX_PATH + 160];
+    unsigned n;
+    (void)ctx;
+    n = rc_sync_manifest_row(row, sizeof(row), rel, st);
+    if (n) fwrite(row, 1, n, stdout);
+}
+
 int main(int argc, char **argv)
 {
     int n;
+    if (argc >= 3 && strcmp(argv[1], "--wire") == 0) {
+        /* BINARY stdout. In text mode the CRT turns every '\n' the row
+         * terminator into "\r\n", which is exactly the corruption this
+         * check exists to detect -- the output would no longer be the bytes
+         * that go on the wire, and the comparison would be against a format
+         * nothing actually sends. */
+        _setmode(_fileno(stdout), _O_BINARY);
+        n = rc_sync_scan(argv[2], emit_wire, NULL);
+        if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
+        if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }
+        fprintf(stderr, "entries=%d\n", n);
+        return 0;
+    }
     if (argc >= 2 && strcmp(argv[1], "--limits") == 0) return limits();
     if (argc >= 2 && strcmp(argv[1], "--contained") == 0) return contained();
-    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--limits|--contained\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained\n"); return 2; }
     n = rc_sync_scan(argv[1], emit, NULL);
     if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
     if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }
