@@ -1818,3 +1818,50 @@ moved to `C:\WORKBK18` rather than deleted, and that is where it still is.
 layer and the framing. Still outstanding for the parts the probe stub does not
 drive: the permission and halt bars, pagination across a reconnect, and the
 BACKLOG §2 memory re-measurement against the 2,312 / 960 KB marks.
+
+
+### 2026-09-18 — the C++ migration is finished, and main.c was not clean
+
+Steps 3, 4 and 5 landed today; step 6 is closed as a deferral. The guest is
+now C++ everywhere except `htmlview.c`, which stays C by decision.
+
+**The audit said the step 4 files were "all clean today". Four of them were.**
+`rpc.c`, `exec.c`, `log.c` and `ini.c` are pure renames -- zero insertions,
+zero deletions. `main.c` was not, and what stopped it is worth recording,
+because it had been visible and ignored for the whole project:
+
+    app/main.c(411): Warning! W131: No prototype found for function 'ui_send'
+
+Every build has printed that line. In C89 it is a warning and the compiler
+invents `int ui_send()`. In C++ it is `E029`, a hard error, and the build
+stops. `ui_send` is `static`, defined at line 537 and called at line 411 --
+one forward declaration fixes it. **The build is now warning-free for the
+first time.** That is a small instance of the argument for the move: the
+language refused to compile something the old one waved through.
+
+**The memory measurement the audit asked for could not be made, and the reason
+matters more than the number.** BACKLOG §2 asks for a re-measure against the
+2,312 / 960 KB marks. What the machine actually logged at window creation:
+
+    mem [window created]: 0K free of 32288K phys, 1703692K free of 171904K page, load 73%
+
+`dwAvailPhys` reads **zero**, and the page-file pair is self-contradictory --
+more free than total. The app then ran correctly and passed all 52 probe
+checks, including a 200KB push in 25 chunks. So this is not a machine about to
+fail an allocation; it is a measurement that does not mean what the project has
+been treating it as meaning.
+
+BACKLOG §2 already corrected "28 KB free after a turn" once, noting it is
+`dwAvailPhys`, that it excludes the disk cache Win98 shrinks under pressure,
+and that allocations were never actually failing. **Today's reading pushes that
+further: on this machine `dwAvailPhys` is not an availability signal at all.**
+VCACHE takes what is free, so the number floors at zero and stays there. The
+standing rule in CLAUDE.md -- "Memory is the binding constraint... 28 KB after
+a turn" -- rests on a figure that is now 0K next to an app that works. The rule
+is still worth keeping, because bounded allocation is right regardless, but the
+evidence cited for it should be corrected rather than repeated.
+
+Sizes, for the record: committed-at-load ended at **298,784** bytes, against
+285,904 before the migration began. Roughly 4KB of that is page-alignment
+padding rather than allocation -- `_BSS` starts on a page boundary, and DATA
+now ends just past one.

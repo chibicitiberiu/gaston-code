@@ -185,6 +185,9 @@ static void layout(HWND hwnd);
 static void fit_label(char *label, unsigned cap, int avail_px);
 static int  chats_text_width(void);
 static void think_hide(void);
+static int  ui_send(const char *what, const char *type,
+                    const char *const *keys, const char *const *vals,
+                    int nkv, const void *body, unsigned body_len);
 
 /* Pagination state.
  *
