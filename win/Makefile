@@ -200,6 +200,23 @@ check: $(BUILD)/retroclaude.exe
 	 if [ "$$n" -gt $(CMOV_BASELINE) ]; then \
 	   echo "   FAIL: $$n CMOV (baseline $(CMOV_BASELINE)) -- check -5 is still set"; exit 1; \
 	 else echo "   ok: $$n (baseline $(CMOV_BASELINE), known data false positive)"; fi
+	@echo "=== unbounded string functions (the overflow family) ==="
+	@# These write until a NUL that may not be there. rc_strcpy/rc_strncpy/
+	@# rc_strf replace them and always terminate, so the READING family
+	@# (strcmp, strlen, strchr...) can never be handed an unterminated
+	@# operand -- which is the property that makes those safe, and it is a
+	@# property of the writes, not of the reads.
+	@#
+	@# \b does not match inside rc_strcpy, because '_' is a word character.
+	@# third_party is excluded: miniz is vendored and not ours to rewrite.
+	@bad=$$(grep -rnE '\b(strcpy|strcat|sprintf|vsprintf|gets|lstrcpyA?|lstrcatA?|wsprintfA?|_mbscpy|alloca)[[:space:]]*\(' \
+	        $(CURDIR) --include='*.c' --include='*.cpp' --include='*.h' \
+	        2>/dev/null | grep -v third_party || true); \
+	 if [ -n "$$bad" ]; then \
+	   echo "$$bad"; \
+	   echo "   FAIL: use rc_strcpy/rc_strncpy/rc_strf (win/core/str.h)"; \
+	   exit 1; \
+	 else echo "   ok: none"; fi
 	@echo "=== static constructors (they run BEFORE WinMain, so before the log) ==="
 	@# Verified on the target: a file-scope object's constructor runs before
 	@# WinMain and its destructor at exit. log.c opens retroclaude.log from

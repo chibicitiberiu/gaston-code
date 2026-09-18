@@ -288,7 +288,14 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
 
     if (*rel) join(pattern, sizeof(pattern), root, rel);
     else      rc_strf(pattern, sizeof(pattern), "%s", root);
-    strncat(pattern, "\\*", sizeof(pattern) - strlen(pattern) - 1);
+    /* Bounded, but strncat's failure is a pattern with the "\\*" missing or
+     * half-appended rather than an error -- and FindFirstFileA then either
+     * fails (the subtree vanishes) or succeeds on the bare directory (the
+     * scan invents directories). The caller has already refused anything that
+     * would not fit; this is the assertion that it did. */
+    if (!rc_strcpy(pattern + strlen(pattern),
+                   sizeof(pattern) - strlen(pattern), "\\*"))
+        return;
 
     h = FindFirstFileA(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -510,7 +517,14 @@ static void recover_dir(const char *root, const char *rel, int depth)
     if (depth > RC_SYNC_MAX_DEPTH) return;
     if (*rel) join(pattern, sizeof(pattern), root, rel);
     else      rc_strf(pattern, sizeof(pattern), "%s", root);
-    strncat(pattern, "\\*", sizeof(pattern) - strlen(pattern) - 1);
+    /* Bounded, but strncat's failure is a pattern with the "\\*" missing or
+     * half-appended rather than an error -- and FindFirstFileA then either
+     * fails (the subtree vanishes) or succeeds on the bare directory (the
+     * scan invents directories). The caller has already refused anything that
+     * would not fit; this is the assertion that it did. */
+    if (!rc_strcpy(pattern + strlen(pattern),
+                   sizeof(pattern) - strlen(pattern), "\\*"))
+        return;
 
     h = FindFirstFileA(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) return;

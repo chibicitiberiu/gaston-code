@@ -13,6 +13,25 @@ and the plan say it does.*
 
 ## Top findings
 
+Fixed: 01.0 UNBOUNDED STRING FUNCTIONS on data that arrives from the wire. Raised by the user during the audit; the automated sweep had missed the worst instance. WHAT WAS WRONG: frameproto.c -- the frame parser, the first code untrusted bytes touch -- carried two strcpy calls and the one _snprintf the earlier `sizeof(x) - 1` sweep never saw, because its bound is a macro (RC_MAX_VAL - 1) rather than sizeof. Both strcpy sites were guarded on the line above, so neither could overflow as written, but that is check-then-copy in two separate statements. WHAT WAS DONE, and why "no usage remains unverified" is a claim rather than a hope: (a) every write-family call in the guest is now rc_strcpy/rc_strncpy/rc_strf, which always terminate and return whether they fit -- the last four were literal copies in inicheck.c and probe.c, converted despite being provably safe, so that the gate below needs no exceptions; (b) the two strncat sites in sync.cpp, whose failure mode is a search pattern with "\\*" missing rather than an error -- the b14be6d mechanism -- now refuse instead; (c) the header VALUE path in frameproto.c drops the frame rather than clipping at 255, and the bridge refuses to send an over-long cwd so a dropped frame is not the user's first symptom; (d) `make -C win check` greps for the whole family and FAILS the build, verified by reintroducing a strcpy and watching it fail. THE READING FAMILY (strcmp/strlen/strchr, 109 sites) is safe as a consequence rather than by inspection: it is only unsafe on an unterminated operand, and the three sources of operands are all terminated by construction -- f->body because net.c:143 allocates len+1 and writes payload[len]='\0', f->type and every header value because frameproto.c now fills them with rc_strcpy, and every local buffer because the writes above were converted. That is why this is one finding and not 109.
+#
+0. **Unbounded string functions on data that arrives from the wire.**
+   *(Raised by the user during the audit, not by the sweep -- and the sweep
+   had missed the worst instance.)* `strcpy`, `strcat`, `sprintf` and their
+   relatives write until a NUL that may not be there. `win/net/frameproto.c`
+   -- the frame parser, the first code untrusted bytes touch -- had two
+   `strcpy` calls and the one `_snprintf` the earlier `sizeof(x) - 1` sweep
+   never saw, because its bound is a macro (`RC_MAX_VAL - 1`) rather than
+   `sizeof`. The two `strcpy`s were guarded on the line above, so neither
+   could overflow as written; that is check-then-copy in two statements,
+   which is the shape that breaks when someone moves one of them.
+
+   The follow-on the user also named: the *reading* family (`strcmp`,
+   `strlen`, `strchr`) reads until a NUL too, so it is only safe if every
+   operand is guaranteed terminated. That is a property of the WRITES, not
+   of the reads -- which is why it is recorded here rather than as 109
+   separate findings.
+
 1. **`main.c` is nine modules in a trench coat — and the plan said so.**
    Thirteen distinct responsibilities share one file, ~60 file-static globals
    and one 340-line `if/else` chain. `docs/PLAN.md:1259-1277` specifies

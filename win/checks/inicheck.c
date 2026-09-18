@@ -19,6 +19,7 @@
 #include <string.h>
 #include "core/str.h"
 #include "core/ini.h"
+#include "core/str.h"
 
 static int fails = 0;
 
@@ -45,12 +46,12 @@ int main(int argc, char **argv)
     /* Every value differs from the default rc_config_load would substitute, so
      * "the key was never written" cannot pass by coincidence. */
     memset(&out, 0, sizeof(out));
-    strcpy(out.host,      "10.11.12.13");
+    rc_strcpy(out.host, sizeof(out.host),      "10.11.12.13");
     out.port =            7999;
-    strcpy(out.secret,    "not-dev-secret");
+    rc_strcpy(out.secret, sizeof(out.secret),    "not-dev-secret");
     out.font_size =       14;
     out.autoscroll =      0;
-    strcpy(out.sync_root, "C:\\WORK\\SUB");
+    rc_strcpy(out.sync_root, sizeof(out.sync_root), "C:\\WORK\\SUB");
 
     rc_strf(path, sizeof(path), "%s\\retroclaude.ini", dir);
     DeleteFileA(path);

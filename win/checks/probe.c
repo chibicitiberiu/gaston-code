@@ -113,7 +113,7 @@ static unsigned __stdcall worker_beginthreadex(void *arg)
         char buf[64];
         char *tok;
         errno = 0;
-        strcpy(buf, "a,b,c");
+        rc_strcpy(buf, sizeof(buf), "a,b,c");
         tok = strtok(buf, ",");
         while (tok) tok = strtok(NULL, ",");
         rc_strf(buf, sizeof(buf), "%d", i);
