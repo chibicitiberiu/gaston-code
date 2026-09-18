@@ -1511,9 +1511,15 @@ class Bridge:
             # is the one abort that cannot be fixed by waiting.
             base = None
         if base is not None:
-            if base.aborted == reason:
+            # Anything already said since the last successful pass, not just
+            # the last thing said. Two alternating reasons defeat a
+            # last-reason check entirely, and two guests sharing a baseline
+            # produce exactly that.
+            if reason in base.announced:
+                base.aborted = reason
                 return
             base.aborted = reason
+            base.announced.append(reason)
             try:
                 base.save(state)
             except Exception as exc:          # pragma: no cover - disk failure

@@ -941,8 +941,9 @@ class Pass:
         # is what makes the next abort news again -- and a recovery worth
         # saying, because "sync has stopped" with no matching "sync resumed"
         # leaves the user believing it is still down.
-        if self.base.aborted:
+        if self.base.aborted or self.base.announced:
             log.info("sync: recovered from %r", self.base.aborted)
+            self.base.announced = []
             done["recovered"] = self.base.aborted
             self.note("SYNC: file synchronisation is working again. It had "
                       "stopped: " + self.base.aborted)

@@ -240,6 +240,16 @@ class Baseline:
     #: DIFFERENT abort is said again, and so sync_status can answer "why has
     #: nothing moved for an hour" without the answer being "read the log".
     aborted: str = ""
+    #: Every abort reason already announced since the last SUCCESSFUL pass.
+    #:
+    #: `aborted` alone is the last reason, and comparing against it only
+    #: suppresses a REPEAT. Two reasons that alternate defeat it completely --
+    #: which is not hypothetical: two guests sharing one --sync-state each
+    #: refuse the other's tree_id, so the reasons alternate every pass and
+    #: both users get a "synchronisation has stopped" notice twice a minute,
+    #: forever. Bounded by the number of distinct failure modes between two
+    #: successes, which is small, and cleared entirely by a pass that works.
+    announced: list = field(default_factory=list)
     #: (size, mtime, auto_class, crc_raw, crc_norm, content_size) per path, so
     #: an unchanged tree is not re-read end to end every thirty seconds. It
     #: caches what the CONTENT says, never the effective class, so changing
@@ -272,6 +282,7 @@ class Baseline:
                 "reported": self.reported,
                 "reported_lines": self.reported_lines,
                 "aborted": self.aborted,
+                "announced": self.announced,
                 "scan_cache": {k: list(v) for k, v in self.scan_cache.items()},
             },
             indent=1,
@@ -307,6 +318,7 @@ class Baseline:
             reported=dict(d.get("reported", {})),
             reported_lines=list(d.get("reported_lines", [])),
             aborted=d.get("aborted", ""),
+            announced=list(d.get("announced", [])),
             scan_cache={k: tuple(v)
                         for k, v in (d.get("scan_cache") or {}).items()},
         )

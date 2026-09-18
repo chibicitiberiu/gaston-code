@@ -1828,3 +1828,44 @@ async def test_a_busy_refusal_answers_in_the_shape_the_caller_expects(
     assert "unpack" not in str(e.value), (
         "a shape mismatch reported instead of the actual refusal")
     await harness.close(writer)
+
+
+async def test_two_alternating_abort_reasons_are_each_said_once(harness,
+                                                                tmp_path):
+    """The once-only guard compared against the LAST reason, which suppresses
+    a repeat and nothing else.
+
+    Two alternating reasons defeat it completely -- and that is not
+    hypothetical: two guests sharing one --sync-state each refuse the other's
+    tree_id, so the reasons alternate every pass and both users get
+    "synchronisation has stopped" twice a minute, forever. The notice channel
+    that also carries conflicts becomes noise.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    said = []
+    for reason in ("machine A is not machine B", "machine B is not machine A",
+                   "machine A is not machine B", "machine B is not machine A"):
+        harness.bridge._agent_notices.clear()
+        await harness.bridge._report_abort(guest, reason)
+        said.append(bool(harness.bridge._agent_notices))
+
+    assert said == [True, True, False, False], (
+        f"each distinct reason once, then silence -- got {said}")
+
+    # And a pass that works clears the slate, so a later failure is news.
+    base = harness.bridge._load_baseline()
+    base.announced = []
+    base.aborted = ""
+    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+    harness.bridge._agent_notices.clear()
+    await harness.bridge._report_abort(guest, "machine A is not machine B")
+    assert harness.bridge._agent_notices, "recovery did not reset the slate"
+    await harness.close(writer)

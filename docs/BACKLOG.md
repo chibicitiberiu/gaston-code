@@ -269,3 +269,40 @@ inventing.
 registered alongside `ICC_BAR_CLASSES`. It was not, so the first
 `CreateWindow(PROGRESS_CLASS, ...)` would have failed on a machine with no
 debugger, presenting as "the progress bar does not appear".
+
+## 7. The sync baseline is bound to one machine, and R7 needs a decision
+
+**Status:** deferred by decision, 2026-09-18, from audit finding 04.2. This is
+a DESIGN question, not a defect, and it is recorded rather than guessed at.
+
+`scan_guest` refuses when `tree_id` or `guest_root` changes, and `tree_id` is
+derived from the volume serial. That is correct for one machine and it means
+two guests sharing one `--sync-state` do not degrade gracefully -- they
+deadlock. Each refuses the other's identity, every pass, forever.
+
+**The rate-limiting half is fixed** (`Baseline.announced`): the two reasons
+alternate, so the previous once-only guard compared against the last reason
+and never matched, and both users were told "synchronisation has stopped"
+twice a minute. Each distinct reason is now announced once until a pass
+succeeds.
+
+**The design question is not.** Before R7 can give the bridge a dict of
+guests, someone has to decide what a mirror MEANS with more than one machine:
+
+* **One mirror per client.** Each guest gets its own `--sync-state` and its
+  own subtree. Simple, and the baseline logic needs no change at all -- but
+  two people cannot collaborate on one tree, which may be the whole point of
+  having two clients.
+* **One shared mirror, many guests.** The baseline becomes per-path-per-guest
+  rather than per-path, `tree_id` stops being an identity check and becomes a
+  key, and every row grows a dimension. The three-way diff becomes an N-way
+  diff, and "the guest's copy wins" needs an answer to "which guest".
+* **One mirror, one writer.** A shared tree with a lease, so only one machine
+  syncs at a time and the others are read-only until it is released.
+
+The first is a weekend. The second is a redesign of `sync.py`'s state table,
+which five review rounds went into. The third is somewhere between.
+
+**To close it:** pick one, and write down why, before `self._guest` becomes
+`self._guests`. Doing it in the other order means discovering the answer from
+whichever tests break.
