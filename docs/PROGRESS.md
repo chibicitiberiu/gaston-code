@@ -2051,3 +2051,57 @@ minutes talking to a socket nobody was reading, which produced screenshots I
 briefly misread as a regression; and an `alt-f4` aimed at the app landed on the
 desktop instead, opened Shut Down Windows, and wedged `command.com`. Neither
 was a defect in the program. Both looked like one.
+
+
+### 2026-09-18 (last) — a turn that cost nothing and said nothing
+
+The user's report was four words long: *"i'm just getting interrupted with no
+message nothing"*. The account had hit its rate limit mid-turn. The transcript
+stayed empty, the status bar read `done $?`, and no log line on either side
+said why.
+
+Four separate defects were in the way, and **no test in the suite could have
+caught any of them**, because every one of them is about what reaches the
+screen when the provider refuses:
+
+1. `bridge/agent/session.py`'s SDK message loop had a silent `else` for
+   message types it did not recognise. `RateLimitEvent` is one, so the turn
+   ended having produced nothing and the bridge never knew a refusal had
+   happened. The fallback is loud now -- `log.warning` plus an `on_system`
+   `"sdk_event"` -- and `server.py` turns a `RateLimitEvent` into a notice in
+   the transcript (`02.44`).
+2. A turn returning `ok=0` rendered as `done $?`. `03.50` had fixed the
+   *exception* path; a quota refusal does not raise, so it went through the
+   ordinary end-of-turn branch. `main.cpp` now has an explicit `ok=0` arm that
+   writes a red error block and sets the status to `failed` (`03.55`).
+3. **This one was self-inflicted, by this same pass.** `turn_error` put its
+   message in a header. `msg[:2000]` caps *characters*, but `_quote` expands
+   each escaped byte to three, so a multi-line API error crosses `RC_MAX_VAL`
+   (256) -- and since this morning's hardening the guest **refuses** an
+   over-long value and `net.cpp` drops the link. Measured: 212 bytes against a
+   256 ceiling on the real error text. So the hardening turned "truncated
+   error message" into "dropped connection", and the more informative the
+   message the likelier it was. It travels in the body now, where `HALT`
+   already puts its text (`03.56`).
+4. **The transcript and the status bar disagreed**, which was only found by
+   looking at the screen after fixing 1 and 2. The `ok=0` arm did not fire,
+   because the SDK reports `ok=True` for a rate-limited turn -- the bridge saw
+   the event and forgot it four hundred lines later. `GuestSession.turn_degraded`
+   carries it to the end of the turn, and `turn_end` sends
+   `turn.ok and not degraded`. Either half being wrong alone is bad; them
+   disagreeing is worse, because the status bar is what the user believes.
+
+Plus `--effort ''` passed to the CLI on every start, which printed a warning
+nobody read -- harmless in itself, and exactly how a real warning gets missed.
+
+**Verified on the real machine**, against the real bridge, with the account
+still rate limited: the user turn, then the notice *"The model provider is
+rate limiting this account. The request may not have run -- try again
+shortly."*, then a red block *"The request did not complete: RateLimitEvent.
+Nothing was returned -- it may not have run at all."*, and the status bar
+reading **`failed`**. The bridge log carries the matching
+`WARNING bridge.session: unhandled SDK message type: RateLimitEvent`.
+
+The process note worth keeping: **an error path that has never been made to
+fail on purpose is not an error path.** Three of these four had shipped and
+been "working" for as long as the provider kept answering.
