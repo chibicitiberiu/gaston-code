@@ -20,6 +20,7 @@ from bridge.files import paths as P
 from bridge.wire.protocol import Frame
 from bridge.files.sync import Baseline, Entry, Type
 from bridge.files.syncrun import Pass, SyncError
+from bridge.files.synctransport import SyncTransport
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -90,7 +91,13 @@ def a_pass(harness, tmp_path, root=None):
     os.makedirs(root, exist_ok=True)
     state = str(tmp_path / "state")
     os.makedirs(state, exist_ok=True)
-    return Pass(harness.bridge, harness.bridge._guest, root, state)
+    # Some callers build a Pass before harness.connect(), when there is no
+    # guest yet -- SyncTransport tolerates that (nothing dereferences it
+    # until a transport method is actually awaited) the same way the old
+    # `getattr(guest, "caps", None) or C.Caps()` tolerated a None guest.
+    guest = harness.bridge._guest
+    caps = guest.caps if guest is not None else None
+    return Pass(SyncTransport(guest), caps, root, state)
 
 
 # --- the manifest -----------------------------------------------------------
@@ -523,8 +530,7 @@ async def test_a_conflict_is_resolved_once_not_every_pass(harness, tmp_path):
     assert first["conflicts"] == 1
 
     # Same baseline, same tree, same guest -- a second pass.
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     task = asyncio.create_task(p2.run())
     await fake_scan(harness, reader, writer, {"a.txt": b"user version\n"})
     second = await asyncio.wait_for(task, 10)
@@ -671,8 +677,7 @@ async def test_the_baseline_survives_a_restart_mid_pass(harness, tmp_path):
     p.base.tree_id = "VOL-1"
     p.base.save(p.state)
 
-    fresh = Pass(harness.bridge, harness.bridge._guest, p.root,
-                 os.path.dirname(p.state))
+    fresh = a_pass(harness, tmp_path, root=p.root)
     assert fresh.base.rows["a.txt"].crc == 7
     assert fresh.base.tree_id == "VOL-1"
 
@@ -796,8 +801,7 @@ async def test_an_unresolvable_divergence_is_announced_once(harness, tmp_path):
     # What `run_sync` does once the notices are actually on the wire.
     p.notices_delivered(first["notices"])
 
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     task = asyncio.create_task(p2.run())
     await fake_scan(harness, reader, writer, {"old.c": user})
     second = await asyncio.wait_for(task, 10)
@@ -825,8 +829,7 @@ async def test_the_same_path_changing_is_news_again(harness, tmp_path):
     await fake_scan(harness, reader, writer, {"old.c": v1})
     await asyncio.wait_for(task, 10)
 
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     task = asyncio.create_task(p2.run())
     await fake_scan(harness, reader, writer, {"old.c": v2})
     second = await asyncio.wait_for(task, 10)
@@ -850,13 +853,11 @@ async def test_a_notice_is_delivered_once_and_then_cleared(harness, tmp_path):
     assert p.base.pending_notice == ["SYNC: something happened"]
 
     # Survives a reload, which is the point of writing it before acting.
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     assert p2.base.pending_notice == ["SYNC: something happened"]
 
     p2.notices_delivered(["SYNC: something happened"])
-    p3 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p3 = a_pass(harness, tmp_path, root=p.root)
     assert p3.base.pending_notice == []
     await harness.close(writer)
 
@@ -1266,7 +1267,10 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
 
     sent = 0
     ran_after = None
-    real_send = harness.bridge._send
+    # 02.19: Pass sends over its own SyncTransport now, which reaches
+    # guest.link.send directly rather than through Bridge._send -- so this
+    # counts at the link, the layer Pass actually calls.
+    real_send = harness.bridge._guest.link.send
 
     async def counting_send(guest, frame, **kw):
         nonlocal sent
@@ -1274,7 +1278,7 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
             sent += 1
         return await real_send(guest, frame, **kw)
 
-    harness.bridge._send = counting_send
+    harness.bridge._guest.link.send = counting_send
 
     seen = []
     watching = True
@@ -1308,7 +1312,7 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
         await asyncio.wait_for(side, 5)
     finally:
         watching = False
-        harness.bridge._send = real_send
+        harness.bridge._guest.link.send = real_send
 
     assert sent > 2, "the test needs a multi-chunk push to mean anything"
     assert ran_after is not None and ran_after <= 1, (
@@ -1391,8 +1395,7 @@ async def test_an_unreadable_path_reaches_the_agent_once(harness, tmp_path):
     # this the pass-1 notice is simply still pending and would be mistaken for
     # a second announcement -- which would make the test pass for the wrong
     # reason if first_report ever stopped working.
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     p2.base.pending_notice.clear()
     task = asyncio.create_task(p2.run())
     req = await _recv(harness, reader, "SYNCSCAN")
@@ -1790,8 +1793,7 @@ async def test_two_roots_sharing_a_long_prefix_are_not_one_tree(harness,
     p.base.save(p.state)
 
     # A different root, an identical tree_id. The old guard saw nothing.
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     task = asyncio.create_task(p2.scan_guest())
     req = await _recv(harness, reader, "SYNCSCAN")
     await harness.send(writer, Frame("SYNCEND", {
@@ -1813,8 +1815,7 @@ async def test_the_same_root_is_not_refused(harness, tmp_path):
     assert p.base.guest_root == "C:\\WORK"
     p.base.save(p.state)
 
-    p2 = Pass(harness.bridge, harness.bridge._guest, p.root,
-              os.path.dirname(p.state))
+    p2 = a_pass(harness, tmp_path, root=p.root)
     task = asyncio.create_task(p2.scan_guest())
     await fake_scan(harness, reader, writer, {})
     await asyncio.wait_for(task, 5)

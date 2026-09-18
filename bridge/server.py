@@ -74,6 +74,7 @@ from .wire.protocol import (
                             )
 from .wire.link import GuestLink
 from .wire.replay import Replay
+from .files.synctransport import GuestSyncState, SyncTransport
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
 from .files.sync import AckResult, GetResult, ScanResult
@@ -184,13 +185,14 @@ class GuestSession:
     # can request tools in parallel, and an "Always" rule would bypass the
     # prompt queue that was implicitly serialising them.
     exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # Sync transfers in flight, keyed by our own s<n> id -- a namespace the
-    # guest enforces, so an exec frame can never resolve a sync future.
-    sync_pending: dict = field(default_factory=dict)
-    sync_seq: int = 0
-    # One pass at a time. Three triggers (timer, watcher, sync_status) and no
-    # lock would let two passes both read the baseline and both advance it.
-    sync_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: The sync subprotocol's own id namespace, in-flight table, baseline
+    #: lock and running flag -- the audit's "Sync RPC" GuestSession group
+    #: (docs/audit/02-bridge-python.md 02.2), moved onto its own type in
+    #: bridge/files/synctransport.py the same way `link: GuestLink` already
+    #: did for the connection itself. `sync_pending`/`sync_seq`/`sync_lock`/
+    #: `sync_active` below forward here so nothing outside this file had to
+    #: change shape.
+    sync: GuestSyncState = field(default_factory=GuestSyncState)
     #: One turn at a time, per guest.
     #:
     #: `_handle` spawned a task per INPUT with no guard, and the RESUME handler
@@ -206,7 +208,6 @@ class GuestSession:
     #: itself is corrupted, and Session._busy is a flag rather than a depth, so
     #: the first `finally` clears it and Stop stops nothing.
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    sync_active: bool = False
 
     # --- forwarded to self.link, so the rest of the bridge can keep saying
     # guest.writer / guest.send_lock / guest.zip_out / guest.link_bps rather
@@ -239,6 +240,28 @@ class GuestSession:
     @property
     def connected(self) -> bool:
         return self.link.connected
+
+    # --- forwarded to self.sync, for the same reason as self.link above -----
+
+    @property
+    def sync_pending(self) -> dict:
+        return self.sync.pending
+
+    @property
+    def sync_seq(self) -> int:
+        return self.sync.seq
+
+    @property
+    def sync_lock(self) -> asyncio.Lock:
+        return self.sync.lock
+
+    @property
+    def sync_active(self) -> bool:
+        return self.sync.active
+
+    @sync_active.setter
+    def sync_active(self, v: bool) -> None:
+        self.sync.active = v
 
     # --- transcript housekeeping --------------------------------------------
     #
@@ -1516,7 +1539,10 @@ class Bridge:
             guest.sync_active = True
             try:
                 from .files.syncrun import Pass
-                p = Pass(self, guest, self.sync_dir, self.sync_state)
+                # 02.19: Pass takes the transport and the caps, nothing else
+                # -- not this Bridge, not the whole GuestSession.
+                transport = SyncTransport(guest)
+                p = Pass(transport, guest.caps, self.sync_dir, self.sync_state)
                 got = await p.run()
                 self.guest_sync_root = p.guest_root
                 # Kept so sync_status can answer without re-running a pass --
