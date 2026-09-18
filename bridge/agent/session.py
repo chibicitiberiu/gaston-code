@@ -315,4 +315,24 @@ class Session:
         if isinstance(msg, ResultMessage):
             return
 
-        log.debug("unhandled message type: %s", type(msg).__name__)
+        # NOT log.debug, and this is a bug that cost a real message.
+        #
+        # An SDK message type this layer does not know about used to be
+        # invisible: DEBUG, dropped, turn over. One of them is RateLimitEvent,
+        # which ends a turn having produced nothing -- so the user typed a
+        # prompt, watched the app go back to idle, and there was nothing
+        # anywhere on screen to say why. "The person at the keyboard never
+        # loses a byte" is the first standing rule in CLAUDE.md, and a
+        # silently swallowed rate limit breaks it.
+        #
+        # Found by smoke testing the real app on the real machine. No test in
+        # this suite could have found it: it needs the live SDK to be in a
+        # state nothing here can fake.
+        #
+        # Loud in the log AND handed to on_system, so the bridge can put it in
+        # the transcript. A type we do not understand is exactly the kind of
+        # thing the user should be told about rather than protected from.
+        name = type(msg).__name__
+        log.warning("unhandled SDK message type: %s", name)
+        if self.on_system:
+            await self.on_system("sdk_event", {"event": name})

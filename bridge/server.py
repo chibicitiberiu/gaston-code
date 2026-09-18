@@ -784,6 +784,23 @@ class Bridge:
         async def on_system(subtype: str, data: dict) -> None:
             if subtype == "compact_boundary":
                 await self._write_block(guest, H.notice("History condensed."))
+            elif subtype == "sdk_event":
+                # An SDK message the session layer does not handle. It used to
+                # be a DEBUG line and nothing else, which meant a
+                # RateLimitEvent ended the turn with the screen unchanged and
+                # the user's prompt apparently ignored. Whatever it is, saying
+                # so beats silence -- the turn may well produce nothing after
+                # it, and an unexplained no-op is the worst possible answer.
+                event = str(data.get("event", "")) or "an unknown event"
+                if event == "RateLimitEvent":
+                    await self._write_block(guest, H.notice(
+                        "The model provider is rate limiting this account. "
+                        "The request may not have run -- try again shortly."))
+                else:
+                    await self._write_block(guest, H.notice(
+                        f"The agent reported {event}, which this bridge does "
+                        f"not handle yet. If nothing follows, the request did "
+                        f"not run."))
             elif subtype == "init":
                 # The conversation id becomes known HERE, not at start().
                 #
