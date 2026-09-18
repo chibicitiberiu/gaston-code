@@ -1090,14 +1090,28 @@ class Bridge:
                                       guest.pages.live.number)
 
     async def _write_block(self, guest: GuestSession, html: str,
-                           *, stream: bool = True) -> None:
+                           *, stream: bool = True,
+                           notify: bool = True) -> None:
         """Record a finished block into the paginator, then send it.
 
-        `stream=False` records without sending, for a block the guest has
-        already put on screen itself -- the echo of the user's own line. It
-        still has to reach the paginator, because a sealed page is re-sent in
-        full when the reader pages back, and a transcript of answers with no
-        questions in it is close to useless.
+        `stream=False` records without sending the APPEND, for a block the
+        guest has already put on screen itself -- the echo of the user's own
+        line. It still has to reach the paginator, because a sealed page is
+        re-sent in full when the reader pages back, and a transcript of
+        answers with no questions in it is close to useless.
+
+        `notify=False` additionally withholds PAGESEALED, and exists for ONE
+        caller: replaying a conversation's history in `_switch` (02.39).
+
+        The two flags are separate because the echo case genuinely needs the
+        seal notification -- the user's own message can be what fills a page,
+        and the guest's page counter would go stale without it. History replay
+        is the opposite: the guest has not been told it is looking at this
+        conversation yet, SWITCHED carries a fresh total immediately
+        afterwards, and `_send_page` then puts the live page on screen. Seals
+        announced during that loop describe a session the guest does not think
+        it is viewing, which is why routing replay through here was twice
+        looked at and twice backed out before the flag existed.
         """
         if not html:
             return
@@ -1119,8 +1133,9 @@ class Bridge:
             if on_this_page:
                 await self._send_html(guest, on_this_page, APPEND, page_no)
 
-        for pg in sealed:
-            await self._send(guest, pagesealed(pg.number, guest.pages.count))
+        if notify:
+            for pg in sealed:
+                await self._send(guest, pagesealed(pg.number, guest.pages.count))
 
     # --- frame pump --------------------------------------------------------
 
@@ -2553,7 +2568,12 @@ class Bridge:
             return
 
         for block in sesslist.history_html(session_id):
-            guest.pages.add("html", block)
+            # Through _write_block, not pages.add (02.39): one path records a
+            # block, so the split-across-a-seal handling that 02.33 fixed
+            # cannot be right in one place and wrong in the other. Both sends
+            # are withheld -- see _write_block's docstring for why replay is
+            # the one caller that wants neither.
+            await self._write_block(guest, block, stream=False, notify=False)
             if guest.pages.live.over_soft_cap():
                 guest.pages.message_boundary()
 
