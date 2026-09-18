@@ -36,6 +36,7 @@ from .files import paths as P
 from .agent import permissions as perms
 from .agent import tools as machine_tools
 from .agent.permdesk import PermissionDesk
+from .agent.identity import GuestIdentity
 from .wire.protocol import (
                             MAX_HEADER_VALUE,
                             Frame,
@@ -101,21 +102,43 @@ class ExecCall:
 class GuestSession:
     """Bridge-side state for one guest, surviving across reconnects."""
 
-    sess_id: str
+    #: Which machine this is and which conversation is live -- `sess_id`,
+    #: `hello`, `claude`, `model`, `effort` -- the audit's "Identity"
+    #: GuestSession group (02.2), moved onto its own type in
+    #: bridge/agent/identity.py the same way `link: GuestLink` already did
+    #: for the connection. The five names below forward here so nothing
+    #: outside this file had to change shape. docs/audit/02-bridge-python.md
+    #: 02.42.
+    identity: GuestIdentity = field(default_factory=GuestIdentity)
     replay: Replay = field(default_factory=Replay)
-    claude: Session | None = None
     #: Everything about writing bytes to this guest -- the socket writer, the
     #: send lock, the persistent compressor and the measured link speed. See
     #: bridge/wire/link.py. `writer`/`send_lock`/`zip_out`/`link_bps` below
     #: forward here so the rest of the bridge did not have to change shape.
     link: GuestLink = field(default_factory=GuestLink)
-    # Chosen from the Model and Effort menus. Held per guest rather than per
-    # process so a reconnect or an effort fork keeps the choice.
-    model: str = ""
-    effort: str = ""
     #: The halt currently on the user's screen, if any. A halt is the bridge
     #: stopping the agent and handing the decision to the person at the
     #: keyboard; it clears when they press Continue, and never on a timer.
+    #:
+    #: LEFT HERE, deliberately not extracted into its own group, and that is
+    #: the decision 02.42 asks for rather than a move. The audit is right that
+    #: this trio is not really guest state -- it is the *display* of a fact
+    #: that lives on disk, `base.latched`, and `_reconcile_halt` already
+    #: derives `halt_id`/`halt_text` from exactly that on every attach and
+    #: every pass (server.py, near `_reconcile_halt`). What the audit's own
+    #: fix sketch (docs/audit/02-bridge-python.md #2, "the halt trio ... it
+    #: belongs with the latch set it answers for") wants is a home that also
+    #: owns the latch set and the baseline -- `SyncCoordinator`, audit #1.4 --
+    #: and that type does not exist yet; it is a separate, unassigned finding
+    #: (this pass's brief: "GuestSession's four remaining groups... follow
+    #: those three exactly as the pattern" names Link/View/Sync as the
+    #: precedent, not a fourth to invent here). Giving this trio a
+    #: `GuestHalt` of its own now would move three fields sideways on
+    #: `GuestSession` without fixing the thing the audit actually flags --
+    #: recovery after a BRIDGE restart still depends on `_reconcile_halt`
+    #: being called, not on which object the fields sit on -- so it stays a
+    #: plain field group here until `SyncCoordinator` exists to derive it
+    #: honestly.
     halt_id: str = ""
     #: The paths the bar on screen was raised FOR. Continue answers those and
     #: nothing else: a conflict found while the bar is already up raises no new
@@ -127,9 +150,6 @@ class GuestSession:
     #: What the bar says, kept so it can be put back after a reconnect. The id
     #: alone is not enough to redisplay it.
     halt_text: str = ""
-    # The machine facts from HELLO, kept so every session this guest opens
-    # gets the same description of the computer it is acting for.
-    hello: dict = field(default_factory=dict)
     # C.from_hello(hello), parsed once in _attach() rather than re-parsed at
     # every site that needs a path rule -- a re-parse cannot raise (already
     # validated at handshake) but silently re-derives what is already known,
@@ -197,6 +217,48 @@ class GuestSession:
     #: itself is corrupted, and Session._busy is a flag rather than a depth, so
     #: the first `finally` clears it and Stop stops nothing.
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    # --- forwarded to self.identity, for the same reason as self.link below -
+
+    @property
+    def sess_id(self) -> str:
+        return self.identity.sess_id
+
+    @sess_id.setter
+    def sess_id(self, v: str) -> None:
+        self.identity.sess_id = v
+
+    @property
+    def hello(self) -> dict:
+        return self.identity.hello
+
+    @hello.setter
+    def hello(self, h: dict) -> None:
+        self.identity.hello = h
+
+    @property
+    def claude(self) -> "Session | None":
+        return self.identity.claude
+
+    @claude.setter
+    def claude(self, s: "Session | None") -> None:
+        self.identity.claude = s
+
+    @property
+    def model(self) -> str:
+        return self.identity.model
+
+    @model.setter
+    def model(self, m: str) -> None:
+        self.identity.model = m
+
+    @property
+    def effort(self) -> str:
+        return self.identity.effort
+
+    @effort.setter
+    def effort(self, e: str) -> None:
+        self.identity.effort = e
 
     # --- forwarded to self.link, so the rest of the bridge can keep saying
     # guest.writer / guest.send_lock / guest.zip_out / guest.link_bps rather
@@ -598,8 +660,13 @@ class Bridge:
 
         resumed = False
         if self._guest is None:
+            # sess_id is not passed here: GuestIdentity's own default_factory
+            # generates it (bridge/agent/identity.py), the same uuid4() this
+            # used to construct inline -- sess_id stopped being a GuestSession
+            # field directly when Identity moved onto its own type (02.42),
+            # and it is not a GuestSession() keyword the way `view` below is
+            # because there is nothing case-specific about it to pass.
             self._guest = GuestSession(
-                sess_id=str(uuid.uuid4()),
                 view=TranscriptView(pages=Paginator(page_bytes, page_blocks)))
             # PermissionDesk needs its own owning guest to reach _write_block
             # and _send with, so it cannot be built as a GuestSession()
