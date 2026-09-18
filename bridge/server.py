@@ -1619,9 +1619,10 @@ class Bridge:
                 p.notices_delivered(delivered)
                 return got
             except SyncError as exc:
-                # A DELIBERATE refusal: a tree_id mismatch, a re-keyed
-                # codepage, a manifest that arrived short. The whole pass
-                # stops, which is right -- and used to be a log warning and
+                # A DELIBERATE refusal: a tree_id mismatch, a changed guest
+                # root, a manifest that arrived short, or too many paths
+                # going backwards at once (a tree restored from a backup).
+                # The whole pass stops, which is right -- and used to be a log warning and
                 # nothing else, so sync could be dead for an hour with the
                 # agent and the user both believing it was working.
                 await self._report_abort(guest, str(exc))

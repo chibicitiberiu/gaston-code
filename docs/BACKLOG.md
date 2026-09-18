@@ -239,17 +239,34 @@ before `closesocket`, and leaking the socket if a thread will not exit.
 
 Three remain:
 
-- **The replay buffer is still dead and still stamping.** The guest never sends
-  `from=`, so `replay.since()` is unreachable; `append()` still fills a
-  20,000-frame buffer and `_send` still stamps every frame. The bridge's own
-  comment admits it (`server.py:704`). Retiring it is larger than it looks: the
-  oversized-frame guard exists *because* replay is append-only, so its merit
-  has to be restated rather than preserved, and the size probe stamps a fake
-  `seq` into every frame's budget including the `stamp=False` ones -- after
-  retirement that is a phantom tax refusing frames that would fit. Retiring
-  `seq` also reverses a documented `[R]` in `PLAN.md:377`, which introduced it
-  *"because adding them later touches every frame and handler on both sides"*;
-  say so rather than quietly undoing it.
+- ~~**The replay buffer is still dead and still stamping.**~~ **Closed
+  2026-09-18.** `bridge/wire/replay.py`, the unreachable `from=` branch, `seq`
+  stamping, `Frame.seq`, the `stamp=` kwarg and `protocol.resync()` are gone,
+  and `PLAN.md`'s `seq=` bullet carries a dated note reversing the original
+  decision rather than quietly undoing it.
+
+  **The two guards were kept and their remedies CHANGED**, which was the part
+  that was larger than it looked. Both had justified a silent drop by replay
+  being append-only -- one poisoned frame corrupts every future replay -- and
+  with replay gone that reasoning left a silent loss behind a log line that
+  was no longer true. `GuestLink.send` now raises on a frame that exceeds
+  `MAX_FRAME` instead of returning a bool nobody checked, and
+  `permissions.MAX_BODY` still degrades to a short fallback (never silent to
+  the user, who sees "arguments too large to display") but now logs, which it
+  never did. The phantom `seq=9999999999` in the size probe died with the
+  stamping, so the budget check finally measures the bytes that actually go on
+  the wire.
+
+  **"EXEC is never replayed" was re-expressed, not deleted**, since it goes
+  vacuous the moment nothing replays: the surviving property is that nothing
+  re-sends anything except the explicit reconnect reissue path
+  (`_reissue_halt`, `_reissue_turn`, `PermissionDesk.reissue`), and that path
+  must never carry EXEC, EXECKILL or any SYNC frame. Both that test and the
+  sync equivalent now assert it across a real reconnect.
+
+  One thing left deliberately: `win/app/main.cpp` still has an `on_resync`
+  handler that is now unreachable. Harmless, and removing it is a guest change
+  that would want its own build and hardware check for no behavioural gain.
 - ~~**Directories deleted on either side are silently resurrected.**~~
   **Closed 2026-09-18** (02.45). `diff`'s directory branch read "directories
   carry no content" as "directory existence has no history" and never looked at
