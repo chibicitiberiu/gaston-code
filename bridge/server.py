@@ -96,6 +96,33 @@ class ExecCall:
     capped: bool = False
 
 
+def turn_verdict(ok: bool, degraded: str, produced: bool,
+                 subtype: str) -> tuple[bool, str]:
+    """What the status bar should say when a turn ends.
+
+    The SDK's own verdict, unless it told us something during the turn that
+    contradicts it AND the turn has nothing to show for itself. Both halves
+    are needed, and the second was learned the hard way on the real machine.
+
+    A rate-limited turn can come back `ok=True` having produced nothing, and
+    reporting that as a success puts "done" in the status bar directly beneath
+    a notice saying the request may not have run. But the SAME event arrives on
+    a turn the SDK then RETRIES AND COMPLETES -- measured on the guest: the
+    notice appeared, the command ran, the answer rendered, and the status bar
+    still said "failed". That is the same contradiction wearing the opposite
+    sign, and it is the worse of the two: a user who reads "failed" under a
+    full, correct answer learns to disbelieve the status bar, and then the one
+    time it is right they will not believe it either.
+
+    `produced` comes only from the SDK's own callbacks, so a notice the BRIDGE
+    wrote -- the sync preamble, the rate-limit warning itself -- does not count
+    as the model having answered.
+    """
+    failed_silently = bool(degraded) and not produced
+    return (ok and not failed_silently,
+            degraded if failed_silently else subtype)
+
+
 @dataclass
 class GuestSession:
     """Bridge-side state for one guest, surviving across reconnects."""
@@ -110,6 +137,12 @@ class GuestSession:
     #: transcript and the status line disagreeing is worse than either being
     #: wrong on its own, and the bridge is the side that knows.
     turn_degraded: str = ""
+    #: Did the model actually produce anything this turn -- text or a tool
+    #: call? Set from the SDK's own callbacks, so a notice the BRIDGE wrote
+    #: (the sync preamble, a rate-limit warning) does not count as output.
+    #: Reset when a turn starts. See where turn_end weighs it against
+    #: `turn_degraded`.
+    turn_produced: bool = False
 
     #: Which machine this is and which conversation is live -- `sess_id`,
     #: `hello`, `claude`, `model`, `effort` -- the audit's "Identity"
@@ -743,12 +776,14 @@ class Bridge:
         self._fail_execs(guest, "The conversation changed while this command "
                                 "was running.")
         async def on_text(t: str) -> None:
+            guest.turn_produced = True
             await self._emit_text(guest, t, style="plain")
 
         async def on_thinking(t: str) -> None:
             await self._emit_text(guest, t, style="thinking")
 
         async def on_tool(name: str, args: dict) -> None:
+            guest.turn_produced = True
             # Flush buffered text first: a tool line that jumps ahead of the
             # prose that introduced it reads as a non sequitur.
             await self._flush_text(guest)
@@ -930,6 +965,7 @@ class Bridge:
         if session is None or not getattr(session, "busy", False):
             return
         log.info("re-issuing turn state after reconnect")
+        guest.turn_produced = False
         await self._send(guest, turn_start())
 
     def _spawn(self, coro) -> None:
@@ -1343,6 +1379,7 @@ class Bridge:
             await self._write_block(guest, H.user_turn(text), stream=False)
         await self._send(guest, anchor_frame(
             anchor.page, anchor.offset, anchor.preview))
+        guest.turn_produced = False
         await self._send(guest, turn_start())
         # Anything sync found while the agent was idle rides in on this turn.
         #
@@ -1377,14 +1414,26 @@ class Bridge:
             log.info("deflate so far: %d -> %d bytes (%.2f:1)",
                      raw, comp, guest.zip_out.ratio)
         # The SDK's own verdict, unless it told us something during the turn
-        # that contradicts it. A rate-limited turn comes back ok=True having
-        # produced nothing, and reporting that as a success puts "done" in the
-        # status bar directly beneath a notice saying the request may not have
-        # run. The bridge saw the event; it should not forget it here.
+        # that contradicts it -- AND the turn has nothing to show for itself.
+        #
+        # Both halves are needed and the second was learned the hard way. A
+        # rate-limited turn can come back ok=True having produced nothing, and
+        # reporting that as a success puts "done" in the status bar directly
+        # beneath a notice saying the request may not have run. But the SAME
+        # event also arrives on a turn the SDK then RETRIES AND COMPLETES --
+        # measured on the guest: the notice appeared, the tool ran, the answer
+        # rendered, and the status bar still said "failed". That is the same
+        # contradiction wearing the opposite sign, and it is worse, because a
+        # user who sees a full answer under the word "failed" learns to
+        # disbelieve the status bar.
+        #
+        # `turn_produced` is set only from the SDK's own callbacks, so a notice
+        # the bridge wrote does not count as the model having answered.
         degraded = guest.turn_degraded
         guest.turn_degraded = ""
-        await self._send(guest, turn_end(turn.ok and not degraded,
-                                         degraded or turn.subtype,
+        ok, subtype = turn_verdict(turn.ok, degraded, guest.turn_produced,
+                                   turn.subtype)
+        await self._send(guest, turn_end(ok, subtype,
                                          turn.cost_usd, turn.duration_ms))
 
     # --- running commands on the guest -------------------------------------

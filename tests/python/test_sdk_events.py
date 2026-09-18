@@ -51,3 +51,45 @@ def test_the_rate_limit_notice_says_what_to_do():
         "The request may not have run -- try again shortly.")
     assert "rate limiting" in note
     assert "may not have run" in note
+
+
+# --- what the status bar says when the SDK contradicts itself ---------------
+#
+# Also found by smoke testing rather than by this suite, and found as a
+# REGRESSION IN THE FIX ABOVE: making a degraded turn report failure was right
+# for a turn that produced nothing and wrong for one the SDK retried and
+# completed. The second reading rendered a full, correct answer under the word
+# "failed".
+
+def test_a_degraded_turn_that_produced_nothing_is_a_failure():
+    """The original complaint: the prompt vanished and the status bar said
+    `done`, directly beneath a notice saying the request may not have run."""
+    from bridge.server import turn_verdict
+    ok, subtype = turn_verdict(True, "RateLimitEvent", False, "success")
+    assert ok is False
+    assert subtype == "RateLimitEvent"
+
+
+def test_a_degraded_turn_that_answered_anyway_is_not_a_failure():
+    """The SDK hit a rate limit, retried, ran the tool and answered. The notice
+    has already said what happened; the status bar must not contradict an
+    answer the user can read on the same screen."""
+    from bridge.server import turn_verdict
+    ok, subtype = turn_verdict(True, "RateLimitEvent", True, "success")
+    assert ok is True
+    assert subtype == "success"
+
+
+def test_a_bridge_notice_does_not_count_as_the_model_answering():
+    """`produced` is set from the SDK's callbacks only. If a notice the bridge
+    wrote counted, the rate-limit warning would mark its own turn as having
+    produced output and the first case above could never fire again."""
+    from bridge.server import turn_verdict
+    assert turn_verdict(True, "RateLimitEvent", False, "success")[0] is False
+
+
+def test_an_undegraded_turn_keeps_the_sdk_verdict():
+    from bridge.server import turn_verdict
+    assert turn_verdict(True, "", False, "success") == (True, "success")
+    assert turn_verdict(False, "", True, "error_max_turns") == (
+        False, "error_max_turns")
