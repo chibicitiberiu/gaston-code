@@ -25,7 +25,10 @@
  * accumulated as we go and the right one is chosen at the end. Two CRC
  * accumulations cost far less than a second pass over the platter.
  */
-typedef struct {
+/* The definition behind sync.h's opaque `rc_sync_scanner` -- same type, so
+ * rc_sync_stat_file (below) and the public rc_sync_scanner_begin/feed/finish
+ * API are the ONE accumulation, not two copies that could drift apart. */
+struct rc_sync_scanner {
     unsigned long crc_raw;      /* every byte as it is on disk */
     unsigned long crc_norm;     /* CRLF collapsed to LF */
     int  saw_nul;
@@ -37,7 +40,8 @@ typedef struct {
      * heap-allocated state block, and not as a local in scan_chunk -- see the
      * note on rc_sync_stat_file. */
     unsigned char nb[RC_SYNC_CHUNK];
-} scan_state;
+};
+typedef struct rc_sync_scanner scan_state;
 
 static void scan_chunk(scan_state *s, const unsigned char *buf, unsigned n)
 {
@@ -85,6 +89,68 @@ static char scan_class(const scan_state *s)
     if (s->saw_lone_cr)  return RC_CLS_EXACT;   /* lone CR and \r\r\n */
     if (s->saw_crlf && s->saw_bare_lf) return RC_CLS_EXACT;   /* mixed */
     return RC_CLS_TEXT;
+}
+
+/* --- the incremental API, for a caller that must do something else with
+ * each chunk (do_get sends it to the bridge) in the SAME pass that scans it,
+ * rather than paying rc_sync_stat_file's own read first. ------------------ */
+
+/* Resolve the CR pending at EOF (if any), classify, and hand back whichever
+ * of cls/crc_raw/crc_norm/crc the caller asked for (any out pointer may be
+ * NULL). rc_sync_stat_file (below) uses this for its own tail instead of a
+ * second copy of the same four lines, and that is not tidiness: it is the
+ * only reason a mistake here is guaranteed to be caught. do_get's read is
+ * exercised only by SYNCGET over the wire, which nothing in this suite
+ * drives end to end; rc_sync_stat_file's is exercised directly by
+ * synccheck.exe under the guest-agreement tests. One function used by both
+ * means a wrong crc/cls choice fails THOSE tests -- proven by deliberately
+ * breaking this function during development and watching
+ * test_guest_agreement.py's checksum tests name the exact mismatch, with
+ * every other test in the suite (do_get has no test of its own) staying
+ * green. Two copies would have let that break through silently. */
+static void scan_finish(scan_state *s, char *cls_out, unsigned long *raw_out,
+                        unsigned long *norm_out, unsigned long *crc_out)
+{
+    char cls;
+
+    /* A file ending in CR: the carry never resolved, so it is a lone CR. */
+    if (s->pending_cr) {
+        unsigned char cr = '\r';
+        s->saw_lone_cr = 1;
+        s->crc_norm = mz_crc32(s->crc_norm, &cr, 1);
+    }
+
+    cls = scan_class(s);
+    if (cls_out)  *cls_out  = cls;
+    if (raw_out)  *raw_out  = s->crc_raw;
+    if (norm_out) *norm_out = s->crc_norm;
+    /* Which of the two THIS class wants -- see RC_CRC_FOR's own comment for
+     * why getting this wrong is a permanent disagreement with the bridge,
+     * not a glitch. */
+    if (crc_out)  *crc_out  = RC_CRC_FOR(*s, cls);
+}
+
+rc_sync_scanner *rc_sync_scanner_begin(void)
+{
+    rc_sync_scanner *s = (rc_sync_scanner *)HeapAlloc(GetProcessHeap(), 0,
+                                                       sizeof(*s));
+    if (!s) return NULL;
+    memset(s, 0, sizeof(*s));
+    s->crc_raw = s->crc_norm = MZ_CRC32_INIT;
+    return s;
+}
+
+void rc_sync_scanner_feed(rc_sync_scanner *s, const void *buf, unsigned n)
+{
+    scan_chunk(s, (const unsigned char *)buf, n);
+}
+
+void rc_sync_scanner_finish(rc_sync_scanner *s, char *cls_out,
+                            unsigned long *crc_out)
+{
+    if (!s) return;
+    scan_finish(s, cls_out, NULL, NULL, crc_out);
+    HeapFree(GetProcessHeap(), 0, s);
 }
 
 static DWORD to_unix(const FILETIME *ft)
@@ -183,21 +249,16 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
         scan_chunk(stp, buf, got);
         out->size += got;
     }
-    /* A file ending in CR: the carry never resolved, so it is a lone CR. */
-    if (stp->pending_cr) {
-        unsigned char cr = '\r';
-        stp->saw_lone_cr = 1;
-        stp->crc_norm = mz_crc32(stp->crc_norm, &cr, 1);
-    }
-
     if (GetFileTime(h, NULL, NULL, &ft)) out->mtime = to_unix(&ft);
     CloseHandle(h);
 
     out->type = 'f';
-    out->cls = scan_class(stp);
-    out->crc_raw  = stp->crc_raw;
-    out->crc_norm = stp->crc_norm;
-    out->crc = RC_CRC_FOR(*out, out->cls);
+    /* The tail fixup (CR pending at EOF), classification and crc_raw/
+     * crc_norm/crc choice are ALL in scan_finish, shared with the public
+     * rc_sync_scanner_finish that do_get uses -- see that function's comment
+     * for why sharing it, rather than keeping two copies of this tail, is
+     * what makes a wrong choice here provably fail this suite. */
+    scan_finish(stp, &out->cls, &out->crc_raw, &out->crc_norm, &out->crc);
     HeapFree(GetProcessHeap(), 0, sc);
     return 0;
 }

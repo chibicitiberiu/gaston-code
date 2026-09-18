@@ -77,6 +77,44 @@ int  rc_sync_scan(const char *root, rc_sync_sink sink, void *ctx);
  * cannot afford to read twice. */
 int  rc_sync_stat_file(const char *path, rc_sync_stat *out);
 
+/* The same accumulation as rc_sync_stat_file, but incremental, so a caller
+ * that ALSO needs to do something else with each chunk (do_get sends it to
+ * the bridge) can do both in the one pass instead of reading the file twice.
+ *
+ * Named rc_sync_scanner rather than rc_sync_scan -- the walk above is already
+ * called rc_sync_scan, and Open Watcom's C++ rejects a typedef that reuses a
+ * function name in the same scope with a hard-to-read syntax error at every
+ * later use of the type, not at the typedef itself.
+ *
+ * Opaque and always heap-allocated -- see the note on scan_scratch in
+ * sync.cpp for why the state cannot live on a caller's stack: it carries an
+ * RC_SYNC_CHUNK normalisation buffer, and this machine's worker thread does
+ * not have 8KB of stack to spare underneath whatever else is on it.
+ *
+ *   rc_sync_scanner *s = rc_sync_scanner_begin();
+ *   if (!s) ... out of memory, same as any other allocation failure here ...
+ *   while (more chunks, in order, no gaps)
+ *       rc_sync_scanner_feed(s, chunk, n);
+ *   rc_sync_scanner_finish(s, &cls, &crc);   -- frees s */
+typedef struct rc_sync_scanner rc_sync_scanner;
+
+/* Start an incremental scan. Returns NULL on OOM -- callers report that the
+ * same way rc_sync_stat_file's own allocation failure is reported: `u`
+ * (unreadable), never "the file is fine". */
+rc_sync_scanner *rc_sync_scanner_begin(void);
+
+/* Feed the next `n` bytes of the file, in the order they occur, with no gaps
+ * and no repeats. */
+void rc_sync_scanner_feed(rc_sync_scanner *s, const void *buf, unsigned n);
+
+/* Resolve any CR left pending at end of file, classify, and pick crc_norm or
+ * crc_raw exactly as RC_CRC_FOR does -- see that macro for why a caller that
+ * reimplements the choice instead of reusing it can get it wrong in a way
+ * nothing but a guest-agreement test will ever catch. Either out pointer may
+ * be NULL. Always frees `s`, even on the way past a NULL out pointer. */
+void rc_sync_scanner_finish(rc_sync_scanner *s, char *cls_out,
+                            unsigned long *crc_out);
+
 /* Is `rel` inside `root` and free of escapes? The guest checks too; the bridge
  * checking is not enough when the bridge is what might be wrong. */
 int  rc_sync_contained(const char *rel);

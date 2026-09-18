@@ -432,22 +432,28 @@ static void do_get(rc_net *net, rc_frame *f)
     const char *keys[4];
     const char *vals[4];
     char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
-    /* Zeroed HERE, not only on the branch that stats a real file: the
-     * rejected-path branch below (a contained() refusal) falls straight
-     * through to the crc/cls _snprintf calls without ever touching st, and an
-     * uninitialised rc_sync_stat sent those two fields to the bridge as
-     * whatever garbage was on the worker's stack. */
-    rc_sync_stat st;
+    /* Zeroed HERE, not only on the branch that reads a real file: every
+     * refusal branch below (bad_path, too_long, missing, is_directory,
+     * locked) falls straight through to the crc/cls _snprintf calls without
+     * ever computing either, and uninitialised locals would have sent the
+     * bridge whatever garbage was on the worker's stack. crc=0, cls=0 (which
+     * prints as RC_CLS_TEXT below) is what the bridge has always been sent on
+     * those branches; preserved exactly. */
+    unsigned long crc = 0;
+    char cls = 0;
     HANDLE h;
+    rc_sync_scanner *scan;
     /* Heap, for the same reason as do_scan's manifest: this runs on the RPC
-     * worker and calls rc_sync_stat_file, which needs its own 16KB of scratch
-     * underneath. Two 8KB stack frames in one call chain is what faulted. */
+     * worker, which only has the image's 64KB stack commit underneath
+     * whatever else is on it. rc_sync_scanner is heap-allocated internally
+     * too (see sync.h) -- between the two, nothing this function needs is on
+     * the stack. */
     char *buf;
-    DWORD got = 0, sent = 0;
+    DWORD attr;
+    DWORD size = 0, got = 0, sent = 0;
     const char *status = "ok";
 
     if (!id) return;
-    memset(&st, 0, sizeof(st));
     buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
     if (!buf) {
         const char *k[2]; const char *v[2];
@@ -473,36 +479,63 @@ static void do_get(rc_net *net, rc_frame *f)
     else if (!rc_sync_join(full, sizeof(full), g_root, f->body))
         status = "too_long";
     else {
-        rc_sync_stat_file(full, &st);
-        if (st.type == 'u')      status = "locked";        /* held open */
-        else if (st.type == 'd') status = "is_directory";
-        else if (st.type != 'f') status = "missing";       /* nothing there */
+        /* What the path IS, cheaply and WITHOUT reading content -- the same
+         * three outcomes rc_sync_stat_file's own attribute check gives (see
+         * there for why a directory or a share-locked file must never read
+         * back as `missing`), but without the full read that function does
+         * afterwards: do_get is about to read the file itself, once, while
+         * streaming it, and cannot afford rc_sync_stat_file's pass first. */
+        attr = GetFileAttributesA(full);
+        if (attr == 0xFFFFFFFF)              status = "missing";
+        else if (attr & FILE_ATTRIBUTE_DIRECTORY) status = "is_directory";
         else {
             h = CreateFileA(full, GENERIC_READ,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
             if (h == INVALID_HANDLE_VALUE) status = "locked";
             else {
-                rc_strf(total, sizeof(total), "%lu", (unsigned long)st.size);
-                while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
-                    rc_strf(offs, sizeof(offs), "%lu", (unsigned long)sent);
-                    keys[0] = "id";    vals[0] = id;
-                    keys[1] = "total"; vals[1] = total;
-                    keys[2] = "off";   vals[2] = offs;
-                    if (rc_net_send(net, "SYNCDAT", keys, vals, 3,
-                                    buf, got) != 0) {
-                        status = "locked";   /* the link went; stop cleanly */
-                        break;
+                scan = rc_sync_scanner_begin();
+                if (!scan) {
+                    /* Out of memory is not "the file is fine" here either --
+                     * same answer rc_sync_scanner_begin's own comment gives. */
+                    status = "locked";
+                } else {
+                    /* The `total` header goes out on the FIRST SYNCDAT chunk,
+                     * so the size must be known before streaming starts.
+                     * GetFileSize on the handle we already hold is cheap (no
+                     * content read) and 9x-safe. */
+                    size = GetFileSize(h, NULL);
+                    rc_strf(total, sizeof(total), "%lu", (unsigned long)size);
+                    while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
+                        /* Classify and checksum this SAME chunk instead of
+                         * reading the file a second time to do it -- the
+                         * whole point of do_get having its own scan. */
+                        rc_sync_scanner_feed(scan, buf, got);
+                        rc_strf(offs, sizeof(offs), "%lu", (unsigned long)sent);
+                        keys[0] = "id";    vals[0] = id;
+                        keys[1] = "total"; vals[1] = total;
+                        keys[2] = "off";   vals[2] = offs;
+                        if (rc_net_send(net, "SYNCDAT", keys, vals, 3,
+                                        buf, got) != 0) {
+                            status = "locked";   /* the link went; stop cleanly */
+                            break;
+                        }
+                        sent += got;
                     }
-                    sent += got;
+                    /* Always finish -- it frees `scan`. The crc/cls it
+                     * produces on an aborted (send-failed) transfer are only
+                     * ever looked at by the bridge when status == "ok", which
+                     * this branch never sets, so a partial scan there is
+                     * harmless. */
+                    rc_sync_scanner_finish(scan, &cls, &crc);
                 }
                 CloseHandle(h);
             }
         }
     }
 
-    rc_strf(crcs, sizeof(crcs), "%lu", st.crc);
-    rc_strf(clss, sizeof(clss), "%c", st.cls ? st.cls : RC_CLS_TEXT);
+    rc_strf(crcs, sizeof(crcs), "%lu", crc);
+    rc_strf(clss, sizeof(clss), "%c", cls ? cls : RC_CLS_TEXT);
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = status;
     keys[2] = "crc";    vals[2] = crcs;
