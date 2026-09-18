@@ -16,15 +16,14 @@ import asyncio
 import contextlib
 import logging
 import os
-import secrets
 import time
 import uuid
-from collections import deque
 from dataclasses import dataclass, field
 
+from . import handshake
 from .files import caps as C
 from .files import manifest
-from .status import EXEC_STATUS_PROSE, ExecStatus, PromptEndReason, SyncStatus
+from .status import EXEC_STATUS_PROSE, ExecStatus, SyncStatus
 from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
@@ -36,11 +35,9 @@ from .view.pages import Paginator, limits_for
 from .files import paths as P
 from .agent import permissions as perms
 from .agent import tools as machine_tools
-from .agent.permissions import PendingPrompt, render_request
+from .agent.permdesk import PermissionDesk
 from .wire.protocol import (
-                            MAX_FRAME,
                             MAX_HEADER_VALUE,
-                            PROTO_VERSION,
                             Frame,
                             FrameReader,
                             ProtocolError,
@@ -57,10 +54,6 @@ from .wire.protocol import (
                             pageend,
                             pagesealed,
                             pagestart,
-                            permend,
-                            permreq,
-                            permstate,
-                            permwait,
                             pong,
                             ready,
                             resync,
@@ -81,7 +74,6 @@ from .files.sync import Entry as SyncEntry, Type as SyncType
 from .files.sync import AckResult, GetResult, ScanResult
 from .files.syncrun import SyncError
 from .agent.session import Session
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 log = logging.getLogger("bridge.server")
 
@@ -156,11 +148,17 @@ class GuestSession:
     #: file had to change shape.
     view: TranscriptView = field(default_factory=TranscriptView)
 
-    # The permission prompt currently on the guest's screen, and the ones
-    # queued behind it. The model can request tools in parallel; a single
-    # guest can show one bar, so the rest wait rather than racing for it.
-    perm_pending: "PendingPrompt | None" = None
-    perm_queue: deque = field(default_factory=deque)
+    #: The prompt currently on the guest's screen, the ones queued behind it,
+    #: and the state machine that owns both -- the audit's "Prompts"
+    #: GuestSession group (02.2), moved onto its own type in
+    #: bridge/agent/permdesk.py the same way `link: GuestLink` already did
+    #: for the connection. `perm_pending`/`perm_queue` below forward here so
+    #: nothing outside this file had to change shape. Unlike `link`/`view`/
+    #: `sync`, there is no bare default: a `PermissionDesk` needs its owning
+    #: guest and three of Bridge's own operations, so it is built and
+    #: assigned in `_attach` right after the `GuestSession` itself.
+    #: docs/audit/02-bridge-python.md 02.41.
+    perms: "PermissionDesk | None" = None
     # When the guest was last heard from, for the idle reaper. A guest that
     # GPFs leaves no FIN behind, so without this _on_client parks forever and
     # `connected` stays True -- which rejects every reconnect as "busy".
@@ -253,6 +251,20 @@ class GuestSession:
     @sync_active.setter
     def sync_active(self, v: bool) -> None:
         self.sync.active = v
+
+    # --- forwarded to self.perms, for the same reason as self.link above ----
+
+    @property
+    def perm_pending(self) -> "PendingPrompt | None":
+        return self.perms.pending if self.perms else None
+
+    @perm_pending.setter
+    def perm_pending(self, prompt: "PendingPrompt | None") -> None:
+        self.perms.pending = prompt
+
+    @property
+    def perm_queue(self):
+        return self.perms.queue
 
     # --- forwarded to self.view, for the same reason as self.link above -----
 
@@ -535,53 +547,35 @@ class Bridge:
     ) -> GuestSession | None:
         h = hello.headers
 
-        # Version and frame cap are checked together: inheriting a peer's idea
-        # of the cap is how you end up allocating 32MB on a 32MB machine.
-        if h.get("ver") != str(PROTO_VERSION):
-            await self._try_send_raw(writer, error(
-                "bad_version",
-                f"bridge speaks {PROTO_VERSION}, guest speaks {h.get('ver')}"))
-            return None
-
-        peer_cap = int(h.get("max_frame", "0") or 0)
-        if peer_cap != MAX_FRAME:
-            await self._try_send_raw(writer, error(
-                "bad_frame_cap",
-                f"bridge caps at {MAX_FRAME}, guest says {peer_cap}"))
-            return None
-
-        if not secrets.compare_digest(h.get("secret", ""), self.secret):
-            log.warning("bad secret from %s", writer.get_extra_info("peername"))
-            await self._try_send_raw(writer, error("bad_secret", "rejected"))
+        try:
+            neg = handshake.negotiate(h, self.secret)
+        except handshake.Refused as exc:
+            if exc.code == "bad_secret":
+                log.warning("bad secret from %s",
+                            writer.get_extra_info("peername"))
+            elif exc.code == "bad_caps":
+                log.warning("client declared rules this bridge cannot "
+                            "honour: %s", exc.message)
+            await self._try_send_raw(writer, error(exc.code, exc.message))
             return None
 
         # A second client is rejected, not evicted: whoever is already holding
         # the session may be mid-turn, and silently stealing it is worse than
-        # refusing.
+        # refusing. Checked here rather than inside negotiate() because it is
+        # live Bridge state, not a fact about the HELLO frame -- see
+        # bridge/handshake.py.
         if self._guest and self._guest.connected:
             await self._try_send_raw(writer, error(
                 "busy", "another client holds this session"))
             return None
 
-        # Page size is scaled to the guest's RAM. A 128MB machine can hold a
-        # far bigger page than the 32MB floor the design is built around, and
-        # the handshake is the only place the bridge learns which it has.
-        mem_kb = int(h.get("mem_kb", "0") or 0)
-        page_bytes, page_blocks = limits_for(mem_kb)
+        page_bytes, page_blocks, caps = neg.page_bytes, neg.page_blocks, neg.caps
         log.info("guest has %d MB; pages capped at %d bytes / %d blocks",
-                 mem_kb // 1024, page_bytes, page_blocks)
-
+                 neg.mem_kb // 1024, page_bytes, page_blocks)
         # What the bridge now believes the machine IS. Logged at connect
         # because "why did that file not sync" starts here, and because a
         # client that declares nothing is indistinguishable from one that
         # declares the defaults until someone can see which happened.
-        try:
-            caps = C.from_hello(h)
-        except C.CapsError as exc:
-            log.warning("client declared rules this bridge cannot honour: %s",
-                        exc)
-            await self._try_send_raw(writer, error("bad_caps", str(exc)[:200]))
-            return None
         log.info("client rules: %s", caps.summary())
 
         # A fresh connection means a fresh inflater on the guest, so the
@@ -607,6 +601,16 @@ class Bridge:
             self._guest = GuestSession(
                 sess_id=str(uuid.uuid4()),
                 view=TranscriptView(pages=Paginator(page_bytes, page_blocks)))
+            # PermissionDesk needs its own owning guest to reach _write_block
+            # and _send with, so it cannot be built as a GuestSession()
+            # keyword the way `view` above is -- it is assigned right after,
+            # same lifetime as the guest itself (a prompt must survive a
+            # reconnect).
+            self._guest.perms = PermissionDesk(
+                self._guest, cwd=self.cwd,
+                write_block=lambda html: self._write_block(self._guest, html),
+                send=lambda frame: self._send(self._guest, frame),
+                spawn=self._spawn)
         guest = self._guest
         guest.writer = writer
         guest.page_bytes = page_bytes
@@ -656,7 +660,7 @@ class Bridge:
         # forever -- the guest sees nothing new and the bridge believes that
         # is correct, because nothing ever reset the flag that says so.
         guest.view_page = None
-        await self._reissue_prompt(guest)
+        await guest.perms.reissue()
         await self._reissue_halt(guest)
         await self._reissue_turn(guest)
         # _reissue_halt above handles a GUEST reconnect: the same
@@ -700,8 +704,8 @@ class Bridge:
         # session -- switch, new, or the effort fork -- orphans its future, so
         # deny first rather than leaving one pending against a client that no
         # longer exists.
-        self._resolve_all(guest, "rebuild",
-                          "The conversation changed before this was answered.")
+        guest.perms.deny_all(
+            "rebuild", "The conversation changed before this was answered.")
         self._fail_execs(guest, "The conversation changed while this command "
                                 "was running.")
         async def on_text(t: str) -> None:
@@ -792,7 +796,7 @@ class Bridge:
             fork=fork,
             # Every tool call the CLI does not resolve locally comes back
             # through here as a prompt on the guest's screen.
-            can_use_tool=self._can_use_tool(guest),
+            can_use_tool=guest.perms.callback(),
             # The key here becomes the mcp__<key>__<tool> prefix.
             mcp_servers=machine_tools.build(self, guest),
             on_text=on_text,
@@ -811,106 +815,13 @@ class Bridge:
         return s
 
     # --- permissions -------------------------------------------------------
-
-    def _can_use_tool(self, guest: GuestSession):
-        """Build the can_use_tool callback for one guest.
-
-        Everything that reaches here gets a bar. There is deliberately no
-        auto-allow branch: measured against the real CLI, a Read or Grep inside
-        cwd never reaches this callback at all, and a Bash command its sandbox
-        can contain is approved without asking us either. The policy the plan
-        carried would have been dead code.
-        """
-
-        async def can_use_tool(tool_name: str, args: dict, ctx):
-            tool_use_id = getattr(ctx, "tool_use_id", None)
-            if not tool_use_id:
-                # types.py promises this is always a non-empty string here.
-                # If it is not, we have no way to correlate a reply, and
-                # guessing would approve the wrong call.
-                log.error("permission request with no tool_use_id: %s",
-                          tool_name)
-                return PermissionResultDeny(
-                    message="Internal error: the request had no id.",
-                    interrupt=False)
-
-            # The proxy is infrastructure, not the subject of the
-            # conversation. A path tool reaching outside the working copy is
-            # refused without troubling the user: they asked about THEIR
-            # machine, and answering with the proxy's files would be wrong
-            # even when the file is real.
-            refuse = perms.off_limits(tool_name, args,
-                                      self.cwd or os.getcwd())
-            if refuse is not None:
-                log.info("auto-refused %s outside the working copy: %s",
-                         tool_name, str(args)[:120])
-                return PermissionResultDeny(message=refuse, interrupt=False)
-
-            loop = asyncio.get_running_loop()
-            prompt = PendingPrompt(
-                tool_use_id=tool_use_id,
-                tool_name=tool_name,
-                future=loop.create_future(),
-                suggestions=list(getattr(ctx, "suggestions", None) or []),
-                body=render_request(tool_name, args, ctx),
-                allows=perms.allows_always(
-                    tool_name, getattr(ctx, "suggestions", None) or []),
-                summary=perms.summary(tool_name, ctx, args),
-            )
-
-            try:
-                await self._enqueue_prompt(guest, prompt)
-                return await asyncio.wait_for(prompt.future,
-                                              timeout=perms.DEADLINE_S)
-            except asyncio.TimeoutError:
-                self._finish_prompt(guest, prompt, PromptEndReason.TIMEOUT)
-                return PermissionResultDeny(
-                    message=("Nobody answered the permission request on the "
-                             "Windows machine within ten minutes, so it was "
-                             "denied. Ask again if you still need it."),
-                    interrupt=False)
-            except asyncio.CancelledError:
-                # The CLI cancelled us -- the turn was interrupted, or another
-                # client answered. We are inside a cancelled scope, so we may
-                # NOT await here: the send would abort before it happened and
-                # the guest would keep a bar it can never dismiss. Schedule it
-                # instead; create_task is synchronous and the new task is not
-                # in the cancelled scope.
-                self._finish_prompt(guest, prompt, PromptEndReason.CANCELLED)
-                raise
-
-        return can_use_tool
-
-    async def _enqueue_prompt(self, guest: GuestSession,
-                              prompt: PendingPrompt) -> None:
-        """Show a prompt, or queue it behind the one already on screen."""
-        if guest.perm_pending is not None:
-            guest.perm_queue.append(prompt)
-            await self._send_waiting(guest)
-            return
-        guest.perm_pending = prompt
-        await self._show_prompt(guest, prompt)
-
-    async def _show_prompt(self, guest: GuestSession,
-                           prompt: PendingPrompt) -> None:
-        # The description goes into the transcript as a normal block so it
-        # paginates and survives paging away and back. The bar itself carries
-        # only the summary, because a guest in HISTORY mode never sees this.
-        await self._write_block(guest, prompt.body)
-        await self._send(guest, permreq(
-            prompt.tool_use_id, prompt.tool_name, prompt.allows,
-            len(guest.perm_queue), prompt.summary))
-
-    async def _reissue_prompt(self, guest: GuestSession) -> None:
-        """P1: after a reconnect, put the bar back."""
-        prompt = guest.perm_pending
-        if prompt is None:
-            return
-        log.info("re-issuing pending prompt %s after reconnect",
-                 prompt.tool_use_id)
-        await self._send(guest, permstate(
-            prompt.tool_use_id, prompt.tool_name, prompt.allows,
-            len(guest.perm_queue), prompt.summary))
+    #
+    # The prompt bar itself -- the can_use_tool callback, the queue, reconnect
+    # recovery, and the two ways a prompt ends -- lives on `guest.perms`
+    # (bridge/agent/permdesk.py) now. What is left here is what still
+    # genuinely needs the whole Bridge: the chat list and the halt bar, which
+    # are not part of the audit's "Prompts" group (docs/audit/02-bridge-python.md
+    # 02.41).
 
     async def _send_sessions(self, guest: GuestSession) -> None:
         """The chat list. Only conversations this bridge started -- the rest
@@ -931,7 +842,8 @@ class Bridge:
     async def _reissue_halt(self, guest: GuestSession) -> None:
         """After a reconnect, put the Continue bar back.
 
-        The third leg of the same idea as _reissue_prompt, and the one whose
+        The third leg of the same idea as `guest.perms.reissue()`, and the one
+        whose
         absence was worst. `halt_id` lives on the GuestSession and survives a
         reconnect; `latched` lives on disk. So a guest that restarted while a
         halt was up came back with NO BAR, a bridge still holding the halt, and
@@ -966,68 +878,6 @@ class Bridge:
             return
         log.info("re-issuing turn state after reconnect")
         await self._send(guest, turn_start(), stamp=False)
-
-    async def _send_waiting(self, guest: GuestSession) -> None:
-        """Refresh the queue depth shown on the bar."""
-        prompt = guest.perm_pending
-        if prompt is None:
-            return
-        await self._send(guest, permwait(prompt.tool_use_id,
-                                         len(guest.perm_queue)))
-
-    def _finish_prompt(self, guest: GuestSession, prompt: PendingPrompt,
-                       reason: PromptEndReason) -> None:
-        """Synchronous bookkeeping plus a scheduled PERMEND.
-
-        Deliberately not a coroutine. It is called from a cancelled context,
-        where any await would be aborted before it ran.
-        """
-        if guest.perm_pending is not prompt:
-            # Already resolved by another path; nothing owed.
-            return
-        guest.perm_pending = None
-        self._spawn(self._after_prompt(guest, prompt.tool_use_id, reason))
-
-    async def _after_prompt(self, guest: GuestSession, tool_use_id: str,
-                            reason: PromptEndReason) -> None:
-        # .value, not the member itself -- Frame.encode() calls str() on
-        # every header value, and str() on a bare (str, Enum) member is
-        # "PromptEndReason.X", not the wire token "x" (bridge/status.py).
-        await self._send(guest, permend(tool_use_id, reason.value))
-        await self._pump_queue(guest)
-
-    async def _pump_queue(self, guest: GuestSession) -> None:
-        """Show the next queued prompt, discarding any that died waiting."""
-        while guest.perm_pending is None and guest.perm_queue:
-            nxt = guest.perm_queue.popleft()
-            if nxt.future.done():
-                continue
-            guest.perm_pending = nxt
-            await self._show_prompt(guest, nxt)
-
-    def _resolve_all(self, guest: GuestSession | None, reason: str,
-                     message: str) -> None:
-        """Deny everything outstanding, synchronously.
-
-        Called from _on_client's finally before its first await, and from the
-        session-rebuild paths. Denying rather than leaving them pending is the
-        point: a future nobody will ever complete hangs the turn until the
-        deadline, on a machine that has already gone away.
-        """
-        if guest is None:
-            return
-        pending = []
-        if guest.perm_pending is not None:
-            pending.append(guest.perm_pending)
-            guest.perm_pending = None
-        while guest.perm_queue:
-            pending.append(guest.perm_queue.popleft())
-        for prompt in pending:
-            if not prompt.future.done():
-                prompt.future.set_result(
-                    PermissionResultDeny(message=message, interrupt=False))
-        if pending:
-            log.info("denied %d pending prompt(s): %s", len(pending), reason)
 
     def _spawn(self, coro) -> None:
         """Fire-and-forget, with a reference kept.
@@ -1284,10 +1134,13 @@ class Bridge:
     #: handler takes `(self, guest, f)`, including the six sync reply types
     #: and the two exec ones, which already had that shape and are reused
     #: as-is rather than wrapped. `_handle` becomes four lines plus the
-    #: unknown-type fallback; a handler that PermissionDesk/ExecChannel/
-    #: SyncCoordinator (02.30's other two extractions, not done by this
-    #: pass) later own can register its own name into this dict instead of
-    #: growing the chain further.
+    #: unknown-type fallback; `_perm_reply` (02.41) is now a one-line forward
+    #: onto `guest.perms.reply`, kept as a named entry here rather than
+    #: replaced by the desk directly registering into this dict, since
+    #: nothing else in `_DISPATCH` holds anything but a bound Bridge method
+    #: name. `ExecChannel`/`SyncCoordinator` (02.30's other two extractions)
+    #: are unowned by any pass so far and can register the same way when they
+    #: land.
     _DISPATCH: dict = {
         "INPUT": "_on_input",
         "RESUME": "_on_resume",
@@ -2313,39 +2166,8 @@ class Bridge:
 
     async def _perm_reply(self, guest: GuestSession, f: Frame) -> None:
         """Answer from the guest's prompt bar."""
-        want = f.headers.get("id", "")
-        action = f.headers.get("action", "deny")
-        prompt = guest.perm_pending
-
-        if prompt is None or prompt.tool_use_id != want:
-            # Not a bug on its own: the prompt may have been resolved by the
-            # deadline, by a disconnect, or by a session rebuild while the
-            # reply was in flight. Ignoring is right; crashing is not.
-            log.info("PERMREPLY for unknown id %s (action=%s)", want, action)
-            return
-
-        if prompt.future.done():
-            guest.perm_pending = None
-            await self._pump_queue(guest)
-            return
-
-        if action == "allow":
-            result = PermissionResultAllow()
-        elif action == "always":
-            result = PermissionResultAllow(
-                updated_permissions=perms.session_scoped(prompt.suggestions))
-        else:
-            result = PermissionResultDeny(
-                message=("The user declined this on the Windows machine. "
-                         "Do not retry it; consider another approach, or ask "
-                         "them what they would prefer."),
-                interrupt=False)
-
-        prompt.future.set_result(result)
-        guest.perm_pending = None
-        log.info("permission %s for %s (%s)", action, prompt.tool_name, want)
-        await self._send(guest, permend(want, PromptEndReason.ANSWERED.value))
-        await self._pump_queue(guest)
+        await guest.perms.reply(f.headers.get("id", ""),
+                                f.headers.get("action", "deny"))
 
     async def _sweep_sync(self) -> None:
         """The backstop trigger. See run_sync for why it exists.
@@ -2376,8 +2198,8 @@ class Bridge:
                 if (guest.perm_pending is not None and guest.lost_at is not None
                         and time.monotonic() - guest.lost_at
                         > self.perm_grace_s):
-                    self._resolve_all(
-                        guest, "gone",
+                    guest.perms.deny_all(
+                        "gone",
                         "The Windows machine disconnected before anyone could "
                         "answer, so this was not approved. It was not refused "
                         "on purpose -- ask again if you still need it.")
@@ -2395,8 +2217,8 @@ class Bridge:
                 continue
             log.warning("guest silent for %.0fs; closing so it can reconnect",
                         idle)
-            self._resolve_all(guest, "idle",
-                              "The Windows machine stopped responding.")
+            guest.perms.deny_all("idle",
+                                 "The Windows machine stopped responding.")
             w, guest.writer = guest.writer, None
             try:
                 if w is not None:
