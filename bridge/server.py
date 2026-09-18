@@ -269,6 +269,8 @@ class Bridge:
         #: Sync is OFF unless a root is named. Defaulting to the bridge's own
         #: working directory would point it at .venv and vm/*.qcow2.
         self.sync_dir: str | None = None
+        #: See _models(). None means "not asked yet", never "asked and empty".
+        self._models_cache: list[dict] | None = None
         # None, matching sync_dir's sentinel (02.36). Every caller of
         # _load_baseline is guarded by `if not self.sync_dir`, and this used
         # to default to "" instead -- so if that invariant ever broke,
@@ -1118,9 +1120,6 @@ class Bridge:
 
         elif f.type == "NEWSESSION":
             await self._new_session(guest)
-
-        elif f.type == "GETOPTIONS":
-            await self._send_options(guest)
 
         elif f.type == "SETMODEL":
             model = f.headers.get("model", "")
@@ -2128,6 +2127,27 @@ class Bridge:
             except Exception:
                 pass
 
+    async def _models(self, guest: GuestSession) -> list[dict]:
+        """The CLI's model list, fetched once per process (04.14).
+
+        This was re-fetched from the CLI on every options refresh -- which
+        happens on every attach, every model change and every effort change --
+        and it shells out. The list is a property of the installed CLI, not of
+        a session or a guest, so it cannot differ between the calls that were
+        making it. Cached on the Bridge rather than on GuestSession for the
+        same reason: a second client would get the same answer.
+
+        Failure is not cached. A CLI that was briefly unavailable should be
+        asked again rather than leaving the menu empty for the life of the
+        process.
+        """
+        if self._models_cache is None:
+            models = await guest.claude.server_models()
+            if not models:
+                return []
+            self._models_cache = models
+        return self._models_cache
+
     async def _send_options(self, guest: GuestSession) -> None:
         """The model and effort menus, with the one in use marked.
 
@@ -2139,7 +2159,7 @@ class Bridge:
         """
         if not guest.claude:
             return
-        models = await guest.claude.server_models()
+        models = await self._models(guest)
 
         # What is actually in effect, as a concrete model name.
         def resolved_of(value: str) -> str:

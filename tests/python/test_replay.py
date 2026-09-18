@@ -72,15 +72,6 @@ def test_resume_below_the_floor_raises_rather_than_lying():
         r.since(1)
 
 
-def test_can_resume_from_reports_the_window():
-    r = Replay(max_frames=3)
-    for i in range(10):
-        r.append(f(i))
-    assert not r.can_resume_from(1)
-    assert r.can_resume_from(r.oldest_seq)
-    assert r.can_resume_from(r.next_seq)
-
-
 def test_seqs_stay_unique_and_ordered_across_eviction():
     r = Replay(max_frames=4)
     seqs = []

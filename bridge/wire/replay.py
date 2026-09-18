@@ -97,8 +97,5 @@ class Replay:
             return []
         return self._frames[from_seq - self._oldest_seq :]
 
-    def can_resume_from(self, from_seq: int) -> bool:
-        return self._oldest_seq <= from_seq <= self._next_seq
-
     def __len__(self) -> int:
         return len(self._frames)
