@@ -1304,10 +1304,20 @@ confidently is the failure mode that makes an agent dangerous.
 
 - **Focus is two calls, not one.** `SetForegroundWindow` works on 9x (there is
   no NT5 foreground lock), but cross-thread `SetFocus` needs
-  `AttachThreadInput` first or focus silently never arrives.
-- **Never send keys to our own window.** Compare the target's thread against
-  ours and refuse. The agent typing into Gaston's own input box is a
-  self-feeding loop, and it is a far likelier accident than any hotkey.
+  `AttachThreadInput` first or focus silently never arrives. **[R --
+  2026-09-18]** And it needs detaching afterwards: the attach is
+  worker-thread-to-target, so leaving it in place makes the RPC worker share
+  the target's input-queue state for the rest of the session.
+- **Never send keys to our own window.** **[R -- 2026-09-18]** This said
+  "compare the target's thread against ours", which does not work from where
+  the tool is designed to run. Every tool dispatches on the RPC worker, so the
+  target's thread and the calling thread already differ even when the target
+  *is* Gaston's input box, and the refusal never fires. Compare
+  `GetWindowThreadProcessId(target)`'s **process** against our own and refuse
+  the whole process -- not the target `HWND` against `g_main` either, since a
+  child control shares the UI thread and is a different HWND. The agent typing
+  into Gaston's own input box is a self-feeding loop, and it is a far likelier
+  accident than any hotkey.
 - **Block Ctrl+Alt+Del** and the power/sleep keys. On 9x Ctrl+Alt+Del is handled
   by the VMM at ring 0 so `keybd_event` probably cannot synthesise it anyway --
   but it is one line and the cost of being wrong is a reboot.
@@ -1357,7 +1367,7 @@ observation.
 
 | tool | why it is not just `exec` |
 |---|---|
-| `list_windows` | the semantic tree; the primary sense |
+| `list_windows(scope)` | the semantic tree; the primary sense |
 | `screenshot(rect)` | region by default, strips underneath |
 | `ocr(rect)` | bridge-side, for what the tree cannot see |
 | `click(target)` | control-resolved or raw XY, one real input path |
@@ -1365,6 +1375,24 @@ observation.
 | `send_action_sequence(steps)` | closed-loop batching |
 | `launch(path, args)` | **`exec` waits for exit.** You cannot drive Notepad's UI with a tool that blocks until Notepad closes. `command.com /c start x` works but is fragile; `CreateProcess` without the wait is ~10 lines. *(The original plan dropped `LAUNCH` because retro-agent's version dragged in its JSON builder -- that reason does not apply to our own.)* |
 | `get_clipboard` / `set_clipboard` | the escape hatch for text no message will give up: Ctrl+A, Ctrl+C, read it. `OpenClipboard` / `GetClipboardData(CF_TEXT)`, ~30 lines |
+
+**[R -- 2026-09-18] `list_windows` takes a scope and a node cap from its first
+version, not its second.** The token argument above -- a tree at ~200 against a
+screenshot at ~850 -- is measured on one dialog and inverts on a busy desktop,
+where an unscoped enumeration returns every control on screen and costs more
+than the screenshot it was meant to replace. Scope is one of: the foreground
+window, a window by class, or everything owned by a pid. The cap is a node
+count, and a truncated tree says so rather than ending silently. Both are
+cheaper to decide now than to retrofit once the model has learned to call it
+unscoped.
+
+**[R -- 2026-09-18] An inline screenshot is a file on disk, never a `data:`
+URI.** The transcript is MSHTML under IE5 and `rc_html_set_document` navigates
+`file:///` at a `view.htm` the guest writes (`win/app/htmlview.cpp`); `data:`
+URIs arrived in IE8. So a screenshot shown in the transcript has to be written
+as a real file beside `view.htm` and referenced by relative path -- through the
+same chunked sink Export as HTML needs, which is why `BACKLOG.md` §6 treats the
+two as one primitive with two callers rather than two features.
 
 #### Permissions: this is where whole-tool "Always" is worst
 

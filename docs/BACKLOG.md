@@ -298,8 +298,10 @@ debugger, presenting as "the progress bar does not appear". (Audit 01.10 found
 the same gap independently; closes that clause of it too.)
 
 **The primitive itself, now named.** Audit 04.3 counted four ad-hoc chunked
-transfers already shipping with no shared shape: `_send_html` (`bridge/server.py`,
-bridge to guest, display text, no ack, no END frame, no Cancel), `Pass.push`
+transfers already shipping with no shared shape: `send_html`
+(`bridge/wire/link.py:84` since the `GuestLink` extraction, and `_send_html`
+on `Bridge` is a two-line delegate to it now -- bridge to guest, display
+text, no ack, no END frame, no Cancel), `Pass.push`
 (`bridge/files/syncrun.py`, bridge to guest, `SYNCPUTEND`/`SYNCPUTACK`, an
 `if_crc` precondition, no Cancel), `do_get` (`win/sync/syncrpc.cpp:378-456`,
 guest to bridge, `SYNCDATEND`, no Cancel) and `send_out` (`win/rpc/rpc.cpp:253`,
@@ -342,13 +344,26 @@ described, since the table it asked for already exists, but not nothing.
 `MessageBoxA` -- closes the missing-`.rc`-infra-adjacent clause of 01.10 by
 being the thing that actually needs the sink) needs the sink above (a
 transcript is hundreds of KB and the guest has tens of KB free) and a real
-END/status on `_send_html`, which today has neither and silently drops an
-oversized LIVE frame (`bridge/server.py:847-848`). Its third cited blocker,
-`wire_yield` not being called from the HTML/page send loops (04.12), is
-already fixed -- `wire_yield` (`bridge/wire/link.py:148`) is wired correctly
-for the sync path; only `_send_html`'s loop and `_send_page`'s run loop still
-skip it, which the extraction above fixes by construction rather than by
-another retrofit.
+END/status on `send_html`, which today has neither: it still returns without
+sending anything when a LIVE block exceeds the frame budget
+(`bridge/wire/link.py:102-103`), and the caller is told nothing either way.
+An oversized APPEND is no longer dropped -- it is truncated with a marker the
+reader can see (`link.py:113-127`), which is the half of this that did get
+fixed.
+
+**Correction, verified 2026-09-18:** this entry previously cited that drop at
+`bridge/server.py:847-848` and said `wire_yield` was skipped by
+`_send_html`'s loop and `_send_page`'s run loop. Both statements were written
+against the pre-`GuestLink` tree and are wrong now. The line range cited is
+`_reissue_turn`, an unrelated function. And 04.12 is closed for these paths,
+not open: `send_html` awaits `wire_yield()` between chunks
+(`bridge/wire/link.py:143-146`) and `_send_page` awaits it between runs
+(`bridge/server.py:2329`), each with a comment naming 04.12 as the reason.
+`wire_yield` itself (`link.py:148`) records the measurement that earns it --
+an uncontended lock with a `drain()` below the high-water mark has no await
+that actually suspends, so 128 chunks of a one-megabyte push ran to
+completion before any other task was scheduled at all. Nothing here needs
+doing; the extraction above inherits a yield that already works.
 
 **The Phase 5 upload** (04.25) hits a second, independent problem once the
 primitive exists: the guest's outbound queue is one 64KB budget
@@ -545,7 +560,12 @@ the whole process, not compare the target HWND against `g_main` -- a child
 control shares the UI thread but is a different HWND, so the HWND comparison
 would miss it. Verified: no cross-thread input code exists anywhere in
 `win/` today (`win/rpc/rpc.cpp:85-93` already has a comment anticipating
-where `list_windows` would dispatch; nothing further is built).
+where `list_windows` would dispatch; nothing further is built). **`PLAN.md`'s
+`send_keys` rules are corrected to match**, because as written they did not
+work from where the tool will run: "compare the target's thread against ours"
+never fires on the RPC worker, whose thread differs from the UI thread even
+when the target is Gaston's own input box. The detach-after-attach
+requirement was missing there too.
 
 **Cancellation is per-process, not per-job.** 01.41: `rc_exec_cancel` sets
 one `g_cancel` and terminates one `g_child` (`win/rpc/exec.cpp:47-83`), so a
@@ -562,7 +582,9 @@ PLAN.md's own argument -- a control tree costs ~200 tokens against a
 screenshot's ~850 -- holds for one dialog and inverts on a busy desktop. A
 scope argument (foreground window / by class / by pid) and a node cap need
 deciding before the first call, not after the first call returns every
-control on screen.
+control on screen. **`PLAN.md`'s Phase 6 tool table now carries both as a
+requirement** rather than leaving the tool a bare name, since this is a case
+of the design being underspecified rather than the code being absent.
 
 **Inline screenshots need the chunked-transfer primitive, not a new one.**
 04.28: the transcript renders under MSHTML/IE5 (`win/app/htmlview.cpp`), and
@@ -570,7 +592,10 @@ IE did not support `data:` URIs until IE8 -- confirmed, `htmlview.cpp:426,452`
 only ever build `file:///%s\view.htm`. Inline images have to be written as
 real files beside `view.htm` via the sink primitive §6 above already
 describes for Export. Cross-reference, not a separate cost: this is one more
-caller of `win/xfer.c`'s sink, not a fourth design.
+caller of `win/xfer.c`'s sink, not a fourth design. `PLAN.md`'s Phase 6
+section now states the constraint, which it did not: the audit's complaint
+was partly that a one-line feature description hid a renderer limit that
+decides how the feature has to be built.
 
 **No reusable RPC primitive on the bridge either.** 02.32 (with 04.11 folded
 in -- they name the same extraction from two different files): `run_on_guest`
@@ -654,11 +679,25 @@ handler -- `rc_config_save(); try_connect();` -- does not reset
 successful connect, `:651-652`), so fixing a typo'd host and hitting OK
 still rides out up to the existing ~15s backoff before the first real
 attempt. And a modal dialog re-enters the message pump while the reader
-thread keeps posting `WM_RC_FRAME` -- exactly the `RC_MAX_INFLIGHT`
-backpressure gate (`win/net/net.cpp:22,206-207`) describes, a real
-`Sleep(10)` loop that fires when the UI thread falls behind draining
-frames, and which has never run against a live stream under a modal, as far
-as the code shows. Also lands here: Export as HTML, the permission rule
+thread keeps posting `WM_RC_FRAME`.
+
+**One correction to 01.34 on that last point, verified 2026-09-18.** The
+re-entrancy half is not waiting for Phase 4 -- it is a designed path that
+runs today. `MessageBoxA` pumps the thread queue exactly as
+`DialogBoxIndirectParam` would, so `WM_RC_FRAME` is dispatched and
+`render_frame` re-enters while a box is up, and **two of the existing boxes
+are gated on `g_turn_active`** so they appear only while a turn is streaming:
+the switch-conversation confirmation (`win/app/main.cpp:417-421`) and the
+new-session confirmation (`:1692-1696`). A settings dialog lengthens the
+window rather than opening a new class of failure. What genuinely has not run
+is the other half, the `RC_MAX_INFLIGHT` backpressure gate
+(`win/net/net.cpp:22,206-207`) -- a real `Sleep(10)` loop in the reader
+thread, which fires only if the UI thread stops draining frames, and a
+pumping modal does not stop draining them. Worth keeping the two apart: the
+first is worth testing because it already happens, the second is reachable
+only from a nested loop that does not dispatch, and nothing here has one.
+
+Also lands here: Export as HTML, the permission rule
 table, R8's Command menu and per-model description text all currently point
 at `main.cpp` too, each another 60-150 lines into a file already at 1923
 lines (it was 1783 when 01.34 was written).
@@ -680,8 +719,10 @@ regardless.
 `.rc`, re-baseline CMOV; (2) build the dialog -- `DialogBoxIndirectParam` is
 cheaper than a `.rc` template given (1) is already required for the icon
 (R5); (3) OK handler calls `rc_config_save` and resets the backoff state;
-(4) exercise a live stream with the dialog open at least once to see whether
-the `RC_MAX_INFLIGHT` gate is really unreached or just unobserved; (5) if
+(4) exercise a live stream with the dialog open at least once -- for the
+re-entrancy, which already happens behind the two confirmations above and has
+simply never been looked at, rather than for the `RC_MAX_INFLIGHT` gate, which
+a pumping modal does not reach; (5) if
 R7's `client_id` is also live by then, one `rc_config_save` fix serves both.
 
 ## 11. Smaller Phase 4/5 gaps found ahead of their phases, not yet closed
