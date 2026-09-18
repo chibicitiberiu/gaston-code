@@ -55,7 +55,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
        str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
-.PHONY: synccheck inicheck cppcheck all clean check run netcheck probe htmlspike
+.PHONY: synccheck inicheck cppcheck all clean check run netcheck rpccheck probe htmlspike
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
@@ -120,6 +120,18 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
 	@echo "built $@"
 
+# Headless conformance check for 04.5's lane table: links the REAL rpc.c and
+# frameproto.c and drives rc_rpc_route/rc_rpc_submit directly, so this is the
+# same worker the GUI runs, not a reimplementation of it. No live bridge
+# needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
+# safe no-op here.
+RPCCHECK_OBJS = $(addprefix $(BUILD)/,rpccheck.o net.o frameproto.o \
+                log.o str.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+rpccheck: $(BUILD)/rpccheck.exe
+$(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(RPCCHECK_OBJS)}
+	@echo "built $@"
+
 # Every object depends on every header. Coarse, but there are seven of them
 # and the failure it prevents is vicious: adding two fields to rc_transcript
 # did not rebuild main.o, so main.c still allocated the OLD struct while
@@ -159,6 +171,14 @@ $(BUILD)/%.o: %.c $(HDRS) | $(BUILD)
 # nothing else in the tree knows, because every header is extern "C".
 $(BUILD)/%.o: %.cpp $(HDRS) | $(BUILD)
 	@$(WPP) $(CFLAGS) $(CXXONLY) -fo=$@ -fr=$(BUILD)/$*.err $<
+
+# mshtml.h has a bare `typedef enum _BoolValue {...};` with no name for the
+# typedef to bind to -- harmless in C, which is how every other Watcom header
+# using this pattern has gone unnoticed, but C++ diagnoses it (W146). It is
+# the shipped header, not our code, and `#pragma warning 146 9` does not
+# silence it in this Watcom build, so it is disabled here instead, for this
+# one object only.
+$(BUILD)/htmlview.o: CFLAGS += -wcd=146
 
 $(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)
 	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/miniz.err third_party/miniz/miniz.c

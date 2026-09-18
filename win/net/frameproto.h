@@ -44,6 +44,56 @@ const char *rc_frame_get(const rc_frame *f, const char *key);
 int         rc_frame_parse(char *payload, unsigned len, rc_frame *out);
 void        rc_frame_free(rc_frame *f);
 
+/* THE FOUR LANES.
+ *
+ * A frame's TYPE decides which of four disjoint paths handles it, and that
+ * decision is a TABLE, not a branch, so a Phase 6 tool costs a row here and
+ * not another `if` in rpc.c's worker.
+ *
+ *   UI        -- not the RPC layer's. rc_rpc_route passes it back to net.c,
+ *                which posts WM_RC_FRAME; the window thread does the rest.
+ *   JOB       -- the worker's ONE job slot. Can run for up to two minutes
+ *                (rpc.c's EXEC timeout), so a second one arriving while it
+ *                runs must be ANSWERED rather than queued -- see rpc.c's
+ *                reject_busy.
+ *   STREAM    -- the worker's bounded FIFO. A chunk in a transfer, never a
+ *                job in its own right: it is milliseconds of file I/O and
+ *                must never wait behind a JOB, or a two-minute EXEC stalls
+ *                every SYNCPUT chunk behind it (rpc.c's rpc_thread drains
+ *                this FIFO before ever looking at the JOB slot).
+ *   IMMEDIATE -- answered on the READER thread, before either worker queue
+ *                is even touched. Never refused for a JOB or STREAM being
+ *                busy, because it never asks them -- EXECKILL is the only
+ *                member today, and a quick syscall like Phase 6's
+ *                list_windows belongs here too.
+ *
+ * Add a Phase 6 tool by adding a row to RC_LANE_TABLE (frameproto.c), not by
+ * adding a branch to rc_rpc_route or rc_rpc_submit. */
+typedef enum {
+    RC_LANE_UI = 0,
+    RC_LANE_JOB,
+    RC_LANE_STREAM,
+    RC_LANE_IMMEDIATE
+} rc_lane;
+
+typedef struct {
+    const char *type;
+    rc_lane     lane;
+} rc_lane_row;
+
+/* Frame types not listed here, and not matching the SYNC* wildcard rule in
+ * frameproto.c, default to RC_LANE_UI -- the safe choice, since render_frame
+ * already has an "unhandled frame type" branch for anything it does not
+ * recognise, where a stray JOB or STREAM row would silently eat a frame the
+ * window was supposed to see. */
+extern const rc_lane_row RC_LANE_TABLE[];
+extern const int         RC_LANE_TABLE_N;
+
+/* Looks a frame type up in RC_LANE_TABLE, then falls back to the one
+ * wildcard rule (SYNC* is always RC_LANE_STREAM -- see frameproto.c) before
+ * defaulting to RC_LANE_UI. */
+rc_lane rc_frame_lane(const char *type);
+
 /* Builds "TYPE\nk=v\n...\n\n" + body into buf. Returns total bytes or -1. */
 int rc_frame_build(char *buf, unsigned bufsz, const char *type,
                    const char *const *keys, const char *const *vals, int nkv,

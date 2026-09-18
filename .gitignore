@@ -62,3 +62,7 @@ vm/*.partial.*
 # that is what they are for -- but the log is scratch, not source.
 /retroclaude.log
 *.log
+
+# rpccheck.c's busy-JOB marker. Deleted at both ends of the run it takes part
+# in; this is only for the crash that skips the second delete.
+/rpccheck_marker.txt

@@ -31,6 +31,30 @@ static void unquote(char *s)
     *w = '\0';
 }
 
+/* THE LANE TABLE. See the big comment in frameproto.h for what each lane
+ * means; this is the one place a Phase 6 tool's frame type gets classified.
+ *
+ * SYNC* is not a row here because it is a whole FAMILY of frame types
+ * (SYNCSCAN, SYNCPUT, SYNCPUTEND, SYNCMKDIR, SYNCGET today) sharing one
+ * four-byte prefix; rc_frame_lane matches it as a wildcard below rather than
+ * listing five rows that would drift the moment a sixth SYNC* type is added
+ * on one side and not the other. */
+const rc_lane_row RC_LANE_TABLE[] = {
+    { "EXEC",     RC_LANE_JOB },
+    { "EXECKILL", RC_LANE_IMMEDIATE }
+};
+const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
+
+rc_lane rc_frame_lane(const char *type)
+{
+    int i;
+    for (i = 0; i < RC_LANE_TABLE_N; i++)
+        if (strcmp(type, RC_LANE_TABLE[i].type) == 0)
+            return RC_LANE_TABLE[i].lane;
+    if (strncmp(type, "SYNC", 4) == 0) return RC_LANE_STREAM;
+    return RC_LANE_UI;
+}
+
 const char *rc_frame_get(const rc_frame *f, const char *key)
 {
     int i;

@@ -26,6 +26,10 @@ int  rc_rpc_start(rc_net *net);
  * it carries -- and meant every tool Phase 6 adds would put another branch in
  * the socket code. There are eight such tools planned.
  *
+ * Which of the four LANES a frame belongs to -- UI, JOB, STREAM or IMMEDIATE
+ * -- is a table in frameproto.h, not a branch here either. See its comment
+ * for what each lane means; rc_rpc_route below only switches on the answer.
+ *
  * Returns RC_ROUTE_TAKEN when the frame has been consumed AND FREED by this
  * layer, so the caller must not touch it again; RC_ROUTE_PASS when it is not
  * ours and belongs to the UI thread.
