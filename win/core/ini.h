@@ -14,7 +14,6 @@ typedef struct {
     char host[64];
     int  port;
     char secret[128];
-    int  font_size;
     int  autoscroll;
     char sync_root[128];      /* "" disables sync entirely */
 } rc_config;

@@ -67,8 +67,6 @@ typedef struct {
  * separators, in the guest's ANSI bytes -- never decoded, never folded. */
 typedef void (*rc_sync_sink)(void *ctx, const char *rel, const rc_sync_stat *st);
 
-void rc_sync_init(void);
-
 /* Walk the root. Returns the entry count, or -1 if the root is missing, or
  * -2 if the tree exceeds RC_SYNC_MAX_FILES (which must abort the whole pass:
  * a truncated manifest is indistinguishable from a mass deletion). */

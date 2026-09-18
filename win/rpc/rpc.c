@@ -7,9 +7,9 @@
  * and silently queueing would hide it.
  *
  * Ownership: a frame handed to rc_rpc_submit belongs to THIS thread, which
- * frees it and decrements net->rpcq. The reader does not free it and the UI
- * thread never sees it. See the three-way contract in net.h -- getting it
- * wrong is a double free, which on 9x is a reboot.
+ * frees it. The reader does not free it and the UI thread never sees it. See
+ * the three-way contract in net.h -- getting it wrong is a double free,
+ * which on 9x is a reboot.
  */
 
 #include <windows.h>
@@ -78,8 +78,19 @@ static void reject_sync_busy(rc_frame *f);
 #define RPC_SETTLE_MS   2000
 #define RPC_SWEEP_MS   30000
 
-/* Tell the bridge the tree moved. It owns the baseline and decides what to do;
- * the guest never reconciles anything itself. */
+/* Tell the bridge the tree moved, or that we are still here.
+ *
+ * SYNCDIRTY when there is a sync root: the bridge owns the baseline and
+ * decides what to do; the guest never reconciles anything itself.
+ *
+ * PING when there is not, and that is the fix for a real disconnection. The
+ * bridge reaps a guest that has been silent for 90 seconds, because a machine
+ * that GPFs leaves no FIN behind and would otherwise hold the slot forever.
+ * But `last_seen` only moves when a frame arrives, and with no sync root this
+ * function used to send NOTHING -- so a user reading a permission prompt was
+ * hung up on after 90 seconds, against a documented 600-second deadline for
+ * that very prompt. The bridge has handled PING since the beginning and the
+ * guest had never sent one. */
 static void rpc_maybe_nudge(void)
 {
     DWORD now = GetTickCount();
@@ -91,10 +102,13 @@ static void rpc_maybe_nudge(void)
     } else if ((now - g_last_poll) > RPC_SWEEP_MS) {
         due = 1;
     }
-    if (!due || !rc_sync_root()[0]) return;
+    if (!due) return;
 
     g_last_poll = now;
-    rc_net_send(g_net, "SYNCDIRTY", NULL, NULL, 0, NULL, 0);
+    if (rc_sync_root()[0])
+        rc_net_send(g_net, "SYNCDIRTY", NULL, NULL, 0, NULL, 0);
+    else
+        rc_net_send(g_net, "PING", NULL, NULL, 0, NULL, 0);
 }
 
 static void rpc_watch_start(void)
@@ -245,7 +259,6 @@ static void drop(rc_frame *f)
 {
     rc_frame_free(f);
     HeapFree(GetProcessHeap(), 0, f);
-    if (g_net) InterlockedDecrement(&g_net->rpcq);
 }
 
 static unsigned __stdcall rpc_thread(void *arg)

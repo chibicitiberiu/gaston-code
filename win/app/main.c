@@ -21,7 +21,6 @@
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 
-#define ID_TRANSCRIPT 1001
 #define ID_INPUT      1002
 #define ID_SEND       1003
 #define ID_STOP       1004
@@ -166,7 +165,6 @@ static unsigned long g_rx_done, g_rx_total;
 static unsigned long g_tx_done, g_tx_total;
 static DWORD         g_xfer_ms;
 static int  g_chat_count = 0;
-static int  g_chat_widest = 0;      /* px, for LB_SETHORIZONTALEXTENT */
 
 /* Not "Claude Code": that is Anthropic's product name and this is a
  * third-party client for it. Gaston is a French given name of roughly the
@@ -181,7 +179,6 @@ static DWORD g_turn_start_ms = 0;
  * visibly streaming is just wrong. */
 static int   g_streaming = 0;
 
-static int  label_width_px(const char *text);
 static void think_show(void);
 static void turn_done(void);
 static void layout(HWND hwnd);
@@ -600,8 +597,6 @@ static void render_frame(rc_frame *f)
     if (strcmp(f->type, "READY") == 0) {
         v = rc_frame_get(f, "sess");
         if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
-        v = rc_frame_get(f, "next_seq");
-        if (v) g_net.next_seq = (unsigned)atoi(v);
         v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
         v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
         g_is_live = 1;
@@ -716,7 +711,6 @@ static void render_frame(rc_frame *f)
         SendMessageA(g_chats, WM_SETREDRAW, FALSE, 0);
         SendMessageA(g_chats, LB_RESETCONTENT, 0, 0);
         g_chat_count = 0;
-        g_chat_widest = 0;
         g_chat_group[0] = '\0';
         g_chat_current = -1;
 
@@ -743,17 +737,23 @@ static void render_frame(rc_frame *f)
              * which conversation is open, and a marker meant every switch had
              * to relabel the whole list. */
             rc_strf(label, sizeof(label), "%s", title ? title : id);
-            _snprintf(g_chat_ids[g_chat_count], 63, "%s", id);
+            /* rc_strcpy, and the bound is sizeof rather than a literal 63.
+             *
+             * `id` is a wire header value and may legitimately be up to 255
+             * bytes. _snprintf(dst, 63, ...) wrote indices 0..62 of a 64-byte
+             * row and never touched index 63 -- so termination came from the
+             * row being zero-filled BSS that nothing else writes. True today,
+             * and an unstated invariant rather than a contract: one memset, or
+             * one widened copy, and strcmp at the two call sites below walks
+             * off the end. */
+            rc_strcpy(g_chat_ids[g_chat_count],
+                      sizeof(g_chat_ids[g_chat_count]), id);
             g_chat_is_header[g_chat_count] = 0;
             fit_label(label, sizeof(label), chats_text_width() - CHAT_INDENT);
             SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)label);
             if (cur && *cur == '1') {
                 g_chat_current = g_chat_count;
                 SendMessageA(g_chats, LB_SETCURSEL, g_chat_count, 0);
-            }
-            {
-                int px = label_width_px(label);
-                if (px > g_chat_widest) g_chat_widest = px;
             }
             g_chat_count++;
         }
@@ -764,8 +764,7 @@ static void render_frame(rc_frame *f)
         SendMessageA(g_chats, WM_SETREDRAW, TRUE, 0);
         RedrawWindow(g_chats, NULL, NULL,
                      RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
-        rc_log("chat list: %d sessions, widest %dpx", g_chat_count,
-               g_chat_widest);
+        rc_log("chat list: %d sessions", g_chat_count);
         log_mem("chat list loaded");
 
     } else if (strcmp(f->type, "SWITCHED") == 0) {
@@ -928,28 +927,6 @@ static void render_frame(rc_frame *f)
 
 /* ------------------------------------------------------------------ input */
 
-/* Width of a list label in the actual UI font. Cheaper than it looks: called
- * once per session while the list is rebuilt, ~36 times. */
-static int label_width_px(const char *text)
-{
-    HDC dc;
-    HFONT old;
-    SIZE sz;
-    int n;
-
-    if (!g_chats || !text) return 0;
-    n = (int)strlen(text);
-    if (n <= 0) return 0;
-    dc = GetDC(g_chats);
-    if (!dc) return 0;
-    old = (HFONT)SelectObject(dc, g_ui_font);
-    sz.cx = 0;
-    GetTextExtentPoint32A(dc, text, n, &sz);
-    SelectObject(dc, old);
-    ReleaseDC(g_chats, dc);
-    return (int)sz.cx;
-}
-
 /* Width available for an item's text: the client area less the vertical
  * scrollbar and the couple of pixels the listbox insets text by. */
 static int chats_text_width(void)
@@ -979,6 +956,10 @@ static void fit_label(char *label, unsigned cap, int avail_px)
     int n;
     char buf[192];
 
+    /* This did not guard its argument. One caller today, always a local
+     * array, so the invariant held by accident of there being a single call
+     * site. C89: declarations first. */
+    if (!label || !cap) return;
     if (!g_chats || avail_px <= 0) return;
     n = (int)strlen(label);
     if (n <= 0) return;
@@ -1045,9 +1026,6 @@ static void turn_done(void)
  * to a sealed page still shows the question above the answer. Echoing locally
  * rather than waiting for the bridge to send it back is what keeps typing
  * responsive on a dialup link. */
-#define RC_USER_RULE "----------------------------------------------------------"
-
-
 static void echo_user_block(const char *text)
 {
     /* Was twenty lines of escaping and heap juggling here, with a buffer that

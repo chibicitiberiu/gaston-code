@@ -29,7 +29,6 @@ void     rc_html_move(rc_html *v, int x, int y, int w, int h);
 /* Navigation is asynchronous. Call this until it returns non-zero; anything
  * appended before then is buffered and flushed when the document arrives. */
 int      rc_html_poll(rc_html *v);
-int      rc_html_ready(rc_html *v);
 
 /* `doc` is the whole skeleton, stylesheet included, as the bridge sent it. */
 void     rc_html_set_document(rc_html *v, const char *doc);

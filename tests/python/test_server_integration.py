@@ -7,6 +7,7 @@ model is exercised separately by netcheck.exe.
 """
 
 import asyncio
+import time
 import zlib
 from dataclasses import dataclass, field
 
@@ -993,4 +994,33 @@ async def test_an_ordinary_cwd_still_goes_through(harness):
         "id": req.headers["id"], "status": "ok", "code": "0",
         "truncated": "0"}))
     await asyncio.wait_for(task, 5)
+    await harness.close(writer)
+
+
+async def test_a_keepalive_keeps_an_idle_guest_alive(harness):
+    """The reaper closes a guest silent for 90s, because a machine that GPFs
+    leaves no FIN and would hold the slot forever -- and `last_seen` only
+    moves when a frame arrives.
+
+    With sync off the guest sent NOTHING between turns, so a user reading a
+    permission prompt was disconnected after 90 seconds against the
+    600-second deadline for that very prompt. The guest now sends PING on its
+    sweep, which the bridge has handled since the beginning and the guest had
+    never sent.
+
+    Not a longer leash for a pending prompt -- that was tried and was wrong.
+    A prompt on screen is no evidence of life, and exempting it meant a guest
+    that crashed WHILE a prompt was up held the slot for ten minutes. The
+    keepalive distinguishes the two: a living machine pings, a dead one does
+    not.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    guest.last_seen = time.monotonic() - 10_000
+    await harness.send(writer, Frame("PING", {}))
+    await _recv(harness, reader, "PONG")
+    assert time.monotonic() - guest.last_seen < 5, \
+        "a keepalive must count as the machine being alive"
     await harness.close(writer)

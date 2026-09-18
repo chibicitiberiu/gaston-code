@@ -211,11 +211,10 @@ same rounds and deliberately left.
   It matters more if the replay buffer is ever retired.
 - **The replay buffer is still dead and still stamping.** The guest never sends
   `from=`, so `replay.since()` is unreachable; `append()` still fills a
-  20,000-frame buffer, and `win/net.h`'s `next_seq` is parsed and never read,
-  which makes the feature look implemented. Retiring it is larger than it
-  looks: the oversized-frame guard exists *because* replay is append-only, so
-  its merit has to be restated rather than preserved, and the size probe
-  stamps a fake `seq` into every frame's budget including `stamp=False` ones.
+  20,000-frame buffer. Retiring it is larger than it looks: the oversized-frame
+  guard exists *because* replay is append-only, so its merit has to be
+  restated rather than preserved, and the size probe stamps a fake `seq` into
+  every frame's budget including `stamp=False` ones.
 - **Directories deleted on either side are silently resurrected.** `diff` never
   consults the ancestor for a directory, so guest-only becomes `ADOPT` plus
   `os.makedirs` and bridge-only becomes `MKDIR`. §4's "reported and never

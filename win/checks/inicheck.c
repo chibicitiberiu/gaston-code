@@ -49,7 +49,6 @@ int main(int argc, char **argv)
     rc_strcpy(out.host, sizeof(out.host),      "10.11.12.13");
     out.port =            7999;
     rc_strcpy(out.secret, sizeof(out.secret),    "not-dev-secret");
-    out.font_size =       14;
     out.autoscroll =      0;
     rc_strcpy(out.sync_root, sizeof(out.sync_root), "C:\\WORK\\SUB");
 
@@ -64,14 +63,13 @@ int main(int argc, char **argv)
     eq_s("host",       in.host,      out.host);
     eq_i("port",       in.port,      out.port);
     eq_s("secret",     in.secret,    out.secret);
-    eq_i("font_size",  in.font_size, out.font_size);
     eq_i("autoscroll", in.autoscroll, out.autoscroll);
     eq_s("sync_root",  in.sync_root, out.sync_root);
 
     /* sizeof is the tripwire for a field added to the struct and to neither
      * function: it cannot check the field, but it can refuse to pass quietly. */
     eq_i("sizeof(rc_config)", (int)sizeof(rc_config),
-         (int)(64 + sizeof(int) + 128 + sizeof(int) + sizeof(int) + 128));
+         (int)(64 + sizeof(int) + 128 + sizeof(int) + 128));
 
     DeleteFileA(path);
     if (fails) { printf("\n%d FAILURES\n", fails); return 1; }

@@ -10,11 +10,10 @@
  *       * a frame posted with WM_RC_FRAME is owned by the UI thread, which
  *         frees it and decrements `inflight`;
  *       * a frame handed to the RPC worker is owned by the WORKER, which
- *         frees it and decrements `rpcq` -- EXCEPT on the two paths where the
- *         worker refuses it (already busy, or not running), where the frame is
- *         freed on the READER thread that offered it. The accounting balances
- *         either way; the rule is "whoever ends up holding it frees it", not
- *         "the worker always frees it";
+ *         frees it -- EXCEPT on the two paths where the worker refuses it
+ *         (already busy, or not running), where the frame is freed on the
+ *         READER thread that offered it. The rule is "whoever ends up
+ *         holding it frees it", not "the worker always frees it";
  *       * if PostMessage fails the READER frees it -- otherwise the pointer
  *         leaks on a machine with single-digit MB free, at exactly the moment
  *         it is already struggling.
@@ -77,11 +76,9 @@ typedef struct {
     HANDLE           outq_room;   /* a full-queue writer waits on this */
     volatile LONG running;
     volatile LONG inflight;     /* frames posted but not yet freed by the UI  */
-    volatile LONG rpcq;         /* frames handed to the RPC worker            */
     volatile rc_state state;
     unsigned long rx_bytes;
     unsigned long tx_bytes;
-    unsigned      next_seq;     /* resume point */
     int           started;      /* rc_net_start succeeded; needs teardown */
     char          sess[64];
 } rc_net;

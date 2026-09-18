@@ -357,8 +357,6 @@ void rc_html_set_document(rc_html *v, const char *doc)
     }
 }
 
-int rc_html_ready(rc_html *v) { return v && v->ready; }
-
 int rc_html_poll(rc_html *v)
 {
     READYSTATE rs = READYSTATE_UNINITIALIZED;

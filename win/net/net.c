@@ -183,7 +183,13 @@ static unsigned __stdcall reader_thread(void *arg)
          * frame would not be looked at until that command finished.
          * rc_exec_cancel is built to be called from another thread. */
         if (strcmp(f->type, "EXECKILL") == 0) {
-            rc_log("net: EXECKILL for %s", rc_frame_get(f, "id"));
+            {
+                /* rc_frame_get returns NULL for an absent header, and nothing
+                 * requires EXECKILL to carry an id. Whether this CRT prints
+                 * "(null)" or faults is not worth finding out on the guest. */
+                const char *kid = rc_frame_get(f, "id");
+                rc_log("net: EXECKILL for %s", kid ? kid : "(no id)");
+            }
             rc_exec_cancel();
             rc_frame_free(f);
             HeapFree(GetProcessHeap(), 0, f);
@@ -191,9 +197,7 @@ static unsigned __stdcall reader_thread(void *arg)
         }
 
         if (strcmp(f->type, "EXEC") == 0) {
-            InterlockedIncrement(&n->rpcq);
             if (rc_rpc_submit(f) != 0) {
-                InterlockedDecrement(&n->rpcq);
                 rc_frame_free(f);
                 HeapFree(GetProcessHeap(), 0, f);
             }
@@ -215,9 +219,7 @@ static unsigned __stdcall reader_thread(void *arg)
         if (strncmp(f->type, "SYNC", 4) == 0) {
             while (rc_rpc_syncq_full() && n->running)
                 Sleep(10);
-            InterlockedIncrement(&n->rpcq);
             if (rc_rpc_submit(f) != 0) {
-                InterlockedDecrement(&n->rpcq);
                 rc_frame_free(f);
                 HeapFree(GetProcessHeap(), 0, f);
             }
@@ -340,7 +342,6 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     InitializeCriticalSection(&n->send_lock);
     n->outq_head = n->outq_tail = NULL;
     n->outq_bytes = 0;
-    n->rpcq = 0;
     /* Auto-reset: the sender takes one item per wake and loops until empty. */
     n->outq_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
     /* Manual-reset would wake every blocked writer at once; auto-reset wakes

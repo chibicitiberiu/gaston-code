@@ -21,7 +21,6 @@ void rc_config_load(rc_config *cfg, const char *exe_dir)
     cfg->port = (int)GetPrivateProfileIntA("bridge", "port", 7890, path);
     GetPrivateProfileStringA("bridge", "secret", "dev-secret",
                              cfg->secret, sizeof(cfg->secret), path);
-    cfg->font_size  = (int)GetPrivateProfileIntA("ui", "font_size", 0, path);
     cfg->autoscroll = (int)GetPrivateProfileIntA("ui", "autoscroll", 1, path);
     /* "" disables sync. This line was missing for one real session on the
      * guest: save() wrote the key, load() never read it back, so the sync root
@@ -53,7 +52,5 @@ void rc_config_save(const rc_config *cfg, const char *exe_dir)
     WritePrivateProfileStringA("ui", "autoscroll", num, path);
     /* Every field that load() reads, save() must write. font_size was missed
      * for months and the same omission would make a sync root vanish. */
-    rc_strf(num, sizeof(num), "%d", cfg->font_size);
-    WritePrivateProfileStringA("ui", "font_size", num, path);
     WritePrivateProfileStringA("sync", "root", cfg->sync_root, path);
 }

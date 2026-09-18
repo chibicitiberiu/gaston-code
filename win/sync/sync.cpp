@@ -17,8 +17,6 @@
 #include "core/str.h"
 #include "miniz.h"
 
-void rc_sync_init(void) { }
-
 /* --- classification + checksum, in ONE read pass ------------------------- */
 /*
  * The class is not known until the last byte (a NUL 30KB in still makes the
@@ -410,6 +408,16 @@ HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
     char full[MAX_PATH];
     unsigned need;
 
+    /* Terminate the caller's buffer FIRST, on every path including the two
+     * refusals below.
+     *
+     * Both used to return without touching tmp_out, so a caller that logged
+     * or measured it afterwards read uninitialised stack -- win/checks/
+     * synccheck.c does exactly that, and it is the binary that verifies this
+     * function. An empty string is the honest answer: no temp file was
+     * created, so there is no name. */
+    if (tmp_out && tmp_cap) tmp_out[0] = '\0';
+
     if (!rc_sync_contained(rel)) return INVALID_HANDLE_VALUE;
 
     /* Refuse rather than truncate, and refuse BEFORE anything is opened.
@@ -546,6 +554,11 @@ static void recover_dir(const char *root, const char *rel, int depth)
                    RC_SYNC_OLD_SUFFIX) == 0) {
             join(aside, sizeof(aside), root, child);
             rc_strf(real, sizeof(real), "%s", aside);
+            /* Safe only transitively -- fd.cFileName was proven longer than
+             * the suffix by the strcmp guard above, and MAX_PATH dwarfs it --
+             * but nothing at THIS line says so, and an unsigned subtraction
+             * that underflows here indexes wildly. State the invariant. */
+            if (strlen(real) <= RC_SYNC_SUFFIX_LEN) continue;
             real[strlen(real) - RC_SYNC_SUFFIX_LEN] = '\0';
             if (GetFileAttributesA(real) == 0xFFFFFFFF) {
                 rc_log("sync: recovering %s -- an interrupted commit", real);

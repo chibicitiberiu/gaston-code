@@ -22,8 +22,6 @@ void rc_log_open(const char *exe_dir)
     rc_log("=== retroclaude starting ===");
 }
 
-const char *rc_log_path(void) { return g_path; }
-
 void rc_log(const char *fmt, ...)
 {
     char line[1024];
@@ -42,7 +40,18 @@ void rc_log(const char *fmt, ...)
     va_start(ap, fmt);
     n = _vsnprintf(line, sizeof(line) - 3, fmt, ap);
     va_end(ap);
-    if (n < 0) n = (int)strlen(line);
+    /* Terminate BEFORE measuring, which is the whole point of rc_strf and was
+     * skipped here -- the one place that still called _vsnprintf directly.
+     *
+     * _vsnprintf returns negative when the result did not fit, and in that
+     * case it has not written a NUL anywhere. The old fallback was
+     * `n = strlen(line)`, which then scanned past whatever had been written,
+     * through the rest of `line` and on into adjacent stack, until it met a
+     * zero byte. An over-long log line is a stack over-read in the logger --
+     * in the function whose whole job is to be working when nothing else is. */
+    line[sizeof(line) - 3] = '\0';
+    if (n < 0 || (unsigned)n > sizeof(line) - 3)
+        n = (int)strlen(line);
     line[n++] = '\r';
     line[n++] = '\n';
 

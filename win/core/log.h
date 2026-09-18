@@ -16,7 +16,6 @@ extern "C" {
 void rc_log_open(const char *exe_dir);
 void rc_log(const char *fmt, ...);
 void rc_log_close(void);
-const char *rc_log_path(void);
 
 #ifdef __cplusplus
 }
