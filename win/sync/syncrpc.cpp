@@ -185,6 +185,32 @@ static void put_fail(rc_net *net, const char *id, const char *why)
     g_put.active = 0;
 }
 
+/* 01.26: g_put is exactly the kind of worker-side singleton that finding
+ * named -- and looking for what would break it turned up a real bug, not the
+ * hypothetical one the finding asked about. A SYNCPUT stream that is cut off
+ * by a dropped connection (no SYNCPUTEND, no failing WriteFile) leaves
+ * g_put.active latched at 1 forever: nothing on the reconnect path ever
+ * called put_fail or do_putend for it. do_put's very first check on the next
+ * transfer -- any transfer, any id, any file -- is `if (g_put.active)
+ * put_fail(..., "busy")`, so one interrupted PUT wedges every PUT after the
+ * reconnect for the rest of the process's life. This is the same shape as
+ * 01.48 (a singleton that breaks on RECONNECT, not on a second connection).
+ *
+ * ONLY a flag, set here on the UI thread. g_put.h is a live HANDLE the RPC
+ * worker thread can be mid-WriteFile on; closing it from here would be a new
+ * race worse than the bug (this file has no lock protecting g_put, and one
+ * is not worth adding for a rare event -- see g_running/g_cancel for the
+ * same "cross-thread flag, no lock" idiom already shipped in rpc.c/exec.c).
+ * do_put's own off==0 branch -- the only place that already runs on the
+ * worker thread before touching g_put for a new transfer -- does the actual
+ * cleanup the next time a PUT arrives. */
+static volatile LONG g_put_aborted;
+
+void rc_syncrpc_abort(void)
+{
+    g_put_aborted = 1;
+}
+
 static void do_put(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
@@ -207,6 +233,21 @@ static void do_put(rc_net *net, rc_frame *f)
     if (off && atol(off) == 0) {
         /* First chunk: open. */
         g_put_failed[0] = '\0';     /* a new transfer, so answer again */
+        if (g_put_aborted) {
+            /* rc_syncrpc_abort() ran on the UI thread since the last frame
+             * this worker handled -- the connection that owned the previous
+             * PUT dropped mid-stream, with no SYNCPUTEND to close it out.
+             * Clean up the abandoned temp file here, on the worker thread,
+             * where g_put.h has always safely lived, instead of trusting the
+             * "busy" check below to reject every transfer forever. */
+            if (g_put.h != INVALID_HANDLE_VALUE && g_put.h != NULL) {
+                CloseHandle(g_put.h);
+                DeleteFileA(g_put.tmp);
+            }
+            g_put.h = INVALID_HANDLE_VALUE;
+            g_put.active = 0;
+            g_put_aborted = 0;
+        }
         if (g_put.active) { put_fail(net, id, "busy"); return; }
         if (!rc_sync_contained(rel)) { put_fail(net, id, "bad_path"); return; }
         rc_strf(g_put.id, sizeof(g_put.id), "%s", id);

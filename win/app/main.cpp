@@ -958,6 +958,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * re-sends HALT, so whatever is genuinely still outstanding comes
              * back, and whatever is not, does not. */
             rc_bar_hide_all();
+            /* And abandon a SYNCPUT the drop caught mid-stream. The RPC
+             * worker thread survives a reconnect (rc_rpc_start's
+             * if (g_thread) return 0), so its state survives with it; a PUT
+             * with no closing SYNCPUTEND left g_put.active latched forever,
+             * refusing every later PUT as "busy" -- found while checking
+             * 01.26's premise that these singletons need per-connection
+             * context, and fixed instead where the actual defect was: this
+             * is the disconnect side, not a second-connection one. A fresh
+             * sync pass after reconnect resends from the top, so there is
+             * nothing here worth resuming. */
+            rc_syncrpc_abort();
             ui_set_busy(0);
             SetTimer(hwnd, TIMER_RECONNECT, (UINT)g_backoff_ms, NULL);
         }
