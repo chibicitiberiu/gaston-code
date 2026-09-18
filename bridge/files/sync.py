@@ -218,7 +218,16 @@ class Baseline:
     #: every row, so the pass refuses rather than re-keying in place.
     acp: str = ""
     generation: int = 0
+    #: The USER's copy: cleared when it actually reaches their screen.
     pending_notice: list = field(default_factory=list)
+    #: The AGENT's copy: cleared when it is actually handed to the model.
+    #: Neither delivery implies the other. Before this the agent's copy lived
+    #: only in Bridge._agent_notices, in memory -- so a bridge restart between
+    #: a pass writing the user's notice and the agent's next turn silently
+    #: lost exactly the news the agent most needed (a conflict that latched
+    #: its writes), while the user's copy was already, correctly, gone.
+    #: docs/audit/02-bridge-python.md 02.20.
+    pending_notice_agent: list = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
     #: What has already been announced, per path, as a fingerprint of the
     #: situation. A divergence that cannot be resolved -- `aux.c`, a path the
@@ -278,6 +287,7 @@ class Baseline:
                 "acp": self.acp,
                 "generation": self.generation,
                 "pending_notice": self.pending_notice,
+                "pending_notice_agent": self.pending_notice_agent,
                 "latched": self.latched,
                 "reported": self.reported,
                 "reported_lines": self.reported_lines,
@@ -314,6 +324,7 @@ class Baseline:
             acp=d.get("acp", ""),
             generation=int(d.get("generation", 0)),
             pending_notice=list(d.get("pending_notice", [])),
+            pending_notice_agent=list(d.get("pending_notice_agent", [])),
             latched=dict(d.get("latched", {})),
             reported=dict(d.get("reported", {})),
             reported_lines=list(d.get("reported_lines", [])),

@@ -180,13 +180,13 @@ async def test_resolve_survives_a_baseline_it_cannot_read(b):
 # the timer between turns reaches the user's screen -- right, they are the one
 # who can act on it -- and reaches the agent nowhere.
 
-def test_no_preamble_when_there_is_nothing_to_say(b):
-    assert b._with_sync_preamble("hello") == "hello"
+async def test_no_preamble_when_there_is_nothing_to_say(b):
+    assert await b._with_sync_preamble("hello") == "hello"
 
 
-def test_a_pending_notice_rides_in_on_the_next_turn(b):
+async def test_a_pending_notice_rides_in_on_the_next_turn(b):
     b._agent_notices = ["SYNC CONFLICT src/main.c -- both sides moved."]
-    out = b._with_sync_preamble("carry on with the parser")
+    out = await b._with_sync_preamble("carry on with the parser")
 
     assert "src/main.c" in out
     assert "carry on with the parser" in out
@@ -195,29 +195,29 @@ def test_a_pending_notice_rides_in_on_the_next_turn(b):
     assert "the user's message follows" in out
 
 
-def test_the_preamble_says_writing_again_is_not_an_option(b):
+async def test_the_preamble_says_writing_again_is_not_an_option(b):
     """The agent's natural move on being told about a conflict is to rewrite
     the file. It cannot -- the path refuses pushes -- and the preamble has to
     say so, or it will try, succeed locally, and report success."""
     b._agent_notices = ["SYNC CONFLICT a.c"]
-    out = b._with_sync_preamble("go on")
+    out = await b._with_sync_preamble("go on")
     assert "REFUSES your writes" in out
     assert "sync_resolve" in out
     assert "finished with the file" in out
 
 
-def test_a_notice_is_not_repeated_on_every_turn(b):
+async def test_a_notice_is_not_repeated_on_every_turn(b):
     b._agent_notices = ["SYNC CONFLICT a.c"]
-    first = b._with_sync_preamble("one")
-    second = b._with_sync_preamble("two")
+    first = await b._with_sync_preamble("one")
+    second = await b._with_sync_preamble("two")
     assert "a.c" in first
     assert second == "two"
 
 
-def test_the_preamble_is_skipped_when_sync_is_off(tmp_path):
+async def test_the_preamble_is_skipped_when_sync_is_off(tmp_path):
     bridge = Bridge("s", host="127.0.0.1", port=0)
     bridge._agent_notices = ["stale"]
-    assert bridge._with_sync_preamble("hello") == "hello"
+    assert await bridge._with_sync_preamble("hello") == "hello"
 
 
 async def test_continue_lifts_every_withheld_path(b):

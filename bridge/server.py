@@ -610,6 +610,7 @@ class Bridge:
         # A guest that was away may have been edited while it was away, and
         # nothing reconciled that until its watcher next happened to fire.
         if self.sync_dir:
+            self._seed_agent_notices()
             self._spawn(self.run_sync("the machine reconnected"))
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
@@ -1202,12 +1203,41 @@ class Bridge:
             log.warning("unknown frame type from guest: %s", f.type)
             await self._send(guest, error("unknown_type", f.type), stamp=False)
 
-    def _with_sync_preamble(self, text: str) -> str:
+    def _seed_agent_notices(self) -> None:
+        """Fold whatever the baseline still owes the agent into memory.
+
+        `_agent_notices` is a Bridge-lifetime cache of
+        `base.pending_notice_agent` (02.20): the durable queue is the source
+        of truth, and this is what makes a bridge that just restarted catch
+        up on a notice a PREVIOUS process wrote and delivered to the user's
+        screen, but never got to hand to the model before it stopped. Called
+        at every attach rather than once at startup, so it also catches a
+        notice written by a pass that ran while nothing was connected --
+        merged, not replaced, so it cannot drop one already waiting in
+        memory for a turn that has not started yet.
+        """
+        try:
+            base = self._load_baseline()
+        except Exception:
+            return
+        for text in base.pending_notice_agent:
+            if text not in self._agent_notices:
+                self._agent_notices.append(text)
+
+    async def _with_sync_preamble(self, text: str) -> str:
         """Prepend anything sync needs the agent to know, and mark it delivered.
 
         Marked delivered when it is handed to the model, not when the model
         acts on it -- there is no signal for the latter, and re-sending on every
         turn until the agent happens to mention it would bury the next one.
+
+        The in-memory queue is cleared first, synchronously, so a notice
+        raised while the durable clear below is in flight is not lost (the
+        same reason `notices_delivered` clears by value rather than by
+        emptying the list). The disk clear is best-effort: a crash in the
+        narrow window between the model seeing these lines and the save below
+        means they are handed over once more after a restart, which is the
+        safe direction to err -- see 02.20.
         """
         if not self.sync_dir or not self._agent_notices:
             return text
@@ -1227,7 +1257,31 @@ class Bridge:
         lines.append("")
         lines.append("--- the user's message follows ---")
         lines.append("")
+        await self._clear_agent_notices(pending)
         return "\n".join(lines) + text
+
+    async def _clear_agent_notices(self, delivered: list) -> None:
+        """Durable half of `_with_sync_preamble` -- see there and 02.20."""
+        if not delivered or not self.sync_dir:
+            return
+        async with self._baseline_lock():
+            try:
+                base = self._load_baseline()
+            except Exception:
+                return
+            gone = list(delivered)
+            keep = []
+            for t in base.pending_notice_agent:
+                if t in gone:
+                    gone.remove(t)
+                else:
+                    keep.append(t)
+            base.pending_notice_agent = keep
+            try:
+                base.save(os.path.join(self.sync_state, "base.json"))
+            except Exception as exc:      # pragma: no cover - disk failure
+                log.warning("could not record delivered agent notices: %s",
+                           exc)
 
     async def _resume_turn(self, guest: GuestSession, answered) -> None:
         """Continue: wait for the wire to be ours, THEN unlatch, THEN explain.
@@ -1283,7 +1337,7 @@ class Bridge:
         # the preserved copy, never merge, and never call sync_resolve, and the
         # path would stay latched for the rest of the session with the agent
         # quietly unable to write to it and no idea why.
-        text = self._with_sync_preamble(text)
+        text = await self._with_sync_preamble(text)
         try:
             turn = await guest.claude.send(text)
         except Exception as exc:
@@ -1476,9 +1530,17 @@ class Bridge:
                 for note in got.get("notices", []):
                     await self._write_block(guest, H.notice(note))
                     delivered.append(note)
-                    # The agent needs the same news, and it has no other way to
-                    # get it: nothing reaches a session except an INPUT.
-                    self._agent_notices.append(note)
+                # The agent needs the same news, and it has no other way to
+                # get it: nothing reaches a session except an INPUT. Merged
+                # rather than replaced or matched 1:1 against the user's set
+                # above: pending_notice_agent is its OWN durable queue
+                # (02.20), so it can carry an entry the user's copy already
+                # dropped (delivered last pass, bridge restarted before the
+                # agent's next turn) -- and a `not in` merge cannot drop one
+                # already waiting in memory for a turn that has not started.
+                for note in got.get("agent_notices", []):
+                    if note not in self._agent_notices:
+                        self._agent_notices.append(note)
 
                 # A conflict STOPS the agent, and stopping it means saying so
                 # on the user's screen with a way to start it again. The
@@ -1560,6 +1622,10 @@ class Bridge:
         """
         log.warning("sync pass aborted: %s", reason)
         state = os.path.join(self.sync_state, "base.json")
+        agent_text = (
+            f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
+            f"direction until this is resolved. Do not tell the user a file "
+            f"has reached their machine; it has not.")
         try:
             base = self._load_baseline()
         except Exception:
@@ -1577,6 +1643,10 @@ class Bridge:
                 return
             base.aborted = reason
             base.announced.append(reason)
+            # Durable, same as a Pass.note() (02.20): a bridge restart
+            # between this and the agent's next turn must not silently lose
+            # the one notice that tells it sync has stopped entirely.
+            base.pending_notice_agent.append(agent_text)
             try:
                 base.save(state)
             except Exception as exc:          # pragma: no cover - disk failure
@@ -1594,10 +1664,8 @@ class Bridge:
         # The agent needs it too, and for the same reason the conflict notices
         # go this way: it will otherwise report a file as delivered when the
         # layer that delivers it has not run for an hour.
-        self._agent_notices.append(
-            f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
-            f"direction until this is resolved. Do not tell the user a file "
-            f"has reached their machine; it has not.")
+        if agent_text not in self._agent_notices:
+            self._agent_notices.append(agent_text)
 
     def _load_baseline(self):
         from .files.sync import Baseline

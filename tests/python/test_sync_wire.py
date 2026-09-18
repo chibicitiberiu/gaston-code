@@ -877,6 +877,65 @@ async def test_clearing_does_not_drop_a_notice_raised_meanwhile(
     assert p.base.pending_notice == ["raised while the first was being sent"]
 
 
+# --- 02.20: the agent's copy of a notice is durable too ---------------------
+
+
+def test_note_writes_both_durable_queues(harness, tmp_path):
+    """The user's and the agent's copies are two separate durable queues on
+    the SAME baseline, not the same list read twice -- so one can be
+    delivered without the other."""
+    p = a_pass(harness, tmp_path)
+    p.note("SYNC: conflict on x.c")
+    assert p.base.pending_notice == ["SYNC: conflict on x.c"]
+    assert p.base.pending_notice_agent == ["SYNC: conflict on x.c"]
+
+    reloaded = Baseline.load(p.state)
+    assert reloaded.pending_notice_agent == ["SYNC: conflict on x.c"]
+
+
+async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
+        harness, tmp_path):
+    """The scenario 02.20 names: a pass raises a conflict notice, it reaches
+    the user's screen (and is cleared from the user's durable queue), and the
+    bridge is replaced -- a crash, a redeploy -- before the agent's next
+    turn. Before this, Bridge._agent_notices was memory-only, so the news
+    the agent most needed (a conflict that latched its writes) was the one
+    that did not survive.
+    """
+    from bridge.server import Bridge
+
+    p = a_pass(harness, tmp_path)
+    p.note("SYNC: conflict on x.c -- your copy was kept")
+    # What run_sync does once the notice is actually on the user's screen:
+    # clear the USER's copy. The agent's has not been touched.
+    p.notices_delivered(["SYNC: conflict on x.c -- your copy was kept"])
+    assert p.base.pending_notice == [], "test setup: user's copy delivered"
+    assert p.base.pending_notice_agent == [
+        "SYNC: conflict on x.c -- your copy was kept"], (
+        "test setup: agent's copy still outstanding")
+
+    # A fresh Bridge, standing in for the process that replaced the one
+    # that ran the pass above -- nothing in memory survives a restart.
+    fresh = Bridge("s", host="127.0.0.1", port=0)
+    fresh.sync_dir = p.root
+    fresh.sync_state = os.path.dirname(p.state)
+    assert fresh._agent_notices == []
+
+    fresh._seed_agent_notices()
+    assert fresh._agent_notices == [
+        "SYNC: conflict on x.c -- your copy was kept"], (
+        "the notice the old process never got to hand over must be picked "
+        "up from disk, not lost with the process that wrote it"
+    )
+
+    out = await fresh._with_sync_preamble("carry on")
+    assert "x.c" in out
+    assert fresh._agent_notices == []
+    # And the durable half actually cleared, not just the in-memory cache --
+    # or the NEXT restart would hand the same notice over a third time.
+    assert Baseline.load(p.state).pending_notice_agent == []
+
+
 class _FakeClaude:
     """Just enough session for the turn to start and be observed.
 
