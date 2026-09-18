@@ -75,11 +75,32 @@ def test_relative_and_absolute_are_refused_not_resolved():
 
 def test_length_counts_the_guest_prefix_not_just_the_relpath():
     """The limit is 260 INCLUDING the drive, root and NUL -- so a path legal on
-    Linux can be untranslatable a few directories deep."""
+    Linux can be untranslatable a few directories deep.
+
+    Long COMPONENTS, not many of them, so this stays under MAX_DEPTH and
+    exercises the length rule on its own -- test_paths_deeper_than_the_guests_
+    own_scanner_are_refused below is the one for the depth rule.
+    """
     assert ok("a" * 200)
     assert why("a/" + "b" * 260) is not None
-    deep = "/".join(["dir"] * 70) + "/file.c"   # 70*4 + 7 + 2 > 260
+    deep = "/".join(["d" * 40] * 7) + "/file.c"   # 7*41 + 7 + 2 > 260, 8 deep
     assert why(deep) == "path too long"
+
+
+def test_paths_deeper_than_the_guests_own_scanner_are_refused():
+    """03.25: the guest's walk (win/sync/sync.h: RC_SYNC_MAX_DEPTH == 16)
+    stops recursing past MAX_DEPTH + 1 components -- it still lists the
+    children of the deepest directory it enters, it just never enters THEM.
+    A path past that line would push fine, ack fine, and then vanish from
+    every later scan with nothing anywhere saying why. Refusing here, before
+    the first push, is the only place that can be caught.
+    """
+    at_limit = "/".join(["d"] * (P.MAX_DEPTH + 1))         # 17 components: fine
+    assert ok(at_limit)
+    one_deeper = at_limit + "/x"                            # 18 components: not
+    assert why(one_deeper) == "path too deep"
+    # A short path is not somehow exempt from a component-count rule.
+    assert ok("a/b/c.txt")
 
 
 def test_names_with_no_form_in_the_guest_codepage():

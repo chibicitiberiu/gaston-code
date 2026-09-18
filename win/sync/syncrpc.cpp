@@ -275,11 +275,7 @@ static void do_putend(rc_net *net, rc_frame *f)
      * overwritten with nothing reported. Re-read the target NOW and refuse if
      * it is not what the bridge decided against. */
     if (ifc && *ifc) {
-        rc_strf(full, sizeof(full), "%s\\%s", g_root, g_put.rel);
-        {
-            char *q;
-            for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
-        }
+        rc_sync_join(full, sizeof(full), g_root, g_put.rel);
         memset(&cur, 0, sizeof(cur));
         rc_sync_stat_file(full, &cur);
         if (strcmp(ifc, "absent") == 0) {
@@ -318,6 +314,14 @@ static void do_putend(rc_net *net, rc_frame *f)
      * fine and retrying will never help. The bridge stops pushing the path and
      * reports it instead, which is the only useful answer. */
     if (rc == -4) { put_fail(net, id, "too_long");     return; }
+    /* -1 (the just-verified temp file no longer stats as a plain file) and -3
+     * (the final MoveFileA into place failed) are not disk-space problems
+     * either -- both point at something else holding the path right after we
+     * let go of it, which is the same "try again" shape as the file being
+     * open for read in do_get. `no_space` used to be the catch-all for every
+     * non-zero rc_sync_commit that was not -2 or -4, which sent the model
+     * looking at free disk space for a cause that was actually a lock. */
+    if (rc == -1 || rc == -3) { put_fail(net, id, "locked");    return; }
     if (rc != 0)  { put_fail(net, id, "no_space");     return; }
 
     /* The bridge advances its baseline from THIS crc, never from a re-scan --
@@ -339,12 +343,10 @@ static void do_mkdir(rc_net *net, rc_frame *f)
     const char *vals[2];
     const char *status = "ok";
     char full[MAX_PATH];
-    char *q;
 
     if (!rc_sync_contained(f->body)) status = "bad_path";
     else {
-        rc_strf(full, sizeof(full), "%s\\%s", g_root, f->body);
-        for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
+        rc_sync_join(full, sizeof(full), g_root, f->body);
         if (!CreateDirectoryA(full, NULL)) {
             DWORD e = GetLastError();
             DWORD a = GetFileAttributesA(full);
@@ -379,9 +381,8 @@ static void do_get(rc_net *net, rc_frame *f)
     const char *keys[4];
     const char *vals[4];
     char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
-    char *q;
     /* Zeroed HERE, not only on the branch that stats a real file: the
-     * rejected-path branch below (bad_path -> "missing") falls straight
+     * rejected-path branch below (a contained() refusal) falls straight
      * through to the crc/cls _snprintf calls without ever touching st, and an
      * uninitialised rc_sync_stat sent those two fields to the bridge as
      * whatever garbage was on the worker's stack. */
@@ -406,10 +407,15 @@ static void do_get(rc_net *net, rc_frame *f)
         rc_net_send(net, "SYNCDATEND", k, v, 2, NULL, 0);
         return;
     }
-    if (!rc_sync_contained(f->body)) status = "missing";
+    /* `bad_path`, matching do_put (syncrpc.c) and do_mkdir below -- not
+     * `missing`. The cause is identical (rc_sync_contained refused the
+     * relative path) and used to be reported as `missing` here alone, which
+     * reads as "the user deleted the file" and would send the bridge down the
+     * wrong branch entirely: `missing` is something a retry can never fix,
+     * `bad_path` is something the bridge sent that it should not have. */
+    if (!rc_sync_contained(f->body)) status = "bad_path";
     else {
-        rc_strf(full, sizeof(full), "%s\\%s", g_root, f->body);
-        for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
+        rc_sync_join(full, sizeof(full), g_root, f->body);
 
         rc_sync_stat_file(full, &st);
         if (st.type == 'u')      status = "locked";        /* held open */

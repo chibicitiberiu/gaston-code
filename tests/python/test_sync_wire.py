@@ -140,6 +140,23 @@ async def test_too_many_aborts_the_whole_pass(harness, tmp_path):
     await harness.close(writer)
 
 
+async def test_too_many_names_the_actual_limit(harness, tmp_path):
+    """03.24: SYNCEND only ever carries status=too_many -- the count itself
+    never crosses the wire, because the scan that would have counted past it
+    is the one that gave up instead of finishing. Before this, the message
+    was just "guest scan returned too_many", and nobody reading it could tell
+    how many files is too many."""
+    from bridge.files.syncrun import SYNC_MAX_FILES
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    task = asyncio.create_task(p.scan_guest())
+    await fake_scan(harness, reader, writer, {}, status="too_many")
+    with pytest.raises(SyncError, match=str(SYNC_MAX_FILES)):
+        await asyncio.wait_for(task, 5)
+    await harness.close(writer)
+
+
 async def test_a_different_tree_is_refused_not_first_synced(harness, tmp_path):
     """Trace it as a first sync and a reconnect from the original guest
     overwrites the conflict copy holding the agent's work."""
@@ -218,6 +235,33 @@ async def test_a_changed_refusal_does_not_advance_the_baseline(harness, tmp_path
         "id": put.headers["id"], "status": "changed", "crc": "0"}))
     assert await asyncio.wait_for(task, 5) is False
     assert any("changed" in r for r in p.reports)
+    await harness.close(writer)
+
+
+async def test_a_too_long_push_refusal_names_the_actual_limit(harness, tmp_path):
+    """03.41: `too_long` used to reach the agent as a bare "push X refused:
+    too_long" with no number in it, unlike exec's own too_long, which names
+    its limit. The bridge already has the number -- the same `paths.check`
+    the pre-push scan ran -- so this re-derives it purely to explain a
+    refusal the guest has already made.
+
+    The push here is of an ordinary short path, so the bridge's own check
+    agrees nothing is wrong with it -- which is itself worth reporting: the
+    guest and the bridge disagreeing about the limit is news, not silence.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    open(os.path.join(p.root, "a.txt"), "wb").write(b"x\n")
+
+    task = asyncio.create_task(p.push("a.txt", None))
+    put = await _recv(harness, reader, "SYNCPUT")
+    await _recv(harness, reader, "SYNCPUTEND")
+    await harness.send(writer, Frame("SYNCPUTACK", {
+        "id": put.headers["id"], "status": "too_long", "crc": "0"}))
+    assert await asyncio.wait_for(task, 5) is False
+    assert any("too_long" in r and "disagrees" in r for r in p.reports), \
+        p.reports
     await harness.close(writer)
 
 
@@ -577,6 +621,45 @@ async def test_a_deletion_on_both_sides_tombstones_and_does_not_resurrect(
     assert "gone.txt" in p.base.tombs
     assert "gone.txt" not in p.base.rows
     assert p.base.tombs["gone.txt"].crc == 5     # the CRC, not a bare marker
+    await harness.close(writer)
+
+
+async def test_a_failed_mkdir_withholds_the_pushes_under_it_without_spam(
+        harness, tmp_path):
+    """03.45: a directory whose MKDIR the guest refuses used to still get
+    every file under it pushed anyway, each one individually refused by the
+    guest as `no_parent` -- one cause, reported once per file, every single
+    pass. Now the whole subtree is withheld after the one refusal, with one
+    report, and the guest is never even asked for a transfer that can only
+    fail.
+
+    Proof this is real and not cosmetic: without the fix, `run()` goes on to
+    send SYNCPUT for `sub/file.txt` and this fake guest never answers it, so
+    the pass hangs until the outer `wait_for` below times out.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    os.makedirs(os.path.join(p.root, "sub"))
+    open(os.path.join(p.root, "sub", "file.txt"), "wb").write(b"x\n")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {})
+    mk = await _recv(harness, reader, "SYNCMKDIR")
+    assert mk.body == b"sub"
+    await harness.send(writer, Frame("SYNCMKDIRACK", {
+        "id": mk.headers["id"], "status": "no_parent"}))
+
+    done = await asyncio.wait_for(task, 10)
+    assert done["dirs"] == 0
+    assert "sub" not in p.base.rows
+    assert "sub/file.txt" not in p.base.rows
+    assert any("withheld" in r and "sub" in r for r in p.reports), p.reports
+    # The mkdir failure itself is still reported and explained -- withholding
+    # the child is on top of that, not instead of it. `no_parent` gets a
+    # plain-English note rather than the bare status word.
+    assert any("own parent directory" in n for n in p.base.pending_notice), \
+        p.base.pending_notice
     await harness.close(writer)
 
 

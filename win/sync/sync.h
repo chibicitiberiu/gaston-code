@@ -81,6 +81,14 @@ int  rc_sync_stat_file(const char *path, rc_sync_stat *out);
  * checking is not enough when the bridge is what might be wrong. */
 int  rc_sync_contained(const char *rel);
 
+/* `root` + '\' + `rel`, with every '/' in `rel` turned into '\'. Returns 1 if
+ * the whole path fit in `cap`, 0 if it was truncated -- a truncated join
+ * names a DIFFERENT file, so a caller that ignores the return value stats,
+ * opens or renames the wrong thing with no way to find out. The one place
+ * this is done, so a join bug is fixed once rather than wherever it was
+ * last copied. */
+int  rc_sync_join(char *out, unsigned cap, const char *root, const char *rel);
+
 /* Open a file for writing through a temp; rc_sync_commit renames it into place,
  * having first moved any existing file aside so no instant has no file at all. */
 HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,

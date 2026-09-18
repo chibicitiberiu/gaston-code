@@ -246,8 +246,14 @@ int rc_sync_contained(const char *rel)
  * a VALID-LOOKING path to a different file, so every caller went on to stat,
  * open or rename the wrong thing with no way to find out. Two of the bugs
  * fixed on 2026-09-18 came through here. Callers that act on the result now
- * check it. */
-static int join(char *out, unsigned cap, const char *root, const char *rel)
+ * check it.
+ *
+ * Exported (was `static`) because it is the one place that turns a root and a
+ * '/'-separated relative path into the backslashed form Win32 wants, and
+ * syncrpc.c had open-coded the same six lines at three of its own call sites
+ * instead of linking against it -- so "the shared helper" was shared with
+ * nobody. A join bug fixed here used to need fixing again there. */
+int rc_sync_join(char *out, unsigned cap, const char *root, const char *rel)
 {
     char *q;
     int ok = rc_strf(out, cap, "%s\\%s", root, rel);
@@ -314,7 +320,7 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
 
     if (depth > RC_SYNC_MAX_DEPTH || w->overflow) return;
 
-    if (*rel) join(pattern, sizeof(pattern), root, rel);
+    if (*rel) rc_sync_join(pattern, sizeof(pattern), root, rel);
     else      rc_strf(pattern, sizeof(pattern), "%s", root);
     /* Bounded, but strncat's failure is a pattern with the "\\*" missing or
      * half-appended rather than an error -- and FindFirstFileA then either
@@ -382,7 +388,7 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
             /* A truncated join names a DIFFERENT file, so stat'ing it would
              * report someone else's size and checksum under this path. `u`
              * says what is true: it is there and we cannot address it. */
-            if (!join(full, sizeof(full), root, child)) {
+            if (!rc_sync_join(full, sizeof(full), root, child)) {
                 memset(&st, 0, sizeof(st));
                 st.type = 'u';
                 w->sink(w->ctx, child, &st);
@@ -471,7 +477,7 @@ HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
         return INVALID_HANDLE_VALUE;
     }
 
-    join(full, sizeof(full), root, rel);
+    rc_sync_join(full, sizeof(full), root, rel);
     rc_strf(tmp_out, tmp_cap, "%s" RC_SYNC_TMP_SUFFIX, full);
     tmp_out[tmp_cap - 1] = '\0';
 
@@ -489,7 +495,7 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
     rc_sync_stat got;
     DWORD attr;
 
-    join(full, sizeof(full), root, rel);
+    rc_sync_join(full, sizeof(full), root, rel);
 
     /* Verify before replacing anything. A transfer that cannot establish
      * crc(guest) == what was sent is reported, never retried. */
@@ -553,7 +559,7 @@ static void recover_dir(const char *root, const char *rel, int depth)
     HANDLE h;
 
     if (depth > RC_SYNC_MAX_DEPTH) return;
-    if (*rel) join(pattern, sizeof(pattern), root, rel);
+    if (*rel) rc_sync_join(pattern, sizeof(pattern), root, rel);
     else      rc_strf(pattern, sizeof(pattern), "%s", root);
     /* Bounded, but strncat's failure is a pattern with the "\\*" missing or
      * half-appended rather than an error -- and FindFirstFileA then either
@@ -582,7 +588,7 @@ static void recover_dir(const char *root, const char *rel, int depth)
         if (len > RC_SYNC_SUFFIX_LEN &&
             strcmp(fd.cFileName + len - RC_SYNC_SUFFIX_LEN,
                    RC_SYNC_OLD_SUFFIX) == 0) {
-            join(aside, sizeof(aside), root, child);
+            rc_sync_join(aside, sizeof(aside), root, child);
             rc_strf(real, sizeof(real), "%s", aside);
             /* Safe only transitively -- fd.cFileName was proven longer than
              * the suffix by the strcmp guard above, and MAX_PATH dwarfs it --
@@ -599,7 +605,7 @@ static void recover_dir(const char *root, const char *rel, int depth)
         } else if (len > RC_SYNC_SUFFIX_LEN &&
                    strcmp(fd.cFileName + len - RC_SYNC_SUFFIX_LEN,
                           RC_SYNC_TMP_SUFFIX) == 0) {
-            join(aside, sizeof(aside), root, child);
+            rc_sync_join(aside, sizeof(aside), root, child);
             DeleteFileA(aside);       /* an abandoned transfer */
         }
     } while (FindNextFileA(h, &fd));

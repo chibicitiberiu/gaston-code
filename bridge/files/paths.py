@@ -49,6 +49,28 @@ MAX_DIR_PATH = MAX_PATH - 12
 # VFAT and ext4 both stop here.
 MAX_COMPONENT = 255
 
+# The guest's own walk (win/sync/sync.h: RC_SYNC_MAX_DEPTH, win/sync/sync.cpp)
+# refuses to recurse past this many directory levels, and says NOTHING when it
+# stops -- no status, no count, nothing on the wire. A path this deep still
+# WRITES fine: rc_sync_begin_write has no depth check of its own, only the
+# scanner does. So a push into a path 18 components deep lands on the guest,
+# the guest acks it, the baseline advances -- and the very next scan simply
+# never visits it again, because the directory that would have to be
+# recursed into to find it is one level past where the walk gives up.
+# From the diff's point of view that reads as "deleted on the guest, kept
+# here" forever: not a re-push, but a standing false report that never
+# resolves and a path that can never be edited-and-synced again after its
+# first push, with nothing anywhere saying why (03.25).
+#
+# The only place this can actually be caught is here, before the first push --
+# same reasoning as MAX_DIR_PATH above, and the same reason a directory
+# reservation cannot be enforced by the receiver. `unreachable at depth D`
+# below is a component count, not the guest's own zero-based recursion depth:
+# walking with RC_SYNC_MAX_DEPTH == 16 still lists the children of the 17th
+# level (they are enumerated by the call that is listing ITS parent), so
+# nothing is invisible until the 18th component.
+MAX_DEPTH = 16
+
 # Reserved device names on Windows 9x. These are devices **in every directory**
 # and **with any extension** -- `aux.c` is the AUX device, not a file, and
 # `aux.h`/`con.py` are ordinary names in real source trees.
@@ -162,6 +184,21 @@ def check(relpath: str, *, guest_root: str, caps=DEFAULT,
         bad = _component_ok(part, caps)
         if bad is not None:
             return bad
+
+    # 03.25: past MAX_DEPTH + 1 components the guest's own walk would visit
+    # this path once, on the pass that first lists its parent, and then never
+    # again -- see MAX_DEPTH above. Refusing here, before the first push, is
+    # the only point where that is catchable: the guest gives no signal when
+    # its walk gives up, so there is nothing to react to afterwards, and a
+    # path that slipped through would look identical to an ordinary file right
+    # up until the SECOND pass quietly stopped seeing it.
+    if len(parts) > MAX_DEPTH + 1:
+        return Skip(
+            "path too deep",
+            f"{len(parts)} components under {guest_root!r}; the machine's "
+            f"own scanner does not recurse past {MAX_DEPTH + 1}, so anything "
+            f"deeper would reach it on a push and then never be reported by "
+            f"a scan again")
 
     # The length that matters is what the guest would hold: its own BYTES,
     # prefix included. `len()` on the decoded string is the same number only

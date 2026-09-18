@@ -60,7 +60,14 @@ def test_pull_advances_the_baseline_from_the_ack():
     content over it with no conflict raised.
     """
     src = inspect.getsource(Pass.run)
-    branch = src[src.index("S.Act.PULL"):src.index("S.Act.MKDIR")]
+    # Anchored on the branch HEADERS, not the bare token: 03.45 added a
+    # pre-check earlier in the loop that also mentions `S.Act.MKDIR` (to
+    # withhold a push into a directory whose own MKDIR already failed this
+    # pass), and a bare `src.index("S.Act.MKDIR")` would find that mention
+    # first -- before the PULL branch even starts -- and slice backwards into
+    # nothing.
+    branch = src[src.index("elif dec.act is S.Act.PULL"):
+                src.index("elif dec.act is S.Act.MKDIR")]
     assert "self._pulled[dec.key]" in branch, (
         "the PULL branch must take its baseline row from the transfer's ack, "
         "not from a fresh stat of the file we just wrote")

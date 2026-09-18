@@ -45,6 +45,16 @@ _MOVES_BYTES = frozenset((S.Act.PUSH, S.Act.PULL, S.Act.MKDIR,
 
 MAX_FILE = 1024 * 1024
 
+#: Prose restatement of the guest's own RC_SYNC_MAX_FILES (win/sync/sync.h,
+#: currently 2000) for the message shown to the model (03.24). The guest's
+#: SYNCEND only ever says status=too_many -- the count itself never crosses
+#: the wire, because the scan that would have counted them past the limit is
+#: the same scan that aborted rather than finish -- so this is the only place
+#: the number can come from, the same way EXEC_MAX_CMD is mirrored in
+#: server.py for exec's own too_long. Named rather than a bare literal so a
+#: change on the guest side is at least a grep away from here.
+SYNC_MAX_FILES = 2000
+
 
 class SyncError(Exception):
     """A pass that must abort rather than act on what it received."""
@@ -132,6 +142,18 @@ class Pass:
         finally:
             self.guest.sync_pending.pop(sid, None)
 
+        if status == "too_many":
+            # 03.24: the limit itself never crosses the wire -- SYNCEND only
+            # ever says status=too_many, because the scan that would have
+            # counted past it is the same scan that aborted instead of
+            # finishing. Without a number here the message only ever said
+            # "too_many", and nobody reading it -- user or agent -- could tell
+            # how many files is too many, or by how much this tree misses it.
+            raise SyncError(
+                f"guest scan returned too_many: the tree under the sync root "
+                f"has more than the machine's {SYNC_MAX_FILES}-file scan "
+                f"limit. Narrow the sync root, or exclude more of the tree "
+                f"with .gitignore, so the scan stays under that count.")
         if status != "ok":
             # A truncated manifest is indistinguishable from a mass deletion,
             # and the natural implementation acts on what arrived -- pushing the
@@ -306,6 +328,28 @@ class Pass:
 
     # --- applying ----------------------------------------------------------
 
+    def _too_long_detail(self, status: str, rel: str, *, is_dir: bool = False) -> str:
+        """03.41: `too_long` named no limit in a push/mkdir refusal, unlike
+        exec's own too_long (`_exec_result`), which tells the model the exact
+        character count. The number was always available here -- it is the
+        same `P.check` the pre-push scan already ran on this path -- so this
+        re-runs it purely to explain a refusal the guest has already made,
+        never to decide anything.
+
+        Also catches the two rules disagreeing: if the bridge's own check
+        finds nothing wrong with a path the guest just refused as too_long,
+        that is itself worth saying, because it means the two path-length
+        rules have drifted apart.
+        """
+        if status != "too_long":
+            return ""
+        bad = P.check(rel, guest_root=self.guest_root, caps=self.caps,
+                      is_dir=is_dir)
+        if bad is not None:
+            return f" ({bad})"
+        return (" (the machine's own length rule disagrees with the "
+                "bridge's -- this path passed the pre-push check here)")
+
     async def push(self, rel: str, expect: S.Entry | None) -> bool:
         """Send one file. Returns True when the baseline may advance."""
         full = os.path.join(self.root, rel)
@@ -363,7 +407,8 @@ class Pass:
             self.guest.sync_pending.pop(sid, None)
 
         if status != "ok":
-            self.reports.append(f"push {rel} refused: {status}")
+            self.reports.append(f"push {rel} refused: {status}"
+                                + self._too_long_detail(status, rel))
             return False
         if ack_crc != crc:
             # Invariant 2: reported, never retried.
@@ -469,7 +514,10 @@ class Pass:
         `exists` is success: the directory is there, which is all the row
         claims. Anything else is a refusal that must reach the agent -- a
         directory that fails to appear makes every push into it fail with
-        `readonly`, which reads as a permissions problem and is not one.
+        `no_parent` (03.45; this used to read `readonly`, back when do_put
+        answered every open failure that way and the distinction did not
+        exist on the wire yet), which reads as a permissions problem if
+        nothing here says otherwise.
         """
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
@@ -484,9 +532,22 @@ class Pass:
 
         if status in ("ok", "exists"):
             return True
-        self.reports.append(f"mkdir {rel} refused: {status}")
-        self.note(f"SYNC: could not create the directory {rel} on the machine "
-                  f"({status}), so nothing under it can be copied there.")
+        self.reports.append(f"mkdir {rel} refused: {status}"
+                            + self._too_long_detail(status, rel, is_dir=True))
+        if status == "no_parent":
+            # 03.45: the guest already tells us this is specifically a
+            # missing-PARENT problem, not a permissions one -- distinct from
+            # `bad_path`, which blames the name (win/sync/syncrpc.c). Saying
+            # so plainly means the agent stops looking for a permissions fix
+            # that does not exist.
+            self.note(f"SYNC: could not create the directory {rel} on the "
+                      f"machine -- its own parent directory does not exist "
+                      f"there. Nothing under {rel} can be copied there until "
+                      f"that is resolved.")
+        else:
+            self.note(f"SYNC: could not create the directory {rel} on the "
+                      f"machine ({status}), so nothing under it can be "
+                      f"copied there.")
         return False
 
     def _next_id(self) -> str:
@@ -718,10 +779,31 @@ class Pass:
         # these and nothing else -- see GuestSession.halt_paths.
         new_conflict_paths: set[str] = set()
 
+        #: 03.45: directories whose MKDIR failed THIS pass, as key-prefixes
+        #: ("dir/"). `order()` puts a directory's own MKDIR ahead of anything
+        #: under it (ranked first, then by depth), so by the time a PUSH or a
+        #: nested MKDIR under a failed one is reached, the failure is already
+        #: known. Without this, one refused directory turned into one refusal
+        #: per file inside it -- every one of them individually reported as
+        #: `no_parent` against the guest, every single pass, for a cause the
+        #: first line already explained.
+        failed_dirs: set[str] = set()
+
         for dec in decisions:
             if dec.act is S.Act.NOTHING:
                 continue
             g, b = guest_rows.get(dec.key), bridge_rows.get(dec.key)
+
+            if dec.act in (S.Act.PUSH, S.Act.MKDIR):
+                parent = next((d for d in failed_dirs
+                              if dec.key.startswith(d)), None)
+                if parent is not None:
+                    done["skipped"] += 1
+                    self.reports.append(
+                        f"{dec.key}: withheld -- its directory "
+                        f"{parent.rstrip('/')} could not be created on the "
+                        f"machine this pass")
+                    continue
 
             # Sync never holds the wire for more than one file. A pass is a
             # sequence of small operations that can be interleaved, never a
@@ -895,6 +977,8 @@ class Pass:
                 if await self.mkdir(rel):
                     done["dirs"] += 1
                     self.base.rows[dec.key] = b
+                else:
+                    failed_dirs.add(dec.key + "/")
             elif dec.act is S.Act.ADOPT:
                 # A directory the guest has and we do not is adopted, and
                 # adopting it means CREATING it -- otherwise the row says the
