@@ -1652,3 +1652,53 @@ They asserted on counters inside `Pass`, and what the fixes changed was the
 wiring in `run_sync` and the RESUME handler. Rewritten to drive a real pass and
 a real frame, they fail as they should. Every fix here was checked by reverting
 it; that is cheap and it caught two tests that proved nothing.
+
+### 2026-09-18 — C++ feasibility: PASSED, and the migration is under way
+
+Recorded as a verdict rather than a description, because the rest of the
+work is gated on it.
+
+**The test passed.** Every gate that could have refused C++ on this target
+was measured, not argued:
+
+| gate | result |
+|---|---|
+| image loads | PASS -- PE32 "MS Windows 4.00 (GUI)", subsystem 4.0 |
+| no new imports | PASS -- import table diffs IDENTICAL to the C build |
+| W-suffix imports | PASS -- the same two stubs, none added |
+| CMOV | PASS -- unchanged at baseline |
+| stack frames | PASS -- nothing in our code reaches a page |
+| static constructors | PASS -- none, and now gated in `make check` |
+| classifier agreement | PASS -- 71 Wine tests over the corpus |
+| memory | PASS -- +512 bytes committed at load |
+| the guards themselves | PASS -- 17/17 properties, verified under Wine |
+
+The import row is the one that mattered. A single NT-only static import
+kills the image at load, before `WinMain`, with no log written and nothing
+to debug -- so that was the gate with the power to end the question, and it
+is measured and clean.
+
+**Conversion cost, measured:** 18 errors across 6,898 lines. Eight of ten
+modules compile as C++ unchanged; `frameproto.c` has two (`memchr`
+returning `void*`) and `htmlview.c` has the other sixteen, every one a COM
+vtable cast.
+
+**Steps 0-2 are done.** `extern "C"` on all eleven headers, binary
+byte-identical. `win/core/rc_cpp.h` with `operator new` over
+`GetProcessHeap()`, `Buf<N>` carrying `ok()`, and RAII for the paired
+operations. `sync.c` -> `sync.cpp` as the probe. Steps 3-6 are sequenced in
+`docs/audit/05-c-versus-cpp.md` and not yet taken.
+
+**What the language buys, in this codebase's own terms.** Three of the
+defects fixed on the same day were silent truncation -- a destroyed file, a
+vanished subtree, a cut-off message -- and in every one the information
+needed to refuse was present at the call site and discarded. `Buf<N>`
+carries that answer with the string. The equivalent fix landed in C first
+(`rc_strf` and a `join()` that returns its verdict), because a bug worth
+fixing is worth fixing before a migration rather than during one.
+
+**Still unverified, and it is the important one:** none of this has run on
+the real Windows 98 machine. `rc_strf` now touches every string path in the
+guest, `net.c` no longer routes frames, the bar takes itself down on
+disconnect, and `sync.cpp` is compiled by a different compiler. Wine proves
+the code and never the platform.
