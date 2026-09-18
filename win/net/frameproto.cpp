@@ -102,7 +102,20 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
         if (!eq) return -1;                       /* header without '=' */
         *eq = '\0';
 
-        if (out->nheaders < RC_MAX_HEADERS) {
+        /* A frame with more headers than we can hold is REFUSED, not quietly
+         * shortened. This used to be `if (nheaders < MAX)` with no else, so
+         * header seventeen simply disappeared -- while the two checks just
+         * below already dropped the frame for an over-long key or value. The
+         * one case that lost data in silence was the one where the data was
+         * perfectly well-formed and there was merely too much of it. If the
+         * missing header is `id`, an ack is answered to nobody and the far
+         * side waits out its whole timeout.
+         *
+         * Safe to be strict: the bridge's largest frame carries six headers,
+         * and tests/python/test_guest_frame.py counts them from protocol.py
+         * so that adding a seventeenth fails there rather than here. */
+        if (out->nheaders >= RC_MAX_HEADERS) return -1;
+        {
             rc_header *h = &out->headers[out->nheaders];
             /* Silently truncating a key would turn two distinct headers into
              * one; drop the frame instead. */
@@ -154,6 +167,46 @@ static int append(char *buf, unsigned bufsz, unsigned *pos, const char *s)
     return 0;
 }
 
+/* Append a header VALUE, percent-encoding the three bytes that would
+ * otherwise change the shape of the frame.
+ *
+ * This is the write half of unquote() above, and for a long time it did not
+ * exist: rc_frame_build appended values raw while the BRIDGE percent-decodes
+ * everything it receives. frameproto.h has said "header values are
+ * percent-encoded" since the file was written, and it was true in exactly one
+ * direction.
+ *
+ * Two ways that bites, both from ordinary data rather than from an attack. A
+ * '%' followed by two hex digits is DECODED by the bridge, so a value of
+ * "50%41" arrives as "50A" -- silent, self-consistent, and wrong on every
+ * layer downstream. A '\n' is worse: it ends the header line early and what
+ * follows is parsed as another header, so a frame can arrive carrying an `id`
+ * nobody sent, and `id` is what routes an ack. Values here come from the INI,
+ * from GetVersionExA and from the filesystem.
+ *
+ * Encoding only %, LF and CR keeps the parser at strchr, which is the reason
+ * the format was chosen. Everything else goes through untouched. */
+static int append_quoted(char *buf, unsigned bufsz, unsigned *pos,
+                         const char *s)
+{
+    static const char HEX[] = "0123456789ABCDEF";
+    unsigned i;
+
+    for (i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '%' || c == '\n' || c == '\r') {
+            if (*pos + 3 > bufsz) return -1;
+            buf[(*pos)++] = '%';
+            buf[(*pos)++] = HEX[(c >> 4) & 0xF];
+            buf[(*pos)++] = HEX[c & 0xF];
+        } else {
+            if (*pos + 1 > bufsz) return -1;
+            buf[(*pos)++] = (char)c;
+        }
+    }
+    return 0;
+}
+
 int rc_frame_build(char *buf, unsigned bufsz, const char *type,
                    const char *const *keys, const char *const *vals, int nkv,
                    const void *body, unsigned body_len)
@@ -167,7 +220,11 @@ int rc_frame_build(char *buf, unsigned bufsz, const char *type,
     for (i = 0; i < nkv; i++) {
         if (append(buf, bufsz, &pos, keys[i]) < 0) return -1;
         if (append(buf, bufsz, &pos, "=") < 0) return -1;
-        if (append(buf, bufsz, &pos, vals[i]) < 0) return -1;
+        /* The VALUE is encoded; the KEY is not. Keys in this tree are all
+         * string literals chosen here, so there is nothing to escape, and
+         * leaving them raw keeps a malformed key a parse error on the far
+         * side rather than something that quietly encodes into legality. */
+        if (append_quoted(buf, bufsz, &pos, vals[i]) < 0) return -1;
         if (append(buf, bufsz, &pos, "\n") < 0) return -1;
     }
     if (append(buf, bufsz, &pos, "\n") < 0) return -1;

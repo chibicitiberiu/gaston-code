@@ -55,7 +55,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
        str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
-.PHONY: synccheck inicheck cppcheck all clean check run netcheck rpccheck probe htmlspike
+.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
@@ -84,6 +84,17 @@ inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(INICHECK_OBJS)}
+	@echo "built $@"
+
+# The frame header contract, run against the shipping frameproto.o. Exists
+# because frameproto.h claimed for three phases that header values were
+# percent-encoded, and that was true of the parser and false of the builder --
+# nothing ran the two halves against each other.
+FRAMECHECK_OBJS = $(addprefix $(BUILD)/,framecheck.o frameproto.o str.o log.o)
+framecheck: $(BUILD)/framecheck.exe
+$(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(FRAMECHECK_OBJS)}
 	@echo "built $@"
 
 # Asserts the C++ guards actually guard: that Buf reports truncation at and
