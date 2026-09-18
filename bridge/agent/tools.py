@@ -155,8 +155,10 @@ def build(bridge, guest=None) -> dict:
             "action": Annotated[
                 str,
                 "release (default) -- lift the write refusal on this path, "
-                "having merged; forget -- stop tracking a path that is gone "
-                "from both sides and should not come back.",
+                "having merged; accept-revert -- the user really did undo "
+                "your change, so take their version and discard yours; "
+                "forget -- stop tracking a path that is gone from both sides "
+                "and should not come back.",
             ],
         },
     )
@@ -165,9 +167,9 @@ def build(bridge, guest=None) -> dict:
         if not path:
             return _text("No path was given.", error=True)
         action = ((args or {}).get("action") or "release").strip().lower()
-        if action not in ("release", "forget"):
-            return _text(f"Unknown action {action!r}; use release or forget.",
-                         error=True)
+        if action not in ("release", "accept-revert", "forget"):
+            return _text(f"Unknown action {action!r}; use release, "
+                         f"accept-revert or forget.", error=True)
         return _text(await bridge.sync_resolve(path, action, guest))
 
     server = create_sdk_mcp_server(name="machine", version="0.1.0",

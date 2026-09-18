@@ -1933,7 +1933,44 @@ class Bridge:
                     f"again in the meantime, it will conflict again -- which "
                     f"is correct, not a failure.")
 
-        # forget
+        if action == "accept-revert":
+            # The guest holds exactly what the last push REPLACED, so `diff`
+            # called it a reverted push and preserved the agent's version
+            # rather than pulling (sync.py, row 15). That guard exists for a
+            # stale editor buffer writing back an old copy, and it cannot tell
+            # that from a person who genuinely undid the change -- which is
+            # the whole reason this action exists rather than the agent being
+            # told to "edit it again".
+            #
+            # Dropping `prev` is the entire mechanism: with no record of what
+            # the push replaced, the guest simply differs from the ancestor,
+            # and the ordinary "the guest moved" row pulls it. Nothing here
+            # transfers anything or decides what the content should be.
+            prev = base.prev.pop(key, None)
+            was_latched = base.latched.pop(key, None) is not None
+            if prev is None and not was_latched:
+                return (f"{path} is not being held as a reverted push. "
+                        f"Nothing changed -- call sync_status to see what is "
+                        f"actually withheld.")
+            base.save(state)
+            log.info("sync: %s revert accepted by the agent", key)
+            if not base.latched and self._guest is not None:
+                self._spawn(self._clear_halt(self._guest))
+            return (f"Accepted the machine's version of {path}. The next pass "
+                    f"will copy it here, replacing what was written. The "
+                    f"previous content is not kept -- if it is still wanted, "
+                    f"read the file after the pull and re-apply the change.")
+
+        if action != "forget":
+            # A THIRD action made this fallthrough dangerous. Until now the
+            # function had exactly two, so "not release" meant "forget" and
+            # the only guard on that was in tools.py, a different file. An
+            # unrecognised action reaching here dropped the row -- the
+            # destructive one of the pair -- which is the wrong way round for
+            # a default.
+            return (f"Unknown action {action!r}; use release, accept-revert "
+                    f"or forget.")
+
         removed = (base.tombs.pop(key, None) is not None
                    or base.rows.pop(key, None) is not None)
         base.latched.pop(key, None)

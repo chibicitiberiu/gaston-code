@@ -164,6 +164,59 @@ async def test_resolve_forget_on_an_untracked_path_says_so(b):
     assert "not tracked" in await b.sync_resolve("never-existed.c", "forget")
 
 
+async def test_resolve_accept_revert_drops_the_prev_that_blocked_the_pull(b):
+    """`diff` refuses to pull when the guest holds exactly what the last push
+    replaced, because a stale editor buffer writing an old copy back looks
+    identical to an edit. It cannot tell that from a person who genuinely
+    undid the change, so this is the escape hatch -- and dropping `prev` is
+    the whole mechanism: with no record of what the push replaced, the guest
+    just differs from the ancestor and the ordinary row pulls it."""
+    path = os.path.join(b.sync_state, "base.json")
+    base = b._load_baseline()
+    base.prev["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=11)
+    base.latched["src/main.c"] = "the guest reverted a push"
+    base.save(path)
+
+    out = await b.sync_resolve("src/main.c", "accept-revert")
+    assert "Accepted the machine's version" in out
+    after = b._load_baseline()
+    assert "src/main.c" not in after.prev
+    assert not after.latched
+
+
+async def test_resolve_accept_revert_says_the_old_content_is_not_kept(b):
+    """The agent's version is discarded by this action and nothing stages it.
+    Saying so is the difference between the agent re-applying its change and
+    the agent believing the bridge kept a copy it can ask for."""
+    path = os.path.join(b.sync_state, "base.json")
+    base = b._load_baseline()
+    base.prev["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=11)
+    base.save(path)
+
+    out = await b.sync_resolve("src/main.c", "accept-revert")
+    assert "not kept" in out
+
+
+async def test_resolve_accept_revert_is_honest_when_nothing_was_reverted(b):
+    assert "not being held as a reverted push" in await b.sync_resolve(
+        "src/main.c", "accept-revert")
+
+
+async def test_resolve_refuses_an_unknown_action_instead_of_forgetting(b):
+    """Until a third action existed, "not release" meant "forget", and the
+    only guard was in tools.py -- a different file. An unrecognised action
+    reaching the bridge dropped the row, which is the DESTRUCTIVE half of the
+    pair and the wrong way round for a default."""
+    path = os.path.join(b.sync_state, "base.json")
+    base = b._load_baseline()
+    base.tombs["gone.c"] = Tomb(cls="t", crc=7)
+    base.save(path)
+
+    out = await b.sync_resolve("gone.c", "acccept-revert")   # typo, deliberate
+    assert "Unknown action" in out
+    assert b._load_baseline().tombs, "an unknown action must not forget the row"
+
+
 async def test_resolve_survives_a_baseline_it_cannot_read(b):
     """Refuse, never treat an unreadable baseline as an empty one -- that
     would make every file new on both sides."""
