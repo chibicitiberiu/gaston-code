@@ -390,6 +390,38 @@ beyond "the primitive is smaller than any one caller and should come first."
 
 ## 7. The sync baseline is bound to one machine, and R7 needs a decision
 
+**[R] ANSWERED 2026-09-18: one mirror per CHAT.** The three options below were
+one per client, one shared with a per-guest baseline dimension, or one with a
+writer lease. The answer keys the mirror to the CONVERSATION instead, which
+bounds the number of mirrors by chats rather than by clients times chats -- the
+combinatorial case the options were all trying to manage simply does not arise.
+
+One mirror, one baseline and one guest still holds, so the reconcile stays
+three-way and the state table five review rounds went into is untouched. No
+N-way merge. No lease to time out or steal. `tree_id` keeps working as written.
+Two people work at once by working on different conversations.
+
+Default work folder: `C:\Gaston\<shortened chat name>`, with a different
+folder selectable when the chat is started. The UI is a Phase 4 item, recorded
+in `PLAN.md` under "The work folder, chosen when a chat is started".
+
+Two things this decision creates, neither of them free:
+
+- The guest's sync root is one string read once from the INI at startup and
+  declared in `HELLO`. Per-chat folders invert that: the BRIDGE has to name the
+  folder for the conversation, so the root moves from something the guest
+  declares to something it is told, probably on `SWITCHED`/`READY`.
+- The path budget shrinks by the length of the prefix. `C:\WORK\` is 8
+  characters; `C:\Gaston\` plus a chat name plus a separator is 11 plus the
+  name, out of `RC_CAP_MAXPATH`'s 259 and before `RC_CAP_WORKRESERVE`'s 11
+  bytes for `.gaston-tmp`. The shortened name needs a hard cap and
+  `paths.check` must count the real prefix, or a long chat title silently costs
+  the user the ability to sync deep paths.
+
+The R7 items below are no longer blocked on a decision. They are ordinary
+implementation work now, and `self.sync_dir` becoming per-conversation
+(`04.19`) is the first of them.
+
 **Status:** deferred by decision, 2026-09-18, from audit finding 04.2. This is
 a DESIGN question, not a defect, and it is recorded rather than guessed at.
 

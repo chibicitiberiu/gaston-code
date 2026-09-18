@@ -945,6 +945,40 @@ the permission dialog appears, and the answer comes back.*
 - Line endings stay as decided: CRLF for files the guest consumes, stated in
   the system prompt rather than translated in a layer.
 
+- **One mirror per CHAT, not per client, and not one shared by everything.
+  [R] Decided 2026-09-18, and it is the decision R7 was blocked on.**
+
+  The question was what the mirrored folder means once two machines are
+  connected, and the three answers on the table were one mirror per client, one
+  shared mirror with a per-guest dimension added to the baseline, or one mirror
+  with a writer lease. Keying it to the CONVERSATION instead dissolves the
+  problem rather than managing it: the number of mirrors is bounded by chats
+  rather than by clients times chats, so the combinatorial case never arises.
+
+  What that buys is the part worth protecting. One mirror, one baseline and one
+  guest still means the reconcile stays three-way, so the state table that five
+  adversarial review rounds went into is untouched -- no N-way merge, no lease
+  to time out and steal, and the `tree_id` guard keeps working as written. Two
+  people work at once by working on different conversations.
+
+  The default work folder becomes `C:\Gaston\<shortened chat name>`, with a
+  different folder selectable when a chat is started (the UI for that is a
+  Phase 4 item -- see "The work folder, chosen when a chat is started").
+
+  **The consequence to design against, because it is not free.** The guest's
+  sync root is one string read once from the INI at startup, so per-chat
+  folders mean the bridge has to tell the guest which folder this conversation
+  uses rather than the guest declaring it in `HELLO` as it does today. And the
+  path budget shrinks: `C:\WORK\` is 8 characters where `C:\Gaston\` plus a
+  chat name plus a separator is 11 plus the name, all of it coming out of the
+  259 that `RC_CAP_MAXPATH` allows, before the 11 bytes `RC_CAP_WORKRESERVE`
+  already reserves for `.gaston-tmp`. **The shortened chat name therefore needs
+  a hard cap, and `paths.check` has to count the real prefix** -- the same
+  arithmetic that `03.13`'s static assert and the working-suffix reserve exist
+  to protect. A generous chat name would otherwise quietly cost the user the
+  ability to sync deep paths, which is exactly the class of silent limit this
+  layer keeps being bitten by.
+
 *Demo: Claude edits a file with its own Edit tool and the change appears on the
 Win98 box a moment later.*
 
@@ -1141,6 +1175,16 @@ has known work left.
   *Still to do:* **Configure -> Server Host...** is a message box telling the
   user to edit the file. It wants a real dialog -- `wrc` is available for a
   resource, or a runtime `DialogBoxIndirectParam` template.
+
+- **The work folder, chosen when a chat is started. [R] Decided 2026-09-18.**
+  *Still to do, and it belongs to this stage's dialog work.* The default
+  becomes `C:\Gaston\<shortened chat name>` rather than one folder shared by
+  every conversation, and the New Chat path offers to put it somewhere else.
+  See "One mirror per chat" under Phase 3.3 for what the default decides and
+  `BACKLOG.md` §7 for what it unblocks. The UI is the only part not yet
+  designed: a folder field on the new-chat path, defaulted from the chat name
+  and editable before the first sync pass runs. Recorded here so it is not
+  rediscovered when the dialog is built.
 
 - **File -> Export as HTML.** Wired to a "not implemented" box. Needs every
   page from the bridge assembled into one document, which is a chunked
