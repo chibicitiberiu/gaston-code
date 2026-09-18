@@ -42,6 +42,7 @@ to go looking at the allocator.
 from __future__ import annotations
 
 import asyncio
+import socket
 
 import pytest
 
@@ -104,3 +105,122 @@ def test_netcheck_reports_no_leaked_frames(netcheck_result):
     text, err = netcheck_result
     assert "frames leaked" not in text, (text, err)
     assert "PASS: guest framing + networking round trip" in text, (text, err)
+
+
+# --------------------------------------------------------- slow-reader gate
+#
+# docs/BACKLOG.md #1's throttled-link gate (`tc netem rate 40kbit`) needs root
+# and has never run. The cheaper fallback the plan itself names -- and the one
+# used here -- is a deliberate slow reader: rather than throttle the wire, it
+# fills the guest's outbound queue directly by refusing to drain it, which is
+# what win/net/net.cpp's backpressure path actually needs exercised. Unlike
+# netem this needs no root and lives in the suite instead of being run by
+# hand.
+#
+# It reaches two weaknesses BACKLOG.md names that a LAN-speed Wine run never
+# does, because the queue never fills and the backpressure path never runs:
+# the 64KB outbound queue's byte cap, and the up-to-5s block inside
+# rc_net_send that backpressure causes.
+#
+# MEASURED against the code before this fix (do not re-derive this by hand --
+# rerun win/checks/netcheck.c's --slowsend mode against a stalled reader if
+# it needs re-checking): three rc_net_send calls in a row, each already over
+# the 64KB cap, each waited its full ~5s budget and then queued the frame
+# ANYWAY -- 65558, then 98337, then 131116 bytes, every single one reported
+# as a successful send. That is not "the cap plus one frame", the ceiling the
+# old comment in net.h claimed; it is unbounded growth on a machine with 28KB
+# free, one blocked caller at a time. rc_net_send now fails a send it cannot
+# queue within the wait instead of enqueueing past the cap.
+async def _stalled_reader_handler(reader, writer):
+    sock = writer.get_extra_info("socket")
+    if sock is not None:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
+        except OSError:
+            pass
+    # The whole point: accept the connection and never read from it again.
+    # netcheck.exe decides when to stop sending; this handler just holds the
+    # socket open (and undrained) until the fixture tears the server down.
+    try:
+        await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.fixture
+async def stalled_reader():
+    """A bare TCP listener that accepts one connection and never reads it.
+
+    Deliberately NOT the `harness` fixture: this scenario does not speak the
+    wire protocol at all (win/checks/netcheck.c's --slowsend mode skips HELLO
+    negotiation and hammers rc_net_send directly), so a real Bridge would be
+    answering a HELLO that never arrives instead of doing anything useful.
+    """
+    server = await asyncio.start_server(_stalled_reader_handler,
+                                        "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        yield port
+    finally:
+        server.close()
+        try:
+            await asyncio.wait_for(server.wait_closed(), 1.0)
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+
+
+async def _run_slowsend(port):
+    exe = guest_exe("netcheck.exe")
+    proc = await asyncio.create_subprocess_exec(
+        WINE, exe, "--slowsend", "127.0.0.1", str(port), "s",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env=wine_env())
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=90)
+    except (TimeoutError, asyncio.TimeoutError):
+        proc.kill()
+        await proc.communicate()
+        pytest.fail("netcheck.exe --slowsend did not finish within 90s -- "
+                    "see win/checks/netcheck.c's SLOWSEND_MAX_FRAMES/"
+                    "SLOWSEND_SLOW_STREAK, which are meant to bound this")
+    return (out.decode("latin-1", "replace"), err.decode("latin-1", "replace"),
+            proc.returncode)
+
+
+@pytest.fixture
+async def slowsend_result(stalled_reader):
+    """Run netcheck.exe --slowsend once against the stalled reader; every
+    test below reads the same run rather than re-running the ~30s scenario
+    once per assertion. Function-scoped like `netcheck_result` above, for the
+    same reason: `stalled_reader` hands out a fresh ephemeral port per test.
+    """
+    return await _run_slowsend(stalled_reader)
+
+
+def test_slowsend_reaches_real_backpressure(slowsend_result):
+    """The stalled reader actually produced backpressure -- otherwise every
+    other assertion here would pass vacuously. netcheck.c's own "nothing ever
+    slowed down" check is what makes a vacuous run loud instead of green, and
+    its "backpressure happened ... but every send still succeeded" check is
+    the one the pre-fix code actually tripped (see the module docstring for
+    the measured numbers: three sends in a row, each already over the 64KB
+    cap, each blocked ~5s and then queued the frame anyway)."""
+    text, err, rc = slowsend_result
+    assert "FAIL: nothing ever slowed down" not in text, (text, err)
+    assert "FAIL: backpressure happened" not in text, (text, err)
+
+
+def test_slowsend_bounded_queue_failed_send_no_deadlock(slowsend_result):
+    """The three invariants this scenario exists to guarantee, all from one
+    run: the 64KB outbound queue does not grow past its cap under
+    backpressure (win/net/net.h's RC_OUTQ_MAX_BYTES comment), a send that
+    cannot be queued within the wait fails and says so rather than blocking
+    past the documented ~5s budget, and the check itself reaches its own
+    PASS line and exits 0 -- proof rc_net_stop's bounded thread-join waits
+    did their job even though the reader thread never gets a FIN back from a
+    peer that never closes its side."""
+    text, err, rc = slowsend_result
+    assert "FAIL: queue grew past its cap" not in text, (text, err)
+    assert "FAIL: a send blocked" not in text, (text, err)
+    assert "PASS: slow-reader scenario" in text, (text, err)
+    assert rc == 0, (text, err, rc)

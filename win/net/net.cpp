@@ -98,6 +98,15 @@ long rc_net_inflight(const rc_net *n)
     return (long)n->inflight;
 }
 
+unsigned rc_net_outq_bytes(rc_net *n)
+{
+    unsigned b;
+    EnterCriticalSection(&n->send_lock);
+    b = n->outq_bytes;
+    LeaveCriticalSection(&n->send_lock);
+    return b;
+}
+
 const char *rc_state_name(rc_state s)
 {
     switch (s) {
@@ -653,7 +662,21 @@ int rc_net_send(rc_net *n, const char *type,
          * stays a raw Enter/Leave on the same section the guard holds. The
          * loop always leaves with the section held again, which is what lets
          * the guard's own release, on every path out of this block, stay
-         * correct. */
+         * correct.
+         *
+         * The cap used to be soft: a writer that waited out its budget
+         * enqueued anyway, on the theory that losing a frame on a stream
+         * with no resync is worse than overshooting. tests/python/
+         * test_guest_net.py's slow-reader scenario measured what that
+         * actually does against a peer that stops reading -- not "one frame
+         * over", but unbounded growth, because every subsequent caller waits
+         * out the same budget and then ALSO enqueues anyway: three calls in
+         * a row against a stalled reader queued 65558, then 98337, then
+         * 131116 bytes, each one succeeding. On a machine with 28KB free
+         * that is not a slack budget, it is an unbounded one with extra
+         * steps. A frame that cannot be queued within the wait now fails
+         * instead -- the caller already has to handle rc_net_send returning
+         * -1 for every other reason it can fail. */
         while (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES && n->running
                && waited < 50) {
             LeaveCriticalSection(&n->send_lock);
@@ -662,6 +685,13 @@ int rc_net_send(rc_net *n, const char *type,
             EnterCriticalSection(&n->send_lock);
         }
         if (!n->running) {
+            outq_free(it);
+            return -1;
+        }
+        if (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES) {
+            rc_log("net: send queue full after %dms wait, dropping %s "
+                   "(%d bytes, outq_bytes=%u)", waited * 100, type, total,
+                   n->outq_bytes);
             outq_free(it);
             return -1;
         }
