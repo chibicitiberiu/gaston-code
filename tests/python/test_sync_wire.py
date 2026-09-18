@@ -2124,9 +2124,29 @@ def test_a_restored_backup_refuses_the_whole_pass():
 def test_paths_gone_from_the_machine_count_towards_it_too():
     """A restored backup predates files created after it, so they read as
     deletions -- the other half of the same event, and counting only reverts
-    would miss a backup restored onto a tree that had mostly grown."""
+    would miss a backup restored onto a tree that had mostly grown. They COUNT,
+    but they cannot fire it on their own; see the test below."""
+    decs = _dec(19, S.GONE_ON_GUEST) + [
+        S.Decision("z.c", S.Act.CONFLICT, S.REVERTED_PUSH)]
     with pytest.raises(SyncError):
-        _revert_pass(_rows(40), _dec(20, S.GONE_ON_GUEST))
+        _revert_pass(_rows(40), decs)
+
+
+def test_deleting_files_on_your_own_machine_never_refuses_the_pass():
+    """THE TRAP THIS AVOIDS, and it is worse than the bug it would guard.
+
+    `REPORT` does not advance the baseline -- it counts and says so -- so a
+    path that vanished is re-decided identically on every pass, forever. If
+    absence alone could fire this, clearing a build directory would refuse the
+    pass, then refuse it again thirty seconds later, with `accept-tree` buying
+    exactly one pass each time. A guard that must be answered forever teaches
+    the answer reflexively, and the one time it matters it gets the same
+    reflex.
+
+    Vanishing alone is deletion: already handled, already harmless, nothing
+    applied and nothing lost. A RESTORED tree is distinguished by content
+    coming BACK to an older state, so at least one of those must be present."""
+    _revert_pass(_rows(40), _dec(30, S.GONE_ON_GUEST))
 
 
 def test_an_ordinary_afternoon_is_not_a_restored_backup():

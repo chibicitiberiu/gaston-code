@@ -597,10 +597,31 @@ class Pass:
         tracked = len(self.base.rows)
         if not tracked:
             return              # a first sync has nothing to regress from
-        regressive = [d for d in decisions
-                      if d.reason in (S.REVERTED_PUSH, S.GONE_ON_GUEST)]
+        reverted = [d for d in decisions if d.reason == S.REVERTED_PUSH]
+        regressive = reverted + [d for d in decisions
+                                 if d.reason == S.GONE_ON_GUEST]
         if (len(regressive) < self.REVERT_FLOOR
                 or len(regressive) < tracked * self.REVERT_SHARE):
+            return
+        # AT LEAST ONE PATH MUST HAVE GONE BACKWARDS IN CONTENT, not merely
+        # vanished, and this condition is what stops the check becoming a trap
+        # rather than a guard.
+        #
+        # `REPORT` does not advance the baseline -- it counts and says so --
+        # so a row that vanished from the machine is re-decided identically on
+        # every pass, forever. Without this clause, deleting a tenth of a small
+        # tree (`del *.tmp`, a cleared build directory) would refuse the pass,
+        # and would refuse it again thirty seconds later, and every thirty
+        # seconds after that, with `accept-tree` buying exactly one pass each
+        # time. A guard that must be answered forever is worse than no guard:
+        # it teaches the answer reflexively, and the one time it matters it
+        # gets the same reflex.
+        #
+        # Vanishing alone is deletion, which is already handled and already
+        # harmless -- nothing is applied and nothing is lost. What distinguishes
+        # a RESTORED tree is content coming back to an older state, and that is
+        # what must be present before the whole pass is stopped.
+        if not reverted:
             return
         sample = ", ".join(sorted(d.key for d in regressive)[:5])
         raise SyncError(
