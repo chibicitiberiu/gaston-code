@@ -31,23 +31,26 @@ from dataclasses import dataclass
 
 from . import caps as C
 
-# Win98 MAX_PATH, including the drive, the root prefix and the NUL. The check is
-# always against the FULL path the guest would hold, never the relative part.
-MAX_PATH = 260
-
-# A DIRECTORY has to stop twelve characters earlier. CreateDirectory refuses a
-# path within 12 of MAX_PATH so that an 8.3 name still fits inside it -- an
-# ancient rule, still enforced, and not derivable from MAX_PATH.
+# 03.20: MAX_PATH/MAX_DIR_PATH/MAX_COMPONENT used to be defined here as
+# module-level constants (260, 260-12, 255) -- a FOURTH copy of the Win9x
+# path limits, alongside caps.h's RC_CAP_MAXPATH/RC_CAP_MAXCOMP, the `Caps`
+# dataclass defaults and paths.DEFAULT below. They had no consumers: `check`
+# and `_component_ok` below both already read the negotiated `caps` object
+# (`caps.maxpath`, `caps.maxdirpath`, `caps.maxcomp`), nothing in this repo
+# imported the three names, and grepping for them turns up only this
+# comment and tests/python/test_paths.py's docstrings, which cite the RULE
+# ("within 12 of MAX_PATH"), not these variables. Removed rather than kept
+# "for documentation" -- they carried the most authoritative-looking
+# comments in the file, so editing them changed nothing while looking like
+# it should, which is worse than not having them.
 #
-# Found the honest way: the bridge measured 256 bytes, allowed it, and the
-# guest answered `too_long` to the SYNCMKDIR. Letting the receiver be the
-# limit check is exactly what the design says not to do -- the guest cannot
-# create the file in order to report the problem, so the report has to come
-# from here, with the path and the reason, before anything is sent.
-MAX_DIR_PATH = MAX_PATH - 12
-
-# VFAT and ext4 both stop here.
-MAX_COMPONENT = 255
+# The one thing worth keeping from that comment: the directory reserve was
+# found the honest way. The bridge measured 256 bytes, allowed it, and the
+# guest answered `too_long` to the SYNCMKDIR -- letting the receiver be the
+# limit check is exactly what the design says not to do, since the guest
+# cannot create the file in order to report the problem. That is why `check`
+# below refuses a too-long directory BEFORE anything is sent, using
+# `caps.dirreserve`/`caps.maxdirpath` rather than a local copy of 12 or 260.
 
 # The guest's own walk (win/sync/sync.h: RC_SYNC_MAX_DEPTH, win/sync/sync.cpp)
 # refuses to recurse past this many directory levels, and says NOTHING when it
@@ -63,8 +66,9 @@ MAX_COMPONENT = 255
 # first push, with nothing anywhere saying why (03.25).
 #
 # The only place this can actually be caught is here, before the first push --
-# same reasoning as MAX_DIR_PATH above, and the same reason a directory
-# reservation cannot be enforced by the receiver. `unreachable at depth D`
+# same reasoning as the directory-reserve check below (`caps.dirreserve`),
+# and the same reason a directory reservation cannot be enforced by the
+# receiver. `unreachable at depth D`
 # below is a component count, not the guest's own zero-based recursion depth:
 # walking with RC_SYNC_MAX_DEPTH == 16 still lists the children of the 17th
 # level (they are enumerated by the call that is listing ITS parent), so
