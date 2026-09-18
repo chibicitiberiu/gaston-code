@@ -14,6 +14,7 @@
 #include <windows.h>
 #include "net/net.h"
 #include "app/htmlview.h"
+#include "app/xferstat.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +47,10 @@ typedef int (*rc_input_send_fn)(const char *what, const char *type,
  *      "too long"/"not connected" refusals. May be NULL exactly as
  *      everywhere else this file guards g_html; every call here is guarded
  *      too.
+ * xfer: app/xferstat.cpp's rc_xferstat instance, for do_send's own side of
+ *      the rx/tx counters -- note_tx_start/note_tx_done. Same reasoning as
+ *      `html`: passed in rather than reached for as a global, and every call
+ *      here is guarded.
  * send: main.c's ui_send, for INTERRUPT (do_stop).
  * blocked: "is Send currently refused" -- g_turn_active || rc_bar_blocks_send()
  *      today. do_send checks this itself, not just the button's enabled
@@ -55,7 +60,7 @@ typedef int (*rc_input_send_fn)(const char *what, const char *type,
  *      been cleared -- main.c's status_refresh() plus ui_set_busy(1) today,
  *      UI chrome this module does not own. */
 void rc_input_create(HWND parent, HINSTANCE inst, HFONT font, rc_net *net,
-                      rc_html *html, rc_input_send_fn send,
+                      rc_html *html, rc_xferstat *xfer, rc_input_send_fn send,
                       int (*blocked)(void), void (*sent)(void));
 
 /* cx/y: where the input box starts. cw: the transcript column's width, which

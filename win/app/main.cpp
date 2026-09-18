@@ -73,6 +73,7 @@
 static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_html *g_html;
+static rc_xferstat *g_xfer;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
@@ -90,7 +91,9 @@ static HWND  g_main, g_status;
  * moved to app/optmenu.cpp -- see app/optmenu.h. */
 
 /* Transfer progress (the rx/tx counters and their formatting) moved to
- * app/xferstat.cpp -- see app/xferstat.h. */
+ * app/xferstat.cpp -- see app/xferstat.h. g_xfer is the one instance,
+ * created in create_children and destroyed in WM_DESTROY, the same shape as
+ * g_html. */
 
 /* Not "Claude Code": that is Anthropic's product name and this is a
  * third-party client for it. Gaston is a French given name of roughly the
@@ -155,7 +158,8 @@ static void status_refresh(void)
     status_set(0, buf);
     /* app/xferstat.cpp owns the rx/tx counters and this pane's formatting,
      * including the "nothing for 1200ms" reset -- see app/xferstat.h. */
-    rc_xfer_text(buf, sizeof(buf));
+    if (g_xfer) g_xfer->text(buf, sizeof(buf));
+    else        buf[0] = '\0';
     status_set(1, buf);
 
     /* Tick the elapsed seconds while a turn is in flight. A counter that moves
@@ -617,9 +621,9 @@ static void render_frame(rc_frame *f)
 
     /* Progress accounting, before anything else looks at the frame -- see
      * app/xferstat.h. Moved out whole rather than left calling back in:
-     * nothing here needs the frame beyond what rc_xfer_note_rx already
+     * nothing here needs the frame beyond what rc_xferstat::note_rx already
      * parses from it. */
-    rc_xfer_note_rx(f);
+    if (g_xfer) g_xfer->note_rx(f);
     status_refresh();
 
     for (i = 0; i < sizeof(g_dispatch) / sizeof(g_dispatch[0]); i++) {
@@ -819,13 +823,19 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * in this file. */
     rc_pagebar_create(hwnd, inst, g_ui_font, &g_net, g_html);
 
+    /* The transfer-progress counters: one instance, created here (ahead of
+     * app/input.cpp below, which needs it) and destroyed in WM_DESTROY --
+     * the same shape as g_html. May be NULL if `new` itself failed (see
+     * core/rc_cpp.h); every use, here and in input.cpp, is guarded. */
+    g_xfer = rc_xferstat::create();
+
     /* The input box and Send/Stop: created and owned by app/input.cpp now
      * (rc_input_create logs its own check_child failures and subclasses the
      * input box itself). ui_send is main.c's "send something the user just
      * asked for", for INTERRUPT; input_blocked/input_sent are this file's
      * answers to the two policy questions that module does not own -- see
      * the callback comments on rc_input_create in app/input.h. */
-    rc_input_create(hwnd, inst, g_ui_font, &g_net, g_html, ui_send,
+    rc_input_create(hwnd, inst, g_ui_font, &g_net, g_html, g_xfer, ui_send,
                      input_blocked, input_sent);
 
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
@@ -1084,6 +1094,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         rc_net_stop(&g_net);
         delete g_html;
         g_html = NULL;
+        delete g_xfer;
+        g_xfer = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
         if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
