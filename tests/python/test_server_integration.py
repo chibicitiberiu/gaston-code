@@ -356,6 +356,59 @@ async def test_seqs_are_monotonic_and_unique(harness):
     await harness.close(w)
 
 
+async def test_fakegui_can_decode_a_real_deflated_text_frame(harness):
+    """fakegui's whole value is "if fakegui works and the guest does not, the
+    bug is in the C" -- which only holds if fakegui actually speaks the
+    protocol. It used to not inflate `enc=deflate` bodies at all and read TEXT
+    by a `style=` header the bridge no longer sends. Drive the real FakeGui
+    class against a real bridge connection and check it can both decode a
+    genuinely compressed frame and render it without raising, using its own
+    persistent inflate stream the way win/net/net.c's guest does.
+    """
+    from bridge.devtools.fakegui import FakeGui
+
+    gui = FakeGui("127.0.0.1", harness.port, "s")
+    await gui.connect()
+    frames = FrameReader()
+
+    async def read_until(stop):
+        """Collect frames, inflating each in fakegui's own stream order, until
+        `stop(frame)` is true."""
+        got = []
+        while True:
+            data = await asyncio.wait_for(gui.reader.read(8192), 5)
+            for f in frames.feed(data):
+                gui._inflate(f)
+                got.append(f)
+                if stop(f):
+                    return got
+
+    await read_until(lambda f: f.type == "READY")
+
+    # Long enough that the bridge's should_compress (MIN_WORTH_COMPRESSING =
+    # 64 bytes) actually engages -- the point is a frame that was genuinely
+    # deflated, not one small enough to have gone over raw.
+    long_prompt = "z" * 400
+    gui.writer.write(Frame("INPUT", {}, long_prompt.encode()).encode())
+    await gui.writer.drain()
+
+    got = await read_until(
+        lambda f: f.type == "TURN" and f.headers.get("state") == "end")
+    text_frames = [f for f in got if f.type == "TEXT"]
+    assert any(f.headers.get("enc") == "deflate" for f in text_frames), (
+        "test is only meaningful if the bridge actually compressed a frame")
+    assert any(long_prompt in f.body.decode("cp1252") for f in text_frames)
+    assert any(f.headers.get("mode") in ("live", "append")
+               for f in text_frames), "bridge must send mode=, not style="
+
+    # gui._inflate already decompressed body in place; render() must not
+    # raise decoding it a second time by the `mode=` header.
+    for f in text_frames:
+        gui.render(f)
+
+    await gui.close()
+
+
 async def test_unknown_frame_type_gets_an_error_not_a_drop(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
@@ -1109,4 +1162,35 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
 
     f = await _recv(harness, reader, "SESSIONSEND")
     assert f.type == "SESSIONSEND", "the guest was not told the list changed"
+    await harness.close(writer)
+
+
+async def test_an_oversized_block_is_truncated_not_split_mid_element(harness):
+    """`total`/`off` are on every TEXT chunk and look like a reassembly
+    protocol. They are not.
+
+    win/app/main.c's TEXT branch calls rc_html_block(f->body) per frame and
+    uses total/off only for the progress figure, so an APPEND block split
+    across frames arrives as several separate appends -- each a fragment of
+    markup, handed to insertAdjacentHTML. Half a <div>.
+
+    Splitting arbitrary HTML safely needs to know where its element
+    boundaries are, which this layer cannot know. So it truncates at the
+    boundary it CAN guarantee and says so. The model still has the whole
+    text; only the on-screen copy is shortened.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    huge = '<div class="tool">' + ("x" * 90_000) + "</div>"
+    await harness.bridge._send_html(guest, huge, srv.APPEND, 1)
+
+    got = await harness.recv_until(reader, {"TURN", "TEXT"}, timeout=3)
+    texts = [f for f in got if f.type == "TEXT"]
+    assert len(texts) == 1, (
+        f"the block was split into {len(texts)} frames; the guest appends "
+        f"each one separately, so this is markup cut in half")
+    body = harness.body(texts)
+    assert b"too large to send" in body, "truncated without saying so"
     await harness.close(writer)

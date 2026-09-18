@@ -942,6 +942,31 @@ class Bridge:
         if mode == LIVE and len(data) > budget:
             return
 
+        # An APPEND block is ONE element, and the guest does not reassemble.
+        #
+        # `total`/`off` are on every chunk and look like a reassembly
+        # protocol; they are not. win/app/main.c's TEXT branch calls
+        # rc_html_block(f->body) per frame and uses total/off only to drive
+        # the progress figure -- so a block split here arrives as several
+        # separate appends, each a fragment of markup, and insertAdjacentHTML
+        # gets half a <div>. What the user sees is the tail of a code block
+        # rendered as page furniture.
+        #
+        # Splitting arbitrary HTML safely would mean knowing where its element
+        # boundaries are, which is not a thing this function can know. So it
+        # truncates at the boundary it CAN guarantee and says it did -- the
+        # same answer tool_result gives, and the model still has the whole
+        # text either way.
+        if mode != LIVE and len(data) > budget:
+            cut = "\n<div class=\"clip\">-- this block was too large to send "
+            cut += "to the machine in one piece and has been shortened here; "
+            cut += "the model still has all of it --</div>"
+            marker = fold.encode(cut)
+            log.warning("block of %d bytes exceeds the %d frame budget; "
+                        "truncating rather than splitting an element",
+                        len(data), budget)
+            data = data[:budget - len(marker)] + marker
+
         total = len(data)
         for i in range(0, total, budget):
             chunk = data[i:i + budget]
