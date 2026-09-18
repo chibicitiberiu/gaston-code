@@ -6,6 +6,10 @@
 #ifndef RC_INI_H
 #define RC_INI_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 typedef struct {
     char host[64];
     int  port;
@@ -17,5 +21,9 @@ typedef struct {
 
 void rc_config_load(rc_config *cfg, const char *exe_dir);
 void rc_config_save(const rc_config *cfg, const char *exe_dir);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

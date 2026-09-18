@@ -8,6 +8,10 @@
 #ifndef RC_RPC_H
 #define RC_RPC_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "net/frameproto.h"
 #include "net/net.h"
 
@@ -25,5 +29,9 @@ void rc_rpc_stop(void);
 
 /* Wait for the worker to exit. Non-zero if it actually did. */
 int  rc_rpc_join(DWORD timeout_ms);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

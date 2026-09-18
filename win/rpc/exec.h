@@ -7,6 +7,10 @@
 #ifndef RC_EXEC_H
 #define RC_EXEC_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <windows.h>
 
 typedef enum {
@@ -38,5 +42,9 @@ void rc_exec_cancel(void);
 int  rc_exec_run(const char *command, const char *cwd, int use_shell,
                  DWORD timeout_ms, rc_exec_sink sink, void *ctx,
                  rc_exec_result *out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

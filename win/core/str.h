@@ -21,6 +21,10 @@
 #ifndef RC_STR_H
 #define RC_STR_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 /* Format into `out`, which is `cap` bytes INCLUDING the terminator.
  * Always leaves `out` NUL-terminated (given cap > 0).
  * Returns 1 if the whole string fit, 0 if it was truncated. */
@@ -32,5 +36,9 @@ int rc_strcpy(char *out, unsigned cap, const char *src);
 /* Copy at most `n` bytes of `src` -- for wire data that is not NUL-terminated.
  * Same contract; the result is always terminated. */
 int rc_strncpy(char *out, unsigned cap, const char *src, unsigned n);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

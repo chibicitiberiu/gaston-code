@@ -10,6 +10,10 @@
 #ifndef RC_FRAMEPROTO_H
 #define RC_FRAMEPROTO_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #define RC_PROTO_VERSION 1
 
 /* 64KB, NOT retro-agent's 32MB. 32MB is the entire target machine: one
@@ -44,5 +48,9 @@ void        rc_frame_free(rc_frame *f);
 int rc_frame_build(char *buf, unsigned bufsz, const char *type,
                    const char *const *keys, const char *const *vals, int nkv,
                    const void *body, unsigned body_len);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

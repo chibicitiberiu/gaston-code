@@ -23,6 +23,10 @@
 #ifndef RC_CAPS_H
 #define RC_CAPS_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #define RC_CASE_SENSITIVE   0   /* README.md and readme.md are two files */
 #define RC_CASE_FOLD        1   /* ...and one. Case-preserving either way. */
 
@@ -84,5 +88,9 @@
  * length-prefixed, so both formats parse either way and the bridge would guess
  * wrong on some trees and not others. */
 #define RC_CAP_MANIFEST    2
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

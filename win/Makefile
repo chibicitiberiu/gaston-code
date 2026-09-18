@@ -15,6 +15,7 @@ OWBIN    = $(WATCOM)/binl64
 BUILD   ?= $(TOP)/build/win
 
 WCC   = $(OWBIN)/wcc386
+WPP   = $(OWBIN)/wpp386
 WLINK = $(OWBIN)/wlink
 WRC   = $(OWBIN)/wrc
 
@@ -32,6 +33,12 @@ export WLINK_LNK = $(OWBIN)/wlink.lnk
 # WINVER pinned at 0x0400: raising it silently changes sizeof(NONCLIENTMETRICS)
 #      and breaks SPI_GETNONCLIENTMETRICS on the guest.
 # _WIN32_IE left at its 0x0400 default so TBSTYLE_* stays available.
+# -xd: no exceptions, no RTTI. Exception support alone measured 9.2 KB, and
+# this codebase has no use for it -- the discipline is "return null and let the
+# caller decide", which C++ preserves because with -xd and a null-returning
+# operator new, Watcom SKIPS the constructor.
+CXXONLY = -xd
+
 CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
          -DWIN32_LEAN_AND_MEAN \
@@ -48,7 +55,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
        str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
-.PHONY: synccheck inicheck all clean check run netcheck probe htmlspike
+.PHONY: synccheck inicheck cppcheck all clean check run netcheck probe htmlspike
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
@@ -77,6 +84,16 @@ inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(INICHECK_OBJS)}
+	@echo "built $@"
+
+# Asserts the C++ guards actually guard: that Buf reports truncation at and
+# past the limit, and that every destructor fires, in order, on every path.
+# Guard code that is wrong is worse than no guard, because it is trusted.
+CPPCHECK_OBJS = $(addprefix $(BUILD)/,cppcheck.o str.o log.o)
+cppcheck: $(BUILD)/cppcheck.exe
+$(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(CPPCHECK_OBJS)}
 	@echo "built $@"
 
 PROBE_OBJS = $(addprefix $(BUILD)/,probe.o str.o miniz.o)
@@ -137,6 +154,11 @@ HDRS = $(wildcard app/*.h net/*.h rpc/*.h sync/*.h core/*.h)
 # frameproto.err and probe.err.
 $(BUILD)/%.o: %.c $(HDRS) | $(BUILD)
 	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/$*.err $<
+
+# The same flags through the C++ compiler. A module migrates by being renamed;
+# nothing else in the tree knows, because every header is extern "C".
+$(BUILD)/%.o: %.cpp $(HDRS) | $(BUILD)
+	@$(WPP) $(CFLAGS) $(CXXONLY) -fo=$@ -fr=$(BUILD)/$*.err $<
 
 $(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)
 	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/miniz.err third_party/miniz/miniz.c

@@ -14,6 +14,10 @@
 #ifndef RC_HTMLVIEW_H
 #define RC_HTMLVIEW_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <windows.h>
 
 typedef struct rc_html rc_html;
@@ -35,5 +39,9 @@ void     rc_html_live(rc_html *v, const char *frag);     /* replaces #l */
 void     rc_html_clear(rc_html *v);
 void     rc_html_scroll_bottom(rc_html *v);
 int      rc_html_at_bottom(rc_html *v);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

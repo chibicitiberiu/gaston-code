@@ -28,6 +28,10 @@
 #ifndef RC_NET_H
 #define RC_NET_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <windows.h>
 #include <winsock.h>
 #include "net/frameproto.h"
@@ -89,5 +93,9 @@ int  rc_net_send(rc_net *n, const char *type,
                  const char *const *keys, const char *const *vals, int nkv,
                  const void *body, unsigned body_len);
 const char *rc_state_name(rc_state s);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

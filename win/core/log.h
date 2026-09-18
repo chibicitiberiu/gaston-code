@@ -9,9 +9,17 @@
 #ifndef RC_LOG_H
 #define RC_LOG_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 void rc_log_open(const char *exe_dir);
 void rc_log(const char *fmt, ...);
 void rc_log_close(void);
 const char *rc_log_path(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

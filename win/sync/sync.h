@@ -7,6 +7,10 @@
 #ifndef RC_SYNC_H
 #define RC_SYNC_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <windows.h>
 
 /* Comparison class. Must match bridge/paths.py exactly -- the two sides compare
@@ -99,5 +103,9 @@ int    rc_sync_is_working_name(const char *name);
 /* Recover an interrupted commit: if <p>.gaston-old exists and <p> does not,
  * put it back. Called once at startup, before the first scan. */
 void   rc_sync_recover(const char *root);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
