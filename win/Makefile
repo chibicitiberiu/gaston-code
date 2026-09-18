@@ -52,8 +52,8 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # forwarder to ws2_32). comctl32 is for the status bar.
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
-OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
-       str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o net.o frameproto.o \
+       log.o ini.o str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
 .PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck
 

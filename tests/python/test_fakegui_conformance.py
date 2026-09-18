@@ -11,9 +11,10 @@ exercises, and several were silent gaps until now:
     guest takes on every connection (win/net/net.cpp's rc_net_start sends 22
     more headers).
   * 03.29 -- fakegui read the `waiting` header on PERMREQ/PERMSTATE, which
-    win/app/main.cpp's PERMREQ/PERMSTATE branch never reads (only PERMWAIT
-    does), so fakegui exercised a header interpretation the shipping guest
-    does not share.
+    the guest's PERMREQ/PERMSTATE handling never reads (only PERMWAIT does
+    -- win/app/bar.cpp's rc_bar_frame, PERMREQ/PERMSTATE and PERMWAIT are
+    two of the six frame types it owns), so fakegui exercised a header
+    interpretation the shipping guest does not share.
   * 03.31 -- fakegui had no way to answer a HALT except a human typing
     /continue at a live terminal prompt, so the one path the project's own
     standing rule is about ("the person at the keyboard never loses a byte,
@@ -94,11 +95,11 @@ async def test_fakegui_hello_declares_capabilities_like_the_real_guest(
 
 
 def test_permreq_does_not_surface_the_queued_count(capsys):
-    """main.cpp's PERMREQ/PERMSTATE branch (main.cpp:914-921) calls
-    perm_show() with only id/body/allows -- `waiting` is read nowhere but
-    the PERMWAIT branch. Would fail before the fix: fakegui used to print
-    "(+3 queued)" straight off the first PERMREQ, a header interpretation
-    the shipping guest does not share."""
+    """The guest's PERMREQ/PERMSTATE handling (win/app/bar.cpp's rc_bar_frame,
+    which pushes a bar entry with only id/body/allows) reads `waiting`
+    nowhere but the PERMWAIT case. Would fail before the fix: fakegui used
+    to print "(+3 queued)" straight off the first PERMREQ, a header
+    interpretation the shipping guest does not share."""
     gui = FakeGui("h", 0, "s")
     gui.render(Frame("PERMREQ", {"id": "t1", "tool": "Bash", "allows": "0",
                                  "waiting": "3"}, b"do a thing"))

@@ -18,6 +18,8 @@
 #include "net/net.h"
 #include <ole2.h>
 #include "app/htmlview.h"
+#include "app/bar.h"
+#include "app/chatlist.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 
@@ -31,16 +33,9 @@
 #define ID_NEXT       1009
 #define ID_LAST       1010
 #define ID_PAGELBL    1011
-#define ID_CHATS      1012
-#define ID_REFRESH    1013
-/* The permission bar. Modeless, above the input box: a modal here would pump
- * messages and re-enter the transcript while Claude is mid-stream, and the
- * obvious fix -- queueing frames for the duration -- costs heap on a machine
- * measured at 28KB free after a turn. */
-#define ID_PERM_TEXT  1014
-#define ID_PERM_ALLOW 1015
-#define ID_PERM_ALWAYS 1016
-#define ID_PERM_DENY  1017
+/* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now, and
+ * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h -- both next to the module
+ * that creates and dispatches them. */
 
 /* Menu. Model and effort entries are numbered from a base because the lists
  * come from the bridge and are not known at compile time. */
@@ -65,7 +60,8 @@
  * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
  * to the code that posts them, not duplicated here. */
 #define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
-#define WM_RC_OPENCHAT (WM_APP + 20)  /* chats_proc -> wnd_proc: open a chat */
+/* WM_RC_OPENCHAT (chatlist.cpp's chats_proc -> wnd_proc: open a chat) is
+ * declared in app/chatlist.h now, next to the module that posts it. */
 
 #define INPUT_HEIGHT  56
 #define BUTTON_WIDTH  64
@@ -73,10 +69,10 @@
 #define PAGEBAR_H     24
 #define PGBTN_W       28
 #define CHATS_W      170
-#define CHAT_INDENT   10   /* session rows sit under their date header */
-#define CHAT_ROW_H    15
-#define PERM_H        26   /* the permission bar, when shown */
-#define PERMBTN_W     58
+/* PERM_H (the permission bar's height, when shown) is declared in app/bar.h;
+ * layout() needs it to shrink the transcript, bar.cpp needs it to size its
+ * own controls. PERMBTN_W is bar.cpp's own business now. CHAT_INDENT and
+ * CHAT_ROW_H moved to app/chatlist.cpp with the drawing code they size. */
 
 static rc_config     g_cfg;
 static rc_net        g_net;
@@ -84,78 +80,18 @@ static rc_html *g_html;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_input, g_send, g_stop, g_status;
 static HWND  g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
-static HWND  g_chats, g_refresh;
-static HWND  g_perm_text, g_perm_allow, g_perm_always, g_perm_deny;
+/* The permission/halt bar's own HWNDs, id, pending state and text all moved
+ * to app/bar.cpp -- see app/bar.h. The design rationale that used to sit here
+ * (why one set of controls serves two request kinds, and the four-bugs
+ * history of arbitrating them pairwise) moved with it. The chat list's HWNDs
+ * and its seven id-keyed globals moved to app/chatlist.cpp the same way --
+ * see app/chatlist.h. */
 
-/* The permission request currently on screen. PERMREQ/PERMEND are a state
- * machine keyed on this id, never a show/hide toggle: a PERMEND can arrive
- * for a request we are not showing (the bridge resolved it while a reply was
- * in flight, or a session rebuild cleared it), and toggling on that would
- * leave the bar up during a live request or hidden during one. */
-static char g_perm_id[80];
-static int  g_perm_pending;
-/* The bar's own text, kept separately from what is on screen so PERMWAIT can
- * append a queue-depth suffix without losing the original prompt, and drop it
- * again if the queue empties. */
-static char g_perm_base_text[224];
-static int  g_perm_waiting;      /* other requests queued behind this one */
-
-/* The bar has two jobs and one set of controls.
- *
- * BAR_PERM is Allow / Always / Deny for a tool call. BAR_HALT is a single
- * Continue, shown when the bridge has STOPPED the agent -- today that means a
- * conflicting edit was found, the user's copy was kept, and the agent must not
- * carry on until the user says they have finished with the file.
- *
- * One set of controls rather than two because the 16-bit USER/GDI heaps on 9x
- * are a fixed 64KB that does not scale with RAM.
- *
- * The original note here also said the two states were "mutually exclusive by
- * construction: a halted agent is not running a tool and cannot be asking for
- * permission". THAT IS FALSE, and it cost both of them. A halt is raised by a
- * sync pass, which runs on the guest's watcher and owes nothing to the agent's
- * turn -- so a conflict is found precisely WHILE the agent works, because the
- * agent writing files is what moves the tree. Each show() then overwrote the
- * other's state:
- *
- *   PERMREQ over a halt -- the mode became BAR_PERM, so Continue answered the
- *   permission instead, and PERMEND then cleared g_halt_id while the bridge
- *   still held the halt. No further bar could be raised (the bridge's raise is
- *   idempotent while one is outstanding) and RESUME could never be sent, so
- *   every latched path refused the agent's writes forever.
- *
- *   HALT over a permission -- g_perm_pending was cleared, so Allow sent RESUME
- *   and the permission request was never answered at all, leaving the model
- *   waiting on a prompt nobody could reply to until the bridge's deadline.
- *
- * So the halt is REMEMBERED rather than shown-or-lost. A permission request
- * takes the bar, because it is the one with a deadline; the halt waits behind
- * it and comes back when it clears. */
 /* The longest message that can be composed and sent in one go. The frame
  * protocol would carry far more, but do_send builds it on the stack and the
  * guard page on 9x is not something to find out about the hard way. Enforced
  * at the control with EM_LIMITTEXT and checked again at send. */
 #define RC_INPUT_MAX 4096
-
-#define BAR_NONE 0
-#define BAR_PERM 1
-#define BAR_HALT 2
-static int  g_bar_mode;
-static char g_halt_id[80];
-/* The halt's text, kept so the bar can be put BACK after a permission request
- * borrows it. Without this there is nothing to redisplay. */
-static char g_halt_text[256];
-
-/* Session ids, parallel to the list box. A ListBox rather than a ListView
- * deliberately: fewer GDI objects, and the 16-bit USER/GDI heaps on 9x are a
- * fixed 64KB that does not scale with RAM. */
-#define MAX_CHATS 64
-static char g_chat_ids[MAX_CHATS][64];
-/* 0 = a session row, 1 = a date-group header. Headers are drawn differently
- * and refuse to be opened. */
-static char g_chat_is_header[MAX_CHATS];
-static char g_chat_group[40];       /* last group emitted, to spot changes */
-static int  g_chat_current = -1;    /* row of the conversation that is open */
 
 /* The Model and Effort menus are built from what the bridge sends, so the
  * lists can change without rebuilding this binary. */
@@ -177,7 +113,6 @@ static int   g_opts_open;   /* mid-batch, so the next model row appends */
 static unsigned long g_rx_done, g_rx_total;
 static unsigned long g_tx_done, g_tx_total;
 static DWORD         g_xfer_ms;
-static int  g_chat_count = 0;
 
 /* Not "Claude Code": that is Anthropic's product name and this is a
  * third-party client for it. Gaston is a French given name of roughly the
@@ -202,8 +137,6 @@ static DWORD g_turn_start_ms = 0;
 static void think_show(void);
 static void turn_done(void);
 static void layout(HWND hwnd);
-static void fit_label(char *label, unsigned cap, int avail_px);
-static int  chats_text_width(void);
 static void turn_receiving(void);
 static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
@@ -223,7 +156,6 @@ static int   g_loading_page = 0;
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
 static WNDPROC g_input_oldproc;
-static WNDPROC g_chats_oldproc;
 static int   g_turn_active = 0;
 static int   g_backoff_ms = 1000;
 /* Whether this outage has already been announced in the transcript. */
@@ -397,48 +329,42 @@ static void clear_popup(HMENU m)
         ;
 }
 
-static void chats_request(void)
+/* app/chatlist.h's rc_chats_confirm_fn: "a switch is about to happen, is a
+ * turn running, may I?" -- the chat list module does not own this policy
+ * question (see the header comment there). Switching closes the live
+ * client, which kills a running request; ask rather than doing it silently
+ * -- a click in the list is easy to make by accident and the reply that is
+ * lost took real time to produce. */
+static int chats_confirm(void)
 {
-    rc_net_send(&g_net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
-}
-
-static void chats_switch(void)
-{
-    int sel = (int)SendMessageA(g_chats, LB_GETCURSEL, 0, 0);
-    const char *keys[1]; const char *vals[1];
-
-    if (sel == LB_ERR || sel < 0 || sel >= g_chat_count) return;
-    if (g_chat_is_header[sel]) return;          /* a date header, not a chat */
-    if (strcmp(g_chat_ids[sel], g_net.sess) == 0) return;   /* already open */
-
-    /* Switching closes the live client, which kills a running request. Ask
-     * rather than doing it silently -- a click in the list is easy to make by
-     * accident and the reply that is lost took real time to produce. */
-    if (g_turn_active
-        && MessageBoxA(g_main,
+    return !g_turn_active
+        || MessageBoxA(g_main,
                        "A request is still running.\n\n"
                        "Opening another conversation will stop it. Continue?",
-                       RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES) {
-        /* Put the highlight back on the conversation that is actually open. */
-        if (g_chat_current >= 0)
-            SendMessageA(g_chats, LB_SETCURSEL, g_chat_current, 0);
-        return;
-    }
-
-    keys[0] = "id"; vals[0] = g_chat_ids[sel];
-    rc_log("switching to session %s", g_chat_ids[sel]);
-    /* Loading a conversation means closing the live client, resuming, and
-     * replaying its history, which is not instant. Say so rather than looking
-     * frozen. */
-    SetWindowTextA(g_main, RC_TITLE "  -  loading...");
-    status_set(2, " loading conversation...");
-    ui_send("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
+                       RC_TITLE, MB_YESNO | MB_ICONQUESTION) == IDYES;
 }
 
-static void ui_set_busy(int busy)
+/* app/chatlist.h's `switching` callback: a switch was confirmed and is about
+ * to go out on the wire. Loading a conversation means closing the live
+ * client, resuming, and replaying its history, which is not instant. Say so
+ * rather than looking frozen. */
+static void chats_switching(void)
 {
-    g_turn_active = busy;
-    EnableWindow(g_stop, busy ? TRUE : FALSE);
+    SetWindowTextA(g_main, RC_TITLE "  -  loading...");
+    status_set(2, " loading conversation...");
+}
+
+/* Split from ui_set_busy (audit finding 01.14): ui_set_busy used to be both a
+ * setter and a refresher -- bar_hide() called ui_set_busy(g_turn_active),
+ * i.e. g_turn_active = g_turn_active, purely to get Send's enabled state
+ * recomputed. This is the recompute half, callable on its own by anything
+ * that changed one of the two inputs without changing the turn flag -- which
+ * is exactly what the bar module's `changed` callback needs (see
+ * app/bar.h): showing, hiding or relabelling the bar never touches
+ * g_turn_active, but always wants Send's enabled state re-checked against
+ * rc_bar_blocks_send(). */
+static void ui_refresh_enables(void)
+{
     /* A pending permission request blocks Send too. That is the one property
      * a modal dialog would have given us: the request cannot be ignored.
      * Without the OR here a TURN end frame arriving mid-prompt would re-enable
@@ -448,128 +374,29 @@ static void ui_set_busy(int busy)
      * has wedged, and it is how the cancellation path gets exercised at all --
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
-    EnableWindow(g_send, (busy || g_perm_pending) ? FALSE : TRUE);
+    EnableWindow(g_send, (g_turn_active || rc_bar_blocks_send())
+                          ? FALSE : TRUE);
+}
+
+static void ui_set_busy(int busy)
+{
+    g_turn_active = busy;
+    EnableWindow(g_stop, busy ? TRUE : FALSE);
+    ui_refresh_enables();
 }
 
 /* ------------------------------------------------------- permission bar */
 
-/* Named bar_layout, not perm_layout: it re-runs the whole window layout for
- * either bar, PERM or HALT, not just the permission half. See audit finding
- * 01.21 -- bar_hide() already used the shared prefix and this one did not. */
-static void bar_layout(void)
+/* The bar's own `changed` callback (see app/bar.h): the bar changes the
+ * transcript's height, and the HTML view has no HWND to resize -- move() is
+ * the only lever it has, so the whole layout must be re-run rather than just
+ * showing the controls. This replaces bar_layout() + ui_set_busy(g_turn_active)
+ * being called together, by hand, at every one of the bar's own show/hide
+ * sites -- there is now exactly one place that pairing can be forgotten. */
+static void bar_changed(void)
 {
-    /* The bar changes the transcript's height, and the HTML view has no HWND
-     * to resize -- move() is the only lever it has, so the whole layout
-     * must be re-run rather than just showing the controls. */
     if (g_main) layout(g_main);
-}
-
-static void bar_hide(void)
-{
-    if (!g_bar_mode) return;
-    /* Clear only what THIS bar owned. Clearing both is how a permission
-     * request ending took the halt down with it, leaving the bridge holding a
-     * halt the user could never answer. */
-    if (g_bar_mode == BAR_HALT) g_halt_id[0] = '\0';
-    g_bar_mode = BAR_NONE;
-    g_perm_pending = 0;
-    g_perm_id[0] = '\0';
-    g_perm_waiting = 0;
-    ShowWindow(g_perm_text,   SW_HIDE);
-    ShowWindow(g_perm_allow,  SW_HIDE);
-    ShowWindow(g_perm_always, SW_HIDE);
-    ShowWindow(g_perm_deny,   SW_HIDE);
-    bar_layout();
-    ui_set_busy(g_turn_active);
-}
-
-static void halt_show(const char *id, const char *text);
-
-static void perm_hide(void)
-{
-    if (g_bar_mode != BAR_PERM) return;
-    bar_hide();
-    /* A halt that arrived while this bar was up was remembered, not shown.
-     * Put it back now, or the bridge is left holding a halt with nothing on
-     * screen to answer it and every latched path refuses the agent forever. */
-    if (g_halt_id[0]) halt_show(g_halt_id, g_halt_text);
-}
-
-/* The agent has been stopped and needs the user to say "carry on". */
-static void halt_show(const char *id, const char *text)
-{
-    if (!id || !*id) return;
-    rc_strf(g_halt_id, sizeof(g_halt_id), "%s", id);
-    rc_strf(g_halt_text, sizeof(g_halt_text), "%s", text && *text
-              ? text : "Stopped: a conflicting edit was found");
-
-    /* A permission request is on screen and has a deadline; this does not.
-     * Keep the id and the text and come back when that bar clears -- taking
-     * the bar here would clear g_perm_pending, so Allow would send RESUME and
-     * the tool call would never be answered at all. */
-    if (g_bar_mode == BAR_PERM) return;
-
-    g_bar_mode = BAR_HALT;
-    g_perm_pending = 0;
-
-    SetWindowTextA(g_perm_text, text && *text
-                   ? text : "Stopped: a conflicting edit was found");
-    /* The SAME button, relabelled, which is why perm_show sets it back. */
-    SetWindowTextA(g_perm_allow, "Continue");
-    ShowWindow(g_perm_text,   SW_SHOW);
-    ShowWindow(g_perm_allow,  SW_SHOW);
-    ShowWindow(g_perm_always, SW_HIDE);
-    ShowWindow(g_perm_deny,   SW_HIDE);
-    bar_layout();
-    ui_set_busy(g_turn_active);
-    SetFocus(g_perm_allow);
-}
-
-static void halt_hide(void)
-{
-    if (g_bar_mode != BAR_HALT) return;
-    bar_hide();
-}
-
-/* Puts g_perm_base_text on screen, with a queue-depth suffix from PERMWAIT
- * when there is one to show. One place for this, so perm_show (which sets the
- * base text) and the PERMWAIT handler (which only ever changes the count)
- * cannot disagree about what is currently displayed. */
-static void perm_update_label(void)
-{
-    char buf[256];
-    if (g_perm_waiting > 0)
-        rc_strf(buf, sizeof(buf), "%s  (+%d waiting)",
-                  g_perm_base_text, g_perm_waiting);
-    else
-        rc_strf(buf, sizeof(buf), "%s", g_perm_base_text);
-    SetWindowTextA(g_perm_text, buf);
-}
-
-static void perm_show(const char *id, const char *text, int allows)
-{
-    if (!id || !*id) return;
-    rc_strf(g_perm_id, sizeof(g_perm_id), "%s", id);
-    g_perm_pending = 1;
-    g_bar_mode = BAR_PERM;
-    g_perm_waiting = 0;
-
-    /* Put the label back: halt_show borrows this button and renames it. */
-    SetWindowTextA(g_perm_allow, "Allow");
-    rc_strf(g_perm_base_text, sizeof(g_perm_base_text), "%s",
-              text && *text ? text : "Permission required");
-    perm_update_label();
-    ShowWindow(g_perm_text,   SW_SHOW);
-    ShowWindow(g_perm_allow,  SW_SHOW);
-    /* "Always" is offered only when the bridge says a rule can be expressed.
-     * For a machine tool it never can -- MCP rules cannot carry specifiers, so
-     * the only rule available is the whole tool, and pressing it once would
-     * hand over the machine for the rest of the session. */
-    ShowWindow(g_perm_always, allows ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_perm_deny,   SW_SHOW);
-    bar_layout();
-    ui_set_busy(g_turn_active);
-    SetFocus(g_perm_allow);
+    ui_refresh_enables();
 }
 
 /* Send something the USER just asked for, and say so if it did not go.
@@ -578,8 +405,9 @@ static void perm_show(const char *id, const char *text, int allows)
  * frame. Ignoring that turns a button press into silence: the press looks
  * accepted, nothing happens, and there is nothing on screen to explain it.
  * Three of ~20 call sites checked, and the one seven-line comment explaining
- * why it must be checked sat above the Continue button while perm_reply --
- * the same bar, the other three buttons -- did not check at all. */
+ * why it must be checked sat above the Continue button while the bar's own
+ * reply helper (now bar.cpp's bar_reply) -- the same bar, the other three
+ * buttons -- did not check at all. */
 static int ui_send(const char *what, const char *type,
                    const char *const *keys, const char *const *vals, int nkv,
                    const void *body, unsigned body_len)
@@ -597,27 +425,345 @@ static int ui_send(const char *what, const char *type,
     return 0;
 }
 
-static void perm_reply(const char *action)
-{
-    const char *keys[2];
-    const char *vals[2];
+/* ------------------------------------------------------------ frame render */
 
-    if (!g_perm_pending) return;
-    keys[0] = "id";     vals[0] = g_perm_id;
-    keys[1] = "action"; vals[1] = action;
-    /* Checked, which it was not. A lost PERMREPLY leaves the model waiting on
-     * a prompt nobody can answer until the bridge's deadline expires and
-     * auto-denies -- and the user, who pressed Allow, is told nothing. */
-    ui_send("Your permission answer", "PERMREPLY", keys, vals, 2, NULL, 0);
-    /* The bar comes down on PERMEND, not here: the bridge owns the state
-     * machine, and a reply can lose a race with a deadline or a disconnect. */
+/* render_frame used to be a 340-line if/else chain over 23 frame types --
+ * audit finding 01.12. Consequences, in order of severity: (a) it was the
+ * reason main.c could not be split, since every module's frame handling was
+ * interleaved in one function body; (b) it cost up to 22 strcmp calls per
+ * frame on a 200MHz Pentium; (c) a typo'd type string was a silent
+ * fall-through to "unhandled frame type", the exact failure mode net.h's
+ * rc_rpc_route comment already documents for a missing route, one layer up.
+ * Below is a table of {type, handler} pairs instead -- the same shape
+ * frameproto.h's own "four lanes" table already uses one layer down. A
+ * linear walk of it is no slower than the chain it replaces, and it is one
+ * place to read the full list of frame types this binary understands. */
+typedef void (*rc_frame_fn)(rc_frame *f);
+
+static void on_ready(rc_frame *f)
+{
+    const char *v;
+    v = rc_frame_get(f, "sess");
+    if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
+    v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
+    v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
+    g_is_live = 1;
+    page_update_ui();
+    rc_chats_request();
+    g_backoff_ms = 1000;
+    g_retry_noted = 0;
+    v = rc_frame_get(f, "model");
+    rc_log("ready: sess=%s model=%s", g_net.sess, v ? v : "?");
+    if (g_html) g_html->notice("Connected to bridge.");
+    /* READY carries page/total for the session as it stands, but g_doc_sent
+     * (below) only installs the document skeleton once per PROCESS, not
+     * once per connection -- so on a reconnect this updates the page
+     * counters without the control's content agreeing with them, and the
+     * window keeps showing whatever the last connection left in it under
+     * the new page number. page_goto("live") re-requests the live page
+     * explicitly, which clears the control (PAGESTART) and repopulates it
+     * from what the bridge now has -- cheap and correct on a fresh session
+     * too, where it is a no-op over an empty page. See BACKLOG.md's note
+     * on this global. */
+    page_goto("live");
+    status_refresh();
 }
 
-/* ------------------------------------------------------------ frame render */
+static void on_doc(rc_frame *f)
+{
+    /* The stylesheet and skeleton come from the bridge, so the look can be
+     * changed by restarting it rather than by rebuilding and re-deploying
+     * the guest binary. */
+    if (!g_doc_sent) {
+        g_doc_sent = 1;
+        if (g_html) g_html->set_document(f->body);
+        /* The control is created here rather than with the other children,
+         * because it needs the skeleton first -- so it has missed every
+         * layout so far and is still sized to whatever DoVerb was given. */
+        layout(g_main);
+        SetTimer(g_main, TIMER_HTMLPOLL, 100, NULL);
+    }
+}
+
+static void on_text(rc_frame *f)
+{
+    /* Body is not NUL-terminated by the protocol; the reader
+     * over-allocates by one and terminates it, so this is safe.
+     *
+     * "live" replaces the block still being written; anything else --
+     * including no mode= at all -- is a finished block appended to the
+     * end and never touched again. That "anything else" is deliberate
+     * for an absent header, but not for one that is PRESENT and wrong: a
+     * misspelled "live" would silently fall into the append branch below
+     * and grow the transcript by a full copy of the answer per token, on
+     * a 32MB guest that measures free memory in KB. So an unrecognized
+     * but non-empty mode= is logged loudly rather than swallowed -- see
+     * audit finding 03.22. */
+    const char *mode = rc_frame_get(f, "mode");
+    turn_receiving();
+    /* Finished markup from the bridge -- the guest transforms nothing --
+     * so this is the one path that does NOT escape. The scroll decision
+     * moved into the view, which is the only place that can apply it
+     * consistently. */
+    if (mode && strcmp(mode, "live") == 0) {
+        if (g_html) g_html->live(f->body);
+    } else {
+        if (mode && strcmp(mode, "append") != 0)
+            rc_log("TEXT: unrecognized mode=\"%s\" (want \"append\" or "
+                   "\"live\"); treating as a finished block", mode);
+        if (g_html) g_html->block(f->body);
+    }
+}
+
+static void on_tool(rc_frame *f)
+{
+    /* The bridge sends tool activity as a finished block now; this branch
+     * only survives for older bridges. */
+    (void)f;
+    turn_receiving();
+}
+
+static void on_turn(rc_frame *f)
+{
+    const char *v;
+    const char *state = rc_frame_get(f, "state");
+    if (state && strcmp(state, "start") == 0) {
+        ui_set_busy(1);
+        g_turn_start_ms = GetTickCount();
+        status_set(2, " Claude is thinking...");
+        think_show();
+    } else {
+        turn_done();
+        ui_set_busy(0);
+        /* Now, and only now, re-fetch the list. Sending a message is what
+         * makes a conversation the most recent one, so this is where the
+         * reordering belongs -- not on merely opening one. */
+        rc_chats_request();
+        /* state=="error" used to fall into the same branch as a normal
+         * end and render identically -- turn_error() (protocol.py) sends
+         * `msg` and no `cost_usd`, so "done $?" is what a failed turn
+         * looked like. Distinguished now: an error goes to the transcript
+         * as an error and the status bar says so, instead of reading like
+         * a quiet success. See audit finding 03.50. */
+        if (state && strcmp(state, "error") == 0) {
+            v = rc_frame_get(f, "msg");
+            if (g_html)
+                g_html->error(v && *v ? v : "The turn ended with an error.");
+            status_set(2, " error");
+        } else {
+            char buf[96];
+            v = rc_frame_get(f, "cost_usd");
+            rc_strf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
+            status_set(2, buf);
+        }
+    }
+}
+
+static void on_option(rc_frame *f)
+{
+    const char *kind = rc_frame_get(f, "kind");
+    const char *id = rc_frame_get(f, "id");
+    const char *label = rc_frame_get(f, "label");
+    const char *cur = rc_frame_get(f, "current");
+    int on = (cur && *cur == '1');
+    /* The first model row of a batch resets both menus. The bridge
+     * always sends models before efforts, so this is a reliable start
+     * marker and saves a frame type. */
+    if (kind && strcmp(kind, "model") == 0 && g_opts_open == 0) {
+        g_opts_open = 1;
+        clear_popup(g_menu_model);
+        clear_popup(g_menu_effort);
+        g_n_model = 0;
+        g_n_effort = 0;
+    }
+    if (kind && id && label) {
+        if (strcmp(kind, "model") == 0 && g_n_model < MAX_OPTS) {
+            rc_strf(g_opt_model[g_n_model], 64, "%s", id);
+            AppendMenuA(g_menu_model,
+                        MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
+                        IDM_MODEL0 + g_n_model, label);
+            g_n_model++;
+        } else if (strcmp(kind, "effort") == 0 && g_n_effort < MAX_OPTS) {
+            /* A model with no effort levels gets one greyed entry saying
+             * so, rather than a menu offering five settings it does not
+             * have. */
+            const char *dis = rc_frame_get(f, "disabled");
+            UINT flags = MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED);
+            if (dis && *dis == '1') flags |= MF_GRAYED;
+            rc_strf(g_opt_effort[g_n_effort], 64, "%s", id);
+            AppendMenuA(g_menu_effort, flags,
+                        IDM_EFFORT0 + g_n_effort, label);
+            g_n_effort++;
+        }
+    }
+}
+
+static void on_optionsend(rc_frame *f)
+{
+    (void)f;
+    g_opts_open = 0;
+    DrawMenuBar(g_main);
+}
+
+/* app/chatlist.h's `switched` callback: a SWITCHED frame has already been
+ * folded into the chat list's own bookkeeping (the newly-open conversation
+ * marked and redrawn) -- this is everything about SWITCHED that is not the
+ * chat list's business. */
+static void chats_switched(rc_frame *f)
+{
+    const char *v;
+    /* A prompt belongs to the session that raised it, and switching
+     * rebuilds the session -- the bridge denies anything pending as
+     * "rebuild". Leaving the bar up would offer Allow/Deny for a request
+     * that no longer exists, on a conversation the user has left. */
+    rc_bar_hide_all();
+    v = rc_frame_get(f, "total");
+    if (v) g_total = atoi(v);
+    SetWindowTextA(g_main, RC_TITLE);
+    status_set(2, "");
+}
+
+/* SESSIONS, SESSION, SESSIONSEND, SWITCHED -- one row in g_dispatch below
+ * covers all four, all owned by app/chatlist.cpp now (audit findings 01.1
+ * and 01.11: the cleanest cut, because nothing outside these branches
+ * touched a g_chat_* global). log_mem stays here rather than moving into
+ * chatlist.cpp: it is main.c's own memory-milestone diagnostic, not
+ * something the chat list module has reason to know about. */
+static void on_chats(rc_frame *f)
+{
+    rc_chats_frame(f);
+    if (strcmp(f->type, "SESSIONSEND") == 0) log_mem("chat list loaded");
+}
+
+static void on_pagestart(rc_frame *f)
+{
+    const char *v;
+    v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
+    v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
+    v = rc_frame_get(f, "live");  g_is_live = (v && *v == '1');
+    g_loading_page = 1;
+    g_turn_state = TURN_IDLE;      /* the control is about to be cleared */
+    /* One page in, one page out: clear before rendering, so the control
+     * never holds two. */
+    if (g_html) g_html->clear();
+    v = rc_frame_get(f, "continued");
+    if (v && *v == '1' && g_html)
+        g_html->notice("continued from the previous page");
+    page_update_ui();
+}
+
+static void on_pageend(rc_frame *f)
+{
+    (void)f;
+    if (g_loading_page) { g_loading_page = 0; if (g_html) g_html->scroll_bottom(); }
+    page_update_ui();
+    log_mem("page loaded");
+}
+
+static void on_pagesealed(rc_frame *f)
+{
+    const char *v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
+    /* On the live page, follow the seal forward. On an older page, the
+     * counter simply ticks up -- that IS the new-content notification. */
+    if (g_is_live) g_view = g_total;
+    page_update_ui();
+}
+
+static void on_anchor(rc_frame *f)
+{
+    const char *page = rc_frame_get(f, "page");
+    const char *preview = rc_frame_get(f, "preview");
+    rc_log("anchor: page=%s preview=%s", page ? page : "?",
+           preview ? preview : "");
+}
+
+/* PERMREQ, PERMSTATE, PERMWAIT, PERMEND, HALT, HALTEND -- all six owned by
+ * app/bar.cpp now; see rc_bar_frame's own comments there for what each one
+ * does. One handler serves all six rows in the table below. */
+static void on_bar(rc_frame *f)
+{
+    rc_bar_frame(f);
+}
+
+static void on_error(rc_frame *f)
+{
+    char line[512];
+    const char *code = rc_frame_get(f, "code");
+    const char *msg = rc_frame_get(f, "msg");
+    rc_strf(line, sizeof(line), "[%s] %s", code ? code : "error",
+              msg ? msg : "");
+    rc_log("bridge error: %s", line);
+    /* Escaped, which it was not: this pushed the bridge's own `code` and
+     * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
+     * ended the document. */
+    if (g_html) g_html->error(line);
+    ui_set_busy(0);
+}
+
+static void on_notice(rc_frame *f)
+{
+    if (g_html) g_html->notice(f->body);
+}
+
+static void on_resync(rc_frame *f)
+{
+    /* The bridge could not replay what we missed and is telling us the
+     * transcript has a hole in it. Say so, because the alternative is the
+     * user scrolling back through a gap they were never told about.
+     *
+     * Had no branch at all, so it fell through to "unhandled frame type"
+     * -- a log line nobody reads on a machine with no console. */
+    const char *why = rc_frame_get(f, "reason");
+    char msg[256];
+    rc_strf(msg, sizeof(msg),
+            "Some of the conversation could not be restored after the "
+            "reconnection%s%s. Use the page buttons to re-read it.",
+            (why && *why) ? ": " : "", (why && *why) ? why : "");
+    if (g_html) g_html->notice(msg);
+}
+
+static void on_pong(rc_frame *f)
+{
+    (void)f;
+    /* The answer to a PING. We do not send PING yet -- see BACKLOG -- so
+     * this cannot arrive today, but handling it here means the day the
+     * keepalive lands it does not read as a protocol error. Nothing to
+     * show: receiving it IS the information, and the reader thread has
+     * already stamped last_seen by getting this far. */
+    rc_log("pong");
+}
+
+static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
+    { "READY",       on_ready },
+    { "DOC",         on_doc },
+    { "TEXT",        on_text },
+    { "TOOL",        on_tool },
+    { "TURN",        on_turn },
+    { "OPTION",      on_option },
+    { "OPTIONSEND",  on_optionsend },
+    { "SESSIONS",    on_chats },
+    { "SESSION",     on_chats },
+    { "SESSIONSEND", on_chats },
+    { "SWITCHED",    on_chats },
+    { "PAGESTART",   on_pagestart },
+    { "PAGEEND",     on_pageend },
+    { "PAGESEALED",  on_pagesealed },
+    { "ANCHOR",      on_anchor },
+    { "PERMREQ",     on_bar },
+    { "PERMSTATE",   on_bar },
+    { "PERMWAIT",    on_bar },
+    { "PERMEND",     on_bar },
+    { "HALT",        on_bar },
+    { "HALTEND",     on_bar },
+    { "ERROR",       on_error },
+    { "NOTICE",      on_notice },
+    { "RESYNC",      on_resync },
+    { "PONG",        on_pong },
+};
 
 static void render_frame(rc_frame *f)
 {
-    const char *v;
+    unsigned i;
 
     {   /* Progress accounting, before anything else looks at the frame. A
          * chunked transfer carries total/off in decompressed bytes; anything
@@ -640,439 +786,19 @@ static void render_frame(rc_frame *f)
         status_refresh();
     }
 
-    if (strcmp(f->type, "READY") == 0) {
-        v = rc_frame_get(f, "sess");
-        if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
-        v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
-        v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
-        g_is_live = 1;
-        page_update_ui();
-        chats_request();
-        g_backoff_ms = 1000;
-        g_retry_noted = 0;
-        v = rc_frame_get(f, "model");
-        rc_log("ready: sess=%s model=%s", g_net.sess, v ? v : "?");
-        if (g_html) g_html->notice("Connected to bridge.");
-        /* READY carries page/total for the session as it stands, but g_doc_sent
-         * (below) only installs the document skeleton once per PROCESS, not
-         * once per connection -- so on a reconnect this updates the page
-         * counters without the control's content agreeing with them, and the
-         * window keeps showing whatever the last connection left in it under
-         * the new page number. page_goto("live") re-requests the live page
-         * explicitly, which clears the control (PAGESTART) and repopulates it
-         * from what the bridge now has -- cheap and correct on a fresh session
-         * too, where it is a no-op over an empty page. See BACKLOG.md's note
-         * on this global. */
-        page_goto("live");
-        status_refresh();
-
-    } else if (strcmp(f->type, "DOC") == 0) {
-        /* The stylesheet and skeleton come from the bridge, so the look can be
-         * changed by restarting it rather than by rebuilding and re-deploying
-         * the guest binary. */
-        if (!g_doc_sent) {
-            g_doc_sent = 1;
-            if (g_html) g_html->set_document(f->body);
-            /* The control is created here rather than with the other children,
-             * because it needs the skeleton first -- so it has missed every
-             * layout so far and is still sized to whatever DoVerb was given. */
-            layout(g_main);
-            SetTimer(g_main, TIMER_HTMLPOLL, 100, NULL);
+    for (i = 0; i < sizeof(g_dispatch) / sizeof(g_dispatch[0]); i++) {
+        if (strcmp(f->type, g_dispatch[i].type) == 0) {
+            g_dispatch[i].fn(f);
+            return;
         }
-
-    } else if (strcmp(f->type, "TEXT") == 0) {
-        /* Body is not NUL-terminated by the protocol; the reader
-         * over-allocates by one and terminates it, so this is safe.
-         *
-         * "live" replaces the block still being written; anything else --
-         * including no mode= at all -- is a finished block appended to the
-         * end and never touched again. That "anything else" is deliberate
-         * for an absent header, but not for one that is PRESENT and wrong: a
-         * misspelled "live" would silently fall into the append branch below
-         * and grow the transcript by a full copy of the answer per token, on
-         * a 32MB guest that measures free memory in KB. So an unrecognized
-         * but non-empty mode= is logged loudly rather than swallowed -- see
-         * audit finding 03.22. */
-        const char *mode = rc_frame_get(f, "mode");
-        turn_receiving();
-        /* Finished markup from the bridge -- the guest transforms nothing --
-         * so this is the one path that does NOT escape. The scroll decision
-         * moved into the view, which is the only place that can apply it
-         * consistently. */
-        if (mode && strcmp(mode, "live") == 0) {
-            if (g_html) g_html->live(f->body);
-        } else {
-            if (mode && strcmp(mode, "append") != 0)
-                rc_log("TEXT: unrecognized mode=\"%s\" (want \"append\" or "
-                       "\"live\"); treating as a finished block", mode);
-            if (g_html) g_html->block(f->body);
-        }
-
-    } else if (strcmp(f->type, "TOOL") == 0) {
-        /* The bridge sends tool activity as a finished block now; this branch
-         * only survives for older bridges. */
-        turn_receiving();
-
-    } else if (strcmp(f->type, "TURN") == 0) {
-        const char *state = rc_frame_get(f, "state");
-        if (state && strcmp(state, "start") == 0) {
-            ui_set_busy(1);
-            g_turn_start_ms = GetTickCount();
-            status_set(2, " Claude is thinking...");
-            think_show();
-        } else {
-            turn_done();
-            ui_set_busy(0);
-            /* Now, and only now, re-fetch the list. Sending a message is what
-             * makes a conversation the most recent one, so this is where the
-             * reordering belongs -- not on merely opening one. */
-            chats_request();
-            /* state=="error" used to fall into the same branch as a normal
-             * end and render identically -- turn_error() (protocol.py) sends
-             * `msg` and no `cost_usd`, so "done $?" is what a failed turn
-             * looked like. Distinguished now: an error goes to the transcript
-             * as an error and the status bar says so, instead of reading like
-             * a quiet success. See audit finding 03.50. */
-            if (state && strcmp(state, "error") == 0) {
-                v = rc_frame_get(f, "msg");
-                if (g_html)
-                    g_html->error(v && *v ? v : "The turn ended with an error.");
-                status_set(2, " error");
-            } else {
-                char buf[96];
-                v = rc_frame_get(f, "cost_usd");
-                rc_strf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
-                status_set(2, buf);
-            }
-        }
-
-    } else if (strcmp(f->type, "OPTION") == 0) {
-        const char *kind = rc_frame_get(f, "kind");
-        const char *id = rc_frame_get(f, "id");
-        const char *label = rc_frame_get(f, "label");
-        const char *cur = rc_frame_get(f, "current");
-        int on = (cur && *cur == '1');
-        /* The first model row of a batch resets both menus. The bridge
-         * always sends models before efforts, so this is a reliable start
-         * marker and saves a frame type. */
-        if (kind && strcmp(kind, "model") == 0 && g_opts_open == 0) {
-            g_opts_open = 1;
-            clear_popup(g_menu_model);
-            clear_popup(g_menu_effort);
-            g_n_model = 0;
-            g_n_effort = 0;
-        }
-        if (kind && id && label) {
-            if (strcmp(kind, "model") == 0 && g_n_model < MAX_OPTS) {
-                rc_strf(g_opt_model[g_n_model], 64, "%s", id);
-                AppendMenuA(g_menu_model,
-                            MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
-                            IDM_MODEL0 + g_n_model, label);
-                g_n_model++;
-            } else if (strcmp(kind, "effort") == 0 && g_n_effort < MAX_OPTS) {
-                /* A model with no effort levels gets one greyed entry saying
-                 * so, rather than a menu offering five settings it does not
-                 * have. */
-                const char *dis = rc_frame_get(f, "disabled");
-                UINT flags = MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED);
-                if (dis && *dis == '1') flags |= MF_GRAYED;
-                rc_strf(g_opt_effort[g_n_effort], 64, "%s", id);
-                AppendMenuA(g_menu_effort, flags,
-                            IDM_EFFORT0 + g_n_effort, label);
-                g_n_effort++;
-            }
-        }
-
-    } else if (strcmp(f->type, "OPTIONSEND") == 0) {
-        g_opts_open = 0;
-        DrawMenuBar(g_main);
-
-    } else if (strcmp(f->type, "SESSIONS") == 0) {
-        SendMessageA(g_chats, WM_SETREDRAW, FALSE, 0);
-        SendMessageA(g_chats, LB_RESETCONTENT, 0, 0);
-        g_chat_count = 0;
-        g_chat_group[0] = '\0';
-        g_chat_current = -1;
-
-    } else if (strcmp(f->type, "SESSION") == 0) {
-        const char *id = rc_frame_get(f, "id");
-        const char *title = rc_frame_get(f, "title");
-        const char *cur = rc_frame_get(f, "current");
-        const char *grp = rc_frame_get(f, "group");
-        if (id && g_chat_count < MAX_CHATS) {
-            char label[160];
-
-            /* A header row whenever the bucket changes. The list arrives
-             * newest first, so these come out in order on their own. */
-            if (grp && *grp && strcmp(grp, g_chat_group) != 0
-                && g_chat_count < MAX_CHATS - 1) {
-                rc_strf(g_chat_group, sizeof(g_chat_group), "%s", grp);
-                g_chat_ids[g_chat_count][0] = '\0';
-                g_chat_is_header[g_chat_count] = 1;
-                SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)g_chat_group);
-                g_chat_count++;
-            }
-
-            /* No "* " marker any more: the selection highlight already says
-             * which conversation is open, and a marker meant every switch had
-             * to relabel the whole list. */
-            rc_strf(label, sizeof(label), "%s", title ? title : id);
-            /* rc_strcpy, and the bound is sizeof rather than a literal 63.
-             *
-             * `id` is a wire header value and may legitimately be up to 255
-             * bytes. _snprintf(dst, 63, ...) wrote indices 0..62 of a 64-byte
-             * row and never touched index 63 -- so termination came from the
-             * row being zero-filled BSS that nothing else writes. True today,
-             * and an unstated invariant rather than a contract: one memset, or
-             * one widened copy, and strcmp at the two call sites below walks
-             * off the end. */
-            rc_strcpy(g_chat_ids[g_chat_count],
-                      sizeof(g_chat_ids[g_chat_count]), id);
-            g_chat_is_header[g_chat_count] = 0;
-            fit_label(label, sizeof(label), chats_text_width() - CHAT_INDENT);
-            SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)label);
-            if (cur && *cur == '1') {
-                g_chat_current = g_chat_count;
-                SendMessageA(g_chats, LB_SETCURSEL, g_chat_count, 0);
-            }
-            g_chat_count++;
-        }
-
-    } else if (strcmp(f->type, "SESSIONSEND") == 0) {
-        /* RDW_FRAME as well as the client: the frame is what draws the
-         * client edge, and repainting only the interior leaves it stale. */
-        SendMessageA(g_chats, WM_SETREDRAW, TRUE, 0);
-        RedrawWindow(g_chats, NULL, NULL,
-                     RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
-        rc_log("chat list: %d sessions", g_chat_count);
-        log_mem("chat list loaded");
-
-    } else if (strcmp(f->type, "SWITCHED") == 0) {
-        /* A prompt belongs to the session that raised it, and switching
-         * rebuilds the session -- the bridge denies anything pending as
-         * "rebuild". Leaving the bar up would offer Allow/Deny for a request
-         * that no longer exists, on a conversation the user has left. */
-        bar_hide();
-        v = rc_frame_get(f, "total");
-        if (v) g_total = atoi(v);
-        v = rc_frame_get(f, "id");
-        if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
-        /* Deliberately NOT refreshing the list here. Resuming a session
-         * rewrites its file, so a refresh re-sorts by modification time and
-         * yanks whatever you just opened to the top -- which is startling when
-         * all you did was look at it. The list is re-fetched when a turn ends
-         * instead, so it reorders only once you have actually said something.
-         * The selection already shows which conversation is open. */
-        {   /* Mark the newly opened conversation in place. Re-fetching the
-             * list would reorder it, which is exactly what we are avoiding. */
-            int i;
-            g_chat_current = -1;
-            for (i = 0; i < g_chat_count; i++) {
-                if (!g_chat_is_header[i]
-                    && strcmp(g_chat_ids[i], g_net.sess) == 0) {
-                    g_chat_current = i;
-                    break;
-                }
-            }
-            InvalidateRect(g_chats, NULL, TRUE);
-        }
-        SetWindowTextA(g_main, RC_TITLE);
-        status_set(2, "");
-
-    } else if (strcmp(f->type, "PAGESTART") == 0) {
-        v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
-        v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
-        v = rc_frame_get(f, "live");  g_is_live = (v && *v == '1');
-        g_loading_page = 1;
-        g_turn_state = TURN_IDLE;      /* the control is about to be cleared */
-        /* One page in, one page out: clear before rendering, so the control
-         * never holds two. */
-        if (g_html) g_html->clear();
-        v = rc_frame_get(f, "continued");
-        if (v && *v == '1' && g_html)
-            g_html->notice("continued from the previous page");
-        page_update_ui();
-
-    } else if (strcmp(f->type, "PAGEEND") == 0) {
-        if (g_loading_page) { g_loading_page = 0; if (g_html) g_html->scroll_bottom(); }
-        page_update_ui();
-        log_mem("page loaded");
-
-    } else if (strcmp(f->type, "PAGESEALED") == 0) {
-        v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
-        /* On the live page, follow the seal forward. On an older page, the
-         * counter simply ticks up -- that IS the new-content notification. */
-        if (g_is_live) g_view = g_total;
-        page_update_ui();
-
-    } else if (strcmp(f->type, "ANCHOR") == 0) {
-        const char *page = rc_frame_get(f, "page");
-        const char *preview = rc_frame_get(f, "preview");
-        rc_log("anchor: page=%s preview=%s", page ? page : "?",
-               preview ? preview : "");
-
-    } else if (strcmp(f->type, "PERMREQ") == 0 ||
-               strcmp(f->type, "PERMSTATE") == 0) {
-        /* PERMSTATE is the same request re-issued after a reconnect. The
-         * guest never sends `from=`, so the bridge's replay buffer cannot
-         * bring the bar back by itself. */
-        const char *id = rc_frame_get(f, "id");
-        const char *allows = rc_frame_get(f, "allows");
-        perm_show(id ? id : "", f->body ? f->body : "",
-                  allows && *allows == '1');
-
-    } else if (strcmp(f->type, "HALT") == 0) {
-        /* The bridge has stopped the agent and wants the user to decide when
-         * it may go on. Today that is a conflicting edit: their copy was kept,
-         * the agent's was preserved, and it must not touch the file again
-         * until they have finished with it.
-         *
-         * The explanation is already in the transcript as a NOTICE -- this is
-         * only the button, so the text here is one short line rather than the
-         * whole story, which would not fit the bar at 640x480 anyway. */
-        const char *id = rc_frame_get(f, "id");
-        halt_show(id ? id : "", f->body ? f->body : "");
-
-    } else if (strcmp(f->type, "HALTEND") == 0) {
-        /* Keyed on the id for the same reason PERMEND is: the bridge can
-         * resolve a halt on its own -- the agent called sync_resolve, or the
-         * session was rebuilt -- while the bar is still up. */
-        const char *id = rc_frame_get(f, "id");
-        if (id && g_halt_id[0] && strcmp(id, g_halt_id) == 0) {
-            if (g_bar_mode == BAR_HALT) {
-                halt_hide();
-            } else {
-                /* Remembered behind a permission bar rather than shown. Forget
-                 * it, or perm_hide would put up a bar for a halt that has
-                 * already been answered. */
-                g_halt_id[0] = '\0';
-                g_halt_text[0] = '\0';
-            }
-        }
-
-    } else if (strcmp(f->type, "PERMWAIT") == 0) {
-        /* Only the queue depth changed; the request is the same one. Was
-         * logged only -- never shown to the person actually waiting on the
-         * decision, although PLAN.md's modeless-bar design implies it should
-         * be. Now appended to the permission bar itself via
-         * perm_update_label(). See audit finding 03.30. */
-        const char *id = rc_frame_get(f, "id");
-        const char *n = rc_frame_get(f, "waiting");
-        if (id && g_perm_pending && strcmp(id, g_perm_id) == 0 && n) {
-            rc_log("perm: %s more request(s) queued", n);
-            g_perm_waiting = atoi(n);
-            if (g_perm_waiting < 0) g_perm_waiting = 0;
-            perm_update_label();
-        }
-
-    } else if (strcmp(f->type, "PERMEND") == 0) {
-        /* Keyed on the id, never a blind hide: a PERMEND can arrive for a
-         * request we are not showing -- resolved by a deadline, a disconnect
-         * or a session rebuild while a reply was in flight -- and hiding on
-         * that would drop the bar during a live request. */
-        const char *id = rc_frame_get(f, "id");
-        if (id && g_perm_pending && strcmp(id, g_perm_id) == 0)
-            perm_hide();
-        else if (id)
-            rc_log("perm: PERMEND for %s, not the one on screen", id);
-
-    } else if (strcmp(f->type, "ERROR") == 0) {
-        char line[512];
-        const char *code = rc_frame_get(f, "code");
-        const char *msg = rc_frame_get(f, "msg");
-        rc_strf(line, sizeof(line), "[%s] %s", code ? code : "error",
-                  msg ? msg : "");
-        rc_log("bridge error: %s", line);
-        /* Escaped, which it was not: this pushed the bridge's own `code` and
-         * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
-         * ended the document. */
-        if (g_html) g_html->error(line);
-        ui_set_busy(0);
-
-    } else if (strcmp(f->type, "NOTICE") == 0) {
-        if (g_html) g_html->notice(f->body);
-
-    } else if (strcmp(f->type, "RESYNC") == 0) {
-        /* The bridge could not replay what we missed and is telling us the
-         * transcript has a hole in it. Say so, because the alternative is the
-         * user scrolling back through a gap they were never told about.
-         *
-         * Had no branch at all, so it fell through to "unhandled frame type"
-         * -- a log line nobody reads on a machine with no console. */
-        const char *why = rc_frame_get(f, "reason");
-        char msg[256];
-        rc_strf(msg, sizeof(msg),
-                "Some of the conversation could not be restored after the "
-                "reconnection%s%s. Use the page buttons to re-read it.",
-                (why && *why) ? ": " : "", (why && *why) ? why : "");
-        if (g_html) g_html->notice(msg);
-
-    } else if (strcmp(f->type, "PONG") == 0) {
-        /* The answer to a PING. We do not send PING yet -- see BACKLOG -- so
-         * this cannot arrive today, but handling it here means the day the
-         * keepalive lands it does not read as a protocol error. Nothing to
-         * show: receiving it IS the information, and the reader thread has
-         * already stamped last_seen by getting this far. */
-        rc_log("pong");
-
-    } else {
-        rc_log("unhandled frame type: %s", f->type);
     }
+    rc_log("unhandled frame type: %s", f->type);
 }
 
 /* ------------------------------------------------------------------ input */
 
-/* Width available for an item's text: the client area less the vertical
- * scrollbar and the couple of pixels the listbox insets text by. */
-static int chats_text_width(void)
-{
-    RECT rc;
-
-    if (!g_chats) return 0;
-    GetClientRect(g_chats, &rc);
-    return (rc.right - rc.left) - GetSystemMetrics(SM_CXVSCROLL) - 6;
-}
-
-/* Shorten a label with an ellipsis until it fits.
- *
- * Two reasons, and the cosmetic one is the lesser. A label wider than the
- * client area makes Win98's listbox overdraw its own client edge (see the
- * CreateWindowEx comment). And silently cutting a name off at the frame reads
- * as a rendering glitch, where "..." reads as "there is more".
- *
- * GetTextExtentExPointA answers "how many characters fit in N pixels" in one
- * call, so this stays one GDI round trip per label rather than a search. */
-static void fit_label(char *label, unsigned cap, int avail_px)
-{
-    HDC dc;
-    HFONT old;
-    SIZE sz;
-    INT fit = 0;
-    int n;
-    char buf[192];
-
-    /* This did not guard its argument. One caller today, always a local
-     * array, so the invariant held by accident of there being a single call
-     * site. C89: declarations first. */
-    if (!label || !cap) return;
-    if (!g_chats || avail_px <= 0) return;
-    n = (int)strlen(label);
-    if (n <= 0) return;
-
-    dc = GetDC(g_chats);
-    if (!dc) return;
-    old = (HFONT)SelectObject(dc, g_ui_font);
-    sz.cx = 0;
-    if (GetTextExtentExPointA(dc, label, n, avail_px, &fit, NULL, &sz)
-        && fit < n) {
-        if (fit > 3) fit -= 3; else fit = 1;
-        rc_strf(buf, sizeof(buf), "%.*s...", fit, label);
-        rc_strf(label, cap, "%s", buf);
-        label[cap - 1] = '\0';
-    }
-    SelectObject(dc, old);
-    ReleaseDC(g_chats, dc);
-}
+/* chats_text_width and fit_label moved to app/chatlist.cpp with the drawing
+ * code that is their only caller. */
 
 /* A turn is running and nothing has come back yet. Without this the window
  * just sits there: Send greys out, but on a slow link or a long think that is
@@ -1145,7 +871,7 @@ static void do_send(void)
     char buf[RC_INPUT_MAX];
     int n;
 
-    if (g_turn_active || g_perm_pending) return;
+    if (g_turn_active || rc_bar_blocks_send()) return;
 
     /* Refuse rather than truncate. GetWindowTextA copies what fits and says
      * nothing, so a pasted log longer than the buffer was silently cut and the
@@ -1189,24 +915,8 @@ static void do_stop(void)
     ui_send("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
 }
 
-/* Open a conversation on a plain click.
- *
- * Not via LBN_SELCHANGE: that also fires for arrow keys, and switching on those
- * would tear down a live session every time the list was scrolled with the
- * keyboard. Testing the mouse button state inside the notification was tried
- * and is unreliable -- by the time it arrives the button may already be up.
- * Handling the button release directly is unambiguous. The switch is POSTED
- * rather than done here so the listbox finishes with the click (and releases
- * capture) before the transcript is torn down and rebuilt. WM_RC_OPENCHAT
- * itself is defined with the rest of this file's WM_APP offsets, up top. */
-
-static LRESULT CALLBACK chats_proc(HWND h, UINT m, WPARAM w, LPARAM l)
-{
-    LRESULT r = CallWindowProc(g_chats_oldproc, h, m, w, l);
-    if (m == WM_LBUTTONUP)
-        PostMessageA(GetParent(h), WM_RC_OPENCHAT, 0, 0);
-    return r;
-}
+/* chats_proc (the listbox subclass that posts WM_RC_OPENCHAT on a plain
+ * click) moved to app/chatlist.cpp with the rest of the chat list. */
 
 /* Enter sends; Shift+Enter inserts a newline. */
 static LRESULT CALLBACK input_proc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -1243,13 +953,11 @@ static void layout(HWND hwnd)
      * disappeared. The bar docks to the bottom of the transcript instead, and
      * only the transcript gets shorter. */
     y = h - INPUT_HEIGHT - GUTTER;
-    ybar = g_bar_mode ? (y - PERM_H - GUTTER) : y;
+    ybar = rc_bar_active() ? (y - PERM_H - GUTTER) : y;
 
-    {   /* Chat list down the left, with its Refresh button under it. */
-        int lh = h - 2 * GUTTER - 24;
-        MoveWindow(g_chats, GUTTER, GUTTER, CHATS_W, lh, TRUE);
-        MoveWindow(g_refresh, GUTTER, GUTTER + lh + 2, CHATS_W, 22, TRUE);
-    }
+    /* Chat list down the left, with its Refresh button under it -- both
+     * positioned by app/chatlist.cpp now. */
+    rc_chats_move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
 
     {   /* Page bar across the top of the transcript column. */
         int x = GUTTER * 2 + CHATS_W, by = GUTTER;
@@ -1266,26 +974,12 @@ static void layout(HWND hwnd)
         int cw = w - cx - GUTTER;
         if (g_html)
             g_html->move(cx, GUTTER + PAGEBAR_H, cw, ybar - GUTTER - PAGEBAR_H);
-        if (g_bar_mode) {
-            /* Right-to-left: the buttons are fixed width and the label takes
-             * whatever is left, so a long tool description truncates rather
-             * than pushing Deny off the edge.
-             *
-             * A halt has only Continue, and the hidden buttons must not be
-             * given screen space -- MoveWindow on a hidden control costs
-             * nothing, but leaving the gap would put Continue in the middle of
-             * the bar with a hole beside it. */
-            int bx = w - GUTTER - PERMBTN_W;
-            if (g_bar_mode == BAR_PERM) {
-                MoveWindow(g_perm_deny, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
-                bx -= PERMBTN_W + 2;
-                MoveWindow(g_perm_always, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
-                bx -= PERMBTN_W + 2;
-            }
-            MoveWindow(g_perm_allow, bx, ybar, PERMBTN_W, PERM_H - 4, TRUE);
-            MoveWindow(g_perm_text, cx, ybar + 4, bx - cx - GUTTER,
-                       PERM_H - 6, TRUE);
-        }
+        /* The bar positions its own controls -- see app/bar.h -- from its
+         * own descriptor table, which is what used to be the "g_bar_mode ==
+         * BAR_PERM" branch here (audit finding 01.15: a new bar state needed
+         * an edit at this exact spot too). */
+        if (rc_bar_active())
+            rc_bar_move(cx, ybar, w - GUTTER);
         MoveWindow(g_input, cx, y,
                    cw - GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
     }
@@ -1294,9 +988,11 @@ static void layout(HWND hwnd)
 }
 
 /* CreateWindowExA can fail, and on this platform that was never a theoretical
- * concern: the comment above g_chats cites the 16-bit USER heap's fixed 64KB
- * three times in this file as a reason a control might not be created. A NULL
- * here was previously silent -- nothing logged, and every subsequent
+ * concern: the chat list's own CreateWindowExA comment (app/chatlist.cpp)
+ * cites the 16-bit USER heap's fixed 64KB as a reason a control might not be
+ * created -- one of four such citations across main.cpp/chatlist.cpp/bar.cpp
+ * now that the bar and chat list are their own files. A NULL here was
+ * previously silent -- nothing logged, and every subsequent
  * SendMessageA/MoveWindow/etc. against the handle becomes a quiet no-op,
  * since the *A functions accept NULL and simply do nothing with it. The log
  * is the only diagnostic on a machine with no console, so this is where the
@@ -1363,52 +1059,25 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     check_child("stop", g_stop);
     EnableWindow(g_stop, FALSE);
 
-    /* LBS_NOINTEGRALHEIGHT: otherwise the control silently resizes itself to
-     *   a whole number of rows after every MoveWindow, so its idea of its own
-     *   size and ours disagree.
-     * WS_CLIPSIBLINGS: keeps neighbours out of its rectangle.
-     *
-     * LBS_OWNERDRAWFIXED with LBS_HASSTRINGS: the listbox still stores and
-     *   searches the strings, we only take over the painting. That is what
-     *   lets a date-group header look like a header rather than like a
-     *   conversation called "Today".
-     *
-     * No WS_HSCROLL: labels are truncated to fit instead, see fit_label().
-     * An item wider than the client area makes Win98's listbox paint over its
-     * own WS_EX_CLIENTEDGE border -- measured as white pixels at x=8,9 where
-     * (128,128,128) and (0,0,0) should be, on exactly the rows whose text
-     * overflowed, surviving both a scroll and a minimise/restore. */
-    g_chats = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-        WS_CLIPSIBLINGS | LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT |
-        LBS_OWNERDRAWFIXED,
-        0, 0, 0, 0, hwnd, (HMENU)ID_CHATS, inst, NULL);
-    check_child("chats", g_chats);
+    /* The chat list and its Refresh button: created and owned by
+     * app/chatlist.cpp now (rc_chats_create logs its own check_child
+     * failures, and the LBS_NOINTEGRALHEIGHT/WS_CLIPSIBLINGS/
+     * LBS_OWNERDRAWFIXED/no-WS_HSCROLL comment that used to be here moved
+     * with the CreateWindowExA call it explains). g_ui_font/g_ui_font_bold
+     * are already set above; chats_confirm/chats_switching/chats_switched
+     * are this file's answers to the policy questions the chat list does
+     * not own -- see the callback comments on rc_chats_create in
+     * app/chatlist.h. */
+    rc_chats_create(hwnd, inst, &g_net, g_ui_font, g_ui_font_bold,
+                     chats_confirm, ui_send, chats_switching, chats_switched);
 
-    /* The permission bar. Created hidden and shown with ShowWindow rather
-     * than created on demand: the 16-bit USER/GDI heaps on 9x are a fixed
-     * 64KB, and churning window handles is exactly what this codebase avoids. */
-    g_perm_text = CreateWindowExA(0, "STATIC", "",
-        WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
-        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_TEXT, inst, NULL);
-    check_child("perm_text", g_perm_text);
-    g_perm_allow = CreateWindowExA(0, "BUTTON", "Allow",
-        WS_CHILD | BS_PUSHBUTTON,
-        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_ALLOW, inst, NULL);
-    check_child("perm_allow", g_perm_allow);
-    g_perm_always = CreateWindowExA(0, "BUTTON", "Always",
-        WS_CHILD | BS_PUSHBUTTON,
-        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_ALWAYS, inst, NULL);
-    check_child("perm_always", g_perm_always);
-    g_perm_deny = CreateWindowExA(0, "BUTTON", "Deny",
-        WS_CHILD | BS_PUSHBUTTON,
-        0, 0, 0, 0, hwnd, (HMENU)ID_PERM_DENY, inst, NULL);
-    check_child("perm_deny", g_perm_deny);
-
-    g_refresh = CreateWindowExA(0, "BUTTON", "Refresh",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_REFRESH, inst, NULL);
-    check_child("refresh", g_refresh);
+    /* The permission/halt bar: its own controls, created and owned by
+     * app/bar.cpp now (rc_bar_create logs its own check_child-equivalent
+     * failures). ui_send is main.c's "send something the user just asked
+     * for" and bar_changed is the layout + enables refresh the bar needs
+     * after any visible change -- see the `send`/`changed` comment on
+     * rc_bar_create in app/bar.h. */
+    rc_bar_create(hwnd, inst, g_ui_font, &g_net, ui_send, bar_changed);
 
     g_live = CreateWindowExA(0, "BUTTON", "Live",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
@@ -1451,16 +1120,10 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     SendMessageA(g_next,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_last,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_pagelbl, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_chats,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_refresh, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_perm_text,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_perm_allow,  WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_perm_always, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_perm_deny,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    /* The chat list and the bar's own controls got their font inside
+     * rc_chats_create/rc_bar_create above. */
     page_update_ui();
 
-    g_chats_oldproc = (WNDPROC)SetWindowLongA(g_chats, GWL_WNDPROC,
-                                              (LONG)(LONG_PTR)chats_proc);
     g_input_oldproc = (WNDPROC)SetWindowLongA(g_input, GWL_WNDPROC,
                                               (LONG)input_proc);
 }
@@ -1527,87 +1190,19 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetFocus(g_input);
         return 0;
 
-    case WM_MEASUREITEM: {
-        MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lp;
-        if (mis && mis->CtlID == ID_CHATS) mis->itemHeight = CHAT_ROW_H;
+    /* Owner-draw so a date header reads as a header instead of as a
+     * conversation named "Today" -- app/chatlist.cpp's own business now,
+     * since ID_CHATS is the only owner-draw control this window has. */
+    case WM_MEASUREITEM:
+        rc_chats_measure((MEASUREITEMSTRUCT *)lp);
         return TRUE;
-    }
 
-    case WM_DRAWITEM: {
-        /* Owner-draw so a date header reads as a header instead of as a
-         * conversation named "Today". Everything else about the control is
-         * still the stock listbox: LBS_HASSTRINGS keeps the strings, so this
-         * only replaces the painting. */
-        DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
-        char text[192];
-        RECT rc;
-        int header, selected;
-        COLORREF oldfg;
-        int oldbk;
-
-        if (!dis || dis->CtlID != ID_CHATS || (int)dis->itemID < 0)
-            return TRUE;
-
-        text[0] = '\0';
-        SendMessageA(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
-        header = ((int)dis->itemID < g_chat_count
-                  && g_chat_is_header[dis->itemID]);
-        selected = (dis->itemState & ODS_SELECTED) && !header;
-        rc = dis->rcItem;
-
-        if (header) {
-            /* A quiet band with a rule under it: visible as structure without
-             * competing with the conversation titles. */
-            HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
-            FillRect(dis->hDC, &rc, br);
-            DeleteObject(br);
-            oldfg = SetTextColor(dis->hDC, GetSysColor(COLOR_BTNSHADOW));
-            oldbk = SetBkMode(dis->hDC, TRANSPARENT);
-            rc.left += 3;
-            rc.top += 1;
-            DrawTextA(dis->hDC, text, -1, &rc,
-                      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-            SetBkMode(dis->hDC, oldbk);
-            SetTextColor(dis->hDC, oldfg);
-            rc = dis->rcItem;
-            {   /* hairline under the band */
-                HBRUSH line = CreateSolidBrush(GetSysColor(COLOR_BTNSHADOW));
-                RECT r2 = rc;
-                r2.top = r2.bottom - 1;
-                FillRect(dis->hDC, &r2, line);
-                DeleteObject(line);
-            }
-            return TRUE;
-        }
-
-        {
-            HBRUSH br = CreateSolidBrush(GetSysColor(
-                selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
-            FillRect(dis->hDC, &rc, br);
-            DeleteObject(br);
-        }
-        oldfg = SetTextColor(dis->hDC, GetSysColor(
-            selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
-        oldbk = SetBkMode(dis->hDC, TRANSPARENT);
-        rc.left += CHAT_INDENT;
-        {
-            HFONT want = ((int)dis->itemID == g_chat_current && g_ui_font_bold)
-                         ? g_ui_font_bold : g_ui_font;
-            HFONT oldf = (HFONT)SelectObject(dis->hDC, want);
-            DrawTextA(dis->hDC, text, -1, &rc,
-                      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-            SelectObject(dis->hDC, oldf);
-        }
-        SetBkMode(dis->hDC, oldbk);
-        SetTextColor(dis->hDC, oldfg);
-
-        if (dis->itemState & ODS_FOCUS)
-            DrawFocusRect(dis->hDC, &dis->rcItem);
+    case WM_DRAWITEM:
+        rc_chats_draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
-    }
 
     case WM_RC_OPENCHAT:
-        chats_switch();
+        rc_chats_open_selected();
         return 0;
 
     case WM_TIMER:
@@ -1637,18 +1232,19 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if ((rc_state)wp == RC_FAILED || (rc_state)wp == RC_DISCONNECTED) {
             /* Take the bar down FIRST.
              *
-             * Nothing did, and ui_set_busy ORs g_perm_pending into the Send
-             * button's enabled state -- so a disconnection while a permission
-             * prompt or a halt was on screen left Send disabled across the
-             * whole outage AND after the reconnection, with a bar on screen
-             * whose buttons answer a request the bridge has already given up
-             * on. The app looked wedged.
+             * Nothing did, once, and ui_refresh_enables ORs
+             * rc_bar_blocks_send() into the Send button's enabled state --
+             * so a disconnection while a permission prompt or a halt was on
+             * screen left Send disabled across the whole outage AND after
+             * the reconnection, with a bar on screen whose buttons answer a
+             * request the bridge has already given up on. The app looked
+             * wedged.
              *
              * Safe to drop locally because the bridge restores both on
              * reattach: _reissue_prompt re-sends PERMSTATE and _reissue_halt
              * re-sends HALT, so whatever is genuinely still outstanding comes
              * back, and whatever is not, does not. */
-            bar_hide();
+            rc_bar_hide_all();
             ui_set_busy(0);
             SetTimer(hwnd, TIMER_RECONNECT, (UINT)g_backoff_ms, NULL);
         }
@@ -1660,33 +1256,22 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_SEND:  do_send(); return 0;
 
         case ID_STOP:  do_stop(); return 0;
+        /* All three of the bar's own buttons dispatch through one call now
+         * -- see app/bar.h. rc_bar_command knows which kind is on screen
+         * and what each button means for it (audit finding 01.15: this used
+         * to be a five-non-adjacent-places problem, one of which was this
+         * exact switch). */
         case ID_PERM_ALLOW:
-            /* One button, two meanings -- see the BAR_* note. */
-            if (g_bar_mode == BAR_HALT) {
-                const char *k[1]; const char *v[1];
-                k[0] = "id"; v[0] = g_halt_id;
-                /* The bar comes down on HALTEND, not here -- the same rule
-                 * perm_reply follows, and for the same reason. rc_net_send
-                 * returns -1 on a closed link, a full queue or an oversized
-                 * frame, and hiding regardless meant a press that never left
-                 * the machine looked answered: the bridge still held the halt,
-                 * its raise is idempotent so no new bar could appear, and
-                 * every latched path refused the agent's writes for good. */
-                if (rc_net_send(&g_net, "RESUME", k, v, 1, NULL, 0) < 0)
-                    SetWindowTextA(g_perm_text,
-                                   "Not sent -- no link. Press Continue again.");
-                return 0;
-            }
-            perm_reply("allow");
+        case ID_PERM_ALWAYS:
+        case ID_PERM_DENY:
+            rc_bar_command(id);
             return 0;
-        case ID_PERM_ALWAYS: perm_reply("always"); return 0;
-        case ID_PERM_DENY:   perm_reply("deny");   return 0;
         case ID_LIVE:  page_goto("live");      return 0;
         case ID_FIRST: page_goto_n(1);         return 0;
         case ID_PREV:  page_goto_n(g_view - 1); return 0;
         case ID_NEXT:  page_goto_n(g_view + 1); return 0;
         case ID_LAST:  page_goto_n(g_total);   return 0;
-        case ID_REFRESH: chats_request();      return 0;
+        case ID_REFRESH: rc_chats_request();      return 0;
 
         case IDM_NEW:
             if (g_turn_active
@@ -1746,7 +1331,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * memory. LBN_SELCHANGE is deliberately not used: it also fires
              * for arrow keys, and switching on those would tear down a live
              * session every time the list was scrolled from the keyboard. */
-            if (HIWORD(wp) == LBN_DBLCLK) chats_switch();
+            if (HIWORD(wp) == LBN_DBLCLK) rc_chats_open_selected();
             return 0;
 
         default:
@@ -1898,16 +1483,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             continue;
         }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
-            && msg.hwnd == g_chats) {
-            chats_switch();
+            && msg.hwnd == rc_chats_hwnd()) {
+            rc_chats_open_selected();
             continue;
         }
-        /* Esc denies a pending request. It has to be intercepted before
+        /* Esc denies a pending permission request (a halt has no "deny" --
+         * see rc_bar_escape). It has to be intercepted before
          * IsDialogMessageA, which eats VK_ESCAPE and would never let it
          * reach the bar. */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
-            && g_perm_pending) {
-            perm_reply("deny");
+            && rc_bar_escape()) {
             continue;
         }
         if (!IsDialogMessageA(g_main, &msg)) {
