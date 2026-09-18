@@ -188,22 +188,37 @@ class FrameReader:
 
 # --- frame constructors -----------------------------------------------------
 #
-# NOT a declaration of the protocol's vocabulary. server.py builds the other
-# ~38 frame types the bridge sends inline with Frame(...) at the call site,
-# and converting those to constructors here is not obviously an improvement
-# (see docs/audit/02-bridge-python.md #1.1 -- the seam worth building is a
-# GuestLink owning the wire, not a pile of one-off functions). These two are
-# the ones worth a constructor because they are sent before a GuestSession
-# exists to hang a send helper off: HELLO is the first frame either peer ever
-# sends (both fakegui and the guest open a connection with it), and ERROR is
-# sent standalone by the bridge whenever a handshake step fails before any
-# session-scoped state exists to send it through.
+# This IS the protocol's vocabulary, as far as the bridge -> guest direction
+# goes: one constructor per frame type the bridge sends, so `stamp=`, header
+# stringification and `fold.encode` are decided once here rather than
+# independently at every `Frame(...)` call site (docs/audit/02-bridge-python.md
+# #1.1). `GuestLink` (bridge/wire/link.py) is the seam that owns HOW a frame
+# reaches the wire -- the writer, the send lock, the compressor, the chunking.
+# These functions are what decides WHAT the bridge is allowed to send: a
+# constructor takes the values that vary and returns a `Frame` whose headers
+# are always shaped the same way for that type.
+#
+# `stamp=` -- whether a frame enters the replay buffer -- is deliberately NOT
+# decided here. It is almost always a property of the type (an EXEC or an
+# EXECKILL must never be replayed; a reissue after reconnect restores state
+# that already happened and must not replay either), but TURN start is sent
+# both ways: a fresh turn should replay, an after-reconnect reissue of the
+# busy UI (Bridge._reissue_turn) must not, for the SAME headers. So `stamp=`
+# stays an explicit argument at the `GuestLink.send` call site, same as
+# before -- only the header-building duplication is gone.
+#
+# HELLO and ERROR predate this: they are sent before a GuestSession exists to
+# hang a send helper off (both fakegui and the guest open a connection with
+# HELLO; ERROR is sent standalone by the bridge whenever a handshake step
+# fails before any session-scoped state exists to send it through).
 #
 # Four other constructors used to live here -- text(), user_input(), status(),
 # interrupt() -- and were dead: no caller anywhere in bridge/, win/ or tests/.
 # text()'s own `style=` parameter named a frame shape the bridge had already
 # stopped sending. Removed rather than fixed, in the same pass that reworked
 # fakegui.py to render TEXT by the `mode=` header the bridge actually sends.
+# `text_frame()` below is a new, unrelated constructor for the TEXT frame the
+# bridge actually sends today.
 
 
 def hello(secret: str, sess: str | None = None, from_seq: int | None = None) -> Frame:
@@ -221,3 +236,210 @@ def error(code: str, msg: str) -> Frame:
     """Errors need a frame type of their own, or a version-mismatch rejection
     arrives as bytes the peer cannot parse."""
     return Frame("ERROR", {"code": code, "msg": msg})
+
+
+# --- session lifecycle --------------------------------------------------
+
+
+def ready(sess: str, model: str, next_seq: int, page: int, total: int) -> Frame:
+    """First frame after HELLO succeeds, carrying the session id and the
+    replay cursor a future `from=` would resume from."""
+    return Frame("READY", {
+        "sess": sess,
+        "ver": str(PROTO_VERSION),
+        "model": model,
+        "next_seq": str(next_seq),
+        "page": str(page),
+        "total": str(total),
+    })
+
+
+def resync(reason: str) -> Frame:
+    """Told to a guest whose requested replay point the buffer no longer
+    has. The guest has no handler for this today -- see
+    docs/audit/02-bridge-python.md #6.1 -- but the bridge still sends it
+    rather than silently resuming from the wrong place."""
+    return Frame("RESYNC", {"reason": reason})
+
+
+def doc(html: str) -> Frame:
+    """The document skeleton and stylesheet, sent once per connection."""
+    return Frame("DOC", {}, fold.encode(html))
+
+
+def switched(session_id: str, total: int) -> Frame:
+    """A different conversation is now live: NEWSESSION, SWITCH or an effort
+    fork all land here."""
+    return Frame("SWITCHED", {"id": session_id, "total": str(total)})
+
+
+def sessions_start(count: int) -> Frame:
+    return Frame("SESSIONS", {"count": str(count)})
+
+
+def session_row(i: int, sess_id: str, title: str, cwd: str, group: str,
+                current: bool) -> Frame:
+    return Frame("SESSION", {
+        "i": str(i),
+        "id": sess_id,
+        "title": title[:120],
+        "cwd": cwd[:120],
+        "group": group,
+        "current": "1" if current else "0",
+    })
+
+
+def sessions_end() -> Frame:
+    return Frame("SESSIONSEND", {})
+
+
+def notice(kind: str, text: str) -> Frame:
+    return Frame("NOTICE", {"kind": kind}, fold.encode(text))
+
+
+# --- turns ----------------------------------------------------------------
+
+
+def turn_start() -> Frame:
+    """Sent both for a fresh turn and, with `stamp=False`, to restore the
+    busy UI after a reconnect -- see the note on `stamp=` above."""
+    return Frame("TURN", {"state": "start"})
+
+
+def turn_error(msg: str) -> Frame:
+    return Frame("TURN", {"state": "error", "msg": msg[:200]})
+
+
+def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int) -> Frame:
+    return Frame("TURN", {
+        "state": "end",
+        "ok": "1" if ok else "0",
+        "subtype": subtype,
+        "cost_usd": f"{cost_usd:.4f}" if cost_usd else "",
+        "ms": str(ms),
+    })
+
+
+def anchor_frame(page: int, off: int, preview: str) -> Frame:
+    """Where a user turn landed in the transcript, so the guest can jump
+    back to it from history."""
+    return Frame("ANCHOR", {
+        "page": str(page), "off": str(off), "preview": preview,
+    })
+
+
+# --- permission prompts -----------------------------------------------------
+
+
+def permreq(tool_use_id: str, tool_name: str, allows: bool, waiting: int,
+            summary: str) -> Frame:
+    return Frame("PERMREQ", {
+        "id": tool_use_id,
+        "tool": tool_name,
+        "allows": "1" if allows else "0",
+        "waiting": str(waiting),
+    }, fold.encode(summary))
+
+
+def permstate(tool_use_id: str, tool_name: str, allows: bool, waiting: int,
+              summary: str) -> Frame:
+    """Reissued after a reconnect to put the bar back -- same shape as
+    PERMREQ under a different type, so the guest can tell a fresh prompt
+    from one it should already be showing."""
+    return Frame("PERMSTATE", {
+        "id": tool_use_id,
+        "tool": tool_name,
+        "allows": "1" if allows else "0",
+        "waiting": str(waiting),
+    }, fold.encode(summary))
+
+
+def permwait(tool_use_id: str, waiting: int) -> Frame:
+    """Refreshes the queue depth shown on the bar."""
+    return Frame("PERMWAIT", {"id": tool_use_id, "waiting": str(waiting)})
+
+
+def permend(tool_use_id: str, reason: str) -> Frame:
+    return Frame("PERMEND", {"id": tool_use_id, "reason": reason})
+
+
+# --- the sync halt bar -------------------------------------------------
+
+
+def halt(halt_id: str, text: str) -> Frame:
+    return Frame("HALT", {"id": halt_id}, fold.encode(text))
+
+
+def haltend(halt_id: str) -> Frame:
+    return Frame("HALTEND", {"id": halt_id})
+
+
+# --- transcript paging -------------------------------------------------
+
+
+def pagesealed(page: int, total: int) -> Frame:
+    return Frame("PAGESEALED", {"page": str(page), "total": str(total)})
+
+
+def pagestart(page: int, total: int, live: bool, continued: bool) -> Frame:
+    return Frame("PAGESTART", {
+        "page": str(page),
+        "total": str(total),
+        "live": "1" if live else "0",
+        "continued": "1" if continued else "0",
+    })
+
+
+def pageend(page: int) -> Frame:
+    return Frame("PAGEEND", {"page": str(page)})
+
+
+def text_frame(mode: str, enc: str, page: int, body: bytes = b"", *,
+               total: int | None = None, off: int | None = None) -> Frame:
+    """One TEXT frame -- either a LIVE replace or one chunk of an APPEND
+    block. `total`/`off` are set together, only when this is a chunk of a
+    larger send; see GuestLink.send_html for why they are on every chunk."""
+    h = {"mode": mode, "enc": enc, "page": str(page)}
+    if total is not None:
+        h["total"] = str(total)
+        h["off"] = str(off)
+    return Frame("TEXT", h, body)
+
+
+# --- exec ----------------------------------------------------------------
+
+
+def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: bool,
+             cwd: str = "") -> Frame:
+    """The command goes in the BODY, never a header: a header value is
+    truncated at 255 bytes silently, and a truncated command is still
+    EXECUTED -- `del c:\\temp\\*.tmp` cut short becomes `del c:\\temp\\*`."""
+    headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
+               "shell": "1" if shell else "0"}
+    if cwd:
+        headers["cwd"] = cwd
+    return Frame("EXEC", headers, fold.encode(command))
+
+
+def exec_kill(exec_id: str) -> Frame:
+    return Frame("EXECKILL", {"id": exec_id})
+
+
+# --- model / effort menus ---------------------------------------------
+
+
+def option(kind: str, id: str, label: str, current: bool, *,
+           disabled: bool = False) -> Frame:
+    h = {"kind": kind, "id": id, "label": label,
+         "current": "1" if current else "0"}
+    if disabled:
+        h["disabled"] = "1"
+    return Frame("OPTION", h)
+
+
+def optionsend() -> Frame:
+    return Frame("OPTIONSEND", {})
+
+
+def pong() -> Frame:
+    return Frame("PONG", {})

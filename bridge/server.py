@@ -28,7 +28,7 @@ from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
 from .wire.coalesce import Coalescer
-from .wire.compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
+from .wire.compress import StreamCompressor
 from .view import html as H
 from .view.html import APPEND, LIVE, HtmlStream
 from .view.pages import Paginator, limits_for
@@ -43,8 +43,35 @@ from .wire.protocol import (
                             Frame,
                             FrameReader,
                             ProtocolError,
+                            anchor_frame,
+                            doc,
                             error,
+                            exec_cmd,
+                            exec_kill,
+                            halt,
+                            haltend,
+                            notice,
+                            option,
+                            optionsend,
+                            pageend,
+                            pagesealed,
+                            pagestart,
+                            permend,
+                            permreq,
+                            permstate,
+                            permwait,
+                            pong,
+                            ready,
+                            resync,
+                            session_row,
+                            sessions_end,
+                            sessions_start,
+                            switched,
+                            turn_end,
+                            turn_error,
+                            turn_start,
                             )
+from .wire.link import GuestLink
 from .wire.replay import Replay
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
@@ -64,14 +91,11 @@ class GuestSession:
     sess_id: str
     replay: Replay = field(default_factory=Replay)
     claude: Session | None = None
-    writer: asyncio.StreamWriter | None = None
-    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-    # One persistent deflate stream for the whole connection. Resetting it
-    # mid-connection would desynchronise the guest's inflater, so it is only
-    # reset on reconnect -- see _attach.
-    zip_out: StreamCompressor = field(default_factory=StreamCompressor)
-    link_bps: float | None = None
+    #: Everything about writing bytes to this guest -- the socket writer, the
+    #: send lock, the persistent compressor and the measured link speed. See
+    #: bridge/wire/link.py. `writer`/`send_lock`/`zip_out`/`link_bps` below
+    #: forward here so the rest of the bridge did not have to change shape.
+    link: GuestLink = field(default_factory=GuestLink)
     # Chosen from the Model and Effort menus. Held per guest rather than per
     # process so a reconnect or an effort fork keeps the choice.
     model: str = ""
@@ -158,9 +182,37 @@ class GuestSession:
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     sync_active: bool = False
 
+    # --- forwarded to self.link, so the rest of the bridge can keep saying
+    # guest.writer / guest.send_lock / guest.zip_out / guest.link_bps rather
+    # than reaching through guest.link for every one of them. ---
+
+    @property
+    def writer(self) -> asyncio.StreamWriter | None:
+        return self.link.writer
+
+    @writer.setter
+    def writer(self, w: asyncio.StreamWriter | None) -> None:
+        self.link.writer = w
+
+    @property
+    def send_lock(self) -> asyncio.Lock:
+        return self.link.send_lock
+
+    @property
+    def zip_out(self) -> StreamCompressor:
+        return self.link.zip_out
+
+    @property
+    def link_bps(self) -> float | None:
+        return self.link.link_bps
+
+    @link_bps.setter
+    def link_bps(self, bps: float | None) -> None:
+        self.link.link_bps = bps
+
     @property
     def connected(self) -> bool:
-        return self.writer is not None and not self.writer.is_closing()
+        return self.link.connected
 
 
 class Bridge:
@@ -451,14 +503,10 @@ class Bridge:
         if guest.claude is None:
             guest.claude = await self._make_session(guest)
 
-        await self._send(guest, Frame("READY", {
-            "sess": guest.sess_id,
-            "ver": str(PROTO_VERSION),
-            "model": guest.claude.model or "(default)",
-            "next_seq": str(guest.replay.next_seq),
-            "page": str(guest.pages.live.number),
-            "total": str(guest.pages.count),
-        }), stamp=False)
+        await self._send(guest, ready(
+            guest.sess_id, guest.claude.model or "(default)",
+            guest.replay.next_seq, guest.pages.live.number,
+            guest.pages.count), stamp=False)
 
         # Replay anything missed while disconnected.
         want = h.get("from")
@@ -466,8 +514,7 @@ class Bridge:
             try:
                 missed = guest.replay.since(int(want))
             except LookupError as exc:
-                await self._send(guest, Frame("RESYNC", {"reason": str(exc)}),
-                                 stamp=False)
+                await self._send(guest, resync(str(exc)), stamp=False)
             else:
                 resumed = True
                 log.info("replaying %d frames from seq %s", len(missed), want)
@@ -477,7 +524,7 @@ class Bridge:
         # The stylesheet and the document skeleton live here rather than in
         # the guest, so the look can be changed by restarting the bridge
         # instead of rebuilding and re-deploying a binary.
-        await self._send(guest, Frame("DOC", {}, fold.encode(H.document())))
+        await self._send(guest, doc(H.document()))
         await self._send_options(guest)
         # P1: the guest never sends `from=`, so the replay path above is dead
         # code in production and a reconnect would otherwise arrive with the
@@ -687,12 +734,10 @@ class Bridge:
         # paginates and survives paging away and back. The bar itself carries
         # only the summary, because a guest in HISTORY mode never sees this.
         await self._write_block(guest, prompt.body)
-        await self._send(guest, Frame("PERMREQ", {
-            "id": prompt.tool_use_id,
-            "tool": prompt.tool_name,
-            "allows": "1" if prompt.allows else "0",
-            "waiting": str(len(guest.perm_queue)),
-        }, fold.encode(getattr(prompt, "summary", prompt.tool_name))))
+        await self._send(guest, permreq(
+            prompt.tool_use_id, prompt.tool_name, prompt.allows,
+            len(guest.perm_queue),
+            getattr(prompt, "summary", prompt.tool_name)))
 
     async def _reissue_prompt(self, guest: GuestSession) -> None:
         """P1: after a reconnect, put the bar back."""
@@ -701,12 +746,10 @@ class Bridge:
             return
         log.info("re-issuing pending prompt %s after reconnect",
                  prompt.tool_use_id)
-        await self._send(guest, Frame("PERMSTATE", {
-            "id": prompt.tool_use_id,
-            "tool": prompt.tool_name,
-            "allows": "1" if prompt.allows else "0",
-            "waiting": str(len(guest.perm_queue)),
-        }, fold.encode(getattr(prompt, "summary", prompt.tool_name))))
+        await self._send(guest, permstate(
+            prompt.tool_use_id, prompt.tool_name, prompt.allows,
+            len(guest.perm_queue),
+            getattr(prompt, "summary", prompt.tool_name)))
 
     async def _send_sessions(self, guest: GuestSession) -> None:
         """The chat list. Only conversations this bridge started -- the rest
@@ -717,20 +760,12 @@ class Bridge:
         now nothing told the guest.
         """
         rows = self.registry.filter(sesslist.listing(cwd=self.cwd))
-        await self._send(guest, Frame("SESSIONS",
-                                      {"count": str(len(rows))}))
+        await self._send(guest, sessions_start(len(rows)))
         for i, r in enumerate(rows):
-            await self._send(guest, Frame("SESSION", {
-                "i": str(i),
-                "id": r["id"],
-                "title": r["title"][:120],
-                "cwd": r["cwd"][:120],
-                "group": r.get("group", ""),
-                "current": "1" if (guest.claude and
-                                   guest.claude.session_id == r["id"])
-                           else "0",
-            }))
-        await self._send(guest, Frame("SESSIONSEND", {}))
+            await self._send(guest, session_row(
+                i, r["id"], r["title"], r["cwd"], r.get("group", ""),
+                bool(guest.claude and guest.claude.session_id == r["id"])))
+        await self._send(guest, sessions_end())
 
     async def _reissue_halt(self, guest: GuestSession) -> None:
         """After a reconnect, put the Continue bar back.
@@ -750,8 +785,7 @@ class Bridge:
         if not guest.halt_id:
             return
         log.info("re-issuing halt %s after reconnect", guest.halt_id)
-        await self._send(guest, Frame("HALT", {"id": guest.halt_id},
-                                      fold.encode(guest.halt_text)),
+        await self._send(guest, halt(guest.halt_id, guest.halt_text),
                          stamp=False)
 
     async def _reissue_turn(self, guest: GuestSession) -> None:
@@ -770,17 +804,15 @@ class Bridge:
         if session is None or not getattr(session, "busy", False):
             return
         log.info("re-issuing turn state after reconnect")
-        await self._send(guest, Frame("TURN", {"state": "start"}), stamp=False)
+        await self._send(guest, turn_start(), stamp=False)
 
     async def _send_waiting(self, guest: GuestSession) -> None:
         """Refresh the queue depth shown on the bar."""
         prompt = guest.perm_pending
         if prompt is None:
             return
-        await self._send(guest, Frame("PERMWAIT", {
-            "id": prompt.tool_use_id,
-            "waiting": str(len(guest.perm_queue)),
-        }))
+        await self._send(guest, permwait(prompt.tool_use_id,
+                                         len(guest.perm_queue)))
 
     def _finish_prompt(self, guest: GuestSession, prompt: PendingPrompt,
                        reason: str) -> None:
@@ -797,8 +829,7 @@ class Bridge:
 
     async def _after_prompt(self, guest: GuestSession, tool_use_id: str,
                             reason: str) -> None:
-        await self._send(guest, Frame("PERMEND",
-                                      {"id": tool_use_id, "reason": reason}))
+        await self._send(guest, permend(tool_use_id, reason))
         await self._pump_queue(guest)
 
     async def _pump_queue(self, guest: GuestSession) -> None:
@@ -917,71 +948,7 @@ class Bridge:
             await self._send_html(guest, html, APPEND, page_no)
 
         for pg in sealed:
-            await self._send(guest, Frame("PAGESEALED", {
-                "page": str(pg.number), "total": str(guest.pages.count)}))
-
-    async def _send_html(self, guest: GuestSession, html: str, mode: str,
-                         page_no: int) -> None:
-        """Fold to CP1252, compress if worthwhile, chunk under the frame cap.
-
-        Chunking keeps the send lock free between chunks, so a long block
-        cannot delay a keystroke or a Stop. A LIVE update is never chunked --
-        it replaces an element wholesale, so half of one is meaningless; an
-        oversized one is simply dropped and the APPEND that follows carries the
-        whole thing.
-        """
-        data = fold.encode(html)
-        if not data:
-            if mode == LIVE:
-                await self._send(guest, Frame(
-                    "TEXT", {"mode": LIVE, "enc": ENC_RAW,
-                             "page": str(page_no)}, b""))
-            return
-
-        budget = MAX_FRAME - 1024   # headroom for headers and deflate overhead
-        if mode == LIVE and len(data) > budget:
-            return
-
-        # An APPEND block is ONE element, and the guest does not reassemble.
-        #
-        # `total`/`off` are on every chunk and look like a reassembly
-        # protocol; they are not. win/app/main.c's TEXT branch calls
-        # rc_html_block(f->body) per frame and uses total/off only to drive
-        # the progress figure -- so a block split here arrives as several
-        # separate appends, each a fragment of markup, and insertAdjacentHTML
-        # gets half a <div>. What the user sees is the tail of a code block
-        # rendered as page furniture.
-        #
-        # Splitting arbitrary HTML safely would mean knowing where its element
-        # boundaries are, which is not a thing this function can know. So it
-        # truncates at the boundary it CAN guarantee and says it did -- the
-        # same answer tool_result gives, and the model still has the whole
-        # text either way.
-        if mode != LIVE and len(data) > budget:
-            cut = "\n<div class=\"clip\">-- this block was too large to send "
-            cut += "to the machine in one piece and has been shortened here; "
-            cut += "the model still has all of it --</div>"
-            marker = fold.encode(cut)
-            log.warning("block of %d bytes exceeds the %d frame budget; "
-                        "truncating rather than splitting an element",
-                        len(data), budget)
-            data = data[:budget - len(marker)] + marker
-
-        total = len(data)
-        for i in range(0, total, budget):
-            chunk = data[i:i + budget]
-            enc = ENC_RAW
-            if should_compress(chunk, guest.link_bps):
-                chunk = guest.zip_out.compress(chunk)
-                enc = ENC_DEFLATE
-            # total/off are in DECOMPRESSED bytes and are on every chunk, not
-            # just the first: the guest shows a progress figure from them, and
-            # a reconnect mid-transfer would otherwise leave it with a
-            # denominator it never received.
-            await self._send(guest, Frame(
-                "TEXT", {"mode": mode, "enc": enc, "page": str(page_no),
-                         "total": str(total), "off": str(i)},
-                chunk))
+            await self._send(guest, pagesealed(pg.number, guest.pages.count))
 
     # --- frame pump --------------------------------------------------------
 
@@ -1027,8 +994,7 @@ class Bridge:
                 # answered on their screen while we still held the halt -- and
                 # since raising is idempotent, no later bar could appear and
                 # every latched path refused the agent for good.
-                await self._send(guest, Frame("HALTEND", {"id": hid}),
-                                 stamp=False)
+                await self._send(guest, haltend(hid), stamp=False)
                 # Pressing Continue IS the confirmation, so it lifts the
                 # refusal here. Making the agent ask again -- a permission
                 # prompt for sync_resolve -- would put a second dialog in front
@@ -1108,7 +1074,7 @@ class Bridge:
                 log.info("guest reports %.0f B/s", bps)
 
         elif f.type == "PING":
-            await self._send(guest, Frame("PONG", {}), stamp=False)
+            await self._send(guest, pong(), stamp=False)
 
         elif f.type == "NEWSESSION":
             await self._new_session(guest)
@@ -1201,10 +1167,9 @@ class Bridge:
         # transcript they can scroll back through later.
         if echo:
             await self._write_block(guest, H.user_turn(text), stream=False)
-        await self._send(guest, Frame("ANCHOR", {
-            "page": str(anchor.page), "off": str(anchor.offset),
-            "preview": anchor.preview}))
-        await self._send(guest, Frame("TURN", {"state": "start"}))
+        await self._send(guest, anchor_frame(
+            anchor.page, anchor.offset, anchor.preview))
+        await self._send(guest, turn_start())
         # Anything sync found while the agent was idle rides in on this turn.
         #
         # `_run_turn` is the only path into a session, and it fires only on
@@ -1220,8 +1185,7 @@ class Bridge:
         except Exception as exc:
             log.exception("turn failed")
             await self._flush_text(guest)
-            await self._send(guest, Frame("TURN", {
-                "state": "error", "msg": str(exc)[:200]}))
+            await self._send(guest, turn_error(str(exc)))
             return
         await self._flush_text(guest)
         # Register here, not at start(): the SDK assigns the session id when
@@ -1232,19 +1196,14 @@ class Bridge:
         # mid-sentence while the reader is watching it stream.
         sealed = guest.pages.message_boundary()
         if sealed:
-            await self._send(guest, Frame("PAGESEALED", {
-                "page": str(sealed.number), "total": str(guest.pages.count)}))
+            await self._send(guest, pagesealed(sealed.number,
+                                               guest.pages.count))
         raw, comp = guest.zip_out.stats
         if comp:
             log.info("deflate so far: %d -> %d bytes (%.2f:1)",
                      raw, comp, guest.zip_out.ratio)
-        await self._send(guest, Frame("TURN", {
-            "state": "end",
-            "ok": "1" if turn.ok else "0",
-            "subtype": turn.subtype,
-            "cost_usd": f"{turn.cost_usd:.4f}" if turn.cost_usd else "",
-            "ms": str(turn.duration_ms),
-        }))
+        await self._send(guest, turn_end(turn.ok, turn.subtype,
+                                         turn.cost_usd, turn.duration_ms))
 
     # --- running commands on the guest -------------------------------------
 
@@ -1288,8 +1247,6 @@ class Bridge:
             fut = asyncio.get_running_loop().create_future()
             guest.exec_pending[exec_id] = {"future": fut, "out": bytearray()}
 
-            headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
-                       "shell": "1" if shell else "0"}
             if cwd:
                 # Refuse rather than let the guest drop the frame.
                 #
@@ -1309,17 +1266,14 @@ class Bridge:
                             f"shorter path, or cd to it inside the command.")}],
                         "isError": True,
                     }
-                headers["cwd"] = cwd
-            # The command goes in the BODY. A header value is truncated at 255
-            # bytes silently, and a truncated command is still EXECUTED --
-            # `del c:\temp\*.tmp` cut short becomes `del c:\temp\*`.
             # stamp=False: an EXEC must NEVER enter the replay buffer.
             # Replay exists to redraw a transcript, and re-delivering this on
             # reconnect would RE-RUN the command -- `del c:\temp\*` twice is
             # not a redraw. Inert today only because the guest never sends
             # `from=`; this is here so implementing that later cannot arm it.
-            await self._send(guest, Frame("EXEC", headers,
-                                          fold.encode(command)), stamp=False)
+            await self._send(guest, exec_cmd(exec_id, command,
+                                             timeout_ms=timeout_ms, shell=shell,
+                                             cwd=cwd), stamp=False)
             log.info("exec %s: %s", exec_id, command[:160])
 
             # Above the guest's own limit, so a slow command produces a
@@ -1361,8 +1315,7 @@ class Bridge:
                 return
             entry["killed"] = True
         log.info("asking the guest to kill exec %s", exec_id)
-        self._spawn(self._send(guest, Frame("EXECKILL", {"id": exec_id}),
-                               stamp=False))
+        self._spawn(self._send(guest, exec_kill(exec_id), stamp=False))
 
     async def run_sync(self, why: str) -> dict:
         """One pass, serialised against every other trigger.
@@ -1806,8 +1759,7 @@ class Bridge:
         guest.halt_id = f"h{uuid.uuid4().hex[:8]}"
         guest.halt_paths = frozenset(paths)
         guest.halt_text = line
-        await self._send(guest, Frame("HALT", {"id": guest.halt_id},
-                                      fold.encode(line)), stamp=False)
+        await self._send(guest, halt(guest.halt_id, line), stamp=False)
 
     async def _clear_halt(self, guest: GuestSession) -> None:
         """Take it down because the reason went away, not because it was
@@ -1817,7 +1769,7 @@ class Bridge:
         hid, guest.halt_id = guest.halt_id, ""
         guest.halt_paths = frozenset()
         guest.halt_text = ""
-        await self._send(guest, Frame("HALTEND", {"id": hid}), stamp=False)
+        await self._send(guest, haltend(hid), stamp=False)
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""
@@ -2022,8 +1974,7 @@ class Bridge:
         prompt.future.set_result(result)
         guest.perm_pending = None
         log.info("permission %s for %s (%s)", action, prompt.tool_name, want)
-        await self._send(guest, Frame("PERMEND",
-                                      {"id": want, "reason": "answered"}))
+        await self._send(guest, permend(want, "answered"))
         await self._pump_queue(guest)
 
     async def _sweep_sync(self) -> None:
@@ -2114,29 +2065,23 @@ class Bridge:
             current = (m.get("resolvedModel") or value) == in_use
             if current and chosen is None:
                 chosen = m
-            await self._send(guest, Frame("OPTION", {
-                "kind": "model", "id": value, "label": label,
-                "current": "1" if current else "0",
-            }))
+            await self._send(guest, option("model", value, label, current))
 
         # Effort is a property of the model: Haiku has none at all, so an
         # Effort menu offering five levels would be lying.
         levels = (chosen or {}).get("supportedEffortLevels") or []
         if not levels:
-            await self._send(guest, Frame("OPTION", {
-                "kind": "effort", "id": "", "label": "(not available for this model)",
-                "current": "0", "disabled": "1",
-            }))
+            await self._send(guest, option(
+                "effort", "", "(not available for this model)", False,
+                disabled=True))
         else:
             for lvl in EFFORT_ORDER:
                 if lvl not in levels:
                     continue
-                await self._send(guest, Frame("OPTION", {
-                    "kind": "effort", "id": lvl,
-                    "label": EFFORT_LABEL.get(lvl, lvl),
-                    "current": "1" if lvl == (guest.effort or "") else "0",
-                }))
-        await self._send(guest, Frame("OPTIONSEND", {}))
+                await self._send(guest, option(
+                    "effort", lvl, EFFORT_LABEL.get(lvl, lvl),
+                    lvl == (guest.effort or "")))
+        await self._send(guest, optionsend())
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
         """Change effort, which means reopening the session.
@@ -2194,10 +2139,8 @@ class Bridge:
             return
 
         guest.sess_id = guest.claude.session_id or guest.sess_id
-        await self._send(guest, Frame("SWITCHED", {
-            "id": guest.claude.session_id or "",
-            "total": str(guest.pages.count),
-        }))
+        await self._send(guest, switched(guest.claude.session_id or "",
+                                         guest.pages.count))
         await self._send_page(guest, "live")
         await self._send_options(guest)
 
@@ -2213,8 +2156,7 @@ class Bridge:
             return
 
         log.info("switching to session %s", session_id)
-        await self._send(guest, Frame("NOTICE", {"kind": "switching"},
-                                      fold.encode("Loading conversation...")))
+        await self._send(guest, notice("switching", "Loading conversation..."))
 
         if guest.claude:
             await guest.claude.close()
@@ -2240,10 +2182,7 @@ class Bridge:
                 guest.pages.message_boundary()
 
         guest.view_page = None
-        await self._send(guest, Frame("SWITCHED", {
-            "id": session_id,
-            "total": str(guest.pages.count),
-        }))
+        await self._send(guest, switched(session_id, guest.pages.count))
         await self._send_page(guest, "live")
 
     async def _send_page(self, guest: GuestSession, want: str) -> None:
@@ -2265,78 +2204,34 @@ class Bridge:
             await self._send(guest, error("no_such_page", want))
             return
 
-        await self._send(guest, Frame("PAGESTART", {
-            "page": str(page.number),
-            "total": str(guest.pages.count),
-            "live": "1" if guest.view_page is None else "0",
-            "continued": "1" if page.continued else "0",
-        }))
+        await self._send(guest, pagestart(
+            page.number, guest.pages.count, guest.view_page is None,
+            page.continued))
         for run in page.runs:
             await self._send_html(guest, run.text, APPEND, page.number)
-        await self._send(guest, Frame("PAGEEND", {"page": str(page.number)}))
+        await self._send(guest, pageend(page.number))
 
-    # --- sending -----------------------------------------------------------
+    # --- sending -------------------------------------------------------
+    #
+    # The transport itself -- the writer, the send lock, the compressor, the
+    # chunking -- lives in GuestLink (bridge/wire/link.py) now. These three
+    # stay on Bridge, as thin delegations to guest.link, because both
+    # syncrun.py's Pass and tests/python reach them by these names.
 
     async def _send(self, guest: GuestSession, frame: Frame,
                     *, stamp: bool = True) -> None:
-        # P4: check encodability BEFORE stamping. Frame.encode raises above
-        # MAX_FRAME and the replay buffer is append-only, so stamping an
-        # oversized frame makes every future replay raise -- permanently, and
-        # the guest can then never reconnect.
-        #
-        # The check is on a copy because append() mutates headers["seq"], and
-        # encoding the real frame first would produce a payload with no seq in
-        # it. The placeholder is wider than any seq we will reach, so a copy
-        # that encodes guarantees the stamped original does too.
-        probe = Frame(frame.type, dict(frame.headers), frame.body)
-        probe.headers["seq"] = "9999999999"
-        try:
-            probe.encode()
-        except ProtocolError:
-            log.error("refusing to send oversized %s frame (%d byte body); "
-                      "it would poison the replay buffer",
-                      frame.type, len(frame.body))
-            return
-        if stamp:
-            guest.replay.append(frame)
-        payload = frame.encode()
-        async with guest.send_lock:
-            w = guest.writer
-            if w is None or w.is_closing():
-                return  # buffered in replay; the guest will ask for it
-            try:
-                w.write(payload)
-                await w.drain()
-            except (ConnectionResetError, BrokenPipeError):
-                guest.writer = None
+        await guest.link.send(guest, frame, stamp=stamp)
+
+    async def _send_html(self, guest: GuestSession, html: str, mode: str,
+                         page_no: int) -> None:
+        await guest.link.send_html(guest, html, mode, page_no)
 
     async def wire_yield(self, guest: GuestSession) -> bool:
-        """Give everything else a turn on the wire. True if sync should pause.
-
-        Measured, because the obvious reasoning is wrong: a chunk loop over an
-        UNCONTENDED lock, with a `drain()` below the high-water mark, contains
-        no await point that actually suspends. 128 chunks of a one-megabyte
-        push therefore run to completion before any other task runs at all --
-        so a permission prompt is not queued behind sync, it has not been
-        composed yet. FIFO lock fairness cannot help with a task that never
-        gets scheduled.
-
-        `sleep(0)` is what reschedules us behind whatever is already runnable.
-        The return value is the second half of the rule: while the user has a
-        prompt in front of them, sync does not start another file. The pass
-        ends early and the next one finishes the job -- every path commits
-        independently, so a partially applied pass is a consistent state.
-        """
-        await asyncio.sleep(0)
-        return guest.perm_pending is not None
+        return await guest.link.wire_yield(guest)
 
     async def _try_send_raw(self, writer: asyncio.StreamWriter,
                             frame: Frame) -> None:
-        try:
-            writer.write(frame.encode())
-            await writer.drain()
-        except Exception:
-            pass
+        await GuestLink.send_raw(writer, frame)
 
 
 # Effort levels, in the order they should appear. Which of these a given model
