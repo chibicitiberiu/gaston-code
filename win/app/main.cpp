@@ -75,6 +75,7 @@ static rc_net        g_net;
 static rc_html *g_html;
 static rc_xferstat *g_xfer;
 static rc_optmenu *g_optmenu;
+static rc_pagebar *g_pagebar;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
@@ -126,7 +127,9 @@ static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
 
-/* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. */
+/* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
+ * is the one instance, created in create_children and destroyed in
+ * WM_DESTROY, the same shape as g_html. */
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
 static int   g_turn_active = 0;
@@ -362,8 +365,8 @@ static void on_ready(rc_frame *f)
     if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
     /* page/total (if present), marking the session live, and the button
      * refresh that follows are app/pagebar.cpp's business now -- see
-     * app/pagebar.h's rc_pagebar_note_ready. */
-    rc_pagebar_note_ready(f);
+     * app/pagebar.h's rc_pagebar::note_ready. */
+    if (g_pagebar) g_pagebar->note_ready(f);
     rc_chats_request();
     g_backoff_ms = 1000;
     g_retry_noted = 0;
@@ -375,12 +378,12 @@ static void on_ready(rc_frame *f)
      * once per connection -- so on a reconnect this updates the page
      * counters without the control's content agreeing with them, and the
      * window keeps showing whatever the last connection left in it under
-     * the new page number. rc_pagebar_goto_live() re-requests the live page
+     * the new page number. goto_live() re-requests the live page
      * explicitly, which clears the control (PAGESTART) and repopulates it
      * from what the bridge now has -- cheap and correct on a fresh session
      * too, where it is a no-op over an empty page. See BACKLOG.md's note
      * on this global. */
-    rc_pagebar_goto_live();
+    if (g_pagebar) g_pagebar->goto_live();
     status_refresh();
 }
 
@@ -493,9 +496,9 @@ static void chats_switched(rc_frame *f)
      * that no longer exists, on a conversation the user has left. */
     rc_bar_hide_all();
     /* The page total is app/pagebar.cpp's state now -- see app/pagebar.h's
-     * rc_pagebar_note_total. No button refresh here, matching what this call
-     * site always did. */
-    rc_pagebar_note_total(f);
+     * rc_pagebar::note_total. No button refresh here, matching what this
+     * call site always did. */
+    if (g_pagebar) g_pagebar->note_total(f);
     SetWindowTextA(g_main, RC_TITLE);
     status_set(2, "");
 }
@@ -513,7 +516,7 @@ static void on_chats(rc_frame *f)
 }
 
 /* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
- * see rc_pagebar_frame's own comments there for what each one does. Two
+ * see rc_pagebar::frame's own comments there for what each one does. Two
  * things about PAGESTART/PAGEEND are not app/pagebar.cpp's business and stay
  * here, the same split on_chats already makes around rc_chats_frame:
  * resetting main.c's own turn-state enum (the control is about to be
@@ -522,7 +525,7 @@ static void on_pagebar(rc_frame *f)
 {
     if (strcmp(f->type, "PAGESTART") == 0)
         g_turn_state = TURN_IDLE;
-    rc_pagebar_frame(f);
+    if (g_pagebar) g_pagebar->frame(f);
     if (strcmp(f->type, "PAGEEND") == 0) log_mem("page loaded");
 }
 
@@ -729,7 +732,7 @@ static void layout(HWND hwnd)
 
     /* Page bar across the top of the transcript column: positions its own
      * six controls from app/pagebar.cpp now -- see app/pagebar.h. */
-    rc_pagebar_move(GUTTER * 2 + CHATS_W, GUTTER);
+    if (g_pagebar) g_pagebar->move(GUTTER * 2 + CHATS_W, GUTTER);
 
     {
         int cx = GUTTER * 2 + CHATS_W;
@@ -820,11 +823,11 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     rc_bar_create(hwnd, inst, g_ui_font, &g_net, ui_send, bar_changed);
 
     /* The page bar: its own six controls, created and owned by
-     * app/pagebar.cpp now (rc_pagebar_create logs its own check_child
-     * failures). g_html may be NULL -- rc_pagebar_create is passed it as-is
+     * app/pagebar.cpp now (rc_pagebar::create logs its own check_child
+     * failures). g_html may be NULL -- rc_pagebar::create is passed it as-is
      * and every use inside pagebar.cpp is guarded, same as everywhere else
      * in this file. */
-    rc_pagebar_create(hwnd, inst, g_ui_font, &g_net, g_html);
+    g_pagebar = rc_pagebar::create(hwnd, inst, g_ui_font, &g_net, g_html);
 
     /* The transfer-progress counters: one instance, created here (ahead of
      * app/input.cpp below, which needs it) and destroyed in WM_DESTROY --
@@ -850,7 +853,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
-     * inside rc_chats_create/rc_bar_create/rc_pagebar_create/
+     * inside rc_chats_create/rc_bar_create/rc_pagebar::create/
      * rc_input_create above. */
 }
 
@@ -1013,7 +1016,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_PREV:
         case ID_NEXT:
         case ID_LAST:
-            rc_pagebar_command(id);
+            if (g_pagebar) g_pagebar->command(id);
             return 0;
         case ID_REFRESH: rc_chats_request();      return 0;
 
@@ -1101,6 +1104,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_xfer = NULL;
         delete g_optmenu;
         g_optmenu = NULL;
+        delete g_pagebar;
+        g_pagebar = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
         if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
