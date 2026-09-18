@@ -160,11 +160,37 @@ use; each is a known limit rather than something forgotten.
   returns a confident wrong checksum. Measure the real cost on the box before
   building anything.
 
-- **The `_snprintf` truncation sweep.** Every call in the guest uses
-  `sizeof(x) - 1` plus an explicit NUL, which prevents the overrun and still
-  truncates silently -- how `del c:\temp\*.tmp` became `del c:\temp\*`. Only
-  `win/exec.c` checks the return. A silently shortened PATH in the sync layer
-  writes to the wrong file.
+- ~~**The `_snprintf` truncation sweep.**~~ **Closed 2026-09-18, and corrected
+  first -- from audit finding 01.16.** This entry's own claim was wrong: "every
+  call in the guest uses `sizeof(x) - 1` plus an explicit NUL" was measured
+  against the 86 `_snprintf` call sites that existed at the time and only 39
+  of them did that. 15 used `sizeof(x) - 1` with **no** NUL and 32 used the
+  full `sizeof(x)` with **no** NUL -- both idioms leave the buffer
+  unterminated whenever the formatted text does not fit, which is a read past
+  the end of the buffer on the next string operation, not merely a truncation.
+  Two of those sites were wire-reachable: `syncrpc.c:224` (`g_put.rel`, from a
+  wire length prefix) and `main.c:577`/`750` (`g_net.sess`, echoed back in
+  HELLO).
+
+  The guest no longer calls `_snprintf` anywhere -- verified: the only two
+  hits left in `win/*.c`/`win/*.cpp` are in comments explaining the old bug,
+  not live calls. Every write-family call now goes through
+  `win/core/str.c`'s `rc_strf` / `rc_strcpy` / `rc_strncpy`, which always NUL-
+  terminate regardless of whether the input fit (`rc_strf` passes the *full*
+  capacity to `_vsnprintf` and terminates by hand afterwards, rather than
+  reserving a byte nothing then writes) and report success or truncation
+  through their return value. The unterminated-buffer defect class this entry
+  was actually about is gone.
+
+  **What is not gone, and is not this entry's original concern:** silent
+  truncation itself. Of 105 call sites to `rc_strf`/`rc_strcpy`/`rc_strncpy`,
+  only 8 check the return value (`win/sync/sync.cpp` x3, `win/rpc/exec.cpp`
+  x2, `win/net/frameproto.cpp` x3) -- not just `win/exec.c` any more, but
+  still a small minority. `del c:\temp\*.tmp` becoming `del c:\temp\*` is
+  still possible at any of the other ~97 sites; it would now stop at a clean
+  NUL rather than reading past one. Worth a future sweep of its own if a
+  truncated value is ever found to matter silently, but it is a truncation
+  question now, not a memory-safety one.
 
 Phase 4's own list (model per-client, the effort fork leaving the chat list on
 the pre-fork session id, the real Server Host dialog, Export as HTML, the
@@ -306,3 +332,36 @@ which five review rounds went into. The third is somewhere between.
 **To close it:** pick one, and write down why, before `self._guest` becomes
 `self._guests`. Doing it in the other order means discovering the answer from
 whichever tests break.
+
+## 8. `rle8` / `rle8+deflate`, named in PLAN.md, never built
+
+**Status:** open question, recorded 2026-09-18, from audit finding 03.35. Not a defect --
+nothing that exists today needs either codec -- but it is a gap PLAN.md promised and never
+delivered, and nothing anywhere said whether that was on purpose.
+
+`PLAN.md`'s wire-format design named `enc=raw|rle8|deflate|rle8+deflate` as the adaptive
+codec set, chosen per payload from a measured `STAT` link speed. What shipped
+(`bridge/wire/compress.py`) defines only `ENC_RAW` and `ENC_DEFLATE`; the guest
+(`win/net/net.cpp`) drops the connection on any `enc=` value it does not recognise, so
+`rle8` is not a silently-ignored option, it is a link-killing one if anything ever sent it.
+`rle8` is named a second time in the Phase 6 screenshot design (`PLAN.md`, "Screenshots:
+crop, then reduce depth, then compress"), where `GetDIBits` producing `BI_RLE8` directly
+was measured and works -- but that is GDI's RLE inside a DIB, a different thing from an
+`enc=rle8` wire codec applied to an arbitrary frame body, and Phase 6 has not landed.
+
+**Two readings, neither confirmed:**
+
+- **Intentional-so-far.** The only traffic that would want RLE over deflate is the
+  screenshot path, which is Phase 6 and does not exist yet. `deflate` alone covers
+  everything that ships today (transcript text, sync file bodies), so there has been
+  nothing to regret.
+- **A forgotten scope cut.** The wire-format section named `enc=` as a value that should be
+  free to extend "so adding a codec is a value change, not a protocol change" -- and then
+  the codec set was never extended when the measured numbers (11.3:1 on `BI_RLE8`,
+  near-zero guest cost) came in during Phase 0's screenshot experiments. Nothing recorded a
+  decision either way.
+
+**To close it:** when Phase 6's screenshot capture lands, decide whether the wire codec
+gets an `rle8` value of its own (cheap: GDI already produces `BI_RLE8` bytes, so the guest
+side may be close to free) or whether `deflate` alone is enough for the compressed sizes
+Phase 6 actually measures, and write down which. Until then this is not blocking anything.

@@ -115,6 +115,24 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
          * and tests/python/test_guest_frame.py counts them from protocol.py
          * so that adding a seventeenth fails there rather than here. */
         if (out->nheaders >= RC_MAX_HEADERS) return -1;
+
+        /* A REPEATED key drops the frame, which is what the bridge already
+         * did and what PLAN.md always specified. The guest had no check at
+         * all: every k=v line was appended, and rc_frame_get returns the
+         * FIRST match on a linear scan, so a second `id=` was accepted,
+         * stored, and then never read. Silent first-wins is the worst of the
+         * three available answers -- the sender believes it set a value, the
+         * receiver acts on a different one, and nothing anywhere disagrees
+         * out loud. bridge/wire/protocol.py raises ProtocolError and tears
+         * the connection down; this now matches it. Safe to be strict: the
+         * bridge builds headers from a dict, so it cannot emit a duplicate
+         * even by accident. */
+        {
+            int d;
+            for (d = 0; d < out->nheaders; d++)
+                if (strcmp(out->headers[d].key, p) == 0) return -1;
+        }
+
         {
             rc_header *h = &out->headers[out->nheaders];
             /* Silently truncating a key would turn two distinct headers into

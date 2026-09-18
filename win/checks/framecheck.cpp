@@ -168,6 +168,22 @@ static void limit_cases(void)
         rc_frame_parse(payload, pos, &f) != 0,
         "a value past RC_MAX_VAL drops the frame");
 
+    /* A repeated key drops the frame. The guest used to append it and then
+     * never read it, because rc_frame_get returns the first match. */
+    pos = 0;
+    pos = addf(payload, sizeof(payload), pos, "TEST\nid=1\nid=2\n\n", 0, 0);
+    say("duplicate-key-refused",
+        rc_frame_parse(payload, pos, &f) != 0,
+        "a repeated header key drops the frame");
+
+    /* Two DIFFERENT keys are obviously fine -- pinned so the duplicate check
+     * cannot be satisfied by refusing everything. */
+    pos = 0;
+    pos = addf(payload, sizeof(payload), pos, "TEST\nid=1\nok=2\n\n", 0, 0);
+    say("distinct-keys-ok",
+        rc_frame_parse(payload, pos, &f) == 0 && f.nheaders == 2,
+        "two different keys still parse");
+
     /* And an over-long KEY, which has always been refused -- pinned here so
      * the three limits are asserted together rather than two of them. */
     pos = 0;

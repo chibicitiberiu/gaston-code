@@ -324,13 +324,13 @@ pointed at another machine.
 
 So the in-process MCP server is **`machine`** and its tools are bare verbs:
 
-    mcp__machine__exec            Phase 3
-    mcp__machine__read_file       } Phase 3, file sync
-    mcp__machine__write_file      }
-    mcp__machine__list_dir        }
-    mcp__machine__list_processes  } Phase 3+, see "the exec test"
+    mcp__machine__exec            Phase 3, SHIPPED
+    mcp__machine__sync_status     } Phase 3.3, SHIPPED -- added by R6; not
+    mcp__machine__sync_resolve    } in this list's first draft, see below
+    mcp__machine__list_dir        } Phase 3+, see "the exec test" -- not yet
+    mcp__machine__list_processes  } built
     mcp__machine__kill_process    }
-    mcp__machine__list_windows    } Phase 6, the UI tier
+    mcp__machine__list_windows    } Phase 6, the UI tier -- not yet built
     mcp__machine__screenshot      }
     mcp__machine__ocr             }
     mcp__machine__click           }
@@ -339,6 +339,15 @@ So the in-process MCP server is **`machine`** and its tools are bare verbs:
     mcp__machine__launch          }
     mcp__machine__get_clipboard   }
     mcp__machine__set_clipboard   }
+
+**[R -- 2026-09-18]** `read_file` and `write_file`, listed here in the first
+draft as "Phase 3, file sync", were dropped when R6 replaced the Samba share
+with the sync layer: Claude edits the bridge's own working copy with its
+native `Edit`/`Write` tools (R3), and the sync layer relays the result, so a
+dedicated read/write tool pair never had a job. `sync_status` and
+`sync_resolve` are the sync layer's actual MCP surface, and they shipped
+before several items above them in this list that have not. See the exec-test
+table under 3.1 for what each does and why it exists.
 
 This matches vocabulary the codebase already uses -- `bridge/machine.py`
 describes the connected machine, and HELLO reports its `os`, `cpu`, `mem_kb` and
@@ -361,15 +370,27 @@ vintage should appear.
 
 ### The bridge owns markdown
 
-Wire carries **pre-styled runs**: `TEXT\nstyle=code\n\n<raw bytes>`. Win98 looks `style` up
-in a static `CHARFORMAT2` table and does `EM_SETCHARFORMAT(SCF_SELECTION)` +
-`EM_REPLACESEL`. No markdown parser in C.
+**[R -- 2026-09-18: rewritten to match what shipped; the "pre-styled runs" design below was
+never how the shipping code works.]** The original plan for this had the wire carry
+**pre-styled runs** -- `TEXT\nstyle=code\n\n<raw bytes>` -- with Win98 looking `style` up
+in a static `CHARFORMAT2` table via `EM_SETCHARFORMAT(SCF_SELECTION)` + `EM_REPLACESEL`.
+That was the RichEdit design. It went with RichEdit when RichEdit was reversed for MSHTML
+(see **Renderer: MSHTML** above): the bridge now sends **finished HTML**, and the `TEXT`
+frame carries `mode=append|live` instead of `style=` -- `append` adds a finished block to
+the transcript, `live` replaces the block still being written, wholesale, as it grows. The
+`style=` constructor and the `CHARFORMAT2` table it implies were dead code with no caller
+on either side and have been removed from `bridge/wire/protocol.py`; see the **Protocol
+reference** under Phase 3.3 for the frame's actual headers. The rest of this paragraph
+still holds: no markdown parser in C, and the bridge decides everything about how a block
+looks before it ever reaches the wire.
 
 Markdown needs lookahead, so the bridge buffers to a safe boundary (newline, or ~200 chars
 of unambiguous text). Streaming granularity becomes one line — which is also what a P2
 repaint budget wants.
 
-**No JSON on the guest.** Grammar: `TYPE\n` + `key=value\n` + blank line + raw body.
+**No JSON on the guest.** Grammar: `TYPE\n` + `key=value\n` + blank line + raw body. See
+the **Protocol reference** under Phase 3.3 for the full grammar, the header limits and the
+frame inventory as shipped.
 
 **[R] Frame header keys present from Phase 1**, even where the guest ignores them, because
 adding them later touches every frame and handler on both sides:
@@ -377,14 +398,43 @@ adding them later touches every frame and handler on both sides:
 - `seq=` monotonic per session — what `resume ... from=` replays from
 - `page=` — ignored in Phase 1, switches the control in Phase 2
 - `sess=` — see multi-session below
-- **[R3]** `enc=` — `raw` only in Phase 1; `deflate` / `rle8` / `rle8+deflate` later.
-  Present from the start so adding a codec is a value change, not a protocol change.
+- **[R3]** `enc=` — `raw` only in Phase 1; `deflate` was added for Phase 2a and is what
+  ships. **[R -- 2026-09-18]** `rle8` and `rle8+deflate`, named here and again in the
+  Phase 6 screenshot design, were **never built** -- `bridge/wire/compress.py` defines only
+  `ENC_RAW` and `ENC_DEFLATE`, and the guest (`win/net/net.cpp`) drops the connection on
+  any `enc=` value it does not recognise. Whether that gap is intentional (the screenshot
+  codec is Phase 6 and hasn't landed, so there may be nothing to compress with `rle8` yet)
+  or a forgotten scope cut is recorded as an open question in `BACKLOG.md` §8, not decided
+  here.
 
-**[R] Protocol error handling (missing entirely from the first draft).** Malformed header,
-unknown `TYPE`, repeated key, truncated body → `ERROR\ncode=\nmsg=` frame and close.
-**Cap frames at 64KB in our own `frameproto.h`.** retro-agent's `MAX_FRAME_SIZE` is 32MB —
-the whole machine — and its own two implementations already disagree (32MB vs 16MB in
-`agent-linux`), so assert the limit in HELLO alongside the version, not just the version.
+**[R] Protocol error handling (missing entirely from the first draft).** The first draft
+said: malformed header, unknown `TYPE`, repeated key, truncated body → `ERROR\ncode=\nmsg=`
+frame and close. **What actually shipped only agrees on malformed framing** -- a bad
+length prefix or an unparseable header genuinely closes the link on both sides. The other
+two cases diverge, and the two sides diverge from *each other*, not just from this
+paragraph:
+
+- **Unknown `TYPE`.** The bridge (`bridge/server.py`, the `_handle` dispatch's final
+  `else`) logs a warning, replies `ERROR unknown_type`, and **leaves the connection open**.
+  The guest (`win/app/main.cpp`, `render_frame`'s final `else`) neither replies nor closes
+  -- it logs `"unhandled frame type: %s"` and drops the frame. Neither side does what this
+  paragraph says, and they don't do the same thing as each other.
+- **Repeated header key.** The bridge (`bridge/wire/protocol.py`, `FrameReader.read`)
+  raises `ProtocolError` and the connection is torn down, which matches the original
+  design. The guest (`win/net/frameproto.cpp`, `rc_frame_parse`) has no duplicate check at
+  all: a second `k=v` line is parsed and stored as an ordinary header, and
+  `rc_frame_get` returns whichever occurrence came **first** -- so a duplicate is silently
+  accepted rather than refused, and the two occurrences don't even agree on which one wins
+  in the two functions that read it (`rc_frame_get` always returns the first; nothing reads
+  the rest).
+
+This is left as an open question rather than resolved here: reconciling it means picking
+one behaviour for two frame types on two codebases that currently disagree with the design
+and with each other, and that choice has not been made. **Cap frames at 64KB in our own
+`frameproto.h`** is the one part of this paragraph that did ship as designed. retro-agent's
+`MAX_FRAME_SIZE` is 32MB — the whole machine — and its own two implementations already
+disagree (32MB vs 16MB in `agent-linux`), so the limit is asserted in HELLO alongside the
+version, not just the version.
 
 **[R] Reconnect (missing entirely).** Bridge-down-at-startup shows a disabled input box and
 a status-bar message, never a modal that blocks the message loop. Backoff 1/2/4/…/15s
@@ -428,7 +478,41 @@ still track bottom-ness via `GetScrollInfo`.
 
 Search and export become bridge operations over the full transcript.
 
-### Renderer: RichEdit 2.0
+### Renderer: MSHTML **[R -- 2026-09-18, reverses the RichEdit 2.0 design below]**
+
+The shipping transcript is `win/app/htmlview.cpp` / `win/app/htmlview.h`, and it hosts
+**MSHTML**, not RichEdit. The RichEdit design in the section immediately below was built
+first and then reversed. It is kept rather than deleted, because the Open Watcom header
+investigation in it is still correct and the reasoning for choosing RichEdit was sound
+given what was known at the time -- the reversal is a fact that arrived later, not a
+repudiation of the reasoning.
+
+**What forced the reversal**, from `htmlview.h`'s own header comment: MSHTML measures at
+about 4MB against a 32MB guest, which is real money on this budget, but it buys padding,
+borders, background tints, real bulleted lists and tables -- none of which RichEdit 2.0
+can do -- and the engine is already resident because Explorer hosts it for folder Web View,
+so a second host pays only its own instance data rather than the DLL tax in full. The
+"MSHTML rejected for v1" paragraph below weighed COM boilerplate against
+`CreateWindowEx`, and that tradeoff didn't change; what changed is that RichEdit's
+ceiling on what a transcript could look like turned out to matter more than the
+boilerplate cost of the alternative.
+
+**Where this was recorded, and where it was not.** Only in `htmlview.h`'s header comment
+and in `PROGRESS.md`'s rolling log -- not here, until now. `make lint` (`Makefile:35`)
+still greps `win/` for RichEdit-3.0-only message names, which is now a check against a
+renderer that does not exist; closing that is a build-file change, so it is tracked in
+`BACKLOG.md` rather than fixed in this design document.
+
+See **Protocol reference**, under Phase 3.3, for how this reversal also changed what
+travels on the wire: `style=`/`CHARFORMAT2` runs became finished HTML tagged
+`mode=append|live`.
+
+The RichEdit 2.0 design below is superseded in full by the above. It is kept because the
+Open Watcom header findings in it (`_RICHEDIT_VER` gating, the `make lint` replacement for
+`richcompat.h`) are still accurate facts about Open Watcom, independent of which renderer
+ended up using them.
+
+### Renderer: RichEdit 2.0 **[SUPERSEDED -- see MSHTML above]**
 
 `riched20.dll` ships with Win98. `CHARFORMAT2`/`PARAFORMAT2` cover bold, per-run monospace,
 background tint, indents, bullets.
@@ -441,13 +525,19 @@ unconditionally. Preprocessing at 0x0200 yields a byte-identical header.
 **Replacement: a `make lint` grep for the 3.0-only message names**, listed explicitly, run
 in CI. `RICHEDIT_CLASSA == "RichEdit20A"` is confirmed (:36) and ungated.
 
-**MSHTML rejected for v1.** Direct hosting is Microsoft-documented and is what Outlook
-Express did — but OE rendered a short fresh document per message, never mutating one
-long-lived document at 15Hz. MSHTML's design centre is infrequent async whole-document
-loads. ~600–1200 lines of plain-C COM boilerplate vs RichEdit's one `CreateWindowEx`, and
-its multi-MB DLL tax is fixed per process so pagination doesn't reduce it. *Revisit only if
-sealed history pages ever need tables / syntax highlighting / inline images — those are
-short static documents, which is the pattern MSHTML is good at.*
+**MSHTML rejected for v1. [R -- 2026-09-18: reversed; see "Renderer: MSHTML" above.]**
+Direct hosting is Microsoft-documented and is what Outlook Express did — but OE rendered
+a short fresh document per message, never mutating one long-lived document at 15Hz.
+MSHTML's design centre is infrequent async whole-document loads. ~600–1200 lines of
+plain-C COM boilerplate vs RichEdit's one `CreateWindowEx`, and its multi-MB DLL tax is
+fixed per process so pagination doesn't reduce it. *Revisit only if sealed history pages
+ever need tables / syntax highlighting / inline images — those are short static documents,
+which is the pattern MSHTML is good at.*
+
+The revisit happened sooner than "only if": tables and real lists turned out to matter for
+the live transcript, not just sealed history, and the DLL-tax argument turned out to be
+moot because Explorer already residents the engine. Kept for the COM-boilerplate-vs-
+`CreateWindowEx` tradeoff, which is real and was correctly stated -- it was simply outweighed.
 
 ### Multi-session **[R] — the biggest hole in the first draft**
 
@@ -799,6 +889,20 @@ Candidates that **fail** the test and stay out: `registry_read` / `registry_writ
 (`read_file` covers it), `find_files` (`dir /s /b`), and `sysinfo` (HELLO already
 sends it and the system prompt already states it).
 
+**[R -- 2026-09-18] What actually shipped is a different, shorter list**, and it
+does not match the table above. `bridge/agent/tools.py` builds exactly three
+tools: `exec` (as designed above), and two the table never named because R6
+(the sync layer replacing Samba) had not been written yet when this table was:
+`sync_status`, which reports which files failed to reach the guest and which
+are conflict-halted, and `sync_resolve`, which lifts a halt after the user
+confirms they are done with a file. `read_file` / `write_file` never shipped
+**at all** -- once R6 made the bridge's own working copy the thing Claude
+edits (native `Edit`/`Write`, relayed by the sync layer rather than by a
+tool call, per R3), a dedicated read/write tool pair had no job left to do.
+`list_dir`, `list_processes`, `kill_process`, `launch`, `get_clipboard` and
+`set_clipboard` remain candidates only -- none are built. The `mcp__machine__*`
+list under **Tool naming** above is corrected to match.
+
 #### 3.2 — The RPC worker thread
 
 The third thread, and the split is mandatory: an `EXEC` can run 60 seconds, so
@@ -843,6 +947,143 @@ the permission dialog appears, and the answer comes back.*
 
 *Demo: Claude edits a file with its own Edit tool and the change appears on the
 Win98 box a moment later.*
+
+#### Protocol reference **[R -- 2026-09-18, new]**
+
+This section did not exist before today. The frame vocabulary has been documented only
+by its two implementations plus a rolling narrative in `PROGRESS.md`, which an audit
+called the single largest documentation gap in the project. What follows describes the
+wire **as it ships**, verified against `win/net/frameproto.h` / `frameproto.cpp`,
+`bridge/wire/protocol.py`, `win/net/caps.h` and `bridge/files/caps.py`. It is a reference,
+not a tutorial -- see "The bridge owns markdown" above for the design reasoning.
+
+**Frame grammar.** One frame is a 4-byte little-endian length prefix followed by that many
+bytes of payload:
+
+    frame   := uint32le(len) payload            len <= RC_MAX_FRAME (64 KB)
+    payload := TYPE "\n" *(key "=" value "\n") "\n" body
+
+No JSON, no nesting: `TYPE` is the frame kind, the header block is flat `key=value` lines
+terminated by a blank line, and everything after that blank line is the body, exactly
+`body_len` bytes, never itself parsed as text unless the frame says so.
+
+**Limits, and what happens when one is hit** (`RC_MAX_TYPE` etc. in `frameproto.h`):
+
+| Limit | Value | Guest behaviour when exceeded |
+|---|---|---|
+| Frame | `RC_MAX_FRAME` = 64 KB | `rc_frame_build` refuses to build it (send-side); a length prefix over this on receive drops the link |
+| Type | `RC_MAX_TYPE` = 32 bytes | An over-long type line drops the frame |
+| Headers per frame | `RC_MAX_HEADERS` = 16 | Drops the frame. (Until 2026-09-18 the 17th and later header lines were parsed and **silently discarded** -- the one limit of the three that lost well-formed data without saying so. If the lost header was `id`, an ack was answered to nobody. The bridge's largest frame carries six headers, and `tests/python/test_guest_frame.py` counts them out of `protocol.py` by AST so that adding a seventeenth fails in a test rather than dropping a live link.) |
+| Header key | `RC_MAX_KEY` = 32 bytes | Drops the frame |
+| Header value | `RC_MAX_VAL` = 256 bytes | Drops the frame. (This used to be a silent truncation to 255 bytes -- fixed, because a truncated `cwd` header named a different, *existing* directory to `CreateProcessA` rather than failing loudly.) |
+
+**Encoding.** Header values are percent-encoded for `%`, `\n` and `\r` only, so the guest's
+parser is `strchr` and nothing more. The bridge (`protocol.py`'s `_quote`) escapes every
+byte outside `0x20..0x7E` plus `%`, folding to CP1252 first. The guest's decoder
+(`unquote` in `frameproto.cpp`) accepts any `%XX`, which is more permissive than what the
+bridge ever sends.
+
+**[R]** For the whole of Phases 1-3 this rule held in exactly one direction. `rc_frame_build`
+copied header values raw while the bridge decoded everything it received, so a guest header
+value of `50%41` arrived as `50A` -- silently, self-consistently, and wrong on every layer
+below. A value containing `\n` was worse: it ended the header line, and what followed was
+parsed as a further header, so a frame could arrive carrying an `id` nobody sent, and `id`
+is what routes an ack. Reachable from ordinary data, not from an attack: these values come
+from `.gaston.ini`, from `GetVersionExA` and from the filesystem. `append_quoted` in
+`rc_frame_build` closes it. The rule is now checked ACROSS the two implementations rather
+than within one -- `tests/python/test_guest_frame.py` feeds the shipping builder's bytes to
+`bridge/wire/protocol.py`'s own reader, the same loop `bridge/files/manifest.py` was given,
+because a format two halves of one file agree on is not a protocol.
+
+**Malformed framing, an unknown `TYPE`, and a duplicate header key are three different
+things, and only the first is handled the same way on both sides.** A bad length prefix or
+an unparseable header genuinely drops the link everywhere. The other two do not match each
+other:
+
+- **Unknown `TYPE`.** Bridge: logs a warning, replies `ERROR unknown_type`, keeps the
+  connection open (`bridge/server.py`, the dispatch's final `else`). Guest: neither replies
+  nor closes -- logs `"unhandled frame type: %s"` and drops the frame (`win/app/main.cpp`,
+  `render_frame`'s final `else`).
+- **Duplicate header key.** **[R] Now the same on both sides.** Bridge: `FrameReader.read`
+  raises `ProtocolError` and the connection is torn down, which is what this document always
+  specified. Guest: `rc_frame_parse` had no duplicate check at all -- the second occurrence
+  was stored as an ordinary header and `rc_frame_get`, a linear scan, returned the first. So
+  a repeated key was accepted, kept, and never read. Silent first-wins is the worst of the
+  three available answers: the sender believes it set a value, the receiver acts on a
+  different one, and nothing disagrees out loud. The guest drops the frame now. Safe to be
+  strict because the bridge builds headers from a dict and cannot emit a duplicate even by
+  accident; `framecheck.exe` pins both the refusal and the case it must not catch (two
+  distinct keys).
+
+**Unknown `TYPE` is still genuinely unresolved** -- see "Protocol error handling" above. The
+bridge answering `ERROR` and staying up is arguably better than this document's original
+"reply and close", and the guest doing neither is arguably worse than both. Not decided
+here, because picking one is a design call and this section is for recording what is true.
+
+**Capability handshake.** The guest's first frame is always `HELLO`, currently 23 headers
+(`win/net/net.cpp`, `rc_net_start`), in three groups:
+
+- **Connection identity**, always present: `ver` (protocol version, refused if it does not
+  match `RC_PROTO_VERSION`/`PROTO_VERSION`), `secret` (shared, plaintext, refused if wrong),
+  `max_frame` (refused if it does not match `RC_MAX_FRAME`/`MAX_FRAME`).
+- **What this machine is**, used for the system prompt and for sizing pages, sent when
+  available rather than guaranteed: `sync_root`, `mem_kb`, `mem_free_kb`, `os`, `cpu`,
+  `screen`, `disk_free_kb`, `sess`, `acp`.
+- **Filesystem and path capability declaration** (`win/net/caps.h`, mirrored in
+  `bridge/files/caps.py`), eleven headers, each a small integer with a stated meaning
+  rather than a bitfield -- `caps.h`'s own reasoning is that a bit can only ever answer
+  yes/no, and an unrecognised value has to be distinguishable from a bit that is clear:
+  `case`, `devices`, `trailing`, `illegal`, `eol`, `shortnames`, `dirreserve`,
+  `workreserve`, `maxpath`, `maxcomp`, `manifest`.
+
+The bridge's `caps.from_hello` refuses rather than guesses: an enum value outside the set
+it knows, or a number outside a declared range, raises `CapsError`, which the handshake
+turns into `ERROR bad_caps` and closes the connection -- deliberately, because an
+unrecognised value means the client knows something the bridge does not, and falling back
+would be the permissive guess in exactly the wrong direction. `eol=cr` is the one case
+where this matters in practice: it is a legal declared value the bridge cannot honour, so
+it is refused at the handshake rather than failing per file forever with a `crc_mismatch`
+that points at corruption instead of at the capability.
+
+Full handshake refusal vocabulary, all `ERROR` frames sent before a `GuestSession` exists:
+`expected_hello`, `hello_timeout`, `bad_version`, `bad_frame_cap`, `bad_secret`, `busy`
+(another client holds the session), `bad_caps`. `protocol` is the catch-all for a
+`ProtocolError` anywhere in the connection, not just at handshake.
+
+**Frame inventory, by direction.** Types only; see the source files above for headers and
+bodies. This is what is actually sent and handled today, not a design intent -- several
+entries below differ from what earlier drafts of this document assumed.
+
+*Guest -> bridge:* `HELLO` (handshake) · `INPUT` (typed text) · `INTERRUPT` (Stop) ·
+`RESUME` (Continue on the halt bar) · `PERMREPLY` (Allow/Always/Deny) · `GETSESSIONS` ·
+`SWITCH` · `GETPAGE` · `NEWSESSION` · `SETMODEL` · `SETEFFORT` · `SYNCDIRTY` (the guest
+noticed its tree moved; it reconciles nothing itself) · `SYNCENT` / `SYNCEND` (manifest
+scan) · `SYNCPUTACK` / `SYNCMKDIRACK` (acks to the bridge's push/mkdir) · `SYNCDAT` /
+`SYNCDATEND` (file data, answering the bridge's `SYNCGET`) · `EXECOUT` (streamed command
+output) · `EXECRESULT` · `STAT` (periodic measured link speed, feeds the adaptive codec
+choice) · `PING` (keepalive, sent only when there is no sync root to make `SYNCDIRTY`
+serve the same purpose).
+
+*Bridge -> guest:* `ERROR` · `READY` (post-handshake session state) · `RESYNC` (a replay
+gap the bridge could not fill) · `DOC` (initial transcript skeleton, once per process) ·
+`TEXT` (a styled transcript block, `mode=append|live`) · `TOOL` (dead: guest keeps a
+handler "for older bridges", nothing builds this frame any more) · `NOTICE` · `TURN`
+(start/end/error) · `PERMREQ` / `PERMSTATE` / `PERMWAIT` / `PERMEND` (the permission
+bar) · `HALT` / `HALTEND` (the sync-conflict halt bar) · `SESSIONS` / `SESSION` /
+`SESSIONSEND` (chat list) · `SWITCHED` · `OPTION` / `OPTIONSEND` (model/effort menus) ·
+`PAGESTART` / `PAGEEND` / `PAGESEALED` (pagination) · `ANCHOR` · `EXEC` / `EXECKILL`
+(routed straight to the RPC worker thread, never the UI thread) · `SYNCSCAN` / `SYNCPUT` /
+`SYNCPUTEND` / `SYNCGET` / `SYNCMKDIR` (routed the same way, matched as a `SYNC*` wildcard
+lane rather than five separate table rows -- `win/net/frameproto.cpp`) · `PONG` (answers
+the guest's `PING`; the guest only sends `PING` when it has no sync root configured, since
+`SYNCDIRTY` already serves as the keepalive otherwise -- the guest branch that receives
+`PONG` just logs it, nothing is shown).
+
+A tool result is **not** its own frame type on the wire today: it arrives as an ordinary
+`TEXT`/`DOC` block through the normal transcript path, the same as any other message
+content. An earlier design sent it as a dedicated `TOOLRESULT` frame the guest never
+implemented a handler for, so tool output never appeared on Win98 at all; the fix routed
+it through the path that already worked rather than adding the missing handler.
 
 #### Verification gates for the phase
 
