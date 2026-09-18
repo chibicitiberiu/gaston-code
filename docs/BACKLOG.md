@@ -250,12 +250,14 @@ Three remain:
   `seq` also reverses a documented `[R]` in `PLAN.md:377`, which introduced it
   *"because adding them later touches every frame and handler on both sides"*;
   say so rather than quietly undoing it.
-- **Directories deleted on either side are silently resurrected.** `diff` never
-  consults the ancestor for a directory (`sync.py:300`), so guest-only becomes
-  `ADOPT` plus `os.makedirs` and bridge-only becomes `MKDIR`. §4's "reported and
-  never silently resurrected" is true for files and false for directories. This
-  is the only one of the three that can lose the user's work, so it ranks above
-  the other two by the project's own ordering rule.
+- ~~**Directories deleted on either side are silently resurrected.**~~
+  **Closed 2026-09-18** (02.45). `diff`'s directory branch read "directories
+  carry no content" as "directory existence has no history" and never looked at
+  the ancestor, so every one-sided absence was a creation: a directory deleted
+  on the machine went straight back on the next pass, and again thirty seconds
+  later. Both sides now answer `REPORT`, which is what the file rows have
+  always answered for the same shape, so §4's "reported and never silently
+  resurrected" is true for directories too.
 - **The netem gate is no longer blocked on sudo, and still has not been run.**
   Verified: unprivileged user namespaces work here, `tc qdisc add dev lo root
   netem rate 40kbit` succeeds inside one, and `pasta --config-net` keeps
