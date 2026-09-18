@@ -94,23 +94,29 @@ const char *rc_state_name(rc_state s);
 /* The UI thread's half of the frame-ownership contract above, spelled out
  * once instead of by hand at every WM_RC_FRAME site: rc_frame_free() releases
  * the frame's own allocations, HeapFree() releases the frame struct itself (a
- * SECOND, separate allocation from the reader thread), and only then is
+ * SECOND, separate allocation made by the reader thread), and only then is
  * `inflight` decremented -- get the order wrong, or drop the decrement, and
  * the reader thread's backpressure gate wedges at RC_MAX_INFLIGHT with no
  * symptom but a stalled transcript.
  *
- * This belongs in net.c as rc_net_frame_done(), next to the `inflight` field
- * it touches and the reader loop that spins on it -- net.c is outside this
- * pass's file set (audit finding 01.24), so it lives here, inline, as the
- * closest safe substitute: callers still make one call instead of three
- * hand-ordered steps, even though the struct field stays reachable directly
- * rather than becoming properly private to net.c. */
-static __inline void rc_net_frame_done(rc_net *n, rc_frame *f)
-{
-    rc_frame_free(f);
-    HeapFree(GetProcessHeap(), 0, f);
-    InterlockedDecrement(&n->inflight);
-}
+ * DEFINED IN net.cpp, beside the field it touches and the reader loop that
+ * spins on it. It was a `static __inline` here for one pass, with a comment
+ * saying it belonged in net.c and only lived in the header because net.c was
+ * outside that pass's file set (01.24). That stopped being true, so it moved
+ * (01.57), and nothing outside net.cpp writes `inflight` any more. */
+void rc_net_frame_done(rc_net *n, rc_frame *f);
+
+/* Read the in-flight count. Exists so a caller that wants to ASSERT on it --
+ * netcheck.exe does, as the only end-to-end check of the ownership rule --
+ * does not have to reach into the struct to do it.
+ *
+ * The field itself is still reachable: net.h is included by C translation
+ * units (the check binaries), rc_net is a plain struct, and C has no way to
+ * make one member private without making the whole type opaque and giving
+ * every other field an accessor too. What CAN be true is true -- no code
+ * outside net.cpp touches it -- and that is the property worth having, since
+ * the bug this guards against is a miscounted decrement rather than a read. */
+long rc_net_inflight(const rc_net *n);
 
 #ifdef __cplusplus
 }

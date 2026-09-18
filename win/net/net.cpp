@@ -85,6 +85,19 @@ static int inflate_body(rc_frame *f)
     return 0;
 }
 
+/* The UI thread's half of the three-way ownership rule. See net.h. */
+void rc_net_frame_done(rc_net *n, rc_frame *f)
+{
+    rc_frame_free(f);
+    HeapFree(GetProcessHeap(), 0, f);
+    InterlockedDecrement(&n->inflight);
+}
+
+long rc_net_inflight(const rc_net *n)
+{
+    return (long)n->inflight;
+}
+
 const char *rc_state_name(rc_state s)
 {
     switch (s) {

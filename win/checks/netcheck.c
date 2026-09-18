@@ -55,9 +55,9 @@ static LRESULT CALLBACK sink_proc(HWND h, UINT m, WPARAM w, LPARAM l)
             g_fail = 1; g_done = 1;
         }
 
-        rc_frame_free(f);
-        HeapFree(GetProcessHeap(), 0, f);
-        InterlockedDecrement(&g_net.inflight);
+        /* One call, not three hand-ordered steps -- this binary exists to
+         * check the ownership rule, so it should not re-implement it. */
+        rc_net_frame_done(&g_net, f);
         return 0;
     }
     if (m == WM_RC_STATE) {
@@ -128,12 +128,15 @@ int main(int argc, char **argv)
 
     printf("\n--- reply ---\n%s\n-------------\n", g_text);
     printf("rx=%lu tx=%lu inflight=%ld\n",
-           g_net.rx_bytes, g_net.tx_bytes, g_net.inflight);
+           g_net.rx_bytes, g_net.tx_bytes, rc_net_inflight(&g_net));
 
     if (g_fail)        { printf("FAIL: error frame or link failure\n"); return 1; }
     if (!g_done)       { printf("FAIL: timed out\n"); return 1; }
     if (!g_textlen)    { printf("FAIL: no text received\n"); return 1; }
-    if (g_net.inflight != 0) { printf("FAIL: %ld frames leaked\n", g_net.inflight); return 1; }
+    if (rc_net_inflight(&g_net) != 0) {
+        printf("FAIL: %ld frames leaked\n", rc_net_inflight(&g_net));
+        return 1;
+    }
     printf("PASS: guest framing + networking round trip\n");
     return 0;
 }
