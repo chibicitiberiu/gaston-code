@@ -1112,127 +1112,159 @@ class Bridge:
 
     async def _handle(self, guest: GuestSession, f: Frame) -> None:
         guest.last_seen = time.monotonic()
-        if f.type == "INPUT":
-            text = fold.decode(f.body)
-            log.info("input: %s", text[:120])
-            self._spawn(self._run_turn(guest, text))
-
-        elif f.type == "RESUME":
-            # The user pressed Continue on the halt bar. THAT is the signal the
-            # design has been waiting for -- not an INPUT, and not a timer.
-            #
-            # "The agent stops until the user confirms they have finished with
-            # the file" needs a confirmation, and until now the only inbound
-            # channels were INPUT and PERMREPLY. Reading it off the next INPUT
-            # was worse than useless: the most natural reaction to the notice
-            # is to type "wait, stop", which is precisely the message that
-            # would have restarted it.
-            if f.headers.get("id", "") == guest.halt_id and guest.halt_id:
-                hid, guest.halt_id = guest.halt_id, ""
-                log.info("user pressed Continue on the sync halt")
-                # Acknowledge, because the guest no longer takes its own bar
-                # down on the click. A press that never reached us used to look
-                # answered on their screen while we still held the halt -- and
-                # since raising is idempotent, no later bar could appear and
-                # every latched path refused the agent for good.
-                await self._send(guest, haltend(hid), stamp=False)
-                # Pressing Continue IS the confirmation, so it lifts the
-                # refusal here. Making the agent ask again -- a permission
-                # prompt for sync_resolve -- would put a second dialog in front
-                # of a user who has just answered the question, on a 640x480
-                # screen, and the second one carries no information the first
-                # did not. `sync_resolve` stays for the case the user never
-                # sees: the agent finishing a merge on its own.
-                # The release travels WITH the turn that explains it, and
-                # that ordering is the whole of M1.
-                #
-                # It used to run here, synchronously, and the informing turn
-                # was spawned after it -- so an in-flight turn that had been
-                # told nothing found the path no longer refusing its writes,
-                # wrote, and the write went to the user's machine. Queueing the
-                # turn (above) makes that window arbitrarily long, so the two
-                # have to move together: _run_turn takes the lock, waits out
-                # any turn ahead of it, and only then lifts the refusals it is
-                # about to explain.
-                answered, guest.halt_paths = guest.halt_paths, frozenset()
-                self._spawn(self._resume_turn(guest, answered))
-
-        elif f.type == "SYNCDIRTY":
-            # The guest noticed its tree move. It never reconciles anything
-            # itself -- the bridge owns the baseline and decides.
-            self._spawn(self.run_sync("the guest reported a change"))
-
-        elif f.type in ("SYNCENT", "SYNCEND", "SYNCPUTACK", "SYNCMKDIRACK",
-                        "SYNCDAT", "SYNCDATEND"):
-            await self._sync_frame(guest, f)
-
-        elif f.type == "EXECOUT":
-            await self._exec_out(guest, f)
-
-        elif f.type == "EXECRESULT":
-            await self._exec_result(guest, f)
-
-        elif f.type == "PERMREPLY":
-            await self._perm_reply(guest, f)
-
-        elif f.type == "INTERRUPT":
-            # Stop must reach the command too, not just the model.
-            #
-            # The CancelledError path in run_on_guest turns out to be largely
-            # unreachable: on mcp 1.x the SDK does NOT cancel an in-flight
-            # tool call when a turn is interrupted (types.py:653-662), so the
-            # coroutine is never cancelled and never sends EXECKILL. Measured
-            # on the guest -- `pause` kept running for its full 90s clamp
-            # after Stop was pressed. Killing from here is the trigger that
-            # actually fires, and it is the one the user meant: they pressed
-            # Stop, so stop.
-            for exec_id in list(guest.exec_pending):
-                self._kill_exec(guest, exec_id)
-            if guest.claude:
-                await guest.claude.interrupt()
-
-        elif f.type == "GETSESSIONS":
-            await self._send_sessions(guest)
-
-        elif f.type == "SWITCH":
-            await self._switch(guest, f.headers.get("id", ""))
-
-        elif f.type == "GETPAGE":
-            await self._send_page(guest, f.headers.get("page", ""))
-
-        elif f.type == "STAT":
-            # The guest measures its own throughput for the progress UI; the
-            # sender uses it to pick a codec. This is what makes one build work
-            # on both a 10Mbit LAN and a modem.
-            try:
-                bps = float(f.headers.get("bps", "0"))
-            except ValueError:
-                bps = 0.0
-            if bps > 0:
-                guest.set_link_speed(bps)
-                log.info("guest reports %.0f B/s", bps)
-
-        elif f.type == "PING":
-            await self._send(guest, pong(), stamp=False)
-
-        elif f.type == "NEWSESSION":
-            await self._new_session(guest)
-
-        elif f.type == "SETMODEL":
-            model = f.headers.get("model", "")
-            if guest.claude:
-                await guest.claude.set_model(model)
-                guest.model = model
-                log.info("model -> %s", model or "(default)")
-                await self._write_block(guest, H.notice("Model set to " + model))
-            await self._send_options(guest)
-
-        elif f.type == "SETEFFORT":
-            await self._set_effort(guest, f.headers.get("effort", ""))
-
-        else:
+        name = self._DISPATCH.get(f.type)
+        if name is None:
             log.warning("unknown frame type from guest: %s", f.type)
             await self._send(guest, error("unknown_type", f.type), stamp=False)
+            return
+        await getattr(self, name)(guest, f)
+
+    async def _on_input(self, guest: GuestSession, f: Frame) -> None:
+        text = fold.decode(f.body)
+        log.info("input: %s", text[:120])
+        self._spawn(self._run_turn(guest, text))
+
+    async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
+        # The user pressed Continue on the halt bar. THAT is the signal the
+        # design has been waiting for -- not an INPUT, and not a timer.
+        #
+        # "The agent stops until the user confirms they have finished with
+        # the file" needs a confirmation, and until now the only inbound
+        # channels were INPUT and PERMREPLY. Reading it off the next INPUT
+        # was worse than useless: the most natural reaction to the notice
+        # is to type "wait, stop", which is precisely the message that
+        # would have restarted it.
+        if not (f.headers.get("id", "") == guest.halt_id and guest.halt_id):
+            return
+        hid, guest.halt_id = guest.halt_id, ""
+        log.info("user pressed Continue on the sync halt")
+        # Acknowledge, because the guest no longer takes its own bar
+        # down on the click. A press that never reached us used to look
+        # answered on their screen while we still held the halt -- and
+        # since raising is idempotent, no later bar could appear and
+        # every latched path refused the agent for good.
+        await self._send(guest, haltend(hid), stamp=False)
+        # Pressing Continue IS the confirmation, so it lifts the
+        # refusal here. Making the agent ask again -- a permission
+        # prompt for sync_resolve -- would put a second dialog in front
+        # of a user who has just answered the question, on a 640x480
+        # screen, and the second one carries no information the first
+        # did not. `sync_resolve` stays for the case the user never
+        # sees: the agent finishing a merge on its own.
+        # The release travels WITH the turn that explains it, and
+        # that ordering is the whole of M1.
+        #
+        # It used to run here, synchronously, and the informing turn
+        # was spawned after it -- so an in-flight turn that had been
+        # told nothing found the path no longer refusing its writes,
+        # wrote, and the write went to the user's machine. Queueing the
+        # turn (above) makes that window arbitrarily long, so the two
+        # have to move together: _run_turn takes the lock, waits out
+        # any turn ahead of it, and only then lifts the refusals it is
+        # about to explain.
+        answered, guest.halt_paths = guest.halt_paths, frozenset()
+        self._spawn(self._resume_turn(guest, answered))
+
+    async def _on_syncdirty(self, guest: GuestSession, f: Frame) -> None:
+        # The guest noticed its tree move. It never reconciles anything
+        # itself -- the bridge owns the baseline and decides.
+        self._spawn(self.run_sync("the guest reported a change"))
+
+    async def _on_interrupt(self, guest: GuestSession, f: Frame) -> None:
+        # Stop must reach the command too, not just the model.
+        #
+        # The CancelledError path in run_on_guest turns out to be largely
+        # unreachable: on mcp 1.x the SDK does NOT cancel an in-flight
+        # tool call when a turn is interrupted (types.py:653-662), so the
+        # coroutine is never cancelled and never sends EXECKILL. Measured
+        # on the guest -- `pause` kept running for its full 90s clamp
+        # after Stop was pressed. Killing from here is the trigger that
+        # actually fires, and it is the one the user meant: they pressed
+        # Stop, so stop.
+        for exec_id in list(guest.exec_pending):
+            self._kill_exec(guest, exec_id)
+        if guest.claude:
+            await guest.claude.interrupt()
+
+    async def _on_getsessions(self, guest: GuestSession, f: Frame) -> None:
+        await self._send_sessions(guest)
+
+    async def _on_switch(self, guest: GuestSession, f: Frame) -> None:
+        await self._switch(guest, f.headers.get("id", ""))
+
+    async def _on_getpage(self, guest: GuestSession, f: Frame) -> None:
+        await self._send_page(guest, f.headers.get("page", ""))
+
+    async def _on_stat(self, guest: GuestSession, f: Frame) -> None:
+        # The guest measures its own throughput for the progress UI; the
+        # sender uses it to pick a codec. This is what makes one build work
+        # on both a 10Mbit LAN and a modem.
+        try:
+            bps = float(f.headers.get("bps", "0"))
+        except ValueError:
+            bps = 0.0
+        if bps > 0:
+            guest.set_link_speed(bps)
+            log.info("guest reports %.0f B/s", bps)
+
+    async def _on_ping(self, guest: GuestSession, f: Frame) -> None:
+        await self._send(guest, pong(), stamp=False)
+
+    async def _on_newsession(self, guest: GuestSession, f: Frame) -> None:
+        await self._new_session(guest)
+
+    async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
+        model = f.headers.get("model", "")
+        if guest.claude:
+            await guest.claude.set_model(model)
+            guest.model = model
+            log.info("model -> %s", model or "(default)")
+            await self._write_block(guest, H.notice("Model set to " + model))
+        await self._send_options(guest)
+
+    async def _on_seteffort(self, guest: GuestSession, f: Frame) -> None:
+        await self._set_effort(guest, f.headers.get("effort", ""))
+
+    #: One entry per inbound frame type, built once at class definition
+    #: time -- 02.30: this used to be a 17-branch if/elif mixing one-line
+    #: handlers (PING, STAT) with 25-line ones (RESUME, GETSESSIONS,
+    #: INTERRUPT), and the previous audit pass named it the lowest-risk
+    #: place to start: mechanical, no state of its own. Values are method
+    #: NAMES rather than the bound methods themselves, and resolved with
+    #: `getattr` in `_handle` -- `_sync_frame`/`_exec_out`/`_exec_result`/
+    #: `_perm_reply` are defined later in this class body, so a dict of the
+    #: bare names built here, at THIS point in class-body execution, would
+    #: raise NameError before the class even finishes being defined. Every
+    #: handler takes `(self, guest, f)`, including the six sync reply types
+    #: and the two exec ones, which already had that shape and are reused
+    #: as-is rather than wrapped. `_handle` becomes four lines plus the
+    #: unknown-type fallback; a handler that PermissionDesk/ExecChannel/
+    #: SyncCoordinator (02.30's other two extractions, not done by this
+    #: pass) later own can register its own name into this dict instead of
+    #: growing the chain further.
+    _DISPATCH: dict = {
+        "INPUT": "_on_input",
+        "RESUME": "_on_resume",
+        "SYNCDIRTY": "_on_syncdirty",
+        "SYNCENT": "_sync_frame",
+        "SYNCEND": "_sync_frame",
+        "SYNCPUTACK": "_sync_frame",
+        "SYNCMKDIRACK": "_sync_frame",
+        "SYNCDAT": "_sync_frame",
+        "SYNCDATEND": "_sync_frame",
+        "EXECOUT": "_exec_out",
+        "EXECRESULT": "_exec_result",
+        "PERMREPLY": "_perm_reply",
+        "INTERRUPT": "_on_interrupt",
+        "GETSESSIONS": "_on_getsessions",
+        "SWITCH": "_on_switch",
+        "GETPAGE": "_on_getpage",
+        "STAT": "_on_stat",
+        "PING": "_on_ping",
+        "NEWSESSION": "_on_newsession",
+        "SETMODEL": "_on_setmodel",
+        "SETEFFORT": "_on_seteffort",
+    }
 
     def _seed_agent_notices(self) -> None:
         """Fold whatever the baseline still owes the agent into memory.
