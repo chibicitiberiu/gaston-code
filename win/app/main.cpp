@@ -55,8 +55,9 @@
  * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
  * to the code that posts them, not duplicated here. */
 #define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
-/* WM_RC_OPENCHAT (chatlist.cpp's chats_proc -> wnd_proc: open a chat) is
- * declared in app/chatlist.h now, next to the module that posts it. */
+/* WM_RC_OPENCHAT (chatlist.cpp's rc_chats::list_proc -> wnd_proc: open a
+ * chat) is declared in app/chatlist.h now, next to the module that posts
+ * it. */
 
 #define GUTTER        4
 #define CHATS_W      170
@@ -74,6 +75,7 @@ static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_html *g_html;
 static rc_bar  *g_bar;
+static rc_chats *g_chats;
 static rc_xferstat *g_xfer;
 static rc_optmenu *g_optmenu;
 static rc_pagebar *g_pagebar;
@@ -88,7 +90,9 @@ static HWND  g_main, g_status;
  * request kinds, and the four-bugs history of arbitrating them pairwise)
  * moved with it. The chat list's HWNDs
  * and its seven id-keyed globals moved to app/chatlist.cpp the same way --
- * see app/chatlist.h. The input box, Send/Stop and RC_INPUT_MAX (the longest
+ * see app/chatlist.h. g_chats is the one instance, created in
+ * create_children and destroyed in WM_DESTROY, the same shape as g_html.
+ * The input box, Send/Stop and RC_INPUT_MAX (the longest
  * message do_send can compose and send in one go) moved to app/input.cpp --
  * see app/input.h. */
 
@@ -371,7 +375,7 @@ static void on_ready(rc_frame *f)
      * refresh that follows are app/pagebar.cpp's business now -- see
      * app/pagebar.h's rc_pagebar::note_ready. */
     if (g_pagebar) g_pagebar->note_ready(f);
-    rc_chats_request();
+    if (g_chats) g_chats->request();
     g_backoff_ms = 1000;
     g_retry_noted = 0;
     v = rc_frame_get(f, "model");
@@ -460,7 +464,7 @@ static void on_turn(rc_frame *f)
         /* Now, and only now, re-fetch the list. Sending a message is what
          * makes a conversation the most recent one, so this is where the
          * reordering belongs -- not on merely opening one. */
-        rc_chats_request();
+        if (g_chats) g_chats->request();
         /* state=="error" used to fall into the same branch as a normal
          * end and render identically -- turn_error() (protocol.py) sends
          * `msg` and no `cost_usd`, so "done $?" is what a failed turn
@@ -515,14 +519,14 @@ static void chats_switched(rc_frame *f)
  * something the chat list module has reason to know about. */
 static void on_chats(rc_frame *f)
 {
-    rc_chats_frame(f);
+    if (g_chats) g_chats->frame(f);
     if (strcmp(f->type, "SESSIONSEND") == 0) log_mem("chat list loaded");
 }
 
 /* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
  * see rc_pagebar::frame's own comments there for what each one does. Two
  * things about PAGESTART/PAGEEND are not app/pagebar.cpp's business and stay
- * here, the same split on_chats already makes around rc_chats_frame:
+ * here, the same split on_chats already makes around rc_chats::frame:
  * resetting main.c's own turn-state enum (the control is about to be
  * cleared) and log_mem, main.c's memory-milestone diagnostic. */
 static void on_pagebar(rc_frame *f)
@@ -732,7 +736,7 @@ static void layout(HWND hwnd)
 
     /* Chat list down the left, with its Refresh button under it -- both
      * positioned by app/chatlist.cpp now. */
-    rc_chats_move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
+    if (g_chats) g_chats->move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
 
     /* Page bar across the top of the transcript column: positions its own
      * six controls from app/pagebar.cpp now -- see app/pagebar.h. */
@@ -807,16 +811,17 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         g_html->set_autoscroll(g_cfg.autoscroll);
 
     /* The chat list and its Refresh button: created and owned by
-     * app/chatlist.cpp now (rc_chats_create logs its own check_child
+     * app/chatlist.cpp now (rc_chats::create logs its own check_child
      * failures, and the LBS_NOINTEGRALHEIGHT/WS_CLIPSIBLINGS/
      * LBS_OWNERDRAWFIXED/no-WS_HSCROLL comment that used to be here moved
      * with the CreateWindowExA call it explains). g_ui_font/g_ui_font_bold
      * are already set above; chats_confirm/chats_switching/chats_switched
      * are this file's answers to the policy questions the chat list does
-     * not own -- see the callback comments on rc_chats_create in
+     * not own -- see the callback comments on rc_chats::create in
      * app/chatlist.h. */
-    rc_chats_create(hwnd, inst, &g_net, g_ui_font, g_ui_font_bold,
-                     chats_confirm, ui_send, chats_switching, chats_switched);
+    g_chats = rc_chats::create(hwnd, inst, &g_net, g_ui_font, g_ui_font_bold,
+                                chats_confirm, ui_send, chats_switching,
+                                chats_switched);
 
     /* The permission/halt bar: its own controls, created and owned by
      * app/bar.cpp now (rc_bar::create logs its own check_child-equivalent
@@ -857,7 +862,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
-     * inside rc_chats_create/rc_bar::create/rc_pagebar::create/
+     * inside rc_chats::create/rc_bar::create/rc_pagebar::create/
      * rc_input_create above. */
 }
 
@@ -927,15 +932,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      * conversation named "Today" -- app/chatlist.cpp's own business now,
      * since ID_CHATS is the only owner-draw control this window has. */
     case WM_MEASUREITEM:
-        rc_chats_measure((MEASUREITEMSTRUCT *)lp);
+        if (g_chats) g_chats->measure((MEASUREITEMSTRUCT *)lp);
         return TRUE;
 
     case WM_DRAWITEM:
-        rc_chats_draw((DRAWITEMSTRUCT *)lp);
+        if (g_chats) g_chats->draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
 
     case WM_RC_OPENCHAT:
-        rc_chats_open_selected();
+        if (g_chats) g_chats->open_selected();
         return 0;
 
     case WM_TIMER:
@@ -1022,7 +1027,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_LAST:
             if (g_pagebar) g_pagebar->command(id);
             return 0;
-        case ID_REFRESH: rc_chats_request();      return 0;
+        case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
 
         case IDM_NEW:
             if (g_turn_active
@@ -1082,7 +1087,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * memory. LBN_SELCHANGE is deliberately not used: it also fires
              * for arrow keys, and switching on those would tear down a live
              * session every time the list was scrolled from the keyboard. */
-            if (HIWORD(wp) == LBN_DBLCLK) rc_chats_open_selected();
+            if (HIWORD(wp) == LBN_DBLCLK && g_chats) g_chats->open_selected();
             return 0;
 
         default:
@@ -1106,6 +1111,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_html = NULL;
         delete g_bar;
         g_bar = NULL;
+        delete g_chats;
+        g_chats = NULL;
         delete g_xfer;
         g_xfer = NULL;
         delete g_optmenu;
@@ -1236,8 +1243,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             continue;
         }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
-            && msg.hwnd == rc_chats_hwnd()) {
-            rc_chats_open_selected();
+            && g_chats && msg.hwnd == g_chats->hwnd()) {
+            g_chats->open_selected();
             continue;
         }
         /* Esc denies a pending permission request (a halt has no "deny" --
