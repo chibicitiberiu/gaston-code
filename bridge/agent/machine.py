@@ -115,7 +115,30 @@ it exists for a conflict you resolved without the user ever seeing a button.
 
 Do not try to get around a refusal by writing again, writing to a different
 name, or using a shell command. The write will appear to succeed here and will
-not reach the user, and you will have lost track of which version is which."""
+not reach the user, and you will have lost track of which version is which.
+
+### The four answers `sync_resolve` takes
+
+- `release` -- you have merged and the path should accept writes again.
+- `accept-revert` -- the user genuinely undid your change rather than an old
+  editor buffer writing over it. Their version is taken and **yours is not
+  kept**, so if any of it is still wanted, read the file after it arrives and
+  apply the change again.
+- `accept-tree` -- answers a refusal of a WHOLE pass, and takes no path. You
+  will be told when one happens: too many paths went backwards at once, which
+  is what a machine restored from a backup looks like. Nothing has moved when
+  you get that message. Do not reach for this to make an error go away -- ask
+  the user whether their machine is meant to be in that state, because the
+  alternative reading is that they lost work and have not noticed yet.
+- `forget` -- stop tracking a path that is gone from both sides for good.
+
+### Keeping your own history
+
+`git` is available on this proxy and the working copy is yours to version.
+`.git/` is never mirrored, so a repository here costs the user's machine
+nothing and never crosses the wire. Commit before a change you are unsure of.
+Their machine is not your undo buffer, and asking them to reconstruct
+something you overwrote is asking them to do your work."""
 
 
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,

@@ -119,16 +119,34 @@ use; each is a known limit rather than something forgotten.
   declaring its own rules, but `C.POSIX` has never been on the other end of a
   socket. Until one is, "the bridge survives being pointed at MS-DOS" is a
   design claim, not a measurement.
-- **`sync_resolve` implements `release` and `forget` only.** The plan named
-  `accept-class`, `accept-revert` and `rebind` as well. Each corresponds to a
-  halt that cannot currently happen: a class change is now resolved as an
-  ordinary content change, and the two tree-identity halts need a second guest
-  or a restored backup to reach.
-- **Restore-from-backup is still the one unresolved silent-loss path.** A guest
-  whose tree is older than its own INI is indistinguishable, per path, from a
-  deliberate mass revert. The plan's mitigation is a persisted generation
-  counter plus an aggregate heuristic; neither is built. `.gaston/base/` is
-  retained as history, so a wrong mass pull is recoverable by hand.
+- ~~**`sync_resolve` implements `release` and `forget` only.**~~ **Partly
+  closed 2026-09-18.** `accept-revert` is built (02.46) -- it answers the halt
+  the stale-editor-buffer guard raises, which is the one of the three that
+  happens routinely. `accept-tree` was added alongside it, path-less, to answer
+  the whole-pass refusal below. `accept-class` stays deferred for the reason
+  already recorded: the halt it would answer does not exist, because a class
+  change resolves as an ordinary content change. `rebind` stays deferred and is
+  a genuinely different job from `accept-tree` -- it re-anchors tree IDENTITY
+  after a machine change, and needs a second guest to reach.
+- ~~**Restore-from-backup is still the one unresolved silent-loss path.**~~
+  **Closed 2026-09-18** (02.47), and NOT the way the plan specified, which is
+  worth recording because the plan was written before the fix existed.
+
+  The plan wanted a persisted generation counter on the wire plus an aggregate
+  heuristic. **The heuristic was built; the generation counter was not, and on
+  inspection it would not have detected the case it was for.** The INI lives in
+  `C:\RETRO`, outside the synced tree, so restoring `C:\WORK` from a backup
+  leaves the stored generation untouched: the guest would report the CURRENT
+  generation over a tree that is five passes old, and the comparison would
+  pass. Its real value was ruling out "a different machine" as the alternative
+  explanation, and `tree_id` plus `guest_root` already refuse that case with
+  their own message. So it bought a better sentence in one report at the price
+  of a protocol change on both sides, a new INI field, and a flag day. Not
+  built, deliberately.
+
+  What is built refuses the whole pass when too many paths go backwards at
+  once, above both a floor and a share of the tree, and ships `accept-tree` as
+  the way to say it was intended. `.gaston/base/` is still retained as history.
 - ~~**`eol=cr` is declarable and not implemented.**~~ **Closed 2026-09-18.**
   Refused at the handshake AND per path -- attributes are consulted per path,
   so `*.txt eol=cr` in a real `.gitattributes` would otherwise reach a client
@@ -270,6 +288,16 @@ audit is explicit that there are already **four ad-hoc chunked transfers**
 (`_send_html`, `Pass.push`, `do_get`, `EXECOUT`) with three more coming. Cancel
 belongs to whatever primitive unifies those, not beside them as a fifth
 special case.
+
+**Steal 9P's `Tflush` contract when the time comes, rather than re-deriving
+it.** Raised 2026-09-18 while comparing this design against WSL's 9P layer.
+The hard half of Cancel is not the message, it is the race: did the cancel
+beat the reply, and when may the id be reused? 9P specifies that away, and the
+rule is worth copying verbatim -- the server answers `Rflush` only once the
+flushed request is definitely never going to be answered; a `Tflush` for
+something already answered still gets an `Rflush`; and the client may not reuse
+the tag until it arrives. Our ids are the tags. Write this into the primitive
+while it is being designed, not into four transfer loops afterwards.
 
 **To close it:** design the chunked-transfer primitive (audit 04.3) and give it
 Cancel as a property. `do_put` is already a chunked sink and `do_get` a chunked

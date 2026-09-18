@@ -2155,3 +2155,47 @@ fooled it. Same session also had the older version of this trap: several client
 instances running at once, where only the first can open `retroclaude.log`
 (`FILE_SHARE_READ`), so the log looked frozen an hour in the past while the
 binary under test was not the one answering.
+
+
+### 2026-09-18 — git on the bridge: the agent's, not the bridge's
+
+Raised by the user while we were costing 3.4e: *"could we leverage git
+somehow?"* Two proposals hide in that, and they land on opposite sides of the
+standing rules.
+
+**Git on the guest is rejected.** The only plausible route is Cygwin 1.5.25,
+the last release supporting 95/98/ME, carrying a git of that era. It fights
+"the guest transforms nothing" squarely -- reconciliation on the guest is
+logic that cannot be tested, fixed or observed from here -- and Cygwin's fork
+emulation on a 32MB P200 is the worst possible shape for a machine where
+memory is the binding constraint. The client is a 220KB PE against Win98's own
+DLLs; the Cygwin DLL alone is several times that before git forks once. And it
+would not solve the problem: reconcile needs both sides' state, so guest-side
+history would still have to cross the wire, as packfiles instead of a manifest
+that is already chunked and interruptible.
+
+**A bridge-side journal was proposed, costed, and dropped -- by the user's
+objection, which was right.** The pitch was to commit the mirror before each
+apply pass, turning 3.4e from "refuse the pass" into "recover". The objection:
+nothing can read that history. There is no UI for it and no tool that restores
+from it, so a commit nobody can reach is a backup, not recovery -- and it had
+been quoted as though the commit itself were the feature.
+
+There is a sharper reason, found while answering it. **The aggregate-revert
+check fires BEFORE the apply loop, so a refused pass leaves both copies
+intact.** Nothing is lost. The recovery being sold would only help in a case
+the refusal already prevents.
+
+**What landed instead is one paragraph in the system prompt.** `git` is on the
+bridge, `.git/` is already in `ignores.DEFAULTS` so it never crosses to the
+guest, and `.gitignore` is already honoured for scope -- the mirror has been
+git-ready the whole time without anyone planning it. The agent is now told to
+version its own working copy and commit before a change it is unsure of. That
+covers the failure that actually happens, which is the agent's own bad edit,
+at no infrastructure cost.
+
+One hazard, recorded rather than guarded: an agent that runs `git checkout`
+across the mirror produces a large bridge-side change, which is the
+mass-revert shape arriving from the other direction. The aggregate check does
+not look at bridge-side regressions today. It has not happened, and naming it
+is cheaper than building for it.
