@@ -768,6 +768,11 @@ static void render_frame(rc_frame *f)
         log_mem("chat list loaded");
 
     } else if (strcmp(f->type, "SWITCHED") == 0) {
+        /* A prompt belongs to the session that raised it, and switching
+         * rebuilds the session -- the bridge denies anything pending as
+         * "rebuild". Leaving the bar up would offer Allow/Deny for a request
+         * that no longer exists, on a conversation the user has left. */
+        bar_hide();
         v = rc_frame_get(f, "total");
         if (v) g_total = atoi(v);
         v = rc_frame_get(f, "id");
@@ -1490,6 +1495,20 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_RC_STATE:
         status_refresh();
         if ((rc_state)wp == RC_FAILED || (rc_state)wp == RC_DISCONNECTED) {
+            /* Take the bar down FIRST.
+             *
+             * Nothing did, and ui_set_busy ORs g_perm_pending into the Send
+             * button's enabled state -- so a disconnection while a permission
+             * prompt or a halt was on screen left Send disabled across the
+             * whole outage AND after the reconnection, with a bar on screen
+             * whose buttons answer a request the bridge has already given up
+             * on. The app looked wedged.
+             *
+             * Safe to drop locally because the bridge restores both on
+             * reattach: _reissue_prompt re-sends PERMSTATE and _reissue_halt
+             * re-sends HALT, so whatever is genuinely still outstanding comes
+             * back, and whatever is not, does not. */
+            bar_hide();
             ui_set_busy(0);
             SetTimer(hwnd, TIMER_RECONNECT, (UINT)g_backoff_ms, NULL);
         }
