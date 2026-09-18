@@ -55,6 +55,50 @@ GREEN = "\033[32m"
 # this, so answering with more here would exercise a path the guest cannot.
 EXEC_MAX_OUT = 32 * 1024
 
+# win/net/net.cpp's rc_net_start sends 22 HELLO headers beyond ver/secret/
+# max_frame/sess/from -- the ones hello() builds. A fakegui that skips them
+# only ever drives the bridge's UNDECLARED defaults (bridge/files/caps.py's
+# Caps(declared=False), manifest=1), never the DECLARED path the real guest
+# exercises on every connection (manifest=2, and every cap explicitly named
+# rather than assumed). 03.28: the two test populations did not overlap.
+#
+# Literal for literal against win/net/caps.h's RC_CAP_* -- this client claims
+# to be the same Win9x guest net.cpp actually is, since that is what fakegui
+# stands in for. Mirrored by hand, like bridge/files/caps.py already mirrors
+# the same header; change one, change the other two.
+FAKE_CAPS = {
+    "acp": "1252",
+    "case": "1",        # RC_CASE_FOLD
+    "devices": "1",     # RC_DEVICES_DOS
+    "trailing": "1",    # RC_TRAILING_STRIP
+    "illegal": "1",     # RC_ILLEGAL_DOS
+    "eol": "1",         # RC_EOL_CRLF
+    "shortnames": "1",  # RC_SHORTNAMES_83
+    "dirreserve": "12", # RC_DIRRESERVE_WIN32
+    "workreserve": "11",# RC_WORKRESERVE_GASTON
+    "maxpath": "260",   # MAX_PATH
+    "maxcomp": "255",
+    "manifest": "2",    # RC_CAP_MANIFEST
+}
+
+# The rest of what rc_net_start reports about the machine itself -- not a
+# capability, but read by bridge/view/pages.py's limits_for (mem_kb) and by
+# bridge/machine.py's system prompt (os/cpu/screen). 32MB/2420KB match the
+# floor CLAUDE.md's "Memory is the binding constraint" section measures
+# against, so a page-sizing bug that only shows up on the 32MB guest still
+# shows up here. No sync_root: fakegui answers every SYNC* frame the way a
+# guest with no configured sync root genuinely would (see _handle_rpc below),
+# and a client that names a root while claiming to have none would be lying
+# to itself before the bridge ever gets a chance to.
+FAKE_IDENTITY = {
+    "mem_kb": "32768",
+    "mem_free_kb": "2420",
+    "os": "Windows 4.10 build 67766095 ",
+    "cpu": "x86 family 5 model 8, 1 cpu",
+    "screen": "640x480x8",
+    "disk_free_kb": "512000",
+}
+
 
 class FakeGui:
     def __init__(self, host: str, port: int, secret: str, *, raw: bool = False):
@@ -98,6 +142,12 @@ class FakeGui:
             sess=self.sess if resume else None,
             from_seq=self.next_seq if resume else None,
         )
+        # hello() only builds ver/secret/max_frame/sess/from -- the fields
+        # every client shares. Everything past that is this client saying
+        # what it IS, which protocol.py has no constructor for because it is
+        # not part of the handshake's shape, only this client's answer to it.
+        f.headers.update(FAKE_CAPS)
+        f.headers.update(FAKE_IDENTITY)
         self.writer.write(f.encode())
         await self.writer.drain()
 
@@ -272,12 +322,21 @@ class FakeGui:
         elif t in ("PERMREQ", "PERMSTATE"):
             # The break-glass case this tool exists for. Without it a wedged
             # prompt can only be cleared by restarting the bridge.
+            #
+            # 03.29: `waiting` is NOT read here, on purpose, even though the
+            # bridge sends it on this frame too. win/app/main.cpp's PERMREQ/
+            # PERMSTATE branch (main.cpp:914-921) calls perm_show() with only
+            # id/body/allows -- the queue depth is read nowhere but the
+            # PERMWAIT branch below, which is the only frame that can ever
+            # change it once a bar is already up. Reading it here would
+            # exercise a header interpretation the shipping guest does not
+            # share, and would show a stale count besides: this bar's own
+            # queue depth is whatever the last PERMWAIT said, not whatever
+            # this PERMREQ happens to carry.
             self.perm_id = f.headers.get("id")
             again = " (re-issued)" if t == "PERMSTATE" else ""
-            waiting = f.headers.get("waiting", "0")
-            queued = f" {DIM}(+{waiting} queued){RESET}" if waiting != "0" else ""
             print(f"\n{YELLOW}{BOLD}PERMISSION{RESET}{again} "
-                  f"{BOLD}{text}{RESET}{queued}")
+                  f"{BOLD}{text}{RESET}")
             opts = "/allow  /deny" if f.headers.get("allows") != "1" \
                 else "/allow  /always  /deny"
             print(f"{DIM}  {opts}{RESET}")
@@ -437,6 +496,24 @@ class FakeGui:
         print(f"{DIM}[exec {eid}] {status} code={code}"
               f"{' truncated' if truncated else ''}{RESET}")
 
+    # --- halt: the other wedge case, answered the way /continue does -------
+
+    async def answer_halt(self) -> bool:
+        """Send RESUME for the halt currently on screen, exactly what
+        pressing Continue on the real guest's halt bar does (main.cpp's
+        BAR_HALT click handler). Pulled out of input_loop so 03.31's "fakegui
+        cannot answer a HALT" gap can be closed by a test that drives this
+        directly, rather than only by a human typing into a live prompt --
+        input_loop is still the one real caller, calling this exact method.
+
+        Returns False when there is nothing to answer, the same guard
+        input_loop applied inline before there was anything here to call.
+        """
+        if not self.halt_id:
+            return False
+        await self.send(Frame("RESUME", {"id": self.halt_id}))
+        return True
+
     # --- input -------------------------------------------------------------
 
     async def input_loop(self) -> None:
@@ -471,10 +548,8 @@ class FakeGui:
                 asyncio.create_task(self.pump())
                 continue
             if line in ("/continue", "/c"):
-                if not self.halt_id:
+                if not await self.answer_halt():
                     print(f"{DIM}no halt is pending{RESET}")
-                    continue
-                await self.send(Frame("RESUME", {"id": self.halt_id}))
                 continue
             if line in ("/allow", "/always", "/deny"):
                 if not self.perm_id:
