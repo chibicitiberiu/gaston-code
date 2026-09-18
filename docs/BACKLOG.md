@@ -200,72 +200,57 @@ permission rule table, icons, multi-client, the command menu) lives in
 ## 5. Found by the 3.4 review rounds, not yet closed
 
 Three adversarial rounds ran against the hardening plan before any code. Nine
-defects were fixed (see `PROGRESS.md`, 2026-09-18); these were found by the
-same rounds and deliberately left.
+defects were fixed at the time (see `PROGRESS.md`, 2026-09-18); these were
+found by the same rounds and deliberately left.
 
-- **`cwd` is still a header, still clipped at 255.** §3 records it; the review
-  added that it goes straight to `CreateProcessA` with no validation, so the
-  command runs in a *different existing directory* rather than failing. The fix
-  is a bridge-side length check before sending, not a move to the body — that
-  would be a lockstep protocol change wanting a declared capability, for a
-  value that is a short DOS path in every real case.
-- **A pass-level abort is invisible.** `SyncError` is caught by a bare
-  `except Exception` and becomes a `log.warning` — it never calls `note()`,
-  never latches, never reaches `sync_status_text`. So the two live
-  tree-identity refusals, and any future mass-revert refusal, stop the whole
-  pass with nothing said to either the user or the agent. Making it visible is
-  not just deleting the `log.warning`: a `tree_id` mismatch aborts *every*
-  pass, so it needs a persisted fingerprint written inside the handler, keyed
-  on the reason. Narrow the bare `except` while there — today a crash is
-  disguised as a deliberate refusal, which is how the `IsADirectoryError`
-  total-stop stayed hidden.
-- **Concurrent turns are still unguarded**, and the reachable route is the
-  *designed* conflict flow rather than a race: the Continue button is not
-  gated on `g_turn_active`, and a halt is raised by a sync pass while the agent
-  works. Two `_run_turn`s then run on a stream that can only have one consumer,
-  so one turn can consume the other's `ResultMessage` and the transcript is
-  corrupted. Both call sites are bare `create_task` — `:837` and `:863` — so
-  neither is even in the strong-reference set. Note `_release_all_latches` now
-  takes the lock, so the specific loss that made this urgent is closed; what
-  remains is the turn guard itself, and it must not defer the turn that carries
-  the conflict preamble past the latch release.
-- **The guest never re-requests page content on reconnect.** `READY` carries
-  `page` and `total`, and the guest updates both — but `DOC` is guarded by
-  `if (!g_doc_sent)`, set once per *process*, so the skeleton is not reset
-  either and the stale transcript simply persists under a new page number.
-  `page_goto("live")` already exists; this is one call in the `READY` handler.
-  It matters more if the replay buffer is ever retired.
+**Re-verified against the code on 2026-09-18**, because the list had drifted:
+six of the nine entries here had been closed by the audit sweep and were still
+written up as open, which makes a backlog worse than no backlog. What closed,
+and where to read it: `cwd` is length-checked bridge-side before the frame is
+sent (`server.py:1464`); a pass-level abort goes through `_report_abort`, which
+persists a fingerprint and pushes a notice to both the user and the agent;
+concurrent turns are serialised on `GuestSession.turn_lock` with both call
+sites through `self._spawn`, and latch release moved into the turn that carries
+the preamble; the guest re-requests page content on every `READY` via
+`goto_live()`; `reject_sync_busy` now answers with the ack type each sync frame
+expects; and the shutdown drain's acks leave before `running` is cleared,
+measured on hardware at 0 before and 24 after. `n->sock` is deliberately NOT
+lock-serialised -- `net.cpp:740` argues a lock would block shutdown behind an
+idle blocking `recv` -- the race is removed by joining the reader and sender
+before `closesocket`, and leaking the socket if a thread will not exit.
+
+Three remain:
+
 - **The replay buffer is still dead and still stamping.** The guest never sends
   `from=`, so `replay.since()` is unreachable; `append()` still fills a
-  20,000-frame buffer. Retiring it is larger than it looks: the oversized-frame
-  guard exists *because* replay is append-only, so its merit has to be
-  restated rather than preserved, and the size probe stamps a fake `seq` into
-  every frame's budget including `stamp=False` ones.
+  20,000-frame buffer and `_send` still stamps every frame. The bridge's own
+  comment admits it (`server.py:704`). Retiring it is larger than it looks: the
+  oversized-frame guard exists *because* replay is append-only, so its merit
+  has to be restated rather than preserved, and the size probe stamps a fake
+  `seq` into every frame's budget including the `stamp=False` ones -- after
+  retirement that is a phantom tax refusing frames that would fit. Retiring
+  `seq` also reverses a documented `[R]` in `PLAN.md:377`, which introduced it
+  *"because adding them later touches every frame and handler on both sides"*;
+  say so rather than quietly undoing it.
 - **Directories deleted on either side are silently resurrected.** `diff` never
-  consults the ancestor for a directory, so guest-only becomes `ADOPT` plus
-  `os.makedirs` and bridge-only becomes `MKDIR`. §4's "reported and never
-  silently resurrected" is true for files and false for directories.
-- **`reject_sync_busy` answers every full-queue sync frame with
-  `SYNCPUTACK`.** MKDIR survives it — the bridge handles both acks in one
-  id-keyed branch — but SCAN and GET get a 2-tuple where they unpack six or
-  four, which surfaces as "sync pass aborted: not enough values to unpack".
-  A blocker for any new sync frame.
-- **`n->sock` is unserialised across four threads**, 14 accesses, none under a
-  lock — §1 names one instance; the review found `recv_exact`'s two and the
-  TOCTOU guard in `rc_net_send` are the same class. And the shutdown drain's
-  acks are *all* discarded, because `rc_net_stop` clears `running` before
-  calling `rc_rpc_stop` and `rc_net_send` bails on `!running`: the comment
-  promising queued frames are "answered, not silently dropped" is false on the
-  only path that reaches it.
-- **The netem gate is no longer blocked on sudo.** Verified: unprivileged user
-  namespaces work here, `tc qdisc add dev lo root netem rate 40kbit` succeeds
-  inside one, and `pasta --config-net` keeps outbound internet while leaving
-  `lo` shapeable. The live domain uses `-netdev user` with no `hostfwd`, so the
-  guest's connection is re-originated on host loopback — exactly what netem on
-  `lo` would shape. Not yet run end to end: QEMU inside the namespace is
-  unverified, and `tools/runvm.sh` specifies `pcnet` where the live domain is
-  `ne2k_isa`, so a run built on it would come up with no network and look like
-  a bridge bug.
+  consults the ancestor for a directory (`sync.py:300`), so guest-only becomes
+  `ADOPT` plus `os.makedirs` and bridge-only becomes `MKDIR`. §4's "reported and
+  never silently resurrected" is true for files and false for directories. This
+  is the only one of the three that can lose the user's work, so it ranks above
+  the other two by the project's own ordering rule.
+- **The netem gate is no longer blocked on sudo, and still has not been run.**
+  Verified: unprivileged user namespaces work here, `tc qdisc add dev lo root
+  netem rate 40kbit` succeeds inside one, and `pasta --config-net` keeps
+  outbound internet while leaving `lo` shapeable. The live domain uses
+  `-netdev user` with no `hostfwd`, so the guest's connection is re-originated
+  on host loopback -- exactly what netem on `lo` would shape. Not yet run end
+  to end: QEMU inside the namespace is unverified, and `tools/runvm.sh`
+  specifies `pcnet` where the live domain is `ne2k_isa`, so a run built on it
+  would come up with no network and look like a bridge bug. Take the argv from
+  `/proc/<pid>/cmdline` of the running domain instead. Stand the harness up as
+  its own gate with a measured throughput check before any demo runs through
+  it -- an unshaped link that looks shaped would discharge the gate while
+  testing nothing.
 
 ## 6. CANCEL, and the chunked-transfer primitive it belongs to
 

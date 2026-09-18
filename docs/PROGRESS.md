@@ -106,7 +106,7 @@ Linux side first, so the guest develops against something real.
 | 3.2a | `EXECKILL`, so Stop reaches the command | done |
 | 3.2b | Restart path: reader clears `running`, `try_connect` tears down first | done — reproduced the KERNEL32 fault, then fixed |
 | 3.3 | File sync layer | **done — verified on real Win98 SE** |
-| 3.4 | Hardening: the backlog worked down | **in progress** |
+| 3.4 | Hardening: the backlog worked down | **in progress** -- 3.4-0/3.4a/3.4b/3.4d landed and verified; what is left is replay retirement, the netem gate (3.4c), `accept-revert`, the Bash characterisation test and all of 3.4e (`gen=` on the wire, the guest INI field, the aggregate-revert heuristic, `rebind`). `BACKLOG.md` §5 is the live list. |
 
 ### Stage B verification (2026-09-17)
 
