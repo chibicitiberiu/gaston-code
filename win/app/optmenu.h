@@ -5,9 +5,15 @@
  * (audit finding 01.58) -- the bar, the chat list and the page bar are
  * already their own files. This is the one the audit called out as most
  * obviously wanting to be one module: the id-range arithmetic in
- * rc_optmenu_command and the array fill in rc_optmenu_frame have to agree
+ * rc_optmenu::command and the array fill in rc_optmenu::frame have to agree
  * about MAX_OPTS and the base constants, and used to be 970 lines apart in
  * main.c.
+ *
+ * A CLASS NOW, not a handle plus three free functions (audit finding 01.60):
+ * same reasoning as app/htmlview.h, the pattern this module and its five
+ * siblings follow. There is exactly one instance, created explicitly by
+ * main.cpp's build_menu at menu-build time (never a file-scope object --
+ * see core/rc_cpp.h) and destroyed with `delete`.
  */
 #ifndef RC_OPTMENU_H
 #define RC_OPTMENU_H
@@ -15,8 +21,8 @@
 #include <windows.h>
 #include "net/frameproto.h"
 
-#ifdef __cplusplus
-extern "C" {
+#ifndef __cplusplus
+#error "optmenu.h is C++; the menus are a class now, see app/htmlview.h"
 #endif
 
 /* Model and effort entries are numbered from a base because the lists come
@@ -33,25 +39,39 @@ typedef int (*rc_optmenu_send_fn)(const char *what, const char *type,
                                    const char *const *vals, int nkv,
                                    const void *body, unsigned body_len);
 
-/* Creates the Model and Effort popups (each seeded with one greyed
- * "(not connected)" placeholder, exactly as build_menu used to) and appends
- * them to `bar` as "&Model"/"&Effort" -- called from build_menu between
- * Configure and Help, so the menu order this module does not own is
- * unchanged.
- * owner: DrawMenuBar's target -- OPTIONSEND redraws the bar after a batch.
- * send: main.c's ui_send, for SETMODEL/SETEFFORT. */
-void rc_optmenu_create(HWND owner, HMENU bar, rc_optmenu_send_fn send);
+class rc_optmenu {
+    HMENU menu_model, menu_effort;
+    char  opt_model[MAX_OPTS][64];
+    char  opt_effort[MAX_OPTS][64];
+    int   n_model, n_effort;
+    int   opts_open;   /* mid-batch, so the next model row appends */
+    HWND  owner;
+    rc_optmenu_send_fn send;
 
-/* OPTION, OPTIONSEND -- the two frame types this module owns. Returns
- * non-zero if `f->type` was one of those. */
-int  rc_optmenu_frame(rc_frame *f);
+    rc_optmenu(const rc_optmenu &);
+    rc_optmenu &operator=(const rc_optmenu &);
+    rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_);
 
-/* WM_COMMAND's default case: the IDM_MODEL0/IDM_EFFORT0 ranges. Returns
- * non-zero if `id` fell in either (whether or not it was actually sent). */
-int  rc_optmenu_command(int id);
+public:
+    /* Creates the Model and Effort popups (each seeded with one greyed
+     * "(not connected)" placeholder, exactly as build_menu used to) and
+     * appends them to `bar` as "&Model"/"&Effort" -- called from build_menu
+     * between Configure and Help, so the menu order this module does not own
+     * is unchanged.
+     * owner: DrawMenuBar's target -- OPTIONSEND redraws the bar after a
+     *     batch.
+     * send: main.c's ui_send, for SETMODEL/SETEFFORT. */
+    static rc_optmenu *create(HWND owner, HMENU bar, rc_optmenu_send_fn send);
+    ~rc_optmenu() {}
 
-#ifdef __cplusplus
-}
-#endif
+    /* OPTION, OPTIONSEND -- the two frame types this module owns. Returns
+     * non-zero if `f->type` was one of those. */
+    int frame(rc_frame *f);
+
+    /* WM_COMMAND's default case: the IDM_MODEL0/IDM_EFFORT0 ranges. Returns
+     * non-zero if `id` fell in either (whether or not it was actually
+     * sent). */
+    int command(int id);
+};
 
 #endif

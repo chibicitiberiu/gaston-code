@@ -55,8 +55,9 @@
  * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
  * to the code that posts them, not duplicated here. */
 #define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
-/* WM_RC_OPENCHAT (chatlist.cpp's chats_proc -> wnd_proc: open a chat) is
- * declared in app/chatlist.h now, next to the module that posts it. */
+/* WM_RC_OPENCHAT (chatlist.cpp's rc_chats::list_proc -> wnd_proc: open a
+ * chat) is declared in app/chatlist.h now, next to the module that posts
+ * it. */
 
 #define GUTTER        4
 #define CHATS_W      170
@@ -73,24 +74,37 @@
 static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_html *g_html;
+static rc_bar  *g_bar;
+static rc_chats *g_chats;
+static rc_xferstat *g_xfer;
+static rc_optmenu *g_optmenu;
+static rc_pagebar *g_pagebar;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
- * to app/bar.cpp -- see app/bar.h. The design rationale that used to sit here
- * (why one set of controls serves two request kinds, and the four-bugs
- * history of arbitrating them pairwise) moved with it. The chat list's HWNDs
+ * to app/bar.cpp -- see app/bar.h. g_bar is the one instance, created in
+ * create_children and destroyed in WM_DESTROY, the same shape as g_html. The
+ * design rationale that used to sit here (why one set of controls serves two
+ * request kinds, and the four-bugs history of arbitrating them pairwise)
+ * moved with it. The chat list's HWNDs
  * and its seven id-keyed globals moved to app/chatlist.cpp the same way --
- * see app/chatlist.h. The input box, Send/Stop and RC_INPUT_MAX (the longest
+ * see app/chatlist.h. g_chats is the one instance, created in
+ * create_children and destroyed in WM_DESTROY, the same shape as g_html.
+ * The input box, Send/Stop and RC_INPUT_MAX (the longest
  * message do_send can compose and send in one go) moved to app/input.cpp --
  * see app/input.h. */
 
 /* The Model and Effort menus (their HMENUs, id-keyed arrays and batch state)
- * moved to app/optmenu.cpp -- see app/optmenu.h. */
+ * moved to app/optmenu.cpp -- see app/optmenu.h. g_optmenu is the one
+ * instance, created in build_menu (menu order is this file's business) and
+ * destroyed in WM_DESTROY, the same shape as g_html. */
 
 /* Transfer progress (the rx/tx counters and their formatting) moved to
- * app/xferstat.cpp -- see app/xferstat.h. */
+ * app/xferstat.cpp -- see app/xferstat.h. g_xfer is the one instance,
+ * created in create_children and destroyed in WM_DESTROY, the same shape as
+ * g_html. */
 
 /* Not "Claude Code": that is Anthropic's product name and this is a
  * third-party client for it. Gaston is a French given name of roughly the
@@ -120,7 +134,9 @@ static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
 
-/* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. */
+/* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
+ * is the one instance, created in create_children and destroyed in
+ * WM_DESTROY, the same shape as g_html. */
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
 static int   g_turn_active = 0;
@@ -155,7 +171,8 @@ static void status_refresh(void)
     status_set(0, buf);
     /* app/xferstat.cpp owns the rx/tx counters and this pane's formatting,
      * including the "nothing for 1200ms" reset -- see app/xferstat.h. */
-    rc_xfer_text(buf, sizeof(buf));
+    if (g_xfer) g_xfer->text(buf, sizeof(buf));
+    else        buf[0] = '\0';
     status_set(1, buf);
 
     /* Tick the elapsed seconds while a turn is in flight. A counter that moves
@@ -218,7 +235,7 @@ static void build_menu(HWND hwnd)
     /* The Model and Effort popups: created and appended to `bar` by
      * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
      * so the menu order is unchanged. */
-    rc_optmenu_create(hwnd, bar, ui_send);
+    g_optmenu = rc_optmenu::create(hwnd, bar, ui_send);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
 }
@@ -256,7 +273,7 @@ static void chats_switching(void)
  * is exactly what the bar module's `changed` callback needs (see
  * app/bar.h): showing, hiding or relabelling the bar never touches
  * g_turn_active, but always wants Send's enabled state re-checked against
- * rc_bar_blocks_send(). */
+ * blocks_send(). */
 static void ui_refresh_enables(void)
 {
     /* A pending permission request blocks Send too. That is the one property
@@ -268,7 +285,8 @@ static void ui_refresh_enables(void)
      * has wedged, and it is how the cancellation path gets exercised at all --
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
-    rc_input_enable_send((g_turn_active || rc_bar_blocks_send()) ? 0 : 1);
+    rc_input_enable_send((g_turn_active || (g_bar && g_bar->blocks_send()))
+                          ? 0 : 1);
 }
 
 static void ui_set_busy(int busy)
@@ -284,7 +302,7 @@ static void ui_set_busy(int busy)
  * gone out. */
 static int input_blocked(void)
 {
-    return g_turn_active || rc_bar_blocks_send();
+    return g_turn_active || (g_bar && g_bar->blocks_send());
 }
 
 static void input_sent(void)
@@ -355,9 +373,9 @@ static void on_ready(rc_frame *f)
     if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
     /* page/total (if present), marking the session live, and the button
      * refresh that follows are app/pagebar.cpp's business now -- see
-     * app/pagebar.h's rc_pagebar_note_ready. */
-    rc_pagebar_note_ready(f);
-    rc_chats_request();
+     * app/pagebar.h's rc_pagebar::note_ready. */
+    if (g_pagebar) g_pagebar->note_ready(f);
+    if (g_chats) g_chats->request();
     g_backoff_ms = 1000;
     g_retry_noted = 0;
     v = rc_frame_get(f, "model");
@@ -368,12 +386,12 @@ static void on_ready(rc_frame *f)
      * once per connection -- so on a reconnect this updates the page
      * counters without the control's content agreeing with them, and the
      * window keeps showing whatever the last connection left in it under
-     * the new page number. rc_pagebar_goto_live() re-requests the live page
+     * the new page number. goto_live() re-requests the live page
      * explicitly, which clears the control (PAGESTART) and repopulates it
      * from what the bridge now has -- cheap and correct on a fresh session
      * too, where it is a no-op over an empty page. See BACKLOG.md's note
      * on this global. */
-    rc_pagebar_goto_live();
+    if (g_pagebar) g_pagebar->goto_live();
     status_refresh();
 }
 
@@ -446,7 +464,7 @@ static void on_turn(rc_frame *f)
         /* Now, and only now, re-fetch the list. Sending a message is what
          * makes a conversation the most recent one, so this is where the
          * reordering belongs -- not on merely opening one. */
-        rc_chats_request();
+        if (g_chats) g_chats->request();
         /* state=="error" used to fall into the same branch as a normal
          * end and render identically -- turn_error() (protocol.py) sends
          * `msg` and no `cost_usd`, so "done $?" is what a failed turn
@@ -471,7 +489,7 @@ static void on_turn(rc_frame *f)
  * rc_optmenu_frame's own comments there for what each one does. */
 static void on_optmenu(rc_frame *f)
 {
-    rc_optmenu_frame(f);
+    if (g_optmenu) g_optmenu->frame(f);
 }
 
 /* app/chatlist.h's `switched` callback: a SWITCHED frame has already been
@@ -484,11 +502,11 @@ static void chats_switched(rc_frame *f)
      * rebuilds the session -- the bridge denies anything pending as
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
      * that no longer exists, on a conversation the user has left. */
-    rc_bar_hide_all();
+    if (g_bar) g_bar->hide_all();
     /* The page total is app/pagebar.cpp's state now -- see app/pagebar.h's
-     * rc_pagebar_note_total. No button refresh here, matching what this call
-     * site always did. */
-    rc_pagebar_note_total(f);
+     * rc_pagebar::note_total. No button refresh here, matching what this
+     * call site always did. */
+    if (g_pagebar) g_pagebar->note_total(f);
     SetWindowTextA(g_main, RC_TITLE);
     status_set(2, "");
 }
@@ -501,21 +519,21 @@ static void chats_switched(rc_frame *f)
  * something the chat list module has reason to know about. */
 static void on_chats(rc_frame *f)
 {
-    rc_chats_frame(f);
+    if (g_chats) g_chats->frame(f);
     if (strcmp(f->type, "SESSIONSEND") == 0) log_mem("chat list loaded");
 }
 
 /* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
- * see rc_pagebar_frame's own comments there for what each one does. Two
+ * see rc_pagebar::frame's own comments there for what each one does. Two
  * things about PAGESTART/PAGEEND are not app/pagebar.cpp's business and stay
- * here, the same split on_chats already makes around rc_chats_frame:
+ * here, the same split on_chats already makes around rc_chats::frame:
  * resetting main.c's own turn-state enum (the control is about to be
  * cleared) and log_mem, main.c's memory-milestone diagnostic. */
 static void on_pagebar(rc_frame *f)
 {
     if (strcmp(f->type, "PAGESTART") == 0)
         g_turn_state = TURN_IDLE;
-    rc_pagebar_frame(f);
+    if (g_pagebar) g_pagebar->frame(f);
     if (strcmp(f->type, "PAGEEND") == 0) log_mem("page loaded");
 }
 
@@ -528,11 +546,11 @@ static void on_anchor(rc_frame *f)
 }
 
 /* PERMREQ, PERMSTATE, PERMWAIT, PERMEND, HALT, HALTEND -- all six owned by
- * app/bar.cpp now; see rc_bar_frame's own comments there for what each one
+ * app/bar.cpp now; see rc_bar::frame's own comments there for what each one
  * does. One handler serves all six rows in the table below. */
 static void on_bar(rc_frame *f)
 {
-    rc_bar_frame(f);
+    if (g_bar) g_bar->frame(f);
 }
 
 static void on_error(rc_frame *f)
@@ -617,9 +635,9 @@ static void render_frame(rc_frame *f)
 
     /* Progress accounting, before anything else looks at the frame -- see
      * app/xferstat.h. Moved out whole rather than left calling back in:
-     * nothing here needs the frame beyond what rc_xfer_note_rx already
+     * nothing here needs the frame beyond what rc_xferstat::note_rx already
      * parses from it. */
-    rc_xfer_note_rx(f);
+    if (g_xfer) g_xfer->note_rx(f);
     status_refresh();
 
     for (i = 0; i < sizeof(g_dispatch) / sizeof(g_dispatch[0]); i++) {
@@ -714,15 +732,15 @@ static void layout(HWND hwnd)
      * disappeared. The bar docks to the bottom of the transcript instead, and
      * only the transcript gets shorter. */
     y = h - INPUT_HEIGHT - GUTTER;
-    ybar = rc_bar_active() ? (y - PERM_H - GUTTER) : y;
+    ybar = (g_bar && g_bar->active()) ? (y - PERM_H - GUTTER) : y;
 
     /* Chat list down the left, with its Refresh button under it -- both
      * positioned by app/chatlist.cpp now. */
-    rc_chats_move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
+    if (g_chats) g_chats->move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
 
     /* Page bar across the top of the transcript column: positions its own
      * six controls from app/pagebar.cpp now -- see app/pagebar.h. */
-    rc_pagebar_move(GUTTER * 2 + CHATS_W, GUTTER);
+    if (g_pagebar) g_pagebar->move(GUTTER * 2 + CHATS_W, GUTTER);
 
     {
         int cx = GUTTER * 2 + CHATS_W;
@@ -733,8 +751,8 @@ static void layout(HWND hwnd)
          * own descriptor table, which is what used to be the "g_bar_mode ==
          * BAR_PERM" branch here (audit finding 01.15: a new bar state needed
          * an edit at this exact spot too). */
-        if (rc_bar_active())
-            rc_bar_move(cx, ybar, w - GUTTER);
+        if (g_bar && g_bar->active())
+            g_bar->move(cx, ybar, w - GUTTER);
         /* The input box, Send and Stop position their own three controls
          * now -- app/input.cpp, see app/input.h. */
         rc_input_move(cx, y, cw, w);
@@ -793,31 +811,38 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         g_html->set_autoscroll(g_cfg.autoscroll);
 
     /* The chat list and its Refresh button: created and owned by
-     * app/chatlist.cpp now (rc_chats_create logs its own check_child
+     * app/chatlist.cpp now (rc_chats::create logs its own check_child
      * failures, and the LBS_NOINTEGRALHEIGHT/WS_CLIPSIBLINGS/
      * LBS_OWNERDRAWFIXED/no-WS_HSCROLL comment that used to be here moved
      * with the CreateWindowExA call it explains). g_ui_font/g_ui_font_bold
      * are already set above; chats_confirm/chats_switching/chats_switched
      * are this file's answers to the policy questions the chat list does
-     * not own -- see the callback comments on rc_chats_create in
+     * not own -- see the callback comments on rc_chats::create in
      * app/chatlist.h. */
-    rc_chats_create(hwnd, inst, &g_net, g_ui_font, g_ui_font_bold,
-                     chats_confirm, ui_send, chats_switching, chats_switched);
+    g_chats = rc_chats::create(hwnd, inst, &g_net, g_ui_font, g_ui_font_bold,
+                                chats_confirm, ui_send, chats_switching,
+                                chats_switched);
 
     /* The permission/halt bar: its own controls, created and owned by
-     * app/bar.cpp now (rc_bar_create logs its own check_child-equivalent
+     * app/bar.cpp now (rc_bar::create logs its own check_child-equivalent
      * failures). ui_send is main.c's "send something the user just asked
      * for" and bar_changed is the layout + enables refresh the bar needs
      * after any visible change -- see the `send`/`changed` comment on
-     * rc_bar_create in app/bar.h. */
-    rc_bar_create(hwnd, inst, g_ui_font, &g_net, ui_send, bar_changed);
+     * rc_bar::create in app/bar.h. */
+    g_bar = rc_bar::create(hwnd, inst, g_ui_font, &g_net, ui_send, bar_changed);
 
     /* The page bar: its own six controls, created and owned by
-     * app/pagebar.cpp now (rc_pagebar_create logs its own check_child
-     * failures). g_html may be NULL -- rc_pagebar_create is passed it as-is
+     * app/pagebar.cpp now (rc_pagebar::create logs its own check_child
+     * failures). g_html may be NULL -- rc_pagebar::create is passed it as-is
      * and every use inside pagebar.cpp is guarded, same as everywhere else
      * in this file. */
-    rc_pagebar_create(hwnd, inst, g_ui_font, &g_net, g_html);
+    g_pagebar = rc_pagebar::create(hwnd, inst, g_ui_font, &g_net, g_html);
+
+    /* The transfer-progress counters: one instance, created here (ahead of
+     * app/input.cpp below, which needs it) and destroyed in WM_DESTROY --
+     * the same shape as g_html. May be NULL if `new` itself failed (see
+     * core/rc_cpp.h); every use, here and in input.cpp, is guarded. */
+    g_xfer = rc_xferstat::create();
 
     /* The input box and Send/Stop: created and owned by app/input.cpp now
      * (rc_input_create logs its own check_child failures and subclasses the
@@ -825,7 +850,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * asked for", for INTERRUPT; input_blocked/input_sent are this file's
      * answers to the two policy questions that module does not own -- see
      * the callback comments on rc_input_create in app/input.h. */
-    rc_input_create(hwnd, inst, g_ui_font, &g_net, g_html, ui_send,
+    rc_input_create(hwnd, inst, g_ui_font, &g_net, g_html, g_xfer, ui_send,
                      input_blocked, input_sent);
 
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
@@ -837,7 +862,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
-     * inside rc_chats_create/rc_bar_create/rc_pagebar_create/
+     * inside rc_chats::create/rc_bar::create/rc_pagebar::create/
      * rc_input_create above. */
 }
 
@@ -907,15 +932,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      * conversation named "Today" -- app/chatlist.cpp's own business now,
      * since ID_CHATS is the only owner-draw control this window has. */
     case WM_MEASUREITEM:
-        rc_chats_measure((MEASUREITEMSTRUCT *)lp);
+        if (g_chats) g_chats->measure((MEASUREITEMSTRUCT *)lp);
         return TRUE;
 
     case WM_DRAWITEM:
-        rc_chats_draw((DRAWITEMSTRUCT *)lp);
+        if (g_chats) g_chats->draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
 
     case WM_RC_OPENCHAT:
-        rc_chats_open_selected();
+        if (g_chats) g_chats->open_selected();
         return 0;
 
     case WM_TIMER:
@@ -946,7 +971,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             /* Take the bar down FIRST.
              *
              * Nothing did, once, and ui_refresh_enables ORs
-             * rc_bar_blocks_send() into the Send button's enabled state --
+             * blocks_send() into the Send button's enabled state --
              * so a disconnection while a permission prompt or a halt was on
              * screen left Send disabled across the whole outage AND after
              * the reconnection, with a bar on screen whose buttons answer a
@@ -957,7 +982,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * reattach: _reissue_prompt re-sends PERMSTATE and _reissue_halt
              * re-sends HALT, so whatever is genuinely still outstanding comes
              * back, and whatever is not, does not. */
-            rc_bar_hide_all();
+            if (g_bar) g_bar->hide_all();
             /* And abandon a SYNCPUT the drop caught mid-stream. The RPC
              * worker thread survives a reconnect (rc_rpc_start's
              * if (g_thread) return 0), so its state survives with it; a PUT
@@ -984,14 +1009,14 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             rc_input_command(id);
             return 0;
         /* All three of the bar's own buttons dispatch through one call now
-         * -- see app/bar.h. rc_bar_command knows which kind is on screen
-         * and what each button means for it (audit finding 01.15: this used
-         * to be a five-non-adjacent-places problem, one of which was this
-         * exact switch). */
+         * -- see app/bar.h. command() knows which kind is on screen and what
+         * each button means for it (audit finding 01.15: this used to be a
+         * five-non-adjacent-places problem, one of which was this exact
+         * switch). */
         case ID_PERM_ALLOW:
         case ID_PERM_ALWAYS:
         case ID_PERM_DENY:
-            rc_bar_command(id);
+            if (g_bar) g_bar->command(id);
             return 0;
         /* All five of the page bar's own buttons dispatch through one call
          * now too -- see app/pagebar.h. */
@@ -1000,9 +1025,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_PREV:
         case ID_NEXT:
         case ID_LAST:
-            rc_pagebar_command(id);
+            if (g_pagebar) g_pagebar->command(id);
             return 0;
-        case ID_REFRESH: rc_chats_request();      return 0;
+        case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
 
         case IDM_NEW:
             if (g_turn_active
@@ -1062,13 +1087,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * memory. LBN_SELCHANGE is deliberately not used: it also fires
              * for arrow keys, and switching on those would tear down a live
              * session every time the list was scrolled from the keyboard. */
-            if (HIWORD(wp) == LBN_DBLCLK) rc_chats_open_selected();
+            if (HIWORD(wp) == LBN_DBLCLK && g_chats) g_chats->open_selected();
             return 0;
 
         default:
             /* The IDM_MODEL0/IDM_EFFORT0 ranges: app/optmenu.cpp's business
              * now -- see app/optmenu.h. */
-            if (rc_optmenu_command(id)) return 0;
+            if (g_optmenu && g_optmenu->command(id)) return 0;
             break;
         }
         return 0;
@@ -1084,6 +1109,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         rc_net_stop(&g_net);
         delete g_html;
         g_html = NULL;
+        delete g_bar;
+        g_bar = NULL;
+        delete g_chats;
+        g_chats = NULL;
+        delete g_xfer;
+        g_xfer = NULL;
+        delete g_optmenu;
+        g_optmenu = NULL;
+        delete g_pagebar;
+        g_pagebar = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
         if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
@@ -1208,16 +1243,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             continue;
         }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
-            && msg.hwnd == rc_chats_hwnd()) {
-            rc_chats_open_selected();
+            && g_chats && msg.hwnd == g_chats->hwnd()) {
+            g_chats->open_selected();
             continue;
         }
         /* Esc denies a pending permission request (a halt has no "deny" --
-         * see rc_bar_escape). It has to be intercepted before
+         * see rc_bar::escape). It has to be intercepted before
          * IsDialogMessageA, which eats VK_ESCAPE and would never let it
          * reach the bar. */
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
-            && rc_bar_escape()) {
+            && g_bar && g_bar->escape()) {
             continue;
         }
         if (!IsDialogMessageA(g_main, &msg)) {

@@ -1,6 +1,5 @@
 /* Compose and send. See app/input.h for the design. */
 #include "app/input.h"
-#include "app/xferstat.h"
 #include "core/log.h"
 
 /* The longest message that can be composed and sent in one go. The frame
@@ -19,6 +18,7 @@ static HWND      g_input, g_send, g_stop;
 static WNDPROC   g_input_oldproc;
 static rc_net   *g_net;
 static rc_html  *g_html;
+static rc_xferstat *g_xfer;
 static rc_input_send_fn g_send_fn;
 static int      (*g_blocked)(void);
 static void     (*g_sent)(void);
@@ -102,9 +102,9 @@ static void do_send(void)
 
     echo_user_block(buf);
 
-    rc_xfer_note_tx_start((unsigned long)n);
+    if (g_xfer) g_xfer->note_tx_start((unsigned long)n);
     if (rc_net_send(g_net, "INPUT", NULL, NULL, 0, buf, (unsigned)n) == 0) {
-        rc_xfer_note_tx_done((unsigned long)n);
+        if (g_xfer) g_xfer->note_tx_done((unsigned long)n);
         SetWindowTextA(g_input, "");
         /* status_refresh() used to run between the tx_done above and the
          * SetWindowTextA that clears the box; it now runs just after,
@@ -141,11 +141,12 @@ static LRESULT CALLBACK input_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 }
 
 void rc_input_create(HWND parent, HINSTANCE inst, HFONT font, rc_net *net,
-                      rc_html *html, rc_input_send_fn send,
+                      rc_html *html, rc_xferstat *xfer, rc_input_send_fn send,
                       int (*blocked)(void), void (*sent)(void))
 {
     g_net = net;
     g_html = html;
+    g_xfer = xfer;
     g_send_fn = send;
     g_blocked = blocked;
     g_sent = sent;
