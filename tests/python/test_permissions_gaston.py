@@ -9,7 +9,7 @@ version of work the user's edit displaced.
 import os
 
 from bridge.agent.permissions import off_limits, render_request, summary
-from bridge.agent.permissions import telling_argument
+from bridge.agent.permissions import telling_argument, _PATH_TOOLS
 
 
 def test_reading_a_conflict_copy_is_allowed(tmp_path):
@@ -48,6 +48,78 @@ def test_outside_cwd_is_still_refused_and_says_so_differently(tmp_path):
     os.makedirs(wd)
     why = off_limits("Read", {"file_path": "/etc/passwd"}, wd)
     assert why is not None and "on the proxy" in why
+
+
+# --- Known gap: Bash is not a path tool --------------------------------------
+#
+# _PATH_TOOLS deliberately excludes Bash (permissions.py:224-226): "a command
+# line cannot be parsed for paths reliably". Because off_limits looks the
+# tool name up in _PATH_TOOLS before it ever inspects an argument
+# (permissions.py:260-262), a Bash call is never refused on grounds of
+# location -- not the outside-cwd containment check, not the `.gaston/`
+# refusal. This is documented, deliberate, and NOT a bug these tests are
+# proposing to fix: server.py:2619 and permissions.py:224/304 all note it in
+# comments, and docs/PLAN.md 3.4d / docs/BACKLOG.md are explicit that the
+# real close is a sandbox around Bash's execution, not a regex over command
+# lines written inside a hardening pass.
+#
+# These tests exist so the gap is pinned instead of rediscovered as a
+# surprise by the next audit. A test going green here is not an endorsement;
+# it is a tripwire -- if `off_limits` ever starts refusing Bash, one of these
+# will fail and whoever changed it should know they changed agent-visible
+# behaviour on purpose.
+
+
+def test_bash_is_absent_from_path_tools():
+    """The root cause in one assertion: Bash has no key in _PATH_TOOLS, so
+    off_limits returns None immediately (permissions.py:260-262) without
+    ever looking at `command`. Pins the gap; the fix is a sandbox, not a
+    parser for shell command lines."""
+    assert "Bash" not in _PATH_TOOLS
+
+
+def test_bash_reaching_outside_cwd_is_not_refused(tmp_path):
+    """Pins a known gap. A path-shaped tool asked to reach `/etc` is refused
+    (see test_outside_cwd_is_still_refused_and_says_so_differently above);
+    the identical target through Bash is not, because off_limits never
+    inspects `command`. Not a fix -- the fix is a sandbox around Bash's
+    execution (docs/BACKLOG.md), not parsing this string."""
+    wd = str(tmp_path / "work")
+    os.makedirs(wd)
+    why = off_limits("Bash", {"command": "cd /etc && cat hostname"}, wd)
+    assert why is None
+
+
+def test_bash_touching_gaston_is_not_refused(tmp_path):
+    """Pins a known gap. Write/Edit into `.gaston/` are refused by
+    _inside_gaston (see test_writing_into_gaston_is_refused above); the same
+    write done through Bash is not, because Bash is absent from
+    _PATH_TOOLS and _inside_gaston is never reached. Not a fix -- the fix is
+    a sandbox around Bash's execution (docs/BACKLOG.md), not parsing this
+    string."""
+    wd = str(tmp_path)
+    target = os.path.join(wd, ".gaston", "conflict", "a.txt", "mine.1")
+    why = off_limits("Bash", {"command": f"echo pwned > {target}"}, wd)
+    assert why is None
+
+
+def test_bash_is_asymmetric_with_the_path_tool_it_stands_in_for(tmp_path):
+    """The actual finding is not "Bash passes" in isolation -- read alone
+    that could look like Bash is fine. It is that the SAME target is refused
+    through a path-shaped tool and waved through Bash, for no reason other
+    than which tool the model happened to pick. That asymmetry is the gap;
+    closing it means sandboxing Bash, not special-casing these two calls."""
+    wd = str(tmp_path / "work")
+    os.makedirs(wd)
+
+    outside = "/etc/passwd"
+    assert off_limits("Read", {"file_path": outside}, wd) is not None
+    assert off_limits("Bash", {"command": f"cat {outside}"}, wd) is None
+
+    gaston_target = os.path.join(wd, ".gaston", "conflict", "a.txt", "mine.1")
+    assert off_limits("Write", {"file_path": gaston_target}, wd) is not None
+    assert off_limits(
+        "Bash", {"command": f"echo x > {gaston_target}"}, wd) is None
 
 
 # --- 02.15: one shared answer to "which argument matters" -------------------
