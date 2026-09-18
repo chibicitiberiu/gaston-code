@@ -49,7 +49,16 @@ class GuestLink:
     def connected(self) -> bool:
         return self.writer is not None and not self.writer.is_closing()
 
-    async def send(self, guest, frame: Frame, *, stamp: bool = True) -> None:
+    async def send(self, guest, frame: Frame, *, stamp: bool = True) -> bool:
+        """Returns whether the frame actually reached the wire.
+
+        02.16: this used to return None unconditionally, so every caller
+        believed it had sent even when the frame was refused for being
+        oversized or dropped because the writer was gone -- silently, in
+        both cases. The return is a bool rather than a raise because most
+        callers genuinely have nothing better to do than log and carry on
+        (a lost NOTICE is not fatal); the ones that care can now check.
+        """
         # P4: check encodability BEFORE stamping. Frame.encode raises above
         # MAX_FRAME and the replay buffer is append-only, so stamping an
         # oversized frame makes every future replay raise -- permanently, and
@@ -67,19 +76,24 @@ class GuestLink:
             log.error("refusing to send oversized %s frame (%d byte body); "
                       "it would poison the replay buffer",
                       frame.type, len(frame.body))
-            return
+            return False
         if stamp:
             guest.replay.append(frame)
         payload = frame.encode()
         async with self.send_lock:
             w = self.writer
             if w is None or w.is_closing():
-                return  # buffered in replay; the guest will ask for it
+                # Simply lost, not "buffered in replay; the guest will ask
+                # for it" as this used to say -- the guest never sends
+                # `from=`, so nothing ever asks (02.11/02.16).
+                return False
             try:
                 w.write(payload)
                 await w.drain()
             except (ConnectionResetError, BrokenPipeError):
                 self.writer = None
+                return False
+        return True
 
     async def send_html(self, guest, html: str, mode: str,
                         page_no: int) -> None:

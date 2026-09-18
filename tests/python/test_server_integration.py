@@ -953,6 +953,27 @@ async def test_oversized_prompt_does_not_poison_replay(harness):
     await harness.close(writer)
 
 
+async def test_send_reports_whether_the_frame_actually_went(harness):
+    """02.16: _send returned None unconditionally, so a caller had no way to
+    tell an oversized frame (refused) or a closed writer (dropped) from an
+    ordinary success -- both were silent. It now returns a bool."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    ok = await harness.bridge._send(guest, srv.notice("k", "an ordinary notice"))
+    assert ok is True
+
+    huge = srv.Frame("NOTICE", {"kind": "k"}, b"x" * 200_000)
+    refused = await harness.bridge._send(guest, huge)
+    assert refused is False, "an oversized frame must report that it was refused"
+
+    await harness.close(writer)
+    await asyncio.sleep(0.1)
+    dropped = await harness.bridge._send(guest, srv.notice("k", "after close"))
+    assert dropped is False, "a closed writer must report that nothing was sent"
+
+
 async def test_session_rebuild_denies_a_pending_prompt(harness):
     """A prompt belongs to the session that raised it; NEWSESSION orphans it."""
     reader, writer, task = await _connect_and_ask(harness)

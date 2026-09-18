@@ -2413,7 +2413,14 @@ class Bridge:
             guest.claude = await self._make_session(guest)
         except Exception as exc:
             log.exception("new session failed")
-            await self._send(guest, error("new_failed", str(exc)[:200]))
+            # H.error into the transcript, not an ERROR frame (02.16): this
+            # is the same "could not open a Claude session" failure
+            # _set_effort already reports this way, and the transcript is
+            # the channel that paginates and survives a reconnect -- an
+            # ERROR frame does neither, and _send silently drops it outright
+            # on a closed writer or an oversized body.
+            await self._write_block(guest, H.error(
+                "Could not start a new session: " + str(exc)[:160]))
             return
 
         # guest.sess_id is a stable per-connection handle now, not the SDK's
@@ -2447,7 +2454,9 @@ class Bridge:
             guest.claude = await self._make_session(guest, resume=session_id)
         except Exception as exc:
             log.exception("resume failed")
-            await self._send(guest, error("resume_failed", str(exc)[:200]))
+            # Same channel as _new_session and _set_effort now (02.16).
+            await self._write_block(guest, H.error(
+                "Could not reopen the session: " + str(exc)[:160]))
             return
 
         for block in sesslist.history_html(session_id):
@@ -2498,8 +2507,8 @@ class Bridge:
     # syncrun.py's Pass and tests/python reach them by these names.
 
     async def _send(self, guest: GuestSession, frame: Frame,
-                    *, stamp: bool = True) -> None:
-        await guest.link.send(guest, frame, stamp=stamp)
+                    *, stamp: bool = True) -> bool:
+        return await guest.link.send(guest, frame, stamp=stamp)
 
     async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:
