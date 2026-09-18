@@ -722,15 +722,35 @@ void rc_net_stop(rc_net *n)
     if (n->outq_wake) SetEvent(n->outq_wake);
     if (n->outq_room) SetEvent(n->outq_room);
 
-    if (n->sock != INVALID_SOCKET) {
-        /* Graceful FIN before close. An abrupt RST is reported to crash
-         * Win98's Winsock stack outright, taking the machine with it -- this
-         * is client-side discipline because the server cannot defend itself. */
+    /* FIN NOW, CLOSE LATER -- and the gap between those is finding 01.52.
+     *
+     * `n->sock` is read and written by four threads with no lock: the reader
+     * in recv_exact, the sender in its write loop, the RPC worker through
+     * rc_net_send, and this one. The named hazard is the sender snapshotting
+     * the descriptor, passing the INVALID_SOCKET test, and being preempted
+     * right there while this function closes it. Win9x recycles descriptors
+     * aggressively, so the resumed send() does not fail -- it can land on
+     * whatever socket was opened in the meantime and write a frame into it.
+     *
+     * A lock is the obvious fix and the wrong one: the reader holds the
+     * socket across a BLOCKING recv, so any mutex covering it would be held
+     * for the length of an idle connection and this function would wait
+     * behind it.
+     *
+     * Ordering removes the race instead of guarding it. The descriptor is not
+     * freed until both threads that can touch it have been joined, so there
+     * is no window in which a live thread holds a stale one. Only the FIN
+     * happens here; closesocket moved below the joins.
+     *
+     * The FIN itself stays graceful, and that part is not stylistic: an
+     * abrupt RST is reported to crash Win98's Winsock stack outright, taking
+     * the machine with it. This is client-side discipline because the server
+     * cannot defend itself. The FIN is also what unblocks the reader -- the
+     * bridge sees it, closes, and recv returns 0 -- so it has to be sent
+     * before the join rather than after it, or the join waits out its whole
+     * timeout on an idle link every single time. */
+    if (n->sock != INVALID_SOCKET)
         shutdown(n->sock, 1 /* SD_SEND */);
-        Sleep(50);
-        closesocket(n->sock);
-        n->sock = INVALID_SOCKET;
-    }
 
     /* Join every thread that can touch send_lock BEFORE deleting it. The old
      * code waited 2000ms, DISCARDED the result and deleted the section
@@ -753,6 +773,23 @@ void rc_net_stop(rc_net *n)
      * exact GPF-at-exit the rewrite existed to remove. `rpcj` is from PHASE 1
      * above; the worker was joined BEFORE the socket closed so its drain could
      * still be answered, but the condition it feeds here is unchanged. */
+    /* NOW the descriptor can go: nothing is left inside send() or recv().
+     * If a thread did not exit, the socket is deliberately LEAKED rather than
+     * closed under it -- the same trade as the critical section below, and
+     * for the same reason. A leaked descriptor at process exit costs nothing;
+     * one freed under a live send() is a frame written into whatever the OS
+     * handed out next. */
+    if (n->sock != INVALID_SOCKET) {
+        if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0) {
+            closesocket(n->sock);
+            n->sock = INVALID_SOCKET;
+        } else {
+            rc_log("net: reader=%lu sender=%lu still running; leaking the "
+                   "socket rather than closing it under them",
+                   (unsigned long)rw, (unsigned long)sw);
+        }
+    }
+
     if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0 && rpcj) {
         outq_clear(n);
         DeleteCriticalSection(&n->send_lock);
