@@ -1764,3 +1764,57 @@ path, `net.c` no longer routes frames, `sync.cpp` and `frameproto.cpp` are
 compiled by a different compiler, and the bar takes itself down on
 disconnect. Wine proves the code and never the platform. That verification
 is now the highest-value work outstanding -- above any of the 13 findings.
+
+
+### 2026-09-18 — the standing caveat, discharged on the real machine
+
+The previous entry ended by calling guest verification the highest-value work
+outstanding, above any of the 13 open findings. It ran today, against the
+shipping binary on the real Windows 98 SE box, and it passed.
+
+**52 of 52 guest-side sync checks, zero failures.** `tools/syncprobe.py` was
+started instead of the bridge and `RETROCL.EXE` launched against it, so what
+was exercised is the binary on the machine and not a model of it. That covers
+the compare-and-swap refusals, `crc_mismatch` with no file and no temp left
+behind, the four `bad_path` families, `is_directory` and `is_file`, byte
+fidelity for all seven fixtures including a 70,000-byte binary and UTF-16, the
+read-only target, and a 200KB push in 25 chunks that must not be answered
+`busy`.
+
+What that verifies, and it is the whole point of running it: `rc_strf` on
+every string path in the guest, `sync.cpp` / `net.cpp` / `frameproto.cpp`
+compiled by `wpp386` rather than `wcc386`, and the reader loop's ownership
+rewrite where five frees became one `HeapPtr` and two `release()` calls. Every
+one of those was unverified this morning.
+
+**`rc_sync_recover` was verified separately, because the probe does not reach
+it.** It is C that R3 flagged and that had never executed on the machine. Four
+fixtures were planted in `C:\WORK` and the app restarted:
+
+| planted | after restart |
+|---|---|
+| `a.txt.gaston-old`, no `a.txt` | `a.txt`, containing `recovered` |
+| `b.txt` plus a stale `b.txt.gaston-old` | `b.txt` still `current`, aside deleted |
+| `c.txt.gaston-tmp` | gone |
+| the previous run's four `.gaston-*` leftovers | all gone |
+
+Both branches: an interrupted commit is put back, and a stale aside is dropped
+without touching the live file. Contents checked, not just names -- a restored
+file of the right name and the wrong bytes would have passed a name-only check.
+
+Note what this does NOT close. `adir.gaston-tmp` turned out to be a file, so
+the *directory* carrying a working suffix is still untested, which is where R3
+finding 7 lives. And the truncated-leftover case (`x.gaston-` / `x.gaston-t`,
+matching neither `rc_sync_is_working_name` nor `recover_dir`) needs a path long
+enough to truncate, which is the case the guest will not let you create by
+hand.
+
+**Method note.** The guest's `C:\WORK` was not empty when this started -- it
+held the 09-17 probe run's output, and PROGRESS already records that a probe
+run against a dirty tree reports failures that are all stale state. It was
+moved to `C:\WORKBK18` rather than deleted, and that is where it still is.
+
+**Where the caveat stands now.** Discharged for the sync layer, the string
+layer and the framing. Still outstanding for the parts the probe stub does not
+drive: the permission and halt bars, pagination across a reconnect, and the
+BACKLOG §2 memory re-measurement against the 2,312 / 960 KB marks.
