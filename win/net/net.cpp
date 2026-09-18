@@ -671,11 +671,56 @@ void rc_net_stop(rc_net *n)
      * can call it unconditionally rather than tracking state itself. */
     if (!n->started) return;
     n->started = 0;
+
+    /* SHUTDOWN IS THREE PHASES, AND THE ORDER IS THE WHOLE POINT (01.51).
+     *
+     * `running` used to be cleared right here, before rc_rpc_stop(). But
+     * rc_net_send bails on `!n->running`, so every ack the RPC worker's
+     * shutdown drain tried to send returned -1 -- and rpc.cpp's comment over
+     * that drain says the frames are "answered, not silently dropped -- the
+     * bridge is holding a future for it". That was false on the only path
+     * that reaches it in production. The bridge waited out the whole timeout
+     * for an answer the guest had already composed and thrown away.
+     *
+     * The mistake was that one flag meant two things: "the link is usable"
+     * and "accept new work". They are separated by sequence now.
+     *
+     * PHASE 1 -- let the worker finish and ANSWER. `running` is still 1, the
+     * socket is still open and the sender thread is still on the wire, so the
+     * drain's acks can actually leave. rc_rpc_stop kills any child process
+     * first, so this cannot wait on a two-minute exec. The 30s budget is the
+     * same one that used to sit further down; it has moved, not grown. */
+    rc_rpc_stop();              /* signals the worker and kills any child */
+    rpcj = rc_rpc_join(30000);
+    if (!rpcj)
+        rc_log("net: RPC worker did not exit");
+
+    /* PHASE 2 -- give those acks time to reach the wire. The sender pops an
+     * item before writing it, so an empty queue means "handed to send()", not
+     * "acknowledged by the peer" -- which is as much as this side can know
+     * anyway, and the shutdown(SD_SEND) below is what actually flushes. A
+     * bounded wait: a link slow enough to need more than two seconds for a
+     * handful of small acks is a link that is already gone. */
+    {
+        int waited = 0;
+        for (;;) {
+            int empty;
+            EnterCriticalSection(&n->send_lock);
+            empty = (n->outq_head == NULL);
+            LeaveCriticalSection(&n->send_lock);
+            if (empty || waited >= 200 || !n->running) break;
+            Sleep(10);
+            waited++;
+        }
+        if (waited >= 200)
+            rc_log("net: outbound queue still had work after 2s of draining");
+    }
+
+    /* PHASE 3 -- now nothing new is accepted and the threads may go. */
     n->running = 0;
     /* Wake anything parked on the queue so it can notice `running`. */
     if (n->outq_wake) SetEvent(n->outq_wake);
     if (n->outq_room) SetEvent(n->outq_room);
-    rc_rpc_stop();              /* signals the worker and kills any child */
 
     if (n->sock != INVALID_SOCKET) {
         /* Graceful FIN before close. An abrupt RST is reported to crash
@@ -702,14 +747,12 @@ void rc_net_stop(rc_net *n)
         CloseHandle(n->sender);
         n->sender = NULL;
     }
-    rpcj = rc_rpc_join(30000);
-    if (!rpcj)
-        rc_log("net: RPC worker did not exit");
-
     /* The worker calls rc_net_send, so it holds send_lock as readily as the
      * other two. An earlier version computed this join and then left it out of
      * the condition, which destroyed the section under a live worker -- the
-     * exact GPF-at-exit the rewrite existed to remove. */
+     * exact GPF-at-exit the rewrite existed to remove. `rpcj` is from PHASE 1
+     * above; the worker was joined BEFORE the socket closed so its drain could
+     * still be answered, but the condition it feeds here is unchanged. */
     if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0 && rpcj) {
         outq_clear(n);
         DeleteCriticalSection(&n->send_lock);
