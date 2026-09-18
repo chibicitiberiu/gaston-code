@@ -22,11 +22,10 @@ from . import caps as C
 from . import ignores as I
 from . import paths as P
 from . import sync as S
-from ..wire.protocol import Frame
+from .synctransport import CHUNK, SyncTransport  # noqa: F401 (CHUNK re-export)
+from ..status import SyncStatus
 
 log = logging.getLogger("bridge.syncrun")
-
-CHUNK = 8192
 
 #: Our own working names, on both sides. The scanners must skip them or an
 #: interrupted write becomes a permanent file: the other side has never seen
@@ -70,19 +69,24 @@ class Pass:
     guest_root = "C:\\WORK"
     caps = C.Caps()
 
-    def __init__(self, bridge, guest, root: str, state_dir: str):
-        self.bridge = bridge
-        self.guest = guest
+    def __init__(self, transport: "SyncTransport", caps: "C.Caps | None",
+                root: str, state_dir: str):
+        # 02.19: this used to be `Pass(bridge, guest, root, state_dir)` --
+        # the entire Bridge and the entire GuestSession, of which four
+        # things were ever used (bridge._send, bridge.wire_yield,
+        # guest.sync_pending, guest.sync_seq) plus a fifth the audit's count
+        # missed, guest.perm_pending. `transport` is those, wrapped by
+        # bridge/files/synctransport.py's SyncTransport; `caps` is passed
+        # explicitly rather than fished out of a guest that might not be one.
+        self.transport = transport
         self.root = root
         self.state = os.path.join(state_dir, "base.json")
         self.base = S.Baseline.load(self.state)
 
-        # What the client says it is, parsed once at handshake and cached on
-        # the GuestSession (02.22) -- a value the bridge cannot honour already
-        # refused the CONNECTION in Bridge._attach, so there is nothing left
-        # to catch here. The class-level `caps = C.Caps()` fallback above is
-        # for the bare-subclass tests that skip __init__ entirely.
-        self.caps = getattr(guest, "caps", None) or C.Caps()
+        # The class-level `caps = C.Caps()` fallback above is for the
+        # bare-subclass tests that skip __init__ entirely and never call
+        # this at all.
+        self.caps = caps if caps is not None else C.Caps()
 
         # A codepage or case-rule CHANGE re-keys the whole baseline, because
         # `canonical` folds through both. Every row would then miss, read as
@@ -130,20 +134,11 @@ class Pass:
         happen before any row is touched -- and whether to abort depends on the
         whole manifest.
         """
-        sid = self._next_id()
-        fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = S.Wait(
-            kind="scan", future=fut, rows={}, display={})
-        await self.bridge._send(self.guest, Frame("SYNCSCAN", {"id": sid}),
-                                stamp=False)
-        try:
-            result = await asyncio.wait_for(fut, timeout=600)
-        finally:
-            self.guest.sync_pending.pop(sid, None)
+        result = await self.transport.scan()
         status, files = result.status, result.files
         tree_id, root, rows = result.tree_id, result.root, result.rows
 
-        if status == "too_many":
+        if status == SyncStatus.TOO_MANY:
             # 03.24: the limit itself never crosses the wire -- SYNCEND only
             # ever says status=too_many, because the scan that would have
             # counted past it is the same scan that aborted instead of
@@ -155,12 +150,17 @@ class Pass:
                 f"has more than the machine's {SYNC_MAX_FILES}-file scan "
                 f"limit. Narrow the sync root, or exclude more of the tree "
                 f"with .gitignore, so the scan stays under that count.")
-        if status != "ok":
+        if status != SyncStatus.OK:
             # A truncated manifest is indistinguishable from a mass deletion,
             # and the natural implementation acts on what arrived -- pushing the
             # bridge's whole tree at a machine that just said it had too many
             # files.
-            raise SyncError(f"guest scan returned {status}")
+            # .value, not the bare member: f"{SyncStatus.X}" is
+            # "SyncStatus.X" (a bare (str, Enum)'s __format__ defers to
+            # Enum.__str__, not the plain string content), confirmed against
+            # this interpreter -- server.py's _exec_result hits the same
+            # thing and already spells it out this way for ExecStatus.
+            raise SyncError(f"guest scan returned {status.value}")
         if len(rows) != files:
             raise SyncError(
                 f"manifest arrived short: {len(rows)} entries, SYNCEND said "
@@ -329,7 +329,8 @@ class Pass:
 
     # --- applying ----------------------------------------------------------
 
-    def _too_long_detail(self, status: str, rel: str, *, is_dir: bool = False) -> str:
+    def _too_long_detail(self, status: SyncStatus, rel: str, *,
+                        is_dir: bool = False) -> str:
         """03.41: `too_long` named no limit in a push/mkdir refusal, unlike
         exec's own too_long (`_exec_result`), which tells the model the exact
         character count. The number was always available here -- it is the
@@ -342,7 +343,7 @@ class Pass:
         that is itself worth saying, because it means the two path-length
         rules have drifted apart.
         """
-        if status != "too_long":
+        if status != SyncStatus.TOO_LONG:
             return ""
         bad = P.check(rel, guest_root=self.guest_root, caps=self.caps,
                       is_dir=is_dir)
@@ -371,45 +372,18 @@ class Pass:
             eol = self.attrs.eol_for(rel, eol)
         wire = P.to_guest(data, cls, self.caps, eol=eol)
         crc = zlib.crc32(P.normalise(data, cls))
-
-        sid = self._next_id()
-        fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = S.Wait(kind="put", future=fut)
         rb = P.wire_encode(rel, acp=self.caps.acp)
-        prefix = str(len(rb)).encode() + b" " + rb
 
-        try:
-            off = 0
-            while True:
-                piece = wire[off:off + CHUNK]
-                await self.bridge._send(
-                    self.guest,
-                    Frame("SYNCPUT", {"id": sid, "total": str(len(wire)),
-                                      "off": str(off)}, prefix + piece),
-                    stamp=False)     # replay would RE-WRITE the file
-                off += CHUNK
-                if off >= len(wire):
-                    break
-                # Between chunks, not merely between files. A megabyte is 128
-                # chunks and none of them suspends on its own.
-                await self.bridge.wire_yield(self.guest)
-            await self.bridge._send(
-                self.guest,
-                Frame("SYNCPUTEND", {
-                    "id": sid, "crc": str(crc), "cls": cls,
-                    # The precondition. The guest re-reads and refuses if the
-                    # world moved -- which turns a silent overwrite into a
-                    # conflict the next pass resolves correctly.
-                    "if_crc": str(expect.crc) if expect else "absent",
-                }),
-                stamp=False)
-            result = await asyncio.wait_for(fut, timeout=300)
-        finally:
-            self.guest.sync_pending.pop(sid, None)
+        result = await self.transport.put(
+            rb, wire, crc=crc, cls=cls,
+            # The precondition. The guest re-reads and refuses if the world
+            # moved -- which turns a silent overwrite into a conflict the
+            # next pass resolves correctly.
+            if_crc=str(expect.crc) if expect else "absent")
         status, ack_crc = result.status, result.crc
 
-        if status != "ok":
-            self.reports.append(f"push {rel} refused: {status}"
+        if status != SyncStatus.OK:
+            self.reports.append(f"push {rel} refused: {status.value}"
                                 + self._too_long_detail(status, rel))
             return False
         if ack_crc != crc:
@@ -442,22 +416,13 @@ class Pass:
           bridge's own guess here is how the two sides end up comparing the
           outputs of different functions forever.
         """
-        sid = self._next_id()
-        fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = S.Wait(kind="get", future=fut,
-                                              data=bytearray())
         rb = P.wire_encode(rel, acp=self.caps.acp)
-        try:
-            await self.bridge._send(
-                self.guest, Frame("SYNCGET", {"id": sid}, rb), stamp=False)
-            result = await asyncio.wait_for(fut, timeout=300)
-        finally:
-            self.guest.sync_pending.pop(sid, None)
+        result = await self.transport.get(rb)
         status, crc, cls, wire = (result.status, result.crc, result.cls,
                                   result.data)
 
-        if status != "ok":
-            self.reports.append(f"pull {rel} refused: {status}")
+        if status != SyncStatus.OK:
+            self.reports.append(f"pull {rel} refused: {status.value}")
             return False
 
         # `cls` is the client's own reading of the bytes, and it is the right
@@ -523,23 +488,15 @@ class Pass:
         exist on the wire yet), which reads as a permissions problem if
         nothing here says otherwise.
         """
-        sid = self._next_id()
-        fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = S.Wait(kind="mkdir", future=fut)
         rb = P.wire_encode(rel, acp=self.caps.acp)
-        try:
-            await self.bridge._send(
-                self.guest, Frame("SYNCMKDIR", {"id": sid}, rb), stamp=False)
-            result = await asyncio.wait_for(fut, timeout=120)
-        finally:
-            self.guest.sync_pending.pop(sid, None)
+        result = await self.transport.mkdir(rb)
         status = result.status
 
-        if status in ("ok", "exists"):
+        if status in (SyncStatus.OK, SyncStatus.EXISTS):
             return True
-        self.reports.append(f"mkdir {rel} refused: {status}"
+        self.reports.append(f"mkdir {rel} refused: {status.value}"
                             + self._too_long_detail(status, rel, is_dir=True))
-        if status == "no_parent":
+        if status == SyncStatus.NO_PARENT:
             # 03.45: the guest already tells us this is specifically a
             # missing-PARENT problem, not a permissions one -- distinct from
             # `bad_path`, which blames the name (win/sync/syncrpc.c). Saying
@@ -551,13 +508,9 @@ class Pass:
                       f"that is resolved.")
         else:
             self.note(f"SYNC: could not create the directory {rel} on the "
-                      f"machine ({status}), so nothing under it can be "
+                      f"machine ({status.value}), so nothing under it can be "
                       f"copied there.")
         return False
-
-    def _next_id(self) -> str:
-        self.guest.sync_seq += 1
-        return f"s{self.guest.sync_seq}"
 
     # --- conflicts ---------------------------------------------------------
 
@@ -850,8 +803,8 @@ class Pass:
             # bulk sender that is not sync (an export) has no reason to
             # inherit this behaviour just by calling the same primitive.
             if dec.act in _MOVES_BYTES:
-                await self.bridge.wire_yield(self.guest)
-                if self.guest.perm_pending is not None:
+                await self.transport.yield_()
+                if self.transport.has_pending_prompt:
                     self.reports.append(
                         "pass cut short: the user has a permission prompt "
                         "open, and sync does not compete with it for the "

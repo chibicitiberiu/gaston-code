@@ -12,6 +12,8 @@ byte-level file reading perfectly well, which is all this needs.
 """
 
 import os
+import pathlib
+import re
 import subprocess
 import zlib
 
@@ -365,3 +367,60 @@ def test_a_row_that_would_not_fit_is_refused_rather_than_truncated():
     # short count against SYNCEND's files=.
     rows, _ = manifest.parse_rows(b"f t 6 0 1 2 99 short\n", C.WIN9X)
     assert rows == {} or all(r.type for r in rows.values())
+
+
+# --- the status vocabulary ---------------------------------------------------
+
+def test_sync_status_vocabulary_matches_the_guest():
+    """SyncStatus (bridge/status.py) must name exactly the tokens
+    win/sync/syncrpc.cpp's four do_* handlers can put in a `status=` header.
+
+    No Wine here -- this is a text diff, not a binary run -- but it lives in
+    this module (and inherits its `needs_guest` skip) rather than a plain
+    unit test file, because the property it checks is specifically an
+    agreement between this package and that one, the same family as every
+    other test here. win/rpc/rpc.h was read too (docs/audit/02-bridge-python.md
+    02.38 names it alongside syncrpc.cpp): it is the RPC worker's routing
+    header, and defines no status vocabulary of its own -- SYNCSCAN/PUT/
+    MKDIR/GET are routed through it to syncrpc.cpp's handlers, which are
+    where every `status=` value in this file actually comes from.
+
+    Extracted with four targeted regexes rather than a C parser: `status =
+    "..."` / `why = "..."` assignments, `put_fail`'s third argument, the `?
+    "a" : "b"` ternary in do_mkdir (`exists`/`is_file`), and do_scan's
+    heap-allocation-failure fallback, which sets `v[1]` beside `k[1] =
+    "status"` rather than assigning a variable named `status`. Verified by
+    hand against a manual read of the file before this was written: it
+    reproduces that reading's 16-token set exactly, matching neither more
+    nor fewer.
+    """
+    src = pathlib.Path(conftest.HERE, "win", "sync", "syncrpc.cpp").read_text()
+
+    found: set[str] = set()
+    for m in re.finditer(r'\b(?:status|why)\s*=\s*"([a-z_]+)"', src):
+        found.add(m.group(1))
+    for m in re.finditer(r'put_fail\([^;]*?,\s*"([a-z_]+)"\s*\)', src):
+        found.add(m.group(1))
+    for m in re.finditer(r'\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"', src):
+        found.update(m.groups())
+    for m in re.finditer(r'k\[1\]\s*=\s*"status";\s*v\[1\]\s*=\s*"([a-z_]+)"',
+                         src):
+        found.add(m.group(1))
+    assert found, ("extracted nothing from win/sync/syncrpc.cpp -- the "
+                   "regexes above no longer match the file's shape")
+
+    from bridge.status import SyncStatus
+    bridge_side = {s.value for s in SyncStatus if s is not SyncStatus.UNKNOWN}
+
+    missing = found - bridge_side
+    assert not missing, (
+        f"win/sync/syncrpc.cpp can send {missing}, which SyncStatus "
+        f"(bridge/status.py) does not name. An unrecognised status parses "
+        f"to SyncStatus.UNKNOWN rather than a wrong answer -- see "
+        f"SyncStatus.parse's docstring -- but the log and the model both "
+        f"lose the guest's own word for what happened.")
+    extra = bridge_side - found
+    assert not extra, (
+        f"SyncStatus names {extra}, which this extraction did not find in "
+        f"win/sync/syncrpc.cpp -- either the guest no longer sends it, or "
+        f"the regexes above need a new case for how it is produced now.")

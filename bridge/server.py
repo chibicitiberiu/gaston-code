@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from .files import caps as C
 from .files import manifest
-from .status import EXEC_STATUS_PROSE, ExecStatus
+from .status import EXEC_STATUS_PROSE, ExecStatus, PromptEndReason, SyncStatus
 from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
@@ -74,6 +74,8 @@ from .wire.protocol import (
                             )
 from .wire.link import GuestLink
 from .wire.replay import Replay
+from .files.synctransport import GuestSyncState, SyncTransport
+from .view.transcript import TranscriptView
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
 from .files.sync import AckResult, GetResult, ScanResult
@@ -133,9 +135,6 @@ class GuestSession:
     #: What the bar says, kept so it can be put back after a reconnect. The id
     #: alone is not enough to redisplay it.
     halt_text: str = ""
-    # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
-    page_bytes: int = 0
-    page_blocks: int = 0
     # The machine facts from HELLO, kept so every session this guest opens
     # gets the same description of the computer it is acting for.
     hello: dict = field(default_factory=dict)
@@ -147,22 +146,15 @@ class GuestSession:
     # client actually declared. See docs/audit/02-bridge-python.md #02.22.
     caps: "C.Caps | None" = None
 
-    # Which page the guest is showing. None means LIVE (follow the last page).
-    # In HISTORY mode the bridge keeps buffering silently; the page counter
-    # ticking up in the status bar is the new-content notification.
-    view_page: int | None = None
-
-    # One coalescer per source stream (assistant text, thinking). Coalescing
-    # happens BEFORE rendering, so the renderer receives whole lines in ~2KB
-    # batches rather than single tokens -- which is what lets it close blocks
-    # properly and keeps the number of DOM updates on the guest down.
-    coalescers: dict = field(default_factory=dict)
-    render: HtmlStream = field(default_factory=HtmlStream)
-
-    # The transcript lives here, in full. The guest only ever holds one page,
-    # which is what bounds its memory by page size rather than by conversation
-    # length.
-    pages: Paginator = field(default_factory=Paginator)
+    #: What this guest is watching and how much of it fits: the paginator,
+    #: the renderer, the per-stream coalescers, which page is on screen, and
+    #: the two page-size limits scaled to this guest's RAM at handshake --
+    #: the audit's "View" GuestSession group (02.2), moved onto its own type
+    #: in bridge/view/transcript.py the same way `link: GuestLink` already
+    #: did for the connection. `pages`/`render`/`coalescers`/`view_page`/
+    #: `page_bytes`/`page_blocks` below forward here so nothing outside this
+    #: file had to change shape.
+    view: TranscriptView = field(default_factory=TranscriptView)
 
     # The permission prompt currently on the guest's screen, and the ones
     # queued behind it. The model can request tools in parallel; a single
@@ -184,13 +176,14 @@ class GuestSession:
     # can request tools in parallel, and an "Always" rule would bypass the
     # prompt queue that was implicitly serialising them.
     exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # Sync transfers in flight, keyed by our own s<n> id -- a namespace the
-    # guest enforces, so an exec frame can never resolve a sync future.
-    sync_pending: dict = field(default_factory=dict)
-    sync_seq: int = 0
-    # One pass at a time. Three triggers (timer, watcher, sync_status) and no
-    # lock would let two passes both read the baseline and both advance it.
-    sync_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: The sync subprotocol's own id namespace, in-flight table, baseline
+    #: lock and running flag -- the audit's "Sync RPC" GuestSession group
+    #: (docs/audit/02-bridge-python.md 02.2), moved onto its own type in
+    #: bridge/files/synctransport.py the same way `link: GuestLink` already
+    #: did for the connection itself. `sync_pending`/`sync_seq`/`sync_lock`/
+    #: `sync_active` below forward here so nothing outside this file had to
+    #: change shape.
+    sync: GuestSyncState = field(default_factory=GuestSyncState)
     #: One turn at a time, per guest.
     #:
     #: `_handle` spawned a task per INPUT with no guard, and the RESUME handler
@@ -206,7 +199,6 @@ class GuestSession:
     #: itself is corrupted, and Session._busy is a flag rather than a depth, so
     #: the first `finally` clears it and Stop stops nothing.
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    sync_active: bool = False
 
     # --- forwarded to self.link, so the rest of the bridge can keep saying
     # guest.writer / guest.send_lock / guest.zip_out / guest.link_bps rather
@@ -240,36 +232,95 @@ class GuestSession:
     def connected(self) -> bool:
         return self.link.connected
 
+    # --- forwarded to self.sync, for the same reason as self.link above -----
+
+    @property
+    def sync_pending(self) -> dict:
+        return self.sync.pending
+
+    @property
+    def sync_seq(self) -> int:
+        return self.sync.seq
+
+    @property
+    def sync_lock(self) -> asyncio.Lock:
+        return self.sync.lock
+
+    @property
+    def sync_active(self) -> bool:
+        return self.sync.active
+
+    @sync_active.setter
+    def sync_active(self, v: bool) -> None:
+        self.sync.active = v
+
+    # --- forwarded to self.view, for the same reason as self.link above -----
+
+    @property
+    def pages(self) -> Paginator:
+        return self.view.pages
+
+    @pages.setter
+    def pages(self, p: Paginator) -> None:
+        self.view.pages = p
+
+    @property
+    def render(self) -> HtmlStream:
+        return self.view.render
+
+    @render.setter
+    def render(self, r: HtmlStream) -> None:
+        self.view.render = r
+
+    @property
+    def coalescers(self) -> dict:
+        return self.view.coalescers
+
+    @property
+    def view_page(self) -> int | None:
+        return self.view.view_page
+
+    @view_page.setter
+    def view_page(self, n: int | None) -> None:
+        self.view.view_page = n
+
+    @property
+    def page_bytes(self) -> int:
+        return self.view.page_bytes
+
+    @page_bytes.setter
+    def page_bytes(self, n: int) -> None:
+        self.view.page_bytes = n
+
+    @property
+    def page_blocks(self) -> int:
+        return self.view.page_blocks
+
+    @page_blocks.setter
+    def page_blocks(self, n: int) -> None:
+        self.view.page_blocks = n
+
     # --- transcript housekeeping --------------------------------------------
-    #
-    # Both belong to what the audit calls TranscriptView (02.2/02.18/02.17a):
-    # not extracted into its own class here, but no longer duplicated either.
 
     def set_link_speed(self, bps: float | None) -> None:
         """Propagate a measured (or CLI-default) link speed to every live
         coalescer, so a conversation already streaming picks it up too, not
         only ones started after. Was `guest.link_bps = bps; for c in
-        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites."""
+        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites.
+
+        Spans two of the audit's groups (Link's `link_bps`, View's
+        `coalescers`) and stays here, on the composition root, rather than on
+        either `GuestLink` or `TranscriptView` -- neither owns both halves of
+        what it does.
+        """
         self.link_bps = bps
-        for c in self.coalescers.values():
+        for c in self.view.coalescers.values():
             c.set_link_speed(bps)
 
     async def reset_transcript(self) -> None:
-        """Start over: a fresh paginator and renderer, every live coalescer
-        stopped and dropped, and the view back on LIVE.
-
-        `_new_session` and `_switch` each rebuilt this by hand, with their
-        own copy of the default page limits -- one of them written as
-        `guest.page_bytes or None or 16384`, where `or None` did nothing at
-        all (`x or None` is `None` exactly when `x or 16384` would already
-        have chosen 16384). docs/audit/02-bridge-python.md 02.17/02.18.
-        """
-        self.pages = Paginator(self.page_bytes or 16384, self.page_blocks or 90)
-        self.render = HtmlStream()
-        for c in self.coalescers.values():
-            await c.stop()
-        self.coalescers.clear()
-        self.view_page = None
+        """`TranscriptView.reset()`, kept as a same-named delegation so
+        `_new_session`/`_switch` did not have to change shape (02.2)."""
+        await self.view.reset()
 
 
 class Bridge:
@@ -555,7 +606,7 @@ class Bridge:
         if self._guest is None:
             self._guest = GuestSession(
                 sess_id=str(uuid.uuid4()),
-                pages=Paginator(page_bytes, page_blocks))
+                view=TranscriptView(pages=Paginator(page_bytes, page_blocks)))
         guest = self._guest
         guest.writer = writer
         guest.page_bytes = page_bytes
@@ -812,7 +863,7 @@ class Bridge:
                 return await asyncio.wait_for(prompt.future,
                                               timeout=perms.DEADLINE_S)
             except asyncio.TimeoutError:
-                self._finish_prompt(guest, prompt, "timeout")
+                self._finish_prompt(guest, prompt, PromptEndReason.TIMEOUT)
                 return PermissionResultDeny(
                     message=("Nobody answered the permission request on the "
                              "Windows machine within ten minutes, so it was "
@@ -825,7 +876,7 @@ class Bridge:
                 # the guest would keep a bar it can never dismiss. Schedule it
                 # instead; create_task is synchronous and the new task is not
                 # in the cancelled scope.
-                self._finish_prompt(guest, prompt, "cancelled")
+                self._finish_prompt(guest, prompt, PromptEndReason.CANCELLED)
                 raise
 
         return can_use_tool
@@ -925,7 +976,7 @@ class Bridge:
                                          len(guest.perm_queue)))
 
     def _finish_prompt(self, guest: GuestSession, prompt: PendingPrompt,
-                       reason: str) -> None:
+                       reason: PromptEndReason) -> None:
         """Synchronous bookkeeping plus a scheduled PERMEND.
 
         Deliberately not a coroutine. It is called from a cancelled context,
@@ -938,8 +989,11 @@ class Bridge:
         self._spawn(self._after_prompt(guest, prompt.tool_use_id, reason))
 
     async def _after_prompt(self, guest: GuestSession, tool_use_id: str,
-                            reason: str) -> None:
-        await self._send(guest, permend(tool_use_id, reason))
+                            reason: PromptEndReason) -> None:
+        # .value, not the member itself -- Frame.encode() calls str() on
+        # every header value, and str() on a bare (str, Enum) member is
+        # "PromptEndReason.X", not the wire token "x" (bridge/status.py).
+        await self._send(guest, permend(tool_use_id, reason.value))
         await self._pump_queue(guest)
 
     async def _pump_queue(self, guest: GuestSession) -> None:
@@ -1089,127 +1143,159 @@ class Bridge:
 
     async def _handle(self, guest: GuestSession, f: Frame) -> None:
         guest.last_seen = time.monotonic()
-        if f.type == "INPUT":
-            text = fold.decode(f.body)
-            log.info("input: %s", text[:120])
-            self._spawn(self._run_turn(guest, text))
-
-        elif f.type == "RESUME":
-            # The user pressed Continue on the halt bar. THAT is the signal the
-            # design has been waiting for -- not an INPUT, and not a timer.
-            #
-            # "The agent stops until the user confirms they have finished with
-            # the file" needs a confirmation, and until now the only inbound
-            # channels were INPUT and PERMREPLY. Reading it off the next INPUT
-            # was worse than useless: the most natural reaction to the notice
-            # is to type "wait, stop", which is precisely the message that
-            # would have restarted it.
-            if f.headers.get("id", "") == guest.halt_id and guest.halt_id:
-                hid, guest.halt_id = guest.halt_id, ""
-                log.info("user pressed Continue on the sync halt")
-                # Acknowledge, because the guest no longer takes its own bar
-                # down on the click. A press that never reached us used to look
-                # answered on their screen while we still held the halt -- and
-                # since raising is idempotent, no later bar could appear and
-                # every latched path refused the agent for good.
-                await self._send(guest, haltend(hid), stamp=False)
-                # Pressing Continue IS the confirmation, so it lifts the
-                # refusal here. Making the agent ask again -- a permission
-                # prompt for sync_resolve -- would put a second dialog in front
-                # of a user who has just answered the question, on a 640x480
-                # screen, and the second one carries no information the first
-                # did not. `sync_resolve` stays for the case the user never
-                # sees: the agent finishing a merge on its own.
-                # The release travels WITH the turn that explains it, and
-                # that ordering is the whole of M1.
-                #
-                # It used to run here, synchronously, and the informing turn
-                # was spawned after it -- so an in-flight turn that had been
-                # told nothing found the path no longer refusing its writes,
-                # wrote, and the write went to the user's machine. Queueing the
-                # turn (above) makes that window arbitrarily long, so the two
-                # have to move together: _run_turn takes the lock, waits out
-                # any turn ahead of it, and only then lifts the refusals it is
-                # about to explain.
-                answered, guest.halt_paths = guest.halt_paths, frozenset()
-                self._spawn(self._resume_turn(guest, answered))
-
-        elif f.type == "SYNCDIRTY":
-            # The guest noticed its tree move. It never reconciles anything
-            # itself -- the bridge owns the baseline and decides.
-            self._spawn(self.run_sync("the guest reported a change"))
-
-        elif f.type in ("SYNCENT", "SYNCEND", "SYNCPUTACK", "SYNCMKDIRACK",
-                        "SYNCDAT", "SYNCDATEND"):
-            await self._sync_frame(guest, f)
-
-        elif f.type == "EXECOUT":
-            await self._exec_out(guest, f)
-
-        elif f.type == "EXECRESULT":
-            await self._exec_result(guest, f)
-
-        elif f.type == "PERMREPLY":
-            await self._perm_reply(guest, f)
-
-        elif f.type == "INTERRUPT":
-            # Stop must reach the command too, not just the model.
-            #
-            # The CancelledError path in run_on_guest turns out to be largely
-            # unreachable: on mcp 1.x the SDK does NOT cancel an in-flight
-            # tool call when a turn is interrupted (types.py:653-662), so the
-            # coroutine is never cancelled and never sends EXECKILL. Measured
-            # on the guest -- `pause` kept running for its full 90s clamp
-            # after Stop was pressed. Killing from here is the trigger that
-            # actually fires, and it is the one the user meant: they pressed
-            # Stop, so stop.
-            for exec_id in list(guest.exec_pending):
-                self._kill_exec(guest, exec_id)
-            if guest.claude:
-                await guest.claude.interrupt()
-
-        elif f.type == "GETSESSIONS":
-            await self._send_sessions(guest)
-
-        elif f.type == "SWITCH":
-            await self._switch(guest, f.headers.get("id", ""))
-
-        elif f.type == "GETPAGE":
-            await self._send_page(guest, f.headers.get("page", ""))
-
-        elif f.type == "STAT":
-            # The guest measures its own throughput for the progress UI; the
-            # sender uses it to pick a codec. This is what makes one build work
-            # on both a 10Mbit LAN and a modem.
-            try:
-                bps = float(f.headers.get("bps", "0"))
-            except ValueError:
-                bps = 0.0
-            if bps > 0:
-                guest.set_link_speed(bps)
-                log.info("guest reports %.0f B/s", bps)
-
-        elif f.type == "PING":
-            await self._send(guest, pong(), stamp=False)
-
-        elif f.type == "NEWSESSION":
-            await self._new_session(guest)
-
-        elif f.type == "SETMODEL":
-            model = f.headers.get("model", "")
-            if guest.claude:
-                await guest.claude.set_model(model)
-                guest.model = model
-                log.info("model -> %s", model or "(default)")
-                await self._write_block(guest, H.notice("Model set to " + model))
-            await self._send_options(guest)
-
-        elif f.type == "SETEFFORT":
-            await self._set_effort(guest, f.headers.get("effort", ""))
-
-        else:
+        name = self._DISPATCH.get(f.type)
+        if name is None:
             log.warning("unknown frame type from guest: %s", f.type)
             await self._send(guest, error("unknown_type", f.type), stamp=False)
+            return
+        await getattr(self, name)(guest, f)
+
+    async def _on_input(self, guest: GuestSession, f: Frame) -> None:
+        text = fold.decode(f.body)
+        log.info("input: %s", text[:120])
+        self._spawn(self._run_turn(guest, text))
+
+    async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
+        # The user pressed Continue on the halt bar. THAT is the signal the
+        # design has been waiting for -- not an INPUT, and not a timer.
+        #
+        # "The agent stops until the user confirms they have finished with
+        # the file" needs a confirmation, and until now the only inbound
+        # channels were INPUT and PERMREPLY. Reading it off the next INPUT
+        # was worse than useless: the most natural reaction to the notice
+        # is to type "wait, stop", which is precisely the message that
+        # would have restarted it.
+        if not (f.headers.get("id", "") == guest.halt_id and guest.halt_id):
+            return
+        hid, guest.halt_id = guest.halt_id, ""
+        log.info("user pressed Continue on the sync halt")
+        # Acknowledge, because the guest no longer takes its own bar
+        # down on the click. A press that never reached us used to look
+        # answered on their screen while we still held the halt -- and
+        # since raising is idempotent, no later bar could appear and
+        # every latched path refused the agent for good.
+        await self._send(guest, haltend(hid), stamp=False)
+        # Pressing Continue IS the confirmation, so it lifts the
+        # refusal here. Making the agent ask again -- a permission
+        # prompt for sync_resolve -- would put a second dialog in front
+        # of a user who has just answered the question, on a 640x480
+        # screen, and the second one carries no information the first
+        # did not. `sync_resolve` stays for the case the user never
+        # sees: the agent finishing a merge on its own.
+        # The release travels WITH the turn that explains it, and
+        # that ordering is the whole of M1.
+        #
+        # It used to run here, synchronously, and the informing turn
+        # was spawned after it -- so an in-flight turn that had been
+        # told nothing found the path no longer refusing its writes,
+        # wrote, and the write went to the user's machine. Queueing the
+        # turn (above) makes that window arbitrarily long, so the two
+        # have to move together: _run_turn takes the lock, waits out
+        # any turn ahead of it, and only then lifts the refusals it is
+        # about to explain.
+        answered, guest.halt_paths = guest.halt_paths, frozenset()
+        self._spawn(self._resume_turn(guest, answered))
+
+    async def _on_syncdirty(self, guest: GuestSession, f: Frame) -> None:
+        # The guest noticed its tree move. It never reconciles anything
+        # itself -- the bridge owns the baseline and decides.
+        self._spawn(self.run_sync("the guest reported a change"))
+
+    async def _on_interrupt(self, guest: GuestSession, f: Frame) -> None:
+        # Stop must reach the command too, not just the model.
+        #
+        # The CancelledError path in run_on_guest turns out to be largely
+        # unreachable: on mcp 1.x the SDK does NOT cancel an in-flight
+        # tool call when a turn is interrupted (types.py:653-662), so the
+        # coroutine is never cancelled and never sends EXECKILL. Measured
+        # on the guest -- `pause` kept running for its full 90s clamp
+        # after Stop was pressed. Killing from here is the trigger that
+        # actually fires, and it is the one the user meant: they pressed
+        # Stop, so stop.
+        for exec_id in list(guest.exec_pending):
+            self._kill_exec(guest, exec_id)
+        if guest.claude:
+            await guest.claude.interrupt()
+
+    async def _on_getsessions(self, guest: GuestSession, f: Frame) -> None:
+        await self._send_sessions(guest)
+
+    async def _on_switch(self, guest: GuestSession, f: Frame) -> None:
+        await self._switch(guest, f.headers.get("id", ""))
+
+    async def _on_getpage(self, guest: GuestSession, f: Frame) -> None:
+        await self._send_page(guest, f.headers.get("page", ""))
+
+    async def _on_stat(self, guest: GuestSession, f: Frame) -> None:
+        # The guest measures its own throughput for the progress UI; the
+        # sender uses it to pick a codec. This is what makes one build work
+        # on both a 10Mbit LAN and a modem.
+        try:
+            bps = float(f.headers.get("bps", "0"))
+        except ValueError:
+            bps = 0.0
+        if bps > 0:
+            guest.set_link_speed(bps)
+            log.info("guest reports %.0f B/s", bps)
+
+    async def _on_ping(self, guest: GuestSession, f: Frame) -> None:
+        await self._send(guest, pong(), stamp=False)
+
+    async def _on_newsession(self, guest: GuestSession, f: Frame) -> None:
+        await self._new_session(guest)
+
+    async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
+        model = f.headers.get("model", "")
+        if guest.claude:
+            await guest.claude.set_model(model)
+            guest.model = model
+            log.info("model -> %s", model or "(default)")
+            await self._write_block(guest, H.notice("Model set to " + model))
+        await self._send_options(guest)
+
+    async def _on_seteffort(self, guest: GuestSession, f: Frame) -> None:
+        await self._set_effort(guest, f.headers.get("effort", ""))
+
+    #: One entry per inbound frame type, built once at class definition
+    #: time -- 02.30: this used to be a 17-branch if/elif mixing one-line
+    #: handlers (PING, STAT) with 25-line ones (RESUME, GETSESSIONS,
+    #: INTERRUPT), and the previous audit pass named it the lowest-risk
+    #: place to start: mechanical, no state of its own. Values are method
+    #: NAMES rather than the bound methods themselves, and resolved with
+    #: `getattr` in `_handle` -- `_sync_frame`/`_exec_out`/`_exec_result`/
+    #: `_perm_reply` are defined later in this class body, so a dict of the
+    #: bare names built here, at THIS point in class-body execution, would
+    #: raise NameError before the class even finishes being defined. Every
+    #: handler takes `(self, guest, f)`, including the six sync reply types
+    #: and the two exec ones, which already had that shape and are reused
+    #: as-is rather than wrapped. `_handle` becomes four lines plus the
+    #: unknown-type fallback; a handler that PermissionDesk/ExecChannel/
+    #: SyncCoordinator (02.30's other two extractions, not done by this
+    #: pass) later own can register its own name into this dict instead of
+    #: growing the chain further.
+    _DISPATCH: dict = {
+        "INPUT": "_on_input",
+        "RESUME": "_on_resume",
+        "SYNCDIRTY": "_on_syncdirty",
+        "SYNCENT": "_sync_frame",
+        "SYNCEND": "_sync_frame",
+        "SYNCPUTACK": "_sync_frame",
+        "SYNCMKDIRACK": "_sync_frame",
+        "SYNCDAT": "_sync_frame",
+        "SYNCDATEND": "_sync_frame",
+        "EXECOUT": "_exec_out",
+        "EXECRESULT": "_exec_result",
+        "PERMREPLY": "_perm_reply",
+        "INTERRUPT": "_on_interrupt",
+        "GETSESSIONS": "_on_getsessions",
+        "SWITCH": "_on_switch",
+        "GETPAGE": "_on_getpage",
+        "STAT": "_on_stat",
+        "PING": "_on_ping",
+        "NEWSESSION": "_on_newsession",
+        "SETMODEL": "_on_setmodel",
+        "SETEFFORT": "_on_seteffort",
+    }
 
     def _seed_agent_notices(self) -> None:
         """Fold whatever the baseline still owes the agent into memory.
@@ -1516,7 +1602,10 @@ class Bridge:
             guest.sync_active = True
             try:
                 from .files.syncrun import Pass
-                p = Pass(self, guest, self.sync_dir, self.sync_state)
+                # 02.19: Pass takes the transport and the caps, nothing else
+                # -- not this Bridge, not the whole GuestSession.
+                transport = SyncTransport(guest)
+                p = Pass(transport, guest.caps, self.sync_dir, self.sync_state)
                 got = await p.run()
                 self.guest_sync_root = p.guest_root
                 # Kept so sync_status can answer without re-running a pass --
@@ -2057,7 +2146,7 @@ class Bridge:
             fut = entry.future
             if not fut.done():
                 fut.set_result(ScanResult(
-                    status=f.headers.get("status", "ok"),
+                    status=SyncStatus.parse(f.headers.get("status", "ok")),
                     files=int(f.headers.get("files", "0")),
                     tree_id=f.headers.get("tree_id", ""),
                     root=f.headers.get("root", ""),
@@ -2067,7 +2156,7 @@ class Bridge:
             fut = entry.future
             if not fut.done():
                 fut.set_result(AckResult(
-                    status=f.headers.get("status", "ok"),
+                    status=SyncStatus.parse(f.headers.get("status", "ok")),
                     crc=int(f.headers.get("crc", "0"))))
 
         elif f.type == "SYNCDAT":
@@ -2081,7 +2170,7 @@ class Bridge:
             fut = entry.future
             if not fut.done():
                 fut.set_result(GetResult(
-                    status=f.headers.get("status", "ok"),
+                    status=SyncStatus.parse(f.headers.get("status", "ok")),
                     crc=int(f.headers.get("crc", "0")),
                     cls=f.headers.get("cls", P.CLASS_TEXT),
                     data=bytes(entry.data or b"")))
@@ -2240,7 +2329,7 @@ class Bridge:
         prompt.future.set_result(result)
         guest.perm_pending = None
         log.info("permission %s for %s (%s)", action, prompt.tool_name, want)
-        await self._send(guest, permend(want, "answered"))
+        await self._send(guest, permend(want, PromptEndReason.ANSWERED.value))
         await self._pump_queue(guest)
 
     async def _sweep_sync(self) -> None:
