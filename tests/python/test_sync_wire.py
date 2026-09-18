@@ -1794,3 +1794,37 @@ async def test_a_sync_frame_for_the_wrong_kind_of_request_is_not_fatal(
         "id": pid, "status": "ok", "crc": "0"}))
     await asyncio.wait_for(task, 5)
     await harness.close(writer)
+
+
+async def test_a_busy_refusal_answers_in_the_shape_the_caller_expects(
+        harness, tmp_path):
+    """The guest's reject_sync_busy answered EVERY full-queue sync frame with
+    SYNCPUTACK, whatever had arrived.
+
+    The bridge routes an ack by id, so a SYNCPUTACK against a SCAN reaches
+    the right future carrying the wrong SHAPE -- two values where the
+    awaiting code unpacks six. It surfaced as "sync pass aborted: not enough
+    values to unpack", which names neither the frame nor the full queue.
+
+    The busy path needs the worker's sync FIFO full, so it is rare -- which
+    is the argument for getting it right rather than against it. A rare path
+    that reports the wrong thing costs an investigation, not a retry.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+
+    task = asyncio.create_task(p.scan_guest())
+    req = await _recv(harness, reader, "SYNCSCAN")
+    # What the guest now sends when its queue is full: SYNCEND, not
+    # SYNCPUTACK. The right shape, carrying a status the pass understands.
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": req.headers["id"], "status": "busy", "files": "0"}))
+
+    with pytest.raises(SyncError) as e:
+        await asyncio.wait_for(task, 5)
+    assert "busy" in str(e.value), (
+        f"the refusal should name the reason, got {e.value}")
+    assert "unpack" not in str(e.value), (
+        "a shape mismatch reported instead of the actual refusal")
+    await harness.close(writer)

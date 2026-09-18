@@ -432,15 +432,34 @@ int rc_rpc_start(rc_net *net)
  * design structurally unable to work: the bridge looks the id up in
  * exec_pending, finds nothing, logs at debug and returns -- a branch added for
  * EXECKILL -- so the transfer hangs forever holding a one-chunk temp file. */
+/* Answer a full queue with the ack the REQUEST expects.
+ *
+ * This always sent SYNCPUTACK, whatever had arrived. The bridge routes an
+ * ack by id, so a SYNCPUTACK against a SCAN or a GET reaches the right
+ * future carrying the wrong SHAPE -- two values where the awaiting code
+ * unpacks six or four. That surfaces as "sync pass aborted: not enough
+ * values to unpack", which names neither the frame nor the queue being full.
+ * SYNCMKDIR happened to survive, because the bridge handles both acks in one
+ * id-keyed branch.
+ *
+ * The busy path is rare -- it needs the worker's sync FIFO full -- which is
+ * exactly why it is worth getting right: a rare path that reports the wrong
+ * thing costs an investigation, not a retry. */
 static void reject_sync_busy(rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
     const char *keys[2];
     const char *vals[2];
+    const char *ack = "SYNCPUTACK";
+
     if (!id) return;
+    if (strcmp(f->type, "SYNCSCAN") == 0)        ack = "SYNCEND";
+    else if (strcmp(f->type, "SYNCGET") == 0)    ack = "SYNCDATEND";
+    else if (strcmp(f->type, "SYNCMKDIR") == 0)  ack = "SYNCMKDIRACK";
+
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = "busy";
-    rc_net_send(g_net, "SYNCPUTACK", keys, vals, 2, NULL, 0);
+    rc_net_send(g_net, ack, keys, vals, 2, NULL, 0);
 }
 
 /* Is this frame a JOB (one at a time, runs for a long time) or STATE MACHINE
