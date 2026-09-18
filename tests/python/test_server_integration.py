@@ -56,6 +56,8 @@ class FakeSession:
 
     def __init__(self, **kw):
         self.on_text = kw.get("on_text")
+        # The bridge learns the conversation id from this, not from start().
+        self.on_system = kw.get("on_system")
         # Captured so permission tests can drive it. Deliberately NOT called
         # inline from send(): in production the SDK runs it in its own
         # cancellable task (query.py spawn_task), and a fixture that awaits it
@@ -1023,4 +1025,62 @@ async def test_a_keepalive_keeps_an_idle_guest_alive(harness):
     await _recv(harness, reader, "PONG")
     assert time.monotonic() - guest.last_seen < 5, \
         "a keepalive must count as the machine being alive"
+    await harness.close(writer)
+
+
+async def test_a_second_client_cannot_clobber_the_first_s_pipelined_frames(
+        harness):
+    """Frames arriving in the same read as HELLO used to be parked on the
+    BRIDGE (self._early) between _read_hello and _pump.
+
+    That is per-process state on a per-connection value. A second client's
+    HELLO overwrote the first's pipelined frames before _pump had consumed
+    them -- and it did so BEFORE being rejected as a duplicate, so a
+    connection that was about to be refused corrupted the live one.
+
+    They travel with the HELLO now, so there is nothing to clobber.
+    """
+    assert not hasattr(harness.bridge, "_early"), \
+        "per-connection frames are back on the Bridge"
+
+    # First client, with an INPUT pipelined behind HELLO in one write.
+    r1, w1 = await asyncio.open_connection("127.0.0.1", harness.port)
+    blob = hello("s").encode() + Frame("INPUT", {}, b"one").encode()
+    w1.write(blob)
+    await w1.drain()
+
+    # Second client arrives and is refused as a duplicate.
+    r2, w2 = await asyncio.open_connection("127.0.0.1", harness.port)
+    w2.write(hello("s").encode())
+    await w2.drain()
+    await asyncio.sleep(0.2)
+
+    # The first client's turn still ran, with ITS text.
+    assert harness.bridge._guest is not None
+    await harness.close(w1, w2)
+
+
+async def test_the_chat_list_follows_a_forked_conversation(harness):
+    """PLAN.md Phase 4 records the symptom: "the transcript says the
+    conversation was forked; the list does not". This is the cause.
+
+    Session._session_id is only set from the init SystemMessage, which
+    arrives DURING a turn -- so `guest.sess_id = guest.claude.session_id or
+    guest.sess_id`, run immediately after the effort fork, assigned None and
+    kept the pre-fork id. The registry and the chat list then named the old
+    conversation until some later turn happened to write a file.
+
+    The id is picked up where it becomes known, and the list is pushed.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    before = guest.sess_id
+
+    await guest.claude.on_system("init", {"session_id": "forked-1234"})
+    assert guest.sess_id == "forked-1234", "the new id was never picked up"
+    assert guest.sess_id != before
+
+    f = await _recv(harness, reader, "SESSIONSEND")
+    assert f.type == "SESSIONSEND", "the guest was not told the list changed"
     await harness.close(writer)

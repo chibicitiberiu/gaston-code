@@ -196,7 +196,6 @@ class Bridge:
         # weak one, so a bare create_task can be collected mid-flight.
         self._tasks: set = set()
         # Frames pipelined behind HELLO in a single read, handed to _pump.
-        self._early: list = []
         self._reaper: asyncio.Task | None = None
         # The guest pings every few seconds, so silence much longer than that
         # means it is gone rather than quiet. Generous, because a 200MHz box
@@ -260,7 +259,13 @@ class Bridge:
             self._reaper = asyncio.create_task(self._reap_idle())
 
         try:
-            hello = await self._read_hello(reader, frames, writer)
+            # The frames pipelined behind HELLO travel WITH it rather than
+            # through an attribute on the Bridge. They used to live in
+            # self._early, which is per-process: a second client's HELLO
+            # overwrote the first client's pipelined frames before _pump had
+            # consumed them -- and it did so BEFORE being rejected as a
+            # duplicate, so the rejected connection corrupted the live one.
+            hello, early = await self._read_hello(reader, frames, writer)
             if hello is None:
                 return
 
@@ -268,7 +273,7 @@ class Bridge:
             if guest is None:
                 return
 
-            await self._pump(guest, reader, frames)
+            await self._pump(guest, reader, frames, early)
 
         except ProtocolError as exc:
             # Framing is lost; never try to resync a byte stream.
@@ -331,7 +336,7 @@ class Bridge:
                 while True:
                     data = await reader.read(4096)
                     if not data:
-                        return None
+                        return None, [], []
                     batch = frames.feed(data)
                     for i, f in enumerate(batch):
                         if f.type != "HELLO":
@@ -339,17 +344,16 @@ class Bridge:
                                 writer, error("expected_hello",
                                               f"first frame was {f.type}")
                             )
-                            return None
+                            return None, [], []
                         # Anything pipelined behind HELLO in the same read has
                         # already been parsed out of the FrameReader's buffer,
                         # so returning here would drop it silently. Hand the
                         # rest to _pump instead.
-                        self._early = batch[i + 1:]
-                        return f
+                        return f, batch[i + 1:]
         except TimeoutError:
             await self._try_send_raw(writer, error("hello_timeout",
                                                    "no HELLO within 10s"))
-            return None
+            return None, [], []
 
     async def _attach(
         self, hello: Frame, writer: asyncio.StreamWriter
@@ -511,6 +515,22 @@ class Bridge:
         async def on_system(subtype: str, data: dict) -> None:
             if subtype == "compact_boundary":
                 await self._write_block(guest, H.notice("History condensed."))
+            elif subtype == "init":
+                # The conversation id becomes known HERE, not at start().
+                #
+                # Session._session_id is only set from this message, which
+                # arrives during the first turn -- so `guest.sess_id =
+                # guest.claude.session_id or guest.sess_id` immediately after
+                # the effort fork was a no-op against None, and the chat list
+                # went on naming the PRE-FORK conversation until some later
+                # turn happened to write a file. PLAN.md Phase 4 records the
+                # symptom ("the transcript says the conversation was forked;
+                # the list does not"); this is the cause.
+                new = data.get("session_id")
+                if new and new != guest.sess_id:
+                    log.info("session id settled: %s -> %s", guest.sess_id, new)
+                    guest.sess_id = new
+                    self._spawn(self._send_sessions(guest))
 
         s = Session(
             cwd=self.cwd,
@@ -663,6 +683,30 @@ class Bridge:
             "allows": "1" if prompt.allows else "0",
             "waiting": str(len(guest.perm_queue)),
         }, fold.encode(getattr(prompt, "summary", prompt.tool_name))))
+
+    async def _send_sessions(self, guest: GuestSession) -> None:
+        """The chat list. Only conversations this bridge started -- the rest
+        belong to a machine with a different way of working.
+
+        Extracted so the list can be pushed when the conversation id CHANGES
+        as well as when the guest asks. The effort fork changes it, and until
+        now nothing told the guest.
+        """
+        rows = self.registry.filter(sesslist.listing(cwd=self.cwd))
+        await self._send(guest, Frame("SESSIONS",
+                                      {"count": str(len(rows))}))
+        for i, r in enumerate(rows):
+            await self._send(guest, Frame("SESSION", {
+                "i": str(i),
+                "id": r["id"],
+                "title": r["title"][:120],
+                "cwd": r["cwd"][:120],
+                "group": r.get("group", ""),
+                "current": "1" if (guest.claude and
+                                   guest.claude.session_id == r["id"])
+                           else "0",
+            }))
+        await self._send(guest, Frame("SESSIONSEND", {}))
 
     async def _reissue_halt(self, guest: GuestSession) -> None:
         """After a reconnect, put the Continue bar back.
@@ -897,9 +941,9 @@ class Bridge:
         guest: GuestSession,
         reader: asyncio.StreamReader,
         frames: FrameReader,
+        early: list,
     ) -> None:
         # Frames that arrived in the same read as HELLO. See _read_hello.
-        early, self._early = self._early, []
         for f in early:
             await self._handle(guest, f)
         while True:
@@ -992,23 +1036,7 @@ class Bridge:
                 await guest.claude.interrupt()
 
         elif f.type == "GETSESSIONS":
-            # Only conversations this bridge started: the rest belong to a
-            # machine with a different way of working.
-            rows = self.registry.filter(sesslist.listing(cwd=self.cwd))
-            await self._send(guest, Frame("SESSIONS",
-                                          {"count": str(len(rows))}))
-            for i, r in enumerate(rows):
-                await self._send(guest, Frame("SESSION", {
-                    "i": str(i),
-                    "id": r["id"],
-                    "title": r["title"][:120],
-                    "cwd": r["cwd"][:120],
-                    "group": r.get("group", ""),
-                    "current": "1" if (guest.claude and
-                                       guest.claude.session_id == r["id"])
-                               else "0",
-                }))
-            await self._send(guest, Frame("SESSIONSEND", {}))
+            await self._send_sessions(guest)
 
         elif f.type == "SWITCH":
             await self._switch(guest, f.headers.get("id", ""))
