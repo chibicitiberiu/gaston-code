@@ -1965,3 +1965,43 @@ was the real risk of reordering shutdown on this platform.
 Two probes were written because the layers had no way to be exercised without a
 live bridge and an API key: `tools/viewprobe.py` (the transcript) and
 `tools/drainprobe.py` (shutdown with work queued).
+
+
+### 2026-09-18 (later still) — main.cpp stops being nine modules in a trench coat
+
+Audit 01.1 made two complaints. One was that `main.c` held thirteen
+responsibilities. The other was procedural and is the one worth repeating:
+**no PROGRESS entry recorded that consolidation as a decision**, while every
+other structural change in this project has one. `docs/PLAN.md:1259-1277`
+specified `w9x.c`, `dialogs.c`, `transcript.c` and `input.c`; none were ever
+built, and nothing said why. This entry is the missing record, written at the
+point the drift was reversed rather than when it happened.
+
+Five modules are out, in the order the audit itself recommended -- the two
+hard ones first, because the easy ones were blocked behind them:
+
+| module | what moved | why it was picked |
+|---|---|---|
+| `bar.cpp` | both bars, as a state stack | carried five findings with it |
+| `chatlist.cpp` | the chat list | no `g_chat_*` global is touched outside it |
+| `xferstat.cpp` | the rx/tx progress counters | self-contained |
+| `pagebar.cpp` | page navigation and its state | self-contained |
+| `optmenu.cpp` | the Model and Effort menus | self-contained |
+
+`main.cpp` went 1923 -> 1302 lines. The three easy ones cost about 512 bytes
+committed-at-load between them, which is the honest price of module
+boundaries on this machine and is negligible against the budget.
+
+**What actually unblocked it was `render_frame` becoming a table.** It was a
+340-line `if/else` chain over 23 frame types, and the audit was right that
+nothing could leave the file until the dispatch stopped being a chain: every
+extraction needs a seam for its own frames, and a chain has none. The table
+is the same shape `frameproto.h`'s lane table already uses one layer down.
+
+**Not finished, and named rather than implied.** `main.cpp` is still roughly
+double the ~600 lines the audit projected, and `input.c` -- compose and send,
+`do_send`/`do_stop`/`echo_user_block`/`input_proc` -- is still in there. It was
+not one of the five named targets, so it is tracked as `01.59` instead of
+being quietly folded into a line marked closed. What remains otherwise maps
+onto the buckets §1.2 said would stay: the globals, `create_children`,
+`wnd_proc`, `try_connect`, turn state, the dispatch glue and `WinMain`.
