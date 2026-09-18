@@ -70,6 +70,61 @@ typedef struct {
 } exec_ctx;
 
 static int  is_sync(const rc_frame *f);
+
+/* Everything the RPC layer answers to. See rpc.h for why this is here and not
+ * in net.c's reader loop. */
+int rc_rpc_route(rc_frame *f, volatile LONG *running)
+{
+    if (!f) return RC_ROUTE_PASS;
+
+    /* EXECKILL is handled RIGHT HERE, on the reader thread, and never queued.
+     * Queueing it behind the worker would be useless: the worker is busy
+     * running the very command this is meant to stop, so the frame would not
+     * be looked at until that command finished. rc_exec_cancel is built to be
+     * called from another thread. */
+    if (strcmp(f->type, "EXECKILL") == 0) {
+        const char *kid = rc_frame_get(f, "id");
+        /* rc_frame_get returns NULL for an absent header, and nothing requires
+         * EXECKILL to carry an id. */
+        rc_log("rpc: EXECKILL for %s", kid ? kid : "(no id)");
+        rc_exec_cancel();
+        rc_frame_free(f);
+        HeapFree(GetProcessHeap(), 0, f);
+        return RC_ROUTE_TAKEN;
+    }
+
+    if (strcmp(f->type, "EXEC") == 0) {
+        if (rc_rpc_submit(f) != 0) {
+            rc_frame_free(f);
+            HeapFree(GetProcessHeap(), 0, f);
+        }
+        return RC_ROUTE_TAKEN;
+    }
+
+    /* SYNC* goes to the worker too, and this is load-bearing. Without it every
+     * sync frame falls through to the UI thread and lands in render_frame's
+     * "unhandled frame type" branch -- so the guest never answers a SYNCSCAN,
+     * the bridge waits out its 600s timeout holding the sync lock, and every
+     * later trigger logs "coalescing" forever. The symptom is a sync layer
+     * that looks wired up on both sides and transfers nothing, with no error
+     * on either.
+     *
+     * Backpressure BEFORE submit, not after: the worker can be inside a
+     * two-minute EXEC, and the bridge streams put chunks without waiting for
+     * an ack. Waiting here stops reading the socket, which is the one form of
+     * pushback that costs no memory. */
+    if (strncmp(f->type, "SYNC", 4) == 0) {
+        while (rc_rpc_syncq_full() && (!running || *running))
+            Sleep(10);
+        if (rc_rpc_submit(f) != 0) {
+            rc_frame_free(f);
+            HeapFree(GetProcessHeap(), 0, f);
+        }
+        return RC_ROUTE_TAKEN;
+    }
+
+    return RC_ROUTE_PASS;
+}
 static void reject_sync_busy(rc_frame *f);
 
 /* Generous, because the watcher shortens it when present -- and a brisk poll is

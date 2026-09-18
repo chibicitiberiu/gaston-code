@@ -18,6 +18,24 @@ extern "C" {
 /* Start the worker. Safe to call more than once. */
 int  rc_rpc_start(rc_net *net);
 
+/* Offer a freshly parsed frame to the RPC layer.
+ *
+ * THE ROUTING VOCABULARY LIVES HERE, not in the networking layer. net.c used
+ * to hard-code EXEC, EXECKILL and the SYNC prefix in its reader loop, which
+ * made a real net<->rpc cycle -- the transport knowing the names of the tools
+ * it carries -- and meant every tool Phase 6 adds would put another branch in
+ * the socket code. There are eight such tools planned.
+ *
+ * Returns RC_ROUTE_TAKEN when the frame has been consumed AND FREED by this
+ * layer, so the caller must not touch it again; RC_ROUTE_PASS when it is not
+ * ours and belongs to the UI thread.
+ *
+ * Called on the READER thread. Anything slow must be queued rather than done
+ * here, with one deliberate exception documented at the implementation. */
+#define RC_ROUTE_PASS   0
+#define RC_ROUTE_TAKEN  1
+int  rc_rpc_route(rc_frame *f, volatile LONG *running);
+
 /* Hand a parsed EXEC frame to the worker. OWNERSHIP TRANSFERS: the worker
  * frees the frame. Returns 0 if queued. */
 int  rc_rpc_submit(rc_frame *f);

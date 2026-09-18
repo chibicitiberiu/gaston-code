@@ -177,54 +177,16 @@ static unsigned __stdcall reader_thread(void *arg)
          * backpressure gate below, and holding it for the sixty seconds a
          * command might run would conflate two unrelated queues and stall
          * display frames behind a compile. The worker has its own counter. */
-        /* EXECKILL is handled RIGHT HERE, on the reader thread, and never
-         * queued. Queueing it behind the worker would be useless: the worker
-         * is busy running the very command this is meant to stop, so the
-         * frame would not be looked at until that command finished.
-         * rc_exec_cancel is built to be called from another thread. */
-        if (strcmp(f->type, "EXECKILL") == 0) {
-            {
-                /* rc_frame_get returns NULL for an absent header, and nothing
-                 * requires EXECKILL to carry an id. Whether this CRT prints
-                 * "(null)" or faults is not worth finding out on the guest. */
-                const char *kid = rc_frame_get(f, "id");
-                rc_log("net: EXECKILL for %s", kid ? kid : "(no id)");
-            }
-            rc_exec_cancel();
-            rc_frame_free(f);
-            HeapFree(GetProcessHeap(), 0, f);
-            continue;
-        }
-
-        if (strcmp(f->type, "EXEC") == 0) {
-            if (rc_rpc_submit(f) != 0) {
-                rc_frame_free(f);
-                HeapFree(GetProcessHeap(), 0, f);
-            }
-            continue;
-        }
-
-        /* SYNC* goes to the worker too, and this line is load-bearing. Without
-         * it every sync frame falls through to the UI thread and lands in
-         * render_frame's "unhandled frame type" branch -- so the guest never
-         * answers a SYNCSCAN, the bridge waits out its 600s timeout holding
-         * the sync lock, and every later trigger logs "coalescing" forever.
-         * The symptom is a sync layer that looks wired up on both sides and
-         * transfers nothing, with no error on either.
+        /* Ask the RPC layer whether this frame is one of its own.
          *
-         * Backpressure before submit, not after: the worker can be inside a
-         * two-minute EXEC, and the bridge streams put chunks without waiting
-         * for an ack. Waiting here stops reading the socket, which is the one
-         * form of pushback that costs no memory. */
-        if (strncmp(f->type, "SYNC", 4) == 0) {
-            while (rc_rpc_syncq_full() && n->running)
-                Sleep(10);
-            if (rc_rpc_submit(f) != 0) {
-                rc_frame_free(f);
-                HeapFree(GetProcessHeap(), 0, f);
-            }
+         * This loop used to hard-code EXEC, EXECKILL and the SYNC prefix --
+         * the transport knowing the names of the tools it carries, which made
+         * a genuine net<->rpc cycle and would have put another branch here for
+         * each of the eight tools Phase 6 adds. The vocabulary lives in
+         * rc_rpc_route now; net.c only knows that something else may want the
+         * frame, and that if it is taken it has also been freed. */
+        if (rc_rpc_route(f, &n->running) == RC_ROUTE_TAKEN)
             continue;
-        }
 
         /* Backpressure: if the UI is not keeping up, wait for it rather than
          * queueing without bound. Yielding here is correct -- the socket's
