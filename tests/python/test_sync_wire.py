@@ -1707,3 +1707,51 @@ async def test_continue_unlatches_only_once_the_wire_is_free(harness, tmp_path):
     assert not harness.bridge._load_baseline().latched, (
         "never unlatched once the wire was free")
     await harness.close(writer)
+
+
+async def test_a_reconnecting_guest_reconciles(harness, tmp_path):
+    """Nothing synced on attach.
+
+    run_sync had exactly ONE production caller -- the SYNCDIRTY handler --
+    although its docstring named three triggers. So the whole 30-second
+    cadence the say-it-once machinery is designed around lived on the GUEST,
+    in win/rpc.c, and a machine edited while it was disconnected reconciled
+    only when its watcher next happened to fire.
+    """
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+
+    reader, writer = await harness.connect()
+    # The scan is asked for without the guest having reported anything.
+    req = await _recv(harness, reader, "SYNCSCAN")
+    assert req.type == "SYNCSCAN", "attaching did not reconcile"
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": req.headers["id"], "status": "ok", "files": "0",
+        "tree_id": "VOL-1", "root": "C:\\WORK"}))
+    await harness.close(writer)
+
+
+async def test_the_bridge_has_its_own_sweep(harness, tmp_path):
+    """The backstop: if the guest's watcher thread dies, or a guest is built
+    without one, nothing on this side would ever have noticed."""
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    harness.bridge.sync_sweep_s = 0.05
+
+    reader, writer = await harness.connect()
+    # Answer the attach pass first: it holds sync_lock until it completes, and
+    # a sweep landing meanwhile correctly COALESCES rather than starting a
+    # second pass over the same baseline. That coalescing is the behaviour the
+    # lock exists for, so the test has to respect it to observe the sweep.
+    first = await _recv(harness, reader, "SYNCSCAN")
+    await harness.send(writer, Frame("SYNCEND", {
+        "id": first.headers["id"], "status": "ok", "files": "0",
+        "tree_id": "VOL-1", "root": "C:\\WORK"}))
+
+    req = await _recv(harness, reader, "SYNCSCAN")    # the sweep one
+    assert req.type == "SYNCSCAN", "the bridge never swept on its own"
+    await harness.close(writer)

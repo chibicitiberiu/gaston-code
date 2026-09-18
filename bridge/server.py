@@ -197,6 +197,11 @@ class Bridge:
         self._tasks: set = set()
         # Frames pipelined behind HELLO in a single read, handed to _pump.
         self._reaper: asyncio.Task | None = None
+        self._sweeper: asyncio.Task | None = None
+        #: How often the bridge checks the tree itself. Longer than the
+        #: guest's own 30s sweep because it is a backstop, not the mechanism:
+        #: a pass it starts is one the guest failed to ask for.
+        self.sync_sweep_s = 120.0
         # The guest pings every few seconds, so silence much longer than that
         # means it is gone rather than quiet. Generous, because a 200MHz box
         # under load genuinely does pause.
@@ -257,6 +262,8 @@ class Bridge:
         # was used is a liveness mechanism you do not have.
         if self._reaper is None:
             self._reaper = asyncio.create_task(self._reap_idle())
+        if self._sweeper is None and self.sync_dir:
+            self._sweeper = asyncio.create_task(self._sweep_sync())
 
         try:
             # The frames pipelined behind HELLO travel WITH it rather than
@@ -467,6 +474,10 @@ class Bridge:
         await self._reissue_prompt(guest)
         await self._reissue_halt(guest)
         await self._reissue_turn(guest)
+        # A guest that was away may have been edited while it was away, and
+        # nothing reconciled that until its watcher next happened to fire.
+        if self.sync_dir:
+            self._spawn(self.run_sync("the machine reconnected"))
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
         return guest
@@ -1308,10 +1319,24 @@ class Bridge:
     async def run_sync(self, why: str) -> dict:
         """One pass, serialised against every other trigger.
 
-        Three triggers -- the guest's watcher, a periodic sweep, and the agent
-        asking -- and no lock would let two passes both read the baseline and
-        both advance it, with the second carrying a generation the first is
-        about to invalidate.
+        Without the lock two passes would both read the baseline and both
+        advance it, the second carrying a generation the first is about to
+        invalidate.
+
+        THE TRIGGERS, and this comment used to name three that did not exist.
+        For most of Phase 3 there was exactly one caller -- the SYNCDIRTY
+        handler -- so the entire 30-second cadence that the say-it-once
+        machinery (first_report, reported_lines, aborted) is designed around
+        lived in win/rpc.c, on the guest. If the guest's watcher thread died,
+        or the guest was built without one, nothing on this side would ever
+        have noticed:
+
+          * the guest's watcher, via SYNCDIRTY -- still the primary one, and
+            the only one that reacts to an actual change rather than a clock;
+          * ON ATTACH, because a reconnecting guest may have been edited while
+            it was away and nothing reconciled that;
+          * a bridge-side sweep, as the backstop for a guest that has stopped
+            telling us anything.
         """
         guest = self._guest
         if guest is None or not guest.connected or not self.sync_dir:
@@ -1927,6 +1952,17 @@ class Bridge:
         await self._send(guest, Frame("PERMEND",
                                       {"id": want, "reason": "answered"}))
         await self._pump_queue(guest)
+
+    async def _sweep_sync(self) -> None:
+        """The backstop trigger. See run_sync for why it exists.
+
+        Coalesced by run_sync's own lock, so a sweep that lands during a pass
+        the guest asked for costs a debug line and nothing else.
+        """
+        while True:
+            await asyncio.sleep(self.sync_sweep_s)
+            if self.sync_dir and self._guest is not None:
+                await self.run_sync("the bridge's own sweep")
 
     async def _reap_idle(self) -> None:
         """P2: a guest that stops talking must eventually be let go.
