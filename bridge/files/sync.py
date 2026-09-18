@@ -82,7 +82,6 @@ class Entry:
 
     type: Type
     cls: str = P.CLASS_TEXT
-    size: int = 0
     mtime: float = 0.0
     crc: int = 0
     #: BOTH checksums, when the side that produced this row could supply them.
@@ -147,7 +146,6 @@ class Tomb:
 
     cls: str
     crc: int
-    reported: bool = False
 
 
 @dataclass
@@ -287,15 +285,14 @@ class Baseline:
                            ("prev", out.prev)):
             for k, v in (d.get(name) or {}).items():
                 dest[k] = Entry(type=Type(v["type"]), cls=v["cls"],
-                                size=v["size"], mtime=v["mtime"],
+                                mtime=v["mtime"],
                                 crc=v["crc"],
                                 crc_raw=v.get("crc_raw", 0),
                                 crc_norm=v.get("crc_norm", 0),
                                 dual=v.get("dual", False),
                                 display=v.get("display", ""))
         for k, v in (d.get("tombs") or {}).items():
-            out.tombs[k] = Tomb(cls=v["cls"], crc=v["crc"],
-                                reported=v.get("reported", False))
+            out.tombs[k] = Tomb(cls=v["cls"], crc=v["crc"])
         return out
 
 

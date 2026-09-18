@@ -207,27 +207,3 @@ def error(code: str, msg: str) -> Frame:
     """Errors need a frame type of their own, or a version-mismatch rejection
     arrives as bytes the peer cannot parse."""
     return Frame("ERROR", {"code": code, "msg": msg})
-
-
-def text(body: bytes, *, seq: int, style: str = "plain",
-         page: int | None = None, enc: str = "raw") -> Frame:
-    """A styled run of transcript text. The bridge has already done the
-    markdown parsing, the CP1252 fold and (later) the compression."""
-    h = {"seq": str(seq), "style": style, "enc": enc}
-    if page is not None:
-        h["page"] = str(page)
-    return Frame("TEXT", h, body)
-
-
-def user_input(body: bytes) -> Frame:
-    return Frame("INPUT", {}, body)
-
-
-def status(**kw: object) -> Frame:
-    """Bridge -> guest status line: connection state, turn state, cost, context."""
-    return Frame("STATUS", {k: str(v) for k, v in kw.items()})
-
-
-def interrupt() -> Frame:
-    """Guest -> bridge Stop button."""
-    return Frame("INTERRUPT", {})

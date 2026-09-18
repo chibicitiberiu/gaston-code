@@ -9,8 +9,8 @@ import pytest
 
 from bridge.files import caps as C
 from bridge.files import paths as P
-from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, canonical, case_collision,
-                                check, classify, join_guest, normalise, to_bridge,
+from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, canonical,
+                                check, classify, normalise, to_bridge,
                                 to_guest)
 
 ROOT = "C:\\WORK"
@@ -110,14 +110,6 @@ def test_canonical_folds_high_bytes_the_way_win32_does():
     assert canonical("CAFÉ.MD") == canonical("café.md")
 
 
-def test_case_collision_refuses_the_newcomer_not_both():
-    """Refusing both retroactively breaks a file that has synced for weeks."""
-    known = {canonical("README.md"): "README.md"}
-    assert case_collision(known, "readme.md") == "README.md"
-    assert case_collision(known, "README.md") is None
-    assert case_collision(known, "other.md") is None
-
-
 # --- content classification -------------------------------------------------
 
 def test_binary_is_detected_anywhere_not_just_the_first_8kb():
@@ -187,13 +179,6 @@ def test_crlf_and_lf_versions_of_one_file_compare_equal():
 def test_a_real_edit_still_compares_different():
     a, b = b"a\nb\n", b"a\nB\n"
     assert normalise(a, classify(a)) != normalise(b, classify(b))
-
-
-# --- joining ----------------------------------------------------------------
-
-def test_join_is_the_only_place_separators_convert():
-    assert join_guest("C:\\WORK", "src/main.c") == "C:\\WORK\\src\\main.c"
-    assert join_guest("C:\\WORK\\", "a.c") == "C:\\WORK\\a.c"
 
 
 # --- the wire representation ------------------------------------------------
@@ -310,17 +295,17 @@ def test_the_file_reserve_is_declared_not_assumed():
 # has a file whose name is mangled on their own disk.
 
 def test_a_known_codepage_maps_to_a_real_codec():
-    assert P.codec_for_acp(1252) == "cp1252"
-    assert P.codec_for_acp("1250") == "cp1250"
-    assert P.codec_for_acp(932) == "cp932"
-    assert P.codec_for_acp(65001) == "utf-8"
+    assert C.codec_for_acp(1252) == "cp1252"
+    assert C.codec_for_acp("1250") == "cp1250"
+    assert C.codec_for_acp(932) == "cp932"
+    assert C.codec_for_acp(65001) == "utf-8"
 
 
 @pytest.mark.parametrize("bad", [None, "", "x", 1, 99999, 0, "1252x"])
 def test_an_unknown_codepage_is_None_not_a_guess(bad):
     """None means the caller must SAY so. Returning cp1252 for something it
     does not recognise is the whole failure this exists to prevent."""
-    assert P.codec_for_acp(bad) is None
+    assert C.codec_for_acp(bad) is None
 
 
 def test_the_same_name_encodes_differently_under_different_codepages():

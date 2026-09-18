@@ -53,14 +53,11 @@ class SyncError(Exception):
 class Pass:
     """One reconciliation pass against one guest."""
 
-    #: Class-level so a scan can run before SYNCEND has reported the real one.
-    #: `scan_guest` overwrites it on the instance from the guest's own answer.
+    #: Class-level fallbacks. `__init__` always overwrites both on a real
+    #: `Pass`, but `test_sync_wire.py` builds bare `Pass` subclasses that skip
+    #: `__init__` to exercise `scan_bridge` in isolation, and those reach these
+    #: directly -- verified live by `make test` before this was trimmed away.
     guest_root = "C:\\WORK"
-
-    #: What the client at the other end IS -- codepage, case rules, device
-    #: names, line endings, path limits. Read from HELLO; see `bridge/caps.py`.
-    #: The class-level value is the Win9x assumption, and applies only to a
-    #: client too old to declare anything.
     caps = C.Caps()
 
     def __init__(self, bridge, guest, root: str, state_dir: str):
@@ -129,7 +126,7 @@ class Pass:
         await self.bridge._send(self.guest, Frame("SYNCSCAN", {"id": sid}),
                                 stamp=False)
         try:
-            status, files, tree_id, root, rows, display = await asyncio.wait_for(
+            status, files, tree_id, root, rows, _display = await asyncio.wait_for(
                 fut, timeout=600)
         finally:
             self.guest.sync_pending.pop(sid, None)
@@ -173,7 +170,6 @@ class Pass:
 
         if root:
             self.guest_root = root
-        self._guest_display = display
         return rows
 
     # --- the bridge's half -------------------------------------------------
@@ -289,7 +285,7 @@ class Pass:
                             key, f"attrs:{refused}", None, None):
                         self.reports.append(f"{rel}: {refused}")
                 rows[key] = S.Entry(
-                    type=S.Type.FILE, cls=cls, size=size, mtime=st.st_mtime,
+                    type=S.Type.FILE, cls=cls, mtime=st.st_mtime,
                     crc=P.crc_for(cls, cnorm, craw),
                     crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
 
@@ -309,7 +305,7 @@ class Pass:
 
     # --- applying ----------------------------------------------------------
 
-    async def push(self, key: str, rel: str, expect: S.Entry | None) -> bool:
+    async def push(self, rel: str, expect: S.Entry | None) -> bool:
         """Send one file. Returns True when the baseline may advance."""
         full = os.path.join(self.root, rel)
         data = open(full, "rb").read()
@@ -457,13 +453,13 @@ class Pass:
         craw = zlib.crc32(data)
         cnorm = zlib.crc32(P.normalise(data, P.CLASS_TEXT))
         self._pulled[key] = S.Entry(
-            type=S.Type.FILE, cls=want, size=len(data),
+            type=S.Type.FILE, cls=want,
             mtime=os.stat(full).st_mtime,
             crc=P.crc_for(want, cnorm, craw),
             crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
         return True
 
-    async def mkdir(self, key: str, rel: str) -> bool:
+    async def mkdir(self, rel: str) -> bool:
         """Create one directory on the guest. Returns True to advance the row.
 
         Its own frame and its own ack, because Invariant 1 says a row advances
@@ -497,7 +493,7 @@ class Pass:
 
     # --- conflicts ---------------------------------------------------------
 
-    def stage_conflict(self, key: str, rel: str) -> str:
+    def stage_conflict(self, rel: str) -> str:
         """Preserve the bridge's version before the guest's overwrites it.
 
         Versioned, and mirroring the tree. A second conflict on one path would
@@ -811,7 +807,7 @@ class Pass:
                 # time. Either way it is worth stopping the user for.
                 done["new_conflicts"] += 1
                 new_conflict_paths.add(dec.key)
-                mine = self.stage_conflict(dec.key, rel)
+                mine = self.stage_conflict(rel)
 
                 # A latched path REFUSES pushes. The agent's in-flight turn
                 # cannot react to a conflict it has not been told about yet,
@@ -869,7 +865,7 @@ class Pass:
                     self.reports.append(f"{dec.key}: latched, push withheld")
                     continue
                 rel = b.display or dec.key
-                if await self.push(dec.key, rel, g):
+                if await self.push(rel, g):
                     done["pushed"] += 1
                     with open(os.path.join(self.root, rel), "rb") as fh:
                         data = fh.read()
@@ -886,7 +882,7 @@ class Pass:
                     self.base.rows[dec.key] = self._pulled[dec.key]
             elif dec.act is S.Act.MKDIR:
                 rel = dec.display or (b.display if b else dec.key)
-                if await self.mkdir(dec.key, rel):
+                if await self.mkdir(rel):
                     done["dirs"] += 1
                     self.base.rows[dec.key] = b
             elif dec.act is S.Act.ADOPT:

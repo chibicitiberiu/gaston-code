@@ -17,7 +17,6 @@ from bridge.wire.protocol import (
                                   ProtocolError,
                                   error,
                                   hello,
-                                  text,
                                   )
 
 
@@ -134,7 +133,8 @@ def test_oversized_frame_rejected_on_encode():
 
 def test_reader_handles_split_across_reads():
     """TCP gives you arbitrary fragments, and the guest's recv() will too."""
-    wire = text(b"abc", seq=1).encode() + text(b"def", seq=2).encode()
+    wire = (Frame("TEXT", {"seq": "1"}, b"abc").encode()
+            + Frame("TEXT", {"seq": "2"}, b"def").encode())
     reader = FrameReader()
     out = []
     for i in range(0, len(wire), 3):
@@ -148,7 +148,8 @@ def test_reader_returns_nothing_on_partial_header():
 
 
 def test_reader_yields_multiple_frames_from_one_read():
-    wire = b"".join(text(b"%d" % i, seq=i).encode() for i in range(5))
+    wire = b"".join(Frame("TEXT", {"seq": str(i)}, b"%d" % i).encode()
+                    for i in range(5))
     assert len(FrameReader().feed(wire)) == 5
 
 

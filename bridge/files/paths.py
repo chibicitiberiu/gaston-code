@@ -29,6 +29,8 @@ import posixpath
 import re
 from dataclasses import dataclass
 
+from . import caps as C
+
 # Win98 MAX_PATH, including the drive, the root prefix and the NUL. The check is
 # always against the FULL path the guest would hold, never the relative part.
 MAX_PATH = 260
@@ -72,34 +74,11 @@ _ILLEGAL_DOS = set('<>:"\\|?*')
 _ILLEGAL_ALWAYS = {chr(c) for c in range(0x20)} | {"\\"}
 
 
-class _Default:
-    """The Win9x rules, for a caller that has no client to ask.
-
-    Duck-typed rather than imported from `caps`, because `caps` imports THIS
-    module for the codepage table and a cycle here would be gratuitous.
-    """
-
-    acp = "cp1252"
-    case = 1
-    devices = 1
-    trailing = 1
-    illegal = 1
-    eol = 1
-    dirreserve = 12
-    workreserve = 11
-    maxpath = 260
-    maxcomp = 255
-
-    @property
-    def maxdirpath(self):
-        return self.maxpath - self.dirreserve
-
-    @property
-    def maxfilepath(self):
-        return self.maxpath - self.workreserve
-
-
-DEFAULT = _Default()
+#: The Win9x rules, for a caller that has no client to ask. `caps.py` used to
+#: import this module for the codepage table, which made a real `caps.Caps`
+#: here a cycle; the table now lives in `caps.py` itself, so this is just the
+#: real thing.
+DEFAULT = C.WIN9X
 
 
 @dataclass(frozen=True)
@@ -363,26 +342,6 @@ def to_bridge(data: bytes, cls: str) -> bytes:
     return normalise(data, cls)
 
 
-def case_collision(existing: dict[str, str], relpath: str,
-                   *, caps=DEFAULT) -> str | None:
-    """Does `relpath` collide, case-insensitively, with something already known?
-
-    Returns the established path it collides with, or None.
-
-    The NEWCOMER is refused, never both. "Refuse both" has no memory: it would
-    retroactively break a path that has been syncing correctly for weeks because
-    someone later added a file differing only in case.
-    """
-    key = canonical(relpath, caps=caps)
-    other = existing.get(key)
-    return other if other is not None and other != relpath else None
-
-
-def join_guest(root: str, relpath: str) -> str:
-    """Build the guest-side path. Separator conversion happens only here."""
-    return root.rstrip("\\") + "\\" + relpath.replace("/", "\\")
-
-
 def rel_from_posix(root: str, path: str) -> str:
     """Bridge-side absolute path -> the wire's relative form."""
     rel = posixpath.relpath(path, root)
@@ -400,50 +359,10 @@ def rel_from_posix(root: str, path: str) -> str:
 # tree grows a filename per pass and the original never syncs again.
 #
 # `check()` already refuses anything the codepage cannot carry. These two make
-# the transfer actually USE that representation.
-
-#: What a Win32 GetACP() number means to Python. Only the pages a machine of
-#: this era can actually be set to; anything else is refused rather than
-#: guessed, because a wrong codepage is the one failure in this layer that
-#: round-trips perfectly and corrupts silently.
-_ACP_CODECS = {
-    437: "cp437", 850: "cp850", 852: "cp852", 855: "cp855", 857: "cp857",
-    858: "cp858", 860: "cp860", 861: "cp861", 862: "cp862", 863: "cp863",
-    865: "cp865", 866: "cp866", 869: "cp869", 874: "cp874",
-    932: "cp932", 936: "cp936", 949: "cp949", 950: "cp950",
-    1250: "cp1250", 1251: "cp1251", 1252: "cp1252", 1253: "cp1253",
-    1254: "cp1254", 1255: "cp1255", 1256: "cp1256", 1257: "cp1257",
-    1258: "cp1258",
-    65001: "utf-8",
-}
-
-
-def codec_for_acp(value: str | int | None) -> str | None:
-    """A guest's reported ANSI codepage -> a Python codec name, or None.
-
-    None means "I do not know what that is", and the caller must treat that as
-    a reason to say so rather than to assume. Assuming cp1252 for an unknown
-    number is exactly the silent path this function exists to close: the bridge
-    would encode a name with the wrong table, the guest would store those
-    bytes, report them back, and the bridge would decode with the same wrong
-    table and see the name it sent. Self-consistent, undetectable, and the
-    user's file is called something else on their own disk.
-    """
-    if value in (None, ""):
-        return None
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        return None
-    name = _ACP_CODECS.get(n)
-    if name is None:
-        return None
-    try:
-        import codecs
-        codecs.lookup(name)
-    except LookupError:
-        return None
-    return name
+# the transfer actually USE that representation. The codepage table itself
+# (`codec_for_acp`) lives in `caps.py` now -- it is codepage knowledge, not
+# path knowledge, and was only ever here to dodge an import cycle that no
+# longer exists.
 
 
 def wire_encode(relpath: str, *, acp: str = "cp1252") -> bytes:

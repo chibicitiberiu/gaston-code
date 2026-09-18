@@ -81,7 +81,7 @@ def parse_rows(body: bytes, caps) -> tuple[dict, dict]:
         rows[key] = Entry(
             type=Type(typ.decode()),
             cls=auto,
-            size=int(size), mtime=float(mtime),
+            mtime=float(mtime),
             crc=int(P.crc_for(auto, crc_norm, crc_raw)),
             crc_norm=int(crc_norm), crc_raw=int(crc_raw),
             dual=caps.manifest >= 2,

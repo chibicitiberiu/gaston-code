@@ -61,7 +61,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import paths as P
 # --- the enums -------------------------------------------------------------
 #
 # Mirrored in win/caps.h. A value the bridge does not recognise is a REFUSAL,
@@ -89,9 +88,6 @@ EOL_CRLF = 1
 #: compare-and-swap never matches, and every text file fails on every pass.
 #: A refusal names the capability; the failure names corruption instead.
 EOL_CR = 2
-
-SHORTNAMES_NONE = 0
-SHORTNAMES_83 = 1           #: 8.3 aliases exist alongside long names
 
 #: How many characters short of the path limit a DIRECTORY must stop. Win32
 #: reserves twelve so an 8.3 name still fits inside; Unix reserves none. A
@@ -121,6 +117,49 @@ DIRRESERVE_WIN32 = 12
 WORKRESERVE_NONE = 0
 WORKRESERVE_GASTON = 11     #: len(".gaston-tmp") == len(".gaston-old")
 
+#: What a Win32 GetACP() number means to Python. Only the pages a machine of
+#: this era can actually be set to; anything else is refused rather than
+#: guessed, because a wrong codepage is the one failure in this layer that
+#: round-trips perfectly and corrupts silently.
+_ACP_CODECS = {
+    437: "cp437", 850: "cp850", 852: "cp852", 855: "cp855", 857: "cp857",
+    858: "cp858", 860: "cp860", 861: "cp861", 862: "cp862", 863: "cp863",
+    865: "cp865", 866: "cp866", 869: "cp869", 874: "cp874",
+    932: "cp932", 936: "cp936", 949: "cp949", 950: "cp950",
+    1250: "cp1250", 1251: "cp1251", 1252: "cp1252", 1253: "cp1253",
+    1254: "cp1254", 1255: "cp1255", 1256: "cp1256", 1257: "cp1257",
+    1258: "cp1258",
+    65001: "utf-8",
+}
+
+
+def codec_for_acp(value: str | int | None) -> str | None:
+    """A guest's reported ANSI codepage -> a Python codec name, or None.
+
+    None means "I do not know what that is", and the caller must treat that as
+    a reason to say so rather than to assume. Assuming cp1252 for an unknown
+    number is exactly the silent path this function exists to close: the bridge
+    would encode a name with the wrong table, the guest would store those
+    bytes, report them back, and the bridge would decode with the same wrong
+    table and see the name it sent. Self-consistent, undetectable, and the
+    user's file is called something else on their own disk.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    name = _ACP_CODECS.get(n)
+    if name is None:
+        return None
+    try:
+        import codecs
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
 
 @dataclass(frozen=True)
 class Caps:
@@ -132,7 +171,6 @@ class Caps:
     trailing: int = TRAILING_STRIPPED
     illegal: int = ILLEGAL_DOS
     eol: int = EOL_CRLF
-    shortnames: int = SHORTNAMES_83
     dirreserve: int = DIRRESERVE_WIN32
     workreserve: int = WORKRESERVE_GASTON
     maxpath: int = 260
@@ -211,7 +249,7 @@ def _num(h: dict, key: str, default: int, lo: int, hi: int) -> int:
 
 def from_hello(h: dict) -> Caps:
     """Read a client's declaration. Raises rather than guessing."""
-    acp = P.codec_for_acp(h.get("acp"))
+    acp = codec_for_acp(h.get("acp"))
     if h.get("acp") and acp is None:
         raise CapsError(
             f"the client reports ANSI codepage {h['acp']!r}, which this bridge "
@@ -238,8 +276,6 @@ def from_hello(h: dict) -> Caps:
         # matches, and every text file comes back crc_mismatch on every pass.
         # Loud, but the log points at corruption rather than at a capability.
         eol=_enum(h, "eol", (EOL_LF, EOL_CRLF), EOL_CRLF),
-        shortnames=_enum(h, "shortnames", (SHORTNAMES_NONE, SHORTNAMES_83),
-                         SHORTNAMES_83),
         dirreserve=_num(h, "dirreserve", DIRRESERVE_WIN32, 0, 64),
         workreserve=_num(h, "workreserve", WORKRESERVE_GASTON, 0, 64),
         maxpath=_num(h, "maxpath", 260, 64, 65536),
@@ -253,7 +289,7 @@ def from_hello(h: dict) -> Caps:
 #: accident -- it is here so tests and future clients can name it.
 POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              trailing=TRAILING_KEPT, illegal=ILLEGAL_POSIX, eol=EOL_LF,
-             shortnames=SHORTNAMES_NONE, dirreserve=DIRRESERVE_NONE,
+             dirreserve=DIRRESERVE_NONE,
              # Not a Windows rule: the `.gaston-tmp` convention is OURS, so a
              # POSIX client that commits by temp-and-rename needs the same room
              # even though nothing about its filesystem is constrained.

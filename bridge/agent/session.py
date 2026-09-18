@@ -73,15 +73,6 @@ TOOLS = [
 #   Enter/ExitWorktree, DesignSync, ReportFindings
 #                   operator-environment features, not part of this product
 
-MODELS = [
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-fable-5-1",
-    "claude-haiku-4-5-20251001",
-]
-EFFORTS = ["low", "medium", "high", "xhigh", "max"]
-
-
 @dataclass
 class Turn:
     """What the UI needs to know when a turn finishes."""
@@ -248,15 +239,6 @@ class Session:
         if self._client:
             await self._client.set_model(model)
         self._opts.model = model
-
-    async def context_usage(self) -> dict | None:
-        """Free context-fill indicator for the status bar."""
-        if not self._client:
-            return None
-        try:
-            return await self._client.get_context_usage()
-        except Exception:  # not worth failing a status update over
-            return None
 
     # --- event pump --------------------------------------------------------
 

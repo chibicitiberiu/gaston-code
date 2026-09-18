@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import dataclasses
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,15 +63,10 @@ class PendingPrompt:
     tool_name: str
     future: Any                      # asyncio.Future[PermissionResult]
     suggestions: list = field(default_factory=list)
-    created: float = field(default_factory=time.monotonic)
     # The rendered body, kept so a reconnect can re-issue the prompt without
     # re-rendering it from a context object that is long out of scope.
     body: str = ""
     allows: bool = False
-
-    @property
-    def expired(self) -> bool:
-        return (time.monotonic() - self.created) > DEADLINE_S
 
 
 def session_scoped(suggestions: list) -> list:

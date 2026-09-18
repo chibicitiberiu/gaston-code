@@ -18,7 +18,7 @@ from bridge.files.sync import (Act, Baseline, Decision, Entry, Tomb, Type, diff,
 
 
 def f(crc, cls=P.CLASS_TEXT, display="", mtime=0.0):
-    return Entry(type=Type.FILE, cls=cls, crc=crc, size=10, mtime=mtime,
+    return Entry(type=Type.FILE, cls=cls, crc=crc, mtime=mtime,
                  display=display)
 
 
@@ -208,11 +208,11 @@ def test_same_crc_different_class_is_not_the_same_content():
     assert not f(1, cls=P.CLASS_TEXT).same_content(f(1, cls=P.CLASS_EXACT))
 
 
-def test_size_and_mtime_never_affect_cross_side_equality():
-    """A uniform text file has different sizes on the two sides by construction;
-    comparing them reads every text file as changed, every pass."""
+def test_mtime_never_affects_cross_side_equality():
+    """mtime is a per-side cache key, not part of identity; comparing it would
+    read every file as changed as soon as either side's clock disagreed."""
     assert f(1, display="a").same_content(
-        Entry(type=Type.FILE, cls=P.CLASS_TEXT, crc=1, size=999, mtime=12345))
+        Entry(type=Type.FILE, cls=P.CLASS_TEXT, crc=1, mtime=12345))
 
 
 # --- the settle window ------------------------------------------------------
@@ -237,12 +237,12 @@ def test_a_future_mtime_is_never_cacheable():
 def test_baseline_round_trips(tmp_path):
     p = str(tmp_path / "state" / "base.json")
     b = Baseline(rows={"a": f(1, display="A.txt")},
-                 tombs={"g": Tomb(cls="t", crc=7, reported=True)},
+                 tombs={"g": Tomb(cls="t", crc=7)},
                  prev={"a": f(9)}, tree_id="VOL-1234", generation=5)
     b.save(p)
     back = Baseline.load(p)
     assert back.rows["a"].crc == 1 and back.rows["a"].display == "A.txt"
-    assert back.tombs["g"].crc == 7 and back.tombs["g"].reported
+    assert back.tombs["g"].crc == 7
     assert back.prev["a"].crc == 9
     assert back.tree_id == "VOL-1234" and back.generation == 5
 

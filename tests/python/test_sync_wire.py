@@ -164,7 +164,7 @@ async def test_a_push_converts_endings_and_carries_its_precondition(
     p = a_pass(harness, tmp_path)
     open(os.path.join(p.root, "a.txt"), "wb").write(b"one\ntwo\n")
 
-    task = asyncio.create_task(p.push("a.txt", "a.txt", None))
+    task = asyncio.create_task(p.push("a.txt", None))
     put = await _recv(harness, reader, "SYNCPUT")
     end = await _recv(harness, reader, "SYNCPUTEND")
 
@@ -189,7 +189,7 @@ async def test_a_binary_push_is_not_converted(harness, tmp_path):
     blob = b"\x00\r\n\x01\n\x02"
     open(os.path.join(p.root, "b.dat"), "wb").write(blob)
 
-    task = asyncio.create_task(p.push("b.dat", "b.dat", None))
+    task = asyncio.create_task(p.push("b.dat", None))
     put = await _recv(harness, reader, "SYNCPUT")
     end = await _recv(harness, reader, "SYNCPUTEND")
     assert put.body[len(b"5 b.dat"):] == blob, "a binary was line-ending mangled"
@@ -209,7 +209,7 @@ async def test_a_changed_refusal_does_not_advance_the_baseline(harness, tmp_path
     open(os.path.join(p.root, "a.txt"), "wb").write(b"x\n")
 
     task = asyncio.create_task(
-        p.push("a.txt", "a.txt", Entry(type=Type.FILE, crc=1234)))
+        p.push("a.txt", Entry(type=Type.FILE, crc=1234)))
     put = await _recv(harness, reader, "SYNCPUT")
     end = await _recv(harness, reader, "SYNCPUTEND")
     assert end.headers["if_crc"] == "1234"
@@ -230,7 +230,7 @@ async def test_an_ack_with_the_wrong_crc_is_reported_not_retried(
     p = a_pass(harness, tmp_path)
     open(os.path.join(p.root, "a.txt"), "wb").write(b"x\n")
 
-    task = asyncio.create_task(p.push("a.txt", "a.txt", None))
+    task = asyncio.create_task(p.push("a.txt", None))
     put = await _recv(harness, reader, "SYNCPUT")
     await _recv(harness, reader, "SYNCPUTEND")
     await harness.send(writer, Frame("SYNCPUTACK", {
@@ -247,7 +247,7 @@ async def test_an_oversized_file_is_skipped_with_a_reason(harness, tmp_path):
     await _recv(harness, reader, "OPTIONSEND")
     p = a_pass(harness, tmp_path)
     open(os.path.join(p.root, "big.bin"), "wb").write(b"\x00" * (2 * 1024 * 1024))
-    assert await p.push("big.bin", "big.bin", None) is False
+    assert await p.push("big.bin", None) is False
     assert any("exceeds" in r for r in p.reports)
     await harness.close(writer)
 
@@ -260,7 +260,7 @@ async def test_sync_frames_never_enter_the_replay_buffer(harness, tmp_path):
     before = harness.bridge._guest.replay.next_seq
     open(os.path.join(p.root, "a.txt"), "wb").write(b"x\n")
 
-    task = asyncio.create_task(p.push("a.txt", "a.txt", None))
+    task = asyncio.create_task(p.push("a.txt", None))
     put = await _recv(harness, reader, "SYNCPUT")
     await _recv(harness, reader, "SYNCPUTEND")
     await harness.send(writer, Frame("SYNCPUTACK", {
@@ -279,7 +279,7 @@ async def test_a_disconnect_mid_transfer_fails_it_rather_than_hanging(
     p = a_pass(harness, tmp_path)
     open(os.path.join(p.root, "a.txt"), "wb").write(b"x\n")
 
-    task = asyncio.create_task(p.push("a.txt", "a.txt", None))
+    task = asyncio.create_task(p.push("a.txt", None))
     await _recv(harness, reader, "SYNCPUT")
     await harness.close(writer)
     with pytest.raises((SyncError, asyncio.TimeoutError)):
@@ -528,9 +528,9 @@ async def test_a_second_conflict_does_not_overwrite_the_first_copy(
     it on the second conflict."""
     p = a_pass(harness, tmp_path)
     open(os.path.join(p.root, "a.txt"), "wb").write(b"first\n")
-    one = p.stage_conflict("a.txt", "a.txt")
+    one = p.stage_conflict("a.txt")
     open(os.path.join(p.root, "a.txt"), "wb").write(b"second\n")
-    two = p.stage_conflict("a.txt", "a.txt")
+    two = p.stage_conflict("a.txt")
     assert one != two
     assert open(one, "rb").read() == b"first\n"
     assert open(two, "rb").read() == b"second\n"
