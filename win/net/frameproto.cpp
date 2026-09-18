@@ -53,7 +53,7 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
     end = payload + len;
 
     /* Type line */
-    nl = memchr(payload, '\n', (size_t)(end - payload));
+    nl = (char *)memchr(payload, '\n', (size_t)(end - payload));
     if (!nl) return -1;
     *nl = '\0';
     if (nl == payload) return -1;                 /* empty type */
@@ -70,7 +70,7 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
     while (p < end) {
         if (*p == '\n') { p++; break; }           /* blank line: headers done */
 
-        nl = memchr(p, '\n', (size_t)(end - p));
+        nl = (char *)memchr(p, '\n', (size_t)(end - p));
         if (!nl) return -1;
         *nl = '\0';
 

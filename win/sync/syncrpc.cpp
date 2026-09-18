@@ -338,7 +338,8 @@ static void do_mkdir(rc_net *net, rc_frame *f)
     const char *keys[2];
     const char *vals[2];
     const char *status = "ok";
-    char full[MAX_PATH], *q;
+    char full[MAX_PATH];
+    char *q;
 
     if (!rc_sync_contained(f->body)) status = "bad_path";
     else {
@@ -377,7 +378,8 @@ static void do_get(rc_net *net, rc_frame *f)
     const char *id = rc_frame_get(f, "id");
     const char *keys[4];
     const char *vals[4];
-    char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4], *q;
+    char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
+    char *q;
     rc_sync_stat st;
     HANDLE h;
     /* Heap, for the same reason as do_scan's manifest: this runs on the RPC

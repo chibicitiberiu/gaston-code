@@ -3,6 +3,7 @@
 #include <process.h>
 #include <stdio.h>
 #include <string.h>
+#include "core/rc_cpp.h"
 #include "net/net.h"
 #include "net/caps.h"
 #include "core/log.h"
@@ -125,7 +126,6 @@ static unsigned __stdcall reader_thread(void *arg)
     while (n->running) {
         unsigned len;
         char *payload;
-        rc_frame *f;
 
         if (recv_exact(n->sock, (char *)hdr, 4, &n->running) != 0) break;
 
@@ -150,22 +150,26 @@ static unsigned __stdcall reader_thread(void *arg)
         payload[len] = '\0';
         n->rx_bytes += len + 4;
 
-        f = (rc_frame *)HeapAlloc(GetProcessHeap(), 0, sizeof(rc_frame));
-        if (!f) { HeapFree(GetProcessHeap(), 0, payload); break; }
+        /* Owns just the rc_frame struct, never `payload` -- that passes into
+         * the frame via rc_frame_parse's out->_raw and is freed by
+         * rc_frame_free, not by this guard. Declared here rather than at the
+         * top of the loop because HeapPtr has no default constructor: a
+         * non-copyable guard cannot be assigned into after the fact either,
+         * so it is built with the pointer it owns from the start. */
+        HeapPtr<rc_frame> f((rc_frame *)HeapAlloc(GetProcessHeap(), 0, sizeof(rc_frame)));
+        if (!f.valid()) { HeapFree(GetProcessHeap(), 0, payload); break; }
 
-        if (rc_frame_parse(payload, len, f) != 0) {
+        if (rc_frame_parse(payload, len, f.get()) != 0) {
             rc_log("net: malformed frame, dropping link");
             HeapFree(GetProcessHeap(), 0, payload);
-            HeapFree(GetProcessHeap(), 0, f);
             break;
         }
 
         {
-            const char *enc = rc_frame_get(f, "enc");
-            if (enc && strcmp(enc, "deflate") == 0 && inflate_body(f) != 0) {
+            const char *enc = rc_frame_get(f.get(), "enc");
+            if (enc && strcmp(enc, "deflate") == 0 && inflate_body(f.get()) != 0) {
                 rc_log("net: cannot inflate frame, dropping link");
-                rc_frame_free(f);
-                HeapFree(GetProcessHeap(), 0, f);
+                rc_frame_free(f.get());
                 break;
             }
         }
@@ -185,8 +189,16 @@ static unsigned __stdcall reader_thread(void *arg)
          * each of the eight tools Phase 6 adds. The vocabulary lives in
          * rc_rpc_route now; net.c only knows that something else may want the
          * frame, and that if it is taken it has also been freed. */
-        if (rc_rpc_route(f, &n->running) == RC_ROUTE_TAKEN)
+        if (rc_rpc_route(f.get(), &n->running) == RC_ROUTE_TAKEN) {
+            /* Ownership genuinely transferred: rc_rpc_route has ALREADY freed
+             * the frame by the time it returns RC_ROUTE_TAKEN (rpc.h), whether
+             * by handing it to the worker or by freeing it itself on a refusal
+             * path. release() so this guard does not free it a second time --
+             * that double free is exactly the failure mode net.h's three-way
+             * ownership rule exists to rule out. */
+            f.release();
             continue;
+        }
 
         /* Backpressure: if the UI is not keeping up, wait for it rather than
          * queueing without bound. Yielding here is correct -- the socket's
@@ -195,16 +207,22 @@ static unsigned __stdcall reader_thread(void *arg)
             Sleep(10);
 
         InterlockedIncrement(&n->inflight);
-        if (!PostMessage(n->notify, WM_RC_FRAME, 0, (LPARAM)f)) {
+        if (!PostMessage(n->notify, WM_RC_FRAME, 0, (LPARAM)f.get())) {
             /* The post failed, so the UI thread will never see this frame and
              * will never free it. Freeing it here is the whole reason the
-             * inflight counter exists. */
+             * inflight counter exists. The guard still owns `f`, so letting it
+             * go out of scope below does the HeapFree half of that. */
             InterlockedDecrement(&n->inflight);
             rc_log("net: PostMessage(hwnd=%p, WM_RC_FRAME) failed: err=%lu "
                    "(inflight=%ld)", (void *)n->notify, GetLastError(),
                    n->inflight);
-            rc_frame_free(f);
-            HeapFree(GetProcessHeap(), 0, f);
+            rc_frame_free(f.get());
+        } else {
+            /* Handed to the UI thread, which now owns it (net.h: "a frame
+             * posted with WM_RC_FRAME is owned by the UI thread, which frees
+             * it"). release() so this guard does not free what the UI thread
+             * is about to. */
+            f.release();
         }
     }
 
@@ -592,45 +610,53 @@ int rc_net_send(rc_net *n, const char *type,
     /* The lock covers building INTO the shared buffer and copying OUT of it.
      * Neither can block, which is the property that matters: the wire write
      * happens on the sender thread, from the heap block, with this released. */
-    EnterCriticalSection(&n->send_lock);
-    total = rc_frame_build(build, sizeof(build), type, keys, vals, nkv,
-                           body, body_len);
-    if (total < 0) {
-        LeaveCriticalSection(&n->send_lock);
-        rc_log("net: frame too large to build (%s, body=%u)", type, body_len);
-        return -1;
-    }
-    it = (rc_outq_item *)HeapAlloc(GetProcessHeap(), 0,
-                                   sizeof(rc_outq_item) + (unsigned)total);
-    if (!it) {
-        LeaveCriticalSection(&n->send_lock);
-        rc_log("net: out of memory queueing %s (%d bytes)", type, total);
-        return -1;
-    }
-    memcpy(it->data, build, (unsigned)total);
-    it->len = (unsigned)total;
-    it->sent = 0;
-    it->next = NULL;
+    {
+        ScopedLock lock(&n->send_lock);
 
-    /* Backpressure, in bytes. Wait for the sender to drain rather than letting
-     * the queue grow without bound on a machine with 28KB free. */
-    while (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES && n->running
-           && waited < 50) {
-        LeaveCriticalSection(&n->send_lock);
-        WaitForSingleObject(n->outq_room, 100);
-        waited++;
-        EnterCriticalSection(&n->send_lock);
+        total = rc_frame_build(build, sizeof(build), type, keys, vals, nkv,
+                               body, body_len);
+        if (total < 0) {
+            rc_log("net: frame too large to build (%s, body=%u)", type, body_len);
+            return -1;
+        }
+        it = (rc_outq_item *)HeapAlloc(GetProcessHeap(), 0,
+                                       sizeof(rc_outq_item) + (unsigned)total);
+        if (!it) {
+            rc_log("net: out of memory queueing %s (%d bytes)", type, total);
+            return -1;
+        }
+        memcpy(it->data, build, (unsigned)total);
+        it->len = (unsigned)total;
+        it->sent = 0;
+        it->next = NULL;
+
+        /* Backpressure, in bytes. Wait for the sender to drain rather than
+         * letting the queue grow without bound on a machine with 28KB free.
+         *
+         * This is a genuine temporary unlock, not a guard that forgot to
+         * release: the wait must not hold send_lock, or the sender thread
+         * could never drain the queue it is waiting on. ScopedLock has no
+         * "pause" -- it is a destructor, not a semaphore -- so the pair below
+         * stays a raw Enter/Leave on the same section the guard holds. The
+         * loop always leaves with the section held again, which is what lets
+         * the guard's own release, on every path out of this block, stay
+         * correct. */
+        while (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES && n->running
+               && waited < 50) {
+            LeaveCriticalSection(&n->send_lock);
+            WaitForSingleObject(n->outq_room, 100);
+            waited++;
+            EnterCriticalSection(&n->send_lock);
+        }
+        if (!n->running) {
+            outq_free(it);
+            return -1;
+        }
+        if (n->outq_tail) n->outq_tail->next = it;
+        else              n->outq_head = it;
+        n->outq_tail = it;
+        n->outq_bytes += it->len;
     }
-    if (!n->running) {
-        LeaveCriticalSection(&n->send_lock);
-        outq_free(it);
-        return -1;
-    }
-    if (n->outq_tail) n->outq_tail->next = it;
-    else              n->outq_head = it;
-    n->outq_tail = it;
-    n->outq_bytes += it->len;
-    LeaveCriticalSection(&n->send_lock);
 
     SetEvent(n->outq_wake);
     return 0;
