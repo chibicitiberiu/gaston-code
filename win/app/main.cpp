@@ -25,6 +25,7 @@
 #include "rpc/rpc.h"
 #include "app/xferstat.h"
 #include "app/pagebar.h"
+#include "app/optmenu.h"
 
 #define ID_INPUT      1002
 #define ID_SEND       1003
@@ -35,16 +36,13 @@
  * LAST/PAGELBL in app/pagebar.h -- all three next to the module that creates
  * and dispatches them. */
 
-/* Menu. Model and effort entries are numbered from a base because the lists
- * come from the bridge and are not known at compile time. */
+/* Menu. IDM_MODEL0/IDM_EFFORT0/MAX_OPTS are declared in app/optmenu.h now,
+ * next to the module that owns that numbering. */
 #define IDM_NEW       1099
 #define IDM_EXPORT    1100
 #define IDM_CLOSE     1101
 #define IDM_HOST      1110
 #define IDM_ABOUT     1120
-#define IDM_MODEL0    1200      /* .. IDM_MODEL0 + MAX_OPTS */
-#define IDM_EFFORT0   1300      /* .. IDM_EFFORT0 + MAX_OPTS */
-#define MAX_OPTS      16
 
 #define TIMER_RECONNECT 1
 #define TIMER_STATUS    2
@@ -92,13 +90,8 @@ static HWND  g_main, g_input, g_send, g_stop, g_status;
  * at the control with EM_LIMITTEXT and checked again at send. */
 #define RC_INPUT_MAX 4096
 
-/* The Model and Effort menus are built from what the bridge sends, so the
- * lists can change without rebuilding this binary. */
-static HMENU g_menu_model, g_menu_effort;
-static char  g_opt_model[MAX_OPTS][64];
-static char  g_opt_effort[MAX_OPTS][64];
-static int   g_n_model, g_n_effort;
-static int   g_opts_open;   /* mid-batch, so the next model row appends */
+/* The Model and Effort menus (their HMENUs, id-keyed arrays and batch state)
+ * moved to app/optmenu.cpp -- see app/optmenu.h. */
 
 /* Transfer progress (the rx/tx counters and their formatting) moved to
  * app/xferstat.cpp -- see app/xferstat.h. */
@@ -223,26 +216,16 @@ static void build_menu(HWND hwnd)
 
     AppendMenuA(cfg, MF_STRING, IDM_HOST, "&Server Host...");
 
-    g_menu_model = CreatePopupMenu();
-    g_menu_effort = CreatePopupMenu();
-    AppendMenuA(g_menu_model, MF_STRING | MF_GRAYED, 0, "(not connected)");
-    AppendMenuA(g_menu_effort, MF_STRING | MF_GRAYED, 0, "(not connected)");
-
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "&About...");
 
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)file, "&File");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)cfg, "&Configure");
-    AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_menu_model, "&Model");
-    AppendMenuA(bar, MF_POPUP, (UINT_PTR)g_menu_effort, "&Effort");
+    /* The Model and Effort popups: created and appended to `bar` by
+     * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
+     * so the menu order is unchanged. */
+    rc_optmenu_create(hwnd, bar, ui_send);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
-}
-
-/* Empty a popup without destroying it: the menu bar holds the handle. */
-static void clear_popup(HMENU m)
-{
-    while (DeleteMenu(m, 0, MF_BYPOSITION))
-        ;
 }
 
 /* app/chatlist.h's rc_chats_confirm_fn: "a switch is about to happen, is a
@@ -475,50 +458,11 @@ static void on_turn(rc_frame *f)
     }
 }
 
-static void on_option(rc_frame *f)
+/* OPTION, OPTIONSEND -- both owned by app/optmenu.cpp now; see
+ * rc_optmenu_frame's own comments there for what each one does. */
+static void on_optmenu(rc_frame *f)
 {
-    const char *kind = rc_frame_get(f, "kind");
-    const char *id = rc_frame_get(f, "id");
-    const char *label = rc_frame_get(f, "label");
-    const char *cur = rc_frame_get(f, "current");
-    int on = (cur && *cur == '1');
-    /* The first model row of a batch resets both menus. The bridge
-     * always sends models before efforts, so this is a reliable start
-     * marker and saves a frame type. */
-    if (kind && strcmp(kind, "model") == 0 && g_opts_open == 0) {
-        g_opts_open = 1;
-        clear_popup(g_menu_model);
-        clear_popup(g_menu_effort);
-        g_n_model = 0;
-        g_n_effort = 0;
-    }
-    if (kind && id && label) {
-        if (strcmp(kind, "model") == 0 && g_n_model < MAX_OPTS) {
-            rc_strf(g_opt_model[g_n_model], 64, "%s", id);
-            AppendMenuA(g_menu_model,
-                        MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
-                        IDM_MODEL0 + g_n_model, label);
-            g_n_model++;
-        } else if (strcmp(kind, "effort") == 0 && g_n_effort < MAX_OPTS) {
-            /* A model with no effort levels gets one greyed entry saying
-             * so, rather than a menu offering five settings it does not
-             * have. */
-            const char *dis = rc_frame_get(f, "disabled");
-            UINT flags = MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED);
-            if (dis && *dis == '1') flags |= MF_GRAYED;
-            rc_strf(g_opt_effort[g_n_effort], 64, "%s", id);
-            AppendMenuA(g_menu_effort, flags,
-                        IDM_EFFORT0 + g_n_effort, label);
-            g_n_effort++;
-        }
-    }
-}
-
-static void on_optionsend(rc_frame *f)
-{
-    (void)f;
-    g_opts_open = 0;
-    DrawMenuBar(g_main);
+    rc_optmenu_frame(f);
 }
 
 /* app/chatlist.h's `switched` callback: a SWITCHED frame has already been
@@ -636,8 +580,8 @@ static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
     { "TEXT",        on_text },
     { "TOOL",        on_tool },
     { "TURN",        on_turn },
-    { "OPTION",      on_option },
-    { "OPTIONSEND",  on_optionsend },
+    { "OPTION",      on_optmenu },
+    { "OPTIONSEND",  on_optmenu },
     { "SESSIONS",    on_chats },
     { "SESSION",     on_chats },
     { "SESSIONSEND", on_chats },
@@ -865,8 +809,9 @@ static void layout(HWND hwnd)
 /* CreateWindowExA can fail, and on this platform that was never a theoretical
  * concern: the chat list's own CreateWindowExA comment (app/chatlist.cpp)
  * cites the 16-bit USER heap's fixed 64KB as a reason a control might not be
- * created -- one of four such citations across main.cpp/chatlist.cpp/bar.cpp
- * now that the bar and chat list are their own files. A NULL here was
+ * created -- one of five such citations across
+ * main.cpp/chatlist.cpp/bar.cpp/pagebar.cpp now that the bar, the chat list
+ * and the page bar are their own files. A NULL here was
  * previously silent -- nothing logged, and every subsequent
  * SendMessageA/MoveWindow/etc. against the handle becomes a quiet no-op,
  * since the *A functions accept NULL and simply do nothing with it. The log
@@ -1190,21 +1135,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
 
         default:
-            /* Model and effort are numbered ranges rather than fixed ids,
-             * because the two lists are sent by the bridge and are not known
-             * when this is compiled. */
-            if (id >= IDM_MODEL0 && id < IDM_MODEL0 + g_n_model) {
-                const char *keys[1], *vals[1];
-                keys[0] = "model"; vals[0] = g_opt_model[id - IDM_MODEL0];
-                ui_send("The model change", "SETMODEL", keys, vals, 1, NULL, 0);
-                return 0;
-            }
-            if (id >= IDM_EFFORT0 && id < IDM_EFFORT0 + g_n_effort) {
-                const char *keys[1], *vals[1];
-                keys[0] = "effort"; vals[0] = g_opt_effort[id - IDM_EFFORT0];
-                ui_send("The effort change", "SETEFFORT", keys, vals, 1, NULL, 0);
-                return 0;
-            }
+            /* The IDM_MODEL0/IDM_EFFORT0 ranges: app/optmenu.cpp's business
+             * now -- see app/optmenu.h. */
+            if (rc_optmenu_command(id)) return 0;
             break;
         }
         return 0;

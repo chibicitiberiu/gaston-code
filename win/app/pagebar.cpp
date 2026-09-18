@@ -23,11 +23,12 @@ static HWND     g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
 static rc_net  *g_net;
 static rc_html *g_html;
 
-/* CreateWindowExA can fail -- see main.c's own check_child comment for why
- * that is not theoretical on this platform. Each module that creates
- * controls keeps its own copy of this rather than sharing one across files
- * that do not otherwise depend on each other (see main.cpp's own citation of
- * this pattern, now at four). */
+/* CreateWindowExA can fail, and on this platform that was never a
+ * theoretical concern: the 16-bit USER/GDI heaps on 9x are a fixed 64KB that
+ * does not scale with RAM -- see main.cpp's own check_child comment, the
+ * fifth citation of this across main.cpp/chatlist.cpp/bar.cpp/pagebar.cpp.
+ * Each module that creates controls keeps its own copy of this rather than
+ * sharing one across files that do not otherwise depend on each other. */
 static void check_child(const char *what, HWND h)
 {
     if (!h)
