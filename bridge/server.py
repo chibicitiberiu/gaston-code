@@ -2372,10 +2372,16 @@ EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
 
 
 def _summarise(args: dict) -> str:
-    """One readable line for the tool-activity pane."""
-    for key in ("command", "file_path", "pattern", "path", "url", "prompt"):
-        if key in args:
-            return f"{key}: {str(args[key])[:160]}"
+    """One readable line for the tool-activity pane.
+
+    perms.telling_argument is the one place "which argument matters" is
+    decided now -- this used to be a fourth, independently-ordered copy of
+    the same list. See docs/audit/02-bridge-python.md 02.15.
+    """
+    told = perms.telling_argument(args)
+    if told:
+        key, value = told
+        return f"{key}: {value[:160]}"
     return ", ".join(f"{k}={str(v)[:40]}" for k, v in list(args.items())[:3])
 
 

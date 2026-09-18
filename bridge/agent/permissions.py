@@ -49,6 +49,27 @@ MAX_VALUE = 400
 _PREFERRED = ("command", "file_path", "path", "pattern", "url", "prompt",
               "old_string", "new_string", "content")
 
+# The argument most worth naming in a ONE-LINE description -- narrower than
+# _PREFERRED above, which orders a whole table: old_string/new_string/content
+# belong in a row, not as the short label everything else is built from.
+# render_request's `desc` fallback, `summary`'s bar text and
+# server._summarise's activity-pane line each used to answer "which argument
+# matters" independently, in three different orderings, so a tool added with
+# a new interesting argument needed all three edited by hand -- and missing
+# one is exactly how a permission bar reading "Click" with no coordinates
+# ships. docs/audit/02-bridge-python.md 02.15.
+_SUMMARY_KEYS = ("command", "file_path", "pattern", "path", "url", "prompt")
+
+
+def telling_argument(args: dict) -> tuple[str, str] | None:
+    """The single argument most worth naming for this call, if any."""
+    if not isinstance(args, dict):
+        return None
+    for key in _SUMMARY_KEYS:
+        if args.get(key):
+            return key, str(args[key])
+    return None
+
 
 @dataclass
 class PendingPrompt:
@@ -140,10 +161,9 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
     desc = getattr(ctx, "description", None)
 
     if not desc and isinstance(args, dict):
-        for key in ("command", "file_path", "path", "url", "pattern"):
-            if args.get(key):
-                desc = str(args[key])
-                break
+        told = telling_argument(args)
+        if told:
+            desc = told[1]
 
     parts = ['<div class="perm">',
              '<div class="permhead">Permission required</div>',
@@ -189,10 +209,9 @@ def summary(tool_name: str, ctx, args: dict | None = None) -> str:
         display = "Run on your machine"
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)
     if not desc and args:
-        for key in ("command", "file_path", "path", "url", "pattern"):
-            if args.get(key):
-                desc = str(args[key])
-                break
+        told = telling_argument(args)
+        if told:
+            desc = told[1]
     line = display if not desc else f"{display}: {desc}"
     return _clip(line, 160)
 
