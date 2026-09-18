@@ -22,6 +22,7 @@
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 #include "core/log.h"
+#include "core/str.h"
 
 static HANDLE           g_thread;
 /* The directory watcher, resolved dynamically. NULL is a supported outcome --
@@ -168,8 +169,7 @@ static void run_one(rc_frame *f)
         return;
     }
     ctx.lost = 0;
-    _snprintf(ctx.id, sizeof(ctx.id) - 1, "%s", id);
-    ctx.id[sizeof(ctx.id) - 1] = '\0';
+    rc_strf(ctx.id, sizeof(ctx.id), "%s", id);
 
     timeout_ms = tmo ? (DWORD)atol(tmo) : 20000;
     if (timeout_ms < 1000)   timeout_ms = 1000;
@@ -205,11 +205,11 @@ static void run_one(rc_frame *f)
     default:                   status = "ok";           break;
     }
 
-    _snprintf(code, sizeof(code), "%lu", (unsigned long)r.code);
-    _snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)r.bytes);
+    rc_strf(code, sizeof(code), "%lu", (unsigned long)r.code);
+    rc_strf(bytes, sizeof(bytes), "%lu", (unsigned long)r.bytes);
     /* Output lost on the wire is reported the same way as output past the
      * cap: either way the model must not treat what arrived as complete. */
-    _snprintf(trunc, sizeof(trunc), "%d",
+    rc_strf(trunc, sizeof(trunc), "%d",
               (r.truncated || ctx.lost) ? 1 : 0);
 
     keys[nkv] = "id";        vals[nkv++] = ctx.id;

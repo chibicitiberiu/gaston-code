@@ -212,3 +212,50 @@ def test_the_guest_never_builds_a_truncated_working_name(guest_limits):
         "nothing was refused; the reserve is not being enforced at all"
     assert any(v == "allowed" for v in guest_limits.values()), \
         "everything was refused; the boundary is in the wrong place"
+
+
+# --- containment ------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def guest_contained():
+    env = dict(os.environ, WINEPREFIX=PREFIX, WINEDEBUG="-all")
+    out = subprocess.run([WINE, EXE, "--contained"], capture_output=True,
+                         timeout=300, env=env)
+    rows = {}
+    for line in out.stdout.decode("latin-1").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2:
+            rows[parts[1]] = parts[0]
+    assert rows, out.stderr.decode("latin-1", "replace")[:800]
+    return rows
+
+
+def test_a_backslash_cannot_escape_the_sync_root(guest_contained):
+    """`a\\..\\..\\x` left the sync root entirely.
+
+    rc_sync_contained split components on '/' only, so a path containing no
+    '/' at all was read as ONE component -- not "..", not ".", not empty --
+    and passed. join() then wrote <root>\\a\\..\\..\\x and handed it to Win32,
+    which resolves `..`. A bridge could write anywhere the guest's user can.
+
+    The wire format does say components are '/'-separated and that '\\' is
+    illegal inside one. But that is a rule the BRIDGE enforces, and this
+    function exists for the case where the bridge is what is wrong -- it
+    cannot lean on a guarantee made by the party it is checking.
+    """
+    for bad in ("a\\..\\..\\x", "..\\x", "a\\..", "a/..\\b", "a\\../b"):
+        assert guest_contained[bad] == "refuse", bad
+
+
+def test_the_ordinary_traversals_are_still_refused(guest_contained):
+    for bad in ("..", "../x", "a/../../x", ".", "./x", "a/./b",
+                "/abs", "\\abs", "C:\\x", "a//b", "a\\\\b", ""):
+        assert guest_contained[bad] == "refuse", bad
+
+
+def test_names_that_merely_contain_dots_still_sync(guest_contained):
+    """`..a` and `a..` are ordinary filenames. Refusing them would be a file
+    that silently stops syncing, which is the failure this layer exists to
+    prevent -- so the check must be on the whole component, not a substring."""
+    for good in ("a", "a/b", "a/b/c.txt", "..a", "a..", "a/..b", "dot.dot/x"):
+        assert guest_contained[good] == "allow", good

@@ -6,6 +6,7 @@
 #include "net/net.h"
 #include "net/caps.h"
 #include "core/log.h"
+#include "core/str.h"
 #include "rpc/rpc.h"
 #include "rpc/exec.h"
 #include "miniz.h"
@@ -329,9 +330,9 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     unsigned tid;
 
     n->notify = notify;
-    _snprintf(n->host, sizeof(n->host) - 1, "%s", host);
+    rc_strf(n->host, sizeof(n->host), "%s", host);
     n->port = port;
-    _snprintf(n->secret, sizeof(n->secret) - 1, "%s", secret);
+    rc_strf(n->secret, sizeof(n->secret), "%s", secret);
     n->sock = INVALID_SOCKET;
     n->inflight = 0;
 
@@ -367,8 +368,8 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     inflate_begin();
     n->running = 1;
 
-    _snprintf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
-    _snprintf(maxframe, sizeof(maxframe), "%d", RC_MAX_FRAME);
+    rc_strf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
+    rc_strf(maxframe, sizeof(maxframe), "%d", RC_MAX_FRAME);
     HDR("ver", ver);
     HDR("secret", n->secret);
     HDR("max_frame", maxframe);
@@ -391,40 +392,37 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
         memset(&ms, 0, sizeof(ms));
         ms.dwLength = sizeof(ms);
         GlobalMemoryStatus(&ms);
-        _snprintf(memkb, sizeof(memkb), "%lu",
+        rc_strf(memkb, sizeof(memkb), "%lu",
                   (unsigned long)(ms.dwTotalPhys / 1024));
         HDR("mem_kb", memkb);
-        _snprintf(memfree, sizeof(memfree), "%lu",
+        rc_strf(memfree, sizeof(memfree), "%lu",
                   (unsigned long)(ms.dwAvailPhys / 1024));
         HDR("mem_free_kb", memfree);
 
         memset(&os, 0, sizeof(os));
         os.dwOSVersionInfoSize = sizeof(os);
         if (GetVersionExA(&os)) {
-            _snprintf(osver, sizeof(osver) - 1, "Windows %lu.%lu build %lu %s",
+            rc_strf(osver, sizeof(osver), "Windows %lu.%lu build %lu %s",
                       (unsigned long)os.dwMajorVersion,
                       (unsigned long)os.dwMinorVersion,
                       (unsigned long)(os.dwBuildNumber & 0xFFFF),
                       os.szCSDVersion);
-            osver[sizeof(osver) - 1] = '\0';
             HDR("os", osver);
         }
 
         memset(&si, 0, sizeof(si));
         GetSystemInfo(&si);
-        _snprintf(cpu, sizeof(cpu) - 1, "x86 family %u model %u, %lu cpu",
+        rc_strf(cpu, sizeof(cpu), "x86 family %u model %u, %lu cpu",
                   (unsigned)si.wProcessorLevel,
                   (unsigned)(si.wProcessorRevision >> 8),
                   (unsigned long)si.dwNumberOfProcessors);
-        cpu[sizeof(cpu) - 1] = '\0';
         HDR("cpu", cpu);
 
         dc = GetDC(NULL);
         if (dc) {
-            _snprintf(screen, sizeof(screen) - 1, "%dx%dx%d",
+            rc_strf(screen, sizeof(screen), "%dx%dx%d",
                       GetDeviceCaps(dc, HORZRES), GetDeviceCaps(dc, VERTRES),
                       GetDeviceCaps(dc, BITSPIXEL));
-            screen[sizeof(screen) - 1] = '\0';
             HDR("screen", screen);
             ReleaseDC(NULL, dc);
         }
@@ -433,9 +431,8 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
          * the image at load on an older 9x. The old call is fine here: the
          * numbers only have to be roughly right. */
         if (GetDiskFreeSpaceA("C:\\", &spc, &bps, &freec, &totalc)) {
-            _snprintf(disk, sizeof(disk) - 1, "%lu",
+            rc_strf(disk, sizeof(disk), "%lu",
                       (unsigned long)((double)spc * bps * freec / 1024.0));
-            disk[sizeof(disk) - 1] = '\0';
             HDR("disk_free_kb", disk);
         }
     }
@@ -459,8 +456,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * ACP and not OEM: VFAT long names are stored in the ANSI codepage, and
      * the scanner keys on long names only (never cAlternateFileName). The
      * console codepage is a different question with a different answer. */
-    _snprintf(acp, sizeof(acp) - 1, "%u", (unsigned)GetACP());
-    acp[sizeof(acp) - 1] = '\0';
+    rc_strf(acp, sizeof(acp), "%u", (unsigned)GetACP());
     HDR("acp", acp);
 
     /* The rest of what this machine is. Every one a literal from caps.h, so a

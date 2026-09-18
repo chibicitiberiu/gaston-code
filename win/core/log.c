@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "core/log.h"
+#include "core/str.h"
 
 static HANDLE g_fh = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION g_lock;
@@ -11,8 +12,7 @@ static char g_path[MAX_PATH];
 
 void rc_log_open(const char *exe_dir)
 {
-    _snprintf(g_path, sizeof(g_path) - 1, "%s\\retroclaude.log", exe_dir);
-    g_path[sizeof(g_path) - 1] = '\0';
+    rc_strf(g_path, sizeof(g_path), "%s\\retroclaude.log", exe_dir);
 
     InitializeCriticalSection(&g_lock);
     g_ready = 1;
@@ -36,7 +36,7 @@ void rc_log(const char *fmt, ...)
     if (g_fh == INVALID_HANDLE_VALUE) return;
 
     GetLocalTime(&st);
-    _snprintf(stamp, sizeof(stamp), "%02d:%02d:%02d.%03d ",
+    rc_strf(stamp, sizeof(stamp), "%02d:%02d:%02d.%03d ",
               st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 
     va_start(ap, fmt);

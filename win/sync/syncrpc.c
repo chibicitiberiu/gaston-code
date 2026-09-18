@@ -13,13 +13,13 @@
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 #include "core/log.h"
+#include "core/str.h"
 
 static char g_root[MAX_PATH];
 
 void rc_sync_set_root(const char *root)
 {
-    _snprintf(g_root, sizeof(g_root) - 1, "%s", root ? root : "");
-    g_root[sizeof(g_root) - 1] = '\0';
+    rc_strf(g_root, sizeof(g_root), "%s", root ? root : "");
 }
 
 const char *rc_sync_root(void) { return g_root; }
@@ -46,7 +46,7 @@ static void manifest_flush(manifest_ctx *m)
     char n[16];
 
     if (!m->len) return;
-    _snprintf(n, sizeof(n), "%d", m->n);
+    rc_strf(n, sizeof(n), "%d", m->n);
     keys[0] = "id"; vals[0] = m->id;
     keys[1] = "n";  vals[1] = n;
     rc_net_send(m->net, "SYNCENT", keys, vals, 2, m->buf, m->len);
@@ -65,7 +65,7 @@ static void manifest_add(void *ctx, const char *rel, const rc_sync_stat *st)
      * reads .gitattributes -- so it must be able to pick either one without
      * asking again. A sixth field the older bridge did not send; that bridge
      * parses a fixed six and this is seven, so the two ship together. */
-    _snprintf(head, sizeof(head), "%c %c %lu %lu %lu %lu %u ",
+    rc_strf(head, sizeof(head), "%c %c %lu %lu %lu %lu %u ",
               st->type, st->cls ? st->cls : '-',
               (unsigned long)st->size, (unsigned long)st->mtime,
               st->crc_norm, st->crc_raw, rn);
@@ -106,7 +106,7 @@ static void do_scan(rc_net *net, rc_frame *f)
     }
     memset(m, 0, sizeof(*m));
     m->net = net;
-    _snprintf(m->id, sizeof(m->id) - 1, "%s", id ? id : "");
+    rc_strf(m->id, sizeof(m->id), "%s", id ? id : "");
 
     if (!g_root[0]) {
         status = "no_root";
@@ -118,8 +118,7 @@ static void do_scan(rc_net *net, rc_frame *f)
     }
     manifest_flush(m);
     total = m->total;
-    _snprintf(sid, sizeof(sid) - 1, "%s", m->id);
-    sid[sizeof(sid) - 1] = '\0';
+    rc_strf(sid, sizeof(sid), "%s", m->id);
     HeapFree(GetProcessHeap(), 0, m);
 
     /* The tree id is derived, never generated and stored: rc_config_save is
@@ -129,13 +128,12 @@ static void do_scan(rc_net *net, rc_frame *f)
     {
         DWORD serial = 0;
         char rootdir[8];
-        _snprintf(rootdir, sizeof(rootdir), "%c:\\", g_root[0] ? g_root[0] : 'C');
+        rc_strf(rootdir, sizeof(rootdir), "%c:\\", g_root[0] ? g_root[0] : 'C');
         GetVolumeInformationA(rootdir, NULL, 0, &serial, NULL, NULL, NULL, 0);
-        _snprintf(tree, sizeof(tree) - 1, "%08lX-%s",
+        rc_strf(tree, sizeof(tree), "%08lX-%s",
                   (unsigned long)serial, g_root);
-        tree[sizeof(tree) - 1] = '\0';
     }
-    _snprintf(files, sizeof(files), "%d", total);
+    rc_strf(files, sizeof(files), "%d", total);
 
     /* The root travels explicitly. The bridge has to know it to apply the
      * MAX_PATH test, which is on the FULL path the guest would hold -- and
@@ -180,8 +178,7 @@ static void put_fail(rc_net *net, const char *id, const char *why)
     /* Already answered for this transfer; the rest of the stream is noise. */
     if (id && strcmp(g_put_failed, id) == 0) return;
     if (id) {
-        _snprintf(g_put_failed, sizeof(g_put_failed) - 1, "%s", id);
-        g_put_failed[sizeof(g_put_failed) - 1] = '\0';
+        rc_strf(g_put_failed, sizeof(g_put_failed), "%s", id);
     }
     rc_log("sync: put %s failed: %s", id ? id : "(none)", why);
 
@@ -220,8 +217,8 @@ static void do_put(rc_net *net, rc_frame *f)
         g_put_failed[0] = '\0';     /* a new transfer, so answer again */
         if (g_put.active) { put_fail(net, id, "busy"); return; }
         if (!rc_sync_contained(rel)) { put_fail(net, id, "bad_path"); return; }
-        _snprintf(g_put.id, sizeof(g_put.id) - 1, "%s", id);
-        _snprintf(g_put.rel, sizeof(g_put.rel) - 1, "%.*s", (int)rn, rel);
+        rc_strf(g_put.id, sizeof(g_put.id), "%s", id);
+        rc_strf(g_put.rel, sizeof(g_put.rel), "%.*s", (int)rn, rel);
         g_put.h = rc_sync_begin_write(g_root, g_put.rel,
                                       g_put.tmp, sizeof(g_put.tmp));
         if (g_put.h == INVALID_HANDLE_VALUE) {
@@ -286,8 +283,7 @@ static void do_putend(rc_net *net, rc_frame *f)
      * overwritten with nothing reported. Re-read the target NOW and refuse if
      * it is not what the bridge decided against. */
     if (ifc && *ifc) {
-        _snprintf(full, sizeof(full) - 1, "%s\\%s", g_root, g_put.rel);
-        full[sizeof(full) - 1] = '\0';
+        rc_strf(full, sizeof(full), "%s\\%s", g_root, g_put.rel);
         {
             char *q;
             for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
@@ -335,7 +331,7 @@ static void do_putend(rc_net *net, rc_frame *f)
     /* The bridge advances its baseline from THIS crc, never from a re-scan --
      * a re-scan could pick up a write the agent made during the transfer and
      * then the next pass would pull over it. */
-    _snprintf(gotcrc, sizeof(gotcrc), "%lu",
+    rc_strf(gotcrc, sizeof(gotcrc), "%lu",
               crc ? strtoul(crc, NULL, 10) : 0UL);
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = "ok";
@@ -354,8 +350,7 @@ static void do_mkdir(rc_net *net, rc_frame *f)
 
     if (!rc_sync_contained(f->body)) status = "bad_path";
     else {
-        _snprintf(full, sizeof(full) - 1, "%s\\%s", g_root, f->body);
-        full[sizeof(full) - 1] = '\0';
+        rc_strf(full, sizeof(full), "%s\\%s", g_root, f->body);
         for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
         if (!CreateDirectoryA(full, NULL)) {
             DWORD e = GetLastError();
@@ -413,8 +408,7 @@ static void do_get(rc_net *net, rc_frame *f)
     }
     if (!rc_sync_contained(f->body)) status = "missing";
     else {
-        _snprintf(full, sizeof(full) - 1, "%s\\%s", g_root, f->body);
-        full[sizeof(full) - 1] = '\0';
+        rc_strf(full, sizeof(full), "%s\\%s", g_root, f->body);
         for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
 
         memset(&st, 0, sizeof(st));
@@ -428,9 +422,9 @@ static void do_get(rc_net *net, rc_frame *f)
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
             if (h == INVALID_HANDLE_VALUE) status = "locked";
             else {
-                _snprintf(total, sizeof(total), "%lu", (unsigned long)st.size);
+                rc_strf(total, sizeof(total), "%lu", (unsigned long)st.size);
                 while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
-                    _snprintf(offs, sizeof(offs), "%lu", (unsigned long)sent);
+                    rc_strf(offs, sizeof(offs), "%lu", (unsigned long)sent);
                     keys[0] = "id";    vals[0] = id;
                     keys[1] = "total"; vals[1] = total;
                     keys[2] = "off";   vals[2] = offs;
@@ -446,8 +440,8 @@ static void do_get(rc_net *net, rc_frame *f)
         }
     }
 
-    _snprintf(crcs, sizeof(crcs), "%lu", st.crc);
-    _snprintf(clss, sizeof(clss), "%c", st.cls ? st.cls : RC_CLS_TEXT);
+    rc_strf(crcs, sizeof(crcs), "%lu", st.crc);
+    rc_strf(clss, sizeof(clss), "%c", st.cls ? st.cls : RC_CLS_TEXT);
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = status;
     keys[2] = "crc";    vals[2] = crcs;

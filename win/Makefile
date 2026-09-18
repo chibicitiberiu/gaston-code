@@ -46,7 +46,7 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
 OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
-       htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+       str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
 .PHONY: synccheck inicheck all clean check run netcheck probe htmlspike
 
@@ -62,7 +62,7 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(addprefix $(BUILD)/,synccheck.o sync.o log.o miniz.o)
+SYNCCHECK_OBJS = $(addprefix $(BUILD)/,synccheck.o sync.o log.o str.o miniz.o)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -72,14 +72,14 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = $(addprefix $(BUILD)/,inicheck.o ini.o log.o)
+INICHECK_OBJS = $(addprefix $(BUILD)/,inicheck.o ini.o log.o str.o)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(INICHECK_OBJS)}
 	@echo "built $@"
 
-PROBE_OBJS = $(addprefix $(BUILD)/,probe.o miniz.o)
+PROBE_OBJS = $(addprefix $(BUILD)/,probe.o str.o miniz.o)
 probe: $(BUILD)/probe.exe
 $(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(PROBE_OBJS)}
@@ -97,7 +97,7 @@ all: $(BUILD)/retroclaude.exe
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(addprefix $(BUILD)/,netcheck.o net.o frameproto.o \
-                log.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+                log.o str.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}

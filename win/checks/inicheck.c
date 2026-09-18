@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include "core/str.h"
 #include "core/ini.h"
 
 static int fails = 0;
@@ -51,8 +52,7 @@ int main(int argc, char **argv)
     out.autoscroll =      0;
     strcpy(out.sync_root, "C:\\WORK\\SUB");
 
-    _snprintf(path, sizeof(path) - 1, "%s\\retroclaude.ini", dir);
-    path[sizeof(path) - 1] = '\0';
+    rc_strf(path, sizeof(path), "%s\\retroclaude.ini", dir);
     DeleteFileA(path);
 
     rc_config_save(&out, dir);

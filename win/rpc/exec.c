@@ -33,6 +33,7 @@
 #include <string.h>
 #include "rpc/exec.h"
 #include "core/log.h"
+#include "core/str.h"
 
 #define EXEC_CHUNK   8192
 #define EXEC_MAX_OUT (32u * 1024u)
@@ -113,9 +114,9 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
 
     /* Build the command line, and REFUSE rather than truncate. */
     if (use_shell)
-        n = _snprintf(cmd, sizeof(cmd), "%s /c %s", shell_name(), command);
+        n = rc_strf(cmd, sizeof(cmd), "%s /c %s", shell_name(), command);
     else
-        n = _snprintf(cmd, sizeof(cmd), "%s", command);
+        n = rc_strf(cmd, sizeof(cmd), "%s", command);
     if (n < 0 || n >= (int)sizeof(cmd)) {
         rc_log("exec: command too long (%u bytes), refused",
                (unsigned)strlen(command));

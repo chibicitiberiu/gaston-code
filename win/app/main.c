@@ -14,6 +14,7 @@
 #include "net/frameproto.h"
 #include "core/ini.h"
 #include "core/log.h"
+#include "core/str.h"
 #include "net/net.h"
 #include <ole2.h>
 #include "app/htmlview.h"
@@ -219,7 +220,7 @@ static void exe_dir(char *out, unsigned n)
     GetModuleFileNameA(NULL, path, sizeof(path));
     slash = strrchr(path, '\\');
     if (slash) *slash = '\0';
-    _snprintf(out, n - 1, "%s", path);
+    rc_strf(out, n, "%s", path);
     out[n - 1] = '\0';
 }
 
@@ -227,8 +228,8 @@ static void exe_dir(char *out, unsigned n)
  * 412/900" says something that "rx 0k/0k" does not. */
 static void fmt_bytes(char *out, unsigned cap, unsigned long n)
 {
-    if (n < 10240) _snprintf(out, cap - 1, "%lu", n);
-    else           _snprintf(out, cap - 1, "%luk", n / 1024);
+    if (n < 10240) rc_strf(out, cap, "%lu", n);
+    else           rc_strf(out, cap, "%luk", n / 1024);
     out[cap - 1] = '\0';
 }
 
@@ -240,7 +241,7 @@ static void status_set(int pane, const char *text)
 static void status_refresh(void)
 {
     char buf[128];
-    _snprintf(buf, sizeof(buf), " %s  %s:%d",
+    rc_strf(buf, sizeof(buf), " %s  %s:%d",
               rc_state_name(g_net.state), g_cfg.host, g_cfg.port);
     status_set(0, buf);
     /* Only while something is actually moving. A transfer is "over" when
@@ -252,20 +253,20 @@ static void status_refresh(void)
         if (g_rx_total) {
             fmt_bytes(a, sizeof(a), g_rx_done);
             fmt_bytes(b, sizeof(b), g_rx_total);
-            _snprintf(rx, sizeof(rx) - 1, "rx %s/%s", a, b);
+            rc_strf(rx, sizeof(rx), "rx %s/%s", a, b);
         } else if (g_rx_done) {
             fmt_bytes(a, sizeof(a), g_rx_done);
-            _snprintf(rx, sizeof(rx) - 1, "rx %s", a);
+            rc_strf(rx, sizeof(rx), "rx %s", a);
         }
         if (g_tx_total) {
             fmt_bytes(a, sizeof(a), g_tx_done);
             fmt_bytes(b, sizeof(b), g_tx_total);
-            _snprintf(tx, sizeof(tx) - 1, "%stx %s/%s", rx[0] ? "  " : "", a, b);
+            rc_strf(tx, sizeof(tx), "%stx %s/%s", rx[0] ? "  " : "", a, b);
         } else if (g_tx_done) {
             fmt_bytes(a, sizeof(a), g_tx_done);
-            _snprintf(tx, sizeof(tx) - 1, "%stx %s", rx[0] ? "  " : "", a);
+            rc_strf(tx, sizeof(tx), "%stx %s", rx[0] ? "  " : "", a);
         }
-        _snprintf(buf, sizeof(buf), " %s%s", rx, tx);
+        rc_strf(buf, sizeof(buf), " %s%s", rx, tx);
         status_set(1, buf);
     } else {
         g_rx_done = g_rx_total = g_tx_done = g_tx_total = 0;
@@ -276,7 +277,7 @@ static void status_refresh(void)
      * is the difference between "working" and "hung", and it costs one
      * SB_SETTEXT a second rather than touching the transcript. */
     if (g_turn_active && g_turn_start_ms) {
-        _snprintf(buf, sizeof(buf), " %s %lus",
+        rc_strf(buf, sizeof(buf), " %s %lus",
                   g_streaming ? "receiving..." : "Claude is thinking...",
                   (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000));
         status_set(2, buf);
@@ -286,7 +287,7 @@ static void status_refresh(void)
 static void page_update_ui(void)
 {
     char lbl[64];
-    _snprintf(lbl, sizeof(lbl), "Page %d/%d%s",
+    rc_strf(lbl, sizeof(lbl), "Page %d/%d%s",
               g_view, g_total, g_is_live ? " (Live)" : "");
     SetWindowTextA(g_pagelbl, lbl);
 
@@ -309,7 +310,7 @@ static void page_goto_n(int n)
     char buf[16];
     if (n < 1) n = 1;
     if (n > g_total) n = g_total;
-    _snprintf(buf, sizeof(buf), "%d", n);
+    rc_strf(buf, sizeof(buf), "%d", n);
     page_goto(buf);
 }
 
@@ -474,11 +475,9 @@ static void perm_hide(void)
 static void halt_show(const char *id, const char *text)
 {
     if (!id || !*id) return;
-    _snprintf(g_halt_id, sizeof(g_halt_id) - 1, "%s", id);
-    g_halt_id[sizeof(g_halt_id) - 1] = '\0';
-    _snprintf(g_halt_text, sizeof(g_halt_text) - 1, "%s", text && *text
+    rc_strf(g_halt_id, sizeof(g_halt_id), "%s", id);
+    rc_strf(g_halt_text, sizeof(g_halt_text), "%s", text && *text
               ? text : "Stopped: a conflicting edit was found");
-    g_halt_text[sizeof(g_halt_text) - 1] = '\0';
 
     /* A permission request is on screen and has a deadline; this does not.
      * Keep the id and the text and come back when that bar clears -- taking
@@ -511,8 +510,7 @@ static void halt_hide(void)
 static void perm_show(const char *id, const char *text, int allows)
 {
     if (!id || !*id) return;
-    _snprintf(g_perm_id, sizeof(g_perm_id) - 1, "%s", id);
-    g_perm_id[sizeof(g_perm_id) - 1] = '\0';
+    rc_strf(g_perm_id, sizeof(g_perm_id), "%s", id);
     g_perm_pending = 1;
     g_bar_mode = BAR_PERM;
 
@@ -574,7 +572,7 @@ static void render_frame(rc_frame *f)
 
     if (strcmp(f->type, "READY") == 0) {
         v = rc_frame_get(f, "sess");
-        if (v) _snprintf(g_net.sess, sizeof(g_net.sess) - 1, "%s", v);
+        if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
         v = rc_frame_get(f, "next_seq");
         if (v) g_net.next_seq = (unsigned)atoi(v);
         v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
@@ -639,7 +637,7 @@ static void render_frame(rc_frame *f)
              * reordering belongs -- not on merely opening one. */
             chats_request();
             v = rc_frame_get(f, "cost_usd");
-            _snprintf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
+            rc_strf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
             status_set(2, buf);
 
         }
@@ -662,7 +660,7 @@ static void render_frame(rc_frame *f)
         }
         if (kind && id && label) {
             if (strcmp(kind, "model") == 0 && g_n_model < MAX_OPTS) {
-                _snprintf(g_opt_model[g_n_model], 63, "%s", id);
+                rc_strf(g_opt_model[g_n_model], 64, "%s", id);
                 AppendMenuA(g_menu_model,
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
                             IDM_MODEL0 + g_n_model, label);
@@ -674,7 +672,7 @@ static void render_frame(rc_frame *f)
                 const char *dis = rc_frame_get(f, "disabled");
                 UINT flags = MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED);
                 if (dis && *dis == '1') flags |= MF_GRAYED;
-                _snprintf(g_opt_effort[g_n_effort], 63, "%s", id);
+                rc_strf(g_opt_effort[g_n_effort], 64, "%s", id);
                 AppendMenuA(g_menu_effort, flags,
                             IDM_EFFORT0 + g_n_effort, label);
                 g_n_effort++;
@@ -705,8 +703,7 @@ static void render_frame(rc_frame *f)
              * newest first, so these come out in order on their own. */
             if (grp && *grp && strcmp(grp, g_chat_group) != 0
                 && g_chat_count < MAX_CHATS - 1) {
-                _snprintf(g_chat_group, sizeof(g_chat_group) - 1, "%s", grp);
-                g_chat_group[sizeof(g_chat_group) - 1] = '\0';
+                rc_strf(g_chat_group, sizeof(g_chat_group), "%s", grp);
                 g_chat_ids[g_chat_count][0] = '\0';
                 g_chat_is_header[g_chat_count] = 1;
                 SendMessageA(g_chats, LB_ADDSTRING, 0, (LPARAM)g_chat_group);
@@ -716,8 +713,7 @@ static void render_frame(rc_frame *f)
             /* No "* " marker any more: the selection highlight already says
              * which conversation is open, and a marker meant every switch had
              * to relabel the whole list. */
-            _snprintf(label, sizeof(label) - 1, "%s", title ? title : id);
-            label[sizeof(label) - 1] = '\0';
+            rc_strf(label, sizeof(label), "%s", title ? title : id);
             _snprintf(g_chat_ids[g_chat_count], 63, "%s", id);
             g_chat_is_header[g_chat_count] = 0;
             fit_label(label, sizeof(label), chats_text_width() - CHAT_INDENT);
@@ -747,7 +743,7 @@ static void render_frame(rc_frame *f)
         v = rc_frame_get(f, "total");
         if (v) g_total = atoi(v);
         v = rc_frame_get(f, "id");
-        if (v) _snprintf(g_net.sess, sizeof(g_net.sess) - 1, "%s", v);
+        if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
         /* Deliberately NOT refreshing the list here. Resuming a session
          * rewrites its file, so a refresh re-sorts by modification time and
          * yanks whatever you just opened to the top -- which is startling when
@@ -861,7 +857,7 @@ static void render_frame(rc_frame *f)
 
     } else if (strcmp(f->type, "ERROR") == 0) {
         char line[512];
-        _snprintf(line, sizeof(line) - 1, "\r\n[%s] %s\r\n",
+        rc_strf(line, sizeof(line), "\r\n[%s] %s\r\n",
                   rc_frame_get(f, "code") ? rc_frame_get(f, "code") : "error",
                   rc_frame_get(f, "msg") ? rc_frame_get(f, "msg") : "");
         rc_log("bridge error: %s", line);
@@ -872,9 +868,8 @@ static void render_frame(rc_frame *f)
         {
             char esc[1024], div[1200];
             esc_html(f->body, esc, sizeof(esc));
-            _snprintf(div, sizeof(div) - 1,
+            rc_strf(div, sizeof(div),
                       "<div class=\"notice\">%s</div>", esc);
-            div[sizeof(div) - 1] = '\0';
             rc_html_append(g_html, div);
         }
 
@@ -947,9 +942,8 @@ static void fit_label(char *label, unsigned cap, int avail_px)
     if (GetTextExtentExPointA(dc, label, n, avail_px, &fit, NULL, &sz)
         && fit < n) {
         if (fit > 3) fit -= 3; else fit = 1;
-        _snprintf(buf, sizeof(buf) - 1, "%.*s...", fit, label);
-        buf[sizeof(buf) - 1] = '\0';
-        _snprintf(label, cap - 1, "%s", buf);
+        rc_strf(buf, sizeof(buf), "%.*s...", fit, label);
+        rc_strf(label, cap, "%s", buf);
         label[cap - 1] = '\0';
     }
     SelectObject(dc, old);
@@ -1368,7 +1362,7 @@ static void try_connect(HWND hwnd)
          * is the right place for something that changes every few seconds. */
         if (!g_retry_noted) {
             char msg[160];
-            _snprintf(msg, sizeof(msg),
+            rc_strf(msg, sizeof(msg),
                       "Cannot reach %s:%d - retrying\r\n",
                       g_cfg.host, g_cfg.port);
             rc_html_append(g_html, msg);
@@ -1581,20 +1575,19 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
         case IDM_HOST: {
             char msg[320];
-            _snprintf(msg, sizeof(msg) - 1,
+            rc_strf(msg, sizeof(msg),
                       "Currently connecting to %s:%d.\n\n"
                       "Set this in retroclaude.ini next to the program:\n\n"
                       "  [bridge]\n  host=%s\n  port=%d\n\n"
                       "A dialog for this is still to come.",
                       g_cfg.host, g_cfg.port, g_cfg.host, g_cfg.port);
-            msg[sizeof(msg) - 1] = '\0';
             MessageBoxA(hwnd, msg, RC_TITLE, MB_OK | MB_ICONINFORMATION);
             return 0;
         }
 
         case IDM_ABOUT: {
             char msg[420];
-            _snprintf(msg, sizeof(msg) - 1,
+            rc_strf(msg, sizeof(msg),
                       RC_TITLE "\n\n"
                       "A native Windows 98 client for Claude Code.\n"
                       "Built with Open Watcom; the transcript is MSHTML.\n\n"

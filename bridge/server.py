@@ -476,10 +476,20 @@ class Bridge:
             await self._write_block(guest, H.tool_call(name, _summarise(args)))
 
         async def on_tool_result(tool_id: str, body: str, is_err: bool) -> None:
-            await self._send(guest, Frame(
-                "TOOLRESULT",
-                {"id": tool_id, "error": "1" if is_err else "0"},
-                fold.encode(body[:2000])))
+            # A finished block, like every other thing the user reads.
+            #
+            # This was a raw TOOLRESULT frame carrying plain text, and the
+            # guest has no branch for that frame type -- so it fell through to
+            # "unhandled frame type" and tool results have never appeared on
+            # Windows 98 at all. The user saw "Bash: ls", then nothing, then
+            # the model discussing output they could not see.
+            #
+            # Through _write_block it also enters the paginator, so it survives
+            # a reconnect and is still there when paging back. A raw frame
+            # never was. The tool_id is dropped: nothing correlated it, and the
+            # result already follows its own call in the transcript.
+            await self._flush_text(guest)
+            await self._write_block(guest, H.tool_result(body, error=is_err))
 
         async def on_system(subtype: str, data: dict) -> None:
             if subtype == "compact_boundary":

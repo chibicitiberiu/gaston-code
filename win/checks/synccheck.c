@@ -67,11 +67,38 @@ static int limits(void)
     return 0;
 }
 
+/* Containment, asserted against the real rc_sync_contained.
+ *
+ * This cannot be checked by walking a directory either: the inputs are paths
+ * a correct bridge never sends, and the whole point of the function is what
+ * happens when the bridge is the thing that is wrong. Prints one line per
+ * case so the Python side diffs the verdicts rather than trusting a comment.
+ */
+static int contained(void)
+{
+    static const char *cases[] = {
+        /* must be REFUSED */
+        "..", "../x", "a/../../x", ".", "./x", "a/./b",
+        "a\\..\\..\\x",          /* the hole: no '/' at all */
+        "..\\x", "a\\..", "a/..\\b", "a\\../b",
+        "/abs", "\\abs", "C:\\x", "a//b", "a\\\\b", "",
+        /* must be ALLOWED */
+        "a", "a/b", "a/b/c.txt", "..a", "a..", "a/..b", "dot.dot/x",
+        NULL
+    };
+    int i;
+    for (i = 0; cases[i]; i++)
+        printf("%s\t%s\n", rc_sync_contained(cases[i]) ? "allow" : "refuse",
+               cases[i]);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int n;
     if (argc >= 2 && strcmp(argv[1], "--limits") == 0) return limits();
-    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--limits\n"); return 2; }
+    if (argc >= 2 && strcmp(argv[1], "--contained") == 0) return contained();
+    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--limits|--contained\n"); return 2; }
     n = rc_sync_scan(argv[1], emit, NULL);
     if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
     if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }

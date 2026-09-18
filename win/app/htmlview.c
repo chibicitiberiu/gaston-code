@@ -26,6 +26,7 @@
 #include <string.h>
 #include "app/htmlview.h"
 #include "core/log.h"
+#include "core/str.h"
 
 typedef struct Host {
     IOleClientSite     site;
@@ -295,8 +296,7 @@ void rc_html_set_document(rc_html *v, const char *doc)
      * is exactly one asynchronous step to wait on instead of two. */
     GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
     { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
-    _snprintf(v->path, sizeof(v->path) - 1, "%s\\view.htm", dir);
-    v->path[sizeof(v->path) - 1] = '\0';
+    rc_strf(v->path, sizeof(v->path), "%s\\view.htm", dir);
     f = fopen(v->path, "wb");
     if (!f) { rc_log("html: cannot write %s", v->path); return; }
     fputs(doc, f);
@@ -320,8 +320,7 @@ void rc_html_set_document(rc_html *v, const char *doc)
     {
         char url8[MAX_PATH + 16];
         char *p;
-        _snprintf(url8, sizeof(url8) - 1, "file:///%s", v->path);
-        url8[sizeof(url8) - 1] = '\0';
+        rc_strf(url8, sizeof(url8), "file:///%s", v->path);
         for (p = url8; *p; p++) if (*p == '\\') *p = '/';
         url = to_bstr(url8);
     }

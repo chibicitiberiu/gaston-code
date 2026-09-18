@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "core/str.h"
 #include <objbase.h>
 #include "miniz.h"
 
@@ -115,7 +116,7 @@ static unsigned __stdcall worker_beginthreadex(void *arg)
         strcpy(buf, "a,b,c");
         tok = strtok(buf, ",");
         while (tok) tok = strtok(NULL, ",");
-        _snprintf(buf, sizeof(buf), "%d", i);
+        rc_strf(buf, sizeof(buf), "%d", i);
         InterlockedIncrement(&g_ticks);
         Sleep(10);
     }
@@ -265,8 +266,7 @@ static int run_capture(const char *cmdline, char *out, unsigned outsz,
     si.hStdError = wr;          /* both into one pipe, as exec.c does */
     si.hStdInput = NULL;
 
-    _snprintf(cmd, sizeof(cmd) - 1, "%s", cmdline);
-    cmd[sizeof(cmd) - 1] = '\0';
+    rc_strf(cmd, sizeof(cmd), "%s", cmdline);
 
     /* CREATE_NO_WINDOW is invalid for a 16-bit child, hence SW_HIDE above. */
     if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0,
@@ -347,17 +347,17 @@ static void probe_exec(void)
     say("shell for this OS: %s%s", shell, is9x ? "  (16-bit!)" : "");
     say("The assertion is 'output non-empty AND correct', not 'did not hang'.");
 
-    _snprintf(cmd, sizeof(cmd), "%s /c echo RETROCLAUDE_MARKER", shell);
+    rc_strf(cmd, sizeof(cmd), "%s /c echo RETROCLAUDE_MARKER", shell);
     try_cmd("echo through the shell", cmd, "RETROCLAUDE_MARKER");
 
-    _snprintf(cmd, sizeof(cmd), "%s /c ver", shell);
+    rc_strf(cmd, sizeof(cmd), "%s /c ver", shell);
     try_cmd("ver", cmd, NULL);
 
-    _snprintf(cmd, sizeof(cmd), "%s /c dir c:\\ /w", shell);
+    rc_strf(cmd, sizeof(cmd), "%s /c dir c:\\ /w", shell);
     try_cmd("dir", cmd, NULL);
 
     /* FIND is the known-bad 16-bit tool. */
-    _snprintf(cmd, sizeof(cmd),
+    rc_strf(cmd, sizeof(cmd),
               "%s /c echo hello | find \"hello\"", shell);
     try_cmd("pipe through FIND (known-bad 16-bit tool)", cmd, "hello");
 

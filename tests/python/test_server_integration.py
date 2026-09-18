@@ -7,6 +7,7 @@ model is exercised separately by netcheck.exe.
 """
 
 import asyncio
+import zlib
 from dataclasses import dataclass, field
 
 import pytest
@@ -16,6 +17,7 @@ from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
 
 from bridge.wire.compress import StreamDecompressor
 from bridge.wire.protocol import Frame, FrameReader, MAX_FRAME, PROTO_VERSION, hello
+from bridge import server as srv
 from bridge.server import Bridge
 
 
@@ -911,3 +913,48 @@ async def test_output_is_capped_here_too_and_says_it_was(harness):
     assert len(text) < 4 * 32768, "the buffer grew past the bridge's own cap"
     assert "truncated" in text, "capped without saying so"
     await harness.close(writer)
+
+
+async def test_a_tool_result_reaches_the_guest_as_a_block(harness):
+    """Tool results have never appeared on Windows 98.
+
+    They went out as a raw TOOLRESULT frame carrying plain text, and the guest
+    has no branch for that type -- it fell through to "unhandled frame type".
+    The user saw the call ("Bash: ls"), then silence, then the model
+    discussing output they could not see.
+
+    A finished block instead, like everything else the user reads: the guest
+    transforms nothing, and going through _write_block also puts it in the
+    paginator, so it survives a reconnect and is still there when paging back.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    await harness.bridge._write_block(
+        guest, srv.H.tool_result("total 4\ndrwxr-xr-x  work\n"))
+
+    frame = await _recv(harness, reader, "TEXT")
+    body = frame.body
+    if frame.headers.get("enc") == "deflate":
+        body = zlib.decompressobj().decompress(body)
+    text = body.decode("cp1252")
+    assert "toolresult" in text
+    assert "drwxr-xr-x" in text
+    assert frame.type != "TOOLRESULT", "a frame the guest has no handler for"
+
+
+def test_a_tool_result_is_clipped_for_the_screen_not_the_model():
+    """A `dir /s` is megabytes. The model already has the whole thing; the
+    person on a 640x480 screen with 32MB does not need it, and the guest
+    should not spend memory holding it."""
+    from bridge.view import html as H
+    out = H.tool_result("x" * 50_000)
+    assert len(out) < 4000
+    assert "more characters were sent to the model" in out
+
+
+def test_an_empty_tool_result_still_says_something():
+    """Silence is indistinguishable from a bug, which is how this was found."""
+    from bridge.view import html as H
+    assert "(no output)" in H.tool_result("")
+    assert "(no output)" in H.tool_result("   \n ")

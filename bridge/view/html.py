@@ -105,9 +105,44 @@ def user_turn(text: str) -> str:
             + "</div>")
 
 
+#: A tool result is for the person watching, not for the model -- it already
+#: has the whole thing. Long enough to be useful on a 640x480 screen and
+#: short enough not to spend the guest's memory on a `dir /s`.
+_TOOL_RESULT_MAX = 1200
+
+
 def tool_call(name: str, summary: str) -> str:
     return ('<div class="tool"><span class="toolname">' + esc(name)
             + "</span> " + esc(summary) + "</div>")
+
+
+def tool_result(body: str, *, error: bool = False) -> str:
+    """What a tool actually returned, as a finished block.
+
+    This used to go out as a raw TOOLRESULT frame carrying plain text, and the
+    guest had NO handler for it -- so tool results have never appeared on
+    Windows 98 at all. The user saw the call ("Bash: ls") and then silence,
+    then whatever the model said next about output they could not see.
+
+    Rendered here rather than there for the reason everything else is: the
+    guest transforms nothing. Going through _write_block also puts it in the
+    paginator, so it survives a reconnect and is still there when paging back
+    -- which a raw frame never was.
+
+    Capped, because a tool can return a great deal more than a 640x480 screen
+    or a 32MB machine wants, and the model already has the full text.
+    """
+    body = (body or "").strip()
+    if not body:
+        body = "(no output)"
+    clipped = body[:_TOOL_RESULT_MAX]
+    out = ('<div class="toolresult' + (' err' if error else '') + '"><pre>'
+           + esc(clipped) + "</pre>")
+    if len(body) > _TOOL_RESULT_MAX:
+        out += ('<div class="clip">-- shown to you in full; '
+                + str(len(body) - _TOOL_RESULT_MAX)
+                + " more characters were sent to the model --</div>")
+    return out + "</div>"
 
 
 def notice(text: str) -> str:
@@ -365,6 +400,13 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
         background: #f2f7f2; border-left: 2px solid #008000;
         padding: 3px 6px; margin: 6px 0; }
 .toolname { font-weight: bold; }
+.toolresult { font: 8pt 'Courier New', monospace; color: #303030;
+              background: #f4f4f4; border-left: 3px solid #b0b0b0;
+              padding: 2px 6px; margin: 2px 0 6px 0; }
+.toolresult pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; }
+.toolresult.err { color: #a00000; background: #fff0f0;
+                  border-left-color: #a00000; }
+.clip { color: #808080; font-style: normal; margin-top: 2px; }
 .notice { color: #808080; font-style: italic; margin: 6px 0; }
 .err { color: #a00000; background: #fff0f0; border-left: 3px solid #a00000;
        padding: 4px 6px; margin: 7px 0; font-weight: bold; }

@@ -3,10 +3,11 @@
 #include <string.h>
 #include "core/ini.h"
 #include "core/log.h"
+#include "core/str.h"
 
 static void ini_path(char *out, unsigned n, const char *exe_dir)
 {
-    _snprintf(out, n - 1, "%s\\retroclaude.ini", exe_dir);
+    rc_strf(out, n, "%s\\retroclaude.ini", exe_dir);
     out[n - 1] = '\0';
 }
 
@@ -45,14 +46,14 @@ void rc_config_save(const rc_config *cfg, const char *exe_dir)
     ini_path(path, sizeof(path), exe_dir);
 
     WritePrivateProfileStringA("bridge", "host", cfg->host, path);
-    _snprintf(num, sizeof(num), "%d", cfg->port);
+    rc_strf(num, sizeof(num), "%d", cfg->port);
     WritePrivateProfileStringA("bridge", "port", num, path);
     WritePrivateProfileStringA("bridge", "secret", cfg->secret, path);
-    _snprintf(num, sizeof(num), "%d", cfg->autoscroll);
+    rc_strf(num, sizeof(num), "%d", cfg->autoscroll);
     WritePrivateProfileStringA("ui", "autoscroll", num, path);
     /* Every field that load() reads, save() must write. font_size was missed
      * for months and the same omission would make a sync root vanish. */
-    _snprintf(num, sizeof(num), "%d", cfg->font_size);
+    rc_strf(num, sizeof(num), "%d", cfg->font_size);
     WritePrivateProfileStringA("ui", "font_size", num, path);
     WritePrivateProfileStringA("sync", "root", cfg->sync_root, path);
 }

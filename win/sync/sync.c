@@ -14,6 +14,7 @@
 #include <string.h>
 #include "sync/sync.h"
 #include "core/log.h"
+#include "core/str.h"
 #include "miniz.h"
 
 void rc_sync_init(void) { }
@@ -215,26 +216,46 @@ int rc_sync_contained(const char *rel)
 
     /* Reject "..", and "." as a whole component, without resolving anything.
      * Resolving would mean deciding what a path means; refusing means the
-     * question never arises. */
+     * question never arises.
+     *
+     * BOTH separators, and that is the whole of the bug this replaces. The
+     * split was on '/' alone, so `a\..\..\x` contained no '/' at all and was
+     * read as ONE nine-character component -- not "..", not ".", not empty --
+     * and passed. join() then wrote `<root>\a\..\..\x` and handed it to Win32,
+     * which resolves `..` and leaves the sync root entirely. A bridge could
+     * write anywhere the guest's user can.
+     *
+     * The wire format says components are '/'-separated and '\' is on the
+     * illegal-character list precisely so it cannot appear inside one -- but
+     * that is a rule the BRIDGE enforces, and this function exists for the
+     * case where the bridge is the thing that is wrong. It cannot lean on a
+     * guarantee made by the party it is checking. */
     while (*p) {
         const char *seg = p;
         unsigned len = 0;
-        while (*p && *p != '/') { p++; len++; }
+        while (*p && *p != '/' && *p != '\\') { p++; len++; }
         if (len == 2 && seg[0] == '.' && seg[1] == '.') return 0;
         if (len == 1 && seg[0] == '.') return 0;
         if (len == 0) return 0;                      /* empty component */
-        if (*p == '/') p++;
+        if (*p == '/' || *p == '\\') p++;
     }
     return 1;
 }
 
-static void join(char *out, unsigned cap, const char *root, const char *rel)
+/* Returns 1 if the whole path fit, 0 if it was truncated.
+ *
+ * It used to return void, and that is not a detail. A truncated join produces
+ * a VALID-LOOKING path to a different file, so every caller went on to stat,
+ * open or rename the wrong thing with no way to find out. Two of the bugs
+ * fixed on 2026-09-18 came through here. Callers that act on the result now
+ * check it. */
+static int join(char *out, unsigned cap, const char *root, const char *rel)
 {
     char *q;
-    _snprintf(out, cap - 1, "%s\\%s", root, rel);
-    out[cap - 1] = '\0';
+    int ok = rc_strf(out, cap, "%s\\%s", root, rel);
     for (q = out + strlen(root); *q; q++)
         if (*q == '/') *q = '\\';
+    return ok;
 }
 
 /* --- the walk ------------------------------------------------------------ */
@@ -265,8 +286,7 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
     if (depth > RC_SYNC_MAX_DEPTH || w->overflow) return;
 
     if (*rel) join(pattern, sizeof(pattern), root, rel);
-    else      _snprintf(pattern, sizeof(pattern) - 1, "%s", root);
-    pattern[sizeof(pattern) - 1] = '\0';
+    else      rc_strf(pattern, sizeof(pattern), "%s", root);
     strncat(pattern, "\\*", sizeof(pattern) - strlen(pattern) - 1);
 
     h = FindFirstFileA(pattern, &fd);
@@ -288,9 +308,8 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
         /* ALWAYS the long name, never cAlternateFileName. The 8.3 alias is not
          * stable -- deleting one file renumbers ~1/~2 for the others -- so
          * keying on it would rename files at random. */
-        if (*rel) _snprintf(child, sizeof(child) - 1, "%s/%s", rel, fd.cFileName);
-        else      _snprintf(child, sizeof(child) - 1, "%s", fd.cFileName);
-        child[sizeof(child) - 1] = '\0';
+        if (*rel) rc_strf(child, sizeof(child), "%s/%s", rel, fd.cFileName);
+        else      rc_strf(child, sizeof(child), "%s", fd.cFileName);
 
         if (w->count >= RC_SYNC_MAX_FILES) { w->overflow = 1; break; }
 
@@ -324,7 +343,16 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
             w->count++;
             walk(root, child, depth + 1, w);
         } else {
-            join(full, sizeof(full), root, child);
+            /* A truncated join names a DIFFERENT file, so stat'ing it would
+             * report someone else's size and checksum under this path. `u`
+             * says what is true: it is there and we cannot address it. */
+            if (!join(full, sizeof(full), root, child)) {
+                memset(&st, 0, sizeof(st));
+                st.type = 'u';
+                w->sink(w->ctx, child, &st);
+                w->count++;
+                continue;
+            }
             rc_sync_stat_file(full, &st);
             /* type 0 means the stat found nothing where FindNextFileA had just
              * seen something. Emitting it as-is put a row on the wire whose
@@ -398,7 +426,7 @@ HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
     }
 
     join(full, sizeof(full), root, rel);
-    _snprintf(tmp_out, tmp_cap - 1, "%s.gaston-tmp", full);
+    rc_strf(tmp_out, tmp_cap, "%s.gaston-tmp", full);
     tmp_out[tmp_cap - 1] = '\0';
 
     /* Binary mode by construction -- CreateFileA does no translation. Using
@@ -456,8 +484,7 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
         return -4;
     }
 
-    _snprintf(aside, sizeof(aside) - 1, "%s.gaston-old", full);
-    aside[sizeof(aside) - 1] = '\0';
+    rc_strf(aside, sizeof(aside), "%s.gaston-old", full);
     DeleteFileA(aside);
     if (attr != 0xFFFFFFFF) MoveFileA(full, aside);
 
@@ -480,8 +507,7 @@ static void recover_dir(const char *root, const char *rel, int depth)
 
     if (depth > RC_SYNC_MAX_DEPTH) return;
     if (*rel) join(pattern, sizeof(pattern), root, rel);
-    else      _snprintf(pattern, sizeof(pattern) - 1, "%s", root);
-    pattern[sizeof(pattern) - 1] = '\0';
+    else      rc_strf(pattern, sizeof(pattern), "%s", root);
     strncat(pattern, "\\*", sizeof(pattern) - strlen(pattern) - 1);
 
     h = FindFirstFileA(pattern, &fd);
@@ -492,9 +518,8 @@ static void recover_dir(const char *root, const char *rel, int depth)
             (fd.cFileName[1] == '\0' ||
              (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0')))
             continue;
-        if (*rel) _snprintf(child, sizeof(child) - 1, "%s/%s", rel, fd.cFileName);
-        else      _snprintf(child, sizeof(child) - 1, "%s", fd.cFileName);
-        child[sizeof(child) - 1] = '\0';
+        if (*rel) rc_strf(child, sizeof(child), "%s/%s", rel, fd.cFileName);
+        else      rc_strf(child, sizeof(child), "%s", fd.cFileName);
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             recover_dir(root, child, depth + 1);
@@ -502,8 +527,7 @@ static void recover_dir(const char *root, const char *rel, int depth)
         }
         if (len > 11 && strcmp(fd.cFileName + len - 11, ".gaston-old") == 0) {
             join(aside, sizeof(aside), root, child);
-            _snprintf(real, sizeof(real) - 1, "%s", aside);
-            real[sizeof(real) - 1] = '\0';
+            rc_strf(real, sizeof(real), "%s", aside);
             real[strlen(real) - 11] = '\0';
             if (GetFileAttributesA(real) == 0xFFFFFFFF) {
                 rc_log("sync: recovering %s -- an interrupted commit", real);
