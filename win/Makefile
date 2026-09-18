@@ -130,7 +130,21 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 	  | grep -E 'SetHandleInformation|OpenSCManager|CM_Get|GetGuiResources' \
 	  && echo "  ^^ NT-ONLY IMPORT -- WILL NOT LOAD ON WIN9X" || echo "  clean"
 
-all: $(BUILD)/retroclaude.exe
+# `all` builds the CHECK BINARIES TOO, and that is not tidiness.
+#
+# It used to be retroclaude.exe alone, so every check binary was only ever
+# rebuilt by naming its own target. tests/python runs them under Wine, which
+# means the suite happily ran an hours-old netcheck.exe against freshly
+# changed net.cpp and reported a pass -- the exact failure the standing rule
+# about verifying the real thing exists to stop, arriving through the build
+# system instead of the platform. Caught when a new --slowsend mode was
+# "missing" from a binary that predated it, and the test's own argv parse
+# printed the flag as a hostname.
+#
+# The cost is a few seconds. A green suite that tested the previous commit is
+# worth far less than that.
+all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
+     netcheck rpccheck probe htmlspike capscheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
