@@ -88,6 +88,10 @@ class PendingPrompt:
     # re-rendering it from a context object that is long out of scope.
     body: str = ""
     allows: bool = False
+    # The bar's one-line STATIC text. Was attached dynamically after
+    # construction (server.py), which made every reader a defensive
+    # getattr(prompt, "summary", prompt.tool_name) -- declared here instead.
+    summary: str = ""
 
 
 def session_scoped(suggestions: list) -> list:

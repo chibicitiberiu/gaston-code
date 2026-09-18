@@ -239,6 +239,37 @@ class GuestSession:
     def connected(self) -> bool:
         return self.link.connected
 
+    # --- transcript housekeeping --------------------------------------------
+    #
+    # Both belong to what the audit calls TranscriptView (02.2/02.18/02.17a):
+    # not extracted into its own class here, but no longer duplicated either.
+
+    def set_link_speed(self, bps: float | None) -> None:
+        """Propagate a measured (or CLI-default) link speed to every live
+        coalescer, so a conversation already streaming picks it up too, not
+        only ones started after. Was `guest.link_bps = bps; for c in
+        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites."""
+        self.link_bps = bps
+        for c in self.coalescers.values():
+            c.set_link_speed(bps)
+
+    async def reset_transcript(self) -> None:
+        """Start over: a fresh paginator and renderer, every live coalescer
+        stopped and dropped, and the view back on LIVE.
+
+        `_new_session` and `_switch` each rebuilt this by hand, with their
+        own copy of the default page limits -- one of them written as
+        `guest.page_bytes or None or 16384`, where `or None` did nothing at
+        all (`x or None` is `None` exactly when `x or 16384` would already
+        have chosen 16384). docs/audit/02-bridge-python.md 02.17/02.18.
+        """
+        self.pages = Paginator(self.page_bytes or 16384, self.page_blocks or 90)
+        self.render = HtmlStream()
+        for c in self.coalescers.values():
+            await c.stop()
+        self.coalescers.clear()
+        self.view_page = None
+
 
 class Bridge:
     def __init__(
@@ -531,9 +562,7 @@ class Bridge:
         guest.hello = dict(h)
         guest.caps = caps
 
-        guest.link_bps = self.link_bps
-        for c in guest.coalescers.values():
-            c.set_link_speed(guest.link_bps)
+        guest.set_link_speed(self.link_bps)
 
         if guest.claude is None:
             guest.claude = await self._make_session(guest)
@@ -752,8 +781,8 @@ class Bridge:
                 body=render_request(tool_name, args, ctx),
                 allows=perms.allows_always(
                     tool_name, getattr(ctx, "suggestions", None) or []),
+                summary=perms.summary(tool_name, ctx, args),
             )
-            prompt.summary = perms.summary(tool_name, ctx, args)
 
             try:
                 await self._enqueue_prompt(guest, prompt)
@@ -796,8 +825,7 @@ class Bridge:
         await self._write_block(guest, prompt.body)
         await self._send(guest, permreq(
             prompt.tool_use_id, prompt.tool_name, prompt.allows,
-            len(guest.perm_queue),
-            getattr(prompt, "summary", prompt.tool_name)))
+            len(guest.perm_queue), prompt.summary))
 
     async def _reissue_prompt(self, guest: GuestSession) -> None:
         """P1: after a reconnect, put the bar back."""
@@ -808,8 +836,7 @@ class Bridge:
                  prompt.tool_use_id)
         await self._send(guest, permstate(
             prompt.tool_use_id, prompt.tool_name, prompt.allows,
-            len(guest.perm_queue),
-            getattr(prompt, "summary", prompt.tool_name)))
+            len(guest.perm_queue), prompt.summary))
 
     async def _send_sessions(self, guest: GuestSession) -> None:
         """The chat list. Only conversations this bridge started -- the rest
@@ -1136,9 +1163,7 @@ class Bridge:
             except ValueError:
                 bps = 0.0
             if bps > 0:
-                guest.link_bps = bps
-                for c in guest.coalescers.values():
-                    c.set_link_speed(bps)
+                guest.set_link_speed(bps)
                 log.info("guest reports %.0f B/s", bps)
 
         elif f.type == "PING":
@@ -2249,13 +2274,7 @@ class Bridge:
         if guest.claude:
             await guest.claude.close()
 
-        guest.pages = Paginator(guest.page_bytes or 16384,
-                                guest.page_blocks or 90)
-        guest.render = HtmlStream()
-        for c in guest.coalescers.values():
-            await c.stop()
-        guest.coalescers.clear()
-        guest.view_page = None
+        await guest.reset_transcript()
 
         try:
             guest.claude = await self._make_session(guest)
@@ -2288,12 +2307,7 @@ class Bridge:
             await guest.claude.close()
 
         # Fresh transcript state. Anything the old session had is on disk.
-        guest.pages = Paginator(guest.page_bytes or None or 16384,
-                                guest.page_blocks or 90)
-        guest.render = HtmlStream()
-        for c in guest.coalescers.values():
-            await c.stop()
-        guest.coalescers.clear()
+        await guest.reset_transcript()
 
         try:
             guest.claude = await self._make_session(guest, resume=session_id)
@@ -2307,7 +2321,8 @@ class Bridge:
             if guest.pages.live.over_soft_cap():
                 guest.pages.message_boundary()
 
-        guest.view_page = None
+        # reset_transcript() above already set view_page to None; nothing
+        # in between reads or writes it.
         await self._send(guest, switched(session_id, guest.pages.count))
         await self._send_page(guest, "live")
 
