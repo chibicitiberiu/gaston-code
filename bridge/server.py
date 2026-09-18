@@ -75,6 +75,7 @@ from .wire.protocol import (
 from .wire.link import GuestLink
 from .wire.replay import Replay
 from .files.synctransport import GuestSyncState, SyncTransport
+from .view.transcript import TranscriptView
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
 from .files.sync import AckResult, GetResult, ScanResult
@@ -134,9 +135,6 @@ class GuestSession:
     #: What the bar says, kept so it can be put back after a reconnect. The id
     #: alone is not enough to redisplay it.
     halt_text: str = ""
-    # Page caps for THIS guest, scaled to the RAM it reported in HELLO.
-    page_bytes: int = 0
-    page_blocks: int = 0
     # The machine facts from HELLO, kept so every session this guest opens
     # gets the same description of the computer it is acting for.
     hello: dict = field(default_factory=dict)
@@ -148,22 +146,15 @@ class GuestSession:
     # client actually declared. See docs/audit/02-bridge-python.md #02.22.
     caps: "C.Caps | None" = None
 
-    # Which page the guest is showing. None means LIVE (follow the last page).
-    # In HISTORY mode the bridge keeps buffering silently; the page counter
-    # ticking up in the status bar is the new-content notification.
-    view_page: int | None = None
-
-    # One coalescer per source stream (assistant text, thinking). Coalescing
-    # happens BEFORE rendering, so the renderer receives whole lines in ~2KB
-    # batches rather than single tokens -- which is what lets it close blocks
-    # properly and keeps the number of DOM updates on the guest down.
-    coalescers: dict = field(default_factory=dict)
-    render: HtmlStream = field(default_factory=HtmlStream)
-
-    # The transcript lives here, in full. The guest only ever holds one page,
-    # which is what bounds its memory by page size rather than by conversation
-    # length.
-    pages: Paginator = field(default_factory=Paginator)
+    #: What this guest is watching and how much of it fits: the paginator,
+    #: the renderer, the per-stream coalescers, which page is on screen, and
+    #: the two page-size limits scaled to this guest's RAM at handshake --
+    #: the audit's "View" GuestSession group (02.2), moved onto its own type
+    #: in bridge/view/transcript.py the same way `link: GuestLink` already
+    #: did for the connection. `pages`/`render`/`coalescers`/`view_page`/
+    #: `page_bytes`/`page_blocks` below forward here so nothing outside this
+    #: file had to change shape.
+    view: TranscriptView = field(default_factory=TranscriptView)
 
     # The permission prompt currently on the guest's screen, and the ones
     # queued behind it. The model can request tools in parallel; a single
@@ -263,36 +254,73 @@ class GuestSession:
     def sync_active(self, v: bool) -> None:
         self.sync.active = v
 
+    # --- forwarded to self.view, for the same reason as self.link above -----
+
+    @property
+    def pages(self) -> Paginator:
+        return self.view.pages
+
+    @pages.setter
+    def pages(self, p: Paginator) -> None:
+        self.view.pages = p
+
+    @property
+    def render(self) -> HtmlStream:
+        return self.view.render
+
+    @render.setter
+    def render(self, r: HtmlStream) -> None:
+        self.view.render = r
+
+    @property
+    def coalescers(self) -> dict:
+        return self.view.coalescers
+
+    @property
+    def view_page(self) -> int | None:
+        return self.view.view_page
+
+    @view_page.setter
+    def view_page(self, n: int | None) -> None:
+        self.view.view_page = n
+
+    @property
+    def page_bytes(self) -> int:
+        return self.view.page_bytes
+
+    @page_bytes.setter
+    def page_bytes(self, n: int) -> None:
+        self.view.page_bytes = n
+
+    @property
+    def page_blocks(self) -> int:
+        return self.view.page_blocks
+
+    @page_blocks.setter
+    def page_blocks(self, n: int) -> None:
+        self.view.page_blocks = n
+
     # --- transcript housekeeping --------------------------------------------
-    #
-    # Both belong to what the audit calls TranscriptView (02.2/02.18/02.17a):
-    # not extracted into its own class here, but no longer duplicated either.
 
     def set_link_speed(self, bps: float | None) -> None:
         """Propagate a measured (or CLI-default) link speed to every live
         coalescer, so a conversation already streaming picks it up too, not
         only ones started after. Was `guest.link_bps = bps; for c in
-        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites."""
+        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites.
+
+        Spans two of the audit's groups (Link's `link_bps`, View's
+        `coalescers`) and stays here, on the composition root, rather than on
+        either `GuestLink` or `TranscriptView` -- neither owns both halves of
+        what it does.
+        """
         self.link_bps = bps
-        for c in self.coalescers.values():
+        for c in self.view.coalescers.values():
             c.set_link_speed(bps)
 
     async def reset_transcript(self) -> None:
-        """Start over: a fresh paginator and renderer, every live coalescer
-        stopped and dropped, and the view back on LIVE.
-
-        `_new_session` and `_switch` each rebuilt this by hand, with their
-        own copy of the default page limits -- one of them written as
-        `guest.page_bytes or None or 16384`, where `or None` did nothing at
-        all (`x or None` is `None` exactly when `x or 16384` would already
-        have chosen 16384). docs/audit/02-bridge-python.md 02.17/02.18.
-        """
-        self.pages = Paginator(self.page_bytes or 16384, self.page_blocks or 90)
-        self.render = HtmlStream()
-        for c in self.coalescers.values():
-            await c.stop()
-        self.coalescers.clear()
-        self.view_page = None
+        """`TranscriptView.reset()`, kept as a same-named delegation so
+        `_new_session`/`_switch` did not have to change shape (02.2)."""
+        await self.view.reset()
 
 
 class Bridge:
@@ -578,7 +606,7 @@ class Bridge:
         if self._guest is None:
             self._guest = GuestSession(
                 sess_id=str(uuid.uuid4()),
-                pages=Paginator(page_bytes, page_blocks))
+                view=TranscriptView(pages=Paginator(page_bytes, page_blocks)))
         guest = self._guest
         guest.writer = writer
         guest.page_bytes = page_bytes
