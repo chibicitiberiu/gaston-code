@@ -1696,7 +1696,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     memset(&icc, 0, sizeof(icc));
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_BAR_CLASSES;
+    /* ICC_BAR_CLASSES covers the toolbar, status bar, trackbar and tooltip.
+     * It does NOT cover the progress bar -- that is ICC_PROGRESS_CLASS, and
+     * without it CreateWindow on PROGRESS_CLASS fails at the moment a
+     * transfer first wants to show progress, which is Phase 5's attachment
+     * upload. One word now against a failure that would present as "the
+     * progress bar does not appear" on a machine with no debugger. */
+    icc.dwICC = ICC_BAR_CLASSES | ICC_PROGRESS_CLASS;
     InitCommonControlsEx(&icc);
 
     rc_config_load(&g_cfg, g_exe_dir);

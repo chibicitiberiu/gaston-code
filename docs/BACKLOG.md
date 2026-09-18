@@ -240,3 +240,32 @@ same rounds and deliberately left.
   unverified, and `tools/runvm.sh` specifies `pcnet` where the live domain is
   `ne2k_isa`, so a run built on it would come up with no network and look like
   a bridge bug.
+
+## 6. CANCEL, and the chunked-transfer primitive it belongs to
+
+**Status:** deferred by decision, 2026-09-18, from audit finding 04.4.
+
+`PLAN.md` mandates a Cancel on any transfer with a progress bar. There is no
+`CANCEL` frame anywhere, on either side.
+
+**Why it is deferred rather than built.** It has no caller yet. The transfers
+that exist today -- a sync push, a sync get, `EXECOUT` -- are each bounded and
+already interruptible by other means (`EXECKILL`, and a sync pass that commits
+per path and is safe to cut short). The transfer that genuinely needs Cancel is
+Phase 5's attachment upload from the guest's own disk, which does not exist.
+
+Building the frame now would mean guessing its shape against no user, and the
+audit is explicit that there are already **four ad-hoc chunked transfers**
+(`_send_html`, `Pass.push`, `do_get`, `EXECOUT`) with three more coming. Cancel
+belongs to whatever primitive unifies those, not beside them as a fifth
+special case.
+
+**To close it:** design the chunked-transfer primitive (audit 04.3) and give it
+Cancel as a property. `do_put` is already a chunked sink and `do_get` a chunked
+source, so the shape exists twice in the guest and wants naming rather than
+inventing.
+
+**Done now, because it is one word and it is a trap:** `ICC_PROGRESS_CLASS` is
+registered alongside `ICC_BAR_CLASSES`. It was not, so the first
+`CreateWindow(PROGRESS_CLASS, ...)` would have failed on a machine with no
+debugger, presenting as "the progress bar does not appear".
