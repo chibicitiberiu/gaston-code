@@ -103,11 +103,6 @@ class Frame:
     # --- convenience accessors for the headers every frame may carry ---
 
     @property
-    def seq(self) -> int | None:
-        v = self.headers.get("seq")
-        return int(v) if v is not None else None
-
-    @property
     def enc(self) -> str:
         return self.headers.get("enc", "raw")
 
@@ -189,7 +184,7 @@ class FrameReader:
 # --- frame constructors -----------------------------------------------------
 #
 # This IS the protocol's vocabulary, as far as the bridge -> guest direction
-# goes: one constructor per frame type the bridge sends, so `stamp=`, header
+# goes: one constructor per frame type the bridge sends, so header
 # stringification and `fold.encode` are decided once here rather than
 # independently at every `Frame(...)` call site (docs/audit/02-bridge-python.md
 # #1.1). `GuestLink` (bridge/wire/link.py) is the seam that owns HOW a frame
@@ -198,14 +193,15 @@ class FrameReader:
 # constructor takes the values that vary and returns a `Frame` whose headers
 # are always shaped the same way for that type.
 #
-# `stamp=` -- whether a frame enters the replay buffer -- is deliberately NOT
-# decided here. It is almost always a property of the type (an EXEC or an
-# EXECKILL must never be replayed; a reissue after reconnect restores state
-# that already happened and must not replay either), but TURN start is sent
-# both ways: a fresh turn should replay, an after-reconnect reissue of the
-# busy UI (Bridge._reissue_turn) must not, for the SAME headers. So `stamp=`
-# stays an explicit argument at the `GuestLink.send` call site, same as
-# before -- only the header-building duplication is gone.
+# `stamp=` used to live at the `GuestLink.send` call site, marking which
+# frames entered the per-session replay buffer -- an EXEC or EXECKILL must
+# never be replayed, a reissue after reconnect must not replay either, but a
+# fresh TURN start should. Retired with the buffer itself (2026-09-18,
+# docs/BACKLOG.md #5): the guest never sent `from=`, so nothing ever replayed
+# anything, and every frame just goes out once, when it is sent. The
+# never-replay invariant for EXEC/EXECKILL/SYNC* still holds -- see
+# `test_exec_is_never_re_delivered` in test_server_integration.py -- it is
+# just no longer a flag this module hands to the sender.
 #
 # HELLO and ERROR predate this: they are sent before a GuestSession exists to
 # hang a send helper off (both fakegui and the guest open a connection with
@@ -221,14 +217,19 @@ class FrameReader:
 # bridge actually sends today.
 
 
-def hello(secret: str, sess: str | None = None, from_seq: int | None = None) -> Frame:
+def hello(secret: str, sess: str | None = None) -> Frame:
     """First frame from the guest. Carries the protocol version and the cap so
-    a mismatch is caught before anything else, and optionally resumes."""
+    a mismatch is caught before anything else, and optionally names the
+    session it is reattaching to.
+
+    Used to also carry `from=<seq>`, asking the bridge to replay whatever the
+    guest missed. Retired 2026-09-18 (docs/BACKLOG.md #5) along with the
+    replay buffer it drove: the guest never sent it, so the path it would
+    have triggered was dead code from Phase 1 onward.
+    """
     h = {"ver": str(PROTO_VERSION), "secret": secret, "max_frame": str(MAX_FRAME)}
     if sess:
         h["sess"] = sess
-    if from_seq is not None:
-        h["from"] = str(from_seq)
     return Frame("HELLO", h)
 
 
@@ -241,25 +242,20 @@ def error(code: str, msg: str) -> Frame:
 # --- session lifecycle --------------------------------------------------
 
 
-def ready(sess: str, model: str, next_seq: int, page: int, total: int) -> Frame:
-    """First frame after HELLO succeeds, carrying the session id and the
-    replay cursor a future `from=` would resume from."""
+def ready(sess: str, model: str, page: int, total: int) -> Frame:
+    """First frame after HELLO succeeds, carrying the session id.
+
+    Used to also carry `next_seq=`, the replay cursor a `from=` on the next
+    HELLO would resume from. Retired with `hello()`'s `from_seq` -- see its
+    docstring.
+    """
     return Frame("READY", {
         "sess": sess,
         "ver": str(PROTO_VERSION),
         "model": model,
-        "next_seq": str(next_seq),
         "page": str(page),
         "total": str(total),
     })
-
-
-def resync(reason: str) -> Frame:
-    """Told to a guest whose requested replay point the buffer no longer
-    has. The guest has no handler for this today -- see
-    docs/audit/02-bridge-python.md #6.1 -- but the bridge still sends it
-    rather than silently resuming from the wrong place."""
-    return Frame("RESYNC", {"reason": reason})
 
 
 def doc(html: str) -> Frame:
@@ -301,8 +297,8 @@ def notice(kind: str, text: str) -> Frame:
 
 
 def turn_start() -> Frame:
-    """Sent both for a fresh turn and, with `stamp=False`, to restore the
-    busy UI after a reconnect -- see the note on `stamp=` above."""
+    """Sent both for a fresh turn and, by `Bridge._reissue_turn`, to restore
+    the busy UI after a reconnect -- same headers either way."""
     return Frame("TURN", {"state": "start"})
 
 

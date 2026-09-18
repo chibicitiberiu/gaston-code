@@ -56,7 +56,7 @@ GREEN = "\033[32m"
 EXEC_MAX_OUT = 32 * 1024
 
 # win/net/net.cpp's rc_net_start sends 22 HELLO headers beyond ver/secret/
-# max_frame/sess/from -- the ones hello() builds. A fakegui that skips them
+# max_frame/sess -- the ones hello() builds. A fakegui that skips them
 # only ever drives the bridge's UNDECLARED defaults (bridge/files/caps.py's
 # Caps(declared=False), manifest=1), never the DECLARED path the real guest
 # exercises on every connection (manifest=2, and every cap explicitly named
@@ -112,7 +112,6 @@ class FakeGui:
         # guest's g_halt_id. /continue answers it with RESUME.
         self.halt_id: str | None = None
         self.sess: str | None = None
-        self.next_seq: int | None = None   # what to resume from
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self._turn_active = False
@@ -140,9 +139,8 @@ class FakeGui:
         f = hello(
             self.secret,
             sess=self.sess if resume else None,
-            from_seq=self.next_seq if resume else None,
         )
-        # hello() only builds ver/secret/max_frame/sess/from -- the fields
+        # hello() only builds ver/secret/max_frame/sess -- the fields
         # every client shares. Everything past that is this client saying
         # what it IS, which protocol.py has no constructor for because it is
         # not part of the handshake's shape, only this client's answer to it.
@@ -214,9 +212,6 @@ class FakeGui:
     # --- rendering: mirrors win/app/main.c's render_frame ------------------
 
     def render(self, f: Frame) -> None:
-        if f.seq is not None:
-            self.next_seq = f.seq + 1
-
         if self.raw:
             body = f.body[:80]
             print(f"{DIM}[{f.type} {f.headers} {body!r}]{RESET}")
@@ -227,7 +222,6 @@ class FakeGui:
 
         if t == "READY":
             self.sess = f.headers.get("sess")
-            self.next_seq = int(f.headers.get("next_seq", "1"))
             self.page_no = int(f.headers.get("page", "0") or 0)
             self.page_total = int(f.headers.get("total", "0") or 0)
             print(f"{GREEN}connected{RESET} {DIM}sess={self.sess} "
@@ -542,7 +536,7 @@ class FakeGui:
                 print(f"{DIM}raw={self.raw}{RESET}")
                 continue
             if line == "/resume":
-                print(f"{DIM}reconnecting with from={self.next_seq}{RESET}")
+                print(f"{DIM}reconnecting as sess={self.sess}{RESET}")
                 await self.close()
                 await self.connect(resume=True)
                 asyncio.create_task(self.pump())

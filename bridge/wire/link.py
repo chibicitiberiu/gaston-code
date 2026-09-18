@@ -2,11 +2,11 @@
 
 Before this, the outbound half of the protocol was 44 `self._send(...)`
 calls and 38 hand-built `Frame(...)` literals spread across `Bridge` -- so
-`stamp=`, header stringification and `fold.encode` were decided
-independently at every call site (docs/audit/02-bridge-python.md #1). This
-class owns the writer, the send lock, the persistent compressor and the
-line that chunks outbound HTML under the frame cap. `Bridge` still decides
-WHAT to send and WHEN; this decides how it reaches the wire.
+header stringification and `fold.encode` were decided independently at every
+call site (docs/audit/02-bridge-python.md #1). This class owns the writer,
+the send lock, the persistent compressor and the line that chunks outbound
+HTML under the frame cap. `Bridge` still decides WHAT to send and WHEN; this
+decides how it reaches the wire.
 
 Deliberately NOT the frame vocabulary itself -- see
 `bridge/wire/protocol.py`'s typed constructors for that. This module never
@@ -49,43 +49,49 @@ class GuestLink:
     def connected(self) -> bool:
         return self.writer is not None and not self.writer.is_closing()
 
-    async def send(self, guest, frame: Frame, *, stamp: bool = True) -> bool:
+    async def send(self, guest, frame: Frame) -> bool:
         """Returns whether the frame actually reached the wire.
+
+        `guest` is currently unused here -- it used to be how this reached
+        `guest.replay` to stamp a seq, which was retired with the buffer
+        itself (docs/BACKLOG.md #5). It stays on the signature anyway:
+        `GuestLink` is deliberately reachable only through the owning
+        `GuestSession` -- see `TranscriptView`'s docstring (bridge/view/
+        transcript.py) for why that boundary exists independently of
+        replay -- and a future per-guest send policy has somewhere to hang
+        without another signature change.
 
         02.16: this used to return None unconditionally, so every caller
         believed it had sent even when the frame was refused for being
         oversized or dropped because the writer was gone -- silently, in
-        both cases. The return is a bool rather than a raise because most
-        callers genuinely have nothing better to do than log and carry on
-        (a lost NOTICE is not fatal); the ones that care can now check.
+        both cases. A closed writer is an ordinary, expected condition (the
+        guest is simply gone) and still returns False -- most callers have
+        nothing better to do with that than log and carry on, and a lost
+        NOTICE is not fatal. An oversized frame is not: see below.
         """
-        # P4: check encodability BEFORE stamping. Frame.encode raises above
-        # MAX_FRAME and the replay buffer is append-only, so stamping an
-        # oversized frame makes every future replay raise -- permanently, and
-        # the guest can then never reconnect.
-        #
-        # The check is on a copy because append() mutates headers["seq"], and
-        # encoding the real frame first would produce a payload with no seq in
-        # it. The placeholder is wider than any seq we will reach, so a copy
-        # that encodes guarantees the stamped original does too.
-        probe = Frame(frame.type, dict(frame.headers), frame.body)
-        probe.headers["seq"] = "9999999999"
+        # Genuinely fatal to this send, not "poisons every future replay"
+        # any more -- MAX_FRAME is the wire format's own limit (net.c's
+        # reader never buffers past the length it was told to expect), so a
+        # frame that fails to encode can never reach ANY client, not just a
+        # replay of this one. That is a bug in whatever built the frame, and
+        # returning False here would let it vanish with nothing but a log
+        # line nobody is watching in real time -- so this refuses loudly
+        # (raises) instead of swallowing it. There is no seq left to stamp,
+        # so this IS the real encode: the bytes it produces are exactly what
+        # gets written below, not an estimate of them.
         try:
-            probe.encode()
+            payload = frame.encode()
         except ProtocolError:
             log.error("refusing to send oversized %s frame (%d byte body); "
-                      "it would poison the replay buffer",
-                      frame.type, len(frame.body))
-            return False
-        if stamp:
-            guest.replay.append(frame)
-        payload = frame.encode()
+                      "it exceeds the %d byte wire cap and can never be "
+                      "delivered -- the caller must chunk or truncate it",
+                      frame.type, len(frame.body), MAX_FRAME)
+            raise
         async with self.send_lock:
             w = self.writer
             if w is None or w.is_closing():
-                # Simply lost, not "buffered in replay; the guest will ask
-                # for it" as this used to say -- the guest never sends
-                # `from=`, so nothing ever asks (02.11/02.16).
+                # Simply lost: nothing buffers this for a later retry any
+                # more (02.11/02.16; the buffer that would have is retired).
                 return False
             try:
                 w.write(payload)

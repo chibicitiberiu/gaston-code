@@ -78,11 +78,6 @@ def test_header_values_survive_quoting(value):
     assert got.headers["v"] == value
 
 
-def test_seq_accessor():
-    assert Frame("TEXT", {"seq": "42"}).seq == 42
-    assert Frame("TEXT", {}).seq is None
-
-
 def test_enc_defaults_to_raw():
     assert Frame("TEXT", {}).enc == "raw"
     assert Frame("TEXT", {"enc": "deflate"}).enc == "deflate"
@@ -140,7 +135,7 @@ def test_reader_handles_split_across_reads():
     for i in range(0, len(wire), 3):
         out.extend(reader.feed(wire[i : i + 3]))
     assert [f.body for f in out] == [b"abc", b"def"]
-    assert [f.seq for f in out] == [1, 2]
+    assert [f.headers["seq"] for f in out] == ["1", "2"]
 
 
 def test_reader_returns_nothing_on_partial_header():
@@ -183,11 +178,10 @@ def test_hello_carries_version_and_cap():
     assert int(f.headers["max_frame"]) == MAX_FRAME
 
 
-def test_hello_resume_is_optional():
+def test_hello_sess_is_optional():
     assert "sess" not in hello("x").headers
-    f = hello("x", sess="abc", from_seq=17)
+    f = hello("x", sess="abc")
     assert f.headers["sess"] == "abc"
-    assert f.headers["from"] == "17"
 
 
 def test_error_frame_has_its_own_type():

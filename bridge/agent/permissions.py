@@ -22,11 +22,15 @@ deleted work:
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..view import html as H
+
+log = logging.getLogger("bridge.permissions")
+
 # How long a prompt may sit unanswered before the bridge denies it for you.
 # can_use_tool has no timeout of its own, so without this a prompt nobody
 # answers wedges the session for as long as the process lives.
@@ -34,10 +38,15 @@ DEADLINE_S = 600.0
 
 # What one prompt's HTML body may occupy. The frame cap is 64KB and _send
 # gets no headroom for headers, so the body is capped well below it: a Write
-# with a large `content`, a Task prompt or an Edit with a long new_string
-# would otherwise produce a frame that cannot be encoded -- and, because
-# _send stamps into the replay buffer BEFORE encoding, one of those poisons
-# every future replay permanently.
+# with a large `content`, a Task prompt or an Edit with a long new_string --
+# or, since a single value is already clipped to MAX_VALUE, a tool called
+# with an unusually large number of distinct arguments -- would otherwise
+# produce a frame GuestLink.send refuses outright (it exceeds the wire's own
+# MAX_FRAME and can never be delivered to any client). Losing the argument
+# table is survivable; losing the connection over one oversized prompt is
+# not, so this degrades to a short fallback instead. The degrade is logged
+# (below) because that is the only place an operator would ever see it --
+# the guest only shows the fallback text, never that a table was cut.
 MAX_BODY = 8 * 1024
 
 # Per-value cap inside the rendered argument table. Long enough for a real
@@ -189,6 +198,12 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
     if len(html) <= MAX_BODY:
         return html
     # Losing the argument table is survivable; losing the connection is not.
+    # The guest only ever sees the fallback text below -- log loudly here,
+    # or a tool that is routinely too large to show in full degrades in
+    # total silence as far as anyone watching the bridge can tell.
+    log.warning("permission prompt for %s is %d bytes, over the %d byte "
+                "budget; the argument table is too large to display and "
+                "was dropped", tool_name, len(html), MAX_BODY)
     short = ('<div class="perm">'
              '<div class="permhead">Permission required</div>'
              "<p><b>" + H.esc(_clip(title or display, 120)) + "</b></p>"

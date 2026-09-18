@@ -17,7 +17,8 @@ from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
                               PermissionUpdate)
 
 from bridge.wire.compress import StreamDecompressor
-from bridge.wire.protocol import Frame, FrameReader, MAX_FRAME, PROTO_VERSION, hello
+from bridge.wire.protocol import (Frame, FrameReader, MAX_FRAME, PROTO_VERSION,
+                                  ProtocolError, hello)
 from bridge import server as srv
 from bridge.server import Bridge
 
@@ -138,14 +139,14 @@ class Harness:
         return b"".join(out)
 
     async def connect(self, secret="s", *, ver=None, cap=None,
-                      sess=None, from_seq=None, hdrs=None):
+                      sess=None, hdrs=None):
         r, w = await asyncio.open_connection("127.0.0.1", self.port)
         # Fresh connection means the bridge resets its compressor, so reset
         # in lockstep. Same for the frame reader.
         self.unzip = StreamDecompressor()
         self._readers.pop(id(r), None)
         self._pending.pop(id(r), None)
-        f = hello(secret, sess=sess, from_seq=from_seq)
+        f = hello(secret, sess=sess)
         if ver is not None:
             f.headers["ver"] = str(ver)
         if cap is not None:
@@ -344,18 +345,6 @@ async def test_input_produces_text_and_turn_end(harness):
     await harness.close(w)
 
 
-async def test_seqs_are_monotonic_and_unique(harness):
-    r, w = await harness.connect()
-    await harness.recv_until(r, {"READY"})
-    await harness.send(w, Frame("INPUT", {}, b"one"))
-    frames = await harness.recv_until(r, {"TURN"}, timeout=5)
-    frames += await harness.recv_until(r, {"TURN"}, timeout=5)
-    seqs = [f.seq for f in frames if f.seq is not None]
-    assert seqs == sorted(seqs)
-    assert len(seqs) == len(set(seqs))
-    await harness.close(w)
-
-
 async def test_fakegui_can_decode_a_real_deflated_text_frame(harness):
     """fakegui's whole value is "if fakegui works and the guest does not, the
     bug is in the C" -- which only holds if fakegui actually speaks the
@@ -418,30 +407,22 @@ async def test_unknown_frame_type_gets_an_error_not_a_drop(harness):
     await harness.close(w)
 
 
-# --- resume -----------------------------------------------------------------
+# --- reconnect ----------------------------------------------------------
 
 
-async def test_a_resume_after_a_compressor_reset_resyncs_rather_than_replays(
+async def test_a_reconnect_resets_the_compressor_and_keeps_the_session(
         harness):
-    """The guest will crash. The session must outlive it -- but the REPLAY
-    buffer cannot.
+    """The guest will crash. The session must outlive it, and the compressor
+    must not: a reconnect means a fresh inflater on the guest side, so the
+    persistent deflate stream has to restart in lockstep or the first
+    deflated frame after reconnect is garbage the guest cannot decode.
 
-    _send stamps the frame it is about to write, and by then _write_block has
-    already run the body through the PERSISTENT deflate stream. A reconnect
-    resets that stream, because the guest's inflater is fresh. So every
-    deflated frame still in the buffer is output from a stream that no longer
-    exists: replaying one feeds garbage to a client that drops the link on a
-    malformed frame.
-
-    This test used to assert the replay happened, and passed -- because
-    nothing checked the guest could decode what it got. The correct answer to
-    "I missed frames I can no longer be sent" is RESYNC, which the protocol
-    already has and the guest now renders.
-
-    Latent today only because the guest has never sent `from=`. BACKLOG
-    records that as dead code; it did not record this consequence of bringing
-    it back, which is what makes it worth closing now rather than at the
-    moment someone finishes resume.
+    Used to matter twice over -- a resume-from-seq (`from=`) landing on the
+    reset stream would have replayed frames from a compressor that no
+    longer existed. There is no such resume any more (docs/BACKLOG.md #5:
+    the guest never sent `from=`, and the replay buffer it would have
+    driven is retired), so the only two things left to prove are that the
+    reset actually happens and that reconnecting does not lose the session.
     """
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"READY"})
@@ -455,20 +436,23 @@ async def test_a_resume_after_a_compressor_reset_resyncs_rather_than_replays(
     await harness.close(w)
     await asyncio.sleep(0.2)
 
-    # Guest comes back asking for everything after what it saw.
-    r2, w2 = await harness.connect(sess=sess, from_seq=1)
-    # READY comes first and RESYNC after it, so reading only to READY would
-    # stop one frame short of the thing being tested.
+    # And comes back. Same session, whether or not it names it.
+    r2, w2 = await harness.connect(sess=sess)
     got = await harness.recv_until(r2, {"READY"}, timeout=3)
-    got += await harness.recv_until(r2, {"RESYNC", "DOC"}, timeout=3)
-    kinds = {f.type for f in got}
-    assert "RESYNC" in kinds, (
-        "a resume across a compressor reset must be refused with RESYNC, not "
-        "answered with frames from a stream the guest cannot decode")
-
-    # And the session itself survived: same conversation, still usable.
     ready = [f for f in got if f.type == "READY"][0]
     assert ready.headers["sess"] == sess
+
+    # The compressor really did restart: a long enough second turn produces
+    # deflated TEXT the harness's own (freshly reset) inflater can decode
+    # without raising.
+    long_prompt = b"second" * 100
+    await harness.send(w2, Frame("INPUT", {}, long_prompt))
+    frames2 = await harness.recv_until(r2, {"TURN"}, timeout=5)
+    frames2 += await harness.recv_until(r2, {"TURN"}, timeout=5)
+    assert any(f.headers.get("enc") == "deflate"
+              for f in frames2 if f.type == "TEXT"), (
+        "test is only meaningful if the bridge actually compressed a frame")
+    assert b"echo: " + long_prompt in harness.body(frames2)
     await harness.close(w2)
 
 
@@ -886,10 +870,10 @@ async def test_disconnect_holds_the_prompt_then_denies(harness):
 
 
 async def test_prompt_is_reissued_after_reconnect(harness):
-    """P1: the guest never sends from=, so the bridge's replay buffer cannot
-    bring the bar back by itself. Without an explicit re-issue the guest
-    reconnects with no bar while the bridge still holds a live future, and the
-    turn hangs until the answer deadline."""
+    """Nothing re-sends anything from a log on reconnect (there is no wire
+    replay any more -- docs/BACKLOG.md #5). Without an explicit re-issue the
+    guest would reconnect with no bar while the bridge still holds a live
+    future, and the turn hangs until the answer deadline."""
     harness.bridge.perm_grace_s = 30.0      # comfortably inside the grace
 
     reader, writer, task = await _connect_and_ask(harness)
@@ -939,16 +923,17 @@ async def test_reply_for_an_unknown_id_is_ignored(harness):
     await harness.close(writer)
 
 
-async def test_oversized_prompt_does_not_poison_replay(harness):
-    """_send stamps into the replay buffer, and Frame.encode raises above
-    MAX_FRAME -- so one unencodable frame would make EVERY future replay
-    raise, permanently, and the guest could never reconnect again."""
+async def test_oversized_prompt_still_reaches_the_guest(harness):
+    """A wildly long description must not cost the connection: MAX_BODY
+    (bridge/agent/permissions.py) clips a single argument value well before
+    render_request's own table cap could ever be reached, so the PERMREQ
+    this produces stays tiny and GuestLink.send never has reason to refuse
+    it. See test_permissions_gaston.py for MAX_BODY's own truncate-and-log
+    path, which needs many distinct arguments, not one long one, to fire."""
     reader, writer, task = await _connect_and_ask(
         harness, description="x" * 200_000)
     f = await _recv(harness, reader, "PERMREQ")
     assert len(f.body) < MAX_FRAME
-    # And the buffer still replays cleanly.
-    harness.bridge._guest.replay.since(1)
     task.cancel()
     await harness.close(writer)
 
@@ -956,7 +941,12 @@ async def test_oversized_prompt_does_not_poison_replay(harness):
 async def test_send_reports_whether_the_frame_actually_went(harness):
     """02.16: _send returned None unconditionally, so a caller had no way to
     tell an oversized frame (refused) or a closed writer (dropped) from an
-    ordinary success -- both were silent. It now returns a bool."""
+    ordinary success -- both were silent. It now returns a bool for the
+    ordinary "nothing to be done about it" case (a closed writer -- the
+    guest is simply gone) and raises for the one that is a bridge-side bug:
+    a frame nothing could ever chunk or truncate for the caller, which used
+    to vanish with nothing but a log line nobody was watching in real time.
+    """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
@@ -965,8 +955,8 @@ async def test_send_reports_whether_the_frame_actually_went(harness):
     assert ok is True
 
     huge = srv.Frame("NOTICE", {"kind": "k"}, b"x" * 200_000)
-    refused = await harness.bridge._send(guest, huge)
-    assert refused is False, "an oversized frame must report that it was refused"
+    with pytest.raises(ProtocolError):
+        await harness.bridge._send(guest, huge)
 
     await harness.close(writer)
     await asyncio.sleep(0.1)
@@ -1083,12 +1073,19 @@ async def test_cancelling_a_turn_tells_the_guest_to_kill_the_command(harness):
     await harness.close(writer)
 
 
-async def test_exec_is_never_replayed(harness):
-    """Replay redraws a transcript. Re-delivering an EXEC would RE-RUN the
-    command -- `del c:\\temp\\*` twice is not a redraw."""
+async def test_exec_is_never_re_delivered(harness):
+    """There is no wire replay any more (docs/BACKLOG.md #5) -- nothing
+    resends a frame from a log; every frame is sent once, when it is sent.
+    The one thing that DOES re-send state after a reconnect is the explicit
+    reissue path (`_reissue_halt`, `_reissue_turn`,
+    `PermissionDesk.reissue`), and it must never re-send a side-effecting
+    frame: a re-delivered EXEC or EXECKILL would RE-RUN or re-kill a
+    command that already finished -- `del c:\\temp\\*` twice is not a
+    redraw -- and the same holds for every SYNC* frame (see
+    test_sync_wire.py's counterpart of this test).
+    """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    before = harness.bridge._guest.replay.next_seq
 
     task = asyncio.create_task(
         harness.bridge.run_on_guest("ver", timeout_ms=5000, shell=True, cwd=""))
@@ -1096,11 +1093,20 @@ async def test_exec_is_never_replayed(harness):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    # The cancellation sends EXECKILL, live, on this same connection -- that
+    # is the one and only delivery, not a replay.
+    await _recv(harness, reader, "EXECKILL")
+    await harness.close(writer)
 
-    types = [fr.type for fr in harness.bridge._guest.replay.since(before)]
+    # Reconnect. Whatever the reissue path sends must not include EXEC,
+    # EXECKILL or any SYNC* frame a second time.
+    reader2, writer2 = await harness.connect()
+    got = await harness.recv_until(reader2, {"OPTIONSEND"}, timeout=3)
+    types = {f.type for f in got}
     assert "EXEC" not in types
     assert "EXECKILL" not in types
-    await harness.close(writer)
+    assert not any(t.startswith("SYNC") for t in types)
+    await harness.close(writer2)
 
 
 async def test_stop_kills_a_running_command(harness):

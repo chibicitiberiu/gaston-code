@@ -9,11 +9,13 @@ the "Link" group out the same way; this follows it.
 Deliberately NOT the "paginate, stream only if live, then seal" rule
 itself (02.18): that stays on `Bridge._write_block`/`_send_page`, because
 enforcing it here would mean this class sending frames, which means it
-needs the guest's `GuestLink` -- and `GuestLink` needs the owning
-`GuestSession` back (`GuestLink.send(guest, frame, ...)` reads
-`guest.replay`), which a `TranscriptView` stored as one of that same
-`GuestSession`'s fields cannot hold without a construction-order cycle.
-`_switch`'s own bypass of that rule during history replay is a separate,
+needs the guest's `GuestLink` -- and `GuestLink.send(guest, frame)` takes
+the owning `GuestSession` back on purpose, to keep `GuestLink` reachable
+only through it (see that method's own docstring for why -- it used to be
+so it could reach `guest.replay`, and stays now that the replay buffer is
+retired). A `TranscriptView` stored as one of that same `GuestSession`'s
+fields cannot hold a `GuestLink` of its own without a construction-order
+cycle. `_switch`'s own bypass of that rule during history replay is a separate,
 already-investigated question (02.39) and is unaffected by this move: it
 still reaches `.pages` directly, now through `guest.view.pages` rather than
 `guest.pages`, exactly as deliberately as before.

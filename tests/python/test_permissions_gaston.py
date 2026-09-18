@@ -6,9 +6,10 @@ merge from. `off_limits` refuses what is outside cwd, so that same placement
 left the staged copies writable -- and a staged copy is the last remaining
 version of work the user's edit displaced.
 """
+import logging
 import os
 
-from bridge.agent.permissions import off_limits, render_request, summary
+from bridge.agent.permissions import MAX_BODY, off_limits, render_request, summary
 from bridge.agent.permissions import telling_argument, _PATH_TOOLS
 
 
@@ -158,3 +159,35 @@ def test_render_request_and_summary_use_the_same_fallback_argument():
     line = summary("Grep", Ctx(), args)
     assert "*.log" in html
     assert "*.log" in line
+
+
+# --- MAX_BODY --------------------------------------------------------------
+
+
+def test_oversized_argument_table_is_truncated_and_logged(caplog):
+    """MAX_BODY exists so a PERMREQ body always stays well under the 64KB
+    wire cap -- a Write with a huge `content`, a Task prompt or a long
+    Edit.new_string would otherwise produce a frame GuestLink.send refuses
+    outright. Losing the argument table is survivable; losing the
+    connection is not, so render_request degrades instead of failing.
+
+    That degrade must be visible to whoever is watching the bridge, not
+    just to the person staring at the guest's screen -- an operator has no
+    other way to notice a tool is routinely producing prompts this large.
+    """
+    class Ctx:
+        display_name = "Write"
+        title = None
+        description = None
+
+    # A single value is clipped to MAX_VALUE (400 chars) before it ever
+    # reaches the table, so this needs many distinct arguments, not one huge
+    # one, to push the assembled table itself past MAX_BODY.
+    args = {f"arg{i}": "x" * 400 for i in range(40)}
+    with caplog.at_level(logging.WARNING, logger="bridge.permissions"):
+        html = render_request("Write", args, Ctx())
+
+    assert len(html) <= MAX_BODY
+    assert "too large to display" in html
+    assert any("too large" in r.message for r in caplog.records), (
+        "truncating the argument table must be logged, not silent")
