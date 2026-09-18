@@ -24,20 +24,16 @@
 #include "sync/sync.h"
 #include "rpc/rpc.h"
 #include "app/xferstat.h"
+#include "app/pagebar.h"
 
 #define ID_INPUT      1002
 #define ID_SEND       1003
 #define ID_STOP       1004
 #define ID_STATUS     1005
-#define ID_LIVE       1006
-#define ID_FIRST      1007
-#define ID_PREV       1008
-#define ID_NEXT       1009
-#define ID_LAST       1010
-#define ID_PAGELBL    1011
-/* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now, and
- * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h -- both next to the module
- * that creates and dispatches them. */
+/* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
+ * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, and ID_LIVE/FIRST/PREV/NEXT/
+ * LAST/PAGELBL in app/pagebar.h -- all three next to the module that creates
+ * and dispatches them. */
 
 /* Menu. Model and effort entries are numbered from a base because the lists
  * come from the bridge and are not known at compile time. */
@@ -68,21 +64,22 @@
 #define INPUT_HEIGHT  56
 #define BUTTON_WIDTH  64
 #define GUTTER        4
-#define PAGEBAR_H     24
-#define PGBTN_W       28
 #define CHATS_W      170
 /* PERM_H (the permission bar's height, when shown) is declared in app/bar.h;
  * layout() needs it to shrink the transcript, bar.cpp needs it to size its
- * own controls. PERMBTN_W is bar.cpp's own business now. CHAT_INDENT and
- * CHAT_ROW_H moved to app/chatlist.cpp with the drawing code they size. */
+ * own controls. PERMBTN_W is bar.cpp's own business now. PAGEBAR_H is
+ * declared in app/pagebar.h the same way; PGBTN_W is pagebar.cpp's own
+ * business. CHAT_INDENT and CHAT_ROW_H moved to app/chatlist.cpp with the
+ * drawing code they size. */
 
 static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_html *g_html;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
 static HWND  g_main, g_input, g_send, g_stop, g_status;
-static HWND  g_live, g_first, g_prev, g_next, g_last, g_pagelbl;
-/* The permission/halt bar's own HWNDs, id, pending state and text all moved
+/* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
+ * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
+ * and text all moved
  * to app/bar.cpp -- see app/bar.h. The design rationale that used to sit here
  * (why one set of controls serves two request kinds, and the four-bugs
  * history of arbitrating them pairwise) moved with it. The chat list's HWNDs
@@ -134,17 +131,7 @@ static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
 
-/* Pagination state.
- *
- * The control holds exactly ONE page, which is what bounds memory by page size
- * rather than by conversation length -- the whole reason a 32MB box can run
- * this. g_view == g_total means LIVE: new text appends as it streams. On any
- * earlier page nothing appends at all, which also removes the
- * append-while-scrolled-up case that RichEdit handles worst. */
-static int   g_view = 1;       /* page currently displayed */
-static int   g_total = 1;      /* pages that exist */
-static int   g_is_live = 1;
-static int   g_loading_page = 0;
+/* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. */
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
 static WNDPROC g_input_oldproc;
@@ -193,36 +180,6 @@ static void status_refresh(void)
                   (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000));
         status_set(2, buf);
     }
-}
-
-static void page_update_ui(void)
-{
-    char lbl[64];
-    rc_strf(lbl, sizeof(lbl), "Page %d/%d%s",
-              g_view, g_total, g_is_live ? " (Live)" : "");
-    SetWindowTextA(g_pagelbl, lbl);
-
-    EnableWindow(g_first, g_view > 1);
-    EnableWindow(g_prev,  g_view > 1);
-    EnableWindow(g_next,  g_view < g_total);
-    EnableWindow(g_last,  g_view < g_total);
-    EnableWindow(g_live,  !g_is_live);
-}
-
-static void page_goto(const char *which)
-{
-    const char *keys[1]; const char *vals[1];
-    keys[0] = "page"; vals[0] = which;
-    rc_net_send(&g_net, "GETPAGE", keys, vals, 1, NULL, 0);
-}
-
-static void page_goto_n(int n)
-{
-    char buf[16];
-    if (n < 1) n = 1;
-    if (n > g_total) n = g_total;
-    rc_strf(buf, sizeof(buf), "%d", n);
-    page_goto(buf);
 }
 
 /* Free physical memory, as the system sees it.
@@ -404,10 +361,10 @@ static void on_ready(rc_frame *f)
     const char *v;
     v = rc_frame_get(f, "sess");
     if (v) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", v);
-    v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
-    v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
-    g_is_live = 1;
-    page_update_ui();
+    /* page/total (if present), marking the session live, and the button
+     * refresh that follows are app/pagebar.cpp's business now -- see
+     * app/pagebar.h's rc_pagebar_note_ready. */
+    rc_pagebar_note_ready(f);
     rc_chats_request();
     g_backoff_ms = 1000;
     g_retry_noted = 0;
@@ -419,12 +376,12 @@ static void on_ready(rc_frame *f)
      * once per connection -- so on a reconnect this updates the page
      * counters without the control's content agreeing with them, and the
      * window keeps showing whatever the last connection left in it under
-     * the new page number. page_goto("live") re-requests the live page
+     * the new page number. rc_pagebar_goto_live() re-requests the live page
      * explicitly, which clears the control (PAGESTART) and repopulates it
      * from what the bridge now has -- cheap and correct on a fresh session
      * too, where it is a no-op over an empty page. See BACKLOG.md's note
      * on this global. */
-    page_goto("live");
+    rc_pagebar_goto_live();
     status_refresh();
 }
 
@@ -570,14 +527,15 @@ static void on_optionsend(rc_frame *f)
  * chat list's business. */
 static void chats_switched(rc_frame *f)
 {
-    const char *v;
     /* A prompt belongs to the session that raised it, and switching
      * rebuilds the session -- the bridge denies anything pending as
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
      * that no longer exists, on a conversation the user has left. */
     rc_bar_hide_all();
-    v = rc_frame_get(f, "total");
-    if (v) g_total = atoi(v);
+    /* The page total is app/pagebar.cpp's state now -- see app/pagebar.h's
+     * rc_pagebar_note_total. No button refresh here, matching what this call
+     * site always did. */
+    rc_pagebar_note_total(f);
     SetWindowTextA(g_main, RC_TITLE);
     status_set(2, "");
 }
@@ -594,38 +552,18 @@ static void on_chats(rc_frame *f)
     if (strcmp(f->type, "SESSIONSEND") == 0) log_mem("chat list loaded");
 }
 
-static void on_pagestart(rc_frame *f)
+/* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
+ * see rc_pagebar_frame's own comments there for what each one does. Two
+ * things about PAGESTART/PAGEEND are not app/pagebar.cpp's business and stay
+ * here, the same split on_chats already makes around rc_chats_frame:
+ * resetting main.c's own turn-state enum (the control is about to be
+ * cleared) and log_mem, main.c's memory-milestone diagnostic. */
+static void on_pagebar(rc_frame *f)
 {
-    const char *v;
-    v = rc_frame_get(f, "page");  if (v) g_view = atoi(v);
-    v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
-    v = rc_frame_get(f, "live");  g_is_live = (v && *v == '1');
-    g_loading_page = 1;
-    g_turn_state = TURN_IDLE;      /* the control is about to be cleared */
-    /* One page in, one page out: clear before rendering, so the control
-     * never holds two. */
-    if (g_html) g_html->clear();
-    v = rc_frame_get(f, "continued");
-    if (v && *v == '1' && g_html)
-        g_html->notice("continued from the previous page");
-    page_update_ui();
-}
-
-static void on_pageend(rc_frame *f)
-{
-    (void)f;
-    if (g_loading_page) { g_loading_page = 0; if (g_html) g_html->scroll_bottom(); }
-    page_update_ui();
-    log_mem("page loaded");
-}
-
-static void on_pagesealed(rc_frame *f)
-{
-    const char *v = rc_frame_get(f, "total"); if (v) g_total = atoi(v);
-    /* On the live page, follow the seal forward. On an older page, the
-     * counter simply ticks up -- that IS the new-content notification. */
-    if (g_is_live) g_view = g_total;
-    page_update_ui();
+    if (strcmp(f->type, "PAGESTART") == 0)
+        g_turn_state = TURN_IDLE;
+    rc_pagebar_frame(f);
+    if (strcmp(f->type, "PAGEEND") == 0) log_mem("page loaded");
 }
 
 static void on_anchor(rc_frame *f)
@@ -704,9 +642,9 @@ static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
     { "SESSION",     on_chats },
     { "SESSIONSEND", on_chats },
     { "SWITCHED",    on_chats },
-    { "PAGESTART",   on_pagestart },
-    { "PAGEEND",     on_pageend },
-    { "PAGESEALED",  on_pagesealed },
+    { "PAGESTART",   on_pagebar },
+    { "PAGEEND",     on_pagebar },
+    { "PAGESEALED",  on_pagebar },
     { "ANCHOR",      on_anchor },
     { "PERMREQ",     on_bar },
     { "PERMSTATE",   on_bar },
@@ -902,15 +840,9 @@ static void layout(HWND hwnd)
      * positioned by app/chatlist.cpp now. */
     rc_chats_move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
 
-    {   /* Page bar across the top of the transcript column. */
-        int x = GUTTER * 2 + CHATS_W, by = GUTTER;
-        MoveWindow(g_live,  x, by, 40, PAGEBAR_H - 2, TRUE); x += 40 + GUTTER;
-        MoveWindow(g_first, x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
-        MoveWindow(g_prev,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
-        MoveWindow(g_pagelbl, x, by + 4, 130, PAGEBAR_H - 4, TRUE); x += 130;
-        MoveWindow(g_next,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
-        MoveWindow(g_last,  x, by, PGBTN_W, PAGEBAR_H - 2, TRUE);
-    }
+    /* Page bar across the top of the transcript column: positions its own
+     * six controls from app/pagebar.cpp now -- see app/pagebar.h. */
+    rc_pagebar_move(GUTTER * 2 + CHATS_W, GUTTER);
 
     {
         int cx = GUTTER * 2 + CHATS_W;
@@ -1022,30 +954,12 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * rc_bar_create in app/bar.h. */
     rc_bar_create(hwnd, inst, g_ui_font, &g_net, ui_send, bar_changed);
 
-    g_live = CreateWindowExA(0, "BUTTON", "Live",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_LIVE, inst, NULL);
-    check_child("live", g_live);
-    g_first = CreateWindowExA(0, "BUTTON", "|<",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_FIRST, inst, NULL);
-    check_child("first", g_first);
-    g_prev = CreateWindowExA(0, "BUTTON", "<",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_PREV, inst, NULL);
-    check_child("prev", g_prev);
-    g_pagelbl = CreateWindowExA(0, "STATIC", "Page 1/1",
-        WS_CHILD | WS_VISIBLE | SS_CENTER, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_PAGELBL, inst, NULL);
-    check_child("pagelbl", g_pagelbl);
-    g_next = CreateWindowExA(0, "BUTTON", ">",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_NEXT, inst, NULL);
-    check_child("next", g_next);
-    g_last = CreateWindowExA(0, "BUTTON", ">|",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
-        hwnd, (HMENU)ID_LAST, inst, NULL);
-    check_child("last", g_last);
+    /* The page bar: its own six controls, created and owned by
+     * app/pagebar.cpp now (rc_pagebar_create logs its own check_child
+     * failures). g_html may be NULL -- rc_pagebar_create is passed it as-is
+     * and every use inside pagebar.cpp is guarded, same as everywhere else
+     * in this file. */
+    rc_pagebar_create(hwnd, inst, g_ui_font, &g_net, g_html);
 
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
@@ -1057,15 +971,9 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     SendMessageA(g_input,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_send,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_stop,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_live,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_first,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_prev,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_next,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_last,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_pagelbl, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    /* The chat list and the bar's own controls got their font inside
-     * rc_chats_create/rc_bar_create above. */
-    page_update_ui();
+    /* The chat list, the bar and the page bar's own controls got their font
+     * (and, for the page bar, its initial enabled state) inside
+     * rc_chats_create/rc_bar_create/rc_pagebar_create above. */
 
     g_input_oldproc = (WNDPROC)SetWindowLongA(g_input, GWL_WNDPROC,
                                               (LONG)input_proc);
@@ -1209,11 +1117,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_PERM_DENY:
             rc_bar_command(id);
             return 0;
-        case ID_LIVE:  page_goto("live");      return 0;
-        case ID_FIRST: page_goto_n(1);         return 0;
-        case ID_PREV:  page_goto_n(g_view - 1); return 0;
-        case ID_NEXT:  page_goto_n(g_view + 1); return 0;
-        case ID_LAST:  page_goto_n(g_total);   return 0;
+        /* All five of the page bar's own buttons dispatch through one call
+         * now too -- see app/pagebar.h. */
+        case ID_LIVE:
+        case ID_FIRST:
+        case ID_PREV:
+        case ID_NEXT:
+        case ID_LAST:
+            rc_pagebar_command(id);
+            return 0;
         case ID_REFRESH: rc_chats_request();      return 0;
 
         case IDM_NEW:
