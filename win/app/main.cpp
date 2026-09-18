@@ -22,6 +22,7 @@
 #include "app/chatlist.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
+#include "rpc/rpc.h"
 
 #define ID_INPUT      1002
 #define ID_SEND       1003
@@ -1432,6 +1433,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     rc_config_load(&g_cfg, g_exe_dir);
     rc_syncrpc_set_root(g_cfg.sync_root);
+    /* rpc.c needs the same string for its directory watcher, and used to get
+     * it by reading rc_syncrpc_root() back -- audit finding 01.25. Pushed
+     * here instead, the same way and at the same moment as the line above,
+     * so rpc.c no longer reaches into syncrpc.c's state for its own
+     * configuration. */
+    rc_rpc_set_sync_root(g_cfg.sync_root);
     if (g_cfg.sync_root[0]) {
         /* Put back any file an interrupted commit left aside, BEFORE the first
          * scan sees the path as missing and reports a deletion nobody made. */
