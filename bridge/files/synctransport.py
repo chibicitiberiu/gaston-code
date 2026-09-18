@@ -84,16 +84,18 @@ class SyncTransport:
     """
 
     def __init__(self, guest) -> None:
-        # `guest` itself, not just `guest.link`, because `GuestLink.send`
-        # takes the owning guest as an argument -- it appends to
-        # `guest.replay` when `stamp=True`, which every send below is not
-        # (a replayed SYNCPUT would re-write the file; a replayed SYNCSCAN
-        # would re-run a scan that can legitimately take minutes). That
-        # `guest.replay` branch is therefore never reached through this
-        # class. Changing `GuestLink.send`'s own signature so it does not
-        # need the guest at all would remove the need to hold this
-        # reference, but `GuestLink` is shared with the rest of `Bridge`
-        # and is not this module's surface to change.
+        # `guest` itself, not just `guest.link`: `.sync` (the id allocator
+        # and in-flight table) and `.perm_pending` (has_pending_prompt below)
+        # both live on the `GuestSession`, not on `GuestLink`.
+        #
+        # `GuestLink.send` also takes `guest` as an argument, though nothing
+        # below relies on that -- it used to append to `guest.replay` when
+        # `stamp=True`, which every send here was `stamp=False` against on
+        # purpose (a replayed SYNCPUT would re-write the file; a replayed
+        # SYNCSCAN would re-run a scan that can legitimately take minutes).
+        # The replay buffer that guarded against is retired (docs/BACKLOG.md
+        # #5), and with it `stamp=`; `GuestLink.send` still takes `guest` for
+        # a reason unrelated to sync -- see its own docstring.
         self._guest = guest
 
     @property
@@ -118,7 +120,7 @@ class SyncTransport:
         state.pending[sid] = S.Wait(kind="scan", future=fut, rows={}, display={})
         try:
             await self._guest.link.send(
-                self._guest, Frame("SYNCSCAN", {"id": sid}), stamp=False)
+                self._guest, Frame("SYNCSCAN", {"id": sid}))
             return await asyncio.wait_for(fut, timeout=600)
         finally:
             state.pending.pop(sid, None)
@@ -144,8 +146,7 @@ class SyncTransport:
                 await self._guest.link.send(
                     self._guest,
                     Frame("SYNCPUT", {"id": sid, "total": str(len(data)),
-                                      "off": str(off)}, prefix + piece),
-                    stamp=False)
+                                      "off": str(off)}, prefix + piece))
                 off += CHUNK
                 if off >= len(data):
                     break
@@ -157,8 +158,7 @@ class SyncTransport:
                 self._guest,
                 Frame("SYNCPUTEND", {
                     "id": sid, "crc": str(crc), "cls": cls, "if_crc": if_crc,
-                }),
-                stamp=False)
+                }))
             return await asyncio.wait_for(fut, timeout=300)
         finally:
             state.pending.pop(sid, None)
@@ -170,8 +170,7 @@ class SyncTransport:
         state.pending[sid] = S.Wait(kind="get", future=fut, data=bytearray())
         try:
             await self._guest.link.send(
-                self._guest, Frame("SYNCGET", {"id": sid}, rel_wire),
-                stamp=False)
+                self._guest, Frame("SYNCGET", {"id": sid}, rel_wire))
             return await asyncio.wait_for(fut, timeout=300)
         finally:
             state.pending.pop(sid, None)
@@ -183,8 +182,7 @@ class SyncTransport:
         state.pending[sid] = S.Wait(kind="mkdir", future=fut)
         try:
             await self._guest.link.send(
-                self._guest, Frame("SYNCMKDIR", {"id": sid}, rel_wire),
-                stamp=False)
+                self._guest, Frame("SYNCMKDIR", {"id": sid}, rel_wire))
             return await asyncio.wait_for(fut, timeout=120)
         finally:
             state.pending.pop(sid, None)

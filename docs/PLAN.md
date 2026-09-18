@@ -395,7 +395,16 @@ frame inventory as shipped.
 **[R] Frame header keys present from Phase 1**, even where the guest ignores them, because
 adding them later touches every frame and handler on both sides:
 
-- `seq=` monotonic per session — what `resume ... from=` replays from
+- **[R -- 2026-09-18: retired.]** `seq=` monotonic per session — what `resume
+  ... from=` replays from. The guest never sent `from=`, so `replay.since()`
+  was unreachable while `append()` still filled a 20,000-frame buffer and
+  `_send` still stamped every outbound frame with it -- dead code the bridge's
+  own comments admitted (server.py:704) and BACKLOG.md §5 tracked. Retired
+  along with `from=`, `next_seq=` and the replay buffer itself
+  (`bridge/wire/replay.py`, deleted); the never-replay invariant for
+  EXEC/EXECKILL/SYNC* still holds, now as a property of there being no
+  re-delivery mechanism left at all rather than of a `stamp=` flag. See
+  BACKLOG.md §5 for the fuller account.
 - `page=` — ignored in Phase 1, switches the control in Phase 2
 - `sess=` — see multi-session below
 - **[R3]** `enc=` — `raw` only in Phase 1; `deflate` was added for Phase 2a and is what

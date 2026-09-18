@@ -57,7 +57,6 @@ from .wire.protocol import (
                             pagestart,
                             pong,
                             ready,
-                            resync,
                             session_row,
                             sessions_end,
                             sessions_start,
@@ -67,7 +66,6 @@ from .wire.protocol import (
                             turn_start,
                             )
 from .wire.link import GuestLink
-from .wire.replay import Replay
 from .files.synctransport import GuestSyncState, SyncTransport
 from .view.transcript import TranscriptView
 from .agent import sessions as sesslist
@@ -121,7 +119,6 @@ class GuestSession:
     #: outside this file had to change shape. docs/audit/02-bridge-python.md
     #: 02.42.
     identity: GuestIdentity = field(default_factory=GuestIdentity)
-    replay: Replay = field(default_factory=Replay)
     #: Everything about writing bytes to this guest -- the socket writer, the
     #: send lock, the persistent compressor and the measured link speed. See
     #: bridge/wire/link.py. `writer`/`send_lock`/`zip_out`/`link_bps` below
@@ -630,23 +627,17 @@ class Bridge:
 
         # A fresh connection means a fresh inflater on the guest, so the
         # compressor must restart in lockstep or the first frame is garbage.
-        #
-        # And the replay buffer dies with it. _send stamps the frame it is
-        # about to write, by which point _write_block has already run the body
-        # through the PERSISTENT compressor -- so every deflated frame in that
-        # buffer is output from a stream that no longer exists. Replaying one
-        # into the guest's fresh inflater produces garbage, and net.c drops
-        # the link on a malformed frame. Latent only because the guest has
-        # never sent `from=`; BACKLOG records that as dead code and did not
-        # record this consequence of bringing it back.
+        # There used to be a second consequence: the (now-retired) replay
+        # buffer had to be invalidated here too, because _write_block runs a
+        # block through the PERSISTENT compressor before _send ever sees it,
+        # so a deflated frame kept for replay was output from a stream that
+        # no longer exists once the guest's inflater restarts. Nothing keeps
+        # frames around to replay any more, so there is nothing left to
+        # invalidate -- see docs/BACKLOG.md #5.
+        is_reconnect = self._guest is not None
         if self._guest is not None:
             self._guest.zip_out.reset()
-            lost = self._guest.replay.invalidate()
-            if lost:
-                log.debug("replay: dropped %d frame(s) the new inflater "
-                          "could not decode", lost)
 
-        resumed = False
         if self._guest is None:
             # sess_id is not passed here: GuestIdentity's own default_factory
             # generates it (bridge/agent/identity.py), the same uuid4() this
@@ -680,31 +671,18 @@ class Bridge:
 
         await self._send(guest, ready(
             guest.sess_id, guest.claude.model or "(default)",
-            guest.replay.next_seq, guest.pages.live.number,
-            guest.pages.count), stamp=False)
-
-        # Replay anything missed while disconnected.
-        want = h.get("from")
-        if want is not None:
-            try:
-                missed = guest.replay.since(int(want))
-            except LookupError as exc:
-                await self._send(guest, resync(str(exc)), stamp=False)
-            else:
-                resumed = True
-                log.info("replaying %d frames from seq %s", len(missed), want)
-                for f in missed:
-                    await self._send(guest, f, stamp=False)
+            guest.pages.live.number, guest.pages.count))
 
         # The stylesheet and the document skeleton live here rather than in
         # the guest, so the look can be changed by restarting the bridge
         # instead of rebuilding and re-deploying a binary.
         await self._send(guest, doc(H.document()))
         await self._send_options(guest)
-        # P1: the guest never sends `from=`, so the replay path above is dead
-        # code in production and a reconnect would otherwise arrive with the
-        # bar gone and the future still pending bridge-side. Re-issue the
-        # prompt explicitly instead of relying on replay.
+        # There is no replay to rely on for anything a reconnect needs back
+        # (docs/BACKLOG.md #5: the guest never sent `from=`, so that path was
+        # always dead code) -- every piece of live state below is re-issued
+        # explicitly instead, or a reconnect would arrive with the bar gone
+        # and the future still pending bridge-side.
         guest.lost_at = None
         # A fresh connection shows the fresh DOC skeleton just sent above --
         # the guest has no memory of which page it was reading before it
@@ -732,7 +710,7 @@ class Bridge:
             self._seed_agent_notices()
             self._spawn(self.run_sync("the machine reconnected"))
 
-        log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
+        log.info("attached sess=%s (reconnect=%s)", guest.sess_id, is_reconnect)
         return guest
 
     # --- Claude session ----------------------------------------------------
@@ -934,7 +912,7 @@ class Bridge:
         if not sc.halt_id:
             return
         log.info("re-issuing halt %s after reconnect", sc.halt_id)
-        await self._send(guest, halt(sc.halt_id, sc.halt_text), stamp=False)
+        await self._send(guest, halt(sc.halt_id, sc.halt_text))
 
     async def _reissue_turn(self, guest: GuestSession) -> None:
         """After a reconnect, restore the busy UI if a turn is still running.
@@ -952,7 +930,7 @@ class Bridge:
         if session is None or not getattr(session, "busy", False):
             return
         log.info("re-issuing turn state after reconnect")
-        await self._send(guest, turn_start(), stamp=False)
+        await self._send(guest, turn_start())
 
     def _spawn(self, coro) -> None:
         """Fire-and-forget, with a reference kept.
@@ -1086,7 +1064,7 @@ class Bridge:
         name = self._DISPATCH.get(f.type)
         if name is None:
             log.warning("unknown frame type from guest: %s", f.type)
-            await self._send(guest, error("unknown_type", f.type), stamp=False)
+            await self._send(guest, error("unknown_type", f.type))
             return
         await getattr(self, name)(guest, f)
 
@@ -1115,7 +1093,7 @@ class Bridge:
         # answered on their screen while we still held the halt -- and
         # since raising is idempotent, no later bar could appear and
         # every latched path refused the agent for good.
-        await self._send(guest, haltend(hid), stamp=False)
+        await self._send(guest, haltend(hid))
         # Pressing Continue IS the confirmation, so it lifts the
         # refusal here. Making the agent ask again -- a permission
         # prompt for sync_resolve -- would put a second dialog in front
@@ -1180,7 +1158,7 @@ class Bridge:
             log.info("guest reports %.0f B/s", bps)
 
     async def _on_ping(self, guest: GuestSession, f: Frame) -> None:
-        await self._send(guest, pong(), stamp=False)
+        await self._send(guest, pong())
 
     async def _on_newsession(self, guest: GuestSession, f: Frame) -> None:
         await self._new_session(guest)
@@ -1470,14 +1448,18 @@ class Bridge:
                             f"shorter path, or cd to it inside the command.")}],
                         "isError": True,
                     }
-            # stamp=False: an EXEC must NEVER enter the replay buffer.
-            # Replay exists to redraw a transcript, and re-delivering this on
-            # reconnect would RE-RUN the command -- `del c:\temp\*` twice is
-            # not a redraw. Inert today only because the guest never sends
-            # `from=`; this is here so implementing that later cannot arm it.
+            # Nothing re-sends an EXEC on reconnect, and nothing must: a
+            # redelivered EXEC would RE-RUN the command -- `del c:\temp\*`
+            # twice is not a redraw. There is no wire replay any more (the
+            # buffer that word used to mean is retired, docs/BACKLOG.md #5),
+            # so the only re-delivery mechanism left is the explicit reissue
+            # path after a reconnect (_reissue_halt, _reissue_turn,
+            # PermissionDesk.reissue) -- and none of those touch
+            # exec_pending or send an EXEC/EXECKILL. See
+            # test_exec_is_never_re_delivered.
             await self._send(guest, exec_cmd(exec_id, command,
                                              timeout_ms=timeout_ms, shell=shell,
-                                             cwd=cwd), stamp=False)
+                                             cwd=cwd))
             log.info("exec %s: %s", exec_id, command[:160])
 
             # Above the guest's own limit, so a slow command produces a
@@ -1519,7 +1501,7 @@ class Bridge:
                 return
             entry.killed = True
         log.info("asking the guest to kill exec %s", exec_id)
-        self._spawn(self._send(guest, exec_kill(exec_id), stamp=False))
+        self._spawn(self._send(guest, exec_kill(exec_id)))
 
     async def run_sync(self, why: str) -> dict:
         """One pass, serialised against every other trigger.
@@ -2075,7 +2057,7 @@ class Bridge:
         hid = self.synccoord.raise_halt(line, paths)
         if hid is None:
             return
-        await self._send(guest, halt(hid, line), stamp=False)
+        await self._send(guest, halt(hid, line))
 
     async def _clear_halt(self, guest: GuestSession) -> None:
         """Take it down because the reason went away, not because it was
@@ -2083,7 +2065,7 @@ class Bridge:
         hid = self.synccoord.clear_halt()
         if hid is None:
             return
-        await self._send(guest, haltend(hid), stamp=False)
+        await self._send(guest, haltend(hid))
 
     async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
         """The halt is a VIEW of base.latched, not independent state.
@@ -2487,7 +2469,10 @@ class Bridge:
             # _set_effort already reports this way, and the transcript is
             # the channel that paginates and survives a reconnect -- an
             # ERROR frame does neither, and _send silently drops it outright
-            # on a closed writer or an oversized body.
+            # on a closed writer (an oversized body would instead raise --
+            # see GuestLink.send -- but this message is truncated to 160
+            # characters, well inside the frame cap, so that case does not
+            # apply here).
             await self._write_block(guest, H.error(
                 "Could not start a new session: " + str(exc)[:160]))
             return
@@ -2580,9 +2565,8 @@ class Bridge:
     # stay on Bridge, as thin delegations to guest.link, because both
     # syncrun.py's Pass and tests/python reach them by these names.
 
-    async def _send(self, guest: GuestSession, frame: Frame,
-                    *, stamp: bool = True) -> bool:
-        return await guest.link.send(guest, frame, stamp=stamp)
+    async def _send(self, guest: GuestSession, frame: Frame) -> bool:
+        return await guest.link.send(guest, frame)
 
     async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:

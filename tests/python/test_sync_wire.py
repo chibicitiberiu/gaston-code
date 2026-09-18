@@ -303,12 +303,18 @@ async def test_an_oversized_file_is_skipped_with_a_reason(harness, tmp_path):
     await harness.close(writer)
 
 
-async def test_sync_frames_never_enter_the_replay_buffer(harness, tmp_path):
-    """Replay redraws a transcript. Re-delivering a SYNCPUT REWRITES A FILE."""
+async def test_sync_frames_are_never_re_delivered_on_reconnect(harness, tmp_path):
+    """There is no wire replay any more (docs/BACKLOG.md #5) -- nothing
+    resends a frame from a log. The one thing that DOES re-send state after
+    a reconnect is the explicit reissue path, and a re-delivered SYNCPUT
+    would rewrite a file that has already finished writing -- so SYNC*
+    frames must never be among what a reconnect sends. See
+    test_server_integration.py::test_exec_is_never_re_delivered for the
+    same property on the exec side.
+    """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     p = a_pass(harness, tmp_path)
-    before = harness.bridge._guest.replay.next_seq
     open(os.path.join(p.root, "a.txt"), "wb").write(b"x\n")
 
     task = asyncio.create_task(p.push("a.txt", None))
@@ -317,10 +323,13 @@ async def test_sync_frames_never_enter_the_replay_buffer(harness, tmp_path):
     await harness.send(writer, Frame("SYNCPUTACK", {
         "id": put.headers["id"], "status": "ok", "crc": "0"}))
     await asyncio.wait_for(task, 5)
-
-    types = [fr.type for fr in harness.bridge._guest.replay.since(before)]
-    assert not [t for t in types if t.startswith("SYNC")]
     await harness.close(writer)
+
+    reader2, writer2 = await harness.connect()
+    got = await harness.recv_until(reader2, {"OPTIONSEND"}, timeout=3)
+    types = {f.type for f in got}
+    assert not any(t.startswith("SYNC") for t in types)
+    await harness.close(writer2)
 
 
 async def test_a_disconnect_mid_transfer_fails_it_rather_than_hanging(
