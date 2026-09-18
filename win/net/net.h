@@ -55,10 +55,17 @@ typedef struct rc_outq_item {
 
 /* Bounded in BYTES, not items: sixteen 64KB frames would be a megabyte.
  *
- * It is a SOFT cap. A writer that has waited its limit enqueues anyway rather
- * than dropping the frame, because losing a frame on a stream with no resync
- * is worse than overshooting the budget by one. So the true ceiling is
- * RC_OUTQ_MAX_BYTES plus one frame per blocked writer. */
+ * It is a HARD cap: rc_net_send waits up to 5s (50 x 100ms) for the sender
+ * to drain room, and if the queue is still full after that it fails the
+ * send rather than enqueueing past the limit. It used to be soft -- a
+ * writer that waited out its budget enqueued anyway, reasoning that losing
+ * a frame on a stream with no resync is worse than overshooting by one.
+ * Measured against a peer that genuinely stops reading (tests/python/
+ * test_guest_net.py's slow-reader scenario), that "by one" was false: each
+ * blocked caller enqueued past the cap in turn, without bound, on a machine
+ * with 28KB free. A failed rc_net_send is a return value every caller
+ * already has to handle for other reasons (OOM, oversized frame, a dead
+ * link); a queue that grows without bound under backpressure is not. */
 #define RC_OUTQ_MAX_BYTES (64 * 1024)
 
 typedef struct {
@@ -117,6 +124,15 @@ void rc_net_frame_done(rc_net *n, rc_frame *f);
  * outside net.cpp touches it -- and that is the property worth having, since
  * the bug this guards against is a miscounted decrement rather than a read. */
 long rc_net_inflight(const rc_net *n);
+
+/* Snapshot of the outbound queue's current byte total, taken under
+ * send_lock -- unlike `inflight`, `outq_bytes` is not volatile, so a caller
+ * outside net.cpp cannot just read the field and trust it. Exists for the
+ * same reason rc_net_inflight does: netcheck.exe's slow-reader scenario is
+ * the only thing that asserts the queue stays bounded under backpressure,
+ * and reaching into the struct for a lock-guarded field is worse than
+ * asking for it properly. */
+unsigned rc_net_outq_bytes(rc_net *n);
 
 #ifdef __cplusplus
 }
