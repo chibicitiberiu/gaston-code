@@ -54,7 +54,10 @@ wine-smoke: guest-checks
 	                 tests/python/test_guest_config.py \
 	                 tests/python/test_guest_cpp.py \
 	                 tests/python/test_guest_rpc.py \
-	                 tests/python/test_guest_frame.py -q
+	                 tests/python/test_guest_frame.py \
+	                 tests/python/test_guest_net.py \
+	                 tests/python/test_guest_probe.py \
+	                 tests/python/test_guest_caps.py -q
 
 # The binaries that run the SHIPPING guest C under Wine. `make test` builds
 # them first, because the alternative is what happened during the audit: a
@@ -62,8 +65,14 @@ wine-smoke: guest-checks
 # and the run reported "2031 passed" as though nothing were wrong. Those
 # checks are the only thing proving the guest's classifier and the bridge's
 # still agree, and a disagreement there is permanent rather than noisy.
+#
+# netcheck and probe joined this list once test_guest_net.py and
+# test_guest_probe.py existed to drive them (03.53) -- before that they built
+# clean and nothing ran them, which is the same silent gap this list exists
+# to close. capscheck joined once test_guest_caps.py existed to diff its
+# output against bridge/files/caps.py (03.12).
 guest-checks:
-	@$(MAKE) -C win synccheck inicheck cppcheck rpccheck framecheck
+	@$(MAKE) -C win synccheck inicheck cppcheck rpccheck framecheck netcheck probe capscheck
 
 # RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
 # that compile clean and fail on the guest. The transcript moved to MSHTML, so
