@@ -899,9 +899,10 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
     """The scenario 02.20 names: a pass raises a conflict notice, it reaches
     the user's screen (and is cleared from the user's durable queue), and the
     bridge is replaced -- a crash, a redeploy -- before the agent's next
-    turn. Before this, Bridge._agent_notices was memory-only, so the news
-    the agent most needed (a conflict that latched its writes) was the one
-    that did not survive.
+    turn. Before this, Bridge._agent_notices (now Bridge.synccoord's
+    agent_notices, docs/audit/02-bridge-python.md 02.43) was memory-only, so
+    the news the agent most needed (a conflict that latched its writes) was
+    the one that did not survive.
     """
     from bridge.server import Bridge
 
@@ -916,14 +917,15 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
         "test setup: agent's copy still outstanding")
 
     # A fresh Bridge, standing in for the process that replaced the one
-    # that ran the pass above -- nothing in memory survives a restart.
+    # that ran the pass above -- nothing in memory survives a restart. Its
+    # SyncCoordinator is built fresh right alongside it, the same way.
     fresh = Bridge("s", host="127.0.0.1", port=0)
     fresh.sync_dir = p.root
     fresh.sync_state = os.path.dirname(p.state)
-    assert fresh._agent_notices == []
+    assert fresh.synccoord.agent_notices == []
 
     fresh._seed_agent_notices()
-    assert fresh._agent_notices == [
+    assert fresh.synccoord.agent_notices == [
         "SYNC: conflict on x.c -- your copy was kept"], (
         "the notice the old process never got to hand over must be picked "
         "up from disk, not lost with the process that wrote it"
@@ -931,7 +933,7 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
 
     out = await fresh._with_sync_preamble("carry on")
     assert "x.c" in out
-    assert fresh._agent_notices == []
+    assert fresh.synccoord.agent_notices == []
     # And the durable half actually cleared, not just the in-memory cache --
     # or the NEXT restart would hand the same notice over a third time.
     assert Baseline.load(p.state).pending_notice_agent == []
@@ -987,7 +989,7 @@ async def test_a_conflict_puts_a_continue_bar_on_the_users_screen(
     # The bar's label is clipped at roughly seventy characters on a 640x480
     # screen, and a line that runs past that loses its end silently.
     assert len(halt.body) <= 70, halt.body
-    assert harness.bridge._guest.halt_id == halt.headers["id"]
+    assert harness.bridge.synccoord.halt_id == halt.headers["id"]
     await harness.close(writer)
 
 
@@ -1001,7 +1003,7 @@ async def test_continue_starts_the_agent_with_an_instruction_not_an_echo(
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
-    guest.halt_id = "h123"
+    harness.bridge.synccoord.halt_id = "h123"
 
     sent = []
     guest.claude = _FakeClaude(sent)
@@ -1012,7 +1014,8 @@ async def test_continue_starts_the_agent_with_an_instruction_not_an_echo(
         await asyncio.sleep(0.05)
 
     assert sent and "Resolve the sync conflict" in sent[0]
-    assert guest.halt_id == "", "the halt must clear when it is answered"
+    assert harness.bridge.synccoord.halt_id == "", (
+        "the halt must clear when it is answered")
     await harness.close(writer)
 
 
@@ -1023,14 +1026,14 @@ async def test_a_stale_resume_is_ignored(harness, tmp_path):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
-    guest.halt_id = "h999"
+    harness.bridge.synccoord.halt_id = "h999"
 
     sent = []
     guest.claude = _FakeClaude(sent)
     await harness.send(writer, Frame("RESUME", {"id": "h123"}))
     await asyncio.sleep(0.3)
     assert not sent
-    assert guest.halt_id == "h999"
+    assert harness.bridge.synccoord.halt_id == "h999"
     await harness.close(writer)
 
 
@@ -1513,8 +1516,8 @@ async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
     assert (await _recv(harness, reader, "HALT")) is not None
 
     # Answer it, the way the user does.
-    guest = harness.bridge._guest
-    await harness.send(writer, Frame("RESUME", {"id": guest.halt_id}))
+    await harness.send(writer,
+                       Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
     await asyncio.sleep(0.1)
 
     # Same unresolvable conflict, next pass. No second bar.
@@ -1523,7 +1526,8 @@ async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
     second = await asyncio.wait_for(task, 10)
     assert second["conflicts"] == 1, "it is still a conflict, and still true"
     assert second["new_conflicts"] == 0, "but it is not news, so no new bar"
-    assert not guest.halt_id, "the bar went back up on a standing conflict"
+    assert not harness.bridge.synccoord.halt_id, (
+        "the bar went back up on a standing conflict")
     await harness.close(writer)
 
 
@@ -1559,7 +1563,8 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
     await harness.bridge._raise_halt(guest, "Stopped: 1 more.",
                                      paths=["unseen.c"])
 
-    await harness.send(writer, Frame("RESUME", {"id": guest.halt_id}))
+    await harness.send(writer,
+                       Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
     await asyncio.sleep(0.15)
 
     left = harness.bridge._load_baseline().latched
@@ -1593,19 +1598,20 @@ async def test_continue_is_acknowledged_rather_than_assumed(harness, tmp_path):
     await harness.send(writer, Frame("RESUME", {"id": halt.headers["id"]}))
     end = await _recv(harness, reader, "HALTEND")
     assert end.headers["id"] == halt.headers["id"]
-    assert not guest.halt_id
+    assert not harness.bridge.synccoord.halt_id
     await harness.close(writer)
 
 
 async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     """The third leg beside PERMSTATE, and the one whose absence was worst.
 
-    halt_id lives on the GuestSession and survives a reconnect; `latched`
-    lives on disk. So a guest that restarted while a halt was up came back
-    with NO BAR, a bridge still holding the halt, and every latched path
-    refusing the agent's writes -- unanswerable, because RESUME is only
-    accepted against a matching id and raising is idempotent while one is
-    outstanding. Nothing short of restarting the bridge would recover it.
+    halt_id lives on the SyncCoordinator (Bridge-lifetime) and survives a
+    reconnect; `latched` lives on disk. So a guest that restarted while a
+    halt was up came back with NO BAR, a bridge still holding the halt, and
+    every latched path refusing the agent's writes -- unanswerable, because
+    RESUME is only accepted against a matching id and raising is idempotent
+    while one is outstanding. Nothing short of restarting the bridge would
+    recover it.
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
@@ -1625,7 +1631,7 @@ async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     # And it is answerable, which is the whole point.
     await harness.send(writer2, Frame("RESUME", {"id": again.headers["id"]}))
     await _recv(harness, reader2, "HALTEND")
-    assert not harness.bridge._guest.halt_id
+    assert not harness.bridge.synccoord.halt_id
     await harness.close(writer2)
 
 
@@ -1634,18 +1640,19 @@ async def test_a_bridge_restart_with_latched_paths_raises_the_bar(
     """02.21: the same hole as test_a_halt_survives_a_reconnect, but across a
     BRIDGE restart rather than a guest reconnect.
 
-    A guest reconnect keeps the same GuestSession, so guest.halt_id survives
-    it and _reissue_halt puts the bar back. A bridge restart does not: the
-    new process's GuestSession starts with halt_id empty, while
-    base.latched -- written by the OLD process -- is still sitting on disk.
-    Before 02.21 nothing at startup or attach ever read it, so the agent's
-    writes stayed refused with no bar on the user's screen to explain why
-    or let them clear it, and the only way out was the agent noticing on
-    its own via sync_status.
+    A guest reconnect keeps the same Bridge (and its SyncCoordinator), so
+    synccoord.halt_id survives it and _reissue_halt puts the bar back. A
+    bridge restart does not: the new process's SyncCoordinator starts with
+    halt_id empty, while base.latched -- written by the OLD process -- is
+    still sitting on disk. Before 02.21 nothing at startup or attach ever
+    read it, so the agent's writes stayed refused with no bar on the user's
+    screen to explain why or let them clear it, and the only way out was
+    the agent noticing on its own via sync_status.
 
     Here the connecting guest IS the first one this Bridge object has ever
-    seen -- there is no previous GuestSession to have carried a halt_id
-    forward -- which is exactly what "a fresh process" looks like from
+    seen -- `harness.bridge.synccoord` has never had a chance to observe
+    this pass's `base.latched`, the same as a freshly constructed one would
+    not have -- which is exactly what "a fresh process" looks like from
     _attach's side.
     """
     harness.bridge.sync_dir = str(tmp_path / "tree")
@@ -1665,7 +1672,7 @@ async def test_a_bridge_restart_with_latched_paths_raises_the_bar(
         "no HALT arrived at all -- the restart left a latched path with no "
         f"bar (got {halt.type} instead, after recv_until's timeout)")
     assert halt.headers["id"]
-    assert harness.bridge._guest.halt_id == halt.headers["id"]
+    assert harness.bridge.synccoord.halt_id == halt.headers["id"]
     await harness.close(writer)
 
 
@@ -1673,7 +1680,7 @@ async def test_reconcile_halt_clears_a_bar_nothing_is_latched_for(
         harness, tmp_path):
     """The other direction: a bar up with base.latched already empty (the
     agent released the last path through some route that did not itself
-    clear guest.halt_id) must come down, not stay stuck."""
+    clear synccoord.halt_id) must come down, not stay stuck."""
     harness.bridge.sync_dir = str(tmp_path / "tree")
     harness.bridge.sync_state = str(tmp_path / "state")
     os.makedirs(harness.bridge.sync_dir, exist_ok=True)
@@ -1683,10 +1690,11 @@ async def test_reconcile_halt_clears_a_bar_nothing_is_latched_for(
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
-    guest.halt_id = "h-stuck"
+    harness.bridge.synccoord.halt_id = "h-stuck"
 
     await harness.bridge._reconcile_halt(guest)
-    assert guest.halt_id == "", "a bar with nothing latched must come down"
+    assert harness.bridge.synccoord.halt_id == "", (
+        "a bar with nothing latched must come down")
     await harness.close(writer)
 
 
@@ -1725,7 +1733,7 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     assert b"stopped" in body.lower(), body[:200]
     # And the agent, which would otherwise keep reporting files as delivered.
     assert any("SYNC HAS STOPPED" in n
-               for n in harness.bridge._agent_notices)
+               for n in harness.bridge.synccoord.agent_notices)
     assert harness.bridge._load_baseline().aborted
 
     # sync_status leads with it, because it makes everything else stale.
@@ -1733,11 +1741,12 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     assert "SYNCHRONISATION IS STOPPED" in status
 
     # Second pass, same refusal: silent.
-    harness.bridge._agent_notices.clear()
+    harness.bridge.synccoord.agent_notices.clear()
     task = asyncio.create_task(harness.bridge.run_sync("test"))
     await fake_scan(harness, reader, writer, {}, tree_id="VOL-OTHER")
     await asyncio.wait_for(task, 10)
-    assert not harness.bridge._agent_notices, "announced the same abort twice"
+    assert not harness.bridge.synccoord.agent_notices, (
+        "announced the same abort twice")
     await harness.close(writer)
 
 
@@ -1898,7 +1907,8 @@ async def test_continue_unlatches_only_once_the_wire_is_free(harness, tmp_path):
     running = asyncio.create_task(harness.bridge._run_turn(guest, "in flight"))
     await asyncio.sleep(0.05)
 
-    await harness.send(writer, Frame("RESUME", {"id": guest.halt_id}))
+    await harness.send(writer,
+                       Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
     await _recv(harness, reader, "HALTEND")
     await asyncio.sleep(0.1)
 
@@ -2057,9 +2067,9 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
     said = []
     for reason in ("machine A is not machine B", "machine B is not machine A",
                    "machine A is not machine B", "machine B is not machine A"):
-        harness.bridge._agent_notices.clear()
+        harness.bridge.synccoord.agent_notices.clear()
         await harness.bridge._report_abort(guest, reason)
-        said.append(bool(harness.bridge._agent_notices))
+        said.append(bool(harness.bridge.synccoord.agent_notices))
 
     assert said == [True, True, False, False], (
         f"each distinct reason once, then silence -- got {said}")
@@ -2069,7 +2079,8 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
     base.announced = []
     base.aborted = ""
     base.save(os.path.join(harness.bridge.sync_state, "base.json"))
-    harness.bridge._agent_notices.clear()
+    harness.bridge.synccoord.agent_notices.clear()
     await harness.bridge._report_abort(guest, "machine A is not machine B")
-    assert harness.bridge._agent_notices, "recovery did not reset the slate"
+    assert harness.bridge.synccoord.agent_notices, (
+        "recovery did not reset the slate")
     await harness.close(writer)

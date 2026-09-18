@@ -146,7 +146,8 @@ async def test_fakegui_answers_a_halt_end_to_end(harness):
     pump = asyncio.create_task(gui.pump())
     try:
         guest = await _wait_attached(harness)
-        assert guest.halt_id == "", "test setup: no halt should be up yet"
+        assert harness.bridge.synccoord.halt_id == "", (
+            "test setup: no halt should be up yet")
 
         await harness.bridge._raise_halt(guest, "conflict on notes.txt")
 
@@ -156,12 +157,12 @@ async def test_fakegui_answers_a_halt_end_to_end(harness):
             await asyncio.sleep(0.02)
         else:
             pytest.fail("fakegui never rendered the HALT frame")
-        assert gui.halt_id == guest.halt_id
+        assert gui.halt_id == harness.bridge.synccoord.halt_id
 
         assert await gui.answer_halt() is True
 
         for _ in range(200):
-            if not guest.halt_id and gui.halt_id is None:
+            if not harness.bridge.synccoord.halt_id and gui.halt_id is None:
                 break
             await asyncio.sleep(0.02)
         else:
