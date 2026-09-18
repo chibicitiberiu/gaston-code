@@ -606,8 +606,19 @@ int rc_net_send(rc_net *n, const char *type,
                 const char *const *keys, const char *const *vals, int nkv,
                 const void *body, unsigned body_len)
 {
-    /* Built on the caller's stack region via a heap block sized to the frame,
-     * so there is no shared build buffer to race over any more. */
+    /* A SHARED static, serialised by send_lock -- which is what the two
+     * comments that used to sit here denied. One said "there is no shared
+     * build buffer to race over any more" directly above this declaration;
+     * the other said the buffer was "still shared, but only for the memcpy",
+     * which is true and was the opposite of the first.
+     *
+     * It is 66,560 bytes committed at load, the single largest static in the
+     * image. The largest frame actually built is SYNCENT at 63,488 plus
+     * headers, and rc_frame_build refuses anything over RC_MAX_FRAME
+     * (frameproto.c), so the + 1024 of slack is roughly 1020 bytes more than
+     * can ever be used. Left alone deliberately: BACKLOG.md §2 owns the
+     * memory pass, and shrinking a buffer to its measured high-water mark is
+     * exactly the change that wants measuring rather than reasoning. */
     static char build[RC_MAX_FRAME + 1024];
     rc_outq_item *it;
     int total;
@@ -615,8 +626,9 @@ int rc_net_send(rc_net *n, const char *type,
 
     if (n->sock == INVALID_SOCKET || !n->running) return -1;
 
-    /* The build buffer is still shared, but only for the memcpy that follows,
-     * which cannot block. That is the whole difference. */
+    /* The lock covers building INTO the shared buffer and copying OUT of it.
+     * Neither can block, which is the property that matters: the wire write
+     * happens on the sender thread, from the heap block, with this released. */
     EnterCriticalSection(&n->send_lock);
     total = rc_frame_build(build, sizeof(build), type, keys, vals, nkv,
                            body, body_len);

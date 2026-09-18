@@ -411,7 +411,7 @@ static void chats_switch(void)
      * frozen. */
     SetWindowTextA(g_main, RC_TITLE "  -  loading...");
     status_set(2, " loading conversation...");
-    rc_net_send(&g_net, "SWITCH", keys, vals, 1, NULL, 0);
+    ui_send("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
 }
 
 static void ui_set_busy(int busy)
@@ -529,6 +529,31 @@ static void perm_show(const char *id, const char *text, int allows)
     SetFocus(g_perm_allow);
 }
 
+/* Send something the USER just asked for, and say so if it did not go.
+ *
+ * rc_net_send returns -1 on a closed link, a full queue or an oversized
+ * frame. Ignoring that turns a button press into silence: the press looks
+ * accepted, nothing happens, and there is nothing on screen to explain it.
+ * Three of ~20 call sites checked, and the one seven-line comment explaining
+ * why it must be checked sat above the Continue button while perm_reply --
+ * the same bar, the other three buttons -- did not check at all. */
+static int ui_send(const char *what, const char *type,
+                   const char *const *keys, const char *const *vals, int nkv,
+                   const void *body, unsigned body_len)
+{
+    if (rc_net_send(&g_net, type, keys, vals, nkv, body, body_len) == 0)
+        return 1;
+    rc_log("ui: %s (%s) did not reach the bridge", what, type);
+    {
+        char msg[192];
+        rc_strf(msg, sizeof(msg),
+                "%s could not be sent -- the connection is down. It will not "
+                "have taken effect. Try again once it reconnects.", what);
+        rc_html_error(g_html, msg);
+    }
+    return 0;
+}
+
 static void perm_reply(const char *action)
 {
     const char *keys[2];
@@ -537,7 +562,10 @@ static void perm_reply(const char *action)
     if (!g_perm_pending) return;
     keys[0] = "id";     vals[0] = g_perm_id;
     keys[1] = "action"; vals[1] = action;
-    rc_net_send(&g_net, "PERMREPLY", keys, vals, 2, NULL, 0);
+    /* Checked, which it was not. A lost PERMREPLY leaves the model waiting on
+     * a prompt nobody can answer until the bridge's deadline expires and
+     * auto-denies -- and the user, who pressed Allow, is told nothing. */
+    ui_send("Your permission answer", "PERMREPLY", keys, vals, 2, NULL, 0);
     /* The bar comes down on PERMEND, not here: the bridge owns the state
      * machine, and a reply can lose a race with a deadline or a disconnect. */
 }
@@ -1071,7 +1099,9 @@ static void do_send(void)
 static void do_stop(void)
 {
     rc_log("stop requested");
-    rc_net_send(&g_net, "INTERRUPT", NULL, NULL, 0, NULL, 0);
+    /* A lost INTERRUPT is a Stop button that does nothing, on a turn that
+     * keeps running and keeps costing. */
+    ui_send("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
 }
 
 /* Open a conversation on a plain click.
@@ -1529,7 +1559,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
             SetWindowTextA(g_main, RC_TITLE "  -  new session...");
-            rc_net_send(&g_net, "NEWSESSION", NULL, NULL, 0, NULL, 0);
+            ui_send("Starting a new conversation", "NEWSESSION", NULL, NULL, 0, NULL, 0);
             return 0;
 
         case IDM_CLOSE:
@@ -1589,13 +1619,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (id >= IDM_MODEL0 && id < IDM_MODEL0 + g_n_model) {
                 const char *keys[1], *vals[1];
                 keys[0] = "model"; vals[0] = g_opt_model[id - IDM_MODEL0];
-                rc_net_send(&g_net, "SETMODEL", keys, vals, 1, NULL, 0);
+                ui_send("The model change", "SETMODEL", keys, vals, 1, NULL, 0);
                 return 0;
             }
             if (id >= IDM_EFFORT0 && id < IDM_EFFORT0 + g_n_effort) {
                 const char *keys[1], *vals[1];
                 keys[0] = "effort"; vals[0] = g_opt_effort[id - IDM_EFFORT0];
-                rc_net_send(&g_net, "SETEFFORT", keys, vals, 1, NULL, 0);
+                ui_send("The effort change", "SETEFFORT", keys, vals, 1, NULL, 0);
                 return 0;
             }
             break;
