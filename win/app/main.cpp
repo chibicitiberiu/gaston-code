@@ -77,6 +77,7 @@ static rc_html *g_html;
 static rc_bar  *g_bar;
 static rc_chats *g_chats;
 static rc_xferstat *g_xfer;
+static rc_input    *g_inputmod;
 static rc_optmenu *g_optmenu;
 static rc_pagebar *g_pagebar;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
@@ -285,14 +286,14 @@ static void ui_refresh_enables(void)
      * has wedged, and it is how the cancellation path gets exercised at all --
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
-    rc_input_enable_send((g_turn_active || (g_bar && g_bar->blocks_send()))
+    if (g_inputmod) g_inputmod->enable_send((g_turn_active || (g_bar && g_bar->blocks_send()))
                           ? 0 : 1);
 }
 
 static void ui_set_busy(int busy)
 {
     g_turn_active = busy;
-    rc_input_enable_stop(busy);
+    if (g_inputmod) g_inputmod->enable_stop(busy);
     ui_refresh_enables();
 }
 
@@ -755,7 +756,7 @@ static void layout(HWND hwnd)
             g_bar->move(cx, ybar, w - GUTTER);
         /* The input box, Send and Stop position their own three controls
          * now -- app/input.cpp, see app/input.h. */
-        rc_input_move(cx, y, cw, w);
+        if (g_inputmod) g_inputmod->move(cx, y, cw, w);
     }
 }
 
@@ -845,12 +846,13 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_xfer = rc_xferstat::create();
 
     /* The input box and Send/Stop: created and owned by app/input.cpp now
-     * (rc_input_create logs its own check_child failures and subclasses the
+     * (rc_input::create logs its own check_child failures and subclasses the
      * input box itself). ui_send is main.c's "send something the user just
      * asked for", for INTERRUPT; input_blocked/input_sent are this file's
      * answers to the two policy questions that module does not own -- see
-     * the callback comments on rc_input_create in app/input.h. */
-    rc_input_create(hwnd, inst, g_ui_font, &g_net, g_html, g_xfer, ui_send,
+     * the callback comments on rc_input::create in app/input.h. */
+    g_inputmod = rc_input::create(hwnd, inst, g_ui_font, &g_net, g_html,
+                                  g_xfer, ui_send,
                      input_blocked, input_sent);
 
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
@@ -863,7 +865,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
      * inside rc_chats::create/rc_bar::create/rc_pagebar::create/
-     * rc_input_create above. */
+     * rc_input::create above. */
 }
 
 /* -------------------------------------------------------------- main proc */
@@ -925,7 +927,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_SETFOCUS:
-        rc_input_focus();
+        if (g_inputmod) g_inputmod->focus();
         return 0;
 
     /* Owner-draw so a date header reads as a header instead of as a
@@ -1006,7 +1008,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
          * app/input.h. */
         case ID_SEND:
         case ID_STOP:
-            rc_input_command(id);
+            if (g_inputmod) g_inputmod->command(id);
             return 0;
         /* All three of the bar's own buttons dispatch through one call now
          * -- see app/bar.h. command() knows which kind is on screen and what
@@ -1113,6 +1115,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_bar = NULL;
         delete g_chats;
         g_chats = NULL;
+        delete g_inputmod;
+        g_inputmod = NULL;
         delete g_xfer;
         g_xfer = NULL;
         delete g_optmenu;

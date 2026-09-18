@@ -7,6 +7,14 @@
  * (finding 01.1), so it survived that pass. Same shape as those five: a
  * module plus its own entry points, seamed at the dispatch table
  * render_frame became (finding 01.12).
+ *
+ * A CLASS NOW, not free functions over file statics (audit finding 01.60,
+ * raised by the user): same reasoning and the same shape as app/htmlview.h
+ * and the five siblings. Exactly one instance, created explicitly by
+ * main.cpp at window-creation time -- never a file-scope object, because a
+ * non-trivial constructor there runs before WinMain and so before
+ * rc_log_open, and `make -C win check` fails the build on one. See
+ * core/rc_cpp.h.
  */
 #ifndef RC_INPUT_H
 #define RC_INPUT_H
@@ -16,8 +24,8 @@
 #include "app/htmlview.h"
 #include "app/xferstat.h"
 
-#ifdef __cplusplus
-extern "C" {
+#ifndef __cplusplus
+#error "input.h is C++; compose and send are a class now, see app/htmlview.h"
 #endif
 
 #define ID_INPUT 1002
@@ -38,52 +46,74 @@ typedef int (*rc_input_send_fn)(const char *what, const char *type,
                                  const char *const *vals, int nkv,
                                  const void *body, unsigned body_len);
 
-/* net: the one raw rc_net_send this module makes itself, for INPUT -- same
- *      shape as app/pagebar.h's `net` parameter. do_send has always had its
- *      own "Not connected" refusal rather than going through main.c's
- *      ui_send (which would report a different message), so that is
- *      preserved rather than folded into `send` below.
- * html: user()/error() -- the local echo of a sent message and the
- *      "too long"/"not connected" refusals. May be NULL exactly as
- *      everywhere else this file guards g_html; every call here is guarded
- *      too.
- * xfer: app/xferstat.cpp's rc_xferstat instance, for do_send's own side of
- *      the rx/tx counters -- note_tx_start/note_tx_done. Same reasoning as
- *      `html`: passed in rather than reached for as a global, and every call
- *      here is guarded.
- * send: main.c's ui_send, for INTERRUPT (do_stop).
- * blocked: "is Send currently refused" -- g_turn_active || rc_bar_blocks_send()
- *      today. do_send checks this itself, not just the button's enabled
- *      state, because Enter (this module's own input_proc) reaches do_send
- *      directly and bypasses whatever EnableWindow last set.
- * sent: called once a typed INPUT has actually gone out, after the box has
- *      been cleared -- main.c's status_refresh() plus ui_set_busy(1) today,
- *      UI chrome this module does not own. */
-void rc_input_create(HWND parent, HINSTANCE inst, HFONT font, rc_net *net,
-                      rc_html *html, rc_xferstat *xfer, rc_input_send_fn send,
-                      int (*blocked)(void), void (*sent)(void));
+class rc_input {
+    HWND         box, send_btn, stop_btn;
+    WNDPROC      oldproc;
+    rc_net      *net;
+    rc_html     *html;
+    rc_xferstat *xfer;
+    rc_input_send_fn send_fn;
+    int        (*blocked_fn)(void);
+    void       (*sent_fn)(void);
 
-/* cx/y: where the input box starts. cw: the transcript column's width, which
- * bounds the input box (Send/Stop sit to its right). win_w: the full client
- * width, which is what Send/Stop are actually measured from. Same split
- * layout() already made at this call site before the move. */
-void rc_input_move(int cx, int y, int cw, int win_w);
+    /* A static trampoline, and a pointer to the single instance for it to
+     * reach through. WNDPROC's signature is fixed by Windows, so a member
+     * function cannot be one -- and there is only ever one compose row, which
+     * is the same singleton assumption the pre-class g_input_oldproc already
+     * made. A plain pointer, so it has no constructor and the static-ctor
+     * gate stays green. */
+    static rc_input *s_instance;
+    static LRESULT CALLBACK box_proc(HWND h, UINT m, WPARAM w, LPARAM l);
 
-/* WM_COMMAND for ID_SEND/ID_STOP. Returns non-zero if `id` was one of those,
- * same contract as rc_bar_command/rc_pagebar_command. */
-int rc_input_command(int id);
+    void echo_user_block(const char *text);
+    void do_send(void);
+    void do_stop(void);
 
-/* EnableWindow for Send/Stop. main.c still owns WHEN (g_turn_active,
- * rc_bar_blocks_send()) -- ui_refresh_enables/ui_set_busy call these rather
- * than reaching into a raw HWND this module owns now. */
-void rc_input_enable_send(int enable);
-void rc_input_enable_stop(int enable);
+    rc_input(const rc_input &);
+    rc_input &operator=(const rc_input &);
+    rc_input() : box(0), send_btn(0), stop_btn(0), oldproc(0), net(0),
+                 html(0), xfer(0), send_fn(0), blocked_fn(0), sent_fn(0) {}
 
-/* SetFocus(the input box) -- used after a send and to forward WM_SETFOCUS. */
-void rc_input_focus(void);
+public:
+    /* net: the one raw rc_net_send this module makes itself, for INPUT.
+     *      do_send has always had its own "Not connected" refusal rather
+     *      than going through main.c's ui_send (which would report a
+     *      different message), so that is preserved rather than folded into
+     *      `send` below.
+     * html: user()/error() -- the local echo of a sent message and the
+     *      "too long"/"not connected" refusals. May be NULL, as everywhere
+     *      else that guards the view; every call here is guarded too.
+     * xfer: do_send's own side of the rx/tx counters.
+     * send: main.c's ui_send, for INTERRUPT (do_stop).
+     * blocked: "is Send currently refused" -- g_turn_active or the bar
+     *      blocking it. do_send checks this itself rather than trusting the
+     *      button's enabled state, because Enter reaches do_send directly
+     *      through box_proc and bypasses whatever EnableWindow last set.
+     * sent: called once a typed INPUT has actually gone, after the box is
+     *      cleared -- status_refresh plus ui_set_busy(1) today, chrome this
+     *      module does not own. */
+    static rc_input *create(HWND parent, HINSTANCE inst, HFONT font,
+                            rc_net *net, rc_html *html, rc_xferstat *xfer,
+                            rc_input_send_fn send, int (*blocked)(void),
+                            void (*sent)(void));
+    ~rc_input() {}
 
-#ifdef __cplusplus
-}
-#endif
+    /* cx/y: where the input box starts. cw: the transcript column's width,
+     * which bounds the box (Send/Stop sit to its right). win_w: the full
+     * client width, which is what Send/Stop are measured from. */
+    void move(int cx, int y, int cw, int win_w);
+
+    /* WM_COMMAND for ID_SEND/ID_STOP. Non-zero if `id` was one of those,
+     * same contract as the bar's and the page bar's. */
+    int  command(int id);
+
+    /* main.cpp still owns WHEN -- ui_refresh_enables calls these rather than
+     * reaching into an HWND this class now keeps private. */
+    void enable_send(int enable);
+    void enable_stop(int enable);
+
+    /* SetFocus(the box) -- after a send, and to forward WM_SETFOCUS. */
+    void focus(void);
+};
 
 #endif
