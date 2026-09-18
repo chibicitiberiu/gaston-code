@@ -129,7 +129,17 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "--limits") == 0) return limits();
     if (argc >= 2 && strcmp(argv[1], "--contained") == 0) return contained();
-    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained\n"); return 2; }
+    /* 03.14: the chunk-boundary corpus in test_guest_agreement.py used to
+     * hardcode byte offsets 8191/8190 rather than deriving them from
+     * RC_SYNC_CHUNK, so a change to the chunk size would leave the
+     * carry-logic test quietly testing the OLD boundary while it kept
+     * passing. This prints the real constant so the corpus can be built
+     * around it instead. */
+    if (argc >= 2 && strcmp(argv[1], "--chunk") == 0) {
+        printf("%d\n", (int)RC_SYNC_CHUNK);
+        return 0;
+    }
+    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--chunk\n"); return 2; }
     n = rc_sync_scan(argv[1], emit, NULL);
     if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
     if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }

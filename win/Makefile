@@ -55,7 +55,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 OBJS = $(addprefix $(BUILD)/,main.o net.o frameproto.o log.o ini.o \
        str.o htmlview.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 
-.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike
+.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
@@ -105,6 +105,17 @@ cppcheck: $(BUILD)/cppcheck.exe
 $(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(CPPCHECK_OBJS)}
+	@echo "built $@"
+
+# 03.12: prints the guest's own capability-enum values by name (stringified
+# macros, not retyped), so tests/python/test_guest_caps.py can catch a value
+# being RE-MEANT on one side without the other -- something a range check on
+# the wire integer alone cannot see.
+CAPSCHECK_OBJS = $(addprefix $(BUILD)/,capscheck.o)
+capscheck: $(BUILD)/capscheck.exe
+$(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(CAPSCHECK_OBJS)}
 	@echo "built $@"
 
 PROBE_OBJS = $(addprefix $(BUILD)/,probe.o str.o miniz.o)

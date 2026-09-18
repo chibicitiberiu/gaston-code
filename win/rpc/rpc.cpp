@@ -218,7 +218,7 @@ static void rpc_maybe_nudge(void)
         last_at = now;
     }
 
-    if (rc_sync_root()[0])
+    if (rc_syncrpc_root()[0])
         rc_net_send(g_net, "SYNCDIRTY", NULL, NULL, 0, NULL, 0);
     else
         rc_net_send(g_net, "PING", NULL, NULL, 0, NULL, 0);
@@ -227,7 +227,7 @@ static void rpc_maybe_nudge(void)
 static void rpc_watch_start(void)
 {
     HMODULE k32 = GetModuleHandleA("kernel32.dll");
-    const char *root = rc_sync_root();
+    const char *root = rc_syncrpc_root();
 
     p_first_change = (FFCN)GetProcAddress(k32, "FindFirstChangeNotificationA");
     p_next_change  = (FNCN)GetProcAddress(k32, "FindNextChangeNotification");
@@ -415,7 +415,7 @@ static unsigned __stdcall rpc_thread(void *arg)
             g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
             g_syncq_n--;
             LeaveCriticalSection(&g_lock);
-            rc_sync_handle(g_net, f);
+            rc_syncrpc_handle(g_net, f);
             drop(f);
             continue;
         }

@@ -371,7 +371,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
          * phrase "the machine's sync folder", the exact vagueness the comment
          * above that fallback warns about, on every first session. The value
          * comes from the INI and is known before the socket opens. */
-        const char *sroot = rc_sync_root();
+        const char *sroot = rc_syncrpc_root();
         if (sroot && *sroot) HDR("sync_root", sroot);
     }
 
