@@ -121,7 +121,16 @@ class Session:
         self._opts = ClaudeAgentOptions(
             cwd=cwd,
             model=model,
-            effort=effort,
+            # None, never "". The bridge's _effective_effort ends in `or ""`
+            # so that a per-guest setting can fall back to the CLI default,
+            # and that empty string used to be handed straight through --
+            # which made the CLI print
+            #   Warning: Unknown --effort value '' -- ignoring it
+            # on every single start. It was harmless and it was also the kind
+            # of warning people learn to read past, which is how a real one
+            # gets missed. Empty means "no preference", and the way to say
+            # that to the SDK is to not say anything.
+            effort=effort or None,
             # A preset dict with an "append" extends Claude Code's own prompt.
             # Passing a bare string here would REPLACE it, which would throw
             # away everything that makes Claude Code work.
