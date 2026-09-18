@@ -870,6 +870,29 @@ static void render_frame(rc_frame *f)
     } else if (strcmp(f->type, "NOTICE") == 0) {
         rc_html_notice(g_html, f->body);
 
+    } else if (strcmp(f->type, "RESYNC") == 0) {
+        /* The bridge could not replay what we missed and is telling us the
+         * transcript has a hole in it. Say so, because the alternative is the
+         * user scrolling back through a gap they were never told about.
+         *
+         * Had no branch at all, so it fell through to "unhandled frame type"
+         * -- a log line nobody reads on a machine with no console. */
+        const char *why = rc_frame_get(f, "reason");
+        char msg[256];
+        rc_strf(msg, sizeof(msg),
+                "Some of the conversation could not be restored after the "
+                "reconnection%s%s. Use the page buttons to re-read it.",
+                (why && *why) ? ": " : "", (why && *why) ? why : "");
+        rc_html_notice(g_html, msg);
+
+    } else if (strcmp(f->type, "PONG") == 0) {
+        /* The answer to a PING. We do not send PING yet -- see BACKLOG -- so
+         * this cannot arrive today, but handling it here means the day the
+         * keepalive lands it does not read as a protocol error. Nothing to
+         * show: receiving it IS the information, and the reader thread has
+         * already stamped last_seen by getting this far. */
+        rc_log("pong");
+
     } else {
         rc_log("unhandled frame type: %s", f->type);
     }

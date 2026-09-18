@@ -23,6 +23,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .files import caps as C
+from .files import manifest
 from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
@@ -37,6 +38,7 @@ from .agent import tools as machine_tools
 from .agent.permissions import PendingPrompt, render_request
 from .wire.protocol import (
                             MAX_FRAME,
+                            MAX_HEADER_VALUE,
                             PROTO_VERSION,
                             Frame,
                             FrameReader,
@@ -1202,6 +1204,24 @@ class Bridge:
             headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
                        "shell": "1" if shell else "0"}
             if cwd:
+                # Refuse rather than let the guest drop the frame.
+                #
+                # `cwd` travels as a header, and the guest's parser caps a
+                # header value at 255 bytes. It used to CLIP there, silently,
+                # and hand the short path to CreateProcessA -- which names a
+                # different, existing directory, so the command ran somewhere
+                # nobody chose. The guest now drops the frame instead, which
+                # is loud but useless on its own: the bridge is the side that
+                # can say something intelligible about it.
+                if len(cwd.encode("utf-8", "surrogateescape")) > MAX_HEADER_VALUE:
+                    return {
+                        "content": [{"type": "text", "text": (
+                            f"That working directory is too long to send to "
+                            f"the machine ({len(cwd)} characters; the limit "
+                            f"is {MAX_HEADER_VALUE}). Nothing was run. Use a "
+                            f"shorter path, or cd to it inside the command.")}],
+                        "isError": True,
+                    }
                 headers["cwd"] = cwd
             # The command goes in the BODY. A header value is truncated at 255
             # bytes silently, and a truncated command is still EXECUTED --
@@ -1701,48 +1721,9 @@ class Bridge:
             # manifest with the wrong table produces names that look right and
             # cannot be encoded back to ask for the file.
             caps = C.from_hello(guest.hello)
-            for line in f.body.split(b"\n"):
-                if not line:
-                    continue
-                try:
-                    # Seven fields, or six from a client that predates
-                    # .gitattributes support. A client sending one checksum
-                    # cannot have a class overridden from here -- it computed
-                    # that number for its own classification and there is no
-                    # way to derive the other -- so both slots take the same
-                    # value and `effective_class` refuses to move it.
-                    if caps.manifest >= 2:
-                        parts = line.split(b" ", 6)
-                        crc_norm, crc_raw = parts[4], parts[5]
-                        plen_and_path = parts[6]
-                    else:
-                        parts = line.split(b" ", 5)
-                        crc_norm = crc_raw = parts[4]
-                        plen_and_path = parts[5]
-                    typ, cls, size, mtime = parts[0], parts[1], parts[2], parts[3]
-                    sp = plen_and_path.index(b" ")
-                    plen = int(plen_and_path[:sp])
-                    raw = plen_and_path[sp + 1:sp + 1 + plen]
-                except (ValueError, IndexError):
-                    log.warning("unparseable manifest line: %r", line[:80])
-                    continue
-                # surrogateescape, never "replace": the five undefined CP1252
-                # positions are legal in a VFAT long name, and "replace" maps
-                # them all to U+FFFD -- so two distinct files get one key, one
-                # of them silently stops syncing, and neither name can be
-                # encoded back to ask the guest for the file.
-                rel = P.wire_decode(raw, acp=caps.acp)
-                key = P.canonical(rel, caps=caps)
-                auto = cls.decode() if cls != b"-" else P.CLASS_TEXT
-                entry["rows"][key] = SyncEntry(
-                    type=SyncType(typ.decode()),
-                    cls=auto,
-                    size=int(size), mtime=float(mtime),
-                    crc=int(crc_norm if auto == P.CLASS_TEXT else crc_raw),
-                    crc_norm=int(crc_norm), crc_raw=int(crc_raw),
-                    dual=caps.manifest >= 2,
-                    display=rel)
-                entry["display"][key] = rel
+            rows, display = manifest.parse_rows(f.body, caps)
+            entry["rows"].update(rows)
+            entry["display"].update(display)
 
         elif f.type == "SYNCEND":
             fut = entry["future"]

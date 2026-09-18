@@ -275,6 +275,21 @@ CLASS_TEXT = "t"        # uniform line endings; compared and stored normalised
 CLASS_EXACT = "b"       # binary, mixed endings, or lone CR; byte-exact
 
 
+def crc_for(cls: str, crc_norm: int, crc_raw: int) -> int:
+    """Which of the two checksums a class is compared under.
+
+    The mirror of `RC_CRC_FOR` in `win/sync.h`, whose comment says why it is a
+    macro there: *"One place, because getting it wrong in one of the four call
+    sites is a permanent disagreement, not a glitch."* Python then open-coded
+    the same expression at four sites and had no such place. This is it.
+
+    Permanent rather than noisy, because the two sides would be comparing the
+    outputs of different functions: the file never converges, and every pass
+    rewrites it.
+    """
+    return crc_norm if cls == CLASS_TEXT else crc_raw
+
+
 def classify(data: bytes) -> str:
     """Which comparison class this content belongs to.
 

@@ -270,8 +270,9 @@ typedef struct {
 int rc_sync_is_working_name(const char *name)
 {
     unsigned len = (unsigned)strlen(name);
-    if (len > 11 && strcmp(name + len - 11, RC_SYNC_TMP_SUFFIX) == 0) return 1;
-    if (len > 11 && strcmp(name + len - 11, RC_SYNC_OLD_SUFFIX) == 0) return 1;
+    if (len <= RC_SYNC_SUFFIX_LEN) return 0;
+    if (strcmp(name + len - RC_SYNC_SUFFIX_LEN, RC_SYNC_TMP_SUFFIX) == 0) return 1;
+    if (strcmp(name + len - RC_SYNC_SUFFIX_LEN, RC_SYNC_OLD_SUFFIX) == 0) return 1;
     return 0;
 }
 
@@ -426,7 +427,7 @@ HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
     }
 
     join(full, sizeof(full), root, rel);
-    rc_strf(tmp_out, tmp_cap, "%s.gaston-tmp", full);
+    rc_strf(tmp_out, tmp_cap, "%s" RC_SYNC_TMP_SUFFIX, full);
     tmp_out[tmp_cap - 1] = '\0';
 
     /* Binary mode by construction -- CreateFileA does no translation. Using
@@ -479,12 +480,13 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
      * telling the bridge to advance its baseline over content this machine
      * never took. Refusing costs a retry; not refusing costs the edit. */
     if (strlen(full) + RC_SYNC_WORK_SUFFIX > sizeof(aside) - 1) {
-        rc_log("sync: refusing to commit %s -- no room for a .gaston-old", rel);
+        rc_log("sync: refusing to commit %s -- no room for a %s", rel,
+               RC_SYNC_OLD_SUFFIX);
         DeleteFileA(tmp);
         return -4;
     }
 
-    rc_strf(aside, sizeof(aside), "%s.gaston-old", full);
+    rc_strf(aside, sizeof(aside), "%s" RC_SYNC_OLD_SUFFIX, full);
     DeleteFileA(aside);
     if (attr != 0xFFFFFFFF) MoveFileA(full, aside);
 
@@ -525,18 +527,21 @@ static void recover_dir(const char *root, const char *rel, int depth)
             recover_dir(root, child, depth + 1);
             continue;
         }
-        if (len > 11 && strcmp(fd.cFileName + len - 11, ".gaston-old") == 0) {
+        if (len > RC_SYNC_SUFFIX_LEN &&
+            strcmp(fd.cFileName + len - RC_SYNC_SUFFIX_LEN,
+                   RC_SYNC_OLD_SUFFIX) == 0) {
             join(aside, sizeof(aside), root, child);
             rc_strf(real, sizeof(real), "%s", aside);
-            real[strlen(real) - 11] = '\0';
+            real[strlen(real) - RC_SYNC_SUFFIX_LEN] = '\0';
             if (GetFileAttributesA(real) == 0xFFFFFFFF) {
                 rc_log("sync: recovering %s -- an interrupted commit", real);
                 MoveFileA(aside, real);
             } else {
                 DeleteFileA(aside);
             }
-        } else if (len > 11 &&
-                   strcmp(fd.cFileName + len - 11, ".gaston-tmp") == 0) {
+        } else if (len > RC_SYNC_SUFFIX_LEN &&
+                   strcmp(fd.cFileName + len - RC_SYNC_SUFFIX_LEN,
+                          RC_SYNC_TMP_SUFFIX) == 0) {
             join(aside, sizeof(aside), root, child);
             DeleteFileA(aside);       /* an abandoned transfer */
         }

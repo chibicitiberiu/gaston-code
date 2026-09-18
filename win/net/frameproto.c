@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "net/frameproto.h"
+#include "core/str.h"
 
 static int hexval(char c)
 {
@@ -56,8 +57,12 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
     if (!nl) return -1;
     *nl = '\0';
     if (nl == payload) return -1;                 /* empty type */
+    /* Bounded, and the bound is checked by the copy itself rather than by a
+     * separate statement above it. The guard is kept -- an over-long type is
+     * a dropped frame, not a truncated one -- but a future edit that moves or
+     * loses it can no longer turn this into an overflow. */
     if ((size_t)(nl - payload) >= RC_MAX_TYPE) return -1;
-    strcpy(out->type, payload);
+    if (!rc_strcpy(out->type, RC_MAX_TYPE, payload)) return -1;
 
     p = nl + 1;
 
@@ -78,9 +83,22 @@ int rc_frame_parse(char *payload, unsigned len, rc_frame *out)
             /* Silently truncating a key would turn two distinct headers into
              * one; drop the frame instead. */
             if (strlen(p) >= RC_MAX_KEY) return -1;
-            strcpy(h->key, p);
-            _snprintf(h->val, RC_MAX_VAL - 1, "%s", eq + 1);
-            h->val[RC_MAX_VAL - 1] = '\0';
+            if (!rc_strcpy(h->key, RC_MAX_KEY, p)) return -1;
+            /* A VALUE that does not fit is now a dropped frame too, and that
+             * is a behaviour change made deliberately.
+             *
+             * This line clipped at 255 in silence while the KEY path four
+             * lines up dropped the frame -- an asymmetry the old comment
+             * described as intentional. It is not survivable for `cwd`, which
+             * travels as a header and goes straight to CreateProcessA: a
+             * clipped path names a DIFFERENT, existing directory, so the
+             * command runs somewhere nobody chose and nothing reports it.
+             * Losing the frame is loud; running in the wrong directory is not.
+             *
+             * The bridge refuses to SEND an over-long cwd as well, so in
+             * practice neither side can reach this. Both, because the guest's
+             * checks exist for the case where the bridge is what is wrong. */
+            if (!rc_strcpy(h->val, RC_MAX_VAL, eq + 1)) return -1;
             unquote(h->val);
             out->nheaders++;
         }

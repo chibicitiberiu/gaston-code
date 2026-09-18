@@ -121,7 +121,7 @@ class Entry:
         """
         if cls == self.cls:
             return self
-        crc = self.crc_norm if cls == P.CLASS_TEXT else self.crc_raw
+        crc = P.crc_for(cls, self.crc_norm, self.crc_raw)
         return replace(self, cls=cls, crc=crc)
 
     def same_content(self, other: "Entry | None") -> bool:

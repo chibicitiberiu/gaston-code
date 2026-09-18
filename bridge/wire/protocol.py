@@ -28,6 +28,13 @@ PROTO_VERSION = 1
 
 # A corrupted length prefix must not be able to allocate the machine away.
 # Anything genuinely larger is chunked by the sender.
+#: The guest's per-header-value limit (`RC_MAX_VAL` in win/frameproto.h),
+#: minus the NUL. A value longer than this is REFUSED by the guest's parser,
+#: which drops the whole frame -- so sending one is a dropped command, and
+#: sending one silently is worse: `cwd` goes straight to CreateProcessA, and a
+#: clipped path names a different, existing directory.
+MAX_HEADER_VALUE = 255
+
 MAX_FRAME = 64 * 1024
 
 _HEADER_END = b"\n\n"

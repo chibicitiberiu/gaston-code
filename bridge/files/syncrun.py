@@ -290,7 +290,7 @@ class Pass:
                         self.reports.append(f"{rel}: {refused}")
                 rows[key] = S.Entry(
                     type=S.Type.FILE, cls=cls, size=size, mtime=st.st_mtime,
-                    crc=cnorm if cls == P.CLASS_TEXT else craw,
+                    crc=P.crc_for(cls, cnorm, craw),
                     crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
 
         # Only now, and only the entries whose read cannot have raced a save in
@@ -446,7 +446,7 @@ class Pass:
 
         full = os.path.join(self.root, rel)
         os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
-        tmp = full + ".gaston-tmp"
+        tmp = full + WORKING_SUFFIXES[0]
         with open(tmp, "wb") as fh:
             fh.write(data)
             fh.flush()
@@ -459,7 +459,7 @@ class Pass:
         self._pulled[key] = S.Entry(
             type=S.Type.FILE, cls=want, size=len(data),
             mtime=os.stat(full).st_mtime,
-            crc=cnorm if want == P.CLASS_TEXT else craw,
+            crc=P.crc_for(want, cnorm, craw),
             crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
         return True
 

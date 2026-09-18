@@ -96,6 +96,12 @@ int    rc_sync_commit(const char *root, const char *rel, const char *tmp,
  * from a put that failed on a path bug, and nothing ever removed it. */
 #define RC_SYNC_TMP_SUFFIX  ".gaston-tmp"
 #define RC_SYNC_OLD_SUFFIX  ".gaston-old"
+/* Both are the same length, which RC_SYNC_WORK_SUFFIX above depends on and
+ * declares to the bridge as `workreserve`. Derived rather than written as 11,
+ * because the literal 11 appeared at four more sites in this file alone --
+ * two of them as `len - 11` on a filename, where being wrong walks off the
+ * front of the string rather than producing a short one. */
+#define RC_SYNC_SUFFIX_LEN  (sizeof(RC_SYNC_TMP_SUFFIX) - 1)
 
 /* Non-zero if `name` is one of ours and must not appear in a manifest. */
 int    rc_sync_is_working_name(const char *name);

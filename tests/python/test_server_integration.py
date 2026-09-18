@@ -958,3 +958,39 @@ def test_an_empty_tool_result_still_says_something():
     from bridge.view import html as H
     assert "(no output)" in H.tool_result("")
     assert "(no output)" in H.tool_result("   \n ")
+
+
+async def test_an_overlong_cwd_is_refused_rather_than_clipped(harness):
+    """`cwd` travels as a header, and the guest's parser caps a header value
+    at 255 bytes. It used to CLIP there, in silence, and hand the short path
+    to CreateProcessA -- which names a DIFFERENT, existing directory, so the
+    command ran somewhere nobody chose and nothing reported it.
+
+    The guest drops the frame now, which is loud but useless on its own: a
+    dropped frame is a command that never answers. The bridge is the side
+    that can say something intelligible, so it refuses first.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    got = await harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell=True, cwd="C:\\" + "d" * 300)
+    text = got["content"][0]["text"]
+    assert "too long" in text
+    assert got["isError"] is True
+    assert "Nothing was run" in text
+    await harness.close(writer)
+
+
+async def test_an_ordinary_cwd_still_goes_through(harness):
+    """The guard must not fire on the case it exists to protect."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = asyncio.create_task(harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell=True, cwd="C:\\WORK"))
+    req = await _recv(harness, reader, "EXEC")
+    assert req.headers["cwd"] == "C:\\WORK"
+    await harness.send(writer, Frame("EXECRESULT", {
+        "id": req.headers["id"], "status": "ok", "code": "0",
+        "truncated": "0"}))
+    await asyncio.wait_for(task, 5)
+    await harness.close(writer)

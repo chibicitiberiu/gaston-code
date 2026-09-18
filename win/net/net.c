@@ -9,6 +9,7 @@
 #include "core/str.h"
 #include "rpc/rpc.h"
 #include "rpc/exec.h"
+#include "sync/syncrpc.h"
 #include "miniz.h"
 
 /* Cap on frames posted to the UI thread but not yet freed.
@@ -382,6 +383,17 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * cannot make good decisions about which tool to reach for: "just install
      * this 400MB toolchain" is a wrong answer here however right it is
      * elsewhere. */
+    {
+        /* The mirrored folder, so the agent's very first system prompt can
+         * name it. The bridge already READS this header (server.py:503) and
+         * the guest has never sent it -- so machine.py fell back to the
+         * phrase "the machine's sync folder", the exact vagueness the comment
+         * above that fallback warns about, on every first session. The value
+         * comes from the INI and is known before the socket opens. */
+        const char *sroot = rc_sync_root();
+        if (sroot && *sroot) HDR("sync_root", sroot);
+    }
+
     {
         MEMORYSTATUS ms;
         OSVERSIONINFOA os;
