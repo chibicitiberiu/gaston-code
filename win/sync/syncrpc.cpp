@@ -17,12 +17,12 @@
 
 static char g_root[MAX_PATH];
 
-void rc_sync_set_root(const char *root)
+void rc_syncrpc_set_root(const char *root)
 {
     rc_strf(g_root, sizeof(g_root), "%s", root ? root : "");
 }
 
-const char *rc_sync_root(void) { return g_root; }
+const char *rc_syncrpc_root(void) { return g_root; }
 
 /* --- the manifest -------------------------------------------------------- */
 /*
@@ -455,7 +455,7 @@ static void do_get(rc_net *net, rc_frame *f)
     HeapFree(GetProcessHeap(), 0, buf);
 }
 
-void rc_sync_handle(rc_net *net, rc_frame *f)
+void rc_syncrpc_handle(rc_net *net, rc_frame *f)
 {
     if      (strcmp(f->type, "SYNCSCAN")   == 0) do_scan(net, f);
     else if (strcmp(f->type, "SYNCPUT")    == 0) do_put(net, f);
