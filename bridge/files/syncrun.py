@@ -22,17 +22,13 @@ from . import caps as C
 from . import ignores as I
 from . import paths as P
 from . import sync as S
+from .reporter import Reporter
+from .scanner import WORKING_SUFFIXES, scan_bridge_tree  # noqa: F401 (WORKING_SUFFIXES re-export)
 from .synctransport import CHUNK, SyncTransport  # noqa: F401 (CHUNK re-export)
 from ..status import SyncStatus
 
 log = logging.getLogger("bridge.syncrun")
 
-#: Our own working names, on both sides. The scanners must skip them or an
-#: interrupted write becomes a permanent file: the other side has never seen
-#: it, so it transfers it, and now `x.md.gaston-tmp` syncs forever alongside
-#: `x.md`. This bit on the real machine -- a put that failed on a path bug left
-#: a temp behind, and the next pass pulled it onto the bridge as real content.
-WORKING_SUFFIXES = (".gaston-tmp", ".gaston-old")
 #: One file must never hold the wire for long. The guest has one sender thread
 #: and one outbound queue, so a big transfer starves permission prompts and exec
 #: output behind it.
@@ -82,6 +78,13 @@ class Pass:
         self.root = root
         self.state = os.path.join(state_dir, "base.json")
         self.base = S.Baseline.load(self.state)
+        #: "What has already been said, to whom" -- `first_report`/`note`/
+        #: `notices_delivered`/`agent_notices_delivered` below are thin
+        #: forwards onto this, moved out the same way `scan_bridge` was
+        #: (docs/audit/02-bridge-python.md #4.2, #02.40). Built over the same
+        #: `self.base` object, not a copy, so the `self.base.acp = keying`
+        #: assignment a few lines down is visible to it too.
+        self.reporter = Reporter(self.base, self.state)
 
         # The class-level `caps = C.Caps()` fallback above is for the
         # bare-subclass tests that skip __init__ entirely and never call
@@ -199,133 +202,23 @@ class Pass:
     # --- the bridge's half -------------------------------------------------
 
     def scan_bridge(self, ignore=None, attrs=None) -> dict[str, S.Entry]:
-        rows: dict[str, S.Entry] = {}
-        seen: dict[str, str] = {}
+        """Thin adapter over `scanner.scan_bridge_tree` (docs/audit/
+        02-bridge-python.md 02.40): supplies this Pass's root, caps and
+        guest_root, the CRC cache from `self.base` (defensive `getattr`
+        because `test_sync_wire.py` builds bare `Pass` subclasses that skip
+        `__init__` to exercise this in isolation -- see the class-level
+        `guest_root`/`caps` fallbacks above), and routes reports and the
+        attrs-refused fingerprint back through `self.reports`/
+        `self.first_report` exactly as before.
+        """
         base = getattr(self, "base", None)
         cache = base.scan_cache if base is not None else None
-        fresh: dict[str, tuple] = {}
-        for dirpath, dirnames, filenames in os.walk(self.root):
-            # Symlinks are not followed: one pointing outside the workdir would
-            # have its target's CONTENTS pushed, bypassing off_limits entirely.
-            keep_dirs = []
-            for d in dirnames:
-                full = os.path.join(dirpath, d)
-                rel = P.rel_from_posix(self.root, full)
-                if os.path.islink(full):
-                    # Say so. Containment was always right, but silence here
-                    # meant an agent could write into a symlinked directory,
-                    # be told the write succeeded, and never learn that not
-                    # one byte of it was going to the machine.
-                    self.reports.append(
-                        f"skipped {rel}/: a symbolic link, which is not "
-                        f"followed -- its contents never reach the machine")
-                    continue
-                if ignore and ignore(rel + "/"):
-                    continue
-                keep_dirs.append(d)
-            dirnames[:] = keep_dirs
-            # Directories go through exactly the same filter as files, and
-            # this used to be file-only. `con/x.c` was correctly refused as a
-            # file while `con` itself went out as a SYNCMKDIR -- so the bridge
-            # asked Windows 98 to create `C:\WORK\con`, which is the `\con\`
-            # shape that can take the machine down. It came back `bad_path`
-            # that time; "the guest refused it" is not a filter.
-            #
-            # A refused directory prunes its subtree. Walking into it would
-            # produce children that are individually legal and have nowhere to
-            # live, each reported separately -- one cause, twenty messages.
-            keep = []
-            for name in dirnames:
-                rel = P.rel_from_posix(self.root, os.path.join(dirpath, name))
-                bad = P.check(rel, guest_root=self.guest_root,
-                              caps=self.caps, is_dir=True)
-                if bad is not None:
-                    self.reports.append(f"skipped {rel}/: {bad}")
-                    continue
-                keep.append(name)
-                rows[P.canonical(rel, caps=self.caps)] = S.Entry(
-                    type=S.Type.DIR, display=rel)
-            dirnames[:] = keep
-            for name in filenames:
-                full = os.path.join(dirpath, name)
-                if os.path.islink(full):
-                    self.reports.append(
-                        f"skipped {P.rel_from_posix(self.root, full)}: a "
-                        f"symbolic link, which is not followed -- it never "
-                        f"reaches the machine")
-                    continue
-                if name.endswith(WORKING_SUFFIXES):
-                    continue
-                rel = P.rel_from_posix(self.root, full)
-                if ignore and ignore(rel):
-                    continue
-                bad = P.check(rel, guest_root=self.guest_root, caps=self.caps)
-                if bad is not None:
-                    self.reports.append(f"skipped {rel}: {bad}")
-                    continue
-                key = P.canonical(rel, caps=self.caps)
-                clash = seen.get(key)
-                if clash is not None:
-                    # The NEWCOMER is refused. Refusing both would retroactively
-                    # break a path that has been syncing for weeks.
-                    self.reports.append(
-                        f"skipped {rel}: collides with {clash} on a "
-                        f"case-insensitive filesystem")
-                    continue
-                seen[key] = rel
-                try:
-                    st = os.stat(full)
-                except OSError as exc:
-                    rows[key] = S.Entry(type=S.Type.UNREADABLE, display=rel)
-                    self.reports.append(f"unreadable {rel}: {exc}")
-                    continue
-
-                # The cache holds the CLASSIFICATION INPUTS -- both checksums
-                # and what the content says on its own -- rather than a class
-                # and one checksum. An attributes change can then re-decide a
-                # path without re-reading it, and the cached value cannot be
-                # stale with respect to a rule the file knows nothing about.
-                hit = cache.get(key) if cache is not None else None
-                if hit and hit[0] == st.st_size and hit[1] == st.st_mtime:
-                    auto, craw, cnorm, size = hit[2], hit[3], hit[4], hit[5]
-                else:
-                    try:
-                        data = open(full, "rb").read()
-                    except OSError as exc:
-                        rows[key] = S.Entry(type=S.Type.UNREADABLE, display=rel)
-                        self.reports.append(f"unreadable {rel}: {exc}")
-                        continue
-                    auto = P.classify(data)
-                    craw = zlib.crc32(data)
-                    cnorm = zlib.crc32(P.normalise(data, P.CLASS_TEXT))
-                    size = len(data)
-                    fresh[key] = (st.st_size, st.st_mtime,
-                                  auto, craw, cnorm, size)
-
-                cls = auto
-                if attrs is not None:
-                    cls, refused = attrs.effective_class(rel, auto)
-                    if refused and self.first_report(
-                            key, f"attrs:{refused}", None, None):
-                        self.reports.append(f"{rel}: {refused}")
-                rows[key] = S.Entry(
-                    type=S.Type.FILE, cls=cls, mtime=st.st_mtime,
-                    crc=P.crc_for(cls, cnorm, craw),
-                    crc_raw=craw, crc_norm=cnorm, dual=True, display=rel)
-
-        # Only now, and only the entries whose read cannot have raced a save in
-        # a tick that was still open. Gating the LOOKUP is the obvious half and
-        # the wrong one: a read taken inside the window is correct for the pass
-        # that took it and can be superseded a moment later at the same size,
-        # so what must never happen is STORING it.
-        if cache is not None:
-            for key, val in fresh.items():
-                probe = S.Entry(type=S.Type.FILE, mtime=val[1])
-                if probe.cacheable:
-                    cache[key] = val
-            for gone in [k for k in cache if k not in rows]:
-                del cache[gone]
-        return rows
+        return scan_bridge_tree(
+            self.root, ignore=ignore, attrs=attrs, caps=self.caps,
+            guest_root=self.guest_root, cache=cache,
+            report=self.reports.append,
+            first_report=lambda key, reason: self.first_report(
+                key, reason, None, None))
 
     # --- applying ----------------------------------------------------------
 
@@ -588,84 +481,27 @@ class Pass:
                 self.reports.append(f"{row.display or key}: {refused}")
         return out
 
-    def first_report(self, key: str, reason: str, g, b) -> bool:
-        """Is this situation new, or the same one we announced last pass?
+    # --- reporting -----------------------------------------------------------
+    #
+    # first_report/note/notices_delivered/agent_notices_delivered are thin
+    # forwards onto self.reporter (bridge/files/reporter.py, docs/audit/
+    # 02-bridge-python.md #4.2/#02.40) -- kept as same-named Pass methods so
+    # `run()`'s many internal callers and test_sync_wire.py's direct calls
+    # (`p.note(...)`, `p.notices_delivered(...)`) did not have to change
+    # shape, the same pattern `scan_bridge` above already follows for
+    # `scanner.scan_bridge_tree`.
 
-        Fingerprinted on the reason AND the content of whichever side still
-        holds the path, so "the user deleted main.c and you still have it"
-        is said once -- but said again if one of them then changes it, which
-        is a different fact about a different file.
-        """
-        fp = "|".join([
-            reason,
-            f"g:{g.cls}:{g.crc}" if g is not None else "g:-",
-            f"b:{b.cls}:{b.crc}" if b is not None else "b:-",
-        ])
-        if self.base.reported.get(key) == fp:
-            return False
-        self.base.reported[key] = fp
-        return True
+    def first_report(self, key: str, reason: str, g, b) -> bool:
+        return self.reporter.first_report(key, reason, g, b)
 
     def note(self, text: str) -> None:
-        """Record a notice durably BEFORE acting on it, for BOTH audiences.
-
-        A crash between the baseline advance and the notification leaves the
-        agent's work in conflict/ with nobody told, and the next pass sees
-        agreement and says nothing.
-
-        The user's copy (`pending_notice`) and the agent's
-        (`pending_notice_agent`) are two separate durable queues, cleared by
-        two separate deliveries -- `notices_delivered` and
-        `agent_notices_delivered` -- because neither reaching its audience
-        implies the other did (02.20).
-        """
-        self.base.pending_notice.append(text)
-        self.base.pending_notice_agent.append(text)
-        self.base.save(self.state)
+        self.reporter.note(text)
 
     def notices_delivered(self, texts: list) -> None:
-        """Called once the caller has actually put them on the wire.
-
-        The queue is PENDING, not a log. Nothing cleared it, so every notice
-        ever raised was re-delivered on every pass -- the user would have seen
-        the same conflict message every thirty seconds, which is worse than not
-        reporting it, because it buries the next real one.
-
-        Cleared by value rather than by emptying the list: a pass can raise a
-        new notice while the previous batch is being written, and truncating
-        would drop it with nobody told, which is the exact failure `note` is
-        durable to prevent.
-        """
-        if not texts:
-            return
-        gone = list(texts)
-        keep = []
-        for t in self.base.pending_notice:
-            if t in gone:
-                gone.remove(t)
-            else:
-                keep.append(t)
-        self.base.pending_notice = keep
-        self.base.save(self.state)
+        self.reporter.notices_delivered(texts)
 
     def agent_notices_delivered(self, texts: list) -> None:
-        """`notices_delivered`'s twin for the agent's own durable queue.
-
-        Called once the caller has actually handed these to the model in a
-        turn preamble -- not when a pass merely produced them, and not the
-        same moment the user's copy is cleared (02.20).
-        """
-        if not texts:
-            return
-        gone = list(texts)
-        keep = []
-        for t in self.base.pending_notice_agent:
-            if t in gone:
-                gone.remove(t)
-            else:
-                keep.append(t)
-        self.base.pending_notice_agent = keep
-        self.base.save(self.state)
+        self.reporter.agent_notices_delivered(texts)
 
     def keep_ancestor(self, rel: str, data: bytes) -> None:
         """Retain the agreed content as history, not just its checksum.
