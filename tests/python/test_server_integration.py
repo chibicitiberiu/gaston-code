@@ -1354,12 +1354,17 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
     conversation was forked; the list does not". This is the cause.
 
     Session._session_id is only set from the init SystemMessage, which
-    arrives DURING a turn -- so `guest.sess_id = guest.claude.session_id or
-    guest.sess_id`, run immediately after the effort fork, assigned None and
-    kept the pre-fork id. The registry and the chat list then named the old
-    conversation until some later turn happened to write a file.
+    arrives DURING a turn -- so the chat-list refresh used to be gated on
+    `guest.sess_id` changing, and `guest.sess_id = guest.claude.session_id or
+    guest.sess_id` run immediately after the effort fork assigned None (the
+    SDK had not reported the new id yet) and kept the pre-fork id, so the
+    comparison saw no change and never pushed. The registry and the chat
+    list then named the old conversation until some later turn happened to
+    write a file.
 
-    The id is picked up where it becomes known, and the list is pushed.
+    Fixed by pushing on the message itself rather than on a value it happens
+    to change (02.24) -- and guest.sess_id is a stable per-connection handle
+    now, not the SDK's session id, so it has nothing to do with this at all.
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
@@ -1367,11 +1372,13 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
     before = guest.sess_id
 
     await guest.claude.on_system("init", {"session_id": "forked-1234"})
-    assert guest.sess_id == "forked-1234", "the new id was never picked up"
-    assert guest.sess_id != before
 
     f = await _recv(harness, reader, "SESSIONSEND")
     assert f.type == "SESSIONSEND", "the guest was not told the list changed"
+    assert guest.sess_id == before, (
+        "sess_id is a stable per-connection handle (02.24); a session "
+        "becoming known must not move it"
+    )
     await harness.close(writer)
 
 

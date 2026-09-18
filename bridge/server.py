@@ -679,17 +679,31 @@ class Bridge:
                 # The conversation id becomes known HERE, not at start().
                 #
                 # Session._session_id is only set from this message, which
-                # arrives during the first turn -- so `guest.sess_id =
-                # guest.claude.session_id or guest.sess_id` immediately after
-                # the effort fork was a no-op against None, and the chat list
-                # went on naming the PRE-FORK conversation until some later
-                # turn happened to write a file. PLAN.md Phase 4 records the
-                # symptom ("the transcript says the conversation was forked;
-                # the list does not"); this is the cause.
-                new = data.get("session_id")
-                if new and new != guest.sess_id:
-                    log.info("session id settled: %s -> %s", guest.sess_id, new)
-                    guest.sess_id = new
+                # arrives during the first turn. Refresh the chat list once
+                # it does -- PLAN.md Phase 4 records the symptom ("the
+                # transcript says the conversation was forked; the list does
+                # not") from the time this used to be gated on `guest.sess_id`
+                # changing: immediately after the effort fork guest.sess_id
+                # was reassigned from guest.claude.session_id, which was
+                # still None at that point, so the comparison saw no change
+                # and never pushed. This fires once per Session object's
+                # lifetime (the SDK's own first-turn system message), so no
+                # dedup against a previous value is needed.
+                #
+                # guest.sess_id itself is NOT touched here, or anywhere a
+                # session is rebuilt. It used to be re-pointed at whatever
+                # session happened to be live -- "a bridge handle" on a fresh
+                # connection, "the SDK session" after a new-session or a
+                # fork, and simply stale after a switch, which never updated
+                # it at all. Nothing reads it for anything but READY's header
+                # and logging, which is exactly why it was free to drift.
+                # It is now a stable per-connection handle, set once in
+                # _attach and never overwritten -- the SDK's own id already
+                # travels in SWITCHED and in this message, and R7's
+                # per-client identity wants a handle that outlives every
+                # session a client opens. docs/audit/02-bridge-python.md
+                # 02.24.
+                if data.get("session_id"):
                     self._spawn(self._send_sessions(guest))
 
         s = Session(
@@ -2265,7 +2279,8 @@ class Bridge:
                 "Could not reopen the session: " + str(exc)[:160]))
             await self._send_options(guest)
             return
-        guest.sess_id = guest.claude.session_id or guest.sess_id
+        # guest.sess_id is a stable per-connection handle now, not the SDK's
+        # own id (02.24) -- nothing to update here.
         await self._send_options(guest)
 
     async def _new_session(self, guest: GuestSession) -> None:
@@ -2283,7 +2298,8 @@ class Bridge:
             await self._send(guest, error("new_failed", str(exc)[:200]))
             return
 
-        guest.sess_id = guest.claude.session_id or guest.sess_id
+        # guest.sess_id is a stable per-connection handle now, not the SDK's
+        # own id (02.24) -- nothing to update here.
         await self._send(guest, switched(guest.claude.session_id or "",
                                          guest.pages.count))
         await self._send_page(guest, "live")
