@@ -200,6 +200,18 @@ check: $(BUILD)/retroclaude.exe
 	 if [ "$$n" -gt $(CMOV_BASELINE) ]; then \
 	   echo "   FAIL: $$n CMOV (baseline $(CMOV_BASELINE)) -- check -5 is still set"; exit 1; \
 	 else echo "   ok: $$n (baseline $(CMOV_BASELINE), known data false positive)"; fi
+	@echo "=== static constructors (they run BEFORE WinMain, so before the log) ==="
+	@# Verified on the target: a file-scope object's constructor runs before
+	@# WinMain and its destructor at exit. log.c opens retroclaude.log from
+	@# WinMain's first statement deliberately, because "no log file" is the
+	@# signal that main never ran -- so a static ctor that faults reproduces
+	@# exactly the undebuggable position the logging discipline exists to
+	@# avoid. POD statics only.
+	@if objdump -t $(BUILD)/retroclaude.exe 2>/dev/null \
+	   | grep -qE '__CPP_INIT|__sti__|_STI__'; then \
+	  echo "   FAIL: a static constructor is linked in; see win/core/rc_cpp.h"; \
+	  exit 1; \
+	else echo "   ok: none"; fi
 	@echo "=== stack frames (a frame >= one page steps over the guard page) ==="
 	@$(PYTHON) $(TOP)/tools/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map
 	@echo "=== static allocation (the guest has 28KB free after a turn) ==="

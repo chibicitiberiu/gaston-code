@@ -184,7 +184,6 @@ static int   g_streaming = 0;
 static int  label_width_px(const char *text);
 static void think_show(void);
 static void turn_done(void);
-static void esc_html(const char *in, char *out, unsigned cap);
 static void layout(HWND hwnd);
 static void fit_label(char *label, unsigned cap, int avail_px);
 static int  chats_text_width(void);
@@ -584,7 +583,7 @@ static void render_frame(rc_frame *f)
         g_retry_noted = 0;
         rc_log("ready: sess=%s model=%s", g_net.sess,
                rc_frame_get(f, "model") ? rc_frame_get(f, "model") : "?");
-        rc_html_append(g_html, "<div class=\"notice\">Connected to bridge.</div>");
+        rc_html_notice(g_html, "Connected to bridge.");
         status_refresh();
 
     } else if (strcmp(f->type, "DOC") == 0) {
@@ -608,13 +607,15 @@ static void render_frame(rc_frame *f)
          * "live" replaces the block still being written; anything else is a
          * finished block appended to the end and never touched again. */
         const char *mode = rc_frame_get(f, "mode");
-        int at_bottom = rc_html_at_bottom(g_html);
         think_hide();
+        /* Finished markup from the bridge -- the guest transforms nothing --
+         * so this is the one path that does NOT escape. The scroll decision
+         * moved into the view, which is the only place that can apply it
+         * consistently. */
         if (mode && strcmp(mode, "live") == 0)
             rc_html_live(g_html, f->body);
         else
-            rc_html_append(g_html, f->body);
-        if (at_bottom) rc_html_scroll_bottom(g_html);
+            rc_html_block(g_html, f->body);
 
     } else if (strcmp(f->type, "TOOL") == 0) {
         /* The bridge sends tool activity as a finished block now; this branch
@@ -777,8 +778,7 @@ static void render_frame(rc_frame *f)
         rc_html_clear(g_html);
         v = rc_frame_get(f, "continued");
         if (v && *v == '1')
-            rc_html_append(g_html, "<div class=\"notice\">"
-                           "continued from the previous page</div>");
+            rc_html_notice(g_html, "continued from the previous page");
         page_update_ui();
 
     } else if (strcmp(f->type, "PAGEEND") == 0) {
@@ -857,21 +857,18 @@ static void render_frame(rc_frame *f)
 
     } else if (strcmp(f->type, "ERROR") == 0) {
         char line[512];
-        rc_strf(line, sizeof(line), "\r\n[%s] %s\r\n",
+        rc_strf(line, sizeof(line), "[%s] %s",
                   rc_frame_get(f, "code") ? rc_frame_get(f, "code") : "error",
                   rc_frame_get(f, "msg") ? rc_frame_get(f, "msg") : "");
         rc_log("bridge error: %s", line);
-        rc_html_append(g_html, line);
+        /* Escaped, which it was not: this pushed the bridge's own `code` and
+         * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
+         * ended the document. */
+        rc_html_error(g_html, line);
         ui_set_busy(0);
 
     } else if (strcmp(f->type, "NOTICE") == 0) {
-        {
-            char esc[1024], div[1200];
-            esc_html(f->body, esc, sizeof(esc));
-            rc_strf(div, sizeof(div),
-                      "<div class=\"notice\">%s</div>", esc);
-            rc_html_append(g_html, div);
-        }
+        rc_html_notice(g_html, f->body);
 
     } else {
         rc_log("unhandled frame type: %s", f->type);
@@ -999,58 +996,13 @@ static void turn_done(void)
  * responsive on a dialup link. */
 #define RC_USER_RULE "----------------------------------------------------------"
 
-/* Escape for HTML. The guest builds exactly one piece of markup itself -- the
- * echo of the user's own line -- and it still has to escape, because what gets
- * typed into the input box is not trusted to be free of '<'. */
-static void esc_html(const char *in, char *out, unsigned cap)
-{
-    unsigned o = 0;
-
-    for (; *in && o + 8 < cap; in++) {
-        const char *rep = NULL;
-        if (*in == '&')      rep = "&amp;";
-        else if (*in == '<') rep = "&lt;";
-        else if (*in == '>') rep = "&gt;";
-        else if (*in == '\n') rep = "<br>";
-        else if (*in == '\r') continue;
-        if (rep) {
-            unsigned n = (unsigned)strlen(rep);
-            memcpy(out + o, rep, n);
-            o += n;
-        } else {
-            out[o++] = *in;
-        }
-    }
-    out[o] = '\0';
-}
 
 static void echo_user_block(const char *text)
 {
-    /* Sized for the worst case rather than for the common one. Escaping
-     * expands: '&' becomes five characters, '<' and '\n' four. A 4000-byte
-     * message of ampersands needs 20KB, so a 4096-byte buffer cut the echo
-     * silently -- esc_html simply stops at `o + 8 < cap` -- and the user saw a
-     * truncated copy of what they had just written while the full text went to
-     * the model. The same standing rule as do_send, one line later.
-     *
-     * On the heap because this is five times RC_INPUT_MAX and do_send's frame
-     * is already the largest in the program. Freed immediately; it is live
-     * only for the append. */
-    unsigned cap = RC_INPUT_MAX * 5 + 64;
-    char *esc = (char *)HeapAlloc(GetProcessHeap(), 0, cap);
-    char *div;
-
-    if (!esc) return;                   /* the echo is cosmetic; the send is not */
-    esc_html(text, esc, cap);
-    div = (char *)HeapAlloc(GetProcessHeap(), 0, cap + 64);
-    if (div) {
-        _snprintf(div, cap + 63, "<div class=\"you\">%s</div>", esc);
-        div[cap + 63] = '\0';
-        rc_html_append(g_html, div);
-        rc_html_scroll_bottom(g_html);
-        HeapFree(GetProcessHeap(), 0, div);
-    }
-    HeapFree(GetProcessHeap(), 0, esc);
+    /* Was twenty lines of escaping and heap juggling here, with a buffer that
+     * silently cut the echo at 4095 bytes while the full text went to the
+     * model. The view owns its markup now, and sizes from the input. */
+    rc_html_user(g_html, text);
 }
 
 static void do_send(void)
@@ -1067,12 +1019,10 @@ static void do_send(void)
      * below normally stops it arriving at all; this is the check that makes
      * that a guarantee rather than a hope. */
     if (GetWindowTextLengthA(g_input) >= RC_INPUT_MAX) {
-        rc_html_append(g_html,
-                       "<div class=\"err\">That message is too long to send "
-                       "(the limit is about 4000 characters). Nothing was "
-                       "sent -- shorten it, or put the long part in a file "
-                       "under the mirrored folder.</div>");
-        rc_html_scroll_bottom(g_html);
+        rc_html_error(g_html,
+                      "That message is too long to send (the limit is about "
+                      "4000 characters). Nothing was sent -- shorten it, or "
+                      "put the long part in a file under the mirrored folder.");
         return;
     }
 
@@ -1090,7 +1040,7 @@ static void do_send(void)
         SetWindowTextA(g_input, "");
         ui_set_busy(1);
     } else {
-        rc_html_append(g_html, "<div class=\"err\">Not connected.</div>");
+        rc_html_error(g_html, "Not connected.");
     }
     SetFocus(g_input);
 }
@@ -1362,10 +1312,11 @@ static void try_connect(HWND hwnd)
          * is the right place for something that changes every few seconds. */
         if (!g_retry_noted) {
             char msg[160];
-            rc_strf(msg, sizeof(msg),
-                      "Cannot reach %s:%d - retrying\r\n",
+            rc_strf(msg, sizeof(msg), "Cannot reach %s:%d - retrying",
                       g_cfg.host, g_cfg.port);
-            rc_html_append(g_html, msg);
+            /* Escaped now. The host comes from the INI, so this was
+             * unescaped user-supplied text going into the document. */
+            rc_html_notice(g_html, msg);
             g_retry_noted = 1;
         }
 

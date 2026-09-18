@@ -34,6 +34,28 @@ int      rc_html_ready(rc_html *v);
 /* `doc` is the whole skeleton, stylesheet included, as the bridge sent it. */
 void     rc_html_set_document(rc_html *v, const char *doc);
 
+/* --- what the transcript can be told -------------------------------------
+ *
+ * These own their markup and their scroll policy, which the CALL SITES used
+ * to own between them. Nine of them, three different markup conventions, and
+ * two -- the bridge's ERROR frame and the reconnect message -- pushed raw
+ * text with no escaping at all, so a '<' in a bridge message or a hostname
+ * ended the document early. Scroll was decided per site: two scrolled always,
+ * one conditionally, six never, and `autoscroll` was read from the INI,
+ * written back, round-trip-tested by inicheck.exe, and consulted by nothing.
+ *
+ * Text arguments are PLAIN TEXT and are escaped here. `rc_html_block` is the
+ * exception and takes finished markup, because the bridge renders the
+ * transcript -- the guest transforms nothing. */
+void     rc_html_notice(rc_html *v, const char *text);
+void     rc_html_error(rc_html *v, const char *text);
+void     rc_html_user(rc_html *v, const char *text);
+void     rc_html_block(rc_html *v, const char *html);    /* bridge-rendered */
+
+/* Honour the user's setting. Off means a block still lands, but the view does
+ * not jump -- which is the whole point of the option. */
+void     rc_html_set_autoscroll(rc_html *v, int on);
+
 void     rc_html_append(rc_html *v, const char *frag);   /* into #t  */
 void     rc_html_live(rc_html *v, const char *frag);     /* replaces #l */
 void     rc_html_clear(rc_html *v);

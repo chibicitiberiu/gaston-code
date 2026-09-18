@@ -199,6 +199,7 @@ struct rc_html {
     unsigned       queue_len, queue_cap;
     char           path[MAX_PATH];
     int            diag;
+    int            autoscroll;  /* the user's setting, finally consulted */
 };
 
 /* CP1252 in, UTF-16 out. The bridge folds everything to CP1252 and the
@@ -272,6 +273,10 @@ rc_html *rc_html_create(HWND parent)
                                       sizeof(rc_html));
     if (!v) return NULL;
     v->parent = parent;
+    /* On unless the user says otherwise -- the same default rc_config_load
+     * uses. The struct is zero-filled, so without this the setting would be
+     * off by accident on the very first run. */
+    v->autoscroll = 1;
     v->host.site.lpVtbl  = &g_site_vtbl;
     v->host.place.lpVtbl = &g_place_vtbl;
     v->host.frame.lpVtbl = &g_frame_vtbl;
@@ -385,6 +390,91 @@ int rc_html_poll(rc_html *v)
     }
     return 1;
 }
+
+/* --- the transcript's own vocabulary -------------------------------------
+ *
+ * Escaping lives here because it has to happen on EVERY path into the
+ * document, and leaving it to the caller meant two paths did not do it.
+ * `<` in a bridge error message or a hostname ended the document early. */
+static void esc_into(const char *in, char *out, unsigned cap)
+{
+    unsigned o = 0;
+
+    /* The 8-byte margin is the longest replacement plus its terminator, so a
+     * character is never half-written. Truncation is silent by necessity --
+     * this is the transcript, and refusing to show a long line would be worse
+     * than showing most of it -- but the CALLERS size their buffers from the
+     * input rather than guessing. */
+    for (; *in && o + 8 < cap; in++) {
+        const char *rep = NULL;
+        if (*in == '&')       rep = "&amp;";
+        else if (*in == '<')  rep = "&lt;";
+        else if (*in == '>')  rep = "&gt;";
+        else if (*in == '"')  rep = "&quot;";
+        else if (*in == '\n') rep = "<br>";
+        else if (*in == '\r') continue;
+        if (rep) {
+            unsigned n = (unsigned)strlen(rep);
+            memcpy(out + o, rep, n);
+            o += n;
+        } else {
+            out[o++] = *in;
+        }
+    }
+    out[o] = '\0';
+}
+
+/* One policy, one place. Was: two call sites scrolled unconditionally, one
+ * scrolled if already at the bottom, six never scrolled, and the user's
+ * autoscroll setting was read by nothing. */
+static void settle(rc_html *v, int was_at_bottom)
+{
+    if (v->autoscroll && was_at_bottom) rc_html_scroll_bottom(v);
+}
+
+/* Escape `text` into a heap block wrapped in `<div class="cls">`, append it,
+ * and apply the scroll policy. Heap rather than stack because escaping can
+ * expand five-fold and the largest frame in this program is already in
+ * main.c. */
+static void say(rc_html *v, const char *cls, const char *text)
+{
+    unsigned n, cap;
+    char *esc, *div;
+    int bottom;
+
+    if (!v || !text) return;
+    n = (unsigned)strlen(text);
+    cap = n * 6 + 64;                       /* '&' -> "&amp;" is the worst */
+    esc = (char *)HeapAlloc(GetProcessHeap(), 0, cap);
+    if (!esc) return;
+    esc_into(text, esc, cap);
+
+    div = (char *)HeapAlloc(GetProcessHeap(), 0, cap + 64);
+    if (!div) { HeapFree(GetProcessHeap(), 0, esc); return; }
+    rc_strf(div, cap + 64, "<div class=\"%s\">%s</div>", cls, esc);
+
+    bottom = rc_html_at_bottom(v);
+    rc_html_append(v, div);
+    settle(v, bottom);
+
+    HeapFree(GetProcessHeap(), 0, div);
+    HeapFree(GetProcessHeap(), 0, esc);
+}
+
+void rc_html_notice(rc_html *v, const char *text) { say(v, "notice", text); }
+void rc_html_error(rc_html *v, const char *text)  { say(v, "err", text); }
+void rc_html_user(rc_html *v, const char *text)   { say(v, "you", text); }
+
+void rc_html_block(rc_html *v, const char *html)
+{
+    int bottom;
+    if (!v || !html || !*html) return;
+    bottom = rc_html_at_bottom(v);
+    rc_html_append(v, html);
+    settle(v, bottom);
+}
+
+void rc_html_set_autoscroll(rc_html *v, int on) { if (v) v->autoscroll = on; }
 
 void rc_html_append(rc_html *v, const char *frag)
 {
