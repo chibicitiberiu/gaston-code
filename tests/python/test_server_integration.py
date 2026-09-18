@@ -599,6 +599,58 @@ async def test_view_page_resets_on_reconnect(harness):
     await harness.close(w2)
 
 
+async def test_a_block_split_across_a_page_boundary_is_not_rendered_twice(harness):
+    """02.33: `_write_block` captured `page_no` before `pages.add`, then sent
+    the WHOLE html as a live APPEND tagged with that one page number. When a
+    single block is long enough to split mid-run across the hard cap, the
+    tail lands on the next page (pages.py's `write`/`add`) but was ALSO
+    already inside the bytes just streamed live under the old page's number
+    -- so paging forward to where the tail actually lives re-sends it, and
+    the reader sees it twice.
+
+    Fixed by only ever streaming the piece of the run that landed on the page
+    the stream is tagged with; the tail reaches the guest when it is paged
+    to, not before.
+    """
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"READY"})
+    guest = harness.bridge._guest
+
+    # hard_bytes is 2x the default page_bytes (16384) with no mem_kb header,
+    # so this run must split: 32000 'A's, a newline the splitter should
+    # prefer to break at, then 10000 'B's that can only fit on the next page.
+    first_half = "A" * 32000
+    second_half = "B" * 10000
+    big = first_half + "\n" + second_half
+
+    await harness.bridge._write_block(guest, big)
+    frames = await harness.recv_until(r, {"PAGESEALED"}, timeout=5)
+
+    sealed = [f for f in frames if f.type == "PAGESEALED"]
+    assert sealed and sealed[0].headers["page"] == "1", (
+        "test setup: the run must actually split across a seal"
+    )
+    assert guest.pages.count == 2, "test setup: expected exactly two pages"
+
+    live_body = harness.body(frames).decode("cp1252")
+    assert "B" not in live_body, (
+        "the tail that landed on page 2 was streamed live under page 1's "
+        "APPEND -- it will be sent again when the reader pages forward"
+    )
+    assert live_body == first_half + "\n", (
+        "page 1's live stream must be exactly what pages.write put on page 1"
+    )
+
+    await harness.send(w, Frame("GETPAGE", {"page": "2"}))
+    frames2 = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
+    page2_body = harness.body(frames2).decode("cp1252")
+    assert page2_body == second_half, (
+        "page 2 must hold exactly the tail, with nothing repeated from what "
+        "already streamed live on page 1"
+    )
+    await harness.close(w)
+
+
 # --- the model menu ---------------------------------------------------------
 
 
@@ -779,6 +831,37 @@ async def test_cancelled_callback_still_clears_the_bar(harness):
     await harness.close(writer)
 
 
+async def test_a_disconnect_mid_sync_fails_the_transfer_not_the_connection(
+        harness):
+    """`_fail_syncs` read `entry.get("future")`, which was correct while
+    `sync_pending` held ad-hoc dicts and became `AttributeError: 'Wait'
+    object has no attribute 'get'` the moment 02.4 typed those entries as
+    `sync.Wait` -- so a guest that dropped mid-transfer crashed the
+    connection handler instead of failing the in-flight SYNCPUT/GET/SCAN/
+    MKDIR future, which then held the sync code waiting on a future nobody
+    would ever resolve.
+    """
+    from bridge.files import sync as S
+
+    reader, writer = await harness.connect()
+    await harness.recv_until(reader, {"READY"})
+    guest = harness.bridge._guest
+
+    fut = asyncio.get_event_loop().create_future()
+    guest.sync_pending["s1"] = S.Wait(kind="put", future=fut)
+
+    await harness.close(writer)
+    async with asyncio.timeout(5):
+        while not fut.done():
+            await asyncio.sleep(0.01)
+
+    assert fut.exception() is not None, (
+        "the in-flight sync future must be failed, not left to hang"
+    )
+    assert "disconnected" in str(fut.exception())
+    assert guest.sync_pending == {}, "the failed entry must be cleared"
+
+
 async def test_disconnect_holds_the_prompt_then_denies(harness):
     """Not "denies immediately", which is what the plan said and what the first
     implementation did.
@@ -868,6 +951,27 @@ async def test_oversized_prompt_does_not_poison_replay(harness):
     harness.bridge._guest.replay.since(1)
     task.cancel()
     await harness.close(writer)
+
+
+async def test_send_reports_whether_the_frame_actually_went(harness):
+    """02.16: _send returned None unconditionally, so a caller had no way to
+    tell an oversized frame (refused) or a closed writer (dropped) from an
+    ordinary success -- both were silent. It now returns a bool."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    ok = await harness.bridge._send(guest, srv.notice("k", "an ordinary notice"))
+    assert ok is True
+
+    huge = srv.Frame("NOTICE", {"kind": "k"}, b"x" * 200_000)
+    refused = await harness.bridge._send(guest, huge)
+    assert refused is False, "an oversized frame must report that it was refused"
+
+    await harness.close(writer)
+    await asyncio.sleep(0.1)
+    dropped = await harness.bridge._send(guest, srv.notice("k", "after close"))
+    assert dropped is False, "a closed writer must report that nothing was sent"
 
 
 async def test_session_rebuild_denies_a_pending_prompt(harness):
@@ -1271,12 +1375,17 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
     conversation was forked; the list does not". This is the cause.
 
     Session._session_id is only set from the init SystemMessage, which
-    arrives DURING a turn -- so `guest.sess_id = guest.claude.session_id or
-    guest.sess_id`, run immediately after the effort fork, assigned None and
-    kept the pre-fork id. The registry and the chat list then named the old
-    conversation until some later turn happened to write a file.
+    arrives DURING a turn -- so the chat-list refresh used to be gated on
+    `guest.sess_id` changing, and `guest.sess_id = guest.claude.session_id or
+    guest.sess_id` run immediately after the effort fork assigned None (the
+    SDK had not reported the new id yet) and kept the pre-fork id, so the
+    comparison saw no change and never pushed. The registry and the chat
+    list then named the old conversation until some later turn happened to
+    write a file.
 
-    The id is picked up where it becomes known, and the list is pushed.
+    Fixed by pushing on the message itself rather than on a value it happens
+    to change (02.24) -- and guest.sess_id is a stable per-connection handle
+    now, not the SDK's session id, so it has nothing to do with this at all.
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
@@ -1284,11 +1393,13 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
     before = guest.sess_id
 
     await guest.claude.on_system("init", {"session_id": "forked-1234"})
-    assert guest.sess_id == "forked-1234", "the new id was never picked up"
-    assert guest.sess_id != before
 
     f = await _recv(harness, reader, "SESSIONSEND")
     assert f.type == "SESSIONSEND", "the guest was not told the list changed"
+    assert guest.sess_id == before, (
+        "sess_id is a stable per-connection handle (02.24); a session "
+        "becoming known must not move it"
+    )
     await harness.close(writer)
 
 

@@ -8,7 +8,8 @@ version of work the user's edit displaced.
 """
 import os
 
-from bridge.agent.permissions import off_limits
+from bridge.agent.permissions import off_limits, render_request, summary
+from bridge.agent.permissions import telling_argument
 
 
 def test_reading_a_conflict_copy_is_allowed(tmp_path):
@@ -47,3 +48,41 @@ def test_outside_cwd_is_still_refused_and_says_so_differently(tmp_path):
     os.makedirs(wd)
     why = off_limits("Read", {"file_path": "/etc/passwd"}, wd)
     assert why is not None and "on the proxy" in why
+
+
+# --- 02.15: one shared answer to "which argument matters" -------------------
+
+
+def test_telling_argument_prefers_command_over_everything_else():
+    args = {"file_path": "/tmp/x", "command": "vol c:", "prompt": "ignored"}
+    assert telling_argument(args) == ("command", "vol c:")
+
+
+def test_telling_argument_falls_back_through_the_shared_order():
+    assert telling_argument({"url": "http://x"}) == ("url", "http://x")
+    assert telling_argument({"pattern": "*.txt"}) == ("pattern", "*.txt")
+
+
+def test_telling_argument_ignores_falsy_and_unlisted_values():
+    assert telling_argument({"command": "", "path": None}) is None
+    assert telling_argument({"selector": "#id"}) is None
+    assert telling_argument({}) is None
+    assert telling_argument("not a dict") is None
+
+
+def test_render_request_and_summary_use_the_same_fallback_argument():
+    """render_request's desc and summary's bar text used to pick the
+    fallback argument from two independently-maintained lists in a
+    different order. Now both go through telling_argument, so they can no
+    longer disagree about which argument is the interesting one."""
+    args = {"pattern": "*.log", "url": "http://example/"}
+
+    class Ctx:
+        display_name = None
+        title = None
+        description = None
+
+    html = render_request("Grep", args, Ctx())
+    line = summary("Grep", Ctx(), args)
+    assert "*.log" in html
+    assert "*.log" in line

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from .files import caps as C
 from .files import manifest
+from .status import EXEC_STATUS_PROSE, ExecStatus
 from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
@@ -75,6 +76,7 @@ from .wire.link import GuestLink
 from .wire.replay import Replay
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
+from .files.sync import AckResult, GetResult, ScanResult
 from .files.syncrun import SyncError
 from .agent.session import Session
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
@@ -82,6 +84,23 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 log = logging.getLogger("bridge.server")
 
 DEFAULT_PORT = 7890
+
+
+@dataclass
+class ExecCall:
+    """One outstanding EXEC, and what has happened to it so far.
+
+    Was an ad-hoc `{"future", "out"}` dict grown post-hoc with `"killed"`
+    (set by `_kill_exec`) and `"capped"` (set by `_exec_out`), so every read
+    was a defensive `entry.get(...)` because the key might not exist yet. A
+    dataclass makes both booleans False by construction -- the exec-side twin
+    of `sync.Wait` (02.4). docs/audit/02-bridge-python.md 02.13.
+    """
+
+    future: "asyncio.Future"
+    out: bytearray = field(default_factory=bytearray)
+    killed: bool = False
+    capped: bool = False
 
 
 @dataclass
@@ -159,7 +178,7 @@ class GuestSession:
     lost_at: float | None = None
     # In-flight EXEC calls, keyed by our own id. Separate namespace from
     # tool_use_id so a stray frame cannot cross-resolve against TOOLRESULT.
-    exec_pending: dict = field(default_factory=dict)
+    exec_pending: dict[str, ExecCall] = field(default_factory=dict)
     exec_seq: int = 0
     # One worker thread on the guest means one command at a time. The model
     # can request tools in parallel, and an "Always" rule would bypass the
@@ -220,6 +239,37 @@ class GuestSession:
     @property
     def connected(self) -> bool:
         return self.link.connected
+
+    # --- transcript housekeeping --------------------------------------------
+    #
+    # Both belong to what the audit calls TranscriptView (02.2/02.18/02.17a):
+    # not extracted into its own class here, but no longer duplicated either.
+
+    def set_link_speed(self, bps: float | None) -> None:
+        """Propagate a measured (or CLI-default) link speed to every live
+        coalescer, so a conversation already streaming picks it up too, not
+        only ones started after. Was `guest.link_bps = bps; for c in
+        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites."""
+        self.link_bps = bps
+        for c in self.coalescers.values():
+            c.set_link_speed(bps)
+
+    async def reset_transcript(self) -> None:
+        """Start over: a fresh paginator and renderer, every live coalescer
+        stopped and dropped, and the view back on LIVE.
+
+        `_new_session` and `_switch` each rebuilt this by hand, with their
+        own copy of the default page limits -- one of them written as
+        `guest.page_bytes or None or 16384`, where `or None` did nothing at
+        all (`x or None` is `None` exactly when `x or 16384` would already
+        have chosen 16384). docs/audit/02-bridge-python.md 02.17/02.18.
+        """
+        self.pages = Paginator(self.page_bytes or 16384, self.page_blocks or 90)
+        self.render = HtmlStream()
+        for c in self.coalescers.values():
+            await c.stop()
+        self.coalescers.clear()
+        self.view_page = None
 
 
 class Bridge:
@@ -513,9 +563,7 @@ class Bridge:
         guest.hello = dict(h)
         guest.caps = caps
 
-        guest.link_bps = self.link_bps
-        for c in guest.coalescers.values():
-            c.set_link_speed(guest.link_bps)
+        guest.set_link_speed(self.link_bps)
 
         if guest.claude is None:
             guest.claude = await self._make_session(guest)
@@ -560,9 +608,17 @@ class Bridge:
         await self._reissue_prompt(guest)
         await self._reissue_halt(guest)
         await self._reissue_turn(guest)
+        # _reissue_halt above handles a GUEST reconnect: the same
+        # GuestSession survives it, so guest.halt_id already agrees with
+        # base.latched. It does NOT handle a BRIDGE restart, which starts a
+        # brand new GuestSession with halt_id empty while base.latched is
+        # still whatever the old process left on disk (02.21) -- so derive
+        # it instead of trusting whichever path last had a chance to set it.
+        await self._reconcile_halt(guest)
         # A guest that was away may have been edited while it was away, and
         # nothing reconciled that until its watcher next happened to fire.
         if self.sync_dir:
+            self._seed_agent_notices()
             self._spawn(self.run_sync("the machine reconnected"))
 
         log.info("attached sess=%s (resumed=%s)", guest.sess_id, resumed)
@@ -632,17 +688,31 @@ class Bridge:
                 # The conversation id becomes known HERE, not at start().
                 #
                 # Session._session_id is only set from this message, which
-                # arrives during the first turn -- so `guest.sess_id =
-                # guest.claude.session_id or guest.sess_id` immediately after
-                # the effort fork was a no-op against None, and the chat list
-                # went on naming the PRE-FORK conversation until some later
-                # turn happened to write a file. PLAN.md Phase 4 records the
-                # symptom ("the transcript says the conversation was forked;
-                # the list does not"); this is the cause.
-                new = data.get("session_id")
-                if new and new != guest.sess_id:
-                    log.info("session id settled: %s -> %s", guest.sess_id, new)
-                    guest.sess_id = new
+                # arrives during the first turn. Refresh the chat list once
+                # it does -- PLAN.md Phase 4 records the symptom ("the
+                # transcript says the conversation was forked; the list does
+                # not") from the time this used to be gated on `guest.sess_id`
+                # changing: immediately after the effort fork guest.sess_id
+                # was reassigned from guest.claude.session_id, which was
+                # still None at that point, so the comparison saw no change
+                # and never pushed. This fires once per Session object's
+                # lifetime (the SDK's own first-turn system message), so no
+                # dedup against a previous value is needed.
+                #
+                # guest.sess_id itself is NOT touched here, or anywhere a
+                # session is rebuilt. It used to be re-pointed at whatever
+                # session happened to be live -- "a bridge handle" on a fresh
+                # connection, "the SDK session" after a new-session or a
+                # fork, and simply stale after a switch, which never updated
+                # it at all. Nothing reads it for anything but READY's header
+                # and logging, which is exactly why it was free to drift.
+                # It is now a stable per-connection handle, set once in
+                # _attach and never overwritten -- the SDK's own id already
+                # travels in SWITCHED and in this message, and R7's
+                # per-client identity wants a handle that outlives every
+                # session a client opens. docs/audit/02-bridge-python.md
+                # 02.24.
+                if data.get("session_id"):
                     self._spawn(self._send_sessions(guest))
 
         s = Session(
@@ -734,8 +804,8 @@ class Bridge:
                 body=render_request(tool_name, args, ctx),
                 allows=perms.allows_always(
                     tool_name, getattr(ctx, "suggestions", None) or []),
+                summary=perms.summary(tool_name, ctx, args),
             )
-            prompt.summary = perms.summary(tool_name, ctx, args)
 
             try:
                 await self._enqueue_prompt(guest, prompt)
@@ -778,8 +848,7 @@ class Bridge:
         await self._write_block(guest, prompt.body)
         await self._send(guest, permreq(
             prompt.tool_use_id, prompt.tool_name, prompt.allows,
-            len(guest.perm_queue),
-            getattr(prompt, "summary", prompt.tool_name)))
+            len(guest.perm_queue), prompt.summary))
 
     async def _reissue_prompt(self, guest: GuestSession) -> None:
         """P1: after a reconnect, put the bar back."""
@@ -790,8 +859,7 @@ class Bridge:
                  prompt.tool_use_id)
         await self._send(guest, permstate(
             prompt.tool_use_id, prompt.tool_name, prompt.allows,
-            len(guest.perm_queue),
-            getattr(prompt, "summary", prompt.tool_name)))
+            len(guest.perm_queue), prompt.summary))
 
     async def _send_sessions(self, guest: GuestSession) -> None:
         """The chat list. Only conversations this bridge started -- the rest
@@ -981,13 +1049,21 @@ class Bridge:
             return
 
         page_no = guest.pages.live.number
-        sealed = guest.pages.add("html", html)
+        sealed, chunks = guest.pages.write("html", html)
 
         # Only stream when the guest is watching the live page. In HISTORY mode
         # the bridge keeps buffering silently and the page counter ticking up
         # is the notification.
+        #
+        # A run this long can split across a seal (pages.write above), so only
+        # the piece that actually landed on page_no belongs in this APPEND --
+        # sending the whole block under page_no double-renders the tail once
+        # the reader pages forward to where pages.write actually put it
+        # (02.33). The tail reaches the guest when it is paged to.
         if stream and (guest.view_page is None or guest.view_page == page_no):
-            await self._send_html(guest, html, APPEND, page_no)
+            on_this_page = "".join(text for pg, text in chunks if pg == page_no)
+            if on_this_page:
+                await self._send_html(guest, on_this_page, APPEND, page_no)
 
         for pg in sealed:
             await self._send(guest, pagesealed(pg.number, guest.pages.count))
@@ -1110,9 +1186,7 @@ class Bridge:
             except ValueError:
                 bps = 0.0
             if bps > 0:
-                guest.link_bps = bps
-                for c in guest.coalescers.values():
-                    c.set_link_speed(bps)
+                guest.set_link_speed(bps)
                 log.info("guest reports %.0f B/s", bps)
 
         elif f.type == "PING":
@@ -1137,12 +1211,41 @@ class Bridge:
             log.warning("unknown frame type from guest: %s", f.type)
             await self._send(guest, error("unknown_type", f.type), stamp=False)
 
-    def _with_sync_preamble(self, text: str) -> str:
+    def _seed_agent_notices(self) -> None:
+        """Fold whatever the baseline still owes the agent into memory.
+
+        `_agent_notices` is a Bridge-lifetime cache of
+        `base.pending_notice_agent` (02.20): the durable queue is the source
+        of truth, and this is what makes a bridge that just restarted catch
+        up on a notice a PREVIOUS process wrote and delivered to the user's
+        screen, but never got to hand to the model before it stopped. Called
+        at every attach rather than once at startup, so it also catches a
+        notice written by a pass that ran while nothing was connected --
+        merged, not replaced, so it cannot drop one already waiting in
+        memory for a turn that has not started yet.
+        """
+        try:
+            base = self._load_baseline()
+        except Exception:
+            return
+        for text in base.pending_notice_agent:
+            if text not in self._agent_notices:
+                self._agent_notices.append(text)
+
+    async def _with_sync_preamble(self, text: str) -> str:
         """Prepend anything sync needs the agent to know, and mark it delivered.
 
         Marked delivered when it is handed to the model, not when the model
         acts on it -- there is no signal for the latter, and re-sending on every
         turn until the agent happens to mention it would bury the next one.
+
+        The in-memory queue is cleared first, synchronously, so a notice
+        raised while the durable clear below is in flight is not lost (the
+        same reason `notices_delivered` clears by value rather than by
+        emptying the list). The disk clear is best-effort: a crash in the
+        narrow window between the model seeing these lines and the save below
+        means they are handed over once more after a restart, which is the
+        safe direction to err -- see 02.20.
         """
         if not self.sync_dir or not self._agent_notices:
             return text
@@ -1162,7 +1265,31 @@ class Bridge:
         lines.append("")
         lines.append("--- the user's message follows ---")
         lines.append("")
+        await self._clear_agent_notices(pending)
         return "\n".join(lines) + text
+
+    async def _clear_agent_notices(self, delivered: list) -> None:
+        """Durable half of `_with_sync_preamble` -- see there and 02.20."""
+        if not delivered or not self.sync_dir:
+            return
+        async with self._baseline_lock():
+            try:
+                base = self._load_baseline()
+            except Exception:
+                return
+            gone = list(delivered)
+            keep = []
+            for t in base.pending_notice_agent:
+                if t in gone:
+                    gone.remove(t)
+                else:
+                    keep.append(t)
+            base.pending_notice_agent = keep
+            try:
+                base.save(os.path.join(self.sync_state, "base.json"))
+            except Exception as exc:      # pragma: no cover - disk failure
+                log.warning("could not record delivered agent notices: %s",
+                           exc)
 
     async def _resume_turn(self, guest: GuestSession, answered) -> None:
         """Continue: wait for the wire to be ours, THEN unlatch, THEN explain.
@@ -1218,7 +1345,7 @@ class Bridge:
         # the preserved copy, never merge, and never call sync_resolve, and the
         # path would stay latched for the rest of the session with the agent
         # quietly unable to write to it and no idea why.
-        text = self._with_sync_preamble(text)
+        text = await self._with_sync_preamble(text)
         try:
             turn = await guest.claude.send(text)
         except Exception as exc:
@@ -1284,7 +1411,7 @@ class Bridge:
             guest.exec_seq += 1
             exec_id = f"x{guest.exec_seq}"
             fut = asyncio.get_running_loop().create_future()
-            guest.exec_pending[exec_id] = {"future": fut, "out": bytearray()}
+            guest.exec_pending[exec_id] = ExecCall(future=fut)
 
             if cwd:
                 # Refuse rather than let the guest drop the frame.
@@ -1350,9 +1477,9 @@ class Bridge:
         """
         entry = guest.exec_pending.get(exec_id)
         if entry is not None:
-            if entry.get("killed"):
+            if entry.killed:
                 return
-            entry["killed"] = True
+            entry.killed = True
         log.info("asking the guest to kill exec %s", exec_id)
         self._spawn(self._send(guest, exec_kill(exec_id), stamp=False))
 
@@ -1411,9 +1538,17 @@ class Bridge:
                 for note in got.get("notices", []):
                     await self._write_block(guest, H.notice(note))
                     delivered.append(note)
-                    # The agent needs the same news, and it has no other way to
-                    # get it: nothing reaches a session except an INPUT.
-                    self._agent_notices.append(note)
+                # The agent needs the same news, and it has no other way to
+                # get it: nothing reaches a session except an INPUT. Merged
+                # rather than replaced or matched 1:1 against the user's set
+                # above: pending_notice_agent is its OWN durable queue
+                # (02.20), so it can carry an entry the user's copy already
+                # dropped (delivered last pass, bridge restarted before the
+                # agent's next turn) -- and a `not in` merge cannot drop one
+                # already waiting in memory for a turn that has not started.
+                for note in got.get("agent_notices", []):
+                    if note not in self._agent_notices:
+                        self._agent_notices.append(note)
 
                 # A conflict STOPS the agent, and stopping it means saying so
                 # on the user's screen with a way to start it again. The
@@ -1448,6 +1583,13 @@ class Bridge:
                         f"Stopped: {n} conflicting edit"
                         f"{'' if n == 1 else 's'}. Your copy was kept.",
                         paths=got.get("conflict_paths", ()))
+                # Covers the same gap _reconcile_halt closes at attach, from
+                # the other direction: latched paths this PASS did not just
+                # raise for (a standing conflict from before a bridge
+                # restart, discovered on the first pass a fresh process
+                # runs) still need a bar, and one that WAS raised needs to
+                # come down once nothing is latched any more.
+                await self._reconcile_halt(guest, base=p.base)
                 # Only after they are on the wire. The queue is pending work,
                 # not a log: leaving them on it re-delivered every notice on
                 # every pass, which buries the next real one.
@@ -1495,6 +1637,10 @@ class Bridge:
         """
         log.warning("sync pass aborted: %s", reason)
         state = os.path.join(self.sync_state, "base.json")
+        agent_text = (
+            f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
+            f"direction until this is resolved. Do not tell the user a file "
+            f"has reached their machine; it has not.")
         try:
             base = self._load_baseline()
         except Exception:
@@ -1512,6 +1658,10 @@ class Bridge:
                 return
             base.aborted = reason
             base.announced.append(reason)
+            # Durable, same as a Pass.note() (02.20): a bridge restart
+            # between this and the agent's next turn must not silently lose
+            # the one notice that tells it sync has stopped entirely.
+            base.pending_notice_agent.append(agent_text)
             try:
                 base.save(state)
             except Exception as exc:          # pragma: no cover - disk failure
@@ -1529,10 +1679,8 @@ class Bridge:
         # The agent needs it too, and for the same reason the conflict notices
         # go this way: it will otherwise report a file as delivered when the
         # layer that delivers it has not run for an hour.
-        self._agent_notices.append(
-            f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
-            f"direction until this is resolved. Do not tell the user a file "
-            f"has reached their machine; it has not.")
+        if agent_text not in self._agent_notices:
+            self._agent_notices.append(agent_text)
 
     def _load_baseline(self):
         from .files.sync import Baseline
@@ -1841,6 +1989,42 @@ class Bridge:
         guest.halt_text = ""
         await self._send(guest, haltend(hid), stamp=False)
 
+    async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
+        """The halt is a VIEW of base.latched, not independent state.
+
+        guest.halt_id is memory; base.latched is disk. Nothing but a fresh
+        conflict (the new_conflicts branch above) or a reconnect
+        (_reissue_halt) ever moved guest.halt_id to agree with it -- so a
+        BRIDGE restart with paths still latched came back with no bar, a
+        fresh GuestSession whose halt_id starts empty, and every latched
+        path going on refusing the agent's writes with nothing on the user's
+        screen to explain why or let them clear it. The only way out used to
+        be the agent proactively calling sync_status and sync_resolve.
+
+        Called at attach (base loaded fresh) and at the end of every pass
+        (base is the Pass's own, already current) so both directions --
+        a bar that should be up and is not, one that is up and should not
+        be -- self-correct instead of depending on whichever call site last
+        had a chance to set guest.halt_id. docs/audit/02-bridge-python.md
+        02.21.
+        """
+        if not self.sync_dir:
+            return
+        if base is None:
+            try:
+                base = self._load_baseline()
+            except Exception:
+                return
+        if base.latched and not guest.halt_id:
+            n = len(base.latched)
+            await self._raise_halt(
+                guest,
+                f"Stopped: {n} conflicting edit{'' if n == 1 else 's'}. "
+                f"Your copy was kept.",
+                paths=base.latched.keys())
+        elif not base.latched and guest.halt_id:
+            await self._clear_halt(guest)
+
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""
         sid = f.headers.get("id", "")
@@ -1872,17 +2056,19 @@ class Bridge:
         elif f.type == "SYNCEND":
             fut = entry.future
             if not fut.done():
-                fut.set_result((f.headers.get("status", "ok"),
-                                int(f.headers.get("files", "0")),
-                                f.headers.get("tree_id", ""),
-                                f.headers.get("root", ""),
-                                entry.rows, entry.display))
+                fut.set_result(ScanResult(
+                    status=f.headers.get("status", "ok"),
+                    files=int(f.headers.get("files", "0")),
+                    tree_id=f.headers.get("tree_id", ""),
+                    root=f.headers.get("root", ""),
+                    rows=entry.rows, display=entry.display))
 
         elif f.type in ("SYNCPUTACK", "SYNCMKDIRACK"):
             fut = entry.future
             if not fut.done():
-                fut.set_result((f.headers.get("status", "ok"),
-                                int(f.headers.get("crc", "0"))))
+                fut.set_result(AckResult(
+                    status=f.headers.get("status", "ok"),
+                    crc=int(f.headers.get("crc", "0"))))
 
         elif f.type == "SYNCDAT":
             if entry.kind != "get":
@@ -1894,18 +2080,24 @@ class Bridge:
         elif f.type == "SYNCDATEND":
             fut = entry.future
             if not fut.done():
-                fut.set_result((f.headers.get("status", "ok"),
-                                int(f.headers.get("crc", "0")),
-                                f.headers.get("cls", P.CLASS_TEXT),
-                                bytes(entry.data or b"")))
+                fut.set_result(GetResult(
+                    status=f.headers.get("status", "ok"),
+                    crc=int(f.headers.get("crc", "0")),
+                    cls=f.headers.get("cls", P.CLASS_TEXT),
+                    data=bytes(entry.data or b"")))
 
     def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
         """Resolve every in-flight sync transfer, synchronously."""
         if guest is None:
             return
         for sid, entry in list(guest.sync_pending.items()):
-            fut = entry.get("future")
-            if fut is not None and not fut.done():
+            # entry.future is a required field on S.Wait, not an optional
+            # one -- this used to be entry.get("future") from when
+            # sync_pending held ad-hoc dicts (pre-02.4), and calling .get on
+            # a Wait dataclass raises AttributeError instead of failing the
+            # transfer, which is the one thing this method exists to do.
+            fut = entry.future
+            if not fut.done():
                 fut.set_exception(SyncError(why))
         guest.sync_pending.clear()
         guest.sync_active = False
@@ -1934,15 +2126,15 @@ class Bridge:
         entry = guest.exec_pending.get(f.headers.get("id", ""))
         if entry is None:
             return          # late chunk for a call we gave up on
-        room = self.EXEC_OUT_MAX - len(entry["out"])
+        room = self.EXEC_OUT_MAX - len(entry.out)
         if room <= 0:
-            entry["capped"] = True
+            entry.capped = True
             return
         if len(f.body) > room:
-            entry["out"].extend(f.body[:room])
-            entry["capped"] = True
+            entry.out.extend(f.body[:room])
+            entry.capped = True
             return
-        entry["out"].extend(f.body)
+        entry.out.extend(f.body)
 
     async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
         exec_id = f.headers.get("id", "")
@@ -1955,53 +2147,35 @@ class Bridge:
                       "(usually a kill that has already been handled)",
                       exec_id)
             return
-        fut = entry["future"]
+        fut = entry.future
         if fut.done():
             return
 
-        status = f.headers.get("status", "ok")
+        status = ExecStatus.parse(f.headers.get("status", "ok"))
         code = f.headers.get("code", "")
         # Either side may have cut it: the guest at its 32KB cap, or us at
         # ours. Both mean the same thing to the model -- what arrived is not
         # the whole of it -- so they are reported the same way.
-        truncated = (f.headers.get("truncated", "0") == "1"
-                     or bool(entry.get("capped")))
+        truncated = f.headers.get("truncated", "0") == "1" or entry.capped
 
         # COMMAND.COM writes the OEM codepage, not the ANSI one. Using
         # fold.decode here instead is the classic Win9x encoding bug and turns
         # a `dir` listing into mojibake.
-        text = fold.decode_oem(bytes(entry["out"]))
+        text = fold.decode_oem(bytes(entry.out))
 
         parts = []
-        if status == "spawn_failed":
-            parts.append("The command could not be started on the connected "
-                         "machine.")
-        elif status == "too_long":
-            # Was reported as spawn_failed, which reads as an environment
-            # problem and invites a retry. It is a deterministic size
-            # rejection, so retrying the same command never succeeds -- and
-            # the model has no way to guess the limit unless it is told.
-            parts.append(
-                "The command line was too long for the connected machine and "
-                f"was refused before it ran. The limit is about "
-                f"{self.EXEC_MAX_CMD} characters including the shell prefix; "
-                f"shorten it, or write the long part to a file and run that.")
-        elif status == "timeout":
-            parts.append(f"Timed out and was killed after the limit; partial "
-                         f"output follows.")
-        elif status == "busy":
-            parts.append("The connected machine is already running a command.")
-        elif status == "cancelled":
-            parts.append("Cancelled -- the machine is shutting down.")
-        if code not in ("", "0") and status == "ok":
+        prose = EXEC_STATUS_PROSE.get(status)
+        if prose:
+            parts.append(prose.format(max_cmd=self.EXEC_MAX_CMD))
+        if code not in ("", "0") and status == ExecStatus.OK:
             parts.append(f"Exit code {code}.")
         if truncated:
-            # Whichever side actually cut it (03.16). entry["capped"] means
-            # OUR OWN EXEC_OUT_MAX bit first; the guest's own 32KB cap is the
+            # Whichever side actually cut it (03.16). entry.capped means OUR
+            # OWN EXEC_OUT_MAX bit first; the guest's own 32KB cap is the
             # ordinary case and is what f.headers["truncated"] reports on its
             # own. Blaming the guest's cap unconditionally was wrong whenever
             # ours was the one that actually fired.
-            if entry.get("capped"):
+            if entry.capped:
                 parts.append(f"Output was capped at "
                             f"{self.EXEC_OUT_MAX // 1024}KB by this bridge "
                             f"and truncated.")
@@ -2013,11 +2187,10 @@ class Bridge:
         head = (" ".join(parts) + "\n\n") if parts else ""
         fut.set_result({
             "content": [{"type": "text", "text": head + body}],
-            "isError": status in ("spawn_failed", "too_long", "busy",
-                                  "cancelled", "timeout"),
+            "isError": status.is_error,
         })
         log.info("exec %s finished: status=%s code=%s bytes=%d",
-                 exec_id, status, code, len(entry["out"]))
+                 exec_id, status.value, code, len(entry.out))
 
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
         """Resolve every in-flight EXEC, synchronously.
@@ -2028,7 +2201,7 @@ class Bridge:
         if guest is None:
             return
         for exec_id, entry in list(guest.exec_pending.items()):
-            fut = entry["future"]
+            fut = entry.future
             if not fut.done():
                 fut.set_result({"content": [{"type": "text", "text": why}],
                                 "isError": True})
@@ -2228,7 +2401,8 @@ class Bridge:
                 "Could not reopen the session: " + str(exc)[:160]))
             await self._send_options(guest)
             return
-        guest.sess_id = guest.claude.session_id or guest.sess_id
+        # guest.sess_id is a stable per-connection handle now, not the SDK's
+        # own id (02.24) -- nothing to update here.
         await self._send_options(guest)
 
     async def _new_session(self, guest: GuestSession) -> None:
@@ -2237,22 +2411,24 @@ class Bridge:
         if guest.claude:
             await guest.claude.close()
 
-        guest.pages = Paginator(guest.page_bytes or 16384,
-                                guest.page_blocks or 90)
-        guest.render = HtmlStream()
-        for c in guest.coalescers.values():
-            await c.stop()
-        guest.coalescers.clear()
-        guest.view_page = None
+        await guest.reset_transcript()
 
         try:
             guest.claude = await self._make_session(guest)
         except Exception as exc:
             log.exception("new session failed")
-            await self._send(guest, error("new_failed", str(exc)[:200]))
+            # H.error into the transcript, not an ERROR frame (02.16): this
+            # is the same "could not open a Claude session" failure
+            # _set_effort already reports this way, and the transcript is
+            # the channel that paginates and survives a reconnect -- an
+            # ERROR frame does neither, and _send silently drops it outright
+            # on a closed writer or an oversized body.
+            await self._write_block(guest, H.error(
+                "Could not start a new session: " + str(exc)[:160]))
             return
 
-        guest.sess_id = guest.claude.session_id or guest.sess_id
+        # guest.sess_id is a stable per-connection handle now, not the SDK's
+        # own id (02.24) -- nothing to update here.
         await self._send(guest, switched(guest.claude.session_id or "",
                                          guest.pages.count))
         await self._send_page(guest, "live")
@@ -2276,18 +2452,15 @@ class Bridge:
             await guest.claude.close()
 
         # Fresh transcript state. Anything the old session had is on disk.
-        guest.pages = Paginator(guest.page_bytes or None or 16384,
-                                guest.page_blocks or 90)
-        guest.render = HtmlStream()
-        for c in guest.coalescers.values():
-            await c.stop()
-        guest.coalescers.clear()
+        await guest.reset_transcript()
 
         try:
             guest.claude = await self._make_session(guest, resume=session_id)
         except Exception as exc:
             log.exception("resume failed")
-            await self._send(guest, error("resume_failed", str(exc)[:200]))
+            # Same channel as _new_session and _set_effort now (02.16).
+            await self._write_block(guest, H.error(
+                "Could not reopen the session: " + str(exc)[:160]))
             return
 
         for block in sesslist.history_html(session_id):
@@ -2295,7 +2468,8 @@ class Bridge:
             if guest.pages.live.over_soft_cap():
                 guest.pages.message_boundary()
 
-        guest.view_page = None
+        # reset_transcript() above already set view_page to None; nothing
+        # in between reads or writes it.
         await self._send(guest, switched(session_id, guest.pages.count))
         await self._send_page(guest, "live")
 
@@ -2337,8 +2511,8 @@ class Bridge:
     # syncrun.py's Pass and tests/python reach them by these names.
 
     async def _send(self, guest: GuestSession, frame: Frame,
-                    *, stamp: bool = True) -> None:
-        await guest.link.send(guest, frame, stamp=stamp)
+                    *, stamp: bool = True) -> bool:
+        return await guest.link.send(guest, frame, stamp=stamp)
 
     async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:
@@ -2360,10 +2534,16 @@ EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
 
 
 def _summarise(args: dict) -> str:
-    """One readable line for the tool-activity pane."""
-    for key in ("command", "file_path", "pattern", "path", "url", "prompt"):
-        if key in args:
-            return f"{key}: {str(args[key])[:160]}"
+    """One readable line for the tool-activity pane.
+
+    perms.telling_argument is the one place "which argument matters" is
+    decided now -- this used to be a fourth, independently-ordered copy of
+    the same list. See docs/audit/02-bridge-python.md 02.15.
+    """
+    told = perms.telling_argument(args)
+    if told:
+        key, value = told
+        return f"{key}: {value[:160]}"
     return ", ".join(f"{k}={str(v)[:40]}" for k, v in list(args.items())[:3])
 
 

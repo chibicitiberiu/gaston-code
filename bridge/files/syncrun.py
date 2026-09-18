@@ -137,10 +137,11 @@ class Pass:
         await self.bridge._send(self.guest, Frame("SYNCSCAN", {"id": sid}),
                                 stamp=False)
         try:
-            status, files, tree_id, root, rows, _display = await asyncio.wait_for(
-                fut, timeout=600)
+            result = await asyncio.wait_for(fut, timeout=600)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status, files = result.status, result.files
+        tree_id, root, rows = result.tree_id, result.root, result.rows
 
         if status == "too_many":
             # 03.24: the limit itself never crosses the wire -- SYNCEND only
@@ -402,9 +403,10 @@ class Pass:
                     "if_crc": str(expect.crc) if expect else "absent",
                 }),
                 stamp=False)
-            status, ack_crc = await asyncio.wait_for(fut, timeout=300)
+            result = await asyncio.wait_for(fut, timeout=300)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status, ack_crc = result.status, result.crc
 
         if status != "ok":
             self.reports.append(f"push {rel} refused: {status}"
@@ -448,9 +450,11 @@ class Pass:
         try:
             await self.bridge._send(
                 self.guest, Frame("SYNCGET", {"id": sid}, rb), stamp=False)
-            status, crc, cls, wire = await asyncio.wait_for(fut, timeout=300)
+            result = await asyncio.wait_for(fut, timeout=300)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status, crc, cls, wire = (result.status, result.crc, result.cls,
+                                  result.data)
 
         if status != "ok":
             self.reports.append(f"pull {rel} refused: {status}")
@@ -526,9 +530,10 @@ class Pass:
         try:
             await self.bridge._send(
                 self.guest, Frame("SYNCMKDIR", {"id": sid}, rb), stamp=False)
-            status, _ = await asyncio.wait_for(fut, timeout=120)
+            result = await asyncio.wait_for(fut, timeout=120)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status = result.status
 
         if status in ("ok", "exists"):
             return True
@@ -649,13 +654,20 @@ class Pass:
         return True
 
     def note(self, text: str) -> None:
-        """Record a notice durably BEFORE acting on it.
+        """Record a notice durably BEFORE acting on it, for BOTH audiences.
 
         A crash between the baseline advance and the notification leaves the
         agent's work in conflict/ with nobody told, and the next pass sees
         agreement and says nothing.
+
+        The user's copy (`pending_notice`) and the agent's
+        (`pending_notice_agent`) are two separate durable queues, cleared by
+        two separate deliveries -- `notices_delivered` and
+        `agent_notices_delivered` -- because neither reaching its audience
+        implies the other did (02.20).
         """
         self.base.pending_notice.append(text)
+        self.base.pending_notice_agent.append(text)
         self.base.save(self.state)
 
     def notices_delivered(self, texts: list) -> None:
@@ -681,6 +693,25 @@ class Pass:
             else:
                 keep.append(t)
         self.base.pending_notice = keep
+        self.base.save(self.state)
+
+    def agent_notices_delivered(self, texts: list) -> None:
+        """`notices_delivered`'s twin for the agent's own durable queue.
+
+        Called once the caller has actually handed these to the model in a
+        turn preamble -- not when a pass merely produced them, and not the
+        same moment the user's copy is cleared (02.20).
+        """
+        if not texts:
+            return
+        gone = list(texts)
+        keep = []
+        for t in self.base.pending_notice_agent:
+            if t in gone:
+                gone.remove(t)
+            else:
+                keep.append(t)
+        self.base.pending_notice_agent = keep
         self.base.save(self.state)
 
     def keep_ancestor(self, rel: str, data: bytes) -> None:
@@ -1047,5 +1078,6 @@ class Pass:
         self.base.save(self.state)
         done["reports"] = list(self.reports)
         done["notices"] = list(self.base.pending_notice)
+        done["agent_notices"] = list(self.base.pending_notice_agent)
         done["conflict_paths"] = sorted(new_conflict_paths)
         return done

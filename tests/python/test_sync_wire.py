@@ -877,6 +877,65 @@ async def test_clearing_does_not_drop_a_notice_raised_meanwhile(
     assert p.base.pending_notice == ["raised while the first was being sent"]
 
 
+# --- 02.20: the agent's copy of a notice is durable too ---------------------
+
+
+def test_note_writes_both_durable_queues(harness, tmp_path):
+    """The user's and the agent's copies are two separate durable queues on
+    the SAME baseline, not the same list read twice -- so one can be
+    delivered without the other."""
+    p = a_pass(harness, tmp_path)
+    p.note("SYNC: conflict on x.c")
+    assert p.base.pending_notice == ["SYNC: conflict on x.c"]
+    assert p.base.pending_notice_agent == ["SYNC: conflict on x.c"]
+
+    reloaded = Baseline.load(p.state)
+    assert reloaded.pending_notice_agent == ["SYNC: conflict on x.c"]
+
+
+async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
+        harness, tmp_path):
+    """The scenario 02.20 names: a pass raises a conflict notice, it reaches
+    the user's screen (and is cleared from the user's durable queue), and the
+    bridge is replaced -- a crash, a redeploy -- before the agent's next
+    turn. Before this, Bridge._agent_notices was memory-only, so the news
+    the agent most needed (a conflict that latched its writes) was the one
+    that did not survive.
+    """
+    from bridge.server import Bridge
+
+    p = a_pass(harness, tmp_path)
+    p.note("SYNC: conflict on x.c -- your copy was kept")
+    # What run_sync does once the notice is actually on the user's screen:
+    # clear the USER's copy. The agent's has not been touched.
+    p.notices_delivered(["SYNC: conflict on x.c -- your copy was kept"])
+    assert p.base.pending_notice == [], "test setup: user's copy delivered"
+    assert p.base.pending_notice_agent == [
+        "SYNC: conflict on x.c -- your copy was kept"], (
+        "test setup: agent's copy still outstanding")
+
+    # A fresh Bridge, standing in for the process that replaced the one
+    # that ran the pass above -- nothing in memory survives a restart.
+    fresh = Bridge("s", host="127.0.0.1", port=0)
+    fresh.sync_dir = p.root
+    fresh.sync_state = os.path.dirname(p.state)
+    assert fresh._agent_notices == []
+
+    fresh._seed_agent_notices()
+    assert fresh._agent_notices == [
+        "SYNC: conflict on x.c -- your copy was kept"], (
+        "the notice the old process never got to hand over must be picked "
+        "up from disk, not lost with the process that wrote it"
+    )
+
+    out = await fresh._with_sync_preamble("carry on")
+    assert "x.c" in out
+    assert fresh._agent_notices == []
+    # And the durable half actually cleared, not just the in-memory cache --
+    # or the NEXT restart would hand the same notice over a third time.
+    assert Baseline.load(p.state).pending_notice_agent == []
+
+
 class _FakeClaude:
     """Just enough session for the turn to start and be observed.
 
@@ -1565,6 +1624,67 @@ async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     await _recv(harness, reader2, "HALTEND")
     assert not harness.bridge._guest.halt_id
     await harness.close(writer2)
+
+
+async def test_a_bridge_restart_with_latched_paths_raises_the_bar(
+        harness, tmp_path):
+    """02.21: the same hole as test_a_halt_survives_a_reconnect, but across a
+    BRIDGE restart rather than a guest reconnect.
+
+    A guest reconnect keeps the same GuestSession, so guest.halt_id survives
+    it and _reissue_halt puts the bar back. A bridge restart does not: the
+    new process's GuestSession starts with halt_id empty, while
+    base.latched -- written by the OLD process -- is still sitting on disk.
+    Before 02.21 nothing at startup or attach ever read it, so the agent's
+    writes stayed refused with no bar on the user's screen to explain why
+    or let them clear it, and the only way out was the agent noticing on
+    its own via sync_status.
+
+    Here the connecting guest IS the first one this Bridge object has ever
+    seen -- there is no previous GuestSession to have carried a halt_id
+    forward -- which is exactly what "a fresh process" looks like from
+    _attach's side.
+    """
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    base = Baseline()
+    base.latched = {"a.txt": "conflicting edit"}
+    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+    assert harness.bridge._guest is None, "test setup: no prior connection"
+
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    halt = await _recv(harness, reader, "HALT")
+
+    assert halt.type == "HALT", (
+        "no HALT arrived at all -- the restart left a latched path with no "
+        f"bar (got {halt.type} instead, after recv_until's timeout)")
+    assert halt.headers["id"]
+    assert harness.bridge._guest.halt_id == halt.headers["id"]
+    await harness.close(writer)
+
+
+async def test_reconcile_halt_clears_a_bar_nothing_is_latched_for(
+        harness, tmp_path):
+    """The other direction: a bar up with base.latched already empty (the
+    agent released the last path through some route that did not itself
+    clear guest.halt_id) must come down, not stay stuck."""
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    guest.halt_id = "h-stuck"
+
+    await harness.bridge._reconcile_halt(guest)
+    assert guest.halt_id == "", "a bar with nothing latched must come down"
+    await harness.close(writer)
 
 
 async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):

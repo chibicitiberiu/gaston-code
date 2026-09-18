@@ -177,6 +177,51 @@ class Wait:
     data: bytearray | None = None
 
 
+# --- what a Wait resolves TO -------------------------------------------
+#
+# The crash `Wait` above fixes was the connection dying on a mismatched
+# frame; this is the readability half that was split out separately
+# (02.37): the four `sync_pending` futures still resolved to positional
+# tuples of four different arities (a 6-tuple for a scan, two flavours of
+# 2-tuple for a put/mkdir ack, a 4-tuple for a get), unpacked positionally
+# at the call site with nothing to check the shape a guest actually sent
+# against what the caller expects to unpack. A fifth shape was one typo
+# away.
+
+
+@dataclass
+class ScanResult:
+    """SYNCEND -- what a manifest request came back with."""
+
+    status: str
+    files: int
+    tree_id: str
+    root: str
+    rows: dict
+    display: dict
+
+
+@dataclass
+class AckResult:
+    """SYNCPUTACK and SYNCMKDIRACK: one shape, two producers. A push reads
+    `crc` as the guest's checksum of what it just wrote; a mkdir has no crc
+    to ack and simply ignores it -- the SAME wire shape, not a coincidence
+    two call sites happened to agree on."""
+
+    status: str
+    crc: int
+
+
+@dataclass
+class GetResult:
+    """SYNCDATEND -- the guest's own reading of a file `pull` just fetched."""
+
+    status: str
+    crc: int
+    cls: str
+    data: bytes
+
+
 @dataclass
 class Decision:
     key: str
@@ -218,7 +263,16 @@ class Baseline:
     #: every row, so the pass refuses rather than re-keying in place.
     acp: str = ""
     generation: int = 0
+    #: The USER's copy: cleared when it actually reaches their screen.
     pending_notice: list = field(default_factory=list)
+    #: The AGENT's copy: cleared when it is actually handed to the model.
+    #: Neither delivery implies the other. Before this the agent's copy lived
+    #: only in Bridge._agent_notices, in memory -- so a bridge restart between
+    #: a pass writing the user's notice and the agent's next turn silently
+    #: lost exactly the news the agent most needed (a conflict that latched
+    #: its writes), while the user's copy was already, correctly, gone.
+    #: docs/audit/02-bridge-python.md 02.20.
+    pending_notice_agent: list = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
     #: What has already been announced, per path, as a fingerprint of the
     #: situation. A divergence that cannot be resolved -- `aux.c`, a path the
@@ -278,6 +332,7 @@ class Baseline:
                 "acp": self.acp,
                 "generation": self.generation,
                 "pending_notice": self.pending_notice,
+                "pending_notice_agent": self.pending_notice_agent,
                 "latched": self.latched,
                 "reported": self.reported,
                 "reported_lines": self.reported_lines,
@@ -314,6 +369,7 @@ class Baseline:
             acp=d.get("acp", ""),
             generation=int(d.get("generation", 0)),
             pending_notice=list(d.get("pending_notice", [])),
+            pending_notice_agent=list(d.get("pending_notice_agent", [])),
             latched=dict(d.get("latched", {})),
             reported=dict(d.get("reported", {})),
             reported_lines=list(d.get("reported_lines", [])),
