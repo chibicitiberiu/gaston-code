@@ -8,7 +8,7 @@ version of work the user's edit displaced.
 """
 import os
 
-from bridge.permissions import off_limits
+from bridge.agent.permissions import off_limits
 
 
 def test_reading_a_conflict_copy_is_allowed(tmp_path):

@@ -8,7 +8,7 @@ actually started.
 
 import json
 
-from bridge.registry import Registry
+from bridge.agent.registry import Registry
 
 
 def test_empty_when_there_is_no_file(tmp_path):

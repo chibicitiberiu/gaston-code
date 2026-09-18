@@ -17,7 +17,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "ini.h"
+#include "core/ini.h"
 
 static int fails = 0;
 

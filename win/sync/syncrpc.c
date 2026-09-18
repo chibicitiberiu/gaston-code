@@ -10,9 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "syncrpc.h"
-#include "sync.h"
-#include "log.h"
+#include "sync/syncrpc.h"
+#include "sync/sync.h"
+#include "core/log.h"
 
 static char g_root[MAX_PATH];
 

@@ -24,8 +24,8 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include "htmlview.h"
-#include "log.h"
+#include "app/htmlview.h"
+#include "core/log.h"
 
 typedef struct Host {
     IOleClientSite     site;

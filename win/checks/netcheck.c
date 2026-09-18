@@ -11,9 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "frameproto.h"
-#include "net.h"
-#include "log.h"
+#include "net/frameproto.h"
+#include "net/net.h"
+#include "core/log.h"
 
 static rc_net  g_net;
 static HWND    g_sink;

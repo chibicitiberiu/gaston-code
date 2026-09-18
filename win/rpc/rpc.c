@@ -17,11 +17,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "rpc.h"
-#include "exec.h"
-#include "syncrpc.h"
-#include "sync.h"
-#include "log.h"
+#include "rpc/rpc.h"
+#include "rpc/exec.h"
+#include "sync/syncrpc.h"
+#include "sync/sync.h"
+#include "core/log.h"
 
 static HANDLE           g_thread;
 /* The directory watcher, resolved dynamically. NULL is a supported outcome --

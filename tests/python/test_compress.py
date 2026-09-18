@@ -10,13 +10,13 @@ import zlib
 
 import pytest
 
-from bridge.coalesce import DEFAULT_INTERVAL, SLOW_INTERVAL, Coalescer
-from bridge.compress import (
-    MIN_WORTH_COMPRESSING,
-    StreamCompressor,
-    StreamDecompressor,
-    should_compress,
-)
+from bridge.wire.coalesce import DEFAULT_INTERVAL, SLOW_INTERVAL, Coalescer
+from bridge.wire.compress import (
+                                  MIN_WORTH_COMPRESSING,
+                                  StreamCompressor,
+                                  StreamDecompressor,
+                                  should_compress,
+                                  )
 
 SAMPLE = (
     b"The bridge owns markdown, so the wire carries pre-styled runs rather than\n"

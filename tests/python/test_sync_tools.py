@@ -19,7 +19,7 @@ import os
 import pytest
 
 from bridge.server import Bridge
-from bridge.sync import Baseline, Entry, Tomb, Type
+from bridge.files.sync import Baseline, Entry, Tomb, Type
 
 
 @pytest.fixture

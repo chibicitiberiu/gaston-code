@@ -32,7 +32,6 @@ from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 
 from . import paths as P
-
 # A file whose mtime is this close to now might still be inside its FAT tick, so
 # a CRC taken from it must not be CACHED -- see Entry.cacheable. Two saves in one
 # tick with the same size are otherwise indistinguishable, and the second is

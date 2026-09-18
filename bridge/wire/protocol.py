@@ -24,7 +24,6 @@ import struct
 from dataclasses import dataclass, field
 
 from . import fold
-
 PROTO_VERSION = 1
 
 # A corrupted length prefix must not be able to allocate the machine away.

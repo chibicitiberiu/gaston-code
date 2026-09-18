@@ -7,8 +7,8 @@ because the guest has no way to detect one.
 
 import pytest
 
-from bridge.protocol import Frame
-from bridge.replay import Replay
+from bridge.wire.protocol import Frame
+from bridge.wire.replay import Replay
 
 
 def f(n: int) -> Frame:

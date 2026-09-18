@@ -7,7 +7,7 @@ a machine with no debugger.
 
 import pytest
 
-from bridge.fold import decode, decode_oem, encode, fold
+from bridge.wire.fold import decode, decode_oem, encode, fold
 
 
 def test_ascii_is_untouched():

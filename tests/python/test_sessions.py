@@ -5,8 +5,8 @@ across releases, so the tests lean on malformed input. A KeyError in there
 would break the whole chat list rather than one message.
 """
 
-from bridge.sessions import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
-from bridge.sessions import _text_of
+from bridge.agent.sessions import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
+from bridge.agent.sessions import _text_of
 
 
 def styles(runs):

@@ -12,8 +12,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "sync.h"
-#include "log.h"
+#include "sync/sync.h"
+#include "core/log.h"
 #include "miniz.h"
 
 void rc_sync_init(void) { }

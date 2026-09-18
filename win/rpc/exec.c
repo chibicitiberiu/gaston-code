@@ -31,8 +31,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "exec.h"
-#include "log.h"
+#include "rpc/exec.h"
+#include "core/log.h"
 
 #define EXEC_CHUNK   8192
 #define EXEC_MAX_OUT (32u * 1024u)

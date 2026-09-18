@@ -22,32 +22,32 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 
-from . import caps as C
-from . import fold
-from . import machine
-from .registry import Registry
-from .coalesce import Coalescer
-from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
-from . import html as H
-from .html import APPEND, LIVE, HtmlStream
-from .pages import Paginator, limits_for
-from . import paths as P
-from . import permissions as perms
-from . import tools as machine_tools
-from .permissions import PendingPrompt, render_request
-from .protocol import (
-    MAX_FRAME,
-    PROTO_VERSION,
-    Frame,
-    FrameReader,
-    ProtocolError,
-    error,
-)
-from .replay import Replay
-from . import sessions as sesslist
-from .sync import Entry as SyncEntry, Type as SyncType
-from .syncrun import SyncError
-from .session import Session
+from .files import caps as C
+from .wire import fold
+from .agent import machine
+from .agent.registry import Registry
+from .wire.coalesce import Coalescer
+from .wire.compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
+from .view import html as H
+from .view.html import APPEND, LIVE, HtmlStream
+from .view.pages import Paginator, limits_for
+from .files import paths as P
+from .agent import permissions as perms
+from .agent import tools as machine_tools
+from .agent.permissions import PendingPrompt, render_request
+from .wire.protocol import (
+                            MAX_FRAME,
+                            PROTO_VERSION,
+                            Frame,
+                            FrameReader,
+                            ProtocolError,
+                            error,
+                            )
+from .wire.replay import Replay
+from .agent import sessions as sesslist
+from .files.sync import Entry as SyncEntry, Type as SyncType
+from .files.syncrun import SyncError
+from .agent.session import Session
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 log = logging.getLogger("bridge.server")
@@ -1220,7 +1220,7 @@ class Bridge:
         async with guest.sync_lock:
             guest.sync_active = True
             try:
-                from .syncrun import Pass
+                from .files.syncrun import Pass
                 p = Pass(self, guest, self.sync_dir, self.sync_state)
                 got = await p.run()
                 self.guest_sync_root = p.guest_root
@@ -1361,7 +1361,7 @@ class Bridge:
             f"has reached their machine; it has not.")
 
     def _load_baseline(self):
-        from .sync import Baseline
+        from .files.sync import Baseline
         return Baseline.load(os.path.join(self.sync_state, "base.json"))
 
     def sync_status_text(self) -> str:
@@ -1406,7 +1406,7 @@ class Bridge:
         # for that -- so a deliberate `-text` reads as a misclassification and
         # invites it to "fix" something that is already correct.
         try:
-            from . import attrs as A
+            from .files import attrs as A
             at = A.load(self.sync_dir)
         except Exception:
             at = None
@@ -1509,7 +1509,7 @@ class Bridge:
         except Exception as exc:
             return f"The baseline could not be read ({exc}); nothing changed."
 
-        from . import paths as P
+        from .files import paths as P
         key = P.canonical(path.replace("\\", "/").strip("/"),
                           caps=C.from_hello(
                               self._guest.hello if self._guest else {}))

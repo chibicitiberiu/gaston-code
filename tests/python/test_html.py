@@ -6,7 +6,7 @@ And a block must stream: the paragraph being written has to be visible before
 it is finished, or streaming reads as a stall.
 """
 
-from bridge.html import APPEND, LIVE, HtmlStream, document, esc, inline, user_turn
+from bridge.view.html import APPEND, LIVE, HtmlStream, document, esc, inline, user_turn
 
 
 def appended(updates):

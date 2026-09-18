@@ -2,8 +2,8 @@
 #ifndef RC_SYNCRPC_H
 #define RC_SYNCRPC_H
 
-#include "net.h"
-#include "frameproto.h"
+#include "net/net.h"
+#include "net/frameproto.h"
 
 /* Handle one SYNC frame. Called on the worker; the frame is still owned by the
  * caller, which frees it afterwards. */

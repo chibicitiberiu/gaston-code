@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from bridge import caps as C
-from bridge import paths as P
+from bridge.files import caps as C
+from bridge.files import paths as P
 
 
 def test_a_client_that_says_nothing_is_the_one_that_already_exists():
@@ -155,5 +155,5 @@ def test_eol_cr_is_refused_per_path_too():
     """A handshake refusal is only half of it: attrs are consulted per PATH,
     so `*.txt eol=cr` in a real .gitattributes would reach a client that
     declared itself perfectly legally."""
-    from bridge import attrs as A
+    from bridge.files import attrs as A
     assert "cr" not in A.EOL_NAMES

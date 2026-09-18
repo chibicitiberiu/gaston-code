@@ -1,7 +1,7 @@
 #include <windows.h>
 #include <string.h>
 #include <stdio.h>
-#include "frameproto.h"
+#include "net/frameproto.h"
 
 static int hexval(char c)
 {

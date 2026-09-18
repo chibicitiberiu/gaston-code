@@ -8,8 +8,8 @@
 #ifndef RC_RPC_H
 #define RC_RPC_H
 
-#include "frameproto.h"
-#include "net.h"
+#include "net/frameproto.h"
+#include "net/net.h"
 
 /* Start the worker. Safe to call more than once. */
 int  rc_rpc_start(rc_net *net);

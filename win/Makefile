@@ -35,8 +35,8 @@ export WLINK_LNK = $(OWBIN)/wlink.lnk
 CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
          -DWIN32_LEAN_AND_MEAN \
-         -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt" -i="$(CURDIR)" \
-         -i="$(CURDIR)/third_party/miniz"
+         -i="$(CURDIR)" -i="$(CURDIR)/third_party/miniz" \
+         -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt"
 
 LFLAGS = system nt_win option quiet, osversion=4.0
 
@@ -109,7 +109,28 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # transcript.c wrote the new fields past the end of it, corrupting the next
 # global. The symptom was PostMessage failing on a valid HWND -- nowhere near
 # the change, and it looked exactly like a Win9x message-queue limit.
-HDRS = $(wildcard *.h)
+# Includes are QUALIFIED BY LAYER -- #include "rpc/rpc.h", never "rpc.h" --
+# and that is not decoration.
+#
+# win/rpc/rpc.h collides with the Windows SDK's own rpc.h. While every header
+# sat in one directory the collision never showed, because a quoted include
+# searches the including file's own directory first and always found the
+# sibling. Splitting into layers removed that accident: net.c resolved "rpc.h"
+# to the SDK's copy, picked up none of our declarations, and the ONLY symptom
+# was a W131 "no prototype found" on a build that still succeeded and ran.
+#
+# Putting our paths first instead is worse: the SDK's rpcndr.h includes rpc.h
+# and would then get ours. Qualifying by layer cannot collide in either
+# direction, and it makes a file's dependencies legible at the include site.
+
+# One include path per layer rather than one flat directory, so a header says
+# which layer it belongs to by where it lives. The layering is real and was
+# already there, just invisible: core (log, ini) is a leaf everything uses;
+# net and sync sit above it; rpc routes between them; app is the only thing
+# that reaches into four layers, which is what an entry point does.
+VPATH = app:net:rpc:sync:core:checks
+
+HDRS = $(wildcard app/*.h net/*.h rpc/*.h sync/*.h core/*.h)
 
 # -fr= puts the compiler's per-file error listing in the build tree. Without
 # it Open Watcom drops a .err next to the SOURCE, which is how win/ collected

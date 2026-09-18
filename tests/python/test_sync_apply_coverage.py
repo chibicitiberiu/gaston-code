@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import inspect
 
-from bridge import sync as S
-from bridge.syncrun import Pass
+from bridge.files import sync as S
+from bridge.files.syncrun import Pass
 
 
 def test_run_handles_every_act():

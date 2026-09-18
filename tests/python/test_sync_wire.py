@@ -14,12 +14,12 @@ import zlib
 
 import pytest
 
-from bridge import ignores as I
-from bridge import sync as S
-from bridge import paths as P
-from bridge.protocol import Frame
-from bridge.sync import Baseline, Entry, Type
-from bridge.syncrun import Pass, SyncError
+from bridge.files import ignores as I
+from bridge.files import sync as S
+from bridge.files import paths as P
+from bridge.wire.protocol import Frame
+from bridge.files.sync import Baseline, Entry, Type
+from bridge.files.syncrun import Pass, SyncError
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))

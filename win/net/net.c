@@ -3,11 +3,11 @@
 #include <process.h>
 #include <stdio.h>
 #include <string.h>
-#include "net.h"
-#include "caps.h"
-#include "log.h"
-#include "rpc.h"
-#include "exec.h"
+#include "net/net.h"
+#include "net/caps.h"
+#include "core/log.h"
+#include "rpc/rpc.h"
+#include "rpc/exec.h"
 #include "miniz.h"
 
 /* Cap on frames posted to the UI thread but not yet freed.

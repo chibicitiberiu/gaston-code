@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include "log.h"
+#include "core/log.h"
 
 static HANDLE g_fh = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION g_lock;

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from bridge import ignores as I
+from bridge.files import ignores as I
 
 
 def m(*patterns: str):

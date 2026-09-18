@@ -11,14 +11,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "frameproto.h"
-#include "ini.h"
-#include "log.h"
-#include "net.h"
+#include "net/frameproto.h"
+#include "core/ini.h"
+#include "core/log.h"
+#include "net/net.h"
 #include <ole2.h>
-#include "htmlview.h"
-#include "syncrpc.h"
-#include "sync.h"
+#include "app/htmlview.h"
+#include "sync/syncrpc.h"
+#include "sync/sync.h"
 
 #define ID_TRANSCRIPT 1001
 #define ID_INPUT      1002

@@ -17,7 +17,7 @@ import zlib
 
 import pytest
 
-from bridge.paths import CLASS_EXACT, CLASS_TEXT, classify, normalise
+from bridge.files.paths import CLASS_EXACT, CLASS_TEXT, classify, normalise
 
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
@@ -194,7 +194,7 @@ def test_the_guest_refuses_a_path_with_no_room_for_its_temp_name(guest_limits):
     resolves to the target itself and CREATE_ALWAYS truncates the user's file
     before anything is verified. Both are silent, so the boundary is the fix.
     """
-    from bridge import caps as C
+    from bridge.files import caps as C
 
     limit = C.Caps().maxpath - C.WORKRESERVE_GASTON       # 249
     # `full` here counts root + separator + rel, with no NUL -- one less than

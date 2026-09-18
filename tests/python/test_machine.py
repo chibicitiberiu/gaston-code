@@ -4,7 +4,7 @@ The model executes on a modern Linux box and, told nothing, answers as though
 that is the machine in question. It is not.
 """
 
-from bridge.machine import describe, system_prompt
+from bridge.agent.machine import describe, system_prompt
 
 HELLO = {
     "os": "Windows 4.10 build 2222 A",

@@ -14,8 +14,8 @@ import pytest
 from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
                               PermissionUpdate)
 
-from bridge.compress import StreamDecompressor
-from bridge.protocol import Frame, FrameReader, MAX_FRAME, PROTO_VERSION, hello
+from bridge.wire.compress import StreamDecompressor
+from bridge.wire.protocol import Frame, FrameReader, MAX_FRAME, PROTO_VERSION, hello
 from bridge.server import Bridge
 
 
@@ -101,7 +101,7 @@ class FakeSession:
         ]
 
     async def send(self, prompt):
-        from bridge.session import Turn
+        from bridge.agent.session import Turn
         if self.on_text:
             await self.on_text(f"echo: {prompt}\n")
         return Turn(ok=True, subtype="success", cost_usd=0.01,

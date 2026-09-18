@@ -149,20 +149,23 @@ Counted in `win/`:
 
 | pair | acquire | release | note |
 |---|---|---|---|
-| `HeapAlloc`/`HeapReAlloc` → `HeapFree` | 15 | 28 | the imbalance *is* the finding |
-| `EnterCriticalSection` → `Leave` | 14 | 18 | four extra exits on error paths |
-| `CreateFileA` → `CloseHandle` | 8 | 22 | `probe.c` and `exec.c` dominate |
-| `FindFirstFileA` → `FindClose` | 2 (sync.c) | 2 | balanced |
+| `HeapAlloc` / `HeapReAlloc` → `HeapFree` | 13 | 26 | **twice as many releases as acquisitions** — the imbalance *is* the finding |
+| `EnterCriticalSection` → `LeaveCriticalSection` | 13 | 18 | five extra exits, all on error paths |
+| `CreateFileA` / `CreatePipe` / `CreateEventA` / `_beginthreadex` / `CreateProcessA` → `CloseHandle` | 13 | 25 | `exec.c` alone holds 12 of the closes |
+| `FindFirstFileA` → `FindClose` | 2 | 2 | balanced; both in `sync.c` |
+
+Counted over the ten modules that link into `retroclaude.exe`, comments
+stripped. `probe.c` is excluded — it is a diagnostic tool, not shipped.
 
 I looked for actual leaks and **did not find one**. The code is correct today.
 What it costs to be correct is the finding.
 
-`rc_sync_stat_file` (`win/sync.c:150-202`) allocates one scratch block and
+`rc_sync_stat_file` (`win/sync.c:123-204`) allocates one scratch block and
 frees it on **four** separate paths — alloc-fail, open-fail, read-fail, and the
 normal exit — each a hand-written `HeapFree(GetProcessHeap(), 0, sc)`. One
 `HeapPtr sc(...)` and it is one line, unmissable.
 
-The reader loop (`win/net.c:120-241`) is the worst case. One `rc_frame *f`
+The reader loop (`reader_thread`, `win/net.c:118-261`) is the worst case. One `rc_frame *f`
 with an **ownership transfer** — to the UI thread via `PostMessage`, or to the
 RPC worker via `rc_rpc_submit` — and **eight** distinct free sites for it,
 across parse failure, inflate failure, EXECKILL, EXEC, SYNC, submit failure
@@ -173,7 +176,7 @@ A `FramePtr` with an explicit `release()` at the two transfer points reduces
 eight sites to two, and the two that remain are the ones that are genuinely
 interesting.
 
-`rc_net_send` (`win/net.c:597-655`) has **five** `LeaveCriticalSection` calls
+`rc_net_send` (`win/net.c:597-654`) has **five** `LeaveCriticalSection` calls
 in one function — build-failure, alloc-failure, the backpressure wait
 (unlock/wait/relock), the `!running` bail, and the success path. `BACKLOG.md`
 §1 and §5 both flag this function as still having live defects: a soft byte
@@ -182,8 +185,17 @@ threads at 14 sites. A scoped lock with an explicit `unlock()`/`relock()` for
 the wait would not fix the *design* problems, but it removes the class where
 somebody adds a sixth early return and forgets the fifth `Leave`.
 
-`probe.c` holds 9 `CloseHandle` against 9 `CreateFile`-family acquisitions —
-it is a diagnostic tool and the churn there is highest.
+`exec.c:130-188` is the handle case, and it is the ugliest code in the tree for
+a reason that has nothing to do with the author. Two `CreatePipe` calls produce
+four handles; the failure paths close *different subsets* of them — `rd, wr` at
+`:151`, `rd` alone at `:165`, `rd, wr, in_rd` at `:184` — and two more closes
+at `:154` and `:187` are deliberate, because closing the write end is how you
+get EOF when the child exits. Twelve of the shipped binary's twenty-five `CloseHandle`
+calls are in this one function. `PLAN.md` §3.2 already lists two
+known leaks in the same file, forked in from `retro-agent`: `HeapReAlloc`
+failure leaking the original block at two sites. A `Handle` with an explicit
+`close()` keeps the two deliberate early closes readable as intent and makes
+the three error paths automatic.
 
 **Verdict: real, not cosmetic, and it compounds.** But note it is prevention of
 bugs this codebase has *not yet had*, whereas §1.1 is repair of bugs it has had
@@ -302,8 +314,8 @@ safe kind. Four lines per header, mechanical, and it is the enabling step for
 everything else.
 
 **The 18 errors, in full.**
-- `frameproto.c`: 2. Both `nl = memchr(...)` at `:54` and `:68`, where `nl` is
-  `char *`. C++ will not implicitly convert `void *`. Two casts.
+- `frameproto.c`: 2. Both `nl = memchr(...)`, at `:55` and `:68`, where `nl`
+  is `char *`. C++ will not implicitly convert `void *`. Two casts.
 - `syncrpc.c`: 0 errors, 2 warnings.
 - `htmlview.c`: 16, and all one family — hand-rolled COM vtables initialised
   with `(void *)site_QueryInterface, (void *)site_AddRef, ...` (`:93`, `:126`,

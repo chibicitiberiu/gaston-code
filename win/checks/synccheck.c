@@ -13,7 +13,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "sync.h"
+#include "sync/sync.h"
 
 static void emit(void *ctx, const char *rel, const rc_sync_stat *st)
 {

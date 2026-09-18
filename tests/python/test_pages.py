@@ -9,12 +9,12 @@ Two properties carry the whole design:
      code block arriving as a single run.
 """
 
-from bridge.pages import (
-    HARD_BYTES,
-    MAX_BYTES,
-    MAX_LINES,
-    Paginator,
-)
+from bridge.view.pages import (
+                               HARD_BYTES,
+                               MAX_BYTES,
+                               MAX_LINES,
+                               Paginator,
+                               )
 
 
 def line(n: int) -> str:
@@ -226,7 +226,7 @@ def test_realistic_session_stays_bounded():
 def test_the_block_cap_seals_between_blocks_not_inside_one():
     """A block boundary is already a clean stopping point, so unlike the byte
     cap this override never splits a run."""
-    from bridge.pages import HARD_BLOCKS
+    from bridge.view.pages import HARD_BLOCKS
     p = Paginator()
     for i in range(HARD_BLOCKS + 10):
         p.add("html", f"<p>{i}</p>")
@@ -237,7 +237,7 @@ def test_the_block_cap_seals_between_blocks_not_inside_one():
 
 
 def test_many_tiny_blocks_still_seal():
-    from bridge.pages import MAX_BLOCKS
+    from bridge.view.pages import MAX_BLOCKS
     p = Paginator()
     for i in range(MAX_BLOCKS + 5):
         p.add("html", f"<p>{i}</p>")
@@ -246,7 +246,7 @@ def test_many_tiny_blocks_still_seal():
 
 
 def test_block_count_is_bounded_on_every_page():
-    from bridge.pages import HARD_BLOCKS
+    from bridge.view.pages import HARD_BLOCKS
     p = Paginator()
     for i in range(700):
         p.add("html", f"<p>{i}</p>")
@@ -263,20 +263,20 @@ def test_page_limits_scale_with_memory():
     """A 128MB machine can hold a bigger page than the 32MB floor the design
     is built around; making it page every 90 blocks would be a restriction
     inherited from a machine it is not running on."""
-    from bridge.pages import limits_for, MAX_BYTES, MAX_BLOCKS
+    from bridge.view.pages import limits_for, MAX_BYTES, MAX_BLOCKS
     assert limits_for(32 * 1024) == (MAX_BYTES, MAX_BLOCKS)
     assert limits_for(64 * 1024) == (MAX_BYTES * 2, MAX_BLOCKS * 2)
     assert limits_for(128 * 1024) == (MAX_BYTES * 4, MAX_BLOCKS * 4)
 
 
 def test_a_smaller_machine_never_gets_smaller_pages_than_the_floor():
-    from bridge.pages import limits_for, MAX_BYTES, MAX_BLOCKS
+    from bridge.view.pages import limits_for, MAX_BYTES, MAX_BLOCKS
     assert limits_for(16 * 1024) == (MAX_BYTES, MAX_BLOCKS)
     assert limits_for(0) == (MAX_BYTES, MAX_BLOCKS)
 
 
 def test_page_limits_are_clamped_so_a_big_machine_does_not_grow_forever():
-    from bridge.pages import limits_for
+    from bridge.view.pages import limits_for
     assert limits_for(256 * 1024) == limits_for(1024 * 1024)
 
 

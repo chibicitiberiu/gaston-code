@@ -7,11 +7,11 @@ say which failure each prevents, because a test whose reason is forgotten gets
 
 import pytest
 
-from bridge import caps as C
-from bridge import paths as P
-from bridge.paths import (CLASS_EXACT, CLASS_TEXT, canonical, case_collision,
-                          check, classify, join_guest, normalise, to_bridge,
-                          to_guest)
+from bridge.files import caps as C
+from bridge.files import paths as P
+from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, canonical, case_collision,
+                                check, classify, join_guest, normalise, to_bridge,
+                                to_guest)
 
 ROOT = "C:\\WORK"
 

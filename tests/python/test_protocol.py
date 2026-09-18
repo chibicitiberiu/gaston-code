@@ -9,16 +9,16 @@ import struct
 
 import pytest
 
-from bridge.protocol import (
-    MAX_FRAME,
-    PROTO_VERSION,
-    Frame,
-    FrameReader,
-    ProtocolError,
-    error,
-    hello,
-    text,
-)
+from bridge.wire.protocol import (
+                                  MAX_FRAME,
+                                  PROTO_VERSION,
+                                  Frame,
+                                  FrameReader,
+                                  ProtocolError,
+                                  error,
+                                  hello,
+                                  text,
+                                  )
 
 
 def roundtrip(f: Frame) -> Frame:

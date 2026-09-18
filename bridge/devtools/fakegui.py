@@ -20,7 +20,7 @@ import asyncio
 import os
 import sys
 
-from .protocol import Frame, FrameReader, ProtocolError, hello
+from ..wire.protocol import Frame, FrameReader, ProtocolError, hello
 
 RESET = "\033[0m"
 DIM = "\033[2m"

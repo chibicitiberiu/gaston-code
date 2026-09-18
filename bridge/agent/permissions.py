@@ -27,8 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import html as H
-
+from ..view import html as H
 # How long a prompt may sit unanswered before the bridge denies it for you.
 # can_use_tool has no timeout of its own, so without this a prompt nobody
 # answers wedges the session for as long as the process lives.

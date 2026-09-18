@@ -22,7 +22,7 @@ from . import caps as C
 from . import ignores as I
 from . import paths as P
 from . import sync as S
-from .protocol import Frame
+from ..wire.protocol import Frame
 
 log = logging.getLogger("bridge.syncrun")
 

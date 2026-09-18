@@ -62,7 +62,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import paths as P
-
 # --- the enums -------------------------------------------------------------
 #
 # Mirrored in win/caps.h. A value the bridge does not recognise is a REFUSAL,

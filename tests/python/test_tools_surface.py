@@ -18,7 +18,7 @@ Two problems with that, and the second is the one that was reported as a bug:
 
 from claude_agent_sdk import ClaudeAgentOptions
 
-from bridge.session import TOOLS, Session
+from bridge.agent.session import TOOLS, Session
 
 
 def _opts(**kw) -> ClaudeAgentOptions:

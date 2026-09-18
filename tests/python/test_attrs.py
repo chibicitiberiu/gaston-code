@@ -7,8 +7,8 @@ import os
 
 import pytest
 
-from bridge import attrs as A
-from bridge import paths as P
+from bridge.files import attrs as A
+from bridge.files import paths as P
 
 
 def tree(tmp_path, **files):
@@ -116,7 +116,7 @@ def test_no_attributes_file_means_content_decides(tmp_path):
 
 def test_eol_lf_actually_changes_what_goes_on_the_wire():
     """The conversion itself, since that is what the user sees on their disk."""
-    from bridge import caps as C
+    from bridge.files import caps as C
     data = b"all: build\n\tmake\n"
     assert P.to_guest(data, P.CLASS_TEXT, C.WIN9X) == b"all: build\r\n\tmake\r\n"
     assert P.to_guest(data, P.CLASS_TEXT, C.WIN9X, eol=0) == data

@@ -21,18 +21,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-    ResultMessage,
-    StreamEvent,
-    SystemMessage,
-    TextBlock,
-    ThinkingBlock,
-    ToolResultBlock,
-    ToolUseBlock,
-    UserMessage,
-)
+                              AssistantMessage,
+                              ClaudeAgentOptions,
+                              ClaudeSDKClient,
+                              ResultMessage,
+                              StreamEvent,
+                              SystemMessage,
+                              TextBlock,
+                              ThinkingBlock,
+                              ToolResultBlock,
+                              ToolUseBlock,
+                              UserMessage,
+                              )
 
 log = logging.getLogger("bridge.session")
 

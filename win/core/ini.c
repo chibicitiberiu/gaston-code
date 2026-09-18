@@ -1,8 +1,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
-#include "ini.h"
-#include "log.h"
+#include "core/ini.h"
+#include "core/log.h"
 
 static void ini_path(char *out, unsigned n, const char *exe_dir)
 {

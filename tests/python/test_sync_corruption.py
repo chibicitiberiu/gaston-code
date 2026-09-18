@@ -18,8 +18,8 @@ import zlib
 
 import pytest
 
-from bridge.paths import (CLASS_EXACT, CLASS_TEXT, canonical, check, classify,
-                          normalise, to_bridge, to_guest)
+from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, canonical, check, classify,
+                                normalise, to_bridge, to_guest)
 
 ROOT = "C:\\WORK"
 
@@ -211,8 +211,8 @@ def test_fold_would_rewrite_these_and_the_body_rule_is_what_saves_them():
     carries perfectly well -- U+00B7 becomes "." and would collide with a real
     file. Sending the raw bytes in the body is what prevents it.
     """
-    from bridge import fold
-    from bridge.protocol import _quote
+    from bridge.wire import fold
+    from bridge.wire.protocol import _quote
 
     for ch, folded in [("\u00b7", "."), ("\u2022", "*"),
                        ("\u2026", "..."), ("\u201c", '"')]:
@@ -233,7 +233,7 @@ def test_the_invented_separator_character_is_refused_outright():
     It is not in CP1252, so the codepage filter refuses it before the body rule
     even matters. Two independent defences, and this asserts the outer one.
     """
-    from bridge import fold
+    from bridge.wire import fold
     assert fold.fold("a\u2044b") == "a/b"          # the danger is real
     bad = check("a\u2044b.txt", guest_root=ROOT)
     assert bad is not None

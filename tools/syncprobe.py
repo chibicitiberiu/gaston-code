@@ -31,8 +31,8 @@ import zlib
 sys.path.insert(0, __import__("os").path.dirname(
     __import__("os").path.dirname(__import__("os").path.abspath(__file__))))
 
-from bridge import paths as P                      # noqa: E402
-from bridge.protocol import Frame, FrameReader     # noqa: E402
+from bridge.files import paths as P                      # noqa: E402
+from bridge.wire.protocol import Frame, FrameReader     # noqa: E402
 
 CHUNK = 8192
 
