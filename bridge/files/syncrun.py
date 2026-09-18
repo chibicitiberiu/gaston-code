@@ -561,6 +561,59 @@ class Pass:
                 f"resume from their stored ancestor")
         return ignore
 
+    #: How many regressive rows in one pass before it stops looking like work
+    #: and starts looking like a restored backup, as an absolute floor AND as
+    #: a share of the tracked tree. Both, because either alone is wrong: a
+    #: fraction misfires on a four-file tree where one revert is 25%, and a
+    #: flat count misfires on a tree of three thousand where twelve reverts is
+    #: an ordinary afternoon.
+    REVERT_FLOOR = 5
+    REVERT_SHARE = 0.25
+
+    def _refuse_aggregate_revert(self, decisions) -> None:
+        """Stop a pass that looks like the guest's tree was restored from a
+        backup, rather than applying it one plausible row at a time.
+
+        THE ROWS ARE INDIVIDUALLY CORRECT, which is the whole difficulty. A
+        file the guest holds at its pre-push content is a reverted push; a
+        file the guest no longer has is a deletion. Both are right. Fifty of
+        them arriving together is not fifty edits, it is one event, and the
+        per-row handling would work through it faithfully -- pulling the old
+        contents over the agent's work and reporting the rest as deletions --
+        with every individual decision defensible and the outcome wrong.
+
+        This is the last silent-loss path `BACKLOG.md` acknowledged, and it is
+        deliberately a REFUSAL rather than a repair: refusing touches neither
+        side, so nothing is lost while a person decides. `sync_resolve` with
+        `accept-tree` is how they say it really was intended.
+        """
+        if self.base.accept_tree:
+            # Consumed here, not on a later success: the point of the flag is
+            # to get PAST this check once, and leaving it set would disarm the
+            # guard for every pass afterwards.
+            self.base.accept_tree = False
+            log.info("sync: aggregate-revert check waived for this pass")
+            return
+        tracked = len(self.base.rows)
+        if not tracked:
+            return              # a first sync has nothing to regress from
+        regressive = [d for d in decisions
+                      if d.reason in (S.REVERTED_PUSH, S.GONE_ON_GUEST)]
+        if (len(regressive) < self.REVERT_FLOOR
+                or len(regressive) < tracked * self.REVERT_SHARE):
+            return
+        sample = ", ".join(sorted(d.key for d in regressive)[:5])
+        raise SyncError(
+            f"{len(regressive)} of {tracked} tracked paths went backwards in "
+            f"one pass -- reverted to the content a push replaced, or gone "
+            f"from the machine while still held here ({sample}"
+            f"{', ...' if len(regressive) > 5 else ''}). That is what a tree "
+            f"restored from a backup looks like, and applying it row by row "
+            f"would pull the old contents over work already done. Nothing has "
+            f"been changed on either side. If the machine's tree is genuinely "
+            f"meant to be this, call sync_resolve with action=accept-tree and "
+            f"the next pass will proceed.")
+
     async def run(self, ignore=None) -> dict:
         """One reconciliation, start to finish.
 
@@ -580,6 +633,7 @@ class Pass:
             self.scan_bridge, ignore, self.attrs if usable else None)
 
         decisions = S.order(S.diff(guest_rows, bridge_rows, self.base))
+        self._refuse_aggregate_revert(decisions)
         #: Conflicts that CANNOT be applied -- a file on one side, a directory
         #: on the other. They never resolve, so the pruning below must not
         #: forget it announced them or they are announced again every pass.

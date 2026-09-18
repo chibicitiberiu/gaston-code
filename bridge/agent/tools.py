@@ -157,19 +157,23 @@ def build(bridge, guest=None) -> dict:
                 "release (default) -- lift the write refusal on this path, "
                 "having merged; accept-revert -- the user really did undo "
                 "your change, so take their version and discard yours; "
-                "forget -- stop tracking a path that is gone from both sides "
-                "and should not come back.",
+                "accept-tree -- answers a whole-pass refusal, takes no "
+                "path; forget -- stop tracking a path that is gone from both "
+                "sides and should not come back.",
             ],
         },
     )
     async def machine_sync_resolve(args: dict) -> dict:
         path = ((args or {}).get("path") or "").strip()
-        if not path:
-            return _text("No path was given.", error=True)
         action = ((args or {}).get("action") or "release").strip().lower()
-        if action not in ("release", "accept-revert", "forget"):
+        if action not in ("release", "accept-revert", "accept-tree", "forget"):
             return _text(f"Unknown action {action!r}; use release, "
-                         f"accept-revert or forget.", error=True)
+                         f"accept-revert, accept-tree or forget.", error=True)
+        # Checked AFTER the action, because one of them is tree-level and has
+        # no path to give. Checking first made "no path" the answer to a call
+        # that was correctly formed.
+        if not path and action != "accept-tree":
+            return _text("No path was given.", error=True)
         return _text(await bridge.sync_resolve(path, action, guest))
 
     server = create_sdk_mcp_server(name="machine", version="0.1.0",

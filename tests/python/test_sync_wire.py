@@ -2084,3 +2084,89 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
     assert harness.bridge.synccoord.agent_notices, (
         "recovery did not reset the slate")
     await harness.close(writer)
+
+
+# --- the aggregate-revert refusal -------------------------------------------
+#
+# Every row it counts is individually correct, which is what makes the case
+# hard and what makes it worth a refusal: applying fifty correct rows produces
+# one wrong outcome.
+
+def _revert_pass(rows, decisions, accept_tree=False):
+    class FakePass(Pass):
+        def __init__(self):
+            self.base = Baseline(rows=rows)
+            self.base.accept_tree = accept_tree
+    p = FakePass()
+    Pass._refuse_aggregate_revert(p, decisions)
+    return p
+
+
+def _dec(n, reason):
+    return [S.Decision(f"f{i}.c", S.Act.CONFLICT, reason) for i in range(n)]
+
+
+def _rows(n):
+    return {f"f{i}.c": Entry(type=Type.FILE, cls="t", crc=i) for i in range(n)}
+
+
+def test_a_restored_backup_refuses_the_whole_pass():
+    """Twenty of forty paths back at the content a push replaced is not twenty
+    edits, it is one event -- and the per-row handling would work through it
+    faithfully, pulling old contents over work already done."""
+    with pytest.raises(SyncError) as exc:
+        _revert_pass(_rows(40), _dec(20, S.REVERTED_PUSH))
+    assert "went backwards in one pass" in str(exc.value)
+    assert "Nothing has been changed on either side" in str(exc.value)
+    assert "accept-tree" in str(exc.value), "a refusal with no way out is a trap"
+
+
+def test_paths_gone_from_the_machine_count_towards_it_too():
+    """A restored backup predates files created after it, so they read as
+    deletions -- the other half of the same event, and counting only reverts
+    would miss a backup restored onto a tree that had mostly grown."""
+    with pytest.raises(SyncError):
+        _revert_pass(_rows(40), _dec(20, S.GONE_ON_GUEST))
+
+
+def test_an_ordinary_afternoon_is_not_a_restored_backup():
+    """Four reverts is someone undoing their own work. The floor exists so a
+    small tree, where one revert is already a large share, is never refused."""
+    _revert_pass(_rows(40), _dec(4, S.REVERTED_PUSH))
+
+
+def test_a_few_reverts_in_a_large_tree_pass():
+    """Twelve reverts in three thousand tracked paths is work, not an event.
+    The share exists so a flat count cannot stop a big tree."""
+    _revert_pass(_rows(3000), _dec(12, S.REVERTED_PUSH))
+
+
+def test_one_revert_in_a_tiny_tree_passes():
+    """The case a bare percentage gets wrong: one of three is 33%."""
+    _revert_pass(_rows(3), _dec(1, S.REVERTED_PUSH))
+
+
+def test_a_first_sync_has_nothing_to_regress_from():
+    _revert_pass({}, _dec(50, S.REVERTED_PUSH))
+
+
+def test_accept_tree_lets_exactly_one_pass_through():
+    """And then re-arms itself. A flag that stayed set would disarm the guard
+    for every pass afterwards, which is the failure mode of every 'just this
+    once' switch that is never cleared."""
+    p = _revert_pass(_rows(40), _dec(20, S.REVERTED_PUSH), accept_tree=True)
+    assert p.base.accept_tree is False
+
+    with pytest.raises(SyncError):
+        _revert_pass(_rows(40), _dec(20, S.REVERTED_PUSH),
+                     accept_tree=p.base.accept_tree)
+
+
+def test_the_accept_tree_flag_survives_a_baseline_round_trip(tmp_path):
+    """It is set by the agent in one process and read by a pass in another, so
+    a field that is written but not loaded would silently never work."""
+    state = str(tmp_path / "base.json")
+    b = Baseline(rows=_rows(2))
+    b.accept_tree = True
+    b.save(state)
+    assert Baseline.load(state).accept_tree is True

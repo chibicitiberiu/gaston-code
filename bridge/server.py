@@ -1905,6 +1905,24 @@ class Bridge:
         except Exception as exc:
             return f"The baseline could not be read ({exc}); nothing changed."
 
+        if action == "accept-tree":
+            # PATH-LESS, and that is the point rather than an omission: the
+            # aggregate-revert check refuses a WHOLE PASS, so answering it one
+            # path at a time would mean fifty calls to lift one refusal, and
+            # the thing being agreed to is a property of the tree rather than
+            # of any file in it.
+            #
+            # It does not change a single row. All it does is let the next
+            # pass past the check, after which the ordinary per-path rows
+            # decide everything exactly as they always would.
+            base.accept_tree = True
+            base.save(os.path.join(self.sync_state, "base.json"))
+            log.info("sync: whole-tree revert accepted by the agent")
+            return ("The next pass will go ahead without the whole-tree "
+                    "check. Its rows are unchanged, so the machine's version "
+                    "of each path wins where it moved -- which is what was "
+                    "being refused. Nothing has moved yet.")
+
         from .files import paths as P
         # guest.caps was parsed once at handshake (02.22). No guest at all
         # (never attached this process) is the one case with nothing to read

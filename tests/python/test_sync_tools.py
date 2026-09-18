@@ -300,3 +300,26 @@ async def test_releasing_survives_an_unreadable_baseline(b):
     RESUME handler, which would leave the user pressing a dead button."""
     open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
     assert await b._release_all_latches() == 0
+
+
+async def test_resolve_accept_tree_takes_no_path(b):
+    """It answers a WHOLE-PASS refusal, so requiring a path would mean fifty
+    calls to lift one refusal -- and there is no single file it is about."""
+    out = await b.sync_resolve("", "accept-tree")
+    assert "next pass" in out
+    assert b._load_baseline().accept_tree is True
+
+
+async def test_resolve_accept_tree_changes_no_rows(b):
+    """All it does is let the next pass past the check. If it edited the
+    baseline it would be deciding the outcome instead of permitting it, and
+    the per-path rows are what should decide."""
+    path = os.path.join(b.sync_state, "base.json")
+    base = b._load_baseline()
+    base.rows["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=3)
+    base.save(path)
+
+    await b.sync_resolve("", "accept-tree")
+    after = b._load_baseline()
+    assert after.rows["src/main.c"].crc == 3
+    assert not after.tombs

@@ -55,6 +55,15 @@ IGNORED = "ignored"
 #: turn one problem into a hundred messages.
 UNDER_UNREADABLE = "inside a directory the machine could not list"
 
+#: The two rows a RESTORED BACKUP produces in bulk, named so the aggregate
+#: check in syncrun.py counts the same thing `diff` decided rather than
+#: re-deriving it from a string that could drift. Individually both are
+#: ordinary and correct; it is only their number, in one pass, that means
+#: something no single row can.
+REVERTED_PUSH = ("the guest reverted a push (stale editor buffer?) -- "
+                 "preserving the pushed version")
+GONE_ON_GUEST = "deleted on the guest, kept here"
+
 
 class Type(str, Enum):
     FILE = "f"
@@ -296,6 +305,13 @@ class Baseline:
     #: DIFFERENT abort is said again, and so sync_status can answer "why has
     #: nothing moved for an hour" without the answer being "read the log".
     aborted: str = ""
+    #: Set by `sync_resolve(action="accept-tree")` and consumed by the next
+    #: pass. The aggregate-revert refusal is a speed bump, not a verdict: it
+    #: cannot tell a tree restored from a backup from a person who really did
+    #: revert fifty files, and refusing forever would be its own kind of data
+    #: loss -- a machine that has stopped synchronising and will not say yes.
+    #: One pass, then it clears itself.
+    accept_tree: bool = False
     #: Every abort reason already announced since the last SUCCESSFUL pass.
     #:
     #: `aborted` alone is the last reason, and comparing against it only
@@ -339,6 +355,7 @@ class Baseline:
                 "reported": self.reported,
                 "reported_lines": self.reported_lines,
                 "aborted": self.aborted,
+                "accept_tree": self.accept_tree,
                 "announced": self.announced,
                 "scan_cache": {k: list(v) for k, v in self.scan_cache.items()},
             },
@@ -376,6 +393,7 @@ class Baseline:
             reported=dict(d.get("reported", {})),
             reported_lines=list(d.get("reported_lines", [])),
             aborted=d.get("aborted", ""),
+            accept_tree=bool(d.get("accept_tree", False)),
             announced=list(d.get("announced", [])),
             scan_cache={k: tuple(v)
                         for k, v in (d.get("scan_cache") or {}).items()},
@@ -534,7 +552,7 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             # The user deleted it and the bridge still holds it. NO TOMBSTONE:
             # one here would make crc(B) == T.crc read as "untouched", quietly
             # freezing a live file the agent keeps editing.
-            out.append(Decision(key, Act.REPORT, "deleted on the guest, kept here"))
+            out.append(Decision(key, Act.REPORT, GONE_ON_GUEST))
             continue
         if not b:
             same = g.same_content(a)
@@ -557,9 +575,7 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             # agent's version".
             prev = base.prev.get(key)
             if prev is not None and g.same_content(prev):
-                out.append(Decision(key, Act.CONFLICT,
-                                    "the guest reverted a push (stale editor "
-                                    "buffer?) -- preserving the pushed version"))
+                out.append(Decision(key, Act.CONFLICT, REVERTED_PUSH))
             else:
                 out.append(Decision(key, Act.PULL, "the guest moved"))
         elif b_moved and not g_moved:
