@@ -24,6 +24,23 @@ HERE = __import__("os").path.dirname(__file__)
 #: text that scrolls through it.
 PROBE = (560, 380)
 
+#: In the DOS window's TITLE BAR, clear of the caption text and the three
+#: buttons. Checking the client area alone is not enough and that cost three
+#: misdirected command batches in one session: a stray click opened My
+#: Documents over part of the screen, the DOS box stayed VISIBLE with PROBE
+#: still black, dos_focused() said yes, and `DELTREE /Y C:\WORK` went to the
+#: window that actually had the keyboard. The commands reported success, the
+#: tree was not cleared, and the probe run that followed was measured against
+#: a dirty tree -- 26 failures that were read as regressions for several
+#: minutes. "Visible" and "focused" are different questions and only the
+#: caption answers the second one.
+TITLE = (450, 111)
+
+#: Win98's active caption is this exact navy; an inactive one is the 3D face
+#: grey. Compared exactly rather than by brightness, because the desktop teal
+#: and the wizard's blue artwork are both "bluish" too.
+ACTIVE_CAPTION = (0, 0, 128)
+
 
 def shot() -> "object":
     from PIL import Image
@@ -34,8 +51,10 @@ def shot() -> "object":
 
 
 def dos_focused() -> bool:
-    px = shot().getpixel(PROBE)
-    return sum(px) < 90          # near-black
+    im = shot()
+    if sum(im.getpixel(PROBE)) >= 90:    # the client area is not black
+        return False
+    return im.getpixel(TITLE) == ACTIVE_CAPTION
 
 
 def focus(tries: int = 6) -> None:

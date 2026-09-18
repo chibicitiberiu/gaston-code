@@ -2105,3 +2105,53 @@ reading **`failed`**. The bridge log carries the matching
 The process note worth keeping: **an error path that has never been made to
 fail on purpose is not an error path.** Three of these four had shipped and
 been "working" for as long as the provider kept answering.
+
+
+### 2026-09-18 (later) — the last two joins nobody checked, and the tool that lied about focus
+
+`rc_sync_join`'s own comment says *"callers that act on the result now
+check it"* and names the two bugs that came through it. Two callers did not:
+`do_get` and `do_mkdir` (`win/sync/syncrpc.cpp`), which are exactly the ones
+whose path arrives **off the wire**. `rc_sync_contained` runs first and checks
+a relative path's SHAPE; it says nothing about its LENGTH, and `f->body` is
+bounded by `RC_MAX_FRAME` — 64KB — not `MAX_PATH`.
+
+The other six join sites are safe transitively, and that is worth stating
+rather than assuming: `rc_sync_begin_write` measures from the inputs and
+refuses before joining, `rc_sync_commit` runs only after `begin_write` accepted
+the same root and rel, and `recover_dir` joins names `FindFirstFileA` returned
+from a path that already fit. So these two were the whole remaining list.
+
+GET is the worse of the pair. A truncated join stats and **opens a different
+existing file**, and its bytes go back to the bridge acked as the path that was
+asked for — so the bridge writes one file's contents over another's, with a crc
+that matches what it received. Both refuse with `too_long` now, which
+`Pass._too_long_detail` already reports, including its *"the machine's own
+length rule disagrees with the bridge's"* branch. `SyncStatus`'s docstring
+gained `TOO_LONG` under `get`, where it was missing.
+
+**Proven fail-first on the real machine.** The pre-fix binary answered a
+260-character GET with `missing` — a path the guest cannot form, reported as a
+file the user deleted, which is the omission-as-deletion class this whole sweep
+exists to close. After the fix the refusal boundary lands exactly where the
+arithmetic says: with a root of `C:\WORK`, 251 characters accepted and 252
+refused. `tools/syncprobe.py` is **54/54 on the guest**, up from 52 — the two
+new cases, and one stale expectation found while adding them: the probe asserted
+`missing` for a root-escaping GET, which the code stopped answering when
+`do_get`'s own comment explaining `bad_path` was written. That check had been
+wrong ever since and nobody had re-run it.
+
+**The process lesson cost more than the fix.** `tools/dos.py`'s focus guard
+sampled one pixel in the DOS client area and treated black as "the DOS box has
+the keyboard". A stray click opened My Documents over part of the screen; the
+DOS box stayed *visible*, the pixel stayed black, the guard said yes, and
+`DELTREE /Y C:\WORK` went to the window that actually had focus. The commands
+reported success, the tree was not cleared, and the probe run measured against
+it came back with 26 failures that read as regressions for several minutes.
+Visible and focused are different questions; only the caption answers the
+second. `dos_focused()` now requires the title bar to be Win98's active caption
+navy as well, checked against three captured screens including the one that
+fooled it. Same session also had the older version of this trap: several client
+instances running at once, where only the first can open `retroclaude.log`
+(`FILE_SHARE_READ`), so the log looked frozen an hour in the past while the
+binary under test was not the one answering.
