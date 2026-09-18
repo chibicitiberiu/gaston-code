@@ -2005,3 +2005,49 @@ not one of the five named targets, so it is tracked as `01.59` instead of
 being quietly folded into a line marked closed. What remains otherwise maps
 onto the buckets §1.2 said would stay: the globals, `create_children`,
 `wnd_proc`, `try_connect`, turn state, the dispatch glue and `WinMain`.
+
+
+### 2026-09-18 — a real turn, on the real machine, against the real bridge
+
+Every check this project has is a proxy for this one. `make test` is 2,232
+green; the probes each drive a layer -- `viewprobe` the transcript, `barprobe`
+the bars, `drainprobe` shutdown with work queued, `syncprobe` the sync state
+machine -- and all of them can pass while the app is unusable. So: the actual
+bridge (`python -m bridge.server`, model `haiku`), the actual guest, a prompt
+typed into the box.
+
+    Run the command: dir C:\RETRO and tell me how many files it reports.
+
+What that exercised, in one turn, most of it rebuilt today:
+
+- **The handshake.** `client rules: declared: acp=cp1252 case=fold devices=dos
+  eol=crlf maxpath=260 maxdir=248 maxfile=249 maxcomp=255 manifest=v2` -- every
+  capability parsed through the new `bridge/handshake.py`.
+- **Sync, unprompted and on connect.** `pushed 1, pulled 12, dirs 2, conflicts
+  0`, through the `SyncTransport`/`BridgeScanner`/`Reporter` split.
+- **The transcript.** The user turn, the tool call, the permission block and
+  the command's output all rendered through `class rc_html` -- the MSHTML host
+  that Wine cannot vouch for.
+- **The permission bar, as a state stack.** "Run on your machine: dir
+  C:\RETRO" with Allow and Deny -- and **Always correctly absent**, because the
+  bridge said this tool cannot have a rule expressed for it. That is `04.6`'s
+  behaviour, live.
+- **The RPC worker and the exec lane.** `exec x1 finished: status=ok code=0
+  bytes=1232`, and the real `dir` output came back: Volume WIN98, serial
+  8229-1980.
+- **The chat list**, which picked up the session's title ("Dir C:\RETRO file
+  count") the moment the SDK reported it -- the `02.24` fix.
+- **`ui_refresh_enables`**: Send disabled and Stop enabled during the turn,
+  and back again at the end. Status bar `done $0.0395`.
+
+Recorded as a BASELINE, deliberately, and before the last refactor lands. The
+C-style-OOP migration (`01.60`) is about to change all six guest UI modules at
+once, and "it still works" is only a useful sentence if there is a run on the
+other side of it to compare against.
+
+One process note. Getting here cost two self-inflicted detours worth writing
+down: a stale probe still holding port 7890 meant the guest spent several
+minutes talking to a socket nobody was reading, which produced screenshots I
+briefly misread as a regression; and an `alt-f4` aimed at the app landed on the
+desktop instead, opened Shut Down Windows, and wedged `command.com`. Neither
+was a defect in the program. Both looked like one.
