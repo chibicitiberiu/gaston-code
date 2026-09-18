@@ -607,6 +607,13 @@ class Bridge:
         await self._reissue_prompt(guest)
         await self._reissue_halt(guest)
         await self._reissue_turn(guest)
+        # _reissue_halt above handles a GUEST reconnect: the same
+        # GuestSession survives it, so guest.halt_id already agrees with
+        # base.latched. It does NOT handle a BRIDGE restart, which starts a
+        # brand new GuestSession with halt_id empty while base.latched is
+        # still whatever the old process left on disk (02.21) -- so derive
+        # it instead of trusting whichever path last had a chance to set it.
+        await self._reconcile_halt(guest)
         # A guest that was away may have been edited while it was away, and
         # nothing reconciled that until its watcher next happened to fire.
         if self.sync_dir:
@@ -1575,6 +1582,13 @@ class Bridge:
                         f"Stopped: {n} conflicting edit"
                         f"{'' if n == 1 else 's'}. Your copy was kept.",
                         paths=got.get("conflict_paths", ()))
+                # Covers the same gap _reconcile_halt closes at attach, from
+                # the other direction: latched paths this PASS did not just
+                # raise for (a standing conflict from before a bridge
+                # restart, discovered on the first pass a fresh process
+                # runs) still need a bar, and one that WAS raised needs to
+                # come down once nothing is latched any more.
+                await self._reconcile_halt(guest, base=p.base)
                 # Only after they are on the wire. The queue is pending work,
                 # not a log: leaving them on it re-delivered every notice on
                 # every pass, which buries the next real one.
@@ -1973,6 +1987,42 @@ class Bridge:
         guest.halt_paths = frozenset()
         guest.halt_text = ""
         await self._send(guest, haltend(hid), stamp=False)
+
+    async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
+        """The halt is a VIEW of base.latched, not independent state.
+
+        guest.halt_id is memory; base.latched is disk. Nothing but a fresh
+        conflict (the new_conflicts branch above) or a reconnect
+        (_reissue_halt) ever moved guest.halt_id to agree with it -- so a
+        BRIDGE restart with paths still latched came back with no bar, a
+        fresh GuestSession whose halt_id starts empty, and every latched
+        path going on refusing the agent's writes with nothing on the user's
+        screen to explain why or let them clear it. The only way out used to
+        be the agent proactively calling sync_status and sync_resolve.
+
+        Called at attach (base loaded fresh) and at the end of every pass
+        (base is the Pass's own, already current) so both directions --
+        a bar that should be up and is not, one that is up and should not
+        be -- self-correct instead of depending on whichever call site last
+        had a chance to set guest.halt_id. docs/audit/02-bridge-python.md
+        02.21.
+        """
+        if not self.sync_dir:
+            return
+        if base is None:
+            try:
+                base = self._load_baseline()
+            except Exception:
+                return
+        if base.latched and not guest.halt_id:
+            n = len(base.latched)
+            await self._raise_halt(
+                guest,
+                f"Stopped: {n} conflicting edit{'' if n == 1 else 's'}. "
+                f"Your copy was kept.",
+                paths=base.latched.keys())
+        elif not base.latched and guest.halt_id:
+            await self._clear_halt(guest)
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""

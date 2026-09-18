@@ -1626,6 +1626,67 @@ async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     await harness.close(writer2)
 
 
+async def test_a_bridge_restart_with_latched_paths_raises_the_bar(
+        harness, tmp_path):
+    """02.21: the same hole as test_a_halt_survives_a_reconnect, but across a
+    BRIDGE restart rather than a guest reconnect.
+
+    A guest reconnect keeps the same GuestSession, so guest.halt_id survives
+    it and _reissue_halt puts the bar back. A bridge restart does not: the
+    new process's GuestSession starts with halt_id empty, while
+    base.latched -- written by the OLD process -- is still sitting on disk.
+    Before 02.21 nothing at startup or attach ever read it, so the agent's
+    writes stayed refused with no bar on the user's screen to explain why
+    or let them clear it, and the only way out was the agent noticing on
+    its own via sync_status.
+
+    Here the connecting guest IS the first one this Bridge object has ever
+    seen -- there is no previous GuestSession to have carried a halt_id
+    forward -- which is exactly what "a fresh process" looks like from
+    _attach's side.
+    """
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    base = Baseline()
+    base.latched = {"a.txt": "conflicting edit"}
+    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+    assert harness.bridge._guest is None, "test setup: no prior connection"
+
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    halt = await _recv(harness, reader, "HALT")
+
+    assert halt.type == "HALT", (
+        "no HALT arrived at all -- the restart left a latched path with no "
+        f"bar (got {halt.type} instead, after recv_until's timeout)")
+    assert halt.headers["id"]
+    assert harness.bridge._guest.halt_id == halt.headers["id"]
+    await harness.close(writer)
+
+
+async def test_reconcile_halt_clears_a_bar_nothing_is_latched_for(
+        harness, tmp_path):
+    """The other direction: a bar up with base.latched already empty (the
+    agent released the last path through some route that did not itself
+    clear guest.halt_id) must come down, not stay stuck."""
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    guest.halt_id = "h-stuck"
+
+    await harness.bridge._reconcile_halt(guest)
+    assert guest.halt_id == "", "a bar with nothing latched must come down"
+    await harness.close(writer)
+
+
 async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     """A tree_id mismatch stops the WHOLE layer -- no file moves in either
     direction -- and it used to be a log warning and nothing else. Sync could
