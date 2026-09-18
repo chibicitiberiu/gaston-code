@@ -201,6 +201,75 @@ Same prompt, same code, two link regimes, via `--link-bps`:
 All output intact both times, `inflight=0` both times. (6.27:1 is flattered by
 deliberately repetitive test text; real prose measured 2.16:1.)
 
+## Phase 4 — settings and the rest of the surface
+
+| # | Item | State |
+|---|---|---|
+| 4.0 | Resource compilation: `wrc` wired in, `gaston.rc`, the app icon | **done -- verified on real Win98 SE** |
+
+### 4.0 — the resource pipeline (2026-09-18)
+
+`WRC` had been defined in `make/ow.mk:13` and `win/Makefile:20` since Phase 0
+and invoked by neither; there was no `.rc` anywhere in the tree. Both R5's
+icon and any dialog template needed it, so it goes first.
+
+What landed:
+
+- `win/app/gaston.rc`, compiled with `wrc -q -r -bt=nt` into
+  `build/win/gaston.res` and bound by the linker's `option resource=`.
+  Bound at link rather than injected into a finished EXE afterwards -- the
+  two-step form leaves, if it is interrupted between the steps, a
+  `retroclaude.exe` newer than every prerequisite and with no icon in it.
+- `win/app/resource.h`, included by **both** wrc and wpp386, so `IDI_GASTON`
+  is defined once. wrc runs a full C preprocessor over a `.rc`, which is what
+  makes that possible; the header stays macro-only because wrc knows no C++.
+- `tools/mkicon.py` and `win/app/gaston.ico` -- 16x16 and 32x32, 4bpp,
+  standard 16-colour VGA palette.
+- A VERSIONINFO block, so the file has a Version tab in its properties.
+
+**The icon format is the platform fact worth recording.** Any modern tool
+that writes a `.ico` writes 32bpp BGRA with an alpha channel, which is an
+XP-era format. Win98's shell does not composite alpha: the transparent margin
+comes out black, and on the taskbar that is a black square. Transparency on
+this target is the 1bpp AND mask, and the XOR pixel under a set mask bit must
+be 0 or the two XOR together and the pixel inverts whatever is behind it. The
+palette is pinned to the sixteen VGA colours for the second reason -- on an
+8bpp display a 4bpp icon carrying an arbitrary palette is colour-matched to
+the system halftone palette and shifts.
+
+Both sizes are drawn, not scaled. `WNDCLASSA` has no `hIconSm` field (that is
+`WNDCLASSEX`) so Windows derives the title-bar icon by shrinking `hIcon`, and
+a 32x32 4bpp image StretchBlt-ed to 16x16 turns the three dots into grey mush.
+`LoadImageA` with an explicit `SM_CXSMICON` size picks the real 16x16 entry
+out of the `.ico`, and `WM_SETICON` installs it after the window exists.
+
+**BACKLOG.md 10 predicted this would move `make check`'s CMOV baseline**, on
+the reasoning that objdump decodes binary data as instructions and a resource
+is binary data. Measured: it does not. `objdump -d` disassembles only sections
+flagged as code and prints exactly one `Disassembly of section AUTO:` for this
+image; `.rsrc` is READONLY DATA and is never walked. The existing false
+positive is inside AUTO, which is where Watcom puts read-only data as well as
+code. Baseline stays at 1, and the prediction is recorded as wrong in the
+Makefile rather than quietly dropped.
+
+**Found while building it:** `make -C win` had no default goal, so make used
+the first target in the file -- `htmlspike`, a Phase 0 spike. The command
+printed "Nothing to be done for 'htmlspike'" and exited 0 while building
+nothing, which reads exactly like a successful no-op build of the real thing.
+The top-level Makefile had already hit this and fixed it with
+`.DEFAULT_GOAL := all`; `win/Makefile` never did.
+
+Committed at load moved 303,044 -> 305,604 bytes: 2,048 of `.rsrc` plus
+section padding. Verified on the guest, not under Wine, because every claim
+above is about how the Win98 shell renders a 4bpp image: title bar, taskbar
+button, Explorer's 16x16 list and 32x32 large-icon views, and the Version tab
+reading `0.4.0 / Gaston Code / Copyright (c) 2026 Tiberiu Chibici. MIT.`
+
+One correction made against the guest rather than reasoned about: the first
+cut shipped `VALUE "CompanyName", ""`. An empty key is worse than a missing
+one -- Win98's Version tab lists every key it finds, so it appeared in "Other
+version information" as a row that selects to a blank value. Removed.
+
 ## Decisions made while building
 
 ### 2026-09-17 — 0.14: Windows 98 does have a directory watcher

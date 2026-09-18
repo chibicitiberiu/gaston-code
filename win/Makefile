@@ -58,6 +58,13 @@ OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
 
 .PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck
 
+# Without this, make's default goal is the FIRST target in the file, which is
+# htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
+# done for 'htmlspike'" and exited 0 while building nothing, which reads
+# exactly like a successful no-op build of the real thing. Same class of trap
+# as the stale check binaries described above `all`.
+.DEFAULT_GOAL := all
+
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
 HTMLSPIKE_OBJS = $(BUILD)/htmlspike.o
@@ -217,6 +224,20 @@ $(BUILD)/%.o: %.cpp $(HDRS) | $(BUILD)
 # one object only.
 $(BUILD)/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
+# The resource script. `wrc -r` compiles only -- it does not touch an EXE --
+# and the .res is then bound at link time by `option resource=` below. The
+# other order (link first, then `wrc file.res file.exe` to inject) also works
+# and is what most Watcom examples show; it is not used here because it makes
+# the EXE a two-step artefact, and a build interrupted between the steps
+# leaves a retroclaude.exe that is newer than every prerequisite and has no
+# icon. One link, one output.
+#
+# -i=$(CURDIR) is what lets gaston.rc say `#include "app/resource.h"` -- the
+# same layer-qualified spelling the C++ uses, so the id is defined once for
+# both compilers.
+$(BUILD)/gaston.res: app/gaston.rc app/gaston.ico app/resource.h | $(BUILD)
+	@$(WRC) -q -r -bt=nt -i="$(CURDIR)" -fo=$@ app/gaston.rc
+
 $(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)
 	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/miniz.err third_party/miniz/miniz.c
 
@@ -225,12 +246,22 @@ $(BUILD):
 
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
-$(BUILD)/retroclaude.exe: $(OBJS)
-	@$(WLINK) $(LFLAGS), map=$(BUILD)/retroclaude.map $(LIBS) name $@ file {$(OBJS)}
+$(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res
+	@$(WLINK) $(LFLAGS), resource=$(BUILD)/gaston.res, \
+	  map=$(BUILD)/retroclaude.map $(LIBS) name $@ file {$(OBJS)}
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # Known-good CMOV count. See the note in the check target: this is a data
 # false positive, not a real instruction. Any INCREASE is a real regression.
+#
+# BACKLOG.md 10 predicted that linking a resource would move this baseline,
+# on the reasoning that .rsrc is binary data and objdump decodes data as
+# instructions. Measured when gaston.res landed: it does not. objdump -d
+# disassembles only sections flagged as code, and prints exactly one
+# "Disassembly of section AUTO:" for this image -- .rsrc is READONLY DATA and
+# is never walked. The existing false positive is inside AUTO, which is where
+# Watcom puts read-only data as well as code. Left at 1, and the prediction
+# recorded as wrong rather than quietly dropped.
 CMOV_BASELINE = 1
 PYTHON ?= python3
 

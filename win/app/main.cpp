@@ -27,6 +27,7 @@
 #include "app/pagebar.h"
 #include "app/optmenu.h"
 #include "app/input.h"
+#include "app/resource.h"
 
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
@@ -1239,7 +1240,24 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = wnd_proc;
     wc.hInstance     = inst;
-    wc.hIcon         = LoadIconA(NULL, IDI_APPLICATION);
+    /* Two sizes, loaded separately and deliberately.
+     *
+     * WNDCLASSA has no hIconSm field -- that is WNDCLASSEX, and this stays
+     * on RegisterClassA. So Windows derives the 16x16 title-bar icon by
+     * shrinking hIcon, and StretchBlt-ing a 32x32 down to 16x16 on a 4bpp
+     * image turns the three dots into grey mush. LoadImageA with an explicit
+     * size picks the 16x16 entry out of the .ico instead, and WM_SETICON
+     * installs it once the window exists.
+     *
+     * SM_CXSMICON rather than a literal 16: it is 16 on this guest, but it
+     * is the metric the shell actually asks for, and asking for the wrong
+     * one is how an icon ends up scaled after all. */
+    wc.hIcon         = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_GASTON),
+                                         IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXICON),
+                                         GetSystemMetrics(SM_CYICON),
+                                         LR_DEFAULTCOLOR);
+    if (!wc.hIcon) wc.hIcon = LoadIconA(NULL, IDI_APPLICATION);
     wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszClassName = "RetroClaudeWnd";
@@ -1262,6 +1280,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
         NULL, NULL, inst, NULL);
     if (!g_main) { rc_log("CreateWindowEx failed"); return 1; }
+    {
+        /* Not freed: an icon loaded from a resource is owned by the module
+         * and is released when it unloads. DestroyIcon on one is documented
+         * as unnecessary, and on 9x it is actively wrong. */
+        HICON small_icon = (HICON)LoadImageA(inst,
+                                             MAKEINTRESOURCE(IDI_GASTON),
+                                             IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXSMICON),
+                                             GetSystemMetrics(SM_CYSMICON),
+                                             LR_DEFAULTCOLOR);
+        if (small_icon)
+            SendMessageA(g_main, WM_SETICON, ICON_SMALL,
+                         (LPARAM)small_icon);
+    }
     rc_log("main window hwnd=%p", (void *)g_main);
     log_mem("window created");
 

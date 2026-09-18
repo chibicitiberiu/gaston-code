@@ -1534,13 +1534,22 @@ Background sessions were considered and rejected for the same reason the plan
 rejected a warm client pool: one live `ClaudeSDKClient` is a third of the work,
 and a machine with ~10MB free should not be running several at once.
 
-### R5 — icons  *(planned)*
+### R5 — icons  *(the application icon is done; the toolbar is not)*
 
 Windows 98 is a colourful system and this app is a grey rectangle. At minimum
 an application icon, so the title bar and taskbar are not generic; ideally a
 small toolbar. Open Watcom ships `wrc`, so a `.rc` with an `.ico` is the
 mechanism. Cheap, visible, and currently the largest gap between "works" and
 "looks like it belongs on the desktop".
+
+**[R -- 2026-09-18]** The application icon shipped as Phase 4.0, along with
+the resource pipeline it needed (`win/app/gaston.rc`, `tools/mkicon.py`).
+What is left of R5 is the toolbar, which is not a resource problem: it is the
+first real GDI spend against the fixed 64KB USER heap, and `BACKLOG.md` 11
+(04.23) says to count GDI objects before and after. It also has no home yet,
+since `win/app/main.cpp` builds a hand-written menu bar and individual
+buttons and there is no comctl32 toolbar to hang bitmaps on. Blocks Phase
+5.1, not this stage.
 
 ### R6 — **the file layer is a sync layer, not Samba**  *(planned, replaces Phase 3's share)*
 

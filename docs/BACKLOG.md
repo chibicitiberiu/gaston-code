@@ -738,18 +738,22 @@ above. These four findings describe the same object -- what a real
 dependency order rather than a single combined cost.
 
 **1. Resource-compile infrastructure (04.17), the true prerequisite.**
-`WRC` is defined in both `make/ow.mk:13` and `win/Makefile:20` and invoked by
-neither -- no `.rc` file exists anywhere in the tree, and `grep` for `$(WRC)`
-across both makefiles returns nothing. Both R5's icon and a
-`DialogBoxIndirectParam`-based dialog need this (closes the missing
-`dialogs.c`/`.rc` clause of 01.10, which named the same gap from the
-"Phase 4's dialog" angle). Linking an `.rc`-derived resource will also move
-`make check`'s CMOV false-positive baseline (`CMOV_BASELINE = 1`,
-`win/Makefile:208`) -- `objdump` disassembles the whole section linearly, and
-a resource's binary data will decode as phantom instructions the same way
-the existing false positive does. Expect to re-baseline with a comment, or a
-future `make check` reads a resource-driven bump as a regression that never
-was one.
+**Closed 2026-09-18 as Phase 4.0** -- `win/app/gaston.rc` + `app/resource.h`
+compiled by `wrc` and bound with the linker's `option resource=`, carrying
+the R5 icon and a VERSIONINFO block. See `PROGRESS.md` "4.0 -- the resource
+pipeline" for the Win98 icon-format facts, which are the part worth keeping.
+This also closes the missing `dialogs.c`/`.rc` clause of 01.10, which named
+the same gap from the "Phase 4's dialog" angle.
+
+**One prediction in this entry was wrong, and is kept here rather than
+edited away.** It said linking a resource would move `make check`'s CMOV
+false-positive baseline, because objdump disassembles a section linearly and
+a resource's binary data would decode as phantom instructions. Measured when
+`gaston.res` landed: the count did not move. `objdump -d` disassembles only
+sections flagged as code and emits exactly one `Disassembly of section
+AUTO:` for this image; `.rsrc` is READONLY DATA and is never walked. The
+existing false positive is inside AUTO, which is where Watcom puts read-only
+data as well as code. `CMOV_BASELINE` stays at 1.
 
 **2. `rc_config_save` is a one-line fix with no caller yet (04.13, and half
 of 01.34).** It runs from exactly two places today: `rc_config_load`'s
@@ -804,8 +808,9 @@ picks up the real id during the fork's first turn. Cite 04.35's framing, not
 02.31's, for that part; the dispatch-unification point stands on its own
 regardless.
 
-**To close it, in order:** (1) wire `WRC` into `win/Makefile`, write the
-`.rc`, re-baseline CMOV; (2) build the dialog -- `DialogBoxIndirectParam` is
+**To close it, in order:** (1) ~~wire `WRC` into `win/Makefile`, write the
+`.rc`, re-baseline CMOV~~ **done, 4.0 -- no re-baseline was needed**;
+(2) build the dialog -- `DialogBoxIndirectParam` is
 cheaper than a `.rc` template given (1) is already required for the icon
 (R5); (3) OK handler calls `rc_config_save` and resets the backoff state;
 (4) exercise a live stream with the dialog open at least once -- for the
