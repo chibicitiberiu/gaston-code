@@ -177,6 +177,51 @@ class Wait:
     data: bytearray | None = None
 
 
+# --- what a Wait resolves TO -------------------------------------------
+#
+# The crash `Wait` above fixes was the connection dying on a mismatched
+# frame; this is the readability half that was split out separately
+# (02.37): the four `sync_pending` futures still resolved to positional
+# tuples of four different arities (a 6-tuple for a scan, two flavours of
+# 2-tuple for a put/mkdir ack, a 4-tuple for a get), unpacked positionally
+# at the call site with nothing to check the shape a guest actually sent
+# against what the caller expects to unpack. A fifth shape was one typo
+# away.
+
+
+@dataclass
+class ScanResult:
+    """SYNCEND -- what a manifest request came back with."""
+
+    status: str
+    files: int
+    tree_id: str
+    root: str
+    rows: dict
+    display: dict
+
+
+@dataclass
+class AckResult:
+    """SYNCPUTACK and SYNCMKDIRACK: one shape, two producers. A push reads
+    `crc` as the guest's checksum of what it just wrote; a mkdir has no crc
+    to ack and simply ignores it -- the SAME wire shape, not a coincidence
+    two call sites happened to agree on."""
+
+    status: str
+    crc: int
+
+
+@dataclass
+class GetResult:
+    """SYNCDATEND -- the guest's own reading of a file `pull` just fetched."""
+
+    status: str
+    crc: int
+    cls: str
+    data: bytes
+
+
 @dataclass
 class Decision:
     key: str

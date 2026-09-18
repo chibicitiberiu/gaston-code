@@ -76,6 +76,7 @@ from .wire.link import GuestLink
 from .wire.replay import Replay
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
+from .files.sync import AckResult, GetResult, ScanResult
 from .files.syncrun import SyncError
 from .agent.session import Session
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
@@ -2055,17 +2056,19 @@ class Bridge:
         elif f.type == "SYNCEND":
             fut = entry.future
             if not fut.done():
-                fut.set_result((f.headers.get("status", "ok"),
-                                int(f.headers.get("files", "0")),
-                                f.headers.get("tree_id", ""),
-                                f.headers.get("root", ""),
-                                entry.rows, entry.display))
+                fut.set_result(ScanResult(
+                    status=f.headers.get("status", "ok"),
+                    files=int(f.headers.get("files", "0")),
+                    tree_id=f.headers.get("tree_id", ""),
+                    root=f.headers.get("root", ""),
+                    rows=entry.rows, display=entry.display))
 
         elif f.type in ("SYNCPUTACK", "SYNCMKDIRACK"):
             fut = entry.future
             if not fut.done():
-                fut.set_result((f.headers.get("status", "ok"),
-                                int(f.headers.get("crc", "0"))))
+                fut.set_result(AckResult(
+                    status=f.headers.get("status", "ok"),
+                    crc=int(f.headers.get("crc", "0"))))
 
         elif f.type == "SYNCDAT":
             if entry.kind != "get":
@@ -2077,10 +2080,11 @@ class Bridge:
         elif f.type == "SYNCDATEND":
             fut = entry.future
             if not fut.done():
-                fut.set_result((f.headers.get("status", "ok"),
-                                int(f.headers.get("crc", "0")),
-                                f.headers.get("cls", P.CLASS_TEXT),
-                                bytes(entry.data or b"")))
+                fut.set_result(GetResult(
+                    status=f.headers.get("status", "ok"),
+                    crc=int(f.headers.get("crc", "0")),
+                    cls=f.headers.get("cls", P.CLASS_TEXT),
+                    data=bytes(entry.data or b"")))
 
     def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
         """Resolve every in-flight sync transfer, synchronously."""

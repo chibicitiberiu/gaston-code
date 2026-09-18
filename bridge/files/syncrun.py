@@ -137,10 +137,11 @@ class Pass:
         await self.bridge._send(self.guest, Frame("SYNCSCAN", {"id": sid}),
                                 stamp=False)
         try:
-            status, files, tree_id, root, rows, _display = await asyncio.wait_for(
-                fut, timeout=600)
+            result = await asyncio.wait_for(fut, timeout=600)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status, files = result.status, result.files
+        tree_id, root, rows = result.tree_id, result.root, result.rows
 
         if status == "too_many":
             # 03.24: the limit itself never crosses the wire -- SYNCEND only
@@ -402,9 +403,10 @@ class Pass:
                     "if_crc": str(expect.crc) if expect else "absent",
                 }),
                 stamp=False)
-            status, ack_crc = await asyncio.wait_for(fut, timeout=300)
+            result = await asyncio.wait_for(fut, timeout=300)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status, ack_crc = result.status, result.crc
 
         if status != "ok":
             self.reports.append(f"push {rel} refused: {status}"
@@ -448,9 +450,11 @@ class Pass:
         try:
             await self.bridge._send(
                 self.guest, Frame("SYNCGET", {"id": sid}, rb), stamp=False)
-            status, crc, cls, wire = await asyncio.wait_for(fut, timeout=300)
+            result = await asyncio.wait_for(fut, timeout=300)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status, crc, cls, wire = (result.status, result.crc, result.cls,
+                                  result.data)
 
         if status != "ok":
             self.reports.append(f"pull {rel} refused: {status}")
@@ -526,9 +530,10 @@ class Pass:
         try:
             await self.bridge._send(
                 self.guest, Frame("SYNCMKDIR", {"id": sid}, rb), stamp=False)
-            status, _ = await asyncio.wait_for(fut, timeout=120)
+            result = await asyncio.wait_for(fut, timeout=120)
         finally:
             self.guest.sync_pending.pop(sid, None)
+        status = result.status
 
         if status in ("ok", "exists"):
             return True
