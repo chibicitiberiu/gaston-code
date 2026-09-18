@@ -26,15 +26,14 @@
 #include "app/xferstat.h"
 #include "app/pagebar.h"
 #include "app/optmenu.h"
+#include "app/input.h"
 
-#define ID_INPUT      1002
-#define ID_SEND       1003
-#define ID_STOP       1004
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
- * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, and ID_LIVE/FIRST/PREV/NEXT/
- * LAST/PAGELBL in app/pagebar.h -- all three next to the module that creates
- * and dispatches them. */
+ * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, ID_LIVE/FIRST/PREV/NEXT/
+ * LAST/PAGELBL in app/pagebar.h, and ID_INPUT/ID_SEND/ID_STOP in
+ * app/input.h -- all four next to the module that creates and dispatches
+ * them. */
 
 /* Menu. IDM_MODEL0/IDM_EFFORT0/MAX_OPTS are declared in app/optmenu.h now,
  * next to the module that owns that numbering. */
@@ -59,8 +58,6 @@
 /* WM_RC_OPENCHAT (chatlist.cpp's chats_proc -> wnd_proc: open a chat) is
  * declared in app/chatlist.h now, next to the module that posts it. */
 
-#define INPUT_HEIGHT  56
-#define BUTTON_WIDTH  64
 #define GUTTER        4
 #define CHATS_W      170
 /* PERM_H (the permission bar's height, when shown) is declared in app/bar.h;
@@ -68,13 +65,16 @@
  * own controls. PERMBTN_W is bar.cpp's own business now. PAGEBAR_H is
  * declared in app/pagebar.h the same way; PGBTN_W is pagebar.cpp's own
  * business. CHAT_INDENT and CHAT_ROW_H moved to app/chatlist.cpp with the
- * drawing code they size. */
+ * drawing code they size. INPUT_HEIGHT (the compose row's height, which
+ * layout() needs before asking app/input.cpp to position its own controls)
+ * is declared in app/input.h the same way; the button width is input.cpp's
+ * own business. */
 
 static rc_config     g_cfg;
 static rc_net        g_net;
 static rc_html *g_html;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
-static HWND  g_main, g_input, g_send, g_stop, g_status;
+static HWND  g_main, g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
@@ -82,13 +82,9 @@ static HWND  g_main, g_input, g_send, g_stop, g_status;
  * (why one set of controls serves two request kinds, and the four-bugs
  * history of arbitrating them pairwise) moved with it. The chat list's HWNDs
  * and its seven id-keyed globals moved to app/chatlist.cpp the same way --
- * see app/chatlist.h. */
-
-/* The longest message that can be composed and sent in one go. The frame
- * protocol would carry far more, but do_send builds it on the stack and the
- * guard page on 9x is not something to find out about the hard way. Enforced
- * at the control with EM_LIMITTEXT and checked again at send. */
-#define RC_INPUT_MAX 4096
+ * see app/chatlist.h. The input box, Send/Stop and RC_INPUT_MAX (the longest
+ * message do_send can compose and send in one go) moved to app/input.cpp --
+ * see app/input.h. */
 
 /* The Model and Effort menus (their HMENUs, id-keyed arrays and batch state)
  * moved to app/optmenu.cpp -- see app/optmenu.h. */
@@ -127,7 +123,6 @@ static int  ui_send(const char *what, const char *type,
 /* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. */
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
-static WNDPROC g_input_oldproc;
 static int   g_turn_active = 0;
 static int   g_backoff_ms = 1000;
 /* Whether this outage has already been announced in the transcript. */
@@ -273,15 +268,29 @@ static void ui_refresh_enables(void)
      * has wedged, and it is how the cancellation path gets exercised at all --
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
-    EnableWindow(g_send, (g_turn_active || rc_bar_blocks_send())
-                          ? FALSE : TRUE);
+    rc_input_enable_send((g_turn_active || rc_bar_blocks_send()) ? 0 : 1);
 }
 
 static void ui_set_busy(int busy)
 {
     g_turn_active = busy;
-    EnableWindow(g_stop, busy ? TRUE : FALSE);
+    rc_input_enable_stop(busy);
     ui_refresh_enables();
+}
+
+/* app/input.h's `blocked`/`sent` callbacks: do_send's own guard (checked
+ * again because Enter reaches do_send directly, bypassing whatever
+ * EnableWindow last set) and what runs after a typed INPUT has actually
+ * gone out. */
+static int input_blocked(void)
+{
+    return g_turn_active || rc_bar_blocks_send();
+}
+
+static void input_sent(void)
+{
+    status_refresh();
+    ui_set_busy(1);
 }
 
 /* ------------------------------------------------------- permission bar */
@@ -672,88 +681,15 @@ static void turn_done(void)
     SetWindowTextA(g_main, RC_TITLE);
 }
 
-/* Echo the user's own line, meant to match bridge/view/html.py's user_turn()
- * (not bridge/markdown.py -- that module is a .bak and user_block() does not
- * exist): the bridge records that same string into the paginator so that
- * paging back to a sealed page still shows the question above the answer.
- * Echoing locally rather than waiting for the bridge to send it back is what
- * keeps typing responsive on a dialup link.
+/* echo_user_block, do_send, do_stop and input_proc (the Enter-sends/
+ * Shift+Enter-inserts-a-newline subclass) moved to app/input.cpp -- audit
+ * finding 01.59, the last of the §1.2 extraction targets to actually move.
+ * See app/input.h for the seam: `input_blocked`/`input_sent` above are this
+ * file's answers to the two policy questions that module does not own, the
+ * same shape as app/chatlist.h's confirm/switching/switched.
  *
- * They do NOT in fact match: user_turn() does text.strip().splitlines()
- * before escaping (html.py:102), and this side's esc_into() (htmlview.cpp)
- * escapes the raw text without stripping -- so a message with a trailing
- * blank line renders one line taller here than it does in the paginator-
- * sealed copy shown after paging back. Recorded as audit finding 01.29;
- * left as found rather than fixed here. */
-static void echo_user_block(const char *text)
-{
-    /* Was twenty lines of escaping and heap juggling here, with a buffer that
-     * silently cut the echo at 4095 bytes while the full text went to the
-     * model. The view owns its markup now, and sizes from the input. */
-    if (g_html) g_html->user(text);
-}
-
-static void do_send(void)
-{
-    char buf[RC_INPUT_MAX];
-    int n;
-
-    if (g_turn_active || rc_bar_blocks_send()) return;
-
-    /* Refuse rather than truncate. GetWindowTextA copies what fits and says
-     * nothing, so a pasted log longer than the buffer was silently cut and the
-     * SHORTENED text is what went to the model -- the person at the keyboard
-     * losing bytes on the one path where they are the author. EM_LIMITTEXT
-     * below normally stops it arriving at all; this is the check that makes
-     * that a guarantee rather than a hope. */
-    if (GetWindowTextLengthA(g_input) >= RC_INPUT_MAX) {
-        if (g_html)
-            g_html->error(
-                      "That message is too long to send (the limit is about "
-                      "4000 characters). Nothing was sent -- shorten it, or "
-                      "put the long part in a file under the mirrored folder.");
-        return;
-    }
-
-    n = GetWindowTextA(g_input, buf, sizeof(buf));
-    if (n <= 0) return;
-
-    echo_user_block(buf);
-
-    rc_xfer_note_tx_start((unsigned long)n);
-    if (rc_net_send(&g_net, "INPUT", NULL, NULL, 0, buf, (unsigned)n) == 0) {
-        rc_xfer_note_tx_done((unsigned long)n);
-        status_refresh();
-        SetWindowTextA(g_input, "");
-        ui_set_busy(1);
-    } else {
-        if (g_html) g_html->error("Not connected.");
-    }
-    SetFocus(g_input);
-}
-
-static void do_stop(void)
-{
-    rc_log("stop requested");
-    /* A lost INTERRUPT is a Stop button that does nothing, on a turn that
-     * keeps running and keeps costing. */
-    ui_send("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
-}
-
-/* chats_proc (the listbox subclass that posts WM_RC_OPENCHAT on a plain
+ * chats_proc (the listbox subclass that posts WM_RC_OPENCHAT on a plain
  * click) moved to app/chatlist.cpp with the rest of the chat list. */
-
-/* Enter sends; Shift+Enter inserts a newline. */
-static LRESULT CALLBACK input_proc(HWND h, UINT m, WPARAM w, LPARAM l)
-{
-    if (m == WM_KEYDOWN && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000)) {
-        do_send();
-        return 0;
-    }
-    if (m == WM_CHAR && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
-        return 0;   /* swallow the beep */
-    return CallWindowProc(g_input_oldproc, h, m, w, l);
-}
 
 /* ----------------------------------------------------------------- layout */
 
@@ -799,20 +735,19 @@ static void layout(HWND hwnd)
          * an edit at this exact spot too). */
         if (rc_bar_active())
             rc_bar_move(cx, ybar, w - GUTTER);
-        MoveWindow(g_input, cx, y,
-                   cw - GUTTER - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
+        /* The input box, Send and Stop position their own three controls
+         * now -- app/input.cpp, see app/input.h. */
+        rc_input_move(cx, y, cw, w);
     }
-    MoveWindow(g_send, w - GUTTER - BUTTON_WIDTH, y, BUTTON_WIDTH, 24, TRUE);
-    MoveWindow(g_stop, w - GUTTER - BUTTON_WIDTH, y + 28, BUTTON_WIDTH, 24, TRUE);
 }
 
 /* CreateWindowExA can fail, and on this platform that was never a theoretical
  * concern: the chat list's own CreateWindowExA comment (app/chatlist.cpp)
  * cites the 16-bit USER heap's fixed 64KB as a reason a control might not be
- * created -- one of five such citations across
- * main.cpp/chatlist.cpp/bar.cpp/pagebar.cpp now that the bar, the chat list
- * and the page bar are their own files. A NULL here was
- * previously silent -- nothing logged, and every subsequent
+ * created -- one of six such citations across
+ * main.cpp/chatlist.cpp/bar.cpp/pagebar.cpp/input.cpp now that the bar, the
+ * chat list, the page bar and compose/send are their own files. A NULL here
+ * was previously silent -- nothing logged, and every subsequent
  * SendMessageA/MoveWindow/etc. against the handle becomes a quiet no-op,
  * since the *A functions accept NULL and simply do nothing with it. The log
  * is the only diagnostic on a machine with no console, so this is where the
@@ -857,28 +792,6 @@ static void create_children(HWND hwnd, HINSTANCE inst)
          * One line makes the claim true. */
         g_html->set_autoscroll(g_cfg.autoscroll);
 
-    g_input = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-        ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-        0, 0, 0, 0, hwnd, (HMENU)ID_INPUT, inst, NULL);
-    check_child("input", g_input);
-    /* Stop an over-long message being composed at all, which is the only
-     * feedback that arrives at the moment the user does it rather than at
-     * send time. The default for a multiline EDIT is 32KB, well past what
-     * do_send can carry. */
-    SendMessageA(g_input, EM_LIMITTEXT, (WPARAM)(RC_INPUT_MAX - 1), 0);
-
-    g_send = CreateWindowExA(0, "BUTTON", "Send",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-        0, 0, 0, 0, hwnd, (HMENU)ID_SEND, inst, NULL);
-    check_child("send", g_send);
-
-    g_stop = CreateWindowExA(0, "BUTTON", "Stop",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, 0, 0, hwnd, (HMENU)ID_STOP, inst, NULL);
-    check_child("stop", g_stop);
-    EnableWindow(g_stop, FALSE);
-
     /* The chat list and its Refresh button: created and owned by
      * app/chatlist.cpp now (rc_chats_create logs its own check_child
      * failures, and the LBS_NOINTEGRALHEIGHT/WS_CLIPSIBLINGS/
@@ -906,6 +819,15 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * in this file. */
     rc_pagebar_create(hwnd, inst, g_ui_font, &g_net, g_html);
 
+    /* The input box and Send/Stop: created and owned by app/input.cpp now
+     * (rc_input_create logs its own check_child failures and subclasses the
+     * input box itself). ui_send is main.c's "send something the user just
+     * asked for", for INTERRUPT; input_blocked/input_sent are this file's
+     * answers to the two policy questions that module does not own -- see
+     * the callback comments on rc_input_create in app/input.h. */
+    rc_input_create(hwnd, inst, g_ui_font, &g_net, g_html, ui_send,
+                     input_blocked, input_sent);
+
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
@@ -913,15 +835,10 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     parts[0] = 220; parts[1] = 340; parts[2] = -1;
     SendMessageA(g_status, SB_SETPARTS, 3, (LPARAM)parts);
 
-    SendMessageA(g_input,   WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_send,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    SendMessageA(g_stop,    WM_SETFONT, (WPARAM)g_ui_font, TRUE);
-    /* The chat list, the bar and the page bar's own controls got their font
-     * (and, for the page bar, its initial enabled state) inside
-     * rc_chats_create/rc_bar_create/rc_pagebar_create above. */
-
-    g_input_oldproc = (WNDPROC)SetWindowLongA(g_input, GWL_WNDPROC,
-                                              (LONG)input_proc);
+    /* The chat list, the bar, the page bar and the input row all got their
+     * font (and, for the page bar and Stop, their initial enabled state)
+     * inside rc_chats_create/rc_bar_create/rc_pagebar_create/
+     * rc_input_create above. */
 }
 
 /* -------------------------------------------------------------- main proc */
@@ -983,7 +900,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_SETFOCUS:
-        SetFocus(g_input);
+        rc_input_focus();
         return 0;
 
     /* Owner-draw so a date header reads as a header instead of as a
@@ -1049,9 +966,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         int id = (int)LOWORD(wp);
         switch (id) {
-        case ID_SEND:  do_send(); return 0;
-
-        case ID_STOP:  do_stop(); return 0;
+        /* Send and Stop dispatch through one call now too -- see
+         * app/input.h. */
+        case ID_SEND:
+        case ID_STOP:
+            rc_input_command(id);
+            return 0;
         /* All three of the bar's own buttons dispatch through one call now
          * -- see app/bar.h. rc_bar_command knows which kind is on screen
          * and what each button means for it (audit finding 01.15: this used
