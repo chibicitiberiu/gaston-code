@@ -160,6 +160,42 @@ static void rpc_maybe_nudge(void)
     if (!due) return;
 
     g_last_poll = now;
+
+    /* Throughput, measured rather than assumed.
+     *
+     * PLAN.md makes adaptive codec selection depend on this -- "the sender
+     * picks the codec from the measured link speed" -- and the bridge has
+     * handled STAT since the beginning. The guest had never sent one, so
+     * guest.link_bps was always None and every threshold in compress.py and
+     * coalesce.py was inert: the same code ran on a 10Mbit LAN and a modem,
+     * which is the exact thing the mechanism exists to avoid.
+     *
+     * Bytes over wall time since the last sample, from counters net.c already
+     * keeps. Only when something actually moved -- an idle link would
+     * otherwise report a speed of nearly zero and pin the bridge to its
+     * slowest codec for a link that is merely quiet. */
+    {
+        static unsigned long last_tx, last_rx;
+        static DWORD last_at;
+        unsigned long moved = (g_net->tx_bytes - last_tx)
+                            + (g_net->rx_bytes - last_rx);
+        DWORD elapsed = last_at ? (now - last_at) : 0;
+
+        if (elapsed >= 1000 && moved > 0) {
+            char bps[24];
+            rc_strf(bps, sizeof(bps), "%lu",
+                    (unsigned long)((double)moved * 1000.0 / elapsed));
+            {
+                const char *k[1]; const char *v[1];
+                k[0] = "bps"; v[0] = bps;
+                rc_net_send(g_net, "STAT", k, v, 1, NULL, 0);
+            }
+        }
+        last_tx = g_net->tx_bytes;
+        last_rx = g_net->rx_bytes;
+        last_at = now;
+    }
+
     if (rc_sync_root()[0])
         rc_net_send(g_net, "SYNCDIRTY", NULL, NULL, 0, NULL, 0);
     else

@@ -1194,3 +1194,34 @@ async def test_an_oversized_block_is_truncated_not_split_mid_element(harness):
     body = harness.body(texts)
     assert b"too large to send" in body, "truncated without saying so"
     await harness.close(writer)
+
+
+async def test_a_measured_link_speed_reaches_the_codec_choice(harness):
+    """PLAN.md makes adaptive codec selection depend on STAT -- "the sender
+    picks the codec from the measured link speed" -- and the bridge has
+    handled STAT since the beginning.
+
+    The guest had never sent one. So guest.link_bps was always None and every
+    threshold in compress.py and coalesce.py was inert: identical behaviour
+    on a 10Mbit LAN and a modem, which is the exact thing the mechanism
+    exists to avoid.
+    """
+    from bridge.wire.compress import should_compress
+
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    assert guest.link_bps is None, "nothing has reported a speed yet"
+
+    small = b"x" * 200
+    await harness.send(writer, Frame("STAT", {"bps": "5000"}))
+    await asyncio.sleep(0.05)
+    assert guest.link_bps == 5000.0, "the measurement never reached the bridge"
+
+    # And it actually changes the decision, rather than merely being stored.
+    slow = should_compress(small, guest.link_bps)
+    fast = should_compress(small, 10_000_000.0)
+    assert slow != fast, (
+        "link speed is recorded but does not affect the codec choice, which "
+        "means the adaptive path is still inert")
+    await harness.close(writer)
