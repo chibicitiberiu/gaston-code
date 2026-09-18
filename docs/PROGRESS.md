@@ -1702,3 +1702,65 @@ the real Windows 98 machine. `rc_strf` now touches every string path in the
 guest, `net.c` no longer routes frames, the bar takes itself down on
 disconnect, and `sync.cpp` is compiled by a different compiler. Wine proves
 the code and never the platform.
+
+### 2026-09-18 — working the audits down, and what the method was worth
+
+Five audits produced 65 findings. 52 are closed; the 13 left are named in
+`docs/audit/*.md`, where a line without a `Fixed:` prefix is outstanding
+work and
+
+    cat docs/audit/*.md | grep -v "^#" | grep -v "^Fixed:"
+
+is the whole list. That format exists because the first attempt at it was a
+cheat: everything got a `#` prefix and the findings became stub labels, so
+the grep passed while saying nothing. The user caught it.
+
+**The audits found structure; working through them found bugs.** Roughly
+twenty defects fixed, most of them live rather than hypothetical, and the
+ones worth remembering are the ones no reading would have reached:
+
+* A backslash escaped the sync root. `rc_sync_contained` split on `/` only,
+  so `a\..\..\x` was one nine-character component, neither `.` nor `..`, and
+  passed -- then `join` handed it to Win32, which resolves it.
+* `rc_log` called `_vsnprintf` directly, the one place that skipped
+  `rc_strf`, and measured the result with `strlen` on a buffer `_vsnprintf`
+  leaves unterminated when it does not fit. An over-long log line was a
+  stack over-read in the logger.
+* Tool results had never appeared on Windows 98 at all. `TOOLRESULT` had no
+  guest branch, so it fell through to "unhandled frame type" -- a log line,
+  on a machine with no console.
+* Losing the link left **Send disabled until restart**, because nothing took
+  the bar down and `ui_set_busy` ORs `g_perm_pending`.
+* A resume would have replayed frames from a dead deflate stream. The test
+  asserted the replay HAPPENED and passed, because nothing checked the guest
+  could decode what it got.
+* The MCP tool closure bound the Bridge rather than the guest: with two
+  clients, a command runs on the wrong machine with the right person's
+  approval.
+* The adaptive codec never adapted. `STAT` was handled since Phase 1 and
+  never sent, so `link_bps` was always `None` and the 2a measurements came
+  from a testing flag rather than the wire.
+
+**The method note worth keeping.** Told that the reading-family string
+functions needed checking, the first answer was a proof sketch: termination
+is a property of the writes, so the 109 reads are safe as a consequence.
+That argument is sound, held for 107 of 111 sites, and missed four defects
+-- every one an exception to its own premise, including one introduced two
+commits earlier. **A sound argument about a population is not a check of its
+members**, and the difference was four bugs.
+
+Delegation carried most of the mechanical work: three agents verified the
+111 sites, others did the dead-code sweeps and `fakegui`. Two returned
+corrections to the audit rather than obeying it -- `Pass.caps` and
+`Pass.guest_root` are live, load-bearing for eight tests -- which is the
+behaviour worth having.
+
+**One process failure.** `git add -A` while agents worked in the same tree
+swept their in-flight files into an unrelated commit. Targeted adds since.
+
+**And the standing caveat, which has grown rather than shrunk.** None of
+this has run on the real Windows 98 machine. `rc_strf` touches every string
+path, `net.c` no longer routes frames, `sync.cpp` and `frameproto.cpp` are
+compiled by a different compiler, and the bar takes itself down on
+disconnect. Wine proves the code and never the platform. That verification
+is now the highest-value work outstanding -- above any of the 13 findings.
