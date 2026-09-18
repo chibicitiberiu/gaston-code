@@ -151,9 +151,23 @@ class Paginator:
 
     def add(self, style: str, text: str) -> list[Page]:
         """Append a run. Returns any pages sealed as a result."""
+        sealed, _chunks = self.write(style, text)
+        return sealed
+
+    def write(self, style: str, text: str) -> tuple[list[Page], list[tuple[int, str]]]:
+        """Append a run, tracking exactly which page each piece landed on.
+
+        A run longer than the room left on the live page is split across a
+        seal (below), and a caller that streams what it just wrote to a live
+        viewer needs to know that split happened -- sending the whole run
+        tagged with the page it STARTED on double-renders the tail once the
+        reader pages forward to where it actually landed (02.33). `add()` is
+        the old interface for callers that only want to know what sealed.
+        """
         sealed: list[Page] = []
+        chunks: list[tuple[int, str]] = []
         if not text:
-            return sealed
+            return sealed, chunks
 
         # A page holding too many elements is sealed before the next one is
         # added. Unlike the byte cap this needs no splitting: a block boundary
@@ -171,6 +185,7 @@ class Paginator:
 
             if len(text) <= room and not page.over_hard_cap(self.hard_bytes):
                 page.add(style, text)
+                chunks.append((page.number, text))
                 text = ""
             else:
                 # Hard cap reached mid-run. Prefer to break at a newline inside
@@ -180,10 +195,11 @@ class Paginator:
                 if nl > 0:
                     chunk = chunk[: nl + 1]
                 page.add(style, chunk)
+                chunks.append((page.number, chunk))
                 text = text[len(chunk):]
                 sealed.append(self._seal(continued=True))
 
-        return sealed
+        return sealed, chunks
 
     def message_boundary(self) -> Page | None:
         """A turn ended. Seal here if the page is over the soft cap.

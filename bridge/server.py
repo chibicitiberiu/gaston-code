@@ -981,13 +981,21 @@ class Bridge:
             return
 
         page_no = guest.pages.live.number
-        sealed = guest.pages.add("html", html)
+        sealed, chunks = guest.pages.write("html", html)
 
         # Only stream when the guest is watching the live page. In HISTORY mode
         # the bridge keeps buffering silently and the page counter ticking up
         # is the notification.
+        #
+        # A run this long can split across a seal (pages.write above), so only
+        # the piece that actually landed on page_no belongs in this APPEND --
+        # sending the whole block under page_no double-renders the tail once
+        # the reader pages forward to where pages.write actually put it
+        # (02.33). The tail reaches the guest when it is paged to.
         if stream and (guest.view_page is None or guest.view_page == page_no):
-            await self._send_html(guest, html, APPEND, page_no)
+            on_this_page = "".join(text for pg, text in chunks if pg == page_no)
+            if on_this_page:
+                await self._send_html(guest, on_this_page, APPEND, page_no)
 
         for pg in sealed:
             await self._send(guest, pagesealed(pg.number, guest.pages.count))

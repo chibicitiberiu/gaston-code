@@ -599,6 +599,58 @@ async def test_view_page_resets_on_reconnect(harness):
     await harness.close(w2)
 
 
+async def test_a_block_split_across_a_page_boundary_is_not_rendered_twice(harness):
+    """02.33: `_write_block` captured `page_no` before `pages.add`, then sent
+    the WHOLE html as a live APPEND tagged with that one page number. When a
+    single block is long enough to split mid-run across the hard cap, the
+    tail lands on the next page (pages.py's `write`/`add`) but was ALSO
+    already inside the bytes just streamed live under the old page's number
+    -- so paging forward to where the tail actually lives re-sends it, and
+    the reader sees it twice.
+
+    Fixed by only ever streaming the piece of the run that landed on the page
+    the stream is tagged with; the tail reaches the guest when it is paged
+    to, not before.
+    """
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"READY"})
+    guest = harness.bridge._guest
+
+    # hard_bytes is 2x the default page_bytes (16384) with no mem_kb header,
+    # so this run must split: 32000 'A's, a newline the splitter should
+    # prefer to break at, then 10000 'B's that can only fit on the next page.
+    first_half = "A" * 32000
+    second_half = "B" * 10000
+    big = first_half + "\n" + second_half
+
+    await harness.bridge._write_block(guest, big)
+    frames = await harness.recv_until(r, {"PAGESEALED"}, timeout=5)
+
+    sealed = [f for f in frames if f.type == "PAGESEALED"]
+    assert sealed and sealed[0].headers["page"] == "1", (
+        "test setup: the run must actually split across a seal"
+    )
+    assert guest.pages.count == 2, "test setup: expected exactly two pages"
+
+    live_body = harness.body(frames).decode("cp1252")
+    assert "B" not in live_body, (
+        "the tail that landed on page 2 was streamed live under page 1's "
+        "APPEND -- it will be sent again when the reader pages forward"
+    )
+    assert live_body == first_half + "\n", (
+        "page 1's live stream must be exactly what pages.write put on page 1"
+    )
+
+    await harness.send(w, Frame("GETPAGE", {"page": "2"}))
+    frames2 = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
+    page2_body = harness.body(frames2).decode("cp1252")
+    assert page2_body == second_half, (
+        "page 2 must hold exactly the tail, with nothing repeated from what "
+        "already streamed live on page 1"
+    )
+    await harness.close(w)
+
+
 # --- the model menu ---------------------------------------------------------
 
 
