@@ -139,6 +139,21 @@ class GuestSession:
     # One pass at a time. Three triggers (timer, watcher, sync_status) and no
     # lock would let two passes both read the baseline and both advance it.
     sync_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: One turn at a time, per guest.
+    #:
+    #: `_handle` spawned a task per INPUT with no guard, and the RESUME handler
+    #: spawned a second -- reachable through the DESIGNED conflict flow, not a
+    #: race: the Continue button is not gated on g_turn_active, a halt is
+    #: raised by a sync pass while the agent works, and the agent writing files
+    #: is what moves the tree in the first place.
+    #:
+    #: Two turns on one session is not "two prompt bars". The SDK stream has a
+    #: single consumer, so two iterators get a DISJOINT split of messages: one
+    #: turn can consume the other's ResultMessage and return with its cost
+    #: while the other's text lands in the wrong callbacks. The transcript
+    #: itself is corrupted, and Session._busy is a flag rather than a depth, so
+    #: the first `finally` clears it and Stop stops nothing.
+    turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     sync_active: bool = False
 
     @property
@@ -897,7 +912,7 @@ class Bridge:
         if f.type == "INPUT":
             text = fold.decode(f.body)
             log.info("input: %s", text[:120])
-            asyncio.create_task(self._run_turn(guest, text))
+            self._spawn(self._run_turn(guest, text))
 
         elif f.type == "RESUME":
             # The user pressed Continue on the halt bar. THAT is the signal the
@@ -926,15 +941,19 @@ class Bridge:
                 # screen, and the second one carries no information the first
                 # did not. `sync_resolve` stays for the case the user never
                 # sees: the agent finishing a merge on its own.
+                # The release travels WITH the turn that explains it, and
+                # that ordering is the whole of M1.
+                #
+                # It used to run here, synchronously, and the informing turn
+                # was spawned after it -- so an in-flight turn that had been
+                # told nothing found the path no longer refusing its writes,
+                # wrote, and the write went to the user's machine. Queueing the
+                # turn (above) makes that window arbitrarily long, so the two
+                # have to move together: _run_turn takes the lock, waits out
+                # any turn ahead of it, and only then lifts the refusals it is
+                # about to explain.
                 answered, guest.halt_paths = guest.halt_paths, frozenset()
-                freed = await self._release_all_latches(only=answered)
-                if freed:
-                    log.info("sync: released %d latched path(s) on Continue",
-                             freed)
-                asyncio.create_task(self._run_turn(
-                    guest,
-                    "Resolve the sync conflict, then continue with what you "
-                    "were doing.", echo=False))
+                self._spawn(self._resume_turn(guest, answered))
 
         elif f.type == "SYNCDIRTY":
             # The guest noticed its tree move. It never reconciles anything
@@ -1061,8 +1080,34 @@ class Bridge:
         lines.append("")
         return "\n".join(lines) + text
 
+    async def _resume_turn(self, guest: GuestSession, answered) -> None:
+        """Continue: wait for the wire to be ours, THEN unlatch, THEN explain.
+
+        Never unlatch before the lock. A turn already running has not been told
+        about this conflict -- that is why the latch exists -- and lifting the
+        refusal while it runs is exactly the loss the latch was added to stop.
+        """
+        async with guest.turn_lock:
+            freed = await self._release_all_latches(only=answered)
+            if freed:
+                log.info("sync: released %d latched path(s) on Continue", freed)
+            await self._run_turn_locked(
+                guest,
+                "Resolve the sync conflict, then continue with what you "
+                "were doing.", echo=False)
+
     async def _run_turn(self, guest: GuestSession, text: str,
                         *, echo: bool = True) -> None:
+        if not guest.claude:
+            return
+        # QUEUED, not rejected. The user pressed Continue, or typed something;
+        # dropping either on the floor is the one thing worse than running it
+        # late. The wait is bounded by the turn ahead of it finishing.
+        async with guest.turn_lock:
+            await self._run_turn_locked(guest, text, echo=echo)
+
+    async def _run_turn_locked(self, guest: GuestSession, text: str,
+                               *, echo: bool = True) -> None:
         if not guest.claude:
             return
         # User turns are the landmarks a reader navigates by.

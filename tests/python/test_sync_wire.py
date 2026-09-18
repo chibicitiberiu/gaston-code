@@ -1616,3 +1616,94 @@ async def test_the_same_root_is_not_refused(harness, tmp_path):
     await fake_scan(harness, reader, writer, {})
     await asyncio.wait_for(task, 5)
     await harness.close(writer)
+
+
+async def test_two_turns_never_run_at_once(harness, tmp_path):
+    """The SDK stream has ONE consumer. Two iterators get a disjoint split of
+    messages -- one turn consumes the other's ResultMessage and returns with
+    its cost while the other's text lands in the wrong callbacks -- so the
+    transcript itself is corrupted, not merely the prompt bar.
+
+    Reachable through the DESIGNED conflict flow, not a race: Continue is not
+    gated on g_turn_active, and a sync pass raises the halt while the agent
+    works because the agent writing files is what moves the tree.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+
+    live = asyncio.Event()
+    order = []
+
+    async def slow(text, **kw):
+        from bridge.agent.session import Turn
+        order.append(("start", text))
+        await live.wait()
+        order.append(("end", text))
+        return Turn(ok=True, subtype="success", cost_usd=0.0,
+                    num_turns=1, duration_ms=1)
+
+    guest.claude.send = slow
+    first = asyncio.create_task(harness.bridge._run_turn(guest, "one"))
+    await asyncio.sleep(0.05)
+    second = asyncio.create_task(harness.bridge._run_turn(guest, "two"))
+    await asyncio.sleep(0.05)
+
+    assert [o for o in order if o[0] == "start"] == [("start", "one")], \
+        "the second turn started while the first was still running"
+    live.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 5)
+    assert order[0] == ("start", "one") and order[1] == ("end", "one")
+    await harness.close(writer)
+
+
+async def test_continue_unlatches_only_once_the_wire_is_free(harness, tmp_path):
+    """M1: the release must travel with the turn that explains it.
+
+    It ran synchronously in the RESUME handler with the informing turn spawned
+    after, so a turn already in flight -- which had been told nothing, that
+    being why the latch exists -- found the path no longer refusing its writes
+    and wrote. Queueing the turn makes that window arbitrarily long, so the two
+    have to move together.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge._guest
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    base = Baseline()
+    base.latched["src/main.c"] = "both sides moved"
+    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+
+    await harness.bridge._raise_halt(guest, "Stopped: 1 conflicting edit.",
+                                     paths=["src/main.c"])
+    await _recv(harness, reader, "HALT")
+
+    # A turn is already running and has heard nothing about this conflict.
+    live = asyncio.Event()
+
+    async def slow(text, **kw):
+        from bridge.agent.session import Turn
+        await live.wait()
+        return Turn(ok=True, subtype="success", cost_usd=0.0,
+                    num_turns=1, duration_ms=1)
+
+    guest.claude.send = slow
+    running = asyncio.create_task(harness.bridge._run_turn(guest, "in flight"))
+    await asyncio.sleep(0.05)
+
+    await harness.send(writer, Frame("RESUME", {"id": guest.halt_id}))
+    await _recv(harness, reader, "HALTEND")
+    await asyncio.sleep(0.1)
+
+    assert harness.bridge._load_baseline().latched, (
+        "unlatched while a turn that was never told about it is still running")
+
+    live.set()
+    await asyncio.wait_for(running, 5)
+    await asyncio.sleep(0.2)
+    assert not harness.bridge._load_baseline().latched, (
+        "never unlatched once the wire was free")
+    await harness.close(writer)
