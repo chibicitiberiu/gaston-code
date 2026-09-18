@@ -294,7 +294,84 @@ inventing.
 **Done now, because it is one word and it is a trap:** `ICC_PROGRESS_CLASS` is
 registered alongside `ICC_BAR_CLASSES`. It was not, so the first
 `CreateWindow(PROGRESS_CLASS, ...)` would have failed on a machine with no
-debugger, presenting as "the progress bar does not appear".
+debugger, presenting as "the progress bar does not appear". (Audit 01.10 found
+the same gap independently; closes that clause of it too.)
+
+**The primitive itself, now named.** Audit 04.3 counted four ad-hoc chunked
+transfers already shipping with no shared shape: `_send_html` (`bridge/server.py`,
+bridge to guest, display text, no ack, no END frame, no Cancel), `Pass.push`
+(`bridge/files/syncrun.py`, bridge to guest, `SYNCPUTEND`/`SYNCPUTACK`, an
+`if_crc` precondition, no Cancel), `do_get` (`win/sync/syncrpc.cpp:378-456`,
+guest to bridge, `SYNCDATEND`, no Cancel) and `send_out` (`win/rpc/rpc.cpp:253`,
+guest to bridge, `EXECRESULT`, no framing at all, no Cancel). Phase 4's Export
+would be a fifth, Phase 5's upload a sixth, Phase 6's screenshot strips a
+seventh -- and 01.10 raised the guest-outbound half of this same gap
+independently, from the "no guest-initiated chunked upload exists" angle.
+
+`do_put` (`win/sync/syncrpc.cpp:188`) is already a chunked sink -- opens on
+`off=0`, writes each chunk to disk, commits on END -- and `do_get` is already a
+chunked source. Both matter more than the other two because neither ever
+holds the whole payload in guest memory, which Export, upload and screenshots
+all need. The shape to extract, per the audit's own worked design
+(`docs/audit/04-planned-features.md`, its §C3): a **sink**
+(`begin(dest) / write(chunk) / commit(crc) / abort(why)`) that `do_put`
+becomes a caller of and that Export and an inline-image write would also use,
+and a **source** (`open(reader_fn, total) / pump()`) that `do_get` becomes a
+caller of and that the Phase 5 upload and Phase 6 strips would also use, both
+in a new `win/xfer.c`, both carrying `id`/`total`/`off` and an END frame with
+a status and a CRC -- what all three existing implementations converged on
+independently -- plus `CANCEL\nid=`, added once during extraction rather than
+retrofitted into four separate loops later. Deliberately NOT unifying
+`_send_html`: it is a no-ack streaming hot path by design, and giving it a
+round trip per block would cost it the thing it exists for.
+
+**The guest-side routing half of this is mostly already solved.** Audit 01.36
+worried that a third frame family would not fit `rpc.c`'s two-prefix model.
+It now does: `rc_rpc_route` (`win/rpc/rpc.cpp:94`) dispatches on
+`rc_frame_lane()` against `RC_LANE_TABLE` (`win/net/frameproto.cpp:42-46`,
+four lanes -- UI/JOB/STREAM/IMMEDIATE), with `frameproto.h:70` inviting "add a
+Phase 6 tool by adding a row to `RC_LANE_TABLE`, not by [editing the
+router]." That landed closing 04.5. What is NOT generalised:
+`id_matches_family`/`rc_rpc_submit` (`rpc.cpp:595-614`) still fight for one
+job slot keyed on a single id prefix, so a third family wanting its own queue
+depth -- a Phase 5 upload running independently of a live `exec`, say --
+still needs a new lane and a new branch there. Narrower work than 01.36
+described, since the table it asked for already exists, but not nothing.
+
+**Export as HTML** (04.15, `win/app/main.cpp:1706-1715`, still a
+`MessageBoxA` -- closes the missing-`.rc`-infra-adjacent clause of 01.10 by
+being the thing that actually needs the sink) needs the sink above (a
+transcript is hundreds of KB and the guest has tens of KB free) and a real
+END/status on `_send_html`, which today has neither and silently drops an
+oversized LIVE frame (`bridge/server.py:847-848`). Its third cited blocker,
+`wire_yield` not being called from the HTML/page send loops (04.12), is
+already fixed -- `wire_yield` (`bridge/wire/link.py:148`) is wired correctly
+for the sync path; only `_send_html`'s loop and `_send_page`'s run loop still
+skip it, which the extraction above fixes by construction rather than by
+another retrofit.
+
+**The Phase 5 upload** (04.25) hits a second, independent problem once the
+primitive exists: the guest's outbound queue is one 64KB budget
+(`RC_OUTQ_MAX_BYTES`, `win/net/net.h`) backing `rc_net_send`, which already
+blocks its UI-thread callers up to 5s when full (`do_send`, `do_stop`,
+`chats_switch`, the permission bar -- §1 above). A 10MB attachment is ten
+times `MAX_FILE`'s 1MB cap (`bridge/files/syncrun.py:46`) and 33 minutes on a
+modem, so Stop and the permission bar go unresponsive in bursts for the whole
+transfer, on a path that has never run because the netem gate never has.
+Fix order, per 04.25: close the netem gate first (§1 above -- no longer
+blocked on sudo, per §5's last bullet) before trusting any number here, then
+build the source primitive with Cancel and a determinate progress bar, then
+cap the upload on both sides and report the cap rather than truncate silently.
+
+**To close it, in order:** (1) `win/xfer.c` with the sink/source pair above,
+maybe 150-250 lines given `do_put`/`do_get` are already ~130 combined and
+mostly reusable; (2) `id_matches_family`/`rc_rpc_submit` grow a third queue
+class if Export or upload need to run independently of `exec` -- decide this
+when the first of the three callers is actually built, not before; (3)
+`_send_html` gains an END frame and a status; (4) each caller (Export,
+upload, screenshot strips) becomes a thin wrapper. None of the three callers
+is built yet, so there is no size estimate for the whole thing worth stating
+beyond "the primitive is smaller than any one caller and should come first."
 
 ## 7. The sync baseline is bound to one machine, and R7 needs a decision
 
@@ -333,6 +410,84 @@ which five review rounds went into. The third is somewhere between.
 `self._guests`. Doing it in the other order means discovering the answer from
 whichever tests break.
 
+**Implementation blockers, once the question above is answered.** Recorded
+2026-09-18 from audits 02.3, 04.18, 04.19, 04.20, 04.21, 04.22, 04.35 and
+01.35 -- eight findings, all the same object seen from `bridge/server.py`,
+`bridge/agent/registry.py` and the guest. None of this is reachable before
+the mirror decision above; it is what changes in code once it is made.
+
+*Bridge-side per-guest state.* 02.3 counted eight attributes living on
+`Bridge` that need to move to per-`GuestSession` (or into
+`self._guests: dict[client_id, GuestSession]`, PLAN.md's R7 shape). One is
+already fixed: commit `326a62a` closed the worst of them -- `run_on_guest`,
+`tools.build()` and `_baseline_lock` now all take an explicit `guest`
+parameter instead of resolving `self._guest` inside a closure. The audit
+called it "the hardest R7 blocker" for good reason: a wrong resolution there
+runs a command on the wrong machine while the permission prompt asking for it
+appears on the right person's screen. `run_sync` (`server.py:1359`) still
+hardcodes `guest = self._guest` and was missed by that fix. Five of the
+remaining seven are still singular exactly as found: `self._agent_notices`,
+`self.guest_sync_root`, `self._last_sync_reports`, `self.registry`,
+`self.sync_dir`/`self.sync_state`. `self._early` (the sixth named in 02.3)
+was closed the same day by a different commit (`a805df3`) for an unrelated
+reason -- it held frames pipelined behind HELLO, per-connection state that a
+second client's HELLO was overwriting before the first client's frames were
+read, corrupting a live connection with a doomed one's data. Worth noting
+because it is exactly the failure shape 02.3 warns about, not because R7
+needed it fixed.
+
+*Mechanical dict-migration, once `self._guests` exists.* Four findings are
+each "this loops over one guest and needs to loop over the dict": `_reap_idle`
+and `close()` (04.22, `server.py:2084` and `:308`); the registry's one
+`~/.gaston-code/sessions.json` set (04.18, `bridge/agent/registry.py:33`)
+becomes `{client_id: [session ids]}` in the same file -- not one file per
+client, since the file is already written on every new session id and an
+atomic replace of one small file is the right cost; `self.cwd` (04.19, read
+at five sites in `server.py`) needs a per-client working directory once
+clients get separate mirrors, gated on the mirror-per-client design above,
+not to be decided independently of it; and the duplicate-connection
+"reject, don't evict" check (04.21, `server.py:~460-462`) narrows from "a
+guest is already connected" to "this `client_id` is already connected," which
+wants a test and a written-down acceptance: `client_id` is an unauthenticated
+assertion (one shared secret via `secrets.compare_digest`, `server.py:451`),
+so a client claiming another's id inherits its transcript and pending
+permission prompts. Accept that risk in writing rather than patch it
+silently with per-client secrets later.
+
+*Identity, on both sides.* 04.20 and 01.35's first point are the same gap
+seen from bridge and guest: `_attach` (`server.py:432`) never reads `sess`
+from HELLO even though the guest already sends it, so reconnect today works
+only because there is exactly one `GuestSession` to attach to. The guest
+side of that fix is `rc_config_save` never being called when a setting
+changes (`win/core/ini.cpp:42`, called only from `rc_config_load`'s
+first-run branch and from `inicheck.c`'s self-test) -- a minted `client_id`
+would regenerate every launch without it, the same trap `tree_id` avoided by
+deriving from the volume serial instead of storing one. This is the
+identical gap §10 below records for the Phase 4 settings dialog; one fix
+closes both call sites' need for it. 04.35 records the other half of guest
+identity: `guest.sess_id` is one field for the client's connection identity
+and the conversation's identity, which is why an effort fork used to leave
+the chat list on the pre-fork name. That symptom is fixed (`on_system` now
+picks up the real id during the fork's first turn, commit `a805df3`); the
+field is still one name for two concepts, and splitting it into `client_id`
+plus a bridge-owned `conv_id` is R7's job specifically, not a fix to make
+ahead of it.
+
+*A scope question 01.35 raises that nothing answers.* Its second and third
+points -- the guest's single-instance mutex
+(`"RetroClaudeSingleInstance"`) and `FindWindowA("RetroClaudeWnd")`
+forbidding a second window (`win/app/main.cpp:1822-1824`), and every
+worker-side module being a hard singleton (`g_net` in `rpc.cpp:56`,
+`g_cancel`/`g_child` in `exec.cpp:47-49`, `g_root`/`g_put` in
+`syncrpc.cpp:18,153`) -- only matter if R7 means multiple *windows on one
+guest*. PLAN.md's R7 text says "the bridge should take multiple **clients**"
+and describes `self._guests: dict[client_id, GuestSession]`, which reads as
+multiple *guests*, each still one window. If that reading holds, 01.35's
+points 2 and 3 need nothing done to them, ever. Say which reading is meant
+when the mirror decision above is made -- it is the same shape of question,
+and answering one without the other leaves half of 01.35 either wrongly
+deferred or wrongly ignored.
+
 ## 8. `rle8` / `rle8+deflate`, named in PLAN.md, never built
 
 **Status:** open question, recorded 2026-09-18, from audit finding 03.35. Not a defect --
@@ -365,3 +520,226 @@ was measured and works -- but that is GDI's RLE inside a DIB, a different thing 
 gets an `rle8` value of its own (cheap: GDI already produces `BI_RLE8` bytes, so the guest
 side may be close to free) or whether `deflate` alone is enough for the compressed sizes
 Phase 6 actually measures, and write down which. Until then this is not blocking anything.
+
+## 9. Phase 6 input/window tools -- readiness gaps found ahead of the phase
+
+**Status:** recorded 2026-09-18, from audits 01.38, 04.31, 01.41, 04.27,
+04.28, 02.32, 04.11, 01.37, 01.10 and 01.39. Phase 6 has not landed; nothing
+here blocks anything in flight. Recorded now because the audit found several
+separate objects that all land the moment `list_windows`, `click` or
+`send_keys` get their first line of code, and finding them once ahead of time
+is cheaper than finding them once per tool.
+
+**Thread affinity has no structural guard.** 01.38: `EnumWindows` and
+`SendMessage(WM_GETTEXT)` are safe from the RPC worker thread, but
+`keybd_event`/`mouse_event` are process-global, and PLAN.md's own rules --
+`AttachThreadInput` before a cross-thread `SetFocus`, never send keys to
+Gaston's own window -- have nothing in the router enforcing them; whoever
+writes the first input tool has to remember both by hand. 04.31 is the same
+finding at implementation depth, not a second risk: (1) the
+`AttachThreadInput` call is worker-to-target and must be detached afterward,
+or the worker thread permanently inherits the target's input-queue state;
+(2) "never send keys to our own window" has to compare
+`GetWindowThreadProcessId(target)` against our own **process** id and refuse
+the whole process, not compare the target HWND against `g_main` -- a child
+control shares the UI thread but is a different HWND, so the HWND comparison
+would miss it. Verified: no cross-thread input code exists anywhere in
+`win/` today (`win/rpc/rpc.cpp:85-93` already has a comment anticipating
+where `list_windows` would dispatch; nothing further is built).
+
+**Cancellation is per-process, not per-job.** 01.41: `rc_exec_cancel` sets
+one `g_cancel` and terminates one `g_child` (`win/rpc/exec.cpp:47-83`), so a
+screenshot job and an `exec` could never be cancelled independently once
+Phase 6 adds jobs that are not `exec`. Separately, `EXECKILL` on the reader
+thread (`win/rpc/rpc.cpp:106-113`) logs the kill id and then discards it,
+calling `rc_exec_cancel()` unconditionally -- an `EXECKILL` for a command
+that already finished kills whatever started since. `rc_exec_arm()` narrows
+the race but does not close it. Not urgent while `exec` is the only job;
+becomes urgent the day a second job type exists.
+
+**`list_windows` has no scope argument or node cap planned.** 04.27:
+PLAN.md's own argument -- a control tree costs ~200 tokens against a
+screenshot's ~850 -- holds for one dialog and inverts on a busy desktop. A
+scope argument (foreground window / by class / by pid) and a node cap need
+deciding before the first call, not after the first call returns every
+control on screen.
+
+**Inline screenshots need the chunked-transfer primitive, not a new one.**
+04.28: the transcript renders under MSHTML/IE5 (`win/app/htmlview.cpp`), and
+IE did not support `data:` URIs until IE8 -- confirmed, `htmlview.cpp:426,452`
+only ever build `file:///%s\view.htm`. Inline images have to be written as
+real files beside `view.htm` via the sink primitive §6 above already
+describes for Export. Cross-reference, not a separate cost: this is one more
+caller of `win/xfer.c`'s sink, not a fourth design.
+
+**No reusable RPC primitive on the bridge either.** 02.32 (with 04.11 folded
+in -- they name the same extraction from two different files): `run_on_guest`
+(`bridge/server.py:1249`) and the four `Pass` transport methods --
+`scan_guest`/`push`/`pull`/`mkdir` (`bridge/files/syncrun.py:126,353,420,509`)
+-- are five hand-rolled copies of allocate-id/send/await-future/handle-reply/
+kill. `exec_lock` (`server.py:167`) encodes "one worker thread on the guest"
+as a field specific to `exec` rather than a property a shared channel
+enforces for everything. `_summarise` and the `EXEC_OUT_MAX` 64KB body cap
+(`server.py:2362-2367`, `:1919`) are both tuned for text tools; neither has a
+branch for an image result. Shape of the fix, per audit: `GuestRpc.call(verb,
+headers, body, *, timeout, serialise=True) -> Result` on the Bridge, with
+`run_on_guest` and the `Pass` methods becoming thin callers. This does not
+block Phase 6's *first* tool -- one more hand-rolled copy costs nothing new --
+but should happen before the *second* Phase 6 tool lands, or the duplication
+this finding is about doubles again.
+
+**The bar has no state for "the agent is driving."** 01.37: PLAN.md itself
+calls this "probably the answer, and it is not designed yet" -- a fourth
+`g_bar_mode` value after `BAR_NONE`/`BAR_PERM`/`BAR_HALT`
+(`win/app/main.cpp:140-143`, unchanged), and the first one that likely needs
+to block input to Gaston's own window rather than merely disable Send.
+Related, and not yet a problem because nothing renders it: 01.10 flagged that
+`g_perm_text` is a single-line `SS_ENDELLIPSIS` static at fixed height 26,
+about 45 characters at 640x480 (`win/app/main.cpp:78,88,1391-1394`), while
+PLAN.md's `send_action_sequence` design wants the bar to render a compact
+multi-step summary (`type "hello" -> click [OK] -> wait "Notepad"`). Same
+bar, same gap, two audits.
+
+**Closed, not open: the stack-frame guard IS reachable from top-level `make
+check`.** 01.39 restated a real memory-safety fact -- `win/sync/sync.cpp:100-116`
+still carries the postmortem for an actual invalid-page-fault where an 8KB
+stack local under a 62KB caller landed below the guard page, so every Phase 6
+job needing a buffer must heap-allocate -- but its claim that the only
+mechanical check for this, `tools/stackframes.py`, is "not reachable from the
+top-level `make check`, per 01.31/CLAUDE.md" is stale. 01.31 itself is marked
+`Fixed:` in the same audit file: the top-level `Makefile:43` now runs
+`$(MAKE) -C win check`, and `win/Makefile:264` runs `stackframes.py` inside
+that same `check:` target (`win/Makefile:213`). Verified directly: `make
+check` from the repo root exercises it today. The underlying advice --
+heap-allocate Phase 6 job buffers -- stays good practice; the tooling that
+would catch a violation already runs.
+
+## 10. The Phase 4 settings dialog -- three layers, in a real order
+
+**Status:** recorded 2026-09-18, from audits 01.34, 04.13, 04.17 and 02.31.
+`IDM_HOST` is still a `MessageBoxA` telling the user to edit the INI by hand
+(`win/app/main.cpp:1717-1726`); `IDM_EXPORT` is a sibling case handled in §6
+above. These four findings describe the same object -- what a real
+`Server Host...` dialog needs -- at three different layers, with a real
+dependency order rather than a single combined cost.
+
+**1. Resource-compile infrastructure (04.17), the true prerequisite.**
+`WRC` is defined in both `make/ow.mk:13` and `win/Makefile:20` and invoked by
+neither -- no `.rc` file exists anywhere in the tree, and `grep` for `$(WRC)`
+across both makefiles returns nothing. Both R5's icon and a
+`DialogBoxIndirectParam`-based dialog need this (closes the missing
+`dialogs.c`/`.rc` clause of 01.10, which named the same gap from the
+"Phase 4's dialog" angle). Linking an `.rc`-derived resource will also move
+`make check`'s CMOV false-positive baseline (`CMOV_BASELINE = 1`,
+`win/Makefile:208`) -- `objdump` disassembles the whole section linearly, and
+a resource's binary data will decode as phantom instructions the same way
+the existing false positive does. Expect to re-baseline with a comment, or a
+future `make check` reads a resource-driven bump as a regression that never
+was one.
+
+**2. `rc_config_save` is a one-line fix with no caller yet (04.13, and half
+of 01.34).** It runs from exactly two places today: `rc_config_load`'s
+first-run branch (`win/core/ini.cpp:39`) and `inicheck.c`'s round-trip
+self-test (`:58`) -- never from anywhere a setting actually changes. An OK
+handler calling it unconditionally would be its first-ever call against an
+existing INI file. This is genuinely small (`rc_config_save();
+try_connect();`) but it has nothing to attach to until either this dialog
+exists or R7 mints a `client_id` that needs persisting (§7 above) --
+whichever lands first should write it; building it speculatively before
+either does just leaves an unreachable function.
+
+**3. What the dialog itself still has to get right (01.34).** The naive OK
+handler -- `rc_config_save(); try_connect();` -- does not reset
+`g_backoff_ms`/`g_retry_noted` (`win/app/main.cpp:228,230`, reset only on a
+successful connect, `:651-652`), so fixing a typo'd host and hitting OK
+still rides out up to the existing ~15s backoff before the first real
+attempt. And a modal dialog re-enters the message pump while the reader
+thread keeps posting `WM_RC_FRAME` -- exactly the `RC_MAX_INFLIGHT`
+backpressure gate (`win/net/net.cpp:22,206-207`) describes, a real
+`Sleep(10)` loop that fires when the UI thread falls behind draining
+frames, and which has never run against a live stream under a modal, as far
+as the code shows. Also lands here: Export as HTML, the permission rule
+table, R8's Command menu and per-model description text all currently point
+at `main.cpp` too, each another 60-150 lines into a file already at 1923
+lines (it was 1783 when 01.34 was written).
+
+**4. The settings-dispatch shape a dialog's new frames would multiply
+(02.31).** `SETMODEL` and `SETEFFORT` are already two near-identical
+dispatch branches -- one inline (`server.py:1124-1129`), one delegated to
+`_set_effort` (`:1133-1134`, `_set_effort` itself at `:2200`) -- and a
+settings dialog's new `SET*` frames would add a third and fourth shape
+without a unified `_apply_setting(name, value)`. One correction to make
+when recording this: 02.31 as audited also claimed `guest.sess_id` stays on
+the pre-fork value "until the next turn fixes it up," framing it as open.
+That symptom is fixed (commit `a805df3`, see §7 above) -- `on_system` now
+picks up the real id during the fork's first turn. Cite 04.35's framing, not
+02.31's, for that part; the dispatch-unification point stands on its own
+regardless.
+
+**To close it, in order:** (1) wire `WRC` into `win/Makefile`, write the
+`.rc`, re-baseline CMOV; (2) build the dialog -- `DialogBoxIndirectParam` is
+cheaper than a `.rc` template given (1) is already required for the icon
+(R5); (3) OK handler calls `rc_config_save` and resets the backoff state;
+(4) exercise a live stream with the dialog open at least once to see whether
+the `RC_MAX_INFLIGHT` gate is really unreached or just unobserved; (5) if
+R7's `client_id` is also live by then, one `rc_config_save` fix serves both.
+
+## 11. Smaller Phase 4/5 gaps found ahead of their phases, not yet closed
+
+**Status:** recorded 2026-09-18. Four unrelated findings, none large enough
+for their own section, none blocking anything in flight.
+
+**04.16 -- the permission rule table and the Phase 6 prompt-bar assumption
+share one gap.** `PROGRESS.md`'s 2026-09-17 entry ("the auto-allow policy was
+deleted, because Claude Code already does it") measured that Claude Code
+resolves `Read`/`Glob`/`Grep` inside `cwd` and sandboxed `Bash` locally,
+never reaching `can_use_tool` at all. A rules table read from
+`.claude/settings*.json` (the planned 4.5) cannot show those local
+resolutions, so it has to say plainly that it is incomplete, or it reads as
+"these are all the things that can happen without asking," which is already
+measured false. The same measurement undercuts Phase 6's assumption that
+every `mcp__machine__*` call reaches the 3.0 prompt bar (PLAN.md's
+Permissions note under Phase 6) -- that wants its own spike to verify before
+Phase 6 relies on it, since this exact class of assumption was wrong once
+already. Nothing to build yet; something to verify before either Phase 4.5
+or Phase 6 ships.
+
+**04.23 -- no toolbar exists for Phase 5's attach control.**
+`win/app/main.cpp` builds a hand-written menu bar and individual buttons, no
+comctl32 toolbar (confirmed, ~`main.cpp:365-383`, `CreateMenu`/`AppendMenuA`
+only). Adding one plus R5's icon bitmaps is the first real GDI spend the
+project makes against the fixed 64KB USER heap -- the same constraint that
+already forced the chat list to stay a `LISTBOX` (`main.cpp:1384`,
+`LBS_OWNERDRAWFIXED`) rather than a `ListView`. Needs GDI-object counting
+before and after, since `GetFreeSystemResources` is already ruled out (9x-only
+16-bit export, no 32-bit equivalent worth resolving). Blocks Phase 5.1, not
+before.
+
+**04.24 -- `off_limits` is not wired to a path that does not exist yet.**
+`off_limits` (`bridge/agent/permissions.py:220`) refuses path-tool calls
+outside `cwd`, but nothing in `win/net/`, `win/rpc/` or `win/sync/` sends or
+handles an `ATTACH` frame today -- grepped, zero hits. The finding is
+accurate as a requirement and premature as a defect: there is no live path
+where a guest could send `ATTACH path=/etc/shadow`, because there is no
+`ATTACH`. Record it as a one-line requirement for Phase 5.2's first cut --
+apply the same containment check to the attach path when it is built -- not
+as something to fix now.
+
+**04.34 -- no shared frame-dispatch table, only a closed instance of the bug
+it enables.** The specific failure -- `TOOLRESULT` going unrendered for all
+of Phase 3 because a frame type was added on one side and missed on the
+other -- is closed (04.7, marked `Fixed: (in part)`): every frame the bridge
+sends now has a guest branch, and the guest's own routing table
+(`RC_LANE_TABLE`, `win/net/frameproto.cpp:42-46`, closing 04.5) means the
+transport itself is no longer a dispatch site on that side. What is not
+built is the audit's own proposed fix for the general case
+(`docs/audit/04-planned-features.md`, its §C5): a single `FRAMES` table in
+`bridge/wire/protocol.py` naming every type, its direction and its
+guest-side lane, plus two coverage tests -- one asserting `Bridge._handle`
+(`server.py`, currently a plain if/elif chain of about 19 `f.type ==`
+branches, no table) has a branch for every guest-to-bridge type, one
+asserting the guest's dispatch covers every bridge-to-guest type. Phase 4
+adds `EXPORT`/`EXPORTDAT`/`EXPORTEND` and a settings frame; Phase 5 adds
+attach and upload; Phase 6 adds the UI-tier request/reply pairs -- each one
+is a chance to repeat the exact bug that motivated this. Belongs with
+whichever of those lands first, not before.
