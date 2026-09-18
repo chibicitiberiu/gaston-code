@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from .files import caps as C
 from .files import manifest
-from .status import EXEC_STATUS_PROSE, ExecStatus
+from .status import EXEC_STATUS_PROSE, ExecStatus, PromptEndReason, SyncStatus
 from .wire import fold
 from .agent import machine
 from .agent.registry import Registry
@@ -835,7 +835,7 @@ class Bridge:
                 return await asyncio.wait_for(prompt.future,
                                               timeout=perms.DEADLINE_S)
             except asyncio.TimeoutError:
-                self._finish_prompt(guest, prompt, "timeout")
+                self._finish_prompt(guest, prompt, PromptEndReason.TIMEOUT)
                 return PermissionResultDeny(
                     message=("Nobody answered the permission request on the "
                              "Windows machine within ten minutes, so it was "
@@ -848,7 +848,7 @@ class Bridge:
                 # the guest would keep a bar it can never dismiss. Schedule it
                 # instead; create_task is synchronous and the new task is not
                 # in the cancelled scope.
-                self._finish_prompt(guest, prompt, "cancelled")
+                self._finish_prompt(guest, prompt, PromptEndReason.CANCELLED)
                 raise
 
         return can_use_tool
@@ -948,7 +948,7 @@ class Bridge:
                                          len(guest.perm_queue)))
 
     def _finish_prompt(self, guest: GuestSession, prompt: PendingPrompt,
-                       reason: str) -> None:
+                       reason: PromptEndReason) -> None:
         """Synchronous bookkeeping plus a scheduled PERMEND.
 
         Deliberately not a coroutine. It is called from a cancelled context,
@@ -961,8 +961,11 @@ class Bridge:
         self._spawn(self._after_prompt(guest, prompt.tool_use_id, reason))
 
     async def _after_prompt(self, guest: GuestSession, tool_use_id: str,
-                            reason: str) -> None:
-        await self._send(guest, permend(tool_use_id, reason))
+                            reason: PromptEndReason) -> None:
+        # .value, not the member itself -- Frame.encode() calls str() on
+        # every header value, and str() on a bare (str, Enum) member is
+        # "PromptEndReason.X", not the wire token "x" (bridge/status.py).
+        await self._send(guest, permend(tool_use_id, reason.value))
         await self._pump_queue(guest)
 
     async def _pump_queue(self, guest: GuestSession) -> None:
@@ -2115,7 +2118,7 @@ class Bridge:
             fut = entry.future
             if not fut.done():
                 fut.set_result(ScanResult(
-                    status=f.headers.get("status", "ok"),
+                    status=SyncStatus.parse(f.headers.get("status", "ok")),
                     files=int(f.headers.get("files", "0")),
                     tree_id=f.headers.get("tree_id", ""),
                     root=f.headers.get("root", ""),
@@ -2125,7 +2128,7 @@ class Bridge:
             fut = entry.future
             if not fut.done():
                 fut.set_result(AckResult(
-                    status=f.headers.get("status", "ok"),
+                    status=SyncStatus.parse(f.headers.get("status", "ok")),
                     crc=int(f.headers.get("crc", "0"))))
 
         elif f.type == "SYNCDAT":
@@ -2139,7 +2142,7 @@ class Bridge:
             fut = entry.future
             if not fut.done():
                 fut.set_result(GetResult(
-                    status=f.headers.get("status", "ok"),
+                    status=SyncStatus.parse(f.headers.get("status", "ok")),
                     crc=int(f.headers.get("crc", "0")),
                     cls=f.headers.get("cls", P.CLASS_TEXT),
                     data=bytes(entry.data or b"")))
@@ -2298,7 +2301,7 @@ class Bridge:
         prompt.future.set_result(result)
         guest.perm_pending = None
         log.info("permission %s for %s (%s)", action, prompt.tool_name, want)
-        await self._send(guest, permend(want, "answered"))
+        await self._send(guest, permend(want, PromptEndReason.ANSWERED.value))
         await self._pump_queue(guest)
 
     async def _sweep_sync(self) -> None:

@@ -23,6 +23,7 @@ from . import ignores as I
 from . import paths as P
 from . import sync as S
 from .synctransport import CHUNK, SyncTransport  # noqa: F401 (CHUNK re-export)
+from ..status import SyncStatus
 
 log = logging.getLogger("bridge.syncrun")
 
@@ -137,7 +138,7 @@ class Pass:
         status, files = result.status, result.files
         tree_id, root, rows = result.tree_id, result.root, result.rows
 
-        if status == "too_many":
+        if status == SyncStatus.TOO_MANY:
             # 03.24: the limit itself never crosses the wire -- SYNCEND only
             # ever says status=too_many, because the scan that would have
             # counted past it is the same scan that aborted instead of
@@ -149,12 +150,17 @@ class Pass:
                 f"has more than the machine's {SYNC_MAX_FILES}-file scan "
                 f"limit. Narrow the sync root, or exclude more of the tree "
                 f"with .gitignore, so the scan stays under that count.")
-        if status != "ok":
+        if status != SyncStatus.OK:
             # A truncated manifest is indistinguishable from a mass deletion,
             # and the natural implementation acts on what arrived -- pushing the
             # bridge's whole tree at a machine that just said it had too many
             # files.
-            raise SyncError(f"guest scan returned {status}")
+            # .value, not the bare member: f"{SyncStatus.X}" is
+            # "SyncStatus.X" (a bare (str, Enum)'s __format__ defers to
+            # Enum.__str__, not the plain string content), confirmed against
+            # this interpreter -- server.py's _exec_result hits the same
+            # thing and already spells it out this way for ExecStatus.
+            raise SyncError(f"guest scan returned {status.value}")
         if len(rows) != files:
             raise SyncError(
                 f"manifest arrived short: {len(rows)} entries, SYNCEND said "
@@ -323,7 +329,8 @@ class Pass:
 
     # --- applying ----------------------------------------------------------
 
-    def _too_long_detail(self, status: str, rel: str, *, is_dir: bool = False) -> str:
+    def _too_long_detail(self, status: SyncStatus, rel: str, *,
+                        is_dir: bool = False) -> str:
         """03.41: `too_long` named no limit in a push/mkdir refusal, unlike
         exec's own too_long (`_exec_result`), which tells the model the exact
         character count. The number was always available here -- it is the
@@ -336,7 +343,7 @@ class Pass:
         that is itself worth saying, because it means the two path-length
         rules have drifted apart.
         """
-        if status != "too_long":
+        if status != SyncStatus.TOO_LONG:
             return ""
         bad = P.check(rel, guest_root=self.guest_root, caps=self.caps,
                       is_dir=is_dir)
@@ -375,8 +382,8 @@ class Pass:
             if_crc=str(expect.crc) if expect else "absent")
         status, ack_crc = result.status, result.crc
 
-        if status != "ok":
-            self.reports.append(f"push {rel} refused: {status}"
+        if status != SyncStatus.OK:
+            self.reports.append(f"push {rel} refused: {status.value}"
                                 + self._too_long_detail(status, rel))
             return False
         if ack_crc != crc:
@@ -414,8 +421,8 @@ class Pass:
         status, crc, cls, wire = (result.status, result.crc, result.cls,
                                   result.data)
 
-        if status != "ok":
-            self.reports.append(f"pull {rel} refused: {status}")
+        if status != SyncStatus.OK:
+            self.reports.append(f"pull {rel} refused: {status.value}")
             return False
 
         # `cls` is the client's own reading of the bytes, and it is the right
@@ -485,11 +492,11 @@ class Pass:
         result = await self.transport.mkdir(rb)
         status = result.status
 
-        if status in ("ok", "exists"):
+        if status in (SyncStatus.OK, SyncStatus.EXISTS):
             return True
-        self.reports.append(f"mkdir {rel} refused: {status}"
+        self.reports.append(f"mkdir {rel} refused: {status.value}"
                             + self._too_long_detail(status, rel, is_dir=True))
-        if status == "no_parent":
+        if status == SyncStatus.NO_PARENT:
             # 03.45: the guest already tells us this is specifically a
             # missing-PARENT problem, not a permissions one -- distinct from
             # `bad_path`, which blames the name (win/sync/syncrpc.c). Saying
@@ -501,7 +508,7 @@ class Pass:
                       f"that is resolved.")
         else:
             self.note(f"SYNC: could not create the directory {rel} on the "
-                      f"machine ({status}), so nothing under it can be "
+                      f"machine ({status.value}), so nothing under it can be "
                       f"copied there.")
         return False
 
