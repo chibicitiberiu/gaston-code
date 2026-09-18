@@ -149,6 +149,35 @@ class Tomb:
 
 
 @dataclass
+class Wait:
+    """One outstanding request to the guest, and what kind it is.
+
+    These were four different ad-hoc dict shapes sharing one id namespace:
+    a scan carried {"future", "rows", "display"} and a put, get or mkdir
+    carried {"future"} alone. `_sync_frame` then indexed entry["rows"]
+    whenever a SYNCENT arrived -- so a SYNCENT bearing a PUT's id raised
+    KeyError, which is not caught anywhere between there and the read loop,
+    and took the whole connection down.
+
+    A guest would have to be confused or hostile to send that. The point is
+    that the bridge's answer to a confused guest should be a log line, not a
+    dropped link -- and a shape it can check is what makes that possible.
+    """
+
+    kind: str                       # "scan" | "put" | "get" | "mkdir"
+    future: object
+    #: Scans only. None on the others, which is what makes a mismatched
+    #: frame detectable rather than a KeyError.
+    rows: dict | None = None
+    display: dict | None = None
+    #: Gets only: the file bytes as SYNCDAT chunks arrive. A fifth ad-hoc
+    #: shape before this -- it was conjured by setdefault on whatever dict
+    #: happened to be there, so a stray SYNCDAT could attach a buffer to a
+    #: scan or a put and nothing would notice.
+    data: bytearray | None = None
+
+
+@dataclass
 class Decision:
     key: str
     act: Act

@@ -122,7 +122,8 @@ class Pass:
         """
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = {"future": fut, "rows": {}, "display": {}}
+        self.guest.sync_pending[sid] = S.Wait(
+            kind="scan", future=fut, rows={}, display={})
         await self.bridge._send(self.guest, Frame("SYNCSCAN", {"id": sid}),
                                 stamp=False)
         try:
@@ -328,7 +329,7 @@ class Pass:
 
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = {"future": fut}
+        self.guest.sync_pending[sid] = S.Wait(kind="put", future=fut)
         rb = P.wire_encode(rel, acp=self.caps.acp)
         prefix = str(len(rb)).encode() + b" " + rb
 
@@ -396,7 +397,8 @@ class Pass:
         """
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = {"future": fut}
+        self.guest.sync_pending[sid] = S.Wait(kind="get", future=fut,
+                                              data=bytearray())
         rb = P.wire_encode(rel, acp=self.caps.acp)
         try:
             await self.bridge._send(
@@ -471,7 +473,7 @@ class Pass:
         """
         sid = self._next_id()
         fut = asyncio.get_running_loop().create_future()
-        self.guest.sync_pending[sid] = {"future": fut}
+        self.guest.sync_pending[sid] = S.Wait(kind="mkdir", future=fut)
         rb = P.wire_encode(rel, acp=self.caps.acp)
         try:
             await self.bridge._send(

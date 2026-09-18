@@ -1755,3 +1755,42 @@ async def test_the_bridge_has_its_own_sweep(harness, tmp_path):
     req = await _recv(harness, reader, "SYNCSCAN")    # the sweep one
     assert req.type == "SYNCSCAN", "the bridge never swept on its own"
     await harness.close(writer)
+
+
+async def test_a_sync_frame_for_the_wrong_kind_of_request_is_not_fatal(
+        harness, tmp_path):
+    """sync_pending held four different ad-hoc dict shapes in one id
+    namespace -- a scan carried rows and display, a put carried neither --
+    and _sync_frame indexed entry["rows"] on any SYNCENT.
+
+    So a SYNCENT bearing a PUT's id raised KeyError, which nothing catches
+    between there and the read loop, and the whole connection went down. A
+    guest would have to be confused to send that; the point is that the
+    bridge's answer to a confused guest should be a log line rather than a
+    dropped link.
+
+    SYNCDAT had the same shape through setdefault, which would silently
+    attach a byte buffer to a scan.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    (pathlib.Path(p.root) / "a.txt").write_bytes(b"hello\n")
+
+    task = asyncio.create_task(p.push("a.txt", None))
+    put = await _recv(harness, reader, "SYNCPUT")
+    await _recv(harness, reader, "SYNCPUTEND")
+    pid = put.headers["id"]
+
+    # Manifest rows and file bytes, both against the PUT's id.
+    await harness.send(writer, Frame("SYNCENT", {"id": pid, "n": "1"},
+                                     manifest_line("x.c", b"int x;\n")))
+    await harness.send(writer, Frame("SYNCDAT", {"id": pid, "total": "3",
+                                                 "off": "0"}, b"abc"))
+    await asyncio.sleep(0.05)
+
+    # The link is still up and the put still completes normally.
+    await harness.send(writer, Frame("SYNCPUTACK", {
+        "id": pid, "status": "ok", "crc": "0"}))
+    await asyncio.wait_for(task, 5)
+    await harness.close(writer)

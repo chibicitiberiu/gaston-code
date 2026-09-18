@@ -1824,39 +1824,52 @@ class Bridge:
             return
 
         if f.type == "SYNCENT":
+            # A manifest row against an id that is not a scan means the guest
+            # is confused. Say so and carry on: this used to index a key that
+            # only a scan entry has, and the KeyError is caught nowhere
+            # between here and the read loop, so a malformed frame took the
+            # whole connection down with it.
+            if entry.kind != "scan":
+                log.warning("SYNCENT for %s, which is a %s -- ignoring",
+                            sid, entry.kind)
+                return
             # The guest's own codepage, never an assumption. Decoding a
             # manifest with the wrong table produces names that look right and
             # cannot be encoded back to ask for the file.
             caps = C.from_hello(guest.hello)
             rows, display = manifest.parse_rows(f.body, caps)
-            entry["rows"].update(rows)
-            entry["display"].update(display)
+            entry.rows.update(rows)
+            entry.display.update(display)
 
         elif f.type == "SYNCEND":
-            fut = entry["future"]
+            fut = entry.future
             if not fut.done():
                 fut.set_result((f.headers.get("status", "ok"),
                                 int(f.headers.get("files", "0")),
                                 f.headers.get("tree_id", ""),
                                 f.headers.get("root", ""),
-                                entry["rows"], entry["display"]))
+                                entry.rows, entry.display))
 
         elif f.type in ("SYNCPUTACK", "SYNCMKDIRACK"):
-            fut = entry["future"]
+            fut = entry.future
             if not fut.done():
                 fut.set_result((f.headers.get("status", "ok"),
                                 int(f.headers.get("crc", "0"))))
 
         elif f.type == "SYNCDAT":
-            entry.setdefault("data", bytearray()).extend(f.body)
+            if entry.kind != "get":
+                log.warning("SYNCDAT for %s, which is a %s -- ignoring",
+                            sid, entry.kind)
+                return
+            entry.data.extend(f.body)
 
         elif f.type == "SYNCDATEND":
-            fut = entry["future"]
+            fut = entry.future
             if not fut.done():
                 fut.set_result((f.headers.get("status", "ok"),
                                 int(f.headers.get("crc", "0")),
                                 f.headers.get("cls", P.CLASS_TEXT),
-                                bytes(entry.get("data", b""))))
+                                bytes(entry.data or b"")))
 
     def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
         """Resolve every in-flight sync transfer, synchronously."""
