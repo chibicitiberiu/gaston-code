@@ -380,6 +380,11 @@ static void do_get(rc_net *net, rc_frame *f)
     const char *vals[4];
     char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
     char *q;
+    /* Zeroed HERE, not only on the branch that stats a real file: the
+     * rejected-path branch below (bad_path -> "missing") falls straight
+     * through to the crc/cls _snprintf calls without ever touching st, and an
+     * uninitialised rc_sync_stat sent those two fields to the bridge as
+     * whatever garbage was on the worker's stack. */
     rc_sync_stat st;
     HANDLE h;
     /* Heap, for the same reason as do_scan's manifest: this runs on the RPC
@@ -390,6 +395,7 @@ static void do_get(rc_net *net, rc_frame *f)
     const char *status = "ok";
 
     if (!id) return;
+    memset(&st, 0, sizeof(st));
     buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
     if (!buf) {
         const char *k[2]; const char *v[2];
@@ -405,7 +411,6 @@ static void do_get(rc_net *net, rc_frame *f)
         rc_strf(full, sizeof(full), "%s\\%s", g_root, f->body);
         for (q = full + strlen(g_root); *q; q++) if (*q == '/') *q = '\\';
 
-        memset(&st, 0, sizeof(st));
         rc_sync_stat_file(full, &st);
         if (st.type == 'u')      status = "locked";        /* held open */
         else if (st.type == 'd') status = "is_directory";

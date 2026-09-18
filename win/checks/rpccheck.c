@@ -258,6 +258,88 @@ static void immediate_survives_busy_job(void)
     DeleteFileA(MARKER_FILE);
 }
 
+/* --- 03.15: an out-of-range EXEC timeout is clamped AND SAYS SO ----------- */
+
+/* rc_log_open(".") below writes here; opened with FILE_SHARE_READ, so this
+ * can read it back while rpc.c's own handle is still open and writing to it
+ * from the worker thread. */
+#define LOG_FILE "retroclaude.log"
+
+static int log_contains(const char *needle)
+{
+    HANDLE h;
+    DWORD sz, got;
+    char *buf;
+    int found;
+
+    h = CreateFileA(LOG_FILE, GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                    OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    sz = GetFileSize(h, NULL);
+    if (sz == INVALID_FILE_SIZE || sz == 0) { CloseHandle(h); return 0; }
+    buf = (char *)HeapAlloc(GetProcessHeap(), 0, sz + 1);
+    if (!buf) { CloseHandle(h); return 0; }
+    found = ReadFile(h, buf, sz, &got, NULL) && got == sz;
+    CloseHandle(h);
+    if (!found) { HeapFree(GetProcessHeap(), 0, buf); return 0; }
+    buf[sz] = '\0';
+    found = strstr(buf, needle) != NULL;
+    HeapFree(GetProcessHeap(), 0, buf);
+    return found;
+}
+
+/* THE PROPERTY: a timeout_ms above the guest's ceiling is clamped, and the
+ * clamp is now a diagnosable event, not a number that just quietly ran for
+ * less time than asked. Without the fix in run_one() (rpc.c), nothing in the
+ * log distinguishes a clamped request from an ordinary one -- this would find
+ * no such line and fail. */
+static void exec_timeout_clamp_is_logged(void)
+{
+    const char *xkeys[3]; const char *xvals[3];
+    rc_frame *f;
+    int ok;
+
+    rc_rpc_start(&g_net);
+
+    /* Absurdly over the 120000ms ceiling; the command itself is instant, so
+     * this check is not itself waiting anywhere near that long -- only the
+     * clamp decision, made before the child is even spawned, is being
+     * proven. shell=0 + cmd.exe named explicitly: see the long comment in
+     * immediate_survives_busy_job() for why that combination is what runs
+     * under this project's Wine prefix. */
+    xkeys[0] = "id";         xvals[0] = "x2";
+    xkeys[1] = "timeout_ms"; xvals[1] = "999999999";
+    xkeys[2] = "shell";      xvals[2] = "0";
+    f = make_frame("EXEC", xkeys, xvals, 3, "cmd.exe /c echo hi");
+    if (!f) {
+        printf("FAIL\tbuild clamp EXEC frame\t(alloc)\n");
+        g_failures++;
+        return;
+    }
+
+    if (rc_rpc_submit(f) != 0) {
+        printf("FAIL\tsubmit clamp EXEC\t(rejected)\n");
+        g_failures++;
+        free_frame(f);
+        rc_rpc_stop(); rc_rpc_join(5000);
+        return;
+    }
+
+    /* The clamp is decided and logged before the child is spawned, so this
+     * only has to outlast the dequeue -- generous against CreateProcess under
+     * Wine being the slow part elsewhere in this file. */
+    Sleep(1500);
+
+    ok = log_contains("clamped");
+    if (!ok) g_failures++;
+    printf("%s\texec timeout clamp is logged, not silent\t(log contains \"clamped\")\n",
+           ok ? "pass" : "FAIL");
+
+    rc_rpc_stop();
+    rc_rpc_join(5000);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -265,6 +347,7 @@ int main(int argc, char **argv)
 
     lane_table_cases();
     immediate_survives_busy_job();
+    exec_timeout_clamp_is_logged();
 
     rc_log_close();
 

@@ -84,3 +84,16 @@ def test_immediate_is_never_refused_for_a_busy_job(verdicts):
     assert verdicts["slow JOB was genuinely running"][0] == "pass"
     assert verdicts[
         "slow JOB stopped promptly after EXECKILL, before rc_rpc_stop"][0] == "pass"
+
+
+def test_exec_timeout_clamp_is_logged(verdicts):
+    """03.15: a timeout_ms above the guest's 120000ms ceiling is still
+    clamped -- that part was never in question -- but it now SAYS SO in the
+    log. Before this fix nothing distinguished a clamped request from an
+    ordinary one, so a bridge that ever asked for more than the guest allows
+    (its own DEFAULT_TIMEOUT_MS/MAX_TIMEOUT_MS in tools.py are meant to
+    prevent that, but that agreement was held by comments alone) would have
+    told the model it "timed out" against a limit it never actually
+    requested, with no diagnostic trail on either side.
+    """
+    assert verdicts["exec timeout clamp is logged, not silent"][0] == "pass"

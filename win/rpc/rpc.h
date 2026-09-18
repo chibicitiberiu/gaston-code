@@ -41,7 +41,11 @@ int  rc_rpc_start(rc_net *net);
 int  rc_rpc_route(rc_frame *f, volatile LONG *running);
 
 /* Hand a parsed EXEC frame to the worker. OWNERSHIP TRANSFERS: the worker
- * frees the frame. Returns 0 if queued. */
+ * frees the frame in every case that returns 0 -- queued, rejected as a
+ * family mismatch, or answered `busy` and dropped are all "the worker took
+ * ownership," which is the only question net.c's caller actually needs
+ * answered. Returns -1, leaving the frame for the CALLER to free, only when
+ * the worker was never started or has already been told to stop. */
 int  rc_rpc_submit(rc_frame *f);
 /* True when the sync FIFO cannot take another frame; the reader waits. */
 int  rc_rpc_syncq_full(void);

@@ -24,6 +24,16 @@
 #include "core/log.h"
 #include "core/str.h"
 
+/* 03.15: the three points of run_one's timeout clamp, named rather than
+ * three bare literals -- this is one side of a three-way contract (PLAN.md
+ * "Three timeouts, and they must be ordered": guest ceiling < bridge
+ * DEFAULT_TIMEOUT_MS/MAX_TIMEOUT_MS < the MCP tool's own 300000ms), and a
+ * cross-language test that wants to prove the two sides still agree needs
+ * something more specific to grep for than "120000". */
+#define RPC_EXEC_TIMEOUT_FLOOR_MS      1000
+#define RPC_EXEC_TIMEOUT_DEFAULT_MS   20000
+#define RPC_EXEC_TIMEOUT_CEIL_MS     120000
+
 static HANDLE           g_thread;
 /* The directory watcher, resolved dynamically. NULL is a supported outcome --
  * the poll below is the mechanism and this only shortens the wait. Experiment
@@ -288,9 +298,33 @@ static void run_one(rc_frame *f)
     ctx.lost = 0;
     rc_strf(ctx.id, sizeof(ctx.id), "%s", id);
 
-    timeout_ms = tmo ? (DWORD)atol(tmo) : 20000;
-    if (timeout_ms < 1000)   timeout_ms = 1000;
-    if (timeout_ms > 120000) timeout_ms = 120000;
+    {
+        /* 03.15: this used to clamp silently. The bridge mirrors the same
+         * floor/default/ceiling in tools.py and clamps before it ever asks
+         * (so the guest normally never sees an out-of-range request), but
+         * that agreement is held by comments on both sides, not enforced --
+         * if it ever drifts, or a frame reaches EXEC some other way, a
+         * clamped request used to just run for less time than asked with no
+         * sign anywhere that it happened, and a timeout that resulted told
+         * the model it had "timed out" against a limit it never actually
+         * requested. Logging the clamp when it happens does not put anything
+         * on the wire -- EXECRESULT still only carries the effective
+         * timeout's OUTCOME, not the timeout value itself -- but it turns a
+         * silent, misleading number into a diagnosable one. */
+        DWORD requested_ms = tmo ? (DWORD)atol(tmo) : RPC_EXEC_TIMEOUT_DEFAULT_MS;
+        timeout_ms = requested_ms;
+        if (timeout_ms < RPC_EXEC_TIMEOUT_FLOOR_MS)
+            timeout_ms = RPC_EXEC_TIMEOUT_FLOOR_MS;
+        if (timeout_ms > RPC_EXEC_TIMEOUT_CEIL_MS)
+            timeout_ms = RPC_EXEC_TIMEOUT_CEIL_MS;
+        if (timeout_ms != requested_ms) {
+            rc_log("rpc: exec %s timeout_ms=%lu out of [%lu,%lu], clamped to %lu",
+                   ctx.id, (unsigned long)requested_ms,
+                   (unsigned long)RPC_EXEC_TIMEOUT_FLOOR_MS,
+                   (unsigned long)RPC_EXEC_TIMEOUT_CEIL_MS,
+                   (unsigned long)timeout_ms);
+        }
+    }
 
     /* The command is in the BODY, never a header: a header value is truncated
      * at 255 bytes silently, and a truncated command would still be run. */
@@ -423,8 +457,20 @@ static unsigned __stdcall rpc_thread(void *arg)
         drop(f);
     }
 
-    /* Anything still queued at shutdown is answered, not silently dropped --
-     * the bridge is holding a future for it. */
+    /* INTENT: anything still queued at shutdown is answered, not silently
+     * dropped -- the bridge is holding a future for it. reject_busy() and
+     * reject_sync_busy() below are that answer.
+     *
+     * CURRENTLY FALSE: net.c's rc_net_stop clears n->running before it calls
+     * rc_rpc_stop(), and rc_net_send bails out whenever !n->running -- so by
+     * the time g_running goes false and this loop runs, every send it makes
+     * returns -1, unchecked, and nothing reaches the wire. The bridge's
+     * future times out instead of resolving. Fixing it means rc_net_stop
+     * keeping n->running true (or otherwise letting this drain's sends
+     * through) until AFTER this loop has run, which is a net.c change and
+     * therefore outside this file's lane (finding 01.51; see BACKLOG.md §5).
+     * The code below is left as originally intended, ready to work the moment
+     * that ordering is fixed on the net.c side. */
     EnterCriticalSection(&g_lock);
     while (g_syncq_n) {
         rc_frame *q = g_syncq[g_syncq_head];
@@ -451,8 +497,15 @@ static unsigned __stdcall rpc_thread(void *arg)
 int rc_rpc_start(rc_net *net)
 {
     unsigned tid = 0;
-    if (g_thread) return 0;
+    /* BEFORE the "already running" early return: a reconnect calls this again
+     * with a freshly-started rc_net while the worker thread from the PREVIOUS
+     * connection is still alive, and every send the worker makes goes through
+     * g_net. Setting it after the early return left a reconnect running
+     * against the stale pointer from the first connection -- today harmless
+     * only because main.c keeps a single rc_net at a fixed address (01.26),
+     * which will not stay true once more than one connection can exist. */
     g_net = net;
+    if (g_thread) return 0;
     if (!g_ready) {
         InitializeCriticalSection(&g_lock);
         g_ready = 1;
@@ -460,6 +513,13 @@ int rc_rpc_start(rc_net *net)
     rc_exec_init();
     if (!g_wake) g_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
     g_running = 1;
+    /* BEFORE _beginthreadex: this writes g_watch and the three GetProcAddress
+     * pointers that rpc_thread's own loop reads. Starting the thread first and
+     * configuring the watcher after was backwards -- a thread that raced ahead
+     * fast enough would read g_watch before rpc_watch_start() had set it,
+     * which on a uniprocessor Pentium never actually happened, but nothing
+     * about the ordering made that safe. */
+    rpc_watch_start();
     /* _beginthreadex, not CreateThread: Open Watcom's multithreaded CRT keeps
      * per-thread data in a list, and a raw CreateThread thread gets it
      * allocated lazily and never released. Same reasoning as net.c's reader. */
@@ -469,7 +529,6 @@ int rc_rpc_start(rc_net *net)
         g_running = 0;
         return -1;
     }
-    rpc_watch_start();
     rc_log("rpc: worker started");
     return 0;
 }
@@ -589,11 +648,13 @@ int rc_rpc_submit(rc_frame *f)
     LeaveCriticalSection(&g_lock);
 
     if (busy) {
-        /* Answer in the frame family's OWN vocabulary. The bridge is waiting on
-         * a sync future or an exec future, and only one of them understands
-         * EXECRESULT. */
-        if (is_sync(f)) reject_sync_busy(f);
-        else            reject_busy(f);
+        /* Always EXECRESULT here, never SYNCPUTACK/SYNCEND/SYNCDATEND: a
+         * SYNC* frame is handled -- and, when it cannot be taken, answered by
+         * reject_sync_busy() -- in the is_sync(f) branch above, which always
+         * returns before this point. So the only family that ever reaches
+         * this g_queued slot is JOB (EXEC), and reject_busy() is its own
+         * vocabulary already. */
+        reject_busy(f);
         drop(f);
         return 0;
     }
@@ -621,5 +682,15 @@ int rc_rpc_join(DWORD timeout_ms)
     CloseHandle(g_thread);
     g_thread = NULL;
     if (g_wake) { CloseHandle(g_wake); g_wake = NULL; }
+    /* g_lock (InitializeCriticalSection'd in rc_rpc_start) is deliberately
+     * never deleted, for the same reason net.c leaves send_lock in place
+     * unless EVERY thread that can touch it has been confirmed joined
+     * (net.c:711-716): this function only knows the WORKER thread exited, not
+     * whether the reader thread's rc_rpc_submit/rc_rpc_syncq_full calls into
+     * g_lock have stopped too -- that is the caller's (net.c's) join, done
+     * before this one runs, and its result never reaches here. Deleting a
+     * critical section a live thread might still enter is the GPF-at-exit
+     * class of bug net.c's own comment describes; leaking one at process exit
+     * costs nothing. */
     return 1;
 }
