@@ -66,26 +66,43 @@ def parse_rows(body: bytes, caps) -> tuple[dict, dict]:
             sp = plen_and_path.index(b" ")
             plen = int(plen_and_path[:sp])
             raw = plen_and_path[sp + 1:sp + 1 + plen]
-        except (ValueError, IndexError):
-            log.warning("unparseable manifest line: %r", line[:80])
+
+            # EVERYTHING BELOW USED TO SIT OUTSIDE THIS `try`, and the
+            # docstring above promised it did not. Splitting the line was
+            # guarded; converting it was not. So an unrecognised type letter,
+            # a non-numeric mtime, or a checksum that was not a number raised
+            # ValueError straight out of parse_rows, up through _sync_frame
+            # and _handle, to the connection pump's outermost `except
+            # Exception`. That does not skip a row -- it drops the guest's
+            # connection in the middle of a manifest.
+            #
+            # Audit 03.18 described it as a row "dropped silently". It was the
+            # opposite of both: nothing was dropped and nothing was quiet.
+            #
+            # surrogateescape, never "replace": the five undefined CP1252
+            # positions are legal in a VFAT long name, and "replace" maps them
+            # all to U+FFFD -- so two distinct files get one key, one of them
+            # silently stops syncing, and neither name can be encoded back to
+            # ask the guest for the file.
+            rel = P.wire_decode(raw, acp=caps.acp)
+            key = P.canonical(rel, caps=caps)
+            auto = cls.decode() if cls != b"-" else P.CLASS_TEXT
+            entry = Entry(
+                type=Type(typ.decode()),
+                cls=auto,
+                mtime=float(mtime),
+                crc=int(P.crc_for(auto, crc_norm, crc_raw)),
+                crc_norm=int(crc_norm), crc_raw=int(crc_raw),
+                dual=caps.manifest >= 2,
+                display=rel)
+        except (ValueError, IndexError, KeyError, UnicodeDecodeError) as exc:
+            # Named, because "unparseable manifest line" over a row whose type
+            # letter is simply unknown sends whoever reads the log looking for
+            # a framing bug.
+            log.warning("skipping manifest line (%s): %r", exc, line[:80])
             continue
 
-        # surrogateescape, never "replace": the five undefined CP1252
-        # positions are legal in a VFAT long name, and "replace" maps them all
-        # to U+FFFD -- so two distinct files get one key, one of them silently
-        # stops syncing, and neither name can be encoded back to ask the guest
-        # for the file.
-        rel = P.wire_decode(raw, acp=caps.acp)
-        key = P.canonical(rel, caps=caps)
-        auto = cls.decode() if cls != b"-" else P.CLASS_TEXT
-        rows[key] = Entry(
-            type=Type(typ.decode()),
-            cls=auto,
-            mtime=float(mtime),
-            crc=int(P.crc_for(auto, crc_norm, crc_raw)),
-            crc_norm=int(crc_norm), crc_raw=int(crc_raw),
-            dual=caps.manifest >= 2,
-            display=rel)
+        rows[key] = entry
         display[key] = rel
 
     return rows, display
