@@ -23,6 +23,15 @@ extern "C" {
  * caller, which frees it afterwards. */
 void rc_syncrpc_handle(rc_net *net, rc_frame *f);
 
+/* Flag an in-flight SYNCPUT as abandoned. Call this on disconnect -- see the
+ * comment at the call site (app/main.cpp, WM_RC_STATE) for why. Only sets a
+ * flag: the RPC worker thread, which is the only thing that ever touches the
+ * transfer's open file handle, does the actual cleanup the next time a PUT
+ * arrives. Without this, a transfer cut off by a dropped link wedges every
+ * PUT after the reconnect as "busy", forever. Safe to call from any thread,
+ * any number of times, whether or not a transfer is in flight. */
+void rc_syncrpc_abort(void);
+
 /* The configured sync root, or "" when sync is off. Set from the INI. */
 void        rc_syncrpc_set_root(const char *root);
 const char *rc_syncrpc_root(void);
