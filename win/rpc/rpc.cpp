@@ -48,6 +48,9 @@ static FCCN   p_close_change;
 static HANDLE g_watch = INVALID_HANDLE_VALUE;
 static DWORD  g_last_poll;
 static DWORD  g_dirty_at;
+/* This module's own copy, pushed by rc_rpc_set_sync_root -- see the comment
+ * there (audit finding 01.25) for why this is not rc_syncrpc_root(). */
+static char   g_sync_root[MAX_PATH];
 static HANDLE           g_wake;
 static CRITICAL_SECTION g_lock;
 static int              g_ready;
@@ -218,16 +221,21 @@ static void rpc_maybe_nudge(void)
         last_at = now;
     }
 
-    if (rc_syncrpc_root()[0])
+    if (g_sync_root[0])
         rc_net_send(g_net, "SYNCDIRTY", NULL, NULL, 0, NULL, 0);
     else
         rc_net_send(g_net, "PING", NULL, NULL, 0, NULL, 0);
 }
 
+void rc_rpc_set_sync_root(const char *root)
+{
+    rc_strf(g_sync_root, sizeof(g_sync_root), "%s", root ? root : "");
+}
+
 static void rpc_watch_start(void)
 {
     HMODULE k32 = GetModuleHandleA("kernel32.dll");
-    const char *root = rc_syncrpc_root();
+    const char *root = g_sync_root;
 
     p_first_change = (FFCN)GetProcAddress(k32, "FindFirstChangeNotificationA");
     p_next_change  = (FNCN)GetProcAddress(k32, "FindNextChangeNotification");

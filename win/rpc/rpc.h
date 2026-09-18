@@ -18,6 +18,16 @@ extern "C" {
 /* Start the worker. Safe to call more than once. */
 int  rc_rpc_start(rc_net *net);
 
+/* The configured sync root, pushed once from main.c's startup -- the same
+ * moment it also calls rc_syncrpc_set_root (app/main.cpp, right next to it)
+ * -- rather than this module reading it back through syncrpc.c's own
+ * accessor. Audit finding 01.25: rpc_watch_start/rpc_maybe_nudge used to call
+ * rc_syncrpc_root() to decide whether to start a directory watcher, which is
+ * this module reaching into a different module's state for what is really
+ * its own configuration. Call before the first rc_rpc_start() -- the watcher
+ * is set up once, on the first call, not on every reconnect. */
+void rc_rpc_set_sync_root(const char *root);
+
 /* Offer a freshly parsed frame to the RPC layer.
  *
  * THE ROUTING VOCABULARY LIVES HERE, not in the networking layer. net.c used
