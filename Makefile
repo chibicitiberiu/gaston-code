@@ -72,12 +72,19 @@ guest-checks:
 #
 # Not in `help`, and not part of any gate. See docs/audit/ for the list of
 # checks that should exist instead.
+#
+# The extension list is load-bearing and was WRONG for half a day. The guest
+# became C++ on 2026-09-18 and this grep still said `--include='*.c'` only, so
+# the sentence above -- that the trap goes live again the same day a RichEdit
+# control comes back -- had quietly stopped being true for every file in the
+# tree. A check whose own comment overstates it is worse than no check. Any
+# grep-based gate added here must list *.cpp.
 RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_GETTEXTLENGTHEX \
            EM_SETTABSTOPS EM_SETMARGINS
 lint:
 	@fail=0; \
 	for m in $(RE3_ONLY); do \
-	  if grep -rn --include='*.c' --include='*.h' "\b$$m\b" win/ 2>/dev/null; then \
+	  if grep -rn --include='*.c' --include='*.cpp' --include='*.h' "\b$$m\b" win/ 2>/dev/null; then \
 	    echo "  ^ $$m is RichEdit 3.0 only; Win98 ships 2.0"; fail=1; \
 	  fi; \
 	done; \
