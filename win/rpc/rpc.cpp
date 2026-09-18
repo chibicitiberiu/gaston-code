@@ -461,16 +461,20 @@ static unsigned __stdcall rpc_thread(void *arg)
      * dropped -- the bridge is holding a future for it. reject_busy() and
      * reject_sync_busy() below are that answer.
      *
-     * CURRENTLY FALSE: net.c's rc_net_stop clears n->running before it calls
-     * rc_rpc_stop(), and rc_net_send bails out whenever !n->running -- so by
-     * the time g_running goes false and this loop runs, every send it makes
-     * returns -1, unchecked, and nothing reaches the wire. The bridge's
-     * future times out instead of resolving. Fixing it means rc_net_stop
-     * keeping n->running true (or otherwise letting this drain's sends
-     * through) until AFTER this loop has run, which is a net.c change and
-     * therefore outside this file's lane (finding 01.51; see BACKLOG.md §5).
-     * The code below is left as originally intended, ready to work the moment
-     * that ordering is fixed on the net.c side. */
+     * IT WAS FALSE FOR THE WHOLE OF PHASE 3, and the shape of that is worth
+     * keeping. rc_net_stop cleared n->running before calling rc_rpc_stop(),
+     * and rc_net_send bails whenever !n->running -- so by the time this loop
+     * ran, every send returned -1, unchecked, and nothing reached the wire.
+     * The comment above was not wrong about the intent; the intent simply
+     * never executed, and nothing said so.
+     *
+     * Fixed in net.cpp, not here: rc_net_stop now stops and JOINS the worker
+     * while the link is still usable, and only then clears running and closes
+     * the socket (finding 01.51). Measured on the real machine rather than
+     * argued -- 600 queued SYNCGETs, close the app mid-flight: before the
+     * change the link dropped with the queue unanswered and zero busy acks
+     * on the wire; after it, exactly RPC_SYNCQ_MAX of them arrive just before
+     * the close. */
     EnterCriticalSection(&g_lock);
     while (g_syncq_n) {
         rc_frame *q = g_syncq[g_syncq_head];

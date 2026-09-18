@@ -91,6 +91,27 @@ int  rc_net_send(rc_net *n, const char *type,
                  const void *body, unsigned body_len);
 const char *rc_state_name(rc_state s);
 
+/* The UI thread's half of the frame-ownership contract above, spelled out
+ * once instead of by hand at every WM_RC_FRAME site: rc_frame_free() releases
+ * the frame's own allocations, HeapFree() releases the frame struct itself (a
+ * SECOND, separate allocation from the reader thread), and only then is
+ * `inflight` decremented -- get the order wrong, or drop the decrement, and
+ * the reader thread's backpressure gate wedges at RC_MAX_INFLIGHT with no
+ * symptom but a stalled transcript.
+ *
+ * This belongs in net.c as rc_net_frame_done(), next to the `inflight` field
+ * it touches and the reader loop that spins on it -- net.c is outside this
+ * pass's file set (audit finding 01.24), so it lives here, inline, as the
+ * closest safe substitute: callers still make one call instead of three
+ * hand-ordered steps, even though the struct field stays reachable directly
+ * rather than becoming properly private to net.c. */
+static __inline void rc_net_frame_done(rc_net *n, rc_frame *f)
+{
+    rc_frame_free(f);
+    HeapFree(GetProcessHeap(), 0, f);
+    InterlockedDecrement(&n->inflight);
+}
+
 #ifdef __cplusplus
 }
 #endif

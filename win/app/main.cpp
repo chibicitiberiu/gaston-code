@@ -59,6 +59,14 @@
  * arrives, then the timer stops. */
 #define TIMER_HTMLPOLL  3
 
+/* WM_APP-offset messages this file posts to itself. One block, so Phase 6's
+ * cross-thread posts have somewhere to go instead of a fourth style turning
+ * up (audit finding 01.22). net.h owns WM_APP+1 (WM_RC_FRAME) and WM_APP+2
+ * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
+ * to the code that posts them, not duplicated here. */
+#define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
+#define WM_RC_OPENCHAT (WM_APP + 20)  /* chats_proc -> wnd_proc: open a chat */
+
 #define INPUT_HEIGHT  56
 #define BUTTON_WIDTH  64
 #define GUTTER        4
@@ -445,7 +453,10 @@ static void ui_set_busy(int busy)
 
 /* ------------------------------------------------------- permission bar */
 
-static void perm_layout(void)
+/* Named bar_layout, not perm_layout: it re-runs the whole window layout for
+ * either bar, PERM or HALT, not just the permission half. See audit finding
+ * 01.21 -- bar_hide() already used the shared prefix and this one did not. */
+static void bar_layout(void)
 {
     /* The bar changes the transcript's height, and the HTML view has no HWND
      * to resize -- move() is the only lever it has, so the whole layout
@@ -468,7 +479,7 @@ static void bar_hide(void)
     ShowWindow(g_perm_allow,  SW_HIDE);
     ShowWindow(g_perm_always, SW_HIDE);
     ShowWindow(g_perm_deny,   SW_HIDE);
-    perm_layout();
+    bar_layout();
     ui_set_busy(g_turn_active);
 }
 
@@ -509,7 +520,7 @@ static void halt_show(const char *id, const char *text)
     ShowWindow(g_perm_allow,  SW_SHOW);
     ShowWindow(g_perm_always, SW_HIDE);
     ShowWindow(g_perm_deny,   SW_HIDE);
-    perm_layout();
+    bar_layout();
     ui_set_busy(g_turn_active);
     SetFocus(g_perm_allow);
 }
@@ -556,7 +567,7 @@ static void perm_show(const char *id, const char *text, int allows)
      * hand over the machine for the rest of the session. */
     ShowWindow(g_perm_always, allows ? SW_SHOW : SW_HIDE);
     ShowWindow(g_perm_deny,   SW_SHOW);
-    perm_layout();
+    bar_layout();
     ui_set_busy(g_turn_active);
     SetFocus(g_perm_allow);
 }
@@ -1186,8 +1197,8 @@ static void do_stop(void)
  * and is unreliable -- by the time it arrives the button may already be up.
  * Handling the button release directly is unambiguous. The switch is POSTED
  * rather than done here so the listbox finishes with the click (and releases
- * capture) before the transcript is torn down and rebuilt. */
-#define WM_RC_OPENCHAT (WM_APP + 20)
+ * capture) before the transcript is torn down and rebuilt. WM_RC_OPENCHAT
+ * itself is defined with the rest of this file's WM_APP offsets, up top. */
 
 static LRESULT CALLBACK chats_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -1321,6 +1332,14 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     if (!g_html)
         MessageBoxA(hwnd, "Could not create the HTML view.", RC_TITLE,
                     MB_OK | MB_ICONERROR);
+    else
+        /* The INI's autoscroll, applied. Audit 01.2 said this setting was
+         * "loaded from the INI, written back, round-trip-tested by
+         * inicheck.exe, and read by nothing", gave the view a
+         * set_autoscroll() to fix it -- and then nobody called it. The
+         * finding was marked closed on the strength of the method existing.
+         * One line makes the claim true. */
+        g_html->set_autoscroll(g_cfg.autoscroll);
 
     g_input = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
@@ -1493,10 +1512,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CREATE:
         create_children(hwnd, ((LPCREATESTRUCT)lp)->hInstance);
         SetTimer(hwnd, TIMER_STATUS, 1000, NULL);
-        PostMessage(hwnd, WM_APP + 99, 0, 0);   /* connect after first paint */
+        PostMessage(hwnd, WM_RC_CONNECT, 0, 0);
         return 0;
 
-    case WM_APP + 99:
+    case WM_RC_CONNECT:
         try_connect(hwnd);
         return 0;
 
@@ -1607,10 +1626,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         render_frame(f);
         /* The UI thread owns every posted frame and is the only thing that
          * frees one -- except when PostMessage itself failed, which the reader
-         * handles. */
-        rc_frame_free(f);
-        HeapFree(GetProcessHeap(), 0, f);
-        InterlockedDecrement(&g_net.inflight);
+         * handles. rc_net_frame_done (net.h) is the two-free-plus-decrement
+         * contract in one call; see audit finding 01.24. */
+        rc_net_frame_done(&g_net, f);
         return 0;
     }
 

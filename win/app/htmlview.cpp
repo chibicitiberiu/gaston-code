@@ -525,7 +525,22 @@ int rc_html::poll()
  *
  * Escaping lives here because it has to happen on EVERY path into the
  * document, and leaving it to the caller meant two paths did not do it.
- * `<` in a bridge error message or a hostname ended the document early. */
+ * `<` in a bridge error message or a hostname ended the document early.
+ *
+ * This is not the same escaping as the bridge's html.esc (html.py, plain
+ * html.escape(quote=False)), and that is by design rather than drift: the
+ * two never see the same string. html.esc feeds the markdown pipeline, whose
+ * output arrives here pre-rendered and goes straight through say()'s callers
+ * block()/live() -- past this function entirely, newlines and all, because
+ * the bridge's line-oriented parser already turned structure into real HTML
+ * before it was ever escaped. esc_into only runs on plain text that has no
+ * such structure: the user's own locally-echoed input, and the handful of
+ * one-line protocol fields (ERROR's code/msg, NOTICE's body, TURN's error
+ * msg) that the bridge sends unescaped on purpose and expects THIS side to
+ * make safe -- see the "Escaped, which it was not" fix at each call site in
+ * main.c. For that content, folding \n to <br> and dropping \r is the guest's
+ * own call to make, not a mismatch to close: there is no upstream line
+ * splitter for a status message. Recorded as audit finding 03.23. */
 static void esc_into(const char *in, char *out, unsigned cap)
 {
     unsigned o = 0;
