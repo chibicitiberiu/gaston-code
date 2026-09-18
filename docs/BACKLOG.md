@@ -258,7 +258,32 @@ Three remain:
   later. Both sides now answer `REPORT`, which is what the file rows have
   always answered for the same shape, so §4's "reported and never silently
   resurrected" is true for directories too.
-- **The netem gate is no longer blocked on sudo, and still has not been run.**
+- ~~**The netem gate is no longer blocked on sudo, and still has not been
+  run.**~~ **Discharged 2026-09-18** (01.62), with the plan's own named
+  fallback rather than netem: a deliberate slow reader
+  (`win/checks/netcheck.c --slowsend` driven from
+  `tests/python/test_guest_net.py`). It fills the guest's outbound queue
+  directly, which is what the named weaknesses actually need, and it lives in
+  the suite instead of being run by hand.
+
+  **It found the first weakness to be worse than recorded.** The byte cap was
+  not soft, it was absent: after the 5s wait `rc_net_send` enqueued anyway and
+  returned success, measured at 65558 -> 98337 -> 131116 bytes across three
+  calls. The second weakness (the UI thread blocking up to 5s) is real and
+  deliberately left -- the duration is the design's stated cost, and only what
+  happened when it expired was wrong.
+
+  **What the fallback does NOT cover, stated rather than implied:** it shapes
+  nothing, so nothing here measures the guest under real bandwidth limits, and
+  the Phase 3 demos have still never been run throttled. The netem route below
+  is kept for whenever that is wanted. Also unreached by hand: the shutdown
+  drain with work still queued -- on loopback the guest answers a full
+  24-frame burst in 762ms, faster than a click can land, so a manual close
+  always finds an empty queue. `rc_net_stop` under a stalled peer IS covered
+  by the slow-reader test, which measured it returning in ~12s rather than
+  hanging.
+
+  The original note, kept because the route is still open:
   Verified: unprivileged user namespaces work here, `tc qdisc add dev lo root
   netem rate 40kbit` succeeds inside one, and `pasta --config-net` keeps
   outbound internet while leaving `lo` shapeable. The live domain uses
