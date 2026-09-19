@@ -178,8 +178,21 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
         if told:
             desc = told[1]
 
-    parts = ['<div class="perm">',
+    # Two heads, one shown at a time, and an id.
+    #
+    # The guest flips the container's class when the request is answered (see
+    # rc_html::settle_perm), and flipping ONE class has to change the heading
+    # as well as hide the table -- rewriting text through the DOM would mean
+    # finding a child element and a second failure mode. The CSS shows
+    # whichever head matches the state.
+    #
+    # The id is fixed rather than the tool_use_id: the desk shows one prompt
+    # at a time and queues the rest, so there is never more than one
+    # outstanding -- the same reasoning RC_ID_PENDING already uses for the
+    # echo, including dropping the id on settle so the next one is unique.
+    parts = ['<div class="perm" id="perm">',
              '<div class="permhead">Permission required</div>',
+             '<div class="permdonehead">Answered</div>',
              "<p><b>" + H.esc(_clip(title or display, 120)) + "</b>"]
     if desc:
         parts.append(" &mdash; " + H.esc(_clip(desc)))
@@ -204,8 +217,9 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
     log.warning("permission prompt for %s is %d bytes, over the %d byte "
                 "budget; the argument table is too large to display and "
                 "was dropped", tool_name, len(html), MAX_BODY)
-    short = ('<div class="perm">'
+    short = ('<div class="perm" id="perm">'
              '<div class="permhead">Permission required</div>'
+             '<div class="permdonehead">Answered</div>'
              "<p><b>" + H.esc(_clip(title or display, 120)) + "</b></p>"
              "<p><i>(arguments too large to display)</i></p></div>")
     return short[:MAX_BODY]

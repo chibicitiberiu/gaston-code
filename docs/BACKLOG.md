@@ -793,6 +793,16 @@ AUTO:` for this image; `.rsrc` is READONLY DATA and is never walked. The
 existing false positive is inside AUTO, which is where Watcom puts read-only
 data as well as code. `CMOV_BASELINE` stays at 1.
 
+**[R -- 2026-09-19] The baseline is gone.** It moved three more times without
+a real instruction behind it -- 1 -> 2 -> 1 -> 7 -- because adding a function
+slides the read-only data that follows it and a different byte sequence lands
+where objdump's linear walk reads a CMOV. `tools/cmovcheck.py` locates each
+hit against the linker map instead and fails only on one inside an object file
+the build compiled. The current seven are one in `uuid.lib`'s
+`_GUID_FONTBOLD` and six in `clib3r.lib`'s `__DefaultExceptionHandler_`
+padding, and they are printed by name on every run rather than summed into a
+number nobody can check.
+
 **2. `rc_config_save` is a one-line fix with no caller yet (04.13, and half
 of 01.34).** It runs from exactly two places today: `rc_config_load`'s
 first-run branch (`win/core/ini.cpp:39`) and `inicheck.c`'s round-trip

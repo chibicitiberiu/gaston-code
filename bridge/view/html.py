@@ -465,6 +465,30 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .perm th { background: #f6eccc; font-weight: normal; color: #604000;
            white-space: nowrap; vertical-align: top; }
 .perm td { font-family: 'Courier New', monospace; }
+
+/* The same request, once it has been answered. A long session used to be
+   mostly amber: every approval stayed a full argument table forever, and on
+   a 640x480 screen a handful of them is the whole page.
+
+   A DIFFERENT CLASS, not `.perm.done`. IE5 and IE6 read a compound class
+   selector as its LAST class only, so `.perm.done` would style every `.perm`
+   -- which is the kind of bug that looks like the rule not working and is
+   actually the rule working on everything.
+
+   The table is hidden rather than removed, and the block keeps its place in
+   the transcript: what was asked and what was answered is a record, and a
+   record that deletes itself once it stops being urgent is not one. Clicking
+   is not needed to see it again -- paging back to a sealed page re-renders
+   the original, because the paginator holds what was written and nothing
+   rewrites history there. */
+.permdone { background: #fbfbf4; border: 1px solid #d8d8c8;
+            border-left: 3px solid #b0b090; padding: 3px 7px; margin: 6px 0; }
+.permdone table { display: none; }
+.permdone .permhead { display: none; }
+.perm .permdonehead { display: none; }
+.permdonehead { font-weight: bold; color: #707060; font-size: 7pt;
+                text-transform: uppercase; margin-bottom: 2px; }
+.permdone p { margin: 0; color: #606050; }
 """
 
 # Three containers: finished blocks accumulate in #t, #l holds the one block

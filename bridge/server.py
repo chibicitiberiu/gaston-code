@@ -896,7 +896,7 @@ class Bridge:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.cwd or os.getcwd()
 
-    def _guest_root(self, guest: GuestSession) -> str:
+    def guest_work_root(self, guest: GuestSession) -> str:
         r"""The same folder, spelled the way the guest spells it.
 
         The guest's mirror root plus this conversation's subfolder, joined
@@ -1094,7 +1094,7 @@ class Bridge:
                 "append": machine.system_prompt(
                     guest.hello, self._work_dir(guest),
                     sync_dir=self._work_dir(guest) if self.sync_dir else None,
-                    guest_root=self._guest_root(guest)),
+                    guest_root=self.guest_work_root(guest)),
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.
@@ -3036,7 +3036,7 @@ class Bridge:
         await self._send_page(guest, "live")
         if name:
             await self._write_block(guest, H.notice(
-                "This conversation works in " + self._guest_root(guest)
+                "This conversation works in " + self.guest_work_root(guest)
                 + " on your machine."))
         await self._send_options(guest)
 

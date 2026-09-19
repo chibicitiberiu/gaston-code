@@ -74,31 +74,55 @@ def build(bridge, guest=None) -> dict:
         "9x those prompts are read from the console device and cannot be fed "
         "from here. Measured, not assumed. Pipe an answer in instead "
         "(`echo y | del c:\\tmp\\*.*`), or use a form that does not ask.",
+        # A FULL JSON SCHEMA, not the `{name: Annotated[...]}` shorthand.
+        #
+        # The shorthand marks EVERY property required -- `"required":
+        # list(properties.keys())` in the SDK's schema builder -- so three
+        # arguments documented as optional were not. Measured on the guest:
+        # the model called this with a command and no `cwd`, got back
+        # `Input validation error: 'cwd' is a required property`, and had to
+        # try again. Every exec cost two round trips and the user watched a
+        # red error go by for a tool call that was correct.
+        #
+        # The SDK uses a schema verbatim when it already looks like one (a
+        # `type` and a `properties`), which is the escape hatch this takes.
         {
-            "command": Annotated[
-                str,
-                "The command line to run, written for the target machine's "
-                "shell (DOS conventions on Windows 9x: backslashes, 8.3 names "
-                "where long ones are not supported).",
-            ],
-            "timeout_ms": Annotated[
-                int,
-                f"How long to allow, in milliseconds. Default "
-                f"{DEFAULT_TIMEOUT_MS}, clamped to {MAX_TIMEOUT_MS}. The "
-                f"machine is slow; a compile may genuinely need minutes.",
-            ],
-            "shell": Annotated[
-                bool,
-                "Run through the shell (default true). Set false to spawn an "
-                "executable directly, which gives cleaner quoting but loses "
-                "built-ins like dir, vol, copy and type, and loses pipes and "
-                "redirection.",
-            ],
-            "cwd": Annotated[
-                str,
-                "Working directory on the connected machine, e.g. C:\\WORK. "
-                "Optional.",
-            ],
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description":
+                        "The command line to run, written for the target "
+                        "machine's shell (DOS conventions on Windows 9x: "
+                        "backslashes, 8.3 names where long ones are not "
+                        "supported).",
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description":
+                        f"How long to allow, in milliseconds. Default "
+                        f"{DEFAULT_TIMEOUT_MS}, clamped to {MAX_TIMEOUT_MS}. "
+                        f"The machine is slow; a compile may genuinely need "
+                        f"minutes.",
+                },
+                "shell": {
+                    "type": "boolean",
+                    "description":
+                        "Run through the shell (default true). Set false to "
+                        "spawn an executable directly, which gives cleaner "
+                        "quoting but loses built-ins like dir, vol, copy and "
+                        "type, and loses pipes and redirection.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description":
+                        "Working directory on the connected machine, e.g. "
+                        "C:\\WORK. Optional -- leave it out and the command "
+                        "runs in this conversation's own folder on that "
+                        "machine, which is where your files arrive.",
+                },
+            },
+            "required": ["command"],
         },
     )
     async def machine_exec(args: dict) -> dict:
@@ -114,7 +138,13 @@ def build(bridge, guest=None) -> dict:
 
         shell = args.get("shell")
         shell = True if shell is None else bool(shell)
-        cwd = args.get("cwd") or ""
+        # Defaulted to THIS conversation's folder on the user's machine, not
+        # left empty. An empty cwd means the guest passes NULL to
+        # CreateProcess and the child inherits the GUI process's directory --
+        # a value the bridge has never been told and cannot derive, which is
+        # also why bridge/agent/doscmd.py has to answer ASK for every
+        # relative path when it is unset.
+        cwd = (args or {}).get("cwd") or bridge.guest_work_root(guest)
 
         return await bridge.run_on_guest(command, timeout_ms=timeout_ms,
                                          shell=shell, cwd=cwd, guest=guest)

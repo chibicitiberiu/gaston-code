@@ -1297,6 +1297,31 @@ has known work left.
   guests still share one mirror and one baseline, so `BACKLOG.md` §7's
   implementation list is untouched.
 
+- **Answered permission boxes collapse. [R -- 2026-09-19] Done.** Every
+  approval used to stay a full amber argument table forever, and on a
+  640x480 screen a handful of them is the whole page. The block keeps its
+  place and its record; the table is hidden and the heading changes to
+  "Answered".
+  A DIFFERENT class, not `.perm.done`: IE5 and IE6 read a compound class
+  selector as its last class only, so `.perm.done` would have styled every
+  `.perm` -- a rule that looks broken and is actually working on everything.
+  Two headings are written and the CSS shows whichever matches the state, so
+  flipping one class does both jobs without the guest rewriting text through
+  the DOM. Live view only: paging back to a sealed page re-renders what the
+  paginator holds, which is the original block, and that is right -- what was
+  asked and answered is a record.
+
+- **`cwd` on `mcp__machine__exec` is genuinely optional now.** The SDK's
+  `{name: Annotated[...]}` shorthand marks EVERY property required, so three
+  arguments documented as optional were not. Measured on the guest: the model
+  called exec with a command and no `cwd`, got back `Input validation error:
+  'cwd' is a required property`, and every single exec cost two round trips
+  with a red error on the user's screen in between. The tool now hands the
+  SDK a full JSON Schema with `required: ["command"]`, and an absent `cwd`
+  defaults to this conversation's own folder on the user's machine rather
+  than to empty -- empty means the guest passes NULL to `CreateProcess` and
+  the child inherits a directory the bridge has never been told.
+
 - **A transcript that survives a disconnection. [R -- 2026-09-19] Done
   (4.1k).** The bridge owns the transcript, so a guest that started with the
   bridge down had nothing at all to show -- an empty white rectangle and an

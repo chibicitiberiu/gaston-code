@@ -67,6 +67,13 @@
 #define RC_CSS_PENDING "you pending"
 #define RC_ID_PENDING  "pend"
 
+/* The permission block, before and after it is answered. The bridge writes
+ * the block with `id=perm`; settle_perm swaps the class and drops the id, so
+ * the next request's block is the only one carrying it. Same shape and same
+ * reasoning as the pending echo above. */
+#define RC_CSS_PERMDONE "permdone"
+#define RC_ID_PERM      "perm"
+
 struct rc_html_impl;
 
 class rc_html {
@@ -135,6 +142,16 @@ public:
     /* The echoed message has been acknowledged -- drop its pending styling
      * in place. No-op if there is nothing pending. Called on TURN start. */
     void settle_pending();
+
+    /* Collapse the permission block that is on screen, once it has been
+     * answered. A long session used to be mostly amber: every approval
+     * stayed a full argument table forever. Called on PERMEND.
+     *
+     * The LIVE view only. Paging back to a sealed page re-renders what the
+     * paginator holds, which is the original block with its table -- that is
+     * the record of what was asked and answered, and it is right that it
+     * does not shrink. */
+    void settle_perm();
     void block(const char *html);          /* bridge-rendered */
 
     /* Honour the user's setting. Off means a block still lands, but the view

@@ -255,33 +255,24 @@ $(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res
 	  map=$(BUILD)/retroclaude.map $(LIBS) name $@ file {$(OBJS)}
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
-# Known-good CMOV count. See the note in the check target: this is a data
-# false positive, not a real instruction. Any INCREASE is a real regression.
+# The CMOV gate used to be a count against a baseline, and the baseline moved
+# three times without a single real instruction behind it: 1 -> 2 -> 1 -> 7.
 #
-# BACKLOG.md 10 predicted that linking a resource would move this baseline,
-# on the reasoning that .rsrc is binary data and objdump decodes data as
-# instructions. Measured when gaston.res landed: it does not. objdump -d
-# disassembles only sections flagged as code, and prints exactly one
-# "Disassembly of section AUTO:" for this image -- .rsrc is READONLY DATA and
-# is never walked.
+# The mechanism was understood by the second move and is worth keeping, because
+# it applies to any linear disassembly of this image. `objdump -d` walks the
+# whole AUTO section, and Open Watcom puts read-only data in AUTO beside code,
+# so a GUID table or the padding between two library functions decodes as
+# whatever its bytes happen to spell. Adding a function slides the data after
+# it and the number changes. Resources do NOT move it -- `.rsrc` is READONLY
+# DATA and objdump never walks it, which BACKLOG.md 10 predicted wrongly and
+# was measured when gaston.res landed.
 #
-# But the count DID move later, from 1 to 2, and the reason refines that
-# note rather than overturning it. Resources do not move it; SHIFTING AUTO
-# does. Watcom puts read-only data in AUTO alongside code, so adding a
-# function slides the data that follows it, and a byte sequence that
-# previously decoded as something harmless can land where objdump's linear
-# walk reads it as a CMOV. Both current hits were checked by hand:
-#
-#   0x41fca0  inside the _GUID_* table (_GUID_YSIZEPIXEL and neighbours)
-#   0x40ff79  surrounded by `lods` / `add %eax,0x0(%ecx)` / `push $0x11`,
-#             which no compiler emits in that order
-#
-# So this number is expected to drift with unrelated code changes, in both
-# directions. That is a known weakness of counting rather than of the gate's
-# intent: an INCREASE still has to be looked at, because a real CMOV would
-# not load on a Pentium MMX, and looking at it costs one objdump. Anyone
-# raising this must name the addresses and say why they are data, as above.
-CMOV_BASELINE = 2
+# So the gate locates each hit instead (tools/cmovcheck.py): the linker map
+# says which module a symbol came from, and only a hit inside an object file
+# THIS BUILD COMPILED is something `-5` governs. The current seven are one
+# inside uuid.lib's _GUID_FONTBOLD and six in clib3r.lib's
+# __DefaultExceptionHandler_ padding, and they are printed every run rather
+# than summed into a number nobody can check.
 PYTHON ?= python3
 
 # Static PE audit. The import table is the gate that matters: a single NT-only
@@ -295,18 +286,10 @@ check: $(BUILD)/retroclaude.exe
 	@objdump -p $(BUILD)/retroclaude.exe | grep -E '^\s+[0-9a-f]+\s+<none>' \
 	  | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
 	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
-	@# objdump disassembles the whole AUTO section linearly, and that section
-	@# holds read-only data as well as code -- so string tables decode as
-	@# instructions and produce phantom CMOVs. There is one such false
-	@# positive today, at a repeating data pattern near 0x416d00 where the
-	@# surrounding "disassembly" is `push %cs; inc %ebx`, which no compiler
-	@# emits. Gating on 0 would therefore fail forever and the gate would
-	@# start being ignored, which is worse than not having it. Gate on the
-	@# baseline instead, so a real regression still trips it.
-	@n=$$(objdump -d -m i386 $(BUILD)/retroclaude.exe 2>/dev/null | grep -cE '\scmov'); \
-	 if [ "$$n" -gt $(CMOV_BASELINE) ]; then \
-	   echo "   FAIL: $$n CMOV (baseline $(CMOV_BASELINE)) -- check -5 is still set"; exit 1; \
-	 else echo "   ok: $$n (baseline $(CMOV_BASELINE), known data false positive)"; fi
+	@# Located, not counted -- see tools/cmovcheck.py for why the baseline
+	@# this replaces moved three times without anything being wrong.
+	@$(PYTHON) $(CURDIR)/../tools/cmovcheck.py $(BUILD)/retroclaude.exe \
+	   $(BUILD)/retroclaude.map $(OBJS)
 	@echo "=== unbounded string functions (the overflow family) ==="
 	@# These write until a NUL that may not be there. rc_strcpy/rc_strncpy/
 	@# rc_strf replace them and always terminate, so the READING family

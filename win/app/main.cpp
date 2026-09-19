@@ -875,6 +875,14 @@ static void on_anchor(rc_frame *f)
 static void on_bar(rc_frame *f)
 {
     if (g_bar) g_bar->frame(f);
+    /* The transcript copy of the request collapses when the bar does. Here
+     * rather than in app/bar.cpp for the same reason log_mem is not in
+     * app/chatlist.cpp: the bar owns the bar, and the transcript is this
+     * file's business. Unconditional -- settle_perm finds nothing and
+     * returns when there is no block on screen, which is the case for a
+     * PERMEND that arrives for a request the guest never showed. */
+    if (strcmp(f->type, "PERMEND") == 0 && g_html)
+        g_html->settle_perm();
 }
 
 static void on_error(rc_frame *f)

@@ -746,6 +746,27 @@ void rc_html::settle_pending()
     }
 }
 
+void rc_html::settle_perm()
+{
+    if (!d->ready) return;
+    {
+        ComPtr<IHTMLElement> el;
+        IHTMLElement *raw = find_id(d->doc.get(), RC_ID_PERM);
+        if (!raw) return;                   /* nothing on screen */
+        el.reset(raw);
+        {
+            /* Class first, then the id -- same order and same reason as
+             * settle_pending: getElementById returns the first match, so a
+             * stale id would make the NEXT answer collapse this block again
+             * instead of the new one. */
+            Bstr cls(to_bstr(RC_CSS_PERMDONE));
+            Bstr none(to_bstr(""));
+            IHTMLElement_put_className(el.get(), cls.get());
+            IHTMLElement_put_id(el.get(), none.get());
+        }
+    }
+}
+
 void rc_html::notice(const char *text)
 { say(RC_CSS_NOTICE, text); }
 void rc_html::error(const char *text)

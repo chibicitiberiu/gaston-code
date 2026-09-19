@@ -87,10 +87,21 @@ def test_registration_list_names_nothing_undeclared():
 class _FakeBridge:
     """Records what each tool called on it, and with which guest."""
 
-    def __init__(self):
+    def __init__(self, work_root="C:\\WORK"):
         self.exec_calls: list[dict] = []
         self.status_calls: list = []
         self.resolve_calls: list[tuple] = []
+        self.work_root = work_root
+
+    def guest_work_root(self, guest):
+        """Where a command with no `cwd` of its own runs.
+
+        Implemented rather than reached for with getattr: this fake stands in
+        for the whole Bridge interface a tool sees, and a real Bridge that
+        stopped answering should be a failing test rather than a silently
+        empty working directory.
+        """
+        return self.work_root
 
     async def run_on_guest(self, command, *, timeout_ms, shell, cwd, guest):
         self.exec_calls.append(dict(command=command, timeout_ms=timeout_ms,
@@ -114,10 +125,12 @@ def _build_tools(monkeypatch, bridge, guest="guest-1"):
 
     def fake_create_sdk_mcp_server(*, name, version, tools):
         captured["by_name"] = {t.name: t.handler for t in tools}
+        captured["defs"] = {t.name: t for t in tools}
         return {"type": "sdk", "name": name, "instance": object()}
 
     monkeypatch.setattr(T, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
     result = T.build(bridge, guest=guest)
+    _build_tools.last_defs = captured["defs"]
     return result, captured["by_name"]
 
 
@@ -144,8 +157,33 @@ async def test_exec_defaults_timeout_and_shell_and_binds_its_own_guest(
     call = bridge.exec_calls[0]
     assert call["timeout_ms"] == T.DEFAULT_TIMEOUT_MS
     assert call["shell"] is True
-    assert call["cwd"] == ""
+    assert call["cwd"] == "C:\\WORK", (
+        "no cwd means this conversation's own folder on the user's machine, "
+        "not empty -- an empty one makes the guest pass NULL to "
+        "CreateProcess and the child inherits a directory the bridge has "
+        "never been told"
+    )
     assert call["guest"] == "machine-a"
+
+
+async def test_exec_still_honours_a_cwd_it_was_given(monkeypatch):
+    bridge = _FakeBridge()
+    _, handlers = _build_tools(monkeypatch, bridge)
+    await handlers["exec"]({"command": "dir", "cwd": "C:\\TEMP"})
+    assert bridge.exec_calls[-1]["cwd"] == "C:\\TEMP"
+
+
+def test_only_command_is_required(monkeypatch):
+    """The shorthand schema marks EVERY property required, which made three
+    documented-optional arguments mandatory. Measured on the guest: the model
+    called exec without `cwd`, got `Input validation error: 'cwd' is a
+    required property`, and every exec cost two round trips with a red error
+    on the user's screen in between."""
+    _build_tools(monkeypatch, _FakeBridge())
+    schema = _build_tools.last_defs["exec"].input_schema
+    assert schema["required"] == ["command"]
+    assert set(schema["properties"]) == {
+        "command", "timeout_ms", "shell", "cwd"}
 
 
 async def test_exec_clamps_timeout_ms_to_the_documented_range(monkeypatch):
