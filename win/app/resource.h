@@ -18,6 +18,16 @@
  * touching this line. */
 #define IDI_GASTON   101
 
+/* The status bar's connection light. Three icons rather than one drawn three
+ * ways: SB_SETICON takes an HICON, and swapping which handle a part holds is
+ * cheaper than owner-drawing the part -- which would also have needed a
+ * WM_DRAWITEM that this window's handler currently claims unconditionally
+ * for the chat list, so an owner-drawn status part would render blank with
+ * no error at all. */
+#define IDI_NET_OK   102
+#define IDI_NET_WARN 103
+#define IDI_NET_BAD  104
+
 /* One version, four places: the VERSIONINFO block wants it twice (binary and
  * string), Windows 98's file-properties tab reads the string, and the title
  * bar may want it later. Keeping the numeric and text forms adjacent is the

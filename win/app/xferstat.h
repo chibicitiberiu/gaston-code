@@ -34,11 +34,25 @@ class rc_xferstat {
     unsigned long rx_done, rx_total;
     unsigned long tx_done, tx_total;
     DWORD         xfer_ms;
+    /* One previous sample, so text() can report a RATE.
+     *
+     * Most traffic has no denominator and never will: nobody knows how many
+     * bytes a model's reply is until it ends, so "rx 12k" could only ever be
+     * a running total. A rate answers the question the total was standing in
+     * for -- is this moving, and how fast -- and it is the thing that makes
+     * a stall visible, because it drops to zero while the total just stops.
+     *
+     * Sampled in text(), which the 1s status timer drives, so this is a 1Hz
+     * measurement and is labelled as bytes per second accordingly. */
+    unsigned long rate_last_rx;
+    DWORD         rate_last_ms;
+    unsigned long rate_bps;
 
     rc_xferstat(const rc_xferstat &);
     rc_xferstat &operator=(const rc_xferstat &);
     rc_xferstat() : rx_done(0), rx_total(0), tx_done(0), tx_total(0),
-                    xfer_ms(0) {}
+                    xfer_ms(0), rate_last_rx(0), rate_last_ms(0),
+                    rate_bps(0) {}
 
 public:
     static rc_xferstat *create();

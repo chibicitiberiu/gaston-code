@@ -235,7 +235,9 @@ $(BUILD)/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 # -i=$(CURDIR) is what lets gaston.rc say `#include "app/resource.h"` -- the
 # same layer-qualified spelling the C++ uses, so the id is defined once for
 # both compilers.
-$(BUILD)/gaston.res: app/gaston.rc app/gaston.ico app/resource.h | $(BUILD)
+$(BUILD)/gaston.res: app/gaston.rc app/gaston.ico app/netok.ico \
+                     app/netwarn.ico app/netbad.ico app/resource.h \
+                     | $(BUILD)
 	@$(WRC) -q -r -bt=nt -i="$(CURDIR)" -fo=$@ app/gaston.rc
 
 $(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)

@@ -168,6 +168,45 @@ def art16():
     return c
 
 
+#: The status bar's connection light, three states. A small server box with
+#: an LED, which is what the user described: "server icon with green dot =
+#: ok, orange or red = not ok". The box is what makes it read as a machine
+#: rather than a generic dot; the LED is what carries the state.
+#:
+#: 16x16 only -- the status bar asks for SM_CXSMICON and nothing else ever
+#: shows these.
+_NET = [
+    "................",
+    "..kkkkkkkkkkkk..",
+    "..kwwwwwwwwwwsk.",
+    "..kwkkkkkkkkwsk.",
+    "..kwkssssssdwsk.",
+    "..kwkssssssdwsk.",
+    "..kwkddddddd wsk",
+    "..kwwwwwwwwwwsk.",
+    "..kw@@wwwwwwwsk.",
+    "..kwwwwwwwwwwsk.",
+    "..kwkkkkkkkkwsk.",
+    "..kwkssssssdwsk.",
+    "..kwkddddddd wsk",
+    "..kwwwwwwwwwwsk.",
+    "..kssssssssssk..",
+    "..kkkkkkkkkkkk..",
+]
+
+
+def art_net(led):
+    """The connection light. `led` is the palette char for the LED."""
+    c = Canvas(16, 16)
+    for y, row in enumerate(_NET):
+        for x, ch in enumerate(row):
+            if ch in (".", " "):
+                continue
+            c.put(x, y, led if ch == "@" else ch)
+    # Two pixels of LED, the only saturated colour in the glyph.
+    return c
+
+
 def encode(c):
     """One ICONDIRENTRY's worth of image: header, palette, XOR bits, AND mask.
 
@@ -204,10 +243,8 @@ def encode(c):
     return hdr + pal + bytes(xor) + bytes(mask)
 
 
-def main():
-    images = [art16(), art32()]
+def write_ico(path, images):
     blobs = [encode(c) for c in images]
-
     out = bytearray(struct.pack("<HHH", 0, 1, len(images)))
     offset = 6 + 16 * len(images)
     for c, blob in zip(images, blobs):
@@ -216,13 +253,21 @@ def main():
         offset += len(blob)
     for blob in blobs:
         out += blob
-
-    top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(top, "win", "app", "gaston.ico")
     with open(path, "wb") as fh:
         fh.write(out)
     print("wrote %s (%d bytes, %s)"
           % (path, len(out), ", ".join("%dx%d" % (c.w, c.h) for c in images)))
+
+
+def main():
+    top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = os.path.join(top, "win", "app")
+    write_ico(os.path.join(app, "gaston.ico"), [art16(), art32()])
+    # Lime / yellow / red, the three the VGA palette actually has. Amber
+    # would be better than yellow and is not one of the sixteen; a dithered
+    # amber on an 8bpp display is noise at this size.
+    for name, led in (("netok", "l"), ("netwarn", "y"), ("netbad", "r")):
+        write_ico(os.path.join(app, name + ".ico"), [art_net(led)])
 
 
 if __name__ == "__main__":

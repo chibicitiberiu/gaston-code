@@ -20,6 +20,12 @@
  * of such a file as a black square on the taskbar. */
 IDI_GASTON ICON "app/gaston.ico"
 
+/* The status bar's connection states. Same generator, same palette, same
+ * reason for 4bpp: Win98 has no alpha compositing. */
+IDI_NET_OK   ICON "app/netok.ico"
+IDI_NET_WARN ICON "app/netwarn.ico"
+IDI_NET_BAD  ICON "app/netbad.ico"
+
 /* Win98 reads this for the Version tab of the file's Properties sheet, and
  * it is the only place the binary says what it is when it is not running. */
 1 VERSIONINFO

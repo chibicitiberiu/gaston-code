@@ -166,6 +166,12 @@ static char  g_exe_dir[MAX_PATH];
  * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
  * other way to reach it. */
 static HINSTANCE g_inst;
+/* The status bar's connection light. Loaded once; resource icons are owned
+ * by the module and must not be DestroyIcon'd. */
+static HICON g_ico_ok, g_ico_warn, g_ico_bad;
+/* Which one is showing, so the icon is only swapped when it changes --
+ * status_refresh runs every second and SB_SETICON repaints. */
+static HICON g_ico_shown;
 
 /* ------------------------------------------------------------------ utils */
 
@@ -188,9 +194,32 @@ static void status_set(int pane, const char *text)
 static void status_refresh(void)
 {
     char buf[128];
-    rc_strf(buf, sizeof(buf), " %s  %s:%d",
-              rc_state_name(g_net.state), g_cfg.host, g_cfg.port);
+
+    /* The state is the ICON now, not a word. "connected 10.0.2.2:7890" spent
+     * a third of a 220px pane spelling out what a green light says at a
+     * glance, and the address -- the part you actually need when it is
+     * wrong -- was what got squeezed.
+     *
+     * The full sentence moves to the tooltip. If Win98's status bar declines
+     * to show it, nothing is lost that the icon and the address do not
+     * already carry; that is why the wording does not depend on it. */
+    {
+        HICON want = (g_net.state == RC_CONNECTED) ? g_ico_ok
+                   : (g_net.state == RC_CONNECTING) ? g_ico_warn
+                   : g_ico_bad;
+        if (want && want != g_ico_shown) {
+            SendMessageA(g_status, SB_SETICON, 0, (LPARAM)want);
+            g_ico_shown = want;
+        }
+    }
+    rc_strf(buf, sizeof(buf), " %s:%d", g_cfg.host, g_cfg.port);
     status_set(0, buf);
+    {
+        char tip[160];
+        rc_strf(tip, sizeof(tip), "%s  %s:%d",
+                rc_state_name(g_net.state), g_cfg.host, g_cfg.port);
+        SendMessageA(g_status, SB_SETTIPTEXTA, 0, (LPARAM)tip);
+    }
     /* app/xferstat.cpp owns the rx/tx counters and this pane's formatting,
      * including the "nothing for 1200ms" reset -- see app/xferstat.h. */
     if (g_xfer) g_xfer->text(buf, sizeof(buf));
@@ -201,7 +230,14 @@ static void status_refresh(void)
      * is the difference between "working" and "hung", and it costs one
      * SB_SETTEXT a second rather than touching the transcript. */
     if (g_turn_active && g_turn_start_ms) {
-        const char *what = g_turn_state == TURN_STREAMING
+        /* "receiving..." while a permission bar is up is false: nothing is
+         * arriving, the bridge is blocked on a person. Measured on the guest
+         * -- the pane counted "receiving... 3s / 8s / 56s" while the prompt
+         * sat there, and most of that was somebody deciding. The elapsed
+         * number has the same problem and is left alone for now: it is the
+         * turn's wall time, which is what "has this hung?" wants. */
+        const char *what = (g_bar && g_bar->active()) ? "waiting for you..."
+                         : g_turn_state == TURN_STREAMING
                                ? "receiving..." : "Claude is thinking...";
         unsigned long secs =
             (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000);
@@ -558,8 +594,16 @@ static void on_turn(rc_frame *f)
             status_set(2, " failed");
         } else {
             char buf[96];
+            /* Keep the elapsed time. It used to be overwritten by the cost,
+             * so the moment a turn ended you lost how long it took -- and
+             * "that took 90 seconds" is the more useful of the two when you
+             * are deciding whether to ask for something smaller next time. */
+            unsigned long secs = g_turn_start_ms
+                ? (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000)
+                : 0;
             v = rc_frame_get(f, "cost_usd");
-            rc_strf(buf, sizeof(buf), " done  $%s", (v && *v) ? v : "?");
+            rc_strf(buf, sizeof(buf), " done  %lus  $%s",
+                    secs, (v && *v) ? v : "?");
             status_set(2, buf);
         }
     }
@@ -1458,6 +1502,21 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
     rc_log("main window hwnd=%p", (void *)g_main);
     log_mem("window created");
+
+    {
+        /* SM_CXSMICON, not a literal 16: it is 16 on this guest and it is the
+         * metric the status bar actually asks for. */
+        int sw = GetSystemMetrics(SM_CXSMICON);
+        int sh = GetSystemMetrics(SM_CYSMICON);
+        g_ico_ok   = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_NET_OK),
+                                       IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
+        g_ico_warn = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_NET_WARN),
+                                       IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
+        g_ico_bad  = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_NET_BAD),
+                                       IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
+        if (!g_ico_ok || !g_ico_warn || !g_ico_bad)
+            rc_log("status: connection icons failed to load");
+    }
 
     g_accel = LoadAcceleratorsA(inst, MAKEINTRESOURCE(IDA_MAIN));
     if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
