@@ -37,14 +37,51 @@ def test_text_blocks():
 
 
 def test_tool_use_is_summarised_not_dumped():
+    """ONE argument, the telling one, clipped -- exactly what the live path
+    writes.
+
+    This used to assert the opposite: that no input was replayed at all, so a
+    call rendered as `tool -> Bash` when you came back to a conversation and
+    `Bash command: ls -la ...` while it was happening. That is the "opening an
+    old conversation makes it lose formatting" complaint surviving in the one
+    block type nobody checked. Summarised still means summarised -- the whole
+    input dict never appears, and the value is clipped at 160 characters, so
+    a replayed page is no larger than the live one was.
+    """
     runs = _text_of({
         "role": "assistant",
         "content": [{"type": "tool_use", "name": "Bash",
-                     "input": {"command": "ls -la /very/long/path"}}],
+                     "input": {"command": "ls -la /very/long/path",
+                               "timeout_ms": 20000, "shell": True}}],
     })
     assert styles(runs) == [STYLE_TOOL]
-    assert "Bash" in texts(runs)
-    assert "/very/long/path" not in texts(runs), "tool input is not replayed"
+    assert texts(runs) == "Bash command: ls -la /very/long/path"
+    assert "timeout_ms" not in texts(runs), "the whole input is not dumped"
+
+
+def test_tool_use_with_no_telling_argument_is_just_the_name():
+    runs = _text_of({
+        "role": "assistant",
+        "content": [{"type": "tool_use", "name": "Glob"}],
+    })
+    assert texts(runs) == "Glob"
+
+
+def test_a_replayed_tool_call_is_the_same_markup_as_a_live_one():
+    """The renderer takes (name, summary); replay used to hand it the literal
+    word "tool" and everything else as the summary, so the tool name was not
+    in `.toolname` and did not get the styling a live one did."""
+    from bridge.view import html as H
+    from bridge.agent import sessions as S
+
+    live = H.tool_call("Bash", "command: ls")
+    runs = S._text_of({
+        "role": "assistant",
+        "content": [{"type": "tool_use", "name": "Bash",
+                     "input": {"command": "ls"}}],
+    })
+    name, _, rest = runs[0][1].partition(" ")
+    assert H.tool_call(name, rest) == live
 
 
 def test_tool_result_is_truncated():

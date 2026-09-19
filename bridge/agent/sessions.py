@@ -15,6 +15,7 @@ import logging
 
 from claude_agent_sdk import get_session_messages, list_sessions
 
+from . import permissions as _perms
 from ..view import html as H
 from ..view.html import APPEND, HtmlStream
 
@@ -167,7 +168,26 @@ def _text_of(message) -> list[tuple[str, str]]:
         elif btype == "thinking":
             continue  # not replayed: it is long and was never the point
         elif btype == "tool_use":
-            runs.append((STYLE_TOOL, f"\n  -> {block.get('name', '?')}\n"))
+            # THE SAME LINE THE LIVE PATH WRITES, not a shorter one.
+            #
+            # This used to emit "  -> Write", which the renderer turned into
+            # `tool  -> Write` -- while the live path writes
+            # `Write file_path: /home/.../plan.md`. So a conversation looked
+            # one way as it happened and a duller way when you came back to
+            # it, which is exactly the "opening an old conversation makes it
+            # lose formatting" complaint this replay path was built to fix,
+            # surviving in the one block type nobody checked.
+            #
+            # `telling_argument` is the shared answer to "which argument
+            # matters" (02.15); using it here keeps the two paths from
+            # drifting the way they already had.
+            name = block.get("name", "?")
+            args = block.get("input")
+            told = _perms.telling_argument(args) if isinstance(args, dict) \
+                else None
+            runs.append((STYLE_TOOL,
+                         f"{name} {told[0]}: {told[1][:160]}" if told
+                         else name))
         elif btype == "tool_result":
             body = block.get("content")
             if isinstance(body, list):
@@ -221,7 +241,12 @@ def history_html(session_id: str, limit: int = 2000) -> list[str]:
                 blocks.extend(u.html for u in md.feed(text)
                               if u.mode == APPEND and u.html)
             elif style == STYLE_TOOL:
-                blocks.append(H.tool_call("tool", text))
+                # Split back into the renderer's (name, summary) shape, so a
+                # replayed call is the same markup as a live one -- the tool
+                # name in `.toolname` and the argument after it, rather than
+                # the literal word "tool" followed by everything.
+                name, _, rest = text.partition(" ")
+                blocks.append(H.tool_call(name, rest))
             elif style == STYLE_CODE:
                 blocks.append('<div class="codewrap"><pre>'
                               + H.esc(text) + "</pre></div>")

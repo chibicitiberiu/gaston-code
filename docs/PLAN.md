@@ -1323,6 +1323,15 @@ has known work left.
   guests still share one mirror and one baseline, so `BACKLOG.md` §7's
   implementation list is untouched.
 
+- **Replayed tool calls look like live ones. [R -- 2026-09-19] Done.** The
+  last survivor of "opening an old conversation makes it lose formatting":
+  every other block type had been routed through the live renderer, and
+  `tool_use` had not. A call rendered `tool -> Bash` on reopening and
+  `Bash command: ls -la ...` while it was happening. Both paths ask
+  `permissions.telling_argument` which one argument matters now, so they
+  cannot drift again, and "summarised" still means summarised -- one
+  argument, clipped at 160 characters, never the whole input dict.
+
 - **Keyboard: Ctrl+A and Ctrl+M. [R -- 2026-09-19] Done.** Windows 98's EDIT
   control has no Ctrl+A -- select-all arrived with rich edit and NT's common
   controls, and on 9x it just beeps, which is twenty years of muscle memory
