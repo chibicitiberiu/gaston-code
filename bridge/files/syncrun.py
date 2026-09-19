@@ -76,7 +76,17 @@ class Pass:
         # explicitly rather than fished out of a guest that might not be one.
         self.transport = transport
         self.root = root
-        self.state = os.path.join(state_dir, "base.json")
+        # `state_dir` may name the FILE rather than the directory.
+        #
+        # One baseline per guest root (Bridge._base_path) means the caller is
+        # the only thing that knows which file this pass belongs to, and
+        # re-deriving `base.json` here silently ignored that -- the bridge
+        # chose base-<root>.json, the pass loaded base.json, and every pass
+        # was refused for an identity mismatch the bridge had already
+        # resolved. Both spellings are accepted so the existing callers that
+        # pass a directory keep working.
+        self.state = (state_dir if str(state_dir).endswith(".json")
+                      else os.path.join(state_dir, "base.json"))
         self.base = S.Baseline.load(self.state)
         #: "What has already been said, to whom" -- `first_report`/`note`/
         #: `notices_delivered`/`agent_notices_delivered` below are thin

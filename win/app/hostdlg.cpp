@@ -109,6 +109,10 @@ INT_PTR CALLBACK proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                             (WPARAM)(sizeof(st->cfg->host) - 1), 0);
         SendDlgItemMessageA(dlg, ID_PORT_EDIT, EM_LIMITTEXT, 5, 0);
         SetFocus(GetDlgItem(dlg, ID_HOST_EDIT));
+        /* Selected, for the same reason as the ask box below: focus set by
+         * hand skips the selection the dialog manager would have made, and
+         * typing a new host then prepends it to the old one. */
+        SendDlgItemMessageA(dlg, ID_HOST_EDIT, EM_SETSEL, 0, (LPARAM)-1);
         return FALSE;           /* focus set above, do not let the dialog */
     }
 
@@ -233,6 +237,15 @@ INT_PTR CALLBACK ask_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         SendDlgItemMessageA(dlg, ID_ASK_EDIT, EM_LIMITTEXT,
                             (WPARAM)(st->cap - 1), 0);
         SetFocus(GetDlgItem(dlg, ID_ASK_EDIT));
+        /* SELECTED, so typing replaces it.
+         *
+         * WM_INITDIALOG returns FALSE here because focus is set by hand
+         * above, and that also skips the selection the dialog manager would
+         * have made -- leaving the caret at position 0 with the old value
+         * intact to the right of it. Typing then PREPENDS, which produced
+         * `C:\GastonC:\WORK` in a field that was meant to be replaced, and
+         * backspace at position 0 does nothing to explain why. */
+        SendDlgItemMessageA(dlg, ID_ASK_EDIT, EM_SETSEL, 0, (LPARAM)-1);
         return FALSE;
 
     case WM_COMMAND:

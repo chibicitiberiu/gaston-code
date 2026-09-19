@@ -39,6 +39,16 @@
 #define IDI_PIE0     110
 #define RC_PIE_STEPS 8
 
+/* Toolbar bitmaps, numbered above the icons so the shell's "lowest icon is
+ * the file's icon" rule stays a statement about icons only. A BITMAP, not an
+ * ICON: TB_ADDBITMAP takes a DIB with no AND mask, and transparency comes
+ * from comctl32 rewriting the standard 3D colours when the bitmap is added.
+ *
+ * Drawn by tools/mkicon.py because comctl32 has no paperclip -- its stock
+ * strip is a 1995 office toolbar, and the nearest thing in it is a folder,
+ * which reads as "open a document" because that is what it is. */
+#define IDB_ATTACH   200
+
 /* One version, four places: the VERSIONINFO block wants it twice (binary and
  * string), Windows 98's file-properties tab reads the string, and the title
  * bar may want it later. Keeping the numeric and text forms adjacent is the

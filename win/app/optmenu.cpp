@@ -18,6 +18,7 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
       input(input_)
 {
     cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
+    cur_work[0] = cur_work_short[0] = '\0';
     /* All three menus are built from what the bridge sends, so the lists can
      * change without rebuilding this binary -- which matters most for Mode,
      * where WHICH modes are offered is a safety decision made beside the
@@ -26,6 +27,21 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
     menu_effort = CreatePopupMenu();
     menu_mode = CreatePopupMenu();
     menu_cmd = CreatePopupMenu();
+    menu_work = CreatePopupMenu();
+
+    /* Attach is a DROPDOWN with File and Screenshot in it, as asked for --
+     * not a plain button. Both are greyed because neither is built: sending
+     * a file and capturing the screen are Phase 5, and a menu entry that
+     * silently does nothing is worse than one that says it cannot yet.
+     *
+     * Built here, once, rather than from an OPTION batch: unlike the model
+     * and command lists these two are not the bridge's to choose. They are
+     * what this client will be able to do, and the bridge has no opinion. */
+    menu_attach = CreatePopupMenu();
+    AppendMenuA(menu_attach, MF_STRING | MF_GRAYED, IDM_ATTFILE,
+                "&File...");
+    AppendMenuA(menu_attach, MF_STRING | MF_GRAYED, IDM_ATTSHOT,
+                "&Screenshot of this screen");
     AppendMenuA(menu_model, MF_STRING | MF_GRAYED, 0, "(not connected)");
     AppendMenuA(menu_effort, MF_STRING | MF_GRAYED, 0, "(not connected)");
     AppendMenuA(menu_mode, MF_STRING | MF_GRAYED, 0, "(not connected)");
@@ -67,6 +83,8 @@ int rc_optmenu::frame(rc_frame *f)
             clear_popup(menu_effort);
             clear_popup(menu_mode);
             clear_popup(menu_cmd);
+            clear_popup(menu_work);
+            cur_work[0] = cur_work_short[0] = '\0';
             n_model = 0;
             n_effort = 0;
             n_mode = 0;
@@ -117,6 +135,33 @@ int rc_optmenu::frame(rc_frame *f)
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
                             IDM_MODE0 + n_mode, label);
                 n_mode++;
+            } else if (strcmp(kind, "work") == 0) {
+                /* One row, no tick: it is a fact about the conversation
+                 * rather than a choice among alternatives.
+                 *
+                 * The BUTTON carries the full path, because "where do my
+                 * files go?" is the question and a leaf answers half of it.
+                 * "<unset>" until the conversation has been spoken in --
+                 * the folder is named after the conversation and the CLI
+                 * names the conversation from its first message. */
+                rc_strf(cur_work, sizeof(cur_work), "%s", id);
+                rc_strf(cur_work_short, sizeof(cur_work_short), "%s",
+                        label && *label ? label : "<unset>");
+                /* The path again, greyed, at the top of the menu.
+                 *
+                 * The BUTTON carries it too, and on a 640px screen a long
+                 * one runs out of room and clips its tail -- measured:
+                 * `C:\Gaston\SKYCOLOR` loses its last character. A menu has
+                 * the whole width of the screen, so this is where the path
+                 * is always readable. Greyed because it is information, not
+                 * a command. */
+                AppendMenuA(menu_work, MF_STRING | MF_GRAYED, 0,
+                            cur_work[0] ? cur_work
+                                        : "Not set until this conversation "
+                                          "has been used");
+                AppendMenuA(menu_work, MF_SEPARATOR, 0, NULL);
+                AppendMenuA(menu_work, MF_STRING, IDM_WORKSET,
+                            "Change &work directory...");
             } else if (strcmp(kind, "command") == 0 && n_cmd < MAX_OPTS) {
                 /* No tick: a command is something you do, not a setting you
                  * are in. The label carries the argument hint and the id is

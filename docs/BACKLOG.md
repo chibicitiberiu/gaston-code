@@ -884,6 +884,29 @@ simply never been looked at, rather than for the `RC_MAX_INFLIGHT` gate, which
 a pumping modal does not reach; (5) if
 R7's `client_id` is also live by then, one `rc_config_save` fix serves both.
 
+## 11c. One baseline per guest root -- built, and what it does not do
+
+**Status:** built 2026-09-19. Recorded because it touches the sync layer and
+because the shape is easy to misread as more than it is.
+
+A baseline is bound to a `tree_id` and a `guest_root`, and `scan_guest`
+refuses when either changes -- correctly, since treating a different directory
+as the same one would conflict the whole tree. That refusal is exactly what
+"Change work directory..." triggers, which made the feature brick
+synchronisation with a message the user has to decode.
+
+So a root gets its own baseline file: the legacy `base.json` keeps belonging
+to whichever root it already records, and any other root gets
+`base-<sha1(root)[:10]>.json` beside it. Nothing is migrated, nothing is
+deleted, and switching back to a previous root finds its history exactly as it
+left it. `Pass` now takes the FILE rather than re-deriving `base.json` from
+the directory -- it did, which silently defeated the whole thing for one
+build.
+
+**What it is not.** This is not R7. Two guests still share one mirror and one
+baseline per root, so the multi-client question in §7 is untouched. It makes
+one machine able to change where it works without losing what it knows.
+
 ## 11b. "Always" still does not survive a session rebuild -- and would not
 help the case it was written for
 

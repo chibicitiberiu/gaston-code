@@ -1232,8 +1232,34 @@ has known work left.
   drops it -- and matching text degrades to today's behaviour when the wording
   changes, where a JSONL reader would break the whole chat list.
 
-- **The work folder, chosen when a chat is started. [R -- 2026-09-19] Done,
-  and as a SUBFOLDER OF THE MIRROR rather than a new mirror.** §7 settled that
+- **The work folder. [R -- 2026-09-19, CORRECTED] `C:\Gaston\<name>`, named
+  after the conversation, after its first message.**
+  An earlier attempt asked for the name on New chat and put it under the
+  existing `C:\WORK`. Both were wrong against what was actually asked for
+  (transcript, "Lets default to `C:\Gaston\<chat shortened name>` as work
+  folder"): a folder is named after the conversation, and the CLI names the
+  conversation from its FIRST MESSAGE -- so asking up front was asking the
+  user to invent something before there was anything to base it on, and then
+  live with it. The toolbar shows `<unset>` until then.
+  Unique by suffix, checked against both the disk and the folders already
+  claimed: two conversations about listing files both reduce to `LISTFILE`,
+  and the second taking the first's folder would put two conversations' work
+  in one place with no way to tell them apart afterwards.
+  The mapping is REMEMBERED (`registry.Folders`), not read back from the
+  session: the folder is named after the session has already started and
+  recorded the directory it started in, which is the root -- so asking the
+  SDK gives the wrong answer and a reopened chat showed `<unset>` for a
+  conversation whose folder was sitting on disk.
+  "Change work directory..." on the dropdown takes any folder. What it
+  changes is the ROOT the per-conversation folders live in, which is what
+  "any other folder" has to mean when each conversation gets its own; the
+  dialog says so. It needs a restart and says that too.
+  The INI default is `C:\Gaston`, and the guest CREATES the root if it is
+  missing -- a work directory is a place the user named, not one they are
+  asserting already exists, and leaving it missing left synchronisation dead
+  with "guest scan returned no_root".
+
+- **[superseded] The work folder as a SUBFOLDER OF THE MIRROR.** §7 settled that
   a mirror belongs to a conversation; what it did not settle is whether that
   means moving the sync root. Moving it would mean a new baseline, a new
   `tree_id`, a watcher restart and a recovery pass on the new tree -- four

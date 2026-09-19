@@ -13,6 +13,9 @@
 /* Labels are re-written at runtime, so each needs its own buffer that
  * outlives the TB_SETBUTTONINFO call. */
 static char g_mode_text[32];
+/* A whole path, so it needs a path's worth of room -- the 32 this started
+ * at truncated C:\Gaston\LISTFILE's longer siblings silently. */
+static char g_work_text[128];
 static char g_model_text[48];
 static char g_effort_text[32];
 
@@ -32,7 +35,8 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
     p->bar = CreateWindowExA(
         0, TOOLBARCLASSNAME, NULL,
         WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST
-        | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER,
+        | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER
+        | TBSTYLE_TOOLTIPS,
         0, 0, 0, 0, parent, (HMENU)0, inst, NULL);
     if (!p->bar) {
         rc_log("toolbar: CreateWindowEx failed (%lu)",
@@ -50,16 +54,31 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
     /* STD_FILENEW for New chat, STD_PROPERTIES for Commands. Only two of
      * comctl32's own bitmaps map to anything here -- there is no gauge,
      * gavel or paperclip in them -- so the rest of this toolbar is text,
-     * which is what it wanted anyway. */
+     * which is what it wanted anyway.
+     *
+     * Except the paperclip, which is ours. Added SECOND, because
+     * TB_ADDBITMAP appends and returns the index of the first image it
+     * added: that index is what the Attach button has to name, and hardcoding
+     * 15 (the stock strip's count) would break the day comctl32 ships a
+     * sixteenth. */
     {
         TBADDBITMAP ab;
         ab.hInst = HINST_COMMCTRL;
         ab.nID = IDB_STD_SMALL_COLOR;
         SendMessageA(p->bar, TB_ADDBITMAP, 0, (LPARAM)&ab);
+
+        ab.hInst = inst;
+        ab.nID = IDB_ATTACH;
+        p->clip_ix = (int)SendMessageA(p->bar, TB_ADDBITMAP, 1, (LPARAM)&ab);
+        if (p->clip_ix < 0) {
+            rc_log("toolbar: the Attach bitmap did not load; using the "
+                   "folder from comctl32 instead");
+            p->clip_ix = STD_FILEOPEN;
+        }
     }
 
     {
-        TBBUTTON b[5];
+        TBBUTTON b[7];
         memset(b, 0, sizeof(b));
 
         /* iString is a pointer here (I_IMAGENONE for the bitmap), which is
@@ -85,13 +104,33 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
 
         b[3].fsStyle   = TBSTYLE_SEP;
 
-        b[4].idCommand = ID_TB_CMD;
-        b[4].iBitmap   = STD_PROPERTIES;
+        /* A DROPDOWN with File and Screenshot in it, as asked for. Enabled,
+         * because the menu is what explains itself -- both entries are
+         * greyed, which says "this is where it will be" rather than leaving
+         * a dead button with no way to find out what it was for. */
+        b[4].idCommand = ID_TB_ATTACH;
+        b[4].iBitmap   = p->clip_ix;
         b[4].fsState   = TBSTATE_ENABLED;
         b[4].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
-        b[4].iString   = (INT_PTR)"Commands";
+        b[4].iString   = (INT_PTR)"Attach";
 
-        SendMessageA(p->bar, TB_ADDBUTTONS, 5, (LPARAM)b);
+        b[5].idCommand = ID_TB_CMD;
+        b[5].iBitmap   = STD_PROPERTIES;
+        b[5].fsState   = TBSTATE_ENABLED;
+        b[5].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
+        b[5].iString   = (INT_PTR)"Commands";
+
+        /* LAST, and the five before it are in the order that was asked for:
+         * mode, model, effort, attach, commands. This one carries a whole
+         * path and is the widest thing on the bar, so it goes where running
+         * out of room clips IT rather than everything to its right. */
+        b[6].idCommand = ID_TB_WORK;
+        b[6].iBitmap   = I_IMAGENONE;
+        b[6].fsState   = TBSTATE_ENABLED;
+        b[6].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
+        b[6].iString   = (INT_PTR)"<unset>";
+
+        SendMessageA(p->bar, TB_ADDBUTTONS, 7, (LPARAM)b);
     }
     /* New chat, on its own bar so it can sit at the other end of the window
      * from the settings -- see the header. Its failure is not fatal: the
@@ -99,7 +138,8 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
     p->top = CreateWindowExA(
         0, TOOLBARCLASSNAME, NULL,
         WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST
-        | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER,
+        | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER
+        | TBSTYLE_TOOLTIPS,
         0, 0, 0, 0, parent, (HMENU)0, inst, NULL);
     if (p->top) {
         TBBUTTON n;
@@ -165,6 +205,7 @@ void rc_toolbar::refresh()
         const char *d = opts->mode_label();
         const char *m = opts->model_label();
         const char *e = opts->effort_label();
+        const char *w = opts->work_label();
         TBBUTTONINFOA bi;
 
         /* The fallbacks are three different states, not one.
@@ -176,7 +217,7 @@ void rc_toolbar::refresh()
          * the three.
          *
          * Effort: the button only exists at all once a model with levels is
-         * picked (see the TB_HIDEBUTTON below), so an empty label here means
+         * picked (see the TB_ENABLEBUTTON below), so an empty label means
          * the CLI's own default is in force -- nothing was chosen and the
          * bridge has no metadata saying which level that is. "default" is
          * what _set_effort already calls that state bridge-side. */
@@ -184,8 +225,20 @@ void rc_toolbar::refresh()
                 (d && *d) ? d : "Mode");
         rc_strf(g_model_text, sizeof(g_model_text), "%s",
                 (m && *m) ? m : "Model");
+        /* The NOUN when the model has no levels: a greyed button showing
+         * "Effort" says the setting does not apply here, where a greyed
+         * button showing a value would claim a value is in force. */
         rc_strf(g_effort_text, sizeof(g_effort_text), "%s",
-                (e && *e) ? e : "default");
+                !opts->has_effort() ? "Effort"
+                                    : ((e && *e) ? e : "default"));
+        /* THE WHOLE PATH, which is what was asked for and is the
+         * right answer: "where do my files go?" is the question,
+         * and a leaf on its own answers half of it on a machine
+         * where the user is going to go and open that folder.
+         * "<unset>" until the conversation has a name to take one
+         * from -- the CLI titles it from the first message. */
+        rc_strf(g_work_text, sizeof(g_work_text), "%s",
+                (w && *w) ? w : "<unset>");
 
         memset(&bi, 0, sizeof(bi));
         bi.cbSize = sizeof(bi);
@@ -196,14 +249,16 @@ void rc_toolbar::refresh()
         SendMessageA(bar, TB_SETBUTTONINFOA, ID_TB_MODEL, (LPARAM)&bi);
         bi.pszText = g_effort_text;
         SendMessageA(bar, TB_SETBUTTONINFOA, ID_TB_EFFORT, (LPARAM)&bi);
+        bi.pszText = g_work_text;
+        SendMessageA(bar, TB_SETBUTTONINFOA, ID_TB_WORK, (LPARAM)&bi);
 
-        /* Haiku has no effort levels, and the bridge says so with a single
-         * greyed row. A button that can only ever read "(effort)" is worse
-         * than no button, so it goes away until a model that has them is
-         * picked. The menu bar's Effort popup stays -- it explains itself
-         * with the greyed entry; a 56px toolbar button cannot. */
-        SendMessageA(bar, TB_HIDEBUTTON, ID_TB_EFFORT,
-                     MAKELONG(opts->has_effort() ? FALSE : TRUE, 0));
+        /* GREYED, not hidden. Haiku has no effort levels and the bridge says
+         * so with one greyed menu row; this says the same thing the same
+         * way. Hiding it took a slot out of the one row whose whole job is
+         * to show what the next message will run with, and moved every
+         * button to its right whenever the model changed. */
+        SendMessageA(bar, TB_ENABLEBUTTON, ID_TB_EFFORT,
+                     MAKELONG(opts->has_effort() ? TRUE : FALSE, 0));
         SendMessageA(bar, TB_AUTOSIZE, 0, 0);
     }
 }
@@ -217,6 +272,8 @@ int rc_toolbar::pop(int id)
     if (id == ID_TB_MODE)        menu = opts->mode_menu();
     else if (id == ID_TB_MODEL)  menu = opts->model_menu();
     else if (id == ID_TB_EFFORT) menu = opts->effort_menu();
+    else if (id == ID_TB_WORK)   menu = opts->work_menu();
+    else if (id == ID_TB_ATTACH) menu = opts->attach_menu();
     else if (id == ID_TB_CMD)    menu = opts->cmd_menu();
     if (!menu) return 0;
 
@@ -231,9 +288,55 @@ int rc_toolbar::pop(int id)
     return 1;
 }
 
+/* One sentence per button, for the tooltip.
+ *
+ * The buttons say what they ARE set to -- "Haiku", "Accept edits" -- which is
+ * the whole point of the bar and also means nothing on them says what they
+ * are FOR. That is what a tooltip is for, and it is the only room on a 640px
+ * screen to say it. Attach's is the one that earns its keep: a greyed button
+ * with no explanation is just a dead control. */
+static const char *tip_for(int id)
+{
+    switch (id) {
+    case ID_TB_MODE:
+        return "Whether you are asked before anything runs on this computer";
+    case ID_TB_MODEL:
+        return "Which model answers";
+    case ID_TB_EFFORT:
+        return "How hard the model works before replying. Not every model "
+               "has this.";
+    case ID_TB_WORK:
+        return "Where this conversation's files live on this computer";
+    case ID_TB_ATTACH:
+        return "Send a file or a screenshot to the assistant";
+    case ID_TB_CMD:
+        return "Commands the assistant understands, such as /compact";
+    case ID_TB_NEW:
+        return "Start a new conversation (Ctrl+N)";
+    }
+    return NULL;
+}
+
 int rc_toolbar::notify(NMHDR *nh)
 {
-    if (!nh || !bar || nh->hwndFrom != bar) return 0;   /* top has no menu */
+    if (!nh) return 0;
+
+    /* TTN_NEEDTEXT comes from the TOOLTIP control the toolbar made, not from
+     * the toolbar, so the hwndFrom check below would throw it away. It is
+     * matched on the code instead, and `idFrom` is the command id. */
+    if (nh->code == TTN_NEEDTEXTA) {
+        NMTTDISPINFOA *ti = (NMTTDISPINFOA *)nh;
+        const char *text = tip_for((int)nh->idFrom);
+        if (!text) return 0;
+        /* lpszText, not szText: szText is 80 bytes and these do not fit.
+         * The string is a literal with static lifetime, which is what
+         * lpszText requires -- the control reads it after this returns. */
+        ti->lpszText = (LPSTR)text;
+        ti->hinst = NULL;
+        return 1;
+    }
+
+    if (!bar || nh->hwndFrom != bar) return 0;   /* top has no menu */
     if (nh->code != TBN_DROPDOWN) return 0;
     pop((int)((NMTOOLBARA *)nh)->iItem);
     return 1;

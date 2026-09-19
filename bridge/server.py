@@ -16,6 +16,7 @@ import datetime as _dt
 import asyncio
 import contextlib
 import logging
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -26,7 +27,7 @@ from .files import manifest
 from .status import EXEC_STATUS_PROSE, ExecStatus, SyncStatus
 from .wire import fold
 from .agent import machine
-from .agent.registry import Registry
+from .agent.registry import Folders, Registry
 from .wire.coalesce import Coalescer
 from .wire.compress import StreamCompressor
 from .view import html as H
@@ -287,6 +288,14 @@ class GuestSession:
         self.identity.work_dir = d
 
     @property
+    def work_guest(self) -> str:
+        return self.identity.work_guest
+
+    @work_guest.setter
+    def work_guest(self, d: str) -> None:
+        self.identity.work_guest = d
+
+    @property
     def pending_resume(self) -> str:
         return self.identity.pending_resume
 
@@ -469,6 +478,9 @@ class Bridge:
         # Which sessions this bridge started, so the chat list can show those
         # and not every conversation on the machine. See bridge/registry.py.
         self.registry = Registry()
+        #: Which folder each conversation works in -- see registry.Folders for
+        #: why this is remembered rather than read back from the session.
+        self.folders = Folders()
         # Measured link speed. None means "unknown, assume it might be slow".
         # Set from the guest's STAT frames; overridable for testing so the
         # dialup path can be exercised without a modem.
@@ -520,6 +532,9 @@ class Bridge:
         #: way to know which of its edits do.
         self.guest_sync_root: str | None = None
         self._last_sync_reports: list[str] = []
+        #: Resolved baseline file per guest root, so the lookup below is not
+        #: repeated on every pass.
+        self._base_paths: dict[str, str] = {}
         #: The halt bar's state and the agent's notice cache -- both outlive
         #: a `Pass` and are Bridge-lifetime, which `Reporter` (built fresh
         #: per `Pass`) and `GuestSession` (whose halt trio was a derived
@@ -836,12 +851,15 @@ class Bridge:
 
     @staticmethod
     def folder_name(raw: str) -> str:
-        """A folder name that is safe on both sides, or "" for the shared one.
+        """A folder name that is safe on both sides, or "" if nothing is left.
 
-        Refuses rather than repairs anything with a separator or a dot run in
-        it: a name arriving with `..` or `/` in it is not a typo to fix, it is
-        someone trying to leave the mirror, and quietly rewriting it into
-        something that works is how a guard becomes decoration.
+        Refuses rather than repairs anything carrying a separator or a `..`:
+        a name with one in it is not a typo to fix, it is a way out of the
+        folder, and quietly rewriting it into something that works is how a
+        guard becomes decoration. Everything else is reduced rather than
+        refused, because this is usually fed a CONVERSATION TITLE -- prose
+        with spaces and punctuation in it -- and refusing "List files in
+        C:\\RETRO" would mean no folder at all.
         """
         raw = (raw or "").strip()
         if not raw:
@@ -851,7 +869,23 @@ class Bridge:
                 return ""
         out = "".join(c for c in raw.upper()
                       if c.isascii() and (c.isalnum() or c in "-_"))
-        return out[:Bridge.FOLDER_MAX]
+        return out.strip("-_")[:Bridge.FOLDER_MAX]
+
+    @staticmethod
+    def _title_folder(title: str) -> str:
+        """A folder name from a conversation title, reduced not refused.
+
+        The title is prose and the folder is 8.3, so punctuation goes and the
+        rest is truncated. "List files in C:\\RETRO" has a colon in it, which
+        `folder_name` refuses on purpose -- so the separators are stripped
+        HERE, where they are known to be part of a sentence rather than an
+        attempt to leave the folder.
+        """
+        keep = []
+        for ch in (title or ""):
+            keep.append(ch if (ch.isascii() and (ch.isalnum() or ch in "-_"))
+                        else " ")
+        return Bridge.folder_name("".join(keep).replace(" ", ""))
 
     def _stored_work_dir(self, session_id: str) -> str:
         """The folder a stored conversation was started in, if it is ours.
@@ -896,19 +930,85 @@ class Bridge:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.cwd or os.getcwd()
 
-    def guest_work_root(self, guest: GuestSession) -> str:
-        r"""The same folder, spelled the way the guest spells it.
+    async def _name_work_dir(self, guest: GuestSession) -> None:
+        """Give this conversation its folder, once it has a name to take one
+        from.
 
-        The guest's mirror root plus this conversation's subfolder, joined
-        with a BACKSLASH -- os.path.join here would produce `C:\WORK/CHAT1`
-        on Linux, which is the exact class of mistake bridge/files/paths.py
-        was written to prevent.
+        Called after a turn, not before: a folder is named after the
+        conversation and the CLI titles a conversation from its first
+        message, so anything picked earlier would be a guess the user has to
+        live with. Until then the toolbar says "<unset>" and the agent works
+        in the shared root, which is what it did before folders existed.
+
+        UNIQUE, by suffix. Two conversations about listing files both reduce
+        to LISTFILE, and the second one taking the first one's folder would
+        put two conversations' work in one place with no way to tell them
+        apart afterwards.
         """
+        if guest.work_guest or not guest.conv_id:
+            return
+        base = self.sync_dir
+        if not base:
+            return
+        # No mirror on the guest means the folder would exist only here, and
+        # the one thing it is for is telling the user where their files are.
+        # Leave it unset and let the agent work in the shared root.
+        if not self._guest_path(guest, "x"):
+            return
+
+        title = ""
+        for r in sesslist.listing():
+            if r["id"] == guest.conv_id:
+                title = r.get("title") or ""
+                break
+        name = self._title_folder(title)
+        if not name:
+            return
+
+        # Unique, and the suffix eats into the 8 characters rather than
+        # extending past them -- the name has to stay 8.3 on the other side.
+        taken = self.folders.taken()
+        stem, n = name, 1
+        while os.path.exists(os.path.join(base, name)) or name in taken:
+            n += 1
+            if n > 99:
+                return
+            tail = str(n)
+            name = stem[:Bridge.FOLDER_MAX - len(tail)] + tail
+
+        path = os.path.join(base, name)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            log.exception("could not create %s", path)
+            return
+        guest.work_dir = path
+        guest.work_guest = self._guest_path(guest, name)
+        self.folders.set(guest.conv_id, name)
+        self._retarget_perms(guest)
+        log.info("work directory for %s: %s (%s)",
+                 guest.conv_id, path, guest.work_guest)
+        await self._write_block(guest, H.notice(
+            "This conversation works in " + guest.work_guest
+            + " on your machine."))
+
+    def _guest_path(self, guest: GuestSession, name: str) -> str:
+        r"""`<mirror root>\<name>`, spelled the way the guest spells it."""
         root = (guest.hello or {}).get("sync_root") or self.guest_sync_root
         if not root:
             return ""
-        sub = self._sub_of(guest)
-        return (root.rstrip("\\") + "\\" + sub) if sub else root
+        return root.rstrip("\\") + "\\" + name if name else root
+
+    def guest_work_root(self, guest: GuestSession) -> str:
+        r"""Where commands run, spelled the way the guest spells it.
+
+        This conversation's own folder once it has one, and the mirror root
+        until then -- a command has to run SOMEWHERE from the first message,
+        and the root is where the agent is working at that point.
+        """
+        if guest.work_guest:
+            return guest.work_guest
+        return (guest.hello or {}).get("sync_root") or self.guest_sync_root
 
     def _sub_of(self, guest: GuestSession) -> str:
         """This conversation's folder name relative to the mirror, or ""."""
@@ -1628,7 +1728,7 @@ class Bridge:
                     keep.append(t)
             base.pending_notice_agent = keep
             try:
-                base.save(os.path.join(self.sync_state, "base.json"))
+                base.save(self._base_path())
             except Exception as exc:      # pragma: no cover - disk failure
                 log.warning("could not record delivered agent notices: %s",
                            exc)
@@ -1771,6 +1871,14 @@ class Bridge:
         await self._send(guest, turn_end(ok, subtype,
                                          turn.cost_usd, turn.duration_ms,
                                          ctx_pct))
+        # The conversation has a name now, so it can have a folder. After the
+        # TURN frame, because naming it writes a notice and re-sends the
+        # options, and both belong after the turn is reported rather than
+        # wedged into the middle of it.
+        if not guest.work_guest:
+            await self._name_work_dir(guest)
+            if guest.work_guest:
+                await self._send_options(guest)
 
     # --- running commands on the guest -------------------------------------
 
@@ -1953,7 +2061,8 @@ class Bridge:
                 # 02.19: Pass takes the transport and the caps, nothing else
                 # -- not this Bridge, not the whole GuestSession.
                 transport = SyncTransport(guest)
-                p = Pass(transport, guest.caps, self.sync_dir, self.sync_state)
+                p = Pass(transport, guest.caps, self.sync_dir,
+                         self._base_path())
                 got = await p.run()
                 self.guest_sync_root = p.guest_root
                 # Kept so sync_status can answer without re-running a pass --
@@ -2074,7 +2183,7 @@ class Bridge:
         the codepage change.
         """
         log.warning("sync pass aborted: %s", reason)
-        state = os.path.join(self.sync_state, "base.json")
+        state = self._base_path()
         agent_text = (
             f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
             f"direction until this is resolved. Do not tell the user a file "
@@ -2120,9 +2229,72 @@ class Bridge:
         if agent_text not in self.synccoord.agent_notices:
             self.synccoord.agent_notices.append(agent_text)
 
+    def _base_path(self) -> str:
+        """The baseline file for the root the guest is currently mirroring.
+
+        ONE BASELINE PER ROOT. A baseline records which files existed where,
+        and it is bound to a `tree_id` and a `guest_root` -- change the root
+        and `scan_guest` refuses, correctly, because treating a different
+        directory as the same one would conflict the whole tree. That refusal
+        is right and it is also what the user hits the moment they use
+        "Change work directory...", which is not a corner case, it is the
+        feature.
+
+        So a root gets its own file instead of fighting over one. Nothing is
+        migrated and nothing is deleted: the legacy `base.json` keeps
+        belonging to whichever root it already records, so switching back to
+        that root finds its history exactly as it left it.
+        """
+        legacy = os.path.join(self.sync_state, "base.json")
+        root = self._current_guest_root()
+        if not root:
+            return legacy
+        # getattr, because sync_status_text is reachable on a Bridge built
+        # with __new__ in the tests -- the same reason _current_guest_root
+        # below guards _guest.
+        cache = getattr(self, "_base_paths", None)
+        if cache is None:
+            cache = self._base_paths = {}
+        hit = cache.get(root)
+        if hit:
+            return hit
+
+        recorded = None
+        try:
+            with open(legacy, encoding="utf-8") as fh:
+                recorded = json.load(fh).get("guest_root", "")
+        except (OSError, ValueError):
+            recorded = None
+
+        if recorded is None or recorded == "" or recorded == root:
+            # No legacy baseline, or it is already this root's.
+            path = legacy
+        else:
+            import hashlib
+            slug = hashlib.sha1(root.encode("utf-8", "replace")).hexdigest()
+            path = os.path.join(self.sync_state, "base-%s.json" % slug[:10])
+            log.info("baseline for %s is %s (%s belongs to %s)",
+                     root, os.path.basename(path), "base.json", recorded)
+        cache[root] = path
+        return path
+
+    def _current_guest_root(self) -> str:
+        """What the guest says it is mirroring, as early as it is known.
+
+        HELLO carries it before the first scan, which is earlier than
+        `guest_sync_root` (learned from SYNCEND) and is what matters here --
+        the baseline is chosen before the first pass, not after it.
+        """
+        g = getattr(self, "_guest", None)
+        if g is not None:
+            root = (g.hello or {}).get("sync_root")
+            if root:
+                return root
+        return self.guest_sync_root or ""
+
     def _load_baseline(self):
         from .files.sync import Baseline
-        return Baseline.load(os.path.join(self.sync_state, "base.json"))
+        return Baseline.load(self._base_path())
 
     def sync_status_text(self, guest: "GuestSession | None" = None) -> str:
         # `guest` is which machine is being asked about. Unused beyond this
@@ -2317,7 +2489,7 @@ class Bridge:
             # pass past the check, after which the ordinary per-path rows
             # decide everything exactly as they always would.
             base.accept_tree = True
-            base.save(os.path.join(self.sync_state, "base.json"))
+            base.save(self._base_path())
             log.info("sync: whole-tree revert accepted by the agent")
             return ("The next pass will go ahead without the whole-tree "
                     "check. Its rows are unchanged, so the machine's version "
@@ -2332,7 +2504,7 @@ class Bridge:
         caps = guest.caps if guest is not None and guest.caps is not None \
             else C.from_hello({})
         key = P.canonical(path.replace("\\", "/").strip("/"), caps=caps)
-        state = os.path.join(self.sync_state, "base.json")
+        state = self._base_path()
 
         if action == "release":
             if key not in base.latched:
@@ -2452,7 +2624,7 @@ class Bridge:
                 if base.latched.pop(key, None) is not None:
                     n += 1
             if n:
-                base.save(os.path.join(self.sync_state, "base.json"))
+                base.save(self._base_path())
             left = len(base.latched)
             if left:
                 log.info("sync: %d path(s) latched after the release; they "
@@ -2866,6 +3038,18 @@ class Bridge:
                     "effort", lvl, EFFORT_LABEL.get(lvl, lvl),
                     lvl == self._effective_effort(guest)))
 
+        # Where this conversation's files live, as the GUEST spells it. One
+        # row, no tick -- it is a fact about the conversation rather than a
+        # choice among alternatives, and the guest shows it on the toolbar so
+        # that "where do my files go?" is answerable without asking.
+        #
+        # `id` is the full path and `label` is the short form the button
+        # wears; the same split the model rows use, and for the same reason:
+        # a 640px screen has no room for C:\WORK\SOMETHING on a button.
+        await self._send(guest, option(
+            "work", guest.work_guest, guest.work_guest or "<unset>", False,
+            desc=guest.work_guest))
+
         # AFTER the models and efforts, not before: the guest clears all three
         # menus when it sees the first `model` row of a batch, which is how it
         # knows a batch has started without a frame type saying so. A mode row
@@ -2971,18 +3155,17 @@ class Bridge:
 
     async def _new_session(self, guest: GuestSession,
                            folder: str = "") -> None:
-        """Start a fresh conversation, optionally in its own folder."""
-        name = self.folder_name(folder)
-        if folder.strip() and not name:
-            # Refused, not repaired: a name with a separator or `..` in it is
-            # not a typo, and silently rewriting it into something that works
-            # is how a guard becomes decoration.
-            await self._write_block(guest, H.error(
-                "That folder name cannot be used. Letters, digits, - and _ "
-                "only, up to %d characters." % self.FOLDER_MAX))
-            return
+        """Start a fresh conversation.
 
-        log.info("new session requested (folder=%s)", name or "(shared)")
+        NO FOLDER IS CHOSEN HERE, and an earlier version asked for one. A
+        folder is named after the conversation and the conversation has no
+        name yet -- the CLI titles it from the first message -- so the prompt
+        was asking the user to invent something before there was anything to
+        base it on, and then live with it. `folder` is still accepted so an
+        older guest is not broken by a header the bridge stopped reading.
+        """
+        name = ""
+        log.info("new session requested")
         self._abandon_pending(guest)
         if guest.claude:
             await guest.claude.close()
@@ -2996,18 +3179,10 @@ class Bridge:
         # exists. Inside the mirror, so the folder and everything in it
         # reaches the user's machine on the next pass without anything else
         # being told about it.
+        # Back to unnamed. The new conversation gets its folder after its
+        # first message, like every other one.
         guest.work_dir = ""
-        if name:
-            base = self.sync_dir or self.cwd or os.getcwd()
-            path = os.path.join(base, name)
-            try:
-                os.makedirs(path, exist_ok=True)
-            except OSError as exc:
-                log.exception("could not create %s", path)
-                await self._write_block(guest, H.error(
-                    "Could not create the folder: " + str(exc)[:160]))
-                return
-            guest.work_dir = path
+        guest.work_guest = ""
         self._retarget_perms(guest)
 
         await guest.reset_transcript()
@@ -3034,10 +3209,6 @@ class Bridge:
         await self._send(guest, switched(guest.claude.session_id or "",
                                          guest.pages.count))
         await self._send_page(guest, "live")
-        if name:
-            await self._write_block(guest, H.notice(
-                "This conversation works in " + self.guest_work_root(guest)
-                + " on your machine."))
         await self._send_options(guest)
 
     async def _switch(self, guest: GuestSession, session_id: str) -> None:
@@ -3074,7 +3245,19 @@ class Bridge:
         # be written somewhere the first half is not -- so this is read from
         # the stored session's own cwd rather than left on whatever the
         # previous conversation was using.
-        guest.work_dir = self._stored_work_dir(session_id)
+        # FROM OUR OWN RECORD, not from the session's cwd. The folder is
+        # named after the conversation and the conversation is named from its
+        # first message -- by which point the session has already recorded
+        # the directory it STARTED in, which is the root. Reopening a chat
+        # showed "<unset>" for a conversation whose folder was sitting on
+        # disk, because the only place that knew was here.
+        name = self.folders.get(session_id)
+        if name and self.sync_dir:
+            guest.work_dir = os.path.join(self.sync_dir, name)
+            guest.work_guest = self._guest_path(guest, name)
+        else:
+            guest.work_dir = self._stored_work_dir(session_id)
+            guest.work_guest = ""
         self._retarget_perms(guest)
 
         # Fresh transcript state. Anything the old session had is on disk.

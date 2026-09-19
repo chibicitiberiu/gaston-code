@@ -17,25 +17,35 @@
  *     short name does not undo that, it just stops shouting it)
  *
  * TWO BARS, not one. The settings bar under the input box carries Mode,
- * Model, Effort and Commands; a second one-button bar carries New chat at
- * the FAR RIGHT OF THE TOP ROW, beside the page buttons. They are different
+ * Model, Effort, Attach and Commands; a second one-button bar carries New
+ * chat at the FAR RIGHT OF THE TOP ROW, beside the page buttons. They are different
  * kinds of thing -- one is "what will the next message run with", the other
  * is "start over" -- and putting the destructive one at the other end of the
  * window is the point rather than a layout accident. comctl32 has no
  * right-alignment, so move_top() measures and places it.
  *
  * Mode is leftmost on the settings bar because it decides whether you are
- * asked before a command runs, which outranks which model answers. Attach is
- * Phase 5.
+ * asked before a command runs, which outranks which model answers.
+ *
+ * ATTACH IS PRESENT AND DISABLED. What it does is Phase 5 -- reading a file
+ * out of the mirrored folder, and capturing the screen -- and neither exists
+ * yet. It is here rather than absent because this toolbar is a statement
+ * about what the application can be told to do, and a capability that is
+ * coming reads better greyed than missing: greyed says "not yet", absent
+ * says nothing at all. Disabled rather than a dropdown of greyed items, so
+ * it cannot be clicked into a menu that answers nothing.
  *
  * Commands and New chat carry an image and a label both, unlike the state
  * dropdowns: they are verbs, the comctl32 standard bitmap for each is
  * unambiguous, and the two together cost ~52px of the budget above.
  *
- * The Effort button HIDES itself when the chosen model has no effort levels
- * -- Haiku has none, and the bridge says so with one greyed menu row. The
- * width jitter that costs is the same jitter a value-as-label button has
- * anyway; a button that can only read "(effort)" is worse.
+ * The Effort button GREYS itself when the chosen model has no effort levels
+ * -- Haiku has none, and the bridge says so with one greyed menu row. An
+ * earlier version HID it, which was wrong twice over: the row that exists to
+ * answer "what will this run with?" had a slot silently missing from it, and
+ * the button reappearing on a model change moved everything to its right.
+ * Greyed is the standard way to say "not applicable here", it keeps the row
+ * the same shape, and the menu behind it still explains itself.
  *
  * TBSTYLE_WRAPABLE is deliberately NOT used. With the value as the label the
  * button widths change whenever a value does, so the wrap point could flip
@@ -71,18 +81,24 @@ class rc_optmenu;
 #define ID_TB_MODE   1019
 #define ID_TB_MODEL  1020
 #define ID_TB_EFFORT 1021
-#define ID_TB_CMD    1022
-#define ID_TB_NEW    1023
+#define ID_TB_WORK   1022
+#define ID_TB_ATTACH 1023
+#define ID_TB_CMD    1024
+#define ID_TB_NEW    1025
 
 class rc_toolbar {
     HWND bar;       /* the settings bar, under the input box */
     HWND top;       /* New chat, right-aligned on the page-bar row */
+    /* Where the paperclip landed in the toolbar's image list. Not a
+     * constant: TB_ADDBITMAP appends after comctl32's stock strip and
+     * returns the index, and the strip's size is not ours to assume. */
+    int  clip_ix;
     rc_optmenu *opts;
     HWND owner;
 
     rc_toolbar(const rc_toolbar &);
     rc_toolbar &operator=(const rc_toolbar &);
-    rc_toolbar() : bar(0), top(0), opts(0), owner(0) {}
+    rc_toolbar() : bar(0), top(0), clip_ix(0), opts(0), owner(0) {}
 
 public:
     /* `opts_` is borrowed, not owned: the toolbar pops that module's menus

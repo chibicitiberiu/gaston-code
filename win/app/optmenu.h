@@ -38,6 +38,9 @@
 #define IDM_EFFORT0 1300      /* .. IDM_EFFORT0 + MAX_OPTS */
 #define IDM_MODE0   1400      /* .. IDM_MODE0 + MAX_OPTS */
 #define IDM_CMD0    1500      /* .. IDM_CMD0 + MAX_OPTS */
+#define IDM_WORKSET 1599      /* "Change work directory..." */
+#define IDM_ATTFILE 1600      /* Attach > File... */
+#define IDM_ATTSHOT 1601      /* Attach > Screenshot */
 #define MAX_OPTS    16
 
 /* Signature of main.c's ui_send: "send something the user just asked for,
@@ -57,7 +60,8 @@ typedef int (*rc_optmenu_send_fn)(const char *what, const char *type,
 typedef int (*rc_optmenu_input_fn)(const char *text, int compose);
 
 class rc_optmenu {
-    HMENU menu_model, menu_effort, menu_mode, menu_cmd;
+    HMENU menu_model, menu_effort, menu_mode, menu_cmd, menu_work;
+    HMENU menu_attach;
     char  opt_model[MAX_OPTS][64];
     char  opt_effort[MAX_OPTS][64];
     /* Permission mode: Manual / Accept edits / Plan. The list is the
@@ -85,6 +89,10 @@ class rc_optmenu {
      * purpose, and the resolved form is 20+ characters, which does not fit
      * a toolbar button on a 640px screen. */
     char  cur_model[64], cur_effort[64], cur_mode[64];
+    /* Where this conversation's files land, as the guest spells it: the full
+     * path for the menu, the short form the button wears. The bridge sends
+     * both because a 640px screen has no room for the long one on a button. */
+    char  cur_work[128], cur_work_short[128];
     /* Non-zero once the batch has offered at least one effort level that is
      * not greyed out. Haiku has none, and the bridge says so with a single
      * disabled row -- a toolbar button reading "(effort)" forever is worse
@@ -136,6 +144,10 @@ public:
     HMENU effort_menu() const { return menu_effort; }
     HMENU mode_menu() const   { return menu_mode; }
     HMENU cmd_menu() const    { return menu_cmd; }
+    HMENU work_menu() const   { return menu_work; }
+    HMENU attach_menu() const { return menu_attach; }
+    const char *work_label() const { return cur_work_short; }
+    const char *work_path() const  { return cur_work; }
     const char *model_label() const  { return cur_model; }
     const char *effort_label() const { return cur_effort; }
     const char *mode_label() const   { return cur_mode; }

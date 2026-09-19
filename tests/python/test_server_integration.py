@@ -774,43 +774,74 @@ async def test_effort_menu_ticks_the_cli_default(harness):
 # --- one folder per conversation --------------------------------------------
 
 
-async def test_a_new_chat_can_have_its_own_folder(harness, tmp_path):
-    r, w = await harness.connect()
+async def test_the_folder_is_named_after_the_conversation(harness, tmp_path):
+    """Not chosen up front. A folder is named after the conversation and the
+    CLI titles a conversation from its FIRST MESSAGE, so anything asked for
+    before then is a guess the user has to live with."""
+    import bridge.server as srv
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(b.sync_dir, exist_ok=True)
-
-    await harness.send(w, Frame("NEWSESSION", {"folder": "notes"}))
-    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     g = b._guest
-    assert g.work_dir == os.path.join(b.sync_dir, "NOTES")
+    assert g.work_guest == "", "unset until it has been spoken in"
+
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = lambda cwd=None, limit=50: [
+        {"id": g.conv_id or g.claude.session_id, "title": "List files in C:",
+         "cwd": "", "modified": "", "group": ""}]
+    try:
+        await harness.send(w, Frame("INPUT", {}, b"hello"))
+        await harness.recv_until(r, {"TURN"}, 10.0)
+        await harness.recv_until(r, {"TURN"}, 10.0)
+    finally:
+        srv.sesslist.listing = orig
+
+    assert g.work_dir == os.path.join(b.sync_dir, "LISTFILE")
     assert os.path.isdir(g.work_dir), "created, not merely named"
-    assert g.claude.cwd == g.work_dir, "and the session runs in it"
+    assert g.work_guest == "C:\\Gaston\\LISTFILE"
     await harness.close(w)
 
 
-async def test_a_folder_name_that_leaves_the_mirror_is_refused(
-    harness, tmp_path,
-):
-    """Refused, not repaired. A name with `..` or a separator in it is not a
-    typo, and rewriting it into something that works is how a guard becomes
-    decoration."""
-    r, w = await harness.connect()
-    await harness.recv_until(r, {"OPTIONSEND"})
+async def test_two_conversations_do_not_share_a_folder(harness, tmp_path):
+    """Two chats about listing files both reduce to LISTFILE, and the second
+    taking the first one's folder would put two conversations' work in one
+    place with no way to tell them apart afterwards."""
     b = harness.bridge
     b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    before = b._guest.claude
+    os.makedirs(os.path.join(b.sync_dir, "LISTFILE"), exist_ok=True)
 
-    for bad in ("../etc", "a/b", "C:\\x", "..", "a\\b"):
-        await harness.send(w, Frame("NEWSESSION", {"folder": bad}))
-        await harness.recv_until(r, {"TEXT"}, 10.0)
-        assert b._guest.claude is before, (
-            "%r must not have started a session" % bad
-        )
-        assert b._guest.work_dir == ""
+    import bridge.server as srv
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = b._guest
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = lambda cwd=None, limit=50: [
+        {"id": g.conv_id or g.claude.session_id, "title": "List files again",
+         "cwd": "", "modified": "", "group": ""}]
+    try:
+        await harness.send(w, Frame("INPUT", {}, b"hello"))
+        await harness.recv_until(r, {"TURN"}, 10.0)
+        await harness.recv_until(r, {"TURN"}, 10.0)
+    finally:
+        srv.sesslist.listing = orig
+    assert os.path.basename(g.work_dir) == "LISTFIL2"
     await harness.close(w)
+
+
+async def test_a_title_with_separators_in_it_still_makes_a_folder(harness):
+    """A conversation title is prose. "List files in C:\\RETRO" carries a
+    colon and a backslash, which folder_name refuses on purpose -- so the
+    title path strips them first, where they are known to be part of a
+    sentence rather than a way out of the folder."""
+    from bridge.server import Bridge
+    assert Bridge._title_folder("List files in C:\\RETRO") == "LISTFILE"
+    assert Bridge._title_folder("vol c:") == "VOLC"
+    assert Bridge._title_folder("   ") == ""
+    # And the raw guard still refuses what it is there to refuse.
+    assert Bridge.folder_name("../etc") == ""
+    assert Bridge.folder_name("a/b") == ""
 
 
 async def test_a_blank_folder_means_the_shared_one(harness):
@@ -863,6 +894,74 @@ class _NoPatch:
     def setattr(self, *a, **kw):
         import bridge.server as srv
         srv.sesslist.history_html = lambda sid_, limit=2000: []
+
+
+async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
+    """The folder is named AFTER the session starts, so the session's own
+    recorded cwd is the root and asking the SDK gives the wrong answer.
+    Reopening showed "<unset>" for a conversation whose folder was on disk."""
+    import bridge.server as srv
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    g = b._guest
+    sid = g.claude.session_id
+
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = lambda cwd=None, limit=50: [
+        {"id": sid, "title": "Sky color", "cwd": b.sync_dir,
+         "modified": "", "group": ""}]
+    try:
+        await harness.send(w, Frame("INPUT", {}, b"hello"))
+        await harness.recv_until(r, {"TURN"}, 10.0)
+        await harness.recv_until(r, {"TURN"}, 10.0)
+        assert b.folders.get(sid) == "SKYCOLOR"
+
+        # Away and back.
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
+                         sid="somewhere-else")
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w, sid=sid)
+    finally:
+        srv.sesslist.listing = orig
+
+    assert g.work_guest == "C:\\Gaston\\SKYCOLOR"
+    assert g.work_dir == os.path.join(b.sync_dir, "SKYCOLOR")
+    await harness.close(w)
+
+
+async def test_a_new_work_directory_gets_its_own_baseline(harness, tmp_path):
+    """Changing the work directory must not brick synchronisation.
+
+    A baseline is bound to a `guest_root` and `scan_guest` refuses when it
+    changes -- correctly, because treating a different directory as the same
+    one would conflict the whole tree. That refusal is exactly what "Change
+    work directory..." triggers, so each root gets its own file. The legacy
+    `base.json` keeps belonging to whichever root it already records, so
+    switching back finds its history where it left it.
+    """
+    import json as _json
+    b = harness.bridge
+    b.sync_state = str(tmp_path / "state")
+    os.makedirs(b.sync_state, exist_ok=True)
+    legacy = os.path.join(b.sync_state, "base.json")
+    with open(legacy, "w") as fh:
+        _json.dump({"guest_root": "C:\\WORK"}, fh)
+
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    assert b._base_path() == legacy, "its own root keeps the legacy file"
+    await harness.close(w)
+
+    b._base_paths.clear()
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    other = b._base_path()
+    assert other != legacy
+    assert os.path.basename(other).startswith("base-")
+    assert os.path.exists(legacy), "and the old one is not touched"
+    await harness.close(w)
 
 
 async def test_the_chat_list_is_not_filtered_by_one_directory(harness):

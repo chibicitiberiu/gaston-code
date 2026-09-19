@@ -249,6 +249,85 @@ def art_pie(filled):
     return c
 
 
+#: The Attach paperclip, 16x16, for the toolbar.
+#:
+#: DRAWN, because comctl32 does not have one. IDB_STD_SMALL_COLOR is New,
+#: Open, Save, Cut, Copy, Paste, Undo, Redo, Delete, Properties, Find,
+#: Replace, Print and Help -- a fifteen-button office toolbar from 1995 with
+#: no paperclip in it, and STD_FILEOPEN standing in for "attach" reads as
+#: "open a document", because that is what it is.
+#:
+#: TWO NESTED U SHAPES, OPEN AT THE TOP, joined by a bend over the right.
+#: The first two attempts drew closed loops and came out as a pair of rings:
+#: what makes a paperclip readable at this size is the free ends, not the
+#: curves. The wire is one pixel and there is no highlight -- at 16x16 on an
+#: 8bpp screen a second tone on a one-pixel stroke is mud.
+_CLIP = [
+    "................",
+    "................",
+    "..........k.....",
+    ".........k.k....",
+    ".........k.k....",
+    "....k....k.k....",
+    "....k.k..k.k....",
+    "....k.k..k.k....",
+    "....k.k..k.k....",
+    "....k.k..k.k....",
+    "....k.k..k.k....",
+    "....k..kk..k....",
+    "....k......k....",
+    ".....k.....k....",
+    "......kkkkk.....",
+    "................",
+]
+
+
+def art_clip():
+    """The Attach paperclip, on the button face so comctl32 maps it away.
+
+    A TOOLBAR BITMAP, not an icon: TB_ADDBITMAP takes a DIB and there is no
+    AND mask, so transparency comes from colour mapping instead. Silver
+    (192,192,192) is the one the toolbar rewrites to whatever the user's
+    button face is, so the background is drawn in it rather than left
+    transparent -- which would come out black.
+    """
+    c = Canvas(16, 16)
+    c.rect(0, 0, 15, 15, "s")
+    for y, row in enumerate(_CLIP):
+        for x, ch in enumerate(row):
+            if ch != ".":
+                c.put(x, y, ch)
+    return c
+
+
+def write_bmp(path, c):
+    """A 16-colour bottom-up DIB, which is what TB_ADDBITMAP wants.
+
+    No AND mask and no doubled height, unlike write_ico: a toolbar bitmap is
+    a plain image and the transparency comes from colour mapping.
+    """
+    rowbytes = ((c.w * 4 + 31) // 32) * 4
+    bits = bytearray()
+    for y in range(c.h - 1, -1, -1):
+        row = bytearray()
+        for x in range(0, c.w, 2):
+            hi = c.px[y][x]
+            lo = c.px[y][x + 1] if x + 1 < c.w else 0
+            row.append(((hi & 0xF) << 4) | (lo & 0xF))
+        row += b"\x00" * (rowbytes - len(row))
+        bits += row
+
+    info = struct.pack("<IiiHHIIiiII", 40, c.w, c.h, 1, 4, 0, len(bits),
+                       2835, 2835, 16, 0)
+    pal = b"".join(struct.pack("<BBBB", b, g, r, 0) for (r, g, b) in PALETTE)
+    offset = 14 + len(info) + len(pal)
+    hdr = struct.pack("<2sIHHI", b"BM", offset + len(bits), 0, 0, offset)
+    with open(path, "wb") as fh:
+        fh.write(hdr + info + pal + bytes(bits))
+    print("wrote %s (%d bytes, %dx%d)"
+          % (path, offset + len(bits), c.w, c.h))
+
+
 def encode(c):
     """One ICONDIRENTRY's worth of image: header, palette, XOR bits, AND mask.
 
@@ -312,6 +391,7 @@ def main():
         write_ico(os.path.join(app, name + ".ico"), [art_net(led)])
     for i in range(PIE_STEPS + 1):
         write_ico(os.path.join(app, "pie%d.ico" % i), [art_pie(i)])
+    write_bmp(os.path.join(app, "attach.bmp"), art_clip())
 
 
 if __name__ == "__main__":

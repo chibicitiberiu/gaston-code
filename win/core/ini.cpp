@@ -28,7 +28,11 @@ void rc_config_load(rc_config *cfg, const char *exe_dir)
      * the font_size shape the comment in save() warns about, wearing the other
      * face -- which is why inicheck.exe now asserts the round trip for every
      * field rather than for the ones someone remembered. */
-    GetPrivateProfileStringA("sync", "root", "",
+    /* C:\Gaston by default, which is where a conversation's own folder goes
+     * -- C:\Gaston\LISTFILE and so on. Empty still disables sync, and an
+     * INI that already names a root keeps it: the default only applies to a
+     * machine that has never had one. */
+    GetPrivateProfileStringA("sync", "root", "C:\\Gaston",
                              cfg->sync_root, sizeof(cfg->sync_root), path);
 
     rc_log("config: bridge=%s:%d autoscroll=%d sync_root='%s'", cfg->host,

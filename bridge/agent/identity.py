@@ -51,6 +51,14 @@ class GuestIdentity:
     #: (BACKLOG.md §7) -- the conversation moves inside the tree rather than
     #: the tree moving.
     work_dir: str = ""
+    #: The same folder as the GUEST spells it -- `C:\Gaston\LISTFILE`.
+    #:
+    #: Empty until the conversation has been spoken in. A folder is named
+    #: after the conversation, and a conversation has no name until the CLI
+    #: titles it from the first message, so anything chosen before then would
+    #: be a guess the user would have to live with. The toolbar shows
+    #: "<unset>" for exactly that long.
+    work_guest: str = ""
     #: A conversation the guest has OPENED but not yet spoken in.
     #:
     #: Switching chats replays stored history and builds no SDK client, so

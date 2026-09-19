@@ -65,3 +65,58 @@ class Registry:
 
     def __len__(self) -> int:
         return len(self._ids)
+
+
+class Folders:
+    """Which folder each conversation works in.
+
+    REMEMBERED HERE rather than read back from the session, and that is not
+    duplication. A conversation's folder is named after the conversation, and
+    the CLI names the conversation from its FIRST MESSAGE -- by which point
+    the session has already started and recorded the directory it started in,
+    which is the root. Asking the SDK afterwards therefore gives the wrong
+    answer, and reopening a chat showed "<unset>" for a conversation that had
+    a folder sitting right there on disk.
+
+    Same shape as `Registry` beside it: a small JSON file, atomic replace, a
+    corrupt one logged and ignored rather than fatal. Losing it costs the
+    folder NAME, not the folder -- the files are still there and the next
+    message names a fresh one.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = Path(path) if path else (default_path().parent
+                                             / "folders.json")
+        self._map: dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            data = json.loads(self.path.read_text())
+            if isinstance(data, dict):
+                self._map = {str(k): str(v) for k, v in data.items()}
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            log.exception("could not read %s", self.path)
+
+    def get(self, session_id: str | None) -> str:
+        return self._map.get(session_id or "", "")
+
+    def set(self, session_id: str | None, folder: str) -> None:
+        if not session_id or not folder:
+            return
+        if self._map.get(session_id) == folder:
+            return
+        self._map[session_id] = folder
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._map, indent=1, sort_keys=True))
+            tmp.replace(self.path)
+        except OSError:
+            log.exception("could not write %s", self.path)
+
+    def taken(self) -> set[str]:
+        """Every folder name already spoken for, for the uniqueness check."""
+        return set(self._map.values())

@@ -33,6 +33,24 @@
 #include "app/export.h"
 #include "app/cache.h"
 
+/* SBARS_TOOLTIPS, which this build's headers do not define.
+ *
+ * commctrl.h gates it behind `_WIN32_IE >= 0x0500` and win/Makefile pins
+ * 0x0400 on purpose, so the constant is simply absent and the style could
+ * never be set -- which is why SB_SETTIPTEXT has been accepted and discarded
+ * for as long as it has been called.
+ *
+ * Defining it here is safe in a way BTNS_WHOLEDROPDOWN was not, and the
+ * difference is worth stating because the same question comes up every time.
+ * That one changes how a button DISPATCHES, so a comctl32 that does not know
+ * it leaves clicks going somewhere else. This is a window style bit on a
+ * status bar: a control that does not recognise it ignores it, and the
+ * degradation is "no tooltips", which is exactly where we are now. IE5 is
+ * what this guest runs; an IE4 machine loses a tooltip and nothing else. */
+#ifndef SBARS_TOOLTIPS
+#define SBARS_TOOLTIPS 0x0800L
+#endif
+
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
  * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, ID_LIVE/FIRST/PREV/NEXT/
@@ -239,6 +257,10 @@ static void status_refresh(void)
     /* The context gauge. Silent until the bridge has said something: an
      * empty pie would claim the context is empty, which is a different
      * statement from not knowing. */
+    if (g_ctx_pct < 0)
+        SendMessageA(g_status, SB_SETTIPTEXTA, 3,
+                     (LPARAM)"How full the conversation's context window is "
+                             "-- known once a request has finished");
     if (g_ctx_pct >= 0) {
         int step = (g_ctx_pct * RC_PIE_STEPS + 50) / 100;
         if (step < 0) step = 0;
@@ -256,7 +278,8 @@ static void status_refresh(void)
     }
     {
         char tip[160];
-        rc_strf(tip, sizeof(tip), "%s  %s:%d",
+        rc_strf(tip, sizeof(tip),
+                "%s  -  %s:%d.  Double-click to change the server.",
                 rc_state_name(g_net.state), g_cfg.host, g_cfg.port);
         SendMessageA(g_status, SB_SETTIPTEXTA, 0, (LPARAM)tip);
     }
@@ -265,6 +288,15 @@ static void status_refresh(void)
     if (g_xfer) g_xfer->text(buf, sizeof(buf));
     else        buf[0] = '\0';
     status_set(1, buf);
+    /* All four panes carry one, not two of them. A status bar pane is a few
+     * characters wide and says things like "rx 12k @ 4k/s" and "done 73s
+     * $0.12"; the tooltip is where the sentence goes. */
+    SendMessageA(g_status, SB_SETTIPTEXTA, 1,
+                 (LPARAM)"Bytes moving between this machine and the bridge, "
+                         "and how fast");
+    SendMessageA(g_status, SB_SETTIPTEXTA, 2,
+                 (LPARAM)"What the current request is doing, how long it has "
+                         "taken and what it cost");
 
     /* Tick the elapsed seconds while a turn is in flight. A counter that moves
      * is the difference between "working" and "hung", and it costs one
@@ -1267,8 +1299,13 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     if (!g_cache) rc_log("cache: not created; history will not survive a "
                          "disconnection");
 
+    /* SBARS_TOOLTIPS is NOT optional decoration here, it is what makes
+     * SB_SETTIPTEXT do anything at all. Without it the control never creates
+     * the tooltip window, every SB_SETTIPTEXT is accepted and discarded, and
+     * the panes that were given tooltip text have been silently showing none
+     * since they were written. */
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
-        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP | SBARS_TOOLTIPS,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
     check_child("status", g_status);
     /* Four parts: connection, transfer, turn, context.
@@ -1484,15 +1521,21 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_LAST:
             if (g_pagebar) g_pagebar->command(id);
             return 0;
-        /* The toolbar's own five, through one call -- same shape as the
-         * bar's and the page bar's above. The four dropdowns are here as
-         * well as in WM_NOTIFY because a click on the button's TEXT arrives
-         * as a WM_COMMAND and only the arrow sends TBN_DROPDOWN; see
-         * rc_toolbar::command. */
+        /* The toolbar's own buttons, through one call -- same shape as the
+         * bar's and the page bar's above.
+         *
+         * EVERY dropdown is here as well as in WM_NOTIFY, because a click on
+         * a button's TEXT arrives as a WM_COMMAND and only the arrow sends
+         * TBN_DROPDOWN (see rc_toolbar::command). Leaving a new one out of
+         * this list is SILENT: the arrow works, the label does nothing, and
+         * it looks like the menu failed to build. That has now happened
+         * twice -- Commands, then Folder and Attach. */
         case ID_TB_MODE:
         case ID_TB_MODEL:
         case ID_TB_EFFORT:
+        case ID_TB_ATTACH:
         case ID_TB_CMD:
+        case ID_TB_WORK:
         case ID_TB_NEW:
             if (g_toolbar) g_toolbar->command(id);
             return 0;
@@ -1598,6 +1641,44 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * invent. */
             ui_send("The permissions view", "RULES", NULL, NULL, 0, NULL, 0);
             return 0;
+
+        case IDM_WORKSET: {
+            /* CHANGE WORK DIRECTORY. Any folder, typed in full.
+             *
+             * What this actually changes is the MIRRORED ROOT -- the folder
+             * whose contents reach this machine -- because a conversation's
+             * own directory is a subfolder of it, named after the
+             * conversation. Picking "any other folder" therefore means
+             * picking where all of them live, and the dialog says so rather
+             * than implying this conversation alone moves.
+             *
+             * It needs a restart and says so. The root is read once in
+             * WinMain: the directory watcher is started on it,
+             * rc_sync_recover has already run against it, and it was
+             * declared to the bridge in HELLO before the socket opened.
+             * Changing all three live is the deferred half of this work
+             * (BACKLOG 7); changing the INI and restarting is honest and
+             * takes four seconds. */
+            char root[128];
+            rc_strf(root, sizeof(root), "%s", g_cfg.sync_root);
+            if (rc_askdlg_run(hwnd, g_inst, "Work Directory",
+                    "Each conversation gets its own folder inside this one, "
+                    "named after it. Files the assistant writes appear "
+                    "there, and files you put there reach it. Leave blank "
+                    "to switch file sharing off.",
+                    "&Folder:", root, sizeof(root))
+                && strcmp(root, g_cfg.sync_root) != 0) {
+                rc_strcpy(g_cfg.sync_root, sizeof(g_cfg.sync_root), root);
+                rc_config_save(&g_cfg, g_exe_dir);
+                MessageBoxA(hwnd,
+                            "Saved.\n\nClose and reopen Gaston Code for it "
+                            "to take effect -- the folder is read once when "
+                            "the program starts, and the bridge is told "
+                            "about it before the connection opens.",
+                            RC_TITLE, MB_OK | MB_ICONINFORMATION);
+            }
+            return 0;
+        }
 
         case IDM_HOST:
             if (rc_hostdlg_run(hwnd, g_inst, &g_cfg)) {
@@ -1774,6 +1855,24 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
      * configuration. */
     rc_rpc_set_sync_root(g_cfg.sync_root);
     if (g_cfg.sync_root[0]) {
+        /* CREATE IT if it is not there. A work directory is a place the user
+         * named, not a place they are asserting already exists -- the first
+         * run after setting one has no folder yet, and leaving it missing
+         * left synchronisation dead with "guest scan returned no_root",
+         * which is a sentence nobody should have to decode to find out that
+         * a directory needed making.
+         *
+         * One level only: CreateDirectory does not make parents, and a
+         * missing C:\ or a typo'd drive is a different problem that should
+         * be reported rather than papered over. */
+        if (GetFileAttributesA(g_cfg.sync_root) == 0xFFFFFFFF) {
+            if (CreateDirectoryA(g_cfg.sync_root, NULL))
+                rc_log("sync: created %s", g_cfg.sync_root);
+            else
+                rc_log("sync: cannot create %s (%lu); synchronisation will "
+                       "not start", g_cfg.sync_root,
+                       (unsigned long)GetLastError());
+        }
         /* Put back any file an interrupted commit left aside, BEFORE the first
          * scan sees the path as missing and reports a deletion nobody made. */
         rc_sync_recover(g_cfg.sync_root);

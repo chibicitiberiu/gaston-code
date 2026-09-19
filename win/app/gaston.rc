@@ -91,6 +91,9 @@ FILESUBTYPE    0x0L
  * risk it carries -- discarding a half-typed message -- is handled where the
  * risk actually is, by confirming when the box is not empty.
  */
+/* The Attach paperclip. A BITMAP rather than an ICON -- see resource.h. */
+IDB_ATTACH BITMAP "attach.bmp"
+
 IDA_MAIN ACCELERATORS
 {
     "N",        IDM_NEW,      VIRTKEY, CONTROL
