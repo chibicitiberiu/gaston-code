@@ -28,6 +28,7 @@
 #include "app/optmenu.h"
 #include "app/input.h"
 #include "app/resource.h"
+#include "app/hostdlg.h"
 
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
@@ -83,7 +84,6 @@ static rc_input    *g_inputmod;
 static HACCEL       g_accel;
 static rc_optmenu *g_optmenu;
 static rc_pagebar *g_pagebar;
-static int      g_doc_sent;     /* the bridge has given us a skeleton */
 /* "Connected to bridge." is announced AFTER the page that follows READY, not
  * before it.
  *
@@ -162,6 +162,10 @@ static int   g_backoff_ms = 1000;
 /* Whether this outage has already been announced in the transcript. */
 static int   g_retry_noted;
 static char  g_exe_dir[MAX_PATH];
+/* WinMain's HINSTANCE, kept because the Server Host dialog needs it and
+ * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
+ * other way to reach it. */
+static HINSTANCE g_inst;
 
 /* ------------------------------------------------------------------ utils */
 
@@ -1053,6 +1057,25 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (g_chats) g_chats->draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
 
+    /* The status bar's connection pane opens the Server Host dialog.
+     *
+     * This is the first WM_NOTIFY handler in the file. A status bar sends
+     * NM_CLICK and NM_DBLCLK to its parent, and NMMOUSE::dwItemSpec names
+     * the part -- 0 is the "connected 10.0.2.2:7890" pane. Double-clicking
+     * the thing that tells you where you are connected to, to change where
+     * you are connected to, is the shortest path anyone will look for. */
+    case WM_NOTIFY: {
+        NMHDR *nh = (NMHDR *)lp;
+        if (nh && nh->hwndFrom == g_status && nh->code == NM_DBLCLK) {
+            NMMOUSE *nm = (NMMOUSE *)lp;
+            if (nm->dwItemSpec == 0) {
+                SendMessageA(hwnd, WM_COMMAND, IDM_HOST, 0);
+                return 0;
+            }
+        }
+        break;
+    }
+
     case WM_RC_OPENCHAT:
         if (g_chats) g_chats->open_selected();
         return 0;
@@ -1201,17 +1224,35 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         RC_TITLE, MB_OK | MB_ICONINFORMATION);
             return 0;
 
-        case IDM_HOST: {
-            char msg[320];
-            rc_strf(msg, sizeof(msg),
-                      "Currently connecting to %s:%d.\n\n"
-                      "Set this in retroclaude.ini next to the program:\n\n"
-                      "  [bridge]\n  host=%s\n  port=%d\n\n"
-                      "A dialog for this is still to come.",
-                      g_cfg.host, g_cfg.port, g_cfg.host, g_cfg.port);
-            MessageBoxA(hwnd, msg, RC_TITLE, MB_OK | MB_ICONINFORMATION);
+        case IDM_HOST:
+            if (rc_hostdlg_run(hwnd, g_inst, &g_cfg)) {
+                char line[192];
+                rc_config_save(&g_cfg, g_exe_dir);
+
+                /* Resetting the backoff globals is NOT enough, and a draft of
+                 * this said it was.
+                 *
+                 * SetTimer captured its interval when the retry was armed, so
+                 * after a bad host has backed off to 15 seconds, setting
+                 * g_backoff_ms = 1000 changes nothing -- the armed timer
+                 * still has to expire first. Fixing a typo'd host would still
+                 * mean waiting out the old wait, which is the entire point of
+                 * the dialog. Kill it, reset, and reconnect now. */
+                KillTimer(hwnd, TIMER_RECONNECT);
+                g_backoff_ms = 1000;
+                g_retry_noted = 0;
+
+                /* The host is user-supplied text going into an HTML
+                 * document. main.cpp:930's notice already escapes it for
+                 * that reason; this is the second, more direct way in. */
+                if (g_html) {
+                    rc_strf(line, sizeof(line), "Now connecting to %s:%d.",
+                            g_cfg.host, g_cfg.port);
+                    g_html->notice(line);   /* notice() escapes */
+                }
+                try_connect(hwnd);
+            }
             return 0;
-        }
 
         case IDM_ABOUT: {
             char msg[420];
@@ -1290,6 +1331,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     /* Log from the very first statement. On this platform "no log file was
      * created" is the primary diagnostic: an NT-only static import kills the
      * process at load, before WinMain, leaving nothing else behind. */
+    g_inst = inst;
     exe_dir(g_exe_dir, sizeof(g_exe_dir));
     rc_log_open(g_exe_dir);
     rc_log("os version: %08lx", GetVersion());
