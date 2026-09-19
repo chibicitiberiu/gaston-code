@@ -431,6 +431,62 @@ def text_frame(mode: str, enc: str, page: int, body: bytes = b"", *,
     return Frame("TEXT", h, body)
 
 
+# --- export ----------------------------------------------------------------
+#
+# Three types, bridge to guest, for File > Export as HTML. The guest asks with
+# a bare EXPORT and then writes what comes back straight to a file.
+#
+# A SEPARATE FAMILY rather than reusing TEXT, for one reason: TEXT is display.
+# The guest hands a TEXT body to MSHTML, and an export is hundreds of KB on a
+# machine with tens of KB free -- it must never reach the DOM, and a mode
+# header on a frame type whose whole contract is "this is for the document"
+# is exactly the kind of overload that gets missed on one side.
+#
+# No lane-table row is needed: `rc_frame_lane` returns RC_LANE_UI for anything
+# it does not recognise, which is where these belong, and `enc=deflate` is
+# handled centrally in the guest's reader before dispatch.
+
+
+def export_start(total: int) -> Frame:
+    """How many bytes are coming, sent before any of them.
+
+    NO FILENAME. The guest picks the path before it asks -- it has to, because
+    a Save dialog opened after this frame would be pumping messages while the
+    chunks arrived with nowhere to go. It also owns its own filesystem and
+    declared its own path rules at handshake, so a name asserted from here
+    would be the bridge guessing at 8.3 rules it was told about.
+
+    `total` is in DECOMPRESSED bytes.
+    """
+    return Frame("EXPORTSTART", {"total": str(total)})
+
+
+def export_data(off: int, total: int, enc: str, body: bytes) -> Frame:
+    """One chunk.
+
+    `off` is the decompressed offset, so the guest can refuse a chunk that
+    does not continue where the last one stopped rather than writing a file
+    with a hole in it. `total` repeats on every chunk for the same reason
+    `send_html` repeats it -- the progress figure needs a denominator, and a
+    guest that missed the START would otherwise never have one.
+    """
+    return Frame("EXPORTDAT",
+                 {"off": str(off), "total": str(total), "enc": enc}, body)
+
+
+def export_end(ok: bool, *, bytes_: int = 0, reason: str = "") -> Frame:
+    """The transfer is over, one way or the other.
+
+    An END that says `status=error` is the point of having one: without it a
+    transfer that died halfway is indistinguishable from one still arriving,
+    and the guest would leave a half-written file looking finished.
+    """
+    h = {"status": "ok" if ok else "error", "bytes": str(bytes_)}
+    if reason:
+        h["reason"] = fold.encode(reason).decode("cp1252", "replace")
+    return Frame("EXPORTEND", h)
+
+
 # --- exec ----------------------------------------------------------------
 
 

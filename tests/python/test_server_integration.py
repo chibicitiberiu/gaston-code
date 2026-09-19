@@ -767,6 +767,112 @@ async def test_effort_menu_ticks_the_cli_default(harness):
     await harness.close(w)
 
 
+# --- what can run without asking --------------------------------------------
+
+
+async def test_the_rules_view_says_what_it_cannot_see(harness):
+    """04.16: a list of only what reaches the prompt reads as "this is
+    everything that can happen", which is MEASURED false -- Claude Code
+    answers Read/Glob/Grep inside its own working directory locally and never
+    calls can_use_tool. A view that does not say so is worse than none."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("RULES", {}))
+    frames = await harness.recv_until(r, {"TEXT"}, 10.0)
+    body = harness.body(frames).decode("cp1252")
+    assert "not complete" in body
+    assert "mcp__machine__exec" in body
+    await harness.close(w)
+
+
+async def test_the_rules_view_does_not_promise_the_operators_settings(
+    harness,
+):
+    """`Session` runs with `setting_sources=[]`, so rules in the operator's
+    .claude/settings.json are not in effect. Showing them would answer "what
+    can happen without asking?" with things that cannot happen."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("RULES", {}))
+    frames = await harness.recv_until(r, {"TEXT"}, 10.0)
+    body = harness.body(frames).decode("cp1252")
+    assert "settings.json" in body and "do <b>not</b> apply" in body
+    await harness.close(w)
+
+
+async def test_the_rules_view_follows_the_mode(harness):
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    await harness.send(w, Frame("RULES", {}))
+    frames = await harness.recv_until(r, {"TEXT"}, 10.0)
+    body = harness.body(frames).decode("cp1252")
+    assert "Mode: Plan" in body
+    await harness.close(w)
+
+
+# --- File > Export as HTML --------------------------------------------------
+
+
+def _export_bytes(harness, frames):
+    """Reassemble an export, inflating in stream order.
+
+    Same constraint as `Harness.body`: one persistent deflate stream, so a
+    chunk skipped here desynchronises everything after it.
+    """
+    out = []
+    for f in frames:
+        if f.type != "EXPORTDAT":
+            continue
+        out.append(harness.unzip.decompress(f.body)
+                   if f.headers.get("enc") == "deflate" else f.body)
+    return b"".join(out)
+
+
+async def test_export_streams_the_whole_transcript(harness):
+    """It has to be a COMPLETE document and it has to arrive in order: the
+    guest writes each chunk straight to a file and never holds the whole
+    thing, so nothing downstream can fix up a gap."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await harness.recv_until(r, {"TURN"}, 10.0)
+
+    await harness.send(w, Frame("EXPORT", {}))
+    frames = await harness.recv_until(r, {"EXPORTEND"}, 10.0)
+
+    start = [f for f in frames if f.type == "EXPORTSTART"]
+    end = [f for f in frames if f.type == "EXPORTEND"]
+    assert len(start) == 1 and len(end) == 1
+    assert end[0].headers["status"] == "ok"
+
+    data = _export_bytes(harness, frames)
+    assert len(data) == int(start[0].headers["total"])
+    assert int(end[0].headers["bytes"]) == len(data)
+    text = data.decode("cp1252")
+    assert text.startswith("<html>") and text.rstrip().endswith("</html>")
+    assert "hello" in text, "the conversation itself must be in there"
+    assert "<style>" in text, "and it must stand alone, not need our CSS"
+
+    offs = [int(f.headers["off"]) for f in frames if f.type == "EXPORTDAT"]
+    assert offs == sorted(offs) and offs[0] == 0
+    await harness.close(w)
+
+
+async def test_export_of_an_empty_conversation_is_still_a_document(harness):
+    """Exporting before saying anything should produce a valid, if dull,
+    file rather than a zero-byte one or an error."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("EXPORT", {}))
+    frames = await harness.recv_until(r, {"EXPORTEND"}, 10.0)
+    data = _export_bytes(harness, frames)
+    assert data.decode("cp1252").rstrip().endswith("</html>")
+    await harness.close(w)
+
+
 # --- opening a conversation without starting one ----------------------------
 
 

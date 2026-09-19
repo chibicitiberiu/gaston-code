@@ -30,6 +30,7 @@
 #include "app/resource.h"
 #include "app/hostdlg.h"
 #include "app/toolbar.h"
+#include "app/export.h"
 
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
@@ -81,6 +82,9 @@ static rc_chats *g_chats;
 static rc_xferstat *g_xfer;
 static rc_input    *g_inputmod;
 static rc_toolbar  *g_toolbar;
+/* The export sink. One instance, created in create_children and destroyed
+ * in WM_DESTROY, the same shape as g_html -- see app/export.h. */
+static rc_export   *g_export;
 /* The accelerator table. Loaded once in WinMain; owned by the module, so it
  * is not destroyed (DestroyAcceleratorTable is for CreateAcceleratorTable). */
 static HACCEL       g_accel;
@@ -330,6 +334,7 @@ static void build_menu(HWND hwnd)
     AppendMenuA(file, MF_STRING, IDM_CLOSE, "&Close");
 
     AppendMenuA(cfg, MF_STRING, IDM_HOST, "&Server Host...");
+    AppendMenuA(cfg, MF_STRING, IDM_PERMS, "&What can run without asking...");
 
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "&About...");
 
@@ -779,6 +784,13 @@ static void on_resync(rc_frame *f)
     if (g_html) g_html->notice(msg);
 }
 
+/* EXPORTSTART / EXPORTDAT / EXPORTEND -- all three owned by app/export.cpp;
+ * see rc_export::frame there for what each one does. */
+static void on_export(rc_frame *f)
+{
+    if (g_export) g_export->frame(f);
+}
+
 static void on_pong(rc_frame *f)
 {
     (void)f;
@@ -815,6 +827,9 @@ static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
     { "ERROR",       on_error },
     { "NOTICE",      on_notice },
     { "RESYNC",      on_resync },
+    { "EXPORTSTART", on_export },
+    { "EXPORTDAT",   on_export },
+    { "EXPORTEND",   on_export },
     { "PONG",        on_pong },
 };
 
@@ -1102,6 +1117,14 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_toolbar = rc_toolbar::create(hwnd, inst, g_ui_font, g_optmenu);
     if (!g_toolbar) rc_log("toolbar: not created; settings stay on the menus");
 
+    /* The export sink. Created here and not on demand so that an EXPORTDAT
+     * arriving without a request -- a replayed one after a reconnect --
+     * reaches something that knows to drop it rather than an unhandled frame
+     * type nobody reads the log for. */
+    g_export = rc_export::create(g_html);
+    if (!g_export) rc_log("export: sink not created; File > Export will not "
+                          "work");
+
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
@@ -1365,14 +1388,25 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
 
         case IDM_EXPORT:
-            /* Wired, not implemented: exporting the whole conversation means
-             * asking the bridge for every page, which is a chunked transfer
-             * and belongs with the rest of that work. */
-            MessageBoxA(hwnd,
-                        "Not implemented yet.\n\n"
-                        "This will ask the bridge for the whole conversation "
-                        "and save it as a single HTML file.",
-                        RC_TITLE, MB_OK | MB_ICONINFORMATION);
+            /* The destination is chosen BEFORE the request goes out -- see
+             * app/export.h for why the obvious order does not work. If the
+             * request then fails to reach the bridge, the file that was just
+             * opened has to go with it, or the next export would refuse to
+             * start against a sink that is holding a path nobody asked for. */
+            if (g_export && g_export->begin(hwnd, "CHAT.HTM")) {
+                if (!ui_send("The export request", "EXPORT",
+                             NULL, NULL, 0, NULL, 0))
+                    g_export->give_up();
+            }
+            return 0;
+
+        case IDM_PERMS:
+            /* Answered by the BRIDGE, because the answer is about the
+             * session it is running -- which mode, which tools, which folder
+             * -- and half of it (what Claude Code resolves locally and never
+             * reports) is knowledge this side does not have and must not
+             * invent. */
+            ui_send("The permissions view", "RULES", NULL, NULL, 0, NULL, 0);
             return 0;
 
         case IDM_HOST:
@@ -1455,6 +1489,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_inputmod = NULL;
         delete g_xfer;
         g_xfer = NULL;
+        delete g_export;
+        g_export = NULL;
         delete g_toolbar;
         g_toolbar = NULL;
         delete g_optmenu;

@@ -21,7 +21,8 @@ import logging
 from ..view.html import LIVE
 from . import fold
 from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
-from .protocol import MAX_FRAME, Frame, ProtocolError
+from .protocol import (MAX_FRAME, Frame, ProtocolError,
+                       export_data, export_end, export_start)
 from .protocol import text_frame
 
 log = logging.getLogger("bridge.link")
@@ -164,6 +165,41 @@ class GuestLink:
                 # this, a big page or a future transcript export starves the
                 # event loop exactly the way sync once did -- see wire_yield.
                 await self.wire_yield()
+
+    async def send_export(self, guest, data: bytes) -> None:
+        """Stream an export to the guest, chunked, with a START and an END.
+
+        Unlike `send_html` this never truncates and never drops. An export is
+        a file the user asked for; a shortened one with a marker in the middle
+        is not a smaller export, it is a broken file. If a chunk cannot be
+        sent the transfer ends with `status=error` and the guest throws away
+        what it had.
+        """
+        budget = MAX_FRAME - 1024
+        total = len(data)
+        if not await self.send(guest, export_start(total)):
+            return
+        sent = 0
+        for i in range(0, total, budget):
+            chunk = data[i:i + budget]
+            enc = ENC_RAW
+            if should_compress(chunk, self.link_bps):
+                chunk = self.zip_out.compress(chunk)
+                enc = ENC_DEFLATE
+            if not await self.send(guest, export_data(i, total, enc, chunk)):
+                log.warning("export: the link went away at %d/%d bytes",
+                            i, total)
+                await self.send(guest, export_end(
+                    False, bytes_=sent,
+                    reason="The connection dropped during the export."))
+                return
+            sent = i + len(data[i:i + budget])
+            # Between chunks, for the same reason send_html yields: a
+            # multi-hundred-KB export would otherwise hold the event loop for
+            # its whole duration and a Stop press would wait it out.
+            if i + budget < total:
+                await self.wire_yield()
+        await self.send(guest, export_end(True, bytes_=sent))
 
     async def wire_yield(self) -> None:
         """Give everything else a turn on the wire.

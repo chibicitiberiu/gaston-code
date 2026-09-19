@@ -12,6 +12,7 @@ approving permission prompts and, from Phase 3, feeding tool results to Claude.
 
 from __future__ import annotations
 
+import datetime as _dt
 import asyncio
 import contextlib
 import logging
@@ -72,7 +73,7 @@ from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
 from .files.sync import AckResult, GetResult, ScanResult
 from .files.syncrun import SyncError
-from .agent.session import Session
+from .agent.session import TOOLS, Session
 
 log = logging.getLogger("bridge.server")
 
@@ -276,6 +277,14 @@ class GuestSession:
     @effort.setter
     def effort(self, e: str) -> None:
         self.identity.effort = e
+
+    @property
+    def work_dir(self) -> str:
+        return self.identity.work_dir
+
+    @work_dir.setter
+    def work_dir(self, d: str) -> None:
+        self.identity.work_dir = d
 
     @property
     def pending_resume(self) -> str:
@@ -800,6 +809,76 @@ class Bridge:
         on the CLI's choice.
         """
         return guest.model or self.model or ""
+
+    # --- the conversation's own folder -------------------------------------
+    #
+    # A SUBFOLDER OF THE MIRROR, never a second mirror. BACKLOG.md §7 settled
+    # that a mirror belongs to a conversation; what it did not settle is
+    # whether "the folder moves" means moving the sync root, and moving it
+    # would mean a new baseline, a new `tree_id`, a watcher restart and a
+    # recovery pass on the new tree -- four chances to report deletions
+    # nobody made, in the one layer of this system that can lose a person's
+    # work. Putting the conversation inside the existing mirror gets the same
+    # property (each chat has its own folder, and two chats cannot overwrite
+    # each other's files) with one mirror, one baseline and one watcher,
+    # exactly as §7 says the decision requires.
+    #
+    # It also makes a nicer guarantee than the original shape: with the
+    # agent's cwd INSIDE the mirror, everything it can write is mirrored, so
+    # `_scan_strays` has nothing to find by construction.
+
+    #: Characters allowed in a folder name, and the cap. Deliberately
+    #: 8.3-safe: the name becomes a directory on a FAT volume on the other
+    #: side, and the guest declared its own path rules at handshake -- this
+    #: is the intersection every one of them accepts unchanged.
+    FOLDER_MAX = 8
+
+    @staticmethod
+    def folder_name(raw: str) -> str:
+        """A folder name that is safe on both sides, or "" for the shared one.
+
+        Refuses rather than repairs anything with a separator or a dot run in
+        it: a name arriving with `..` or `/` in it is not a typo to fix, it is
+        someone trying to leave the mirror, and quietly rewriting it into
+        something that works is how a guard becomes decoration.
+        """
+        raw = (raw or "").strip()
+        if not raw:
+            return ""
+        for bad in ("/", "\\", ":", "..", "*", "?", '"', "<", ">", "|"):
+            if bad in raw:
+                return ""
+        out = "".join(c for c in raw.upper()
+                      if c.isascii() and (c.isalnum() or c in "-_"))
+        return out[:Bridge.FOLDER_MAX]
+
+    def _work_dir(self, guest: GuestSession) -> str:
+        """Where the agent works for THIS conversation."""
+        return guest.work_dir or self.cwd or os.getcwd()
+
+    def _guest_root(self, guest: GuestSession) -> str:
+        r"""The same folder, spelled the way the guest spells it.
+
+        The guest's mirror root plus this conversation's subfolder, joined
+        with a BACKSLASH -- os.path.join here would produce `C:\WORK/CHAT1`
+        on Linux, which is the exact class of mistake bridge/files/paths.py
+        was written to prevent.
+        """
+        root = (guest.hello or {}).get("sync_root") or self.guest_sync_root
+        if not root:
+            return ""
+        sub = self._sub_of(guest)
+        return (root.rstrip("\\") + "\\" + sub) if sub else root
+
+    def _sub_of(self, guest: GuestSession) -> str:
+        """This conversation's folder name relative to the mirror, or ""."""
+        if not guest.work_dir or not self.sync_dir:
+            return ""
+        try:
+            rel = os.path.relpath(guest.work_dir, self.sync_dir)
+        except ValueError:
+            return ""
+        return "" if rel in (".", "") or rel.startswith("..") else rel
 
     def _effective_effort(self, guest: GuestSession) -> str:
         """Effort's counterpart to `_effective_model` -- see there."""
@@ -1335,6 +1414,53 @@ class Bridge:
     async def _on_setmode(self, guest: GuestSession, f: Frame) -> None:
         await self._set_mode(guest, f.headers.get("mode", ""))
 
+    async def _on_rules(self, guest: GuestSession, f: Frame) -> None:
+        """What can run without asking, as a transcript block.
+
+        A block rather than a dialog: it is prose with a table in it, the
+        guest already renders both, and a dialog on a 640x480 screen would
+        need scrolling it does not have. It also belongs in the transcript --
+        the answer depends on the mode, and the mode changes.
+        """
+        tools = list(TOOLS) + ["mcp__machine__exec"]
+        root = (guest.hello or {}).get("sync_root", "") or ""
+        await self._write_block(guest, perms.rules_view(
+            guest.perm_mode, tools, root))
+
+    async def _on_export(self, guest: GuestSession, f: Frame) -> None:
+        """Assemble the whole conversation into one file and stream it.
+
+        Assembled HERE and not on the guest, like everything else: the guest
+        has tens of kilobytes free and a transcript is hundreds. It never
+        holds the document -- each chunk goes straight from the socket to a
+        file -- which is the same rule `do_put` already follows for sync.
+        """
+        title = self._conv_title(guest)
+        when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+        doc = H.export_document(title, guest.pages.all_text(),
+                                "Exported from Gaston Code, " + when)
+        # CP1252 on the way out, because the file is read on the machine that
+        # saved it, by a browser that will be told windows-1252 in the meta
+        # tag the document carries.
+        data = fold.encode(doc)
+        log.info("export: %d bytes for %r", len(data), title)
+        await guest.link.send_export(guest, data)
+
+    def _conv_title(self, guest: GuestSession) -> str:
+        """What this conversation is called, for the export's heading.
+
+        From the chat list rather than from anything the bridge invents: the
+        title the user is looking at in the list is the one they expect on the
+        file. Falls back to the id, and then to a flat noun, because an
+        untitled conversation is still exportable.
+        """
+        cid = guest.conv_id
+        if cid:
+            for r in sesslist.listing(cwd=self.cwd):
+                if r["id"] == cid:
+                    return r["title"]
+        return cid or "Conversation"
+
     #: One entry per inbound frame type, built once at class definition
     #: time -- 02.30: this used to be a 17-branch if/elif mixing one-line
     #: handlers (PING, STAT) with 25-line ones (RESUME, GETSESSIONS,
@@ -1378,6 +1504,8 @@ class Bridge:
         "SETMODEL": "_on_setmodel",
         "SETEFFORT": "_on_seteffort",
         "SETMODE": "_on_setmode",
+        "EXPORT": "_on_export",
+        "RULES": "_on_rules",
     }
 
     def _seed_agent_notices(self) -> None:

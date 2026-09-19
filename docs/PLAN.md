@@ -1242,12 +1242,35 @@ has known work left.
   and editable before the first sync pass runs. Recorded here so it is not
   rediscovered when the dialog is built.
 
-- **File -> Export as HTML.** Wired to a "not implemented" box. Needs every
-  page from the bridge assembled into one document, which is a chunked
-  transfer.
+- **File -> Export as HTML. [R -- 2026-09-19] Done.** Three frames
+  (`EXPORTSTART`/`EXPORTDAT`/`EXPORTEND`), `GuestLink.send_export`, and a
+  streaming sink in `win/app/export.cpp`. The guest never holds the document
+  -- each chunk goes from the socket to the file -- and writes to a temp file
+  renamed on a clean END, so a transfer that dies halfway leaves nothing
+  rather than a truncated file under the name the user chose.
+  The Save dialog is opened BEFORE the request goes out, which is the one
+  ordering decision worth knowing: a modal on this thread still pumps
+  `WM_RC_FRAME`, so a dialog opened when the data starts arriving would be
+  dispatching chunks with no file open. `GetSaveFileNameA` is resolved
+  through `LoadLibrary` rather than imported, so a stripped install loses the
+  dialog instead of refusing to load the program.
+  Verified on the guest: 9,514 bytes exported and opened in IE5 from
+  `C:\RETRO\EXPORT.HTM`, byte count matching what the bridge sent.
 
-- **The permission rule table.** No API reads the effective rules, so parse
-  `.claude/settings*.json` on the bridge and push a read-only view. Untouched.
+- **The permission rule table. [R -- 2026-09-19] Built, and NOT as specified.**
+  Parsing `.claude/settings*.json` would have been actively misleading:
+  `Session` runs with `setting_sources=[]` on purpose, so the operator's
+  permission rules are not in effect for a Win98 client at all, and a table of
+  them would answer "what can happen without asking?" with rules that cannot
+  happen.
+  What shipped is `Configure -> What can run without asking...`, answered by
+  the bridge because the answer is about the session it is running: the mode
+  in force and what it means, that anything touching the user's machine always
+  asks, the tool list with a one-line note each, and -- this is 04.16's
+  requirement, honoured -- a paragraph saying plainly that the list is
+  incomplete, because Claude Code resolves some of its own calls locally and
+  never tells the bridge. A view that listed only what reaches the prompt
+  would read as "this is everything", which is measured false.
 
 - **R5 (icons), R7 (multiple clients), R8 (Command menu)** land here unless
   pulled forward.

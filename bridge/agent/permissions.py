@@ -337,3 +337,93 @@ def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
             f"it. Read them freely -- that is what they are for -- but write "
             f"your merge to the real file in the sync root, which is what "
             f"reaches the user's machine.")
+
+
+# --- what can run without asking --------------------------------------------
+#
+# NOT a rules table read from `.claude/settings*.json`, which is what the plan
+# asked for and would have been actively misleading. `Session` runs with
+# `setting_sources=[]` on purpose -- "the tool set a Win98 client gets must not
+# depend on whose laptop runs the bridge" -- so the operator's permission rules
+# ARE NOT IN EFFECT here. A table of them would answer the question "what can
+# happen without asking?" with rules that cannot happen at all.
+#
+# It also has to admit what it cannot see, which is the point of 04.16:
+# measured in this project, Claude Code resolves Read/Glob/Grep inside its
+# working directory and sandboxed Bash LOCALLY and never calls `can_use_tool`,
+# so nothing on the bridge observes them. A view that listed only what reaches
+# the prompt would read as "this is everything that can happen", which is
+# already known to be false.
+
+_MODE_MEANS = {
+    "default": "every tool call that reaches this bridge is shown to you "
+               "first.",
+    "acceptEdits": "file edits inside the working copy are applied without "
+                   "asking. Commands on your machine still ask.",
+    "plan": "the model researches and proposes rather than acting. Tool "
+            "calls that would change something are refused by the CLI "
+            "before they reach here.",
+}
+
+
+def rules_view(mode: str, tools: list[str], guest_root: str = "") -> str:
+    """A read-only answer to "what can run without asking?".
+
+    Written as prose with a short table rather than as a settings dump,
+    because the honest answer has three parts and only one of them is a list.
+    """
+    p = ['<div class="perm">',
+         '<div class="permhead">What can run without asking</div>']
+
+    p.append("<p><b>Mode: " + H.esc(_MODE_LABELS.get(mode, mode)) + "</b>"
+             " &mdash; " + H.esc(_MODE_MEANS.get(mode, "")) + "</p>")
+
+    p.append("<p>Anything that runs a command on your computer asks first, "
+             "every time, and cannot be turned off from here. If the folder "
+             "it touches is outside ")
+    p.append(H.esc(guest_root) if guest_root
+             else "the mirrored folder (which is not configured)")
+    p.append(", the prompt says so.</p>")
+
+    p.append("<p><b>This list is not complete, and that is not a bug.</b> "
+             "Claude Code answers some of its own tool calls locally and "
+             "never tells this bridge about them &mdash; reading and "
+             "searching files inside its own working folder, for instance. "
+             "Those happen on the machine running the bridge, never on "
+             "yours, and nothing here can show them.</p>")
+
+    p.append("<p>The permission rules in the operator's "
+             "<code>.claude/settings.json</code> do <b>not</b> apply to this "
+             "connection. The bridge starts every session with settings "
+             "inheritance switched off, so what a Windows 98 client is "
+             "allowed to do does not depend on whose computer is running "
+             "the bridge.</p>")
+
+    if tools:
+        p.append("<p>Tools this session can use at all:</p><table>")
+        for t in sorted(tools):
+            p.append("<tr><th>" + H.esc(t) + "</th><td>"
+                     + H.esc(_TOOL_NOTES.get(t, "")) + "</td></tr>")
+        p.append("</table>")
+    p.append("</div>")
+    return "".join(p)
+
+
+#: Mode names as the menus spell them, duplicated from bridge/server.py's
+#: MODE_LABEL rather than imported: this module is imported BY the server and
+#: an import back would be a cycle. Two entries drifting apart would show a
+#: wrong word in one place, which is worth less than the cycle would cost.
+_MODE_LABELS = {"default": "Manual", "acceptEdits": "Accept edits",
+                "plan": "Plan"}
+
+_TOOL_NOTES = {
+    "Read": "reads a file on the bridge's working copy",
+    "Write": "writes one; it reaches you through the folder mirror",
+    "Edit": "changes one, the same way",
+    "Glob": "finds files by name",
+    "Grep": "searches inside them",
+    "Bash": "runs a command ON THE BRIDGE, not on your computer",
+    "WebFetch": "fetches a page from the internet",
+    "WebSearch": "searches the web",
+    "mcp__machine__exec": "RUNS A COMMAND ON YOUR COMPUTER. Always asks.",
+}

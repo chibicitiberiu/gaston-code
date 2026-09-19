@@ -397,16 +397,32 @@ depth -- a Phase 5 upload running independently of a live `exec`, say --
 still needs a new lane and a new branch there. Narrower work than 01.36
 described, since the table it asked for already exists, but not nothing.
 
-**Export as HTML** (04.15, `win/app/main.cpp:1706-1715`, still a
-`MessageBoxA` -- closes the missing-`.rc`-infra-adjacent clause of 01.10 by
-being the thing that actually needs the sink) needs the sink above (a
-transcript is hundreds of KB and the guest has tens of KB free) and a real
-END/status on `send_html`, which today has neither: it still returns without
-sending anything when a LIVE block exceeds the frame budget
-(`bridge/wire/link.py:102-103`), and the caller is told nothing either way.
-An oversized APPEND is no longer dropped -- it is truncated with a marker the
-reader can see (`link.py:113-127`), which is the half of this that did get
-fixed.
+**Export as HTML -- BUILT 2026-09-19 (Phase 4.2), and it did NOT wait for the
+general primitive.** `EXPORTSTART`/`EXPORTDAT`/`EXPORTEND`, `send_export` on
+`GuestLink` and a streaming sink in `win/app/export.cpp`. It has the three
+things this entry said the shape needed -- an END frame with a status, a
+`total`/`off` on every chunk, and a guest that never holds the document --
+without `win/xfer.c` existing, because it is one caller and the primitive is
+meant to be extracted from two or three.
+
+What that decision costs, stated rather than discovered later: **the sink in
+`export.cpp` is now the third implementation of the same shape** after
+`do_put` (`win/sync/syncrpc.cpp:188`) and the guest side of `EXECOUT`. It is
+also the cleanest of the three to extract from, because it was written
+knowing the others exist: `begin`/`frame`/`cleanup` with a temp file renamed
+on a clean END, an offset check that refuses a chunk which does not continue
+where the last one stopped, and no `CANCEL` -- deliberately, since an export
+is seconds on a LAN and the Cancel design belongs to the primitive (§6 above,
+and 9P's `Tflush` contract). **Phase 5's upload should extract the sink from
+`export.cpp` rather than write a fourth.**
+
+Still true and still not done: `send_html` has no END and no status. It
+returns without sending anything when a LIVE block exceeds the frame budget
+(`bridge/wire/link.py`), and the caller is told nothing either way. An
+oversized APPEND is truncated with a marker the reader can see rather than
+dropped, which is the half of this that got fixed earlier. `send_export`
+does NOT share that weakness -- it never truncates, because a shortened
+export is not a smaller file, it is a broken one.
 
 **Correction, verified 2026-09-18:** this entry previously cited that drop at
 `bridge/server.py:847-848` and said `wire_yield` was skipped by
@@ -842,8 +858,17 @@ R7's `client_id` is also live by then, one `rc_config_save` fix serves both.
 **Status:** recorded 2026-09-18. Four unrelated findings, none large enough
 for their own section, none blocking anything in flight.
 
-**04.16 -- the permission rule table and the Phase 6 prompt-bar assumption
-share one gap.** `PROGRESS.md`'s 2026-09-17 entry ("the auto-allow policy was
+**04.16 -- HALF CLOSED 2026-09-19.** The rules view shipped (Phase 4.2,
+`permissions.rules_view`) and it says in as many words that it is incomplete,
+which is what this finding asked for. It also does not parse
+`.claude/settings*.json` at all -- working through this finding is what made
+it clear that those rules are not in effect for this client, so showing them
+would have been worse than showing nothing. **The Phase 6 half is still
+open**: nothing has verified that every `mcp__machine__*` call reaches the 3.0
+prompt bar, and that wants its own spike before Phase 6 relies on it.
+
+Original text: **the permission rule table and the Phase 6 prompt-bar
+assumption share one gap.** `PROGRESS.md`'s 2026-09-17 entry ("the auto-allow policy was
 deleted, because Claude Code already does it") measured that Claude Code
 resolves `Read`/`Glob`/`Grep` inside `cwd` and sandboxed `Bash` locally,
 never reaching `can_use_tool` at all. A rules table read from

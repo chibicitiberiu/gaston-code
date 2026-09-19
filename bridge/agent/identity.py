@@ -42,6 +42,15 @@ class GuestIdentity:
     #: process so a reconnect or an effort fork keeps the choice.
     model: str = ""
     effort: str = ""
+    #: This conversation's own working folder, absolute, on the BRIDGE.
+    #:
+    #: Empty means the shared one (`Bridge.cwd`), which is what every
+    #: conversation used before per-chat folders existed and is still what a
+    #: chat created without naming one gets. When set it is a SUBFOLDER OF
+    #: THE MIRROR, not a new mirror: one mirror, one baseline, one watcher
+    #: (BACKLOG.md §7) -- the conversation moves inside the tree rather than
+    #: the tree moving.
+    work_dir: str = ""
     #: A conversation the guest has OPENED but not yet spoken in.
     #:
     #: Switching chats replays stored history and builds no SDK client, so
