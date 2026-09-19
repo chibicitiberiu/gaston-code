@@ -1534,3 +1534,52 @@ async def test_a_cp1252_command_still_runs(harness):
         await task
     await _recv(harness, reader, "EXECKILL")
     await harness.close(writer)
+
+
+# --- the DOS guard annotates the prompt --------------------------------------
+#
+# It gates nothing: the verdict is displayed and nothing acts on it. That is
+# deliberate -- it earns its way onto real traffic before anything depends on
+# it. What it must never do is add REASSURANCE, because the bar clips at 160
+# characters and a "stays in the mirrored folder" prefix on a truncated
+# command would be less honest than the bare command is today.
+
+
+async def test_a_command_reaching_outside_the_mirror_is_announced(harness):
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge._guest.hello["sync_root"] = "C:\\WORK"
+
+    task = harness.bridge._guest.claude.ask(
+        "mcp__machine__exec",
+        {"command": "deltree /y c:\\windows", "cwd": "C:\\"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+
+    assert body.startswith("! writes outside the mirrored folder: ")
+    # The path keeps the case the model wrote it in -- only the marker is
+    # ours. Shouting the path back loses information for no gain.
+    assert "c:\\windows" in body
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_a_contained_command_gets_no_added_reassurance(harness):
+    """The bar must read exactly as it does today for an ordinary command."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge._guest.hello["sync_root"] = "C:\\WORK"
+
+    task = harness.bridge._guest.claude.ask(
+        "mcp__machine__exec",
+        {"command": "dir c:\\work", "cwd": "C:\\WORK"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+
+    # Byte-for-byte what the bar shows today. FakeCtx supplies the summary
+    # ("Bash: vol c:"), which is fixture, not args -- what matters is that
+    # the guard added nothing in front of it.
+    assert "mirror" not in body.lower()
+    assert not body.startswith("!")
+    task.cancel()
+    await harness.close(writer)

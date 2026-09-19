@@ -35,6 +35,7 @@ import logging
 import os
 from collections import deque
 
+from . import doscmd
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 from ..status import PromptEndReason
@@ -111,6 +112,32 @@ class PermissionDesk:
                          tool_name, str(args)[:120])
                 return PermissionResultDeny(message=refuse, interrupt=False)
 
+            # What this command reaches outside the mirrored folder, if
+            # anything. It ONLY EVER ADDS A WARNING.
+            #
+            # That asymmetry is the whole design. The bar clips its line at
+            # 160 characters and "Run on your machine: " eats 21 of them, so
+            # roughly 139 bytes of a command that may be ~1000 are visible --
+            # and attaching a reassuring "stays in the mirrored folder" to a
+            # truncated line would be manufactured reassurance, strictly less
+            # honest than today's bare command. So a contained command is
+            # annotated with nothing at all, and the user reads the command
+            # exactly as they do now.
+            #
+            # It gates nothing yet either. The verdict is displayed and
+            # nothing acts on it, which is deliberate: it earns its way onto
+            # real traffic before anything depends on it.
+            warning = None
+            if tool_name.startswith("mcp__machine__"):
+                warning = doscmd.reason(
+                    str((args or {}).get("command") or ""),
+                    cwd=str((args or {}).get("cwd") or ""),
+                    guest_root=str(
+                        (getattr(self._guest, "hello", None) or {}).get(
+                            "sync_root") or ""))
+                if warning:
+                    log.info("guard: %s -- %s", warning, str(args)[:80])
+
             loop = asyncio.get_running_loop()
             prompt = PendingPrompt(
                 tool_use_id=tool_use_id,
@@ -120,7 +147,10 @@ class PermissionDesk:
                 body=render_request(tool_name, args, ctx),
                 allows=perms.allows_always(
                     tool_name, getattr(ctx, "suggestions", None) or []),
-                summary=perms.summary(tool_name, ctx, args),
+                summary=(("! %s -- %s"
+                          % (warning, perms.summary(tool_name, ctx, args)))
+                         if warning
+                         else perms.summary(tool_name, ctx, args)),
             )
 
             try:
