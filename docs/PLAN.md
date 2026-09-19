@@ -1174,11 +1174,22 @@ has known work left.
 - **Model selection.** *Shipped:* menu built from
   `get_server_info()["models"]`, with the `default` alias resolved away and a
   tick on the model actually in use.
-  *Still to do:* per-client model once R7 lands; surface each model's
-  `description` so they can be told apart on a 640x480 screen; decide what to
-  do with `supportsFastMode`, `supportsAdaptiveThinking` and
-  `supportsAutoMode`, which arrive in the model data and are currently
-  ignored; handle the list changing under a running session.
+  *Still to do:* per-client model once R7 lands.
+  **[R -- 2026-09-19] The other three are closed.** `description` is surfaced:
+  it rides as its own OPTION header and the menu shows "Haiku -- Haiku 4.5 .
+  Fastest for quick answers" while the toolbar button keeps the short
+  `displayName`, because the button has 640 pixels of window to live in.
+  The list changing under a running session is handled at the one point where
+  it can actually change: `get_server_info()` returns the init result the SDK
+  cached when the CLIENT connected, so re-fetching mid-session re-reads the
+  same answer. `_make_session` clears the cache; nothing else can.
+  And the three `supports*` flags are ANSWERED, by measurement rather than by
+  deciding: the installed SDK has **zero references** to fast mode or
+  adaptive thinking -- no option, no control request, no method -- so
+  `supportsFastMode` and `supportsAdaptiveThinking` name capabilities there is
+  no way to drive from here. `supportsAutoMode` names a permission mode this
+  client deliberately withholds (see `MODE_ORDER` in `bridge/server.py`, and
+  4.1f). Re-open this only if the SDK grows a control for one of them.
 
 - **Effort selection.** *Shipped:* levels filtered by the selected model's
   `supportedEffortLevels`, with a greyed entry for models that have none, and
@@ -1201,6 +1212,25 @@ has known work left.
   *Still to do:* **Configure -> Server Host...** is a message box telling the
   user to edit the file. It wants a real dialog -- `wrc` is available for a
   resource, or a runtime `DialogBoxIndirectParam` template.
+
+- **Opening a chat starts nothing. [R -- 2026-09-19] Done (4.1i).** `_switch`
+  used to spawn a full CLI subprocess with `--resume` just to READ a
+  conversation. It replays stored history and builds no client; the first
+  message is what starts the process (`Bridge._resume_pending`). Four things
+  that were quietly session-dependent had to stop being so: the option menus
+  answer from a Bridge-level cache of the CLI's model and command lists,
+  Model and Effort are recorded against the guest and applied when the client
+  is finally built, the chat list marks the open conversation by
+  `GuestSession.conv_id` rather than by a live client's id, and the
+  deny-everything-pending barrier moved out of `_make_session` into
+  `_abandon_pending`, which fires on a switch whether or not anything is
+  rebuilt.
+  The stored compaction summary is replayed as one line rather than as a
+  multi-KB user bubble. Matched on its opening sentence, not on
+  `isCompactSummary`: that flag is a top-level key on the JSONL record and
+  `SessionMessage.message` carries only `{content, role}`, so the accessor
+  drops it -- and matching text degrades to today's behaviour when the wording
+  changes, where a JSONL reader would break the whole chat list.
 
 - **The work folder, chosen when a chat is started. [R] Decided 2026-09-18.**
   *Still to do, and it belongs to this stage's dialog work.* The default

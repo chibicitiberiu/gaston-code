@@ -492,3 +492,38 @@ SKELETON = ("<html><head>"
 
 def document(css: str | None = None) -> str:
     return SKELETON % (css if css is not None else STYLESHEET)
+
+
+def export_document(title: str, body: str, when: str = "") -> str:
+    """The whole transcript as one standalone file.
+
+    NOT `document()` with the body filled in. That one is the live view: it
+    has the `#l` and `#s` slots the streaming path replaces, and an exported
+    file carrying two empty divs named after a protocol nobody reading the
+    file has heard of is just litter. This has a heading, the conversation,
+    and nothing that only makes sense while connected.
+
+    Same STYLESHEET, deliberately: an export that looks different from what
+    was on screen invites the question of which one is right. It also has to
+    render in IE5 on the machine that saved it, which is the same constraint
+    the stylesheet was already written to.
+    """
+    head = '<div class="exporthead"><h1>' + esc(title or "Conversation")
+    head += "</h1>"
+    if when:
+        head += '<div class="notice">' + esc(when) + "</div>"
+    head += "</div>"
+    return ("<html><head>"
+            "<meta http-equiv=\"Content-Type\" "
+            "content=\"text/html; charset=windows-1252\">"
+            "<title>" + esc(title or "Conversation") + "</title>"
+            "<style>" + STYLESHEET + EXPORT_CSS + "</style></head>"
+            "<body>" + head + body + "</body></html>")
+
+
+#: Only what the live view has no use for. Kept separate so the shared
+#: stylesheet stays exactly what the guest is running.
+EXPORT_CSS = (
+    ".exporthead { border-bottom: 1px solid #808080; margin-bottom: 12px; }"
+    ".exporthead h1 { font-size: 12pt; margin: 0 0 2px 0; }"
+)

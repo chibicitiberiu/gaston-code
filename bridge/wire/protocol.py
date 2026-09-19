@@ -463,7 +463,7 @@ def exec_kill(exec_id: str) -> Frame:
 
 
 def option(kind: str, id: str, label: str, current: bool, *,
-           disabled: bool = False, hint: str = "") -> Frame:
+           disabled: bool = False, hint: str = "", desc: str = "") -> Frame:
     """One row of a bridge-driven menu.
 
     `id` is what the guest sends back; `label` is what it shows. They differ
@@ -475,6 +475,10 @@ def option(kind: str, id: str, label: str, current: bool, *,
     reads it as "put this in the input box rather than sending it" -- so the
     label showing a hint and the click opening the box for you to fill it in
     are the same fact, not two that can drift.
+
+    `desc` is extra text for the MENU only, kept out of `label` because the
+    label is also what a toolbar button shows and "Haiku 4.5 - Fastest for
+    quick answers" does not fit on a 640px screen while "Haiku" does.
     """
     h = {"kind": kind, "id": id, "label": label,
          "current": "1" if current else "0"}
@@ -482,6 +486,8 @@ def option(kind: str, id: str, label: str, current: bool, *,
         h["disabled"] = "1"
     if hint:
         h["hint"] = "1"
+    if desc:
+        h["desc"] = desc
     return Frame("OPTION", h)
 
 

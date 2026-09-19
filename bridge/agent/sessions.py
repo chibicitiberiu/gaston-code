@@ -93,6 +93,49 @@ def listing(cwd: str | None = None, limit: int = 50) -> list[dict]:
     return out
 
 
+#: How Claude Code opens the synthetic message it writes at a compaction
+#: boundary. MATCHED ON THE TEXT, which wants justifying because it looks like
+#: the fragile option.
+#:
+#: The record carries `isCompactSummary: true` -- measured, it is a TOP-LEVEL
+#: key on the stored line, beside `cwd`, `gitBranch` and `uuid`. But
+#: `SessionMessage` does not surface it: its `message` attribute is the raw
+#: Anthropic dict and carries `{content, role}` and nothing else, so the flag
+#: is dropped by the accessor. Reading it back means opening the JSONL, and
+#: this module's own docstring says not to -- "that format is internal and
+#: changes between releases."
+#:
+#: So the choice is between reaching around the documented accessor and
+#: matching a sentence. The sentence wins on how each one FAILS. If the
+#: wording changes, this stops matching and a compacted session replays its
+#: summary as a user bubble again, which is exactly today's behaviour. If the
+#: file format changes, a JSONL reader raises or silently returns nothing for
+#: every session in the list. One degrades to the status quo; the other
+#: breaks the chat list.
+_COMPACT_OPENER = ("This session is being continued from a previous "
+                   "conversation")
+
+
+def _compact_summary(message) -> str | None:
+    """The stored compaction summary's text, if this message is one.
+
+    User role only: an assistant message that happens to quote the sentence --
+    this project's own transcripts do, discussing this very code -- is a real
+    reply and must be replayed.
+    """
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return None
+    content = message.get("content")
+    if isinstance(content, list):
+        first = content[0] if content else None
+        if not isinstance(first, dict) or first.get("type") != "text":
+            return None
+        content = first.get("text")
+    if not isinstance(content, str):
+        return None
+    return content if content.startswith(_COMPACT_OPENER) else None
+
+
 def _text_of(message) -> list[tuple[str, str]]:
     """Flatten one stored message into (style, text) runs.
 
@@ -152,6 +195,20 @@ def history_html(session_id: str, limit: int = 2000) -> list[str]:
     blocks: list[str] = []
     for m in msgs:
         msg = getattr(m, "message", None)
+
+        # The compaction summary is not something the user said, and it opened
+        # every restored conversation with several kilobytes of machine-written
+        # recap in a user bubble -- on a 640x480 screen that is the whole first
+        # page. One line instead. Nothing is lost that the reader had: the
+        # summary exists for the MODEL's context, which resuming the session
+        # restores regardless of what the transcript shows.
+        summary = _compact_summary(msg)
+        if summary is not None:
+            blocks.append(H.notice(
+                "Earlier conversation, condensed (%d characters, kept for "
+                "the assistant and not shown here)." % len(summary)))
+            continue
+
         # A fresh renderer per message: a stored message is complete, and
         # fence state must not leak from one into the next.
         md = HtmlStream()

@@ -56,6 +56,12 @@ class FakeSession:
     _seq = 0
 
     def __init__(self, **kw):
+        # What the bridge asked us to resume, so a test can assert that
+        # switching a chat built NOTHING and that the first message built the
+        # right thing.
+        self.resume = kw.get("resume")
+        self.model = kw.get("model") or "fake-model"
+        self.effort = kw.get("effort")
         self.on_text = kw.get("on_text")
         # The bridge learns the conversation id from this, not from start().
         self.on_system = kw.get("on_system")
@@ -64,7 +70,6 @@ class FakeSession:
         # cancellable task (query.py spawn_task), and a fixture that awaits it
         # inline would pass while the cancellation wedge shipped.
         self.can_use_tool = kw.get("can_use_tool")
-        self.model = "fake-model"
         # What Session.__init__ is given, and what set_permission_mode
         # changes. Held here rather than ignored so a test can assert the
         # bridge passed the guest's choice into the REBUILT session as well
@@ -111,7 +116,8 @@ class FakeSession:
              "displayName": "Opus", "supportsEffort": True,
              "supportedEffortLevels": ["low", "high"]},
             {"value": "haiku", "resolvedModel": "fake-haiku",
-             "displayName": "Haiku"},
+             "displayName": "Haiku",
+             "description": "Fastest for quick answers"},
         ]
 
     async def server_commands(self):
@@ -695,6 +701,24 @@ async def test_option_frames_resolve_the_default_alias_away(harness):
     await harness.close(w)
 
 
+async def test_model_description_rides_beside_the_label_not_inside_it(
+    harness,
+):
+    """The label is what the toolbar BUTTON shows, and it has 640 pixels of
+    window. "Haiku 4.5 - Fastest for quick answers" does not fit there and
+    "Haiku" does, so the description is its own header and the menu is what
+    renders both. A model with no description sends none rather than an
+    empty one."""
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    rows = {f.headers["id"]: f.headers for f in frames if f.type == "OPTION"
+            and f.headers.get("kind") == "model"}
+    assert rows["haiku"]["label"] == "Haiku"
+    assert rows["haiku"]["desc"] == "Fastest for quick answers"
+    assert "desc" not in rows["opus"]
+    await harness.close(w)
+
+
 async def test_effort_options_follow_the_selected_model(harness):
     """Haiku has no effort levels at all, so offering five would be lying."""
     r, w = await harness.connect()
@@ -741,6 +765,108 @@ async def test_effort_menu_ticks_the_cli_default(harness):
               if f.headers.get("current") == "1"]
     assert ticked == ["low"], "the effort menu must tick the CLI's --effort"
     await harness.close(w)
+
+
+# --- opening a conversation without starting one ----------------------------
+
+
+async def _switch_to(harness, monkeypatch, r, w, sid, blocks=None):
+    """Drive a SWITCH with history replay faked.
+
+    history_html reads the real transcript store, which a test has none of.
+    Faking it keeps the test about the switch rather than about the SDK.
+    """
+    import bridge.server as srv
+    monkeypatch.setattr(srv.sesslist, "history_html",
+                        lambda sid_, limit=2000: list(blocks or []))
+    await harness.send(w, Frame("SWITCH", {"id": sid}))
+    return await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+
+async def test_switching_a_chat_starts_no_process(harness, monkeypatch):
+    """Opening a conversation to READ it used to spawn a full CLI subprocess
+    with --resume. Nothing was billed, but browsing the list to find something
+    paid a process start per click."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge._guest
+    first = g.claude
+    assert first is not None, "the first connect builds one eagerly"
+
+    await _switch_to(harness, monkeypatch, r, w, "stored-1",
+                     ["<p>hello again</p>"])
+    assert g.claude is None, "the switch must not have built a client"
+    assert g.pending_resume == "stored-1"
+    assert first.started is False, "the old client must be closed"
+    await harness.close(w)
+
+
+async def test_the_first_message_is_what_resumes_it(harness, monkeypatch):
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge._guest
+    await _switch_to(harness, monkeypatch, r, w, "stored-1")
+
+    await harness.send(w, Frame("INPUT", {}, b"carry on"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    assert g.claude is not None
+    assert g.claude.resume == "stored-1", "resumed the conversation we opened"
+    assert g.pending_resume == "", "and stopped calling it pending"
+    await harness.close(w)
+
+
+async def test_the_menus_survive_a_switch_with_no_client(harness, monkeypatch):
+    """The model list is a property of the installed CLI, not of a session,
+    so a conversation with no process behind it still knows what it can be
+    run with. Without this the toolbar read "Model" and "Mode" after every
+    switch."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    frames = await _switch_to(harness, monkeypatch, r, w, "stored-1")
+    opts = [f for f in frames if f.type == "OPTION"]
+    kinds = {f.headers.get("kind") for f in opts}
+    assert {"model", "effort", "mode", "command"} <= kinds
+    await harness.close(w)
+
+
+async def test_choosing_a_model_with_no_client_is_not_a_no_op(
+    harness, monkeypatch,
+):
+    """It used to be exactly that: the menu re-ticked the old model and
+    nothing said why."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge._guest
+    await _switch_to(harness, monkeypatch, r, w, "stored-1")
+
+    await harness.send(w, Frame("SETMODEL", {"model": "haiku"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert g.model == "haiku"
+
+    await harness.send(w, Frame("INPUT", {}, b"go"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    assert g.claude.model == "haiku", (
+        "the deferred client must start on the model that was picked while "
+        "it did not exist"
+    )
+    await harness.close(w)
+
+
+async def test_a_switch_denies_what_the_old_conversation_left_pending(
+    harness, monkeypatch,
+):
+    """The cleanup used to live inside _make_session, which a switch no
+    longer calls. The guest hides its bar on the strength of the deny, so a
+    prompt that outlived the switch would be unanswerable."""
+    reader, writer, task = await _connect_and_ask(harness)
+    await _recv(harness, reader, "PERMREQ")
+    await _switch_to(harness, monkeypatch, reader, writer, "stored-1")
+    perms = harness.bridge._guest.perms
+    assert perms.pending is None and not perms.queue, (
+        "the prompt belonged to the conversation that was left"
+    )
+    task.cancel()
+    await harness.close(writer)
 
 
 # --- the permission-mode menu -----------------------------------------------

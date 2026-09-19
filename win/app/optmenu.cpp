@@ -75,11 +75,22 @@ int rc_optmenu::frame(rc_frame *f)
         }
         if (kind && id && label) {
             if (strcmp(kind, "model") == 0 && n_model < MAX_OPTS) {
+                /* The MENU says "Haiku -- Haiku 4.5 . Fastest for quick
+                 * answers"; cur_model, which is what the toolbar button
+                 * shows, stays "Haiku". Four display names alone do not tell
+                 * you which model is which, and the description is the
+                 * bridge's, not a table here. */
+                const char *desc = rc_frame_get(f, "desc");
+                char item[160];
+                if (desc && *desc)
+                    rc_strf(item, sizeof(item), "%s -- %s", label, desc);
+                else
+                    rc_strf(item, sizeof(item), "%s", label);
                 rc_strf(opt_model[n_model], 64, "%s", id);
                 if (on) rc_strf(cur_model, sizeof(cur_model), "%s", label);
                 AppendMenuA(menu_model,
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
-                            IDM_MODEL0 + n_model, label);
+                            IDM_MODEL0 + n_model, item);
                 n_model++;
             } else if (strcmp(kind, "effort") == 0 && n_effort < MAX_OPTS) {
                 /* A model with no effort levels gets one greyed entry saying

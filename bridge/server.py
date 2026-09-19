@@ -278,6 +278,28 @@ class GuestSession:
         self.identity.effort = e
 
     @property
+    def pending_resume(self) -> str:
+        return self.identity.pending_resume
+
+    @pending_resume.setter
+    def pending_resume(self, s: str) -> None:
+        self.identity.pending_resume = s
+
+    @property
+    def conv_id(self) -> str:
+        """Which conversation this guest is looking at.
+
+        Either the live client's id, or -- after a switch that has not been
+        spoken in yet -- the id it will resume from. Everything that asks
+        "which conversation" should ask here rather than reaching for
+        `claude.session_id`, which is None for a conversation that is open on
+        screen and simply has no process behind it.
+        """
+        if self.claude and self.claude.session_id:
+            return self.claude.session_id
+        return self.identity.pending_resume
+
+    @property
     def perm_mode(self) -> str:
         return self.identity.perm_mode
 
@@ -471,6 +493,11 @@ class Bridge:
         self.sync_dir: str | None = None
         #: See _models(). None means "not asked yet", never "asked and empty".
         self._models_cache: list[dict] | None = None
+        #: The CLI's slash-command list, cached beside the model list and for
+        #: the same reasons: it is a property of the installed CLI, and a
+        #: conversation opened from the chat list has no client to ask until
+        #: the first message. Cleared wherever the model cache is.
+        self._commands_cache: list[dict] | None = None
         # None, matching sync_dir's sentinel (02.36). Every caller of
         # _load_baseline is guarded by `if not self.sync_dir`, and this used
         # to default to "" instead -- so if that invariant ever broke,
@@ -707,11 +734,17 @@ class Bridge:
 
         guest.set_link_speed(self.link_bps)
 
-        if guest.claude is None:
+        # Not when a conversation is open-but-unspoken: the guest reconnecting
+        # must not start the process that switching to it deliberately did
+        # not. This is the one place a fresh bridge DOES build eagerly, and it
+        # is what warms the model cache the deferred path then reads.
+        if guest.claude is None and not guest.pending_resume:
             guest.claude = await self._make_session(guest)
 
         await self._send(guest, ready(
-            guest.sess_id, guest.claude.model or "(default)",
+            guest.sess_id,
+            (guest.claude.model if guest.claude else guest.model)
+            or "(default)",
             guest.pages.live.number, guest.pages.count))
 
         # The stylesheet and the document skeleton live here rather than in
@@ -772,17 +805,59 @@ class Bridge:
         """Effort's counterpart to `_effective_model` -- see there."""
         return guest.effort or self.effort or ""
 
-    async def _make_session(self, guest: GuestSession,
-                            resume: str | None = None,
-                            fork: bool = False) -> Session:
-        # A prompt belongs to the session that raised it. Rebuilding the
-        # session -- switch, new, or the effort fork -- orphans its future, so
-        # deny first rather than leaving one pending against a client that no
-        # longer exists.
+    def _abandon_pending(self, guest: GuestSession) -> None:
+        """Orphan everything the conversation being left behind still owes.
+
+        A prompt belongs to the session that raised it, and so does a running
+        EXEC. Leaving either pending against a conversation the user has
+        walked away from is the unanswerable state `_reissue_halt` exists to
+        prevent -- worse now than when this lived inside `_make_session`,
+        because a switch no longer rebuilds anything and would otherwise
+        clean up nothing at all. The guest hides its bar on the strength of
+        the deny, so the deny has to happen whether or not a new client is
+        built.
+        """
         guest.perms.deny_all(
             "rebuild", "The conversation changed before this was answered.")
         self._fail_execs(guest, "The conversation changed while this command "
                                 "was running.")
+
+    async def _resume_pending(self, guest: GuestSession) -> bool:
+        """Build the client for a conversation opened but not yet spoken in.
+
+        Switching chats is pure replay -- it reads stored history and spawns
+        nothing. This is where the process finally starts, at the first
+        message, which is also the first moment it can do anything. Returns
+        False and tells the user if the resume fails; the caller must not
+        proceed.
+        """
+        if guest.claude or not guest.pending_resume:
+            return bool(guest.claude)
+        try:
+            guest.claude = await self._make_session(
+                guest, resume=guest.pending_resume)
+        except Exception as exc:
+            log.exception("deferred resume failed")
+            await self._write_block(guest, H.error(
+                "Could not reopen the conversation: " + str(exc)[:160]))
+            return False
+        guest.pending_resume = ""
+        # The menus were filled from the cache while there was no client; now
+        # there is one, and it is the thing that decides what `default`
+        # resolves to.
+        await self._send_options(guest)
+        return True
+
+    async def _make_session(self, guest: GuestSession,
+                            resume: str | None = None,
+                            fork: bool = False) -> Session:
+        # The model list is whatever the CLI reported when the CLIENT
+        # connected -- get_server_info() hands back the cached init result --
+        # so a CLI upgraded under a running bridge cannot reach the menu
+        # until a new client exists. This is that moment, and it is the only
+        # one: re-fetching at any other point re-reads the same init result.
+        self._models_cache = None
+        self._commands_cache = None
         async def on_text(t: str) -> None:
             guest.turn_produced = True
             await self._emit_text(guest, t, style="plain")
@@ -954,7 +1029,7 @@ class Bridge:
         for i, r in enumerate(rows):
             await self._send(guest, session_row(
                 i, r["id"], r["title"], r["cwd"], r.get("group", ""),
-                bool(guest.claude and guest.claude.session_id == r["id"])))
+                bool(guest.conv_id and guest.conv_id == r["id"])))
         await self._send(guest, sessions_end())
 
     async def _reissue_halt(self, guest: GuestSession) -> None:
@@ -1242,11 +1317,16 @@ class Bridge:
 
     async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
         model = f.headers.get("model", "")
+        # RECORDED whether or not a client exists. A conversation opened from
+        # the chat list has none until the first message, and picking a model
+        # there used to be a silent no-op -- the menu re-ticked the old one
+        # and nothing said why. `_make_session` reads `guest.model`, so the
+        # choice is applied when the client is finally built.
+        guest.model = model
+        log.info("model -> %s", model or "(default)")
         if guest.claude:
             await guest.claude.set_model(model)
-            guest.model = model
-            log.info("model -> %s", model or "(default)")
-            await self._write_block(guest, H.notice("Model set to " + model))
+        await self._write_block(guest, H.notice("Model set to " + model))
         await self._send_options(guest)
 
     async def _on_seteffort(self, guest: GuestSession, f: Frame) -> None:
@@ -1398,6 +1478,13 @@ class Bridge:
 
     async def _run_turn(self, guest: GuestSession, text: str,
                         *, echo: bool = True) -> None:
+        # The first message into a conversation opened from the chat list is
+        # what starts its process. Before the lock, because building it is
+        # slow and holding the turn lock across a subprocess start would make
+        # a second message queue behind a client that does not exist yet.
+        if not guest.claude and guest.pending_resume:
+            if not await self._resume_pending(guest):
+                return
         if not guest.claude:
             return
         # QUEUED, not rejected. The user pressed Continue, or typed something;
@@ -2517,11 +2604,30 @@ class Bridge:
         process.
         """
         if self._models_cache is None:
+            if not guest.claude:
+                return []
             models = await guest.claude.server_models()
             if not models:
                 return []
             self._models_cache = models
         return self._models_cache
+
+    async def _commands(self, guest: GuestSession) -> list[dict]:
+        """The CLI's slash-command list, cached like `_models`.
+
+        Same lifetime and the same reason: it comes from the init result the
+        SDK cached at connect, so it cannot differ between calls within one
+        client, and a conversation with no client yet still has a Commands
+        menu to fill. Failure is not cached.
+        """
+        if self._commands_cache is None:
+            if not guest.claude:
+                return []
+            cmds = await guest.claude.server_commands()
+            if not cmds:
+                return []
+            self._commands_cache = cmds
+        return self._commands_cache
 
     async def _send_options(self, guest: GuestSession) -> None:
         """The model and effort menus, with the one in use marked.
@@ -2532,7 +2638,12 @@ class Bridge:
         "Default" does not tell you what you are talking to. The alias is
         resolved and the real model it points at is the one ticked.
         """
-        if not guest.claude:
+        # A conversation opened from the chat list has no client until the
+        # first message, and its menus must still be right: the model list is
+        # a property of the installed CLI, and mode and effort are the
+        # guest's own. `_models` answers from the cache in that state; only a
+        # bridge that has never built a session at all has nothing to say.
+        if not guest.claude and self._models_cache is None:
             return
         models = await self._models(guest)
 
@@ -2554,7 +2665,14 @@ class Bridge:
             current = (m.get("resolvedModel") or value) == in_use
             if current and chosen is None:
                 chosen = m
-            await self._send(guest, option("model", value, label, current))
+            # `description` rides as its own header, not folded into the
+            # label: the label is what the toolbar BUTTON shows, and "Haiku
+            # 4.5 - Fastest for quick answers" does not fit on a 640px screen
+            # while "Haiku" does. The menu shows both, which is where the
+            # question "which of these is which?" is actually asked -- four
+            # display names alone do not answer it.
+            await self._send(guest, option("model", value, label, current,
+                                           desc=m.get("description") or ""))
 
         # Effort is a property of the model: Haiku has none at all, so an
         # Effort menu offering five levels would be lying.
@@ -2585,7 +2703,7 @@ class Bridge:
         # have would fail as a typed prompt, several seconds later, with the
         # model apologising for it.
         have = {}
-        for c in await guest.claude.server_commands():
+        for c in await self._commands(guest):
             n = c.get("name")
             if isinstance(n, str) and n:
                 have["/" + n] = c.get("argumentHint") or ""
@@ -2609,13 +2727,24 @@ class Bridge:
         same conversation with fork_session=True. The fork is why the history
         survives and why the session id changes.
         """
-        if not guest.claude:
-            return
-        old = guest.claude.session_id
-        guest.effort = effort
         label = EFFORT_LABEL.get(effort, effort or "default")
-        log.info("effort -> %s (forking %s)", effort or "(default)", old)
 
+        # No client means a conversation opened from the chat list and not yet
+        # spoken in -- there is nothing to fork, and nothing needs forking.
+        # Record it and let the deferred resume start with it. Picking an
+        # effort there used to be a silent no-op.
+        if not guest.claude:
+            guest.effort = effort
+            log.info("effort -> %s (no client yet)", effort or "(default)")
+            await self._write_block(guest, H.notice(
+                "Effort set to " + label + "."))
+            await self._send_options(guest)
+            return
+
+        old = guest.claude.session_id
+        self._abandon_pending(guest)
+        guest.effort = effort
+        log.info("effort -> %s (forking %s)", effort or "(default)", old)
         await self._write_block(guest, H.notice(
             "Effort set to " + label
             + ". Effort cannot be changed on a running session, so this "
@@ -2666,8 +2795,13 @@ class Bridge:
     async def _new_session(self, guest: GuestSession) -> None:
         """Start a fresh conversation. There was no way to do this at all."""
         log.info("new session requested")
+        self._abandon_pending(guest)
         if guest.claude:
             await guest.claude.close()
+        # A fresh conversation is not a resumed one: whatever the chat list
+        # opened and never spoke in is abandoned here too, or the first
+        # message in the NEW chat would resume the OLD one.
+        guest.pending_resume = ""
 
         await guest.reset_transcript()
 
@@ -2709,20 +2843,24 @@ class Bridge:
         log.info("switching to session %s", session_id)
         await self._send(guest, notice("switching", "Loading conversation..."))
 
+        # Whatever the conversation being left behind still owes, it owes to a
+        # client that is about to stop existing. This used to happen inside
+        # _make_session, which this path no longer calls at all.
+        self._abandon_pending(guest)
         if guest.claude:
             await guest.claude.close()
+        guest.claude = None
+
+        # NOTHING IS SPAWNED HERE. Opening a conversation to read it used to
+        # start a full CLI subprocess with --resume: no turn ran and nothing
+        # was billed, but on a machine where the user browses the list to find
+        # something, every click paid for a process start. Replay is a file
+        # read. The client is built at the first message instead
+        # (_resume_pending), which is the first moment it can do anything.
+        guest.pending_resume = session_id
 
         # Fresh transcript state. Anything the old session had is on disk.
         await guest.reset_transcript()
-
-        try:
-            guest.claude = await self._make_session(guest, resume=session_id)
-        except Exception as exc:
-            log.exception("resume failed")
-            # Same channel as _new_session and _set_effort now (02.16).
-            await self._write_block(guest, H.error(
-                "Could not reopen the session: " + str(exc)[:160]))
-            return
 
         for block in sesslist.history_html(session_id):
             # Through _write_block, not pages.add (02.39): one path records a
@@ -2738,6 +2876,12 @@ class Bridge:
         # in between reads or writes it.
         await self._send(guest, switched(session_id, guest.pages.count))
         await self._send_page(guest, "live")
+        # The menus follow the conversation even though no client exists --
+        # the model list is a property of the CLI, not of a session, and mode
+        # and effort are the guest's own. _switch was the only session-
+        # changing path that never re-sent them (02.x); now it does, and from
+        # the cache rather than from a process it deliberately did not start.
+        await self._send_options(guest)
 
     async def _send_page(self, guest: GuestSession, want: str) -> None:
         """Render one page to the guest. LIVE is requested as page=live."""
@@ -2768,6 +2912,24 @@ class Bridge:
             # actually suspends any more than send_html's did on its own.
             await self.wire_yield(guest)
         await self._send(guest, pageend(page.number))
+
+        # An empty LIVE page is a conversation nobody has spoken in yet, and
+        # it looked exactly like a conversation whose transcript failed to
+        # arrive: PAGESTART clears the view, there are no runs, PAGEEND lands,
+        # and the reader is left facing a blank white rectangle. The cold-start
+        # placeholder the guest draws for itself (main.cpp, boot_local) is gone
+        # by then -- the first PAGESTART cleared it -- and "Connected to
+        # bridge." is gated on the FIRST connect, so New chat produced nothing
+        # at all.
+        #
+        # A NOTICE, not a recorded block: it belongs to this view of this
+        # moment, not to the transcript. Paginating it would put "Type a
+        # message to start." above the first reply for the rest of the
+        # conversation's life, and page 1 would still carry it when you paged
+        # back to it a thousand messages later.
+        if guest.view_page is None and not page.runs:
+            await self._send(guest, notice(
+                "empty", "Type a message below to start this conversation."))
 
     # --- sending -------------------------------------------------------
     #

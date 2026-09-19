@@ -142,6 +142,16 @@ class Paginator:
     def anchors(self) -> list[Anchor]:
         return list(self._anchors)
 
+    def all_text(self) -> str:
+        """Every page's HTML, in order, as one string.
+
+        For Export, which is the one caller that wants the whole transcript
+        rather than a page of it. Built here rather than by reaching into
+        `_pages` from outside, because "in order" is this class's business --
+        the live page is the last one, and that is not obvious from the API.
+        """
+        return "".join(p.text for p in self._pages)
+
     def page(self, number: int) -> Page | None:
         if 1 <= number <= len(self._pages):
             return self._pages[number - 1]

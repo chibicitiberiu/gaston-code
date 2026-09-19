@@ -730,10 +730,11 @@ would catch a violation already runs.
 
 ## 10. The Phase 4 settings dialog -- three layers, in a real order
 
-**Status:** recorded 2026-09-18, from audits 01.34, 04.13, 04.17 and 02.31.
-`IDM_HOST` is still a `MessageBoxA` telling the user to edit the INI by hand
-(`win/app/main.cpp:1717-1726`); `IDM_EXPORT` is a sibling case handled in §6
-above. These four findings describe the same object -- what a real
+**Status:** layers 1-3 CLOSED (4.0 and 4.1h); layer 4 open. Recorded
+2026-09-18, from audits 01.34, 04.13, 04.17 and 02.31. `IDM_HOST` WAS a
+`MessageBoxA` telling the user to edit the INI by hand; it is
+`rc_hostdlg_run` now (`win/app/hostdlg.cpp`). `IDM_EXPORT` is a sibling case
+handled in §6 above and is still open. These four findings describe the same object -- what a real
 `Server Host...` dialog needs -- at three different layers, with a real
 dependency order rather than a single combined cost.
 
@@ -765,6 +766,9 @@ try_connect();`) but it has nothing to attach to until either this dialog
 exists or R7 mints a `client_id` that needs persisting (§7 above) --
 whichever lands first should write it; building it speculatively before
 either does just leaves an unreachable function.
+**Closed 2026-09-19 by Phase 4.1h** (commit `e292b87`): the dialog landed and
+its OK handler is `rc_config_save`'s first caller against an existing file.
+Layer 3's backoff reset landed with it.
 
 **3. What the dialog itself still has to get right (01.34).** The naive OK
 handler -- `rc_config_save(); try_connect();` -- does not reset
@@ -794,9 +798,23 @@ Also lands here: Export as HTML, the permission rule
 table, R8's Command menu and per-model description text all currently point
 at `main.cpp` too, each another 60-150 lines into a file already at 1923
 lines (it was 1783 when 01.34 was written).
+**R8's Command menu landed 2026-09-19 (4.1f part 3) and did NOT go into
+`main.cpp`** -- it is a fourth bridge-driven menu in `app/optmenu.cpp` plus a
+button in `app/toolbar.cpp`, which is the shape the rest of this paragraph
+was warning about. The prediction was right about the pressure and wrong
+about where it would land.
 
 **4. The settings-dispatch shape a dialog's new frames would multiply
-(02.31).** `SETMODEL` and `SETEFFORT` are already two near-identical
+(02.31). STILL OPEN, and now three rather than two:** `SETMODE` landed
+2026-09-19 (4.1f part 2) as a third near-identical branch, delegating to
+`_set_mode` the way `SETEFFORT` delegates to `_set_effort`. The dispatch
+itself is a table now (`Bridge._DISPATCH`), so adding a type is one row
+rather than an if/elif arm, but there is still no `_apply_setting(name,
+value)` and each setting still writes its own notice, its own `_send_options`
+call and its own failure path. `SETMODEL` and `SETMODE` differ in whether
+they validate the value at all.
+
+Original text: `SETMODEL` and `SETEFFORT` are already two near-identical
 dispatch branches -- one inline (`server.py:1124-1129`), one delegated to
 `_set_effort` (`:1133-1134`, `_set_effort` itself at `:2200`) -- and a
 settings dialog's new `SET*` frames would add a third and fourth shape
@@ -839,16 +857,24 @@ Phase 6 relies on it, since this exact class of assumption was wrong once
 already. Nothing to build yet; something to verify before either Phase 4.5
 or Phase 6 ships.
 
-**04.23 -- no toolbar exists for Phase 5's attach control.**
-`win/app/main.cpp` builds a hand-written menu bar and individual buttons, no
-comctl32 toolbar (confirmed, ~`main.cpp:365-383`, `CreateMenu`/`AppendMenuA`
-only). Adding one plus R5's icon bitmaps is the first real GDI spend the
-project makes against the fixed 64KB USER heap -- the same constraint that
-already forced the chat list to stay a `LISTBOX` (`main.cpp:1384`,
-`LBS_OWNERDRAWFIXED`) rather than a `ListView`. Needs GDI-object counting
-before and after, since `GetFreeSystemResources` is already ruled out (9x-only
-16-bit export, no 32-bit equivalent worth resolving). Blocks Phase 5.1, not
-before.
+**04.23 -- CLOSED 2026-09-19 by Phase 4.1f.** Two comctl32 toolbars now
+exist (`win/app/toolbar.cpp`): the settings bar under the input box and a
+one-button New chat bar right-aligned on the page-bar row. Phase 5's attach
+control has somewhere to go.
+
+**The measurement this entry asked for could not be taken, and that is the
+part worth keeping.** It said `GetFreeSystemResources` was "already ruled out
+(9x-only 16-bit export, no 32-bit equivalent worth resolving)", which is half
+wrong: `win/checks/probe.c:75-93` already resolves it through `rsrc32.dll`
+and reports system/GDI/USER separately. But on this Win98 SE install the
+answer is `rsrc32.dll not present`, measured 2026-09-19 -- the Resource Meter
+is not installed, so there is no USER/GDI percentage to read without
+installing it first. What WAS measured, with only the app running (launched
+from Start > Run, no DOS box, no Explorer window): **5208 KB free at window
+creation, 4568 KB after the chat list, 4580 KB after a page**, against the
+2420/1060 marks recorded when the chat list landed. The toolbars are not a
+memory problem. Anyone who wants the USER split specifically has to install
+the Resource Meter on the guest first.
 
 **04.24 -- `off_limits` is not wired to a path that does not exist yet.**
 `off_limits` (`bridge/agent/permissions.py:220`) refuses path-tool calls

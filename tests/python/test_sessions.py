@@ -6,7 +6,7 @@ would break the whole chat list rather than one message.
 """
 
 from bridge.agent.sessions import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
-from bridge.agent.sessions import _text_of
+from bridge.agent.sessions import _compact_summary, _text_of
 
 
 def styles(runs):
@@ -135,3 +135,40 @@ def test_realistic_mixed_message():
     assert STYLE_PLAIN in styles(runs)
     assert STYLE_TOOL in styles(runs)
     assert "Read" in texts(runs)
+
+
+# --- the compaction summary -------------------------------------------------
+#
+# Restoring a compacted conversation used to open it with several kilobytes of
+# machine-written recap in a user bubble. On a 640x480 screen that is the whole
+# first page, and it is not something the user said.
+
+
+def test_the_compaction_opener_is_recognised():
+    text = ("This session is being continued from a previous conversation "
+            "that ran out of context. The summary below covers...")
+    assert _compact_summary({"role": "user", "content": text}) == text
+    assert _compact_summary({
+        "role": "user",
+        "content": [{"type": "text", "text": text}],
+    }) == text
+
+
+def test_an_assistant_quoting_the_opener_is_still_a_real_reply():
+    """This project's own transcripts quote that sentence while discussing
+    this very code. Role is what separates the synthetic message from a reply
+    about it."""
+    text = ("This session is being continued from a previous conversation -- "
+            "that is the string we match on.")
+    assert _compact_summary({"role": "assistant", "content": text}) is None
+
+
+def test_an_ordinary_user_message_is_not_a_summary():
+    assert _compact_summary({"role": "user", "content": "hello"}) is None
+    assert _compact_summary({"role": "user", "content": None}) is None
+    assert _compact_summary(None) is None
+    # A tool_result first block, not text: not a summary, and must not raise.
+    assert _compact_summary({
+        "role": "user",
+        "content": [{"type": "tool_result", "content": "x"}],
+    }) is None

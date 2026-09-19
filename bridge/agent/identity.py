@@ -42,6 +42,15 @@ class GuestIdentity:
     #: process so a reconnect or an effort fork keeps the choice.
     model: str = ""
     effort: str = ""
+    #: A conversation the guest has OPENED but not yet spoken in.
+    #:
+    #: Switching chats replays stored history and builds no SDK client, so
+    #: between the switch and the first message `claude` is None and this
+    #: holds the id the client will resume from. `conv_id` is the question
+    #: "which conversation is this" that everything else should ask, because
+    #: the answer lives in one of these two places depending on a state the
+    #: caller does not care about.
+    pending_resume: str = ""
     #: The permission mode the next session is built with, and the one the
     #: live client is currently in. Per guest for the same reason model and
     #: effort are: a switch, a new session and the effort fork all rebuild
