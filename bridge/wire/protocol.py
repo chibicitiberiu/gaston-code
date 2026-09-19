@@ -425,12 +425,21 @@ def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: bool,
              cwd: str = "") -> Frame:
     """The command goes in the BODY, never a header: a header value is
     truncated at 255 bytes silently, and a truncated command is still
-    EXECUTED -- `del c:\\temp\\*.tmp` cut short becomes `del c:\\temp\\*`."""
+    EXECUTED -- `del c:\\temp\\*.tmp` cut short becomes `del c:\\temp\\*`.
+
+    `encode_exact`, NOT `fold.encode`. This used to fold, which is the display
+    transliterator: it rewrote the command on its way to the wire, so the
+    bytes that ran were not the bytes anything had inspected. U+00B7 became
+    '.', U+2502 became '|', U+00BB became '>>'. See fold.encode_exact.
+
+    It raises on a character CP1252 cannot carry. Callers refuse; nobody
+    approximates a command line.
+    """
     headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
                "shell": "1" if shell else "0"}
     if cwd:
         headers["cwd"] = cwd
-    return Frame("EXEC", headers, fold.encode(command))
+    return Frame("EXEC", headers, fold.encode_exact(command))
 
 
 def exec_kill(exec_id: str) -> Frame:

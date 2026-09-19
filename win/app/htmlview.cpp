@@ -679,13 +679,36 @@ void rc_html::append(const char *frag)
 
 void rc_html::live(const char *frag)
 {
+    int bottom;
+
     if (!d->ready) return;
-    Bstr html(to_bstr(frag ? frag : ""));
+
+    /* Sample BEFORE the replace, and settle after -- the same order say()
+     * and block() have always used, which this function did not.
+     *
+     * It did not scroll at all. Streaming text therefore never followed, and
+     * worse, it broke the append path too: the live block grows the document
+     * without moving the view, so by the time the finished block arrives
+     * at_bottom() is already false and settle() declines. That is why
+     * autoscroll looked like it "stopped working" partway through a turn and
+     * then stayed stopped -- the finished answer was below the fold and the
+     * user had to press Ctrl+End to find it.
+     *
+     * Two COM round trips per streamed delta is the cost. Measured against
+     * the alternative of a timer, it is the cheaper one: at_bottom() already
+     * reads three properties off the same IHTMLElement2 the poll timer
+     * touches, and a 100ms timer that scrolls unconditionally would fight
+     * the user every time they scrolled up to read. */
+    bottom = at_bottom();
     {
+        Bstr html(to_bstr(frag ? frag : ""));
         HRESULT hr = IHTMLElement_put_innerHTML(d->slot_l.get(), html.get());
-        if (FAILED(hr))
+        if (FAILED(hr)) {
             rc_log("html: live FAILED hr=%08lX", (unsigned long)hr);
+            return;             /* nothing moved, so nothing to follow */
+        }
     }
+    settle(bottom);
 }
 
 void rc_html::clear()

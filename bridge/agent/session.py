@@ -24,6 +24,8 @@ from claude_agent_sdk import (
                               AssistantMessage,
                               ClaudeAgentOptions,
                               ClaudeSDKClient,
+                              ConversationResetMessage,
+                              RateLimitEvent,
                               ResultMessage,
                               StreamEvent,
                               SystemMessage,
@@ -322,6 +324,46 @@ class Session:
             return
 
         if isinstance(msg, ResultMessage):
+            return
+
+        # RateLimitEvent is INFORMATIONAL, and treating it as an error was a
+        # bug of mine from 3.4.
+        #
+        # The CLI emits it whenever rate-limit status TRANSITIONS, including
+        # into "allowed". It used to fall through to the catch-all below,
+        # which forwards only the class name -- so the bridge marked the turn
+        # degraded, printed "The model provider is rate limiting this account.
+        # The request may not have run", and on an output-less turn (a
+        # /compact, say) turn_verdict then reported a completed turn as
+        # failed. All three on turns that were fine.
+        #
+        # The payload was there the whole time and nobody read it: only
+        # `rejected` means anything was actually refused. Note the nesting --
+        # it is msg.rate_limit_info.status, not msg.status.
+        if isinstance(msg, RateLimitEvent):
+            info = getattr(msg, "rate_limit_info", None)
+            status = str(getattr(info, "status", "") or "")
+            log.info("rate limit: status=%s utilization=%s", status,
+                     getattr(info, "utilization", None))
+            if self.on_system:
+                await self.on_system("rate_limit", {
+                    "status": status,
+                    "utilization": getattr(info, "utilization", None),
+                    "resets_at": getattr(info, "resets_at", None),
+                })
+            return
+
+        # Emitted after /clear. The other live fall-through, and it would
+        # have misfired exactly the same way: a reset produces no text and no
+        # tool call, so it looked like a degraded turn that answered nothing.
+        if isinstance(msg, ConversationResetMessage):
+            new_id = getattr(msg, "new_conversation_id", "") or ""
+            log.info("conversation reset: new id %s", new_id or "(none)")
+            if new_id:
+                self._session_id = new_id
+            if self.on_system:
+                await self.on_system("conversation_reset",
+                                     {"new_conversation_id": new_id})
             return
 
         # NOT log.debug, and this is a bug that cost a real message.

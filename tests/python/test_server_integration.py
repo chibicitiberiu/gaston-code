@@ -1469,3 +1469,68 @@ async def test_a_measured_link_speed_reaches_the_codec_choice(harness):
         "link speed is recorded but does not affect the codec choice, which "
         "means the adaptive path is still inert")
     await harness.close(writer)
+
+
+# --- the wire must not rewrite a command -------------------------------------
+#
+# EXEC used fold.encode -- the DISPLAY transliterator -- for three phases, so
+# the bridge rewrote the command between the moment anything could inspect it
+# and the moment the guest ran it. Found by a red team against the
+# path-containment guard, which it defeated completely: a guard that parses
+# the pre-fold string parses a different program from the one that runs.
+
+
+async def test_a_command_the_wire_would_rewrite_is_refused(harness):
+    """U+2044 FRACTION SLASH folded to '/' -- a path separator invented from
+    nothing, which is the exact wording paths.py:16 already used to warn about
+    this for sync paths. Nobody noticed EXEC did it too.
+
+    The refusal must happen on the bridge and name the character. The guest
+    cannot help here: by the time it sees the body the substitution has
+    already happened and the bytes look deliberate.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    out = await harness.bridge.run_on_guest(
+        "type c:\\work\u2044..\u2044windows\\win.ini",
+        timeout_ms=5000, shell=True, cwd="")
+
+    assert out["isError"] is True
+    text = out["content"][0]["text"]
+    assert "U+2044" in text
+    assert "Nothing was run" in text
+    await harness.close(writer)
+
+
+async def test_an_unrepresentable_cwd_is_refused(harness):
+    """`cwd` travels as a header, and _quote still folds -- correctly, for
+    every other header, which carries prose. So the check lives here rather
+    than in the quoting."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    out = await harness.bridge.run_on_guest(
+        "ver", timeout_ms=5000, shell=True, cwd="c:\\w\u2502rk")
+
+    assert out["isError"] is True
+    assert "U+2502" in out["content"][0]["text"]
+    await harness.close(writer)
+
+
+async def test_a_cp1252_command_still_runs(harness):
+    """The refusal must not catch accented names, which are ordinary on a
+    CP1252 box. Asserted by watching the EXEC frame leave with the real
+    bytes -- 0xE9, not 'e'."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    task = asyncio.create_task(harness.bridge.run_on_guest(
+        "type c:\\caf\u00e9.txt", timeout_ms=5000, shell=True, cwd=""))
+    frame = await _recv(harness, reader, "EXEC")
+    assert frame.body == b"type c:\\caf\xe9.txt"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await _recv(harness, reader, "EXECKILL")
+    await harness.close(writer)

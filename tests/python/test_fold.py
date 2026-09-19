@@ -186,3 +186,57 @@ def test_nothing_in_the_80_9f_range_survives_folding():
 def test_latin1_accents_are_left_alone():
     """Above 0xA0 the font is fine, so folding there would be vandalism."""
     assert fold("café naïve über") == "café naïve über"
+
+
+# --- the RPC path must not be folded -----------------------------------------
+#
+# Everything above is about the display path, where an approximate glyph beats
+# no glyph. These are the opposite contract, and they exist because EXEC used
+# encode() for three phases: the bridge REWROTE the command between the moment
+# anything could inspect it and the moment the guest ran it. Found by a red
+# team against the path-containment guard, not by this suite.
+
+
+def test_encode_exact_never_invents_dos_syntax():
+    """The four folds that matter, each of which invents DOS syntax.
+
+    A guard that parses the pre-fold string is parsing a different program
+    from the one that runs, and no amount of hardening its separator set or
+    its `..` resolver can see through that.
+
+    Note the two outcomes, and that BOTH are correct. U+2044 and U+2502 have
+    no CP1252 byte, so encode_exact refuses. U+00B7 and U+00BB DO have one
+    (0xB7, 0xBB) and pass through as themselves -- fold rewrites them anyway,
+    because _fold_char puts the explicit map ahead of the passthrough. What
+    the RPC path needs is not "refuse more", it is "never substitute": the
+    guest must receive the byte the model wrote, or nothing.
+    """
+    from bridge.wire.fold import encode_exact
+
+    for ch, invented in (("\u00b7", b"."), ("\u2044", b"/"),
+                         ("\u2502", b"|"), ("\u00bb", b">>")):
+        assert encode(ch) == invented, "fold no longer rewrites this"
+        try:
+            out = encode_exact(ch)
+        except UnicodeEncodeError:
+            continue                      # refused; nothing was invented
+        assert out != invented, f"U+{ord(ch):04X} still became {invented!r}"
+        assert out == ch.encode("cp1252")
+
+
+def test_encode_exact_passes_everything_cp1252_can_carry():
+    from bridge.wire.fold import encode_exact
+
+    assert encode_exact("dir c:\\work") == b"dir c:\\work"
+    # Accented names are real on a CP1252 box and must not be refused.
+    assert encode_exact("type c:\\caf\xe9.txt") == "type c:\\café.txt".encode("cp1252")
+
+
+def test_unrepresentable_names_the_character():
+    from bridge.wire.fold import unrepresentable
+
+    assert unrepresentable("dir c:\\work") is None
+    assert unrepresentable("caf\xe9") is None
+    assert unrepresentable("del x\u2044y") == "\u2044"
+    # The FIRST one, so the message names what the reader will look for.
+    assert unrepresentable("a\u2502b\u2044c") == "\u2502"

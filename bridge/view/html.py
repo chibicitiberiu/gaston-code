@@ -355,7 +355,16 @@ class HtmlStream:
 # Sizes are in points against an 8pt UI font, because the whole layout has to
 # work in a 470px column on a 640x480 screen.
 STYLESHEET = """
-body { font: 8pt 'MS Sans Serif', sans-serif; background: #ffffff;
+/* Verdana, not MS Sans Serif, and the reason is italics.
+   MS Sans Serif is a bitmap .FON with no italic face, so GDI fakes one by
+   shearing the glyph grid -- which is what made emphasis look broken. It is
+   not a smoothing problem, and smoothing is unavailable at 8bpp anyway.
+   Measured on the guest: C:\WINDOWS\FONTS carries VERDANA, VERDANAB,
+   VERDANAI and VERDANAZ, so the italic and bold-italic faces are real ones.
+   Verdana was drawn for small unsmoothed screen type, which is exactly this.
+   (Tahoma would not do: it ships bold only, same defect.)
+   MS Sans Serif stays as the fallback for a guest without IE's font set. */
+body { font: 8pt Verdana, 'MS Sans Serif', sans-serif; background: #ffffff;
        color: #000000; margin: 0; padding: 6px 9px 24px 9px; }
 p  { margin: 0 0 7px 0; line-height: 1.35; }
 h3, h4, h5, h6 { font-size: 9pt; margin: 12px 0 5px 0; padding-bottom: 2px;
@@ -400,14 +409,31 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
         background: #f2f7f2; border-left: 2px solid #008000;
         padding: 3px 6px; margin: 6px 0; }
 .toolname { font-weight: bold; }
+/* `overflow: auto` AND `width: 100%`, the same pair as .codewrap above and
+   for the same reason -- PROGRESS.md records that the width was required, not
+   decorative. This block used to have neither, while its `pre` asked for
+   `pre-wrap` and `word-wrap`, which the comment twenty lines up says IE5 does
+   not have. So command output could not wrap and had no box to scroll inside,
+   and the whole TRANSCRIPT got the horizontal scrollbar -- which then stayed
+   for the rest of the conversation. The first line of a capped result reads
+   "Output was capped at 32KB by the connected machine and trun", cut off at
+   the right edge: the most important line in the block was the one you could
+   not read.
+
+   The two wrapping declarations are kept. `word-wrap: break-word` is a
+   Microsoft extension that shipped in IE 5.5, and the guest's mshtml version
+   is not pinned anywhere in this repo -- so on 5.5 they wrap and the box
+   never needs to scroll, and on 5.0 they are ignored and it does. Either way
+   the document no longer moves. */
 .toolresult { font: 8pt 'Courier New', monospace; color: #303030;
               background: #f4f4f4; border-left: 3px solid #b0b0b0;
-              padding: 2px 6px; margin: 2px 0 6px 0; }
+              padding: 2px 6px; margin: 2px 0 6px 0;
+              overflow: auto; width: 100%; }
 .toolresult pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; }
 .toolresult.err { color: #a00000; background: #fff0f0;
                   border-left-color: #a00000; }
 .clip { color: #808080; font-style: normal; margin-top: 2px; }
-.notice { color: #808080; font-style: italic; margin: 6px 0; }
+.notice { color: #808080; margin: 6px 0; }
 .err { color: #a00000; background: #fff0f0; border-left: 3px solid #a00000;
        padding: 4px 6px; margin: 7px 0; font-weight: bold; }
 

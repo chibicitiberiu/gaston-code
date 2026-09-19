@@ -153,6 +153,46 @@ def encode(text: str) -> bytes:
     return fold(text).encode("cp1252", errors="replace")
 
 
+def unrepresentable(text: str) -> str | None:
+    """The first character CP1252 cannot carry, or None if it can carry all.
+
+    For naming the offending character in a refusal. Checked one character at
+    a time rather than by catching UnicodeEncodeError on the whole string,
+    because the exception's `start` offset is into the string we are about to
+    stop using and the caller wants the character, not an index.
+    """
+    for ch in text:
+        try:
+            ch.encode("cp1252")
+        except UnicodeEncodeError:
+            return ch
+    return None
+
+
+def encode_exact(text: str) -> bytes:
+    """Encode for the RPC path: no transliteration, and a refusal rather than
+    a rewrite. Raises UnicodeEncodeError.
+
+    This is the counterpart to encode() and the module docstring's rule --
+    "Anything on the RPC path stays UTF-8 and is not touched by this module"
+    -- made available rather than merely asserted. EXEC used encode() for
+    three phases, which meant the bridge silently REWROTE the command between
+    the moment anything inspected it and the moment the guest ran it:
+
+        typed:  del c:\\work\\<U+00B7><U+00B7>\\<U+00B7><U+00B7>\\windows\\win.ini
+        ran:    del c:\\work\\..\\..\\windows\\win.ini
+
+    U+00B7 folds to '.', U+2502 folds to '|', U+00BB folds to '>>' and U+2044
+    folds to '/' -- a path separator, a pipe and a redirection invented from
+    nothing. paths.py:16 already warns about exactly this for sync paths.
+
+    Folding is right for prose, where the alternative to an approximate glyph
+    is no glyph. It is wrong for anything executable, where the alternative to
+    an approximate command is a command the user did not write.
+    """
+    return text.encode("cp1252")
+
+
 def decode(data: bytes) -> str:
     """Guest -> bridge. Command output, window titles, filenames and typed
     input all arrive as CP1252 bytes.

@@ -808,6 +808,26 @@ class Bridge:
         async def on_system(subtype: str, data: dict) -> None:
             if subtype == "compact_boundary":
                 await self._write_block(guest, H.notice("History condensed."))
+            elif subtype == "rate_limit":
+                # Only "rejected" means anything was refused. The CLI emits
+                # this on every status TRANSITION, including into "allowed",
+                # and treating all of them as trouble is what put "the request
+                # may not have run" under turns that ran perfectly -- and, on
+                # an output-less turn, reported a completed one as failed.
+                #
+                # Deliberately NOT marking the turn degraded on a warning.
+                # `allowed_warning` means the account is near a ceiling, which
+                # is worth knowing and is not a reason to disbelieve an answer
+                # the user can read on the same screen.
+                status = str(data.get("status") or "")
+                if status == "rejected":
+                    guest.turn_degraded = "rate_limited"
+                    await self._write_block(guest, H.notice(
+                        "The model provider refused this request: the "
+                        "account is over its rate limit. Nothing ran -- try "
+                        "again shortly."))
+            elif subtype == "conversation_reset":
+                await self._write_block(guest, H.notice("Conversation reset."))
             elif subtype == "sdk_event":
                 # An SDK message the session layer does not handle. It used to
                 # be a DEBUG line and nothing else, which meant a
@@ -815,17 +835,17 @@ class Bridge:
                 # the user's prompt apparently ignored. Whatever it is, saying
                 # so beats silence -- the turn may well produce nothing after
                 # it, and an unexplained no-op is the worst possible answer.
+                #
+                # RateLimitEvent and ConversationResetMessage used to arrive
+                # here; both have real branches in session.py now. What is
+                # left is genuinely unknown, which is the only case where
+                # "assume the worst" is the right reading.
                 event = str(data.get("event", "")) or "an unknown event"
                 guest.turn_degraded = event
-                if event == "RateLimitEvent":
-                    await self._write_block(guest, H.notice(
-                        "The model provider is rate limiting this account. "
-                        "The request may not have run -- try again shortly."))
-                else:
-                    await self._write_block(guest, H.notice(
-                        f"The agent reported {event}, which this bridge does "
-                        f"not handle yet. If nothing follows, the request did "
-                        f"not run."))
+                await self._write_block(guest, H.notice(
+                    f"The agent reported {event}, which this bridge does "
+                    f"not handle yet. If nothing follows, the request did "
+                    f"not run."))
             elif subtype == "init":
                 # The conversation id becomes known HERE, not at start().
                 #
@@ -965,7 +985,17 @@ class Bridge:
         if session is None or not getattr(session, "busy", False):
             return
         log.info("re-issuing turn state after reconnect")
+        # Both halves, not one.
+        #
+        # This reset `turn_produced` alone, which meant a guest that blipped
+        # AFTER the model had already streamed text came back looking like a
+        # turn that had answered nothing -- and then any stale `turn_degraded`
+        # turned that into a reported failure under a visible answer. The
+        # verdict needs the two fields to agree about which turn they
+        # describe, and the only honest answer here is "we stopped watching",
+        # which is what clearing both says.
         guest.turn_produced = False
+        guest.turn_degraded = ""
         await self._send(guest, turn_start())
 
     def _spawn(self, coro) -> None:
@@ -1379,7 +1409,14 @@ class Bridge:
             await self._write_block(guest, H.user_turn(text), stream=False)
         await self._send(guest, anchor_frame(
             anchor.page, anchor.offset, anchor.preview))
+        # Cleared at the START of a turn, not only at its end.
+        #
+        # `turn_degraded` used to be cleared only after a verdict was taken,
+        # so a turn whose `send()` RAISED returned early (see the except
+        # below) and left the event name set -- and the NEXT turn, which had
+        # nothing to do with it, was judged against it.
         guest.turn_produced = False
+        guest.turn_degraded = ""
         await self._send(guest, turn_start())
         # Anything sync found while the agent was idle rides in on this turn.
         #
@@ -1477,6 +1514,35 @@ class Bridge:
             exec_id = f"x{guest.exec_seq}"
             fut = asyncio.get_running_loop().create_future()
             guest.exec_pending[exec_id] = ExecCall(future=fut)
+
+            # Refuse a command the wire would REWRITE.
+            #
+            # Header values and, until this was fixed, the EXEC body went
+            # through fold -- the display transliterator -- which turns
+            # U+00B7 into '.', U+2502 into '|', U+00BB into '>>' and U+2044
+            # into '/'. So a command could be inspected in one form and
+            # executed in another: `del c:\work\<U+00B7><U+00B7>\..` arrives
+            # at the guest as `del c:\work\..\..`, with a path separator and
+            # a parent-directory hop invented between the two.
+            #
+            # exec_cmd now raises instead of folding, and `cwd` is checked
+            # here because it travels as a header and _quote still folds --
+            # correctly, for every other header, which carries prose.
+            #
+            # Refusing rather than stripping: the model did not type these by
+            # accident, and a command with characters removed is no more the
+            # command it wrote than one with characters added.
+            for label, value in (("command", command), ("cwd", cwd)):
+                bad = fold.unrepresentable(value)
+                if bad is None:
+                    continue
+                return {"content": [{"type": "text", "text": (
+                    f"That {label} contains {bad!r} (U+{ord(bad):04X}), which "
+                    f"the machine's codepage cannot represent. Nothing was "
+                    f"run. Rewrite it using plain ASCII -- do not assume a "
+                    f"lookalike character will be understood, because the "
+                    f"machine will read whatever byte it is given.")}],
+                    "isError": True}
 
             if cwd:
                 # Refuse rather than let the guest drop the frame.
