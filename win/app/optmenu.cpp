@@ -12,8 +12,10 @@ static void clear_popup(HMENU m)
 }
 
 rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_)
-    : n_model(0), n_effort(0), opts_open(0), owner(owner_), send(send_)
+    : n_model(0), n_effort(0), effort_ok(0), opts_open(0), owner(owner_),
+      send(send_)
 {
+    cur_model[0] = cur_effort[0] = '\0';
     /* The Model and Effort menus are built from what the bridge sends, so the
      * lists can change without rebuilding this binary. */
     menu_model = CreatePopupMenu();
@@ -47,10 +49,13 @@ int rc_optmenu::frame(rc_frame *f)
             clear_popup(menu_effort);
             n_model = 0;
             n_effort = 0;
+            effort_ok = 0;
+            cur_model[0] = cur_effort[0] = '\0';
         }
         if (kind && id && label) {
             if (strcmp(kind, "model") == 0 && n_model < MAX_OPTS) {
                 rc_strf(opt_model[n_model], 64, "%s", id);
+                if (on) rc_strf(cur_model, sizeof(cur_model), "%s", label);
                 AppendMenuA(menu_model,
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
                             IDM_MODEL0 + n_model, label);
@@ -62,7 +67,9 @@ int rc_optmenu::frame(rc_frame *f)
                 const char *dis = rc_frame_get(f, "disabled");
                 UINT flags = MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED);
                 if (dis && *dis == '1') flags |= MF_GRAYED;
+                else effort_ok = 1;
                 rc_strf(opt_effort[n_effort], 64, "%s", id);
+                if (on) rc_strf(cur_effort, sizeof(cur_effort), "%s", label);
                 AppendMenuA(menu_effort, flags,
                             IDM_EFFORT0 + n_effort, label);
                 n_effort++;

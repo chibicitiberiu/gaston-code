@@ -1,0 +1,97 @@
+/* The toolbar under the input box.
+ *
+ * It exists to answer one question the menus could not: at the moment you
+ * press Send, what settings is this going to run with? A menu you have to
+ * open to see a tick mark does not answer it. So the button's TEXT IS THE
+ * VALUE -- "Haiku", "medium" -- and the dropdown is how you change it.
+ *
+ * LAYOUT, and why it is this shape. Seven labelled dropdowns were costed at
+ * roughly 662px against a 640px screen, which does not fit. Three changes
+ * bring it to about 367:
+ *
+ *   * the value alone is the label -- no "Model:" prefix
+ *   * no image on the dropdowns that carry text; they have no sensible icon
+ *     and the 16px bitmap plus padding is ~26px each that buys nothing
+ *   * the bridge's displayName, not the resolved model id, which is 20+
+ *     characters (_send_options resolves aliases deliberately; showing the
+ *     short name does not undo that, it just stops shouting it)
+ *
+ * WHAT IS ON IT TODAY: Model, Effort and New chat. Mode wants a frame type
+ * and a Session method that do not exist yet (set_permission_mode is in the
+ * SDK but not exposed by bridge/agent/session.py), Commands wants the live
+ * list out of get_server_info(), and Attach is Phase 5. Each lands as its own
+ * change so the width budget above is re-measured against the real thing
+ * rather than against this estimate.
+ *
+ * The Effort button HIDES itself when the chosen model has no effort levels
+ * -- Haiku has none, and the bridge says so with one greyed menu row. The
+ * width jitter that costs is the same jitter a value-as-label button has
+ * anyway; a button that can only read "(effort)" is worse.
+ *
+ * TBSTYLE_WRAPABLE is deliberately NOT used. With the value as the label the
+ * button widths change whenever a value does, so the wrap point could flip
+ * between one and two rows mid-conversation, re-running layout() and
+ * resizing the MSHTML control under the reader.
+ *
+ * It sits BELOW the input row, which knowingly amends a rule written in
+ * blood: "The input row NEVER moves" (main.cpp), added after an earlier bar
+ * drawn below it covered the Stop button -- the one control you need while a
+ * request is pending. That was a z-order bug; this is arithmetic, the input
+ * row moves up as a whole, and Stop is positioned from the same `y`. The
+ * permission bar still docks above the input, so nothing here collides with
+ * it.
+ */
+#ifndef RC_TOOLBAR_H
+#define RC_TOOLBAR_H
+
+#ifndef __cplusplus
+#error "toolbar.h is C++"
+#endif
+
+#include <windows.h>
+#include "net/frameproto.h"
+
+class rc_optmenu;
+
+/* Its height, which layout() must reserve. 22 for the control plus a
+ * gutter; measured against the 640x480 budget, this costs the transcript
+ * about two lines and nothing else has to shrink. */
+#define TOOLBAR_H 26
+
+/* Command ids. Above the bar/pagebar/input ranges and below IDM_MODEL0. */
+#define ID_TB_MODEL  1020
+#define ID_TB_EFFORT 1021
+#define ID_TB_NEW    1022
+
+class rc_toolbar {
+    HWND bar;
+    rc_optmenu *opts;
+    HWND owner;
+
+    rc_toolbar(const rc_toolbar &);
+    rc_toolbar &operator=(const rc_toolbar &);
+    rc_toolbar() : bar(0), opts(0), owner(0) {}
+
+public:
+    /* `opts_` is borrowed, not owned: the toolbar pops that module's menus
+     * rather than building its own, so there is one list and one tick. */
+    static rc_toolbar *create(HWND parent, HINSTANCE inst, HFONT font,
+                              rc_optmenu *opts_);
+    ~rc_toolbar();
+
+    void move(int x, int y, int w);
+
+    /* Re-read the current model/effort from the option menus and re-label.
+     * Called on OPTIONSEND, which is when those can have changed. */
+    void refresh();
+
+    /* WM_NOTIFY. Non-zero if this was ours (TBN_DROPDOWN on our bar). */
+    int notify(NMHDR *nh);
+
+    /* WM_COMMAND. Non-zero if `id` was one of ours. */
+    int command(int id);
+
+    HWND hwnd() const { return bar; }
+};
+
+#endif

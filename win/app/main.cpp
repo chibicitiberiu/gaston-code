@@ -29,6 +29,7 @@
 #include "app/input.h"
 #include "app/resource.h"
 #include "app/hostdlg.h"
+#include "app/toolbar.h"
 
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
@@ -79,6 +80,7 @@ static rc_bar  *g_bar;
 static rc_chats *g_chats;
 static rc_xferstat *g_xfer;
 static rc_input    *g_inputmod;
+static rc_toolbar  *g_toolbar;
 /* The accelerator table. Loaded once in WinMain; owned by the module, so it
  * is not destroyed (DestroyAcceleratorTable is for CreateAcceleratorTable). */
 static HACCEL       g_accel;
@@ -648,6 +650,11 @@ static void on_turn(rc_frame *f)
 static void on_optmenu(rc_frame *f)
 {
     if (g_optmenu) g_optmenu->frame(f);
+    /* The toolbar shows the ticked entries as its button text, so it has to
+     * be told when a batch lands. Cheap enough to do on every OPTION row
+     * rather than only OPTIONSEND: re-labelling is two TB_SETBUTTONINFO
+     * calls and the batch is a handful of frames once per session. */
+    if (g_toolbar) g_toolbar->refresh();
 }
 
 /* app/chatlist.h's `switched` callback: a SWITCHED frame has already been
@@ -906,7 +913,12 @@ static void layout(HWND hwnd)
      * so the one control you need while a request is pending was the one that
      * disappeared. The bar docks to the bottom of the transcript instead, and
      * only the transcript gets shorter. */
-    y = h - INPUT_HEIGHT - GUTTER;
+    /* The toolbar sits between the input row and the status bar, so the
+     * input row DOES move now -- see app/toolbar.h for why that is a
+     * deliberate amendment to the rule above and not a re-run of the bug it
+     * was written for. Stop is positioned from this same `y`, so it moves
+     * with the row rather than being left behind by it. */
+    y = h - INPUT_HEIGHT - GUTTER - (g_toolbar ? TOOLBAR_H : 0);
     ybar = (g_bar && g_bar->active()) ? (y - PERM_H - GUTTER) : y;
 
     /* Chat list down the left, with its Refresh button under it -- both
@@ -931,6 +943,11 @@ static void layout(HWND hwnd)
         /* The input box, Send and Stop position their own three controls
          * now -- app/input.cpp, see app/input.h. */
         if (g_inputmod) g_inputmod->move(cx, y, cw, w);
+        /* In the TRANSCRIPT column, not across the full width: the chat
+         * list's Refresh button sits at the bottom of the left column and a
+         * full-width bar draws straight over it. */
+        if (g_toolbar)
+            g_toolbar->move(cx, h - TOOLBAR_H, cw);
     }
 }
 
@@ -956,6 +973,15 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 {
     int parts[4];
     NONCLIENTMETRICSA ncm;
+
+    /* The menu bar FIRST, because the toolbar below borrows the Model and
+     * Effort popups that build_menu creates. This used to run from WinMain
+     * after CreateWindowEx returned, which left g_optmenu NULL for the whole
+     * of create_children -- the toolbar took the NULL, kept it, and its two
+     * dropdowns read "(model)"/"(effort)" for the rest of the session while
+     * the menu bar two inches above showed Haiku ticked. SetMenu before the
+     * window is shown needs no DrawMenuBar. */
+    build_menu(hwnd);
 
     memset(&ncm, 0, sizeof(ncm));
     ncm.cbSize = sizeof(ncm);
@@ -1048,6 +1074,11 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_inputmod = rc_input::create(hwnd, inst, g_ui_font, &g_net, g_html,
                                   g_xfer, ui_send,
                      input_blocked, input_sent);
+
+    /* After the option menus, because it borrows their HMENUs and their
+     * current labels rather than keeping its own copy. */
+    g_toolbar = rc_toolbar::create(hwnd, inst, g_ui_font, g_optmenu);
+    if (!g_toolbar) rc_log("toolbar: not created; settings stay on the menus");
 
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
@@ -1151,6 +1182,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      * you are connected to, is the shortest path anyone will look for. */
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lp;
+        if (g_toolbar && g_toolbar->notify(nh)) return 0;
         if (nh && nh->hwndFrom == g_status && nh->code == NM_DBLCLK) {
             NMMOUSE *nm = (NMMOUSE *)lp;
             if (nm->dwItemSpec == 0) {
@@ -1248,6 +1280,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_NEXT:
         case ID_LAST:
             if (g_pagebar) g_pagebar->command(id);
+            return 0;
+        case ID_TB_NEW:
+            if (g_toolbar) g_toolbar->command(ID_TB_NEW);
             return 0;
         case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
 
@@ -1389,6 +1424,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_inputmod = NULL;
         delete g_xfer;
         g_xfer = NULL;
+        delete g_toolbar;
+        g_toolbar = NULL;
         delete g_optmenu;
         g_optmenu = NULL;
         delete g_pagebar;
@@ -1569,7 +1606,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     g_accel = LoadAcceleratorsA(inst, MAKEINTRESOURCE(IDA_MAIN));
     if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
 
-    build_menu(g_main);
+    /* build_menu moved into create_children (WM_CREATE) -- see the comment
+     * there; the toolbar has to be able to see the option menus. */
     ShowWindow(g_main, show);
     UpdateWindow(g_main);
 

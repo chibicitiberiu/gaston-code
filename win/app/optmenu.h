@@ -44,6 +44,17 @@ class rc_optmenu {
     char  opt_model[MAX_OPTS][64];
     char  opt_effort[MAX_OPTS][64];
     int   n_model, n_effort;
+    /* The LABELS of the checked entries, which is what the toolbar shows.
+     * The label is the bridge's displayName ("Haiku"), not the resolved id
+     * ("claude-haiku-4-5-20251001") -- _send_options resolves aliases on
+     * purpose, and the resolved form is 20+ characters, which does not fit
+     * a toolbar button on a 640px screen. */
+    char  cur_model[64], cur_effort[64];
+    /* Non-zero once the batch has offered at least one effort level that is
+     * not greyed out. Haiku has none, and the bridge says so with a single
+     * disabled row -- a toolbar button reading "(effort)" forever is worse
+     * than no button, so the toolbar hides it. */
+    int   effort_ok;
     int   opts_open;   /* mid-batch, so the next model row appends */
     HWND  owner;
     rc_optmenu_send_fn send;
@@ -72,6 +83,15 @@ public:
      * non-zero if `id` fell in either (whether or not it was actually
      * sent). */
     int command(int id);
+
+    /* For the toolbar, which pops these same menus rather than building its
+     * own. One source of truth for what the lists contain and which entry is
+     * ticked; the toolbar is another way to reach them, not another copy. */
+    HMENU model_menu() const  { return menu_model; }
+    HMENU effort_menu() const { return menu_effort; }
+    const char *model_label() const  { return cur_model; }
+    const char *effort_label() const { return cur_effort; }
+    int has_effort() const { return effort_ok; }
 };
 
 #endif
