@@ -1433,6 +1433,10 @@ class Bridge:
         guest.turn_produced = False
         guest.turn_degraded = ""
         await self._send(guest, turn_start())
+        # Captured BEFORE _with_sync_preamble rewrites `text`: the preamble is
+        # prepended, so the leading "/" this is testing for would no longer be
+        # leading by the time the turn ends.
+        was_command = text.lstrip().startswith("/")
         # Anything sync found while the agent was idle rides in on this turn.
         #
         # `_run_turn` is the only path into a session, and it fires only on
@@ -1485,6 +1489,19 @@ class Bridge:
         guest.turn_degraded = ""
         ok, subtype = turn_verdict(turn.ok, degraded, guest.turn_produced,
                                    turn.subtype)
+        # A slash command that answered nothing.
+        #
+        # The CLI resolves some commands entirely locally and sends no message
+        # back at all. Measured on the guest: /recap and /usage each cost a
+        # turn and left the transcript blank, and a /compact that declines
+        # looks exactly like one that ran. Those two are off the Commands menu
+        # now (COMMAND_MENU), but a command can also be TYPED, and the install
+        # decides which ones exist -- so the silence is worth naming wherever
+        # it happens. "Nothing happened" and "it worked" must not look alike.
+        if ok and was_command and not guest.turn_produced:
+            await self._write_block(guest, H.notice(
+                "That command finished without sending anything back. Some "
+                "commands only affect the session itself."))
         # How full the context window is, asked at the one moment it has
         # just changed and the guest is already listening. A live control
         # request, NOT ResultMessage.model_usage -- that is cumulative over
@@ -2562,6 +2579,26 @@ class Bridge:
             await self._send(guest, option(
                 "mode", mode, MODE_LABEL.get(mode, mode),
                 mode == guest.perm_mode))
+
+        # Intersected with what this CLI actually offers rather than sent from
+        # the table alone: a menu entry for a command the install does not
+        # have would fail as a typed prompt, several seconds later, with the
+        # model apologising for it.
+        have = {}
+        for c in await guest.claude.server_commands():
+            n = c.get("name")
+            if isinstance(n, str) and n:
+                have["/" + n] = c.get("argumentHint") or ""
+        for cmd in COMMAND_MENU:
+            if cmd not in have:
+                continue
+            # The hint goes in the LABEL, because the menu is where the
+            # question "what does this one take?" is actually asked. The id
+            # stays the bare command -- it is what gets sent.
+            hint = have[cmd]
+            label = (cmd + " " + hint) if hint else cmd
+            await self._send(guest, option("command", cmd, label, False,
+                                           hint=hint))
         await self._send(guest, optionsend())
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
@@ -2779,6 +2816,42 @@ EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
 MODE_ORDER = ["default", "acceptEdits", "plan"]
 MODE_LABEL = {"default": "Manual", "acceptEdits": "Accept edits",
               "plan": "Plan"}
+
+# Slash commands offered on the Commands menu, in menu order.
+#
+# THREE OF FIFTY-THREE, and the ratio is the point. The CLI's own list is
+# whatever the operator's install happens to carry -- on the machine this was
+# written against: plugin management, cloud workflows billed by the run, a JS
+# heap dump written to the operator's Desktop, three ways to grant a web
+# service access to a design system. None of that means anything on a Win98
+# box, and some of it spends money or touches the bridge host.
+#
+# There is no SDK list to lean on. `terminal_slash_commands` was assumed to
+# exist and does not (see Session.server_commands). So the subset is ours, and
+# the rule for adding to it is: does this do something a person sitting at a
+# 640x480 screen with no terminal actually wants, that no other control here
+# already does, without spending money by surprise?
+#
+# Deliberately NOT here, so nobody "completes" the list:
+#   /model, /effort     the toolbar owns those. Going through the CLI would
+#                       change the model WITHOUT a SETMODEL frame, so the
+#                       dropdown would keep showing the old one -- a control
+#                       that lies is worse than one that is missing.
+#   /clear              New chat already does it, through a path that resets
+#                       the transcript and the paginator too.
+#   /context            the status bar has the gauge.
+#   /code-review, /security-review, /ultrareview
+#                       cloud agents billed per run, launched by one click on
+#                       a machine whose owner cannot see what they cost.
+#   /doctor, /config, /mcp, /reload-plugins, /import, /heapdump, /fast, /color
+#                       operator-environment features. They configure or
+#                       inspect the BRIDGE HOST, which is not the machine the
+#                       person at the keyboard is sitting at.
+#   /recap, /usage      MEASURED on the guest: both ran, both cost a turn,
+#                       and both rendered an empty transcript. The CLI
+#                       resolves them locally and sends nothing back. They
+#                       were on this list until they were tried.
+COMMAND_MENU = ["/compact", "/rename", "/init"]
 
 
 def _summarise(args: dict) -> str:

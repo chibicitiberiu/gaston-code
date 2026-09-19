@@ -280,6 +280,35 @@ class Session:
         models = info.get("models")
         return models if isinstance(models, list) else []
 
+    async def server_commands(self) -> list[dict]:
+        """The slash commands the CLI offers, as {name, description,
+        argumentHint}.
+
+        Free, unlike it looks: get_server_info() returns the initialization
+        result the SDK already holds from connect(), so this shells out to
+        nothing.
+
+        There is NO companion list saying which of these a remote UI should
+        hide. `terminal_slash_commands` was assumed to exist and does not --
+        measured against this SDK, get_server_info() returns account, agents,
+        commands, current_permission_mode, models, output_style, session_state
+        and a dozen more, and no key like it. 53 commands came back, most of
+        them meaningless on a Win98 client (plugins, cloud workflows, a heap
+        dump to the operator's Desktop). Whatever picks a subset has to be
+        ours.
+        """
+        if not self._client:
+            return []
+        try:
+            info = await self._client.get_server_info()
+        except Exception:
+            log.exception("get_server_info failed")
+            return []
+        if not isinstance(info, dict):
+            return []
+        cmds = info.get("commands")
+        return cmds if isinstance(cmds, list) else []
+
     async def set_model(self, model: str) -> None:
         """Live, no fork needed -- verified against SDK 0.2.153."""
         if self._client:

@@ -1,4 +1,6 @@
 /* Compose and send. See app/input.h for the design. */
+#include <string.h>
+
 #include "app/input.h"
 #include "core/log.h"
 
@@ -104,23 +106,63 @@ void rc_input::do_send(void)
     n = GetWindowTextA(box, buf, RC_INPUT_MAX);
     if (n <= 0) { HeapFree(GetProcessHeap(), 0, buf); return; }
 
-    echo_user_block(buf);
-
-    if (xfer) xfer->note_tx_start((unsigned long)n);
-    if (rc_net_send(net, "INPUT", NULL, NULL, 0, buf, (unsigned)n) == 0) {
-        if (xfer) xfer->note_tx_done((unsigned long)n);
-        SetWindowTextA(box, "");
-        /* status_refresh() used to run between the tx_done above and the
-         * SetWindowTextA that clears the box; it now runs just after,
-         * bundled into `sent` with ui_set_busy(1) -- both are synchronous
-         * UI refreshes with no dependency on one another or on the box's
-         * text, so the reorder is not observable. */
-        if (sent_fn) sent_fn();
-    } else {
-        if (html) html->error("Not connected.");
-    }
+    /* status_refresh() used to run between note_tx_done and the
+     * SetWindowTextA that clears the box; it now runs just after, bundled
+     * into `sent` with ui_set_busy(1) -- both are synchronous UI refreshes
+     * with no dependency on one another or on the box's text, so the reorder
+     * is not observable. */
+    if (send_text(buf)) SetWindowTextA(box, "");
     HeapFree(GetProcessHeap(), 0, buf);
     SetFocus(box);
+}
+
+int rc_input::send_text(const char *text)
+{
+    unsigned n;
+
+    if (!text || !*text) return 0;
+    /* The same refusal the Send button gets, not a second opinion about it:
+     * a menu entry that sends a prompt mid-turn would be the one path around
+     * the check that stops two turns overlapping. */
+    if (blocked_fn && blocked_fn()) return 0;
+
+    n = (unsigned)strlen(text);
+    if (n >= RC_INPUT_MAX) {
+        if (html) html->error("That message is too long to send.");
+        return 0;
+    }
+
+    /* Echoed BEFORE the send attempt, exactly as a typed message is, so a
+     * command picked from a menu appears in the transcript in the place it
+     * was sent from rather than only when the reply arrives. */
+    echo_user_block(text);
+
+    if (xfer) xfer->note_tx_start((unsigned long)n);
+    if (rc_net_send(net, "INPUT", NULL, NULL, 0, text, n) == 0) {
+        if (xfer) xfer->note_tx_done((unsigned long)n);
+        if (sent_fn) sent_fn();
+        return 1;
+    }
+    if (html) html->error("Not connected.");
+    return 0;
+}
+
+int rc_input::compose(const char *text)
+{
+    if (!box || !text) return 0;
+    if (GetWindowTextLengthA(box) > 0) {
+        if (html)
+            html->error("There is already a message in the box. Send it or "
+                        "clear it first, then pick the command again.");
+        SetFocus(box);
+        return 0;
+    }
+    SetWindowTextA(box, text);
+    /* Caret to the end, so typing continues the line rather than landing in
+     * front of the command -- EM_SETSEL with both ends past the text. */
+    SendMessageA(box, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SetFocus(box);
+    return 1;
 }
 
 void rc_input::do_stop(void)

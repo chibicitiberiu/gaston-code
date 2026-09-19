@@ -153,6 +153,7 @@ static void turn_receiving(void);
 static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
+static int  ui_send_text(const char *text, int compose);
 
 /* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
  * is the one instance, created in create_children and destroyed in
@@ -337,7 +338,7 @@ static void build_menu(HWND hwnd)
     /* The Model and Effort popups: created and appended to `bar` by
      * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
      * so the menu order is unchanged. */
-    g_optmenu = rc_optmenu::create(hwnd, bar, ui_send);
+    g_optmenu = rc_optmenu::create(hwnd, bar, ui_send, ui_send_text);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
 }
@@ -451,6 +452,21 @@ static int ui_send(const char *what, const char *type,
         if (g_html) g_html->error(msg);
     }
     return 0;
+}
+
+/* app/optmenu.h's rc_optmenu_input_fn: "send this as if it had been typed".
+ *
+ * A thin forward to compose-and-send rather than a second sender, because a
+ * slash command IS a prompt -- the CLI reads it out of the message text and
+ * there is no frame for one. Going through rc_input is what gives it the
+ * local echo, the mid-turn refusal and the busy state. Created after the
+ * menus (create_children runs at WM_CREATE, build_menu at its top), so this
+ * can be called before g_inputmod exists only if a frame arrives first,
+ * which cannot happen -- guarded anyway. */
+static int ui_send_text(const char *text, int compose)
+{
+    if (!g_inputmod) return 0;
+    return compose ? g_inputmod->compose(text) : g_inputmod->send_text(text);
 }
 
 /* ------------------------------------------------------------ frame render */
@@ -946,8 +962,14 @@ static void layout(HWND hwnd)
         /* In the TRANSCRIPT column, not across the full width: the chat
          * list's Refresh button sits at the bottom of the left column and a
          * full-width bar draws straight over it. */
-        if (g_toolbar)
+        if (g_toolbar) {
             g_toolbar->move(cx, h - TOOLBAR_H, cw);
+            /* New chat at the FAR RIGHT of the page-bar row, the opposite
+             * end of the window from the settings. Same y as the page bar,
+             * which positions its own six controls from the left and leaves
+             * this half of the row empty. */
+            g_toolbar->move_top(cx, GUTTER, cw);
+        }
     }
 }
 
@@ -1281,8 +1303,17 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_LAST:
             if (g_pagebar) g_pagebar->command(id);
             return 0;
+        /* The toolbar's own five, through one call -- same shape as the
+         * bar's and the page bar's above. The four dropdowns are here as
+         * well as in WM_NOTIFY because a click on the button's TEXT arrives
+         * as a WM_COMMAND and only the arrow sends TBN_DROPDOWN; see
+         * rc_toolbar::command. */
+        case ID_TB_MODE:
+        case ID_TB_MODEL:
+        case ID_TB_EFFORT:
+        case ID_TB_CMD:
         case ID_TB_NEW:
-            if (g_toolbar) g_toolbar->command(ID_TB_NEW);
+            if (g_toolbar) g_toolbar->command(id);
             return 0;
         case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
 

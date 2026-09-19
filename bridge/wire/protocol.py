@@ -463,11 +463,25 @@ def exec_kill(exec_id: str) -> Frame:
 
 
 def option(kind: str, id: str, label: str, current: bool, *,
-           disabled: bool = False) -> Frame:
+           disabled: bool = False, hint: str = "") -> Frame:
+    """One row of a bridge-driven menu.
+
+    `id` is what the guest sends back; `label` is what it shows. They differ
+    on purpose for commands, where the label carries the argument hint
+    ("/compact <optional custom summarization instructions>") and the id is
+    the bare command.
+
+    `hint` is present only when the command TAKES an argument, and the guest
+    reads it as "put this in the input box rather than sending it" -- so the
+    label showing a hint and the click opening the box for you to fill it in
+    are the same fact, not two that can drift.
+    """
     h = {"kind": kind, "id": id, "label": label,
          "current": "1" if current else "0"}
     if disabled:
         h["disabled"] = "1"
+    if hint:
+        h["hint"] = "1"
     return Frame("OPTION", h)
 
 

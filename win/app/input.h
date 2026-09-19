@@ -117,6 +117,26 @@ public:
     /* SetFocus(the box) -- after a send, and to forward WM_SETFOCUS. */
     void focus(void);
 
+    /* Send `text` as an INPUT, exactly as if it had been typed and Sent:
+     * same blocked check, same local echo, same tx accounting, same busy
+     * state. Non-zero if it actually went.
+     *
+     * For the Commands menu, which is the first thing that sends a prompt
+     * the user did not type. It does NOT touch the input box, so a draft
+     * sitting there survives -- the command is a separate message, not an
+     * edit to what you were writing. */
+    int  send_text(const char *text);
+
+    /* Put `text` in the input box, caret at the end, box focused -- for a
+     * Commands entry that takes an argument, where the point is to finish
+     * the line yourself.
+     *
+     * REFUSES rather than overwriting a draft: "the person at the keyboard
+     * never loses a byte" applies to a half-written message as much as to a
+     * sent one, and a menu that silently ate two paragraphs would be the
+     * worst thing on this toolbar. Non-zero if the box now holds `text`. */
+    int  compose(const char *text);
+
     /* Is the box empty, and does it have the keyboard?
      *
      * Both exist for the message loop's conditional keys. PgUp/PgDn scroll

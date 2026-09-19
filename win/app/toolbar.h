@@ -16,12 +16,21 @@
  *     characters (_send_options resolves aliases deliberately; showing the
  *     short name does not undo that, it just stops shouting it)
  *
- * WHAT IS ON IT TODAY: Mode, Model, Effort and New chat. Mode is leftmost
- * because it decides whether you are asked before a command runs, which
- * outranks which model answers. Commands wants the live list out of
- * get_server_info(), and Attach is Phase 5; each lands as its own change so
- * the width budget above is re-measured against the real thing rather than
- * against this estimate.
+ * TWO BARS, not one. The settings bar under the input box carries Mode,
+ * Model, Effort and Commands; a second one-button bar carries New chat at
+ * the FAR RIGHT OF THE TOP ROW, beside the page buttons. They are different
+ * kinds of thing -- one is "what will the next message run with", the other
+ * is "start over" -- and putting the destructive one at the other end of the
+ * window is the point rather than a layout accident. comctl32 has no
+ * right-alignment, so move_top() measures and places it.
+ *
+ * Mode is leftmost on the settings bar because it decides whether you are
+ * asked before a command runs, which outranks which model answers. Attach is
+ * Phase 5.
+ *
+ * Commands and New chat carry an image and a label both, unlike the state
+ * dropdowns: they are verbs, the comctl32 standard bitmap for each is
+ * unambiguous, and the two together cost ~52px of the budget above.
  *
  * The Effort button HIDES itself when the chosen model has no effort levels
  * -- Haiku has none, and the bridge says so with one greyed menu row. The
@@ -62,16 +71,18 @@ class rc_optmenu;
 #define ID_TB_MODE   1019
 #define ID_TB_MODEL  1020
 #define ID_TB_EFFORT 1021
-#define ID_TB_NEW    1022
+#define ID_TB_CMD    1022
+#define ID_TB_NEW    1023
 
 class rc_toolbar {
-    HWND bar;
+    HWND bar;       /* the settings bar, under the input box */
+    HWND top;       /* New chat, right-aligned on the page-bar row */
     rc_optmenu *opts;
     HWND owner;
 
     rc_toolbar(const rc_toolbar &);
     rc_toolbar &operator=(const rc_toolbar &);
-    rc_toolbar() : bar(0), opts(0), owner(0) {}
+    rc_toolbar() : bar(0), top(0), opts(0), owner(0) {}
 
 public:
     /* `opts_` is borrowed, not owned: the toolbar pops that module's menus
@@ -82,9 +93,20 @@ public:
 
     void move(int x, int y, int w);
 
+    /* The New chat bar, right-aligned inside [x, x+w) on the page-bar row.
+     * Separate from move() because the two bars are on opposite sides of the
+     * window and layout() knows both rows; this class knows neither. */
+    void move_top(int x, int y, int w);
+
     /* Re-read the current model/effort from the option menus and re-label.
      * Called on OPTIONSEND, which is when those can have changed. */
     void refresh();
+
+    /* Drop `id`'s menu under its button. Non-zero if `id` was one of the
+     * dropdowns. Both entry points below go through it, because a click on
+     * the arrow and a click on the text must do the same thing -- see
+     * command(). */
+    int pop(int id);
 
     /* WM_NOTIFY. Non-zero if this was ours (TBN_DROPDOWN on our bar). */
     int notify(NMHDR *nh);

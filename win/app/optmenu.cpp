@@ -11,9 +11,10 @@ static void clear_popup(HMENU m)
         ;
 }
 
-rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_)
-    : n_model(0), n_effort(0), n_mode(0), effort_ok(0), opts_open(0),
-      owner(owner_), send(send_)
+rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
+                       rc_optmenu_input_fn input_)
+    : n_model(0), n_effort(0), n_mode(0), n_cmd(0), effort_ok(0), opts_open(0),
+      owner(owner_), send(send_), input(input_)
 {
     cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
     /* All three menus are built from what the bridge sends, so the lists can
@@ -23,9 +24,11 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_)
     menu_model = CreatePopupMenu();
     menu_effort = CreatePopupMenu();
     menu_mode = CreatePopupMenu();
+    menu_cmd = CreatePopupMenu();
     AppendMenuA(menu_model, MF_STRING | MF_GRAYED, 0, "(not connected)");
     AppendMenuA(menu_effort, MF_STRING | MF_GRAYED, 0, "(not connected)");
     AppendMenuA(menu_mode, MF_STRING | MF_GRAYED, 0, "(not connected)");
+    AppendMenuA(menu_cmd, MF_STRING | MF_GRAYED, 0, "(not connected)");
 
     /* Mode first: it decides whether you are asked before a command runs,
      * which outranks which model answers. "Mo&de" rather than "&Mode"
@@ -34,11 +37,16 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_)
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_mode, "Mo&de");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_model, "&Model");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_effort, "&Effort");
+    /* "Comm&ands": C belongs to Configure and M to Model, so A is what is
+     * left that is actually in the word. */
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_cmd, "Comm&ands");
 }
 
-rc_optmenu *rc_optmenu::create(HWND owner, HMENU bar, rc_optmenu_send_fn send)
+rc_optmenu *rc_optmenu::create(HWND owner, HMENU bar,
+                               rc_optmenu_send_fn send,
+                               rc_optmenu_input_fn input)
 {
-    return new rc_optmenu(owner, bar, send);
+    return new rc_optmenu(owner, bar, send, input);
 }
 
 int rc_optmenu::frame(rc_frame *f)
@@ -57,9 +65,11 @@ int rc_optmenu::frame(rc_frame *f)
             clear_popup(menu_model);
             clear_popup(menu_effort);
             clear_popup(menu_mode);
+            clear_popup(menu_cmd);
             n_model = 0;
             n_effort = 0;
             n_mode = 0;
+            n_cmd = 0;
             effort_ok = 0;
             cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
         }
@@ -91,6 +101,15 @@ int rc_optmenu::frame(rc_frame *f)
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
                             IDM_MODE0 + n_mode, label);
                 n_mode++;
+            } else if (strcmp(kind, "command") == 0 && n_cmd < MAX_OPTS) {
+                /* No tick: a command is something you do, not a setting you
+                 * are in. The label carries the argument hint and the id is
+                 * the bare command -- see bridge/wire/protocol.py option(). */
+                const char *hint = rc_frame_get(f, "hint");
+                rc_strf(opt_cmd[n_cmd], 64, "%s", id);
+                cmd_arg[n_cmd] = (char)((hint && *hint == '1') ? 1 : 0);
+                AppendMenuA(menu_cmd, MF_STRING, IDM_CMD0 + n_cmd, label);
+                n_cmd++;
             }
         }
         return 1;
@@ -124,6 +143,28 @@ int rc_optmenu::command(int id)
         const char *keys[1], *vals[1];
         keys[0] = "mode"; vals[0] = opt_mode[id - IDM_MODE0];
         send("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
+        return 1;
+    }
+    if (id >= IDM_CMD0 && id < IDM_CMD0 + n_cmd) {
+        /* Sent as a message, because that is what it is -- the CLI reads a
+         * slash command out of the prompt text and there is no frame for
+         * one. Going through compose-and-send rather than raw is what makes
+         * it refuse mid-turn and appear in the transcript. */
+        {
+            int i = id - IDM_CMD0;
+            if (input) {
+                if (cmd_arg[i]) {
+                    /* Takes an argument, so it goes in the box with a
+                     * trailing space -- the menu said it wanted one and this
+                     * is where you type it. */
+                    char line[80];
+                    rc_strf(line, sizeof(line), "%s ", opt_cmd[i]);
+                    input(line, 1);
+                } else {
+                    input(opt_cmd[i], 0);
+                }
+            }
+        }
         return 1;
     }
     return 0;

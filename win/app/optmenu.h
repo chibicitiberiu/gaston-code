@@ -1,5 +1,12 @@
-/* The Model and Effort menus: built from what the bridge sends, so the lists
- * can change without rebuilding this binary.
+/* The Mode, Model, Effort and Commands menus: built from what the bridge
+ * sends, so the lists can change without rebuilding this binary.
+ *
+ * Four now, not two. Three are settings with a ticked current value; the
+ * fourth is a list of slash commands, which is not a setting at all and has
+ * no tick. It lives here anyway because it is the same OPTION frame, the
+ * same batch reset, the same id arithmetic and the same WM_COMMAND routing
+ * -- a fourth copy of that machinery elsewhere would be the duplication this
+ * module exists to have prevented.
  *
  * The last of the three remaining §1.2 extraction targets out of main.c
  * (audit finding 01.58) -- the bar, the chat list and the page bar are
@@ -30,6 +37,7 @@
 #define IDM_MODEL0  1200      /* .. IDM_MODEL0 + MAX_OPTS */
 #define IDM_EFFORT0 1300      /* .. IDM_EFFORT0 + MAX_OPTS */
 #define IDM_MODE0   1400      /* .. IDM_MODE0 + MAX_OPTS */
+#define IDM_CMD0    1500      /* .. IDM_CMD0 + MAX_OPTS */
 #define MAX_OPTS    16
 
 /* Signature of main.c's ui_send: "send something the user just asked for,
@@ -40,8 +48,16 @@ typedef int (*rc_optmenu_send_fn)(const char *what, const char *type,
                                    const char *const *vals, int nkv,
                                    const void *body, unsigned body_len);
 
+/* "Send this as if it had been typed" -- app/input.h's rc_input::send_text,
+ * behind a function pointer so this module does not depend on that class.
+ * A slash command IS a prompt: the CLI reads it out of the message text,
+ * there is no command frame, and routing it through compose-and-send is what
+ * gives it the local echo, the mid-turn refusal and the busy state that a
+ * typed message gets. */
+typedef int (*rc_optmenu_input_fn)(const char *text, int compose);
+
 class rc_optmenu {
-    HMENU menu_model, menu_effort, menu_mode;
+    HMENU menu_model, menu_effort, menu_mode, menu_cmd;
     char  opt_model[MAX_OPTS][64];
     char  opt_effort[MAX_OPTS][64];
     /* Permission mode: Manual / Accept edits / Plan. The list is the
@@ -50,7 +66,19 @@ class rc_optmenu {
      * belong beside the measurement (bridge/server.py, MODE_ORDER), not in
      * a menu builder on a 32MB machine. */
     char  opt_mode[MAX_OPTS][64];
-    int   n_model, n_effort, n_mode;
+    /* Slash commands. Not an option -- nothing is ticked and there is no
+     * current value -- but the same bridge-driven menu with the same id
+     * arithmetic and the same WM_COMMAND routing, so it lives here rather
+     * than as a fourth copy of that machinery somewhere else. WHICH commands
+     * appear is the bridge's decision (bridge/server.py, COMMAND_MENU): five
+     * of the fifty-three the CLI offers. */
+    char  opt_cmd[MAX_OPTS][64];
+    /* Does this one take an argument? The bridge says so with a `hint`
+     * header, which is the same fact the label's "<optional custom
+     * summarization instructions>" shows -- one source, so the label and the
+     * behaviour cannot disagree. */
+    char  cmd_arg[MAX_OPTS];
+    int   n_model, n_effort, n_mode, n_cmd;
     /* The LABELS of the checked entries, which is what the toolbar shows.
      * The label is the bridge's displayName ("Haiku"), not the resolved id
      * ("claude-haiku-4-5-20251001") -- _send_options resolves aliases on
@@ -65,10 +93,12 @@ class rc_optmenu {
     int   opts_open;   /* mid-batch, so the next model row appends */
     HWND  owner;
     rc_optmenu_send_fn send;
+    rc_optmenu_input_fn input;
 
     rc_optmenu(const rc_optmenu &);
     rc_optmenu &operator=(const rc_optmenu &);
-    rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_);
+    rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
+               rc_optmenu_input_fn input_);
 
 public:
     /* Creates the Model and Effort popups (each seeded with one greyed
@@ -78,8 +108,11 @@ public:
      * is unchanged.
      * owner: DrawMenuBar's target -- OPTIONSEND redraws the bar after a
      *     batch.
-     * send: main.c's ui_send, for SETMODEL/SETEFFORT. */
-    static rc_optmenu *create(HWND owner, HMENU bar, rc_optmenu_send_fn send);
+     * send: main.c's ui_send, for SETMODEL/SETEFFORT/SETMODE.
+     * input: compose-and-send, for the Commands menu -- see
+     *     rc_optmenu_input_fn above. */
+    static rc_optmenu *create(HWND owner, HMENU bar, rc_optmenu_send_fn send,
+                              rc_optmenu_input_fn input);
     ~rc_optmenu() {}
 
     /* OPTION, OPTIONSEND -- the two frame types this module owns. Returns
@@ -97,6 +130,7 @@ public:
     HMENU model_menu() const  { return menu_model; }
     HMENU effort_menu() const { return menu_effort; }
     HMENU mode_menu() const   { return menu_mode; }
+    HMENU cmd_menu() const    { return menu_cmd; }
     const char *model_label() const  { return cur_model; }
     const char *effort_label() const { return cur_effort; }
     const char *mode_label() const   { return cur_mode; }

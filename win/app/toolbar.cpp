@@ -47,9 +47,10 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
     SendMessageA(p->bar, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_DRAWDDARROWS);
     if (font) SendMessageA(p->bar, WM_SETFONT, (WPARAM)font, TRUE);
 
-    /* STD_FILENEW for New chat. Two of comctl32's own bitmaps map to
-     * anything here -- there is no gauge, gavel or paperclip in them -- so
-     * the rest of this toolbar is text, which is what it wanted anyway. */
+    /* STD_FILENEW for New chat, STD_PROPERTIES for Commands. Only two of
+     * comctl32's own bitmaps map to anything here -- there is no gauge,
+     * gavel or paperclip in them -- so the rest of this toolbar is text,
+     * which is what it wanted anyway. */
     {
         TBADDBITMAP ab;
         ab.hInst = HINST_COMMCTRL;
@@ -84,14 +85,43 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
 
         b[3].fsStyle   = TBSTYLE_SEP;
 
-        b[4].idCommand = ID_TB_NEW;
-        b[4].iBitmap   = STD_FILENEW;
+        b[4].idCommand = ID_TB_CMD;
+        b[4].iBitmap   = STD_PROPERTIES;
         b[4].fsState   = TBSTATE_ENABLED;
-        b[4].fsStyle   = TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE;
-        b[4].iString   = (INT_PTR)"New chat";
+        b[4].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
+        b[4].iString   = (INT_PTR)"Commands";
 
         SendMessageA(p->bar, TB_ADDBUTTONS, 5, (LPARAM)b);
     }
+    /* New chat, on its own bar so it can sit at the other end of the window
+     * from the settings -- see the header. Its failure is not fatal: the
+     * File menu and Ctrl+N both still start a conversation. */
+    p->top = CreateWindowExA(
+        0, TOOLBARCLASSNAME, NULL,
+        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST
+        | CCS_NOPARENTALIGN | CCS_NORESIZE | CCS_NODIVIDER,
+        0, 0, 0, 0, parent, (HMENU)0, inst, NULL);
+    if (p->top) {
+        TBBUTTON n;
+        TBADDBITMAP ab;
+        SendMessageA(p->top, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
+        if (font) SendMessageA(p->top, WM_SETFONT, (WPARAM)font, TRUE);
+        ab.hInst = HINST_COMMCTRL;
+        ab.nID = IDB_STD_SMALL_COLOR;
+        SendMessageA(p->top, TB_ADDBITMAP, 0, (LPARAM)&ab);
+        memset(&n, 0, sizeof(n));
+        n.idCommand = ID_TB_NEW;
+        n.iBitmap   = STD_FILENEW;
+        n.fsState   = TBSTATE_ENABLED;
+        n.fsStyle   = TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE;
+        n.iString   = (INT_PTR)"New chat";
+        SendMessageA(p->top, TB_ADDBUTTONS, 1, (LPARAM)&n);
+        SendMessageA(p->top, TB_AUTOSIZE, 0, 0);
+    } else {
+        rc_log("toolbar: New chat bar not created (%lu)",
+               (unsigned long)GetLastError());
+    }
+
     /* Straight into the same state an OPTION batch would leave: the Effort
      * button is hidden until a model that has levels is picked, and it has
      * to start hidden rather than appear and vanish on the first frame. */
@@ -101,14 +131,31 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
 
 rc_toolbar::~rc_toolbar()
 {
-    /* The window is a child of the frame and Windows destroys it; nothing
-     * here is subclassed, so unlike rc_chats and rc_input there is no
-     * dangling proc to take down with us. */
+    /* Both windows are children of the frame and Windows destroys them;
+     * nothing here is subclassed, so unlike rc_chats and rc_input there is
+     * no dangling proc to take down with us. */
 }
 
 void rc_toolbar::move(int x, int y, int w)
 {
     if (bar) MoveWindow(bar, x, y, w, TOOLBAR_H - 4, TRUE);
+}
+
+void rc_toolbar::move_top(int x, int y, int w)
+{
+    RECT r;
+    int bw;
+
+    if (!top) return;
+    /* Measured, not assumed: the caption is "New chat" in whatever the
+     * system font is, and TB_GETRECT is the only thing that knows how wide
+     * that came out. Right-aligned by subtracting it from the far edge --
+     * comctl32 has no alignment of its own. */
+    if (!SendMessageA(top, TB_GETRECT, (WPARAM)ID_TB_NEW, (LPARAM)&r))
+        return;
+    bw = r.right - r.left;
+    if (bw <= 0 || bw > w) bw = w;
+    MoveWindow(top, x + w - bw, y, bw, TOOLBAR_H - 4, TRUE);
 }
 
 void rc_toolbar::refresh()
@@ -161,36 +208,56 @@ void rc_toolbar::refresh()
     }
 }
 
+int rc_toolbar::pop(int id)
+{
+    HMENU menu = NULL;
+    RECT r;
+
+    if (!bar || !opts) return 0;
+    if (id == ID_TB_MODE)        menu = opts->mode_menu();
+    else if (id == ID_TB_MODEL)  menu = opts->model_menu();
+    else if (id == ID_TB_EFFORT) menu = opts->effort_menu();
+    else if (id == ID_TB_CMD)    menu = opts->cmd_menu();
+    if (!menu) return 0;
+
+    /* Popped directly under the button, the way a dropdown reads. The menu
+     * is the SAME HMENU the menu bar uses, so the tick and the list cannot
+     * disagree with what the button says, and the WM_COMMAND ids already
+     * route through rc_optmenu::command. */
+    SendMessageA(bar, TB_GETRECT, (WPARAM)id, (LPARAM)&r);
+    MapWindowPoints(bar, HWND_DESKTOP, (POINT *)&r, 2);
+    TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom,
+                   0, owner, NULL);
+    return 1;
+}
+
 int rc_toolbar::notify(NMHDR *nh)
 {
-    if (!nh || !bar || nh->hwndFrom != bar) return 0;
+    if (!nh || !bar || nh->hwndFrom != bar) return 0;   /* top has no menu */
     if (nh->code != TBN_DROPDOWN) return 0;
-
-    {
-        NMTOOLBARA *tb = (NMTOOLBARA *)nh;
-        HMENU menu = NULL;
-        RECT r;
-
-        if (!opts) return 1;
-        if (tb->iItem == ID_TB_MODE)        menu = opts->mode_menu();
-        else if (tb->iItem == ID_TB_MODEL)  menu = opts->model_menu();
-        else if (tb->iItem == ID_TB_EFFORT) menu = opts->effort_menu();
-        if (!menu) return 1;
-
-        /* Popped directly under the button, the way a dropdown reads. The
-         * menu is the SAME HMENU the menu bar uses, so the tick and the list
-         * cannot disagree with what the button says, and the WM_COMMAND ids
-         * already route through rc_optmenu::command. */
-        SendMessageA(bar, TB_GETRECT, (WPARAM)tb->iItem, (LPARAM)&r);
-        MapWindowPoints(bar, HWND_DESKTOP, (POINT *)&r, 2);
-        TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom,
-                       0, owner, NULL);
-    }
+    pop((int)((NMTOOLBARA *)nh)->iItem);
     return 1;
 }
 
 int rc_toolbar::command(int id)
 {
+    /* THE WHOLE BUTTON DROPS THE MENU, not just the arrow.
+     *
+     * With TBSTYLE_EX_DRAWDDARROWS a TBSTYLE_DROPDOWN button splits in two:
+     * the arrow sends TBN_DROPDOWN and the rest sends a plain WM_COMMAND.
+     * That split is right for a button whose body does something on its own
+     * -- Back, in a browser -- and wrong for every button here, where the
+     * text IS the current value and there is nothing else it could mean.
+     * Left alone, clicking "Commands" or "Haiku" did nothing at all.
+     *
+     * BTNS_WHOLEDROPDOWN would say this to comctl32 directly, and is NOT
+     * used: the constant is gated behind _WIN32_IE >= 0x0500 and this build
+     * pins 0x0400, so it would mean hardcoding 0x80 and betting the target
+     * has IE5's comctl32. This guest does; a Win98 box with IE4 does not,
+     * and the failure would be silent. Catching the WM_COMMAND costs one
+     * branch and works on both. */
+    if (pop(id)) return 1;
+
     if (id == ID_TB_NEW) {
         /* Routed to the menu command rather than duplicating it: IDM_NEW
          * already confirms when a turn is running and when the input box

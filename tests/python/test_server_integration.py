@@ -114,8 +114,32 @@ class FakeSession:
              "displayName": "Haiku"},
         ]
 
+    async def server_commands(self):
+        """Shaped like what the CLI returns. Deliberately a MIXTURE: two the
+        menu wants, one it wants but this install does not have (/init is
+        absent), and two it must never offer."""
+        return [
+            {"name": "compact", "description": "Free up context",
+             "argumentHint": "<options>"},
+            {"name": "rename", "description": "Rename the conversation",
+             "argumentHint": "[name]"},
+            {"name": "recap", "description": "One-line recap",
+             "argumentHint": ""},
+            {"name": "usage", "description": "Session cost", "argumentHint": ""},
+            {"name": "model", "description": "Set the model",
+             "argumentHint": "<model>"},
+            {"name": "heapdump", "description": "Dump the JS heap to ~/Desktop",
+             "argumentHint": ""},
+        ]
+
     async def send(self, prompt):
         from bridge.agent.session import Turn
+        # A command the CLI resolves locally streams nothing back. Modelled
+        # rather than assumed away: the bridge's "returned nothing" notice is
+        # only reachable through a turn that really does produce no output.
+        if getattr(self, "silent", False):
+            return Turn(ok=True, subtype="success", cost_usd=0.0,
+                        num_turns=1, duration_ms=10)
         if self.on_text:
             await self.on_text(f"echo: {prompt}\n")
         return Turn(ok=True, subtype="success", cost_usd=0.01,
@@ -788,6 +812,65 @@ async def test_the_chosen_mode_survives_a_rebuilt_session(harness):
         "the rebuilt session must start in the mode the user chose, not "
         "back in Manual"
     )
+    await harness.close(w)
+
+
+# --- the commands menu ------------------------------------------------------
+
+
+async def test_command_menu_is_curated_and_intersected_with_the_cli(harness):
+    """Three of fifty-three, and the rules that pick them.
+
+    /model is withheld because the toolbar owns the model and going through
+    the CLI would change it WITHOUT a SETMODEL frame, leaving the dropdown
+    showing the old one. /heapdump is withheld because it writes to the
+    OPERATOR'S Desktop -- it configures the bridge host, not the machine the
+    person is sitting at. /recap and /usage are withheld because they were
+    MEASURED to produce nothing: both cost a turn and rendered a blank
+    transcript. And /init is in COMMAND_MENU but not in this install's list,
+    so it must not be offered: a menu entry for a command the CLI does not
+    have fails as a typed prompt, seconds later, with the model apologising
+    for it.
+    """
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    cmds = [f.headers["id"] for f in frames if f.type == "OPTION"
+            and f.headers.get("kind") == "command"]
+    assert cmds == ["/compact", "/rename"]
+    await harness.close(w)
+
+
+async def test_command_labels_carry_the_argument_hint(harness):
+    """The label is where "what does this one take?" is asked, and the `hint`
+    header is the same fact -- the guest reads it as "open the input box for
+    them to finish the line" rather than sending it bare. One source, so a
+    label promising an argument and a click that ignores it cannot happen."""
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    rows = {f.headers["id"]: f.headers for f in frames if f.type == "OPTION"
+            and f.headers.get("kind") == "command"}
+    assert rows["/compact"]["label"] == "/compact <options>"
+    assert rows["/compact"].get("hint") == "1"
+    assert rows["/rename"]["label"] == "/rename [name]"
+    await harness.close(w)
+
+
+async def test_a_silent_command_says_so_rather_than_looking_like_nothing(
+    harness,
+):
+    """A command the CLI resolves locally returns no message at all, so the
+    transcript showed the echoed "/recap" and then nothing -- identical to a
+    command that failed. Measured on the guest before this existed."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    harness.bridge._guest.claude.silent = True
+    await harness.send(w, Frame("INPUT", {}, b"/recap"))
+    frames = []
+    # Twice: TURN arrives at the start of a turn as well as at its end, and
+    # the notice is written between them.
+    for _ in range(2):
+        frames += await harness.recv_until(r, {"TURN"}, 10.0)
+    assert b"without sending anything back" in harness.body(frames)
     await harness.close(w)
 
 
