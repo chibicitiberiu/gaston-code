@@ -31,6 +31,7 @@
 #include "app/hostdlg.h"
 #include "app/toolbar.h"
 #include "app/export.h"
+#include "app/cache.h"
 
 #define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
@@ -85,6 +86,14 @@ static rc_toolbar  *g_toolbar;
 /* The export sink. One instance, created in create_children and destroyed
  * in WM_DESTROY, the same shape as g_html -- see app/export.h. */
 static rc_export   *g_export;
+/* The on-disk transcript cache -- see app/cache.h. One instance, created in
+ * create_children and destroyed in WM_DESTROY, the same shape as g_html. */
+static rc_cache    *g_cache;
+/* Has the cached transcript already been put on screen for this outage? The
+ * reconnect timer fires every few seconds while the bridge is down, and
+ * restoring on each one would clear and redraw the transcript under someone
+ * who is reading it. */
+static int          g_cache_shown;
 /* The accelerator table. Loaded once in WinMain; owned by the module, so it
  * is not destroyed (DestroyAcceleratorTable is for CreateAcceleratorTable). */
 static HACCEL       g_accel;
@@ -503,6 +512,17 @@ static void on_ready(rc_frame *f)
     g_retry_noted = 0;
     v = rc_frame_get(f, "model");
     rc_log("ready: sess=%s model=%s", g_net.sess, v ? v : "?");
+    /* A reconnect gets a fresh transcript from the bridge, so whatever was
+     * restored from the cache during the outage is about to be replaced by
+     * the real thing. Re-arm for the NEXT outage. */
+    g_cache_shown = 0;
+    /* WHICH conversation, not which connection. `sess` above is the
+     * per-connection handle and is never a conversation id; `conv` is the
+     * one the transcript arriving next belongs to. Without this, a plain
+     * reconnect cached nothing at all -- only a SWITCHED told the cache
+     * where to put pages, and a reconnect does not send one. */
+    v = rc_frame_get(f, "conv");
+    if (g_cache) g_cache->open_session(v ? v : "");
     g_announce_connected = 1;
     /* READY carries page/total for the session as it stands. goto_live()
      * re-requests the live page explicitly, which clears the control
@@ -567,6 +587,12 @@ static void on_text(rc_frame *f)
         if (mode && strcmp(mode, "append") != 0)
             rc_log("TEXT: unrecognized mode=\"%s\" (want \"append\" or "
                    "\"live\"); treating as a finished block", mode);
+        /* The same bytes the view is about to be handed. "The guest
+         * transforms nothing" applies to the cache too: what comes back out
+         * is what the bridge sent, so rendering a cached page is the same
+         * call on the same string. Dropped unless a page is open, which is
+         * what keeps a streamed reply out of the cached copy. */
+        if (g_cache) g_cache->add(f->body, f->body_len);
         if (g_html) g_html->block(f->body);
     }
 }
@@ -693,6 +719,10 @@ static void chats_switched(rc_frame *f)
      * rc_pagebar::note_total. No button refresh here, matching what this
      * call site always did. */
     if (g_pagebar) g_pagebar->note_total(f);
+    /* SWITCHED is the only frame that names the conversation now on screen,
+     * so it is where the cache learns which folder its pages belong in. The
+     * pages themselves arrive immediately afterwards. */
+    if (g_cache) g_cache->open_session(rc_frame_get(f, "id"));
     SetWindowTextA(g_main, RC_TITLE);
     status_set(2, "");
 }
@@ -703,10 +733,101 @@ static void chats_switched(rc_frame *f)
  * touched a g_chat_* global). log_mem stays here rather than moving into
  * chatlist.cpp: it is main.c's own memory-milestone diagnostic, not
  * something the chat list module has reason to know about. */
+/* The chat list, written to the cache a row at a time as it arrives.
+ *
+ * A row at a time and never buffered: the first version of this held the
+ * whole list in a static array, which cost 12.8KB of BSS on a machine
+ * measured at 28 KB free after a turn -- for data whose destination is a
+ * file being written one line at a time anyway. Four headers per row, not
+ * the framing, because rc_chats::add_row is the path a cached row takes back
+ * in and it wants values, not frames. */
 static void on_chats(rc_frame *f)
 {
     if (g_chats) g_chats->frame(f);
-    if (strcmp(f->type, "SESSIONSEND") == 0) log_mem("chat list loaded");
+
+    if (strcmp(f->type, "SESSIONS") == 0) {
+        if (g_cache) g_cache->begin_chats();
+    } else if (strcmp(f->type, "SESSION") == 0) {
+        const char *id = rc_frame_get(f, "id");
+        const char *title = rc_frame_get(f, "title");
+        const char *grp = rc_frame_get(f, "group");
+        const char *cur = rc_frame_get(f, "current");
+        char line[220];
+        /* Tab-separated, because a title can contain almost anything else
+         * and a tab is the one character the bridge's titles never carry --
+         * they come from a summary line, not from a file. */
+        rc_strf(line, sizeof(line), "%s\t%s\t%s\t%s",
+                id ? id : "", title ? title : "", grp ? grp : "",
+                (cur && *cur == '1') ? "1" : "0");
+        if (g_cache) {
+            g_cache->add_chat(line);
+            /* The chat list is also where a BRAND NEW conversation's id
+             * first reaches the guest. READY carries `conv`, but the SDK
+             * does not assign an id until the first query goes out, so on a
+             * fresh session that header is empty and stays empty until
+             * something says otherwise. The row marked current is that
+             * something. */
+            if (cur && *cur == '1' && id && *id)
+                g_cache->open_session(id);
+        }
+    } else if (strcmp(f->type, "SESSIONSEND") == 0) {
+        if (g_cache) g_cache->end_chats();
+        log_mem("chat list loaded");
+    }
+}
+
+/* Put back what was on screen before the bridge went away.
+ *
+ * Called once per outage, from the failed-connect path. It does not pretend
+ * to be connected: the notice says where this came from, and the page bar is
+ * left alone because paging back through a cached conversation needs the
+ * bridge and saying otherwise with buttons would be a lie you can click.
+ */
+static void cache_restore(void)
+{
+    char sess[64];
+    char line[220];
+    int pages;
+
+    if (!g_cache || !g_cache->ok() || g_cache_shown) return;
+    g_cache_shown = 1;
+
+    /* The chat list first: it is the smaller of the two and it is what makes
+     * the window look like an application rather than a failure. One line at
+     * a time, so nothing here scales with how many conversations there are. */
+    if (g_chats && g_cache->chats_open()) {
+        g_chats->begin_rows();
+        while (g_cache->chats_next(line, sizeof(line))) {
+            char *fields[4];
+            int nf = 0;
+            char *p = line;
+            fields[nf++] = p;
+            while (*p && nf < 4) {
+                if (*p == '\t') { *p = '\0'; fields[nf++] = p + 1; }
+                p++;
+            }
+            if (nf == 4 && fields[0][0])
+                g_chats->add_row(fields[0], fields[1], fields[2],
+                                 fields[3][0] == '1');
+        }
+        g_cache->chats_close();
+        g_chats->end_rows();
+    }
+
+    /* Then the conversation that was open, newest page first -- which is
+     * where the reader was. */
+    g_cache->last_session(sess, sizeof(sess));
+    if (!sess[0]) return;
+    g_cache->open_session(sess);
+    pages = g_cache->page_count();
+    if (pages <= 0) return;
+    if (g_html) {
+        g_html->notice("The bridge is not reachable. This is the last page "
+                       "of your conversation as it was cached here; it is "
+                       "not live, and nothing typed now will be sent.");
+        g_cache->load_page(pages, g_html);
+    }
+    rc_log("cache: showed page %d of %d for %s", pages, pages, sess);
 }
 
 /* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
@@ -717,10 +838,19 @@ static void on_chats(rc_frame *f)
  * cleared) and log_mem, main.c's memory-milestone diagnostic. */
 static void on_pagebar(rc_frame *f)
 {
-    if (strcmp(f->type, "PAGESTART") == 0)
+    if (strcmp(f->type, "PAGESTART") == 0) {
         g_turn_state = TURN_IDLE;
+        /* Cache the page the bridge is about to send. Only a page it says is
+         * complete is kept -- see app/cache.h -- so this opens a temporary
+         * file that PAGEEND renames and anything else throws away. */
+        if (g_cache) {
+            const char *n = rc_frame_get(f, "page");
+            g_cache->begin_page(n ? atoi(n) : 0);
+        }
+    }
     if (g_pagebar) g_pagebar->frame(f);
     if (strcmp(f->type, "PAGEEND") == 0) {
+        if (g_cache) g_cache->end_page();
         log_mem("page loaded");
         /* Past PAGESTART's clear() and past the pre-ready queue, so this is
          * the first moment the line can be written and survive. */
@@ -1125,6 +1255,10 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     if (!g_export) rc_log("export: sink not created; File > Export will not "
                           "work");
 
+    g_cache = rc_cache::create(g_exe_dir);
+    if (!g_cache) rc_log("cache: not created; history will not survive a "
+                         "disconnection");
+
     g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
@@ -1175,6 +1309,11 @@ static void try_connect(HWND hwnd)
              * unescaped user-supplied text going into the document. */
             if (g_html) g_html->notice(msg);
             g_retry_noted = 1;
+            /* Once per outage, right after the one notice that is also once
+             * per outage -- the retry timer fires every few seconds and
+             * redrawing the transcript under someone reading it would be
+             * worse than the empty window this replaces. */
+            cache_restore();
         }
 
         /* Backoff on a timer, never a sleeping loop -- the message queue has
@@ -1363,8 +1502,33 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                "Continue?",
                                RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
-            SetWindowTextA(g_main, RC_TITLE "  -  new session...");
-            ui_send("Starting a new conversation", "NEWSESSION", NULL, NULL, 0, NULL, 0);
+            {
+                /* A folder of its own, or the shared one. Asked HERE rather
+                 * than defaulted on the bridge because it is the only moment
+                 * it can be asked: the conversation has no name yet -- the
+                 * CLI titles it from the first message -- so there is nothing
+                 * to derive a default from, and it cannot be changed
+                 * afterwards without moving files that are already mirrored.
+                 *
+                 * Blank is a real answer and the common one. It means the
+                 * shared folder, which is what every conversation used before
+                 * this existed. */
+                char folder[16];
+                const char *keys[1], *vals[1];
+
+                folder[0] = '\0';
+                if (!rc_askdlg_run(hwnd, g_inst, "New Chat",
+                        "Give this conversation its own folder inside the "
+                        "mirrored folder, or leave it blank to share the "
+                        "main one. Letters, digits, - and _ only.",
+                        "&Folder:", folder, sizeof(folder)))
+                    return 0;
+
+                SetWindowTextA(g_main, RC_TITLE "  -  new session...");
+                keys[0] = "folder"; vals[0] = folder;
+                ui_send("Starting a new conversation", "NEWSESSION",
+                        keys, vals, 1, NULL, 0);
+            }
             return 0;
 
         case IDM_CLOSE:
@@ -1489,6 +1653,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_inputmod = NULL;
         delete g_xfer;
         g_xfer = NULL;
+        delete g_cache;
+        g_cache = NULL;
         delete g_export;
         g_export = NULL;
         delete g_toolbar;

@@ -150,19 +150,27 @@ LRESULT CALLBACK rc_chats::list_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 void rc_chats::on_sessions(rc_frame *f)
 {
     (void)f;
-    SendMessageA(list, WM_SETREDRAW, FALSE, 0);
-    SendMessageA(list, LB_RESETCONTENT, 0, 0);
-    chat_count = 0;
-    chat_group[0] = '\0';
-    chat_current = -1;
+    begin_rows();
 }
 
 void rc_chats::on_session(rc_frame *f)
 {
-    const char *id = rc_frame_get(f, "id");
-    const char *title = rc_frame_get(f, "title");
-    const char *cur = rc_frame_get(f, "current");
-    const char *grp = rc_frame_get(f, "group");
+    add_row(rc_frame_get(f, "id"), rc_frame_get(f, "title"),
+            rc_frame_get(f, "group"),
+            (rc_frame_get(f, "current")
+             && *rc_frame_get(f, "current") == '1'));
+}
+
+/* The body of on_session, with the frame taken off the front.
+ *
+ * Split out so the disk cache can replay a list without building frames the
+ * wire never sent -- app/cache.h keeps the rows, not the framing, and a
+ * cached row and a live one have to land in the list by the same path or
+ * they will differ in some detail nobody thinks to check until it is wrong
+ * on one of them. */
+void rc_chats::add_row(const char *id, const char *title, const char *grp,
+                       int current)
+{
     if (id && chat_count < MAX_CHATS) {
         char label[160];
 
@@ -199,7 +207,7 @@ void rc_chats::on_session(rc_frame *f)
         chat_is_header[chat_count] = 0;
         fit_label(label, sizeof(label), text_width() - CHAT_INDENT);
         SendMessageA(list, LB_ADDSTRING, 0, (LPARAM)label);
-        if (cur && *cur == '1') {
+        if (current) {
             chat_current = chat_count;
             SendMessageA(list, LB_SETCURSEL, chat_count, 0);
         }
@@ -210,12 +218,26 @@ void rc_chats::on_session(rc_frame *f)
 void rc_chats::on_sessionsend(rc_frame *f)
 {
     (void)f;
+    end_rows();
+    rc_log("chat list: %d sessions", chat_count);
+}
+
+void rc_chats::begin_rows()
+{
+    SendMessageA(list, WM_SETREDRAW, FALSE, 0);
+    SendMessageA(list, LB_RESETCONTENT, 0, 0);
+    chat_count = 0;
+    chat_group[0] = '\0';
+    chat_current = -1;
+}
+
+void rc_chats::end_rows()
+{
     /* RDW_FRAME as well as the client: the frame is what draws the
      * client edge, and repainting only the interior leaves it stale. */
     SendMessageA(list, WM_SETREDRAW, TRUE, 0);
     RedrawWindow(list, NULL, NULL,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
-    rc_log("chat list: %d sessions", chat_count);
 }
 
 void rc_chats::on_switched(rc_frame *f)

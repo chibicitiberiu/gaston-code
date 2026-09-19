@@ -478,6 +478,27 @@ Default work folder: `C:\Gaston\<shortened chat name>`, with a different
 folder selectable when the chat is started. The UI is a Phase 4 item, recorded
 in `PLAN.md` under "The work folder, chosen when a chat is started".
 
+**[R -- 2026-09-19] BUILT, with one deliberate departure: the conversation
+moves INSIDE the mirror rather than the mirror moving.** `C:\WORK\<name>`,
+not `C:\Gaston\<name>`. The two "things this decision creates" below were
+the reason:
+
+- *The sync root moving from something the guest declares to something it is
+  told* does not happen. It is still one string read once from the INI and
+  declared in HELLO. No new frame, no watcher restart, no second baseline, no
+  `tree_id` change, no recovery pass on a fresh tree -- four chances to report
+  deletions nobody made, avoided rather than handled.
+- *The path budget* shrinks by the subfolder name only, which is capped at 8
+  characters and 8.3-safe by construction (`Bridge.folder_name`), so
+  `paths.check`'s existing arithmetic is unchanged.
+
+What it does NOT give, stated plainly: two guests still share one mirror and
+one baseline, so this is not R7 and does not make multiple clients work. It
+gives one conversation one folder, which is what the Phase 4 item asked for.
+Verified end to end on the guest: a chat created with the folder NOTES ran the
+agent in `~/gaston-work/NOTES`, the write reached `C:\WORK\NOTES\HELLO.TXT`
+on the next pass, and reopening the chat resumed in the same folder.
+
 Two things this decision creates, neither of them free:
 
 - The guest's sync root is one string read once from the INI at startup and
@@ -852,6 +873,37 @@ re-entrancy, which already happens behind the two confirmations above and has
 simply never been looked at, rather than for the `RC_MAX_INFLIGHT` gate, which
 a pumping modal does not reach; (5) if
 R7's `client_id` is also live by then, one `rc_config_save` fix serves both.
+
+## 11a. The transcript cache prunes nothing
+
+**Status:** recorded 2026-09-19, when the cache was built (Phase 4.3,
+`win/app/cache.cpp`). A deliberate omission, not an oversight.
+
+Each page of each conversation is kept as a file under `<exe dir>\CACHE\`,
+capped at the guest's own page budget -- 16KB on a 32MB box -- so a
+hundred-page conversation is under two megabytes and the Win98 test machine
+has 1.7GB free. Nothing deletes any of it, ever.
+
+**Why it was not built.** Pruning needs a policy for "which conversation is
+stale", and the only source for that ranking is the chat list, which this
+same cache is holding a copy of -- so the rule would be deciding what to
+throw away based on data it may itself be the last copy of. Getting it wrong
+deletes the one thing that survives a disconnection, which is the whole
+reason the cache exists. A wrong prune is silent and unrecoverable; unbounded
+growth is visible in a `DIR` and costs megabytes.
+
+**To close it:** either a total-bytes cap with oldest-directory-first
+eviction keyed on the directory's own mtime (no chat list involved, which is
+the point), or a "Clear cached history" item next to Configure > Server Host.
+The second is smaller and answers the real complaint, which is "this machine
+is keeping something I did not ask it to keep".
+
+**Also not built, and the same call:** paging BACKWARDS through a cached
+conversation while disconnected. The pages are all there and `page_count()`
+already reports how many, but the page bar's buttons send `GETPAGE` over a
+socket, and making them silently mean something else when the socket is down
+is a control that lies about what it does. The restored view shows the last
+page and says plainly that it is not live.
 
 ## 11. Smaller Phase 4/5 gaps found ahead of their phases, not yet closed
 

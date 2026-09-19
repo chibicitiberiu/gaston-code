@@ -754,7 +754,8 @@ class Bridge:
             guest.sess_id,
             (guest.claude.model if guest.claude else guest.model)
             or "(default)",
-            guest.pages.live.number, guest.pages.count))
+            guest.pages.live.number, guest.pages.count,
+            conv=guest.conv_id))
 
         # The stylesheet and the document skeleton live here rather than in
         # the guest, so the look can be changed by restarting the bridge
@@ -851,6 +852,45 @@ class Bridge:
         out = "".join(c for c in raw.upper()
                       if c.isascii() and (c.isalnum() or c in "-_"))
         return out[:Bridge.FOLDER_MAX]
+
+    def _stored_work_dir(self, session_id: str) -> str:
+        """The folder a stored conversation was started in, if it is ours.
+
+        Only a folder INSIDE the mirror is accepted. A session started by
+        something else -- the CLI in a terminal, a different bridge -- can
+        have any cwd at all, and resuming it must not point this bridge's
+        agent at a directory the rest of the system knows nothing about.
+        """
+        base = self.sync_dir
+        if not base:
+            return ""
+        for r in sesslist.listing():
+            if r["id"] != session_id:
+                continue
+            cwd = r.get("cwd") or ""
+            if not cwd:
+                return ""
+            try:
+                rel = os.path.relpath(cwd, base)
+            except ValueError:
+                return ""
+            if rel in (".", "") or rel.startswith(".."):
+                return ""
+            return os.path.join(base, rel)
+        return ""
+
+    def _retarget_perms(self, guest: GuestSession) -> None:
+        """Point the permission desk at this conversation's folder.
+
+        `off_limits` refuses a path tool reaching outside the working
+        directory, and the desk was handed one at connect time and never told
+        it had changed. Leaving it stale would refuse the conversation's OWN
+        files while allowing the previous conversation's, which is the check
+        inverted rather than merely wrong.
+        """
+        desk = getattr(guest, "perms", None)
+        if desk is not None:
+            desk._cwd = self._work_dir(guest)
 
     def _work_dir(self, guest: GuestSession) -> str:
         """Where the agent works for THIS conversation."""
@@ -1040,7 +1080,7 @@ class Bridge:
                     self._spawn(self._send_sessions(guest))
 
         s = Session(
-            cwd=self.cwd,
+            cwd=self._work_dir(guest),
             # APPENDED to Claude Code's own prompt, never substituted. Without
             # it the model answers as though it were on this machine, and the
             # machine that matters is the 200MHz one on the other end.
@@ -1052,10 +1092,9 @@ class Bridge:
                 # edits reach the user" without naming the folder is how an
                 # agent writes outside it and reports success.
                 "append": machine.system_prompt(
-                    guest.hello, self.cwd or os.getcwd(),
-                    sync_dir=self.sync_dir,
-                    guest_root=guest.hello.get("sync_root")
-                    or self.guest_sync_root),
+                    guest.hello, self._work_dir(guest),
+                    sync_dir=self._work_dir(guest) if self.sync_dir else None,
+                    guest_root=self._guest_root(guest)),
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.
@@ -1078,8 +1117,8 @@ class Bridge:
             on_system=on_system,
         )
         await s.start()
-        log.info("session for guest machine:\n%s",
-                 machine.describe(guest.hello))
+        log.info("session in %s for guest machine:\n%s",
+                 self._work_dir(guest), machine.describe(guest.hello))
         # The id is usually not known yet -- the SDK assigns it when the first
         # query goes out -- so this is a best effort and _run_turn registers it
         # again once it exists.
@@ -1103,7 +1142,13 @@ class Bridge:
         as well as when the guest asks. The effort fork changes it, and until
         now nothing told the guest.
         """
-        rows = self.registry.filter(sesslist.listing(cwd=self.cwd))
+        # NOT filtered by directory any more. Conversations live in their own
+        # folders now, so `list_sessions(directory=self.cwd)` would list only
+        # the ones sharing the default -- the chat list would lose a chat the
+        # moment it was given a folder of its own. `registry.filter` was
+        # always the real filter (only conversations this bridge started);
+        # the directory was belt and braces and is now wrong.
+        rows = self.registry.filter(sesslist.listing())
         await self._send(guest, sessions_start(len(rows)))
         for i, r in enumerate(rows):
             await self._send(guest, session_row(
@@ -1392,7 +1437,7 @@ class Bridge:
         await self._send(guest, pong())
 
     async def _on_newsession(self, guest: GuestSession, f: Frame) -> None:
-        await self._new_session(guest)
+        await self._new_session(guest, f.headers.get("folder", ""))
 
     async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
         model = f.headers.get("model", "")
@@ -1456,7 +1501,7 @@ class Bridge:
         """
         cid = guest.conv_id
         if cid:
-            for r in sesslist.listing(cwd=self.cwd):
+            for r in sesslist.listing():
                 if r["id"] == cid:
                     return r["title"]
         return cid or "Conversation"
@@ -2202,7 +2247,11 @@ class Bridge:
         STRAY_SCAN_BUDGET before finishing, so the caller can say the list may
         be incomplete rather than imply it is exhaustive.
         """
-        cwd = self.cwd or os.getcwd()
+        # The CONVERSATION's folder, not the process default: with per-chat
+        # folders the agent's cwd is inside the mirror, so there is nothing
+        # outside it to find and the early return below takes care of it.
+        guest = getattr(self, "_guest", None)
+        cwd = self._work_dir(guest) if guest else (self.cwd or os.getcwd())
         if not self.sync_dir or os.path.realpath(cwd) == os.path.realpath(
                 self.sync_dir):
             return [], False
@@ -2920,9 +2969,20 @@ class Bridge:
             "Permission mode set to " + label + "."))
         await self._send_options(guest)
 
-    async def _new_session(self, guest: GuestSession) -> None:
-        """Start a fresh conversation. There was no way to do this at all."""
-        log.info("new session requested")
+    async def _new_session(self, guest: GuestSession,
+                           folder: str = "") -> None:
+        """Start a fresh conversation, optionally in its own folder."""
+        name = self.folder_name(folder)
+        if folder.strip() and not name:
+            # Refused, not repaired: a name with a separator or `..` in it is
+            # not a typo, and silently rewriting it into something that works
+            # is how a guard becomes decoration.
+            await self._write_block(guest, H.error(
+                "That folder name cannot be used. Letters, digits, - and _ "
+                "only, up to %d characters." % self.FOLDER_MAX))
+            return
+
+        log.info("new session requested (folder=%s)", name or "(shared)")
         self._abandon_pending(guest)
         if guest.claude:
             await guest.claude.close()
@@ -2930,6 +2990,25 @@ class Bridge:
         # opened and never spoke in is abandoned here too, or the first
         # message in the NEW chat would resume the OLD one.
         guest.pending_resume = ""
+
+        # CREATED HERE, not lazily: the session is about to be built with
+        # this as its cwd, and the CLI is entitled to a directory that
+        # exists. Inside the mirror, so the folder and everything in it
+        # reaches the user's machine on the next pass without anything else
+        # being told about it.
+        guest.work_dir = ""
+        if name:
+            base = self.sync_dir or self.cwd or os.getcwd()
+            path = os.path.join(base, name)
+            try:
+                os.makedirs(path, exist_ok=True)
+            except OSError as exc:
+                log.exception("could not create %s", path)
+                await self._write_block(guest, H.error(
+                    "Could not create the folder: " + str(exc)[:160]))
+                return
+            guest.work_dir = path
+        self._retarget_perms(guest)
 
         await guest.reset_transcript()
 
@@ -2955,6 +3034,10 @@ class Bridge:
         await self._send(guest, switched(guest.claude.session_id or "",
                                          guest.pages.count))
         await self._send_page(guest, "live")
+        if name:
+            await self._write_block(guest, H.notice(
+                "This conversation works in " + self._guest_root(guest)
+                + " on your machine."))
         await self._send_options(guest)
 
     async def _switch(self, guest: GuestSession, session_id: str) -> None:
@@ -2986,6 +3069,13 @@ class Bridge:
         # read. The client is built at the first message instead
         # (_resume_pending), which is the first moment it can do anything.
         guest.pending_resume = session_id
+        # And its folder comes back with it. A conversation started in
+        # C:\WORK\NOTES has to resume there, or the second half of it would
+        # be written somewhere the first half is not -- so this is read from
+        # the stored session's own cwd rather than left on whatever the
+        # previous conversation was using.
+        guest.work_dir = self._stored_work_dir(session_id)
+        self._retarget_perms(guest)
 
         # Fresh transcript state. Anything the old session had is on disk.
         await guest.reset_transcript()

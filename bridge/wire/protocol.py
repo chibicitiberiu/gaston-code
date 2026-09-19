@@ -242,20 +242,33 @@ def error(code: str, msg: str) -> Frame:
 # --- session lifecycle --------------------------------------------------
 
 
-def ready(sess: str, model: str, page: int, total: int) -> Frame:
+def ready(sess: str, model: str, page: int, total: int,
+          conv: str = "") -> Frame:
     """First frame after HELLO succeeds, carrying the session id.
+
+    `sess` and `conv` are two different things and the difference matters
+    here. `sess` is the per-CONNECTION handle, stable for the life of the
+    socket and never the same as a conversation's id (02.24). `conv` is which
+    CONVERSATION is on screen, and it is new: the guest keeps its own cached
+    copy of a transcript keyed on that, and before this frame carried it,
+    nothing told a freshly connected guest which conversation it was looking
+    at unless a SWITCHED happened to follow -- which it does after a switch
+    and does not after a plain reconnect.
 
     Used to also carry `next_seq=`, the replay cursor a `from=` on the next
     HELLO would resume from. Retired with `hello()`'s `from_seq` -- see its
     docstring.
     """
-    return Frame("READY", {
+    h = {
         "sess": sess,
         "ver": str(PROTO_VERSION),
         "model": model,
         "page": str(page),
         "total": str(total),
-    })
+    }
+    if conv:
+        h["conv"] = conv
+    return Frame("READY", h)
 
 
 def doc(html: str) -> Frame:

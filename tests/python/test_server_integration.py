@@ -6,6 +6,7 @@ round trips. Mocking the session keeps it deterministic and fast; the real
 model is exercised separately by netcheck.exe.
 """
 
+import os
 import asyncio
 import time
 import zlib
@@ -60,6 +61,9 @@ class FakeSession:
         # switching a chat built NOTHING and that the first message built the
         # right thing.
         self.resume = kw.get("resume")
+        # Where the bridge said to work. A conversation with its own folder
+        # has to actually RUN in it, not merely be labelled with it.
+        self.cwd = kw.get("cwd")
         self.model = kw.get("model") or "fake-model"
         self.effort = kw.get("effort")
         self.on_text = kw.get("on_text")
@@ -767,6 +771,124 @@ async def test_effort_menu_ticks_the_cli_default(harness):
     await harness.close(w)
 
 
+# --- one folder per conversation --------------------------------------------
+
+
+async def test_a_new_chat_can_have_its_own_folder(harness, tmp_path):
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+
+    await harness.send(w, Frame("NEWSESSION", {"folder": "notes"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    g = b._guest
+    assert g.work_dir == os.path.join(b.sync_dir, "NOTES")
+    assert os.path.isdir(g.work_dir), "created, not merely named"
+    assert g.claude.cwd == g.work_dir, "and the session runs in it"
+    await harness.close(w)
+
+
+async def test_a_folder_name_that_leaves_the_mirror_is_refused(
+    harness, tmp_path,
+):
+    """Refused, not repaired. A name with `..` or a separator in it is not a
+    typo, and rewriting it into something that works is how a guard becomes
+    decoration."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    before = b._guest.claude
+
+    for bad in ("../etc", "a/b", "C:\\x", "..", "a\\b"):
+        await harness.send(w, Frame("NEWSESSION", {"folder": bad}))
+        await harness.recv_until(r, {"TEXT"}, 10.0)
+        assert b._guest.claude is before, (
+            "%r must not have started a session" % bad
+        )
+        assert b._guest.work_dir == ""
+    await harness.close(w)
+
+
+async def test_a_blank_folder_means_the_shared_one(harness):
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("NEWSESSION", {"folder": "  "}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert harness.bridge._guest.work_dir == ""
+    await harness.close(w)
+
+
+async def test_a_restored_chat_comes_back_in_its_own_folder(
+    harness, tmp_path,
+):
+    """A conversation started in C:\\WORK\\NOTES has to resume there, or its
+    second half is written somewhere its first half is not."""
+    import bridge.server as srv
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(os.path.join(b.sync_dir, "NOTES"), exist_ok=True)
+
+    rows = [{"id": "stored-1", "title": "t", "cwd": os.path.join(
+                b.sync_dir, "NOTES"), "modified": "", "group": ""},
+            {"id": "stored-2", "title": "t", "cwd": "/somewhere/else",
+             "modified": "", "group": ""}]
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = lambda cwd=None, limit=50: list(rows)
+    try:
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
+                         sid="stored-1")
+        assert b._guest.work_dir == os.path.join(b.sync_dir, "NOTES")
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
+                         sid="stored-2")
+        assert b._guest.work_dir == "", (
+            "a conversation started outside the mirror must not point this "
+            "bridge's agent at a directory the rest of the system knows "
+            "nothing about"
+        )
+    finally:
+        srv.sesslist.listing = orig
+    await harness.close(w)
+
+
+class _NoPatch:
+    """monkeypatch's setattr, for a caller that has already patched what it
+    needs and only wants _switch_to's frame handling."""
+
+    def setattr(self, *a, **kw):
+        import bridge.server as srv
+        srv.sesslist.history_html = lambda sid_, limit=2000: []
+
+
+async def test_the_chat_list_is_not_filtered_by_one_directory(harness):
+    """Conversations live in their own folders now, so filtering the listing
+    by `self.cwd` would drop a chat the moment it was given one. The registry
+    was always the real filter."""
+    import bridge.server as srv
+    seen = {}
+
+    def fake_listing(cwd=None, limit=50):
+        seen["cwd"] = cwd
+        return []
+
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = fake_listing
+    try:
+        await harness.send(w, Frame("GETSESSIONS", {}))
+        await harness.recv_until(r, {"SESSIONSEND"}, 10.0)
+    finally:
+        srv.sesslist.listing = orig
+    assert seen.get("cwd") is None
+    await harness.close(w)
+
+
 # --- what can run without asking --------------------------------------------
 
 
@@ -887,6 +1009,20 @@ async def _switch_to(harness, monkeypatch, r, w, sid, blocks=None):
                         lambda sid_, limit=2000: list(blocks or []))
     await harness.send(w, Frame("SWITCH", {"id": sid}))
     return await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+
+async def test_ready_names_the_conversation_not_just_the_connection(harness):
+    """`sess` is the per-connection handle and is never a conversation id.
+    The guest keys its cached transcript on the conversation, and before
+    READY carried one, a plain reconnect cached nothing at all -- only
+    SWITCHED said where pages belonged, and a reconnect does not send one."""
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"READY"})
+    ready_f = [f for f in frames if f.type == "READY"][-1]
+    g = harness.bridge._guest
+    assert ready_f.headers.get("conv") == g.conv_id
+    assert ready_f.headers["sess"] != ready_f.headers.get("conv")
+    await harness.close(w)
 
 
 async def test_switching_a_chat_starts_no_process(harness, monkeypatch):

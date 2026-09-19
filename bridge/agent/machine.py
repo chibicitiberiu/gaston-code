@@ -57,6 +57,12 @@ transfer it -- an offer you cannot keep is worse than the limitation."""
 
     where = guest_root or "the machine's sync folder"
     rel = os.path.relpath(sync_dir, workdir) if sync_dir != workdir else "."
+    # `..` means the working directory is INSIDE the mirror rather than the
+    # other way round, which is what a per-conversation folder looks like.
+    # Everything reachable is mirrored, so say that rather than "`../` is
+    # mirrored", which is true and reads as though the agent should go up.
+    if rel.startswith(".."):
+        rel = "."
     inside = "the whole working directory" if rel == "." else f"`{rel}/`"
     return f"""Your file editing tools operate on `{workdir}` on this proxy. Within it,
 **{inside} is mirrored to `{where}` on the user's machine** -- and nothing else

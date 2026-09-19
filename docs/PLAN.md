@@ -1232,15 +1232,34 @@ has known work left.
   drops it -- and matching text degrades to today's behaviour when the wording
   changes, where a JSONL reader would break the whole chat list.
 
-- **The work folder, chosen when a chat is started. [R] Decided 2026-09-18.**
-  *Still to do, and it belongs to this stage's dialog work.* The default
-  becomes `C:\Gaston\<shortened chat name>` rather than one folder shared by
-  every conversation, and the New Chat path offers to put it somewhere else.
-  See "One mirror per chat" under Phase 3.3 for what the default decides and
-  `BACKLOG.md` §7 for what it unblocks. The UI is the only part not yet
-  designed: a folder field on the new-chat path, defaulted from the chat name
-  and editable before the first sync pass runs. Recorded here so it is not
-  rediscovered when the dialog is built.
+- **The work folder, chosen when a chat is started. [R -- 2026-09-19] Done,
+  and as a SUBFOLDER OF THE MIRROR rather than a new mirror.** §7 settled that
+  a mirror belongs to a conversation; what it did not settle is whether that
+  means moving the sync root. Moving it would mean a new baseline, a new
+  `tree_id`, a watcher restart and a recovery pass on the new tree -- four
+  chances to report deletions nobody made, in the one layer that can lose a
+  person's work. Putting the conversation INSIDE the existing mirror gets the
+  same property (every chat has its own folder; two chats cannot overwrite
+  each other's files) with one mirror, one baseline and one watcher, which is
+  what §7 says the decision requires. It also makes a stronger guarantee than
+  the original shape: with the agent's cwd inside the mirror, everything it
+  can write is mirrored, so `_edits_outside_the_mirror` has nothing to find by
+  construction.
+  The name is asked for on New chat and cannot be changed afterwards -- there
+  is nothing to default it from (the CLI titles a conversation from its first
+  message, which has not happened yet) and changing it later would mean moving
+  files that are already on the other machine. Blank is a real answer and
+  means the shared folder.
+  A folder name with a separator, a colon or `..` in it is REFUSED, not
+  repaired: it is not a typo, and rewriting it into something that works is
+  how a guard becomes decoration. A restored conversation comes back in its
+  own folder, read from the stored session's `cwd` and accepted only if it is
+  inside the mirror.
+  Two consequences worth knowing: the chat list is no longer filtered by
+  directory (`registry.filter` was always the real filter, and a directory
+  filter would drop a chat the moment it was given a folder), and the
+  permission desk's containment root follows the conversation, or `off_limits`
+  would refuse the chat's OWN files while allowing the previous chat's.
 
 - **File -> Export as HTML. [R -- 2026-09-19] Done.** Three frames
   (`EXPORTSTART`/`EXPORTDAT`/`EXPORTEND`), `GuestLink.send_export`, and a
@@ -1273,7 +1292,25 @@ has known work left.
   would read as "this is everything", which is measured false.
 
 - **R5 (icons), R7 (multiple clients), R8 (Command menu)** land here unless
-  pulled forward.
+  pulled forward. **[R -- 2026-09-19]** R5 shipped as Phase 4.0 and R8 as
+  4.1f part 3. R7 did NOT: one conversation now has one folder, but two
+  guests still share one mirror and one baseline, so `BACKLOG.md` §7's
+  implementation list is untouched.
+
+- **A transcript that survives a disconnection. [R -- 2026-09-19] Done
+  (4.1k).** The bridge owns the transcript, so a guest that started with the
+  bridge down had nothing at all to show -- an empty white rectangle and an
+  empty chat list. Each completed page and the chat list are now kept on
+  DISK under `<exe dir>\CACHE\`, and a failed connect puts them back with a
+  notice saying they are not live.
+  On disk and not in memory, deliberately: `app/pagebar.h`'s "the control
+  holds exactly ONE page ... the whole reason a 32MB box can run this" is
+  unchanged, and so is the high-water mark. The chat list is streamed a row
+  at a time in both directions -- an earlier version held it in a static
+  array, which cost 12.8KB of BSS on a machine measured at 28 KB free after
+  a turn, for data whose destination is a file written one line at a time.
+  Only a page the bridge calls complete is kept, so a half-streamed answer is
+  never restored as though it had finished.
 
 **One SDK question from the original text is now answered** rather than
 guessed, checked against the installed 0.2.153:

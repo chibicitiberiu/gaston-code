@@ -31,4 +31,19 @@
  */
 int rc_hostdlg_run(HWND parent, HINSTANCE inst, rc_config *cfg);
 
+/* Ask for one short line of text, with a sentence of explanation above it.
+ *
+ * Here rather than in its own file because the byte-level DLGTEMPLATE
+ * machinery above -- the DWORD alignment and the UTF-16 strings that are
+ * wrong in ways which produce no dialog and no error -- is the whole of the
+ * cost, and a second copy of it would be a second chance to get that wrong.
+ * File > New chat's folder prompt is its one caller today.
+ *
+ * `buf` is seeded with the default and holds the answer. Non-zero if the
+ * user pressed OK; zero on Cancel, and `buf` is left alone.
+ */
+int rc_askdlg_run(HWND parent, HINSTANCE inst, const char *title,
+                  const char *note, const char *label,
+                  char *buf, unsigned cap);
+
 #endif

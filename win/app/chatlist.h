@@ -143,6 +143,16 @@ public:
      * class owns. Returns non-zero if `f->type` was one of those. */
     int frame(rc_frame *f);
 
+    /* Fill the list from somewhere that is not the wire -- app/cache.cpp
+     * replaying what was on screen before the bridge went away. Same three
+     * steps the SESSIONS/SESSION/SESSIONSEND frames drive, so a restored
+     * list and a live one cannot differ in a detail nobody thought to
+     * check. */
+    void begin_rows();
+    void add_row(const char *id, const char *title, const char *group,
+                 int current);
+    void end_rows();
+
     int draw(DRAWITEMSTRUCT *dis);
     int measure(MEASUREITEMSTRUCT *mis);
 

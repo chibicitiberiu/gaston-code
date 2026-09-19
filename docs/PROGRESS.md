@@ -3,12 +3,11 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: Phase 3 — the guest becomes a workspace.**
+**Current goal: Phase 5 — Attach.**
 
-Phases 0-2 are done and demoed on the real guest. Phase 3 is now planned in
-detail in `PLAN.md`: permissions first (3.0), then the tool surface (3.1), the
-RPC worker thread (3.2), strip-based screenshots (3.3) and the file sync layer
-(3.4) that replaces Samba.
+Phases 0–4 are done and demoed on the real guest. Phase 4's own list is closed
+except for R7 (multiple clients), which `BACKLOG.md` §7 carries with its
+implementation blockers intact.
 
 ---
 
@@ -2344,3 +2343,90 @@ GPF; and a second turn confirming a degraded-but-completed turn now reads
 **2253 tests, four gates green, 303,044 bytes committed at load** -- unchanged
 across the whole stage, which is the number that decides what else fits on a
 32MB machine.
+
+### 2026-09-19 — Phase 4 closed
+
+Eleven sub-stages in one run: 4.1f through 4.1k, the per-chat work folder,
+Export, and the permissions view. What is worth keeping is not the list.
+
+**Four features were specified wrong, and finding that out was the work.**
+
+*The permission rule table* was "parse `.claude/settings*.json` and push a
+read-only view". `Session` runs with `setting_sources=[]` on purpose, so the
+operator's rules are **not in effect** for a Win98 client — a table of them
+answers "what can happen without asking?" with rules that cannot happen. What
+shipped says the mode in force, that anything touching the user's machine
+always asks, and, in as many words, that the list is incomplete because Claude
+Code resolves some calls locally and never tells the bridge.
+
+*The Commands menu* was "built from live data, not guesswork". The live data is
+53 commands, most of them meaningless on that machine: plugin management, cloud
+workflows billed by the run, a heap dump to the operator's Desktop.
+`terminal_slash_commands` — the SDK list the plan expected to filter with —
+**does not exist**. Three of the fifty-three shipped, and `/recap` and `/usage`
+were cut after being tried: both ran, both cost a turn, both rendered nothing.
+
+*The per-chat work folder* was `C:\Gaston\<chat>`, a new mirror per
+conversation. That means a new baseline, a new `tree_id`, a watcher restart and
+a recovery pass — four chances to report deletions nobody made, in the one
+layer that can lose a person's work. The conversation moves **inside** the
+existing mirror instead: same property, one mirror, one baseline, one watcher,
+which is what `BACKLOG.md` §7 said the decision required. It also makes a
+stronger guarantee than the original shape — with the agent's cwd inside the
+mirror, everything it can write is mirrored, so strays are impossible by
+construction.
+
+*The local cache* was going to hold pages in memory. It is files on disk, one
+page each, exactly one in memory at a time — `pagebar.h`'s "the control holds
+exactly ONE page … the whole reason a 32MB box can run this" is unchanged. The
+first version of the chat-list half held it in a static array and cost
+**12.8KB of BSS** on a machine measured at 28KB free after a turn, for data
+whose destination is a file written one line at a time. Streaming it in both
+directions costs 220 bytes of stack.
+
+**The permission-mode menu offers three of the SDK's six, and the three it
+withholds matter more.** Under `bypassPermissions` the callback is never
+invoked. Under `auto`, measured here, **the classifier is not in the loop at
+all**: `git reset --hard` on a repo with real uncommitted work executed
+unchanged in both `default` and `auto`. Offering "Auto" would promise Claude's
+danger classifier and deliver nothing, to somebody whose machine cannot undo a
+`DELTREE`. `dontAsk` denies anything not pre-approved, and nothing is
+pre-approved yet. A test pins the list so nobody completes it later.
+
+**Three bugs found by clicking, not by reading.** The first toolbar spanned the
+window and drew over the chat list's Refresh button. `build_menu` ran after
+`CreateWindowEx`, so `g_optmenu` was NULL for the whole of `create_children` —
+the toolbar took that NULL and its dropdowns read `(model)` forever while the
+menu bar above showed Haiku ticked. And with `TBSTYLE_EX_DRAWDDARROWS` only the
+*arrow* of a dropdown sends `TBN_DROPDOWN`; clicking the text of "Commands" or
+"Haiku" did nothing at all. `BTNS_WHOLEDROPDOWN` would say so directly and is
+gated behind `_WIN32_IE >= 0x0500`, so catching the `WM_COMMAND` costs one
+branch and works on an IE4 machine too.
+
+**Opening a conversation stops starting one.** `_switch` spawned a full CLI
+subprocess with `--resume` just to *read* a chat. It replays stored history and
+builds nothing; the first message starts the process. Four things were quietly
+session-dependent and had to stop being: the cleanup barrier that denies
+outgoing prompts moved out of `_make_session` (a switch no longer calls it, so
+a prompt could have outlived the conversation that raised it while the guest
+had already hidden its bar), the menus answer from a Bridge-level cache of the
+CLI's lists, Model and Effort are recorded rather than dropped, and the chat
+list marks by `conv_id` rather than a live client's id.
+
+**The compaction summary is one line.** The flag `isCompactSummary` is a
+top-level key on the stored JSONL record and `SessionMessage.message` carries
+`{content, role}` and nothing else, so the accessor drops it. Matched on the
+opening sentence instead, and the reason is how each option *fails*: a wording
+change stops the match and replays the summary as a bubble, which is today's
+behaviour; a format change breaks a JSONL reader for every session in the list.
+
+**Measured on the guest, with nothing else running:** 5208 KB free at window
+creation, 4568 KB after the chat list. The USER/GDI split could **not** be
+measured — `probe.exe` resolves `GetFreeSystemResources` through `rsrc32.dll`
+and that DLL is not installed, so the Resource Meter has to be added before
+anyone quotes a percentage. `BACKLOG.md` §11's "already ruled out" was half
+wrong and is corrected there.
+
+**2381 tests green, four gates green, 303,044 → 337,028 bytes committed at
+load** across the whole of Phase 4 — the number that decides what else fits on
+a 32MB machine.
