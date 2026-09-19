@@ -118,7 +118,16 @@ public:
                              rc_chats_confirm_fn confirm,
                              rc_chats_send_fn send, void (*switching)(void),
                              void (*switched)(rc_frame *f));
-    ~rc_chats() {}
+    /* NOT empty, and it was.
+     *
+     * list_proc dereferences s_instance on every message, and the listbox
+     * outlives this object: children are destroyed after the frame's
+     * WM_DESTROY handler runs, and they get WM_DESTROY/WM_NCDESTROY on the
+     * way out. So a deleted rc_chats left a live window pointing at a proc
+     * that read freed memory -- an invalid page fault during shutdown, at an
+     * address inside this file, with the log ending one line earlier at
+     * "reader thread exiting". Un-subclass first, then drop the singleton. */
+    ~rc_chats();
 
     /* x/y/w: the column's position and width. col_h: the column's FULL
      * height, list plus the Refresh button plus the gap between them --

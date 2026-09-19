@@ -38,6 +38,10 @@ cp "$HERE/vm/retrocl.ini"      "$STAGE/RETROCL.INI" 2>/dev/null || true
 # frame still wins at runtime: set_document compares and re-installs when the
 # two differ, which is also what makes a CSS change reach the guest on a
 # reconnect rather than a reinstall.
+# The transcript's spinner. A real file because IE5 animates GIFs but has no
+# data: URI support, so it cannot be inlined into the document.
+cp "$HERE/win/app/spin.gif" "$STAGE/SPIN.GIF" 2>/dev/null || true
+
 if ! python3 -c "
 import sys; sys.path.insert(0, '$HERE')
 from bridge.view.html import document
@@ -64,6 +68,7 @@ REM The cold-start transcript document. Without it the app shows a bare grey
 REM rectangle until a bridge answers, which is also when it most needs to say
 REM something. Long name deliberately: the app opens view.htm beside itself.
 IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\RETRO\view.htm > NUL
+IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\RETRO\spin.gif > NUL
 C:
 CD \RETRO
 ECHO Copied to C:\RETRO.  Run PROBE to start the Phase 0 experiments.

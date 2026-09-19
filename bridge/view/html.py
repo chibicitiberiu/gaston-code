@@ -359,7 +359,7 @@ STYLESHEET = """
    MS Sans Serif is a bitmap .FON with no italic face, so GDI fakes one by
    shearing the glyph grid -- which is what made emphasis look broken. It is
    not a smoothing problem, and smoothing is unavailable at 8bpp anyway.
-   Measured on the guest: C:\WINDOWS\FONTS carries VERDANA, VERDANAB,
+   Measured on the guest: its FONTS directory carries VERDANA, VERDANAB,
    VERDANAI and VERDANAZ, so the italic and bold-italic faces are real ones.
    Verdana was drawn for small unsmoothed screen type, which is exactly this.
    (Tahoma would not do: it ships bold only, same defect.)
@@ -377,6 +377,15 @@ i { font-style: italic; }
 .you { background: #e8e8f0; border-left: 3px solid #000080;
        padding: 5px 7px; margin: 12px 0 9px 0; color: #000080;
        font-weight: bold; }
+
+/* A message the guest has echoed but the bridge has not yet acknowledged by
+   starting a turn. Drawn back: hollow left rule, grey text, no bold. On a
+   LAN that state lasts a moment; on the 5 KB/s dialup link this project also
+   targets it is seconds, and "did that send?" is the question it answers.
+   The class is dropped in place when TURN state=start arrives, so the block
+   does not move or re-render -- it just stops looking provisional. */
+.you.pending { background: #f4f4f8; border-left-color: #a0a0b8;
+               color: #606078; font-weight: normal; }
 
 /* Code. The label sits on the block rather than floating above it as the
    bracketed "[c]" used to. */
@@ -434,6 +443,15 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
                   border-left-color: #a00000; }
 .clip { color: #808080; font-style: normal; margin-top: 2px; }
 .notice { color: #808080; margin: 6px 0; }
+
+/* The status line, under everything. Grey like a notice because it is the
+   same kind of thing -- the app talking about itself -- but it does not
+   scroll away, it is replaced. The spinner is a real .gif file beside the
+   document: IE5 animates GIFs but has no data: URI support, so it cannot be
+   inlined. If the file is missing the alt text is empty and the line still
+   reads correctly, which is why the wording never depends on it. */
+.status { color: #808080; margin: 6px 0; }
+.status img { vertical-align: middle; margin-right: 5px; }
 .err { color: #a00000; background: #fff0f0; border-left: 3px solid #a00000;
        padding: 4px 6px; margin: 7px 0; font-weight: bold; }
 
@@ -449,14 +467,27 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .perm td { font-family: 'Courier New', monospace; }
 """
 
-# Two containers: finished blocks accumulate in #t, and #l holds the one block
-# still being written, replaced wholesale on each update. Keeping them separate
-# is what lets the guest stream without ever re-parsing what is already there.
+# Three containers: finished blocks accumulate in #t, #l holds the one block
+# still being written (replaced wholesale on each update), and #s is the
+# status line that sits under both. Keeping them separate is what lets the
+# guest stream without ever re-parsing what is already there.
+#
+# #s is written by the GUEST, not from here, and that is not a breach of "the
+# guest transforms nothing". It renders no bridge content: it says what the
+# app itself is doing -- thinking, receiving, how long -- which is the same
+# thing it has always put in the status bar, just somewhere the eye already
+# is. The bridge supplies the slot and the stylesheet; the guest supplies the
+# one line about its own state.
+#
+# A guest built against a two-slot skeleton must still work, because the
+# bridge's DOC is authoritative and the two can be different versions. The
+# guest treats #s as optional for exactly that reason.
 SKELETON = ("<html><head>"
             "<meta http-equiv=\"Content-Type\" "
             "content=\"text/html; charset=windows-1252\">"
             "<style>%s</style></head>"
-            "<body><div id=\"t\"></div><div id=\"l\"></div></body></html>")
+            "<body><div id=\"t\"></div><div id=\"l\"></div>"
+            "<div id=\"s\"></div></body></html>")
 
 
 def document(css: str | None = None) -> str:

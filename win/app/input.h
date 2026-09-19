@@ -96,7 +96,9 @@ public:
                             rc_net *net, rc_html *html, rc_xferstat *xfer,
                             rc_input_send_fn send, int (*blocked)(void),
                             void (*sent)(void));
-    ~rc_input() {}
+    /* Same reason as rc_chats': box_proc dereferences s_instance and the
+     * edit control outlives this object during teardown. See chatlist.h. */
+    ~rc_input();
 
     /* cx/y: where the input box starts. cw: the transcript column's width,
      * which bounds the box (Send/Stop sit to its right). win_w: the full

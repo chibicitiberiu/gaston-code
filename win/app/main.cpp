@@ -197,11 +197,29 @@ static void status_refresh(void)
      * is the difference between "working" and "hung", and it costs one
      * SB_SETTEXT a second rather than touching the transcript. */
     if (g_turn_active && g_turn_start_ms) {
-        rc_strf(buf, sizeof(buf), " %s %lus",
-                  g_turn_state == TURN_STREAMING
-                      ? "receiving..." : "Claude is thinking...",
-                  (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000));
+        const char *what = g_turn_state == TURN_STREAMING
+                               ? "receiving..." : "Claude is thinking...";
+        unsigned long secs =
+            (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000);
+        rc_strf(buf, sizeof(buf), " %s %lus", what, secs);
         status_set(2, buf);
+
+        /* And the same thing at the bottom of the transcript, which is where
+         * the eye already is. The status bar is 400 pixels away from the
+         * text you are reading; a line under the last paragraph is not.
+         *
+         * The spinner is a real file beside the document because IE5
+         * animates GIFs but has no data: URI support. If it is missing the
+         * <img> renders as nothing and the line still reads correctly --
+         * which is why the wording never depends on it. */
+        if (g_html) {
+            char row[256];
+            rc_strf(row, sizeof(row),
+                    "<div class=\"status\">"
+                    "<img src=\"spin.gif\" width=\"16\" height=\"16\" alt=\"\">"
+                    "%s %lus</div>", what, secs);
+            g_html->status(row);
+        }
     }
 }
 
@@ -746,6 +764,10 @@ static void think_show(void)
     if (g_turn_state != TURN_IDLE) return;
     g_turn_state = TURN_THINKING;
     SetWindowTextA(g_main, RC_TITLE "  -  working...");
+    /* The bridge has the message: it started a turn for it. Drop the echo's
+     * provisional styling in place -- the block does not move or re-render,
+     * it just stops looking unsent. */
+    if (g_html) g_html->settle_pending();
 }
 
 /* First output of the turn. The title stays as it is until the turn actually
@@ -763,6 +785,11 @@ static void turn_done(void)
 {
     g_turn_state = TURN_IDLE;
     SetWindowTextA(g_main, RC_TITLE);
+    /* The status line is a statement about right now, so it goes when "right
+     * now" stops being true. Leaving "receiving... 41s" under a finished
+     * answer would be the same class of lie as the status bar saying
+     * "receiving" while a permission prompt waits for a human. */
+    if (g_html) g_html->status("");
 }
 
 /* echo_user_block, do_send, do_stop and input_proc (the Enter-sends/
@@ -1283,7 +1310,17 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         if (once && GetLastError() == ERROR_ALREADY_EXISTS) {
             HWND other = FindWindowA("RetroClaudeWnd", NULL);
             rc_log("another instance is running; raising it and exiting");
-            if (other) {
+            /* IsWindow, because FindWindow can hand back a window that is
+             * already being destroyed.
+             *
+             * The window outlives the mutex during teardown -- the handle is
+             * released when the process exits, and the class is unregistered
+             * after WM_DESTROY -- so relaunching immediately after closing
+             * (which is exactly what a ship-and-test loop does) lands here
+             * with a HWND that is on its way out. It does not close the race,
+             * nothing here can; it closes the window where we would act on a
+             * handle already known to be dead. */
+            if (other && IsWindow(other)) {
                 if (IsIconic(other)) ShowWindow(other, SW_RESTORE);
                 SetForegroundWindow(other);
             }

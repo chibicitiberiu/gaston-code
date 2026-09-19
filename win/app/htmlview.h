@@ -52,10 +52,20 @@
  * and is replaced wholesale as it grows. */
 #define RC_SLOT_DONE   "t"
 #define RC_SLOT_LIVE   "l"
+/* The status line under both. OPTIONAL, unlike the other two: the bridge's
+ * DOC is authoritative and may be an older build than this guest, and a
+ * missing status line is a cosmetic loss where a missing #t is a dead
+ * transcript. See rc_html::poll. */
+#define RC_SLOT_STATUS "s"
 
 #define RC_CSS_NOTICE  "notice"
 #define RC_CSS_ERROR   "err"
 #define RC_CSS_USER    "you"
+/* The echo is written pending and settled when the turn starts. One id,
+ * because there is only ever one un-acknowledged message: you cannot send
+ * another until this one has been. */
+#define RC_CSS_PENDING "you pending"
+#define RC_ID_PENDING  "pend"
 
 struct rc_html_impl;
 
@@ -121,6 +131,10 @@ public:
     void notice(const char *text);
     void error(const char *text);
     void user(const char *text);
+
+    /* The echoed message has been acknowledged -- drop its pending styling
+     * in place. No-op if there is nothing pending. Called on TURN start. */
+    void settle_pending();
     void block(const char *html);          /* bridge-rendered */
 
     /* Honour the user's setting. Off means a block still lands, but the view
@@ -128,6 +142,14 @@ public:
     void set_autoscroll(int on);
 
     void live(const char *frag);           /* replaces #l */
+
+    /* Replaces #s, the status line under the transcript. HTML, not text --
+     * it carries the spinner's <img>. Pass "" to clear it.
+     *
+     * The guest composes this, which is not a breach of "the guest
+     * transforms nothing": it renders no bridge content, it says what the
+     * app itself is doing. Silently a no-op if the document has no #s. */
+    void status(const char *frag);
     void clear();
     void scroll_bottom();
     int  at_bottom() const;
@@ -150,6 +172,7 @@ private:
     void renavigate();
     void append(const char *frag);
     void say(const char *cls, const char *text);
+    void say_id(const char *cls, const char *id, const char *text);
     void settle(int was_at_bottom);
 };
 

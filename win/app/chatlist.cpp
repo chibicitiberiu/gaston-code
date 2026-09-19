@@ -18,6 +18,18 @@
 
 rc_chats *rc_chats::s_instance;
 
+rc_chats::~rc_chats()
+{
+    /* Restore BEFORE clearing s_instance: the order matters, because
+     * anything dispatched between the two would otherwise reach list_proc
+     * with a null singleton. After this the listbox is an ordinary listbox
+     * and can be destroyed by Windows in its own time. */
+    if (list && oldproc)
+        SetWindowLongA(list, GWL_WNDPROC, (LONG)oldproc);
+    oldproc = NULL;
+    if (s_instance == this) s_instance = NULL;
+}
+
 /* Width available for an item's text: the client area less the vertical
  * scrollbar and the couple of pixels the listbox insets text by. */
 int rc_chats::text_width()
@@ -123,7 +135,13 @@ void rc_chats::open_selected()
  * on. */
 LRESULT CALLBACK rc_chats::list_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
-    LRESULT r = CallWindowProc(s_instance->oldproc, h, m, w, l);
+    LRESULT r;
+    /* The destructor un-subclasses, so this should be unreachable with a
+     * null singleton. It is checked anyway: the cost is one compare and the
+     * alternative was a page fault with no log line. */
+    if (!s_instance || !s_instance->oldproc)
+        return DefWindowProcA(h, m, w, l);
+    r = CallWindowProc(s_instance->oldproc, h, m, w, l);
     if (m == WM_LBUTTONUP)
         PostMessageA(GetParent(h), WM_RC_OPENCHAT, 0, 0);
     return r;

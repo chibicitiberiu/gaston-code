@@ -19,6 +19,14 @@
  * with one would run before WinMain and fail the static-ctor gate. */
 rc_input *rc_input::s_instance;
 
+rc_input::~rc_input()
+{
+    if (box && oldproc)
+        SetWindowLongA(box, GWL_WNDPROC, (LONG)oldproc);
+    oldproc = NULL;
+    if (s_instance == this) s_instance = NULL;
+}
+
 /* CreateWindowExA can fail, and on this platform that was never a
  * theoretical concern: the 16-bit USER/GDI heaps on 9x are a fixed 64KB that
  * does not scale with RAM -- see main.cpp's own check_child comment, the
@@ -127,12 +135,15 @@ void rc_input::do_stop(void)
 /* Enter sends; Shift+Enter inserts a newline. */
 LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
-    if (m == WM_KEYDOWN && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+    if (s_instance && m == WM_KEYDOWN && w == VK_RETURN
+        && !(GetKeyState(VK_SHIFT) & 0x8000)) {
         s_instance->do_send();
         return 0;
     }
     if (m == WM_CHAR && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
         return 0;   /* swallow the beep */
+    if (!s_instance || !s_instance->oldproc)
+        return DefWindowProcA(h, m, w, l);
     return CallWindowProc(s_instance->oldproc, h, m, w, l);
 }
 

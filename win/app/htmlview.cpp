@@ -255,6 +255,7 @@ struct rc_html_impl {
     ComPtr<IHTMLDocument2>  doc;
     ComPtr<IHTMLElement>    slot_t;     /* finished blocks */
     ComPtr<IHTMLElement>    slot_l;     /* the block being written */
+    ComPtr<IHTMLElement>    slot_s;     /* the status line (optional) */
     HWND           parent;
     int            ready;
     char          *queue;       /* appends that arrived before the document */
@@ -440,6 +441,14 @@ int rc_html::boot_local()
                                             (unsigned)n + 1));
         if (buf.valid() && fread(buf.get(), 1, (size_t)n, f) == (size_t)n) {
             buf.get()[n] = '\0';
+            /* CLOSE BEFORE INSTALLING. set_document writes the document to
+             * this same path -- so calling it with the file still open means
+             * truncating and rewriting a file we are holding a FILE* to,
+             * with identical bytes, for no reason. It is pointless work and
+             * an unnecessary hazard on a platform whose sharing rules are
+             * not the ones anyone remembers. */
+            fclose(f);
+            f = NULL;
             set_document(buf.get());
             ok = 1;
             rc_log("html: cold-start document installed (%ld bytes)", n);
@@ -447,7 +456,7 @@ int rc_html::boot_local()
     } else {
         rc_log("html: cold-start document is %ld bytes; ignored", n);
     }
-    fclose(f);
+    if (f) fclose(f);
     return ok;
 }
 
@@ -528,6 +537,7 @@ void rc_html::set_document(const char *doc)
         d->ready = 0;
         d->slot_t.reset(NULL);
         d->slot_l.reset(NULL);
+        d->slot_s.reset(NULL);
         renavigate();
         rc_log("html: document changed, re-navigating");
         return;
@@ -605,6 +615,14 @@ int rc_html::poll()
         rc_log("html: document has no #t/#l containers");
         return 0;
     }
+    /* Optional, and deliberately not part of the test above. The bridge's
+     * DOC wins over the copy shipped beside the exe, and the two can be
+     * different builds -- so a guest that insists on #s would refuse to
+     * render a transcript at all when talking to an older bridge. Losing the
+     * status line is cosmetic; losing #t is the whole window. */
+    d->slot_s.reset(find_id(d->doc.get(), RC_SLOT_STATUS));
+    if (!d->slot_s.valid())
+        rc_log("html: no #s container; status line disabled");
     d->ready = 1;
     rc_log("html: document ready");
 
@@ -678,6 +696,11 @@ void rc_html::settle(int was_at_bottom)
  * main.c. */
 void rc_html::say(const char *cls, const char *text)
 {
+    say_id(cls, NULL, text);
+}
+
+void rc_html::say_id(const char *cls, const char *id, const char *text)
+{
     unsigned n, cap;
     int bottom;
 
@@ -688,13 +711,39 @@ void rc_html::say(const char *cls, const char *text)
     if (!esc.valid()) return;
     esc_into(text, esc.get(), cap);
 
-    HeapPtr<char> div((char *)HeapAlloc(GetProcessHeap(), 0, cap + 64));
+    HeapPtr<char> div((char *)HeapAlloc(GetProcessHeap(), 0, cap + 96));
     if (!div.valid()) return;
-    rc_strf(div.get(), cap + 64, "<div class=\"%s\">%s</div>", cls, esc.get());
+    if (id && *id)
+        rc_strf(div.get(), cap + 96, "<div class=\"%s\" id=\"%s\">%s</div>",
+                cls, id, esc.get());
+    else
+        rc_strf(div.get(), cap + 96, "<div class=\"%s\">%s</div>",
+                cls, esc.get());
 
     bottom = at_bottom();
     append(div.get());
     settle(bottom);
+}
+
+void rc_html::settle_pending()
+{
+    if (!d->ready) return;
+    {
+        ComPtr<IHTMLElement> el;
+        IHTMLElement *raw = find_id(d->doc.get(), RC_ID_PENDING);
+        if (!raw) return;                   /* nothing outstanding */
+        el.reset(raw);
+        {
+            /* Class first, then the id. Dropping the id is what keeps the
+             * NEXT echo's id unique -- MSHTML's getElementById returns the
+             * first match, so a stale one would make settle_pending settle
+             * the wrong message from then on. */
+            Bstr cls(to_bstr(RC_CSS_USER));
+            Bstr none(to_bstr(""));
+            IHTMLElement_put_className(el.get(), cls.get());
+            IHTMLElement_put_id(el.get(), none.get());
+        }
+    }
 }
 
 void rc_html::notice(const char *text)
@@ -732,10 +781,10 @@ void rc_html::user(const char *text)
          * Heap rather than stack: the input is the user's whole message and
          * the largest frame in this program already lives in main. */
         HeapPtr<char> t((char *)HeapAlloc(GetProcessHeap(), 0, n + 1));
-        if (!t.valid()) { say(RC_CSS_USER, b); return; }
+        if (!t.valid()) { say_id(RC_CSS_PENDING, RC_ID_PENDING, b); return; }
         memcpy(t.get(), b, n);
         t.get()[n] = '\0';
-        say(RC_CSS_USER, t.get());
+        say_id(RC_CSS_PENDING, RC_ID_PENDING, t.get());
     }
 }
 
@@ -806,6 +855,24 @@ void rc_html::live(const char *frag)
     settle(bottom);
 }
 
+void rc_html::status(const char *frag)
+{
+    if (!d->ready || !d->slot_s.valid()) return;
+    {
+        Bstr html(to_bstr(frag ? frag : ""));
+        HRESULT hr = IHTMLElement_put_innerHTML(d->slot_s.get(), html.get());
+        if (FAILED(hr))
+            rc_log("html: status FAILED hr=%08lX", (unsigned long)hr);
+    }
+    /* Deliberately no settle() here, unlike live().
+     *
+     * This line re-renders once a second for the whole turn. Following it
+     * would mean scrolling on a timer, which fights the user the moment they
+     * scroll up to read something -- and at_bottom()'s 24px tolerance is
+     * already about the height of this line, so the append path stays
+     * correct without any help. */
+}
+
 void rc_html::clear()
 {
     d->queue_len = 0;
@@ -814,6 +881,8 @@ void rc_html::clear()
     Bstr empty(to_bstr(""));
     IHTMLElement_put_innerHTML(d->slot_t.get(), empty.get());
     IHTMLElement_put_innerHTML(d->slot_l.get(), empty.get());
+    if (d->slot_s.valid())
+        IHTMLElement_put_innerHTML(d->slot_s.get(), empty.get());
 }
 
 void rc_html::scroll_bottom()
