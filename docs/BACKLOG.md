@@ -884,6 +884,44 @@ simply never been looked at, rather than for the `RC_MAX_INFLIGHT` gate, which
 a pumping modal does not reach; (5) if
 R7's `client_id` is also live by then, one `rc_config_save` fix serves both.
 
+## 11b. "Always" still does not survive a session rebuild -- and would not
+help the case it was written for
+
+**Status:** open, recorded 2026-09-19. Listed in the Phase 4.1j plan as "make
+Always survive a session rebuild ... Approve `wmake` once, never again."
+Working through it found that the second half of that sentence cannot be true.
+
+**What exists.** Pressing Always forwards the rule the CLI itself proposed,
+forced to `destination="session"` (`permissions.session_scoped`). It holds
+until the Session object is replaced -- which a switch, a new conversation and
+the effort fork all do -- and then it is gone.
+
+**Why persisting it would not deliver the example.** `allows_always` refuses
+the Always button for `mcp__machine__*` outright, because MCP rule names
+cannot carry specifiers: the only expressible rule is THE WHOLE TOOL, and one
+press on "run vol c:" would be a standing grant of arbitrary command execution
+on the user's machine. `wmake` runs through `mcp__machine__exec`. So the two
+nags the eval found cannot be retired by persisting Always no matter how the
+storage is built -- the button is not offered for them in the first place.
+
+What persistence WOULD cover is Bash/Read/Write/Edit on the bridge, which
+`off_limits` already confines to the working directory.
+
+**The other half of the problem is mechanical.** There is no control request
+for setting permission rules -- `ClaudeSDKClient` has `set_permission_mode`,
+`set_model`, `interrupt` and a dozen others, and nothing for rules. The only
+channel is `PermissionResultAllow.updated_permissions`, which needs a prompt
+to attach to. So a restored rule could only be re-applied on the FIRST allow
+of a new session, and until then the user is asked anyway.
+
+**To close it, decide first, then build:** whether "approve once" should mean
+something for `mcp__machine__exec`, which is the tool it is actually wanted
+for. That is the stop-asking-mode decision the 4.1j plan deferred by name --
+"the guard is built and exercised first; what gates on it is a separate
+decision once you have lived with it" -- and `bridge/agent/doscmd.py` is the
+thing that would have to gate it. Building the storage before that decision
+would produce a feature that works only where it is not needed.
+
 ## 11a. The transcript cache prunes nothing
 
 **Status:** recorded 2026-09-19, when the cache was built (Phase 4.3,

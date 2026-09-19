@@ -97,4 +97,13 @@ IDA_MAIN ACCELERATORS
     VK_F5,      IDA_REFRESH,  VIRTKEY
     VK_PRIOR,   IDA_PAGEPREV, VIRTKEY, CONTROL
     VK_NEXT,    IDA_PAGENEXT, VIRTKEY, CONTROL
+    /* Ctrl+M advances the permission mode. It is the setting most worth
+     * changing mid-conversation and the one furthest from the keyboard --
+     * two clicks on a dropdown at the bottom of the window.
+     *
+     * It DOES take Ctrl+M away from the edit control, where Win98 treats it
+     * as a newline. Shift+Enter is this app's documented way to do that and
+     * is what the input box's own comment describes, so the collision costs
+     * a behaviour nobody here was told about. */
+    "M",        IDA_MODENEXT, VIRTKEY, CONTROL
 }

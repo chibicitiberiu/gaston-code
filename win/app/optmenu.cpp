@@ -13,8 +13,9 @@ static void clear_popup(HMENU m)
 
 rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
                        rc_optmenu_input_fn input_)
-    : n_model(0), n_effort(0), n_mode(0), n_cmd(0), effort_ok(0), opts_open(0),
-      owner(owner_), send(send_), input(input_)
+    : n_model(0), n_effort(0), n_mode(0), n_cmd(0), effort_ok(0),
+      cur_mode_ix(-1), opts_open(0), owner(owner_), send(send_),
+      input(input_)
 {
     cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
     /* All three menus are built from what the bridge sends, so the lists can
@@ -71,6 +72,7 @@ int rc_optmenu::frame(rc_frame *f)
             n_mode = 0;
             n_cmd = 0;
             effort_ok = 0;
+            cur_mode_ix = -1;
             cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
         }
         if (kind && id && label) {
@@ -107,7 +109,10 @@ int rc_optmenu::frame(rc_frame *f)
                 n_effort++;
             } else if (strcmp(kind, "mode") == 0 && n_mode < MAX_OPTS) {
                 rc_strf(opt_mode[n_mode], 64, "%s", id);
-                if (on) rc_strf(cur_mode, sizeof(cur_mode), "%s", label);
+                if (on) {
+                    rc_strf(cur_mode, sizeof(cur_mode), "%s", label);
+                    cur_mode_ix = n_mode;
+                }
                 AppendMenuA(menu_mode,
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
                             IDM_MODE0 + n_mode, label);
@@ -131,6 +136,20 @@ int rc_optmenu::frame(rc_frame *f)
         return 1;
     }
     return 0;
+}
+
+void rc_optmenu::cycle_mode()
+{
+    if (n_mode <= 0) return;
+    {
+        /* From the ticked one, or from the first when nothing is ticked --
+         * which is what a disconnected guest looks like after a reconnect
+         * that has not sent options yet. */
+        int next = (cur_mode_ix < 0) ? 0 : (cur_mode_ix + 1) % n_mode;
+        const char *keys[1], *vals[1];
+        keys[0] = "mode"; vals[0] = opt_mode[next];
+        send("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
+    }
 }
 
 int rc_optmenu::command(int id)

@@ -1365,13 +1365,24 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (g_chats) g_chats->draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
 
-    /* The status bar's connection pane opens the Server Host dialog.
+    /* Double-clicking the connection pane opens the Server Host dialog.
+     * Double-clicking the thing that tells you where you are connected to,
+     * to change where you are connected to, is the shortest path anyone will
+     * look for, and `NMMOUSE::dwItemSpec` names the part -- 0 is the
+     * "10.0.2.2:7890" pane.
      *
-     * This is the first WM_NOTIFY handler in the file. A status bar sends
-     * NM_CLICK and NM_DBLCLK to its parent, and NMMOUSE::dwItemSpec names
-     * the part -- 0 is the "connected 10.0.2.2:7890" pane. Double-clicking
-     * the thing that tells you where you are connected to, to change where
-     * you are connected to, is the shortest path anyone will look for. */
+     * MEASURED, because this was written down as broken and was not. On a
+     * real double-click a Windows 98 status bar sends NM_CLICK and then
+     * NM_DBLCLK, 110ms apart, exactly as documented. What was broken was the
+     * testing: `tools/qmp.py click X Y double` silently ignored the third
+     * word -- the CLI verb is `dclick` -- so every attempt to exercise this
+     * was a single click, and a working feature was recorded as a defect and
+     * then "fixed" twice. The tool accepts both spellings now.
+     *
+     * A subclass catching WM_LBUTTONDBLCLK also works and was tried; it is
+     * not here because it is a subclass, and the two shutdown crashes this
+     * app has had were both subclass procs outliving what they reached
+     * through. */
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lp;
         if (g_toolbar && g_toolbar->notify(nh)) return 0;
@@ -1557,6 +1568,13 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
         case IDA_REFRESH:
             if (g_chats) g_chats->request();
+            return 0;
+
+        case IDA_MODENEXT:
+            /* Not guarded on the input box having focus, unlike PgUp/PgDn:
+             * this changes a setting rather than taking a key away from
+             * something you are in the middle of, and it loses nothing. */
+            if (g_optmenu) g_optmenu->cycle_mode();
             return 0;
 
         case IDM_EXPORT:
@@ -1854,7 +1872,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
         /* Accelerators FIRST, and only the keys whose meaning does not depend
-         * on focus -- Ctrl+N, F5, Ctrl+PgUp/PgDn. See gaston.rc.
+         * on focus -- Ctrl+N, Ctrl+M, F5, Ctrl+PgUp/PgDn. See gaston.rc.
          *
          * Ctrl+N used to be hand-rolled right here with no msg.hwnd filter,
          * which is the same thing an accelerator does; moving it did not

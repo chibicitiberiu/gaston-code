@@ -78,6 +78,7 @@
 #define IDA_PAGEPREV 130
 #define IDA_PAGENEXT 131
 #define IDA_REFRESH  132
+#define IDA_MODENEXT 133
 
 /* The accelerator table itself. */
 #define IDA_MAIN     140

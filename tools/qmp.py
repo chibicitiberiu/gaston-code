@@ -173,11 +173,18 @@ class Qmp:
         self._walk(x, y)
         time.sleep(0.15)
 
+    #: Gap between the two clicks of a double, in seconds. Comfortably inside
+    #: Windows' default 500ms double-click time, and slow enough to survive a
+    #: loaded host -- QEMU's PS/2 emulation has to deliver two distinct press
+    #: events and a TCG guest is not quick about noticing. 0.06 was the
+    #: original and was never shown to fail; this is margin, not a fix.
+    DOUBLE_GAP = 0.12
+
     def click(self, x: int, y: int, button: str = "left", double: bool = False) -> None:
         self.move(x, y)
         for i in range(2 if double else 1):
             if i:
-                time.sleep(0.06)
+                time.sleep(self.DOUBLE_GAP)
             self._rel([{"type": "btn", "data": {"down": True, "button": button}}])
             time.sleep(0.05)
             self._rel([{"type": "btn", "data": {"down": False, "button": button}}])
@@ -205,6 +212,12 @@ class VirshQmp:
         if "error" in r:
             raise RuntimeError(f"{name}: {r['error']['desc']}")
         return r.get("return", {})
+
+    # Borrowed method by method rather than by inheriting, which is what this
+    # class has always done -- but a borrowed method that reads `self.X` needs
+    # X borrowed too, and DOUBLE_GAP was not. `dclick` raised AttributeError
+    # through this class and worked through the other one.
+    DOUBLE_GAP = Qmp.DOUBLE_GAP
 
     shot = Qmp.shot
     key = Qmp.key
@@ -240,7 +253,23 @@ def main() -> int:
     elif verb == "move":
         q.move(int(rest[0]), int(rest[1]))
     elif verb == "click":
-        q.click(int(rest[0]), int(rest[1]))
+        # `click X Y double` means the same as `dclick X Y`.
+        #
+        # It is accepted because it was TYPED, repeatedly, by someone who had
+        # read `click(self, x, y, button, double=False)` and reasonably
+        # assumed the CLI mirrored it. The extra word was silently ignored, so
+        # every "double-click" in that session was a single click -- which
+        # made a working feature look broken and sent the investigation after
+        # the wrong thing twice. A verb that quietly drops an argument it does
+        # not understand is worse than one that rejects it.
+        extra = [a for a in rest[2:] if a not in ("double", "dbl")]
+        if extra:
+            # Loudly, not silently. A verb that drops what it does not
+            # understand is how "double" went unnoticed in the first place.
+            print("qmp: ignoring unknown argument(s): %s" % " ".join(extra),
+                  file=sys.stderr)
+        q.click(int(rest[0]), int(rest[1]),
+                double=bool(set(rest[2:]) & {"double", "dbl"}))
     elif verb == "dclick":
         q.click(int(rest[0]), int(rest[1]), double=True)
     elif verb == "rclick":

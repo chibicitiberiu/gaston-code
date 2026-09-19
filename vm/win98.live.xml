@@ -61,7 +61,8 @@ speed; drop to 32MB afterwards to match the real Pentium MMX 200 target.</descri
     </interface>
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
-    <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
+    <!-- SPICE; see the comment in vm/win98.xml for why. -->
+    <graphics type='spice' port='-1' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
     <audio id='1' type='none'/>

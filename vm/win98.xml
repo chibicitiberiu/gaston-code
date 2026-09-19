@@ -100,7 +100,19 @@ developing on a roomier one would quietly hide the moment it stops fitting.</des
     </interface>
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
-    <graphics type='vnc' port='-1' listen='127.0.0.1'/>
+    <!-- SPICE, not VNC. virt-manager's VNC widget does not take the pointer
+         cleanly against a PS/2 mouse: you get two cursors moving at different
+         speeds and clicks only register while the outer one is over the
+         window. SPICE's client-side pointer handling does not have that
+         problem, and the guest cannot tell the difference -- it is still a
+         PS/2 mouse and a Cirrus card either side of it.
+
+         The live domain was switched by hand on 2026-09-19; this file is what
+         vmdefine.sh redefines FROM, so leaving it as VNC meant the next
+         redefine would quietly put the bug back. -->
+    <graphics type='spice' port='-1' autoport='yes' listen='127.0.0.1'>
+      <listen type='address' address='127.0.0.1'/>
+    </graphics>
     <video><model type='cirrus' vram='4096' heads='1'/></video>
     <memballoon model='none'/>
   </devices>

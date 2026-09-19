@@ -2427,6 +2427,16 @@ and that DLL is not installed, so the Resource Meter has to be added before
 anyone quotes a percentage. `BACKLOG.md` §11's "already ruled out" was half
 wrong and is corrected there.
 
+**One "defect" was the test harness.** The status-bar double-click that opens
+Server Host had been recorded as unresolved, with a plausible guess attached
+("NM_DBLCLK may not be sent"). It sends it: NM_CLICK then NM_DBLCLK, 110ms
+apart, measured. `tools/qmp.py click X Y double` silently dropped the third
+word — the verb is `dclick` — so every attempt to exercise the feature was a
+single click, and it was "fixed" twice before that was noticed. Both fixes
+were reverted. The lesson is not about status bars: a guess written next to an
+unverified symptom reads like a finding six weeks later, and the driving is
+part of the experiment.
+
 **And the CMOV gate stopped being a number.** Its baseline moved three times
 during this stage without a real instruction behind it — 1 → 2 → 1 → 7 —
 because adding a function slides the read-only data Watcom puts in AUTO beside

@@ -1297,6 +1297,26 @@ has known work left.
   guests still share one mirror and one baseline, so `BACKLOG.md` §7's
   implementation list is untouched.
 
+- **Keyboard: Ctrl+A and Ctrl+M. [R -- 2026-09-19] Done.** Windows 98's EDIT
+  control has no Ctrl+A -- select-all arrived with rich edit and NT's common
+  controls, and on 9x it just beeps, which is twenty years of muscle memory
+  arriving at a control that predates it. The input box handles it, and
+  swallows the SOH that would otherwise beep. Ctrl+M advances the permission
+  mode: the setting most worth changing mid-conversation and the one furthest
+  from the keyboard. It does take Ctrl+M away from the edit control, where
+  Win98 treats it as a newline; Shift+Enter is this app's documented way to do
+  that, so the collision costs a behaviour nobody here was told about.
+
+- **The status-bar double-click was never broken.** It was recorded as an
+  unresolved defect ("NM_DBLCLK may not be sent") and it is not: measured on
+  the guest, a Windows 98 status bar sends NM_CLICK and then NM_DBLCLK, 110ms
+  apart, exactly as documented. What was broken was the testing --
+  `tools/qmp.py click X Y double` silently ignored the third word, because the
+  CLI verb is `dclick`, so every attempt to exercise it was a SINGLE click. A
+  working feature was written down as a defect and then "fixed" twice before
+  that was noticed. The tool accepts both spellings now and `VirshQmp` borrows
+  the constant `click` reads, which it had not.
+
 - **Answered permission boxes collapse. [R -- 2026-09-19] Done.** Every
   approval used to stay a full amber argument table forever, and on a
   640x480 screen a handful of them is the whole page. The block keeps its

@@ -14,9 +14,16 @@ ISO="${WIN98_ISO:-$LIB/Win98SE_bootable.iso}"
 MODE="${1:-run}"
 
 # A visible window by default so the install can be watched; QMP still drives
-# it either way. DISPLAY=none keeps it headless for CI, and VNC stays on :1
-# regardless so it can also be attached to remotely.
+# it either way. VIEW=none keeps it headless for CI.
+#
+# The remote head is SPICE rather than VNC, to match vm/win98.xml. VNC's
+# pointer handling against a PS/2 mouse gives two cursors moving at different
+# speeds, with clicks registering only while the outer one is over the window
+# -- and usb-tablet, the usual fix, is not an option here because Win98 has no
+# HID tablet driver. SPICE does client-side pointer handling and does not have
+# the problem. Nothing the guest sees changes either way.
 VIEW="${VIEW:-gtk}"
+SPICE_PORT="${SPICE_PORT:-5901}"
 
 # The real machine is a Pentium MMX 200 with 32MB. Install with more RAM
 # because Setup is painfully slow otherwise; Win98 does not bake the size in,
@@ -49,6 +56,6 @@ exec qemu-system-i386 \
   -device pcnet,netdev=n0 \
   -rtc base=localtime \
   -qmp unix:"$VM/qmp.sock",server=on,wait=off \
-  -vnc :1 \
+  -spice port="$SPICE_PORT",addr=127.0.0.1,disable-ticketing=on \
   -display "$VIEW" \
   -name "RetroClaude Win98SE"

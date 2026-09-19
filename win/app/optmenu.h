@@ -90,6 +90,11 @@ class rc_optmenu {
      * disabled row -- a toolbar button reading "(effort)" forever is worse
      * than no button, so the toolbar hides it. */
     int   effort_ok;
+    /* Which mode row is ticked, so one keystroke can advance to the next.
+     * An index rather than a search on `cur_mode`, which holds the LABEL --
+     * matching a display string back to its id is the sort of thing that
+     * works until a label is reworded. -1 when nothing is ticked. */
+    int   cur_mode_ix;
     int   opts_open;   /* mid-batch, so the next model row appends */
     HWND  owner;
     rc_optmenu_send_fn send;
@@ -135,6 +140,13 @@ public:
     const char *effort_label() const { return cur_effort; }
     const char *mode_label() const   { return cur_mode; }
     int has_effort() const { return effort_ok; }
+
+    /* Advance to the next permission mode and tell the bridge, for the
+     * keyboard shortcut. Wraps. Does nothing when the list is empty, which
+     * is the disconnected case. The menus and the toolbar update when the
+     * bridge answers with a fresh batch -- not optimistically here, because
+     * a mode this client did not manage to set must not be shown as set. */
+    void cycle_mode();
 };
 
 #endif

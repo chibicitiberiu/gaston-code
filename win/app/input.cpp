@@ -184,6 +184,25 @@ LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     if (m == WM_CHAR && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
         return 0;   /* swallow the beep */
+
+    /* Ctrl+A selects all.
+     *
+     * Windows 98's EDIT control has no such accelerator -- that arrived with
+     * the rich edit control and with NT's common controls, and on 9x
+     * Ctrl+A simply beeps. Every other application the user has touched in
+     * the last twenty years does this, so it is muscle memory arriving at a
+     * control that predates it.
+     *
+     * EM_SETSEL(0, -1) rather than -1/-1, which is the caret-to-end form used
+     * in compose(). Both WM_KEYDOWN and WM_CHAR are handled: the first does
+     * the work, the second swallows the beep the control would otherwise make
+     * for a character it does not want. */
+    if (m == WM_KEYDOWN && w == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+        SendMessageA(h, EM_SETSEL, 0, (LPARAM)-1);
+        return 0;
+    }
+    if (m == WM_CHAR && w == 1)         /* Ctrl+A arrives as SOH */
+        return 0;
     if (!s_instance || !s_instance->oldproc)
         return DefWindowProcA(h, m, w, l);
     return CallWindowProc(s_instance->oldproc, h, m, w, l);
