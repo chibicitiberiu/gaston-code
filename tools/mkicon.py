@@ -207,6 +207,48 @@ def art_net(led):
     return c
 
 
+#: How many pie frames. The user asked for "~8 frames for it to be good
+#: enough" and that is about right: at 16x16 there are not enough pixels to
+#: distinguish more, and a status indicator that moves in visible steps reads
+#: better than one that creeps.
+PIE_STEPS = 8
+
+
+def art_pie(filled):
+    """A context-usage pie, `filled` eighths of it.
+
+    Drawn by testing each pixel rather than by an arc primitive, because
+    there is no arc primitive here and because at this size the only thing
+    that matters is which pixels are in. Clockwise from twelve o'clock, the
+    direction every gauge in the world fills.
+    """
+    import math
+    c = Canvas(16, 16)
+    cx, cy, r = 7.5, 7.5, 6.5
+    sweep = 2.0 * math.pi * (float(filled) / PIE_STEPS)
+
+    for y in range(16):
+        for x in range(16):
+            dx, dy = x - cx, y - cy
+            d = math.hypot(dx, dy)
+            if d > r:
+                continue
+            if d > r - 1.2:
+                c.put(x, y, "k")            # rim, always drawn
+                continue
+            if filled <= 0:
+                c.put(x, y, "w")
+                continue
+            # atan2 with the axes arranged so 0 is up and angle grows
+            # clockwise, which is what "filled" means to a reader.
+            ang = math.atan2(dx, -dy)
+            if ang < 0:
+                ang += 2.0 * math.pi
+            # Past three quarters the slice is the warning, not the news.
+            c.put(x, y, ("r" if filled >= 7 else "n") if ang <= sweep else "w")
+    return c
+
+
 def encode(c):
     """One ICONDIRENTRY's worth of image: header, palette, XOR bits, AND mask.
 
@@ -268,6 +310,8 @@ def main():
     # amber on an 8bpp display is noise at this size.
     for name, led in (("netok", "l"), ("netwarn", "y"), ("netbad", "r")):
         write_ico(os.path.join(app, name + ".ico"), [art_net(led)])
+    for i in range(PIE_STEPS + 1):
+        write_ico(os.path.join(app, "pie%d.ico" % i), [art_pie(i)])
 
 
 if __name__ == "__main__":

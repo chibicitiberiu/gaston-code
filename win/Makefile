@@ -236,7 +236,8 @@ $(BUILD)/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 # same layer-qualified spelling the C++ uses, so the id is defined once for
 # both compilers.
 $(BUILD)/gaston.res: app/gaston.rc app/gaston.ico app/netok.ico \
-                     app/netwarn.ico app/netbad.ico app/resource.h \
+                     app/netwarn.ico app/netbad.ico \
+                     $(wildcard app/pie*.ico) app/resource.h \
                      | $(BUILD)
 	@$(WRC) -q -r -bt=nt -i="$(CURDIR)" -fo=$@ app/gaston.rc
 
@@ -261,10 +262,25 @@ $(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res
 # instructions. Measured when gaston.res landed: it does not. objdump -d
 # disassembles only sections flagged as code, and prints exactly one
 # "Disassembly of section AUTO:" for this image -- .rsrc is READONLY DATA and
-# is never walked. The existing false positive is inside AUTO, which is where
-# Watcom puts read-only data as well as code. Left at 1, and the prediction
-# recorded as wrong rather than quietly dropped.
-CMOV_BASELINE = 1
+# is never walked.
+#
+# But the count DID move later, from 1 to 2, and the reason refines that
+# note rather than overturning it. Resources do not move it; SHIFTING AUTO
+# does. Watcom puts read-only data in AUTO alongside code, so adding a
+# function slides the data that follows it, and a byte sequence that
+# previously decoded as something harmless can land where objdump's linear
+# walk reads it as a CMOV. Both current hits were checked by hand:
+#
+#   0x41fca0  inside the _GUID_* table (_GUID_YSIZEPIXEL and neighbours)
+#   0x40ff79  surrounded by `lods` / `add %eax,0x0(%ecx)` / `push $0x11`,
+#             which no compiler emits in that order
+#
+# So this number is expected to drift with unrelated code changes, in both
+# directions. That is a known weakness of counting rather than of the gate's
+# intent: an INCREASE still has to be looked at, because a real CMOV would
+# not load on a Pentium MMX, and looking at it costs one objdump. Anyone
+# raising this must name the addresses and say why they are data, as above.
+CMOV_BASELINE = 2
 PYTHON ?= python3
 
 # Static PE audit. The import table is the gate that matters: a single NT-only

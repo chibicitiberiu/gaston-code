@@ -322,14 +322,27 @@ def turn_error(msg: str) -> Frame:
     return Frame("TURN", {"state": "error"}, fold.encode(msg[:2000]))
 
 
-def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int) -> Frame:
-    return Frame("TURN", {
+def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int,
+             ctx_pct: int | None = None) -> Frame:
+    """`ctx_pct` rides on this frame rather than getting one of its own.
+
+    It is one small integer that only changes when a turn ends, and the guest
+    is already parsing this frame at exactly that moment. A new frame type
+    would mean a new dispatch entry on both sides and a new thing that can
+    arrive when nothing expects it, to carry a number nobody needs sooner.
+    Absent when the bridge could not get it, which the guest reads as "leave
+    the gauge alone" rather than as zero.
+    """
+    h = {
         "state": "end",
         "ok": "1" if ok else "0",
         "subtype": subtype,
         "cost_usd": f"{cost_usd:.4f}" if cost_usd else "",
         "ms": str(ms),
-    })
+    }
+    if ctx_pct is not None:
+        h["ctx_pct"] = str(ctx_pct)
+    return Frame("TURN", h)
 
 
 def anchor_frame(page: int, off: int, preview: str) -> Frame:

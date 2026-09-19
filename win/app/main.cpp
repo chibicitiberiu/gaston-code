@@ -172,6 +172,11 @@ static HICON g_ico_ok, g_ico_warn, g_ico_bad;
 /* Which one is showing, so the icon is only swapped when it changes --
  * status_refresh runs every second and SB_SETICON repaints. */
 static HICON g_ico_shown;
+/* The context gauge: nine frames, and the last percentage the bridge sent.
+ * -1 means "never told", which is drawn as nothing at all rather than as an
+ * empty context -- the two are different and only one of them is news. */
+static HICON g_ico_pie[RC_PIE_STEPS + 1];
+static int   g_ctx_pct = -1;
 
 /* ------------------------------------------------------------------ utils */
 
@@ -214,6 +219,25 @@ static void status_refresh(void)
     }
     rc_strf(buf, sizeof(buf), " %s:%d", g_cfg.host, g_cfg.port);
     status_set(0, buf);
+
+    /* The context gauge. Silent until the bridge has said something: an
+     * empty pie would claim the context is empty, which is a different
+     * statement from not knowing. */
+    if (g_ctx_pct >= 0) {
+        int step = (g_ctx_pct * RC_PIE_STEPS + 50) / 100;
+        if (step < 0) step = 0;
+        if (step > RC_PIE_STEPS) step = RC_PIE_STEPS;
+        if (g_ico_pie[step])
+            SendMessageA(g_status, SB_SETICON, 3, (LPARAM)g_ico_pie[step]);
+        rc_strf(buf, sizeof(buf), " %d%%", g_ctx_pct);
+        status_set(3, buf);
+        {
+            char tip[96];
+            rc_strf(tip, sizeof(tip),
+                    "Context window %d%% full", g_ctx_pct);
+            SendMessageA(g_status, SB_SETTIPTEXTA, 3, (LPARAM)tip);
+        }
+    }
     {
         char tip[160];
         rc_strf(tip, sizeof(tip), "%s  %s:%d",
@@ -601,6 +625,16 @@ static void on_turn(rc_frame *f)
             unsigned long secs = g_turn_start_ms
                 ? (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000)
                 : 0;
+            {
+                /* Absent means "leave the gauge alone", not zero. The bridge
+                 * omits it when the reading was unavailable, and drawing an
+                 * empty pie then would be a confident wrong answer. */
+                const char *cp = rc_frame_get(f, "ctx_pct");
+                if (cp && *cp) {
+                    int pct = atoi(cp);
+                    if (pct >= 0 && pct <= 100) g_ctx_pct = pct;
+                }
+            }
             v = rc_frame_get(f, "cost_usd");
             rc_strf(buf, sizeof(buf), " done  %lus  $%s",
                     secs, (v && *v) ? v : "?");
@@ -920,7 +954,7 @@ static void check_child(const char *what, HWND h)
 
 static void create_children(HWND hwnd, HINSTANCE inst)
 {
-    int parts[3];
+    int parts[4];
     NONCLIENTMETRICSA ncm;
 
     memset(&ncm, 0, sizeof(ncm));
@@ -1019,8 +1053,15 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
     check_child("status", g_status);
-    parts[0] = 220; parts[1] = 340; parts[2] = -1;
-    SendMessageA(g_status, SB_SETPARTS, 3, (LPARAM)parts);
+    /* Four parts: connection, transfer, turn, context.
+     *
+     * The widths were 220/340/-1 and are re-picked rather than nudged --
+     * dropping the word "connected" for an icon freed most of pane 0, and
+     * the turn pane is the one that actually needs room ("waiting for
+     * you... 127s"). The last part keeps ~72px, enough for a 16px gauge and
+     * "100%", and SBARS_SIZEGRIP eats about 16 of the window's right edge. */
+    parts[0] = 150; parts[1] = 300; parts[2] = 560; parts[3] = -1;
+    SendMessageA(g_status, SB_SETPARTS, 4, (LPARAM)parts);
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
@@ -1516,6 +1557,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                                        IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
         if (!g_ico_ok || !g_ico_warn || !g_ico_bad)
             rc_log("status: connection icons failed to load");
+        {
+            int i;
+            for (i = 0; i <= RC_PIE_STEPS; i++)
+                g_ico_pie[i] = (HICON)LoadImageA(
+                    inst, MAKEINTRESOURCE(IDI_PIE0 + i), IMAGE_ICON,
+                    sw, sh, LR_DEFAULTCOLOR);
+        }
     }
 
     g_accel = LoadAcceleratorsA(inst, MAKEINTRESOURCE(IDA_MAIN));

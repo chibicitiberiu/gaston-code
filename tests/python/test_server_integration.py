@@ -113,6 +113,15 @@ class FakeSession:
         return Turn(ok=True, subtype="success", cost_usd=0.01,
                     num_turns=1, duration_ms=5)
 
+    #: Context-window fullness, 0-100. Implemented here rather than letting
+    #: the call site use getattr: this fake stands in for the whole Session
+    #: interface, and a real Session that stopped answering would be a bug
+    #: worth a failing test rather than a silently blank gauge.
+    context_pct: int | None = 42
+
+    async def context_usage(self):
+        return self.context_pct
+
 
 class Harness:
     def __init__(self, bridge, port):
@@ -1582,4 +1591,40 @@ async def test_a_contained_command_gets_no_added_reassurance(harness):
     assert "mirror" not in body.lower()
     assert not body.startswith("!")
     task.cancel()
+    await harness.close(writer)
+
+
+# --- the context gauge -------------------------------------------------------
+
+
+async def test_turn_end_carries_context_fullness(harness):
+    """It rides on TURN end rather than getting a frame of its own: one small
+    integer that only changes when a turn ends, arriving at the moment the
+    guest is already parsing that frame."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    await harness.bridge._guest.claude.send("hello")
+    await harness.bridge._run_turn(harness.bridge._guest, "hello")
+    frame = await _recv(harness, reader, "TURN")
+    while frame.headers.get("state") != "end":
+        frame = await _recv(harness, reader, "TURN")
+
+    assert frame.headers.get("ctx_pct") == "42"
+    await harness.close(writer)
+
+
+async def test_an_unavailable_context_reading_is_absent_not_zero(harness):
+    """The guest reads a missing header as "leave the gauge alone". Sending
+    0 would claim an empty context, which is the opposite of unknown."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge._guest.claude.context_pct = None
+
+    await harness.bridge._run_turn(harness.bridge._guest, "hello")
+    frame = await _recv(harness, reader, "TURN")
+    while frame.headers.get("state") != "end":
+        frame = await _recv(harness, reader, "TURN")
+
+    assert "ctx_pct" not in frame.headers
     await harness.close(writer)

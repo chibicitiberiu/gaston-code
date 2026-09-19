@@ -198,6 +198,41 @@ class Session:
 
     # --- driving -----------------------------------------------------------
 
+    async def context_usage(self) -> int | None:
+        """How full the context window is, 0-100, or None.
+
+        `get_context_usage()` is a LIVE control request -- the same data the
+        CLI's /context shows -- and `percentage` is already computed against
+        the real ceiling.
+
+        The obvious alternative is wrong and would ship visibly broken:
+        ResultMessage.model_usage carries `contextWindow` and the token
+        counts, but those are CUMULATIVE OVER THE TURN. A turn with twelve
+        tool calls re-sends the context each time, so summing inputTokens +
+        cacheReadInputTokens + cacheCreationInputTokens exceeds the window
+        several times over and the gauge would read past 100% on any real
+        turn.
+
+        Never raises: this is decoration on a status bar, and an exception
+        here would abort a turn that has already finished.
+        """
+        if not self._client:
+            return None
+        try:
+            usage = await self._client.get_context_usage()
+        except Exception as exc:          # noqa: BLE001 -- see docstring
+            log.debug("context usage unavailable: %s", exc)
+            return None
+        if not usage:
+            return None
+        try:
+            pct = float(usage.get("percentage") or 0.0)
+        except (TypeError, ValueError):
+            return None
+        if pct < 0:
+            return 0
+        return int(pct + 0.5) if pct <= 100 else 100
+
     async def send(self, prompt: str) -> Turn:
         """Send one user turn and consume events until the turn ends."""
         if not self._client:

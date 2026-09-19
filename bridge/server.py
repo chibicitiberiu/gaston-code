@@ -1470,8 +1470,15 @@ class Bridge:
         guest.turn_degraded = ""
         ok, subtype = turn_verdict(turn.ok, degraded, guest.turn_produced,
                                    turn.subtype)
+        # How full the context window is, asked at the one moment it has
+        # just changed and the guest is already listening. A live control
+        # request, NOT ResultMessage.model_usage -- that is cumulative over
+        # the turn and would read past 100% on any multi-tool turn. See
+        # Session.context_usage.
+        ctx_pct = await guest.claude.context_usage() if guest.claude else None
         await self._send(guest, turn_end(ok, subtype,
-                                         turn.cost_usd, turn.duration_ms))
+                                         turn.cost_usd, turn.duration_ms,
+                                         ctx_pct))
 
     # --- running commands on the guest -------------------------------------
 

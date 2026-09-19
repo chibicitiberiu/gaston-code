@@ -28,6 +28,17 @@
 #define IDI_NET_WARN 103
 #define IDI_NET_BAD  104
 
+/* The context gauge, nine frames from empty to full. Static icons rather
+ * than a drawn arc: SB_SETICON swaps a handle, where drawing would need an
+ * owner-drawn part and this window's WM_DRAWITEM already answers TRUE for
+ * everything (it was written when the chat list was the only owner-draw
+ * control), so the part would be claimed as painted and left blank.
+ *
+ * Nine, not more: at 16x16 there are not enough pixels to distinguish finer
+ * steps, and a gauge that moves visibly reads better than one that creeps. */
+#define IDI_PIE0     110
+#define RC_PIE_STEPS 8
+
 /* One version, four places: the VERSIONINFO block wants it twice (binary and
  * string), Windows 98's file-properties tab reads the string, and the title
  * bar may want it later. Keeping the numeric and text forms adjacent is the

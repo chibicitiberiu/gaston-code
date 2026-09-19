@@ -26,6 +26,18 @@ IDI_NET_OK   ICON "app/netok.ico"
 IDI_NET_WARN ICON "app/netwarn.ico"
 IDI_NET_BAD  ICON "app/netbad.ico"
 
+/* The context gauge. Contiguous ids from IDI_PIE0 so the C++ can index
+ * them -- MAKEINTRESOURCE(IDI_PIE0 + n) -- rather than carry a table. */
+110 ICON "app/pie0.ico"
+111 ICON "app/pie1.ico"
+112 ICON "app/pie2.ico"
+113 ICON "app/pie3.ico"
+114 ICON "app/pie4.ico"
+115 ICON "app/pie5.ico"
+116 ICON "app/pie6.ico"
+117 ICON "app/pie7.ico"
+118 ICON "app/pie8.ico"
+
 /* Win98 reads this for the Version tab of the file's Properties sheet, and
  * it is the only place the binary says what it is when it is not running. */
 1 VERSIONINFO
