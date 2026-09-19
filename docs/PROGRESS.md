@@ -2427,6 +2427,16 @@ and that DLL is not installed, so the Resource Meter has to be added before
 anyone quotes a percentage. `BACKLOG.md` §11's "already ruled out" was half
 wrong and is corrected there.
 
-**2381 tests green, four gates green, 303,044 → 337,028 bytes committed at
+**And the CMOV gate stopped being a number.** Its baseline moved three times
+during this stage without a real instruction behind it — 1 → 2 → 1 → 7 —
+because adding a function slides the read-only data Watcom puts in AUTO beside
+code until some byte sequence spells `cmov`. A gate whose green condition
+drifts with unrelated edits is one people learn to raise rather than read, and
+it had already been raised twice. `tools/cmovcheck.py` resolves each hit
+against the linker map and fails only on one inside an object file this build
+compiled. Today's seven print as what they are: `uuid.lib`'s `_GUID_FONTBOLD`
+and `clib3r.lib`'s `__DefaultExceptionHandler_` padding.
+
+**2384 tests green, four gates green, 303,044 → 337,540 bytes committed at
 load** across the whole of Phase 4 — the number that decides what else fits on
 a 32MB machine.
