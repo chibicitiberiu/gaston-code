@@ -166,12 +166,12 @@ rc_input *rc_input::create(HWND parent, HINSTANCE inst, HFONT font,
      * do_send can carry. */
     SendMessageA(p->box, EM_LIMITTEXT, (WPARAM)(RC_INPUT_MAX - 1), 0);
 
-    p->send_btn = CreateWindowExA(0, "BUTTON", "Send",
+    p->send_btn = CreateWindowExA(0, "BUTTON", "&Send",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_SEND, inst, NULL);
     check_child("send", p->send_btn);
 
-    p->stop_btn = CreateWindowExA(0, "BUTTON", "Stop",
+    p->stop_btn = CreateWindowExA(0, "BUTTON", "S&top",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_STOP, inst, NULL);
     check_child("stop", p->stop_btn);
@@ -219,4 +219,17 @@ void rc_input::enable_stop(int enable)
 void rc_input::focus(void)
 {
     SetFocus(box);
+}
+
+int rc_input::is_empty(void) const
+{
+    /* WM_GETTEXTLENGTH rather than reading the text: the answer is a count,
+     * the box holds up to RC_INPUT_MAX bytes, and this is called from the
+     * message loop on every PgUp. */
+    return SendMessageA(box, WM_GETTEXTLENGTH, 0, 0) == 0;
+}
+
+int rc_input::has_focus(void) const
+{
+    return GetFocus() == box;
 }

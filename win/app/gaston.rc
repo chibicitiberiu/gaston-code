@@ -56,3 +56,27 @@ FILESUBTYPE    0x0L
     VALUE "Translation", 0x409, 1252
   }
 }
+
+/* Keyboard accelerators.
+ *
+ * Only the keys whose meaning does NOT depend on what has focus live here.
+ * A Win32 accelerator is translated for the whole message before anything
+ * else sees it, regardless of msg.hwnd -- so a key that must behave one way
+ * in the input box and another in the transcript cannot be an accelerator at
+ * all, and PgUp/PgDn/Ctrl+Home/Ctrl+End stay hand-rolled in the message loop
+ * (see the comment there). Putting them here would silently steal
+ * caret-to-start and caret-to-end from a multiline EDIT.
+ *
+ * Ctrl+N IS global, on purpose: that is what it means in every Windows
+ * application, and the draft that made it focus-dependent would have made it
+ * unreachable, because the input box holds focus almost all the time. The
+ * risk it carries -- discarding a half-typed message -- is handled where the
+ * risk actually is, by confirming when the box is not empty.
+ */
+IDA_MAIN ACCELERATORS
+{
+    "N",        IDM_NEW,      VIRTKEY, CONTROL
+    VK_F5,      IDA_REFRESH,  VIRTKEY
+    VK_PRIOR,   IDA_PAGEPREV, VIRTKEY, CONTROL
+    VK_NEXT,    IDA_PAGENEXT, VIRTKEY, CONTROL
+}

@@ -55,6 +55,18 @@ rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
                         rc_html *html_)
     : view(1), total(1), is_live(1), loading_page(0), net(net_), html(html_)
 {
+    /* Deliberately NO WS_TABSTOP on any of these six.
+     *
+     * A draft of the keyboard work added one to each. Tab order follows
+     * CREATION order, and the page bar is created before the input box -- so
+     * five extra stops would sit between the chat list and the place you
+     * type, on every Tab, for everyone. The page bar also now has a keyboard
+     * route that is better than tabbing: Ctrl+PgUp/PgDn (see gaston.rc), and
+     * Ctrl+Home/End for the ends of the current page.
+     *
+     * What that leaves genuinely mouse-only is Live, |< and >|. If those
+     * want a keyboard route they want accelerators of their own, not a
+     * position in a cycle nobody wants to walk. */
     live = CreateWindowExA(0, "BUTTON", "Live",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         parent, (HMENU)ID_LIVE, inst, NULL);

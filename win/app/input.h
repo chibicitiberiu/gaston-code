@@ -114,6 +114,17 @@ public:
 
     /* SetFocus(the box) -- after a send, and to forward WM_SETFOCUS. */
     void focus(void);
+
+    /* Is the box empty, and does it have the keyboard?
+     *
+     * Both exist for the message loop's conditional keys. PgUp/PgDn scroll
+     * the transcript, but only when taking them from the edit control costs
+     * nothing -- which is exactly when there is nothing to scroll through.
+     * And Ctrl+N confirms before discarding a draft, which needs to know
+     * whether there IS one. The box HWND stays private; these are the two
+     * questions anyone outside actually has about it. */
+    int  is_empty(void) const;
+    int  has_focus(void) const;
 };
 
 #endif

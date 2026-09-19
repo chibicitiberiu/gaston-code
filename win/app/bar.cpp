@@ -83,14 +83,22 @@ rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
     text = CreateWindowExA(0, "STATIC", "",
         WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_TEXT, inst, NULL);
-    allow = CreateWindowExA(0, "BUTTON", "Allow",
-        WS_CHILD | BS_PUSHBUTTON,
+    /* WS_TABSTOP on all three, and mnemonics. These were mouse-only, which
+     * is the worst place in the app for that: the bar is the one control the
+     * program STOPS for, and show() already moves focus here. Without a tab
+     * stop, focus could land on Allow and never be moved off it by keyboard.
+     *
+     * A/L/D avoid the menu bar's F/C/M/E/H. Note the captions carry '&' and
+     * the descriptor table in this file does not -- relabel() writes the
+     * table's text into the STATIC, not into these buttons. */
+    allow = CreateWindowExA(0, "BUTTON", "&Allow",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALLOW, inst, NULL);
-    always = CreateWindowExA(0, "BUTTON", "Always",
-        WS_CHILD | BS_PUSHBUTTON,
+    always = CreateWindowExA(0, "BUTTON", "A&lways",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALWAYS, inst, NULL);
-    deny = CreateWindowExA(0, "BUTTON", "Deny",
-        WS_CHILD | BS_PUSHBUTTON,
+    deny = CreateWindowExA(0, "BUTTON", "&Deny",
+        WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_DENY, inst, NULL);
     if (!text || !allow || !always || !deny)
         rc_log("bar: a control failed to create (GetLastError=%lu)",

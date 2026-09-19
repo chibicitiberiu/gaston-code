@@ -28,4 +28,54 @@
 #define RC_VER_PATCH 0
 #define RC_VER_STR   "0.4.0"
 
+/* Menu commands. Here rather than in main.cpp because gaston.rc's
+ * ACCELERATORS block has to name IDM_NEW, and wrc cannot see a #define in a
+ * .cpp. IDM_MODEL0/IDM_EFFORT0 stay in app/optmenu.h: they are a runtime
+ * RANGE owned by that module, and no resource refers to them. */
+#define IDM_NEW      1099
+#define IDM_EXPORT   1100
+#define IDM_CLOSE    1101
+#define IDM_HOST     1110
+#define IDM_ABOUT    1120
+
+/* Accelerator commands.
+ *
+ * These are DELIBERATELY not the control ids they end up driving. The page
+ * buttons are ID_PREV/ID_NEXT in app/pagebar.h, and that header opens with
+ *
+ *     #ifndef __cplusplus
+ *     #error "pagebar.h is C++; the page bar is a class now"
+ *     #endif
+ *
+ * so gaston.rc cannot include it -- wrc preprocesses a .rc as C and does not
+ * define __cplusplus. Duplicating the literals in two files would be worse:
+ * the numbers would drift the first time someone renumbered one side. So the
+ * accelerator table gets its own ids in its own range and wnd_proc routes
+ * them, which also keeps "what a key does" in one readable place.
+ */
+#define IDA_PAGEPREV 130
+#define IDA_PAGENEXT 131
+#define IDA_REFRESH  132
+
+/* The accelerator table itself. */
+#define IDA_MAIN     140
+
+/* Virtual key codes for the ACCELERATORS block.
+ *
+ * wrc does not include windows.h -- it preprocesses a .rc as C with only what
+ * that file includes -- so VK_F5 and friends are simply undefined when the
+ * resource compiler runs, and the table fails to parse. Guarded, so the C++
+ * side keeps winuser.h's real definitions and these are only ever used by
+ * wrc. Writing the numbers inline in gaston.rc would work too and would turn
+ * a keyboard table into magic constants. */
+#ifndef VK_PRIOR
+#define VK_PRIOR 0x21
+#endif
+#ifndef VK_NEXT
+#define VK_NEXT  0x22
+#endif
+#ifndef VK_F5
+#define VK_F5    0x74
+#endif
+
 #endif

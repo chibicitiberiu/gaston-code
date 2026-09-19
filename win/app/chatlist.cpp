@@ -360,8 +360,10 @@ rc_chats::rc_chats(HWND parent, HINSTANCE inst, rc_net *net_, HFONT normal,
         0, 0, 0, 0, parent, (HMENU)ID_CHATS, inst, NULL);
     check_child("chats", list);
 
-    refresh = CreateWindowExA(0, "BUTTON", "Refresh",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
+    /* WS_TABSTOP and a mnemonic: this was mouse-only. The menu bar owns
+     * F/C/M/E/H, so R is free. */
+    refresh = CreateWindowExA(0, "BUTTON", "&Refresh",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0,
         parent, (HMENU)ID_REFRESH, inst, NULL);
     check_child("refresh", refresh);
 

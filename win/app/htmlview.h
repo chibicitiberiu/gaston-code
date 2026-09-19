@@ -122,6 +122,16 @@ public:
     void scroll_bottom();
     int  at_bottom() const;
 
+    /* Keyboard scrolling. `dir` is -1 for a page up, +1 for a page down;
+     * scroll_top() is Ctrl+Home's other half (Ctrl+End is scroll_bottom).
+     *
+     * A page is the viewport minus an overlap, the way every document reader
+     * behaves -- scrolling by the full height loses the line you were
+     * reading across the jump. Both go through IHTMLWindow2::scrollBy, which
+     * this file already calls, so nothing new is imported or linked. */
+    void scroll_page(int dir);
+    void scroll_top();
+
 private:
     /* Was rc_html_append, and was public. It is the raw path: no escaping, no
      * scroll policy, straight into #t. Making it public again would re-open

@@ -735,6 +735,60 @@ void rc_html::scroll_bottom()
     }
 }
 
+void rc_html::scroll_page(int dir)
+{
+    long client = 0;
+
+    if (!d->ready) return;
+    {
+        ComPtr<IHTMLElement> body;
+        IHTMLElement *body_raw = NULL;
+        if (FAILED(IHTMLDocument2_get_body(d->doc.get(), &body_raw)) || !body_raw)
+            return;
+        body.reset(body_raw);
+        ComPtr<IHTMLElement2> b2;
+        IHTMLElement2 *b2_raw = NULL;
+        if (FAILED(IHTMLElement_QueryInterface(body.get(), IID_IHTMLElement2,
+                                               (void **)&b2_raw)) || !b2_raw)
+            return;
+        b2.reset(b2_raw);
+        IHTMLElement2_get_clientHeight(b2.get(), &client);
+    }
+    if (client <= 0) return;
+
+    /* Two lines of overlap, so the line you were reading is still on screen
+     * after the jump. 24 is the same figure at_bottom() uses for "close
+     * enough to the end", and for the same reason: it is about two lines of
+     * 8pt text. */
+    {
+        long delta = client - 24;
+        if (delta < 1) delta = 1;
+        ComPtr<IHTMLWindow2> win;
+        IHTMLWindow2 *win_raw = NULL;
+        if (SUCCEEDED(IHTMLDocument2_get_parentWindow(d->doc.get(), &win_raw))
+            && win_raw) {
+            win.reset(win_raw);
+            IHTMLWindow2_scrollBy(win.get(), 0, dir < 0 ? -delta : delta);
+        }
+    }
+}
+
+void rc_html::scroll_top()
+{
+    if (!d->ready) return;
+    {
+        ComPtr<IHTMLWindow2> win;
+        IHTMLWindow2 *win_raw = NULL;
+        if (SUCCEEDED(IHTMLDocument2_get_parentWindow(d->doc.get(), &win_raw))
+            && win_raw) {
+            win.reset(win_raw);
+            /* Symmetric with scroll_bottom's absurd positive delta: the
+             * window clamps, so this cannot overshoot. */
+            IHTMLWindow2_scrollBy(win.get(), 0, -1000000);
+        }
+    }
+}
+
 int rc_html::at_bottom() const
 {
     long top = 0, height = 0, client = 0;

@@ -37,12 +37,11 @@
  * them. */
 
 /* Menu. IDM_MODEL0/IDM_EFFORT0/MAX_OPTS are declared in app/optmenu.h now,
- * next to the module that owns that numbering. */
-#define IDM_NEW       1099
-#define IDM_EXPORT    1100
-#define IDM_CLOSE     1101
-#define IDM_HOST      1110
-#define IDM_ABOUT     1120
+ * next to the module that owns that numbering.
+ *
+ * IDM_NEW and friends moved to app/resource.h, because gaston.rc's
+ * ACCELERATORS block names IDM_NEW and wrc cannot see a #define that lives
+ * in a .cpp. Duplicating the number in two files is how the two drift. */
 
 #define TIMER_RECONNECT 1
 #define TIMER_STATUS    2
@@ -79,6 +78,9 @@ static rc_bar  *g_bar;
 static rc_chats *g_chats;
 static rc_xferstat *g_xfer;
 static rc_input    *g_inputmod;
+/* The accelerator table. Loaded once in WinMain; owned by the module, so it
+ * is not destroyed (DestroyAcceleratorTable is for CreateAcceleratorTable). */
+static HACCEL       g_accel;
 static rc_optmenu *g_optmenu;
 static rc_pagebar *g_pagebar;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
@@ -1072,12 +1074,44 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                "Starting a new session will stop it. Continue?",
                                RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
+            /* Ctrl+N is global, the way it is in every Windows application,
+             * and the input box holds focus almost all the time -- so without
+             * this, one keystroke while composing throws the message away
+             * with nothing on screen to say it happened.
+             *
+             * Gating the KEY on focus was the other option and it is worse:
+             * the shortcut would be unreachable exactly when you are using
+             * the app. Guard the destructive act, not the key. "The person at
+             * the keyboard never loses a byte." */
+            if (g_inputmod && !g_inputmod->is_empty()
+                && MessageBoxA(hwnd,
+                               "You have a message you have not sent.\n\n"
+                               "Starting a new session will discard it. "
+                               "Continue?",
+                               RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES)
+                return 0;
             SetWindowTextA(g_main, RC_TITLE "  -  new session...");
             ui_send("Starting a new conversation", "NEWSESSION", NULL, NULL, 0, NULL, 0);
             return 0;
 
         case IDM_CLOSE:
             PostMessageA(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+
+        /* Accelerator-only commands. They route to the same entry points the
+         * buttons use -- rc_pagebar::command clamps to [1,total] and keeps
+         * the buttons' enable state honest, which a direct goto_n would
+         * bypass. See app/resource.h for why these are not ID_PREV/ID_NEXT. */
+        case IDA_PAGEPREV:
+            if (g_pagebar) g_pagebar->command(ID_PREV);
+            return 0;
+
+        case IDA_PAGENEXT:
+            if (g_pagebar) g_pagebar->command(ID_NEXT);
+            return 0;
+
+        case IDA_REFRESH:
+            if (g_chats) g_chats->request();
             return 0;
 
         case IDM_EXPORT:
@@ -1297,24 +1331,62 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     rc_log("main window hwnd=%p", (void *)g_main);
     log_mem("window created");
 
+    g_accel = LoadAcceleratorsA(inst, MAKEINTRESOURCE(IDA_MAIN));
+    if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
+
     build_menu(g_main);
     ShowWindow(g_main, show);
     UpdateWindow(g_main);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        /* Accelerators FIRST, and only the keys whose meaning does not depend
+         * on focus -- Ctrl+N, F5, Ctrl+PgUp/PgDn. See gaston.rc.
+         *
+         * Ctrl+N used to be hand-rolled right here with no msg.hwnd filter,
+         * which is the same thing an accelerator does; moving it did not
+         * change what it matches, and a draft of this plan claimed otherwise.
+         * What makes it safe is the confirmation in IDM_NEW, not where the
+         * key is translated. */
+        if (g_accel && TranslateAcceleratorA(g_main, g_accel, &msg))
+            continue;
+
         /* Enter opens the highlighted conversation. Caught here rather than by
          * subclassing the listbox, because IsDialogMessage would otherwise
          * route it to the default pushbutton and the keyboard would have no
          * way to open a chat at all. */
-        if (msg.message == WM_KEYDOWN && msg.wParam == 'N'
-            && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            SendMessageA(g_main, WM_COMMAND, IDM_NEW, 0);
-            continue;
-        }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
             && g_chats && msg.hwnd == g_chats->hwnd()) {
             g_chats->open_selected();
             continue;
+        }
+        /* Scrolling the transcript from the keyboard, and why these CANNOT be
+         * accelerators.
+         *
+         * TranslateAccelerator does not look at msg.hwnd: it translates for
+         * the whole message whatever has focus. PgUp/PgDn/Ctrl+Home/Ctrl+End
+         * are the caret keys of a multiline EDIT, so an accelerator would
+         * steal them from the input box permanently -- you could never move
+         * the caret in a long draft again.
+         *
+         * So they are conditional, and the condition is "taking them costs
+         * the edit control nothing": an empty box has no caret to move. A
+         * non-empty one keeps them, and the page bar's buttons and the
+         * scrollbar are still there for the mouse.
+         *
+         * Ctrl is deliberately not checked for PgUp/PgDn: Ctrl+PgUp/PgDn is
+         * the accelerator above, which moves between SEALED PAGES, and that
+         * is a different axis from scrolling within one. */
+        if (msg.message == WM_KEYDOWN && g_html && g_inputmod
+            && g_inputmod->is_empty()
+            && !(GetKeyState(VK_CONTROL) & 0x8000)) {
+            if (msg.wParam == VK_PRIOR) { g_html->scroll_page(-1); continue; }
+            if (msg.wParam == VK_NEXT)  { g_html->scroll_page(1);  continue; }
+        }
+        if (msg.message == WM_KEYDOWN && g_html && g_inputmod
+            && g_inputmod->is_empty()
+            && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            if (msg.wParam == VK_HOME) { g_html->scroll_top();    continue; }
+            if (msg.wParam == VK_END)  { g_html->scroll_bottom(); continue; }
         }
         /* Esc denies a pending permission request (a halt has no "deny" --
          * see rc_bar::escape). It has to be intercepted before
