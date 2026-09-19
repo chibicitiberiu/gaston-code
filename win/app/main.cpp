@@ -84,6 +84,20 @@ static HACCEL       g_accel;
 static rc_optmenu *g_optmenu;
 static rc_pagebar *g_pagebar;
 static int      g_doc_sent;     /* the bridge has given us a skeleton */
+/* "Connected to bridge." is announced AFTER the page that follows READY, not
+ * before it.
+ *
+ * on_ready used to write the notice and then call goto_live(), which
+ * re-requests the live page -- and PAGESTART clears the control. So the one
+ * line confirming the connection was wiped by the next thing the same
+ * handler did, every time, and a fresh connection said nothing in the
+ * transcript at all.
+ *
+ * On a FIRST connect it was worse and in a different way: the document does
+ * not exist yet, so the notice goes into the pre-ready queue, and clear()
+ * zeroes that queue too. Announcing after PAGEEND is the one point that is
+ * past both. */
+static int      g_announce_connected;
 static HWND  g_main, g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
@@ -384,17 +398,15 @@ static void on_ready(rc_frame *f)
     g_retry_noted = 0;
     v = rc_frame_get(f, "model");
     rc_log("ready: sess=%s model=%s", g_net.sess, v ? v : "?");
-    if (g_html) g_html->notice("Connected to bridge.");
-    /* READY carries page/total for the session as it stands, but g_doc_sent
-     * (below) only installs the document skeleton once per PROCESS, not
-     * once per connection -- so on a reconnect this updates the page
-     * counters without the control's content agreeing with them, and the
-     * window keeps showing whatever the last connection left in it under
-     * the new page number. goto_live() re-requests the live page
-     * explicitly, which clears the control (PAGESTART) and repopulates it
-     * from what the bridge now has -- cheap and correct on a fresh session
-     * too, where it is a no-op over an empty page. See BACKLOG.md's note
-     * on this global. */
+    g_announce_connected = 1;
+    /* READY carries page/total for the session as it stands. goto_live()
+     * re-requests the live page explicitly, which clears the control
+     * (PAGESTART) and repopulates it from what the bridge now has -- cheap
+     * and correct on a fresh session too, where it is a no-op over an empty
+     * page.
+     *
+     * It is also what used to eat the "Connected to bridge." notice this
+     * handler wrote one line earlier; see g_announce_connected. */
     if (g_pagebar) g_pagebar->goto_live();
     status_refresh();
 }
@@ -403,16 +415,25 @@ static void on_doc(rc_frame *f)
 {
     /* The stylesheet and skeleton come from the bridge, so the look can be
      * changed by restarting it rather than by rebuilding and re-deploying
-     * the guest binary. */
-    if (!g_doc_sent) {
-        g_doc_sent = 1;
-        if (g_html) g_html->set_document(f->body);
-        /* The control is created here rather than with the other children,
-         * because it needs the skeleton first -- so it has missed every
-         * layout so far and is still sized to whatever DoVerb was given. */
-        layout(g_main);
-        SetTimer(g_main, TIMER_HTMLPOLL, 100, NULL);
-    }
+     * the guest binary.
+     *
+     * Unconditional now. This used to be guarded by a g_doc_sent flag that
+     * was per PROCESS, not per connection, so the bridge's skeleton was
+     * installed once at first contact and never again -- which meant a
+     * stylesheet edit could not reach a running guest at all, and the guest
+     * could not have a document before a bridge answered.
+     *
+     * rc_html::set_document now decides: identical content is a no-op (the
+     * bridge re-sends the same skeleton on every attach, and re-navigating
+     * would throw the transcript away for nothing), different content
+     * re-navigates. The cold-start document beside the exe is what the app
+     * boots with; this is what keeps it current. */
+    if (g_html) g_html->set_document(f->body);
+    /* The control may have been created here rather than with the other
+     * children, in which case it has missed every layout so far and is still
+     * sized to whatever DoVerb was given. Cheap enough to always do. */
+    layout(g_main);
+    SetTimer(g_main, TIMER_HTMLPOLL, 100, NULL);
 }
 
 static void on_text(rc_frame *f)
@@ -571,7 +592,15 @@ static void on_pagebar(rc_frame *f)
     if (strcmp(f->type, "PAGESTART") == 0)
         g_turn_state = TURN_IDLE;
     if (g_pagebar) g_pagebar->frame(f);
-    if (strcmp(f->type, "PAGEEND") == 0) log_mem("page loaded");
+    if (strcmp(f->type, "PAGEEND") == 0) {
+        log_mem("page loaded");
+        /* Past PAGESTART's clear() and past the pre-ready queue, so this is
+         * the first moment the line can be written and survive. */
+        if (g_announce_connected) {
+            g_announce_connected = 0;
+            if (g_html) g_html->notice("Connected to bridge.");
+        }
+    }
 }
 
 static void on_anchor(rc_frame *f)
@@ -838,6 +867,26 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     if (!g_html)
         MessageBoxA(hwnd, "Could not create the HTML view.", RC_TITLE,
                     MB_OK | MB_ICONERROR);
+    else if (g_html->boot_local()) {
+        /* There is a document now, before anything has been connected to.
+         * The poll timer is what notices it has finished loading; on_doc
+         * arms one too and re-arming is harmless. */
+        SetTimer(hwnd, TIMER_HTMLPOLL, 100, NULL);
+        /* Say what the window is about to do. The transcript used to be a
+         * bare grey rectangle until a bridge answered -- and if none ever
+         * did, it stayed that way, with the only sign of trouble a word in
+         * the status bar. This goes through the pre-ready queue and appears
+         * when the document finishes loading. */
+        if (g_cfg.host[0]) {
+            char line[160];
+            rc_strf(line, sizeof(line), "Connecting to %s:%d...",
+                    g_cfg.host, g_cfg.port);
+            g_html->notice(line);
+        } else {
+            g_html->notice("No bridge is configured. "
+                           "Use Configure -> Server Host... to set one.");
+        }
+    }
     else
         /* The INI's autoscroll, applied. Audit 01.2 said this setting was
          * "loaded from the INI, written back, round-trip-tested by

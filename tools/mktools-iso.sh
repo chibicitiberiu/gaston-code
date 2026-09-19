@@ -23,6 +23,30 @@ cp "$HERE/build/win/netcheck.exe"    "$STAGE/NETCHECK.EXE" 2>/dev/null || true
 cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true
 cp "$HERE/vm/retrocl.ini"      "$STAGE/RETROCL.INI" 2>/dev/null || true
 
+# The transcript's cold-start document, GENERATED from the bridge's own
+# stylesheet so there is exactly one source of truth.
+#
+# The guest needs a document before it has a connection -- otherwise the
+# transcript area is bare grey until a bridge answers, and anything the app
+# wants to say in the meantime ("configure a host") has nowhere to appear.
+# Shipping a hand-maintained copy of the CSS would be the obvious way and the
+# wrong one: two copies of a stylesheet drift, which is the bug rc_html::user
+# carries a long comment about -- the guest stripped whitespace differently
+# from the bridge and one message rendered two ways.
+#
+# So it is emitted from bridge/view/html.py at package time. The bridge's DOC
+# frame still wins at runtime: set_document compares and re-installs when the
+# two differ, which is also what makes a CSS change reach the guest on a
+# reconnect rather than a reinstall.
+if ! python3 -c "
+import sys; sys.path.insert(0, '$HERE')
+from bridge.view.html import document
+open('$STAGE/VIEW.HTM', 'w', encoding='cp1252').write(document())
+" 2>/dev/null; then
+    echo "  WARNING: could not generate VIEW.HTM from bridge/view/html.py;" >&2
+    echo "           the guest will start with no document until DOC arrives" >&2
+fi
+
 # One command to type blind through QMP send-key, rather than six.
 cat > "$STAGE/SETUP.BAT" <<'BAT'
 @ECHO OFF
@@ -36,6 +60,10 @@ REM opens -- it then falls back to its compiled-in defaults and, in the case
 REM that cost an hour, ran with an empty sync root and no error anywhere.
 REM Name the destination explicitly. The Win98 DOS box speaks long filenames.
 COPY D:\RETROCL.INI C:\RETRO\retroclaude.ini > NUL
+REM The cold-start transcript document. Without it the app shows a bare grey
+REM rectangle until a bridge answers, which is also when it most needs to say
+REM something. Long name deliberately: the app opens view.htm beside itself.
+IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\RETRO\view.htm > NUL
 C:
 CD \RETRO
 ECHO Copied to C:\RETRO.  Run PROBE to start the Phase 0 experiments.

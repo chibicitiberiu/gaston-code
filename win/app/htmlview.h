@@ -94,6 +94,16 @@ public:
      * it. */
     void set_document(const char *doc);
 
+    /* Install the cold-start document shipped beside the exe (view.htm).
+     *
+     * Non-zero if one was found and installed. Without it the transcript is
+     * a bare grey rectangle until a bridge answers -- which is exactly when
+     * the app most needs somewhere to say "no bridge answered". The file is
+     * GENERATED from bridge/view/html.py at package time (tools/mktools-iso.sh)
+     * so there is one stylesheet, not two that drift; the bridge's DOC frame
+     * still wins at runtime. */
+    int  boot_local();
+
     /* --- what the transcript can be told ---------------------------------
      *
      * These own their markup and their scroll policy, which the CALL SITES
@@ -137,6 +147,7 @@ private:
      * scroll policy, straight into #t. Making it public again would re-open
      * the exact hole the vocabulary above closed, because the two unescaped
      * sites reached it directly. `block` is the supported way in. */
+    void renavigate();
     void append(const char *frag);
     void say(const char *cls, const char *text);
     void settle(int was_at_bottom);

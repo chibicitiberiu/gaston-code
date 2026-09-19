@@ -262,9 +262,17 @@ struct rc_html_impl {
     char           path[MAX_PATH];
     int            diag;
     int            autoscroll;  /* the user's setting, finally consulted */
+    /* A fingerprint of the document currently installed, so set_document can
+     * tell "the bridge sent the same skeleton again" (every reconnect) from
+     * "the stylesheet changed" (worth re-navigating for, and the only way a
+     * CSS edit on the bridge ever reaches the guest). Length plus a rolling
+     * sum: a real hash would be better and this is not a security boundary,
+     * it is a did-anything-change test on a machine with 28KB free. */
+    unsigned       doc_len, doc_sum;
 
     explicit rc_html_impl(HWND p)
         : parent(p), ready(0), queue(0), queue_len(0), queue_cap(0), diag(0),
+          doc_len(0), doc_sum(0),
           /* On unless the user says otherwise -- the same default
            * rc_config_load uses. The struct is zero-filled, so without this
            * the setting would be off by accident on the very first run. */
@@ -408,6 +416,71 @@ rc_html::~rc_html()
     delete d;
 }
 
+int rc_html::boot_local()
+{
+    char dir[MAX_PATH], path[MAX_PATH];
+    FILE *f;
+    long n;
+    int ok = 0;
+
+    GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
+    { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
+    rc_strf(path, sizeof(path), "%s\\view.htm", dir);
+
+    f = fopen(path, "rb");
+    if (!f) { rc_log("html: no cold-start document at %s", path); return 0; }
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    /* A skeleton is a few KB. Anything far larger is not the file we ship,
+     * and reading it into a heap block on a 28KB-free machine is not worth
+     * finding out. */
+    if (n > 0 && n < 64 * 1024) {
+        HeapPtr<char> buf((char *)HeapAlloc(GetProcessHeap(), 0,
+                                            (unsigned)n + 1));
+        if (buf.valid() && fread(buf.get(), 1, (size_t)n, f) == (size_t)n) {
+            buf.get()[n] = '\0';
+            set_document(buf.get());
+            ok = 1;
+            rc_log("html: cold-start document installed (%ld bytes)", n);
+        }
+    } else {
+        rc_log("html: cold-start document is %ld bytes; ignored", n);
+    }
+    fclose(f);
+    return ok;
+}
+
+/* Point the control at d->path. Split out because set_document has two
+ * callers' worth of work now: the first install creates the control and
+ * navigates, a later one with different content only navigates. */
+void rc_html::renavigate()
+{
+    char url8[MAX_PATH + 16];
+    char *p;
+    Bstr url;
+    VARIANT empty;
+
+    if (!d->web.valid()) return;
+    rc_strf(url8, sizeof(url8), "file:///%s", d->path);
+    for (p = url8; *p; p++) if (*p == '\\') *p = '/';
+    url.reset(to_bstr(url8));
+    VariantInit(&empty);
+    IWebBrowser2_Navigate(d->web.get(), url.get(), &empty, &empty, &empty,
+                          &empty);
+    rc_log("html: navigating to %s", d->path);
+}
+
+/* Cheap content fingerprint; see rc_html_impl::doc_sum. */
+static void doc_fingerprint(const char *doc, unsigned *len, unsigned *sum)
+{
+    unsigned n = 0, acc = 2166136261u;
+    const unsigned char *p = (const unsigned char *)doc;
+    for (; *p; p++, n++) { acc ^= *p; acc *= 16777619u; }
+    *len = n;
+    *sum = acc;
+}
+
 void rc_html::set_document(const char *doc)
 {
     RECT rc;
@@ -415,8 +488,27 @@ void rc_html::set_document(const char *doc)
     FILE *f;
     VARIANT empty;
     char dir[MAX_PATH];
+    unsigned len, sum;
 
-    if (d->obj.valid()) return;
+    if (!doc || !*doc) return;
+
+    /* Re-installable, where this used to be once per process.
+     *
+     * The old guard was `if (d->obj.valid()) return;`, and main.cpp had a
+     * second one (g_doc_sent) that was also per-process rather than per
+     * connection. Between them, a stylesheet change on the bridge could not
+     * reach a running guest at all -- it needed the app restarted -- and the
+     * document could never be installed before a bridge answered.
+     *
+     * Now: identical content is a no-op, because the bridge re-sends the
+     * same skeleton on every attach and re-navigating would throw the
+     * transcript away for nothing. Different content re-navigates, which is
+     * what makes a CSS edit land on a reconnect. */
+    doc_fingerprint(doc, &len, &sum);
+    if (d->obj.valid() && len == d->doc_len && sum == d->doc_sum)
+        return;
+    d->doc_len = len;
+    d->doc_sum = sum;
 
     /* A file rather than document.write: writing needs the document to exist
      * first, which means waiting for a navigation anyway, and this way there
@@ -428,6 +520,18 @@ void rc_html::set_document(const char *doc)
     if (!f) { rc_log("html: cannot write %s", d->path); return; }
     fputs(doc, f);
     fclose(f);
+
+    /* The file is rewritten above either way; if the control is already
+     * hosting, all that is left is to point it at the new bytes. Creating a
+     * second control would leak the first and lose the transcript. */
+    if (d->obj.valid()) {
+        d->ready = 0;
+        d->slot_t.reset(NULL);
+        d->slot_l.reset(NULL);
+        renavigate();
+        rc_log("html: document changed, re-navigating");
+        return;
+    }
 
     hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER,
                           IID_IOleObject, (void **)d->obj.addr());
@@ -445,17 +549,8 @@ void rc_html::set_document(const char *doc)
                                    (void **)d->web.addr());
     if (FAILED(hr)) { rc_log("html: QI IWebBrowser2 %08lX", (unsigned long)hr); return; }
 
-    {
-        char url8[MAX_PATH + 16];
-        char *p;
-        Bstr url;
-        rc_strf(url8, sizeof(url8), "file:///%s", d->path);
-        for (p = url8; *p; p++) if (*p == '\\') *p = '/';
-        url.reset(to_bstr(url8));
-        VariantInit(&empty);
-        IWebBrowser2_Navigate(d->web.get(), url.get(), &empty, &empty, &empty, &empty);
-    }
-    rc_log("html: navigating to %s", d->path);
+    renavigate();
+    (void)empty;
 
     {   /* Where did the control actually put its window? A control that is
          * hosting correctly but sized to nothing looks exactly like one that
