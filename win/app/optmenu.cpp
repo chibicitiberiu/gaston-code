@@ -12,17 +12,26 @@ static void clear_popup(HMENU m)
 }
 
 rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_)
-    : n_model(0), n_effort(0), effort_ok(0), opts_open(0), owner(owner_),
-      send(send_)
+    : n_model(0), n_effort(0), n_mode(0), effort_ok(0), opts_open(0),
+      owner(owner_), send(send_)
 {
-    cur_model[0] = cur_effort[0] = '\0';
-    /* The Model and Effort menus are built from what the bridge sends, so the
-     * lists can change without rebuilding this binary. */
+    cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
+    /* All three menus are built from what the bridge sends, so the lists can
+     * change without rebuilding this binary -- which matters most for Mode,
+     * where WHICH modes are offered is a safety decision made beside the
+     * measurement that justifies it (bridge/server.py, MODE_ORDER). */
     menu_model = CreatePopupMenu();
     menu_effort = CreatePopupMenu();
+    menu_mode = CreatePopupMenu();
     AppendMenuA(menu_model, MF_STRING | MF_GRAYED, 0, "(not connected)");
     AppendMenuA(menu_effort, MF_STRING | MF_GRAYED, 0, "(not connected)");
+    AppendMenuA(menu_mode, MF_STRING | MF_GRAYED, 0, "(not connected)");
 
+    /* Mode first: it decides whether you are asked before a command runs,
+     * which outranks which model answers. "Mo&de" rather than "&Mode"
+     * because "&Model" already owns Alt+M, and two menus answering the same
+     * key means one of them cannot be reached from the keyboard at all. */
+    AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_mode, "Mo&de");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_model, "&Model");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)menu_effort, "&Effort");
 }
@@ -47,10 +56,12 @@ int rc_optmenu::frame(rc_frame *f)
             opts_open = 1;
             clear_popup(menu_model);
             clear_popup(menu_effort);
+            clear_popup(menu_mode);
             n_model = 0;
             n_effort = 0;
+            n_mode = 0;
             effort_ok = 0;
-            cur_model[0] = cur_effort[0] = '\0';
+            cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
         }
         if (kind && id && label) {
             if (strcmp(kind, "model") == 0 && n_model < MAX_OPTS) {
@@ -73,6 +84,13 @@ int rc_optmenu::frame(rc_frame *f)
                 AppendMenuA(menu_effort, flags,
                             IDM_EFFORT0 + n_effort, label);
                 n_effort++;
+            } else if (strcmp(kind, "mode") == 0 && n_mode < MAX_OPTS) {
+                rc_strf(opt_mode[n_mode], 64, "%s", id);
+                if (on) rc_strf(cur_mode, sizeof(cur_mode), "%s", label);
+                AppendMenuA(menu_mode,
+                            MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
+                            IDM_MODE0 + n_mode, label);
+                n_mode++;
             }
         }
         return 1;
@@ -100,6 +118,12 @@ int rc_optmenu::command(int id)
         const char *keys[1], *vals[1];
         keys[0] = "effort"; vals[0] = opt_effort[id - IDM_EFFORT0];
         send("The effort change", "SETEFFORT", keys, vals, 1, NULL, 0);
+        return 1;
+    }
+    if (id >= IDM_MODE0 && id < IDM_MODE0 + n_mode) {
+        const char *keys[1], *vals[1];
+        keys[0] = "mode"; vals[0] = opt_mode[id - IDM_MODE0];
+        send("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
         return 1;
     }
     return 0;

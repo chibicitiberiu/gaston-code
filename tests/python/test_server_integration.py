@@ -65,6 +65,11 @@ class FakeSession:
         # inline would pass while the cancellation wedge shipped.
         self.can_use_tool = kw.get("can_use_tool")
         self.model = "fake-model"
+        # What Session.__init__ is given, and what set_permission_mode
+        # changes. Held here rather than ignored so a test can assert the
+        # bridge passed the guest's choice into the REBUILT session as well
+        # as into the live one.
+        self.permission_mode = kw.get("permission_mode", "default")
         self.started = False
         self.interrupted = False
         FakeSession._seq += 1
@@ -91,6 +96,9 @@ class FakeSession:
 
     async def set_model(self, m):
         self.model = m
+
+    async def set_permission_mode(self, m):
+        self.permission_mode = m
 
     async def server_models(self):
         """Shaped like what the CLI returns, including the "default" alias
@@ -708,6 +716,78 @@ async def test_effort_menu_ticks_the_cli_default(harness):
     ticked = [f.headers["id"] for f in efforts
               if f.headers.get("current") == "1"]
     assert ticked == ["low"], "the effort menu must tick the CLI's --effort"
+    await harness.close(w)
+
+
+# --- the permission-mode menu -----------------------------------------------
+
+
+async def test_mode_options_offer_three_and_withhold_three(harness):
+    """`auto` and `bypassPermissions` must never appear on that menu.
+
+    Under bypassPermissions the docs say can_use_tool is never invoked, and
+    under auto it was MEASURED here that with can_use_tool installed the
+    model classifier is not in the loop at all -- `git reset --hard` on a
+    repo with real uncommitted work executed unchanged in both `default` and
+    `auto`. Offering either would promise a safety net that is not there, to
+    somebody whose machine cannot undo a DELTREE. `dontAsk` is withheld for a
+    different reason: we persist no allow rules yet, so it would deny
+    everything.
+    """
+    r, w = await harness.connect()
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    modes = [f.headers["id"] for f in frames if f.type == "OPTION"
+             and f.headers.get("kind") == "mode"]
+    assert modes == ["default", "acceptEdits", "plan"]
+    ticked = [f.headers["id"] for f in frames if f.type == "OPTION"
+              and f.headers.get("kind") == "mode"
+              and f.headers.get("current") == "1"]
+    assert ticked == ["default"], "a fresh guest starts in Manual"
+    await harness.close(w)
+
+
+async def test_setmode_changes_the_live_session_and_the_menu(harness):
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+    frames = await harness.recv_until(r, {"OPTIONSEND"})
+    ticked = [f.headers["id"] for f in frames if f.type == "OPTION"
+              and f.headers.get("kind") == "mode"
+              and f.headers.get("current") == "1"]
+    assert ticked == ["acceptEdits"]
+    assert harness.bridge._guest.claude.permission_mode == "acceptEdits"
+    await harness.close(w)
+
+
+async def test_setmode_refuses_a_mode_that_is_not_on_the_menu(harness):
+    """The header is not model-supplied, but it still arrives off a socket,
+    and this particular typo would silently stop the permission bar from ever
+    appearing again."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("SETMODE", {"mode": "bypassPermissions"}))
+    await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+    await harness.recv_until(r, {"OPTIONSEND"})
+    assert harness.bridge._guest.perm_mode == "acceptEdits", (
+        "the refused mode must not have been applied, and must not have "
+        "swallowed the valid one that followed"
+    )
+    await harness.close(w)
+
+
+async def test_the_chosen_mode_survives_a_rebuilt_session(harness):
+    """A new session throws the Session object away. The mode the user picked
+    is on the guest, not on that object, precisely so it comes back."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("NEWSESSION", {}))
+    await harness.recv_until(r, {"OPTIONSEND"})
+    assert harness.bridge._guest.claude.permission_mode == "plan", (
+        "the rebuilt session must start in the mode the user chose, not "
+        "back in Manual"
+    )
     await harness.close(w)
 
 

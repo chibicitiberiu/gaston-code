@@ -1115,7 +1115,8 @@ entries below differ from what earlier drafts of this document assumed.
 
 *Guest -> bridge:* `HELLO` (handshake) · `INPUT` (typed text) · `INTERRUPT` (Stop) ·
 `RESUME` (Continue on the halt bar) · `PERMREPLY` (Allow/Always/Deny) · `GETSESSIONS` ·
-`SWITCH` · `GETPAGE` · `NEWSESSION` · `SETMODEL` · `SETEFFORT` · `SYNCDIRTY` (the guest
+`SWITCH` · `GETPAGE` · `NEWSESSION` · `SETMODEL` · `SETEFFORT` · `SETMODE` (the
+permission mode, live -- no fork, unlike effort) · `SYNCDIRTY` (the guest
 noticed its tree moved; it reconciles nothing itself) · `SYNCENT` / `SYNCEND` (manifest
 scan) · `SYNCPUTACK` / `SYNCMKDIRACK` (acks to the bridge's push/mkdir) · `SYNCDAT` /
 `SYNCDATEND` (file data, answering the bridge's `SYNCGET`) · `EXECOUT` (streamed command

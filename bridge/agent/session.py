@@ -286,6 +286,19 @@ class Session:
             await self._client.set_model(model)
         self._opts.model = model
 
+    async def set_permission_mode(self, mode: str) -> None:
+        """Live, like set_model, and for the same reason: streaming.
+
+        The SDK's set_permission_mode is documented as working only in
+        streaming mode, which is what this class always uses
+        (`include_partial_messages=streaming`, default True). `_opts` is
+        updated as well so a session rebuilt from these options -- the effort
+        fork does exactly that -- does not silently drop back to "default".
+        """
+        if self._client:
+            await self._client.set_permission_mode(mode)
+        self._opts.permission_mode = mode
+
     # --- event pump --------------------------------------------------------
 
     async def _consume(self) -> Turn:

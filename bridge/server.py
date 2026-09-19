@@ -277,6 +277,14 @@ class GuestSession:
     def effort(self, e: str) -> None:
         self.identity.effort = e
 
+    @property
+    def perm_mode(self) -> str:
+        return self.identity.perm_mode
+
+    @perm_mode.setter
+    def perm_mode(self, m: str) -> None:
+        self.identity.perm_mode = m
+
     # --- forwarded to self.link, so the rest of the bridge can keep saying
     # guest.writer / guest.send_lock / guest.zip_out / guest.link_bps rather
     # than reaching through guest.link for every one of them. ---
@@ -899,6 +907,9 @@ class Bridge:
             # these and a later reconnect or fork has to keep the choice.
             model=self._effective_model(guest),
             effort=self._effective_effort(guest),
+            # Same reasoning: a rebuild (switch, new session, effort fork)
+            # must not drop the user back into Manual without saying so.
+            permission_mode=guest.perm_mode,
             resume=resume,
             fork=fork,
             # Every tool call the CLI does not resolve locally comes back
@@ -1241,6 +1252,9 @@ class Bridge:
     async def _on_seteffort(self, guest: GuestSession, f: Frame) -> None:
         await self._set_effort(guest, f.headers.get("effort", ""))
 
+    async def _on_setmode(self, guest: GuestSession, f: Frame) -> None:
+        await self._set_mode(guest, f.headers.get("mode", ""))
+
     #: One entry per inbound frame type, built once at class definition
     #: time -- 02.30: this used to be a 17-branch if/elif mixing one-line
     #: handlers (PING, STAT) with 25-line ones (RESUME, GETSESSIONS,
@@ -1283,6 +1297,7 @@ class Bridge:
         "NEWSESSION": "_on_newsession",
         "SETMODEL": "_on_setmodel",
         "SETEFFORT": "_on_seteffort",
+        "SETMODE": "_on_setmode",
     }
 
     def _seed_agent_notices(self) -> None:
@@ -2538,6 +2553,15 @@ class Bridge:
                 await self._send(guest, option(
                     "effort", lvl, EFFORT_LABEL.get(lvl, lvl),
                     lvl == self._effective_effort(guest)))
+
+        # AFTER the models and efforts, not before: the guest clears all three
+        # menus when it sees the first `model` row of a batch, which is how it
+        # knows a batch has started without a frame type saying so. A mode row
+        # sent ahead of that would be appended and then deleted.
+        for mode in MODE_ORDER:
+            await self._send(guest, option(
+                "mode", mode, MODE_LABEL.get(mode, mode),
+                mode == guest.perm_mode))
         await self._send(guest, optionsend())
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
@@ -2573,6 +2597,33 @@ class Bridge:
             return
         # guest.sess_id is a stable per-connection handle now, not the SDK's
         # own id (02.24) -- nothing to update here.
+        await self._send_options(guest)
+
+    async def _set_mode(self, guest: GuestSession, mode: str) -> None:
+        """Change the permission mode, live -- no fork, unlike effort.
+
+        Refused rather than passed through if it is not one we offer: the
+        header is model-free but it still arrives off a socket, and
+        `bypassPermissions` would silently stop the permission bar from ever
+        appearing again.
+        """
+        if mode not in MODE_ORDER:
+            log.warning("ignoring unknown permission mode %r", mode)
+            return
+        guest.perm_mode = mode
+        label = MODE_LABEL.get(mode, mode)
+        if guest.claude:
+            try:
+                await guest.claude.set_permission_mode(mode)
+            except Exception as exc:
+                log.exception("permission mode change failed")
+                await self._write_block(guest, H.error(
+                    "Could not change the permission mode: " + str(exc)[:160]))
+                await self._send_options(guest)
+                return
+        log.info("permission mode -> %s", mode)
+        await self._write_block(guest, H.notice(
+            "Permission mode set to " + label + "."))
         await self._send_options(guest)
 
     async def _new_session(self, guest: GuestSession) -> None:
@@ -2708,6 +2759,26 @@ class Bridge:
 EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"]
 EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
                 "xhigh": "Extra high", "max": "Maximum"}
+
+# Permission modes offered to the guest, in menu order. THREE OF THE SDK'S
+# SIX, and the three that are missing are missing for measured reasons:
+#
+#   bypassPermissions  the docs say can_use_tool is never invoked. The bar
+#                      would stop appearing and nothing would say why.
+#   auto               measured here: with can_use_tool installed the model
+#                      classifier is NOT IN THE LOOP AT ALL. `git reset
+#                      --hard` on a repo with real uncommitted work -- a
+#                      documented blocked-by-default action -- executed
+#                      unchanged in both `default` and `auto`. Offering it
+#                      would promise Claude's danger classifier and deliver
+#                      nothing, on a machine whose owner cannot undo a
+#                      DELTREE.
+#   dontAsk            denies anything not pre-approved by an allow rule, and
+#                      we persist no allow rules yet (4.1j). Today it would
+#                      deny everything, which is not a mode, it is a fault.
+MODE_ORDER = ["default", "acceptEdits", "plan"]
+MODE_LABEL = {"default": "Manual", "acceptEdits": "Accept edits",
+              "plan": "Plan"}
 
 
 def _summarise(args: dict) -> str:

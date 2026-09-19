@@ -16,12 +16,12 @@
  *     characters (_send_options resolves aliases deliberately; showing the
  *     short name does not undo that, it just stops shouting it)
  *
- * WHAT IS ON IT TODAY: Model, Effort and New chat. Mode wants a frame type
- * and a Session method that do not exist yet (set_permission_mode is in the
- * SDK but not exposed by bridge/agent/session.py), Commands wants the live
- * list out of get_server_info(), and Attach is Phase 5. Each lands as its own
- * change so the width budget above is re-measured against the real thing
- * rather than against this estimate.
+ * WHAT IS ON IT TODAY: Mode, Model, Effort and New chat. Mode is leftmost
+ * because it decides whether you are asked before a command runs, which
+ * outranks which model answers. Commands wants the live list out of
+ * get_server_info(), and Attach is Phase 5; each lands as its own change so
+ * the width budget above is re-measured against the real thing rather than
+ * against this estimate.
  *
  * The Effort button HIDES itself when the chosen model has no effort levels
  * -- Haiku has none, and the bridge says so with one greyed menu row. The
@@ -59,6 +59,7 @@ class rc_optmenu;
 #define TOOLBAR_H 26
 
 /* Command ids. Above the bar/pagebar/input ranges and below IDM_MODEL0. */
+#define ID_TB_MODE   1019
 #define ID_TB_MODEL  1020
 #define ID_TB_EFFORT 1021
 #define ID_TB_NEW    1022

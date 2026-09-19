@@ -29,6 +29,7 @@
  * from the bridge and are not known at compile time. */
 #define IDM_MODEL0  1200      /* .. IDM_MODEL0 + MAX_OPTS */
 #define IDM_EFFORT0 1300      /* .. IDM_EFFORT0 + MAX_OPTS */
+#define IDM_MODE0   1400      /* .. IDM_MODE0 + MAX_OPTS */
 #define MAX_OPTS    16
 
 /* Signature of main.c's ui_send: "send something the user just asked for,
@@ -40,16 +41,22 @@ typedef int (*rc_optmenu_send_fn)(const char *what, const char *type,
                                    const void *body, unsigned body_len);
 
 class rc_optmenu {
-    HMENU menu_model, menu_effort;
+    HMENU menu_model, menu_effort, menu_mode;
     char  opt_model[MAX_OPTS][64];
     char  opt_effort[MAX_OPTS][64];
-    int   n_model, n_effort;
+    /* Permission mode: Manual / Accept edits / Plan. The list is the
+     * BRIDGE'S, not a table here, for the same reason the model list is --
+     * `auto` and `bypassPermissions` are withheld for measured reasons that
+     * belong beside the measurement (bridge/server.py, MODE_ORDER), not in
+     * a menu builder on a 32MB machine. */
+    char  opt_mode[MAX_OPTS][64];
+    int   n_model, n_effort, n_mode;
     /* The LABELS of the checked entries, which is what the toolbar shows.
      * The label is the bridge's displayName ("Haiku"), not the resolved id
      * ("claude-haiku-4-5-20251001") -- _send_options resolves aliases on
      * purpose, and the resolved form is 20+ characters, which does not fit
      * a toolbar button on a 640px screen. */
-    char  cur_model[64], cur_effort[64];
+    char  cur_model[64], cur_effort[64], cur_mode[64];
     /* Non-zero once the batch has offered at least one effort level that is
      * not greyed out. Haiku has none, and the bridge says so with a single
      * disabled row -- a toolbar button reading "(effort)" forever is worse
@@ -89,8 +96,10 @@ public:
      * ticked; the toolbar is another way to reach them, not another copy. */
     HMENU model_menu() const  { return menu_model; }
     HMENU effort_menu() const { return menu_effort; }
+    HMENU mode_menu() const   { return menu_mode; }
     const char *model_label() const  { return cur_model; }
     const char *effort_label() const { return cur_effort; }
+    const char *mode_label() const   { return cur_mode; }
     int has_effort() const { return effort_ok; }
 };
 

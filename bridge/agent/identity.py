@@ -42,3 +42,9 @@ class GuestIdentity:
     #: process so a reconnect or an effort fork keeps the choice.
     model: str = ""
     effort: str = ""
+    #: The permission mode the next session is built with, and the one the
+    #: live client is currently in. Per guest for the same reason model and
+    #: effort are: a switch, a new session and the effort fork all rebuild
+    #: the Session, and a mode the user chose must not quietly revert to
+    #: "default" because the object holding it was thrown away.
+    perm_mode: str = "default"

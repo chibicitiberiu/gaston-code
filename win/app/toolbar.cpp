@@ -12,6 +12,7 @@
 
 /* Labels are re-written at runtime, so each needs its own buffer that
  * outlives the TB_SETBUTTONINFO call. */
+static char g_mode_text[32];
 static char g_model_text[48];
 static char g_effort_text[32];
 
@@ -57,33 +58,39 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
     }
 
     {
-        TBBUTTON b[4];
+        TBBUTTON b[5];
         memset(b, 0, sizeof(b));
 
         /* iString is a pointer here (I_IMAGENONE for the bitmap), which is
          * what lets the caption be re-written later without rebuilding the
          * button. */
-        b[0].idCommand = ID_TB_MODEL;
+        b[0].idCommand = ID_TB_MODE;
         b[0].iBitmap   = I_IMAGENONE;
         b[0].fsState   = TBSTATE_ENABLED;
         b[0].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
-        b[0].iString   = (INT_PTR)"Model";
+        b[0].iString   = (INT_PTR)"Mode";
 
-        b[1].idCommand = ID_TB_EFFORT;
+        b[1].idCommand = ID_TB_MODEL;
         b[1].iBitmap   = I_IMAGENONE;
         b[1].fsState   = TBSTATE_ENABLED;
         b[1].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
-        b[1].iString   = (INT_PTR)"default";
+        b[1].iString   = (INT_PTR)"Model";
 
-        b[2].fsStyle   = TBSTYLE_SEP;
+        b[2].idCommand = ID_TB_EFFORT;
+        b[2].iBitmap   = I_IMAGENONE;
+        b[2].fsState   = TBSTATE_ENABLED;
+        b[2].fsStyle   = TBSTYLE_DROPDOWN | TBSTYLE_AUTOSIZE;
+        b[2].iString   = (INT_PTR)"default";
 
-        b[3].idCommand = ID_TB_NEW;
-        b[3].iBitmap   = STD_FILENEW;
-        b[3].fsState   = TBSTATE_ENABLED;
-        b[3].fsStyle   = TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE;
-        b[3].iString   = (INT_PTR)"New chat";
+        b[3].fsStyle   = TBSTYLE_SEP;
 
-        SendMessageA(p->bar, TB_ADDBUTTONS, 4, (LPARAM)b);
+        b[4].idCommand = ID_TB_NEW;
+        b[4].iBitmap   = STD_FILENEW;
+        b[4].fsState   = TBSTATE_ENABLED;
+        b[4].fsStyle   = TBSTYLE_BUTTON | TBSTYLE_AUTOSIZE;
+        b[4].iString   = (INT_PTR)"New chat";
+
+        SendMessageA(p->bar, TB_ADDBUTTONS, 5, (LPARAM)b);
     }
     /* Straight into the same state an OPTION batch would leave: the Effort
      * button is hidden until a model that has levels is picked, and it has
@@ -108,21 +115,26 @@ void rc_toolbar::refresh()
 {
     if (!bar || !opts) return;
     {
+        const char *d = opts->mode_label();
         const char *m = opts->model_label();
         const char *e = opts->effort_label();
         TBBUTTONINFOA bi;
 
-        /* The fallbacks are two different states, not one.
+        /* The fallbacks are three different states, not one.
          *
-         * Model: nothing is ticked before the first OPTION batch, i.e. while
-         * disconnected. The bare noun reads as "not set yet", and the menu
-         * behind it says "(not connected)" in as many words.
+         * Mode and Model: nothing is ticked before the first OPTION batch,
+         * i.e. while disconnected. The bare noun reads as "not set yet", and
+         * the menu behind it says "(not connected)" in as many words. Mode
+         * never falls back once connected -- the bridge always ticks one of
+         * the three.
          *
          * Effort: the button only exists at all once a model with levels is
          * picked (see the TB_HIDEBUTTON below), so an empty label here means
          * the CLI's own default is in force -- nothing was chosen and the
          * bridge has no metadata saying which level that is. "default" is
          * what _set_effort already calls that state bridge-side. */
+        rc_strf(g_mode_text, sizeof(g_mode_text), "%s",
+                (d && *d) ? d : "Mode");
         rc_strf(g_model_text, sizeof(g_model_text), "%s",
                 (m && *m) ? m : "Model");
         rc_strf(g_effort_text, sizeof(g_effort_text), "%s",
@@ -131,6 +143,8 @@ void rc_toolbar::refresh()
         memset(&bi, 0, sizeof(bi));
         bi.cbSize = sizeof(bi);
         bi.dwMask = TBIF_TEXT;
+        bi.pszText = g_mode_text;
+        SendMessageA(bar, TB_SETBUTTONINFOA, ID_TB_MODE, (LPARAM)&bi);
         bi.pszText = g_model_text;
         SendMessageA(bar, TB_SETBUTTONINFOA, ID_TB_MODEL, (LPARAM)&bi);
         bi.pszText = g_effort_text;
@@ -157,10 +171,10 @@ int rc_toolbar::notify(NMHDR *nh)
         HMENU menu = NULL;
         RECT r;
 
-        if (tb->iItem == ID_TB_MODEL)       menu = opts ? opts->model_menu()
-                                                        : NULL;
-        else if (tb->iItem == ID_TB_EFFORT) menu = opts ? opts->effort_menu()
-                                                        : NULL;
+        if (!opts) return 1;
+        if (tb->iItem == ID_TB_MODE)        menu = opts->mode_menu();
+        else if (tb->iItem == ID_TB_MODEL)  menu = opts->model_menu();
+        else if (tb->iItem == ID_TB_EFFORT) menu = opts->effort_menu();
         if (!menu) return 1;
 
         /* Popped directly under the button, the way a dropdown reads. The
