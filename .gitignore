@@ -67,3 +67,7 @@ vm/*.partial.*
 # in; this is only for the crash that skips the second delete.
 /rpccheck_marker.txt
 .claude/
+
+# Watcom ISO staging, like tools-stage: 90MB of unpacked third-party
+# toolchain that the script rebuilds from the installer in seconds.
+vm/*-stage/

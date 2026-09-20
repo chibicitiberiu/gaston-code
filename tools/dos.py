@@ -106,13 +106,40 @@ def dos_focused() -> bool:
     return sum(im.getpixel(probe)) < 90
 
 
-def focus(tries: int = 6) -> None:
+def _click(x: int, y: int) -> None:
+    subprocess.run(["python3", f"{HERE}/qmp.py", "click", str(x), str(y)],
+                   check=True, capture_output=True)
+
+
+def focus(tries: int = 2) -> None:
+    """Bring the MS-DOS Prompt forward, or refuse to type at all.
+
+    Alt-tab first, because it is one keystroke and usually right. Then the
+    TASKBAR, because alt-tab is not addressing: a discrete alt+tab toggles
+    between the two most recently used windows, so with three open -- the
+    client, an Explorer window and this -- it oscillates between the other
+    two forever and this function used to spend six rounds proving it.
+
+    The taskbar buttons are walked left to right and each is checked. x
+    starts past the Start button and the quick-launch icons; clicking one of
+    those would open a menu over the very thing being looked for.
+    """
     for _ in range(tries):
         if dos_focused():
             return
         subprocess.run(["python3", f"{HERE}/qmp.py", "key", "alt-tab"],
                        check=True, capture_output=True)
-        time.sleep(2.0)
+        time.sleep(1.5)
+
+    im = shot()
+    w, h = im.size
+    row = h - 13
+    for x in range(170, w - 110, 55):
+        _click(x, row)
+        time.sleep(1.0)
+        if dos_focused():
+            return
+
     raise SystemExit(
         "could not bring the MS-DOS Prompt to the front; refusing to type "
         "into whatever is there instead")
