@@ -14,6 +14,7 @@
 #include "net/frameproto.h"
 #include "core/ini.h"
 #include "core/log.h"
+#include "core/path.h"
 #include "core/str.h"
 #include "net/net.h"
 #include <ole2.h>
@@ -196,12 +197,18 @@ static int  ui_send_text(const char *text, int compose);
  * A PROPOSAL, not the change. The bridge records it against the conversation
  * and sends it back in the next OPTION batch, which is what makes it real on
  * this side -- see app/workdir.h for why the authority runs that way. */
-static void propose_workdir(const char *path)
+static void propose_workdir(const char *path, int staged)
 {
-    const char *keys[1], *vals[1];
+    const char *keys[2], *vals[2];
     if (!path || !*path) return;
-    keys[0] = "path"; vals[0] = path;
-    ui_send("The work directory change", "SETWORK", keys, vals, 1, NULL, 0);
+    keys[0] = "path";   vals[0] = path;
+    /* WHAT THE USER CHOSE, not merely where. "Let the assistant merge them"
+     * is an instruction to the assistant, and the assistant is on the other
+     * end of this socket -- without this header the copies land in
+     * Gaston-Incoming and nothing ever asks anyone to reconcile them, which
+     * makes that answer do half of what its label says. */
+    keys[1] = "staged"; vals[1] = staged ? "merge" : "";
+    ui_send("The work directory change", "SETWORK", keys, vals, 2, NULL, 0);
 }
 
 /* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
@@ -1918,18 +1925,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
      * a conversation's folder gets created under. */
     rc_syncrpc_set_home(g_cfg.sync_root);
     if (g_cfg.sync_root[0]) {
-        /* CREATE IT if it is not there. A work directory is a place the user
-         * named, not a place they are asserting already exists -- the first
-         * run after setting one has no folder yet, and leaving it missing
-         * left synchronisation dead with "guest scan returned no_root",
-         * which is a sentence nobody should have to decode to find out that
-         * a directory needed making.
-         *
-         * One level only: CreateDirectory does not make parents, and a
-         * missing C:\ or a typo'd drive is a different problem that should
-         * be reported rather than papered over. */
+        /* CREATE IT if it is not there, parents and all. A sync root is a
+         * place the user named in the INI, not a place they are asserting
+         * already exists -- the first run after setting one has no folder
+         * yet, and leaving it missing left synchronisation dead with "guest
+         * scan returned no_root", which is a sentence nobody should have to
+         * decode to find out that a directory needed making. A typo'd drive
+         * still fails, and still says so. */
         if (GetFileAttributesA(g_cfg.sync_root) == 0xFFFFFFFF) {
-            if (CreateDirectoryA(g_cfg.sync_root, NULL))
+            if (rc_mkpath(g_cfg.sync_root))
                 rc_log("sync: created %s", g_cfg.sync_root);
             else
                 rc_log("sync: cannot create %s (%lu); synchronisation will "

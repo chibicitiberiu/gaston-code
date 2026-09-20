@@ -1015,6 +1015,54 @@ async def test_setwork_points_the_conversation_at_the_folder_chosen(
     await harness.close(w)
 
 
+async def test_setwork_tells_the_agent_the_directory_moved(harness, tmp_path):
+    """The agent had no idea. The transcript notice goes to the user, the
+    OPTION batch goes to the toolbar, and the system prompt was written
+    before either -- so it went on writing into a folder that is no longer
+    mirrored anywhere, with every write appearing to succeed."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+
+    await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    said = "\n".join(b.synccoord.agent_notices)
+    assert "THE WORK DIRECTORY HAS CHANGED" in said
+    assert "D:\\Projects\\Retro" in said, "it has to name the guest's path"
+    assert os.path.join(b.sync_dir, "RETRO") in said, "and this side's"
+    assert "stays on this proxy" in said
+    # Not asked for, so not asked of it.
+    assert "Gaston-Incoming" not in said
+    await harness.close(w)
+
+
+async def test_choosing_assistant_merge_actually_asks_the_assistant(
+    harness, tmp_path,
+):
+    """"Let the assistant merge them" is an instruction TO the assistant, and
+    the assistant is on the other end of the socket. Without this the copies
+    land in Gaston-Incoming and nothing ever asks anyone to reconcile them --
+    the answer did half of what its label said."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+
+    await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro",
+                                            "staged": "merge"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    said = "\n".join(b.synccoord.agent_notices)
+    assert "asked YOU to merge" in said
+    assert os.path.join(b.sync_dir, "RETRO", "Gaston-Incoming") in said
+    assert "ask before" in said, "it must not pick a side on its own"
+    await harness.close(w)
+
+
 async def test_setwork_before_the_conversation_exists_is_refused(harness):
     """A work directory belongs to a conversation, and there is not one yet."""
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})

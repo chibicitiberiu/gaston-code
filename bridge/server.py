@@ -1713,6 +1713,36 @@ class Bridge:
                  guest.conv_id, local, path)
         await self._write_block(guest, H.notice(
             "This conversation works in " + path + " on your machine."))
+        # AND THE AGENT. It had no idea this had happened: the notice above
+        # goes to the transcript, `_send_options` goes to the toolbar, and
+        # the system prompt was written before either. So the agent went on
+        # writing into the folder it was told about when the session was
+        # built -- which is no longer mirrored anywhere.
+        #
+        # Through agent_notices, which rides in on the next turn's preamble.
+        # That is the right moment and the only one: nothing reaches a
+        # session except an INPUT, and manufacturing a turn to deliver a
+        # directory change would bill the user for an announcement.
+        note = (f"THE WORK DIRECTORY HAS CHANGED. This conversation now "
+                f"works in {local} here, mirrored to {path} on the user's "
+                f"machine. The folder you were using before is no longer "
+                f"mirrored -- anything written there from now on stays on "
+                f"this proxy, however well the write appears to succeed.")
+        if f.headers.get("staged") == "merge":
+            # The user picked "let the assistant merge them" in the dialog,
+            # which is an instruction to the assistant. Without this the
+            # copies land in Gaston-Incoming and nothing ever asks anyone to
+            # reconcile them, so that answer did half of what its label said.
+            note += (
+                f"\n\nThe user asked YOU to merge the files they brought "
+                f"across. Copies whose names clashed are in "
+                f"{os.path.join(local, 'Gaston-Incoming')}; the versions that "
+                f"were already here are in place beside it. Reconcile them "
+                f"file by file, say what you changed, and ask before "
+                f"discarding either side. Do not delete anything in "
+                f"Gaston-Incoming until the user agrees the merge is right.")
+        if note not in self.synccoord.agent_notices:
+            self.synccoord.agent_notices.append(note)
         await self._send_options(guest)
 
     async def _on_export(self, guest: GuestSession, f: Frame) -> None:

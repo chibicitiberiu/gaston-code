@@ -54,7 +54,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
 OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
        optmenu.o input.o hostdlg.o toolbar.o export.o cache.o workdir.o workcopy.o workdlg.o net.o \
-       frameproto.o log.o ini.o str.o htmlview.o miniz.o exec.o rpc.o \
+       frameproto.o log.o ini.o str.o path.o htmlview.o miniz.o exec.o rpc.o \
        sync.o syncrpc.o)
 
 .PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck
@@ -78,7 +78,7 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(addprefix $(BUILD)/,synccheck.o sync.o log.o str.o miniz.o)
+SYNCCHECK_OBJS = $(addprefix $(BUILD)/,synccheck.o sync.o log.o str.o path.o miniz.o)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -159,7 +159,7 @@ all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(addprefix $(BUILD)/,netcheck.o net.o frameproto.o \
-                log.o str.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+                log.o str.o path.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
@@ -171,7 +171,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
 RPCCHECK_OBJS = $(addprefix $(BUILD)/,rpccheck.o net.o frameproto.o \
-                log.o str.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+                log.o str.o path.o miniz.o exec.o rpc.o sync.o syncrpc.o)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(RPCCHECK_OBJS)}

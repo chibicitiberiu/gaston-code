@@ -6,6 +6,7 @@
 
 #include "app/workdir.h"
 #include "core/log.h"
+#include "core/path.h"
 #include "core/str.h"
 #include "rpc/rpc.h"
 #include "sync/sync.h"
@@ -42,18 +43,19 @@ int rc_workdir_apply(const char *path)
         return 0;
     }
 
-    /* CREATED if it is not there. A work directory is a place that was named,
-     * not one anybody is asserting already exists -- the first message in a
-     * conversation names a folder that has never existed, and leaving it
-     * missing leaves synchronisation dead with "guest scan returned no_root",
-     * which is a sentence nobody should have to decode to find out a
-     * directory needed making.
+    /* CREATED if it is not there, PARENTS AND ALL. A work directory is a
+     * place that was named, not one anybody is asserting already exists --
+     * the first message in a conversation names a folder that has never
+     * existed, and leaving it missing leaves synchronisation dead with
+     * "guest scan returned no_root", which is a sentence nobody should have
+     * to decode to find out a directory needed making.
      *
-     * One level only: CreateDirectory does not make parents, and a missing
-     * drive is a different problem that deserves to be reported rather than
-     * papered over. */
-    if (GetFileAttributesA(want) == 0xFFFFFFFF
-        && !CreateDirectoryA(want, NULL)) {
+     * This used to make one level only, which was fine while every folder
+     * sat directly under C:\Gaston and stopped being fine the moment the
+     * user could pick one: C:\Projects\Retro\Build is an ordinary answer
+     * to "where should this conversation work", and three of its four
+     * components can be absent. */
+    if (!rc_mkpath(want)) {
         rc_log("workdir: cannot create %s (%lu)", want,
                (unsigned long)GetLastError());
         return 0;

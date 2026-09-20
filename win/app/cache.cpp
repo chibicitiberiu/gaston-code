@@ -7,6 +7,7 @@
 #include "app/cache.h"
 #include "app/htmlview.h"
 #include "core/log.h"
+#include "core/path.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
 
@@ -41,8 +42,7 @@ rc_cache *rc_cache::create(const char *exe_dir)
 
     rc_strf(p->root, sizeof(p->root), "%s\\CACHE",
             (exe_dir && *exe_dir) ? exe_dir : ".");
-    if (!CreateDirectoryA(p->root, NULL)
-        && GetLastError() != ERROR_ALREADY_EXISTS) {
+    if (!rc_mkpath(p->root)) {
         /* Not fatal and not silent. A read-only or full disk means no cache,
          * which costs history after a disconnect and nothing else -- but a
          * cache that quietly does nothing is exactly the kind of thing that
@@ -87,8 +87,7 @@ void rc_cache::open_session(const char *session_id)
     rc_strf(sess, sizeof(sess), "%s", session_id);
     key_of(session_id, key, sizeof(key));
     rc_strf(dir, sizeof(dir), "%s\\%s", root, key);
-    if (!CreateDirectoryA(dir, NULL)
-        && GetLastError() != ERROR_ALREADY_EXISTS) {
+    if (!rc_mkpath(dir)) {
         rc_log("cache: cannot create %s (%lu)", dir,
                (unsigned long)GetLastError());
         dir[0] = '\0';

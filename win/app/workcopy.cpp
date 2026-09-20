@@ -4,6 +4,7 @@
 
 #include "app/workcopy.h"
 #include "core/log.h"
+#include "core/path.h"
 #include "core/str.h"
 #include "sync/sync.h"
 
@@ -52,26 +53,21 @@ static int dosjoin(char *out, unsigned cap, const char *root, const char *rel)
     return 1;
 }
 
-/* Every parent of `rel` under `root`, made in order. CreateDirectory does not
- * make parents and a copy into a tree two deep fails on the first file
- * otherwise -- with ERROR_PATH_NOT_FOUND, which reads like a missing source. */
+/* The directory `rel` will live in, under `root`, made if it is not there.
+ *
+ * `rc_mkpath` does the work; this only has to strip the last component,
+ * because the caller is about to create a FILE with that name and making a
+ * directory of it first would be the one mistake that cannot be undone by
+ * retrying. */
 static int make_parents(const char *root, const char *rel)
 {
     char full[MAX_PATH];
-    char *p;
+    char *cut;
     if (!dosjoin(full, sizeof(full), root, rel)) return 0;
-    for (p = full + strlen(root) + 1; *p; p++) {
-        if (*p != '\\') continue;
-        *p = '\0';
-        if (GetFileAttributesA(full) == 0xFFFFFFFF
-            && !CreateDirectoryA(full, NULL)
-            && GetLastError() != ERROR_ALREADY_EXISTS) {
-            *p = '\\';
-            return 0;
-        }
-        *p = '\\';
-    }
-    return 1;
+    cut = strrchr(full, '\\');
+    if (!cut) return 1;                 /* directly in the root, which exists */
+    *cut = '\0';
+    return rc_mkpath(full);
 }
 
 /* --- free space ---------------------------------------------------------- */
@@ -223,7 +219,10 @@ int rc_worksurvey_run(const char *src, const char *dst, unsigned maxpath,
         return 0;
     }
 
-    if (GetFileAttributesA(dst) == 0xFFFFFFFF && !CreateDirectoryA(dst, NULL)) {
+    /* Parents and all: the user can type or browse to a folder several
+     * levels below anything that exists, and refusing that would make the
+     * dialog's own Browse button able to propose paths it then rejects. */
+    if (!rc_mkpath(dst)) {
         out->refusal = RC_WORK_NODST;
         return 0;
     }
@@ -337,8 +336,11 @@ void copy_sink(void *ctx, const char *rel, const rc_sync_stat *st)
     if (c->cancelled) return;
 
     if (st->type == 'd') {
+        /* The directory itself, parents included -- the walk yields parents
+         * first, but leaning on that would make this depend on an ordering
+         * it does not control. */
         if (dosjoin(to, sizeof(to), c->dst, rel))
-            make_parents(c->dst, rel), CreateDirectoryA(to, NULL);
+            rc_mkpath(to);
         return;
     }
 

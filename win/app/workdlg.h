@@ -30,7 +30,7 @@
  * flow, between the copy and the wait, so ONE progress window covers both --
  * from where the user sits it is one wait, and two bars for one action
  * invite the belief that the first one finishing means it is done. */
-typedef void (*rc_workdlg_propose)(const char *path);
+typedef void (*rc_workdlg_propose)(const char *path, int staged);
 
 /* Ask for a new work directory, deal with the files in the old one, and stay
  * up until the new folder has reached the assistant.

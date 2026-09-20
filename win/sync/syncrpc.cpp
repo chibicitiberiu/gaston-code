@@ -13,6 +13,7 @@
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 #include "core/log.h"
+#include "core/path.h"
 #include "core/str.h"
 
 /* What is mirrored RIGHT NOW -- this conversation's folder, or "" while
@@ -431,15 +432,26 @@ static void do_mkdir(rc_net *net, rc_frame *f)
     else if (!rc_sync_join(full, sizeof(full), g_root, f->body))
         status = "too_long";
     else {
-        if (!CreateDirectoryA(full, NULL)) {
+        DWORD was = GetFileAttributesA(full);
+        if (was != 0xFFFFFFFF)
+            status = (was & FILE_ATTRIBUTE_DIRECTORY) ? "exists" : "is_file";
+        /* PARENTS AND ALL. The bridge's `order()` puts a directory's own
+         * MKDIR ahead of anything under it, so a conforming bridge never
+         * needs this -- and that is exactly the guarantee this file is not
+         * allowed to lean on, for the same reason rc_sync_contained does not
+         * lean on the bridge checking its own paths. A missing parent used
+         * to fail the whole subtree and set off the bridge's failed_dirs
+         * cascade; now it is made. */
+        else if (!rc_mkpath(full)) {
             DWORD e = GetLastError();
             DWORD a = GetFileAttributesA(full);
             if (e == ERROR_ALREADY_EXISTS)
                 status = (a != 0xFFFFFFFF && (a & FILE_ATTRIBUTE_DIRECTORY))
                          ? "exists" : "is_file";
             else if (e == ERROR_PATH_NOT_FOUND)
-                /* The parent is missing, which means the bridge sent these out
-                 * of order. Distinct from bad_path, which blames the name. */
+                /* Not an ordering problem any more -- rc_mkpath would have
+                 * made a missing parent. What is left is a root that cannot
+                 * be reached at all: a drive that is not there. */
                 status = "no_parent";
             else if (e == ERROR_FILENAME_EXCED_RANGE ||
                      e == ERROR_BUFFER_OVERFLOW)

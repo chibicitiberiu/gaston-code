@@ -576,7 +576,7 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
      * anything. */
     if (!st.current[0] || !st.cur_files) {
         if (!rc_workdir_browse(parent, st.current, out, cap)) return 0;
-        if (propose) propose(out);
+        if (propose) propose(out, 0);
         return 1;
     }
 
@@ -629,7 +629,7 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
         p.dlg = NULL;
         p.cancelled = 0;
         progress_open(parent, inst, &p);
-        if (propose) propose(out);
+        if (propose) propose(out, 0);
         progress_say(&p, "Sending to the assistant...", 0, st.dst_files);
         EnableWindow(parent, FALSE);
         wait_for_sync(&p, st.dst_files);
@@ -682,7 +682,7 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
          * finished would say the operation was over while the files were
          * still crossing the wire. */
         if (!p.cancelled) {
-            if (propose) propose(out);
+            if (propose) propose(out, mode == RC_WORK_MERGE);
             progress_say(&p, "Sending to the assistant...", 0,
                          st.dst_files + copied);
             wait_for_sync(&p, st.dst_files + copied);
