@@ -16,6 +16,7 @@
 #include "app/workdir.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "sync/syncrpc.h"
 
 #define ID_CUR      300
 #define ID_SIZE     301
@@ -25,6 +26,7 @@
 #define ID_LEAVE    305
 #define ID_BRING    306
 #define ID_GROUP    307
+#define ID_DEST     308
 
 #define ID_CLASH    320
 #define ID_KEEP     321
@@ -345,6 +347,58 @@ int on_error(void *ctx, const char *rel, DWORD err)
     return RC_WORK_CANCEL;
 }
 
+/* Stay up until the new folder has reached the assistant, or until it stops
+ * arriving.
+ *
+ * There is no "the pass is finished" signal to wait for and inventing one
+ * would be a wire change for a progress bar. So this watches the one fact
+ * the guest already knows -- how many files its own sync layer has finished
+ * moving -- and stops when that stops changing. `expect` is what the folder
+ * holds, which is the right denominator for the common case and merely an
+ * estimate when the bridge also has files to push down; the bar is capped
+ * rather than allowed to read past the end.
+ *
+ * QUIET, not "done": a pass that moves nothing at all is the normal outcome
+ * of pointing at an empty folder, and it must not sit here for a minute
+ * proving it. The first stretch of quiet is short for that reason, and only
+ * lengthens once something has started arriving.
+ */
+void wait_for_sync(Progress *p, unsigned expect)
+{
+    unsigned long base = rc_syncrpc_moved();
+    unsigned long seen = 0, last = 0;
+    DWORD quiet = GetTickCount();
+    char line[120];
+
+    for (;;) {
+        DWORD idle;
+        if (p->cancelled) return;
+
+        seen = rc_syncrpc_moved() - base;
+        if (seen != last) { last = seen; quiet = GetTickCount(); }
+
+        if (expect && seen >= expect) return;
+
+        idle = GetTickCount() - quiet;
+        /* Twelve seconds once files have started moving -- the bridge sweeps
+         * every thirty and a pass can pause mid-way -- and three before,
+         * because "nothing to send" is the ordinary answer for an empty
+         * folder and waiting twelve seconds to say so is the bar lying about
+         * how long the work took. */
+        if (idle > (seen ? 12000UL : 3000UL)) return;
+
+        if (expect)
+            rc_strf(line, sizeof(line), "Sending to the assistant: %lu of %u",
+                    seen, expect);
+        else
+            rc_strf(line, sizeof(line), "Sending to the assistant: %lu",
+                    seen);
+        progress_say(p, line, (unsigned)(seen > expect ? expect : seen),
+                     expect);
+        Sleep(120);
+    }
+}
+
 /* --- the dialog ---------------------------------------------------------- */
 
 struct State {
@@ -352,6 +406,7 @@ struct State {
     unsigned    maxpath;
     unsigned    cur_files;
     unsigned long cur_bytes;
+    unsigned    dst_files;          /* what the new folder already holds */
     char        chosen[MAX_PATH];
 };
 
@@ -365,6 +420,45 @@ void set_size_line(HWND dlg, State *st)
                 st->cur_files, st->cur_files == 1 ? "" : "s",
                 (st->cur_bytes + 1023) / 1024);
     SetDlgItemTextA(dlg, ID_SIZE, line);
+}
+
+/* What the folder being moved TO already holds, because every one of those
+ * files is about to be read and sent. Pointing a chat at a real project is
+ * the case this feature exists for and it is minutes on this link, so it is
+ * stated before OK rather than discovered afterwards as an unexplained
+ * transfer.
+ *
+ * Counted when the field loses focus and when Browse returns, NOT on every
+ * keystroke: this walks a tree on a 200MHz machine, and doing that between
+ * the `C` and the `:` would make the dialog unusable. */
+void set_dest_line(HWND dlg, State *st)
+{
+    char want[MAX_PATH];
+    char line[200];
+    unsigned files = 0;
+    unsigned long bytes = 0;
+
+    GetDlgItemTextA(dlg, ID_PATH, want, sizeof(want));
+    st->dst_files = 0;
+    if (!want[0] || GetFileAttributesA(want) == 0xFFFFFFFF) {
+        SetDlgItemTextA(dlg, ID_DEST,
+                        want[0] ? "It does not exist yet; it will be created."
+                                : "");
+        return;
+    }
+    if (!rc_worksurvey_count(want, &files, &bytes)) {
+        SetDlgItemTextA(dlg, ID_DEST, "");
+        return;
+    }
+    st->dst_files = files;
+    if (!files)
+        rc_strcpy(line, sizeof(line), "It is empty.");
+    else
+        rc_strf(line, sizeof(line),
+                "It holds %u file%s, %lu KB -- all of which will be read and "
+                "sent to the assistant.",
+                files, files == 1 ? "" : "s", (bytes + 1023) / 1024);
+    SetDlgItemTextA(dlg, ID_DEST, line);
 }
 
 INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
@@ -385,6 +479,7 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
          * manager would have made -- and then typing a new path prepends it
          * to the old one, which is how C:\GastonC:\WORK happened once. */
         SendDlgItemMessageA(dlg, ID_PATH, EM_SETSEL, 0, (LPARAM)-1);
+        set_dest_line(dlg, st);
         return FALSE;
 
     case WM_COMMAND:
@@ -417,10 +512,16 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             char start[MAX_PATH];
             GetDlgItemTextA(dlg, ID_PATH, start, sizeof(start));
             if (rc_workdir_browse(dlg, start[0] ? start : st->current,
-                                  picked, sizeof(picked)))
+                                  picked, sizeof(picked))) {
                 SetDlgItemTextA(dlg, ID_PATH, picked);
+                set_dest_line(dlg, st);
+            }
             return TRUE;
         }
+
+        case ID_PATH:
+            if (HIWORD(wp) == EN_KILLFOCUS) set_dest_line(dlg, st);
+            return FALSE;
 
         case IDOK: {
             char want[MAX_PATH];
@@ -432,6 +533,7 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 SetFocus(GetDlgItem(dlg, ID_PATH));
                 return TRUE;
             }
+            set_dest_line(dlg, st);
             rc_strcpy(st->chosen, sizeof(st->chosen), want);
             EndDialog(dlg, IsDlgButtonChecked(dlg, ID_BRING) ? 2 : 1);
             return TRUE;
@@ -454,7 +556,8 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 }  /* namespace */
 
 int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
-                   unsigned maxpath, char *out, unsigned cap)
+                   unsigned maxpath, rc_workdlg_propose propose,
+                   char *out, unsigned cap)
 {
     State st;
     Tmpl t;
@@ -471,10 +574,13 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
      * to the browser: a radio group about zero files is noise, and the extra
      * dialog would be in the way of the common case rather than protecting
      * anything. */
-    if (!st.current[0] || !st.cur_files)
-        return rc_workdir_browse(parent, st.current, out, cap);
+    if (!st.current[0] || !st.cur_files) {
+        if (!rc_workdir_browse(parent, st.current, out, cap)) return 0;
+        if (propose) propose(out);
+        return 1;
+    }
 
-    head(t, 12, 252, 152, "Change Work Directory");
+    head(t, 13, 252, 174, "Change Work Directory");
     item(t, 0, 7, 7, 238, 9, (WORD)-1, CLS_STATIC,
          "This conversation works in:");
     item(t, SS_PATHELLIPSIS, 12, 19, 168, 9, ID_CUR, CLS_STATIC, "");
@@ -486,16 +592,20 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
          ID_PATH, CLS_EDIT, "");
     item(t, WS_TABSTOP | BS_PUSHBUTTON, 190, 60, 55, 14, ID_BROWSE,
          CLS_BUTTON, "&Browse...");
-    item(t, WS_GROUP | BS_GROUPBOX, 7, 80, 238, 46, ID_GROUP, CLS_BUTTON,
+    /* Two lines high: "It holds 312 files, 4180 KB -- all of which will be
+     * read and sent to the assistant" does not fit on one at this width, and
+     * a clipped sentence about a transfer is worse than no sentence. */
+    item(t, 0, 12, 76, 233, 18, ID_DEST, CLS_STATIC, "");
+    item(t, WS_GROUP | BS_GROUPBOX, 7, 98, 238, 46, ID_GROUP, CLS_BUTTON,
          " The files already there ");
-    item(t, WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON, 14, 93, 224, 10,
+    item(t, WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON, 14, 111, 224, 10,
          ID_LEAVE, CLS_BUTTON,
          "&Leave them where they are (still yours, still there)");
-    item(t, WS_TABSTOP | BS_AUTORADIOBUTTON, 14, 107, 224, 10, ID_BRING,
+    item(t, WS_TABSTOP | BS_AUTORADIOBUTTON, 14, 125, 224, 10, ID_BRING,
          CLS_BUTTON, "Bring a &copy into the new folder");
-    item(t, WS_TABSTOP | BS_DEFPUSHBUTTON, 137, 132, 50, 14, IDOK,
+    item(t, WS_TABSTOP | BS_DEFPUSHBUTTON, 137, 152, 50, 14, IDOK,
          CLS_BUTTON, "OK");
-    item(t, WS_TABSTOP | BS_PUSHBUTTON, 195, 132, 50, 14, IDCANCEL,
+    item(t, WS_TABSTOP | BS_PUSHBUTTON, 195, 152, 50, 14, IDCANCEL,
          CLS_BUTTON, "Cancel");
     if (t.overflowed()) {
         rc_log("workdlg: template overflowed; not showing");
@@ -510,9 +620,22 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
     if (r == 1) {
         /* LEAVE. Nothing moves on this side; the old folder keeps what it
          * has and stops being mirrored. The bridge starts a fresh folder of
-         * its own and the first pass carries up whatever the new one holds. */
+         * its own and the first pass carries up whatever the new one holds
+         * -- which for an existing project is the whole project, and is why
+         * the bar stays up for it. */
+        Progress p;
         rc_log("workdlg: %s -> %s, leaving %u files behind",
                st.current, out, st.cur_files);
+        p.dlg = NULL;
+        p.cancelled = 0;
+        progress_open(parent, inst, &p);
+        if (propose) propose(out);
+        progress_say(&p, "Sending to the assistant...", 0, st.dst_files);
+        EnableWindow(parent, FALSE);
+        wait_for_sync(&p, st.dst_files);
+        EnableWindow(parent, TRUE);
+        if (p.dlg) DestroyWindow(p.dlg);
+        SetActiveWindow(parent);
         return 1;
     }
 
@@ -554,6 +677,16 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
         EnableWindow(parent, FALSE);
         rc_workcopy_run(st.current, out, mode, &s, on_progress, on_error,
                         &run, &copied, &failed);
+        /* THE SAME WINDOW carries straight on into the transfer. From where
+         * the user sits this is one wait, and closing the bar when the copy
+         * finished would say the operation was over while the files were
+         * still crossing the wire. */
+        if (!p.cancelled) {
+            if (propose) propose(out);
+            progress_say(&p, "Sending to the assistant...", 0,
+                         st.dst_files + copied);
+            wait_for_sync(&p, st.dst_files + copied);
+        }
         EnableWindow(parent, TRUE);
         if (p.dlg) DestroyWindow(p.dlg);
         /* Back to the frame, or the taskbar keeps the focus the destroyed
@@ -604,6 +737,22 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
         }
         rc_log("workdlg: %s -> %s, mode %d, copied %u, failed %u",
                st.current, out, mode, copied, failed);
+        if (p.cancelled) {
+            /* Nothing was proposed, so the conversation is still working
+             * where it was -- and the files that did copy are sitting in the
+             * folder that was not chosen. Say both, because either one on its
+             * own is misleading. */
+            char text[320];
+            rc_strf(text, sizeof(text),
+                    "Stopped. This conversation still works in %s, and %u "
+                    "file%s already copied into %s. Nothing there was "
+                    "removed.", st.current, copied, copied == 1 ? " was" : "s "
+                    "were", out);
+            MessageBoxA(parent, text, "Work Directory",
+                        MB_OK | MB_ICONINFORMATION);
+            out[0] = '\0';
+            return 0;
+        }
     }
     return 1;
 }

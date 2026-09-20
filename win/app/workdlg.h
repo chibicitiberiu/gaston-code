@@ -26,15 +26,23 @@
 
 #include <windows.h>
 
-/* Ask for a new work directory, and deal with the files in the old one.
+/* Send the chosen folder to the bridge. Called from inside the dialog's own
+ * flow, between the copy and the wait, so ONE progress window covers both --
+ * from where the user sits it is one wait, and two bars for one action
+ * invite the belief that the first one finishing means it is done. */
+typedef void (*rc_workdlg_propose)(const char *path);
+
+/* Ask for a new work directory, deal with the files in the old one, and stay
+ * up until the new folder has reached the assistant.
  *
  * `current` is the folder in force, which may be "". `out` receives the
- * folder chosen. Non-zero if the user chose one and any copying they asked
- * for has been done -- so the caller's only remaining job is to propose it.
+ * folder chosen. Non-zero if the user chose one; by then the copying they
+ * asked for has been done and `propose` has been called.
  *
  * `maxpath` is what the machine declared at handshake; it is what the
  * pre-flight measures destination paths against. */
 int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
-                   unsigned maxpath, char *out, unsigned cap);
+                   unsigned maxpath, rc_workdlg_propose propose,
+                   char *out, unsigned cap);
 
 #endif

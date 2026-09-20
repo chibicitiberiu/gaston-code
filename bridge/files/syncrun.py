@@ -52,7 +52,23 @@ SYNC_MAX_FILES = 2000
 
 
 class SyncError(Exception):
-    """A pass that must abort rather than act on what it received."""
+    """A pass that must abort rather than act on what it received.
+
+    `transient` marks the ones that are not news. A refusal is normally
+    something a person has to fix -- a tree_id mismatch, a short manifest --
+    and it is announced loudly because sync being dead for an hour while
+    everyone believes it is working is the failure that machinery exists for.
+    But `no_root` is the two sides mid-handover: the work directory has just
+    changed and the other end has not applied it yet, which resolves itself
+    within a second and happens on EVERY change. Announcing it produced a
+    matched pair of "synchronisation has stopped" and "it is working again"
+    notices every time, thirty-four of them in one session -- which teaches
+    people to ignore the notice that matters.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 class Pass:
@@ -173,7 +189,13 @@ class Pass:
             # Enum.__str__, not the plain string content), confirmed against
             # this interpreter -- server.py's _exec_result hits the same
             # thing and already spells it out this way for ExecStatus.
-            raise SyncError(f"guest scan returned {status.value}")
+            raise SyncError(
+                f"guest scan returned {status.value}",
+                # The machine has no root right now, which during a work
+                # directory change is true for about a second and is nobody's
+                # fault. run_sync retries rather than announcing it; it only
+                # becomes news if it keeps happening.
+                transient=status is SyncStatus.NO_ROOT)
         if len(rows) != files:
             raise SyncError(
                 f"manifest arrived short: {len(rows)} entries, SYNCEND said "

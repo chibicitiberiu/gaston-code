@@ -43,6 +43,19 @@ void rc_syncrpc_set_home(const char *home)
 
 const char *rc_syncrpc_home(void) { return g_home; }
 
+/* How many files this layer has finished moving, in either direction, since
+ * the process started. Monotonic and never reset: a caller that wants "how
+ * many since I started watching" takes a reading first and subtracts, which
+ * is the only shape that cannot be confused by two watchers.
+ *
+ * Written on the RPC WORKER thread and read on the UI thread, which is safe
+ * without a lock for exactly one reason: it is a single aligned 32-bit word,
+ * so a reader sees either the old value or the new one and never half of
+ * each. The worst outcome is a progress bar one file behind. */
+static volatile unsigned long g_moved;
+
+unsigned long rc_syncrpc_moved(void) { return g_moved; }
+
 /* --- the manifest -------------------------------------------------------- */
 /*
  * Entries are length-prefixed, not TAB-separated: TAB and newline are both
@@ -368,6 +381,7 @@ static void do_putend(rc_net *net, rc_frame *f)
                         crc ? strtoul(crc, NULL, 10) : 0,
                         cls && *cls ? *cls : RC_CLS_TEXT);
     g_put.active = 0;
+    if (rc == 0) g_moved++;          /* one file landed; see rc_syncrpc_moved */
 
     if (rc == -2) { put_fail(net, id, "crc_mismatch"); return; }
     /* -4 is the working-name reserve, and it is NOT `no_space`: the disk is
@@ -555,6 +569,7 @@ static void do_get(rc_net *net, rc_frame *f)
 
     rc_strf(crcs, sizeof(crcs), "%lu", crc);
     rc_strf(clss, sizeof(clss), "%c", cls ? cls : RC_CLS_TEXT);
+    if (strcmp(status, "ok") == 0) g_moved++;   /* one file went the other way */
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = status;
     keys[2] = "crc";    vals[2] = crcs;

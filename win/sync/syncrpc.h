@@ -44,6 +44,12 @@ const char *rc_syncrpc_root(void);
 void        rc_syncrpc_set_home(const char *home);
 const char *rc_syncrpc_home(void);
 
+/* Files this layer has finished moving, either way, since the process
+ * started. Monotonic and never reset, so a caller that wants a count since
+ * some moment takes a reading first and subtracts. Safe to read from the UI
+ * thread -- see the definition for why no lock is needed. */
+unsigned long rc_syncrpc_moved(void);
+
 #ifdef __cplusplus
 }
 #endif

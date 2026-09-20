@@ -189,6 +189,21 @@ static int  ui_send(const char *what, const char *type,
                     int nkv, const void *body, unsigned body_len);
 static int  ui_send_text(const char *text, int compose);
 
+/* app/workdlg.h's `propose` callback. The dialog calls this ITSELF, between
+ * the copy and the wait, so one progress window covers both halves of what
+ * the user sees as a single operation.
+ *
+ * A PROPOSAL, not the change. The bridge records it against the conversation
+ * and sends it back in the next OPTION batch, which is what makes it real on
+ * this side -- see app/workdir.h for why the authority runs that way. */
+static void propose_workdir(const char *path)
+{
+    const char *keys[1], *vals[1];
+    if (!path || !*path) return;
+    keys[0] = "path"; vals[0] = path;
+    ui_send("The work directory change", "SETWORK", keys, vals, 1, NULL, 0);
+}
+
 /* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
  * is the one instance, created in create_children and destroyed in
  * WM_DESTROY, the same shape as g_html. */
@@ -1718,14 +1733,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * bridge is about to mirror is the tree the user asked for
              * rather than one that grows under it during the first pass. */
             char picked[MAX_PATH];
-            if (g_optmenu
-                && rc_workdlg_run(hwnd, g_inst, rc_workdir_current(),
-                                  RC_CAP_MAXPATH, picked, sizeof(picked))) {
-                const char *keys[1], *vals[1];
-                keys[0] = "path"; vals[0] = picked;
-                ui_send("The work directory change", "SETWORK",
-                        keys, vals, 1, NULL, 0);
-            }
+            if (g_optmenu)
+                rc_workdlg_run(hwnd, g_inst, rc_workdir_current(),
+                               RC_CAP_MAXPATH, propose_workdir,
+                               picked, sizeof(picked));
             return 0;
         }
 

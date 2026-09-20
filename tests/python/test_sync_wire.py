@@ -1762,6 +1762,59 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     await harness.close(writer)
 
 
+async def test_a_handover_is_not_announced_as_a_failure(harness, tmp_path):
+    """`no_root` is the two sides mid-handover, not a fault.
+
+    Changing the work directory re-points the bridge and the guest at
+    different moments, and for about a second in between the machine has no
+    root -- so a pass lands on `no_root` on EVERY change. Announcing it wrote
+    a matched "synchronisation has stopped" and "it is working again" into
+    the transcript each time, thirty-four of them in one session, which is
+    how people learn to ignore the notice that matters.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.sync_dir)
+
+    task = asyncio.create_task(harness.bridge.run_sync("test"))
+    await fake_scan(harness, reader, writer, {}, status="no_root")
+    got = await asyncio.wait_for(task, 10)
+
+    assert "retry" in got, got
+    assert "error" not in got
+    assert not harness.bridge.synccoord.agent_notices, (
+        "the agent must not be told synchronisation has stopped for a "
+        "handover that fixes itself")
+    assert not harness.bridge._load_baseline().aborted
+
+
+async def test_a_handover_that_never_ends_is_announced(harness, tmp_path):
+    """Patience, not blindness. A root that genuinely cannot be made looks
+    exactly like a handover for one pass and nothing like one after four, and
+    the user has to hear about it while they still remember choosing it."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge.sync_dir = str(tmp_path / "tree")
+    harness.bridge.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.sync_dir)
+
+    for _ in range(harness.bridge.TRANSIENT_ABORT_GRACE + 1):
+        task = asyncio.create_task(harness.bridge.run_sync("test"))
+        await fake_scan(harness, reader, writer, {}, status="no_root")
+        got = await asyncio.wait_for(task, 10)
+
+    assert "error" in got, got
+    assert any("SYNC HAS STOPPED" in n
+               for n in harness.bridge.synccoord.agent_notices)
+    await harness.close(writer)
+
+
 async def test_recovery_is_announced_too(harness, tmp_path):
     """"Sync has stopped" with no matching "sync is working again" leaves the
     user believing it is still down."""

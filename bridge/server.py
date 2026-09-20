@@ -539,6 +539,9 @@ class Bridge:
         #: folder" -- an agent told only that its edits reach the user has no
         #: way to know which of its edits do.
         self.guest_sync_root: str | None = None
+        #: Consecutive passes refused for a reason that fixes itself. See the
+        #: `transient` branch in run_sync.
+        self._transient_aborts = 0
         self._last_sync_reports: list[str] = []
         #: Resolved baseline file per guest root, so the lookup below is not
         #: repeated on every pass.
@@ -2299,6 +2302,7 @@ class Bridge:
                 # not a log: leaving them on it re-delivered every notice on
                 # every pass, which buries the next real one.
                 p.notices_delivered(delivered)
+                self._transient_aborts = 0
                 return got
             except SyncError as exc:
                 # A DELIBERATE refusal: a tree_id mismatch, a changed guest
@@ -2307,6 +2311,21 @@ class Bridge:
                 # The whole pass stops, which is right -- and used to be a log warning and
                 # nothing else, so sync could be dead for an hour with the
                 # agent and the user both believing it was working.
+                #
+                # EXCEPT WHILE THE TWO SIDES ARE MID-HANDOVER. `no_root` means
+                # the machine has no root at this instant, which is what every
+                # work directory change looks like for about a second -- and
+                # announcing it wrote a matched "synchronisation has stopped"
+                # and "it is working again" into the transcript every time. It
+                # still becomes news if it keeps happening, because then it is
+                # not a handover, it is a folder that cannot be made.
+                if getattr(exc, "transient", False):
+                    self._transient_aborts += 1
+                    if self._transient_aborts <= self.TRANSIENT_ABORT_GRACE:
+                        log.info("sync: %s (retrying; %d of %d)", exc,
+                                 self._transient_aborts,
+                                 self.TRANSIENT_ABORT_GRACE)
+                        return {"retry": str(exc)}
                 await self._report_abort(guest, str(exc))
                 return {"error": str(exc)}
             except Exception as exc:
@@ -2387,6 +2406,14 @@ class Bridge:
         # layer that delivers it has not run for an hour.
         if agent_text not in self.synccoord.agent_notices:
             self.synccoord.agent_notices.append(agent_text)
+
+    #: How many passes in a row may be refused for a self-fixing reason
+    #: before it is announced anyway. Passes run about every thirty seconds
+    #: and a handover resolves in one, so three is a minute and a half of
+    #: patience -- long enough that no change announces itself, short enough
+    #: that a root which genuinely cannot be made is still reported while the
+    #: user remembers choosing it.
+    TRANSIENT_ABORT_GRACE = 3
 
     def _base_path(self) -> str:
         """The baseline file for the root the guest is currently mirroring.
