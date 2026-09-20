@@ -402,7 +402,16 @@ void wait_for_sync(Progress *p, unsigned expect)
 /* --- the dialog ---------------------------------------------------------- */
 
 struct State {
-    const char *current;
+    /* A COPY, not the pointer rc_workdir_current() returns.
+     *
+     * That pointer aliases workdir.cpp's own global, and this dialog CHANGES
+     * it half way through: `propose` sends SETWORK, the bridge answers with
+     * an OPTION batch, and the guest applies it -- all while the message
+     * loop is being pumped for the progress bar. So by the time the
+     * completion box is formatted, a stored pointer reads the NEW folder,
+     * and "the file that clashed is still in <old folder>" named the folder
+     * the files had just been copied INTO. Measured on the guest. */
+    char        current[MAX_PATH];
     unsigned    maxpath;
     unsigned    cur_files;
     unsigned long cur_bytes;
@@ -565,7 +574,7 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
 
     if (!out || cap < 2) return 0;
     out[0] = '\0';
-    st.current = current ? current : "";
+    rc_strcpy(st.current, sizeof(st.current), current ? current : "");
     st.maxpath = maxpath ? maxpath : MAX_PATH;
     st.chosen[0] = '\0';
     rc_worksurvey_count(st.current, &st.cur_files, &st.cur_bytes);

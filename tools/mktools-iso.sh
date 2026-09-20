@@ -18,6 +18,10 @@ cp "$HERE/build/win/probe.exe"       "$STAGE/PROBE.EXE"  2>/dev/null || true
 cp "$HERE/win/htmlspike.exe"   "$STAGE/HTMLSPK.EXE" 2>/dev/null || true
 cp "$HERE/build/win/retroclaude.exe" "$STAGE/RETROCL.EXE" 2>/dev/null || true
 cp "$HERE/build/win/netcheck.exe"    "$STAGE/NETCHECK.EXE" 2>/dev/null || true
+# The collision-mode check. It runs green under Wine and that proves the
+# code, never the platform -- CopyFile, MoveFile and the 8.3 aliasing
+# underneath them are exactly the layer Wine reimplements.
+cp "$HERE/build/win/workcheck.exe"   "$STAGE/WORKCHK.EXE" 2>/dev/null || true
 # vm/retrocl.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
 # the Wine-tier default of 127.0.0.1 when it exists.
 cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true

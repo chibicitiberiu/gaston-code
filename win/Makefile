@@ -57,7 +57,7 @@ OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
        frameproto.o log.o ini.o str.o path.o htmlview.o miniz.o exec.o rpc.o \
        sync.o syncrpc.o)
 
-.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck
+.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck workcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -127,6 +127,20 @@ $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 	  file {$(CAPSCHECK_OBJS)}
 	@echo "built $@"
 
+# The three answers to a filename collision, run against real directories.
+# They differ ONLY in what happens to the two copies that clash, which is
+# exactly the kind of difference that reads correct and behaves otherwise:
+# `stash` takes the incoming file in one mode and the target's own in the
+# other, one character apart at the call site, and swapping them would still
+# compile and still report success while putting the wrong version live.
+WORKCHECK_OBJS = $(addprefix $(BUILD)/,workcheck.o workcopy.o path.o str.o \
+                 log.o sync.o miniz.o)
+workcheck: $(BUILD)/workcheck.exe
+$(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(WORKCHECK_OBJS)}
+	@echo "built $@"
+
 PROBE_OBJS = $(addprefix $(BUILD)/,probe.o str.o miniz.o)
 probe: $(BUILD)/probe.exe
 $(BUILD)/probe.exe: $(PROBE_OBJS)
@@ -152,7 +166,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 # The cost is a few seconds. A green suite that tested the previous commit is
 # worth far less than that.
 all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
-     netcheck rpccheck probe htmlspike capscheck
+     netcheck rpccheck probe htmlspike capscheck workcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
