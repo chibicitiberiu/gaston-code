@@ -135,7 +135,7 @@ def tool_result(body: str, *, error: bool = False) -> str:
     body = (body or "").strip()
     if not body:
         body = "(no output)"
-    clipped = body[:_TOOL_RESULT_MAX]
+    clipped = _fold_long_lines(body[:_TOOL_RESULT_MAX])
     out = ('<div class="toolresult' + (' err' if error else '') + '"><pre>'
            + esc(clipped) + "</pre>")
     if len(body) > _TOOL_RESULT_MAX:
@@ -143,6 +143,51 @@ def tool_result(body: str, *, error: bool = False) -> str:
                 + str(len(body) - _TOOL_RESULT_MAX)
                 + " more characters were sent to the model --</div>")
     return out + "</div>"
+
+
+#: Where a tool-result line is broken if nothing else breaks it. Measured,
+#: not chosen: the transcript column is 470px (see STYLESHEET below) and the
+#: block is 8pt Courier New, whose advance is 6px at that size, less 12px of
+#: padding and 3px of border -- so 75 characters fit and the 76th does not.
+#:
+#: Fixed rather than read from the guest's screen size, because the number
+#: has to be the same for a page re-read later on a different display as it
+#: was when the block was sealed. A transcript that rewraps when you resize
+#: is a transcript whose stored bytes disagree with what you saw.
+_TOOL_WRAP_COL = 75
+
+
+def _fold_long_lines(text: str, width: int = _TOOL_WRAP_COL) -> str:
+    """Break lines too long for the column, HERE, because the guest cannot.
+
+    IE5 has neither `pre-wrap` nor `word-wrap`, so a `pre` holding one long
+    line cannot wrap at all -- and `overflow: auto` on the box around it then
+    draws a horizontal scrollbar INSIDE a box whose height is exactly one
+    line, so the scrollbar sits on top of the only text there is. Observed:
+    a block that was nothing but a scrollbar.
+
+    The `pre-wrap`/`word-wrap` pair stays in the stylesheet for a guest new
+    enough to honour it, but it cannot be relied on and this does not rely on
+    it. THE GUEST TRANSFORMS NOTHING -- wrapping is the bridge's job in
+    exactly the way markdown and pagination already are.
+
+    Breaks at a space when there is one in the last third of the line, so
+    prose reads normally; hard-breaks otherwise, because a 300-character path
+    with no spaces in it is the case that started this.
+    """
+    out = []
+    for line in text.split("\n"):
+        while len(line) > width:
+            cut = line.rfind(" ", width * 2 // 3, width)
+            if cut <= 0:
+                cut = width
+                out.append(line[:cut])
+            else:
+                out.append(line[:cut])
+                cut += 1            # the space itself is consumed by the break
+            line = line[cut:]
+        out.append(line)
+    return "\n".join(out)
 
 
 def notice(text: str) -> str:
@@ -429,11 +474,21 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
    the right edge: the most important line in the block was the one you could
    not read.
 
-   The two wrapping declarations are kept. `word-wrap: break-word` is a
-   Microsoft extension that shipped in IE 5.5, and the guest's mshtml version
-   is not pinned anywhere in this repo -- so on 5.5 they wrap and the box
-   never needs to scroll, and on 5.0 they are ignored and it does. Either way
-   the document no longer moves. */
+   The two wrapping declarations are kept and are NOT relied on.
+   `word-wrap: break-word` is a Microsoft extension that shipped in IE 5.5
+   and the guest's mshtml version is not pinned anywhere in this repo, so on
+   5.0 both are ignored -- `pre-wrap` is not a value it knows, which drops
+   the declaration and leaves the `pre` on plain `white-space: pre`.
+
+   That is not a cosmetic difference. A `pre` that cannot wrap holds one
+   enormous line, `overflow: auto` gives the box a horizontal scrollbar, and
+   IE draws that scrollbar INSIDE a box whose height is exactly one line --
+   so it sits on top of the only text there is. Observed on the guest: a
+   block that was nothing but a scrollbar.
+
+   So the lines are broken on the BRIDGE now, by `_fold_long_lines`, which
+   is where every other transformation already happens. These two stay for a
+   newer guest and as a second line of defence; nothing depends on them. */
 .toolresult { font: 8pt 'Courier New', monospace; color: #303030;
               background: #f4f4f4; border-left: 3px solid #b0b0b0;
               padding: 2px 6px; margin: 2px 0 6px 0;

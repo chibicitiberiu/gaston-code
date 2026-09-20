@@ -1489,6 +1489,115 @@ async def test_the_chosen_mode_survives_a_rebuilt_session(harness):
     await harness.close(w)
 
 
+async def test_a_conversation_gets_its_own_settings_back(harness, tmp_path,
+                                                        monkeypatch):
+    """Per CONVERSATION, not per machine. These used to live on the guest and
+    nowhere else, so opening a chat you had set to Plan gave you whatever the
+    last chat was using, and a bridge restart put everything back on the
+    process defaults."""
+    import bridge.server as srv
+    from bridge.agent.registry import Settings
+
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.settings = Settings(tmp_path / "settings.json")
+
+    # Speak, so there is a conversation to attach settings to.
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    first = b._guest.conv_id
+    assert first
+
+    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    await harness.send(w, Frame("SETMODEL", {"model": "haiku"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert b.settings.get(first)["mode"] == "plan"
+    assert b.settings.get(first)["model"] == "haiku"
+
+    # Somewhere else, set differently.
+    rows = [{"id": "other", "title": "t", "cwd": "", "modified": "",
+             "group": ""},
+            {"id": first, "title": "t", "cwd": "", "modified": "",
+             "group": ""}]
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = lambda cwd=None, limit=50: list(rows)
+    try:
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
+                         sid="other")
+        await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+        await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+        assert b._guest.perm_mode == "acceptEdits"
+
+        # ...and back. The first conversation's own choices return.
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w, sid=first)
+    finally:
+        srv.sesslist.listing = orig
+
+    assert b._guest.perm_mode == "plan", "its own mode, not the other chat's"
+    assert b._guest.model == "haiku"
+    await harness.close(w)
+
+
+async def test_a_conversation_with_nothing_saved_is_left_alone(
+    harness, tmp_path, monkeypatch,
+):
+    """"I have not chosen for this chat" and "I chose the default for this
+    chat" are different, and only the second is written down. A chat from
+    before this existed must not reset what is currently selected."""
+    import bridge.server as srv
+    from bridge.agent.registry import Settings
+
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.settings = Settings(tmp_path / "settings.json")
+
+    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    rows = [{"id": "ancient", "title": "t", "cwd": "", "modified": "",
+             "group": ""}]
+    orig = srv.sesslist.listing
+    srv.sesslist.listing = lambda cwd=None, limit=50: list(rows)
+    try:
+        await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
+                         sid="ancient")
+    finally:
+        srv.sesslist.listing = orig
+    assert b._guest.perm_mode == "plan"
+    await harness.close(w)
+
+
+async def test_settings_chosen_before_the_first_message_are_saved(
+    harness, tmp_path,
+):
+    """The two halves together: pick before there is a conversation, and have
+    it both apply AND be remembered once the conversation exists."""
+    from bridge.agent.registry import Settings
+
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.settings = Settings(tmp_path / "settings.json")
+
+    await harness.send(w, Frame("NEWSESSION", {}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert b._guest.claude is None
+    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert len(b.settings) == 0, "nowhere to write it yet, and it must not"
+
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+
+    conv = b._guest.conv_id
+    assert b._guest.claude.permission_mode == "plan", "applied"
+    assert b.settings.get(conv)["mode"] == "plan", "and written down"
+    await harness.close(w)
+
+
 async def test_settings_chosen_before_the_first_message_are_not_refused(
     harness,
 ):

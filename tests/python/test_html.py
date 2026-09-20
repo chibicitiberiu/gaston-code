@@ -212,3 +212,46 @@ def test_asterisk_emphasis_is_unaffected():
 
 def test_snake_case_in_a_code_span_is_untouched():
     assert inline("`a_b_c`") == "<code>a_b_c</code>"
+
+
+def test_a_long_tool_result_line_is_broken_by_the_bridge():
+    """IE5 has neither pre-wrap nor word-wrap, so a `pre` holding one long
+    line cannot wrap -- and `overflow: auto` then draws a horizontal
+    scrollbar inside a box one line tall, on top of the only text there is.
+    Observed on the guest as a block that was nothing but a scrollbar.
+
+    The guest transforms nothing, so the break happens here.
+    """
+    from bridge.view import html as H
+
+    long_line = ("/home/tibi/gaston-work/WRITEMEA/hello.c is outside this "
+                 "conversation's folder, and only that folder reaches the "
+                 "user's machine. Write to /home/tibi/gaston-work/X instead.")
+    out = H.tool_result(long_line)
+    body = out[out.index("<pre>") + 5:out.index("</pre>")]
+    lines = body.split("\n")
+    assert len(lines) > 1, "it must actually break"
+    assert all(len(l) <= H._TOOL_WRAP_COL for l in lines), lines
+    # Broken at spaces, so it still reads as prose.
+    assert not any(l.startswith(" ") for l in lines), lines
+    assert "".join(l + " " for l in lines).split() == long_line.split()
+
+
+def test_an_unbreakable_run_is_broken_anyway():
+    """A 300-character path with no spaces is the case that started this. A
+    wrapper that only breaks at spaces would leave it exactly as it was."""
+    from bridge.view import html as H
+
+    out = H.tool_result("x" * 200)
+    body = out[out.index("<pre>") + 5:out.index("</pre>")]
+    lines = body.split("\n")
+    assert max(len(l) for l in lines) <= H._TOOL_WRAP_COL
+    assert "".join(lines) == "x" * 200, "and no character is lost doing it"
+
+
+def test_short_output_is_left_exactly_alone():
+    from bridge.view import html as H
+
+    out = H.tool_result("Volume in drive C is WIN98")
+    assert "<pre>Volume in drive C is WIN98</pre>" in out
+

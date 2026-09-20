@@ -27,7 +27,7 @@ from .files import manifest
 from .status import EXEC_STATUS_PROSE, ExecStatus, SyncStatus
 from .wire import fold
 from .agent import machine
-from .agent.registry import Folders, Registry
+from .agent.registry import Folders, Registry, Settings
 from .wire.coalesce import Coalescer
 from .wire.compress import StreamCompressor
 from .view import html as H
@@ -489,6 +489,9 @@ class Bridge:
         #: Which folder each conversation works in -- see registry.Folders for
         #: why this is remembered rather than read back from the session.
         self.folders = Folders()
+        #: Model, effort and permission mode, per conversation. See
+        #: registry.Settings for why these are not simply left on the guest.
+        self.settings = Settings()
         # Measured link speed. None means "unknown, assume it might be slow".
         # Set from the guest's STAT frames; overridable for testing so the
         # dialup path can be exercised without a modem.
@@ -966,6 +969,44 @@ class Bridge:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.cwd or os.getcwd()
 
+    def _remember_settings(self, guest: GuestSession) -> None:
+        """Write this conversation's model, effort and mode to disk.
+
+        Called after every change AND once the conversation first gets an id,
+        because a setting picked before the first message has nowhere to be
+        written until then -- `conv_id` is empty for a chat that has been
+        started but not spoken in. Cheap: three strings and an atomic
+        replace, against a change the user made by hand.
+        """
+        if not guest.conv_id:
+            return
+        self.settings.set(guest.conv_id,
+                          model=guest.model,
+                          effort=guest.effort,
+                          mode=guest.perm_mode)
+
+    def _restore_settings(self, guest: GuestSession, session_id: str) -> None:
+        """Put back what this conversation was last set to.
+
+        ONLY WHAT WAS RECORDED. A conversation with nothing saved -- one from
+        before this existed, or one opened on another machine -- keeps
+        whatever is currently selected rather than being reset to the
+        process defaults, because "I have not chosen for this chat" and "I
+        chose the default for this chat" are different and only the second
+        one is written down.
+        """
+        saved = self.settings.get(session_id)
+        if not saved:
+            return
+        if "model" in saved:
+            guest.model = saved["model"]
+        if "effort" in saved:
+            guest.effort = saved["effort"]
+        mode = saved.get("mode")
+        if mode in MODE_ORDER:
+            guest.perm_mode = mode
+        log.info("restored settings for %s: %s", session_id, saved)
+
     async def _ensure_work_dir(self, guest: GuestSession) -> None:
         """Commit this conversation to a folder, if it has not already.
 
@@ -1138,6 +1179,10 @@ class Bridge:
                  else "Could not start a new session: ") + str(exc)[:160]))
             return False
         guest.pending_resume = ""
+        # The conversation has an id at last, so anything chosen before the
+        # first message -- which is everything, for a chat started with New
+        # chat -- can finally be written against it.
+        self._remember_settings(guest)
         if not resuming:
             # The guest has been showing an empty id since New chat; tell it
             # which conversation this turned out to be, so the chat list can
@@ -1650,6 +1695,7 @@ class Bridge:
         # and nothing said why. `_make_session` reads `guest.model`, so the
         # choice is applied when the client is finally built.
         guest.model = model
+        self._remember_settings(guest)
         log.info("model -> %s", model or "(default)")
         if guest.claude:
             await guest.claude.set_model(model)
@@ -3359,6 +3405,7 @@ class Bridge:
         # effort there used to be a silent no-op.
         if not guest.claude:
             guest.effort = effort
+            self._remember_settings(guest)
             log.info("effort -> %s (no client yet)", effort or "(default)")
             await self._write_block(guest, H.notice(
                 "Effort set to " + label + "."))
@@ -3368,6 +3415,7 @@ class Bridge:
         old = guest.claude.session_id
         self._abandon_pending(guest)
         guest.effort = effort
+        self._remember_settings(guest)
         log.info("effort -> %s (forking %s)", effort or "(default)", old)
         await self._write_block(guest, H.notice(
             "Effort set to " + label
@@ -3401,6 +3449,7 @@ class Bridge:
             log.warning("ignoring unknown permission mode %r", mode)
             return
         guest.perm_mode = mode
+        self._remember_settings(guest)
         label = MODE_LABEL.get(mode, mode)
         if guest.claude:
             try:
@@ -3509,6 +3558,10 @@ class Bridge:
         # read. The client is built at the first message instead
         # (_resume_pending), which is the first moment it can do anything.
         guest.pending_resume = session_id
+        # Its OWN model, effort and mode, not the ones the chat being left
+        # happened to be using. Before this, opening a conversation you had
+        # set to Plan and Opus gave you whatever was on screen a moment ago.
+        self._restore_settings(guest, session_id)
         # And its folder comes back with it. A conversation started in
         # C:\WORK\NOTES has to resume there, or the second half of it would
         # be written somewhere the first half is not -- so this is read from

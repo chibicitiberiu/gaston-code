@@ -7,6 +7,7 @@ actually started.
 """
 
 import json
+import pytest
 
 from bridge.agent.registry import Registry
 
@@ -76,3 +77,79 @@ def test_ids_that_appear_later_can_still_be_registered(tmp_path):
     assert len(r) == 0
     r.add("assigned-later")     # what the first turn sees
     assert r.filter([{"id": "assigned-later"}]) == [{"id": "assigned-later"}]
+
+
+# --- settings, per conversation ---------------------------------------------
+
+
+def test_settings_round_trip_through_the_file(tmp_path):
+    from bridge.agent.registry import Settings
+
+    path = tmp_path / "settings.json"
+    s = Settings(path)
+    s.set("conv-1", model="opus", effort="high", mode="plan")
+    s.set("conv-2", model="haiku")
+    assert Settings(path).get("conv-1") == {
+        "model": "opus", "effort": "high", "mode": "plan"}
+    assert Settings(path).get("conv-2") == {"model": "haiku"}
+    assert Settings(path).get("never-seen") == {}
+
+
+def test_a_later_change_merges_rather_than_replaces(tmp_path):
+    """Picking a model must not forget the mode chosen a minute earlier."""
+    from bridge.agent.registry import Settings
+
+    path = tmp_path / "settings.json"
+    s = Settings(path)
+    s.set("c", mode="plan")
+    s.set("c", model="opus")
+    assert Settings(path).get("c") == {"model": "opus", "mode": "plan"}
+
+
+def test_the_empty_string_is_a_real_value(tmp_path):
+    """"" means the bridge's own default, which is a CHOICE -- distinct from
+    never having chosen, which is what an absent key means. A caller has to
+    be able to tell them apart or "restore what this chat used" cannot know
+    whether to leave the current selection alone."""
+    from bridge.agent.registry import Settings
+
+    path = tmp_path / "settings.json"
+    s = Settings(path)
+    s.set("c", model="")
+    assert Settings(path).get("c") == {"model": ""}
+    assert "model" in Settings(path).get("c")
+
+
+def test_a_field_nobody_declared_is_refused(tmp_path):
+    from bridge.agent.registry import Settings
+
+    s = Settings(tmp_path / "settings.json")
+    with pytest.raises(KeyError):
+        s.set("c", colour="red")
+
+
+def test_no_conversation_id_writes_nothing(tmp_path):
+    """Before the first message there is no id. Writing under "" would give
+    every unspoken chat on the machine the same saved settings."""
+    from bridge.agent.registry import Settings
+
+    path = tmp_path / "settings.json"
+    s = Settings(path)
+    s.set("", model="opus")
+    s.set(None, model="opus")
+    assert not path.exists()
+    assert len(s) == 0
+
+
+def test_a_corrupt_settings_file_is_not_fatal(tmp_path):
+    """Losing these costs three menu selections. Refusing to start costs the
+    session -- see Baseline for where the other posture belongs."""
+    from bridge.agent.registry import Settings
+
+    path = tmp_path / "settings.json"
+    path.write_text("{not json")
+    s = Settings(path)
+    assert s.get("c") == {}
+    s.set("c", model="opus")
+    assert Settings(path).get("c") == {"model": "opus"}
+

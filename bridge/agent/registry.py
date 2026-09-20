@@ -67,6 +67,82 @@ class Registry:
         return len(self._ids)
 
 
+class Settings:
+    """Model, effort and permission mode, per conversation.
+
+    THE CONVERSATION'S, not the machine's. These used to live on the guest
+    and nowhere else, which meant two things that both read as bugs: opening
+    a chat you had set to Plan and Opus gave you whatever the last chat was
+    using, and a bridge restart put every conversation back on the process
+    defaults. Neither is a choice anyone made.
+
+    Written whenever one changes and read when a conversation is opened. A
+    setting chosen BEFORE the first message has nowhere to be written yet --
+    there is no conversation id until the client exists -- so it is held on
+    the guest and saved at the moment the id appears. That is why `set` takes
+    the whole trio rather than one field: by then all three may have changed.
+
+    Same shape as `Folders` beside it, and for the same reasons: a small JSON
+    file, atomic replace, a corrupt one logged and ignored rather than fatal.
+    Losing it costs three menu selections, not work.
+    """
+
+    #: What is remembered. Named here so a typo is a KeyError in a test
+    #: rather than a field that silently never persists.
+    FIELDS = ("model", "effort", "mode")
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = Path(path) if path else (default_path().parent
+                                             / "settings.json")
+        self._map: dict[str, dict] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            data = json.loads(self.path.read_text())
+            if isinstance(data, dict):
+                self._map = {str(k): v for k, v in data.items()
+                             if isinstance(v, dict)}
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            log.exception("could not read %s", self.path)
+
+    def get(self, session_id: str | None) -> dict:
+        """What this conversation was last set to, as far as it is known.
+
+        Absent keys are absent rather than empty: "" is a real value for
+        model and effort (it means the bridge's own default), so a caller has
+        to be able to tell "never set" from "set to the default".
+        """
+        v = self._map.get(session_id or "")
+        if not isinstance(v, dict):
+            return {}
+        return {k: v[k] for k in self.FIELDS if k in v}
+
+    def set(self, session_id: str | None, **values) -> None:
+        bad = [k for k in values if k not in self.FIELDS]
+        if bad:
+            raise KeyError(f"not a remembered setting: {bad!r}")
+        if not session_id:
+            return
+        entry = dict(self._map.get(session_id) or {})
+        entry.update({k: v for k, v in values.items() if v is not None})
+        if self._map.get(session_id) == entry:
+            return
+        self._map[session_id] = entry
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._map, indent=1, sort_keys=True))
+            tmp.replace(self.path)
+        except OSError:
+            log.exception("could not write %s", self.path)
+
+    def __len__(self) -> int:
+        return len(self._map)
+
+
 class Folders:
     """Which folder each conversation works in.
 
