@@ -53,9 +53,20 @@ mkdir -p "$STAGE/WATCOM"
 #   samples something to compile that is known to be correct, for the first
 #           five minutes on a new toolchain.
 #
-# binw (51M, DOS-hosted), binp (OS/2), binl (Linux), lib286 and docs are all
-# left out. None is needed to build a Win32 program and together they are
-# more than everything above.
+# binw's 51M of DOS-hosted COMPILERS are left out, as are binp (OS/2), binl
+# (Linux), lib286 and docs. None is needed to build a Win32 program and
+# together they are larger than everything kept.
+#
+# BUT NOT ALL OF binw, and that distinction cost a build. `binnt/wlink.lnk`
+# ends with `@%watcom%\binw\wlsystem.lnk`, so the linker reads a file from
+# binw on every single link no matter what it is targeting. Without it the
+# compile succeeds, the link dies, and the message is
+#
+#     Error! E2093: environment watcom: cannot open C:\WATCOM
+#
+# which names the environment variable and not the file that is missing, and
+# sends you looking at your PATH. The support files are 116KB in total: the
+# directive files and the stubs they name.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 echo "unpacking..."
@@ -63,6 +74,41 @@ echo "unpacking..."
 for part in binnt h lib386 eddat samples; do
     [ -d "$TMP/$part" ] || { echo "missing $part in the installer" >&2; exit 1; }
     cp -a "$TMP/$part" "$STAGE/WATCOM/"
+done
+
+mkdir -p "$STAGE/WATCOM/binw"
+[ -f "$TMP/binw/wlsystem.lnk" ] \
+    || { echo "no binw/wlsystem.lnk -- the linker needs it" >&2; exit 1; }
+for f in "$TMP"/binw/*.lnk "$TMP"/binw/wstub.exe "$TMP"/binw/cwstub.exe \
+         "$TMP"/binw/dos32a.exe "$TMP"/binw/pmodew.exe \
+         "$TMP"/binw/stub32a.exe "$TMP"/binw/stub32c.exe; do
+    [ -f "$f" ] && cp -a "$f" "$STAGE/WATCOM/binw/"
+done
+
+# %WATCOM% OUT OF THE DIRECTIVE FILES, replaced with where this actually
+# gets installed.
+#
+# These ship as EXAMPLES -- `wlink.lnk` says so on its first line -- and a
+# real setup.exe patches them as it installs. Unpacking the ZIP skips that
+# step, and the unpatched last line of binnt/wlink.lnk,
+#
+#     @%watcom%\binw\wlsystem.lnk
+#
+# makes the linker resolve the variable and then lose the rest of the path:
+# it reports `cannot open C:\WATCOM`, naming the directory rather than the
+# file it wanted, on every link of anything. The compile succeeds and the
+# link dies, which points at the program being built rather than at the
+# toolchain.
+#
+# So the install path is fixed at C:\WATCOM and written in. That is what
+# README.TXT tells you to use and the only thing SETVARS.BAT knows.
+for f in "$STAGE"/WATCOM/binnt/*.lnk "$STAGE"/WATCOM/binw/*.lnk; do
+    [ -f "$f" ] || continue
+    sed -i -e 's|%WATCOM%|C:\\WATCOM|g' -e 's|%watcom%|C:\\WATCOM|g' "$f"
+    # Strip THEN add, because these already ship with CRLF and appending a
+    # second one gives every line a stray ^M that the linker reads as part
+    # of the filename.
+    sed -i -e 's/\r$//' -e 's/$/\r/' "$f"
 done
 
 # Set up on the guest by running this, not by hand. Win98's default
@@ -79,6 +125,11 @@ SET INCLUDE=C:\WATCOM\H;C:\WATCOM\H\NT
 SET EDPATH=C:\WATCOM\EDDAT
 ECHO Open Watcom 1.9 ready.  wcc386 / wpp386 / wlink / wmake / wrc
 BAT
+# CRLF, and not as a nicety. command.com reads a batch file line by line and
+# a bare LF is not a line ending to it: the first line ran, printed "OFF",
+# and every SET after it was silently never seen -- which looks exactly like
+# "out of environment space" and sends you to CONFIG.SYS for an hour.
+sed -i 's/$/\r/' "$STAGE/WATCOM/SETVARS.BAT"
 
 cat > "$STAGE/README.TXT" <<'TXT'
 Open Watcom 1.9, Windows-hosted, for compiling ON this machine.
