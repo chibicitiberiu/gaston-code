@@ -1314,21 +1314,30 @@ has known work left.
   construction because the source is still intact. A move that deletes as it
   goes leaves the tree split across two folders with no record of which
   files made it.
-  **COLLISIONS ARE ASKED ABOUT, NOT STAGED.** `.gaston\conflict` exists
-  because a background sync conflict has nobody to ask; this one has a user
-  standing in front of it who has just clicked OK. One question for the
-  whole set with the list shown, not one per file -- point at a real project
-  and forty names collide. Three answers, and cancel:
+  **COLLISIONS ARE ASKED ABOUT, NOT STAGED BY RULE.** `.gaston\conflict`
+  exists because a background sync conflict has nobody to ask; this one has
+  a user standing in front of it who has just clicked OK. One question for
+  the whole set with the list shown, not one per file -- point at a real
+  project and forty names collide. Three answers, and cancel:
   **Keep the files already there** -- the incoming copies are simply not
   brought; nothing is staged, because they are still in the old folder.
   **Replace them with the ones I am bringing** -- the target's own copies go
-  to `.gaston\conflict`, the one case where a byte would otherwise be
+  to `Gaston-Replaced\`, the one case where a byte would otherwise be
   destroyed with nowhere else to exist.
   **Let the assistant merge them** -- the folder keeps what it has, the
-  incoming copies are staged to `.gaston\conflict`, and the agent is handed
-  the list to reconcile file by file. This is what that folder was built for
-  and the only answer that does not make the user pick a side; the other two
-  are for when they already know which side is right.
+  incoming copies go to `Gaston-Incoming\`, and the agent reconciles them
+  file by file. The only answer that does not make the user pick a side;
+  the other two are for when they already know which side is right.
+  **NOT `.gaston\conflict`,** which is what this first used and which was
+  wrong for a reason only the guest could show: that directory is the sync
+  layer's own and the bridge ignores it by default
+  (`bridge/files/ignores.py`), so everything staged there was frozen out of
+  the mirror and the agent could not read a byte of it -- the entire point
+  of the merge answer. The first run on the guest reported
+  `.gaston/conflict/hi.txt: ignored`. Two ordinary visible folders instead,
+  and two names rather than one because they hold opposite things: INCOMING
+  is what was brought and did not overwrite, REPLACED is what was
+  overwritten and would otherwise be gone.
   **PRE-FLIGHT BEFORE A BYTE IS WRITTEN**, so a refusal never leaves a
   half-copied tree: every destination path against the guest's declared
   `maxpath`/`maxdir`/`maxfile` (names that fit under `C:\Gaston\OK` need not

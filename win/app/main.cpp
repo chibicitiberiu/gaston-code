@@ -33,6 +33,8 @@
 #include "app/export.h"
 #include "app/cache.h"
 #include "app/workdir.h"
+#include "app/workdlg.h"
+#include "net/caps.h"
 
 /* SBARS_TOOLTIPS, which this build's headers do not define.
  *
@@ -1705,11 +1707,20 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              *
              * The native browser, not a text field: it is what a Windows user
              * reaches for, and it makes a typo impossible where a typed path
-             * would have quietly created one. */
+             * would have quietly created one. It is reached through
+             * rc_workdlg_run's Browse button when the folder being left has
+             * files in it, and directly when it does not -- because a
+             * question about what to do with zero files is noise.
+             *
+             * The COPY, if one was asked for, has already happened by the
+             * time this returns. It is local to this machine and the bridge
+             * has no part in it, and doing it first means the tree the
+             * bridge is about to mirror is the tree the user asked for
+             * rather than one that grows under it during the first pass. */
             char picked[MAX_PATH];
             if (g_optmenu
-                && rc_workdir_browse(hwnd, rc_workdir_current(),
-                                     picked, sizeof(picked))) {
+                && rc_workdlg_run(hwnd, g_inst, rc_workdir_current(),
+                                  RC_CAP_MAXPATH, picked, sizeof(picked))) {
                 const char *keys[1], *vals[1];
                 keys[0] = "path"; vals[0] = picked;
                 ui_send("The work directory change", "SETWORK",

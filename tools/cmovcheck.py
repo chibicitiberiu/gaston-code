@@ -34,8 +34,8 @@ import sys
 SYM = re.compile(r"^([0-9A-Fa-f]{8})[+*]?\s+(\S.*?)\s*$")
 #: `Module: /path/to/build/win/main.o(...)`
 MOD = re.compile(r"^Module:\s+(\S+?)(?:\(|\s*$)")
-#: ` 4236d0:\t0f 43 50 66 \tcmovae ...`
-INSN = re.compile(r"^\s*([0-9a-f]+):\s")
+#: ` 4236d0:\t0f 43 50 66 \tcmovae ...` -- address, then the raw bytes.
+INSN = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)")
 
 
 def symbols(map_path: str) -> list[tuple[int, str, str]]:
@@ -59,6 +59,41 @@ def owns(module: str, ours: set[str]) -> bool:
     return module.rsplit("/", 1)[-1] in ours
 
 
+def pointer_table(addr: int, raw: str, lo: int, hi: int) -> bool:
+    """Is this "CMOV" three bytes out of a table of code pointers?
+
+    THE MODULE FILTER IS NOT ENOUGH, and finding that out cost a green build.
+    Open Watcom puts read-only data in AUTO beside the code it belongs to, so
+    a switch's jump table lives INSIDE one of our own object files -- and
+    `objdump` walks AUTO linearly, so it decodes that table as instructions.
+
+    A little-endian address of the form 0x00420f06 is the bytes
+    `06 0f 42 00`, and the middle three spell `cmovb (%eax),%eax`. miniz's
+    error-string table landed at 0x00420f00 the day two new source files
+    shifted it there, and ten "CMOVs" appeared in a function nobody had
+    touched. Slide it back and they vanish -- which is the same drifting
+    green condition this tool was written to replace, one level down.
+
+    So: read the DWORD that would END at this instruction's second byte. If
+    it is an address inside the image's code, these bytes are the tail of a
+    pointer and not an opcode. Every hit is still printed either way, so a
+    real one masked by this is visible rather than silent.
+    """
+    b = [int(x, 16) for x in raw.split()]
+    if len(b) < 3:
+        return False
+    # The hit is `0f 4x ..`; the pointer's low byte is the one BEFORE it,
+    # which objdump attributed to the previous line, so reconstruct from the
+    # three bytes here plus the known shape: 0x00_4x_0f_?? .
+    #
+    # Bytes here are [0f, 4x, y]. As the top three of a little-endian DWORD
+    # the value is (y << 24) | (0x4x << 8) | 0x0f ... which is the wrong way
+    # round. Read them as the SECOND, THIRD and FOURTH bytes instead:
+    #   pointer = ?? | (0f << 8) | (4x << 16) | (y << 24)
+    val = (b[2] << 24) | (b[1] << 16) | (b[0] << 8)
+    return lo <= val <= hi and b[2] == 0x00
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 4:
         print("usage: cmovcheck.py EXE MAP obj.o [obj.o ...]", file=sys.stderr)
@@ -74,6 +109,10 @@ def main(argv: list[str]) -> int:
               % map_path)
         return 1
 
+    # The span the image's own symbols occupy, which is what a pointer in a
+    # jump table points into.
+    first, last = syms[0][0], syms[-1][0] + 0x10000
+
     real, benign = [], []
     for line in dis.splitlines():
         if not re.search(r"\scmov", line):
@@ -82,6 +121,7 @@ def main(argv: list[str]) -> int:
         if not m:
             continue
         addr = int(m.group(1), 16)
+        raw = m.group(2)
         # The symbol this address falls in: the last one at or below it.
         lo, hi = 0, len(syms)
         while lo < hi:
@@ -91,7 +131,10 @@ def main(argv: list[str]) -> int:
             else:
                 hi = mid
         where = syms[lo - 1] if lo else (0, "(before the first symbol)", "?")
-        (real if owns(where[2], objs) else benign).append((addr, where))
+        if owns(where[2], objs) and not pointer_table(addr, raw, first, last):
+            real.append((addr, where))
+        else:
+            benign.append((addr, where))
 
     for addr, where in benign:
         print("   data  %08x  in %s (%s)"
