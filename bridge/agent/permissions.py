@@ -269,7 +269,8 @@ _PATH_TOOLS = {
 _WRITE_TOOLS = {"Edit", "Write", "NotebookEdit"}
 
 
-def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
+def off_limits(tool_name: str, args: dict, workdir: str | None,
+               shared: str | None = None) -> str | None:
     """Why this call must be refused outright, or None to ask the user.
 
     The proxy is infrastructure, not the subject of the conversation. Every
@@ -283,6 +284,13 @@ def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
     dead code, because Claude Code approves those locally and never asks us.
     The same check inverted is not dead at all -- by the time a path tool
     reaches this callback, the path is already somewhere it should not be.
+
+    `shared` is the directory the agent's session actually RUNS in, which is
+    not always `workdir`: a session's cwd is fixed when it is built, which for
+    a new conversation is before it has committed to a folder, so the agent
+    goes on running in the shared root while the mirror narrows to a folder
+    underneath it. Passing it buys a second, much more useful refusal -- see
+    the two returns below.
     """
     if not workdir:
         return None
@@ -308,6 +316,27 @@ def off_limits(tool_name: str, args: dict, workdir: str | None) -> str | None:
         inside = False
     if inside:
         return _inside_gaston(tool_name, raw, root, target)
+
+    # NEAR MISS, and it deserves its own answer. `/home/x/work/notes.txt` is
+    # just as much "on the proxy" as `/etc/passwd` is, so the refusal below
+    # explains nothing about why one is refused and its sibling directory is
+    # not -- and an agent that had written one directory too high went off to
+    # diagnose a synchronisation fault instead of moving the file. The honest
+    # answer names the folder and is one sentence long.
+    if shared:
+        try:
+            near = os.path.commonpath(
+                [os.path.realpath(shared), target]) == os.path.realpath(shared)
+        except (OSError, ValueError):
+            near = False
+        if near:
+            return (f"`{raw}` is outside this conversation's folder, and only "
+                    f"that folder reaches the user's machine. Write to "
+                    f"`{workdir}` instead -- the same file one directory "
+                    f"down. Nothing else on this proxy is copied anywhere, "
+                    f"however well the write appears to succeed.\n\n"
+                    f"This is not a synchronisation fault and there is "
+                    f"nothing to diagnose.")
 
     return (f"`{raw}` is on the proxy, not on the user's machine, and the "
             f"proxy is not what this conversation is about. Refused "

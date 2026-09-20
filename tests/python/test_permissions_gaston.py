@@ -191,3 +191,45 @@ def test_oversized_argument_table_is_truncated_and_logged(caplog):
     assert "too large to display" in html
     assert any("too large" in r.message for r in caplog.records), (
         "truncating the argument table must be logged, not silent")
+
+
+def test_a_near_miss_names_the_folder_instead_of_saying_proxy():
+    """`/home/x/work/notes.txt` is exactly as much "on the proxy" as
+    `/etc/passwd` is, so the generic refusal explains nothing about why one
+    is refused and its sibling directory allowed.
+
+    Measured on the guest: an agent asked to create a file wrote to the
+    shared root one directory above the conversation's folder, was told the
+    path "is on the proxy, not on the user's machine", and spent a turn
+    diagnosing a synchronisation fault instead of writing the file one
+    directory down.
+    """
+    from bridge.agent import permissions as P
+
+    why = P.off_limits("Write", {"file_path": "/home/x/work/HI.TXT"},
+                       "/home/x/work/CREATEHI", shared="/home/x/work")
+    assert why is not None
+    assert "outside this conversation's folder" in why
+    assert "/home/x/work/CREATEHI" in why, "it has to name where to write"
+    assert "nothing to diagnose" in why
+    assert "on the proxy, not on the user" not in why
+
+
+def test_a_genuinely_foreign_path_still_gets_the_old_answer():
+    """The near-miss wording must not swallow the case it was carved out of:
+    /etc/passwd is not one directory too high, it is the wrong machine."""
+    from bridge.agent import permissions as P
+
+    why = P.off_limits("Read", {"file_path": "/etc/passwd"},
+                       "/home/x/work/CREATEHI", shared="/home/x/work")
+    assert why is not None
+    assert "is on the proxy, not on the user's machine" in why
+    assert "outside this conversation's folder" not in why
+
+
+def test_inside_the_folder_is_still_allowed_through():
+    from bridge.agent import permissions as P
+
+    assert P.off_limits("Write", {"file_path": "/home/x/work/CREATEHI/a.txt"},
+                        "/home/x/work/CREATEHI", shared="/home/x/work") is None
+

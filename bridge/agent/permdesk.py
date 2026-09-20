@@ -70,6 +70,12 @@ class PermissionDesk:
         #: yet and announce "no folder is mirrored" for a command that is
         #: about to run in one.
         self._ensure_work = ensure_work
+        #: Where the agent's session actually runs, which is not always
+        #: `_cwd`. A session's cwd is fixed when it is built and a folder is
+        #: committed at the first tool call, so for a new conversation the
+        #: agent runs here while the mirror is a folder underneath. Only used
+        #: to tell a near miss from a genuinely foreign path.
+        self._shared = cwd
         #: The prompt on screen, or None. `GuestSession.perm_pending`
         #: forwards here, the same pattern `link: GuestLink` established for
         #: `writer`/`send_lock`/`zip_out`/`link_bps`.
@@ -114,7 +120,8 @@ class PermissionDesk:
             # machine, and answering with the proxy's files would be wrong
             # even when the file is real.
             refuse = perms.off_limits(tool_name, args,
-                                      self._cwd or os.getcwd())
+                                      self._cwd or os.getcwd(),
+                                      shared=self._shared)
             if refuse is not None:
                 log.info("auto-refused %s outside the working copy: %s",
                          tool_name, str(args)[:120])
