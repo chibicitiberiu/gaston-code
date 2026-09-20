@@ -67,6 +67,11 @@ class FakeSession:
         self.model = kw.get("model") or "fake-model"
         self.effort = kw.get("effort")
         self.on_text = kw.get("on_text")
+        # Captured so a test can drive the FIRST TOOL CALL, which is what
+        # commits a conversation to a work folder. Nothing is mirrored before
+        # it, so "the folder appears" and "the folder does not appear" are
+        # both assertions that need this.
+        self.on_tool = kw.get("on_tool")
         # The bridge learns the conversation id from this, not from start().
         self.on_system = kw.get("on_system")
         # Captured so permission tests can drive it. Deliberately NOT called
@@ -93,6 +98,11 @@ class FakeSession:
         ctx = FakeCtx(**ctx_kw)
         coro = self.can_use_tool(tool_name, args or {"command": "vol c:"}, ctx)
         return asyncio.create_task(coro)
+
+    async def use_tool(self, name="Bash", args=None):
+        """Report a tool call the way the SDK does, so the bridge's own
+        `on_tool` runs -- including the work-folder commitment."""
+        await self.on_tool(name, args or {"command": "vol c:"})
 
     async def start(self):
         self.started = True
@@ -774,10 +784,66 @@ async def test_effort_menu_ticks_the_cli_default(harness):
 # --- one folder per conversation --------------------------------------------
 
 
-async def test_the_folder_is_named_after_the_conversation(harness, tmp_path):
-    """Not chosen up front. A folder is named after the conversation and the
-    CLI titles a conversation from its FIRST MESSAGE, so anything asked for
-    before then is a guess the user has to live with."""
+async def test_talking_to_a_chat_shares_no_files_at_all(harness, tmp_path):
+    """A conversation that has not called a tool has no folder, nothing is
+    mirrored, and no pass runs.
+
+    This is not tidiness. The live root used to be held on the GUEST and
+    reported in HELLO, so it outlived a bridge restart: a fresh bridge was
+    told the machine was mirroring C:\\Gaston\\OK, picked that tree's
+    baseline and then ran its first pass against its own whole shared
+    directory. With nothing mirrored until the bridge names a tree, there is
+    no tree to disagree about."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    g = b._guest
+
+    await harness.send(w, Frame("INPUT", {}, b"just a question"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+
+    assert g.work_guest == "", "unset until a tool has run"
+    assert g.work_dir == ""
+    assert b._mirror_dir(g) == "", "no mirror without a committed folder"
+    assert b._current_guest_root() == ""
+    assert await b.run_sync("test") == {}, "no pass without a mirror"
+    assert os.listdir(b.sync_dir) == [], "and no folder littered on disk"
+    await harness.close(w)
+
+
+async def test_the_first_tool_call_commits_the_folder(harness, tmp_path):
+    """Named from the FIRST MESSAGE, not the CLI's title: a tool can run in
+    the first turn, before the conversation has been titled, and the
+    alternative -- a placeholder renamed afterwards -- is a new tree_id and a
+    new baseline for a tree sync has already scanned."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    g = b._guest
+
+    await harness.send(w, Frame("INPUT", {}, b"List files in C:"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    assert g.work_guest == ""
+
+    await g.claude.use_tool()
+
+    assert g.work_dir == os.path.join(b.sync_dir, "LISTFILE")
+    assert os.path.isdir(g.work_dir), "created, not merely named"
+    assert g.work_guest == "C:\\Gaston\\LISTFILE"
+    assert b._mirror_dir(g) == g.work_dir, "and sharing is on now"
+    await harness.close(w)
+
+
+async def test_the_folder_is_named_from_the_title_when_there_is_no_message(
+    harness, tmp_path,
+):
+    """The fallback, for a conversation resumed from the chat list that never
+    got a folder: it has a title already and no first message of this
+    session's own."""
     import bridge.server as srv
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
@@ -785,21 +851,17 @@ async def test_the_folder_is_named_after_the_conversation(harness, tmp_path):
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(b.sync_dir, exist_ok=True)
     g = b._guest
-    assert g.work_guest == "", "unset until it has been spoken in"
 
     orig = srv.sesslist.listing
     srv.sesslist.listing = lambda cwd=None, limit=50: [
         {"id": g.conv_id or g.claude.session_id, "title": "List files in C:",
          "cwd": "", "modified": "", "group": ""}]
     try:
-        await harness.send(w, Frame("INPUT", {}, b"hello"))
-        await harness.recv_until(r, {"TURN"}, 10.0)
-        await harness.recv_until(r, {"TURN"}, 10.0)
+        assert g.first_prompt == "", "nothing said in this session"
+        await b._ensure_work_dir(g)
     finally:
         srv.sesslist.listing = orig
 
-    assert g.work_dir == os.path.join(b.sync_dir, "LISTFILE")
-    assert os.path.isdir(g.work_dir), "created, not merely named"
     assert g.work_guest == "C:\\Gaston\\LISTFILE"
     await harness.close(w)
 
@@ -812,20 +874,12 @@ async def test_two_conversations_do_not_share_a_folder(harness, tmp_path):
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(os.path.join(b.sync_dir, "LISTFILE"), exist_ok=True)
 
-    import bridge.server as srv
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     g = b._guest
-    orig = srv.sesslist.listing
-    srv.sesslist.listing = lambda cwd=None, limit=50: [
-        {"id": g.conv_id or g.claude.session_id, "title": "List files again",
-         "cwd": "", "modified": "", "group": ""}]
-    try:
-        await harness.send(w, Frame("INPUT", {}, b"hello"))
-        await harness.recv_until(r, {"TURN"}, 10.0)
-        await harness.recv_until(r, {"TURN"}, 10.0)
-    finally:
-        srv.sesslist.listing = orig
+    await harness.send(w, Frame("INPUT", {}, b"List files again"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await g.claude.use_tool()
     assert os.path.basename(g.work_dir) == "LISTFIL2"
     await harness.close(w)
 
@@ -914,9 +968,9 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
         {"id": sid, "title": "Sky color", "cwd": b.sync_dir,
          "modified": "", "group": ""}]
     try:
-        await harness.send(w, Frame("INPUT", {}, b"hello"))
+        await harness.send(w, Frame("INPUT", {}, b"Sky color"))
         await harness.recv_until(r, {"TURN"}, 10.0)
-        await harness.recv_until(r, {"TURN"}, 10.0)
+        await g.claude.use_tool()
         assert b.folders.get(sid) == "SKYCOLOR"
 
         # Away and back.
@@ -928,6 +982,48 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
 
     assert g.work_guest == "C:\\Gaston\\SKYCOLOR"
     assert g.work_dir == os.path.join(b.sync_dir, "SKYCOLOR")
+    await harness.close(w)
+
+
+async def test_setwork_points_the_conversation_at_the_folder_chosen(
+    harness, tmp_path,
+):
+    """"Setting work directory sets the actual work directory" -- not a
+    parent it will sit under. The guest picks any folder on its own machine
+    and that becomes this conversation's directory, whatever it is called."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    g = b._guest
+    sid = g.claude.session_id
+
+    await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
+    frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert g.work_guest == "D:\\Projects\\Retro"
+    assert os.path.isdir(g.work_dir), "and a folder on this side to pair with"
+
+    row = [f.headers for f in frames if f.type == "OPTION"
+           and f.headers.get("kind") == "work"][-1]
+    assert row["id"] == "D:\\Projects\\Retro"
+    assert row["label"] == "D:\\Projects\\Retro"
+
+    # And it comes back, because the guest's spelling cannot be derived from
+    # anything on this side.
+    assert b.folders.guest(sid) == "D:\\Projects\\Retro"
+    await harness.close(w)
+
+
+async def test_setwork_before_the_conversation_exists_is_refused(harness):
+    """A work directory belongs to a conversation, and there is not one yet."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    harness.bridge._guest.identity.claude.session_id = None
+    harness.bridge._guest.pending_resume = ""
+    await harness.send(w, Frame("SETWORK", {"path": "D:\\Nope"}))
+    frames = await harness.recv_until(r, {"TEXT"}, 10.0)
+    assert b"Send a message first" in harness.body(frames)
     await harness.close(w)
 
 
@@ -949,14 +1045,21 @@ async def test_a_new_work_directory_gets_its_own_baseline(harness, tmp_path):
     with open(legacy, "w") as fh:
         _json.dump({"guest_root": "C:\\WORK"}, fh)
 
-    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
-    await harness.recv_until(r, {"OPTIONSEND"})
-    assert b._base_path() == legacy, "its own root keeps the legacy file"
-    await harness.close(w)
-
-    b._base_paths.clear()
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
+
+    # Nothing committed, nothing mirrored, so there is no root to key a
+    # baseline on and the legacy file is what an unasked question returns.
+    assert b._base_path() == legacy
+
+    await harness.send(w, Frame("SETWORK", {"path": "C:\\WORK"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    assert b._base_path() == legacy, "its own root keeps the legacy file"
+
+    await harness.send(w, Frame("SETWORK", {"path": "C:\\Gaston\\OK"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     other = b._base_path()
     assert other != legacy
     assert os.path.basename(other).startswith("base-")
@@ -1213,27 +1316,41 @@ async def test_a_switch_denies_what_the_old_conversation_left_pending(
 # --- the permission-mode menu -----------------------------------------------
 
 
-async def test_mode_options_offer_three_and_withhold_three(harness):
-    """`auto` and `bypassPermissions` must never appear on that menu.
+async def test_bypass_permissions_is_never_on_the_menu(harness):
+    """One press would stop the permission bar appearing and nothing would
+    say why: the docs are explicit that can_use_tool is not invoked under
+    bypassPermissions. `dontAsk` is withheld for a different reason -- we
+    persist no allow rules yet, so it would deny everything, which is not a
+    mode, it is a fault.
 
-    Under bypassPermissions the docs say can_use_tool is never invoked, and
-    under auto it was MEASURED here that with can_use_tool installed the
-    model classifier is not in the loop at all -- `git reset --hard` on a
-    repo with real uncommitted work executed unchanged in both `default` and
-    `auto`. Offering either would promise a safety net that is not there, to
-    somebody whose machine cannot undo a DELTREE. `dontAsk` is withheld for a
-    different reason: we persist no allow rules yet, so it would deny
-    everything.
+    `auto` IS offered. It was withheld for one release on the strength of a
+    measurement, and that was the wrong call to make silently: see
+    MODE_CAVEAT, which puts the measurement in front of whoever picks it.
     """
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"OPTIONSEND"})
     modes = [f.headers["id"] for f in frames if f.type == "OPTION"
              and f.headers.get("kind") == "mode"]
-    assert modes == ["default", "acceptEdits", "plan"]
+    assert modes == ["default", "acceptEdits", "plan", "auto"]
+    assert "bypassPermissions" not in modes
+    assert "dontAsk" not in modes
     ticked = [f.headers["id"] for f in frames if f.type == "OPTION"
               and f.headers.get("kind") == "mode"
               and f.headers.get("current") == "1"]
     assert ticked == ["default"], "a fresh guest starts in Manual"
+    await harness.close(w)
+
+
+async def test_choosing_auto_says_what_it_does_not_do(harness):
+    """The measurement goes in front of the person choosing, once, rather
+    than into a decision made on their behalf."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("SETMODE", {"mode": "auto"}))
+    frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    body = harness.body(frames).decode("cp1252")
+    assert "Permission mode set to Auto" in body
+    assert "not consulted" in body
     await harness.close(w)
 
 
@@ -2187,7 +2304,11 @@ async def test_a_cp1252_command_still_runs(harness):
 async def test_a_command_reaching_outside_the_mirror_is_announced(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge._guest.hello["sync_root"] = "C:\\WORK"
+    # THIS CONVERSATION'S folder, not HELLO's configured root. Containment is
+    # measured against the tree actually being mirrored for this chat, which
+    # is narrower -- measuring against the parent would call a write into a
+    # sibling conversation's folder "inside the mirror".
+    harness.bridge._guest.work_guest = "C:\\WORK"
 
     task = harness.bridge._guest.claude.ask(
         "mcp__machine__exec",
@@ -2207,7 +2328,7 @@ async def test_a_contained_command_gets_no_added_reassurance(harness):
     """The bar must read exactly as it does today for an ordinary command."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge._guest.hello["sync_root"] = "C:\\WORK"
+    harness.bridge._guest.work_guest = "C:\\WORK"
 
     task = harness.bridge._guest.claude.ask(
         "mcp__machine__exec",
@@ -2220,6 +2341,34 @@ async def test_a_contained_command_gets_no_added_reassurance(harness):
     # the guard added nothing in front of it.
     assert "mirror" not in body.lower()
     assert not body.startswith("!")
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_asking_permission_is_early_enough_to_commit_the_folder(
+    harness, tmp_path,
+):
+    """A permission request is the FIRST moment of a tool call -- earlier
+    than on_tool and earlier than the tool body. If the folder were committed
+    any later the guard would measure containment against a directory that
+    does not exist yet and announce "no folder is mirrored" for a command
+    about to run in one."""
+    reader, writer = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await _recv(harness, reader, "OPTIONSEND")
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    g = b._guest
+    g.first_prompt = "Sky color"
+    assert g.work_guest == ""
+
+    task = g.claude.ask("mcp__machine__exec",
+                        {"command": "dir", "cwd": "C:\\Gaston\\SKYCOLOR"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+
+    assert g.work_guest == "C:\\Gaston\\SKYCOLOR", "committed by the ask"
+    assert "no folder is mirrored" not in body.lower()
     task.cancel()
     await harness.close(writer)
 

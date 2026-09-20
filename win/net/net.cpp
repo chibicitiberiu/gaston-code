@@ -387,13 +387,21 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * this 400MB toolchain" is a wrong answer here however right it is
      * elsewhere. */
     {
-        /* The mirrored folder, so the agent's very first system prompt can
-         * name it. The bridge already READS this header (server.py:503) and
-         * the guest has never sent it -- so machine.py fell back to the
-         * phrase "the machine's sync folder", the exact vagueness the comment
-         * above that fallback warns about, on every first session. The value
-         * comes from the INI and is known before the socket opens. */
-        const char *sroot = rc_syncrpc_root();
+        /* The folder this machine shares, so the agent's very first system
+         * prompt can name it. The bridge already READS this header
+         * (server.py:503) and the guest has never sent it -- so machine.py
+         * fell back to the phrase "the machine's sync folder", the exact
+         * vagueness the comment above that fallback warns about, on every
+         * first session. The value comes from the INI and is known before
+         * the socket opens.
+         *
+         * THE CONFIGURED ROOT, NOT THE LIVE ONE. A conversation's own folder
+         * is chosen by the bridge, so reporting it here tells the bridge
+         * what it already decided -- and after a bridge restart it reports
+         * a tree the new process knows nothing about, which is how one came
+         * to pick C:\Gaston\OK's baseline and pair it against its whole
+         * mirrored directory. */
+        const char *sroot = rc_syncrpc_home();
         if (sroot && *sroot) HDR("sync_root", sroot);
     }
 

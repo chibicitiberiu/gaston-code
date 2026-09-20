@@ -87,28 +87,50 @@ class Folders:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else (default_path().parent
                                              / "folders.json")
-        self._map: dict[str, str] = {}
+        self._map: dict[str, dict] = {}
         self._load()
 
     def _load(self) -> None:
         try:
             data = json.loads(self.path.read_text())
             if isinstance(data, dict):
-                self._map = {str(k): str(v) for k, v in data.items()}
+                self._map = {str(k): v for k, v in data.items()}
         except FileNotFoundError:
             pass
         except (OSError, ValueError):
             log.exception("could not read %s", self.path)
 
     def get(self, session_id: str | None) -> str:
-        return self._map.get(session_id or "", "")
+        """The folder name on THIS side."""
+        return self._entry(session_id).get("local", "")
 
-    def set(self, session_id: str | None, folder: str) -> None:
+    def guest(self, session_id: str | None) -> str:
+        """The folder as the GUEST spells it -- an absolute DOS path.
+
+        Stored rather than derived, because the user can point a
+        conversation at any folder on their machine and nothing about
+        `C:\\Somewhere\\Else` can be worked out from a name on this side.
+        """
+        return self._entry(session_id).get("guest", "")
+
+    def _entry(self, session_id: str | None) -> dict:
+        v = self._map.get(session_id or "")
+        if isinstance(v, str):
+            # The first format: just the local name. Read, never written.
+            return {"local": v, "guest": ""}
+        return v if isinstance(v, dict) else {}
+
+    def set(self, session_id: str | None, folder: str,
+            guest_path: str = "") -> None:
         if not session_id or not folder:
             return
-        if self._map.get(session_id) == folder:
+        entry = dict(self._entry(session_id))
+        entry["local"] = folder
+        if guest_path:
+            entry["guest"] = guest_path
+        if self._map.get(session_id) == entry:
             return
-        self._map[session_id] = folder
+        self._map[session_id] = entry
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
@@ -119,4 +141,4 @@ class Folders:
 
     def taken(self) -> set[str]:
         """Every folder name already spoken for, for the uniqueness check."""
-        return set(self._map.values())
+        return {self._entry(k).get("local", "") for k in self._map}

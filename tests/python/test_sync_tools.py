@@ -22,6 +22,20 @@ from bridge.server import Bridge
 from bridge.files.sync import Baseline, Entry, Tomb, Type
 
 
+def _committed_guest(local: str, guest_root: str):
+    """A GuestSession that has (or has not) committed to a work folder.
+
+    A real one rather than a stub: `sync_status_text` is not the only thing
+    these tests reach, and the paths around it want `sync_lock` and the rest
+    of the machinery a namespace does not have.
+    """
+    from bridge.server import GuestSession, TranscriptView, Paginator
+    g = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
+    g.work_dir = local
+    g.work_guest = guest_root
+    return g
+
+
 @pytest.fixture
 def b(tmp_path):
     bridge = Bridge("s", host="127.0.0.1", port=0)
@@ -32,8 +46,25 @@ def b(tmp_path):
     bridge.sync_state = str(tmp_path / "state")
     os.makedirs(bridge.sync_state, exist_ok=True)
     bridge.guest_sync_root = "C:\\WORK"
+    # A conversation that has COMMITTED to a folder, because that is what
+    # makes there be a mirror to report on at all. Nothing is mirrored until
+    # a chat's first tool call, and `sync_status` says exactly that while
+    # there is not -- see test_status_says_so_before_a_folder_exists.
+    bridge._guest = _committed_guest(bridge.sync_dir, "C:\\WORK")
     Baseline().save(os.path.join(bridge.sync_state, "base.json"))
     return bridge
+
+
+def test_status_says_so_before_a_folder_exists(b):
+    """An agent told "mirrored: <shared root> <-> <configured root>" while
+    the baseline named an older tree concluded synchronisation was broken and
+    refused to write the file it had been asked for. Nothing being mirrored
+    yet is the normal state of a conversation, and it has to read that way."""
+    b._guest = _committed_guest("", "")
+    out = b.sync_status_text()
+    assert "does not have a folder on the user's machine yet" in out
+    assert "not a fault" in out
+    assert "Mirrored:" not in out
 
 
 def test_status_says_so_plainly_when_sync_is_off(tmp_path):

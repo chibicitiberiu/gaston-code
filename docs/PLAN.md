@@ -1250,14 +1250,112 @@ has known work left.
   recorded the directory it started in, which is the root -- so asking the
   SDK gives the wrong answer and a reopened chat showed `<unset>` for a
   conversation whose folder was sitting on disk.
-  "Change work directory..." on the dropdown takes any folder. What it
-  changes is the ROOT the per-conversation folders live in, which is what
-  "any other folder" has to mean when each conversation gets its own; the
-  dialog says so. It needs a restart and says that too.
+  "Change work directory..." sets THIS CONVERSATION'S directory, through the
+  native folder browser (`SHBrowseForFolder`, resolved via LoadLibrary). An
+  earlier version edited the mirrored ROOT in the INI and asked for a
+  restart, which is a different setting wearing this one's name -- "we don't
+  set the directory in which the work directory will sit in the future,
+  we're setting the actual wk directory". No restart: the sync layer is
+  re-pointed live (`app/workdir.cpp`), and the RPC watcher follows on its own
+  thread, which is the only thread allowed to touch that handle.
+  THE BRIDGE DECIDES AND THE GUEST APPLIES. Picking a folder sends `SETWORK`
+  as a proposal; it comes back in the next OPTION batch and that is what
+  makes it real on the guest. One direction of authority, so the two sides
+  cannot disagree about which tree is mirrored -- the disagreement that ends
+  with files in the wrong place. The guest's own spelling is stored
+  (`registry.Folders`) because `D:\Projects\Retro` cannot be derived from a
+  folder name on the bridge.
   The INI default is `C:\Gaston`, and the guest CREATES the root if it is
   missing -- a work directory is a place the user named, not one they are
   asserting already exists, and leaving it missing left synchronisation dead
   with "guest scan returned no_root".
+
+- **Nothing is mirrored until a conversation commits to a folder.
+  [R -- 2026-09-20]**
+  A chat that is only being talked to shares no files at all: the guest's
+  sync root is empty, `HELLO` names no live tree, and the bridge runs no
+  pass. **The commit happens at the FIRST TOOL CALL**, which is the first
+  moment a folder is needed for anything, and it is a commitment -- the
+  folder is created, sharing turns on, and the toolbar stops saying
+  `<unset>`.
+  This is not tidiness, it fixes a real defect. The live root used to be
+  held on the GUEST and reported in `HELLO`, so it outlived a bridge
+  restart: a freshly started bridge was told the machine was mirroring
+  `C:\Gaston\OK`, picked that tree's baseline, and then ran its first pass
+  against its own whole mirrored directory -- two sides pairing different
+  trees before a conversation was even open. With nothing mirrored until
+  the bridge names a tree, there is no tree to disagree about.
+  So `HELLO`'s `sync_root` carries the machine's CONFIGURED root (the INI),
+  which is a fact about the machine, and never the live one, which is
+  bridge-directed and therefore already known there. A connection starts
+  with sharing off (`try_connect` re-applies `""` before `rc_net_start`).
+  The name is derived from the FIRST MESSAGE rather than waiting for the
+  CLI's title: a tool can run in the first turn, before the conversation has
+  been titled, and the alternative -- commit a placeholder and rename later
+  -- renames a tree sync has already scanned, which is a new `tree_id`, a
+  new baseline and a window where both sides must move together.
+
+- **Changing the work directory when it already holds files.
+  [R -- 2026-09-20]**
+  Two things can be true at once: the folder being left has work in it, and
+  the folder being chosen is an existing project with its own. Requiring an
+  empty target would rule out the case that makes the feature worth having.
+  So a dialog of our own, not the bare folder browser -- current path with a
+  **Review...** button (`ShellExecuteA` on the old folder, so "review, then
+  decide" is literal), a path field with **Browse...** (still
+  `SHBrowseForFolder`), and a choice: bring a copy of the existing files
+  into the new folder, or leave them where they are. It appears only when
+  there is something to lose; an unset or empty current folder goes straight
+  to the browser, because a radio group about zero files is noise.
+  **A COPY, NEVER A MOVE.** The old folder is left on disk, unmirrored, and
+  the notice names it. Deleting a directory as a side effect of changing a
+  setting deserves its own confirmation rather than a radio button; and,
+  which is what decides it, an interrupted copy is recoverable by
+  construction because the source is still intact. A move that deletes as it
+  goes leaves the tree split across two folders with no record of which
+  files made it.
+  **COLLISIONS ARE ASKED ABOUT, NOT STAGED.** `.gaston\conflict` exists
+  because a background sync conflict has nobody to ask; this one has a user
+  standing in front of it who has just clicked OK. One question for the
+  whole set with the list shown, not one per file -- point at a real project
+  and forty names collide. Three answers, and cancel:
+  **Keep the files already there** -- the incoming copies are simply not
+  brought; nothing is staged, because they are still in the old folder.
+  **Replace them with the ones I am bringing** -- the target's own copies go
+  to `.gaston\conflict`, the one case where a byte would otherwise be
+  destroyed with nowhere else to exist.
+  **Let the assistant merge them** -- the folder keeps what it has, the
+  incoming copies are staged to `.gaston\conflict`, and the agent is handed
+  the list to reconcile file by file. This is what that folder was built for
+  and the only answer that does not make the user pick a side; the other two
+  are for when they already know which side is right.
+  **PRE-FLIGHT BEFORE A BYTE IS WRITTEN**, so a refusal never leaves a
+  half-copied tree: every destination path against the guest's declared
+  `maxpath`/`maxdir`/`maxfile` (names that fit under `C:\Gaston\OK` need not
+  fit under a deeper root, and this is the failure most likely to bite);
+  summed source bytes against free space on the target volume
+  (`GetDiskFreeSpaceExA` through `GetProcAddress`, `GetDiskFreeSpaceA` as
+  the fallback -- Win95 OSR2 predates the first); containment either way,
+  since copying a tree into its own subdirectory never terminates; the
+  target writable; and the collision set, which is what feeds the question.
+  Failures during the copy are still possible -- something else fills the
+  disk, a file is locked -- so each one offers **Retry / Skip / Cancel** with
+  the reason spelled out.
+  **THE FIRST PASS IS SHOWN FOR WHAT IT IS.** Pointing a chat at an existing
+  project means the guest reads that whole tree and sends it up, which on
+  this link is minutes. The dialog states the count and the total size
+  before OK, rather than letting a settings change turn into an unexplained
+  transfer.
+  **ONE PROGRESS WINDOW COVERS BOTH PHASES** -- "Copying files 34/312", then
+  "Sending to the assistant 34/312" -- because from where the user sits it
+  is one wait, and two bars for one action invite the belief that the first
+  one finishing means it is done. MODELESS, so the message loop keeps
+  pumping: the second half is driven by the bridge over the socket and a
+  modal dialog would stall the very frames it is reporting on.
+  `ICC_PROGRESS_CLASS` is already registered in `WinMain` -- it was put
+  there for Phase 5's uploads and this is its first user. Cancel stops the
+  copy where it stands, which is safe for the reason above: the source is
+  untouched.
 
 - **[superseded] The work folder as a SUBFOLDER OF THE MIRROR.** §7 settled that
   a mirror belongs to a conversation; what it did not settle is whether that
@@ -1322,6 +1420,29 @@ has known work left.
   4.1f part 3. R7 did NOT: one conversation now has one folder, but two
   guests still share one mirror and one baseline, so `BACKLOG.md` §7's
   implementation list is untouched.
+
+- **Autoscroll is a toggle, not a heuristic. [R -- 2026-09-20] Done.** It was
+  `autoscroll && was_at_bottom`, so following the conversation depended on a
+  measurement of where the view happened to be -- and anything leaving it a
+  few pixels short of the end turned autoscroll off silently and permanently
+  until the user scrolled there by hand. Reported twice from the real
+  machine, most recently for an error notice that never came into view.
+  ON means the view follows, always; OFF means it never moves on its own.
+  The control is an icon button on the page-control strip (a drawn
+  page-down arrow -- comctl32 has no arrow that points down, only the
+  back/forward chevrons, which read as navigation), because that is where it
+  was asked for and because "follow the end" belongs next to "which page am
+  I on".
+
+- **`auto` is back on the Mode menu. [R -- 2026-09-20]** It was asked for by
+  name and withheld for one release on the strength of a measurement. That
+  was the wrong call to make silently: the measurement says what auto does
+  NOT do, and that belongs in front of the person choosing it rather than in
+  a decision made for them. `MODE_CAVEAT` puts it in the transcript when the
+  mode is picked -- with `can_use_tool` installed the model's own danger
+  classifier is not consulted, so Auto here still asks, it does not add a
+  second opinion. `bypassPermissions` and `dontAsk` stay off for their own
+  reasons, which are not measurements but documented behaviour.
 
 - **Replayed tool calls look like live ones. [R -- 2026-09-19] Done.** The
   last survivor of "opening an old conversation makes it lose formatting":

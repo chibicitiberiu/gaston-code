@@ -15,7 +15,19 @@
 #include "core/log.h"
 #include "core/str.h"
 
+/* What is mirrored RIGHT NOW -- this conversation's folder, or "" while
+ * nothing is being shared. Bridge-directed; see app/workdir.h. */
 static char g_root[MAX_PATH];
+
+/* What this machine is CONFIGURED to share, from the INI. A fact about the
+ * computer rather than about the conversation, which is why it is the one of
+ * the two that goes in HELLO: the live tree is chosen by the bridge, so
+ * telling the bridge about it is telling it what it already decided -- and
+ * telling it a STALE one is worse than useless. A conversation folder applied
+ * before a bridge restart outlives that restart here and not there, so a
+ * freshly started bridge was once told the machine was mirroring
+ * C:\Gaston\OK and paired that baseline against its own whole tree. */
+static char g_home[MAX_PATH];
 
 void rc_syncrpc_set_root(const char *root)
 {
@@ -23,6 +35,13 @@ void rc_syncrpc_set_root(const char *root)
 }
 
 const char *rc_syncrpc_root(void) { return g_root; }
+
+void rc_syncrpc_set_home(const char *home)
+{
+    rc_strf(g_home, sizeof(g_home), "%s", home ? home : "");
+}
+
+const char *rc_syncrpc_home(void) { return g_home; }
 
 /* --- the manifest -------------------------------------------------------- */
 /*

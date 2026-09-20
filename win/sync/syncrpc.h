@@ -32,9 +32,17 @@ void rc_syncrpc_handle(rc_net *net, rc_frame *f);
  * any number of times, whether or not a transfer is in flight. */
 void rc_syncrpc_abort(void);
 
-/* The configured sync root, or "" when sync is off. Set from the INI. */
+/* The tree being mirrored RIGHT NOW, or "" while nothing is shared -- which
+ * is how every connection starts and how a conversation stays until its
+ * first tool call. Re-pointed by app/workdir.cpp on the bridge's say-so. */
 void        rc_syncrpc_set_root(const char *root);
 const char *rc_syncrpc_root(void);
+
+/* The root this machine is CONFIGURED to share, from the INI, whether or not
+ * anything is being shared through it. What HELLO reports and what a
+ * conversation's own folder is created under. */
+void        rc_syncrpc_set_home(const char *home);
+const char *rc_syncrpc_home(void);
 
 #ifdef __cplusplus
 }

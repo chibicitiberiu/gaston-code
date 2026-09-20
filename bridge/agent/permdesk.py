@@ -56,12 +56,20 @@ class PermissionDesk:
     """
 
     def __init__(self, guest, *, cwd: str | None, write_block, send,
-                spawn) -> None:
+                spawn, ensure_work=None) -> None:
         self._guest = guest
         self._cwd = cwd
         self._write_block = write_block
         self._send = send
         self._spawn = spawn
+        #: Commit this conversation to a work folder, awaited before the
+        #: guard runs. A tool call is what commits one, and the PERMISSION
+        #: REQUEST is the earliest moment of a tool call -- earlier than
+        #: `on_tool` and earlier than the tool body. Without it the guard
+        #: would measure containment against a folder that does not exist
+        #: yet and announce "no folder is mirrored" for a command that is
+        #: about to run in one.
+        self._ensure_work = ensure_work
         #: The prompt on screen, or None. `GuestSession.perm_pending`
         #: forwards here, the same pattern `link: GuestLink` established for
         #: `writer`/`send_lock`/`zip_out`/`link_bps`.
@@ -129,12 +137,23 @@ class PermissionDesk:
             # real traffic before anything depends on it.
             warning = None
             if tool_name.startswith("mcp__machine__"):
+                if self._ensure_work is not None:
+                    await self._ensure_work()
+                # THE LIVE FOLDER, not HELLO's `sync_root`. That header
+                # carries the machine's CONFIGURED root -- where folders get
+                # created -- and containment has to be measured against the
+                # tree actually being mirrored for THIS conversation, which
+                # is narrower. Measuring against the parent would call a
+                # write into a sibling conversation's folder "inside the
+                # mirror", which is the check inverted rather than loose.
+                # An empty root means nothing is mirrored, and doscmd.reason
+                # refuses outright on one rather than letting
+                # `"".startswith("")` call every path contained.
                 warning = doscmd.reason(
                     str((args or {}).get("command") or ""),
                     cwd=str((args or {}).get("cwd") or ""),
                     guest_root=str(
-                        (getattr(self._guest, "hello", None) or {}).get(
-                            "sync_root") or ""))
+                        getattr(self._guest, "work_guest", "") or ""))
                 if warning:
                     log.info("guard: %s -- %s", warning, str(args)[:80])
 

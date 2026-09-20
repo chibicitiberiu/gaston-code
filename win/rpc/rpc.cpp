@@ -51,6 +51,9 @@ static DWORD  g_dirty_at;
 /* This module's own copy, pushed by rc_rpc_set_sync_root -- see the comment
  * there (audit finding 01.25) for why this is not rc_syncrpc_root(). */
 static char   g_sync_root[MAX_PATH];
+/* What the watcher is actually watching. Compared against g_sync_root on the
+ * worker thread, which is the only thread allowed to touch g_watch. */
+static char   g_watch_root[MAX_PATH];
 static HANDLE           g_wake;
 static CRITICAL_SECTION g_lock;
 static int              g_ready;
@@ -229,13 +232,32 @@ static void rpc_maybe_nudge(void)
 
 void rc_rpc_set_sync_root(const char *root)
 {
+    /* CALLABLE AT RUNTIME now, not only before the thread starts: a
+     * conversation carries its own work directory and switching to one
+     * changes which tree is watched.
+     *
+     * It does NOT touch g_watch. That handle belongs to the worker thread --
+     * it is waited on there, reset there and closed there -- and closing it
+     * from the UI thread while WaitForMultipleObjects holds it is exactly the
+     * kind of race that fails once a month on someone else's machine. The
+     * worker notices the string changed and does the work itself
+     * (rpc_watch_sync); waking it means "promptly" rather than "at the next
+     * poll".
+     *
+     * The lock is skipped before rc_rpc_start has created it, which is the
+     * startup call -- single-threaded by construction at that point. */
+    if (g_ready) EnterCriticalSection(&g_lock);
     rc_strf(g_sync_root, sizeof(g_sync_root), "%s", root ? root : "");
+    if (g_ready) LeaveCriticalSection(&g_lock);
+    if (g_wake) SetEvent(g_wake);
 }
 
 static void rpc_watch_start(void)
 {
     HMODULE k32 = GetModuleHandleA("kernel32.dll");
     const char *root = g_sync_root;
+
+    rc_strf(g_watch_root, sizeof(g_watch_root), "%s", root);
 
     p_first_change = (FFCN)GetProcAddress(k32, "FindFirstChangeNotificationA");
     p_next_change  = (FNCN)GetProcAddress(k32, "FindNextChangeNotification");
@@ -256,6 +278,27 @@ static void rpc_watch_start(void)
     } else {
         rc_log("rpc: watching %s", root);
     }
+}
+
+/* Re-point the watcher when the work directory has changed under us.
+ *
+ * On the worker thread, so `g_watch` is only ever opened, waited on, reset
+ * and closed by one thread. A root that has not changed costs one strcmp. */
+static void rpc_watch_sync(void)
+{
+    char want[MAX_PATH];
+
+    if (g_ready) EnterCriticalSection(&g_lock);
+    rc_strf(want, sizeof(want), "%s", g_sync_root);
+    if (g_ready) LeaveCriticalSection(&g_lock);
+
+    if (strcmp(want, g_watch_root) == 0) return;
+
+    if (g_watch != INVALID_HANDLE_VALUE && g_watch != NULL && p_close_change)
+        p_close_change(g_watch);
+    g_watch = INVALID_HANDLE_VALUE;
+    rc_log("rpc: work directory changed to %s", want[0] ? want : "(none)");
+    rpc_watch_start();
 }
 
 static void send_out(void *ctx, const char *data, unsigned len)
@@ -442,6 +485,10 @@ static unsigned __stdcall rpc_thread(void *arg)
              * WaitForMultipleObjects on an invalid handle returns WAIT_FAILED
              * IMMEDIATELY -- turning this loop into a 100% busy spin on a
              * 200MHz machine. */
+            /* WORKER THREAD ONLY. rc_rpc_set_sync_root may have named a
+             * different tree since the last time round; this is where that
+             * becomes a different watcher. */
+            rpc_watch_sync();
             if (g_watch != INVALID_HANDLE_VALUE && g_watch != NULL) {
                 HANDLE hs[2];
                 DWORD r;

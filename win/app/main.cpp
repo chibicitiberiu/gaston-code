@@ -32,6 +32,7 @@
 #include "app/toolbar.h"
 #include "app/export.h"
 #include "app/cache.h"
+#include "app/workdir.h"
 
 /* SBARS_TOOLTIPS, which this build's headers do not define.
  *
@@ -729,6 +730,21 @@ static void on_turn(rc_frame *f)
 static void on_optmenu(rc_frame *f)
 {
     if (g_optmenu) g_optmenu->frame(f);
+    /* The work directory arrives in this batch like the model and the mode,
+     * and THIS is what makes it real on this side: the sync layer is
+     * re-pointed at it, the watcher follows, and the folder is created if it
+     * has never existed. Called on every batch because rc_workdir_apply
+     * returns without touching anything when the path has not changed. */
+    if (g_optmenu && strcmp(f->type, "OPTIONSEND") == 0) {
+        const char *want = g_optmenu->work_path();
+        if (!rc_workdir_apply(want) && want && *want && g_html) {
+            char msg[256];
+            rc_strf(msg, sizeof(msg),
+                    "Could not use %s as the work directory. Files will not "
+                    "be shared until this is fixed.", want);
+            g_html->error(msg);
+        }
+    }
     /* The toolbar shows the ticked entries as its button text, so it has to
      * be told when a batch lands. Cheap enough to do on every OPTION row
      * rather than only OPTIONSEND: re-labelling is two TB_SETBUTTONINFO
@@ -1237,6 +1253,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
          * finding was marked closed on the strength of the method existing.
          * One line makes the claim true. */
         g_html->set_autoscroll(g_cfg.autoscroll);
+        if (g_pagebar) g_pagebar->set_follow(g_cfg.autoscroll);
 
     /* The chat list and its Refresh button: created and owned by
      * app/chatlist.cpp now (rc_chats::create logs its own check_child
@@ -1329,6 +1346,21 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 static void try_connect(HWND hwnd)
 {
     status_refresh();
+    /* SHARING OFF before saying hello.
+     *
+     * HELLO carries `sync_root` straight from the live sync layer, and the
+     * live value is whatever conversation was open when the last connection
+     * ended -- which outlives a bridge restart, because it is held here and
+     * not there. So a bridge that had just started was told the guest was
+     * mirroring C:\Gaston\OK, picked that tree's baseline, and then ran its
+     * first pass against its own whole mirrored directory. The two sides
+     * disagreed about which tree they were pairing before a conversation was
+     * even open.
+     *
+     * A connection therefore starts with nothing mirrored, and the bridge
+     * names the tree when a conversation commits to one -- the one direction
+     * of authority workdir.h describes. */
+    rc_workdir_apply("");
     /* Tear the previous attempt down FIRST.
      *
      * rc_net_start is not idempotent: it re-initialises the critical section,
@@ -1539,6 +1571,23 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_TB_NEW:
             if (g_toolbar) g_toolbar->command(id);
             return 0;
+        case ID_FOLLOW:
+            /* The autoscroll toggle, beside the page controls. The BUTTON
+             * owns the state -- it is BS_AUTOCHECKBOX, so Windows has
+             * already flipped it by the time this runs -- and everything
+             * else follows from reading it back, so the button and the
+             * setting cannot disagree about which is true. */
+            if (g_pagebar) {
+                g_cfg.autoscroll = g_pagebar->follow_on();
+                if (g_html) g_html->set_autoscroll(g_cfg.autoscroll);
+                rc_config_save(&g_cfg, g_exe_dir);
+                rc_log("autoscroll: %s", g_cfg.autoscroll ? "on" : "off");
+                /* Following again means catching up, not waiting for the
+                 * next message to arrive before it means anything. */
+                if (g_cfg.autoscroll && g_html) g_html->scroll_bottom();
+            }
+            return 0;
+
         case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
 
         case IDM_NEW:
@@ -1643,39 +1692,28 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
 
         case IDM_WORKSET: {
-            /* CHANGE WORK DIRECTORY. Any folder, typed in full.
+            /* CHANGE WORK DIRECTORY -- this conversation's, not a parent it
+             * will sit under.
              *
-             * What this actually changes is the MIRRORED ROOT -- the folder
-             * whose contents reach this machine -- because a conversation's
-             * own directory is a subfolder of it, named after the
-             * conversation. Picking "any other folder" therefore means
-             * picking where all of them live, and the dialog says so rather
-             * than implying this conversation alone moves.
+             * An earlier version edited the mirrored ROOT in the INI and
+             * asked for a restart, which is a different setting wearing this
+             * one's name: "setting work directory sets the actual work
+             * directory". So this picks a folder and PROPOSES it; the bridge
+             * records it against the conversation and sends it back in the
+             * next OPTION batch, which is what makes it real on this side
+             * (see app/workdir.h for why the authority runs that way).
              *
-             * It needs a restart and says so. The root is read once in
-             * WinMain: the directory watcher is started on it,
-             * rc_sync_recover has already run against it, and it was
-             * declared to the bridge in HELLO before the socket opened.
-             * Changing all three live is the deferred half of this work
-             * (BACKLOG 7); changing the INI and restarting is honest and
-             * takes four seconds. */
-            char root[128];
-            rc_strf(root, sizeof(root), "%s", g_cfg.sync_root);
-            if (rc_askdlg_run(hwnd, g_inst, "Work Directory",
-                    "Each conversation gets its own folder inside this one, "
-                    "named after it. Files the assistant writes appear "
-                    "there, and files you put there reach it. Leave blank "
-                    "to switch file sharing off.",
-                    "&Folder:", root, sizeof(root))
-                && strcmp(root, g_cfg.sync_root) != 0) {
-                rc_strcpy(g_cfg.sync_root, sizeof(g_cfg.sync_root), root);
-                rc_config_save(&g_cfg, g_exe_dir);
-                MessageBoxA(hwnd,
-                            "Saved.\n\nClose and reopen Gaston Code for it "
-                            "to take effect -- the folder is read once when "
-                            "the program starts, and the bridge is told "
-                            "about it before the connection opens.",
-                            RC_TITLE, MB_OK | MB_ICONINFORMATION);
+             * The native browser, not a text field: it is what a Windows user
+             * reaches for, and it makes a typo impossible where a typed path
+             * would have quietly created one. */
+            char picked[MAX_PATH];
+            if (g_optmenu
+                && rc_workdir_browse(hwnd, rc_workdir_current(),
+                                     picked, sizeof(picked))) {
+                const char *keys[1], *vals[1];
+                keys[0] = "path"; vals[0] = picked;
+                ui_send("The work directory change", "SETWORK",
+                        keys, vals, 1, NULL, 0);
             }
             return 0;
         }
@@ -1847,13 +1885,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     InitCommonControlsEx(&icc);
 
     rc_config_load(&g_cfg, g_exe_dir);
-    rc_syncrpc_set_root(g_cfg.sync_root);
-    /* rpc.c needs the same string for its directory watcher, and used to get
-     * it by reading rc_syncrpc_root() back -- audit finding 01.25. Pushed
-     * here instead, the same way and at the same moment as the line above,
-     * so rpc.c no longer reaches into syncrpc.c's state for its own
-     * configuration. */
-    rc_rpc_set_sync_root(g_cfg.sync_root);
+    /* The configured root, which is NOT the same thing as the tree being
+     * mirrored. Nothing is mirrored at startup and nothing is mirrored while
+     * a chat is only being talked to: sharing begins when a conversation
+     * commits to a folder, which is the moment its first tool runs. So the
+     * live root (rc_syncrpc_set_root / rc_rpc_set_sync_root) stays empty
+     * here, and app/workdir.cpp sets it when the bridge names a tree.
+     *
+     * This one is still recorded, because it is what HELLO reports and what
+     * a conversation's folder gets created under. */
+    rc_syncrpc_set_home(g_cfg.sync_root);
     if (g_cfg.sync_root[0]) {
         /* CREATE IT if it is not there. A work directory is a place the user
          * named, not a place they are asserting already exists -- the first
@@ -1873,10 +1914,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                        "not start", g_cfg.sync_root,
                        (unsigned long)GetLastError());
         }
-        /* Put back any file an interrupted commit left aside, BEFORE the first
-         * scan sees the path as missing and reports a deletion nobody made. */
-        rc_sync_recover(g_cfg.sync_root);
-        rc_log("sync: root is %s", g_cfg.sync_root);
+        /* No recovery pass here any more. An interrupted commit is staged
+         * inside the tree it belongs to, and the trees are now the
+         * conversation folders UNDER this root -- rc_workdir_apply recovers
+         * each one as it is applied, which is both the right place and the
+         * right moment (before the first scan of that tree, so it cannot
+         * see the file missing and report a deletion nobody made). */
+        rc_log("sync: conversations get their folders under %s",
+               g_cfg.sync_root);
     }
 
     memset(&wc, 0, sizeof(wc));

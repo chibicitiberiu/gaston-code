@@ -983,6 +983,7 @@ async def test_a_conflict_puts_a_continue_bar_on_the_users_screen(
     p = a_pass(harness, tmp_path)
     harness.bridge.sync_dir = p.root
     harness.bridge.sync_state = os.path.dirname(p.state)
+    _commit(harness, p.root)
     open(os.path.join(p.root, "a.txt"), "wb").write(b"agent version\n")
     p.base.rows["a.txt"] = Entry(type=Type.FILE, crc=111, display="a.txt")
     p.base.save(p.state)
@@ -1517,6 +1518,7 @@ async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
     harness.bridge.sync_dir = root
     harness.bridge.sync_state = str(tmp_path / "state")
     os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    _commit(harness, root)
 
     task = asyncio.create_task(harness.bridge.run_sync("test"))
     await fake_scan(harness, reader, writer, {"notes": b"a file now\n"})
@@ -1724,6 +1726,7 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     harness.bridge.sync_state = str(tmp_path / "state")
     os.makedirs(harness.bridge.sync_dir, exist_ok=True)
     os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.sync_dir)
     base = Baseline()
     base.tree_id = "VOL-ORIGINAL"
     base.save(os.path.join(harness.bridge.sync_state, "base.json"))
@@ -1768,6 +1771,7 @@ async def test_recovery_is_announced_too(harness, tmp_path):
     harness.bridge.sync_state = str(tmp_path / "state")
     os.makedirs(harness.bridge.sync_dir, exist_ok=True)
     os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.sync_dir)
     base = Baseline()
     base.aborted = "something stopped it earlier"
     base.save(os.path.join(harness.bridge.sync_state, "base.json"))
@@ -1947,6 +1951,14 @@ async def test_a_reconnecting_guest_reconciles(harness, tmp_path):
     os.makedirs(harness.bridge.sync_state, exist_ok=True)
 
     reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    # A folder this conversation has committed to, because that is what makes
+    # there be a tree to reconcile at all. A chat that never called a tool
+    # mirrors nothing, and attaching one correctly does nothing.
+    _commit(harness, harness.bridge.sync_dir)
+    await harness.close(writer)
+
+    reader, writer = await harness.connect()
     # The scan is asked for without the guest having reported anything.
     req = await _recv(harness, reader, "SYNCSCAN")
     assert req.type == "SYNCSCAN", "attaching did not reconcile"
@@ -1966,14 +1978,11 @@ async def test_the_bridge_has_its_own_sweep(harness, tmp_path):
     harness.bridge.sync_sweep_s = 0.05
 
     reader, writer = await harness.connect()
-    # Answer the attach pass first: it holds sync_lock until it completes, and
-    # a sweep landing meanwhile correctly COALESCES rather than starting a
-    # second pass over the same baseline. That coalescing is the behaviour the
-    # lock exists for, so the test has to respect it to observe the sweep.
-    first = await _recv(harness, reader, "SYNCSCAN")
-    await harness.send(writer, Frame("SYNCEND", {
-        "id": first.headers["id"], "status": "ok", "files": "0",
-        "tree_id": "VOL-1", "root": "C:\\WORK"}))
+    await _recv(harness, reader, "OPTIONSEND")
+    # No attach pass to answer: a fresh conversation has committed to no
+    # folder, so nothing is mirrored and attaching has nothing to reconcile.
+    # The sweep is the only pass here, which is what this is about.
+    _commit(harness, harness.bridge.sync_dir)
 
     req = await _recv(harness, reader, "SYNCSCAN")    # the sweep one
     assert req.type == "SYNCSCAN", "the bridge never swept on its own"
@@ -2100,6 +2109,18 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
 # Every row it counts is individually correct, which is what makes the case
 # hard and what makes it worth a refusal: applying fifty correct rows produces
 # one wrong outcome.
+
+def _commit(harness, local_root, guest_root="C:\\WORK"):
+    """Give the open conversation a work folder.
+
+    Nothing is mirrored until one exists -- a chat that is only being talked
+    to shares no files, and `run_sync` returns immediately without one. In
+    production the first TOOL CALL does this; a sync test has no tool, so it
+    says the same thing directly.
+    """
+    harness.bridge._guest.work_dir = local_root
+    harness.bridge._guest.work_guest = guest_root
+
 
 def _revert_pass(rows, decisions, accept_tree=False):
     class FakePass(Pass):

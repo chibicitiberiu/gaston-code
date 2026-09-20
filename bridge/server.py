@@ -288,6 +288,14 @@ class GuestSession:
         self.identity.work_dir = d
 
     @property
+    def first_prompt(self) -> str:
+        return self.identity.first_prompt
+
+    @first_prompt.setter
+    def first_prompt(self, t: str) -> None:
+        self.identity.first_prompt = t
+
+    @property
     def work_guest(self) -> str:
         return self.identity.work_guest
 
@@ -716,6 +724,15 @@ class Bridge:
         # client that declares nothing is indistinguishable from one that
         # declares the defaults until someone can see which happened.
         log.info("client rules: %s", caps.summary())
+        # And which tree it says it is mirroring. The root is the
+        # first thing that goes wrong when files do not move, and it
+        # is the ONE fact the guest reports that the bridge cannot
+        # derive -- a conversation folder applied before a bridge
+        # restart outlives that restart on the guest's side, so a
+        # HELLO can name a narrower tree than this process knows
+        # anything about.
+        log.info("guest mirrors %s", h.get("sync_root")
+                 or "(file sharing is off)")
 
         # A fresh connection means a fresh inflater on the guest, so the
         # compressor must restart in lockstep or the first frame is garbage.
@@ -748,7 +765,8 @@ class Bridge:
                 self._guest, cwd=self.cwd,
                 write_block=lambda html: self._write_block(self._guest, html),
                 send=lambda frame: self._send(self._guest, frame),
-                spawn=self._spawn)
+                spawn=self._spawn,
+                ensure_work=lambda: self._ensure_work_dir(self._guest))
         guest = self._guest
         guest.writer = writer
         guest.page_bytes = page_bytes
@@ -926,19 +944,57 @@ class Bridge:
         if desk is not None:
             desk._cwd = self._work_dir(guest)
 
+    def _mirror_dir(self, guest: GuestSession) -> str:
+        """The directory on THIS side that pairs with the guest's work folder,
+        or "" while this conversation has not committed to one.
+
+        NO FALLBACK, and that is the whole point. `_work_dir` falls back to
+        `self.cwd` because the agent has to run somewhere; a mirror has no
+        such obligation, and inventing one pairs this bridge's entire shared
+        directory against whatever tree the guest happens to have open. That
+        is not hypothetical: a restarted bridge, told by HELLO that the
+        machine was mirroring ``C:\\Gaston\\OK``, offered its whole tree
+        against it. Nothing is mirrored until both sides have been told the same
+        folder.
+        """
+        return guest.work_dir or ""
+
     def _work_dir(self, guest: GuestSession) -> str:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.cwd or os.getcwd()
 
-    async def _name_work_dir(self, guest: GuestSession) -> None:
-        """Give this conversation its folder, once it has a name to take one
-        from.
+    async def _ensure_work_dir(self, guest: GuestSession) -> None:
+        """Commit this conversation to a folder, if it has not already.
 
-        Called after a turn, not before: a folder is named after the
-        conversation and the CLI titles a conversation from its first
-        message, so anything picked earlier would be a guess the user has to
-        live with. Until then the toolbar says "<unset>" and the agent works
-        in the shared root, which is what it did before folders existed.
+        THE FIRST TOOL CALL IS THE COMMITMENT. Before it nothing is mirrored
+        -- no folder exists, the guest's sync layer is pointed at nothing,
+        and no pass runs -- because a chat that is only being talked to has
+        no files to share and creating a directory for it is litter. At the
+        first tool the folder is made, sharing turns on and the toolbar stops
+        saying "<unset>".
+
+        Idempotent and called from both the render path and the exec path,
+        because which of the two arrives first is an ordering detail of the
+        SDK rather than something to depend on.
+        """
+        if guest.work_guest:
+            return
+        await self._name_work_dir(guest)
+        if guest.work_guest:
+            await self._send_options(guest)
+
+    async def _name_work_dir(self, guest: GuestSession) -> None:
+        """Give this conversation its folder.
+
+        NAMED FROM THE FIRST MESSAGE, not from the CLI's title. A folder is
+        named after the conversation and the CLI does title a conversation
+        from its first message -- but it does so at the end of the turn, and
+        the folder is needed the moment a tool runs, which can be inside that
+        same turn. The alternative was a placeholder renamed afterwards,
+        which means a new `tree_id` and a new baseline for a tree sync has
+        already scanned, and a window in which both sides have to move
+        together. The title is the fallback, for a conversation resumed from
+        the chat list that never got a folder.
 
         UNIQUE, by suffix. Two conversations about listing files both reduce
         to LISTFILE, and the second one taking the first one's folder would
@@ -956,12 +1012,13 @@ class Bridge:
         if not self._guest_path(guest, "x"):
             return
 
-        title = ""
-        for r in sesslist.listing():
-            if r["id"] == guest.conv_id:
-                title = r.get("title") or ""
-                break
-        name = self._title_folder(title)
+        source = guest.first_prompt
+        if not source:
+            for r in sesslist.listing():
+                if r["id"] == guest.conv_id:
+                    source = r.get("title") or ""
+                    break
+        name = self._title_folder(source)
         if not name:
             return
 
@@ -984,13 +1041,24 @@ class Bridge:
             return
         guest.work_dir = path
         guest.work_guest = self._guest_path(guest, name)
-        self.folders.set(guest.conv_id, name)
+        self.folders.set(guest.conv_id, name, guest.work_guest)
         self._retarget_perms(guest)
         log.info("work directory for %s: %s (%s)",
                  guest.conv_id, path, guest.work_guest)
         await self._write_block(guest, H.notice(
             "This conversation works in " + guest.work_guest
             + " on your machine."))
+        # AND THE AGENT, which is the half that was missing. Its system
+        # prompt was written before this folder existed and says so; without
+        # this the only way it could learn the path was to call sync_status
+        # and read it out of a status report, which is a tool call to
+        # discover something we already knew.
+        note = (f"This conversation's folder now exists: write in {path} "
+                f"here, which is mirrored to {guest.work_guest} on the "
+                f"user's machine. Anything written outside it stays on this "
+                f"proxy.")
+        if note not in self.synccoord.agent_notices:
+            self.synccoord.agent_notices.append(note)
 
     def _guest_path(self, guest: GuestSession, name: str) -> str:
         r"""`<mirror root>\<name>`, spelled the way the guest spells it."""
@@ -1086,6 +1154,11 @@ class Bridge:
 
         async def on_tool(name: str, args: dict) -> None:
             guest.turn_produced = True
+            # THE FIRST TOOL IS THE COMMITMENT: this conversation gets its
+            # folder here, and file sharing begins. Before the block is
+            # written, so the notice naming the folder comes first and the
+            # tool line lands under it rather than above it.
+            await self._ensure_work_dir(guest)
             # Flush buffered text first: a tool line that jumps ahead of the
             # prose that introduced it reads as a non sequitur.
             await self._flush_text(guest)
@@ -1191,10 +1264,19 @@ class Bridge:
                 # prompt has to say WHICH directory is mirrored. Saying "your
                 # edits reach the user" without naming the folder is how an
                 # agent writes outside it and reports success.
+                # THIS CONVERSATION'S folder, which is usually empty here:
+                # the prompt is built when the session is, and a folder is
+                # committed at the first TOOL CALL. `guest_work_root` would
+                # fall back to the configured root and name a mirror that
+                # does not exist -- which is exactly what sent an agent off
+                # to diagnose a sync fault instead of writing the file it
+                # was asked for. `home` is what the folder will sit under,
+                # so the prompt can describe what is about to happen.
                 "append": machine.system_prompt(
                     guest.hello, self._work_dir(guest),
                     sync_dir=self._work_dir(guest) if self.sync_dir else None,
-                    guest_root=self.guest_work_root(guest)),
+                    guest_root=guest.work_guest,
+                    home=(guest.hello or {}).get("sync_root") or ""),
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.
@@ -1447,6 +1529,12 @@ class Bridge:
     async def _on_input(self, guest: GuestSession, f: Frame) -> None:
         text = fold.decode(f.body)
         log.info("input: %s", text[:120])
+        # The first thing said in a conversation is what its folder is named
+        # after, and by the time a tool runs the SDK has not titled the
+        # conversation yet. Recorded only while the folder is still open --
+        # once committed, the name is the name.
+        if not guest.work_guest and not guest.first_prompt:
+            guest.first_prompt = text
         self._spawn(self._run_turn(guest, text))
 
     async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
@@ -1572,6 +1660,58 @@ class Bridge:
         await self._write_block(guest, perms.rules_view(
             guest.perm_mode, tools, root))
 
+    async def _on_setwork(self, guest: GuestSession, f: Frame) -> None:
+        """The user picked a folder on their machine for this conversation.
+
+        A PROPOSAL, recorded here and sent back in the options -- the guest
+        applies what it is told rather than what it picked, so the two sides
+        cannot end up disagreeing about which tree is mirrored.
+
+        The path is the GUEST'S and is never touched with os.path: it is a
+        DOS path and this process is on Linux, where `os.path.basename`
+        of `C:\\Gaston\\NOTES` is the whole string. That mistake is what
+        bridge/files/paths.py exists to have stopped happening.
+        """
+        path = (f.headers.get("path") or "").strip()
+        if not path:
+            return
+        if not guest.conv_id:
+            await self._write_block(guest, H.error(
+                "Send a message first -- a work directory belongs to a "
+                "conversation, and this one has not started yet."))
+            return
+
+        # The bridge-side half is still a folder under --sync-dir, because
+        # that is the tree this process can actually write to. What changed is
+        # the GUEST'S half, which is the one the user chose.
+        name = self.folder_name(path.replace("\\", "/").rsplit("/", 1)[-1])
+        if not name:
+            name = self.folder_name(guest.conv_id[:8]) or "WORK"
+        base = self.sync_dir
+        if not base:
+            await self._write_block(guest, H.error(
+                "This bridge has no mirrored folder, so a work directory "
+                "would have nothing on this side to pair with."))
+            return
+        local = os.path.join(base, name)
+        try:
+            os.makedirs(local, exist_ok=True)
+        except OSError as exc:
+            log.exception("could not create %s", local)
+            await self._write_block(guest, H.error(
+                "Could not create the folder on this side: " + str(exc)[:160]))
+            return
+
+        guest.work_dir = local
+        guest.work_guest = path
+        self.folders.set(guest.conv_id, name, path)
+        self._retarget_perms(guest)
+        log.info("work directory for %s: %s (guest: %s)",
+                 guest.conv_id, local, path)
+        await self._write_block(guest, H.notice(
+            "This conversation works in " + path + " on your machine."))
+        await self._send_options(guest)
+
     async def _on_export(self, guest: GuestSession, f: Frame) -> None:
         """Assemble the whole conversation into one file and stream it.
 
@@ -1651,6 +1791,7 @@ class Bridge:
         "SETMODE": "_on_setmode",
         "EXPORT": "_on_export",
         "RULES": "_on_rules",
+        "SETWORK": "_on_setwork",
     }
 
     def _seed_agent_notices(self) -> None:
@@ -1871,14 +2012,10 @@ class Bridge:
         await self._send(guest, turn_end(ok, subtype,
                                          turn.cost_usd, turn.duration_ms,
                                          ctx_pct))
-        # The conversation has a name now, so it can have a folder. After the
-        # TURN frame, because naming it writes a notice and re-sends the
-        # options, and both belong after the turn is reported rather than
-        # wedged into the middle of it.
-        if not guest.work_guest:
-            await self._name_work_dir(guest)
-            if guest.work_guest:
-                await self._send_options(guest)
+        # The folder is NOT committed here. It is committed at the first tool
+        # call (_ensure_work_dir), which is the first moment anything needs
+        # one -- a conversation that is only being talked to shares no files
+        # at all, and a turn that ran no tool has nothing to have shared.
 
     # --- running commands on the guest -------------------------------------
 
@@ -1896,6 +2033,11 @@ class Bridge:
         after Phase 6.
         """
         guest = guest or self._guest
+        if guest is not None:
+            # Same commitment as `on_tool`, from the other side. Which of the
+            # two the SDK reaches first is its business; a command must not
+            # run in a folder that does not exist yet either way.
+            await self._ensure_work_dir(guest)
         if guest is None or not guest.connected:
             # Structured error, never a hang. This is the cost of the
             # single-binary design and it was accepted on condition it is
@@ -2050,6 +2192,16 @@ class Bridge:
         guest = self._guest
         if guest is None or not guest.connected or not self.sync_dir:
             return {}
+        # NOTHING IS MIRRORED UNTIL A CONVERSATION COMMITS TO A FOLDER, so
+        # there is no pass to run. A chat that is only being talked to shares
+        # no files: sharing begins at the first tool call and not before.
+        # Without this a pass would pair this process's whole shared
+        # directory against whatever the guest had open, which is how a
+        # restarted bridge came to push four conversations' folders at one
+        # conversation's tree.
+        if not self._mirror_dir(guest):
+            log.debug("nothing mirrored yet; skipping sync (%s)", why)
+            return {}
         if guest.sync_lock.locked():
             log.debug("sync already running; coalescing (%s)", why)
             return {}
@@ -2061,7 +2213,14 @@ class Bridge:
                 # 02.19: Pass takes the transport and the caps, nothing else
                 # -- not this Bridge, not the whole GuestSession.
                 transport = SyncTransport(guest)
-                p = Pass(transport, guest.caps, self.sync_dir,
+                # THE CONVERSATION'S FOLDER, not the whole tree.
+                #
+                # One mirror per conversation means both ends narrow, not
+                # one: the guest re-points its sync layer at the folder the
+                # chat works in, and if this side kept offering
+                # `~/gaston-work` against the guest's `C:\Gaston\OK` it would
+                # push every other conversation's files into it.
+                p = Pass(transport, guest.caps, self._mirror_dir(guest),
                          self._base_path())
                 got = await p.run()
                 self.guest_sync_root = p.guest_root
@@ -2279,18 +2438,25 @@ class Bridge:
         return path
 
     def _current_guest_root(self) -> str:
-        """What the guest says it is mirroring, as early as it is known.
+        """What the guest is mirroring RIGHT NOW, or "" while it is mirroring
+        nothing -- which is every conversation until its first tool call.
 
-        HELLO carries it before the first scan, which is earlier than
-        `guest_sync_root` (learned from SYNCEND) and is what matters here --
-        the baseline is chosen before the first pass, not after it.
+        THE COMMITTED FOLDER AND NOTHING ELSE. One mirror per conversation
+        means the guest re-points its sync layer at the folder the chat works
+        in, so `C:\\Gaston\\OK` and not `C:\\Gaston` is what its scan
+        reports, and a baseline keyed on the latter refuses every pass for an
+        identity mismatch.
+
+        HELLO's `sync_root` used to be the fallback here and must not be: it
+        now carries the machine's CONFIGURED root, which is where folders get
+        created and never a tree anyone is pairing. Falling back to it would
+        put this process's whole shared directory opposite the guest's, which
+        is the arrangement per-conversation folders exist to end.
         """
         g = getattr(self, "_guest", None)
-        if g is not None:
-            root = (g.hello or {}).get("sync_root")
-            if root:
-                return root
-        return self.guest_sync_root or ""
+        if g is not None and g.work_guest:
+            return g.work_guest
+        return ""
 
     def _load_baseline(self):
         from .files.sync import Baseline
@@ -2313,15 +2479,30 @@ class Bridge:
             return ("File synchronisation is not switched on for this session. "
                     "Nothing you write here reaches the user's machine, and "
                     "there is no tool that would copy it.")
+        g = guest or self._guest
+        mirror = self._mirror_dir(g) if g is not None else ""
+        if not mirror:
+            # NOT A FAULT, and it has to say so in as many words. An agent
+            # told "mirrored: <shared root> <-> <configured root>" while the
+            # baseline still named an older tree concluded synchronisation
+            # was broken and refused to write the file it had been asked for,
+            # which is the most expensive possible reading of "nothing has
+            # been set up yet".
+            return ("This conversation does not have a folder on the user's "
+                    "machine yet, so nothing is being copied in either "
+                    "direction. That is the normal state of a conversation "
+                    "that has not used a tool -- it is not a fault and there "
+                    "is nothing to diagnose. A folder is created the moment "
+                    "you use one, and you will be told its path then.")
         try:
             base = self._load_baseline()
         except Exception as exc:
             return (f"The synchronisation baseline could not be read ({exc}). "
                     f"No pass will run until that is fixed; tell the user.")
 
-        out = [f"Mirrored: {self.sync_dir} here <-> "
-               f"{self.guest_sync_root or '(not reported yet)'} on the "
-               f"machine.",
+        out = [f"Mirrored: {mirror} here <-> "
+               f"{g.work_guest or self.guest_sync_root or '(not reported yet)'}"
+               f" on the machine.",
                f"Last pass: generation {base.generation}."
                + (f"  Bound to tree {base.tree_id}." if base.tree_id else "")]
 
@@ -2344,12 +2525,12 @@ class Bridge:
         # invites it to "fix" something that is already correct.
         try:
             from .files import attrs as A
-            at = A.load(self.sync_dir)
+            at = A.load(mirror)
         except Exception:
             at = None
         if at is not None and len(at):
             where = ", ".join(sorted(
-                os.path.relpath(f, self.sync_dir) for f in at.sources)) or "?"
+                os.path.relpath(f, mirror) for f in at.sources)) or "?"
             out.append(
                 f"\nLine-ending and text rules: {len(at)} in force, from "
                 f"{where}. `-text`/`binary` means the two sides hold identical "
@@ -2361,7 +2542,7 @@ class Bridge:
         if base.latched:
             out.append("\nREFUSING YOUR WRITES -- these conflicted and the "
                        "user's copy won. Your version is preserved under "
-                       f"{self.sync_dir.rstrip('/')}/../.gaston/conflict/ with "
+                       f"{mirror.rstrip('/')}/../.gaston/conflict/ with "
                        "the common ancestor beside it. Read it, merge, ask the "
                        "user whether they have finished with the file, and "
                        "only then call sync_resolve:")
@@ -2419,15 +2600,22 @@ class Bridge:
         STRAY_SCAN_BUDGET before finishing, so the caller can say the list may
         be incomplete rather than imply it is exhaustive.
         """
-        # The CONVERSATION's folder, not the process default: with per-chat
-        # folders the agent's cwd is inside the mirror, so there is nothing
-        # outside it to find and the early return below takes care of it.
+        # WHERE THE AGENT ACTUALLY RUNS against WHAT IS ACTUALLY MIRRORED,
+        # and the two are not the same question. A session's cwd is fixed
+        # when the session is built, which for a new conversation is BEFORE
+        # it has committed to a folder -- so the agent goes on running in
+        # `self.cwd` while the mirror narrows to the folder underneath it,
+        # and everything it writes beside that folder is a stray. That is
+        # precisely the case this exists to catch, and reading the cwd back
+        # off the conversation's folder would declare the two equal and find
+        # nothing.
         guest = getattr(self, "_guest", None)
-        cwd = self._work_dir(guest) if guest else (self.cwd or os.getcwd())
-        if not self.sync_dir or os.path.realpath(cwd) == os.path.realpath(
-                self.sync_dir):
+        cwd = self.cwd or os.getcwd()
+        mirror_dir = (self._mirror_dir(guest) if guest else "") or self.sync_dir
+        if not mirror_dir or os.path.realpath(cwd) == os.path.realpath(
+                mirror_dir):
             return [], False
-        mirror = os.path.realpath(self.sync_dir)
+        mirror = os.path.realpath(mirror_dir)
         found: list[tuple[float, str]] = []
         seen = 0
         truncated = False
@@ -3149,8 +3337,11 @@ class Bridge:
                 await self._send_options(guest)
                 return
         log.info("permission mode -> %s", mode)
-        await self._write_block(guest, H.notice(
-            "Permission mode set to " + label + "."))
+        note = "Permission mode set to " + label + "."
+        caveat = MODE_CAVEAT.get(mode)
+        if caveat:
+            note += " " + caveat
+        await self._write_block(guest, H.notice(note))
         await self._send_options(guest)
 
     async def _new_session(self, guest: GuestSession,
@@ -3179,10 +3370,13 @@ class Bridge:
         # exists. Inside the mirror, so the folder and everything in it
         # reaches the user's machine on the next pass without anything else
         # being told about it.
-        # Back to unnamed. The new conversation gets its folder after its
-        # first message, like every other one.
+        # Back to unnamed, and back to sharing nothing. The new conversation
+        # commits to a folder at its first tool call, like every other one,
+        # and is named after its own first message rather than the one that
+        # named the chat being left.
         guest.work_dir = ""
         guest.work_guest = ""
+        guest.first_prompt = ""
         self._retarget_perms(guest)
 
         await guest.reset_transcript()
@@ -3254,10 +3448,17 @@ class Bridge:
         name = self.folders.get(session_id)
         if name and self.sync_dir:
             guest.work_dir = os.path.join(self.sync_dir, name)
-            guest.work_guest = self._guest_path(guest, name)
+            # The guest's own spelling, which it may have chosen itself and
+            # which cannot be derived from a name on this side.
+            guest.work_guest = (self.folders.guest(session_id)
+                                or self._guest_path(guest, name))
         else:
             guest.work_dir = self._stored_work_dir(session_id)
             guest.work_guest = ""
+        # A conversation resumed from the chat list has a title already, and
+        # that is what names it if it still has no folder -- so this must not
+        # carry the previous chat's opening line into it.
+        guest.first_prompt = ""
         self._retarget_perms(guest)
 
         # Fresh transcript state. Anything the old session had is on disk.
@@ -3365,20 +3566,33 @@ EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
 #
 #   bypassPermissions  the docs say can_use_tool is never invoked. The bar
 #                      would stop appearing and nothing would say why.
-#   auto               measured here: with can_use_tool installed the model
-#                      classifier is NOT IN THE LOOP AT ALL. `git reset
-#                      --hard` on a repo with real uncommitted work -- a
-#                      documented blocked-by-default action -- executed
-#                      unchanged in both `default` and `auto`. Offering it
-#                      would promise Claude's danger classifier and deliver
-#                      nothing, on a machine whose owner cannot undo a
-#                      DELTREE.
 #   dontAsk            denies anything not pre-approved by an allow rule, and
 #                      we persist no allow rules yet (4.1j). Today it would
 #                      deny everything, which is not a mode, it is a fault.
-MODE_ORDER = ["default", "acceptEdits", "plan"]
+#
+# `auto` IS offered, and was withheld for one release. It was asked for by
+# name, and taking it off the menu on the strength of a measurement was the
+# wrong call to make silently: the measurement says what auto does NOT do, and
+# that belongs in front of the person choosing it rather than in a decision
+# made for them. What was measured, on this bridge: with `can_use_tool`
+# installed the model's own danger classifier is not consulted at all --
+# `git reset --hard` on a repo with real uncommitted work, a documented
+# blocked-by-default action, executed unchanged in `auto` and in `default`.
+# So auto here means "the permission prompt still asks", not "something
+# smarter is watching". `_set_mode` says so in the transcript when it is
+# picked.
+MODE_ORDER = ["default", "acceptEdits", "plan", "auto"]
 MODE_LABEL = {"default": "Manual", "acceptEdits": "Accept edits",
-              "plan": "Plan"}
+              "plan": "Plan", "auto": "Auto"}
+#: Said once, when the mode is chosen, for modes whose name promises more than
+#: this client can deliver.
+MODE_CAVEAT = {
+    "auto": "Measured on this bridge: with the permission prompt installed, "
+            "the model's own danger classifier is not consulted -- "
+            "`git reset --hard` on a repo with uncommitted work ran "
+            "unchanged in Auto and in Manual. Auto still asks you; it does "
+            "not add a second opinion.",
+}
 
 # Slash commands offered on the Commands menu, in menu order.
 #

@@ -37,15 +37,34 @@ def describe(h: dict) -> str:
 
 
 def _sync_paragraph(workdir: str, sync_dir: str | None,
-                    guest_root: str | None) -> str:
+                    guest_root: str | None,
+                    home: str | None = None) -> str:
     """What to say about files, which depends on whether sync is configured.
 
-    Two paragraphs, and only one of them is ever true at a time. Getting this
-    wrong in either direction costs the user real work: promising a transfer
+    THREE paragraphs now, and only one of them is ever true at a time. Getting
+    this wrong in any direction costs the user real work: promising a transfer
     that does not exist means the model reports a file as delivered when it is
-    sitting on a Linux box the user cannot see, and denying one that does exist
-    means it refuses a thing it could have done.
+    sitting on a Linux box the user cannot see; denying one that does exist
+    means it refuses a thing it could have done; and NAMING A FOLDER THAT DOES
+    NOT EXIST YET sent one agent off to diagnose a sync fault instead of
+    writing the file it had been asked for.
+
+    The third is the new normal: this prompt is built when the session is,
+    which is before the conversation has committed to a folder -- that happens
+    at the first tool call, and the agent is told the path in a notice then.
     """
+    if sync_dir and not guest_root:
+        under = f" under `{home}`" if home else ""
+        return f"""Your file editing tools operate on `{workdir}` on this proxy.
+
+**This conversation does not have a folder on the user's machine yet.** One is
+created{under} the first time you use a tool, named after what the user asked
+for, and you will be told its path -- on both machines -- in a notice at that
+moment. Until then nothing is being copied in either direction, and that is
+normal rather than a fault: a conversation that is only being talked to shares
+no files. **Do not go looking for a synchronisation problem, and do not report
+one.** Write in the folder the notice names, once it names one."""
+
     if not sync_dir:
         return f"""Your file editing tools operate on the working copy at `{workdir}` on this
 proxy, which exists to stage files for the user's machine. Use them normally
@@ -148,7 +167,8 @@ something you overwrote is asking them to do your work."""
 
 
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
-                  guest_root: str | None = None) -> str:
+                  guest_root: str | None = None,
+                  home: str | None = None) -> str:
     """Text appended to Claude Code's own system prompt.
 
     APPENDED, never substituted: the preset is what makes Claude Code work,
@@ -187,7 +207,7 @@ though the file you read was real.
 
 ## What this means in practice
 
-{_sync_paragraph(workdir, sync_dir, guest_root)}
+{_sync_paragraph(workdir, sync_dir, guest_root, home)}
 
 To interact with the connected machine itself, use the tools whose names begin
 `mcp__machine__`. Only the tools actually offered to you exist: do not assume

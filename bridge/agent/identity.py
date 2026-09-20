@@ -59,6 +59,15 @@ class GuestIdentity:
     #: be a guess the user would have to live with. The toolbar shows
     #: "<unset>" for exactly that long.
     work_guest: str = ""
+    #: The first thing the user said in this conversation.
+    #:
+    #: Kept because the FOLDER IS NAMED FROM IT. A folder is named after the
+    #: conversation, and the CLI titles a conversation from its first message
+    #: -- but the folder is committed at the first TOOL CALL, which can
+    #: happen inside that same first turn, before any title exists. The
+    #: alternative was a placeholder folder renamed afterwards, which is a
+    #: new tree_id and a new baseline for a tree sync has already scanned.
+    first_prompt: str = ""
     #: A conversation the guest has OPENED but not yet spoken in.
     #:
     #: Switching chats replays stored history and builds no SDK client, so
