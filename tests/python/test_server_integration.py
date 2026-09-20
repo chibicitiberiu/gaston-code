@@ -1468,17 +1468,66 @@ async def test_setmode_refuses_a_mode_that_is_not_on_the_menu(harness):
 
 async def test_the_chosen_mode_survives_a_rebuilt_session(harness):
     """A new session throws the Session object away. The mode the user picked
-    is on the guest, not on that object, precisely so it comes back."""
+    is on the guest, not on that object, precisely so it comes back -- and it
+    has to survive all the way to the client the FIRST MESSAGE builds, since
+    New chat no longer builds one."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("NEWSESSION", {}))
     await harness.recv_until(r, {"OPTIONSEND"})
+    assert harness.bridge._guest.claude is None, "New chat spawns nothing"
+    assert harness.bridge._guest.perm_mode == "plan"
+
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
     assert harness.bridge._guest.claude.permission_mode == "plan", (
-        "the rebuilt session must start in the mode the user chose, not "
-        "back in Manual"
+        "the session the first message builds must start in the mode the "
+        "user chose, not back in Manual"
     )
+    await harness.close(w)
+
+
+async def test_settings_chosen_before_the_first_message_are_not_refused(
+    harness,
+):
+    """The window where a user most wants these: between New chat and typing.
+
+    It used to build the client immediately, so Model, Effort and Mode all
+    acted on a session that existed but had never run a turn -- and the CLI
+    refuses control requests against one. Picking a mode said "Could not
+    change the permission mode", and picking an effort tried to fork a
+    session with no history. Nothing was applied and the toolbar snapped
+    back.
+    """
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("NEWSESSION", {}))
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge._guest
+    assert g.claude is None
+
+    await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    await harness.send(w, Frame("SETMODEL", {"model": "haiku"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    await harness.send(w, Frame("SETEFFORT", {"effort": "low"}))
+    frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    # Recorded, and said so rather than refused.
+    assert g.perm_mode == "acceptEdits"
+    assert g.model == "haiku"
+    assert g.effort == "low"
+    body = harness.body(frames).lower()
+    assert b"could not" not in body, body[:300]
+
+    # And all three reach the client the first message builds.
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    assert g.claude.permission_mode == "acceptEdits"
+    assert g.claude.model == "haiku"
+    assert g.claude.effort == "low"
     await harness.close(w)
 
 

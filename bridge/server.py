@@ -1113,25 +1113,37 @@ class Bridge:
                                 "was running.")
 
     async def _resume_pending(self, guest: GuestSession) -> bool:
-        """Build the client for a conversation opened but not yet spoken in.
+        """Build the client for a conversation that has not been spoken in.
 
-        Switching chats is pure replay -- it reads stored history and spawns
-        nothing. This is where the process finally starts, at the first
-        message, which is also the first moment it can do anything. Returns
-        False and tells the user if the resume fails; the caller must not
-        proceed.
+        NEITHER opening a chat from the list NOR pressing New chat spawns
+        anything: both are pure bookkeeping, and this is where the process
+        finally starts -- at the first message, which is also the first
+        moment it could do anything. Resumes a stored conversation when one
+        is pending and starts a fresh one otherwise.
+
+        Returns False and tells the user if it fails; the caller must not
+        proceed. A message that vanishes because there was no client is the
+        one outcome worse than an error.
         """
-        if guest.claude or not guest.pending_resume:
-            return bool(guest.claude)
+        if guest.claude:
+            return True
+        resuming = bool(guest.pending_resume)
         try:
             guest.claude = await self._make_session(
-                guest, resume=guest.pending_resume)
+                guest, resume=guest.pending_resume or None)
         except Exception as exc:
-            log.exception("deferred resume failed")
+            log.exception("deferred session start failed")
             await self._write_block(guest, H.error(
-                "Could not reopen the conversation: " + str(exc)[:160]))
+                ("Could not reopen the conversation: " if resuming
+                 else "Could not start a new session: ") + str(exc)[:160]))
             return False
         guest.pending_resume = ""
+        if not resuming:
+            # The guest has been showing an empty id since New chat; tell it
+            # which conversation this turned out to be, so the chat list can
+            # mark it and a reconnect knows what to resume.
+            await self._send(guest, switched(guest.claude.session_id or "",
+                                             guest.pages.count))
         # The menus were filled from the cache while there was no client; now
         # there is one, and it is the thing that decides what `default`
         # resolves to.
@@ -1925,11 +1937,17 @@ class Bridge:
 
     async def _run_turn(self, guest: GuestSession, text: str,
                         *, echo: bool = True) -> None:
-        # The first message into a conversation opened from the chat list is
-        # what starts its process. Before the lock, because building it is
+        # The first message is what starts the process -- for a chat opened
+        # from the list AND for one started with New chat, neither of which
+        # spawns anything by itself. Before the lock, because building it is
         # slow and holding the turn lock across a subprocess start would make
         # a second message queue behind a client that does not exist yet.
-        if not guest.claude and guest.pending_resume:
+        #
+        # Unconditional now. It used to run only when `pending_resume` was
+        # set, so once New chat stopped spawning eagerly the first message
+        # into a new conversation would have fallen through to the `return`
+        # below and vanished without a word.
+        if not guest.claude:
             if not await self._resume_pending(guest):
                 return
         if not guest.claude:
@@ -3438,27 +3456,27 @@ class Bridge:
 
         await guest.reset_transcript()
 
-        try:
-            guest.claude = await self._make_session(guest)
-        except Exception as exc:
-            log.exception("new session failed")
-            # H.error into the transcript, not an ERROR frame (02.16): this
-            # is the same "could not open a Claude session" failure
-            # _set_effort already reports this way, and the transcript is
-            # the channel that paginates and survives a reconnect -- an
-            # ERROR frame does neither, and _send silently drops it outright
-            # on a closed writer (an oversized body would instead raise --
-            # see GuestLink.send -- but this message is truncated to 160
-            # characters, well inside the frame cap, so that case does not
-            # apply here).
-            await self._write_block(guest, H.error(
-                "Could not start a new session: " + str(exc)[:160]))
-            return
-
-        # guest.sess_id is a stable per-connection handle now, not the SDK's
-        # own id (02.24) -- nothing to update here.
-        await self._send(guest, switched(guest.claude.session_id or "",
-                                         guest.pages.count))
+        # NOTHING IS SPAWNED HERE either, the same as opening a chat from the
+        # list. It used to build the client immediately, and that made the
+        # settings unusable in the one window where a user most wants them:
+        # between pressing New chat and typing, Model, Effort and Mode all
+        # acted on a client that existed but had never run a turn, and the
+        # CLI refuses control requests against one -- so picking a mode said
+        # "Could not change the permission mode" and picking an effort tried
+        # to fork a session with no history to fork.
+        #
+        # With no client there is nothing to refuse. All three handlers
+        # already have a "record it and move on" path, written for the chat
+        # list, and `_make_session` reads guest.model, guest.effort and
+        # guest.perm_mode when the first message finally builds one -- so a
+        # setting chosen now applies to the first message rather than being
+        # an error the user has to work around.
+        #
+        # Safe because the cleanup this used to carry moved out:
+        # `_abandon_pending` above denies the old conversation's prompts and
+        # fails its execs whether or not anything is rebuilt.
+        guest.claude = None
+        await self._send(guest, switched("", guest.pages.count))
         await self._send_page(guest, "live")
         await self._send_options(guest)
 
