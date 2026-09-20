@@ -20,26 +20,31 @@ import time
 
 HERE = __import__("os").path.dirname(__file__)
 
-#: Inside the DOS client area in the default window position, and clear of the
-#: text that scrolls through it.
-PROBE = (560, 380)
+#: Both constants that used to live here -- a fixed point in the title bar
+#: and a fixed point in the client area -- are gone. They were measured
+#: against one window position at one screen size, and the day the guest was
+#: switched to 800x600 they pointed at the desktop and at somebody else's
+#: window. `focus` then alt-tabbed six times and refused, which reads as "the
+#: window would not come forward" while the DOS box sat in front of it.
+#: `find_caption` looks for the title bar instead.
 
-#: In the DOS window's TITLE BAR, clear of the caption text and the three
-#: buttons. Checking the client area alone is not enough and that cost three
-#: misdirected command batches in one session: a stray click opened My
-#: Documents over part of the screen, the DOS box stayed VISIBLE with PROBE
-#: still black, dos_focused() said yes, and `DELTREE /Y C:\WORK` went to the
-#: window that actually had the keyboard. The commands reported success, the
-#: tree was not cleared, and the probe run that followed was measured against
-#: a dirty tree -- 26 failures that were read as regressions for several
-#: minutes. "Visible" and "focused" are different questions and only the
-#: caption answers the second one.
-TITLE = (450, 111)
+def is_active_caption(px) -> bool:
+    """Win98's active title bar navy, allowing for the palette.
 
-#: Win98's active caption is this exact navy; an inactive one is the 3D face
-#: grey. Compared exactly rather than by brightness, because the desktop teal
-#: and the wizard's blue artwork are both "bluish" too.
-ACTIVE_CAPTION = (0, 0, 128)
+    NOT an exact tuple, which is what this was. The colour is (0,0,128) at
+    640x480x8 and (0,0,120) at 800x600 -- the 8bpp palette does not hold the
+    system colours at identical values across modes -- so an exact compare
+    silently stopped matching anything the day the guest was resized, and
+    `focus` alt-tabbed six times and refused with the DOS box already in
+    front of it.
+
+    Still not a brightness test, for the reason the old comment gave: the
+    desktop teal and the wizard artwork are both "bluish". Pinning red and
+    green near zero excludes teal (g is 128) and the band on blue excludes
+    anything brighter than a caption.
+    """
+    r, g, b = px[0], px[1], px[2]
+    return r < 40 and g < 40 and 90 <= b <= 160
 
 
 def shot() -> "object":
@@ -50,11 +55,55 @@ def shot() -> "object":
         return Image.open(f.name).convert("RGB").copy()
 
 
+def find_caption(im):
+    """The centre of the widest run of active-caption navy, or None.
+
+    A caption is the one wide band of this exact colour on the screen, and
+    its centre is a point inside it and clear of both the caption text (drawn
+    in white) and the three buttons at the right-hand end. Found rather than
+    assumed, so moving or resizing the window does not silently turn the
+    check into a reading of the desktop.
+    """
+    w, h = im.size
+    best = None
+
+    def offer(run, start, y):
+        nonlocal best
+        if run >= 120 and (best is None or run > best[0]):
+            best = (run, start + run // 2, y)
+
+    for y in range(0, h - 40, 2):
+        run, start = 0, 0
+        for x in range(0, w, 2):
+            if is_active_caption(im.getpixel((x, y))):
+                if not run:
+                    start = x
+                run += 2
+            else:
+                offer(run, start, y)
+                run = 0
+        offer(run, start, y)
+    return None if best is None else (best[1], best[2])
+
+
 def dos_focused() -> bool:
+    """Is the MS-DOS Prompt the window holding the keyboard?
+
+    TWO questions, and only the second is about focus. "Visible" and
+    "focused" are different, and that difference cost three misdirected
+    command batches in one session: a stray click opened My Documents over
+    part of the screen, the DOS box stayed VISIBLE with its client area still
+    black, and `DELTREE /Y C:\\WORK` went to the window that actually had the
+    keyboard. So: find the ACTIVE caption, then check that what is under it
+    is the black client area of a console.
+    """
     im = shot()
-    if sum(im.getpixel(PROBE)) >= 90:    # the client area is not black
+    cap = find_caption(im)
+    if cap is None:
         return False
-    return im.getpixel(TITLE) == ACTIVE_CAPTION
+    x, y = cap
+    probe = (x, min(y + 120, im.size[1] - 1))
+    return sum(im.getpixel(probe)) < 90
 
 
 def focus(tries: int = 6) -> None:
