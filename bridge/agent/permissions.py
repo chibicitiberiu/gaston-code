@@ -317,6 +317,27 @@ def off_limits(tool_name: str, args: dict, workdir: str | None,
     if inside:
         return _inside_gaston(tool_name, raw, root, target)
 
+    # THE CONFLICT DIRECTORY IS OUTSIDE cwd AND MUST STILL BE READABLE.
+    #
+    # `syncrun.Pass._conflict_dir` is `dirname(work_dir)/.gaston/conflict` --
+    # deliberately outside the mirrored folder, because `off_limits` does not
+    # cover Bash and a staged copy inside the tree would sync back. But the
+    # whole point of staging is that the agent reads `mine.N` and `base.N` to
+    # merge, and `server.py`'s conflict notice tells it to. Without this it
+    # hits the near-miss refusal below and is told there is nothing to
+    # diagnose -- for the one directory it was just instructed to open.
+    #
+    # Reads only. `_inside_gaston` below refuses writes wherever `.gaston`
+    # sits, and that has to keep being true here: a staged copy is the only
+    # remaining copy of the agent's own work.
+    if shared and tool_name not in _WRITE_TOOLS:
+        try:
+            staged = os.path.join(os.path.realpath(shared), ".gaston")
+            if os.path.commonpath([staged, target]) == staged:
+                return None
+        except (OSError, ValueError):
+            pass
+
     # NEAR MISS, and it deserves its own answer. `/home/x/work/notes.txt` is
     # just as much "on the proxy" as `/etc/passwd` is, so the refusal below
     # explains nothing about why one is refused and its sibling directory is
@@ -351,25 +372,35 @@ def off_limits(tool_name: str, args: dict, workdir: str | None,
 def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
     """Refuse a WRITE into `.gaston/`, which containment cannot catch.
 
-    `.gaston/` is inside the working directory deliberately, so the agent can
-    read a conflict copy and the ancestor beside it without a new permission
-    path. The containment check above only refuses what is OUTSIDE, so the same
-    placement that lets the agent read a staged copy also let it overwrite one
-    -- and a staged copy exists precisely because the user's version won and
-    theirs was about to be lost. Destroying it is the one outcome this whole
-    layer is built to prevent.
+    A staged copy exists precisely because the user's version won and the
+    agent's was about to be lost, so it is the only remaining copy of that
+    work. Destroying it is the one outcome this whole layer is built to
+    prevent -- and the containment check above only refuses what is OUTSIDE,
+    so without this the same placement that lets the agent read a staged copy
+    let it overwrite one.
 
-    Reads are untouched. So is Bash, which this module deliberately does not
-    parse: the baseline itself is out of its reach by PLACEMENT instead, since
-    `--sync-state` must resolve outside the working directory.
+    BOTH LOCATIONS, because the documentation and the code disagreed about
+    where `.gaston` is. `syncrun.Pass` puts it at
+    `dirname(work_dir)/.gaston` (outside cwd, so Bash cannot reach it either)
+    while this function only ever guarded `work_dir/.gaston`, which is a
+    directory nothing creates. Guarding the phantom is not a guard.
+
+    Reads are untouched -- that is what the staged copies are for. So is
+    Bash, which this module deliberately does not parse: the baseline itself
+    is out of its reach by PLACEMENT instead, since `--sync-state` must
+    resolve outside the working directory.
     """
     if tool_name not in _WRITE_TOOLS:
         return None
-    gaston = os.path.join(root, ".gaston")
-    try:
-        if os.path.commonpath([gaston, target]) != gaston:
-            return None
-    except ValueError:
+    here = os.path.join(root, ".gaston")
+    above = os.path.join(os.path.dirname(root.rstrip(os.sep)), ".gaston")
+    for gaston in (here, above):
+        try:
+            if os.path.commonpath([gaston, target]) == gaston:
+                break
+        except ValueError:
+            continue
+    else:
         return None
     return (f"`{raw}` is inside `.gaston/`, which belongs to the sync layer "
             f"rather than to the project. Refused automatically -- the user "

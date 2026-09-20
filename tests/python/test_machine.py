@@ -148,3 +148,36 @@ def test_prompt_warns_about_the_hardware():
 def test_prompt_separates_the_two_machines():
     out = system_prompt(HELLO, "/work")
     assert "different computers" in out
+
+
+def test_the_conflict_path_is_the_one_that_exists():
+    """The model was told `.gaston/conflict/<path>/mine.N` -- relative, so it
+    resolved from the agent's cwd to <work_dir>/.gaston/conflict, a directory
+    nothing creates. The real one is a level up
+    (`syncrun.Pass._conflict_dir`), outside the mirror so a staged copy does
+    not sync back to the machine it was staged away from.
+
+    Told to read a path that has never existed, and a Read of the real one
+    was refused for being outside the working copy. Both halves are fixed;
+    this pins the prompt half.
+    """
+    out = system_prompt(HELLO, "/work/CHAT", sync_dir="/work/CHAT",
+                        guest_root="C:\\Gaston\\CHAT")
+    assert "/work/.gaston/conflict/<path>/mine.N" in out, out[:0] or "wrong path"
+    assert "`.gaston/conflict/<path>/mine.N`" not in out
+
+
+def test_the_conflict_path_agrees_with_the_sync_layer():
+    """Computed two ways in two files. If they drift, the model is sent
+    somewhere empty again and nothing else notices."""
+    import os
+    from bridge.files.syncrun import Pass
+
+    workdir = "/work/CHAT"
+    out = system_prompt(HELLO, workdir, sync_dir=workdir,
+                        guest_root="C:\\Gaston\\CHAT")
+    p = Pass.__new__(Pass)
+    p._conflict_dir = os.path.join(
+        os.path.dirname(workdir.rstrip("/")), ".gaston", "conflict")
+    assert p.conflict_dir in out, (p.conflict_dir, out[:200])
+

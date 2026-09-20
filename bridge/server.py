@@ -669,14 +669,28 @@ class Bridge:
         reader: asyncio.StreamReader,
         frames: FrameReader,
         writer: asyncio.StreamWriter,
-    ) -> Frame | None:
-        """First frame must be HELLO, within a short deadline."""
+    ) -> "tuple[Frame | None, list[Frame]]":
+        """First frame must be HELLO, within a short deadline.
+
+        Returns `(hello, pipelined)`. A TWO-tuple on every path, which it was
+        not: the three refusals below each returned `None, [], []` while the
+        one caller unpacks two (`hello, early = await self._read_hello(...)`).
+        So an EOF, a non-HELLO first frame and a handshake timeout all raised
+        `ValueError: too many values to unpack` into `_on_client`'s catch-all
+        and were logged as an unhandled error with a traceback.
+
+        Nobody noticed because the refusal frame is sent by `_try_send_raw`
+        BEFORE the return, so the client saw the right thing and only the
+        bridge's own log was wrong -- which is exactly the shape of bug that
+        survives a test suite. The annotation said `Frame | None` and was
+        wrong for both shapes.
+        """
         try:
             async with asyncio.timeout(10):
                 while True:
                     data = await reader.read(4096)
                     if not data:
-                        return None, [], []
+                        return None, []
                     batch = frames.feed(data)
                     for i, f in enumerate(batch):
                         if f.type != "HELLO":
@@ -684,7 +698,7 @@ class Bridge:
                                 writer, error("expected_hello",
                                               f"first frame was {f.type}")
                             )
-                            return None, [], []
+                            return None, []
                         # Anything pipelined behind HELLO in the same read has
                         # already been parsed out of the FrameReader's buffer,
                         # so returning here would drop it silently. Hand the
@@ -693,7 +707,7 @@ class Bridge:
         except TimeoutError:
             await self._try_send_raw(writer, error("hello_timeout",
                                                    "no HELLO within 10s"))
-            return None, [], []
+            return None, []
 
     async def _attach(
         self, hello: Frame, writer: asyncio.StreamWriter

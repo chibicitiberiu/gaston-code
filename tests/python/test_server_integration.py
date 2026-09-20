@@ -379,13 +379,34 @@ async def test_second_client_is_rejected_not_evicted(harness):
     await harness.close(w1, w2)
 
 
-async def test_non_hello_first_frame_rejected(harness):
+async def test_non_hello_first_frame_rejected(harness, caplog):
+    """And the refusal is CLEAN, which it was not.
+
+    `_read_hello` returned a three-tuple on each of its three refusal paths
+    while the caller unpacked two, so every rejected handshake raised
+    `ValueError: too many values to unpack` into `_on_client`'s catch-all and
+    logged a traceback. This test passed throughout, because the ERROR frame
+    is sent before the return -- the client saw the right thing and only the
+    bridge's own log was wrong.
+    """
     r, w = await asyncio.open_connection("127.0.0.1", harness.port)
     w.write(Frame("INPUT", {}, b"hi").encode())
     await w.drain()
     frames = await harness.recv_until(r, {"ERROR"})
     assert frames[-1].headers["code"] == "expected_hello"
+    assert "unhandled error" not in caplog.text.lower(), caplog.text[:400]
+    assert "ValueError" not in caplog.text, caplog.text[:400]
     await harness.close(w)
+
+
+async def test_an_eof_before_hello_is_not_an_internal_error(harness, caplog):
+    """The other two refusal paths had the same fault. A client that opens a
+    socket and goes away is ordinary, not a bug in the bridge."""
+    r, w = await asyncio.open_connection("127.0.0.1", harness.port)
+    w.close()
+    await asyncio.sleep(0.3)
+    assert "ValueError" not in caplog.text, caplog.text[:400]
+    assert "unhandled error" not in caplog.text.lower(), caplog.text[:400]
 
 
 # --- turns ------------------------------------------------------------------

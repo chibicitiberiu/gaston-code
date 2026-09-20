@@ -233,3 +233,53 @@ def test_inside_the_folder_is_still_allowed_through():
     assert P.off_limits("Write", {"file_path": "/home/x/work/CREATEHI/a.txt"},
                         "/home/x/work/CREATEHI", shared="/home/x/work") is None
 
+
+def test_the_agent_can_read_the_conflict_copies_it_is_told_to_merge():
+    """The staged copies live OUTSIDE the working folder on purpose -- a copy
+    inside it would sync straight back to the machine it was staged away
+    from. But that put them outside cwd, where the near-miss refusal fires
+    and tells the model "there is nothing to diagnose" about the one
+    directory the conflict notice had just told it to open.
+    """
+    from bridge.agent import permissions as P
+
+    staged = "/home/x/work/.gaston/conflict/notes.txt/mine.1"
+    assert P.off_limits("Read", {"file_path": staged},
+                        "/home/x/work/CHAT", shared="/home/x/work") is None
+
+
+def test_but_it_still_cannot_write_there():
+    """A staged copy is the only remaining copy of the agent's own work. The
+    mechanism meant to preserve it must not be the thing that destroys it."""
+    from bridge.agent import permissions as P
+
+    staged = "/home/x/work/.gaston/conflict/notes.txt/mine.1"
+    why = P.off_limits("Write", {"file_path": staged},
+                       "/home/x/work/CHAT", shared="/home/x/work")
+    assert why is not None
+    assert ".gaston" in why
+
+
+def test_the_write_guard_covers_the_location_that_is_actually_used():
+    """It only ever guarded `<work_dir>/.gaston`, which nothing creates.
+    `syncrun.Pass` stages at `dirname(work_dir)/.gaston`. Guarding the
+    phantom is not a guard."""
+    from bridge.agent import permissions as P
+
+    for target in ("/home/x/work/CHAT/.gaston/conflict/a/mine.1",
+                   "/home/x/work/.gaston/conflict/a/mine.1"):
+        why = P.off_limits("Edit", {"file_path": target},
+                           "/home/x/work/CHAT", shared="/home/x/work")
+        assert why is not None, target
+
+
+def test_a_read_outside_the_folder_that_is_not_staged_is_still_refused():
+    """The carve-out is `.gaston` only -- it must not become a hole through
+    which the whole shared root is readable."""
+    from bridge.agent import permissions as P
+
+    why = P.off_limits("Read", {"file_path": "/home/x/work/OTHER/notes.txt"},
+                       "/home/x/work/CHAT", shared="/home/x/work")
+    assert why is not None
+    assert "outside this conversation" in why
+

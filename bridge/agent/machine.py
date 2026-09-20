@@ -83,6 +83,16 @@ transfer it -- an offer you cannot keep is worse than the limitation."""
     if rel.startswith(".."):
         rel = "."
     inside = "the whole working directory" if rel == "." else f"`{rel}/`"
+    # WHERE THE STAGED COPIES ACTUALLY ARE, computed the same way
+    # `syncrun.Pass._conflict_dir` computes it: one level above the working
+    # directory, so a staged copy does not sync back to the machine it was
+    # staged away from. This used to be written as a bare relative
+    # `.gaston/conflict/...`, which resolves from the agent's cwd to a
+    # directory nothing creates -- the model was told to read a path that has
+    # never existed, and a Read of the real one was refused as being outside
+    # the working copy.
+    conflicts = os.path.join(
+        os.path.dirname(workdir.rstrip(os.sep)), ".gaston", "conflict")
     return f"""Your file editing tools operate on `{workdir}` on this proxy. Within it,
 **{inside} is mirrored to `{where}` on the user's machine** -- and nothing else
 is. A file you write there reaches them within about half a minute; a file they
@@ -109,9 +119,12 @@ synchronisation layer and not from the user. What has already happened by then:
 
 1. The user's version of the file is now the one here as well. Theirs is never
    overwritten and never lost -- that is the rule, not a tie-break.
-2. Your version is preserved at `.gaston/conflict/<path>/mine.N`, with
-   `base.N` beside it: the common ancestor both versions came from. That is a
-   real three-way merge, not a diff against whatever the file happens to be now.
+2. Your version is preserved at `{conflicts}/<path>/mine.N`, with `base.N`
+   beside it: the common ancestor both versions came from. That is a real
+   three-way merge, not a diff against whatever the file happens to be now.
+   ABSOLUTE, and note it is one level ABOVE your working directory -- it has
+   to live outside the mirrored folder or a staged copy would sync straight
+   back to the machine it was staged away from.
 3. The path is REFUSING your writes. Not as a request -- the bridge drops them.
 4. The user was shown a Continue button on their own screen, and pressed it.
    **That press is their confirmation that they have finished with the file,
