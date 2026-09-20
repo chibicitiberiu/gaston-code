@@ -899,11 +899,46 @@ async def test_a_title_with_separators_in_it_still_makes_a_folder(harness):
 
 
 async def test_a_blank_folder_means_the_shared_one(harness):
+    """An older guest still sends the header. It is read and ignored rather
+    than refused, so upgrading the bridge does not break a client that has
+    not been reshipped."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("NEWSESSION", {"folder": "  "}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     assert harness.bridge._guest.work_dir == ""
+    await harness.close(w)
+
+
+async def test_a_new_chat_is_not_asked_for_a_folder_at_all(harness, tmp_path):
+    """New chat sends NEWSESSION with NO folder header, because there is
+    nothing to ask.
+
+    The guest used to put up a dialog for one. That was the last piece of a
+    design replaced twice over -- a folder is named after the conversation
+    and the CLI titles a conversation from its first message, so the prompt
+    asked the user to invent a name before there was anything to base it on.
+    By the end the bridge had stopped reading the header, so the dialog was
+    asking a question and discarding the answer.
+    """
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+
+    await harness.send(w, Frame("NEWSESSION", {}))
+    frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    g = b._guest
+    assert g.work_dir == "", "a new chat has no folder until its first tool"
+    assert g.work_guest == ""
+    assert b._mirror_dir(g) == "", "and mirrors nothing until then"
+    assert os.listdir(b.sync_dir) == [], "nothing created on the way past"
+
+    row = [f.headers for f in frames if f.type == "OPTION"
+           and f.headers.get("kind") == "work"][-1]
+    assert row["label"] == "<unset>", row
     await harness.close(w)
 
 

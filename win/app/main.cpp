@@ -1637,33 +1637,23 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                "Continue?",
                                RC_TITLE, MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
-            {
-                /* A folder of its own, or the shared one. Asked HERE rather
-                 * than defaulted on the bridge because it is the only moment
-                 * it can be asked: the conversation has no name yet -- the
-                 * CLI titles it from the first message -- so there is nothing
-                 * to derive a default from, and it cannot be changed
-                 * afterwards without moving files that are already mirrored.
-                 *
-                 * Blank is a real answer and the common one. It means the
-                 * shared folder, which is what every conversation used before
-                 * this existed. */
-                char folder[16];
-                const char *keys[1], *vals[1];
-
-                folder[0] = '\0';
-                if (!rc_askdlg_run(hwnd, g_inst, "New Chat",
-                        "Give this conversation its own folder inside the "
-                        "mirrored folder, or leave it blank to share the "
-                        "main one. Letters, digits, - and _ only.",
-                        "&Folder:", folder, sizeof(folder)))
-                    return 0;
-
-                SetWindowTextA(g_main, RC_TITLE "  -  new session...");
-                keys[0] = "folder"; vals[0] = folder;
-                ui_send("Starting a new conversation", "NEWSESSION",
-                        keys, vals, 1, NULL, 0);
-            }
+            /* NO FOLDER IS ASKED FOR. This used to put up a dialog, and
+             * it was the last piece of a design that has been replaced twice
+             * over: a folder is named after the conversation, and the CLI
+             * titles a conversation from its first message, so the prompt
+             * asked the user to invent a name before there was anything to
+             * base it on -- and then to live with it, because at the time it
+             * could not be changed afterwards.
+             *
+             * Both halves of that are now false. The folder is committed at
+             * the FIRST TOOL CALL and named from the first message, and
+             * "Change work directory..." moves an existing one, files and
+             * all. The bridge stopped reading the `folder` header when that
+             * landed, so by the end this dialog was asking a question and
+             * discarding the answer, which is worse than not asking. */
+            SetWindowTextA(g_main, RC_TITLE "  -  new session...");
+            ui_send("Starting a new conversation", "NEWSESSION",
+                    NULL, NULL, 0, NULL, 0);
             return 0;
 
         case IDM_CLOSE:

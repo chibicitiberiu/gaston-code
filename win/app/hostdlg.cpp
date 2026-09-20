@@ -212,113 +212,14 @@ int rc_hostdlg_run(HWND parent, HINSTANCE inst, rc_config *cfg)
     return st.changed;
 }
 
-/* ------------------------------------------------- the one-line ask box */
-
-namespace {
-
-#define ID_ASK_EDIT 210
-
-struct AskState {
-    char    *buf;
-    unsigned cap;
-};
-
-INT_PTR CALLBACK ask_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
-{
-    AskState *st = (AskState *)GetWindowLongA(dlg, DWL_USER);
-
-    switch (msg) {
-    case WM_INITDIALOG:
-        st = (AskState *)lp;
-        SetWindowLongA(dlg, DWL_USER, (LONG)st);
-        SetDlgItemTextA(dlg, ID_ASK_EDIT, st->buf);
-        /* Capped at what the caller's buffer holds rather than truncated on
-         * the way out -- the same reason hostdlg caps the host field. */
-        SendDlgItemMessageA(dlg, ID_ASK_EDIT, EM_LIMITTEXT,
-                            (WPARAM)(st->cap - 1), 0);
-        SetFocus(GetDlgItem(dlg, ID_ASK_EDIT));
-        /* SELECTED, so typing replaces it.
-         *
-         * WM_INITDIALOG returns FALSE here because focus is set by hand
-         * above, and that also skips the selection the dialog manager would
-         * have made -- leaving the caret at position 0 with the old value
-         * intact to the right of it. Typing then PREPENDS, which produced
-         * `C:\GastonC:\WORK` in a field that was meant to be replaced, and
-         * backspace at position 0 does nothing to explain why. */
-        SendDlgItemMessageA(dlg, ID_ASK_EDIT, EM_SETSEL, 0, (LPARAM)-1);
-        return FALSE;
-
-    case WM_COMMAND:
-        if (LOWORD(wp) == IDOK) {
-            if (st) GetDlgItemTextA(dlg, ID_ASK_EDIT, st->buf, (int)st->cap);
-            EndDialog(dlg, 1);
-            return TRUE;
-        }
-        if (LOWORD(wp) == IDCANCEL) { EndDialog(dlg, 0); return TRUE; }
-        return FALSE;
-
-    case WM_CLOSE:
-        EndDialog(dlg, 0);
-        return TRUE;
-    }
-    return FALSE;
-}
-
-}  /* namespace */
-
-int rc_askdlg_run(HWND parent, HINSTANCE inst, const char *title,
-                  const char *note, const char *label,
-                  char *buf, unsigned cap)
-{
-    Tmpl t;
-    AskState st;
-
-    if (!buf || cap < 2) return 0;
-    st.buf = buf;
-    st.cap = cap;
-
-    t.dw(DS_MODALFRAME | DS_SETFONT | DS_CENTER | WS_POPUP | WS_CAPTION
-         | WS_SYSMENU);
-    t.dw(0);
-    t.w(5);                                     /* control count */
-    t.ss(0); t.ss(0); t.ss(DLG_W); t.ss(88);
-    t.w(0);
-    t.w(0);
-    t.wide(title ? title : "");
-    t.w(8);
-    t.wide("MS Sans Serif");
-
-    /* The note spans the width and wraps: it is a sentence, and a static
-     * sized to one line would simply clip the rest with nothing to show that
-     * it had. */
-    /* Four lines of room for the note, measured on the guest rather than
-     * guessed: three fit the sentence below at 8pt MS Sans Serif and the
-     * fourth is the margin a longer one gets. A static sized to what the
-     * text needs today clips the rest with nothing on screen to show it
-     * did -- which is exactly what the first version of this dialog did. */
-    add_item(t, SS_LEFT, 6, 6, DLG_W - 12, 34, (WORD)-1, CLS_STATIC,
-             note ? note : "");
-    add_item(t, SS_RIGHT, 6, 46, 40, 10, (WORD)-1, CLS_STATIC,
-             label ? label : "");
-    add_item(t, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
-             50, 44, DLG_W - 56, 12, ID_ASK_EDIT, CLS_EDIT, "");
-    add_item(t, WS_TABSTOP | BS_DEFPUSHBUTTON,
-             DLG_W - 108, 66, 50, 14, IDOK, CLS_BUTTON, "OK");
-    add_item(t, WS_TABSTOP | BS_PUSHBUTTON,
-             DLG_W - 54, 66, 50, 14, IDCANCEL, CLS_BUTTON, "Cancel");
-
-    if (t.overflowed()) {
-        rc_log("askdlg: template overflowed; not showing");
-        return 0;
-    }
-    {
-        INT_PTR r = DialogBoxIndirectParamA(inst, (LPCDLGTEMPLATE)t.buf,
-                                            parent, ask_proc, (LPARAM)&st);
-        if (r == -1) {
-            rc_log("askdlg: DialogBoxIndirectParam failed (%lu)",
-                   (unsigned long)GetLastError());
-            return 0;
-        }
-        return r ? 1 : 0;
-    }
-}
+/* The one-line ask box that used to live here is gone with its only caller.
+ *
+ * It asked New chat for a folder name, which was the last piece of a design
+ * replaced twice over: a folder is named after the conversation, the CLI
+ * titles a conversation from its first message, and "Change work directory"
+ * now moves an existing folder files and all. Kept as dead code it would be
+ * a dialog nobody can reach in a program measured at 28KB free after a turn.
+ * git has it if a second one-line prompt is ever wanted -- but note that
+ * app/workdlg.cpp now carries the same DLGTEMPLATE machinery and is the
+ * better place to lift it from.
+ */
