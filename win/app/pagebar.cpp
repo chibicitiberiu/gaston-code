@@ -1,5 +1,6 @@
 /* The page navigation bar. See app/pagebar.h for the design. */
 #include "app/pagebar.h"
+#include "app/resource.h"
 #include "core/str.h"
 #include "core/log.h"
 #include "core/rc_cpp.h"
@@ -87,6 +88,31 @@ rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         parent, (HMENU)ID_NEXT, inst, NULL);
     check_child("next", next);
+    /* The autoscroll toggle, at the end of the strip.
+     *
+     * HERE because this is where it belongs on screen -- "follow the end of
+     * the document" next to "which page am I on" -- and because it was asked
+     * for next to the page controls. Paging and scrolling are not the same
+     * subject and this is the only thing on the strip that is not paging.
+     *
+     * BS_AUTOCHECKBOX | BS_PUSHLIKE: a button that stays pressed, which is
+     * how Windows 98 spells a toggle without an owner-draw. BS_BITMAP because
+     * the face is a drawn arrow -- comctl32 has no arrow that points down,
+     * only the back/forward chevrons, which read as navigation. */
+    follow = CreateWindowExA(0, "BUTTON", "",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_PUSHLIKE | BS_BITMAP,
+        0, 0, 0, 0, parent, (HMENU)ID_FOLLOW, inst, NULL);
+    check_child("follow", follow);
+    if (follow) {
+        HBITMAP bmp = (HBITMAP)LoadImageA(inst, MAKEINTRESOURCE(IDB_PGDN),
+                                          IMAGE_BITMAP, 0, 0,
+                                          LR_DEFAULTCOLOR);
+        if (bmp)
+            SendMessageA(follow, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bmp);
+        else
+            rc_log("pagebar: IDB_PGDN did not load; the autoscroll button "
+                   "will be blank");
+    }
     last = CreateWindowExA(0, "BUTTON", ">|",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0,
         parent, (HMENU)ID_LAST, inst, NULL);
@@ -124,7 +150,10 @@ void rc_pagebar::move(int x, int y)
     MoveWindow(prev,  x, y, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
     MoveWindow(pagelbl, x, y + 4, 130, PAGEBAR_H - 4, TRUE); x += 130;
     MoveWindow(next,  x, y, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W;
-    MoveWindow(last,  x, y, PGBTN_W, PAGEBAR_H - 2, TRUE);
+    MoveWindow(last,  x, y, PGBTN_W, PAGEBAR_H - 2, TRUE); x += PGBTN_W + 8;
+    /* A gap before it: it is not a page button and should not read as the
+     * next one along. */
+    MoveWindow(follow, x, y, PGBTN_W, PAGEBAR_H - 2, TRUE);
 }
 
 int rc_pagebar::frame(rc_frame *f)
@@ -173,6 +202,18 @@ int rc_pagebar::command(int id)
     case ID_LAST:  goto_n(total);       return 1;
     default:       return 0;
     }
+}
+
+void rc_pagebar::set_follow(int on)
+{
+    if (follow) SendMessageA(follow, BM_SETCHECK,
+                             on ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+
+int rc_pagebar::follow_on() const
+{
+    if (!follow) return 1;
+    return SendMessageA(follow, BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
 
 void rc_pagebar::note_ready(rc_frame *f)

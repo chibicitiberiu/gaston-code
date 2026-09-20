@@ -38,6 +38,14 @@
 #define ID_NEXT    1009
 #define ID_LAST    1010
 #define ID_PAGELBL 1011
+/* The autoscroll toggle. It lives on this strip because that is where it
+ * belongs on screen -- "follow the end of the document" sits next to "which
+ * page am I on" -- not because paging and scrolling are the same subject.
+ * app/pagebar.cpp's constructor says so again beside the button. */
+/* 1018, not 1012: the page-bar block ends at ID_PAGELBL and 1012 is
+ * ID_CHATS. Watcom caught it as a duplicate case; a compiler that did not
+ * would have routed the chat list's notifications to the toggle. */
+#define ID_FOLLOW  1018
 
 /* The bar's fixed height, and the geometry main.c's layout() needs to know
  * before asking this module to position its own controls -- same
@@ -50,7 +58,7 @@ class rc_pagebar {
     int is_live;
     int loading_page;
 
-    HWND    live, first, prev, next, last, pagelbl;
+    HWND    live, first, prev, next, last, pagelbl, follow;
     rc_net *net;
     rc_html *html;
 
@@ -109,6 +117,12 @@ public:
      * button refresh, matching that call site's existing behaviour
      * precisely.
      * goto_live: on_ready's trailing page_goto("live"). */
+    /* The autoscroll toggle's state, pushed in at creation and read back
+     * when it is clicked. Kept here rather than in main.cpp's config so the
+     * button and the setting cannot disagree about which is true. */
+    void set_follow(int on);
+    int  follow_on() const;
+
     void note_ready(rc_frame *f);
     void note_total(rc_frame *f);
     void goto_live();

@@ -282,6 +282,43 @@ _CLIP = [
 ]
 
 
+#: The autoscroll button: a page-down arrow, 16x16, for the page-control row.
+#:
+#: comctl32 has no arrow in IDB_STD_SMALL_COLOR -- the view and history strips
+#: have back/forward chevrons, which point the wrong way and read as
+#: navigation. This is the "follow to the end" arrow: a bar at the bottom for
+#: the end of the document, and a chevron pointing at it.
+_PGDN = [
+    "................",
+    "................",
+    ".......kk.......",
+    ".......kk.......",
+    ".......kk.......",
+    ".......kk.......",
+    ".......kk.......",
+    "..kk...kk...kk..",
+    "...kk..kk..kk...",
+    "....kk.kk.kk....",
+    ".....kkkkkk.....",
+    "......kkkk......",
+    ".......kk.......",
+    "................",
+    "..kkkkkkkkkkkk..",
+    "................",
+]
+
+
+def art_pgdn():
+    """The autoscroll toggle's face, on the button colour like the clip."""
+    c = Canvas(16, 16)
+    c.rect(0, 0, 15, 15, "s")
+    for y, row in enumerate(_PGDN):
+        for x, ch in enumerate(row):
+            if ch != ".":
+                c.put(x, y, ch)
+    return c
+
+
 def art_clip():
     """The Attach paperclip, on the button face so comctl32 maps it away.
 
@@ -392,6 +429,7 @@ def main():
     for i in range(PIE_STEPS + 1):
         write_ico(os.path.join(app, "pie%d.ico" % i), [art_pie(i)])
     write_bmp(os.path.join(app, "attach.bmp"), art_clip())
+    write_bmp(os.path.join(app, "pgdn.bmp"), art_pgdn())
 
 
 if __name__ == "__main__":

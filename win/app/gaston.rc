@@ -94,6 +94,9 @@ FILESUBTYPE    0x0L
 /* The Attach paperclip. A BITMAP rather than an ICON -- see resource.h. */
 IDB_ATTACH BITMAP "attach.bmp"
 
+/* The autoscroll toggle's face, beside the page controls. */
+IDB_PGDN BITMAP "pgdn.bmp"
+
 IDA_MAIN ACCELERATORS
 {
     "N",        IDM_NEW,      VIRTKEY, CONTROL

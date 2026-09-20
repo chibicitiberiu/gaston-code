@@ -684,10 +684,29 @@ static void esc_into(const char *in, char *out, unsigned cap)
 
 /* One policy, one place. Was: two call sites scrolled unconditionally, one
  * scrolled if already at the bottom, six never scrolled, and the user's
- * autoscroll setting was read by nothing. */
+ * autoscroll setting was read by nothing.
+ *
+ * THE SETTING IS AN OVERRIDE NOW, not a second condition. It used to be
+ * `autoscroll && was_at_bottom`, so following the conversation depended on a
+ * measurement of where the view happened to be -- and "happened to be" is
+ * doing a lot of work there. `at_bottom()` compares scrollTop + clientHeight
+ * against scrollHeight with 24px of slack, and anything that leaves the view
+ * a few pixels short (a restored page, a block that grew after it was
+ * measured, a manual nudge that was never scrolled back) turns autoscroll off
+ * silently and permanently until the user scrolls to the end by hand.
+ * Reported twice from the real machine, most recently for an error notice
+ * that never came into view.
+ *
+ * So: ON means the view follows, always. OFF means it never moves on its own.
+ * Both are states the user chose and can see (Configure > Autoscroll), which
+ * is worth more than a heuristic that is right most of the time and gives no
+ * account of itself when it is not. `was_at_bottom` stays in the signature
+ * because every caller already measures it and the OFF case is where a
+ * smarter policy would go if one is ever wanted. */
 void rc_html::settle(int was_at_bottom)
 {
-    if (d->autoscroll && was_at_bottom) scroll_bottom();
+    (void)was_at_bottom;
+    if (d->autoscroll) scroll_bottom();
 }
 
 /* Escape `text` into a heap block wrapped in `<div class="cls">`, append it,

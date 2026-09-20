@@ -48,6 +48,7 @@
  * strip is a 1995 office toolbar, and the nearest thing in it is a folder,
  * which reads as "open a document" because that is what it is. */
 #define IDB_ATTACH   200
+#define IDB_PGDN     201
 
 /* One version, four places: the VERSIONINFO block wants it twice (binary and
  * string), Windows 98's file-properties tab reads the string, and the title
@@ -68,6 +69,7 @@
 #define IDM_CLOSE    1101
 #define IDM_HOST     1110
 #define IDM_PERMS    1111
+#define IDM_AUTOSCRL 1112
 #define IDM_ABOUT    1120
 
 /* Accelerator commands.

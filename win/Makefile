@@ -53,7 +53,7 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
 OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
-       optmenu.o input.o hostdlg.o toolbar.o export.o cache.o net.o \
+       optmenu.o input.o hostdlg.o toolbar.o export.o cache.o workdir.o net.o \
        frameproto.o log.o ini.o str.o htmlview.o miniz.o exec.o rpc.o \
        sync.o syncrpc.o)
 
