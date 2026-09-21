@@ -2637,3 +2637,35 @@ conversation already open when an older client reconnects keeps the prompt it
 was built with. The next conversation gets the inventory. Rebuilding a
 session mid-conversation to refresh a prompt would throw away its state,
 which is a worse trade.
+
+#### The acceptance measurement
+
+Same task as S1, same model (Sonnet), same permission mode (Auto), fresh
+conversation -- but the Watcom text now arrives because the machine reported
+having it, not because it was hardcoded.
+
+| | baseline | hardcoded note (S1) | detected |
+|---|---|---|---|
+| `mcp__machine__exec` calls | 19 | 10 | **5** |
+| wall clock | 146 s | 76 s | **59 s** |
+| cost | $0.4957 | $0.2041 | **$0.0940** |
+
+All three runs put a real window on the guest's desktop, so this compares
+successes rather than a success and a give-up.
+
+The composition is the claim worth making. **Toolchain orientation: zero
+calls.** The first `exec` of the run was
+`wcl386 -bt=nt -l=nt_win hello.c`, correct on the first try, and the linker
+answered `creating a Windows NT windowed executable`.
+
+Of the five calls, **two were the real work** (compile, run) and **three were
+the work-directory shape** -- two compiles returning `Unable to open
+"hello.c"` and a `dir C:\Gaston\WRITEME4` to find where the file had gone,
+because the agent's first tool call was a `Write` to the shared root and that
+same call is what created the conversation's folder. The plan predicted this
+residue and said not to let the re-run blame detection for it; it is now
+`docs/BACKLOG.md` 04.35 with this transcript as its baseline.
+
+So the honest read is that detection removed the category it targeted
+completely, and what is left over is a different problem that this
+measurement has now made legible.

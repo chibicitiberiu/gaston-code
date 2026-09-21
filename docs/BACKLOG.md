@@ -1052,3 +1052,34 @@ adds `EXPORT`/`EXPORTDAT`/`EXPORTEND` and a settings frame; Phase 5 adds
 attach and upload; Phase 6 adds the UI-tier request/reply pairs -- each one
 is a chance to repeat the exact bug that motivated this. Belongs with
 whichever of those lands first, not before.
+
+**04.35 -- the first tool call is usually the write, and it is the call that
+commits the folder.** A conversation gets its folder on the first tool call
+(`_ensure_work_dir`), and the prompt's no-folder branch (`machine.py:60`)
+tells the agent its tools operate on `{workdir}` -- the shared root -- and to
+"write in the folder the notice names, once it names one". The agent cannot
+get a notice without making a tool call, and the natural first tool call is
+the write. So it writes to the root, that same call creates
+`C:\Gaston\<Name>`, and the file it just wrote is outside the mirror that was
+created for it.
+
+Measured on the Phase 4.18 acceptance run, which is what makes this worth
+recording rather than reasoning about: 5 `exec` calls total, of which **three
+were this** -- two `wcl386 ... hello.c` returning `Unable to open "hello.c"`,
+then a `dir C:\Gaston\WRITEME4` to find where the file had actually gone. The
+remaining two were the real work (compile, run). Zero were toolchain
+orientation.
+
+The agent recovered on its own in one `Bash` (`mkdir -p ... && cp ...`) after
+reading `sync_status`, which already says "EDITED HERE BUT OUTSIDE THE
+MIRRORED FOLDER". So the machinery reports the problem correctly; the cost is
+the retries before it thinks to look.
+
+Not a one-line prompt fix, which is why it is here and not done. The
+candidates all have a cost: telling the agent to make a throwaway tool call
+first is a wasted round trip on a 200MHz machine; moving root-written files
+into the folder at commit time means the sync layer relocating a file the
+agent believes it knows the path of; naming the folder in the prompt before
+it exists is exactly what `_sync_paragraph`'s docstring says sent an agent
+off to diagnose a sync fault. Wants its own measurement, against this
+transcript as the baseline.
