@@ -162,19 +162,25 @@ def guest_says(out) -> str:
 
 
 def guest_verdicts(name: str, *args, timeout: float = 300) -> dict:
-    """Run a check binary that prints `name<TAB>verdict[<TAB>detail]` rows.
+    """Run a check binary that prints `verdict<TAB>case<TAB>detail` rows.
 
-    `cppcheck` and `rpccheck` had byte-identical copies of this, and
-    `framecheck` and `capscheck` had the same shape with a different split.
-    The empty-result assertion is the load-bearing part: a binary that prints
-    nothing at all parses to `{}`, and a suite that then iterates over `{}`
-    passes every one of its assertions while checking nothing.
+    `cppcheck` and `rpccheck` print exactly this and had byte-identical
+    parsers. `capscheck` does NOT -- it prints `name<TAB>number` -- and this
+    helper was first written assuming all four agreed, with the columns the
+    wrong way round into the bargain. Worth recording: the shared shape was
+    taken from a survey and not checked against the files, which would have
+    turned every verdict into its own key and passed, because the assertion
+    below only asks that SOMETHING parsed.
+
+    That assertion is still the load-bearing part. A binary that prints
+    nothing parses to `{}`, and a suite that then iterates over `{}` passes
+    every assertion it makes while checking nothing at all.
     """
     out = run_guest(name, *args, timeout=timeout)
     rows = {}
     for line in out.stdout.decode("latin-1", "replace").splitlines():
         parts = line.split("\t")
-        if len(parts) >= 2:
-            rows[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+        if len(parts) == 3:
+            rows[parts[1]] = (parts[0], parts[2])
     assert rows, f"{name} printed no verdicts:\n{guest_says(out)}"
     return rows

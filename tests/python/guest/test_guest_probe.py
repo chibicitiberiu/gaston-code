@@ -22,12 +22,11 @@ line of output rather than a table.
 """
 from __future__ import annotations
 
-import subprocess
 
 import pytest
 
 import conftest
-from conftest import WINE, guest_exe, wine_env
+
 
 pytestmark = conftest.needs_guest
 
@@ -35,9 +34,7 @@ pytestmark = conftest.needs_guest
 def test_probe_deflate_round_trips_the_shipping_miniz(tmp_path):
     """`probe deflate` only -- the other sections ask questions real Win98
     hardware has to answer; see the module docstring."""
-    out = subprocess.run([WINE, guest_exe("probe.exe"), "deflate"],
-                         cwd=tmp_path, capture_output=True, timeout=60,
-                         env=wine_env())
+    out = conftest.run_guest("probe.exe", "deflate", cwd=tmp_path)
     text = out.stdout.decode("latin-1", "replace")
     assert "round trip" in text, (
         f"probe.exe did not reach the deflate section:\n{text}\n"

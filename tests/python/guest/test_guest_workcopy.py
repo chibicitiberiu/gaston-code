@@ -16,12 +16,11 @@ Wine proves the code and never the platform, so the same binary is run on the
 Win98 guest by hand at least once per change to it; see docs/PROGRESS.md.
 """
 
-import subprocess
 
 import pytest
 
 import conftest
-from conftest import wine_env
+
 
 EXE_NAME = "workcheck.exe"
 
@@ -36,9 +35,7 @@ def report(tmp_path_factory):
     a test that scribbles in the repo is one nobody can run twice.
     """
     cwd = tmp_path_factory.mktemp("workcheck")
-    out = subprocess.run(
-        [conftest.WINE, conftest.guest_exe(EXE_NAME)],
-        capture_output=True, timeout=300, env=wine_env(), cwd=str(cwd))
+    out = conftest.run_guest(EXE_NAME, timeout=300, cwd=cwd)
     text = out.stdout.decode("latin-1")
     assert text.strip(), out.stderr.decode("latin-1", "replace")[:800]
     return text, out.returncode

@@ -16,7 +16,7 @@ are on the guest: `docs/PROGRESS.md` has the run.
 """
 
 import os
-import subprocess
+
 
 import pytest
 
@@ -38,9 +38,7 @@ def run(tmp_path, ini: str, *, env=None, user_ini: str | None = None) -> bytes:
         (tmp_path / "tools.ini").write_text(user_ini, encoding="latin-1")
     e = wine_env()
     e.update(env or {})
-    out = subprocess.run(
-        [conftest.WINE, conftest.guest_exe(EXE_NAME), str(tmp_path)],
-        capture_output=True, env=e, timeout=120)
+    out = conftest.run_guest(EXE_NAME, tmp_path, env=e, timeout=120)
     return out.stdout
 
 
@@ -59,7 +57,7 @@ def make(tmp_path, *parts) -> str:
     p = tmp_path.joinpath(*parts)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"MZ")
-    return "Z:" + str(p).replace("/", "\\")
+    return conftest.wine_path(p)
 
 
 def test_a_file_that_exists_round_trips_through_both_sides(tmp_path):
@@ -124,9 +122,7 @@ def test_the_users_ini_is_read_after_the_shipped_one(tmp_path):
 def test_a_missing_shipped_ini_is_not_an_error(tmp_path):
     """An install that did not copy it, or a user who deleted it. The client
     still connects and the machine simply reports nothing."""
-    out = subprocess.run(
-        [conftest.WINE, conftest.guest_exe(EXE_NAME), str(tmp_path)],
-        capture_output=True, env=wine_env(), timeout=120)
+    out = conftest.run_guest(EXE_NAME, tmp_path, timeout=120)
     assert out.returncode == 0
     # PATH still comes back; nothing else does, because there is nothing to
     # look at.

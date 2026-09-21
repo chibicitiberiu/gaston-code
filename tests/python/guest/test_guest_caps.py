@@ -21,12 +21,11 @@ each one equals the bridge constant of the matching name.
 """
 from __future__ import annotations
 
-import subprocess
 
 import pytest
 
 import conftest
-from conftest import WINE, guest_exe, wine_env
+
 
 from bridge.files import caps as C
 
@@ -69,8 +68,7 @@ EXPECTED = {
 
 @pytest.fixture(scope="module")
 def guest_caps():
-    out = subprocess.run([WINE, guest_exe("capscheck.exe")],
-                         capture_output=True, timeout=60, env=wine_env())
+    out = conftest.run_guest("capscheck.exe")
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
         parts = line.split("\t")

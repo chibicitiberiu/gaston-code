@@ -18,12 +18,12 @@ manifest.py` for the same reason.
 from __future__ import annotations
 
 import struct
-import subprocess
+
 
 import pytest
 
 import conftest
-from conftest import WINE, guest_exe, wine_env
+from conftest import guest_exe
 
 from bridge.wire.protocol import FrameReader
 
@@ -35,8 +35,9 @@ pytestmark = conftest.needs_guest
 
 
 def _run(*args: str) -> str:
-    out = subprocess.run([WINE, guest_exe("framecheck.exe"), *args],
-                         env=wine_env(), capture_output=True, text=True)
+    # This had no timeout, so a framecheck that hung took the suite with it
+    # rather than failing it. run_guest supplies one.
+    out = conftest.run_guest("framecheck.exe", *args, text=True)
     return out.stdout
 
 

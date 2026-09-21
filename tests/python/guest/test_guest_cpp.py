@@ -11,12 +11,12 @@ only caught overflow would have missed it.
 """
 
 import os
-import subprocess
+
 
 import pytest
 
 import conftest
-from conftest import wine_env
+
 
 EXE_NAME = "cppcheck.exe"
 
@@ -28,15 +28,7 @@ pytestmark = conftest.needs_guest
 
 @pytest.fixture(scope="module")
 def verdicts():
-    env = wine_env()
-    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME)], capture_output=True, timeout=300, env=env)
-    rows = {}
-    for line in out.stdout.decode("latin-1").splitlines():
-        parts = line.split("\t")
-        if len(parts) == 3:
-            rows[parts[1]] = (parts[0], parts[2])
-    assert rows, out.stderr.decode("latin-1", "replace")[:800]
-    return rows
+    return conftest.guest_verdicts(EXE_NAME)
 
 
 def test_every_guard_passes(verdicts):

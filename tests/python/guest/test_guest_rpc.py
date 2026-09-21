@@ -14,12 +14,11 @@ This diffs rpccheck's verdicts rather than reading rpc.c and believing it, the
 same discipline test_guest_cpp.py uses for the C++ prelude's guards.
 """
 
-import subprocess
 
 import pytest
 
 import conftest
-from conftest import wine_env
+
 
 EXE_NAME = "rpccheck.exe"
 
@@ -31,20 +30,11 @@ pytestmark = conftest.needs_guest
 
 @pytest.fixture(scope="module")
 def verdicts():
-    env = wine_env()
     # The busy-JOB case runs a real EXEC (shell=0, cmd.exe named explicitly --
     # see rpccheck.c for why) for up to 8s of its own timeout budget, plus two
     # 600ms settle sleeps either side of the cancel; 60s is generous slack for
     # a slow CI box without hiding a genuine hang.
-    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME)],
-                         capture_output=True, timeout=60, env=env)
-    rows = {}
-    for line in out.stdout.decode("latin-1").splitlines():
-        parts = line.split("\t")
-        if len(parts) == 3:
-            rows[parts[1]] = (parts[0], parts[2])
-    assert rows, out.stderr.decode("latin-1", "replace")[:800]
-    return rows
+    return conftest.guest_verdicts(EXE_NAME, timeout=60)
 
 
 def test_every_case_passes(verdicts):

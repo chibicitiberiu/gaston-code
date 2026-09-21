@@ -21,7 +21,7 @@ import subprocess
 import pytest
 
 import conftest
-from conftest import wine_env
+
 
 EXE_NAME = "inicheck.exe"
 
@@ -32,10 +32,8 @@ pytestmark = conftest.needs_guest
 
 
 def _run(workdir: str) -> subprocess.CompletedProcess:
-    env = wine_env()
-    win_dir = "Z:" + workdir.replace("/", "\\")
-    return subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), win_dir], env=env,
-                          capture_output=True, text=True, timeout=120)
+    return conftest.run_guest(EXE_NAME, conftest.wine_path(workdir),
+                              text=True, timeout=120)
 
 
 def test_every_config_field_round_trips(tmp_path):

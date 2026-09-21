@@ -14,7 +14,7 @@ byte-level file reading perfectly well, which is all this needs.
 import os
 import pathlib
 import re
-import subprocess
+
 import zlib
 
 import pytest
@@ -23,7 +23,7 @@ from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, classify,
                                 normalise)
 
 import conftest
-from conftest import wine_env
+
 
 EXE_NAME = "synccheck.exe"
 
@@ -86,8 +86,7 @@ def _pin_corpus_to_the_guests_real_chunk_size():
     """
     if not conftest.have_toolchain():
         pytest.skip("needs Open Watcom and the Lutris wine-ge runner")
-    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), "--chunk"],
-                         capture_output=True, timeout=60, env=wine_env())
+    out = conftest.run_guest(EXE_NAME, "--chunk")
     chunk = int(out.stdout.decode("latin-1").strip())
 
     from bridge.files import syncrun
@@ -121,9 +120,7 @@ def guest_answers(tmp_path_factory, _pin_corpus_to_the_guests_real_chunk_size):
         (d / name).write_bytes(data)
     for name in WORKING_NAMES:
         (d / name).write_bytes(b"should not be reported\n")
-    env = wine_env()
-    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), str(d)], capture_output=True,
-                         timeout=300, env=env)
+    out = conftest.run_guest(EXE_NAME, d, timeout=300)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
         parts = line.split("\t")
@@ -209,9 +206,7 @@ def test_the_selected_checksum_is_one_of_the_two(guest_answers):
 
 @pytest.fixture(scope="module")
 def guest_limits():
-    env = wine_env()
-    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), "--limits"], capture_output=True,
-                         timeout=300, env=env)
+    out = conftest.run_guest(EXE_NAME, "--limits", timeout=300)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
         parts = line.split("\t")
@@ -255,9 +250,7 @@ def test_the_guest_never_builds_a_truncated_working_name(guest_limits):
 
 @pytest.fixture(scope="module")
 def guest_contained():
-    env = wine_env()
-    out = subprocess.run([conftest.WINE, conftest.guest_exe(EXE_NAME), "--contained"], capture_output=True,
-                         timeout=300, env=env)
+    out = conftest.run_guest(EXE_NAME, "--contained", timeout=300)
     rows = {}
     for line in out.stdout.decode("latin-1").splitlines():
         parts = line.split("\t")
@@ -331,11 +324,8 @@ def test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser(
     for name, data in corpus.items():
         (d / name).write_bytes(data)
 
-    # Wine sees the Linux filesystem through Z:.
-    guest_path = "Z:" + str(d).replace("/", "\\")
-    out = subprocess.run(
-        [conftest.WINE, conftest.guest_exe(EXE_NAME), "--wire", guest_path],
-        capture_output=True, timeout=300, env=wine_env())
+    out = conftest.run_guest(EXE_NAME, "--wire", conftest.wine_path(d),
+                             timeout=300)
     body = out.stdout
     assert body, out.stderr.decode("latin-1", "replace")[:800]
 
