@@ -648,7 +648,19 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
 
     /* Verify before replacing anything. A transfer that cannot establish
      * crc(guest) == what was sent is reported, never retried. */
-    if (rc_sync_stat_file(tmp, &got) != 0 || got.type != 'f') return -1;
+    /* Two things were wrong here. The temp was NOT deleted on this path,
+     * alone among the refusals in this function (-4 above, -2, -4 and -3
+     * below all delete first), so a transient stat failure right after the
+     * CloseHandle left the .gaston-tmp behind. And the `!= 0` half could
+     * never fire: rc_sync_stat_file reports through out->type and every one
+     * of its six returns is `return 0`, so this read as though it checked
+     * two things and checked one. See docs/mem-audit F2. */
+    rc_sync_stat_file(tmp, &got);
+    if (got.type != 'f') {
+        rc_log("sync: cannot verify %s after writing it -- not committing", rel);
+        DeleteFileA(tmp);
+        return -1;
+    }
     /* Against the checksum the DECLARED class selects, not against our own
      * classification of the bytes. `got.cls != cls` used to be a hard failure
      * here, which made a bridge-side `-text` override unusable: the bridge

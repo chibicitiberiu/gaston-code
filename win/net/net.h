@@ -87,6 +87,15 @@ typedef struct {
     unsigned long rx_bytes;
     unsigned long tx_bytes;
     int           started;      /* rc_net_start succeeded; needs teardown */
+    /* A PREVIOUS rc_net_stop GAVE UP. Set when a thread failed to join, which
+     * is the case where that function deliberately leaks the socket, the
+     * critical section and both events rather than free them under a live
+     * thread. Those objects are then still in use, so rc_net_start must not
+     * re-initialise them on top -- which is exactly what it used to do, on
+     * every reconnect after a hung shutdown (mem-audit F5). Sticky: once a
+     * thread from a dead connection is loose in the process there is no way
+     * back to a known state without a restart. */
+    int           leaked;
     /* THE SESSION ID, and 64 is a limit this client cannot exceed rather
      * than a guess. app/chatlist.h's chat_ids[] is 64 too, deliberately
      * symmetric: the strcmp that decides "is this conversation already open"

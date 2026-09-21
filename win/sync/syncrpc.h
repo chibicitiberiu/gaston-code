@@ -42,7 +42,10 @@ const char *rc_syncrpc_root(void);
  * anything is being shared through it. What HELLO reports and what a
  * conversation's own folder is created under. */
 void        rc_syncrpc_set_home(const char *home);
-const char *rc_syncrpc_home(void);
+/* Copies into the caller's buffer under the lock, and returns 1 if there was
+ * anything to copy. The bare-pointer accessor this replaces handed out the
+ * shared buffer, which the UI thread can overwrite mid-read (mem-audit F7). */
+int         rc_syncrpc_home_copy(char *out, unsigned cap);
 
 /* Files this layer has finished moving, either way, since the process
  * started. Monotonic and never reset, so a caller that wants a count since

@@ -1954,6 +1954,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             DeleteObject(g_ui_font_bold);
         g_ui_font_bold = NULL;
         if (g_ui_font) DeleteObject(g_ui_font);
+        /* Nulled like every other handle above it. It was the one that was
+         * not, and a stale HFONT outliving WM_DESTROY is a deleted GDI
+         * object that still looks valid to anything that reads it. */
+        g_ui_font = NULL;
         PostQuitMessage(0);
         return 0;
     }

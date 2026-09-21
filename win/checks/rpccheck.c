@@ -25,6 +25,9 @@
 #include "rpc/rpc.h"
 #include "rpc/exec.h"
 #include "core/log.h"
+#include "sync/sync.h"
+#include "sync/syncrpc.h"
+#include "core/str.h"
 
 /* Zero-initialised: sock is 0 (not a real socket) and running is 0, which is
  * the field rc_net_send actually checks before touching the wire. rc_rpc_*
@@ -397,10 +400,101 @@ static void exec_timeout_clamp_is_logged(void)
     rc_rpc_join(5000);
 }
 
+
+/* Does a REFUSED conditional push take its temp file with it?
+ *
+ * It did not, and this is the regression test for the one user-visible bug
+ * in docs/mem-audit (F1). do_putend closes the temp's handle before the
+ * compare-and-swap check -- it must, the commit needs it closed -- and
+ * put_fail's cleanup was keyed on that handle still being live, so every
+ * refusal after that point left a fully-written .gaston-tmp in the user's
+ * tree. The compare-and-swap IS the ordinary path: the whole point of
+ * if_crc is to refuse when the user edited the file underneath, so a plain
+ * edit conflict leaked one every time. The scanner skips those names, so
+ * nothing reported it either.
+ *
+ * Driven through the real rc_syncrpc_handle with the real frames, against a
+ * zeroed rc_net whose `running` is 0 -- so rc_net_send builds the ack and
+ * drops it without touching a socket, exactly as the rest of this file does.
+ *
+ * Prints the directory's contents after the put and after the refusal, so
+ * the Python side can assert on names rather than on a count it has to
+ * trust.
+ */
+static void list_dir(const char *label, const char *dir)
+{
+    char pat[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    int n = 0;
+
+    rc_strf(pat, sizeof(pat), "%s\\*", dir);
+    h = FindFirstFileA(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (strcmp(fd.cFileName, ".") == 0 ||
+                strcmp(fd.cFileName, "..") == 0) continue;
+            printf("%s\t%s\n", label, fd.cFileName);
+            n++;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    if (!n) printf("%s\t(empty)\n", label);
+}
+
+static int putend_cases(const char *root)
+{
+    rc_net net;
+    rc_frame *f;
+    char body[512];
+    const char *keys[4];
+    const char *vals[4];
+    int n;
+
+    /* running == 0, so rc_net_send is the documented no-op. */
+    memset(&net, 0, sizeof(net));
+    rc_syncrpc_set_root(root);
+
+    /* One chunk: "<len> <rel>" then the file's own bytes. */
+    rc_strf(body, sizeof(body), "%u %s", (unsigned)strlen("f1.txt"), "f1.txt");
+    n = (int)strlen(body);
+    rc_strf(body + n, sizeof(body) - n, "hello");
+
+    keys[0] = "id";  vals[0] = "s1";
+    keys[1] = "off"; vals[1] = "0";
+    f = make_frame("SYNCPUT", keys, vals, 2, body);
+    if (!f) { fprintf(stderr, "no frame\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    list_dir("after_put", root);
+
+    /* SYNCPUTEND carrying an if_crc the target cannot match -- nothing is at
+     * that path, so the `absent` test fails and the refusal is `changed`.
+     * That is the ordinary edit-conflict answer, and the path that leaked. */
+    keys[0] = "id";     vals[0] = "s1";
+    keys[1] = "crc";    vals[1] = "0";
+    keys[2] = "cls";    vals[2] = "t";
+    keys[3] = "if_crc"; vals[3] = "123456";
+    f = make_frame("SYNCPUTEND", keys, vals, 4, "");
+    if (!f) { fprintf(stderr, "no frame\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    list_dir("after_refusal", root);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    (void)argc; (void)argv;
     rc_log_open(".");
+
+    /* A mode rather than another always-on case: it needs a directory to
+     * work in, and the SYNCPUT path writes real files. */
+    if (argc >= 3 && strcmp(argv[1], "--putend") == 0) {
+        int rc = putend_cases(argv[2]);
+        rc_log_close();
+        return rc;
+    }
+    (void)argc; (void)argv;
 
     lane_table_cases();
     immediate_survives_busy_job();

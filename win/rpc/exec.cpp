@@ -69,15 +69,30 @@ void rc_exec_arm(void)
 void rc_exec_cancel(void)
 {
     g_cancel = 1;
+    /* Reachable, and correct: no section means rc_exec_init never ran, which
+     * means rc_rpc_start never ran, which means there is no child. g_cancel
+     * is set above regardless, so a worker that starts later still sees it. */
     if (!g_child_lock_ready) return;
     EnterCriticalSection(&g_child_lock);
     if (g_child) TerminateProcess(g_child, 1);
     LeaveCriticalSection(&g_child_lock);
 }
 
+/* Worker thread only, and it cannot run before the section exists:
+ * rc_rpc_start calls rc_exec_init() at rpc.cpp:599 and only creates the
+ * worker at :612, both on the UI thread. So the branch below is unreachable
+ * today. It used to be a silent UNLOCKED write to g_child, which read like
+ * the one unsynchronised access in this file; it says so now instead, so a
+ * change to that ordering announces itself rather than quietly dropping the
+ * lock. (mem-audit L5) */
 static void set_child(HANDLE h)
 {
-    if (!g_child_lock_ready) { g_child = h; return; }
+    if (!g_child_lock_ready) {
+        rc_log("exec: set_child before rc_exec_init -- start-up ordering "
+               "changed; g_child is being written without the lock");
+        g_child = h;
+        return;
+    }
     EnterCriticalSection(&g_child_lock);
     g_child = h;
     LeaveCriticalSection(&g_child_lock);

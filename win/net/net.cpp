@@ -384,6 +384,11 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
     char oemcp[16];
     char osver[96], cpu[64], screen[32];
+    /* Lives for the whole function, not just the block that fills it: HDR
+     * records the pointer and rc_frame_build runs at the end. On the stack
+     * with its neighbours rather than in BSS -- this frame is ~1.4KB against
+     * a 4096 gate, and BSS is the budget that is actually tight. */
+    char sroot[MAX_PATH];
     /* This array overflowed the moment mem_kb was added, and the fix at the
      * time was to make it bigger -- which left the same trap armed for the
      * next field. There are eleven entries now and there was NO bounds check
@@ -393,6 +398,25 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     const char *keys[RC_HELLO_MAX]; const char *vals[RC_HELLO_MAX];
     int nkv = 0;
     unsigned tid;
+
+    /* REFUSE, rather than re-initialise objects a surviving thread still
+     * holds. rc_net_stop leaks send_lock and both events when a join times
+     * out, precisely because a live thread may be inside them -- and then
+     * cleared `started`, so this function had no way to know and ran
+     * InitializeCriticalSection on a HELD section and overwrote two live
+     * event handles, every reconnect after a hung shutdown. Undefined
+     * behaviour on 9x, plus an accumulating handle leak.
+     *
+     * There is no safe recovery here: the old reader and sender still point
+     * at this struct. Saying so and stopping is better than a fault with no
+     * explanation. (mem-audit F5) */
+    if (n->leaked) {
+        rc_log("net: refusing to connect -- a previous shutdown left a thread "
+               "running and its lock and events are still in use. Restart the "
+               "application.");
+        set_state(n, RC_FAILED);
+        return -1;
+    }
 
     n->notify = notify;
     rc_strf(n->host, sizeof(n->host), "%s", host);
@@ -461,8 +485,9 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
          * a tree the new process knows nothing about, which is how one came
          * to pick C:\Gaston\OK's baseline and pair it against its whole
          * mirrored directory. */
-        const char *sroot = rc_syncrpc_home();
-        if (sroot && *sroot) HDR("sync_root", sroot);
+        /* A copy, not the shared buffer: rc_syncrpc_set_home runs on the
+         * UI thread and this runs while HELLO is built (mem-audit F7). */
+        if (rc_syncrpc_home_copy(sroot, sizeof(sroot))) HDR("sync_root", sroot);
     }
 
     {
@@ -994,6 +1019,7 @@ void rc_net_stop(rc_net *n)
         /* A thread is still in there somewhere. Leaking a critical section at
          * process exit costs nothing; destroying one out from under a live
          * thread costs the user a crash dialog. */
+        n->leaked = 1;
         rc_log("net: reader=%lu sender=%lu did not exit; not deleting the lock",
                (unsigned long)rw, (unsigned long)sw);
     }
@@ -1005,6 +1031,31 @@ void rc_net_stop(rc_net *n)
         if (n->outq_wake) { CloseHandle(n->outq_wake); n->outq_wake = NULL; }
         if (n->outq_room) { CloseHandle(n->outq_room); n->outq_room = NULL; }
     }
-    inflate_finish();
-    WSACleanup();
+    /* GATED, like every release above it -- this line was the one exception.
+     *
+     * inflate_finish() frees the 128KB scratch and ends the mz_stream, and
+     * BOTH are touched only by the READER thread, inside inflate_body(). If
+     * the reader's join timed out, that free lands under a live mz_inflate:
+     * exactly the hazard that makes the socket, send_lock and both events
+     * above deliberately leak rather than be released. Only `rw` is relevant
+     * -- the sender and the RPC worker never touch either object.
+     * See docs/mem-audit F3. */
+    if (rw == WAIT_OBJECT_0) {
+        inflate_finish();
+    } else {
+        rc_log("net: reader did not exit; leaking the inflate scratch rather "
+               "than freeing it under a live mz_inflate");
+    }
+
+    /* Same argument one step wider. WSACleanup tears Winsock down for the
+     * whole process, and a surviving reader or sender is still inside
+     * recv()/send() on the descriptor this function has just decided to leak
+     * for that very reason. The refcount it leaves behind is reclaimed at
+     * process exit; a socket call into a torn-down stack is not. */
+    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0) {
+        WSACleanup();
+    } else {
+        rc_log("net: reader=%lu sender=%lu still running; skipping WSACleanup",
+               (unsigned long)rw, (unsigned long)sw);
+    }
 }

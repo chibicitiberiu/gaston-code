@@ -87,3 +87,46 @@ def test_exec_timeout_clamp_is_logged(verdicts):
     requested, with no diagnostic trail on either side.
     """
     assert verdicts["exec timeout clamp is logged, not silent"][0] == "pass"
+
+
+# --- a refused conditional push takes its temp file with it -----------------
+#
+# THE one user-visible bug in docs/mem-audit (F1), and the only finding there
+# that fired on an ordinary action rather than on an error path.
+#
+# do_putend closes the temp file's handle before the compare-and-swap check,
+# because the commit needs it closed. put_fail's cleanup was keyed on that
+# handle still being live, so from that point on its DeleteFileA could never
+# run -- and the compare-and-swap is the NORMAL path: if_crc exists precisely
+# to refuse a push when the user edited the file underneath, so every edit
+# conflict left a fully-written `.gaston-tmp` behind. rc_sync_is_working_name
+# makes the scanner skip that name, so nothing reported it and nothing
+# removed it until the next start-up swept the tree.
+#
+# Verified to FAIL against the bug before it was trusted: restoring the old
+# `put_fail` calls leaves `f1.txt.gaston-tmp` in the listing after the
+# refusal. That check is what separates this from the F2 cases in
+# test_guest_agreement.py, which do not discriminate and say so.
+
+def test_a_refused_conditional_push_leaves_no_temp_file(tmp_path):
+    out = conftest.run_guest("rpccheck.exe", "--putend",
+                             conftest.wine_path(tmp_path),
+                             cwd=tmp_path, timeout=120)
+    rows: dict[str, set[str]] = {}
+    for line in out.stdout.decode("latin-1").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2:
+            rows.setdefault(parts[0], set()).add(parts[1])
+    assert rows, out.stderr.decode("latin-1", "replace")[:800]
+
+    after_put = rows.get("after_put", set())
+    assert "f1.txt.gaston-tmp" in after_put, (
+        f"the put never created its temp file, so this test is not "
+        f"exercising what it claims. Saw: {sorted(after_put)}")
+
+    left = {n for n in rows.get("after_refusal", set())
+            if n.endswith(".gaston-tmp")}
+    assert not left, (
+        f"a refused conditional push left {sorted(left)} in the sync tree. "
+        f"The scanner skips that name, so nothing will report it and nothing "
+        f"will remove it until the next rc_sync_recover on start-up.")

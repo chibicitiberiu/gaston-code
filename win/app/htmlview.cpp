@@ -507,11 +507,32 @@ static void doc_fingerprint(const char *doc, unsigned *len, unsigned *sum)
  * failure after that point has to clear it by hand, or the identical skeleton
  * the bridge re-sends is matched against a fingerprint for a document that was
  * never successfully installed, and the view stays blank forever. */
+/* Give up on the control, leaving nothing half-attached.
+ *
+ * This used to drop the two references and nothing else, while
+ * ~rc_html_impl went to the trouble of Close + SetClientSite(NULL) first.
+ * The difference mattered on RE-navigation: three of this function's five
+ * callers are the file-write failures below, which sit BEFORE the
+ * `if (d->obj.valid())` branch, so on a mid-session document update they
+ * released a control that was already created and in-place active --
+ * without closing it, and without dropping a client site that points at
+ * `&d->host.site`, a sub-object of this very struct.
+ *
+ * Then, because obj is nulled, the next successful set_document() fails the
+ * valid() test and calls CoCreateInstance again -- the outcome that
+ * function's own comment names as the thing to avoid: "Creating a second
+ * control would leak the first and lose the transcript."
+ *
+ * Same sequence as the destructor, for the same reason. (mem-audit L1) */
 static void boot_failed(rc_html_impl *d)
 {
     d->doc_len = 0;
     d->doc_sum = 0;
     d->ready   = 0;
+    if (d->obj.valid()) {
+        IOleObject_Close(d->obj.get(), OLECLOSE_NOSAVE);
+        IOleObject_SetClientSite(d->obj.get(), NULL);
+    }
     d->web.reset(NULL);
     d->obj.reset(NULL);
 }

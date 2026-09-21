@@ -31,6 +31,9 @@ void rc_log(const char *fmt, ...)
     int n;
     DWORD written;
 
+    /* A HINT, not the decision. Re-tested under the lock below, because
+     * rc_log_close can close the handle between this test and the write.
+     * Cheap here and it saves formatting a line nobody will read. */
     if (g_fh == INVALID_HANDLE_VALUE) return;
 
     GetLocalTime(&st);
@@ -55,21 +58,55 @@ void rc_log(const char *fmt, ...)
     line[n++] = '\r';
     line[n++] = '\n';
 
+    /* THE HANDLE IS NOW READ UNDER THE LOCK, and that is the fix.
+     *
+     * It used to be tested once at the top of this function, unlocked, and
+     * closed in rc_log_close, also unlocked. A thread past that test could
+     * reach WriteFile after the close had happened -- and Win9x recycles
+     * handle values aggressively, so the write does not fail, it lands in
+     * whatever file got that number next. net.cpp documents the identical
+     * hazard for the socket (finding 01.52) and removes it by ordering
+     * against a join; there is no join to order against here, so the read
+     * moves inside the section that already exists. (mem-audit F6) */
     if (g_ready) EnterCriticalSection(&g_lock);
-    WriteFile(g_fh, stamp, (DWORD)strlen(stamp), &written, NULL);
-    WriteFile(g_fh, line, (DWORD)n, &written, NULL);
-    /* Flush every line. Slow, but a buffered log loses exactly the lines that
-     * matter -- the ones written just before the fault. */
-    FlushFileBuffers(g_fh);
+    if (g_fh != INVALID_HANDLE_VALUE) {
+        WriteFile(g_fh, stamp, (DWORD)strlen(stamp), &written, NULL);
+        WriteFile(g_fh, line, (DWORD)n, &written, NULL);
+        /* Flush every line, and it stays INSIDE the lock deliberately.
+         *
+         * A buffered log loses exactly the lines that matter, the ones
+         * written just before the fault, so the flush is not negotiable.
+         * Holding four threads behind a physical flush on a 200MHz machine
+         * is a real cost and it was tempting to move this below the Leave --
+         * but that needs the handle to stay valid outside the lock, which is
+         * precisely the race the block above just removed. A complete log
+         * beats a fast one; this file is the only debugging channel the
+         * guest has. */
+        FlushFileBuffers(g_fh);
+    }
     if (g_ready) LeaveCriticalSection(&g_lock);
 }
 
 void rc_log_close(void)
 {
-    if (g_fh != INVALID_HANDLE_VALUE) {
-        rc_log("=== retroclaude exiting ===");
-        CloseHandle(g_fh);
-        g_fh = INVALID_HANDLE_VALUE;
-    }
-    if (g_ready) { DeleteCriticalSection(&g_lock); g_ready = 0; }
+    if (g_fh == INVALID_HANDLE_VALUE) return;
+    rc_log("=== retroclaude exiting ===");
+
+    /* Close under the lock, so a thread inside rc_log cannot be between its
+     * handle test and its WriteFile when this happens. */
+    if (g_ready) EnterCriticalSection(&g_lock);
+    CloseHandle(g_fh);
+    g_fh = INVALID_HANDLE_VALUE;
+    if (g_ready) LeaveCriticalSection(&g_lock);
+
+    /* g_lock is NOT deleted, and that is the same trade net.cpp makes for
+     * send_lock and rpc.cpp for its own g_lock: this function cannot
+     * establish that no other thread is inside rc_log, and destroying a
+     * critical section under a live thread is the GPF-at-exit those files
+     * describe. Leaking one at process exit costs nothing. It used to be
+     * deleted unconditionally, which is the one place this file broke a
+     * rule the transport layer states twice. (mem-audit F6)
+     *
+     * g_ready stays 1 for the same reason -- clearing it would make every
+     * later rc_log skip the lock and race the ones already inside it. */
 }

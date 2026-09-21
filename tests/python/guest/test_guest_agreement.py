@@ -376,7 +376,7 @@ def test_sync_status_vocabulary_matches_the_guest():
     where every `status=` value in this file actually comes from.
 
     Extracted with four targeted regexes rather than a C parser: `status =
-    "..."` / `why = "..."` assignments, `put_fail`'s third argument, the `?
+    "..."` / `why = "..."` assignments, `put_fail`/`putend_fail`'s third argument, the `?
     "a" : "b"` ternary in do_mkdir (`exists`/`is_file`), and do_scan's
     heap-allocation-failure fallback, which sets `v[1]` beside `k[1] =
     "status"` rather than assigning a variable named `status`. Verified by
@@ -389,7 +389,14 @@ def test_sync_status_vocabulary_matches_the_guest():
     found: set[str] = set()
     for m in re.finditer(r'\b(?:status|why)\s*=\s*"([a-z_]+)"', src):
         found.add(m.group(1))
-    for m in re.finditer(r'put_fail\([^;]*?,\s*"([a-z_]+)"\s*\)', src):
+    # put_fail AND putend_fail. The second exists because do_putend closes
+    # the temp file's handle before the compare-and-swap check, which makes
+    # put_fail's handle-keyed DeleteFileA unreachable -- every refusal after
+    # that point has to remove the temp by name instead (docs/mem-audit F1).
+    # It carries the same vocabulary, and `changed` now reaches the wire
+    # ONLY through it, so missing it here loses a real token.
+    for m in re.finditer(r'\bput(?:end)?_fail\([^;]*?,\s*"([a-z_]+)"\s*\)',
+                         src):
         found.add(m.group(1))
     for m in re.finditer(r'\?\s*"([a-z_]+)"\s*:\s*"([a-z_]+)"', src):
         found.update(m.groups())
@@ -518,3 +525,94 @@ def test_the_data_offset_is_where_the_content_starts(guest_putpath):
                         ("plain-ascii", "readme.md")):
         _, _, off = guest_putpath[label]
         assert off == len(str(len(path))) + 1 + len(path), label
+
+
+# --- rc_sync_commit cleans up after itself, on every refusal ----------------
+#
+# Four of its five failure returns deleted the temp file first; the fifth --
+# the `got.type != 'f'` verification right after the handle is closed -- did
+# not. That asymmetry is now fixed (docs/mem-audit F2).
+#
+# BE CLEAR ABOUT WHAT THESE TESTS DO AND DO NOT CATCH. They were written to
+# guard F2 and they DO NOT: reintroducing the bug leaves all four of them
+# green, which was checked rather than assumed. The reason is worth keeping,
+# because it is also what makes F2 a small finding instead of a large one.
+# There are only three ways to reach that branch, and rc_sync_stat_file
+# decides which:
+#
+#   attr == INVALID   the file is absent -- nothing to delete
+#   FILE_ATTRIBUTE_DIRECTORY   a directory -- DeleteFileA cannot remove one
+#   CreateFileA fails          another handle holds it with no sharing, so
+#                              DeleteFileA fails for the same reason
+#
+# In every one of those the temp is either already gone or undeletable, so
+# the missing cleanup could not leak anything. The ONE case where it could
+# is the fourth: `ReadFile` failing after a successful open (a bad sector, a
+# network drive dropping out) closes the handle and reports 'u' with the
+# file present and nothing holding it. That needs fault injection to reach
+# and there is no way in from here.
+#
+# What these tests are actually worth: they pin the cleanup behaviour of
+# every reachable path, so a later "make this consistent" change cannot
+# quietly start deleting a locked temp, and a later simplification cannot
+# drop the delete from the crc refusal. Driven through synccheck's --commit
+# mode, against the SHIPPING sync.o rather than a reimplementation.
+
+@pytest.fixture(scope="module")
+def commit_cases(tmp_path_factory):
+    d = tmp_path_factory.mktemp("commit")
+    out = conftest.run_guest(EXE_NAME, "--commit", conftest.wine_path(d),
+                             timeout=300)
+    rows = {}
+    for line in out.stdout.decode("latin-1").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            rows[parts[0]] = (int(parts[1]), parts[2] == "1")
+    assert rows, out.stderr.decode("latin-1", "replace")[:800]
+    return rows
+
+
+def test_a_refused_commit_takes_its_temp_file_with_it(commit_cases):
+    """The ordinary refusal: the bytes arrived but the checksum disagrees."""
+    rc, left_behind = commit_cases["crc_mismatch"]
+    assert rc == -2, f"expected crc_mismatch to refuse with -2, got {rc}"
+    assert not left_behind, (
+        "rc_sync_commit refused the transfer and left its .gaston-tmp in the "
+        "tree. The scanner skips that name, so nothing will ever report it "
+        "and nothing will remove it until the next rc_sync_recover.")
+
+
+def test_the_verification_branch_is_reachable_and_does_not_fault(commit_cases):
+    """The path that used to skip its cleanup.
+
+    Asserts what is reachable from outside: the branch is live, it answers
+    -1, and it does not fault when the file is already gone. It cannot
+    assert the fix -- see the note above this fixture for why.
+    """
+    rc, left_behind = commit_cases["vanished"]
+    assert rc == -1, f"expected the verification branch to refuse with -1, got {rc}"
+    assert not left_behind
+
+
+def test_a_locked_temp_is_refused_and_honestly_left_alone(commit_cases):
+    """`type == 'u'` with the file still present, and that one MUST survive.
+
+    DeleteFileA on a file another handle holds open fails, and it should:
+    guessing that the file is ours to remove while somebody else is reading
+    it is worse than leaving it for rc_sync_recover. This is here so a future
+    "make cleanup unconditional" change has to argue with a test.
+    """
+    rc, left_behind = commit_cases["locked"]
+    assert rc == -1, f"expected a locked temp to refuse with -1, got {rc}"
+    assert left_behind, (
+        "the temp was removed while another handle held it open -- either "
+        "Wine is not enforcing the share mode, or the cleanup stopped "
+        "checking whether the delete succeeded")
+
+
+def test_a_successful_commit_moves_the_temp_rather_than_deleting_it(commit_cases):
+    """The success path, so cleanup-on-failure cannot be faked by deleting
+    unconditionally: the temp must be gone AND the target must exist."""
+    rc, left_behind = commit_cases["ok"]
+    assert rc == 0, f"expected a good commit to return 0, got {rc}"
+    assert not left_behind

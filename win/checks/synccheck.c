@@ -192,6 +192,96 @@ static void emit_wire(void *ctx, const char *rel, const rc_sync_stat *st)
     if (n) fwrite(row, 1, n, stdout);
 }
 
+
+/* Does rc_sync_commit clean up its temp file on EVERY refusal?
+ *
+ * It did not. Four of the five failure returns deleted the temp first and
+ * the fifth -- the `got.type != 'f'` verification at the top -- did not, so
+ * a transfer that could not be re-stat'd right after its own CloseHandle
+ * left a fully-written .gaston-tmp in the user's tree. The scanner skips
+ * those names, so nothing reported it and nothing removed it until the next
+ * rc_sync_recover on start-up. See docs/mem-audit F2.
+ *
+ * Prints one row per case: case<TAB>rc<TAB>temp-still-there. The Python side
+ * asserts the temp is gone wherever it CAN be gone -- which is not every
+ * case, and the exceptions are the interesting part:
+ *
+ *   crc_mismatch   the ordinary refusal. Deletable, must be gone.
+ *   too_long       refused before anything is opened, so there is no temp.
+ *   vanished       the temp is removed underneath us, which is the only way
+ *                  to reach the `type != 'f'` branch with a deletable file
+ *                  -- it is already gone, so this case proves the branch is
+ *                  REACHABLE and does not fault, not that it deletes.
+ *   locked         stat cannot open it, so type is 'u' and the branch is
+ *                  taken with the file still present -- and DeleteFileA on
+ *                  a file somebody else holds open legitimately fails. The
+ *                  temp survives, correctly, and the row says so.
+ *   ok             the success path: temp gone, target in place.
+ */
+static int commitcases(const char *root)
+{
+    char tmp[MAX_PATH];
+    HANDLE h;
+    DWORD wrote;
+    int rc;
+
+    /* crc_mismatch: a complete temp, committed against a checksum it cannot
+     * possibly match. */
+    h = rc_sync_begin_write(root, "cc_crc.txt", tmp, sizeof(tmp));
+    if (h == INVALID_HANDLE_VALUE) { fprintf(stderr, "no_root\n"); return 3; }
+    WriteFile(h, "hello", 5, &wrote, NULL);
+    CloseHandle(h);
+    rc = rc_sync_commit(root, "cc_crc.txt", tmp, 1uL, RC_CLS_TEXT);
+    printf("crc_mismatch\t%d\t%d\n", rc,
+           GetFileAttributesA(tmp) != 0xFFFFFFFF);
+
+    /* vanished: reach the verification branch with nothing at the path. */
+    h = rc_sync_begin_write(root, "cc_gone.txt", tmp, sizeof(tmp));
+    if (h != INVALID_HANDLE_VALUE) {
+        WriteFile(h, "hello", 5, &wrote, NULL);
+        CloseHandle(h);
+        DeleteFileA(tmp);
+        rc = rc_sync_commit(root, "cc_gone.txt", tmp, 0uL, RC_CLS_TEXT);
+        printf("vanished\t%d\t%d\n", rc,
+               GetFileAttributesA(tmp) != 0xFFFFFFFF);
+    }
+
+    /* locked: held open with no sharing, so rc_sync_stat_file reports 'u'. */
+    h = rc_sync_begin_write(root, "cc_lock.txt", tmp, sizeof(tmp));
+    if (h != INVALID_HANDLE_VALUE) {
+        HANDLE keep;
+        WriteFile(h, "hello", 5, &wrote, NULL);
+        CloseHandle(h);
+        keep = CreateFileA(tmp, GENERIC_READ, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+        rc = rc_sync_commit(root, "cc_lock.txt", tmp, 0uL, RC_CLS_TEXT);
+        printf("locked\t%d\t%d\n", rc,
+               GetFileAttributesA(tmp) != 0xFFFFFFFF);
+        if (keep != INVALID_HANDLE_VALUE) CloseHandle(keep);
+        DeleteFileA(tmp);
+    }
+
+    /* ok: the success path, so a regression in the cleanup cannot pass by
+     * deleting everything unconditionally. */
+    h = rc_sync_begin_write(root, "cc_ok.txt", tmp, sizeof(tmp));
+    if (h != INVALID_HANDLE_VALUE) {
+        rc_sync_stat st;
+        char full[MAX_PATH];
+        WriteFile(h, "hello", 5, &wrote, NULL);
+        CloseHandle(h);
+        memset(&st, 0, sizeof(st));
+        rc_sync_stat_file(tmp, &st);
+        rc = rc_sync_commit(root, "cc_ok.txt", tmp,
+                            RC_CRC_FOR(st, RC_CLS_TEXT), RC_CLS_TEXT);
+        rc_sync_join(full, sizeof(full), root, "cc_ok.txt");
+        printf("ok\t%d\t%d\ttarget=%d\n", rc,
+               GetFileAttributesA(tmp) != 0xFFFFFFFF,
+               GetFileAttributesA(full) != 0xFFFFFFFF);
+        DeleteFileA(full);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int n;
@@ -211,6 +301,7 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--limits") == 0) return limits();
     if (argc >= 2 && strcmp(argv[1], "--contained") == 0) return contained();
     if (argc >= 2 && strcmp(argv[1], "--putpath") == 0) return putpath();
+    if (argc >= 3 && strcmp(argv[1], "--commit") == 0) return commitcases(argv[2]);
     /* 03.14: the chunk-boundary corpus in test_guest_agreement.py used to
      * hardcode byte offsets 8191/8190 rather than deriving them from
      * RC_SYNC_CHUNK, so a change to the chunk size would leave the
@@ -221,7 +312,7 @@ int main(int argc, char **argv)
         printf("%d\n", (int)RC_SYNC_CHUNK);
         return 0;
     }
-    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--putpath|--chunk\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--putpath|--commit <dir>|--chunk\n"); return 2; }
     n = rc_sync_scan(argv[1], emit, NULL);
     if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
     if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }

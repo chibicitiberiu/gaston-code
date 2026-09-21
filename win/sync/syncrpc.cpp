@@ -36,7 +36,16 @@ static char             g_root[MAX_PATH];
 static CRITICAL_SECTION g_root_lock;
 static int              g_root_lock_ready = 0;
 
-/* Idempotent, called before any thread but the first can reach g_root.
+/* Idempotent, and the check-then-act is safe because of a real ordering
+ * guarantee rather than by luck: the FIRST call is rc_syncrpc_set_home from
+ * WinMain (app/main.cpp), long before try_connect creates any thread. The
+ * later callers -- rc_syncrpc_set_root from the UI thread, root_snapshot
+ * from the RPC worker -- therefore always find g_root_lock_ready already 1.
+ *
+ * That ordering is load-bearing. If set_home ever stops being called at
+ * start-up, two threads can reach InitializeCriticalSection on the same
+ * object, which is undefined rather than merely wasteful.
+ *
  * Not a static constructor: those run before WinMain and therefore before the
  * log exists (win/core/rc_cpp.h). */
 static void root_lock_init(void)
@@ -78,12 +87,32 @@ void rc_syncrpc_set_root(const char *root)
 
 const char *rc_syncrpc_root(void) { return g_root; }
 
+/* Under the SAME lock as g_root, seventeen lines above, and for the same
+ * reason spelled out there: written on the UI thread when options are
+ * applied, read on another thread while HELLO's headers are built. It had
+ * none of that hardening. Sharing g_root_lock rather than adding a second
+ * one keeps the ordering trivially free of deadlock -- there is only ever
+ * one lock in this module. See docs/mem-audit F7. */
 void rc_syncrpc_set_home(const char *home)
 {
+    root_lock_init();
+    EnterCriticalSection(&g_root_lock);
     rc_strf(g_home, sizeof(g_home), "%s", home ? home : "");
+    LeaveCriticalSection(&g_root_lock);
 }
 
-const char *rc_syncrpc_home(void) { return g_home; }
+/* A caller's own copy, like root_snapshot. The bare-pointer accessor this
+ * replaces handed out the buffer itself, so a reader could be walking it
+ * while the UI thread overwrote it. */
+int rc_syncrpc_home_copy(char *out, unsigned cap)
+{
+    int got;
+    root_lock_init();
+    EnterCriticalSection(&g_root_lock);
+    got = rc_strf(out, cap, "%s", g_home);
+    LeaveCriticalSection(&g_root_lock);
+    return got && out[0];
+}
 
 /* How many files this layer has finished moving, in either direction, since
  * the process started. Monotonic and never reset: a caller that wants "how
@@ -280,6 +309,30 @@ static void put_fail(rc_net *net, const char *id, const char *why)
     g_put.active = 0;
 }
 
+/* A refusal AFTER do_putend has closed the handle.
+ *
+ * put_fail's own cleanup is keyed on `g_put.h` being live, and do_putend
+ * closes that handle before the compare-and-swap check -- it has to, the
+ * commit needs it closed. So from that CloseHandle onward put_fail's
+ * DeleteFileA can never fire, and every refusal in the compare-and-swap
+ * block used to leave a fully-written .gaston-tmp in the user's tree. That
+ * is the ORDINARY path, not a corner: the whole point of if_crc is to refuse
+ * a push when the user edited the file, so an edit conflict leaked one every
+ * time. sync.h's own note records the same outcome arriving by a different
+ * route ("the bridge's tree grew `café.md.gaston-tmp` ... and nothing ever
+ * removed it").
+ *
+ * Keyed on the NAME, because that is the thing that still exists once the
+ * handle is gone. See docs/mem-audit F1. */
+static void putend_fail(rc_net *net, const char *id, const char *why)
+{
+    if (g_put.tmp[0]) {
+        DeleteFileA(g_put.tmp);
+        g_put.tmp[0] = '\0';
+    }
+    put_fail(net, id, why);
+}
+
 /* 01.26: g_put is exactly the kind of worker-side singleton that finding
  * named -- and looking for what would break it turned up a real bug, not the
  * hypothetical one the finding asked about. A SYNCPUT stream that is cut off
@@ -434,16 +487,16 @@ static void do_putend(rc_net *net, rc_frame *f)
          * is the direction that loses the user's save. Audit 01.61 closed this
          * class for do_get and do_mkdir and missed this third site. */
         if (!rc_sync_join(full, sizeof(full), g_put.root, g_put.rel)) {
-            put_fail(net, id, "too_long");
+            putend_fail(net, id, "too_long");
             return;
         }
         memset(&cur, 0, sizeof(cur));
         rc_sync_stat_file(full, &cur);
         if (strcmp(ifc, "absent") == 0) {
             /* Anything at all at the path contradicts "absent". */
-            if (cur.type != 0) { put_fail(net, id, "changed"); return; }
+            if (cur.type != 0) { putend_fail(net, id, "changed"); return; }
         } else if (cur.type == 'u') {
-            put_fail(net, id, "locked");
+            putend_fail(net, id, "locked");
             return;
         } else if (cur.type != 'f') {
             /* The bridge expected a file with a specific checksum and the path
@@ -451,7 +504,7 @@ static void do_putend(rc_net *net, rc_frame *f)
              * deleted it between the scan and here. Both mean the world moved
              * under the decision, which is exactly what `changed` is for.
              * Falling through instead would commit over it. */
-            put_fail(net, id, "changed");
+            putend_fail(net, id, "changed");
             return;
         } else if (RC_CRC_FOR(cur, cls && *cls ? *cls : RC_CLS_TEXT)
                    != (unsigned long)strtoul(ifc, NULL, 10)) {
@@ -460,7 +513,7 @@ static void do_putend(rc_net *net, rc_frame *f)
              * of one function against the other whenever the bridge had a
              * `-text` override for the path, so every push was refused as
              * `changed` and the file never moved again. */
-            put_fail(net, id, "changed");
+            putend_fail(net, id, "changed");
             return;
         }
     }
