@@ -1,0 +1,14 @@
+# hardcoded -- S1: the Watcom note pasted in by hand
+# session e6b91949-bd2c-4b0b-ac23-875ed9482607
+# 10 mcp__machine__exec calls
+
+  1  wcl386 -bt=nt -l=nt_win hello.c
+  2  wcl386 -bt=nt -l=nt_win hello.c
+  3  path
+  4  call C:\WATCOM\SETVARS.BAT && wcl386 -bt=nt -l=nt_win hello.c
+  5  compile.bat
+  6  dir
+  7  dir
+  8  dir compile.bat
+  9  compile.bat
+ 10  start hello.exe

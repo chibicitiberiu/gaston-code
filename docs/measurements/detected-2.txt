@@ -1,0 +1,6 @@
+# detected-2 -- the note selected by what the machine reported
+# session 7c4a3517-3588-40f5-b4f5-439155f6602c
+# 2 mcp__machine__exec calls
+
+  1  wcl386 -bt=nt -l=nt_win hello.c
+  2  start hello.exe

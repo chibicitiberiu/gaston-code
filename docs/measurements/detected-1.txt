@@ -1,0 +1,9 @@
+# detected-1 -- the note selected by what the machine reported
+# session df18683d-a06f-4b87-9970-fc711709e9f1
+# 5 mcp__machine__exec calls
+
+  1  wcl386 -bt=nt -l=nt_win hello.c
+  2  wcl386 -bt=nt -l=nt_win hello.c
+  3  dir C:\Gaston\WRITEME4
+  4  wcl386 -bt=nt -l=nt_win C:\Gaston\WRITEME4\hello.c
+  5  start C:\Gaston\WRITEME4\hello.exe

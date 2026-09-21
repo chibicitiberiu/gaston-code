@@ -1,0 +1,23 @@
+# baseline -- no tool information in the prompt
+# session 8857cd46-2577-4147-be75-d6bed113db31
+# 19 mcp__machine__exec calls
+
+  1  set
+  2  dir C:\ /a:d
+  3  dir C:\WATCOM\BINW
+  4  dir C:\WATCOM
+  5  dir C:\WATCOM\BINNT
+  6  type C:\WATCOM\SETVARS.BAT
+  7  dir C:\WATCOM\LIB386
+  8  dir C:\WATCOM\H\NT\WINDOWS.H
+  9  dir C:\WATCOM\LIB386\NT
+ 10  dir C:\Gaston
+ 11  dir C:\Gaston\WRITEME2
+ 12  C:\Gaston\WRITEME2\compile.bat
+ 13  dir C:\Gaston\WRITEME2
+ 14  dir C:\Gaston\WRITEME2
+ 15  dir C:\Gaston\WRITEME2
+ 16  dir C:\Gaston\WRITEME2
+ 17  compile.bat
+ 18  dir C:\Gaston\WRITEME2\hello.exe
+ 19  start hello.exe
