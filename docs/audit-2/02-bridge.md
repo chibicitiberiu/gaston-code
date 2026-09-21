@@ -748,3 +748,32 @@ real gap rather than a formality:
   fail. That redundancy is deliberate and now stated: the reaper records the
   loss at the moment it causes it, and the teardown path no longer skips its
   own bookkeeping because something else got there first.
+
+## On the guest
+
+Bridge restarted on this code against the running `retroclaude-win98` client,
+which reconnected on its own backoff (`attached sess=fdfe6b1d…`, 31MB,
+800x600x16). Wine proves the code, not the platform; these are the changes a
+person actually sees.
+
+- **02.4, both halves.** Asked for `copy c:\work\a.txt c:\temp\a.txt`. The bar
+  read `! Run on your machine: copy c:\work\a.txt c:\temp\a.txt  -- writes
+  outs…` — the command legible, the marker two characters, the warning
+  trailing. Before this it read `! writes outside the mirrored folder: c:\temp…`
+  and the command was entirely off the end of the control. The transcript block
+  above it carried the full sentence as **Check this one:** *writes outside the
+  mirrored folder: c:\temp\a.txt*, and kept it after the prompt settled to
+  ANSWERED.
+- **02.4, the contained case.** The next tool call was `sync_status`. The bar
+  read `Sync Status` — no marker, no warning, byte for byte what it showed
+  before. The guard still adds nothing to a call it found nothing about.
+- **02.17.** A 120-line fenced block streamed and sealed with every line
+  present and the fence closed (`line 120 -- filler text here`, then ordinary
+  prose after it), 25,946 bytes of transcript in 1,956 on the wire.
+- **02.16 / 02.3.** File > Export as HTML wrote
+  `C:\RETRO\A2TEST.htm (14987 bytes)` — the transfer path whose `wire_yield`
+  signature changed, end to end, with the bridge logging the matching
+  `export: 14987 bytes`.
+- Two turns completed normally (`done 43s $0.1454`), the chat list renamed the
+  conversation, and the permission bar went up and came down three times
+  without wedging.
