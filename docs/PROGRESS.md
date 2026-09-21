@@ -2742,3 +2742,86 @@ earlier sessions ended by telling the user a window had appeared, which
 either way, please check your screen to confirm"*. Same cost, one fewer false
 claim. The gate is now two-sided, and the facts added for failures this task
 never exercises are flagged as carrying a weaker warrant.
+
+## 4.36 -- The negotiation was real and three consumers ignored it
+
+An audit of the bridge for anything still tying it to one machine, after the
+tool knowledge moved into `bridge/profiles/`. The theme that came out was not
+"OS names in strings". It was **a capability declared on the wire and decided
+in Python anyway** -- which is worse than never having negotiated it, because
+the mechanism reads as working.
+
+**The guard's grammar had not moved, only its vocabulary.** The profile
+refactor left four regexes behind as Python fallbacks, `^[A-Za-z]:` among
+them. The consequence was not theoretical: `reason()` had no parameter for a
+caller to say which shell, and `_T` was built once at import by counting
+profiles -- so the design comment's *"a caller that does not say which gets
+none"* described something **no caller could do**. Installing a second
+`[shell]` table turned every command on every machine into "unknown":
+
+    2 shells have guard tables (command.com, sh)
+    READ verbs: 0   WRITE verbs: 0
+    DRIVE regex: ^[A-Za-z]:        <- still compiled, still resolving
+
+It fails safe and it makes the product unusable, which is exactly why nothing
+caught it: the tests only ever had one shell installed. "Adding a shell is
+adding a file" was true of the verb lists and false of everything else.
+
+**Two fail-open holes in the same file**, both the dangerous direction -- a
+write outside the mirror, reported as inside, with nothing shown to the user:
+
+    del /WORK/x     root=/work   ->  None   (case folded unconditionally)
+    del /work/$T/x  root=/work   ->  None   (only %...% counted as a variable)
+
+`caps.case` had been negotiated and stored on the session all along. Folding
+is a property of the **filesystem**, not the shell, so a shell profile is not
+allowed to assert it: the same COMMAND.COM grammar is correct on a FAT volume
+and on a case-sensitive one. The sigil is the opposite -- `$T` really is a
+literal filename character to COMMAND.COM, so `"%" in token` was *right* here
+and silently wrong anywhere else.
+
+**The file and display layers disagreed about which machine they were
+talking to.** `caps.acp` is read off `GetACP()`, mapped through a 28-entry
+table, and refused rather than guessed; `paths.py` and `syncrun.py` honour it
+on every filename. `fold.py` hardcoded cp1252 at six places, `protocol.py` at
+two more, and `html.py` independently hardcoded the matching `<meta charset>`
+-- correctly paired by accident, wrong together on anything else. A guest
+reporting `acp=1251`, which the handshake **accepts today**:
+
+    filename on the wire -> b'\xcf\xf0\xe8\xe2\xe5\xf2.txt'  round-trips: True
+    the same text as prose -> b'??????.txt'
+
+Its files sync perfectly and its own filenames are unreadable in every
+transcript line, permission prompt and export.
+
+Bound per connection with a context variable rather than threaded as an
+argument. The codepage is fixed for a connection and needed at ~45
+frame-building call sites, nearly all short English strings where every page
+in the table agrees **because they are ASCII** -- a test asserts that, so
+those call sites are safe rather than lucky, and another asserts two
+concurrent guests on different codepages cannot see each other's.
+
+**Two capabilities parsed only far enough to count.** `shortnames` and
+`maxdepth` both reached `from_hello` and neither had a field:
+`from_hello({'shortnames':'0'})` and `{'shortnames':'1'}` compared **equal**.
+Meanwhile `Bridge.FOLDER_MAX = 8` hardcoded the rule the first one describes,
+and `paths.MAX_DEPTH = 16` sat under sixty lines explaining that it belongs
+to one specific client's walk -- which every client then got.
+
+**A test that read clean while the invariant was broken.** `BANNED` in
+`test_no_os_in_code.py` had `win9x`, `windows 98` and `windows 95` but not
+`windows 9x` with a space, and `paths.py` was shipping *"-- on Windows 9x
+this is the CON device"* straight to the assistant. Widening the list caught
+that one string and nothing else. A guard nobody can see failing is one
+nobody maintains -- the same lesson as the guard's own missing second-shell
+test, arriving twice in one audit.
+
+**Verified on the guest, not under Wine.** The real Win98 SE box now declares
+`maxdepth=16 shortnames=8.3` and both are read rather than assumed; its
+conversation folder came out `C:\Gaston\RUNTHECO`, eight characters *because
+the client asked for eight* rather than because the bridge had decided;
+`ver` drew a permission bar with **no** guard annotation, which is the guard
+classifying a read verb rather than falling through to "unknown program";
+and the console bytes decoded through the profile-declared cp437.
+`doscmd.py` is now `cmdguard.py` -- renamed last, because while
+`^[A-Za-z]:` was still compiled into it the old name was at least accurate.

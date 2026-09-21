@@ -941,7 +941,7 @@ of a new session, and until then the user is asked anyway.
 something for `mcp__machine__exec`, which is the tool it is actually wanted
 for. That is the stop-asking-mode decision the 4.1j plan deferred by name --
 "the guard is built and exercised first; what gates on it is a separate
-decision once you have lived with it" -- and `bridge/agent/doscmd.py` is the
+decision once you have lived with it" -- and `bridge/agent/cmdguard.py` is the
 thing that would have to gate it. Building the storage before that decision
 would produce a feature that works only where it is not needed.
 
