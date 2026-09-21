@@ -12,21 +12,40 @@ OUT="$HERE/vm/tools.iso"
 
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 
+# Every copy below used to end in `2>/dev/null || true`, and one of them had
+# been pointing at $HERE/win/htmlspike.exe since the build moved to
+# build/win/. The ISO shipped without HTMLSPK.EXE for as long as that was
+# true, and said nothing, because a silenced copy of a file that is not there
+# looks exactly like a copy of a file that is not wanted.
+#
+# So: `need` for anything the guest cannot do without, `want` for the rest --
+# and `want` still SAYS when it skips. Only RETROCL.INI is genuinely allowed
+# to be absent twice, because the two sources deliberately overwrite.
+missing=0
+need() {                                # fail loudly
+  cp "$1" "$STAGE/$2" || { echo "mktools-iso: required: $1" >&2; exit 1; }
+}
+want() {                                # skip, but out loud
+  if [ -e "$1" ]; then cp "$1" "$STAGE/$2"
+  else echo "mktools-iso: not built, leaving out of the ISO: $1" >&2
+       missing=$((missing + 1)); fi
+}
+
 # 8.3 names throughout: the guest may see this via a driver that does not
 # surface long filenames, and a truncated name is a confusing failure.
-cp "$HERE/build/win/probe.exe"       "$STAGE/PROBE.EXE"  2>/dev/null || true
-cp "$HERE/win/htmlspike.exe"   "$STAGE/HTMLSPK.EXE" 2>/dev/null || true
-cp "$HERE/build/win/retroclaude.exe" "$STAGE/RETROCL.EXE" 2>/dev/null || true
-cp "$HERE/build/win/netcheck.exe"    "$STAGE/NETCHECK.EXE" 2>/dev/null || true
+want "$HERE/build/win/probe.exe" "PROBE.EXE"
+want "$HERE/build/win/htmlspike.exe" "HTMLSPK.EXE"
+need "$HERE/build/win/retroclaude.exe" "RETROCL.EXE"
+want "$HERE/build/win/netcheck.exe" "NETCHECK.EXE"
 # The collision-mode check. It runs green under Wine and that proves the
 # code, never the platform -- CopyFile, MoveFile and the 8.3 aliasing
 # underneath them are exactly the layer Wine reimplements.
-cp "$HERE/build/win/workcheck.exe"   "$STAGE/WORKCHK.EXE" 2>/dev/null || true
+want "$HERE/build/win/workcheck.exe" "WORKCHK.EXE"
 # Tool detection, printing exactly the bytes HELLO carries. On the guest it
 # answers two things Wine cannot: how long a real FAT scan takes, and whether
 # a path on a drive with no disk in it raises the system-modal "There is no
 # disk in drive A:" that would freeze the app's message pump.
-cp "$HERE/build/win/toolcheck.exe"   "$STAGE/TOOLCHK.EXE" 2>/dev/null || true
+want "$HERE/build/win/toolcheck.exe" "TOOLCHK.EXE"
 # vm/retrocl.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
 # the Wine-tier default of 127.0.0.1 when it exists.
 cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true
@@ -34,7 +53,7 @@ cp "$HERE/vm/retrocl.ini"      "$STAGE/RETROCL.INI" 2>/dev/null || true
 # What to look for on the machine. Without this on the CD the detector finds
 # nothing and the feature is inert -- it fails silently, because "no INI" and
 # "nothing installed" produce the same empty report by design.
-cp "$HERE/win/tools_detect.ini" "$STAGE/TOOLSDET.INI" 2>/dev/null || true
+need "$HERE/win/tools_detect.ini" "TOOLSDET.INI"
 
 # The transcript's cold-start document, GENERATED from the bridge's own
 # stylesheet so there is exactly one source of truth.
@@ -53,7 +72,7 @@ cp "$HERE/win/tools_detect.ini" "$STAGE/TOOLSDET.INI" 2>/dev/null || true
 # reconnect rather than a reinstall.
 # The transcript's spinner. A real file because IE5 animates GIFs but has no
 # data: URI support, so it cannot be inlined into the document.
-cp "$HERE/win/resources/spin.gif" "$STAGE/SPIN.GIF" 2>/dev/null || true
+need "$HERE/win/resources/spin.gif" "SPIN.GIF"
 
 if ! python3 -c "
 import sys; sys.path.insert(0, '$HERE')

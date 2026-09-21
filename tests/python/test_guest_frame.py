@@ -22,9 +22,16 @@ import subprocess
 
 import pytest
 
+import conftest
 from conftest import WINE, guest_exe, wine_env
 
 from bridge.wire.protocol import FrameReader
+
+#: This suite relied on `guest_exe`'s internal skip instead of marking
+#: itself, which worked but left it invisible to `-m guest` -- so it would
+#: have been the third suite in nobody's gate the moment the Makefile
+#: stopped naming files by hand.
+pytestmark = conftest.needs_guest
 
 
 def _run(*args: str) -> str:

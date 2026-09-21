@@ -2825,3 +2825,84 @@ classifying a read verb rather than falling through to "unknown program";
 and the console bytes decoded through the profile-declared cp437.
 `doscmd.py` is now `cmdguard.py` -- renamed last, because while
 `^[A-Za-z]:` was still compiled into it the old name was at least accurate.
+
+## 4.37 -- A click took eighteen seconds, and two lists were quietly short
+
+Two unrelated tidy-ups that turned out to share a shape: something measured
+once, written down as a constant or a list, and never checked again.
+
+### The pointer
+
+`tools/qmp.py` drives the guest's mouse, and the guest's mouse is PS/2 --
+relative, no "move to (400,300)". So a move is walked, and the walk sent one
+delta per pixel: about 700 of them for a click mid-screen, each one forking
+`virsh qemu-monitor-command` at 22ms. Sixteen seconds to press Start.
+
+Both halves were assumptions, and both were wrong in the cheap direction.
+
+**The acceleration curve, measured rather than avoided.** The single-pixel
+step existed because Win98 accelerates anything larger and 1 was the only
+delta known to be safe. Sending one delta k times and diffing screendumps
+gives the whole curve: deltas of **1 and 2 travel exactly that**, everything
+from **3 to 127 travels exactly double**, and 128 and up all travel 254,
+because qemu clamps a ps2 delta to 127. There is no second threshold. So a
+move is a coarse pass at the x2 scale followed by a fine pass at x1, and it
+lands on the pixel -- checked against a reference walk built only from
+deltas of 2, pixel-identical on every target tried.
+
+**The fact that shapes the code: the scale is per PACKET, not per axis.** A
+packet of `x=96 y=3` lands at `(192, 6)` -- y doubled because x was big. A
+walk that reasoned axis by axis would drift on the short axis only, by a few
+pixels, which is about the hardest error there is to see. So the pass fixes
+the scale and both axes ride in the same packet -- which is also what a real
+mouse does, and halves the count again.
+
+**What looks like the obvious optimisation and is not:** batching small
+deltas into one `input-send-event`. qemu accumulates the rel events of one
+command and emits a single packet at the closing sync, so two hundred 1s is
+a delta of 200 and accelerates exactly as one 200 would. The packet count is
+fixed by the guest; only what each packet costs was ours to change.
+
+**And one libvirt connection instead of a fork per command** -- 0.73ms
+against 22ms, `virsh` kept as the fallback. Measured end to end: a click on
+the Start button, **16s -> 621ms**, most of which is now the settle sleeps.
+
+A position cache was built and then deleted. It was the obvious answer to
+"why does it always start from the corner", and at 700 packets a move it
+would have been worth it -- but at eight packets it saved ~80ms while adding
+a way to be silently wrong, because nothing in the guest moves the pointer
+but a person at the SPICE viewer does. Homing costs six packets and cannot
+be stale.
+
+**The first cut had the threshold at 8 rather than 3**, so the fine pass
+sent deltas of 7 that were silently doubled and every move landed exactly
+14px long. It was caught because the arithmetic predicted the error to the
+pixel -- `7 + 7 + 2` travelling `14 + 14 + 2` is +14 -- which is the only
+reason it got re-measured instead of written off as a flaky VM.
+`test_qmp_pointer.py` models the measured guest and fails 18 ways against
+those constants. It needs no VM, which is the point: the failure it catches
+is one you would otherwise meet while debugging something else.
+
+### The lists
+
+Same shape, less glamorous. `make wine-smoke` named **eight** test files and
+there were **ten**: `test_guest_workcopy.py` and `test_tooldet_agreement.py`
+were in no gate at all, and `guest-checks` was missing the two binaries they
+need. `test_guest_frame.py` leaned on `guest_exe`'s internal skip instead of
+marking itself, so `-m guest` could not see it either.
+
+Selection is now by **mark**, not by filename, so the list cannot drift --
+and `tests/python/test_suite_hygiene.py` asserts that any suite importing
+conftest's Wine plumbing carries the mark. Verified by removing the mark and
+watching it name the file.
+
+That also buys the inner loop: the ten Wine suites are 144 tests of 2791 and
+~156s of ~172s, so **`make test-fast` finishes in 15 seconds** where `make
+test` takes three minutes. `--strict-markers` is on, because a typo'd mark
+is inert and an inert `guest` mark puts a Wine suite back in the fast run.
+
+And `tools/mktools-iso.sh` had been copying `win/htmlspike.exe` since the
+build moved to `build/win/`, under `2>/dev/null || true`. The ISO shipped
+without `HTMLSPK.EXE` and said nothing, because a silenced copy of a file
+that is not there looks exactly like a copy of a file that is not wanted.
+Copies are now `need` (fail) or `want` (skip, but say so).

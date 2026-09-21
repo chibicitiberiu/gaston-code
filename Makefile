@@ -19,13 +19,14 @@ BUILD_DIRS = build tmp
 # default goal -- `make` printed the help and built nothing.
 .DEFAULT_GOAL := all
 
-.PHONY: all guest guest-checks check wine-smoke lint test clean help
+.PHONY: all guest guest-checks check wine-smoke lint test test-fast clean help
 
 help:
 	@echo "all         build the Win98 guest binary"
 	@echo "check       static PE audit of the GUEST (imports, CMOV, frames, BSS)"
 	@echo "wine-smoke  run the shipping C under Wine -- code, never the platform"
-	@echo "test        python tests"
+	@echo "test        python tests, all of them (~3 min)"
+	@echo "test-fast   python tests except the Wine suites (~15s) -- the inner loop"
 	@echo "clean       remove build/ and tmp/ entirely"
 
 all: guest
@@ -43,21 +44,21 @@ guest:
 check:
 	@$(MAKE) -C win check
 
-# The Wine gate, also repointed. It ran the hello-world's message loop for six
-# seconds. These two suites run the SHIPPING sync.c and ini.c under Wine and
-# diff their answers against the bridge's -- the only automated check that the
-# two implementations of the classifier and the INI round-trip agree.
+# The Wine gate. These suites run the SHIPPING guest C under Wine and diff its
+# answers against the bridge's -- the only automated check that the two
+# implementations of the classifier, the INI round-trip, the frame codec and
+# the caps enums still agree.
 #
 # Wine proves the code and never the platform; the real gate is the guest.
+#
+# Selected by MARK, not by a list of filenames, because the list was wrong: it
+# named eight files and there were ten, so test_guest_workcopy.py and
+# test_tooldet_agreement.py were in no gate at all -- `make test` ran them
+# among two thousand others and nothing else did. A list maintained by hand
+# beside a directory that grows is the same silent gap the conftest docstring
+# was written about, one level up.
 wine-smoke: guest-checks
-	@$(PY) -m pytest tests/python/test_guest_agreement.py \
-	                 tests/python/test_guest_config.py \
-	                 tests/python/test_guest_cpp.py \
-	                 tests/python/test_guest_rpc.py \
-	                 tests/python/test_guest_frame.py \
-	                 tests/python/test_guest_net.py \
-	                 tests/python/test_guest_probe.py \
-	                 tests/python/test_guest_caps.py -q
+	@$(PY) -m pytest tests/python -m guest -q
 
 # The binaries that run the SHIPPING guest C under Wine. `make test` builds
 # them first, because the alternative is what happened during the audit: a
@@ -71,8 +72,13 @@ wine-smoke: guest-checks
 # clean and nothing ran them, which is the same silent gap this list exists
 # to close. capscheck joined once test_guest_caps.py existed to diff its
 # output against bridge/files/caps.py (03.12).
+# workcheck and toolcheck were missing here for the same reason they were
+# missing from wine-smoke. They built anyway, because `make -C win all` builds
+# everything -- so after a `make clean; make test` their two suites would hit
+# guest_exe's loud failure, which is the good outcome of a bad list.
 guest-checks:
-	@$(MAKE) -C win synccheck inicheck cppcheck rpccheck framecheck netcheck probe capscheck
+	@$(MAKE) -C win synccheck inicheck cppcheck rpccheck framecheck netcheck \
+	                probe capscheck workcheck toolcheck
 
 # RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
 # that compile clean and fail on the guest. The transcript moved to MSHTML, so
@@ -111,6 +117,14 @@ test: guest-checks
 	@if [ -d tests/python ] && ls tests/python/*.py >/dev/null 2>&1; then \
 	  $(PY) -m pytest tests/python -q; \
 	else echo "test: no tests yet"; fi
+
+# The inner loop. Ten suites run the guest's C under Wine; they are 144 tests
+# of 2746 and ~156s of ~172s, so deselecting them turns a three-minute wait
+# into fifteen seconds. Not a gate -- `make test` is -- but the difference
+# between running the tests after every edit and running them after every
+# third one.
+test-fast:
+	@$(PY) -m pytest tests/python -m "not guest" -q
 
 clean:
 	@$(MAKE) -C win clean

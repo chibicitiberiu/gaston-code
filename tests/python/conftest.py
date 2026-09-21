@@ -75,8 +75,24 @@ def wine_env() -> dict:
 
 
 #: Suites that need a guest binary mark themselves with this rather than
-#: repeating the condition. It covers only the genuinely-unsupported case.
-needs_guest = pytest.mark.skipif(
-    not have_toolchain(),
-    reason="needs Open Watcom and the Lutris wine-ge runner",
-)
+#: repeating the condition. Two marks, and both matter:
+#:
+#:   `guest` is the SELECTOR. It is what lets `make test-fast` skip the ten
+#:   Wine suites and finish in 15 seconds instead of three minutes, and what
+#:   lets `make wine-smoke` run exactly those ten without a hand-maintained
+#:   list of filenames in the Makefile. That list had already drifted: it was
+#:   missing test_guest_workcopy.py and test_tooldet_agreement.py, so two
+#:   suites were in nobody's gate.
+#:
+#:   `skipif` is the CONDITION, and it covers only the genuinely-unsupported
+#:   case -- see the module docstring on why a missing binary is a failure
+#:   rather than a skip.
+#:
+#: `pytestmark` takes a list, so a suite still writes one line.
+needs_guest = [
+    pytest.mark.guest,
+    pytest.mark.skipif(
+        not have_toolchain(),
+        reason="needs Open Watcom and the Lutris wine-ge runner",
+    ),
+]

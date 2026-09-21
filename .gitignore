@@ -23,6 +23,10 @@ spike/.wineprefix/
 *.bak.*
 *.bak[0-9].*
 *.pre-*
+# Taken before rebuilding a generated artefact -- vm/tools.iso and friends.
+# The ISO is itself generated and ignored, so its snapshot has no business
+# in history either.
+*.bak-*
 
 # Python
 __pycache__/
