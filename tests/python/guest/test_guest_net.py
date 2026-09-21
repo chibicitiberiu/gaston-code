@@ -52,7 +52,7 @@ from conftest import WINE, guest_exe, wine_env
 # harness (a real Bridge, Session monkeypatched to FakeSession, on its own
 # port) is defined in test_server_integration.py and re-used rather than
 # duplicated, same as test_fakegui_conformance.py already does.
-from test_server_integration import harness   # noqa: F401
+from harness import harness   # noqa: F401
 
 pytestmark = conftest.needs_guest
 

@@ -23,16 +23,32 @@ import pytest
 
 import conftest
 
-TESTS = os.path.dirname(os.path.abspath(__file__))
+TESTS = os.path.join(conftest.REPO, "tests", "python")
+
+#: One directory per layer, and every suite in one of them. The names are
+#: listed rather than discovered so that adding a folder is a decision
+#: somebody made, not a directory that appeared.
+LAYERS = {"agent", "files", "wire", "view", "server", "guest", "meta", "tools"}
 
 #: What a suite touches when it needs a built guest binary under Wine.
 GUEST_API = {"guest_exe", "WINE", "wine_env", "have_toolchain"}
 
 
 def _modules():
-    for name in sorted(os.listdir(TESTS)):
-        if name.startswith("test_") and name.endswith(".py"):
-            yield name, os.path.join(TESTS, name)
+    """Every suite in the tree, as (layer/name, path).
+
+    Walks, because the suites live one directory down now. This used to
+    `listdir` a single flat directory, and when the files moved it kept
+    passing while looking at four of them -- which is the same failure it
+    exists to catch, so it is worth saying twice: a check that enumerates
+    has to enumerate the thing that grew, not the thing it was written
+    beside.
+    """
+    for layer in sorted(LAYERS):
+        d = os.path.join(TESTS, layer)
+        for name in sorted(os.listdir(d)):
+            if name.startswith("test_") and name.endswith(".py"):
+                yield f"{layer}/{name}", os.path.join(d, name)
 
 
 def _uses_guest_api(tree) -> bool:
@@ -80,6 +96,47 @@ def test_a_suite_that_needs_wine_says_so(name, path):
         f"{name} imports conftest's Wine plumbing but has no module-level "
         f"`pytestmark = conftest.needs_guest`, so `-m guest` cannot select "
         f"it and `make wine-smoke` will not run it")
+
+
+def test_every_suite_lives_in_a_layer():
+    """Nothing loose at the top of tests/python, and no stray folders.
+
+    The flat directory is what made three of the bugs above possible: a
+    fixture imported out of a sibling test module, a Makefile listing
+    filenames, and a hygiene check that read one directory. A file dropped
+    at the root would quietly reintroduce the first of those, because it
+    would be importable by name from anywhere.
+    """
+    loose = [n for n in os.listdir(TESTS)
+             if n.startswith("test_") and n.endswith(".py")]
+    assert not loose, f"put these in a layer folder: {loose}"
+
+    dirs = {n for n in os.listdir(TESTS)
+            if os.path.isdir(os.path.join(TESTS, n))
+            and not n.startswith((".", "__"))}
+    assert dirs == LAYERS, f"unexpected: {dirs ^ LAYERS}"
+
+
+def test_the_shared_scaffolding_is_not_a_test_module():
+    """`harness` has to be importable as itself.
+
+    Three suites used to import the `harness` fixture out of the server
+    integration suite, which only worked while every suite sat in one
+    directory. If the scaffolding moves back inside a test module, those
+    imports come back with it.
+
+    Parsed rather than grepped, because the first cut of this check searched
+    for the import as a STRING and matched the sentence above -- the check
+    failed on its own explanation of itself.
+    """
+    assert os.path.exists(os.path.join(TESTS, "harness.py"))
+    for name, path in _modules():
+        tree = ast.parse(open(path).read(), path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                assert not (node.module or "").startswith("test_"), (
+                    f"{name} imports from the test module {node.module!r}; "
+                    f"shared scaffolding belongs in harness.py or conftest.py")
 
 
 def test_the_guest_mark_selects_something():

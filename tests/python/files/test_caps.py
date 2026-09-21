@@ -16,6 +16,8 @@ import pytest
 from bridge.files import caps as C
 from bridge.files import paths as P
 
+import conftest
+
 
 def test_a_client_that_says_nothing_is_the_one_that_already_exists():
     """Absence means the deployed Win9x guest, because that is the only client
@@ -221,7 +223,7 @@ def test_the_summary_names_both_so_a_failed_sync_can_be_read():
 
 def _guest_headers() -> set:
     """Header names `rc_net_start` puts in HELLO, read from the source."""
-    src = (pathlib.Path(__file__).resolve().parents[2]
+    src = (pathlib.Path(conftest.REPO)
            / "win" / "net" / "net.cpp").read_text()
     return set(re.findall(r'HDR\("([a-z_]+)"', src))
 

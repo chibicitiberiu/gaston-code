@@ -17,7 +17,9 @@ import pytest
 from bridge.agent.toolnotes import NOTES, Note
 from bridge.agent.toolrules import RULES
 
-INI = pathlib.Path(__file__).resolve().parents[2] / "win" / "tools_detect.ini"
+import conftest
+
+INI = pathlib.Path(conftest.REPO) / "win" / "tools_detect.ini"
 
 
 def test_every_note_says_where_it_was_measured():

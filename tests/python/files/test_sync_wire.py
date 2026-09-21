@@ -24,7 +24,7 @@ from bridge.files.synctransport import SyncTransport
 
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from test_server_integration import _recv, harness  # noqa: E402,F401
+from harness import _recv, harness  # noqa: E402,F401
 
 
 def manifest_line(rel: str, data: bytes, typ=b"f", v=1) -> bytes:

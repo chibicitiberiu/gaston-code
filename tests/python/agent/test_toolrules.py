@@ -25,7 +25,9 @@ import pytest
 from bridge.agent.toolrep import Fact
 from bridge.agent.toolrules import RULES, Found, inventory, path_dirs, root_of
 
-INI = pathlib.Path(__file__).resolve().parents[2] / "win" / "tools_detect.ini"
+import conftest
+
+INI = pathlib.Path(conftest.REPO) / "win" / "tools_detect.ini"
 
 
 def test_a_marker_file_walks_up_to_the_root():

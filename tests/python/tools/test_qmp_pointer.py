@@ -26,10 +26,13 @@ import sys
 
 import pytest
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import conftest
+
+HERE = conftest.REPO
 sys.path.insert(0, os.path.join(HERE, "tools"))
 
 import qmp                                                    # noqa: E402
+
 
 
 class Model:

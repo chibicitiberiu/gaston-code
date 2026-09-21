@@ -20,7 +20,9 @@ import re
 
 from bridge.view import html as H
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import conftest
+
+HERE = conftest.REPO
 HEADER = os.path.join(HERE, "win", "app", "htmlview.h")
 
 

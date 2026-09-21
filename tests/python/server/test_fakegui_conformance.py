@@ -42,7 +42,7 @@ from bridge.files import caps as C
 # them keeps this file honest against the one Harness the rest of the suite
 # already trusts, rather than a second implementation that could drift from
 # it.
-from test_server_integration import harness, _recv   # noqa: F401
+from harness import harness, _recv   # noqa: F401
 
 
 async def _wait_attached(harness, timeout=5.0):

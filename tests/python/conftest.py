@@ -22,10 +22,19 @@ cannot build or run the guest.
 
 import os
 import shutil
+import subprocess
 
 import pytest
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+#: The repo root. One spelling, because there were six: three chained
+#: `os.path.dirname` calls here and in two other suites, `parents[2]` in four
+#: more, and `__import__("os").path.dirname` in the tools. They all meant the
+#: same directory and they all counted levels by hand, so moving a test file
+#: one directory deeper broke four of them in different ways.
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+#: Kept because suites import it by name. REPO is the one to reach for.
+HERE = REPO
 
 #: Where `make -C win` puts its output. Overridable so a different BUILD works.
 BUILD = os.environ.get("BUILD", os.path.join(HERE, "build", "win"))
@@ -96,3 +105,76 @@ needs_guest = [
         reason="needs Open Watcom and the Lutris wine-ge runner",
     ),
 ]
+
+
+# --- running a guest check binary -------------------------------------------
+#
+# Ten suites spawn a Wine process, and all ten spelled it out: the runner, the
+# binary, `capture_output=True`, an env from `wine_env()`, a timeout, and then
+# `out.stderr.decode("latin-1", "replace")[:800]` in the assertion message.
+# Ten copies of one call that drift apart -- three different timeouts for the
+# same class of binary, and two suites that forgot `timeout=` entirely and
+# would hang the suite rather than fail it.
+
+
+def wine_path(p) -> str:
+    """A host path as the guest sees it through Wine's Z: drive.
+
+    Four copies of this line existed, one of them in a suite that also wrote
+    it inline a second time. It looks too small to share right up until a
+    path with a forward slash in it reaches a binary that splits on
+    backslashes.
+    """
+    return "Z:" + str(p).replace("/", "\\")
+
+
+def run_guest(name: str, *args, cwd=None, timeout: float = 60,
+              text: bool = False, env: dict = None):
+    """Run a guest check binary under Wine and hand back the CompletedProcess.
+
+    `name` is the binary, e.g. "synccheck.exe" -- resolved through `guest_exe`,
+    so a missing binary is still the loud failure described above rather than
+    a silent skip.
+
+    A timeout is not optional here and the default is deliberate. Wine can
+    hang on a guest binary that is waiting for something that will never
+    arrive, and a hung test takes the whole suite with it; `test_guest_net.py`
+    needs a longer one and passes it, which is the point of the parameter.
+    """
+    argv = [WINE, guest_exe(name), *[str(a) for a in args]]
+    return subprocess.run(argv, capture_output=True, text=text,
+                          timeout=timeout, cwd=str(cwd) if cwd else None,
+                          env=env if env is not None else wine_env())
+
+
+def guest_says(out) -> str:
+    """What the binary printed, for an assertion message.
+
+    latin-1 because the guest emits OEM bytes and this must never raise while
+    building the explanation of a failure -- a decode error here replaces the
+    real failure with a UnicodeDecodeError, which is how you spend an hour on
+    the wrong bug. Capped, because a check binary that goes wrong goes wrong
+    at length.
+    """
+    err = out.stderr if isinstance(out.stderr, str) else \
+        out.stderr.decode("latin-1", "replace")
+    return err[:800]
+
+
+def guest_verdicts(name: str, *args, timeout: float = 300) -> dict:
+    """Run a check binary that prints `name<TAB>verdict[<TAB>detail]` rows.
+
+    `cppcheck` and `rpccheck` had byte-identical copies of this, and
+    `framecheck` and `capscheck` had the same shape with a different split.
+    The empty-result assertion is the load-bearing part: a binary that prints
+    nothing at all parses to `{}`, and a suite that then iterates over `{}`
+    passes every one of its assertions while checking nothing.
+    """
+    out = run_guest(name, *args, timeout=timeout)
+    rows = {}
+    for line in out.stdout.decode("latin-1", "replace").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            rows[parts[0]] = (parts[1], parts[2] if len(parts) > 2 else "")
+    assert rows, f"{name} printed no verdicts:\n{guest_says(out)}"
+    return rows

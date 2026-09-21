@@ -25,7 +25,9 @@ import pathlib
 
 import pytest
 
-ROOT = pathlib.Path(__file__).resolve().parents[2] / "bridge"
+import conftest
+
+ROOT = pathlib.Path(conftest.REPO) / "bridge"
 
 #: Lowercased needles. Deliberately narrow -- this is about naming a specific
 #: platform, not about the word "path".
