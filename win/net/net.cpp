@@ -527,13 +527,17 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                   (unsigned long)si.dwNumberOfProcessors);
         HDR("cpu", cpu);
 
-        dc = GetDC(NULL);
-        if (dc) {
-            rc_strf(screen, sizeof(screen), "%dx%dx%d",
-                      GetDeviceCaps(dc, HORZRES), GetDeviceCaps(dc, VERTRES),
-                      GetDeviceCaps(dc, BITSPIXEL));
-            HDR("screen", screen);
-            ReleaseDC(NULL, dc);
+        /* The SCREEN dc: GetDC(NULL) pairs with ReleaseDC(NULL, dc), which
+         * is exactly what WindowDC does with a null window. */
+        {
+            WindowDC dc(NULL);
+            if (dc.valid()) {
+                rc_strf(screen, sizeof(screen), "%dx%dx%d",
+                          GetDeviceCaps(dc.get(), HORZRES),
+                          GetDeviceCaps(dc.get(), VERTRES),
+                          GetDeviceCaps(dc.get(), BITSPIXEL));
+                HDR("screen", screen);
+            }
         }
 
         /* GetDiskFreeSpaceEx is NT4+/OSR2 and a static import of it would kill
