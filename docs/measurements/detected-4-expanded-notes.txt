@@ -1,0 +1,13 @@
+# detected-4 -- with the notes expanded from the corpus mine
+# session 13bc0616-c4e2-4956-830b-ce718ca303a4
+# 5 mcp__machine__exec calls
+#
+# Calls did NOT fall (5, against a 2-5 baseline). The run is kept
+# because it ended without the false 'a window appeared' claim that
+# six earlier sessions made -- see test_machine.py MAX_BLOCK_CHARS.
+
+  1  wcl386 -bt=nt -l=nt_win hello.c
+  2  wcl386 -bt=nt -l=nt_win hello.c
+  3  dir
+  4  wcl386 -bt=nt -l=nt_win hello.c
+  5  start hello.exe

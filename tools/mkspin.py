@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the transcript's spinner, win/app/spin.gif.
+"""Generate the transcript's spinner, win/resources/spin.gif.
 
 An animated GIF rather than anything cleverer, because the transcript is
 MSHTML on Internet Explorer 5 and that is the animation IE5 has. It also has
@@ -12,7 +12,7 @@ stylesheet, on white to match the transcript background: no transparency,
 because a transparent GIF over a white page buys nothing and GIF's
 single-colour transparency is the classic source of a halo.
 
-Run:  python3 tools/mkspin.py   (writes win/app/spin.gif)
+Run:  python3 tools/mkspin.py   (writes win/resources/spin.gif)
 """
 
 import math

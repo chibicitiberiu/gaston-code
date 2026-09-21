@@ -93,8 +93,9 @@ def build(bridge, guest=None) -> dict:
         "to ask a question -- a delete or a format asking 'Are you sure "
         "(Y/N)?' -- will HANG until the timeout kills it: that prompt is "
         "read from the machine's own console and there is no way to answer "
-        "it from here. Measured on the guest, not assumed. Pipe an answer in "
-        "instead, or use a form that does not ask.",
+        "it from here -- NOT by piping one in either, which was measured and "
+        "does not work. Use a form that does not ask: a switch that says "
+        "yes, or a more specific target.",
         # A FULL JSON SCHEMA, not the `{name: Annotated[...]}` shorthand.
         #
         # The shorthand marks EVERY property required -- `"required":
@@ -113,10 +114,14 @@ def build(bridge, guest=None) -> dict:
                 "command": {
                     "type": "string",
                     "description":
+                        # No OS named here, for the same reason the main
+                        # description carries no shell syntax: this schema
+                        # ships to every machine. What that machine's paths
+                        # and shell look like is detected and stated in the
+                        # system prompt.
                         "The command line to run, written for the target "
-                        "machine's shell (DOS conventions on Windows 9x: "
-                        "backslashes, 8.3 names where long ones are not "
-                        "supported).",
+                        "machine's own shell and path conventions -- the "
+                        "system prompt says what those are.",
                 },
                 "timeout_ms": {
                     "type": "integer",

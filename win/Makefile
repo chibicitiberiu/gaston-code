@@ -261,9 +261,12 @@ $(BUILD)/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 # -i=$(CURDIR) is what lets gaston.rc say `#include "app/resource.h"` -- the
 # same layer-qualified spelling the C++ uses, so the id is defined once for
 # both compilers.
-$(BUILD)/gaston.res: app/gaston.rc app/gaston.ico app/netok.ico \
-                     app/netwarn.ico app/netbad.ico \
-                     $(wildcard app/pie*.ico) app/resource.h \
+# Every binary this script names lives in resources/, not beside the C++.
+# The wildcards are deliberate: a new pie slice or a replaced icon must not
+# need a Makefile edit to be picked up, and a stale .res that silently keeps
+# the old artwork is the failure this dependency list exists to prevent.
+$(BUILD)/gaston.res: app/gaston.rc app/resource.h \
+                     $(wildcard resources/*.ico) $(wildcard resources/*.bmp) \
                      | $(BUILD)
 	@$(WRC) -q -r -bt=nt -i="$(CURDIR)" -fo=$@ app/gaston.rc
 

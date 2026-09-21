@@ -81,15 +81,20 @@ Open Watcom 1.9 at {root} -- measured on this machine, not inferred:
         # fetched: there is no "look it up first" moment for a shell, because
         # the first command fails before the agent could know to ask.
         body=r"""
-The shell is COMMAND.COM, which is not cmd.exe:
+The shell is COMMAND.COM, which is not cmd.exe. Every line below was
+measured on this machine, mostly by an agent getting it wrong first:
 
-  * One command per call, on one line. `&`, `&&` and `||` are NOT separators
-    -- they give "Too many parameters - &". A command containing a newline
-    is a "Syntax error".
-  * There is no `2>&1`. It redirects into a file literally named `&1`, which
-    then synchronises to this proxy.
-  * For several steps, write a .bat file into the mirrored folder and run
-    that. It is also one approval instead of several.
+  * One command, one line. `&`, `&&`, `||` and a newline are not separators;
+    the complaint varies ("Too many parameters - &", "Syntax error") and
+    `call x.bat && y` is the silent case -- no output, no error, `y` never
+    ran. For several steps write a .bat into the mirrored folder and run it.
+  * No `2>&1`: it creates a file literally named `&1`, and a following
+    `| more` eats the rest of the output.
+  * `start prog.exe` returns instantly with no output whether it ran,
+    crashed, or does not exist. You cannot see a window -- do not report one.
+  * A running .exe is locked: "Permission denied" from the linker, "Access
+    denied" from `del`, and `attrib` shows nothing wrong. Ask the user to
+    close it.
 """,
     ),
 }

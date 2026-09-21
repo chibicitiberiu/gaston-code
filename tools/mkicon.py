@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate win/app/gaston.ico -- the application icon.
+"""Generate win/resources/gaston.ico -- the application icon.
 
 Why a generator rather than a checked-in blob nobody can edit: the art below
 is the source. A .ico is a container, and the one thing that matters about it
@@ -18,7 +18,7 @@ may be running an 8bpp display, where a 4bpp icon carrying its own arbitrary
 palette gets colour-matched to the system halftone palette and shifts. These
 sixteen are in the system palette at every depth, so they map exactly.
 
-Run:  python3 tools/mkicon.py   (writes win/app/gaston.ico)
+Run:  python3 tools/mkicon.py   (writes win/resources/gaston.ico)
 """
 
 import os

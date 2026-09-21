@@ -18,25 +18,25 @@
  * tools/mkicon.py, which explains at length why it is not a 32bpp file from
  * a modern tool. Win98 has no alpha compositing and would render the margin
  * of such a file as a black square on the taskbar. */
-IDI_GASTON ICON "app/gaston.ico"
+IDI_GASTON ICON "resources/gaston.ico"
 
 /* The status bar's connection states. Same generator, same palette, same
  * reason for 4bpp: Win98 has no alpha compositing. */
-IDI_NET_OK   ICON "app/netok.ico"
-IDI_NET_WARN ICON "app/netwarn.ico"
-IDI_NET_BAD  ICON "app/netbad.ico"
+IDI_NET_OK   ICON "resources/netok.ico"
+IDI_NET_WARN ICON "resources/netwarn.ico"
+IDI_NET_BAD  ICON "resources/netbad.ico"
 
 /* The context gauge. Contiguous ids from IDI_PIE0 so the C++ can index
  * them -- MAKEINTRESOURCE(IDI_PIE0 + n) -- rather than carry a table. */
-110 ICON "app/pie0.ico"
-111 ICON "app/pie1.ico"
-112 ICON "app/pie2.ico"
-113 ICON "app/pie3.ico"
-114 ICON "app/pie4.ico"
-115 ICON "app/pie5.ico"
-116 ICON "app/pie6.ico"
-117 ICON "app/pie7.ico"
-118 ICON "app/pie8.ico"
+110 ICON "resources/pie0.ico"
+111 ICON "resources/pie1.ico"
+112 ICON "resources/pie2.ico"
+113 ICON "resources/pie3.ico"
+114 ICON "resources/pie4.ico"
+115 ICON "resources/pie5.ico"
+116 ICON "resources/pie6.ico"
+117 ICON "resources/pie7.ico"
+118 ICON "resources/pie8.ico"
 
 /* Win98 reads this for the Version tab of the file's Properties sheet, and
  * it is the only place the binary says what it is when it is not running. */
@@ -92,10 +92,10 @@ FILESUBTYPE    0x0L
  * risk actually is, by confirming when the box is not empty.
  */
 /* The Attach paperclip. A BITMAP rather than an ICON -- see resource.h. */
-IDB_ATTACH BITMAP "attach.bmp"
+IDB_ATTACH BITMAP "resources/attach.bmp"
 
 /* The autoscroll toggle's face, beside the page controls. */
-IDB_PGDN BITMAP "pgdn.bmp"
+IDB_PGDN BITMAP "resources/pgdn.bmp"
 
 IDA_MAIN ACCELERATORS
 {

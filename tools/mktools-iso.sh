@@ -53,7 +53,7 @@ cp "$HERE/win/tools_detect.ini" "$STAGE/TOOLSDET.INI" 2>/dev/null || true
 # reconnect rather than a reinstall.
 # The transcript's spinner. A real file because IE5 animates GIFs but has no
 # data: URI support, so it cannot be inlined into the document.
-cp "$HERE/win/app/spin.gif" "$STAGE/SPIN.GIF" 2>/dev/null || true
+cp "$HERE/win/resources/spin.gif" "$STAGE/SPIN.GIF" 2>/dev/null || true
 
 if ! python3 -c "
 import sys; sys.path.insert(0, '$HERE')

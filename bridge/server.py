@@ -186,6 +186,8 @@ class GuestSession:
     #: sends no body and lands here as [], which is the same thing the prompt
     #: does with "nothing was detected" -- says nothing at all.
     tools: "list[Found]" = field(default_factory=list)
+    #: That machine's PATH, as it was at connect. Same lifetime as `tools`.
+    path: "list[str]" = field(default_factory=list)
 
     #: What this guest is watching and how much of it fits: the paginator,
     #: the renderer, the per-stream coalescers, which page is on screen, and
@@ -814,8 +816,13 @@ class Bridge:
         # Decoded through `caps`, not the raw `acp` header: the header is a
         # codepage number and the codec name comes from codec_for_acp. A path
         # under C:\Program Files is ASCII, but a German machine's is not.
-        guest.tools = toolrules.inventory(
-            toolrep.parse_rows(hello.body or b"", caps))
+        _facts = toolrep.parse_rows(hello.body or b"", caps)
+        guest.tools = toolrules.inventory(_facts)
+        # PATH separately from the inventory: it is not a tool, it is the
+        # reason a tool that IS installed comes back "Bad command or file
+        # name". Every exec is a fresh shell, so the machine's own start-up
+        # scripts have not run.
+        guest.path = toolrules.path_dirs(_facts)
         if guest.tools:
             log.info("machine has: %s", ", ".join(
                 "%s (%s)" % (f.name, f.path) for f in guest.tools))
@@ -1382,7 +1389,7 @@ class Bridge:
                     # machine. Empty for any guest built before the body
                     # existed, which is every deployed one until it is
                     # reflashed -- and empty prints nothing at all.
-                    tools=guest.tools),
+                    tools=guest.tools, path=guest.path),
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.

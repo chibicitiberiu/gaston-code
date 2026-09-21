@@ -194,7 +194,7 @@ something you overwrote is asking them to do your work."""
 MAX_FACT_BLOCKS = 1
 
 
-def tools_block(found: "list") -> str:
+def tools_block(found: "list", path: "list | None" = None) -> str:
     r"""The inventory, plus the measured notes for what was found.
 
     `found` is `toolrules.inventory(...)`. Empty gives "" -- a heading over
@@ -228,6 +228,31 @@ def tools_block(found: "list") -> str:
         "nothing matched, not that the thing is missing.",
     ]
 
+    # THE PATH, STATED, because `Bad command or file name` names the PROGRAM
+    # and not the environment -- and three separate sessions read that as
+    # "the compiler is not installed" and went hunting the disk, which is
+    # exactly what the inventory above exists to prevent.
+    #
+    # PRINTED FROM DETECTION, never asserted, and that distinction was nearly
+    # lost. The corpus contains a measured `PATH=C:\WINDOWS;C:\WINDOWS\
+    # COMMAND` and a note saying the machine's start-up scripts had not run.
+    # Both were true when recorded and neither is true now: installing Open
+    # Watcom put SETVARS.BAT into AUTOEXEC.BAT, and `exec` inherits the
+    # client's environment (CreateProcessA with lpEnvironment=NULL,
+    # win/rpc/exec.cpp:180), so today the same command answers
+    # `...;C:\WATCOM\BINNT`. A measurement has a shelf life; printing the
+    # live value has none.
+    if path:
+        out += [
+            "",
+            "Commands run with this PATH:",
+            "",
+            "  " + ";".join(path),
+            "",
+            "As at connect: anything installed since is not on it yet, and a",
+            "tool above that is missing from it still runs by full path.",
+        ]
+
     # Shell notes are not counted against MAX_FACT_BLOCKS. Which shell is
     # present changes how every single command must be written, and unlike a
     # toolchain there is no moment when the agent could look it up first --
@@ -249,7 +274,8 @@ def tools_block(found: "list") -> str:
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
                   guest_root: str | None = None,
                   home: str | None = None,
-                  tools: "list | None" = None) -> str:
+                  tools: "list | None" = None,
+                  path: "list | None" = None) -> str:
     """Text appended to Claude Code's own system prompt.
 
     APPENDED, never substituted: the preset is what makes Claude Code work,
@@ -301,7 +327,7 @@ first, on a 640x480 screen, one request at a time. Batch your work and explain
 what you are about to do -- a run of separate requests is slow and is how
 people start approving things without reading them.
 
-{tools_block(tools or [])}
+{tools_block(tools or [], path)}
 
 ## Keep the old machine in mind
 

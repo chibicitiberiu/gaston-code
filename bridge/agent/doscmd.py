@@ -37,9 +37,16 @@ from __future__ import annotations
 
 import re
 
-#: Separators COMMAND.COM recognises. Unverified on the guest whether `&&`
-#: and `||` are honoured by Win9x COMMAND.COM at all (they may be CMD-only);
-#: splitting on a non-separator can only OVER-split, which fails safe.
+#: Separators COMMAND.COM recognises -- or rather, the ones a command might
+#: CONTAIN. Measured on the guest since this was written: `&`, `&&` and `||`
+#: are NOT separators to Win9x COMMAND.COM. It answers `Too many parameters
+#: - &` and runs nothing, seen in three separate sessions.
+#:
+#: They stay in this pattern anyway, and the reason is worth keeping straight:
+#: this is the GUARD's splitter, not a shell. Its job is to make sure no
+#: fragment of a command escapes inspection, so splitting on something that
+#: is not a separator can only OVER-split, which fails safe. Removing them
+#: would mean a command containing `&` got inspected as one long string.
 _SEPARATORS = re.compile(r"&&|\|\||[&|]")
 
 #: Redirection. `<` is an INPUT redirect -- a read -- and an early draft

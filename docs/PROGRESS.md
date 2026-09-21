@@ -2689,3 +2689,56 @@ executable. That is a harness error, not a property of anything here, and
 the app window is now closed between runs. And the baseline figures are
 inherited from the S1 session rather than re-measured alongside these, so
 they were taken on the same machine and task but not the same afternoon.
+
+### 2026-09-21 — what the machine knows, from the docs and from our own history
+
+Two mines, both primary sources, no web research. Open Watcom 1.9's own
+manuals (1,234 HTML pages, extracted with `7z` from the installer in `vm/`,
+so version-exact and offline) and this project's chat history -- 28 agent
+sessions on the guest plus 93 MB of our own development transcripts.
+
+**The verification pass mattered more than the mining.** The doc mine
+produced twelve tier-1 candidates. Run against the actual toolchain, three of
+the four shortlisted were wrong:
+
+- `-bt=windows` is 16-bit Windows -- true, but it fails LOUDLY: `cannot open
+  win386.lib`, `DEFWINDOWPROC is an undefined reference`.
+- A `__watcall` window procedure was predicted to link clean and crash. It is
+  a hard compile error naming `__stdcall` in the message.
+- "`wcl386` compiles a `.res` as C source" is **false on 1.9**. The manual's
+  extension table says so; the tool recognises `.res` and hands it to the
+  linker. `wcl386 hello.c app.res` builds and binds.
+
+Only the fact already shipped survived, now confirmed at the byte level:
+`-l=nt` gives PE subsystem 3 (console), `-l=nt_win` gives 2 (GUI), both
+silently. `-l=win32` also gives 2, resolving a contradiction the docs could
+not settle on their own.
+
+**A measurement has a shelf life.** The history mine's best-looking find --
+"every exec is a fresh shell with a bare PATH", which explained the largest
+failure bucket -- was genuinely measured, and is now false. Installing Open
+Watcom put `SETVARS.BAT` into `AUTOEXEC.BAT`; `exec` inherits the client's
+environment (`CreateProcessA` with `lpEnvironment=NULL`,
+`win/rpc/exec.cpp:180`), so the same command now answers
+`C:\WINDOWS;C:\WINDOWS\COMMAND;C:\WATCOM\BINNT`. It was written into the
+prompt as fact before being re-checked. The fix is structural: PATH is
+**printed from live detection**, which cannot go stale, rather than asserted.
+Provenance needs a date, not just the word "measured".
+
+**Two bugs in shipped text.** `exec`'s description told the agent to pipe an
+answer into a prompting command -- contradicted by our own measurement at
+`win/rpc/exec.cpp:141` ("no stdin arrangement reaches them"). And the
+`command` parameter's schema still said "DOS conventions on Windows 9x",
+unconditional, on every machine -- the same leak fixed in the main
+description that morning, hiding one level down. `doscmd.py`'s "unverified
+whether `&&` is honoured" comment was three measurements out of date.
+
+**The acceptance run, and a gate that was wrong.** The block grew from ~2,025
+to ~2,536 characters. The test said text that does not reduce exec calls
+comes back out. Calls did not fall -- 5, against a 2-5 baseline -- and the
+text is staying, because the run showed what the call count cannot see: six
+earlier sessions ended by telling the user a window had appeared, which
+`start` gives no evidence for. This one ended *"since it returns no output
+either way, please check your screen to confirm"*. Same cost, one fewer false
+claim. The gate is now two-sided, and the facts added for failures this task
+never exercises are flagged as carrying a weaker warrant.
