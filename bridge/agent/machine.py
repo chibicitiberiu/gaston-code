@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 
+from . import toolnotes as notes
+
 
 def describe(h: dict) -> str:
     """One readable block of machine facts, from HELLO headers."""
@@ -179,6 +181,39 @@ Their machine is not your undo buffer, and asking them to reconstruct
 something you overwrote is asking them to do your work."""
 
 
+#: SPIKE SCAFFOLD -- hardcoded, and only correct for the one machine in
+#: `vm/`. It is here because it MEASURED well and is worth having until
+#: detection replaces it, not because this is the right shape.
+#:
+#: The A/B, same task and model and permission mode, Watcom already
+#: installed: 19 exec calls without it, 10 with. All nine of the baseline's
+#: orientation and layout calls disappeared -- `set`, `dir C:\`, and seven
+#: walks of the Watcom tree -- and the ten build-verify-run calls were
+#: unchanged. See docs/PROGRESS.md.
+#:
+#: WHAT IS TEMPORARY IS THE DELIVERY, NOT THE TEXT. The text lives in
+#: `toolnotes.py`, which is its permanent home; detection will decide which
+#: notes apply to a given machine and substitute the real root. Until then
+#: this asserts Watcom at C:\WATCOM unconditionally, which is true here and
+#: would be a lie on anyone else's box -- so it does not survive Stage 3.
+def _spike_tools() -> str:
+    root = "C:\\WATCOM"
+    return "\n".join([
+        "## What is installed on that machine",
+        "",
+        "  command.com  shell      C:\\WINDOWS\\COMMAND.COM",
+        f"  watcom       toolchain  {root}        verified on this machine",
+        "",
+        "That is what is installed. One command to confirm something is fine;",
+        "a survey of the disk is not. An entry being absent means nothing",
+        "matched, not that the thing is missing.",
+        "",
+        notes.NOTES["command.com"].render(""),
+        "",
+        notes.NOTES["watcom"].render(root),
+    ])
+
+
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
                   guest_root: str | None = None,
                   home: str | None = None) -> str:
@@ -232,6 +267,8 @@ Anything you do reach for on that machine will ask the user for permission
 first, on a 640x480 screen, one request at a time. Batch your work and explain
 what you are about to do -- a run of separate requests is slow and is how
 people start approving things without reading them.
+
+{_spike_tools()}
 
 ## Keep the old machine in mind
 

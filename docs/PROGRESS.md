@@ -2450,3 +2450,63 @@ and `clib3r.lib`'s `__DefaultExceptionHandler_` padding.
 **2384 tests green, four gates green, 303,044 → 337,540 bytes committed at
 load** across the whole of Phase 4 — the number that decides what else fits on
 a 32MB machine.
+
+### 2026-09-21 — S1: does telling the agent where the toolchain is actually stop it looking?
+
+The next phase wants the client to detect installed tools and the bridge to
+put them in the system prompt. That is guest C, a wire change, an INI format
+and a rule table — weeks — and all of it rests on one assumption no amount of
+code reading can settle: **models verify things.** Telling one that Open
+Watcom is at `C:\WATCOM` does not obviously stop it running `dir C:\WATCOM`.
+
+So it was measured before it was built. Write the Watcom note by hand, put it
+in the prompt, re-run the same task, count `mcp__machine__exec` calls.
+
+Controlled: same task text, same model (Sonnet), same permission mode (Auto),
+Watcom already installed on both runs, fresh conversation each time. That
+last condition is why the original 49-call transcript is not the baseline —
+about fifteen of those calls were hunting for a compiler that was not
+installed yet, and the user installed it mid-run.
+
+| | baseline | with the note |
+|---|---|---|
+| `mcp__machine__exec` calls | **19** | **10** |
+| wall clock | 146 s | 76 s |
+| cost | $0.4957 | $0.2041 |
+
+The totals understate it. The composition is the result:
+
+```
+BASELINE, first nine calls          WITH THE NOTE, first call
+  set                                 wcl386 -bt=nt -l=nt_win hello.c
+  dir C:\ /a:d
+  dir C:\WATCOM\BINW
+  dir C:\WATCOM
+  dir C:\WATCOM\BINNT
+  type C:\WATCOM\SETVARS.BAT
+  dir C:\WATCOM\LIB386
+  dir C:\WATCOM\H\NT\WINDOWS.H
+  dir C:\WATCOM\LIB386\NT
+```
+
+**All nine orientation-and-layout calls disappeared. The ten
+build-verify-run calls were identical in both.** The note removed exactly the
+category it targeted and touched nothing else — which is a much stronger
+signal than "the number went down", because it says the mechanism worked
+rather than that the run happened to be shorter.
+
+Both runs produced a real `Hello World` window on the guest, so the
+comparison is between two successes rather than a success and a give-up.
+
+Worth recording as an honest caveat: the baseline never made the `-l=nt` vs
+`-l=nt_win` mistake that cost seven calls in the original transcript. It read
+`SETVARS.BAT` and the directory layout instead and got there. So the 7 calls
+that fact was expected to save did not recur under these conditions, and the
+9 it did save were orientation. The win is real and it is not the win that
+was predicted.
+
+The premise holds, so the detection work is worth building. The note text is
+now `bridge/agent/toolnotes.py`, which is its permanent home; what is
+temporary is the hardcoded delivery in `machine.py`, which asserts Watcom at
+`C:\WATCOM` unconditionally. True on this machine, a lie on anyone else's,
+and replaced when detection lands.
