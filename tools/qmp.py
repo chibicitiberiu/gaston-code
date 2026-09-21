@@ -6,17 +6,29 @@ send-key read and write QEMU's own device model, so they work even when the
 guest is wedged -- which is exactly when you need them. No in-guest agent is
 involved, and none exists for Win9x anyway.
 
-Two transports, picked automatically: a raw QMP unix socket when one exists
-(qemu started by hand), otherwise `virsh qemu-monitor-command` against the
-libvirt domain. Same commands either way -- libvirt owns its own monitor
-socket and will not share it, so the raw path stops working the moment the
-domain is defined.
+Three transports, picked automatically and in this order:
+
+  * a raw QMP unix socket, when one exists (qemu started by hand via runvm.sh);
+  * libvirt's monitor passthrough over a PERSISTENT python connection;
+  * the same passthrough, shelled out to `virsh` once per command.
+
+Same commands either way -- libvirt owns its own monitor socket and will not
+share it, so the raw path stops working the moment the domain is defined,
+which is the normal case here.
+
+A click used to take 18 seconds, and both halves of that are worth knowing.
+The guest has a PS/2 mouse, so a move is a stream of relative deltas; it used
+to send one per pixel, ~700 of them, each shelling out to `virsh` at 22ms. So:
+send calibrated deltas instead of single pixels (see `_walk`, which is where
+the measurements are), and hold one libvirt connection open instead of forking
+per command -- 0.73ms against 22ms. A click is now about fifteen packets.
 
     tools/qmp.py shot out.ppm
     tools/qmp.py key ret
     tools/qmp.py click 208 190
     tools/qmp.py dclick 208 190
     tools/qmp.py type "hello"
+    tools/qmp.py home
     tools/qmp.py save clean
     tools/qmp.py load clean
     tools/qmp.py reset
@@ -31,6 +43,8 @@ import socket
 import subprocess
 import sys
 import time
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SOCK = "vm/qmp.sock"
 DOMAIN = os.environ.get("RC_DOMAIN", "retroclaude-win98")
@@ -52,40 +66,28 @@ KEYMAP = {
 }
 
 
-class Qmp:
-    def __init__(self, path: str = SOCK, timeout: float = 10.0):
-        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.s.settimeout(timeout)
-        self.s.connect(path)
-        self.f = self.s.makefile("rwb")
-        self._read()                      # greeting
-        self.cmd("qmp_capabilities")
+class Monitor:
+    """Everything that drives the guest's devices. Subclasses supply `cmd`.
 
-    def _read(self) -> dict:
-        while True:
-            line = self.f.readline()
-            if not line:
-                raise ConnectionError("qmp closed")
-            msg = json.loads(line)
-            if "event" in msg:            # ignore async events
-                continue
-            return msg
+    This used to be three classes that borrowed methods from each other by
+    assignment -- `shot = Qmp.shot`, and so on down a list that had to be
+    maintained by hand. A borrowed method reading `self.DOUBLE_GAP` needs
+    DOUBLE_GAP borrowed too, and it was not: `dclick` raised AttributeError
+    through one class and worked through the other. The list is gone; the
+    behaviour lives in one place and the subclasses differ only in how a
+    command reaches QEMU, which is the only thing that actually differs.
+    """
+
+    #: Set by subclasses. Used to key the pointer cache, so two domains
+    #: driven from the same checkout do not inherit each other's position.
+    name = "qmp"
 
     def cmd(self, name: str, **args) -> dict:
-        payload = {"execute": name}
-        if args:
-            payload["arguments"] = args
-        self.f.write((json.dumps(payload) + "\n").encode())
-        self.f.flush()
-        r = self._read()
-        if "error" in r:
-            raise RuntimeError(f"{name}: {r['error']['desc']}")
-        return r.get("return", {})
+        raise NotImplementedError
 
     # --- convenience -------------------------------------------------------
 
     def shot(self, path: str) -> None:
-        import os
         self.cmd("screendump", filename=os.path.abspath(path))
 
     def key(self, *keys: str) -> None:
@@ -127,49 +129,137 @@ class Qmp:
     # --- mouse -------------------------------------------------------------
     #
     # The guest has a PS/2 mouse, which is a RELATIVE device: there is no
-    # "move to 400,300". So home the pointer into the top-left corner with one
-    # oversized move, then walk to the target in single-pixel steps.
+    # "move to 400,300". Every move is a sequence of deltas, and the only
+    # question is how few of them it takes to land on the pixel asked for.
     #
-    # Single pixels, not one big delta, because Win98's pointer acceleration
-    # doubles any movement past its threshold (6 by default) and a batched
-    # 400px jump lands somewhere else entirely. Deltas of 1 never trip it.
+    # Win98 applies pointer acceleration, so a delta is not the distance
+    # travelled. Measured on this guest, by sending one packet from the
+    # corner and diffing two screendumps to find the cursor:
+    #
+    #     delta sent       1    2    3    4   ..   96   127   128+
+    #     px travelled     1    2    6    8   ..  192   254    254
+    #
+    # Three facts fall out of that, and the walk is built on them:
+    #
+    #   * The threshold is 3. Deltas of 1 and 2 are exact; 3 and everything
+    #     above it is doubled. Measured by sending one delta k times and
+    #     dividing -- a single small delta cannot be seen, because the two
+    #     cursor images overlap.
+    #   * It is doubled and ONLY ever doubled: no second threshold anywhere
+    #     in the range, so the scale is 1 or 2 and nothing else. 127 is the
+    #     ceiling -- QEMU clamps a ps2 delta to it, which is why 128, 192 and
+    #     255 all travel the same 254.
+    #   * **The scale is chosen per PACKET, not per axis.** One packet of
+    #     x=96 y=3 lands at (192, 6): y was doubled because x was big. This
+    #     is the fact that shapes the code -- a packet cannot mix a coarse
+    #     axis with a fine one, so the walk runs in two passes at a fixed
+    #     scale rather than per-axis.
+    #
+    # And x and y go in the SAME packet, which is what a real mouse does: one
+    # `input-send-event` carrying a rel on each axis produces one ps2 packet,
+    # so a diagonal costs max(|dx|,|dy|) packets rather than |dx|+|dy|.
+    #
+    # What does NOT work, and looks like it should: sending many small deltas
+    # in one command. QEMU accumulates the rel events of a single
+    # `input-send-event` and emits ONE packet at the closing sync, so a batch
+    # of two hundred 1s is a delta of 200 and accelerates exactly as one 200
+    # would. Fewer, larger, calibrated packets is the only way to cut the
+    # count, which is what this does.
+
     def _rel(self, events) -> None:
         self.cmd("input-send-event", events=events)
 
-    def _walk(self, dx: int, dy: int) -> None:
-        """Walk to the target in small steps, paced.
+    def _packet(self, dx: int, dy: int) -> None:
+        ev = []
+        if dx:
+            ev.append({"type": "rel", "data": {"axis": "x", "value": dx}})
+        if dy:
+            ev.append({"type": "rel", "data": {"axis": "y", "value": dy}})
+        if ev:
+            self._rel(ev)
+            time.sleep(self.STEP_GAP)
 
-        Two limits, both easy to trip and both silent when you do:
-        QEMU's PS/2 queue is short, so a burst of a few hundred motion events
-        is simply dropped; and Win98 accelerates, so the pointer travels
-        further than asked. Measured: with a step of 4 a requested (100,100)
-        landed at (197,192), almost exactly double. A step of 1 stays under
-        the acceleration threshold, and the sleep keeps the queue drained.
+    #: Largest delta worth sending. QEMU clamps a ps2 packet to 127, so
+    #: anything above travels no further, and 127 doubles to 254.
+    COARSE_MAX = 127
+
+    #: Smallest delta that is doubled, so the smallest the coarse pass may
+    #: send. Getting this wrong is silent and looks like nothing: it was 7
+    #: on the first attempt and every move landed exactly 14px long, because
+    #: two "fine" packets of 7 each travelled 14.
+    COARSE_MIN = 3
+
+    #: Largest delta that is NOT accelerated.
+    FINE_MAX = 2
+
+    def _walk(self, dx: int, dy: int) -> None:
+        """Walk the pointer by (dx, dy), landing on the pixel.
+
+        Coarse pass first, at the x2 scale, while either axis has more than
+        `2 * COARSE_MIN` left to cover; then a fine pass at x1 for the last
+        thirty-odd pixels. Both axes move in every packet, and the pass is
+        what fixes the scale, because the scale is a property of the packet.
         """
-        STEP = 1
-        for axis, d in (("x", dx), ("y", dy)):
-            sign = 1 if d >= 0 else -1
-            left = abs(d)
-            while left:
-                n = min(STEP, left)
-                self._rel([{"type": "rel", "data": {"axis": axis, "value": sign * n}}])
-                left -= n
-                time.sleep(0.004)
+        rx, ry = dx, dy
+
+        def step(r, lo, hi, scale):
+            """How much of `r` this packet should carry, in delta units."""
+            v = min(hi, abs(r) // scale)
+            if v < lo:
+                return 0
+            return v if r > 0 else -v
+
+        # Coarse: doubled. Guarded on `or`, not `and` -- one long axis is
+        # still worth coarse packets when the other is already close, and
+        # whatever the short axis contributes is doubled along with it.
+        while max(abs(rx), abs(ry)) >= 2 * self.COARSE_MIN:   # >= 6
+            px = step(rx, 0, self.COARSE_MAX, 2)
+            py = step(ry, 0, self.COARSE_MAX, 2)
+            if max(abs(px), abs(py)) < self.COARSE_MIN:
+                break                     # neither axis can reach the scale
+            self._packet(px, py)
+            rx -= 2 * px
+            ry -= 2 * py
+
+        # Fine: exact, 1 or 2 per packet. At most three, since both axes are
+        # now under 6.
+        while rx or ry:
+            px = step(rx, 0, self.FINE_MAX, 1)
+            py = step(ry, 0, self.FINE_MAX, 1)
+            self._packet(px, py)
+            rx -= px
+            ry -= py
+
+    #: Pacing between packets. There is no queue pressure left to speak of --
+    #: a full-screen move is about nine packets now, not fifteen hundred --
+    #: but the guest is a 200MHz TCG box and this costs nothing.
+    STEP_GAP = 0.01
 
     def home(self) -> None:
         """Pin the pointer at (0,0). A corner cannot be overshot.
 
-        A PS/2 packet carries a 9-bit signed delta, so one huge move is
-        clamped rather than obeyed -- hence a few repeats.
+        QEMU clamps a ps2 delta to 127, which Win98 doubles to 254, so this
+        is 1524px of travel against an 800x600 screen -- deliberate excess,
+        because overshooting a corner costs nothing and stopping short costs
+        a wrong click. This is the only self-correcting operation here, and
+        every move starts with it.
         """
         for _ in range(6):
-            self._rel([{"type": "rel", "data": {"axis": "x", "value": -200}},
-                       {"type": "rel", "data": {"axis": "y", "value": -200}}])
-            time.sleep(0.01)
+            self._packet(-self.COARSE_MAX, -self.COARSE_MAX)
 
     def move(self, x: int, y: int) -> None:
+        """Put the pointer at (x, y), by way of the corner.
+
+        Homing first looks wasteful and is not: it costs six packets, a move
+        across the whole screen costs eight, and the alternative -- caching
+        the last position between the separate `qmp.py click` processes that
+        dos.py spawns -- buys about 80ms while adding a way to be silently
+        WRONG. Nothing in the guest moves the pointer on its own, but a
+        person at the SPICE viewer does, and a cache that has gone stale
+        clicks somewhere nobody asked for. The corner cannot be stale.
+        """
         self.home()
-        time.sleep(0.15)
+        time.sleep(0.1)
         self._walk(x, y)
         time.sleep(0.15)
 
@@ -194,47 +284,108 @@ class Qmp:
         return self.cmd("query-status").get("status", "?")
 
 
-class VirshQmp:
-    """Same surface as Qmp, tunnelled through libvirt's monitor passthrough."""
+class SockMonitor(Monitor):
+    """Raw QMP over the unix socket runvm.sh asks qemu for."""
+
+    def __init__(self, path: str = SOCK, timeout: float = 10.0):
+        self.name = os.path.abspath(path)
+        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.s.settimeout(timeout)
+        self.s.connect(path)
+        self.f = self.s.makefile("rwb")
+        self._read()                      # greeting
+        self.cmd("qmp_capabilities")
+
+    def _read(self) -> dict:
+        while True:
+            line = self.f.readline()
+            if not line:
+                raise ConnectionError("qmp closed")
+            msg = json.loads(line)
+            if "event" in msg:            # ignore async events
+                continue
+            return msg
+
+    def cmd(self, name: str, **args) -> dict:
+        payload = {"execute": name}
+        if args:
+            payload["arguments"] = args
+        self.f.write((json.dumps(payload) + "\n").encode())
+        self.f.flush()
+        r = self._read()
+        if "error" in r:
+            raise RuntimeError(f"{name}: {r['error']['desc']}")
+        return r.get("return", {})
+
+
+def _unwrap(name: str, out: str) -> dict:
+    r = json.loads(out)
+    if "error" in r:
+        raise RuntimeError(f"{name}: {r['error']['desc']}")
+    return r.get("return", {})
+
+
+class LibvirtMonitor(Monitor):
+    """libvirt's monitor passthrough over one persistent connection.
+
+    Identical wire traffic to the `virsh` path below and 30x cheaper, because
+    it does not fork a process and re-open the libvirt connection for every
+    one of the several hundred events a single mouse move costs. This is the
+    normal transport: the domain is defined, so the raw socket does not exist.
+    """
 
     def __init__(self, domain: str = DOMAIN):
-        self.domain = domain
+        import libvirt
+        import libvirt_qemu
+        self._qemu = libvirt_qemu
+        self.name = domain
+        self.conn = libvirt.open(URI)
+        if self.conn is None:
+            raise RuntimeError(f"cannot open {URI}")
+        self.dom = self.conn.lookupByName(domain)
+
+    def cmd(self, name: str, **args) -> dict:
+        payload = {"execute": name}
+        if args:
+            payload["arguments"] = args
+        return _unwrap(name, self._qemu.qemuMonitorCommand(
+            self.dom, json.dumps(payload), 0))
+
+
+class VirshMonitor(Monitor):
+    """The same passthrough, shelled out. Kept for a machine without the
+    python bindings; it works, and a mouse move on it takes 18 seconds."""
+
+    def __init__(self, domain: str = DOMAIN):
+        self.name = domain
 
     def cmd(self, name: str, **args) -> dict:
         payload = {"execute": name}
         if args:
             payload["arguments"] = args
         out = subprocess.run(
-            ["virsh", "-c", URI, "qemu-monitor-command", self.domain,
+            ["virsh", "-c", URI, "qemu-monitor-command", self.name,
              json.dumps(payload)],
             capture_output=True, text=True, check=True).stdout
-        r = json.loads(out)
-        if "error" in r:
-            raise RuntimeError(f"{name}: {r['error']['desc']}")
-        return r.get("return", {})
+        return _unwrap(name, out)
 
-    # Borrowed method by method rather than by inheriting, which is what this
-    # class has always done -- but a borrowed method that reads `self.X` needs
-    # X borrowed too, and DOUBLE_GAP was not. `dclick` raised AttributeError
-    # through this class and worked through the other one.
-    DOUBLE_GAP = Qmp.DOUBLE_GAP
 
-    shot = Qmp.shot
-    key = Qmp.key
-    type = Qmp.type
-    status = Qmp.status
-    _rel = Qmp._rel
-    _walk = Qmp._walk
-    home = Qmp.home
-    move = Qmp.move
-    click = Qmp.click
+#: Old names. Nothing outside this file imports them, but the docs do.
+Qmp = SockMonitor
+VirshQmp = VirshMonitor
 
 
 def connect():
     if os.path.exists(SOCK):
-        return Qmp()
+        return SockMonitor()
+    try:
+        return LibvirtMonitor()
+    except ImportError:
+        pass                              # no python3-libvirt; fall back
+    except Exception as e:                # domain not defined, session gone
+        print(f"qmp: libvirt: {e}; falling back to virsh", file=sys.stderr)
     if shutil.which("virsh"):
-        return VirshQmp()
+        return VirshMonitor()
     raise SystemExit(f"no {SOCK} and no virsh -- is the guest running?")
 
 
@@ -252,6 +403,8 @@ def main() -> int:
         q.type(" ".join(rest))
     elif verb == "move":
         q.move(int(rest[0]), int(rest[1]))
+    elif verb == "home":
+        q.home()
     elif verb == "click":
         # `click X Y double` means the same as `dclick X Y`.
         #
