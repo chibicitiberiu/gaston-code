@@ -90,8 +90,13 @@ typedef struct {
     char          sess[64];
 } rc_net;
 
+/* `tools` and `tools_len` are the machine's own inventory, carried as
+ * HELLO's BODY rather than as headers -- the header array caps at 32 with
+ * most of it spent, values cap at 256, and an inventory is neither a
+ * capability enum nor twenty bytes. NULL and 0 are fine and mean "nothing
+ * to say", which is what every client built before this sent. */
 int  rc_net_start(rc_net *n, HWND notify, const char *host, int port,
-                 const char *secret);
+                 const char *secret, const void *tools, unsigned tools_len);
 void rc_net_stop(rc_net *n);
 int  rc_net_send(rc_net *n, const char *type,
                  const char *const *keys, const char *const *vals, int nkv,

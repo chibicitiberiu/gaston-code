@@ -319,7 +319,7 @@ static int do_connect(rc_net *n)
     } while (0)
 
 int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
-                 const char *secret)
+                 const char *secret, const void *tools, unsigned tools_len)
 {
     WSADATA wsa;
     char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
@@ -496,7 +496,13 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
     HDR("manifest",   RC_STR(RC_CAP_MANIFEST));
 
-    if (rc_net_send(n, "HELLO", keys, vals, nkv, NULL, 0) != 0) {
+    /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
+     * own because the bridge builds the agent's system prompt inside the
+     * same call that consumes HELLO, before it starts reading any further
+     * frames -- so anything sent afterwards arrives too late to be in the
+     * prompt for that session, which is every session on a fresh
+     * connection. A bridge that does not understand it ignores it. */
+    if (rc_net_send(n, "HELLO", keys, vals, nkv, tools, tools_len) != 0) {
         rc_log("net: HELLO failed");
         set_state(n, RC_FAILED);
         return -1;

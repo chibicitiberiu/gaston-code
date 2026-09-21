@@ -2510,3 +2510,130 @@ now `bridge/agent/toolnotes.py`, which is its permanent home; what is
 temporary is the hardcoded delivery in `machine.py`, which asserts Watcom at
 `C:\WATCOM` unconditionally. True on this machine, a lie on anyone else's,
 and replaced when detection lands.
+
+### 2026-09-21 — Phase 4.18: the machine tells the agent what it has
+
+S1 measured the premise; this is the delivery. The hardcoded Watcom paragraph
+in `machine.py` is gone and the same text now arrives because the machine
+said what it had.
+
+**Three layers, and the split is the point.**
+
+The guest answers two questions per entry — what is this environment variable
+worth, and does this file exist — and reports the answers. It does not decide
+that a toolchain *is* Open Watcom, does not walk up from a marker to a root,
+and has no notion of one source beating another. `win/tools_detect.ini` says
+what to look at; `win/app/tooldet.cpp` looks. An earlier draft put an ordered
+rule engine on the guest: source dispatch, parent hops, OR-ed proof files.
+Several hundred lines, in the layer with 28KB free, that could not be changed
+without reflashing a 1998 PC.
+
+The rules live in `bridge/agent/toolrules.py`, in Python, where they are
+tested in milliseconds and edited without a guest rebuild. `toolrep.py` reads
+the wire rows; `toolnotes.py` holds what is known about each tool;
+`machine.py`'s `tools_block` assembles the prompt text.
+
+**The inventory rides in HELLO's body.** Not a frame of its own, and the
+reason is a timing fact rather than a preference: `_attach` builds the
+session — which freezes the system prompt — before `_pump` starts reading
+anything else. A `TOOLS` frame sent immediately after connect would arrive
+after the prompt every single time, on every fresh connection, which is the
+case that matters. `docs/PLAN.md:912` had already blessed this channel when
+it rejected a `sysinfo` *tool*: "HELLO already sends it and the system prompt
+already states it."
+
+**Measured on the guest, end to end.** Detection reported:
+
+```
+machine     env  PATH=C:\WINDOWS;C:\WINDOWS\COMMAND;C:\WATCOM\BINNT
+command.com env  COMSPEC=C:\WINDOWS\COMMAND.COM
+command.com file C:\WINDOWS\COMMAND.COM
+command.com file C:\COMMAND.COM
+watcom      env  WATCOM=C:\WATCOM
+watcom      env  INCLUDE=C:\WATCOM\H;C:\WATCOM\H\NT
+watcom      file C:\WATCOM\BINNT\WCC386.EXE
+debug       file C:\WINDOWS\COMMAND\DEBUG.EXE
+```
+
+and the bridge turned it into `command.com (C:\WINDOWS\COMMAND.COM), debug
+(C:\WINDOWS\COMMAND\DEBUG.EXE), watcom (C:\WATCOM)` — the root recovered from
+the marker, the seen file preferred over `WATCOM` and `COMSPEC`, and the
+second `C:\COMMAND.COM` ignored because the first listed marker wins.
+
+Asked on a fresh conversation which compiler was installed and how to build a
+windowed app, the agent answered in **2 seconds with no `exec` calls at all**:
+`wcl386 -bt=nt -l=nt_win hello.c`, with the `-l=nt` trap explained. That is
+S1's result reproduced through detection instead of a hardcoded string.
+
+**Two things this cost, stated plainly.**
+
+The prompt grows by ~1,400 characters, about 40% on the ~3,500 a fresh
+conversation runs with. It is bought deliberately and `MAX_FACT_BLOCKS = 1`
+is what keeps it bought: N inventory rows, at most one resident toolchain
+note. A second measured toolchain goes in as a row and nothing more. Without
+that cap the budget would be honest only for as long as the feature was
+unsuccessful.
+
+The guest gained ~4KB of BSS (`g_sections` and `g_rows`, both file-static
+rather than stack, because a 4KB frame steps over the guard page). Nothing is
+held twice: rows are written once, into the buffer that goes on the wire.
+
+**Where the notes are resident and not behind a lookup.** The draft made
+`-l=nt_win` a skill the model could open. An agent that does not doubt `-l=nt`
+never goes looking for a Watcom skill — and `session.py:51` already records
+this exact failure with Glob and Grep, which sat behind ToolSearch and often
+were simply never found. Skills are deferred, not rejected; the trigger to
+revisit is a second measured toolchain on one machine.
+
+#### Four bugs, three of them found by the tests that were written for them
+
+**`toolcheck.exe` printed CRLF where the wire carries LF.** The C runtime
+opens stdout in text mode. The check binary exists so that one producer
+serves the guest and the tests, and it was quietly producing a *different*
+format: every stated byte count was one short and the bridge's parser
+correctly refused every row. It read as a broken parser. `setmode(fileno
+(stdout), O_BINARY)` — and this is precisely the "second implementation that
+happens to agree" that a cross-language agreement test exists to rule out.
+It failed on its first run.
+
+**`up=2` could not describe `[turboc]`.** Turbo C 2.01 installs flat
+(`C:\TC\TCC.EXE`), 3.x uses `C:\TC\BIN\TCC.EXE`, and both are listed because
+either may be what is on the disk. A hop count is per-section: right for one,
+and it turns the other into `C:` — a wrong root presented as *verified*,
+after which the agent sets INCLUDE to `C:\INCLUDE` and every compile fails
+for a reason it has been told not to explore. Replaced with `bins`: the rule
+names the directories a compiler is found in, and one is dropped only if it
+is actually there. Found by a test asserting the rules and the shipped INI
+cannot drift.
+
+**A bare `C:` is not a directory.** It is that drive's *current* directory,
+so a root written that way means something different every time it is used.
+`_parent` returns `C:\`.
+
+**The hand-written wire fixture was wrong again.** Same failure as during S1:
+counted byte lengths, parser rejected every row, and the length check was
+doing its job. Fixtures now compute their counts. A fixture whose invariant
+is "I counted right" will be wrong again.
+
+#### Verified, and what was not
+
+`make -C win check` clean: no NT-only imports, no CMOV in our code, no
+unbounded strings, no static constructors, no frame within 400 bytes of the
+4096 gate. 2,567 Python tests, including twelve under Wine feeding
+`toolcheck.exe`'s bytes straight into the bridge's parser.
+
+Not settled: **the floppy dialog.** `SetErrorMode(SEM_FAILCRITICALERRORS)`
+wraps the whole scan, and a `tools.ini` pointing at `A:\TASM.EXE` on the
+guest returned immediately with no dialog and no false positive. But this VM
+has no floppy drive configured at all (`domblklist` shows `hda` and `hdc`),
+so INT 24h may simply never have fired. What is proven is that an
+unreadable drive costs nothing; what is not is that the suppression works,
+because the condition could not be created. The call stays in — it is one
+line of insurance against freezing the message pump behind a system-modal
+dialog owned by nothing visible.
+
+Also honest: a reconnect does **not** rebuild a live session, so a
+conversation already open when an older client reconnects keeps the prompt it
+was built with. The next conversation gets the inventory. Rebuilding a
+session mid-conversation to refresh a prompt would throw away its state,
+which is a worse trade.

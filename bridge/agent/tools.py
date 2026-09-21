@@ -63,25 +63,38 @@ def build(bridge, guest=None) -> dict:
         # see, so it states the era rather than assuming it.
         "Run a command on the connected machine (the old computer the user is "
         "sitting at), and return its output. By default the command runs "
-        "through the system shell, so shell built-ins, pipes and redirection "
-        "work -- on Windows 9x that is COMMAND.COM, which is 16-bit. Output is "
+        "through the system shell, whichever that machine has. Output is "
         "captured as the console codepage and capped at 32KB. The user must "
         "approve every call on their own screen, so prefer one command that "
         "answers the question over several that explore.\n\n"
-        "ONE COMMAND, AND ONE LINE. COMMAND.COM is not cmd.exe: `&`, `&&` "
-        "and `||` are not separators and produce `Too many parameters - &`, "
-        "and a command containing a newline is a `Syntax error`. There is no "
-        "`2>&1` either -- it redirects stdout into a FILE LITERALLY NAMED "
-        "`&1`, which then synchronises to the proxy. To run several steps, "
-        "write a .bat file into the mirrored folder and run that; it is one "
-        "approval instead of several as well. Measured on the guest, where "
-        "an agent spent four round trips discovering each of these.\n\n"
+        # NO SHELL SYNTAX HERE, deliberately, and it was here for a while.
+        #
+        # A tool description is unconditional: every machine gets it. The
+        # COMMAND.COM rules that used to sit in this paragraph are wrong on
+        # a 4DOS box, where `&&` works, and wrong on the NT 4 and Windows
+        # 3.1 targets CLAUDE.md's first standing rule says this surface has
+        # to survive. They moved to `toolnotes.py` and are now selected by
+        # what the machine reported having -- which is the cheapest
+        # available proof the design is portable rather than a Win98 special
+        # case, since pointing this at NT 4 changes the text with no bridge
+        # change at all.
+        #
+        # One command per call is NOT a shell fact and stays:
+        "ONE COMMAND PER CALL. Whether commands can be chained, and with "
+        "what, depends on the shell that machine has -- the system prompt "
+        "says which one it is and what it accepts. To run several steps "
+        "regardless of shell, write a script file into the mirrored folder "
+        "and run that; it is also one approval instead of several.\n\n"
+        # The provenance names the machine it was measured on; the RULE is
+        # stated generally, because "a program that prompts reads the
+        # console directly and cannot be fed from here" is a fact about the
+        # transport, not about any one shell.
         "IMPORTANT: the command must be non-interactive. Anything that stops "
-        "to ask a question -- `del *.*` and `format` ask 'Are you sure "
-        "(Y/N)?' -- will HANG until the timeout kills it, because on Windows "
-        "9x those prompts are read from the console device and cannot be fed "
-        "from here. Measured, not assumed. Pipe an answer in instead "
-        "(`echo y | del c:\\tmp\\*.*`), or use a form that does not ask.",
+        "to ask a question -- a delete or a format asking 'Are you sure "
+        "(Y/N)?' -- will HANG until the timeout kills it: that prompt is "
+        "read from the machine's own console and there is no way to answer "
+        "it from here. Measured on the guest, not assumed. Pipe an answer in "
+        "instead, or use a form that does not ask.",
         # A FULL JSON SCHEMA, not the `{name: Annotated[...]}` shorthand.
         #
         # The shorthand marks EVERY property required -- `"required":

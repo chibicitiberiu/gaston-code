@@ -53,11 +53,11 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
 OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
-       optmenu.o input.o hostdlg.o toolbar.o export.o cache.o workdir.o workcopy.o workdlg.o net.o \
+       optmenu.o input.o hostdlg.o toolbar.o export.o cache.o workdir.o workcopy.o workdlg.o tooldet.o net.o \
        frameproto.o log.o ini.o str.o path.o htmlview.o miniz.o exec.o rpc.o \
        sync.o syncrpc.o)
 
-.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck workcheck
+.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -133,6 +133,17 @@ $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 # `stash` takes the incoming file in one mode and the target's own in the
 # other, one character apart at the call site, and swapping them would still
 # compile and still report success while putting the wrong version live.
+# What tool detection found, in the wire encoding -- one producer for the
+# guest and for the tests, so the format Python parses is the format that
+# ships. Takes a directory so it can run under Wine against a synthetic tree
+# with its own INI, without the toolchains actually being installed.
+TOOLCHECK_OBJS = $(addprefix $(BUILD)/,toolcheck.o tooldet.o str.o log.o)
+toolcheck: $(BUILD)/toolcheck.exe
+$(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  file {$(TOOLCHECK_OBJS)}
+	@echo "built $@"
+
 WORKCHECK_OBJS = $(addprefix $(BUILD)/,workcheck.o workcopy.o path.o str.o \
                  log.o sync.o miniz.o)
 workcheck: $(BUILD)/workcheck.exe
@@ -166,7 +177,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 # The cost is a few seconds. A green suite that tested the previous commit is
 # worth far less than that.
 all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
-     netcheck rpccheck probe htmlspike capscheck workcheck
+     netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.

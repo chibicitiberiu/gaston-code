@@ -148,10 +148,19 @@ bigger one.  Add or edit:
 
 and reboot.  The default is 256 bytes and PATH plus INCLUDE do not fit.
 
-A first program:
+A first program, as a console app:
 
-  CD C:\WATCOM\SAMPLES
   wcl386 -l=nt hello.c
+
+A WINDOWED one is a different target and this is the part that costs an hour:
+
+  wcl386 -bt=nt -l=nt_win hello.c user32.lib gdi32.lib kernel32.lib
+
+`-l=nt` links the console subsystem, and the linker cheerfully says
+"creating a Windows NT character-mode executable" while you are waiting to
+see a window.  `nt_win` is the GUI one.  The spelling is not in wcl386's own
+help; it is in SAMPLES\WIN\GENERIC\WIN32\MAKEFILE, which is the reason
+the samples are on this disc.
 
 Tools are in C:\WATCOM\BINNT.  wcl386 drives the compiler and linker in one
 step; wcc386 (C), wpp386 (C++), wlink, wmake and wrc are the separate pieces.

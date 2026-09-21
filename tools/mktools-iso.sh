@@ -22,10 +22,19 @@ cp "$HERE/build/win/netcheck.exe"    "$STAGE/NETCHECK.EXE" 2>/dev/null || true
 # code, never the platform -- CopyFile, MoveFile and the 8.3 aliasing
 # underneath them are exactly the layer Wine reimplements.
 cp "$HERE/build/win/workcheck.exe"   "$STAGE/WORKCHK.EXE" 2>/dev/null || true
+# Tool detection, printing exactly the bytes HELLO carries. On the guest it
+# answers two things Wine cannot: how long a real FAT scan takes, and whether
+# a path on a drive with no disk in it raises the system-modal "There is no
+# disk in drive A:" that would freeze the app's message pump.
+cp "$HERE/build/win/toolcheck.exe"   "$STAGE/TOOLCHK.EXE" 2>/dev/null || true
 # vm/retrocl.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
 # the Wine-tier default of 127.0.0.1 when it exists.
 cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true
 cp "$HERE/vm/retrocl.ini"      "$STAGE/RETROCL.INI" 2>/dev/null || true
+# What to look for on the machine. Without this on the CD the detector finds
+# nothing and the feature is inert -- it fails silently, because "no INI" and
+# "nothing installed" produce the same empty report by design.
+cp "$HERE/win/tools_detect.ini" "$STAGE/TOOLSDET.INI" 2>/dev/null || true
 
 # The transcript's cold-start document, GENERATED from the bridge's own
 # stylesheet so there is exactly one source of truth.
@@ -71,6 +80,12 @@ COPY D:\RETROCL.INI C:\RETRO\retroclaude.ini > NUL
 REM The cold-start transcript document. Without it the app shows a bare grey
 REM rectangle until a bridge answers, which is also when it most needs to say
 REM something. Long name deliberately: the app opens view.htm beside itself.
+REM Long name again, and for the same reason as retroclaude.ini above: the
+REM detector opens tools_detect.ini beside the exe, and ISO level 1 can only
+REM carry TOOLSDET.INI. TOOLS.INI is the user's and is NEVER shipped -- it is
+REM read second so their additions win, and copying one over it on every
+REM install would throw those away.
+IF EXIST D:\TOOLSDET.INI COPY D:\TOOLSDET.INI C:\RETRO\tools_detect.ini > NUL
 IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\RETRO\view.htm > NUL
 IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\RETRO\spin.gif > NUL
 C:
@@ -97,7 +112,17 @@ HELLO98.EXE   minimal Win32 GUI app. If this does not start, the Open Watcom
 NETCHECK.EXE  headless framing + networking check. Needs the bridge:
                   NETCHECK <host> <port> <secret> "<prompt>"
 
+TOOLCHK.EXE   prints what tool detection found, in the wire encoding:
+                  TOOLCHK [<directory holding the INIs>]
+              The same code the client runs, so what this prints is what
+              the bridge is told.
+
 RETROCL.EXE   the GUI client. Reads RETROCL.INI from its own directory.
+
+TOOLSDET.INI  what to look for when reporting which tools this machine has.
+              Installed as tools_detect.ini and REPLACED on every install.
+              To add something of your own, put it in TOOLS.INI beside it:
+              that file is never shipped and is read second, so it wins.
 
 Copy these to C:\RETRO before running, so they can write their log files.
 TXT

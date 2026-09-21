@@ -102,3 +102,58 @@ def test_the_tools_are_bound_to_a_guest_not_just_the_bridge():
         assert "guest" in params, (
             f"Bridge.{name} still resolves the guest itself, so the tool "
             f"cannot say which machine it means")
+
+
+# --- a tool description is unconditional -----------------------------------
+#
+# Every machine that connects gets this text, whatever it is running. That is
+# what makes it the wrong place for anything true of only one shell: `&&`
+# works on a 4DOS box and on the NT 4 and Windows 3.1 targets CLAUDE.md's
+# first standing rule says this surface has to survive. Shell facts moved to
+# `toolnotes.py`, selected by what the machine actually reported having --
+# which is also the cheapest available proof the design is portable rather
+# than a Win98 special case, since pointing the bridge at NT 4 changes the
+# text with no bridge change at all.
+
+import asyncio
+
+from bridge.agent import tools as machine_tools
+
+
+def _descriptions() -> dict:
+    srv = machine_tools.build(None, None)["machine"]["instance"]
+    listed = asyncio.run(srv._request_handlers["tools/list"].handler(None, None))
+    return {t.name: (t.description or "") for t in listed.tools}
+
+
+def test_exec_does_not_name_one_machines_shell():
+    d = _descriptions()["exec"]
+    for leak in ("COMMAND.COM", "cmd.exe", "4DOS"):
+        assert leak not in d, f"exec's description names {leak}"
+
+
+def test_exec_does_not_carry_one_shells_syntax():
+    r"""`&&` and `2>&1` are COMMAND.COM facts. They were here, they were
+    correct for the measured machine, and they were wrong for every other
+    one -- which is a tool description asserting something it cannot know."""
+    d = _descriptions()["exec"]
+    for leak in ("&&", "||", "2>&1", "Too many parameters", ".bat"):
+        assert leak not in d, f"exec's description carries {leak}"
+
+
+def test_exec_still_says_one_command_per_call():
+    """Not a shell fact: the transport sends one command and waits for one
+    exit code, whatever is running it."""
+    assert "ONE COMMAND PER CALL" in _descriptions()["exec"]
+
+
+def test_exec_points_at_the_prompt_for_the_shell_specifics():
+    """Dropping the facts without saying where they went would cost the
+    round trips they were added to save."""
+    assert "system prompt" in _descriptions()["exec"]
+
+
+def test_exec_still_warns_that_an_interactive_command_hangs():
+    """This one is about the transport rather than the shell -- there is no
+    console to answer a prompt from -- so it stays, phrased generally."""
+    assert "non-interactive" in _descriptions()["exec"]

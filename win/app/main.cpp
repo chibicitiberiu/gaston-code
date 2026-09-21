@@ -33,6 +33,7 @@
 #include "app/toolbar.h"
 #include "app/export.h"
 #include "app/cache.h"
+#include "app/tooldet.h"
 #include "app/workdir.h"
 #include "app/workdlg.h"
 #include "net/caps.h"
@@ -1369,6 +1370,9 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
 static void try_connect(HWND hwnd)
 {
+    const char *tools;
+    unsigned tools_len = 0;
+
     status_refresh();
     /* SHARING OFF before saying hello.
      *
@@ -1393,7 +1397,15 @@ static void try_connect(HWND hwnd)
      * senders on one socket and corrupted the queue. rc_net_stop is a no-op
      * when there is nothing to stop. */
     rc_net_stop(&g_net);
-    if (rc_net_start(&g_net, hwnd, g_cfg.host, g_cfg.port, g_cfg.secret) != 0) {
+    /* WHAT THIS MACHINE HAS, carried on HELLO so the bridge can tell the
+     * agent before it writes the system prompt. Cached: this function runs
+     * again every few seconds while the bridge is down, and a rescan per
+     * retry would walk the FAT on a loop for an answer that cannot change
+     * without a restart. The scan itself suppresses critical-error dialogs,
+     * which matters because we are on the thread that pumps messages. */
+    tools = rc_tooldet_cached(g_exe_dir, &tools_len);
+    if (rc_net_start(&g_net, hwnd, g_cfg.host, g_cfg.port, g_cfg.secret,
+                     tools, tools_len) != 0) {
         /* Say it ONCE per outage, not once per retry.
          *
          * Appending on every attempt filled the transcript with hundreds of

@@ -75,6 +75,8 @@ from .files.sync import Entry as SyncEntry, Type as SyncType
 from .files.sync import AckResult, GetResult, ScanResult
 from .files.syncrun import SyncError
 from .agent.session import TOOLS, Session
+from .agent import toolrep, toolrules
+from .agent.toolrules import Found
 
 log = logging.getLogger("bridge.server")
 
@@ -176,6 +178,14 @@ class GuestSession:
     # merely unset, guessing Win9x defaults instead of reading what the
     # client actually declared. See docs/audit/02-bridge-python.md #02.22.
     caps: "C.Caps | None" = None
+
+    #: What that machine has installed, as HELLO's body said and the rules in
+    #: bridge/agent/toolrules.py read it. Set once per CONNECTION, not once
+    #: per session: it comes off HELLO, and every conversation opened on one
+    #: connection sees the same inventory. A guest built before this existed
+    #: sends no body and lands here as [], which is the same thing the prompt
+    #: does with "nothing was detected" -- says nothing at all.
+    tools: "list[Found]" = field(default_factory=list)
 
     #: What this guest is watching and how much of it fits: the paginator,
     #: the renderer, the per-stream coalescers, which page is on screen, and
@@ -793,6 +803,22 @@ class Bridge:
         guest.page_blocks = page_blocks
         guest.hello = dict(h)
         guest.caps = caps
+        # THE INVENTORY, off HELLO's body rather than a frame of its own.
+        #
+        # It has to be here, above _make_session below, because that call
+        # freezes the system prompt for the session -- and on a fresh
+        # connection that is the session the user then talks to. A TOOLS
+        # frame sent after connect would arrive after _pump starts reading,
+        # which is after this, which is too late every time.
+        #
+        # Decoded through `caps`, not the raw `acp` header: the header is a
+        # codepage number and the codec name comes from codec_for_acp. A path
+        # under C:\Program Files is ASCII, but a German machine's is not.
+        guest.tools = toolrules.inventory(
+            toolrep.parse_rows(hello.body or b"", caps))
+        if guest.tools:
+            log.info("machine has: %s", ", ".join(
+                "%s (%s)" % (f.name, f.path) for f in guest.tools))
 
         guest.set_link_speed(self.link_bps)
 
@@ -1350,7 +1376,13 @@ class Bridge:
                     guest.hello, self._work_dir(guest),
                     sync_dir=self._work_dir(guest) if self.sync_dir else None,
                     guest_root=guest.work_guest,
-                    home=(guest.hello or {}).get("sync_root") or ""),
+                    home=(guest.hello or {}).get("sync_root") or "",
+                    # From HELLO, so it is fixed for the life of the
+                    # connection and every conversation on it sees the same
+                    # machine. Empty for any guest built before the body
+                    # existed, which is every deployed one until it is
+                    # reflashed -- and empty prints nothing at all.
+                    tools=guest.tools),
             },
             # The per-guest values, not the process defaults: the menu changes
             # these and a later reconnect or fork has to keep the choice.

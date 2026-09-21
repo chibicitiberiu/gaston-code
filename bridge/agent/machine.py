@@ -181,42 +181,75 @@ Their machine is not your undo buffer, and asking them to reconstruct
 something you overwrote is asking them to do your work."""
 
 
-#: SPIKE SCAFFOLD -- hardcoded, and only correct for the one machine in
-#: `vm/`. It is here because it MEASURED well and is worth having until
-#: detection replaces it, not because this is the right shape.
+#: How many fact blocks may be resident at once, on top of the shells'.
 #:
-#: The A/B, same task and model and permission mode, Watcom already
-#: installed: 19 exec calls without it, 10 with. All nine of the baseline's
-#: orientation and layout calls disappeared -- `set`, `dir C:\`, and seven
-#: walks of the Watcom tree -- and the ten build-verify-run calls were
-#: unchanged. See docs/PROGRESS.md.
-#:
-#: WHAT IS TEMPORARY IS THE DELIVERY, NOT THE TEXT. The text lives in
-#: `toolnotes.py`, which is its permanent home; detection will decide which
-#: notes apply to a given machine and substitute the real root. Until then
-#: this asserts Watcom at C:\WATCOM unconditionally, which is true here and
-#: would be a lie on anyone else's box -- so it does not survive Stage 3.
-def _spike_tools() -> str:
-    root = "C:\\WATCOM"
-    return "\n".join([
+#: THE CAP IS LOAD-BEARING, not a tidiness preference. A fresh conversation's
+#: prompt is ~3,500 characters (`guest_root` is empty until the first tool
+#: call and nothing rebuilds the session), and one toolchain note is ~600 of
+#: them. Two measured toolchains on one machine and this block is a third of
+#: the prompt -- so the budget would be honest only for as long as the
+#: feature was unsuccessful. A second toolchain goes in as an inventory row
+#: and nothing more; if that starts costing calls, that is the trigger to
+#: look at skills, not to raise this number.
+MAX_FACT_BLOCKS = 1
+
+
+def tools_block(found: "list") -> str:
+    r"""The inventory, plus the measured notes for what was found.
+
+    `found` is `toolrules.inventory(...)`. Empty gives "" -- a heading over
+    an empty table is a paragraph the model reads on every request to learn
+    nothing, and "nothing was detected" is not the same claim as "nothing is
+    installed", which is why silence is the honest output.
+
+    Every note is rendered against the root that was actually FOUND. A user
+    with Watcom at `D:\OW` would otherwise get an inventory row saying
+    `D:\OW` and a note saying `C:\WATCOM` -- two authoritative sources
+    disagreeing, the more detailed one wrong.
+    """
+    if not found:
+        return ""
+
+    width = max(len(f.name) for f in found)
+    rows = [f"  {f.name:<{width}}  {f.kind:<9}  {f.path}" for f in found]
+    # The basis goes on its own aligned column so the eye reads down it.
+    pad = max(len(r) for r in rows)
+    rows = [f"{r:<{pad}}   {f.basis}" for r, f in zip(rows, found)]
+
+    out = [
         "## What is installed on that machine",
         "",
-        "  command.com  shell      C:\\WINDOWS\\COMMAND.COM",
-        f"  watcom       toolchain  {root}        verified on this machine",
+        *rows,
         "",
-        "That is what is installed. One command to confirm something is fine;",
-        "a survey of the disk is not. An entry being absent means nothing",
-        "matched, not that the thing is missing.",
-        "",
-        notes.NOTES["command.com"].render(""),
-        "",
-        notes.NOTES["watcom"].render(root),
-    ])
+        "Detected at connect from paths and environment variables, so it is",
+        "evidence and not proof -- an unconfirmed row in particular is the",
+        "machine's claim about itself. One command to confirm something is",
+        "fine; a survey of the disk is not. An entry being absent means",
+        "nothing matched, not that the thing is missing.",
+    ]
+
+    # Shell notes are not counted against MAX_FACT_BLOCKS. Which shell is
+    # present changes how every single command must be written, and unlike a
+    # toolchain there is no moment when the agent could look it up first --
+    # the first command fails before it knows to ask.
+    budget = MAX_FACT_BLOCKS
+    for f in found:
+        note = notes.NOTES.get(f.name)
+        if note is None:
+            continue
+        if f.kind != "shell":
+            if budget <= 0:
+                continue
+            budget -= 1
+        out += ["", note.render(f.path)]
+
+    return "\n".join(out)
 
 
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
                   guest_root: str | None = None,
-                  home: str | None = None) -> str:
+                  home: str | None = None,
+                  tools: "list | None" = None) -> str:
     """Text appended to Claude Code's own system prompt.
 
     APPENDED, never substituted: the preset is what makes Claude Code work,
@@ -268,7 +301,7 @@ first, on a 640x480 screen, one request at a time. Batch your work and explain
 what you are about to do -- a run of separate requests is slow and is how
 people start approving things without reading them.
 
-{_spike_tools()}
+{tools_block(tools or [])}
 
 ## Keep the old machine in mind
 

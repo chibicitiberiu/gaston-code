@@ -181,3 +181,140 @@ def test_the_conflict_path_agrees_with_the_sync_layer():
         os.path.dirname(workdir.rstrip("/")), ".gaston", "conflict")
     assert p.conflict_dir in out, (p.conflict_dir, out[:200])
 
+
+
+# --- the inventory block ----------------------------------------------------
+#
+# What the machine has, resident in the prompt rather than behind a lookup.
+# The reason it is resident is measured and is recorded in docs/PROGRESS.md:
+# the agent that typed `&` on COMMAND.COM did so with complete confidence,
+# and an agent that does not doubt `-l=nt` never goes looking for a note
+# telling it about `-l=nt_win`. A gate whose failure mode is silence is not
+# a gate. The cost is a bigger prompt on every request, which is why the
+# tests below are as much about the budget as about the text.
+
+from bridge.agent.machine import MAX_FACT_BLOCKS, tools_block
+from bridge.agent.toolrules import Found
+
+SHELL = Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", False)
+WATCOM = Found("watcom", "toolchain", r"C:\WATCOM", True)
+
+
+def test_nothing_detected_says_nothing_at_all():
+    """A heading over an empty table is a paragraph the model reads on every
+    request to learn nothing -- and "nothing was detected" is a different
+    claim from "nothing is installed"."""
+    assert tools_block([]) == ""
+
+
+def test_an_old_client_that_sends_no_body_gets_the_prompt_it_always_got():
+    """Every deployed guest is this case until it is reflashed. The feature
+    is dark, not broken."""
+    out = system_prompt(HELLO, "/w", tools=[])
+    assert "What is installed" not in out
+    assert "Everything the user says refers to THEIR machine" in out
+
+
+def test_the_inventory_names_what_was_found():
+    out = tools_block([SHELL, WATCOM])
+    assert r"C:\WINDOWS\COMMAND.COM" in out
+    assert r"C:\WATCOM" in out
+    assert "toolchain" in out
+
+
+def test_every_row_carries_how_it_is_known():
+    r"""A guess is not harmless here. The inventory is the only place a
+    toolchain is named, so it is the one the agent reaches for: `turboc
+    toolchain C:\TC` on a machine without it gets `tcc hello.c` for a Win32
+    GUI app Turbo C 2.01 cannot build at all, then a failure the agent has
+    been told not to go exploring about."""
+    out = tools_block([SHELL, WATCOM])
+    assert "not confirmed" in out
+    assert "verified on this machine" in out
+
+
+def test_the_block_permits_one_confirming_command_rather_than_forbidding_it():
+    """Models verify things, and asking one to suppress a correct instinct
+    does not work. Nine orientation calls collapsing to one is the win; nine
+    to zero was never on offer."""
+    out = tools_block([WATCOM])
+    assert "One command to confirm" in out
+    assert "survey" in out
+
+
+def test_an_absent_row_is_not_read_as_an_absent_tool():
+    out = tools_block([WATCOM])
+    assert "absent means" in out
+
+
+def test_a_note_is_written_against_the_root_that_was_found():
+    r"""The whole point of detection is finding a toolchain somewhere other
+    than the obvious place. A row saying `D:\OW` over a note saying
+    `C:\WATCOM` is two authoritative sources disagreeing, with the more
+    detailed one wrong."""
+    out = tools_block([Found("watcom", "toolchain", r"D:\OW", True)])
+    assert r"D:\OW\SETVARS.BAT" in out
+    assert "C:\\WATCOM" not in out
+
+
+def test_the_costliest_watcom_fact_is_resident():
+    """`-l=nt_win`. Seven exec calls in the baseline, and it is not in
+    wcl386's own help -- it is in a sample makefile."""
+    assert "-l=nt_win" in tools_block([WATCOM])
+
+
+def test_a_detected_tool_with_no_note_still_gets_its_row():
+    """Detection may guess; notes may not. A tool nobody has measured is
+    listed and left at that."""
+    out = tools_block([Found("pkzip", "tool", r"C:\PKZIP\PKZIP.EXE", True)])
+    assert "pkzip" in out
+
+
+def test_at_most_one_toolchain_note_is_resident():
+    """The cap is load-bearing: a fresh conversation's prompt is ~3,500
+    characters and one toolchain note is ~600 of them. Without this the
+    budget is honest only for as long as the feature is unsuccessful."""
+    both = tools_block([
+        WATCOM,
+        Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True),
+    ])
+    assert both.count("Open Watcom 1.9 at") == 1
+    assert MAX_FACT_BLOCKS == 1
+
+
+def test_a_second_toolchain_is_listed_but_not_explained():
+    """It goes in as an inventory row or it does not ship. If that starts
+    costing calls, that is the trigger to look at skills -- not to raise the
+    cap."""
+    out = tools_block([WATCOM, Found("turboc", "toolchain", r"C:\TC", True)])
+    assert r"C:\TC" in out          # listed
+    assert out.count("measured on this machine, not inferred") <= 1
+
+
+def test_the_shell_note_is_not_charged_against_the_toolchain_cap():
+    """There is no "look it up first" moment for a shell: the first command
+    fails before the agent could know to ask. So it is resident regardless of
+    what else was found."""
+    out = tools_block([SHELL, WATCOM])
+    assert "Too many parameters" in out
+    assert "-l=nt_win" in out
+
+
+def test_a_machine_with_only_a_shell_gets_the_shell_note():
+    out = tools_block([SHELL])
+    assert "2>&1" in out
+
+
+def test_the_block_stays_inside_its_budget():
+    """Measured against the branch that actually runs: a fresh conversation
+    has no committed folder, so its prompt is the ~3,500-character one for
+    its whole life. 1,400 is the number the plan bought this with."""
+    out = tools_block([SHELL, WATCOM])
+    assert len(out) < 2600, len(out)
+
+
+def test_the_block_sits_above_the_hardware_section():
+    """Order matters for what gets attended to. What is installed answers
+    "how do I do this"; the hardware notes answer "do it sparingly"."""
+    out = system_prompt(HELLO, "/w", tools=[SHELL, WATCOM])
+    assert out.index("What is installed") < out.index("Keep the old machine")

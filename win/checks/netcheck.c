@@ -129,7 +129,7 @@ static int slowsend_main(int argc, char **argv)
     if (!sink) { printf("FAIL: sink window\n"); return 2; }
 
     printf("connecting to %s:%d\n", host, port);
-    if (rc_net_start(&n, sink, host, port, secret) != 0) {
+    if (rc_net_start(&n, sink, host, port, secret, NULL, 0) != 0) {
         printf("FAIL: cannot connect\n");
         return 2;
     }
@@ -246,7 +246,7 @@ int main(int argc, char **argv)
     if (!g_sink) { printf("FAIL: sink window\n"); return 2; }
 
     printf("connecting to %s:%d\n", host, port);
-    if (rc_net_start(&g_net, g_sink, host, port, secret) != 0) {
+    if (rc_net_start(&g_net, g_sink, host, port, secret, NULL, 0) != 0) {
         printf("FAIL: cannot connect\n");
         return 2;
     }

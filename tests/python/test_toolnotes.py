@@ -9,9 +9,15 @@ So the invariants here are about provenance and about not hardcoding a path
 that detection exists to discover.
 """
 
+import configparser
+import pathlib
+
 import pytest
 
 from bridge.agent.toolnotes import NOTES, Note
+from bridge.agent.toolrules import RULES
+
+INI = pathlib.Path(__file__).resolve().parents[2] / "win" / "tools_detect.ini"
 
 
 def test_every_note_says_where_it_was_measured():
@@ -69,3 +75,22 @@ def test_a_note_is_immutable():
     place and have it leak into the next conversation."""
     with pytest.raises(Exception):
         NOTES["watcom"].title = "something else"
+
+
+# --- a note nothing can detect is a note nobody will ever read --------------
+
+def test_every_note_is_keyed_on_something_the_bridge_can_detect():
+    """The key is how a note gets selected. One that matches no rule is text
+    that can never be shown, which is the quiet way for a measured fact to
+    rot: nobody notices it is unreachable because nothing errors."""
+    unreachable = sorted(set(NOTES) - set(RULES))
+    assert not unreachable, f"notes with no detection rule: {unreachable}"
+
+
+def test_every_note_is_keyed_on_something_the_guest_looks_for():
+    """And the rule has to correspond to a section the SHIPPED INI asks
+    about, or the guest never reports that name and the rule never fires."""
+    cp = configparser.ConfigParser(interpolation=None, delimiters=("=",))
+    cp.read(INI, encoding="latin-1")
+    missing = sorted(set(NOTES) - set(cp.sections()))
+    assert not missing, f"notes nothing is looked for: {missing}"

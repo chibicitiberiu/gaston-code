@@ -84,6 +84,12 @@ class FakeSession:
         # bridge passed the guest's choice into the REBUILT session as well
         # as into the live one.
         self.permission_mode = kw.get("permission_mode", "default")
+        # The whole system_prompt dict, so a test can assert on text that was
+        # only ever true AT BUILD TIME. The tool inventory is the case: it
+        # has to be in the prompt this session was constructed with, and
+        # reading it back off the guest afterwards would pass even if the
+        # prompt had been frozen a moment too early.
+        self.system_prompt = kw.get("system_prompt")
         self.started = False
         self.interrupted = False
         FakeSession._seq += 1
@@ -200,7 +206,7 @@ class Harness:
         return b"".join(out)
 
     async def connect(self, secret="s", *, ver=None, cap=None,
-                      sess=None, hdrs=None):
+                      sess=None, hdrs=None, tools=None):
         r, w = await asyncio.open_connection("127.0.0.1", self.port)
         # Fresh connection means the bridge resets its compressor, so reset
         # in lockstep. Same for the frame reader.
@@ -208,6 +214,12 @@ class Harness:
         self._readers.pop(id(r), None)
         self._pending.pop(id(r), None)
         f = hello(secret, sess=sess)
+        if tools is not None:
+            # HELLO's BODY is the machine's tool inventory. Passing it here
+            # rather than through a later frame is the whole design: _attach
+            # builds the session -- and freezes the system prompt -- before
+            # _pump reads anything else.
+            f.body = tools
         if ver is not None:
             f.headers["ver"] = str(ver)
         if cap is not None:
@@ -2669,3 +2681,117 @@ async def test_an_unavailable_context_reading_is_absent_not_zero(harness):
 
     assert "ctx_pct" not in frame.headers
     await harness.close(writer)
+
+
+# --- the inventory rides in on HELLO ---------------------------------------
+#
+# A machine's tool list has exactly one moment when it can arrive: before
+# `_attach` builds the session, because that is where the system prompt is
+# frozen and a fresh connection's first session is the one the user then
+# talks to. `_attach` receives HELLO; `_pump` starts reading afterwards. So a
+# TOOLS frame sent right after connect would land after the prompt every
+# single time, and the feature would look like it worked while doing nothing.
+#
+# docs/PLAN.md already blessed this channel, rejecting a `sysinfo` TOOL with
+# the reason "HELLO already sends it and the system prompt already states
+# it".
+
+def _rows(*facts: tuple) -> bytes:
+    """Wire rows, with the byte counts COMPUTED.
+
+    Written by hand the first time, and the parser correctly rejected every
+    one of them -- which proved the length check works and cost an hour
+    looking for a bug in the bridge. A fixture whose invariant is "I counted
+    right" is a fixture that will be wrong again."""
+    out = b""
+    for name, kind, value in facts:
+        raw = value.encode("latin-1")
+        out += f"{name} {kind} {len(raw)} ".encode("latin-1") + raw + b"\n"
+    return out
+
+
+ROWS = _rows(("command.com", "file", r"C:\WINDOWS\COMMAND.COM"),
+             ("watcom", "file", r"C:\WATCOM\BINNT\WCC386.EXE"))
+
+
+async def test_a_hello_carrying_an_inventory_still_connects(harness):
+    r, w = await harness.connect(tools=ROWS)
+    frames = await harness.recv_until(r, {"READY"})
+    assert [f for f in frames if f.type == "READY"], [f.type for f in frames]
+    await harness.close(w)
+
+
+async def test_the_inventory_reaches_the_guest(harness):
+    r, w = await harness.connect(tools=ROWS)
+    await harness.recv_until(r, {"READY"})
+    got = {f.name: f.path for f in harness.bridge._guest.tools}
+    assert got == {"command.com": "C:\\WINDOWS\\COMMAND.COM",
+                   "watcom": "C:\\WATCOM"}
+    await harness.close(w)
+
+
+async def test_the_inventory_is_in_the_prompt_the_session_was_built_with(
+        harness):
+    """The point of the whole exercise. Asserting on `guest.tools` alone
+    would pass even if the prompt were built a moment too early -- which is
+    the failure this design exists to avoid, and it is invisible from the
+    outside."""
+    r, w = await harness.connect(tools=ROWS)
+    await harness.recv_until(r, {"READY"})
+    prompt = harness.bridge._guest.claude.system_prompt["append"]
+    assert "What is installed on that machine" in prompt
+    assert "-l=nt_win" in prompt
+    await harness.close(w)
+
+
+async def test_a_client_that_sends_no_body_connects_exactly_as_before(harness):
+    """EVERY DEPLOYED CLIENT IS THIS CASE until it is reflashed. Day one the
+    feature is dark, and dark must mean unchanged rather than degraded."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"READY"})
+    assert harness.bridge._guest.tools == []
+    prompt = harness.bridge._guest.claude.system_prompt["append"]
+    assert "What is installed on that machine" not in prompt
+    await harness.close(w)
+
+
+async def test_a_malformed_body_does_not_cost_the_user_their_machine(harness):
+    """The body is written by a program pointed at an INI the user can edit,
+    and it arrives mid-handshake. A bad row costs one inventory line; a
+    refusal costs the user their computer."""
+    r, w = await harness.connect(tools=b"\xff\xfe garbage not rows at all\n")
+    frames = await harness.recv_until(r, {"READY"})
+    assert [f for f in frames if f.type == "READY"], [f.type for f in frames]
+    assert harness.bridge._guest.tools == []
+    await harness.close(w)
+
+
+async def test_one_bad_row_does_not_lose_the_good_ones(harness):
+    r, w = await harness.connect(tools=b"watcom file 999 C:\\W\n" + ROWS)
+    await harness.recv_until(r, {"READY"})
+    assert [f.name for f in harness.bridge._guest.tools] == [
+        "command.com", "watcom"]
+    await harness.close(w)
+
+
+async def test_the_inventory_survives_a_reconnect_that_resends_it(harness):
+    r, w = await harness.connect(tools=ROWS)
+    await harness.recv_until(r, {"READY"})
+    await harness.close(w)
+    r2, w2 = await harness.connect(tools=ROWS)
+    await harness.recv_until(r2, {"READY"})
+    assert len(harness.bridge._guest.tools) == 2
+    await harness.close(w2)
+
+
+async def test_reconnecting_from_an_older_client_clears_the_inventory(harness):
+    """Not stale-but-plausible. If the machine at the other end stops
+    reporting, saying nothing is the honest answer -- the alternative is an
+    inventory describing a computer that is no longer connected."""
+    r, w = await harness.connect(tools=ROWS)
+    await harness.recv_until(r, {"READY"})
+    await harness.close(w)
+    r2, w2 = await harness.connect()
+    await harness.recv_until(r2, {"READY"})
+    assert harness.bridge._guest.tools == []
+    await harness.close(w2)
