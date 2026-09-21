@@ -22,6 +22,9 @@ might be the start of ``**bold**`` and you cannot tell yet.
 
 from __future__ import annotations
 
+from ..files import caps as C
+from ..wire import fold
+
 import html as _html
 import re
 from dataclasses import dataclass
@@ -563,14 +566,21 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 # guest treats #s as optional for exactly that reason.
 SKELETON = ("<html><head>"
             "<meta http-equiv=\"Content-Type\" "
-            "content=\"text/html; charset=windows-1252\">"
+            "content=\"text/html; charset=%s\">"
             "<style>%s</style></head>"
             "<body><div id=\"t\"></div><div id=\"l\"></div>"
             "<div id=\"s\"></div></body></html>")
 
 
 def document(css: str | None = None) -> str:
-    return SKELETON % (css if css is not None else STYLESHEET)
+    """The live view's skeleton.
+
+    The charset is the connection's, not a literal: `link.send_html` encodes
+    this document's updates with `fold`, and a <meta> naming a different
+    table than the bytes were written with is mojibake by construction.
+    """
+    return SKELETON % (C.html_charset(fold.codec()),
+                       css if css is not None else STYLESHEET)
 
 
 def export_document(title: str, body: str, when: str = "") -> str:
@@ -594,7 +604,8 @@ def export_document(title: str, body: str, when: str = "") -> str:
     head += "</div>"
     return ("<html><head>"
             "<meta http-equiv=\"Content-Type\" "
-            "content=\"text/html; charset=windows-1252\">"
+            "content=\"text/html; charset=" + C.html_charset(fold.codec())
+            + "\">"
             "<title>" + esc(title or "Conversation") + "</title>"
             "<style>" + STYLESHEET + EXPORT_CSS + "</style></head>"
             "<body>" + head + body + "</body></html>")

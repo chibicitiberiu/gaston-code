@@ -27,6 +27,7 @@ from .files import manifest
 from .status import EXEC_STATUS_PROSE, ExecStatus, SyncStatus
 from .wire import fold
 from .agent import machine
+from .agent import profiles
 from .agent.registry import Folders, Registry, Settings
 from .wire.coalesce import Coalescer
 from .wire.compress import StreamCompressor
@@ -805,6 +806,16 @@ class Bridge:
         guest.page_blocks = page_blocks
         guest.hello = dict(h)
         guest.caps = caps
+        # BIND THE DISPLAY CODEPAGE FOR THIS CONNECTION, here, because this is
+        # the first moment it is known and everything below writes text.
+        #
+        # `caps.acp` has been negotiated since the handshake was written and
+        # only the FILE layer read it. `fold` hardcoded cp1252 at six places
+        # and `protocol.py` at two more, so a client reporting acp=1251
+        # connected, synced its filenames perfectly, and saw every one of them
+        # as `??????.txt` in the transcript. Set once per connection; asyncio
+        # tasks spawned from here inherit it.
+        fold.use(caps.acp)
         # THE INVENTORY, off HELLO's body rather than a frame of its own.
         #
         # It has to be here, above _make_session below, because that call
@@ -822,7 +833,16 @@ class Bridge:
         # reason a tool that IS installed comes back "Bad command or file
         # name". Every exec is a fresh shell, so the machine's own start-up
         # scripts have not run.
-        guest.path = toolrules.path_dirs(_facts)
+        _shell = toolrules.shell_of(guest.tools)
+        guest.path = toolrules.path_dirs(_facts, _shell)
+        # The CONSOLE codepage, which is a different question from the ANSI
+        # one with a different answer -- win/net/net.cpp says exactly that and
+        # then never sent an answer, so `decode_oem` defaulted to cp437 for
+        # every machine. The shell declares it, because it is the shell that
+        # spawns the child whose bytes these are.
+        _oem = str(profiles.shell(_shell).get("oem_codepage", "")) if _shell else ""
+        if _oem:
+            fold.use(oem=_oem)
         if guest.tools:
             log.info("machine has: %s", ", ".join(
                 "%s (%s)" % (f.name, f.path) for f in guest.tools))
@@ -914,14 +934,35 @@ class Bridge:
     # agent's cwd INSIDE the mirror, everything it can write is mirrored, so
     # `_scan_strays` has nothing to find by construction.
 
-    #: Characters allowed in a folder name, and the cap. Deliberately
-    #: 8.3-safe: the name becomes a directory on a FAT volume on the other
-    #: side, and the guest declared its own path rules at handshake -- this
-    #: is the intersection every one of them accepts unchanged.
-    FOLDER_MAX = 8
+    #: The cap a client that declares nothing is assumed to want. 8, because
+    #: the assumed client aliases every long name to 8.3 -- see
+    #: `caps.SHORTNAME_MAX`. It is a DEFAULT now, not the rule: the rule is
+    #: `folder_max`, which asks the client.
+    FOLDER_MAX = C.SHORTNAME_MAX
+
+    #: A folder name is read by a person, in a title bar and a status line, so
+    #: it is capped for legibility as well as by the filesystem. A client with
+    #: long names gets a readable slice of the conversation title rather than
+    #: 255 characters of it.
+    FOLDER_MAX_LONG = 32
 
     @staticmethod
-    def folder_name(raw: str) -> str:
+    def folder_max(caps=None) -> int:
+        """How long this client's conversation folder may be.
+
+        `shortnames` has been on the wire since the handshake was written and
+        was discarded on arrival -- it counted toward `declared` and had no
+        field, so a client asking IN WRITING for the restrictive rule was
+        answered with a hardcoded 8. Now the 8 is what a silent client is
+        assumed to want, and a client that says otherwise is believed.
+        """
+        caps = caps if caps is not None else P.DEFAULT
+        if caps.shortnames:
+            return C.SHORTNAME_MAX
+        return min(caps.maxcomp, Bridge.FOLDER_MAX_LONG)
+
+    @staticmethod
+    def folder_name(raw: str, caps=None) -> str:
         """A folder name that is safe on both sides, or "" if nothing is left.
 
         Refuses rather than repairs anything carrying a separator or a `..`:
@@ -931,19 +972,34 @@ class Bridge:
         refused, because this is usually fed a CONVERSATION TITLE -- prose
         with spaces and punctuation in it -- and refusing "List files in
         C:\\RETRO" would mean no folder at all.
+
+        The illegal set comes from `caps`, not from a literal here. It used to
+        be spelled out -- separators, `..`, and `* ? " < > |` -- which is
+        COMMAND.COM's set written into the bridge while `caps.illegal` sat
+        negotiated and unread, and `paths._component_ok` did the same job
+        correctly two modules away.
         """
         raw = (raw or "").strip()
         if not raw:
             return ""
-        for bad in ("/", "\\", ":", "..", "*", "?", '"', "<", ">", "|"):
-            if bad in raw:
-                return ""
-        out = "".join(c for c in raw.upper()
+        caps = caps if caps is not None else P.DEFAULT
+        # Separators and `..` are refused whatever the client says: they are
+        # how a name leaves the folder, which is not a filesystem question.
+        bad = P.illegal_chars(caps) | {"/", ":", ".."}
+        if any(b in raw for b in bad):
+            return ""
+        # Uppercased only where the volume aliases, because the alias itself
+        # is uppercase. Elsewhere the title's own case is worth keeping.
+        text = raw.upper() if caps.shortnames else raw
+        out = "".join(c for c in text
                       if c.isascii() and (c.isalnum() or c in "-_"))
-        return out.strip("-_")[:Bridge.FOLDER_MAX]
+        out = out.strip("-_")[:Bridge.folder_max(caps)]
+        # Last word to the same check every synced path gets, so a folder
+        # cannot be called CON on a machine where that is a device.
+        return "" if out and P.component_ok(out, caps) else out
 
     @staticmethod
-    def _title_folder(title: str) -> str:
+    def _title_folder(title: str, caps=None) -> str:
         """A folder name from a conversation title, reduced not refused.
 
         The title is prose and the folder is 8.3, so punctuation goes and the
@@ -956,7 +1012,7 @@ class Bridge:
         for ch in (title or ""):
             keep.append(ch if (ch.isascii() and (ch.isalnum() or ch in "-_"))
                         else " ")
-        return Bridge.folder_name("".join(keep).replace(" ", ""))
+        return Bridge.folder_name("".join(keep).replace(" ", ""), caps)
 
     def _stored_work_dir(self, session_id: str) -> str:
         """The folder a stored conversation was started in, if it is ours.
@@ -1109,7 +1165,7 @@ class Bridge:
                 if r["id"] == guest.conv_id:
                     source = r.get("title") or ""
                     break
-        name = self._title_folder(source)
+        name = self._title_folder(source, guest.caps)
         if not name:
             return
 
@@ -1122,7 +1178,7 @@ class Bridge:
             if n > 99:
                 return
             tail = str(n)
-            name = stem[:Bridge.FOLDER_MAX - len(tail)] + tail
+            name = stem[:Bridge.folder_max(guest.caps) - len(tail)] + tail
 
         path = os.path.join(base, name)
         try:
@@ -1151,12 +1207,32 @@ class Bridge:
         if note not in self.synccoord.agent_notices:
             self.synccoord.agent_notices.append(note)
 
+    @staticmethod
+    def _sep_of(root: str) -> str:
+        r"""The separator this machine spells its own paths with.
+
+        Read off the root rather than declared, and that is the honest source:
+        the guest SENT this string, so whatever it joins with is what it uses.
+        `caps` has no separator field and adding one would ask the client to
+        repeat something it has already demonstrated.
+
+        Backslash only if the root actually contains one. This line used to be
+        `root.rstrip("\\") + "\\" + name` unconditionally -- the one place the
+        bridge spells a guest path, and it spelled it for exactly one family
+        of machines while `paths.py` carefully kept "/" as the wire separator
+        everywhere else.
+        """
+        return "\\" if "\\" in root else "/"
+
     def _guest_path(self, guest: GuestSession, name: str) -> str:
-        r"""`<mirror root>\<name>`, spelled the way the guest spells it."""
+        r"""`<mirror root><sep><name>`, spelled the way the guest spells it."""
         root = (guest.hello or {}).get("sync_root") or self.guest_sync_root
         if not root:
             return ""
-        return root.rstrip("\\") + "\\" + name if name else root
+        if not name:
+            return root
+        sep = self._sep_of(root)
+        return root.rstrip("\\/") + sep + name
 
     def guest_work_root(self, guest: GuestSession) -> str:
         r"""Where commands run, spelled the way the guest spells it.
@@ -1798,9 +1874,10 @@ class Bridge:
         # The bridge-side half is still a folder under --sync-dir, because
         # that is the tree this process can actually write to. What changed is
         # the GUEST'S half, which is the one the user chose.
-        name = self.folder_name(path.replace("\\", "/").rsplit("/", 1)[-1])
+        name = self.folder_name(
+            path.replace("\\", "/").rsplit("/", 1)[-1], guest.caps)
         if not name:
-            name = self.folder_name(guest.conv_id[:8]) or "WORK"
+            name = self.folder_name(guest.conv_id[:8], guest.caps) or "WORK"
         base = self.sync_dir
         if not base:
             await self._write_block(guest, H.error(

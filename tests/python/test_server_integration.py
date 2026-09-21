@@ -2795,3 +2795,56 @@ async def test_reconnecting_from_an_older_client_clears_the_inventory(harness):
     await harness.recv_until(r2, {"READY"})
     assert harness.bridge._guest.tools == []
     await harness.close(w2)
+
+
+# --- a folder name is the client's rules, not the bridge's --------------------
+
+def test_folder_length_follows_the_clients_declared_shortnames():
+    """`FOLDER_MAX = 8` was a constant, and `shortnames` -- the header that
+    says whether a volume aliases every long name to 8.3 -- was parsed only
+    far enough to count as "declared" and then dropped.
+
+    A client that aliases still gets 8. A client that says it does not gets a
+    readable name instead of a truncated one.
+    """
+    from bridge.files import caps as C
+    aliasing = C.from_hello({"shortnames": "1"})
+    long_names = C.from_hello({"shortnames": "0", "maxcomp": "255"})
+    assert Bridge.folder_max(aliasing) == 8
+    assert Bridge.folder_max(long_names) == Bridge.FOLDER_MAX_LONG
+
+    title = "List files in the RETRO folder"
+    assert Bridge._title_folder(title, aliasing) == "LISTFILE"
+    assert len(Bridge._title_folder(title, long_names)) > 8
+    # A silent client is still assumed to be the restrictive one.
+    assert Bridge._title_folder(title) == "LISTFILE"
+
+
+def test_a_folder_cannot_be_named_after_a_device_where_devices_are_reserved():
+    """`folder_name` had its own literal illegal set and no device check at
+    all, so `CON` came back as a perfectly good folder name on a machine
+    where opening it can block forever."""
+    from bridge.files import caps as C
+    assert Bridge.folder_name("CON", C.CONSTRAINED) == ""
+    assert Bridge.folder_name("CON", C.POSIX) == "CON"
+
+
+def test_illegal_characters_come_from_caps_not_from_a_literal():
+    from bridge.files import caps as C
+    # `*` is illegal on the restrictive client and ordinary on POSIX...
+    assert Bridge.folder_name("a*b", C.CONSTRAINED) == ""
+    # ...but a separator or a `..` is refused for everyone, because that is
+    # how a name leaves the folder rather than a filesystem question.
+    for caps in (C.CONSTRAINED, C.POSIX):
+        assert Bridge.folder_name("../etc", caps) == ""
+        assert Bridge.folder_name("a/b", caps) == ""
+        assert Bridge.folder_name("a\\b", caps) == ""
+
+
+def test_a_guest_path_is_joined_with_the_separator_the_guest_uses():
+    """The one place the bridge spells a guest path. It used to spell it with
+    a backslash unconditionally, while `paths.py` kept "/" as the wire
+    separator everywhere else on purpose."""
+    assert Bridge._sep_of("C:\\GASTON") == "\\"
+    assert Bridge._sep_of("/srv/gaston") == "/"
+    assert Bridge._sep_of("") == "/"

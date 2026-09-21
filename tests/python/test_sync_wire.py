@@ -400,7 +400,14 @@ def test_the_bridge_scan_filters_DIRECTORY_names_and_prunes(tmp_path):
     assert "con/x.c" not in rows and "aux/y.c" not in rows
     assert any("con/" in r and "reserved" in r for r in p.reports)
     # One report per refused directory, not one per file underneath it.
-    assert len([r for r in p.reports if "con" in r]) == 1
+    #
+    # Matched on the reported PATH rather than on "con" appearing anywhere in
+    # the line. The loose version counted the word inside the explanation too,
+    # so it broke the day that sentence stopped naming an OS and started
+    # saying "the connected machine" -- a test failing on prose it was never
+    # meant to be reading.
+    assert len([r for r in p.reports if r.startswith("skipped con/")]) == 1
+    assert len([r for r in p.reports if r.startswith("skipped aux/")]) == 1
 
 
 def test_the_bridge_scan_refuses_a_directory_path_over_max_path(tmp_path):

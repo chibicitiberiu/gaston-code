@@ -36,6 +36,7 @@ import os
 from collections import deque
 
 from . import cmdguard
+from . import toolrules
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 from ..status import PromptEndReason
@@ -88,16 +89,12 @@ class PermissionDesk:
     def _shell(self) -> str:
         """Which shell's rules to judge a command by.
 
-        Detection already answers this: the client reports what it found and
-        `toolrules.inventory` sorts shells first, precisely so the guard does
-        not have to guess. An empty answer is honest -- the guard then refers
-        every command to the user rather than judging it by whichever profile
-        happened to be the only one installed.
+        Detection already answers this -- the client reports what it found --
+        so the guard does not have to guess, and an empty answer is honest:
+        it then refers every command to the user rather than judging it by
+        whichever profile happened to be the only one installed.
         """
-        for found in getattr(self._guest, "tools", None) or ():
-            if getattr(found, "kind", "") == "shell":
-                return getattr(found, "name", "") or ""
-        return ""
+        return toolrules.shell_of(getattr(self._guest, "tools", None))
 
     @property
     def busy(self) -> bool:

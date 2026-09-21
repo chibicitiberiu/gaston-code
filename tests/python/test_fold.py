@@ -240,3 +240,126 @@ def test_unrepresentable_names_the_character():
     assert unrepresentable("del x\u2044y") == "\u2044"
     # The FIRST one, so the message names what the reader will look for.
     assert unrepresentable("a\u2502b\u2044c") == "\u2502"
+
+
+# --- the display codepage is the client's, not a literal ---------------------
+#
+# `caps.py` negotiates `acp`, maps it through a 28-entry table and REFUSES
+# rather than guesses. `paths.py` and `syncrun.py` honour it on every
+# filename. This module hardcoded cp1252 at six places and `protocol.py` at
+# two more, so the two halves disagreed about what machine they were talking
+# to -- and a client whose ANSI page is not 1252 connects today.
+
+import pytest
+
+from bridge.files import caps as C
+from bridge.view import html as H
+from bridge.wire import fold as foldmod
+
+
+@pytest.fixture
+def cp1251():
+    """A Russian Win98. `acp=1251` is in the table, so it connects."""
+    tokens = foldmod.use("cp1251", oem="cp866")
+    yield
+    for var, tok in zip((foldmod._codec, foldmod._oem), tokens):
+        if tok is not None:
+            var.reset(tok)
+
+
+CYRILLIC = "Привет.txt"     # "Privet.txt"
+
+
+def test_a_name_that_syncs_is_a_name_that_can_be_displayed(cp1251):
+    """The bug, stated as the contract it broke.
+
+    The file layer and the display layer have to agree about the machine.
+    They did not: this name round-tripped perfectly through `wire_encode`
+    and came out `??????.txt` in every transcript line, permission prompt
+    and export -- on a client the handshake accepts.
+    """
+    from bridge.files import paths as P
+    caps = C.from_hello({"acp": "1251"})
+    assert P.wire_decode(P.wire_encode(CYRILLIC, acp=caps.acp),
+                         acp=caps.acp) == CYRILLIC
+    assert foldmod.decode(foldmod.encode(CYRILLIC)) == CYRILLIC
+    assert b"?" not in foldmod.encode(CYRILLIC)
+
+
+def test_the_default_is_still_the_restrictive_assumption():
+    """Nothing bound means the machine this was built for."""
+    assert foldmod.codec() == foldmod.DEFAULT_CODEC
+    assert foldmod.oem_codec() == foldmod.DEFAULT_OEM
+
+
+def test_ascii_folds_identically_under_every_supported_codepage():
+    """Why the un-threaded frame builders are safe rather than lucky: every
+    page in `caps._ACP_CODECS` is an ASCII superset, so the forty-odd short
+    English strings encode the same under all of them."""
+    text = "Nobody answered the permission request within ten minutes."
+    seen = {foldmod.encode(text, cp) for cp in set(C._ACP_CODECS.values())}
+    assert len(seen) == 1
+
+
+def test_the_console_codepage_is_a_separate_question(cp1251):
+    """A Russian machine is cp1251 for its GUI and cp866 for its console.
+    `decode_oem` defaulted to cp437 for every machine, and `net.cpp` had
+    already written down that these are different questions."""
+    assert foldmod.oem_codec() == "cp866"
+    # 0x90 is 'R' in cp866 and a control character in cp1251.
+    assert foldmod.decode_oem(b"\x90") == "Р"
+    assert foldmod.decode_oem(b"\x90", "cp437") == "É"
+
+
+def test_the_exported_charset_matches_the_bytes_it_declares(cp1251):
+    """Two independent hardcodings of one assumption: `fold.encode` said
+    cp1252 and the <meta> tag said windows-1252. Correctly paired by
+    accident, wrong together on any other machine -- and the export is a file
+    the user keeps."""
+    doc = H.export_document("Notes", "<p>" + CYRILLIC + "</p>")
+    assert "charset=windows-1251" in doc
+    data = foldmod.encode(doc)
+    assert CYRILLIC.encode("cp1251") in data
+
+
+def test_a_folded_header_uses_one_table_both_ways(cp1251):
+    """`protocol.exportend` folded with `fold.encode` and decoded with a
+    literal cp1252, so the round trip could invent characters instead of
+    removing them."""
+    from bridge.wire.protocol import export_end
+    f = export_end(False, reason=CYRILLIC)
+    assert f.headers["reason"] == CYRILLIC
+
+
+def test_two_guests_with_different_codepages_do_not_see_each_others():
+    """The assumption the context-variable design rests on, asserted rather
+    than reasoned about.
+
+    `asyncio.start_server` runs each connection's handler in its own task,
+    so each gets its own copy of the context; `_attach` is AWAITED from
+    `_on_client`, so binding inside it reaches the connection's own context
+    and every task spawned from there afterwards. If either half were false
+    -- if `_attach` were spawned rather than awaited, say -- one guest would
+    silently take another's codepage, and the symptom would be mojibake on a
+    machine nobody changed.
+    """
+    import asyncio
+
+    async def attach(cp):
+        foldmod.use(cp)
+
+    async def spawned():
+        return foldmod.codec()
+
+    async def one_connection(cp):
+        await attach(cp)
+        return cp, foldmod.codec(), await asyncio.create_task(spawned())
+
+    async def both():
+        return await asyncio.gather(one_connection("cp1251"),
+                                    one_connection("cp932"))
+
+    for want, here, in_task in asyncio.run(both()):
+        assert here == want and in_task == want
+    # ...and nothing leaked into the process-wide default.
+    assert foldmod.codec() == foldmod.DEFAULT_CODEC

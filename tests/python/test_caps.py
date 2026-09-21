@@ -157,3 +157,57 @@ def test_eol_cr_is_refused_per_path_too():
     declared itself perfectly legally."""
     from bridge.files import attrs as A
     assert "cr" not in A.EOL_NAMES
+
+
+# --- capabilities the client declared and the bridge threw away --------------
+#
+# Both of these were sent by the guest, counted toward `declared`, and then
+# discarded -- so the bridge took the permissive branch on a client that had
+# asked in writing for the restrictive one, which is the exact failure the
+# restrictive-default design in this module exists to prevent.
+
+def test_shortnames_is_read_and_not_merely_counted():
+    """`from_hello({'shortnames':'0'}) == from_hello({'shortnames':'1'})` was
+    True: the key appeared only in the `declared` tuple and had no field.
+
+    The guest has sent RC_CAP_SHORTNAMES since the handshake was written
+    (win/net/net.cpp), and `Bridge.FOLDER_MAX = 8` hardcoded the very rule it
+    describes.
+    """
+    short = C.from_hello({"shortnames": "1"})
+    long_ = C.from_hello({"shortnames": "0"})
+    assert short != long_
+    assert short.shortnames == C.SHORTNAMES_83
+    assert long_.shortnames == C.SHORTNAMES_NONE
+    with pytest.raises(C.CapsError):
+        C.from_hello({"shortnames": "2"})
+
+
+def test_maxdepth_is_declared_like_every_other_client_rule():
+    """It lived in `paths.MAX_DEPTH` as a bare 16 mirroring the guest's own
+    RC_SYNC_MAX_DEPTH, with sixty lines explaining that it belongs to that
+    client's walk -- and every client got it.
+
+    Wrong in both directions: a deeper walker has trees refused for nothing,
+    a shallower one gets the silent never-scanned-again bug the comment
+    describes.
+    """
+    assert C.from_hello({}).maxdepth == C.MAXDEPTH_GASTON
+    assert C.from_hello({"maxdepth": "8"}).maxdepth == 8
+    assert C.POSIX.maxdepth > C.MAXDEPTH_GASTON
+    with pytest.raises(C.CapsError):
+        C.from_hello({"maxdepth": "0"})
+
+
+def test_a_shallower_client_has_its_own_limit_enforced():
+    """The check has to read the DECLARED depth, not the default."""
+    from bridge.files import paths as P
+    shallow = C.from_hello({"maxdepth": "2"})
+    deep = "a/b/c/d/e/f.txt"
+    assert P.check(deep, guest_root="C:\\WORK", caps=shallow) is not None
+    assert P.check(deep, guest_root="C:\\WORK", caps=C.from_hello({})) is None
+
+
+def test_the_summary_names_both_so_a_failed_sync_can_be_read():
+    s = C.from_hello({"shortnames": "0", "maxdepth": "9"}).summary()
+    assert "maxdepth=9" in s and "shortnames=long" in s

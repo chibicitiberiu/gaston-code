@@ -29,8 +29,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[2] / "bridge"
 
 #: Lowercased needles. Deliberately narrow -- this is about naming a specific
 #: platform, not about the word "path".
-BANNED = ("windows 98", "windows 95", "win9x", "win95", "win98",
-          "ms-dos", "command.com", "cmd.exe", "4dos")
+#: `windows 9x` WITH A SPACE was missing, and `paths.py` was shipping
+#: "-- on Windows 9x this is the CON device" straight to the assistant. The
+#: test read clean for months while the invariant it exists to protect was
+#: broken in a live string, which is worse than having no test: a guard
+#: nobody can see failing is one nobody maintains.
+BANNED = ("windows 98", "windows 95", "windows 9x", "win 9x",
+          "win9x", "win95", "win98",
+          "windows 3.1", "windows nt", "ms-dos", "msdos",
+          "command.com", "cmd.exe", "4dos")
 
 #: `profiles/` is where naming a machine is the POINT, and it is not Python.
 #: `devtools/` is our own test harness, not the product.

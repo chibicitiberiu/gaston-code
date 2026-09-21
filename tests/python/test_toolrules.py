@@ -18,6 +18,8 @@ reads.
 import configparser
 import pathlib
 
+import logging
+
 import pytest
 
 from bridge.agent.toolrep import Fact
@@ -120,9 +122,25 @@ def test_a_trailing_backslash_is_not_carried_into_the_prompt():
     assert got[0].path == r"C:\WATCOM"
 
 
-def test_path_is_split_on_semicolons():
+def test_path_is_split_the_way_the_machines_shell_separates_it():
+    """`;` is COMMAND.COM's answer, and it comes from COMMAND.COM.
+
+    It was a literal in `path_dirs`, so a machine separating with `:` had its
+    whole PATH returned as one entry -- and the system prompt then stated
+    that as fact, which is the expensive kind of wrong: confidently, under an
+    instruction not to go and check.
+    """
     facts = [Fact("machine", "env", r"PATH=C:\WINDOWS;C:\WINDOWS\COMMAND;")]
-    assert path_dirs(facts) == [r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"]
+    assert path_dirs(facts, "command.com") == [r"C:\WINDOWS",
+                                              r"C:\WINDOWS\COMMAND"]
+
+
+def test_an_undeclared_separator_reports_nothing_rather_than_guessing(caplog):
+    """No PATH in the prompt costs one `set`. A wrong PATH costs more."""
+    facts = [Fact("machine", "env", "PATH=/usr/bin:/bin")]
+    with caplog.at_level(logging.WARNING):
+        assert path_dirs(facts) == []
+    assert "how PATH is separated" in caplog.text
 
 
 def test_path_is_empty_when_the_machine_did_not_report_it():

@@ -56,6 +56,16 @@ quote = '"'
 switch = "/"
 switch_max = 8
 
+# How PATH is separated. `;` here because `:` follows a drive letter, which
+# is the whole reason the two families differ.
+path_sep = ";"
+
+# What a spawned console child writes. NOT the ANSI codepage: this shell's
+# children write OEM, so `dir` output is cp437 while a window title from the
+# same machine is cp1252. Conflating the two is the classic encoding bug and
+# turns a directory listing into mojibake.
+oem_codepage = "cp437"
+
 # Extensions that make a leaf a program rather than a builtin, longest-match
 # irrelevant here because none is a suffix of another.
 exts = [".exe", ".com", ".bat"]

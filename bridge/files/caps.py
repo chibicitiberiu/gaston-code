@@ -89,6 +89,37 @@ EOL_CRLF = 1
 #: A refusal names the capability; the failure names corruption instead.
 EOL_CR = 2
 
+#: Whether the client's filesystem ALSO generates an 8.3 alias for every long
+#: name. NOT "only 8.3 names are allowed" -- a Win9x VFAT volume declares
+#: SHORTNAMES_83 and `maxcomp=255` at the same time, because it has both.
+#: The length limit is `maxcomp`'s job; this says the SHAPE of a name matters
+#: independently, because two long names can share one alias.
+#:
+#: The client has sent this since the handshake was written and the bridge
+#: threw it away: it counted toward `declared` and had no field, so
+#: `from_hello({'shortnames':'0'})` and `{'shortnames':'1'}` compared EQUAL.
+#: Meanwhile the one place the bridge caps a name to 8.3 -- the per-
+#: conversation folder -- carried a bare `FOLDER_MAX = 8`. A client asking in
+#: writing for the restrictive rule, answered with an assumption.
+SHORTNAMES_NONE = 0
+SHORTNAMES_83 = 1
+
+#: The longest name that survives on a volume that aliases. Eight, because
+#: the alias is `STEM~N.EXT` and a name of 8 or fewer with no extension IS
+#: its own alias -- nothing to collide with.
+SHORTNAME_MAX = 8
+
+#: How deep the client's own scanner walks. A CLIENT RULE like any other, and
+#: the one that never got a field: it sat in `paths.MAX_DEPTH` as a bare 16
+#: mirroring `win/sync/sync.h`'s RC_SYNC_MAX_DEPTH, with a forty-line comment
+#: explaining that it belongs to that specific client's walk.
+#:
+#: Wrong in both directions when it is assumed. A client that walks deeper has
+#: its trees refused for nothing; a client that walks SHALLOWER gets the silent
+#: bug the comment describes -- the path is pushed, acked, and then never
+#: reported by a scan again, so it reads as "deleted on the guest" forever.
+MAXDEPTH_GASTON = 16
+
 #: How many characters short of the path limit a DIRECTORY must stop. Win32
 #: reserves twelve so an 8.3 name still fits inside; Unix reserves none. A
 #: number rather than a flag because it is a number, and because a client with
@@ -133,6 +164,36 @@ _ACP_CODECS = {
 }
 
 
+#: A Python codec name -> the charset label to put in a <meta> tag. IE5 on
+#: the guest reads the exported transcript, and a document whose bytes and
+#: whose declared charset disagree renders as mojibake in a file the user
+#: keeps. The two used to be independently hardcoded -- `fold.encode` said
+#: cp1252 and `html.py` said `windows-1252` -- correctly paired by accident
+#: and wrong together on any other machine.
+_HTML_CHARSET = {
+    "utf-8": "utf-8", "latin-1": "iso-8859-1",
+    # The CJK pages have conventional IANA names that browsers of the era
+    # recognise; their `cpNNN` spellings are Python's, not the web's.
+    "cp932": "shift_jis", "cp936": "gb2312", "cp949": "euc-kr",
+    "cp950": "big5",
+}
+
+
+def html_charset(codec: str) -> str:
+    """What to declare in a <meta> tag for text encoded with `codec`."""
+    name = (codec or "").lower()
+    if name in _HTML_CHARSET:
+        return _HTML_CHARSET[name]
+    # `cp1252` -> `windows-1252`; the IANA name for the Windows ANSI pages.
+    # Everything else (cp437, cp866, cp932...) is accepted under its own
+    # name by every browser that can render it at all.
+    if name.startswith("cp") and name[2:].isdigit() and 1250 <= int(name[2:]) <= 1258:
+        return "windows-" + name[2:]
+    # The assumed client's label, derived rather than repeated: `Caps.acp`
+    # is the one place that says what a silent client is taken to be.
+    return name or html_charset(Caps.acp)
+
+
 def codec_for_acp(value: str | int | None) -> str | None:
     """A guest's reported ANSI codepage -> a Python codec name, or None.
 
@@ -171,6 +232,8 @@ class Caps:
     trailing: int = TRAILING_STRIPPED
     illegal: int = ILLEGAL_DOS
     eol: int = EOL_CRLF
+    shortnames: int = SHORTNAMES_83
+    maxdepth: int = MAXDEPTH_GASTON
     dirreserve: int = DIRRESERVE_WIN32
     workreserve: int = WORKRESERVE_GASTON
     maxpath: int = 260
@@ -210,7 +273,9 @@ class Caps:
                 f"eol={('lf', 'crlf', 'cr')[self.eol]} "
                 f"maxpath={self.maxpath} maxdir={self.maxdirpath} "
                 f"maxfile={self.maxfilepath} "
-                f"maxcomp={self.maxcomp} manifest=v{self.manifest}")
+                f"maxcomp={self.maxcomp} maxdepth={self.maxdepth} "
+                f"shortnames={'8.3' if self.shortnames else 'long'} "
+                f"manifest=v{self.manifest}")
 
 
 class CapsError(Exception):
@@ -276,6 +341,12 @@ def from_hello(h: dict) -> Caps:
         # matches, and every text file comes back crc_mismatch on every pass.
         # Loud, but the log points at corruption rather than at a capability.
         eol=_enum(h, "eol", (EOL_LF, EOL_CRLF), EOL_CRLF),
+        shortnames=_enum(h, "shortnames", (SHORTNAMES_NONE, SHORTNAMES_83),
+                         SHORTNAMES_83),
+        # A number, for the same reason `dirreserve` is one: a client with a
+        # different walk says so without anyone adding a field. The floor is 1
+        # because a client that cannot recurse at all still has a root.
+        maxdepth=_num(h, "maxdepth", MAXDEPTH_GASTON, 1, 4096),
         dirreserve=_num(h, "dirreserve", DIRRESERVE_WIN32, 0, 64),
         workreserve=_num(h, "workreserve", WORKRESERVE_GASTON, 0, 64),
         maxpath=_num(h, "maxpath", 260, 64, 65536),
@@ -289,6 +360,7 @@ def from_hello(h: dict) -> Caps:
 #: accident -- it is here so tests and future clients can name it.
 POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              trailing=TRAILING_KEPT, illegal=ILLEGAL_POSIX, eol=EOL_LF,
+             shortnames=SHORTNAMES_NONE, maxdepth=4096,
              dirreserve=DIRRESERVE_NONE,
              # Not a Windows rule: the `.gaston-tmp` convention is OURS, so a
              # POSIX client that commits by temp-and-rename needs the same room

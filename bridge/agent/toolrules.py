@@ -26,11 +26,14 @@ fine; a survey is not" rather than "do not check".
 
 from __future__ import annotations
 
-import posixpath
+import logging
+
 from dataclasses import dataclass
 
 from . import profiles
 from .toolrep import Fact
+
+log = logging.getLogger("bridge.toolrules")
 
 #: How a root is recovered from the marker file that proved it, LOADED FROM
 #: `bridge/profiles/<tool>.toml`. The marker is what exists; the root is what
@@ -156,10 +159,42 @@ def inventory(facts: list[Fact]) -> list[Found]:
     return out
 
 
-def path_dirs(facts: list[Fact]) -> list[str]:
-    """PATH, split. Reported unconditionally by the guest because every rule
-    wants it and no section has to ask for it."""
+def shell_of(found) -> str:
+    """Which shell this machine reported, or "" if it reported none.
+
+    One answer to this question, because two callers need it -- the system
+    prompt, which says how commands must be written, and the command guard,
+    which judges them. `inventory` already sorts shells first for exactly
+    this reason.
+    """
+    for f in found or ():
+        if getattr(f, "kind", "") == "shell":
+            return getattr(f, "name", "") or ""
+    return ""
+
+
+def path_dirs(facts: list[Fact], shell: str = "") -> list[str]:
+    """PATH, split the way this machine's shell separates it.
+
+    Reported unconditionally by the guest because every rule wants it and no
+    section has to ask for it.
+
+    THE SEPARATOR IS THE SHELL'S, not `;`. It was `;` in Python, so a machine
+    that separates with `:` had its entire PATH returned as one entry and the
+    system prompt then stated it as fact -- a wrong answer, stated
+    confidently, under an instruction not to go and check.
+
+    An undeclared separator returns nothing rather than guessing. The PATH
+    line is then absent from the prompt, which costs the assistant one `set`
+    and is strictly better than a PATH that is wrong.
+    """
+    sep = str(profiles.shell(shell).get("path_sep", "")) if shell else ""
     for f in facts:
         if f.kind == "env" and f.var == "PATH":
-            return [p for p in f.contents.split(";") if p.strip()]
+            if not sep:
+                log.warning("no shell profile declares how PATH is separated "
+                            "(shell=%r), so it is left out of the prompt "
+                            "rather than split wrongly", shell)
+                return []
+            return [p for p in f.contents.split(sep) if p.strip()]
     return []

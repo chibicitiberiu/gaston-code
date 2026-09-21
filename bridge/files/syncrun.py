@@ -78,7 +78,13 @@ class Pass:
     #: `Pass`, but `test_sync_wire.py` builds bare `Pass` subclasses that skip
     #: `__init__` to exercise `scan_bridge` in isolation, and those reach these
     #: directly -- verified live by `make test` before this was trimmed away.
-    guest_root = "C:\\WORK"
+    #: EMPTY, not a path. This used to read `C:\\WORK` -- a drive letter and a
+    #: separator, in behaviour rather than a comment, and a live input to the
+    #: MAX_PATH budget `P.check` measures. Nothing in production ever reads
+    #: it (`run()` calls `scan_guest`, which sets the real root from SYNCEND,
+    #: before anything is pushed), so naming one machine's convention here
+    #: bought nothing and asserted something the bridge had not been told.
+    guest_root = ""
     caps = C.Caps()
 
     def __init__(self, transport: "SyncTransport", caps: "C.Caps | None",
@@ -138,7 +144,9 @@ class Pass:
         #: run here, before a push -- the guest cannot create the file in order
         #: to tell us it is too long. Until SYNCEND arrives this is the
         #: conventional default; scan_bridge always runs after scan_guest.
-        self.guest_root = "C:\\WORK"
+        #: Empty rather than a guess: an invented root is a length budget
+        #: measured against a path this machine may not have.
+        self.guest_root = ""
         #: Rows established by a pull's ack, keyed by canonical path. The
         #: baseline takes its value from HERE and never from a re-scan of our
         #: own tree -- a re-scan could pick up a write the agent made during

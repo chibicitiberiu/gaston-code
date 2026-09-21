@@ -73,7 +73,14 @@ from . import caps as C
 # walking with RC_SYNC_MAX_DEPTH == 16 still lists the children of the 17th
 # level (they are enumerated by the call that is listing ITS parent), so
 # nothing is invisible until the 18th component.
-MAX_DEPTH = 16
+#
+# 04.36: DECLARED, not assumed. This is a client rule like `dirreserve` and
+# `maxcomp`, and it was the one such rule with no caps field -- sixty lines
+# arguing that it belongs to one specific client's walk, and a bare 16 that
+# every client got. It now lives in `caps.maxdepth`; this is the default a
+# client that says nothing is assumed to have, kept here so the paragraph
+# above still has something to point at.
+MAX_DEPTH = C.MAXDEPTH_GASTON
 
 # Reserved device names on Windows 9x. These are devices **in every directory**
 # and **with any extension** -- `aux.c` is the AUX device, not a file, and
@@ -118,6 +125,28 @@ class Skip:
         return f"{self.reason}: {self.detail}" if self.detail else self.reason
 
 
+def illegal_chars(caps=DEFAULT) -> set:
+    """Every character this client cannot hold in a name.
+
+    Public because `server.folder_name` had its own literal copy of this set
+    -- `("/", "\\", ":", "..", "*", "?", '"', "<", ">", "|")` -- written out
+    while `caps.illegal` sat negotiated and unread two modules away.
+    """
+    return _ILLEGAL_ALWAYS | (_ILLEGAL_DOS if caps.illegal else set())
+
+
+def component_ok(name: str, caps=DEFAULT) -> Skip | None:
+    """Is this a name the client can hold? `None` means yes.
+
+    The public face of the check `check()` runs per component, for callers
+    that have one name rather than a path -- naming a conversation's folder,
+    say. Reserved devices, illegal characters, trailing dots and length all
+    come from `caps`, so there is one answer to this question rather than a
+    second opinion per caller.
+    """
+    return _component_ok(name, caps)
+
+
 def _component_ok(name: str, caps=DEFAULT) -> Skip | None:
     if not name:
         return Skip("empty path component")
@@ -129,9 +158,9 @@ def _component_ok(name: str, caps=DEFAULT) -> Skip | None:
     if caps.devices and stem in _RESERVED:
         return Skip(
             "reserved device name",
-            f"{name!r} -- on Windows 9x this is the {stem.upper()} device in "
-            f"every directory, whatever the extension. Opening it can block "
-            f"forever.",
+            f"{name!r} -- {stem.upper()} is a device on the connected "
+            f"machine, in every directory and whatever the extension. "
+            f"Opening it can block forever.",
         )
 
     illegal = _ILLEGAL_ALWAYS | (_ILLEGAL_DOS if caps.illegal else set())
@@ -196,13 +225,13 @@ def check(relpath: str, *, guest_root: str, caps=DEFAULT,
     # its walk gives up, so there is nothing to react to afterwards, and a
     # path that slipped through would look identical to an ordinary file right
     # up until the SECOND pass quietly stopped seeing it.
-    if len(parts) > MAX_DEPTH + 1:
+    if len(parts) > caps.maxdepth + 1:
         return Skip(
             "path too deep",
             f"{len(parts)} components under {guest_root!r}; the machine's "
-            f"own scanner does not recurse past {MAX_DEPTH + 1}, so anything "
-            f"deeper would reach it on a push and then never be reported by "
-            f"a scan again")
+            f"own scanner does not recurse past {caps.maxdepth + 1}, so "
+            f"anything deeper would reach it on a push and then never be "
+            f"reported by a scan again")
 
     # The length that matters is what the guest would hold: its own BYTES,
     # prefix included. `len()` on the decoded string is the same number only

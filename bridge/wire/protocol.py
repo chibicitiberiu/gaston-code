@@ -89,7 +89,10 @@ def _unquote(value: str) -> str:
             raw.append(int(m.group(1), 16))
             i = m.end()
         else:
-            raw.extend(value[i].encode("cp1252", errors="replace"))
+            # The connection's codepage, not a literal: `_quote` folded
+            # with it on the way out, so decoding with a different table
+            # would invent bytes rather than reverse them.
+            raw.extend(value[i].encode(fold.codec(), errors="replace"))
             i += 1
     return fold.decode(bytes(raw))
 
@@ -496,7 +499,11 @@ def export_end(ok: bool, *, bytes_: int = 0, reason: str = "") -> Frame:
     """
     h = {"status": "ok" if ok else "error", "bytes": str(bytes_)}
     if reason:
-        h["reason"] = fold.encode(reason).decode("cp1252", "replace")
+        # Folded and back, so the header carries only what the guest can
+        # actually render. Through the CONNECTION's codepage, not a literal:
+        # the round trip has to use one table both ways or it invents
+        # characters rather than removing them.
+        h["reason"] = fold.decode(fold.encode(reason))
     return Frame("EXPORTEND", h)
 
 
