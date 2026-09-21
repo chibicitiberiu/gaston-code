@@ -1,4 +1,4 @@
-"""The DOS command guard: what reaches outside the mirrored folder.
+"""The command guard: what reaches outside the mirrored folder.
 
 This file is why the guard is trustworthy rather than merely plausible, and
 it is what will catch the next person who "simplifies" the containment rule.
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from bridge.agent.doscmd import reason
+from bridge.agent.cmdguard import reason
 
 #: The mirrored folder these cases are written against.
 ROOT = "C:\\GASTON\\CHAT1"
@@ -254,3 +254,125 @@ def test_nothing_found_is_not_a_grant():
     a contained command still returns None and the CALLER still asks."""
     assert ask("dir C:\\GASTON\\CHAT1") is None
     assert ask("copy C:\\GASTON\\CHAT1\\a C:\\GASTON\\CHAT1\\b") is None
+
+
+# --- the guard is the logic, the shell is the data ---------------------------
+#
+# Everything above judges COMMAND.COM, because that is the machine in the
+# next room. These assert the part that has no machine to check it against:
+# that the shell's GRAMMAR -- not merely its verb lists -- comes from its
+# profile, and that a shell the bridge has no rules for gets no verdict
+# rather than somebody else's.
+#
+# All three of these were measured as failures before they were tests.
+
+import logging
+
+from bridge.agent import cmdguard as G
+from bridge.agent import profiles
+from bridge.files import caps as C
+
+#: A second shell, POSIX-shaped: no drive letters, `/` separators, `$` and
+#: `~` as sigils, `-` switches. Nothing about it is Windows, which is the
+#: point -- if any of the guard's grammar is still Python, this is where it
+#: shows up as a wrong answer rather than an argument.
+SH = {"detect": {"kind": "shell"}, "shell": {
+    "separators": r"&&|\|\||[;&|]",
+    "redirect_write": r"(>>?)\s*(\S+)",
+    "variables": r"[$~`]",
+    "sep": "/", "quote": "\"'", "switch": "-", "switch_max": 12, "exts": [],
+    "read": ["ls", "cat", "pwd"], "write": ["rm", "cp", "mv"],
+    "src_dest": ["cp", "mv"], "move_like": ["mv"],
+}}
+
+SENSITIVE = C.Caps(case=C.CASE_SENSITIVE)
+
+
+@pytest.fixture
+def two_shells(monkeypatch):
+    """A bridge that knows two shells. Previously fatal to the guard."""
+    monkeypatch.setitem(profiles.ALL, "sh", SH)
+    monkeypatch.setattr(G, "_CACHE", {})
+    yield
+
+
+def test_a_second_shell_does_not_disable_the_guard(two_shells):
+    """The regression that made the whole profile refactor a half-measure.
+
+    `_T` was built once at import by counting profiles, and `reason()` had no
+    way to be told which shell to use -- so the moment a second `[shell]`
+    table existed, every command on EVERY machine became "unknown" and the
+    guard degraded to asking about everything. It failed safe and it made the
+    product unusable, which is why nothing caught it: the tests only ever had
+    one shell installed.
+    """
+    assert G.reason("rm /work/x", guest_root="/work", shell="sh",
+                    caps=SENSITIVE) is None
+    assert G.reason("rm /etc/passwd", guest_root="/work", shell="sh",
+                    caps=SENSITIVE) is not None
+    # ...and command.com is still judged by command.com's rules.
+    assert G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK",
+                    shell="command.com") is None
+    assert G.reason(r"del C:\WINDOWS\WIN.INI", guest_root=r"C:\WORK",
+                    shell="command.com") is not None
+
+
+def test_an_unnamed_shell_gets_no_verdict_rather_than_the_wrong_one(
+        two_shells, caplog):
+    """With two shells and no way to choose, the honest answer is a refusal.
+
+    Not a fallback. Four regexes -- including `^[A-Za-z]:` -- used to be
+    Python defaults, so this case kept resolving DRIVE LETTERS for a shell it
+    had no tables for.
+    """
+    with caplog.at_level(logging.ERROR):
+        why = G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK")
+    assert why is not None
+    assert "not one this bridge has rules for" in why
+    assert "did not say which" in caplog.text
+
+
+def test_the_variable_sigil_is_the_shells_own(two_shells):
+    """`$T` is a literal filename character to COMMAND.COM and a variable to
+    sh, and the guard has to believe each shell about its own syntax.
+
+    The old code asked `"%" in token`, which is right for COMMAND.COM and
+    silently wrong everywhere else: `rm /work/$T/x` resolved to a path inside
+    the mirror and the user was shown nothing.
+    """
+    why = G.reason("rm /work/$T/x", guest_root="/work", shell="sh",
+                   caps=SENSITIVE)
+    assert why is not None and "$T" in why
+    assert G.reason("rm /work/~/x", guest_root="/work", shell="sh",
+                    caps=SENSITIVE) is not None
+    # The same token under COMMAND.COM's rules is just a file name.
+    assert G.reason(r"del C:\WORK\$T\x", guest_root=r"C:\WORK",
+                    shell="command.com") is None
+
+
+def test_case_folding_follows_the_filesystem_not_the_shell():
+    """`caps.case` is negotiated at the handshake and was never read here.
+
+    On a case-sensitive machine `/WORK` and `/work` are different
+    directories, and folding made a write to one report as contained in the
+    other -- with nothing shown to the user. The shell profile must NOT be
+    what decides this: the same COMMAND.COM grammar is correct on a FAT
+    volume and on a case-sensitive one.
+    """
+    assert G.reason("del /WORK/x", guest_root="/work",
+                    caps=C.Caps(case=C.CASE_SENSITIVE)) is not None
+    assert G.reason("del /WORK/x", guest_root="/work",
+                    caps=C.Caps(case=C.CASE_FOLD)) is None
+    # Omitting caps assumes the restrictive default rather than inventing one.
+    assert G.reason("del /work/x", guest_root="/work") is None
+
+
+def test_every_shell_profile_declares_a_usable_grammar():
+    """A profile with verb lists but no grammar is worse than no profile: it
+    looks configured and decides nothing. Catches a half-written file."""
+    for name in profiles.shells():
+        g = G.grammar_for(name)
+        assert g.usable, f"{name} has guard tables but no usable grammar"
+        assert g.variables is not None, (
+            f"{name} does not say what an unresolvable token looks like, so "
+            f"every variable reference would resolve to a literal path")

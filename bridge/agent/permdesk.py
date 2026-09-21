@@ -35,7 +35,7 @@ import logging
 import os
 from collections import deque
 
-from . import doscmd
+from . import cmdguard
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 from ..status import PromptEndReason
@@ -84,6 +84,20 @@ class PermissionDesk:
         #: request tools in parallel, so the rest wait rather than racing for
         #: it. `GuestSession.perm_queue` forwards here for the same reason.
         self.queue: deque = deque()
+
+    def _shell(self) -> str:
+        """Which shell's rules to judge a command by.
+
+        Detection already answers this: the client reports what it found and
+        `toolrules.inventory` sorts shells first, precisely so the guard does
+        not have to guess. An empty answer is honest -- the guard then refers
+        every command to the user rather than judging it by whichever profile
+        happened to be the only one installed.
+        """
+        for found in getattr(self._guest, "tools", None) or ():
+            if getattr(found, "kind", "") == "shell":
+                return getattr(found, "name", "") or ""
+        return ""
 
     @property
     def busy(self) -> bool:
@@ -153,14 +167,23 @@ class PermissionDesk:
                 # is narrower. Measuring against the parent would call a
                 # write into a sibling conversation's folder "inside the
                 # mirror", which is the check inverted rather than loose.
-                # An empty root means nothing is mirrored, and doscmd.reason
-                # refuses outright on one rather than letting
+                # An empty root means nothing is mirrored, and
+                # cmdguard.reason refuses outright on one rather than letting
                 # `"".startswith("")` call every path contained.
-                warning = doscmd.reason(
+                #
+                # THE SHELL AND THE CAPS ARE BOTH PASSED, and neither used to
+                # be. Without the shell, the guard picked one by counting
+                # profiles, so adding a second shell disabled it entirely.
+                # Without the caps it folded case unconditionally, which on a
+                # case-sensitive machine calls `/WORK/x` contained in a mirror
+                # rooted at `/work`.
+                warning = cmdguard.reason(
                     str((args or {}).get("command") or ""),
                     cwd=str((args or {}).get("cwd") or ""),
                     guest_root=str(
-                        getattr(self._guest, "work_guest", "") or ""))
+                        getattr(self._guest, "work_guest", "") or ""),
+                    shell=self._shell(),
+                    caps=getattr(self._guest, "caps", None))
                 if warning:
                     log.info("guard: %s -- %s", warning, str(args)[:80])
 

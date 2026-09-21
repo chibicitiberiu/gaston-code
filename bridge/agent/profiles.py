@@ -16,8 +16,8 @@ ignored:
   * The bridge is supposed to survive being pointed at MS-DOS, Windows 3.1 or
     NT 4 (`CLAUDE.md`, first standing rule). That claim is only honest if
     supporting a new machine means adding a file. While `command.com`'s verb
-    table lived in `doscmd.py`, the tool surface was portable and its guard
-    was not.
+    table lived in the guard itself (then `doscmd.py`), the tool surface was
+    portable and its guard was not.
   * A fact written in Python reads as a decision the program makes. A fact
     written in a profile reads as a claim about a machine, which is what it
     is -- and can carry its own provenance next to it.

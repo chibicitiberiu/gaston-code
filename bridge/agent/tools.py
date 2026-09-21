@@ -168,7 +168,7 @@ def build(bridge, guest=None) -> dict:
         # left empty. An empty cwd means the guest passes NULL to
         # CreateProcess and the child inherits the GUI process's directory --
         # a value the bridge has never been told and cannot derive, which is
-        # also why bridge/agent/doscmd.py has to answer ASK for every
+        # also why bridge/agent/cmdguard.py has to answer ASK for every
         # relative path when it is unset.
         cwd = (args or {}).get("cwd") or bridge.guest_work_root(guest)
 

@@ -33,6 +33,33 @@ redirect_write = "(>>?)\\s*(\\S+)"
 redirect_read = "(<)\\s*(\\S+)"
 drive = "^[A-Za-z]:"
 
+# A token matching this holds something the bridge cannot expand, so where
+# it points is unknown -- which means ASK, not "safe". `%` alone is right
+# for this shell: `%PATH%`, `%1`, and a stray `%` are all unresolvable here.
+# A shell whose sigil is `$` or `~` says so instead, and the guard stops
+# quietly resolving the wrong ones. (It used to be `"%" in token`, in
+# Python, which read `del /work/$TARGET/x` as inside the mirror.)
+variables = "%"
+
+# How a path is spelled. `altsep` is accepted on input and folded to `sep`:
+# everything going through CreateFileA takes `/` as a separator, which is
+# also why `switch_max` exists below.
+sep = '\'
+altsep = '/'
+quote = '"'
+
+# Switches, which are not paths. `/windows/system/x` IS a path, so a switch
+# is recognised by being short and carrying no separator -- discarding every
+# `/`-prefixed token made a real destination invisible, and the guard then
+# reported "writes inside mirror" for a command whose target it had thrown
+# away.
+switch = "/"
+switch_max = 8
+
+# Extensions that make a leaf a program rather than a builtin, longest-match
+# irrelevant here because none is a suffix of another.
+exts = [".exe", ".com", ".bat"]
+
 # Verbs that only read.
 read = [
   "cd", "chdir", "cls", "comp", "date", "dir", "echo", "fc",
@@ -49,6 +76,12 @@ write = [
 # Two-argument verbs where the LAST path is the destination.
 src_dest = [
   "copy", "xcopy",
+]
+
+# Verbs that REMOVE their sources as well as writing their destination, so
+# every argument but the last is checked a second time.
+move_like = [
+  "move",
 ]
 
 # Verbs that only read in SOME forms, so each needs its own test.
@@ -95,6 +128,25 @@ assign = "remaps drive letters"
 smartdrv = "enables write-behind caching"
 regedit = "imports registry changes"
 start = "launches a program detached from the timeout"
+
+# The form in which a `conditional_read` verb actually WRITES. `attrib x`
+# reports; `attrib -r x` sets. While this regex was in Python,
+# `conditional_read` could only ever hold verbs that happen to use DOS
+# attribute letters. Matched case-insensitively.
+[shell.write_if]
+attrib = "[-+][RSHA]"
+
+# The form in which an `always_ask` verb only READS, and so is not worth
+# nagging about. These were `if stem == "fdisk" and "/STATUS" in upper` in
+# Python -- a command name and a switch syntax, hardcoded, two lines below a
+# comment explaining that command names live in profiles.
+[shell.safe_if]
+fdisk = "/STATUS"
+
+# The inverse: an `always_ask` verb that only writes in ONE form, so every
+# other form is a read. CHKDSK reports unless it is given /F.
+[shell.ask_only_if]
+chkdsk = "/F"
 
 [note]
 # Shown to the assistant when this tool is detected. DETECTION MAY
