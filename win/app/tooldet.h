@@ -54,7 +54,7 @@ typedef int (*rc_tooldet_sink)(void *ctx, const char *name, const char *kind,
  * second is the user's: it is never shipped, never overwritten by an
  * install, and read SECOND so a section in it wins. The first is ours and is
  * replaced on every deploy, which is why the two are separate files -- the
- * installer copies over what it ships (`tools/mktools-iso.sh`), so a single
+ * installer copies over what it ships (`tools/gen/mktools-iso.sh`), so a single
  * file would force a choice between shipping fixes and keeping user edits.
  *
  * Does not allocate. Does not write anything anywhere. Safe to call more

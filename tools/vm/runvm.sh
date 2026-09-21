@@ -4,10 +4,11 @@
 #   runvm.sh install   first boot: floppy once, then hard disk, CD attached
 #   runvm.sh run       normal boot, 32MB to match the real target machine
 #
-# QMP lives on vm/qmp.sock; drive it with tools/qmp.py.
+# QMP lives on vm/qmp.sock; drive it with tools/vm/qmp.py.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
+HERE="$REPO"
 VM="$HERE/vm"
 LIB="${WIN98_LIB:-/mnt/zizo/Library/Software/Operating Systems/Windows/Windows 9x}"
 ISO="${WIN98_ISO:-$LIB/Win98SE_bootable.iso}"

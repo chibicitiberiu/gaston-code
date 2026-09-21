@@ -18,11 +18,15 @@ may be running an 8bpp display, where a 4bpp icon carrying its own arbitrary
 palette gets colour-matched to the system halftone palette and shifts. These
 sixteen are in the system palette at every depth, so they map exactly.
 
-Run:  python3 tools/mkicon.py   (writes win/resources/gaston.ico)
+Run:  python3 tools/gen/mkicon.py   (writes win/resources/gaston.ico)
 """
 
 import os
 import struct
+import sys                                                # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
+
 
 # The Windows 16-colour palette, in its canonical index order.
 PALETTE = [
@@ -418,8 +422,8 @@ def write_ico(path, images):
 
 
 def main():
-    top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    app = os.path.join(top, "win", "app")
+    top = toolkit.REPO
+    app = os.path.join(top, "win", "resources")
     write_ico(os.path.join(app, "gaston.ico"), [art16(), art32()])
     # Lime / yellow / red, the three the VGA palette actually has. Amber
     # would be better than yellow and is not one of the sixteen; a dithered

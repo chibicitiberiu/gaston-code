@@ -5,8 +5,7 @@
 # working when the guest is wedged -- which is when it matters most. This is
 # the same mechanism the plan relies on for detecting a hung guest or a BSOD.
 set -uo pipefail
-export LIBVIRT_DEFAULT_URI=qemu:///session
-DOM="${DOM:-retroclaude-win98}"
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
 # Scratch goes under tmp/, which is gitignored wholesale. It used to land in
 # vm/, beside the disk images, which made "what in here matters" unanswerable.
 OUT="${OUT:-tmp/watch}"

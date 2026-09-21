@@ -306,7 +306,7 @@ Three remain:
   outbound internet while leaving `lo` shapeable. The live domain uses
   `-netdev user` with no `hostfwd`, so the guest's connection is re-originated
   on host loopback -- exactly what netem on `lo` would shape. Not yet run end
-  to end: QEMU inside the namespace is unverified, and `tools/runvm.sh`
+  to end: QEMU inside the namespace is unverified, and `tools/vm/runvm.sh`
   specifies `pcnet` where the live domain is `ne2k_isa`, so a run built on it
   would come up with no network and look like a bridge bug. Take the argv from
   `/proc/<pid>/cmdline` of the running domain instead. Stand the harness up as
@@ -756,7 +756,7 @@ check`.** 01.39 restated a real memory-safety fact -- `win/sync/sync.cpp:100-116
 still carries the postmortem for an actual invalid-page-fault where an 8KB
 stack local under a 62KB caller landed below the guard page, so every Phase 6
 job needing a buffer must heap-allocate -- but its claim that the only
-mechanical check for this, `tools/stackframes.py`, is "not reachable from the
+mechanical check for this, `tools/check/stackframes.py`, is "not reachable from the
 top-level `make check`, per 01.31/CLAUDE.md" is stale. 01.31 itself is marked
 `Fixed:` in the same audit file: the top-level `Makefile:43` now runs
 `$(MAKE) -C win check`, and `win/Makefile:264` runs `stackframes.py` inside
@@ -796,7 +796,7 @@ data as well as code. `CMOV_BASELINE` stays at 1.
 **[R -- 2026-09-19] The baseline is gone.** It moved three more times without
 a real instruction behind it -- 1 -> 2 -> 1 -> 7 -- because adding a function
 slides the read-only data that follows it and a different byte sequence lands
-where objdump's linear walk reads a CMOV. `tools/cmovcheck.py` locates each
+where objdump's linear walk reads a CMOV. `tools/check/cmovcheck.py` locates each
 hit against the linker map instead and fails only on one inside an object file
 the build compiled. The current seven are one in `uuid.lib`'s
 `_GUID_FONTBOLD` and six in `clib3r.lib`'s `__DefaultExceptionHandler_`

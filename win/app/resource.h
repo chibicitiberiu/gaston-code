@@ -44,7 +44,7 @@
  * ICON: TB_ADDBITMAP takes a DIB with no AND mask, and transparency comes
  * from comctl32 rewriting the standard 3D colours when the bitmap is added.
  *
- * Drawn by tools/mkicon.py because comctl32 has no paperclip -- its stock
+ * Drawn by tools/gen/mkicon.py because comctl32 has no paperclip -- its stock
  * strip is a 1995 office toolbar, and the nearest thing in it is a folder,
  * which reads as "open a document" because that is what it is. */
 #define IDB_ATTACH   200

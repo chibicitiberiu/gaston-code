@@ -12,7 +12,7 @@ Reordering shutdown on Win9x is exactly where this project has twice produced
 a GPF dialog at exit, so it has to be watched on the real machine rather than
 reasoned about.
 
-    python3 -u tools/drainprobe.py --port 7890 --burst 24
+    python3 -u tools/probe/drainprobe.py --port 7890 --burst 24
 
 Start it INSTEAD OF the bridge, launch the client, then close the client while
 this is running. Every frame is printed with the milliseconds since the burst
@@ -20,22 +20,22 @@ was sent, so an ack that arrives AFTER the close is visibly the drain's.
 """
 from __future__ import annotations
 
-import argparse
 import os
 import socket
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
+import probelib                                           # noqa: E402
+toolkit.on_path()
 
 from bridge.files import paths as P                       # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader       # noqa: E402
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=7890)
-    ap.add_argument("--secret", default="dev-secret")
+    ap = probelib.arg_parser()
     ap.add_argument("--burst", type=int, default=24,
                     help="how many SYNCGETs to queue; the guest's sync queue "
                          "is RPC_SYNCQ_MAX = 24 slots")
@@ -44,13 +44,7 @@ def main() -> int:
                          "it takes real work (8KB chunks)")
     a = ap.parse_args()
 
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", a.port))
-    s.listen(1)
-    print(f"waiting for the guest on 0.0.0.0:{a.port} ...")
-    conn, peer = s.accept()
-    print(f"guest connected from {peer}")
+    conn, peer = probelib.listen_for_guest(a.host, a.port)
 
     r = FrameReader()
     pend: list[Frame] = []

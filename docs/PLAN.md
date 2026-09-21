@@ -1476,7 +1476,7 @@ has known work left.
   unresolved defect ("NM_DBLCLK may not be sent") and it is not: measured on
   the guest, a Windows 98 status bar sends NM_CLICK and then NM_DBLCLK, 110ms
   apart, exactly as documented. What was broken was the testing --
-  `tools/qmp.py click X Y double` silently ignored the third word, because the
+  `tools/vm/qmp.py click X Y double` silently ignored the third word, because the
   CLI verb is `dclick`, so every attempt to exercise it was a SINGLE click. A
   working feature was written down as a defect and then "fixed" twice before
   that was noticed. The tool accepts both spellings now and `VirshQmp` borrows
@@ -1844,7 +1844,7 @@ mechanism. Cheap, visible, and currently the largest gap between "works" and
 "looks like it belongs on the desktop".
 
 **[R -- 2026-09-18]** The application icon shipped as Phase 4.0, along with
-the resource pipeline it needed (`win/app/gaston.rc`, `tools/mkicon.py`).
+the resource pipeline it needed (`win/app/gaston.rc`, `tools/gen/mkicon.py`).
 What is left of R5 is the toolbar, which is not a resource problem: it is the
 first real GDI spend against the fixed 64KB USER heap, and `BACKLOG.md` 11
 (04.23) says to count GDI objects before and after. It also has no home yet,
@@ -1932,9 +1932,14 @@ RetroAI/
   tmp/                        # scratch from the VM-driving scripts, gitignored
   bridge/     server.py session.py rpc.py tools.py markdown.py fold.py
               pages.py paths.py replay.py protocol.py fakegui.py
-  tests/python/  test_pe_imports.py (Phase 3) test_protocol.py
-                 test_markdown.py test_fold.py
-  tools/      qmp.py mkvm.sh vmship.sh dos.py syncprobe.py stackframes.py
+  tests/python/  one folder per layer -- agent/ files/ wire/ view/ server/
+                 guest/ meta/ tools/ -- plus conftest.py and harness.py.
+                 See tests/python/README.md.
+  tools/      vm/     drive the guest: qmp.py dos.py vmship.sh runvm.sh ...
+              gen/    make what ships: mkicon.py mktools-iso.sh ...
+              check/  the static gates make check runs
+              probe/  bridge stubs that drive the guest's own code
+              toolkit.py / vmlib.sh -- the repo root and the domain name
   vm/         disk images and run scripts (all images gitignored)
   docs/       PLAN.md PROGRESS.md BACKLOG.md FEASIBILITY.md FORKED.md audit/
 ```
@@ -1960,7 +1965,7 @@ attribution and upstream-diff tool in one.
 | Channel multiplexing over one socket | Process split already separates them |
 | Scrollback trimming, custom-drawn view, MSHTML | Pagination supersedes / see Architecture |
 | Warm multi-session client pool | One live client, switch = close + resume |
-| Integrated QMP auto-recovery | `tools/qmp.py` run by hand |
+| Integrated QMP auto-recovery | `tools/vm/qmp.py` run by hand |
 
 ## Effort
 

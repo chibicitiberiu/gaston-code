@@ -10,7 +10,8 @@
 # Setup expects.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
+HERE="$REPO"
 VM="$HERE/vm"
 LIB="${WIN98_LIB:-/mnt/zizo/Library/Software/Operating Systems/Windows/Windows 9x}"
 ISO="${WIN98_ISO:-$LIB/Win98SE_bootable.iso}"
@@ -217,4 +218,4 @@ echo "  disk:   $DISK"
 echo "  floppy: $FLOPPY"
 echo "  iso:    $ISO"
 echo
-echo "Run: tools/runvm.sh install"
+echo "Run: tools/vm/runvm.sh install"

@@ -23,16 +23,16 @@ send calibrated deltas instead of single pixels (see `_walk`, which is where
 the measurements are), and hold one libvirt connection open instead of forking
 per command -- 0.73ms against 22ms. A click is now about fifteen packets.
 
-    tools/qmp.py shot out.ppm
-    tools/qmp.py key ret
-    tools/qmp.py click 208 190
-    tools/qmp.py dclick 208 190
-    tools/qmp.py type "hello"
-    tools/qmp.py home
-    tools/qmp.py save clean
-    tools/qmp.py load clean
-    tools/qmp.py reset
-    tools/qmp.py status
+    tools/vm/qmp.py shot out.ppm
+    tools/vm/qmp.py key ret
+    tools/vm/qmp.py click 208 190
+    tools/vm/qmp.py dclick 208 190
+    tools/vm/qmp.py type "hello"
+    tools/vm/qmp.py home
+    tools/vm/qmp.py save clean
+    tools/vm/qmp.py load clean
+    tools/vm/qmp.py reset
+    tools/vm/qmp.py status
 """
 from __future__ import annotations
 
@@ -44,11 +44,17 @@ import subprocess
 import sys
 import time
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
 
-SOCK = "vm/qmp.sock"
-DOMAIN = os.environ.get("RC_DOMAIN", "retroclaude-win98")
-URI = os.environ.get("LIBVIRT_DEFAULT_URI", "qemu:///session")
+#: The raw QMP socket runvm.sh asks qemu for. ABSOLUTE, which it was not:
+#: `"vm/qmp.sock"` is relative to the working directory, so the socket
+#: transport was silently unavailable to anything invoking this from
+#: anywhere but the repo root -- including dos.py, which spawns it by
+#: absolute path and inherits whatever cwd its own caller had.
+SOCK = toolkit.repo_path("vm", "qmp.sock")
+DOMAIN = toolkit.DOMAIN
+URI = toolkit.URI
 
 # QEMU key names differ from ASCII; enough of a map to type a DOS command line.
 KEYMAP = {

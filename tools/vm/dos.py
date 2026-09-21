@@ -13,12 +13,15 @@ black, which the Win98 desktop and the client's white transcript are not.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
 import time
 
-HERE = __import__("os").path.dirname(__file__)
+#: This directory. qmp.py and vmshot.sh are siblings, which is why they
+#: are reached from HERE and not from the repo root.
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 #: Both constants that used to live here -- a fixed point in the title bar
 #: and a fixed point in the client area -- are gone. They were measured

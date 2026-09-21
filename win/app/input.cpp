@@ -7,7 +7,7 @@
 /* The longest message that can be composed and sent in one go. The frame
  * protocol would carry far more, but this is exactly one page and do_send's
  * own comment on its HeapAlloc explains why it is not a stack buffer:
- * building it on the stack is the guard-page fault tools/stackframes.py
+ * building it on the stack is the guard-page fault tools/check/stackframes.py
  * exists to catch, not just something to avoid on general principle.
  * Enforced at the control with EM_LIMITTEXT and checked again at send. */
 #define RC_INPUT_MAX 4096
@@ -88,7 +88,7 @@ void rc_input::do_send(void)
 
     /* Heap, not the stack this used to be on inside main.cpp. RC_INPUT_MAX
      * is exactly one page (4096 bytes); Open Watcom emits no stack probe for
-     * a frame that size, which is precisely the fault tools/stackframes.py
+     * a frame that size, which is precisely the fault tools/check/stackframes.py
      * (make check's "stack frames" gate) exists to catch -- its own
      * docstring is a real crash on the real machine from this exact pattern.
      * Moving this function into its own translation unit (audit finding

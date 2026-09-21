@@ -1,6 +1,6 @@
 """The pointer walk lands on the pixel it was asked for.
 
-`tools/qmp.py` drives a PS/2 mouse, which is relative, through a guest that
+`tools/vm/qmp.py` drives a PS/2 mouse, which is relative, through a guest that
 applies pointer acceleration. So "click at (400,300)" is arithmetic, and the
 arithmetic is built on constants MEASURED on the guest:
 
@@ -29,7 +29,7 @@ import pytest
 import conftest
 
 HERE = conftest.REPO
-sys.path.insert(0, os.path.join(HERE, "tools"))
+sys.path.insert(0, os.path.join(HERE, "tools", "vm"))
 
 import qmp                                                    # noqa: E402
 

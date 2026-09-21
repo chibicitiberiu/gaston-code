@@ -6,12 +6,12 @@
 # guest quietly keeps running the previous binary. That cost an evening of
 # chasing a bug that had already been fixed. Eject first, then insert.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///session}"
-DOM=retroclaude-win98
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
+cd "$REPO"
+
 ISO="$PWD/vm/tools.iso"
 
-bash tools/mktools-iso.sh
+bash tools/gen/mktools-iso.sh
 virsh change-media "$DOM" hdc --eject --live >/dev/null 2>&1 || true
 sleep 1
 virsh change-media "$DOM" hdc "$ISO" --insert --live

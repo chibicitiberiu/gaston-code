@@ -1479,7 +1479,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      * MEASURED, because this was written down as broken and was not. On a
      * real double-click a Windows 98 status bar sends NM_CLICK and then
      * NM_DBLCLK, 110ms apart, exactly as documented. What was broken was the
-     * testing: `tools/qmp.py click X Y double` silently ignored the third
+     * testing: `tools/vm/qmp.py click X Y double` silently ignored the third
      * word -- the CLI verb is `dclick` -- so every attempt to exercise this
      * was a single click, and a working feature was recorded as a defect and
      * then "fixed" twice. The tool accepts both spellings now.

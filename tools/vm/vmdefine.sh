@@ -7,9 +7,10 @@
 #   * Defining a config that boots the floppy first. That silently restarted
 #     Windows Setup over a working installation.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
+cd "$REPO"
 XML=vm/win98.xml
-export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///session}"
+
 
 if grep -n -- '--' "$XML" | grep -v '<!--\|-->' ; then
     echo "^^ '--' inside an XML comment; libvirt will refuse this file." >&2
@@ -27,4 +28,4 @@ if grep -q "device='floppy'" "$XML"; then
 fi
 
 virsh define "$XML"
-virsh domblklist retroclaude-win98 2>/dev/null || true
+virsh domblklist "$DOM" 2>/dev/null || true

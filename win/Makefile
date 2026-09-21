@@ -295,7 +295,7 @@ $(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res
 # DATA and objdump never walks it, which BACKLOG.md 10 predicted wrongly and
 # was measured when gaston.res landed.
 #
-# So the gate locates each hit instead (tools/cmovcheck.py): the linker map
+# So the gate locates each hit instead (tools/check/cmovcheck.py): the linker map
 # says which module a symbol came from, and only a hit inside an object file
 # THIS BUILD COMPILED is something `-5` governs. The current seven are one
 # inside uuid.lib's _GUID_FONTBOLD and six in clib3r.lib's
@@ -314,9 +314,9 @@ check: $(BUILD)/retroclaude.exe
 	@objdump -p $(BUILD)/retroclaude.exe | grep -E '^\s+[0-9a-f]+\s+<none>' \
 	  | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
 	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
-	@# Located, not counted -- see tools/cmovcheck.py for why the baseline
+	@# Located, not counted -- see tools/check/cmovcheck.py for why the baseline
 	@# this replaces moved three times without anything being wrong.
-	@$(PYTHON) $(CURDIR)/../tools/cmovcheck.py $(BUILD)/retroclaude.exe \
+	@$(PYTHON) $(CURDIR)/../tools/check/cmovcheck.py $(BUILD)/retroclaude.exe \
 	   $(BUILD)/retroclaude.map $(OBJS)
 	@echo "=== unbounded string functions (the overflow family) ==="
 	@# These write until a NUL that may not be there. rc_strcpy/rc_strncpy/
@@ -348,7 +348,7 @@ check: $(BUILD)/retroclaude.exe
 	  exit 1; \
 	else echo "   ok: none"; fi
 	@echo "=== stack frames (a frame >= one page steps over the guard page) ==="
-	@$(PYTHON) $(TOP)/tools/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map
+	@$(PYTHON) $(TOP)/tools/check/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map
 	@echo "=== static allocation (the guest has 28KB free after a turn) ==="
 	@# Uninitialised statics are committed at load and are spent before the
 	@# app does anything -- rc_net_send's frame build buffer alone is 66,560

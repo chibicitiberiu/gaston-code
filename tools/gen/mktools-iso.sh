@@ -6,7 +6,8 @@
 # rather than the network because networking is itself one of the things
 # being tested -- this has to work before the guest can talk to the bridge.
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
+HERE="$REPO"
 STAGE="$HERE/vm/tools-stage"
 OUT="$HERE/vm/tools.iso"
 

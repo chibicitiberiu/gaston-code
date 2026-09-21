@@ -116,7 +116,7 @@ public:
      * Non-zero if one was found and installed. Without it the transcript is
      * a bare grey rectangle until a bridge answers -- which is exactly when
      * the app most needs somewhere to say "no bridge answered". The file is
-     * GENERATED from bridge/view/html.py at package time (tools/mktools-iso.sh)
+     * GENERATED from bridge/view/html.py at package time (tools/gen/mktools-iso.sh)
      * so there is one stylesheet, not two that drift; the bridge's DOC frame
      * still wins at runtime. */
     int  boot_local();

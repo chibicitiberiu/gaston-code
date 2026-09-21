@@ -13,12 +13,13 @@
 # tool imports nothing but USER32 and KERNEL32 -- both checked before this
 # script was written, and both worth re-checking if the version moves.
 #
-#   tools/mkwatcom-iso.sh [path-to-open-watcom-c-win32-1.9.exe]
+#   tools/gen/mkwatcom-iso.sh [path-to-open-watcom-c-win32-1.9.exe]
 #
 # With no argument it downloads the installer beside the ISO and keeps it, so
 # a rebuild costs nothing.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+. "$(dirname "${BASH_SOURCE[0]}")/../vmlib.sh"
+cd "$REPO"
 
 URL=https://github.com/open-watcom/open-watcom-1.9/releases/download/ow1.9/open-watcom-c-win32-1.9.exe
 #: Checked once, against the file this was developed with. A toolchain that

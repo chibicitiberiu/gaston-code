@@ -14,7 +14,7 @@ so none of that has ever been exercised on the machine by anything but a live
 bridge with an API key and a cooperating agent. This does it deliberately, one
 step at a time, pausing so each state can be screenshotted.
 
-    python3 -u tools/barprobe.py --port 7890
+    python3 -u tools/probe/barprobe.py --port 7890
 
 Start it INSTEAD OF the bridge, then launch the client. It sends no EXEC and
 no SYNC frame, so it cannot touch the guest's disk.
@@ -26,13 +26,15 @@ explicit branch in the HALTEND handler, and getting it wrong lost the halt.
 """
 from __future__ import annotations
 
-import argparse
 import os
 import socket
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
+import probelib                                           # noqa: E402
+toolkit.on_path()
 
 from bridge.view import html as H                         # noqa: E402
 from bridge.wire import protocol as PR                    # noqa: E402
@@ -75,19 +77,12 @@ STEPS = [
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=7890)
-    ap.add_argument("--secret", default="dev-secret")
+    ap = probelib.arg_parser()
     ap.add_argument("--step-seconds", type=float, default=6.0,
                     help="pause between steps, so each state can be captured")
     a = ap.parse_args()
 
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", a.port))
-    s.listen(1)
-    print(f"waiting for the guest on 0.0.0.0:{a.port} ...")
-    conn, _ = s.accept()
+    conn, _ = probelib.listen_for_guest(a.host, a.port)
     r = FrameReader()
     pend: list[Frame] = []
 

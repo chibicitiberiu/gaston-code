@@ -5,18 +5,22 @@ An animated GIF rather than anything cleverer, because the transcript is
 MSHTML on Internet Explorer 5 and that is the animation IE5 has. It also has
 no support for `data:` URIs, so this cannot be inlined into the document --
 it has to be a real file sitting beside view.htm, which is why
-tools/mktools-iso.sh ships it.
+tools/gen/mktools-iso.sh ships it.
 
 Eight frames of a rotating dot ring. Grey to match `.status` in the
 stylesheet, on white to match the transcript background: no transparency,
 because a transparent GIF over a white page buys nothing and GIF's
 single-colour transparency is the classic source of a halo.
 
-Run:  python3 tools/mkspin.py   (writes win/resources/spin.gif)
+Run:  python3 tools/gen/mkspin.py   (writes win/resources/spin.gif)
 """
 
 import math
 import os
+import sys                                                # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
+
 
 from PIL import Image, ImageDraw
 
@@ -55,8 +59,8 @@ def frame(lead):
 
 def main():
     frames = [frame(i) for i in range(FRAMES)]
-    top = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(top, "win", "app", "spin.gif")
+    top = toolkit.REPO
+    path = os.path.join(top, "win", "resources", "spin.gif")
     frames[0].save(
         path, save_all=True, append_images=frames[1:],
         # 100ms a frame: one full rotation in 0.8s. Slower than a modern

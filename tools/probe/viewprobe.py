@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drive the real guest's TRANSCRIPT on the real machine, with no agent.
 
-WHY THIS EXISTS. tools/syncprobe.py proves the sync layer against the shipping
+WHY THIS EXISTS. tools/probe/syncprobe.py proves the sync layer against the shipping
 binary, and it is the only thing that does. It never sends DOC, so the HTML
 view has never been exercised on the Windows 98 box by anything but a live
 bridge with an API key -- which means the view is the one layer whose
@@ -18,21 +18,23 @@ render: HELLO, READY, DOC with the REAL stylesheet from bridge/view/html.py,
 then one block of each kind the view knows how to say. It holds the connection
 open afterwards so the window can be screenshotted.
 
-    python3 -u tools/viewprobe.py            # then launch the client
-    python3 -u tools/viewprobe.py --port 7890
+    python3 -u tools/probe/viewprobe.py            # then launch the client
+    python3 -u tools/probe/viewprobe.py --port 7890
 
 Start it INSTEAD OF the bridge. It sends no EXEC and no SYNC frame, so it
 cannot touch the guest's disk.
 """
 from __future__ import annotations
 
-import argparse
 import os
 import socket
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
+import probelib                                           # noqa: E402
+toolkit.on_path()
 
 from bridge.view import html as H                         # noqa: E402
 from bridge.wire import protocol as PR                    # noqa: E402
@@ -40,23 +42,14 @@ from bridge.wire.protocol import Frame, FrameReader       # noqa: E402
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=7890)
-    ap.add_argument("--secret", default="dev-secret")
+    ap = probelib.arg_parser()
     ap.add_argument("--hold", type=float, default=600.0,
                     help="seconds to keep the link up so the window can be "
                          "looked at; the guest drops the bar and the "
                          "transcript if the socket closes")
     a = ap.parse_args()
 
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind((a.host, a.port))
-    s.listen(1)
-    print(f"waiting for the guest on {a.host}:{a.port} ...")
-    conn, peer = s.accept()
-    print(f"guest connected from {peer}")
+    conn, peer = probelib.listen_for_guest(a.host, a.port)
 
     r = FrameReader()
     pending: list[Frame] = []

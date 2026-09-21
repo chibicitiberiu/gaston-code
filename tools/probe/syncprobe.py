@@ -16,20 +16,22 @@ whatever frames the test wants. It talks to the SHIPPING retroclaude.exe over a
 real socket, so what it proves is about the binary on the Windows 98 machine
 and not about a model of it.
 
-    python3 tools/syncprobe.py            # run every check
-    python3 tools/syncprobe.py --port 7890
+    python3 tools/probe/syncprobe.py            # run every check
+    python3 tools/probe/syncprobe.py --port 7890
 
 Start it INSTEAD OF the bridge, then launch the client on the guest.
 """
 from __future__ import annotations
 
-import argparse
+import os
 import socket
 import sys
 import zlib
 
-sys.path.insert(0, __import__("os").path.dirname(
-    __import__("os").path.dirname(__import__("os").path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit                                            # noqa: E402
+import probelib                                           # noqa: E402
+toolkit.on_path()
 
 from bridge.files import paths as P                      # noqa: E402
 from bridge.wire.protocol import Frame, FrameReader     # noqa: E402
@@ -136,9 +138,8 @@ def dos(cmd: str) -> None:
     and then observed through it.
     """
     import subprocess
-    subprocess.run(["python3", __import__("os").path.join(
-        __import__("os").path.dirname(__import__("os").path.abspath(__file__)),
-        "dos.py"), cmd], check=True, capture_output=True)
+    subprocess.run(["python3", toolkit.repo_path("tools", "vm", "dos.py"), cmd],
+                   check=True, capture_output=True)
 
 
 # --- the checks -------------------------------------------------------------
@@ -423,25 +424,17 @@ def stage_recovery(g: Guest) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = probelib.arg_parser()
     ap.add_argument("--stage-recovery", action="store_true",
                     help="put the guest tree into a post-crash state and exit")
     ap.add_argument("--recovery", action="store_true",
                     help="only the startup-recovery checks; the tree must be "
                          "staged first and the client restarted after this "
                          "starts listening")
-    ap.add_argument("--port", type=int, default=7890)
-    ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--secret", default="dev-secret")
+
     a = ap.parse_args()
 
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind((a.host, a.port))
-    s.listen(1)
-    print(f"waiting for the guest on {a.host}:{a.port} ...")
-    conn, peer = s.accept()
-    print(f"guest connected from {peer}")
+    conn, peer = probelib.listen_for_guest(a.host, a.port)
 
     g = Guest(conn)
     hello = g.recv("HELLO")
