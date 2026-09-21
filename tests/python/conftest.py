@@ -46,7 +46,32 @@ WINE = os.environ.get(
     os.path.expanduser(
         "~/.local/share/lutris/runners/wine/wine-ge-8-26-x86_64/bin/wine"),
 )
-PREFIX = os.environ.get("WINEPREFIX", os.path.join(HERE, ".wineprefix"))
+#: OUTSIDE THE WORKSPACE, deliberately, and this is not tidiness.
+#:
+#: A wine prefix contains `dosdevices/z: -> /`. Any recursive walk that follows
+#: symlinks therefore re-enters the repo through it, forever:
+#:
+#:     <prefix>/dosdevices/z:/home/tibi/Dev/RetroAI/<prefix>/dosdevices/z:/...
+#:
+#: With the prefix inside the workspace that loop is what pinned VS Code's
+#: extension host and cpptools at gigabytes -- cpptools walks
+#: ${workspaceFolder} recursively for its browse database and followed z:
+#: straight out into /. `.vscode/settings.json` carries excludes for it, but an
+#: exclude is per-tool whack-a-mole: ripgrep, file watchers, `find`, backup
+#: tools and every future extension each need their own, and one that has not
+#: heard of it walks the whole filesystem. Keeping 222MB of fake C: drive out
+#: of the tree fixes it once, for everything.
+#:
+#: XDG data rather than cache: losing it means re-initialising a prefix and
+#: re-running the Wine gate, which is minutes, not seconds. WINEPREFIX still
+#: overrides, so CI or a second checkout can point somewhere else.
+PREFIX = os.environ.get(
+    "WINEPREFIX",
+    os.path.join(
+        os.environ.get("XDG_DATA_HOME",
+                       os.path.expanduser("~/.local/share")),
+        "retroclaude", "wineprefix"),
+)
 
 #: The compiler that builds the guest. Its presence is what turns "the binary
 #: is missing" from an excuse into a bug.
