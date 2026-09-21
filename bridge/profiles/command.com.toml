@@ -1,0 +1,120 @@
+# What the bridge knows about `command.com`.
+#
+# ONE FILE PER TOOL, named for what the guest reports. The client
+# looks and says what it found; everything about what that MEANS is
+# here, in data, so it can change without touching Python and without
+# reflashing a 1998 PC.
+
+[detect]
+kind = "shell"
+# No `bins`: the marker file IS the answer. A single program, where
+# the path to the program is what anyone wants.
+# Variables that name the root directly. Reported by the client
+# only if it was asked to look at them -- a test asserts these
+# appear in the shipped tools_detect.ini.
+env = ["COMSPEC"]
+
+# --- how a command written for this shell is read -------------------------
+#
+# THE GUARD'S TABLES, not the shell's grammar. Nothing here executes
+# anything: it decides whether a command can be shown to the user as "this
+# reads" or "this writes THERE", and anything it cannot classify is asked
+# about. So the safe direction is always to over-match.
+
+[shell]
+# Fragments a command might be split on. `&`, `&&` and `||` are NOT
+# separators to this shell -- measured on the guest, which answers
+# "Too many parameters - &" and runs nothing. They stay in the pattern
+# because this is the guard's splitter: splitting on a non-separator can
+# only OVER-split, which fails safe, while missing one would let a fragment
+# through uninspected.
+separators = "&&|\\|\\||[&|]"
+redirect_write = "(>>?)\\s*(\\S+)"
+redirect_read = "(<)\\s*(\\S+)"
+drive = "^[A-Za-z]:"
+
+# Verbs that only read.
+read = [
+  "cd", "chdir", "cls", "comp", "date", "dir", "echo", "fc",
+  "find", "findstr", "help", "mem", "more", "path", "pause", "print",
+  "rem", "set", "time", "tree", "type", "ver", "vol",
+]
+
+# Verbs that write, and whose arguments say where.
+write = [
+  "copy", "del", "deltree", "edit", "erase", "label", "md", "mkdir",
+  "move", "rd", "ren", "rename", "replace", "rmdir", "xcopy",
+]
+
+# Two-argument verbs where the LAST path is the destination.
+src_dest = [
+  "copy", "xcopy",
+]
+
+# Verbs that only read in SOME forms, so each needs its own test.
+conditional_read = [
+  "attrib",
+]
+
+# Interpreters and shells. Not dangerous -- UNBOUNDED, the same class as an
+# unknown program. Listed apart from [shell.always_ask] so a future
+# approve-once store can refuse to remember them: one click must never buy a
+# permanent grant of arbitrary execution.
+unbounded = [
+  "basic", "cmd", "cmd.exe", "command", "command.com", "cscript", "perl", "perl.exe",
+  "python", "python.exe", "qbasic", "qbasic.exe", "tclsh", "wish", "wscript",
+]
+
+# Reserved device names. Reserved in EVERY directory and with ANY extension,
+# so a path inside the mirror can still name one -- and then the write does
+# not land in the mirror at all.
+devices = [
+  "aux", "clock$", "com1", "com2", "com3", "com4", "com5", "com6",
+  "com7", "com8", "com9", "con", "lpt1", "lpt2", "lpt3", "lpt4",
+  "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "nul", "prn",
+]
+
+# Always ask, whatever the arguments, for one of two reasons: the damage is
+# not named by any argument, or the command changes what a path MEANS and so
+# invalidates every later verdict. The value is what the user is told.
+[shell.always_ask]
+format = "reformats a volume"
+fdisk = "rewrites the partition table"
+sys = "rewrites boot sectors and system files"
+debug = "can write raw sectors from a script"
+recover = "destroys a directory into FILE0001.REC"
+scandisk = "rewrites filesystem metadata"
+chkdsk = "can rewrite filesystem metadata"
+defrag = "rewrites the whole volume layout"
+scanreg = "rewrites the registry from a backup"
+ctty = "redirects the console device"
+mode = "reconfigures devices"
+subst = "changes what a drive letter means, so later answers about paths stop being true"
+join = "grafts a volume under a directory, so later answers about paths stop being true"
+assign = "remaps drive letters"
+smartdrv = "enables write-behind caching"
+regedit = "imports registry changes"
+start = "launches a program detached from the timeout"
+
+[note]
+# Shown to the assistant when this tool is detected. DETECTION MAY
+# GUESS; A NOTE MAY NOT -- `measured` says on what machine and what
+# version, and a test asserts it is present.
+title = "COMMAND.COM"
+measured = "Windows 98 SE 4.10.2222 on the vm/ guest, 2026-09-20"
+body = '''
+The shell is COMMAND.COM, which is not cmd.exe. Every line below was
+measured on this machine, mostly by an agent getting it wrong first:
+
+  * One command, one line. `&`, `&&`, `||` and a newline are not separators;
+    the complaint varies ("Too many parameters - &", "Syntax error") and
+    `call x.bat && y` is the silent case -- no output, no error, `y` never
+    ran. For several steps write a .bat into the mirrored folder and run it.
+  * No `2>&1`: it creates a file literally named `&1`, and a following
+    `| more` eats the rest of the output.
+  * `start prog.exe` returns instantly with no output whether it ran,
+    crashed, or does not exist. You cannot see a window -- do not report one.
+  * A running .exe is locked: "Permission denied" from the linker, "Access
+    denied" from `del`, and `attrib` shows nothing wrong. Ask the user to
+    close it.
+'''

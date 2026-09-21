@@ -206,7 +206,7 @@ class Caps:
         """For the log, because "why did that not sync" starts here."""
         how = "declared" if self.declared else "assumed (client did not say)"
         return (f"{how}: acp={self.acp} case={'fold' if self.case else 'exact'} "
-                f"devices={'dos' if self.devices else 'none'} "
+                f"devices={'reserved' if self.devices else 'none'} "
                 f"eol={('lf', 'crlf', 'cr')[self.eol]} "
                 f"maxpath={self.maxpath} maxdir={self.maxdirpath} "
                 f"maxfile={self.maxfilepath} "
@@ -296,4 +296,15 @@ POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              workreserve=WORKRESERVE_GASTON,
              maxpath=4096, maxcomp=255, manifest=2, declared=True)
 
-WIN9X = Caps(manifest=2, declared=True)
+#: What a client that declares nothing is assumed to be. Named for the
+#: ASSUMPTION, not for an operating system: the values are the conservative
+#: ones -- case-folding, reserved device names, CRLF, MAX_PATH 260 -- and a
+#: client that is none of those things is expected to say so at handshake.
+#: It was called WIN9X, which made a default read as a platform and made
+#: `DEFAULT = WIN9X` in paths.py look like the bridge deciding what the
+#: machine was rather than what it would assume absent a declaration.
+CONSTRAINED = Caps(manifest=2, declared=True)
+
+#: The old name, kept so nothing outside this file had to change in the same
+#: commit. Prefer CONSTRAINED.
+WIN9X = CONSTRAINED

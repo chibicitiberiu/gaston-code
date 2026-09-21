@@ -104,7 +104,7 @@ _ILLEGAL_ALWAYS = {chr(c) for c in range(0x20)} | {"\\"}
 #: import this module for the codepage table, which made a real `caps.Caps`
 #: here a cycle; the table now lives in `caps.py` itself, so this is just the
 #: real thing.
-DEFAULT = C.WIN9X
+DEFAULT = C.CONSTRAINED
 
 
 @dataclass(frozen=True)

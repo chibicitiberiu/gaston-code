@@ -469,7 +469,7 @@ def rules_view(mode: str, tools: list[str], guest_root: str = "") -> str:
     p.append("<p>The permission rules in the operator's "
              "<code>.claude/settings.json</code> do <b>not</b> apply to this "
              "connection. The bridge starts every session with settings "
-             "inheritance switched off, so what a Windows 98 client is "
+             "inheritance switched off, so what the connected machine is "
              "allowed to do does not depend on whose computer is running "
              "the bridge.</p>")
 

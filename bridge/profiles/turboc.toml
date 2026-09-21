@@ -1,0 +1,14 @@
+# What the bridge knows about `turboc`.
+#
+# ONE FILE PER TOOL, named for what the guest reports. The client
+# looks and says what it found; everything about what that MEANS is
+# here, in data, so it can change without touching Python and without
+# reflashing a 1998 PC.
+
+[detect]
+kind = "toolchain"
+# Directories a marker may sit in. One is dropped from the marker
+# path only if it is actually there -- a hop COUNT cannot describe
+# a tool that installs flat in one version and under BIN\ in the
+# next, and would silently resolve the flat one to the drive root.
+bins = ["BIN"]

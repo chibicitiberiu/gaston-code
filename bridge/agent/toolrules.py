@@ -29,25 +29,22 @@ from __future__ import annotations
 import posixpath
 from dataclasses import dataclass
 
+from . import profiles
 from .toolrep import Fact
 
-#: How a root is recovered from the marker file that proved it. The marker is
-#: what exists; the root is what the assistant needs, because INCLUDE and LIB
-#: are relative to it.
+#: How a root is recovered from the marker file that proved it, LOADED FROM
+#: `bridge/profiles/<tool>.toml`. The marker is what exists; the root is what
+#: the assistant needs, because INCLUDE and LIB are relative to it.
 #:
 #: `bins` rather than a hop count, and that was not the first design. A count
 #: is per-section, but a section deliberately lists markers at DIFFERENT
 #: depths -- Turbo C 2.01 installs flat (`C:\TC\TCC.EXE`) and 3.x uses
-#: `C:\TC\BIN\TCC.EXE`, and both are in `[turboc]` because either may be what
-#: is on the disk. "Drop two components" is right for one and turns the other
-#: into `C:`, which is a wrong root stated as verified: the agent then sets
+#: `C:\TC\BIN\TCC.EXE`, and both are listed because either may be what is on
+#: the disk. "Drop two components" is right for one and turns the other into
+#: `C:`, which is a wrong root stated as verified: the assistant then sets
 #: INCLUDE to `C:\INCLUDE` and every compile fails for a reason it has been
 #: told not to go exploring about. So the rule names the directories a
 #: compiler is found IN and one is dropped only if it is actually there.
-#:
-#: Data rather than code so adding a toolchain is a table entry, and so the
-#: shipped `win/tools_detect.ini` and this file can be checked against each
-#: other by a test instead of by memory.
 @dataclass(frozen=True)
 class Rule:
     kind: str
@@ -60,26 +57,20 @@ class Rule:
     env: tuple = ()             # variables that name the root directly
 
 
-#: The Windows-hosted and DOS-hosted halves of a Watcom install both hold a
-#: `wcc386`, and BINW additionally holds `wlsystem.lnk`, which the linker
-#: reads on every link whatever the target.
-_WATCOM_BINS = ("BINNT", "BINW", "BINNT64")
+def _build() -> dict[str, Rule]:
+    out: dict[str, Rule] = {}
+    for name in profiles.names():
+        d = profiles.detect(name)
+        if not d.get("kind"):
+            continue
+        bins = d.get("bins")
+        out[name] = Rule(kind=d["kind"],
+                         bins=tuple(bins) if bins is not None else None,
+                         env=tuple(d.get("env", ())))
+    return out
 
-RULES: dict[str, Rule] = {
-    "command.com": Rule(kind="shell", env=("COMSPEC",)),
-    "4dos":        Rule(kind="shell"),
-    "watcom":      Rule(kind="toolchain", bins=_WATCOM_BINS, env=("WATCOM",)),
-    "turboc":      Rule(kind="toolchain", bins=("BIN",)),
-    "borlandc":    Rule(kind="toolchain", bins=("BIN",)),
-    "msvc":        Rule(kind="toolchain", bins=("BIN",), env=("MSVCDIR",)),
-    "djgpp":       Rule(kind="toolchain", bins=("BIN",), env=("DJGPP",)),
-    "turbopascal": Rule(kind="toolchain", bins=("BIN",)),
-    "masm":        Rule(kind="toolchain", bins=("BIN",)),
-    "tasm":        Rule(kind="toolchain", bins=("BIN",)),
-    "qbasic":      Rule(kind="tool"),
-    "pkzip":       Rule(kind="tool"),
-    "debug":       Rule(kind="tool"),
-}
+
+RULES: dict[str, Rule] = _build()
 
 
 @dataclass(frozen=True)

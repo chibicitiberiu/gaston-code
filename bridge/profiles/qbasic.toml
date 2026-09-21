@@ -1,0 +1,11 @@
+# What the bridge knows about `qbasic`.
+#
+# ONE FILE PER TOOL, named for what the guest reports. The client
+# looks and says what it found; everything about what that MEANS is
+# here, in data, so it can change without touching Python and without
+# reflashing a 1998 PC.
+
+[detect]
+kind = "tool"
+# No `bins`: the marker file IS the answer. A single program, where
+# the path to the program is what anyone wants.
