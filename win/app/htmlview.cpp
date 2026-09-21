@@ -430,7 +430,6 @@ rc_html::~rc_html()
 int rc_html::boot_local()
 {
     char dir[MAX_PATH], path[MAX_PATH];
-    FILE *f;
     long n;
     int ok = 0;
 
@@ -438,18 +437,22 @@ int rc_html::boot_local()
     { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
     rc_strf(path, sizeof(path), "%s\\view.htm", dir);
 
-    f = fopen(path, "rb");
-    if (!f) { rc_log("html: no cold-start document at %s", path); return 0; }
-    fseek(f, 0, SEEK_END);
-    n = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    File f(fopen(path, "rb"));
+    if (!f.valid()) {
+        rc_log("html: no cold-start document at %s", path);
+        return 0;
+    }
+    fseek(f.get(), 0, SEEK_END);
+    n = ftell(f.get());
+    fseek(f.get(), 0, SEEK_SET);
     /* A skeleton is a few KB. Anything far larger is not the file we ship,
      * and reading it into a heap block on a 28KB-free machine is not worth
      * finding out. */
     if (n > 0 && n < 64 * 1024) {
         HeapPtr<char> buf((char *)HeapAlloc(GetProcessHeap(), 0,
                                             (unsigned)n + 1));
-        if (buf.valid() && fread(buf.get(), 1, (size_t)n, f) == (size_t)n) {
+        if (buf.valid() &&
+            fread(buf.get(), 1, (size_t)n, f.get()) == (size_t)n) {
             buf.get()[n] = '\0';
             /* CLOSE BEFORE INSTALLING. set_document writes the document to
              * this same path -- so calling it with the file still open means
@@ -457,8 +460,7 @@ int rc_html::boot_local()
              * with identical bytes, for no reason. It is pointless work and
              * an unnecessary hazard on a platform whose sharing rules are
              * not the ones anyone remembers. */
-            fclose(f);
-            f = NULL;
+            f.reset();
             set_document(buf.get());
             ok = 1;
             rc_log("html: cold-start document installed (%ld bytes)", n);
@@ -466,7 +468,9 @@ int rc_html::boot_local()
     } else {
         rc_log("html: cold-start document is %ld bytes; ignored", n);
     }
-    if (f) fclose(f);
+    /* Whatever path we leave by, the guard closes it. The explicit close
+     * above is the one that must happen EARLY, not the one that must
+     * happen at all. */
     return ok;
 }
 
@@ -541,7 +545,6 @@ void rc_html::set_document(const char *doc)
 {
     RECT rc;
     HRESULT hr;
-    FILE *f;
     VARIANT empty;
     char dir[MAX_PATH];
     unsigned len, sum;
@@ -579,20 +582,23 @@ void rc_html::set_document(const char *doc)
      * re-sends identical bytes forever. fputs returns EOF on error and the
      * bytes a buffered fclose flushes can fail there and nowhere else, which
      * is why the close is checked rather than assumed. */
-    f = fopen(d->path, "wb");
-    if (!f) {
+    File f(fopen(d->path, "wb"));
+    if (!f.valid()) {
         rc_log("html: cannot write %s (%d)", d->path, errno);
         boot_failed(d);
         return;
     }
-    if (fputs(doc, f) == EOF) {
+    if (fputs(doc, f.get()) == EOF) {
         rc_log("html: short write to %s -- the skeleton would be truncated",
                d->path);
-        fclose(f);
         boot_failed(d);
-        return;
+        return;                 /* the guard closes it on the way out */
     }
-    if (fclose(f) != 0) {
+    /* THE CLOSE IS CHECKED, so it cannot be left to the guard: a destructor
+     * has nowhere to put the answer, and stdio reports a full disk HERE and
+     * nowhere else -- which is what the comment above this block is about.
+     * release() hands the handle to the check, which then owns it. */
+    if (fclose(f.release()) != 0) {
         rc_log("html: cannot flush %s -- out of disk?", d->path);
         boot_failed(d);
         return;

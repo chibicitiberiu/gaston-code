@@ -25,7 +25,6 @@ typedef BOOL (WINAPI *PFN_GETSAVEFILENAMEA)(LPOPENFILENAMEA);
 static int ask_for_path(HWND owner, const char *suggested,
                         char *out, unsigned cap)
 {
-    HMODULE dll;
     PFN_GETSAVEFILENAMEA fn;
     OPENFILENAMEA ofn;
     char name[MAX_PATH];
@@ -34,16 +33,15 @@ static int ask_for_path(HWND owner, const char *suggested,
     rc_strf(name, sizeof(name), "%s",
             (suggested && *suggested) ? suggested : "CHAT.HTM");
 
-    dll = LoadLibraryA("comdlg32.dll");
-    if (!dll) {
+    Dll dll(LoadLibraryA("comdlg32.dll"));
+    if (!dll.valid()) {
         rc_log("export: comdlg32 not available (%lu)",
                (unsigned long)GetLastError());
         return 0;
     }
-    fn = (PFN_GETSAVEFILENAMEA)GetProcAddress(dll, "GetSaveFileNameA");
+    fn = (PFN_GETSAVEFILENAMEA)GetProcAddress(dll.get(), "GetSaveFileNameA");
     if (!fn) {
         rc_log("export: GetSaveFileNameA not found");
-        FreeLibrary(dll);
         return 0;
     }
 
@@ -67,12 +65,11 @@ static int ask_for_path(HWND owner, const char *suggested,
          * matters here -- a wrong lStructSize, CDERR_STRUCTSIZE == 1 -- looks
          * exactly like the user pressing Cancel. */
         typedef DWORD (WINAPI *PFN_ERR)(void);
-        PFN_ERR err = (PFN_ERR)GetProcAddress(dll, "CommDlgExtendedError");
+        PFN_ERR err = (PFN_ERR)GetProcAddress(dll.get(), "CommDlgExtendedError");
         rc_log("export: no path chosen (ofn=%u, err=%lu)",
                (unsigned)sizeof(ofn),
                err ? (unsigned long)err() : 0UL);
     }
-    FreeLibrary(dll);
     if (!ok) return 0;
     rc_strf(out, cap, "%s", name);
     return 1;
@@ -96,7 +93,7 @@ rc_export::~rc_export()
 
 void rc_export::cleanup(void)
 {
-    if (fp) { fclose(fp); fp = NULL; }
+    fp.reset();
     if (tmp[0]) { DeleteFileA(tmp); tmp[0] = '\0'; }
     dest[0] = '\0';
     got = 0;
@@ -107,7 +104,7 @@ int rc_export::begin(HWND owner, const char *suggested)
 {
     char path[MAX_PATH];
 
-    if (fp) {
+    if (fp.valid()) {
         if (html) html->error("An export is already in progress.");
         return 0;
     }
@@ -135,8 +132,8 @@ int rc_export::begin(HWND owner, const char *suggested)
         tmp[0] = '\0';
         return 0;
     }
-    fp = fopen(tmp, "wb");
-    if (!fp) {
+    fp.reset(fopen(tmp, "wb"));
+    if (!fp.valid()) {
         rc_log("export: cannot open %s", tmp);
         if (html)
             html->error("Could not create the file. Check the drive has room "
@@ -159,7 +156,7 @@ void rc_export::give_up(void)
      * data arrived", which was only true of the first caller. cleanup()
      * closes the FILE* and removes the .$$$ either way: a half-written export
      * is not a smaller export, it is a broken file. */
-    if (fp)
+    if (fp.valid())
         rc_log("export: abandoned after %lu of %lu bytes",
                (unsigned long)got, (unsigned long)total);
     cleanup();
@@ -169,7 +166,7 @@ int rc_export::frame(rc_frame *f)
 {
     if (strcmp(f->type, "EXPORTSTART") == 0) {
         const char *t = rc_frame_get(f, "total");
-        if (!fp) {
+        if (!fp.valid()) {
             /* Nothing asked for this, so nothing is open. Possible after a
              * reconnect that replayed a request, and dropping it is correct:
              * writing to a path the user has not chosen would be worse. */
@@ -183,7 +180,7 @@ int rc_export::frame(rc_frame *f)
     if (strcmp(f->type, "EXPORTDAT") == 0) {
         const char *o = rc_frame_get(f, "off");
         unsigned long off = o ? (unsigned long)atol(o) : 0;
-        if (!fp) return 1;
+        if (!fp.valid()) return 1;
 
         /* A chunk that does not continue where the last one stopped means a
          * hole, and a file with a hole in it renders as garbage from that
@@ -199,7 +196,7 @@ int rc_export::frame(rc_frame *f)
             return 1;
         }
         if (f->body_len
-            && fwrite(f->body, 1, f->body_len, fp) != f->body_len) {
+            && fwrite(f->body, 1, f->body_len, fp.get()) != f->body_len) {
             rc_log("export: write failed at %lu", got);
             if (html)
                 html->error("Writing the file failed -- the drive may be "
@@ -217,7 +214,7 @@ int rc_export::frame(rc_frame *f)
         int ok = (st && strcmp(st, "ok") == 0);
         char msg[320];
 
-        if (!fp) return 1;
+        if (!fp.valid()) return 1;
         /* CHECKED, because stdio buffers and this is where the last buffer
          * actually reaches the disk.
          *
@@ -228,10 +225,15 @@ int rc_export::frame(rc_frame *f)
          * renamed into the name the user chose. export.h names that exact
          * outcome as the thing the temp file exists to prevent: "they would
          * open it, see most of a conversation, and have no way to tell that
-         * the end is missing." */
+         * the end is missing."
+         *
+         * release(), not reset(): the guard's own release() calls fclose and
+         * throws away what it returns, which is exactly the return value
+         * this block exists to check. So the close stays hand-written; the
+         * guard only hands over the FILE* it would otherwise have closed
+         * itself. */
         {
-            int closed = fclose(fp);
-            fp = NULL;
+            int closed = fclose(fp.release());
             if (closed != 0) {
                 rc_log("export: fclose failed after %lu bytes -- out of disk?",
                        (unsigned long)got);
@@ -274,8 +276,8 @@ int rc_export::frame(rc_frame *f)
                     "It is at %s", tmp);
             if (html) html->error(msg);
             /* NOT cleanup(): that would delete the file this just told the
-             * user where to find. */
-            fp = NULL; tmp[0] = '\0'; dest[0] = '\0'; got = 0; total = 0;
+             * user where to find. fp is already released, above. */
+            tmp[0] = '\0'; dest[0] = '\0'; got = 0; total = 0;
             return 1;
         }
         rc_strf(msg, sizeof(msg), "Conversation exported to %s (%lu bytes).",

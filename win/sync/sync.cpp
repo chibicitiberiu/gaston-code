@@ -16,6 +16,7 @@
 #include "sync/sync.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 #include "miniz.h"
 
 /* --- classification + checksum, in ONE read pass ------------------------- */
@@ -188,7 +189,6 @@ typedef struct {
 
 int rc_sync_stat_file(const char *path, rc_sync_stat *out)
 {
-    HANDLE h;
     scan_scratch *sc;
     scan_state *stp;
     unsigned char *buf;
@@ -231,17 +231,16 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
      * lock, and a file we cannot read must be reported UNREADABLE rather than
      * omitted. Omitting it reads as absent, which becomes a tombstone, and then
      * the user's later edits are invisible forever. */
-    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) {
+    Handle h(CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
+    if (!h.valid()) {
         out->type = 'u';
         HeapFree(GetProcessHeap(), 0, sc);
         return 0;
     }
 
     for (;;) {
-        if (!ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL)) {
-            CloseHandle(h);
+        if (!ReadFile(h.get(), buf, RC_SYNC_CHUNK, &got, NULL)) {
             out->type = 'u';
             HeapFree(GetProcessHeap(), 0, sc);
             return 0;
@@ -250,8 +249,7 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
         scan_chunk(stp, buf, got);
         out->size += got;
     }
-    if (GetFileTime(h, NULL, NULL, &ft)) out->mtime = to_unix(&ft);
-    CloseHandle(h);
+    if (GetFileTime(h.get(), NULL, NULL, &ft)) out->mtime = to_unix(&ft);
 
     out->type = 'f';
     /* The tail fixup (CR pending at EOF), classification and crc_raw/
@@ -431,7 +429,6 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
     char child[MAX_PATH];
     char full[MAX_PATH];
     WIN32_FIND_DATAA fd;
-    HANDLE h;
 
     if (depth > RC_SYNC_MAX_DEPTH || w->overflow) return;
 
@@ -446,8 +443,8 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
                    sizeof(pattern) - strlen(pattern), "\\*"))
         return;
 
-    h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
+    FindHandle h(FindFirstFileA(pattern, &fd));
+    if (!h.valid()) return;
 
     do {
         rc_sync_stat st;
@@ -543,9 +540,7 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
             w->sink(w->ctx, child, &st);
             w->count++;
         }
-    } while (FindNextFileA(h, &fd));
-
-    FindClose(h);
+    } while (FindNextFileA(h.get(), &fd));
 }
 
 int rc_sync_scan(const char *root, rc_sync_sink sink, void *ctx)
@@ -717,7 +712,6 @@ static void recover_dir(const char *root, const char *rel, int depth)
 {
     char pattern[MAX_PATH], child[MAX_PATH], aside[MAX_PATH], real[MAX_PATH];
     WIN32_FIND_DATAA fd;
-    HANDLE h;
 
     if (depth > RC_SYNC_MAX_DEPTH) return;
     if (*rel) rc_sync_join(pattern, sizeof(pattern), root, rel);
@@ -731,8 +725,8 @@ static void recover_dir(const char *root, const char *rel, int depth)
                    sizeof(pattern) - strlen(pattern), "\\*"))
         return;
 
-    h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
+    FindHandle h(FindFirstFileA(pattern, &fd));
+    if (!h.valid()) return;
     do {
         unsigned len = (unsigned)strlen(fd.cFileName);
         if (fd.cFileName[0] == '.' &&
@@ -783,8 +777,7 @@ static void recover_dir(const char *root, const char *rel, int depth)
             }
             DeleteFileA(aside);       /* an abandoned transfer */
         }
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
+    } while (FindNextFileA(h.get(), &fd));
 }
 
 void rc_sync_recover(const char *root)

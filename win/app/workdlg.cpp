@@ -16,6 +16,7 @@
 #include "app/workdir.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 #include "sync/syncrpc.h"
 
 #define ID_CUR      300
@@ -571,15 +572,16 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
              * WinMain, with no log -- and a Review button is not worth the
              * program refusing to start. */
             {
-                HMODULE sh = LoadLibraryA("shell32.dll");
-                PFN_SHEXEC go = sh ? (PFN_SHEXEC)GetProcAddress(
-                                          sh, "ShellExecuteA") : NULL;
+                Dll sh(LoadLibraryA("shell32.dll"));
+                PFN_SHEXEC go = sh.valid()
+                    ? (PFN_SHEXEC)GetProcAddress(sh.get(), "ShellExecuteA")
+                    : NULL;
                 if (go)
                     go(dlg, "open", st->current, NULL, NULL, SW_SHOWNORMAL);
                 else
                     MessageBoxA(dlg, st->current, "Work Directory",
                                 MB_OK | MB_ICONINFORMATION);
-                if (sh) FreeLibrary(sh);
+                /* sh releases here */
             }
             return TRUE;
 

@@ -30,11 +30,12 @@
 #include <windows.h>
 #include <stdio.h>
 #include "net/frameproto.h"
+#include "core/rc_cpp.h"    /* File, the RAII guard `fp` uses */
 
 class rc_html;
 
 class rc_export {
-    FILE *fp;
+    File  fp;
     char  dest[MAX_PATH];
     char  tmp[MAX_PATH];
     unsigned long got;      /* decompressed bytes written so far */
@@ -65,7 +66,7 @@ public:
 
     /* Is a transfer in progress? Export refuses to start a second one: two
      * sinks would interleave into each other's files. */
-    int busy(void) const { return fp != 0; }
+    int busy(void) const { return fp.valid(); }
 };
 
 #endif

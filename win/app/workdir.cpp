@@ -8,6 +8,7 @@
 #include "core/log.h"
 #include "core/path.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 #include "rpc/rpc.h"
 #include "sync/sync.h"
 #include "sync/syncrpc.h"
@@ -104,7 +105,6 @@ static int CALLBACK browse_init(HWND dlg, UINT msg, LPARAM lp, LPARAM data)
 
 int rc_workdir_browse(HWND owner, const char *start, char *out, unsigned cap)
 {
-    HMODULE dll;
     PFN_BROWSE browse;
     PFN_GETPATH getpath;
     BROWSEINFOA bi;
@@ -120,17 +120,16 @@ int rc_workdir_browse(HWND owner, const char *start, char *out, unsigned cap)
      * the same reason. An import that cannot resolve kills the image at load,
      * before WinMain, with no log written, and a folder picker is not worth
      * the program refusing to start on a stripped install. */
-    dll = LoadLibraryA("shell32.dll");
-    if (!dll) {
+    Dll dll(LoadLibraryA("shell32.dll"));
+    if (!dll.valid()) {
         rc_log("workdir: shell32 not available (%lu)",
                (unsigned long)GetLastError());
         return 0;
     }
-    browse = (PFN_BROWSE)GetProcAddress(dll, "SHBrowseForFolderA");
-    getpath = (PFN_GETPATH)GetProcAddress(dll, "SHGetPathFromIDListA");
+    browse = (PFN_BROWSE)GetProcAddress(dll.get(), "SHBrowseForFolderA");
+    getpath = (PFN_GETPATH)GetProcAddress(dll.get(), "SHGetPathFromIDListA");
     if (!browse || !getpath) {
         rc_log("workdir: no SHBrowseForFolderA in shell32");
-        FreeLibrary(dll);
         return 0;
     }
 
@@ -165,6 +164,5 @@ int rc_workdir_browse(HWND owner, const char *start, char *out, unsigned cap)
          * goes back. ole32 is already linked for MSHTML. */
         CoTaskMemFree(pidl);
     }
-    FreeLibrary(dll);
     return ok;
 }

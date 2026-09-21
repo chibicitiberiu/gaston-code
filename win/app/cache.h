@@ -37,6 +37,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include "core/rc_cpp.h"   /* File, the RAII guard page_fp/chat_fp use */
 
 class rc_html;
 
@@ -48,8 +49,8 @@ class rc_cache {
     char root[MAX_PATH];        /* <exe dir>\CACHE */
     char dir[MAX_PATH];         /* root\<key>, the open conversation */
     char sess[64];              /* the id `dir` was derived from */
-    FILE *page_fp;              /* open only between begin_page and end_page */
-    FILE *chat_fp;              /* the chat list, writing or reading */
+    File  page_fp;              /* open only between begin_page and end_page */
+    File  chat_fp;              /* the chat list, writing or reading */
     int   chat_bad;             /* a write failed; do not rename over the good copy */
     int   page_no;
     int   usable;               /* zero once the disk has said no */
@@ -68,7 +69,10 @@ public:
      * already there, and a cache somewhere else would be a second place to
      * look when clearing one machine's state. */
     static rc_cache *create(const char *exe_dir);
-    ~rc_cache();
+    /* page_fp and chat_fp are File guards: their destructors run right after
+     * this one, in declaration order, and close whichever is still open.
+     * Nothing left to do here by hand, which is why Watcom wants it inline. */
+    ~rc_cache() {}
 
     /* Which conversation the pages that follow belong to. Creates the
      * directory. An empty id parks the cache: writes are dropped rather than

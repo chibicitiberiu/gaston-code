@@ -34,6 +34,7 @@
 #include "rpc/exec.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 
 #define EXEC_CHUNK   8192
 #define EXEC_MAX_OUT (32u * 1024u)
@@ -73,9 +74,10 @@ void rc_exec_cancel(void)
      * means rc_rpc_start never ran, which means there is no child. g_cancel
      * is set above regardless, so a worker that starts later still sees it. */
     if (!g_child_lock_ready) return;
-    EnterCriticalSection(&g_child_lock);
-    if (g_child) TerminateProcess(g_child, 1);
-    LeaveCriticalSection(&g_child_lock);
+    {
+        ScopedLock lock(&g_child_lock);
+        if (g_child) TerminateProcess(g_child, 1);
+    }
 }
 
 /* Worker thread only, and it cannot run before the section exists:
@@ -93,9 +95,10 @@ static void set_child(HANDLE h)
         g_child = h;
         return;
     }
-    EnterCriticalSection(&g_child_lock);
-    g_child = h;
-    LeaveCriticalSection(&g_child_lock);
+    {
+        ScopedLock lock(&g_child_lock);
+        g_child = h;
+    }
 }
 
 /* The shell for this OS. The only place the guest's vintage should appear:
@@ -112,7 +115,13 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
     SECURITY_ATTRIBUTES sa;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
-    HANDLE rd = NULL, wr = NULL, in_rd = NULL, in_wr = NULL;
+    /* Guarded, and the CLOSE TIMING is still explicit where it is
+     * load-bearing: `wr` and `in_rd` must survive CreateProcess (the child
+     * inherits them) and must be gone immediately after it, or ReadFile on
+     * `rd` never sees EOF because this process still holds the write end.
+     * A destructor cannot express "close here, in the middle"; reset() can,
+     * and the guard still covers every path out. */
+    HANDLE rd_h = NULL, wr_h = NULL, in_rd_h = NULL, in_wr_h = NULL;
     DWORD start;
     char cmd[EXEC_MAX_CMD];
     int fit;
@@ -156,7 +165,8 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
     memset(&sa, 0, sizeof(sa));
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
-    if (!CreatePipe(&rd, &wr, &sa, 16384)) return -1;
+    if (!CreatePipe(&rd_h, &wr_h, &sa, 16384)) return -1;
+    Handle rd(rd_h), wr(wr_h);
 
     /* An empty, immediately-closed stdin.
      *
@@ -176,11 +186,9 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
      * that genuinely reads handle 0 (`sort`, `more`, `find` with no pipe)
      * gets a defined immediate EOF instead of an invalid handle. That is a
      * real improvement over NULL; answering prompts never was. */
-    if (!CreatePipe(&in_rd, &in_wr, &sa, 256)) {
-        CloseHandle(rd); CloseHandle(wr);
-        return -1;
-    }
-    CloseHandle(in_wr);         /* EOF the moment the child reads */
+    if (!CreatePipe(&in_rd_h, &in_wr_h, &sa, 256)) return -1;
+    Handle in_rd(in_rd_h), in_wr(in_wr_h);
+    in_wr.reset();              /* EOF the moment the child reads */
 
     /* The read end must not be inherited, or the pipe never reports EOF.
      * SetHandleInformation is the obvious call and it is Win2000+ -- a single
@@ -189,10 +197,9 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
      * the pre-2000 way and works everywhere. */
     {
         HANDLE dup = NULL;
-        if (DuplicateHandle(GetCurrentProcess(), rd, GetCurrentProcess(),
+        if (DuplicateHandle(GetCurrentProcess(), rd.get(), GetCurrentProcess(),
                             &dup, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-            CloseHandle(rd);
-            rd = dup;
+            rd.reset(dup);      /* closes the inheritable original */
         }
     }
 
@@ -200,9 +207,9 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;   /* CREATE_NO_WINDOW is invalid for 16-bit */
-    si.hStdOutput = wr;
-    si.hStdError  = wr;
-    si.hStdInput  = in_rd;
+    si.hStdOutput = wr.get();
+    si.hStdError  = wr.get();
+    si.hStdInput  = in_rd.get();
 
     start = GetTickCount();
     if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL,
@@ -210,11 +217,10 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
         out->error = GetLastError();
         rc_log("exec: CreateProcess failed: %lu (%s)",
                (unsigned long)out->error, cmd);
-        CloseHandle(rd); CloseHandle(wr); CloseHandle(in_rd);
-        return -1;
+        return -1;              /* rd/wr/in_rd close on the way out */
     }
-    CloseHandle(wr);            /* so ReadFile ends when the child exits */
-    CloseHandle(in_rd);
+    wr.reset();                 /* so ReadFile ends when the child exits */
+    in_rd.reset();
     set_child(pi.hProcess);
     out->status = RC_EXEC_OK;
 
@@ -227,9 +233,9 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
             break;
         }
 
-        if (PeekNamedPipe(rd, NULL, 0, NULL, &avail, NULL) && avail > 0) {
+        if (PeekNamedPipe(rd.get(), NULL, 0, NULL, &avail, NULL) && avail > 0) {
             DWORD want = avail > EXEC_CHUNK ? EXEC_CHUNK : avail;
-            if (ReadFile(rd, g_chunk, want, &got, NULL) && got) {
+            if (ReadFile(rd.get(), g_chunk, want, &got, NULL) && got) {
                 if (out->bytes >= EXEC_MAX_OUT) {
                     /* Keep DRAINING past the cap. Stopping here is defect (3):
                      * the child blocks writing to a pipe nobody empties and we
@@ -256,7 +262,7 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
              * loop read no flag, so cancel could not break it either -- which
              * made exec.h's "cancellable from another thread" false exactly
              * here. The worker would hang and shutdown would GPF. */
-            while (PeekNamedPipe(rd, NULL, 0, NULL, &avail, NULL) && avail) {
+            while (PeekNamedPipe(rd.get(), NULL, 0, NULL, &avail, NULL) && avail) {
                 DWORD want = avail > EXEC_CHUNK ? EXEC_CHUNK : avail;
                 if (g_cancel) { out->status = RC_EXEC_CANCELLED; break; }
                 if (GetTickCount() - start > timeout_ms) {
@@ -268,7 +274,7 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
                     out->truncated = 1;
                     break;
                 }
-                if (!ReadFile(rd, g_chunk, want, &got, NULL) || !got) break;
+                if (!ReadFile(rd.get(), g_chunk, want, &got, NULL) || !got) break;
                 if (out->bytes < EXEC_MAX_OUT) {
                     DWORD room = EXEC_MAX_OUT - out->bytes;
                     DWORD use = got > room ? room : got;
@@ -291,6 +297,5 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
     set_child(NULL);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    CloseHandle(rd);
-    return 0;
+    return 0;                   /* rd closes here */
 }

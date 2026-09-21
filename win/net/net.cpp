@@ -160,9 +160,10 @@ long rc_net_inflight(const rc_net *n)
 unsigned rc_net_outq_bytes(rc_net *n)
 {
     unsigned b;
-    EnterCriticalSection(&n->send_lock);
-    b = n->outq_bytes;
-    LeaveCriticalSection(&n->send_lock);
+    {
+        ScopedLock lock(&n->send_lock);
+        b = n->outq_bytes;
+    }
     return b;
 }
 
@@ -687,11 +688,12 @@ static void outq_free(rc_outq_item *it)
 static void outq_clear(rc_net *n)
 {
     rc_outq_item *it;
-    EnterCriticalSection(&n->send_lock);
-    it = n->outq_head;
-    n->outq_head = n->outq_tail = NULL;
-    n->outq_bytes = 0;
-    LeaveCriticalSection(&n->send_lock);
+    {
+        ScopedLock lock(&n->send_lock);
+        it = n->outq_head;
+        n->outq_head = n->outq_tail = NULL;
+        n->outq_bytes = 0;
+    }
     while (it) {
         rc_outq_item *next = it->next;
         outq_free(it);
@@ -707,14 +709,15 @@ static unsigned __stdcall sender_thread(void *arg)
     while (n->running) {
         rc_outq_item *it = NULL;
 
-        EnterCriticalSection(&n->send_lock);
-        if (n->outq_head) {
-            it = n->outq_head;
-            n->outq_head = it->next;
-            if (!n->outq_head) n->outq_tail = NULL;
-            n->outq_bytes -= it->len;
+        {
+            ScopedLock lock(&n->send_lock);
+            if (n->outq_head) {
+                it = n->outq_head;
+                n->outq_head = it->next;
+                if (!n->outq_head) n->outq_tail = NULL;
+                n->outq_bytes -= it->len;
+            }
         }
-        LeaveCriticalSection(&n->send_lock);
 
         if (!it) {
             /* Timed wait rather than infinite: `running` going to 0 must be
@@ -927,9 +930,10 @@ void rc_net_stop(rc_net *n)
         int waited = 0;
         for (;;) {
             int empty;
-            EnterCriticalSection(&n->send_lock);
-            empty = (n->outq_head == NULL);
-            LeaveCriticalSection(&n->send_lock);
+            {
+                ScopedLock lock(&n->send_lock);
+                empty = (n->outq_head == NULL);
+            }
             if (empty || waited >= 200 || !n->running) break;
             Sleep(10);
             waited++;

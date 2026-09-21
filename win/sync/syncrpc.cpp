@@ -15,6 +15,7 @@
 #include "core/log.h"
 #include "core/path.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 
 /* What is mirrored RIGHT NOW -- this conversation's folder, or "" while
  * nothing is being shared. Bridge-directed; see app/workdir.h. */
@@ -61,9 +62,10 @@ static int root_snapshot(char *out, unsigned cap)
 {
     int got;
     root_lock_init();
-    EnterCriticalSection(&g_root_lock);
-    got = rc_strf(out, cap, "%s", g_root);
-    LeaveCriticalSection(&g_root_lock);
+    {
+        ScopedLock lock(&g_root_lock);
+        got = rc_strf(out, cap, "%s", g_root);
+    }
     return got && out[0];
 }
 
@@ -80,9 +82,10 @@ static char g_home[MAX_PATH];
 void rc_syncrpc_set_root(const char *root)
 {
     root_lock_init();
-    EnterCriticalSection(&g_root_lock);
-    rc_strf(g_root, sizeof(g_root), "%s", root ? root : "");
-    LeaveCriticalSection(&g_root_lock);
+    {
+        ScopedLock lock(&g_root_lock);
+        rc_strf(g_root, sizeof(g_root), "%s", root ? root : "");
+    }
 }
 
 const char *rc_syncrpc_root(void) { return g_root; }
@@ -96,9 +99,10 @@ const char *rc_syncrpc_root(void) { return g_root; }
 void rc_syncrpc_set_home(const char *home)
 {
     root_lock_init();
-    EnterCriticalSection(&g_root_lock);
-    rc_strf(g_home, sizeof(g_home), "%s", home ? home : "");
-    LeaveCriticalSection(&g_root_lock);
+    {
+        ScopedLock lock(&g_root_lock);
+        rc_strf(g_home, sizeof(g_home), "%s", home ? home : "");
+    }
 }
 
 /* A caller's own copy, like root_snapshot. The bare-pointer accessor this
@@ -108,9 +112,10 @@ int rc_syncrpc_home_copy(char *out, unsigned cap)
 {
     int got;
     root_lock_init();
-    EnterCriticalSection(&g_root_lock);
-    got = rc_strf(out, cap, "%s", g_home);
-    LeaveCriticalSection(&g_root_lock);
+    {
+        ScopedLock lock(&g_root_lock);
+        got = rc_strf(out, cap, "%s", g_home);
+    }
     return got && out[0];
 }
 

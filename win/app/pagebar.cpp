@@ -153,7 +153,7 @@ rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
                                           IMAGE_BITMAP, 0, 0,
                                           LR_DEFAULTCOLOR);
         if (bmp) {
-            follow_bmp = bmp;
+            follow_bmp.reset(bmp);
             SendMessageA(follow, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bmp);
         }
         else

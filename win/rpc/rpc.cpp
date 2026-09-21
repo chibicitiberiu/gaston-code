@@ -23,6 +23,7 @@
 #include "sync/sync.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 
 /* 03.15: the three points of run_one's timeout clamp, named rather than
  * three bare literals -- this is one side of a three-way contract (PLAN.md
@@ -246,9 +247,10 @@ void rc_rpc_set_sync_root(const char *root)
      *
      * The lock is skipped before rc_rpc_start has created it, which is the
      * startup call -- single-threaded by construction at that point. */
-    if (g_ready) EnterCriticalSection(&g_lock);
-    rc_strf(g_sync_root, sizeof(g_sync_root), "%s", root ? root : "");
-    if (g_ready) LeaveCriticalSection(&g_lock);
+    {
+        ScopedLockIf lock(&g_lock, g_ready);
+        rc_strf(g_sync_root, sizeof(g_sync_root), "%s", root ? root : "");
+    }
     if (g_wake) SetEvent(g_wake);
 }
 
@@ -288,9 +290,10 @@ static void rpc_watch_sync(void)
 {
     char want[MAX_PATH];
 
-    if (g_ready) EnterCriticalSection(&g_lock);
-    rc_strf(want, sizeof(want), "%s", g_sync_root);
-    if (g_ready) LeaveCriticalSection(&g_lock);
+    {
+        ScopedLockIf lock(&g_lock, g_ready);
+        rc_strf(want, sizeof(want), "%s", g_sync_root);
+    }
 
     if (strcmp(want, g_watch_root) == 0) return;
 
@@ -466,25 +469,35 @@ static unsigned __stdcall rpc_thread(void *arg)
     (void)arg;
     while (g_running) {
         rc_frame *f = NULL;
+        int from_syncq = 0;
 
         /* Sync first, always. An EXEC runs for up to two minutes and a sync
          * chunk queued behind it stalls a transfer the bridge is holding a
          * future for; a sync frame, by contrast, is a few milliseconds of file
          * I/O, so draining it first cannot starve anything. */
-        EnterCriticalSection(&g_lock);
-        if (g_syncq_n) {
-            f = g_syncq[g_syncq_head];
-            g_syncq[g_syncq_head] = NULL;
-            g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
-            g_syncq_n--;
-            LeaveCriticalSection(&g_lock);
+        /* Take one frame under the lock, decide what it is, and do the WORK
+         * outside -- rc_syncrpc_handle is file I/O and must not run holding
+         * g_lock. The release used to sit in the middle of the `if`, so the
+         * function had two exits from one locked region; the guard takes the
+         * frame and the flag, and the handling happens after the block. */
+        {
+            ScopedLock lock(&g_lock);
+            if (g_syncq_n) {
+                f = g_syncq[g_syncq_head];
+                g_syncq[g_syncq_head] = NULL;
+                g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
+                g_syncq_n--;
+                from_syncq = 1;
+            } else {
+                f = g_queued;
+                g_queued = NULL;
+            }
+        }
+        if (from_syncq) {
             rc_syncrpc_handle(g_net, f);
             drop(f);
             continue;
         }
-        f = g_queued;
-        g_queued = NULL;
-        LeaveCriticalSection(&g_lock);
 
         if (!f) {
             /* The watcher is an ACCELERATOR. Polling is the mechanism, so the
@@ -542,25 +555,37 @@ static unsigned __stdcall rpc_thread(void *arg)
      * change the link dropped with the queue unanswered and zero busy acks
      * on the wire; after it, exactly RPC_SYNCQ_MAX of them arrive just before
      * the close. */
-    EnterCriticalSection(&g_lock);
-    while (g_syncq_n) {
-        rc_frame *q = g_syncq[g_syncq_head];
-        g_syncq[g_syncq_head] = NULL;
-        g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
-        g_syncq_n--;
-        LeaveCriticalSection(&g_lock);
+    /* One item per pass, each taken under the guard and answered outside it.
+     * This used to hold the section across the whole loop and drop it in the
+     * middle of each iteration to send the ack -- correct, but with three
+     * Enter/Leave calls in two nesting levels and a separate `else` whose
+     * only job was to release. */
+    for (;;) {
+        rc_frame *q = NULL;
+        {
+            ScopedLock lock(&g_lock);
+            if (g_syncq_n) {
+                q = g_syncq[g_syncq_head];
+                g_syncq[g_syncq_head] = NULL;
+                g_syncq_head = (g_syncq_head + 1) % RPC_SYNCQ_MAX;
+                g_syncq_n--;
+            }
+        }
+        if (!q) break;
         reject_sync_busy(q);
         drop(q);
-        EnterCriticalSection(&g_lock);
     }
-    if (g_queued) {
-        rc_frame *f = g_queued;
-        g_queued = NULL;
-        LeaveCriticalSection(&g_lock);
-        reject_busy(f);
-        drop(f);
-    } else {
-        LeaveCriticalSection(&g_lock);
+    {
+        rc_frame *last = NULL;
+        {
+            ScopedLock lock(&g_lock);
+            last = g_queued;
+            g_queued = NULL;
+        }
+        if (last) {
+            reject_busy(last);
+            drop(last);
+        }
     }
     return 0;
 }
@@ -699,9 +724,10 @@ int rc_rpc_syncq_full(void)
 {
     int n;
     if (!g_ready) return 0;
-    EnterCriticalSection(&g_lock);
-    n = g_syncq_n;
-    LeaveCriticalSection(&g_lock);
+    {
+        ScopedLock lock(&g_lock);
+        n = g_syncq_n;
+    }
     return n >= RPC_SYNCQ_MAX;
 }
 
@@ -720,14 +746,15 @@ int rc_rpc_submit(rc_frame *f)
 
     if (is_sync(f)) {
         int full = 0;
-        EnterCriticalSection(&g_lock);
-        if (g_syncq_n >= RPC_SYNCQ_MAX) {
-            full = 1;
-        } else {
-            g_syncq[(g_syncq_head + g_syncq_n) % RPC_SYNCQ_MAX] = f;
-            g_syncq_n++;
+        {
+            ScopedLock lock(&g_lock);
+            if (g_syncq_n >= RPC_SYNCQ_MAX) {
+                full = 1;
+            } else {
+                g_syncq[(g_syncq_head + g_syncq_n) % RPC_SYNCQ_MAX] = f;
+                g_syncq_n++;
+            }
         }
-        LeaveCriticalSection(&g_lock);
         if (full) {
             /* The caller is rc_rpc_syncq_full()-aware and should not have got
              * here; answering `busy` is better than dropping the frame, which
@@ -740,10 +767,11 @@ int rc_rpc_submit(rc_frame *f)
         return 0;
     }
 
-    EnterCriticalSection(&g_lock);
-    if (g_queued) busy = 1;
-    else          g_queued = f;
-    LeaveCriticalSection(&g_lock);
+    {
+        ScopedLock lock(&g_lock);
+        if (g_queued) busy = 1;
+        else          g_queued = f;
+    }
 
     if (busy) {
         /* Always EXECRESULT here, never SYNCPUTACK/SYNCEND/SYNCDATEND: a

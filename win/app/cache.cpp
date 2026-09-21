@@ -56,14 +56,6 @@ rc_cache *rc_cache::create(const char *exe_dir)
     return p;
 }
 
-rc_cache::~rc_cache()
-{
-    if (page_fp) fclose(page_fp);
-    page_fp = NULL;
-    if (chat_fp) fclose(chat_fp);
-    chat_fp = NULL;
-}
-
 /* Non-zero if the whole path fit. CHECKED by every caller, because a
  * truncated one is not a shorter path, it is a DIFFERENT file: with an exe
  * directory near 250 characters the "P%03d.HTM" suffix is what gets cut, so
@@ -80,9 +72,8 @@ void rc_cache::open_session(const char *session_id)
 {
     char key[RC_CACHE_KEY];
     char last[MAX_PATH];
-    FILE *fp;
 
-    if (page_fp) { fclose(page_fp); page_fp = NULL; }
+    page_fp.reset();
     if (!usable || !session_id || !*session_id) {
         dir[0] = '\0';
         sess[0] = '\0';
@@ -113,27 +104,26 @@ void rc_cache::open_session(const char *session_id)
      * "save on the way out" that a power cut skips is worse than useless --
      * it would restore whatever was open two sessions ago. */
     rc_strf(last, sizeof(last), "%s\\LAST.TXT", root);
-    fp = fopen(last, "wb");
-    if (fp) {
-        fwrite(session_id, 1, strlen(session_id), fp);
-        fclose(fp);
+    {
+        File fp(fopen(last, "wb"));
+        if (fp.valid())
+            fwrite(session_id, 1, strlen(session_id), fp.get());
     }
 }
 
 void rc_cache::last_session(char *out, unsigned cap) const
 {
     char path[MAX_PATH];
-    FILE *fp;
     size_t n;
 
     if (!out || cap == 0) return;
     out[0] = '\0';
     if (!usable) return;
     rc_strf(path, sizeof(path), "%s\\LAST.TXT", root);
-    fp = fopen(path, "rb");
-    if (!fp) return;
-    n = fread(out, 1, cap - 1, fp);
-    fclose(fp);
+
+    File fp(fopen(path, "rb"));
+    if (!fp.valid()) return;
+    n = fread(out, 1, cap - 1, fp.get());
     out[n] = '\0';
     /* Written without a terminator, so trim anything a text editor may have
      * added if somebody opened it. */
@@ -145,7 +135,7 @@ void rc_cache::begin_page(int n)
 {
     char path[MAX_PATH];
 
-    if (page_fp) { fclose(page_fp); page_fp = NULL; }
+    page_fp.reset();
     if (!usable || !dir[0] || n < 1) return;
 
     page_no = n;
@@ -154,18 +144,17 @@ void rc_cache::begin_page(int n)
      * whole one -- the whole point of this module is that what it hands back
      * is what the bridge actually sent. */
     rc_strf(path, sizeof(path), "%s\\P%03d.TMP", dir, n);
-    page_fp = fopen(path, "wb");
-    if (!page_fp)
+    page_fp.reset(fopen(path, "wb"));
+    if (!page_fp.valid())
         rc_log("cache: cannot write %s (page %d not kept)", path, n);
 }
 
 void rc_cache::add(const void *body, unsigned len)
 {
-    if (!page_fp || !body || !len) return;
-    if (fwrite(body, 1, len, page_fp) != len) {
+    if (!page_fp.valid() || !body || !len) return;
+    if (fwrite(body, 1, len, page_fp.get()) != len) {
         rc_log("cache: write failed on page %d; dropping it", page_no);
-        fclose(page_fp);
-        page_fp = NULL;
+        page_fp.reset();
     }
 }
 
@@ -173,9 +162,8 @@ void rc_cache::end_page()
 {
     char tmp[MAX_PATH], dest[MAX_PATH];
 
-    if (!page_fp) return;
-    fclose(page_fp);
-    page_fp = NULL;
+    if (!page_fp.valid()) return;
+    page_fp.reset();
 
     /* Both checked: a truncated pair can alias a DIFFERENT page's file, and
      * the next two lines delete and rename. */
@@ -195,31 +183,29 @@ void rc_cache::end_page()
 int rc_cache::load_page(int n, rc_html *html)
 {
     char path[MAX_PATH];
-    FILE *fp;
     long size;
     char *buf;
     size_t got;
 
     if (!usable || !dir[0] || !html || n < 1) return 0;
     if (!path_for(path, sizeof(path), n)) return 0;
-    fp = fopen(path, "rb");
-    if (!fp) return 0;
 
-    fseek(fp, 0, SEEK_END);
-    size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
+    File fp(fopen(path, "rb"));
+    if (!fp.valid()) return 0;
+
+    fseek(fp.get(), 0, SEEK_END);
+    size = ftell(fp.get());
+    fseek(fp.get(), 0, SEEK_SET);
     if (size <= 0 || size > CACHE_PAGE_MAX) {
         rc_log("cache: page %d is %ld bytes; refusing to load it", n, size);
-        fclose(fp);
         return 0;
     }
 
     /* The heap, and freed before returning. One page at a time is the same
      * ceiling the live path already lives under; holding two would not be. */
     buf = (char *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)size + 1);
-    if (!buf) { fclose(fp); return 0; }
-    got = fread(buf, 1, (size_t)size, fp);
-    fclose(fp);
+    if (!buf) return 0;
+    got = fread(buf, 1, (size_t)size, fp.get());
     buf[got] = '\0';
 
     html->block(buf);
@@ -246,25 +232,25 @@ void rc_cache::begin_chats()
 {
     char tmp[MAX_PATH];
 
-    if (chat_fp) { fclose(chat_fp); chat_fp = NULL; }
+    chat_fp.reset();
     if (!usable) return;
     rc_strf(tmp, sizeof(tmp), "%s\\CHATS.TMP", root);
-    chat_fp = fopen(tmp, "wb");
+    chat_fp.reset(fopen(tmp, "wb"));
     chat_bad = 0;
     /* Logged, unlike before -- every other fopen in this file says when it
      * fails, and a chat cache that silently never starts is a cold start that
      * silently shows nothing. */
-    if (!chat_fp) rc_log("cache: cannot write %s", tmp);
+    if (!chat_fp.valid()) rc_log("cache: cannot write %s", tmp);
 }
 
 void rc_cache::add_chat(const char *line)
 {
-    if (!chat_fp || !line) return;
+    if (!chat_fp.valid() || !line) return;
     /* TRACKED, the way rc_cache::add already does it for a page. A disk that
      * fills partway through a 40-conversation list must not end up replacing
      * a complete CHATS.TXT with a truncated one -- the next cold start would
      * show a chat list missing its tail with nothing to say why. */
-    if (fputs(line, chat_fp) == EOF || fputc('\n', chat_fp) == EOF)
+    if (fputs(line, chat_fp.get()) == EOF || fputc('\n', chat_fp.get()) == EOF)
         chat_bad = 1;
 }
 
@@ -273,11 +259,12 @@ void rc_cache::end_chats()
     char tmp[MAX_PATH], dest[MAX_PATH];
     int bad;
 
-    if (!chat_fp) return;
+    if (!chat_fp.valid()) return;
     /* The close is part of the verdict: stdio buffers, so the last write
-     * reaches the disk here and nowhere else. */
-    bad = (fclose(chat_fp) != 0) || chat_bad;
-    chat_fp = NULL;
+     * reaches the disk here and nowhere else. release(), not reset(): the
+     * guard's own release discards fclose's return, and that return is what
+     * tells a full-disk failure apart from a clean close. */
+    bad = (fclose(chat_fp.release()) != 0) || chat_bad;
     rc_strf(tmp, sizeof(tmp), "%s\\CHATS.TMP", root);
     rc_strf(dest, sizeof(dest), "%s\\CHATS.TXT", root);
     if (bad) {
@@ -295,19 +282,19 @@ int rc_cache::chats_open()
 {
     char path[MAX_PATH];
 
-    if (chat_fp) { fclose(chat_fp); chat_fp = NULL; }
+    chat_fp.reset();
     if (!usable) return 0;
     rc_strf(path, sizeof(path), "%s\\CHATS.TXT", root);
-    chat_fp = fopen(path, "rb");
-    return chat_fp ? 1 : 0;
+    chat_fp.reset(fopen(path, "rb"));
+    return chat_fp.valid() ? 1 : 0;
 }
 
 int rc_cache::chats_next(char *out, unsigned cap)
 {
     unsigned n;
 
-    if (!chat_fp || !out || cap < 2) return 0;
-    if (!fgets(out, (int)cap, chat_fp)) return 0;
+    if (!chat_fp.valid() || !out || cap < 2) return 0;
+    if (!fgets(out, (int)cap, chat_fp.get())) return 0;
     n = (unsigned)strlen(out);
     while (n && (out[n - 1] == '\n' || out[n - 1] == '\r'))
         out[--n] = '\0';
@@ -316,5 +303,5 @@ int rc_cache::chats_next(char *out, unsigned cap)
 
 void rc_cache::chats_close()
 {
-    if (chat_fp) { fclose(chat_fp); chat_fp = NULL; }
+    chat_fp.reset();
 }

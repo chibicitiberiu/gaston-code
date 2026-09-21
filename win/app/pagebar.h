@@ -27,6 +27,7 @@
 #include "net/net.h"
 #include "net/frameproto.h"
 #include "app/htmlview.h"
+#include "core/rc_cpp.h"
 
 #ifndef __cplusplus
 #error "pagebar.h is C++; the page bar is a class now, see app/htmlview.h"
@@ -73,7 +74,7 @@ class rc_pagebar {
     rc_pagebar_send_fn send;
     /* The autoscroll button's face. BM_SETIMAGE does not take ownership, so
      * this class does -- see the destructor. */
-    HBITMAP follow_bmp;
+    GdiObj follow_bmp;
 
     rc_pagebar(const rc_pagebar &);
     rc_pagebar &operator=(const rc_pagebar &);
@@ -103,7 +104,7 @@ public:
     static rc_pagebar *create(HWND parent, HINSTANCE inst, HFONT font,
                                rc_net *net, rc_html *html,
                                rc_pagebar_send_fn send);
-    ~rc_pagebar() { if (follow_bmp) DeleteObject(follow_bmp); }
+    ~rc_pagebar() {}
 
     /* x: the strip's left edge (where Live starts). y: the strip's top.
      * Unlike the bar, the page strip is never hidden, so there is no

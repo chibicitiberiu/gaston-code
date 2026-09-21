@@ -139,6 +139,36 @@ public:
     ~ScopedLock() { LeaveCriticalSection(cs); }
 };
 
+/* A lock taken only if the section is actually there.
+ *
+ * Two modules initialise their CRITICAL_SECTION lazily -- log.cpp and
+ * rpc.cpp, both keyed on a `g_ready` int -- because the rule at the top of
+ * this file forbids a file-scope object with a constructor, so there is no
+ * way to have one ready before WinMain. Both wrote the pair out longhand:
+ *
+ *     if (g_ready) EnterCriticalSection(&g_lock);
+ *     ...
+ *     if (g_ready) LeaveCriticalSection(&g_lock);
+ *
+ * which reads the flag TWICE. Anything that clears it in between -- and
+ * rc_log_close used to do exactly that -- leaves the section entered and
+ * never left. Capturing the decision once, at construction, is the whole
+ * point of this class; the destructor cannot disagree with the constructor
+ * about whether a lock was taken.
+ */
+class ScopedLockIf {
+    CRITICAL_SECTION *cs;
+    ScopedLockIf(const ScopedLockIf &);
+    ScopedLockIf &operator=(const ScopedLockIf &);
+public:
+    ScopedLockIf(CRITICAL_SECTION *c, int ready) : cs(ready ? c : 0)
+    { if (cs) EnterCriticalSection(cs); }
+    ~ScopedLockIf() { if (cs) LeaveCriticalSection(cs); }
+    /* Whether it actually holds anything -- for the caller that wants to
+     * skip work rather than do it unlocked. */
+    int held() const { return cs != 0; }
+};
+
 /* --- one owner, any resource --------------------------------------------
  *
  * `Handle` and `FindHandle` used to be written out longhand here, and the

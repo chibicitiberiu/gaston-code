@@ -52,8 +52,6 @@ int rc_chats::text_width()
  * call, so this stays one GDI round trip per label rather than a search. */
 void rc_chats::fit_label(char *label, unsigned cap, int avail_px, int bold)
 {
-    HDC dc;
-    HFONT old;
     SIZE sz;
     INT fit = 0;
     int n;
@@ -67,26 +65,26 @@ void rc_chats::fit_label(char *label, unsigned cap, int avail_px, int bold)
     n = (int)strlen(label);
     if (n <= 0) return;
 
-    dc = GetDC(list);
-    if (!dc) return;
-    /* THE FONT THE ROW IS ACTUALLY DRAWN WITH. The open conversation is
-     * drawn in font_bold (see the draw code below), and bold is wider than
-     * normal -- so measuring every row with font_normal let exactly that row
-     * overflow. That is the condition this file documents as making Win98's
-     * listbox paint over its own WS_EX_CLIENTEDGE border, "measured as white
-     * pixels at x=8,9": the documented fix did not cover the one row most
-     * likely to trigger it. (audit 01.37) */
-    old = (HFONT)SelectObject(dc, bold ? font_bold : font_normal);
-    sz.cx = 0;
-    if (GetTextExtentExPointA(dc, label, n, avail_px, &fit, NULL, &sz)
-        && fit < n) {
-        if (fit > 3) fit -= 3; else fit = 1;
-        rc_strf(buf, sizeof(buf), "%.*s...", fit, label);
-        rc_strf(label, cap, "%s", buf);
-        label[cap - 1] = '\0';
+    {
+        WindowDC dc(list);
+        if (!dc.valid()) return;
+        /* THE FONT THE ROW IS ACTUALLY DRAWN WITH. The open conversation is
+         * drawn in font_bold (see the draw code below), and bold is wider
+         * than normal -- so measuring every row with font_normal let exactly
+         * that row overflow. That is the condition this file documents as
+         * making Win98's listbox paint over its own WS_EX_CLIENTEDGE border,
+         * "measured as white pixels at x=8,9": the documented fix did not
+         * cover the one row most likely to trigger it. (audit 01.37) */
+        Selected sel(dc.get(), bold ? font_bold : font_normal);
+        sz.cx = 0;
+        if (GetTextExtentExPointA(dc.get(), label, n, avail_px, &fit, NULL, &sz)
+            && fit < n) {
+            if (fit > 3) fit -= 3; else fit = 1;
+            rc_strf(buf, sizeof(buf), "%.*s...", fit, label);
+            rc_strf(label, cap, "%s", buf);
+            label[cap - 1] = '\0';
+        }
     }
-    SelectObject(dc, old);
-    ReleaseDC(list, dc);
 }
 
 void rc_chats::request()
@@ -353,9 +351,8 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
     if (header) {
         /* A quiet band with a rule under it: visible as structure without
          * competing with the conversation titles. */
-        HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
-        FillRect(dis->hDC, &rc, br);
-        DeleteObject(br);
+        GdiObj br(CreateSolidBrush(GetSysColor(COLOR_BTNFACE)));
+        FillRect(dis->hDC, &rc, (HBRUSH)br.get());
         oldfg = SetTextColor(dis->hDC, GetSysColor(COLOR_BTNSHADOW));
         oldbk = SetBkMode(dis->hDC, TRANSPARENT);
         rc.left += 3;
@@ -366,20 +363,18 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
         SetTextColor(dis->hDC, oldfg);
         rc = dis->rcItem;
         {   /* hairline under the band */
-            HBRUSH line = CreateSolidBrush(GetSysColor(COLOR_BTNSHADOW));
+            GdiObj line(CreateSolidBrush(GetSysColor(COLOR_BTNSHADOW)));
             RECT r2 = rc;
             r2.top = r2.bottom - 1;
-            FillRect(dis->hDC, &r2, line);
-            DeleteObject(line);
+            FillRect(dis->hDC, &r2, (HBRUSH)line.get());
         }
         return 1;
     }
 
     {
-        HBRUSH br = CreateSolidBrush(GetSysColor(
-            selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
-        FillRect(dis->hDC, &rc, br);
-        DeleteObject(br);
+        GdiObj br(CreateSolidBrush(GetSysColor(
+            selected ? COLOR_HIGHLIGHT : COLOR_WINDOW)));
+        FillRect(dis->hDC, &rc, (HBRUSH)br.get());
     }
     oldfg = SetTextColor(dis->hDC, GetSysColor(
         selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
@@ -388,10 +383,11 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
     {
         HFONT want = ((int)dis->itemID == chat_current && font_bold)
                      ? font_bold : font_normal;
-        HFONT oldf = (HFONT)SelectObject(dis->hDC, want);
+        /* dis->hDC is CALLER-OWNED -- only the SelectObject save/restore is
+         * ours to do here, never a WindowDC around it. */
+        Selected sel(dis->hDC, want);
         DrawTextA(dis->hDC, text, -1, &rc,
                   DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-        SelectObject(dis->hDC, oldf);
     }
     SetBkMode(dis->hDC, oldbk);
     SetTextColor(dis->hDC, oldfg);

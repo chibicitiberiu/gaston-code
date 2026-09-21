@@ -4,6 +4,7 @@
 #include <string.h>
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rc_cpp.h"
 
 static HANDLE g_fh = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION g_lock;
@@ -68,7 +69,8 @@ void rc_log(const char *fmt, ...)
      * hazard for the socket (finding 01.52) and removes it by ordering
      * against a join; there is no join to order against here, so the read
      * moves inside the section that already exists. (mem-audit F6) */
-    if (g_ready) EnterCriticalSection(&g_lock);
+    {
+    ScopedLockIf lock(&g_lock, g_ready);
     if (g_fh != INVALID_HANDLE_VALUE) {
         WriteFile(g_fh, stamp, (DWORD)strlen(stamp), &written, NULL);
         WriteFile(g_fh, line, (DWORD)n, &written, NULL);
@@ -84,7 +86,7 @@ void rc_log(const char *fmt, ...)
          * guest has. */
         FlushFileBuffers(g_fh);
     }
-    if (g_ready) LeaveCriticalSection(&g_lock);
+    }
 }
 
 void rc_log_close(void)
@@ -94,10 +96,11 @@ void rc_log_close(void)
 
     /* Close under the lock, so a thread inside rc_log cannot be between its
      * handle test and its WriteFile when this happens. */
-    if (g_ready) EnterCriticalSection(&g_lock);
-    CloseHandle(g_fh);
-    g_fh = INVALID_HANDLE_VALUE;
-    if (g_ready) LeaveCriticalSection(&g_lock);
+    {
+        ScopedLockIf lock(&g_lock, g_ready);
+        CloseHandle(g_fh);
+        g_fh = INVALID_HANDLE_VALUE;
+    }
 
     /* g_lock is NOT deleted, and that is the same trade net.cpp makes for
      * send_lock and rpc.cpp for its own g_lock: this function cannot
