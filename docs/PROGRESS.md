@@ -2906,3 +2906,61 @@ build moved to `build/win/`, under `2>/dev/null || true`. The ISO shipped
 without `HTMLSPK.EXE` and said nothing, because a silenced copy of a file
 that is not there looks exactly like a copy of a file that is not wanted.
 Copies are now `need` (fail) or `want` (skip, but say so).
+
+## 4.38 -- Two directories that were really one pile each
+
+`tests/python/` was 43 files in one directory and `tools/` was 19. Both are
+folders now -- tests by layer, tools by job -- and both have a README and a
+test that enforces the folder list, so a new one is a decision somebody made
+rather than a directory that appeared.
+
+The move was the easy half. What it turned up was that the flatness was
+load-bearing in one tree and the path arithmetic was wrong in the other.
+
+**Three suites imported a fixture out of another test module.**
+`from test_server_integration import harness`, which resolves only while
+every suite shares a directory -- and which made a 2851-line test suite into
+a library three other suites linked against. The scaffolding is
+`tests/python/harness.py` now and the suite is a suite.
+
+**Six spellings of the repo root in the tests, five in the tools**, every one
+counting `..` from `__file__` by hand: fifteen scripts that would each have
+broken differently on this move, silently, in the direction of writing output
+somewhere nobody looks. `conftest.REPO` for the tests; `toolkit.py` and
+`vmlib.sh` for the tools, which FIND the root by walking up for markers
+instead of counting. A test asserts the two find the same directory.
+
+**Ten suites spelled out the same Wine invocation** with three different
+timeouts and one -- `test_guest_frame.py` -- with none at all, so a hung
+binary took the suite down instead of failing it. `conftest.run_guest()`
+supplies one whether or not the caller thought about it.
+
+### What only ran because something finally ran it
+
+`tools/` had three bugs of one kind: code nothing exercises.
+
+`mkicon.py` and `mkspin.py` wrote into `win/app/`. The assets live in
+`win/resources/` and moved there some time ago; the docstrings were updated
+and the code was not. Running either produced sixteen untracked files beside
+the source and left the committed assets alone, so the generator of record
+had stopped generating anything -- and the bytes were correct the whole
+time, which is exactly why nothing looked wrong.
+
+`qmp.py`'s `SOCK` was `"vm/qmp.sock"`, relative, so the raw-QMP transport
+was invisible to any caller whose working directory was not the repo root.
+
+`install-sitter.sh` could not parse -- a dangling `fi` -- and had zero
+references anywhere, so nothing had ever tried. Deleted rather than guessed
+at. `bash -n` over every script is a test now, along with an AST check that
+a Python tool imports what it uses, which is what found `syncprobe.py` had
+no `import os` at all.
+
+**Two guards that passed against the bug they were written for**, both
+caught by checking them the other way round first. `test_suite_hygiene.py`
+read one flat directory, so after the move it passed while looking at four
+files out of forty-three -- the same enumeration bug it exists to catch. And
+the generator guard asserted `"gaston.ico" in output`, which
+`win/app/gaston.ico` satisfies perfectly well.
+
+`make test-fast` runs everything except the ten Wine suites: 2683 tests in
+16s, against 3 minutes for the lot.
