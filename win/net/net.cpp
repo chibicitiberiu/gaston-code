@@ -323,6 +323,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
 {
     WSADATA wsa;
     char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
+    char oemcp[16];
     char osver[96], cpu[64], screen[32];
     /* This array overflowed the moment mem_kb was added, and the fix at the
      * time was to make it bigger -- which left the same trap armed for the
@@ -482,6 +483,19 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     rc_strf(acp, sizeof(acp), "%u", (unsigned)GetACP());
     HDR("acp", acp);
 
+    /* ...and the OEM one, which is the "different question" above, now
+     * answered. A console child writes OEM, not ANSI, and the two differ on
+     * every machine that is not US-English: cp1252/cp437 here, cp1251/cp866
+     * on a Russian box. The bridge used to take this from the shell's profile
+     * -- which can say THAT this shell's children write OEM but cannot know
+     * WHICH OEM this machine is set to. Only the machine knows, so it says,
+     * for exactly the reason the ANSI page is sent.
+     *
+     * GetOEMCP sits beside GetACP in KERNEL32 from Win95 onward, so it
+     * survives the import audit the same way. */
+    rc_strf(oemcp, sizeof(oemcp), "%u", (unsigned)GetOEMCP());
+    HDR("oemcp", oemcp);
+
     /* The rest of what this machine is. Every one a literal from caps.h, so a
      * Windows 3.1 or MS-DOS build changes that header and nothing here. */
     HDR("case",       RC_STR(RC_CAP_CASE));
@@ -495,6 +509,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("maxpath",    RC_STR(RC_CAP_MAXPATH));
     HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
     HDR("manifest",   RC_STR(RC_CAP_MANIFEST));
+    HDR("maxdepth",   RC_STR(RC_CAP_MAXDEPTH));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the

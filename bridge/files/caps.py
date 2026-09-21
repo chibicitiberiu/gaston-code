@@ -227,6 +227,12 @@ class Caps:
     """One client's rules. Built from HELLO; defaults are Win9x."""
 
     acp: str = "cp1252"
+    #: The codepage a console child writes, which is NOT the ANSI one: this
+    #: machine is cp1252/cp437 and a Russian one is cp1251/cp866. EMPTY means
+    #: the client did not say, and the caller falls back to what the shell's
+    #: profile declares -- a profile can say THAT this shell's children write
+    #: OEM, but only the machine knows WHICH OEM it is set to.
+    oemcp: str = ""
     case: int = CASE_FOLD
     devices: int = DEVICES_DOS
     trailing: int = TRAILING_STRIPPED
@@ -268,7 +274,8 @@ class Caps:
     def summary(self) -> str:
         """For the log, because "why did that not sync" starts here."""
         how = "declared" if self.declared else "assumed (client did not say)"
-        return (f"{how}: acp={self.acp} case={'fold' if self.case else 'exact'} "
+        return (f"{how}: acp={self.acp} "
+                f"oem={self.oemcp or 'not stated'} case={'fold' if self.case else 'exact'} "
                 f"devices={'reserved' if self.devices else 'none'} "
                 f"eol={('lf', 'crlf', 'cr')[self.eol]} "
                 f"maxpath={self.maxpath} maxdir={self.maxdirpath} "
@@ -315,6 +322,13 @@ def _num(h: dict, key: str, default: int, lo: int, hi: int) -> int:
 def from_hello(h: dict) -> Caps:
     """Read a client's declaration. Raises rather than guessing."""
     acp = codec_for_acp(h.get("acp"))
+    oemcp = codec_for_acp(h.get("oemcp"))
+    if h.get("oemcp") and oemcp is None:
+        raise CapsError(
+            f"the client reports OEM codepage {h['oemcp']!r}, which this "
+            f"bridge has no mapping for. Refused for the same reason as the "
+            f"ANSI page: a console decoded with the wrong table turns every "
+            f"`dir` into mojibake with nothing reporting it.")
     if h.get("acp") and acp is None:
         raise CapsError(
             f"the client reports ANSI codepage {h['acp']!r}, which this bridge "
@@ -324,11 +338,13 @@ def from_hello(h: dict) -> Caps:
             f"the one field that is never guessed.")
 
     declared = any(k in h for k in (
-        "acp", "case", "devices", "trailing", "illegal", "eol", "shortnames",
+        "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
+        "shortnames",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest"))
 
     return Caps(
-        acp=acp or "cp1252",
+        acp=acp or Caps.acp,
+        oemcp=oemcp or "",
         case=_enum(h, "case", (CASE_SENSITIVE, CASE_FOLD), CASE_FOLD),
         devices=_enum(h, "devices", (DEVICES_NONE, DEVICES_DOS), DEVICES_DOS),
         trailing=_enum(h, "trailing", (TRAILING_KEPT, TRAILING_STRIPPED),
@@ -360,7 +376,7 @@ def from_hello(h: dict) -> Caps:
 #: accident -- it is here so tests and future clients can name it.
 POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              trailing=TRAILING_KEPT, illegal=ILLEGAL_POSIX, eol=EOL_LF,
-             shortnames=SHORTNAMES_NONE, maxdepth=4096,
+             oemcp="latin-1", shortnames=SHORTNAMES_NONE, maxdepth=4096,
              dirreserve=DIRRESERVE_NONE,
              # Not a Windows rule: the `.gaston-tmp` convention is OURS, so a
              # POSIX client that commits by temp-and-rename needs the same room

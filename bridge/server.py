@@ -840,7 +840,11 @@ class Bridge:
         # then never sent an answer, so `decode_oem` defaulted to cp437 for
         # every machine. The shell declares it, because it is the shell that
         # spawns the child whose bytes these are.
-        _oem = str(profiles.shell(_shell).get("oem_codepage", "")) if _shell else ""
+        # THE MACHINE FIRST, then the shell profile. A profile can say that
+        # this shell's children write OEM; only the machine knows which OEM
+        # it is set to, and it now sends GetOEMCP() beside GetACP().
+        _oem = caps.oemcp or (
+            str(profiles.shell(_shell).get("oem_codepage", "")) if _shell else "")
         if _oem:
             fold.use(oem=_oem)
         if guest.tools:
@@ -933,12 +937,6 @@ class Bridge:
     # It also makes a nicer guarantee than the original shape: with the
     # agent's cwd INSIDE the mirror, everything it can write is mirrored, so
     # `_scan_strays` has nothing to find by construction.
-
-    #: The cap a client that declares nothing is assumed to want. 8, because
-    #: the assumed client aliases every long name to 8.3 -- see
-    #: `caps.SHORTNAME_MAX`. It is a DEFAULT now, not the rule: the rule is
-    #: `folder_max`, which asks the client.
-    FOLDER_MAX = C.SHORTNAME_MAX
 
     #: A folder name is read by a person, in a title bar and a status line, so
     #: it is capped for legibility as well as by the filesystem. A client with

@@ -54,6 +54,16 @@ EXPECTED = {
     "RC_DIRRESERVE_WIN32":  C.DIRRESERVE_WIN32,
     "RC_WORKRESERVE_NONE":  C.WORKRESERVE_NONE,
     "RC_WORKRESERVE_GASTON": C.WORKRESERVE_GASTON,
+    # Declared on both sides since the handshake was written and never
+    # cross-checked, because the bridge parsed the header only far enough to
+    # count it as "declared" and kept no field to compare against.
+    "RC_SHORTNAMES_NONE":   C.SHORTNAMES_NONE,
+    "RC_SHORTNAMES_83":     C.SHORTNAMES_83,
+    # Not an enum: the guest's own walk depth, which the bridge assumes when
+    # a client does not declare one. If these drift, the bridge refuses paths
+    # the guest would have scanned, or accepts ones it will silently stop
+    # reporting -- the failure that reads as "deleted on the guest" forever.
+    "RC_CAP_MAXDEPTH":      C.MAXDEPTH_GASTON,
 }
 
 
@@ -126,3 +136,4 @@ def test_this_client_matches_what_the_bridge_assumes_it_is(name, guest_caps):
         f"expects {CAP_EXPECTED[name]}. Those are meant to be the same "
         f"Win9x machine described twice (bridge/files/caps.py's module "
         f"docstring); a live guest and an assumed one would now disagree.")
+

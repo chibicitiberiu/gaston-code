@@ -97,6 +97,17 @@ typedef char rc_workreserve_matches_sync_h
 #define RC_CAP_MAXPATH     MAX_PATH
 #define RC_CAP_MAXCOMP     255
 
+/* How deep our own scanner walks. THE SYMBOL ITSELF, not a copy of its value:
+ * the bridge refuses a path deeper than this before pushing it, because the
+ * walk gives NO signal when it gives up -- a deeper path is written, acked,
+ * and then never reported by a scan again, which reads as "deleted on the
+ * guest" forever.
+ *
+ * RC_WORKRESERVE_GASTON needed a static assert to stay tied to sync.h because
+ * the two are different numbers that must agree. This one is the same number,
+ * so there is nothing to drift and nothing to assert. */
+#define RC_CAP_MAXDEPTH    RC_SYNC_MAX_DEPTH
+
 /* Manifest row format. v2 carries both checksums per row -- the normalised one
  * and the raw one -- so the bridge can honour a .gitattributes `-text` without
  * asking us to scan the tree a second time under a different rule. v1 carried

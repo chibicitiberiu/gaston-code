@@ -7,6 +7,10 @@ Unix, which shares none of them.
 """
 from __future__ import annotations
 
+import inspect
+import pathlib
+import re
+
 import pytest
 
 from bridge.files import caps as C
@@ -211,3 +215,54 @@ def test_a_shallower_client_has_its_own_limit_enforced():
 def test_the_summary_names_both_so_a_failed_sync_can_be_read():
     s = C.from_hello({"shortnames": "0", "maxdepth": "9"}).summary()
     assert "maxdepth=9" in s and "shortnames=long" in s
+
+
+# --- every capability the bridge READS, the client must SEND -----------------
+
+def _guest_headers() -> set:
+    """Header names `rc_net_start` puts in HELLO, read from the source."""
+    src = (pathlib.Path(__file__).resolve().parents[2]
+           / "win" / "net" / "net.cpp").read_text()
+    return set(re.findall(r'HDR\("([a-z_]+)"', src))
+
+
+def _bridge_headers() -> set:
+    """Header names `from_hello` reads out of it."""
+    src = inspect.getsource(C.from_hello)
+    return (set(re.findall(r'_(?:enum|num)\(h,\s*"([a-z_]+)"', src))
+            | set(re.findall(r'h\.get\(\s*"([a-z_]+)"', src)))
+
+
+def test_the_bridge_reads_no_capability_the_client_does_not_send():
+    """A capability parsed but never declared is a default wearing a
+    negotiation's clothes.
+
+    This is how `maxdepth` shipped: the bridge grew a field and a refusal for
+    it while the guest sent nothing, so the value agreed with the guest's own
+    RC_SYNC_MAX_DEPTH by luck rather than by declaration -- and `make check`
+    could not see it, because the drift is between two files in different
+    languages that nothing compared.
+
+    Source-level on purpose: no guest, no Wine, no build. The failure it
+    catches is a missing line, and a missing line costs nothing to look for.
+    """
+    missing = _bridge_headers() - _guest_headers()
+    assert not missing, (
+        "bridge/files/caps.py reads " + ", ".join(sorted(missing)) +
+        " out of HELLO, and win/net/net.cpp never sends it. The bridge's "
+        "default is then silently standing in for a negotiation -- add an "
+        "HDR() line, or stop parsing it.")
+
+
+def test_the_client_declares_what_it_is_asked_about():
+    """The other direction is NOT symmetric and must not be asserted as
+    though it were: the guest sends `cpu`, `screen`, `mem_kb` and friends,
+    which are facts for the system prompt rather than capabilities. This only
+    pins the ones `Caps` has a field for."""
+    fields = set(C.Caps.__dataclass_fields__) - {"declared"}
+    # `acp`/`oemcp` are sent as NUMBERS and stored as codec names.
+    sent = _guest_headers()
+    for name in sorted(fields):
+        assert name in sent, (
+            f"Caps has a {name!r} field, so the bridge believes the client "
+            f"declares it, and win/net/net.cpp does not send it")

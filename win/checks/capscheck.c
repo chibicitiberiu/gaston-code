@@ -45,6 +45,9 @@ int main(void)
     P(RC_WORKRESERVE_NONE);
     P(RC_WORKRESERVE_GASTON);
 
+    P(RC_SHORTNAMES_NONE);
+    P(RC_SHORTNAMES_83);
+
     /* 03.19: "what this client IS" (RC_CAP_*, what a real Win98 build
      * actually declares in HELLO) and "what the bridge assumes an
      * undeclaring client is" (Caps()'s field defaults in bridge/files/
@@ -62,6 +65,11 @@ int main(void)
     P(RC_CAP_EOL);
     P(RC_CAP_DIRRESERVE);
     P(RC_CAP_WORKRESERVE);
+    P(RC_CAP_SHORTNAMES);
+    /* The bridge refuses a path deeper than the guest's own walk, so its
+     * assumed default has to equal ours. This is RC_SYNC_MAX_DEPTH by
+     * definition, and the point of printing it is the BRIDGE side. */
+    P(RC_CAP_MAXDEPTH);
     P(RC_CAP_MAXPATH);
     P(RC_CAP_MAXCOMP);
 
