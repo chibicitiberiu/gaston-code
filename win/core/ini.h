@@ -19,7 +19,10 @@ typedef struct {
 } rc_config;
 
 void rc_config_load(rc_config *cfg, const char *exe_dir);
-void rc_config_save(const rc_config *cfg, const char *exe_dir);
+/* Non-zero if every value reached the file. A caller that ignores this tells
+ * the user their setting was accepted when it was not -- see the note in
+ * ini.cpp. */
+int rc_config_save(const rc_config *cfg, const char *exe_dir);
 
 #ifdef __cplusplus
 }

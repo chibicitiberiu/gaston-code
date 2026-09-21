@@ -163,6 +163,20 @@ int    rc_sync_commit(const char *root, const char *rel, const char *tmp,
 unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
                               const rc_sync_stat *st);
 
+/* What rc_syncrpc_put_path decided about a SYNCPUT body's path prefix. */
+#define RC_PUTPATH_OK       0
+#define RC_PUTPATH_NOSEP  (-1)   /* no separator, or a length outside the frame */
+#define RC_PUTPATH_TOOLONG (-2)  /* the path does not fit MAX_PATH */
+#define RC_PUTPATH_BADPATH (-3)  /* absolute, a drive spec, or an escape */
+
+/* Parse "<len> <rel>" + data. `out` receives the bounded, validated relative
+ * path and `data_off` (may be NULL) the offset of the file's own bytes.
+ * Exposed so win/checks/synccheck.c can drive the REAL parser over bodies
+ * with real content glued to the tail -- the composition that had no test.
+ * See the implementation for what each refusal protects against. */
+int rc_syncrpc_put_path(const char *body, unsigned body_len,
+                        char *out, unsigned cap, unsigned *data_off);
+
 /* Non-zero if `name` is one of ours and must not appear in a manifest. */
 int    rc_sync_is_working_name(const char *name);
 

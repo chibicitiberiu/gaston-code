@@ -29,6 +29,7 @@
 #include <docobj.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <errno.h>
 #include <string.h>
 #include "app/htmlview.h"
 #include "app/comptr.h"
@@ -309,11 +310,20 @@ static BSTR to_bstr(const char *s)
     WCHAR *w;
     BSTR b;
 
+    /* NULL ON FAILURE, never an empty string.
+     *
+     * Substituting L"" made every failure here SUCCEED downstream and lose
+     * data in silence: insertAdjacentHTML("") returns S_OK, so append()'s
+     * `if (FAILED(hr))` never fired, diag still reported "first append ok",
+     * and the bridge's block simply was not in the transcript. live() was
+     * worse -- put_innerHTML("") WIPED the partial answer instead of leaving
+     * it alone. A NULL BSTR makes those calls fail loudly, which is what the
+     * callers' existing error handling is already written for. */
     if (!s) s = "";
     n = MultiByteToWideChar(1252, 0, s, -1, NULL, 0);
-    if (n <= 0) return SysAllocString(L"");
+    if (n <= 0) return NULL;
     w = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (unsigned)n * sizeof(WCHAR));
-    if (!w) return SysAllocString(L"");
+    if (!w) { rc_log("html: no memory to widen %d bytes", n); return NULL; }
     MultiByteToWideChar(1252, 0, s, -1, w, n);
     b = SysAllocString(w);
     HeapFree(GetProcessHeap(), 0, w);
@@ -490,6 +500,22 @@ static void doc_fingerprint(const char *doc, unsigned *len, unsigned *sum)
     *sum = acc;
 }
 
+/* Undo everything set_document recorded, so the NEXT attach retries.
+ *
+ * The fingerprint is stored before the control is built, which is what makes
+ * "identical skeleton -> no-op" cheap on a reconnect. The cost is that any
+ * failure after that point has to clear it by hand, or the identical skeleton
+ * the bridge re-sends is matched against a fingerprint for a document that was
+ * never successfully installed, and the view stays blank forever. */
+static void boot_failed(rc_html_impl *d)
+{
+    d->doc_len = 0;
+    d->doc_sum = 0;
+    d->ready   = 0;
+    d->web.reset(NULL);
+    d->obj.reset(NULL);
+}
+
 void rc_html::set_document(const char *doc)
 {
     RECT rc;
@@ -525,10 +551,31 @@ void rc_html::set_document(const char *doc)
     GetModuleFileNameA(NULL, dir, sizeof(dir) - 1);
     { char *slash = strrchr(dir, '\\'); if (slash) *slash = '\0'; }
     rc_strf(d->path, sizeof(d->path), "%s\\view.htm", dir);
+    /* CHECKED, all three. A full disk truncates the skeleton mid-document and
+     * a read-only exe directory (a CD-ROM or a network install) fails the
+     * open -- both left a blank transcript with one log line and no way back,
+     * because the fingerprint above was already recorded and the bridge
+     * re-sends identical bytes forever. fputs returns EOF on error and the
+     * bytes a buffered fclose flushes can fail there and nowhere else, which
+     * is why the close is checked rather than assumed. */
     f = fopen(d->path, "wb");
-    if (!f) { rc_log("html: cannot write %s", d->path); return; }
-    fputs(doc, f);
-    fclose(f);
+    if (!f) {
+        rc_log("html: cannot write %s (%d)", d->path, errno);
+        boot_failed(d);
+        return;
+    }
+    if (fputs(doc, f) == EOF) {
+        rc_log("html: short write to %s -- the skeleton would be truncated",
+               d->path);
+        fclose(f);
+        boot_failed(d);
+        return;
+    }
+    if (fclose(f) != 0) {
+        rc_log("html: cannot flush %s -- out of disk?", d->path);
+        boot_failed(d);
+        return;
+    }
 
     /* The file is rewritten above either way; if the control is already
      * hosting, all that is left is to point it at the new bytes. Creating a
@@ -551,13 +598,34 @@ void rc_html::set_document(const char *doc)
     OleSetContainedObject((IUnknown *)d->obj.get(), TRUE);
 
     GetClientRect(d->parent, &rc);
+    /* BOTH failure paths below must UNDO the fingerprint and drop `obj`, or
+     * the next attach cannot retry.
+     *
+     * doc_len/doc_sum are recorded near the top of this function, before the
+     * control exists. If DoVerb or the QI failed, this returned with obj
+     * VALID and web null -- so on the next reconnect the bridge re-sent the
+     * identical skeleton, the guard up there saw
+     * `obj.valid() && len == doc_len && sum == doc_sum` and returned at once.
+     * Nothing ever retried: poll() returned 0 forever, every frame piled into
+     * the pre-ready queue until it hit its cap, and the window stayed a blank
+     * rectangle for the rest of the session with reconnecting unable to fix
+     * it. CoCreateInstance failing does NOT have this problem, because it
+     * leaves obj null; only these two latch. */
     hr = IOleObject_DoVerb(d->obj.get(), OLEIVERB_INPLACEACTIVATE, NULL,
                            &d->host.site, 0, d->parent, &rc);
-    if (FAILED(hr)) { rc_log("html: DoVerb %08lX", (unsigned long)hr); return; }
+    if (FAILED(hr)) {
+        rc_log("html: DoVerb %08lX", (unsigned long)hr);
+        boot_failed(d);
+        return;
+    }
 
     hr = IOleObject_QueryInterface(d->obj.get(), IID_IWebBrowser2,
                                    (void **)d->web.addr());
-    if (FAILED(hr)) { rc_log("html: QI IWebBrowser2 %08lX", (unsigned long)hr); return; }
+    if (FAILED(hr)) {
+        rc_log("html: QI IWebBrowser2 %08lX", (unsigned long)hr);
+        boot_failed(d);
+        return;
+    }
 
     renavigate();
     (void)empty;
@@ -726,12 +794,24 @@ void rc_html::say_id(const char *cls, const char *id, const char *text)
     if (!text) return;
     n = (unsigned)strlen(text);
     cap = n * 6 + 64;                       /* '&' -> "&amp;" is the worst */
+    /* BOTH failures are logged. queue_add was fixed for exactly this and
+     * these two were not: notice(), error() and user() all land here, and
+     * error() is what says "the connection is down" -- so on the machine's
+     * binding constraint the message explaining why things are failing was
+     * the message that vanished without trace. The arithmetic is sound (6
+     * bytes is the true worst case, "&quot;"); only the silence was wrong. */
     HeapPtr<char> esc((char *)HeapAlloc(GetProcessHeap(), 0, cap));
-    if (!esc.valid()) return;
+    if (!esc.valid()) {
+        rc_log("html: no memory to escape a %u byte %s block", n, cls);
+        return;
+    }
     esc_into(text, esc.get(), cap);
 
     HeapPtr<char> div((char *)HeapAlloc(GetProcessHeap(), 0, cap + 96));
-    if (!div.valid()) return;
+    if (!div.valid()) {
+        rc_log("html: no memory to wrap a %u byte %s block", n, cls);
+        return;
+    }
     if (id && *id)
         rc_strf(div.get(), cap + 96, "<div class=\"%s\" id=\"%s\">%s</div>",
                 cls, id, esc.get());
@@ -847,6 +927,14 @@ void rc_html::append(const char *frag)
     if (!d->ready) { queue_add(d, frag); return; }
     Bstr where(to_bstr("beforeEnd"));
     Bstr html(to_bstr(frag));
+    /* to_bstr returns NULL when it could not widen the fragment. Refuse
+     * rather than insert, so the block is missing WITH a log line instead of
+     * missing silently. */
+    if (!where.get() || !html.get()) {
+        rc_log("html: append refused, could not widen %u bytes",
+               (unsigned)strlen(frag));
+        return;
+    }
     hr = IHTMLElement_insertAdjacentHTML(d->slot_t.get(), where.get(), html.get());
 
     /* Quiet unless something goes wrong. A failed insert is invisible by
@@ -886,7 +974,17 @@ void rc_html::live(const char *frag)
     bottom = at_bottom();
     {
         Bstr html(to_bstr(frag ? frag : ""));
-        HRESULT hr = IHTMLElement_put_innerHTML(d->slot_l.get(), html.get());
+        HRESULT hr;
+        /* CHECKED EXPLICITLY, because put_innerHTML(NULL) does not fail --
+         * MSHTML treats it as "set it to nothing", which would WIPE the
+         * partial answer on screen. That is the same outcome the old
+         * to_bstr's L"" substitution produced, so returning NULL is only
+         * half the fix; this is the other half. */
+        if (!html.get()) {
+            rc_log("html: live refused, could not widen the delta");
+            return;             /* leave what is on screen alone */
+        }
+        hr = IHTMLElement_put_innerHTML(d->slot_l.get(), html.get());
         if (FAILED(hr)) {
             rc_log("html: live FAILED hr=%08lX", (unsigned long)hr);
             return;             /* nothing moved, so nothing to follow */
@@ -900,13 +998,23 @@ void rc_html::status(const char *frag)
     if (!d->ready || !d->slot_s.valid()) return;
     {
         Bstr html(to_bstr(frag ? frag : ""));
-        HRESULT hr = IHTMLElement_put_innerHTML(d->slot_s.get(), html.get());
+        HRESULT hr;
+        if (!html.get()) return;    /* see live(): NULL would blank the line */
+        hr = IHTMLElement_put_innerHTML(d->slot_s.get(), html.get());
         if (FAILED(hr))
             rc_log("html: status FAILED hr=%08lX", (unsigned long)hr);
     }
     /* Deliberately no settle() here, unlike live().
      *
-     * This line re-renders once a second for the whole turn. Following it
+     * This line re-renders once a second for the whole turn -- from
+     * TIMER_STATUS, and ONLY from there. It used to also be driven once per
+     * inbound frame by render_frame's unconditional status_refresh(), so on a
+     * streamed answer it did a full MultiByteToWideChar + SysAllocString +
+     * put_innerHTML reflow per frame, with content identical between frames
+     * because the only variable is a whole-second counter. On a 200MHz
+     * Pentium that is a real cost on top of the live() write the frame
+     * actually carries, and this comment asserted a frequency that was not
+     * true (audit 01.33). Following it
      * would mean scrolling on a timer, which fights the user the moment they
      * scroll up to read something -- and at_bottom()'s 24px tolerance is
      * already about the height of this line, so the append path stays
@@ -919,6 +1027,10 @@ void rc_html::clear()
     if (d->queue) d->queue[0] = '\0';
     if (!d->ready) return;
     Bstr empty(to_bstr(""));
+    /* Clearing is the one place a NULL would do the right thing anyway, but
+     * to_bstr("") allocates a real empty BSTR and only fails on OOM -- in
+     * which case there is nothing to clear with and nothing worth doing. */
+    if (!empty.get()) { rc_log("html: clear refused, out of memory"); return; }
     IHTMLElement_put_innerHTML(d->slot_t.get(), empty.get());
     IHTMLElement_put_innerHTML(d->slot_l.get(), empty.get());
     if (d->slot_s.valid())

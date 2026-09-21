@@ -437,7 +437,19 @@ static void reject_busy(rc_frame *f)
     const char *id = rc_frame_get(f, "id");
     const char *keys[2];
     const char *vals[2];
-    if (!id) return;
+    if (!id) {
+        /* NAMED, not dropped in silence. The bridge allocated a future for
+         * this frame and will wait out its whole budget -- 120s for an exec,
+         * 300s for a put or get, 600s for a scan -- with nothing anywhere
+         * saying why. rpc.cpp already explains this exact cost for a WRONGLY
+         * SHAPED ack and treats it as the reason lane-specific ack types
+         * exist; a frame answered with nothing at all is worse and was the
+         * one case nothing logged. There is no id to answer to, so a log
+         * line is all that is available. (audit 01.37) */
+        rc_log("%s: frame carries no id -- dropped, and the bridge will wait "
+               "out its timeout", f->type);
+        return;
+    }
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = "busy";
     rc_net_send(g_net, "EXECRESULT", keys, vals, 2, NULL, 0);
@@ -564,6 +576,21 @@ int rc_rpc_start(rc_net *net)
      * only because main.c keeps a single rc_net at a fixed address (01.26),
      * which will not stay true once more than one connection can exist. */
     g_net = net;
+    /* AND g_running, for the same reason and on the same early return.
+     *
+     * If rc_rpc_join times out it returns 0 leaving g_thread non-NULL and
+     * g_running 0 -- rc_net_stop logs "RPC worker did not exit" and carries
+     * on. The next try_connect then took the early return below BEFORE
+     * setting g_running, so the surviving worker stayed adopted with
+     * g_running still 0, and rc_rpc_submit's `if (!g_thread || !g_running)`
+     * dropped every frame it was handed.
+     *
+     * The reconnect looked healthy: the transcript streamed, the chat list
+     * loaded, the light was green. But every EXEC and every SYNC* frame was
+     * discarded with no answer, so each tool call waited out its full
+     * bridge-side budget -- 120s for an exec, 600s for a scan -- and the only
+     * explanation was one log line from the PREVIOUS shutdown. */
+    g_running = 1;
     if (g_thread) return 0;
     if (!g_ready) {
         InitializeCriticalSection(&g_lock);
@@ -571,7 +598,7 @@ int rc_rpc_start(rc_net *net)
     }
     rc_exec_init();
     if (!g_wake) g_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
-    g_running = 1;
+    /* g_running is set above, before the early return -- see the note there. */
     /* BEFORE _beginthreadex: this writes g_watch and the three GetProcAddress
      * pointers that rpc_thread's own loop reads. Starting the thread first and
      * configuring the watcher after was backwards -- a thread that raced ahead
@@ -618,7 +645,19 @@ static void reject_sync_busy(rc_frame *f)
     const char *vals[2];
     const char *ack = "SYNCPUTACK";
 
-    if (!id) return;
+    if (!id) {
+        /* NAMED, not dropped in silence. The bridge allocated a future for
+         * this frame and will wait out its whole budget -- 120s for an exec,
+         * 300s for a put or get, 600s for a scan -- with nothing anywhere
+         * saying why. rpc.cpp already explains this exact cost for a WRONGLY
+         * SHAPED ack and treats it as the reason lane-specific ack types
+         * exist; a frame answered with nothing at all is worse and was the
+         * one case nothing logged. There is no id to answer to, so a log
+         * line is all that is available. (audit 01.37) */
+        rc_log("%s: frame carries no id -- dropped, and the bridge will wait "
+               "out its timeout", f->type);
+        return;
+    }
     if (strcmp(f->type, "SYNCSCAN") == 0)        ack = "SYNCEND";
     else if (strcmp(f->type, "SYNCGET") == 0)    ack = "SYNCDATEND";
     else if (strcmp(f->type, "SYNCMKDIR") == 0)  ack = "SYNCMKDIRACK";
@@ -731,13 +770,45 @@ void rc_rpc_stop(void)
 int rc_rpc_join(DWORD timeout_ms)
 {
     DWORD w;
+
+    /* THE WATCHER HANDLE IS CLOSED AFTER THE JOIN, NOT BEFORE.
+     *
+     * It used to be closed here, first, on the calling (UI) thread -- while
+     * rpc_thread may still be inside WaitForMultipleObjects with that very
+     * handle in hs[1]. rc_rpc_stop has only cleared g_running and signalled
+     * g_wake by this point, so the worker being still in the wait is the
+     * ordinary case, not a narrow race.
+     *
+     * This module already states the hazard 495 lines above, as the reason
+     * rc_rpc_set_sync_root does NOT touch g_watch: "That handle belongs to
+     * the worker thread -- it is waited on there, reset there and closed
+     * there -- and closing it from the UI thread while WaitForMultipleObjects
+     * holds it is exactly the kind of race that fails once a month on someone
+     * else's machine."
+     *
+     * On shutdown the wait returned WAIT_FAILED and the loop exited, usually
+     * harmlessly. The dangerous case was the RECONNECT one: Win9x recycles
+     * handle values, so the worker could end up waiting on -- and being
+     * signalled by -- an unrelated object, with p_next_change() then called
+     * on it.
+     *
+     * After a successful join the worker is gone and this thread is the only
+     * one left that can touch the handle, so closing it here is safe. If the
+     * join TIMES OUT the handle is deliberately left alone: the worker is
+     * still running and it is still the owner. */
+    if (!g_thread) {
+        if (g_watch != INVALID_HANDLE_VALUE && p_close_change) {
+            p_close_change(g_watch);
+            g_watch = INVALID_HANDLE_VALUE;
+        }
+        return 1;
+    }
+    w = WaitForSingleObject(g_thread, timeout_ms);
+    if (w != WAIT_OBJECT_0) return 0;
     if (g_watch != INVALID_HANDLE_VALUE && p_close_change) {
         p_close_change(g_watch);
         g_watch = INVALID_HANDLE_VALUE;
     }
-    if (!g_thread) return 1;
-    w = WaitForSingleObject(g_thread, timeout_ms);
-    if (w != WAIT_OBJECT_0) return 0;
     CloseHandle(g_thread);
     g_thread = NULL;
     if (g_wake) { CloseHandle(g_wake); g_wake = NULL; }

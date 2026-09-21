@@ -18,7 +18,45 @@
 
 /* What is mirrored RIGHT NOW -- this conversation's folder, or "" while
  * nothing is being shared. Bridge-directed; see app/workdir.h. */
-static char g_root[MAX_PATH];
+/* GUARDED, because it is written on the UI thread and read on the RPC worker.
+ *
+ * rc_syncrpc_set_root runs from on_optmenu -> rc_workdir_apply on an
+ * OPTIONSEND naming a different folder, and from try_connect on every
+ * reconnect attempt -- both on the window thread. do_scan, do_put, do_putend,
+ * do_mkdir and do_get all read it on the worker. An rc_strf into g_root
+ * interleaved with the worker's rc_sync_join produces a path spliced from the
+ * old root and the new, and the worker then CreateFileA(CREATE_ALWAYS)s,
+ * DeleteFileA's and MoveFileA's at it. rpc.cpp keeps its own copy of the same
+ * string and has always guarded it with g_lock; this side did not.
+ *
+ * Readers take a snapshot rather than holding the lock across the file I/O:
+ * the value is a path, the copy is cheap, and holding a lock across a floppy
+ * write is how the UI thread ends up waiting on a disk. */
+static char             g_root[MAX_PATH];
+static CRITICAL_SECTION g_root_lock;
+static int              g_root_lock_ready = 0;
+
+/* Idempotent, called before any thread but the first can reach g_root.
+ * Not a static constructor: those run before WinMain and therefore before the
+ * log exists (win/core/rc_cpp.h). */
+static void root_lock_init(void)
+{
+    if (!g_root_lock_ready) {
+        InitializeCriticalSection(&g_root_lock);
+        g_root_lock_ready = 1;
+    }
+}
+
+/* A caller's own copy of the live root. Returns 1 if there is one. */
+static int root_snapshot(char *out, unsigned cap)
+{
+    int got;
+    root_lock_init();
+    EnterCriticalSection(&g_root_lock);
+    got = rc_strf(out, cap, "%s", g_root);
+    LeaveCriticalSection(&g_root_lock);
+    return got && out[0];
+}
 
 /* What this machine is CONFIGURED to share, from the INI. A fact about the
  * computer rather than about the conversation, which is why it is the one of
@@ -32,7 +70,10 @@ static char g_home[MAX_PATH];
 
 void rc_syncrpc_set_root(const char *root)
 {
+    root_lock_init();
+    EnterCriticalSection(&g_root_lock);
     rc_strf(g_root, sizeof(g_root), "%s", root ? root : "");
+    LeaveCriticalSection(&g_root_lock);
 }
 
 const char *rc_syncrpc_root(void) { return g_root; }
@@ -112,9 +153,15 @@ static void do_scan(rc_net *net, rc_frame *f)
     const char *keys[5];
     const char *vals[5];
     char files[16], tree[64], sid[64];
+    char root[MAX_PATH];
     const char *status = "ok";
     manifest_ctx *m;
     int n, total = 0;
+
+    /* One snapshot for the whole scan, so the manifest, the tree id and the
+     * `root=` header all describe the SAME tree even if the UI thread
+     * re-points the mirror while the walk is running. */
+    root_snapshot(root, sizeof(root));
 
     /* On the heap. manifest_ctx holds a ~62KB frame buffer, and the RPC worker
      * thread only has the image's 64KB stack commit -- so keeping it here left
@@ -133,11 +180,11 @@ static void do_scan(rc_net *net, rc_frame *f)
     m->net = net;
     rc_strf(m->id, sizeof(m->id), "%s", id ? id : "");
 
-    if (!g_root[0]) {
+    if (!root[0]) {
         status = "no_root";
         n = 0;
     } else {
-        n = rc_sync_scan(g_root, manifest_add, m);
+        n = rc_sync_scan(root, manifest_add, m);
         if (n == -1)      status = "no_root";
         else if (n == -2) status = "too_many";
     }
@@ -153,10 +200,10 @@ static void do_scan(rc_net *net, rc_frame *f)
     {
         DWORD serial = 0;
         char rootdir[8];
-        rc_strf(rootdir, sizeof(rootdir), "%c:\\", g_root[0] ? g_root[0] : 'C');
+        rc_strf(rootdir, sizeof(rootdir), "%c:\\", root[0] ? root[0] : 'C');
         GetVolumeInformationA(rootdir, NULL, 0, &serial, NULL, NULL, NULL, 0);
         rc_strf(tree, sizeof(tree), "%08lX-%s",
-                  (unsigned long)serial, g_root);
+                  (unsigned long)serial, root);
     }
     rc_strf(files, sizeof(files), "%d", total);
 
@@ -170,7 +217,7 @@ static void do_scan(rc_net *net, rc_frame *f)
     keys[1] = "status";  vals[1] = status;
     keys[2] = "files";   vals[2] = files;
     keys[3] = "tree_id"; vals[3] = tree;
-    keys[4] = "root";    vals[4] = g_root;
+    keys[4] = "root";    vals[4] = root;
     rc_net_send(net, "SYNCEND", keys, vals, 5, NULL, 0);
     rc_log("sync: scan %s -> %s, %d entries", sid, status, total);
 }
@@ -181,6 +228,21 @@ static struct {
     char   id[64];
     char   rel[MAX_PATH];
     char   tmp[MAX_PATH];
+    /* THE ROOT THIS TRANSFER BEGAN AGAINST, captured with the rest of it.
+     *
+     * No race is needed for this one. do_put's first chunk opens
+     * <root A>\<rel>.gaston-tmp and stores the full temp path here; if the
+     * work directory changes before SYNCPUTEND -- an ordinary OPTIONSEND
+     * between two chunks -- do_putend used to call rc_sync_commit with the
+     * LIVE root, so `full` became <root B>\<rel> and MoveFileA moved the file
+     * out of tree A into tree B, or failed and left an orphaned .gaston-tmp
+     * in A that the next scan offered to the bridge as a new file.
+     *
+     * The id, the relative path and the temp name were already captured for
+     * the life of the transfer; the root was the one piece looked up fresh. */
+    char   root[MAX_PATH];
+    /* Where the first chunk's file bytes begin, as the parser measured it. */
+    unsigned data_off;
     HANDLE h;
     int    active;
 } g_put;
@@ -248,20 +310,21 @@ static void do_put(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
     const char *off = rc_frame_get(f, "off");
-    const char *rel;
-    unsigned rn, plen = 0;
-    const char *body = f->body;
     DWORD wrote = 0;
 
-    if (!id) return;
-
-    /* The path is in the BODY, length-prefixed. A header value is truncated at
-     * 255 bytes silently, and a truncated PATH writes the right content to the
-     * wrong file -- with the CRC check passing, because the content is
-     * correct. */
-    while (body[plen] && body[plen] != ' ' && plen < 16) plen++;
-    rn = (unsigned)atoi(body);
-    rel = body + plen + 1;
+    if (!id) {
+        /* NAMED, not dropped in silence. The bridge allocated a future for
+         * this frame and will wait out its whole budget -- 120s for an exec,
+         * 300s for a put or get, 600s for a scan -- with nothing anywhere
+         * saying why. rpc.cpp already explains this exact cost for a WRONGLY
+         * SHAPED ack and treats it as the reason lane-specific ack types
+         * exist; a frame answered with nothing at all is worse and was the
+         * one case nothing logged. There is no id to answer to, so a log
+         * line is all that is available. (audit 01.37) */
+        rc_log("%s: frame carries no id -- dropped, and the bridge will wait "
+               "out its timeout", f->type);
+        return;
+    }
 
     if (off && atol(off) == 0) {
         /* First chunk: open. */
@@ -282,10 +345,24 @@ static void do_put(rc_net *net, rc_frame *f)
             g_put_aborted = 0;
         }
         if (g_put.active) { put_fail(net, id, "busy"); return; }
-        if (!rc_sync_contained(rel)) { put_fail(net, id, "bad_path"); return; }
+
+        /* ONE parser, shared with `synccheck --putpath`. See its comment. */
+        switch (rc_syncrpc_put_path(f->body, f->body_len,
+                                    g_put.rel, sizeof(g_put.rel),
+                                    &g_put.data_off)) {
+        case RC_PUTPATH_OK:      break;
+        case RC_PUTPATH_TOOLONG: put_fail(net, id, "too_long"); return;
+        default:                 put_fail(net, id, "bad_path"); return;
+        }
         rc_strf(g_put.id, sizeof(g_put.id), "%s", id);
-        rc_strf(g_put.rel, sizeof(g_put.rel), "%.*s", (int)rn, rel);
-        g_put.h = rc_sync_begin_write(g_root, g_put.rel,
+
+        /* Captured HERE, once, and used by every later frame of this
+         * transfer -- see the note on g_put.root. */
+        if (!root_snapshot(g_put.root, sizeof(g_put.root))) {
+            put_fail(net, id, "no_root");
+            return;
+        }
+        g_put.h = rc_sync_begin_write(g_put.root, g_put.rel,
                                       g_put.tmp, sizeof(g_put.tmp));
         if (g_put.h == INVALID_HANDLE_VALUE) {
             /* Reporting every open failure as `readonly` sent a real
@@ -314,7 +391,9 @@ static void do_put(rc_net *net, rc_frame *f)
         return;
     }
     {
-        unsigned skip = plen + 1 + rn;
+        /* From the parser, not recomputed: see rc_syncrpc_put_path. Only
+         * the FIRST chunk carries the prefix; later chunks are all data. */
+        unsigned skip = (off && atol(off) == 0) ? g_put.data_off : 0;
         if (f->body_len > skip) {
             if (!WriteFile(g_put.h, f->body + skip,
                            f->body_len - skip, &wrote, NULL)) {
@@ -349,7 +428,15 @@ static void do_putend(rc_net *net, rc_frame *f)
      * overwritten with nothing reported. Re-read the target NOW and refuse if
      * it is not what the bridge decided against. */
     if (ifc && *ifc) {
-        rc_sync_join(full, sizeof(full), g_root, g_put.rel);
+        /* A truncated join here runs the precondition against a DIFFERENT
+         * file, so the guard that exists to stop a concurrent local edit being
+         * overwritten would pass or fail on the wrong evidence -- and passing
+         * is the direction that loses the user's save. Audit 01.61 closed this
+         * class for do_get and do_mkdir and missed this third site. */
+        if (!rc_sync_join(full, sizeof(full), g_put.root, g_put.rel)) {
+            put_fail(net, id, "too_long");
+            return;
+        }
         memset(&cur, 0, sizeof(cur));
         rc_sync_stat_file(full, &cur);
         if (strcmp(ifc, "absent") == 0) {
@@ -378,7 +465,7 @@ static void do_putend(rc_net *net, rc_frame *f)
         }
     }
 
-    rc = rc_sync_commit(g_root, g_put.rel, g_put.tmp,
+    rc = rc_sync_commit(g_put.root, g_put.rel, g_put.tmp,
                         crc ? strtoul(crc, NULL, 10) : 0,
                         cls && *cls ? *cls : RC_CLS_TEXT);
     g_put.active = 0;
@@ -418,6 +505,7 @@ static void do_mkdir(rc_net *net, rc_frame *f)
     const char *vals[2];
     const char *status = "ok";
     char full[MAX_PATH];
+    char root[MAX_PATH];
 
     if (!rc_sync_contained(f->body)) status = "bad_path";
     /* rc_sync_contained checks the SHAPE of the relative path and says nothing
@@ -429,7 +517,11 @@ static void do_mkdir(rc_net *net, rc_frame *f)
      * lean on -- this function exists for the case where the bridge is the
      * thing that is wrong, and it cannot rest on a guarantee made by the party
      * it is checking. */
-    else if (!rc_sync_join(full, sizeof(full), g_root, f->body))
+    /* Snapshot, not the live global: a work-directory change on the UI thread
+     * mid-join splices a path out of two roots (see the note on g_root). */
+    else if (!root_snapshot(root, sizeof(root)))
+        status = "no_root";
+    else if (!rc_sync_join(full, sizeof(full), root, f->body))
         status = "too_long";
     else {
         DWORD was = GetFileAttributesA(full);
@@ -477,6 +569,7 @@ static void do_get(rc_net *net, rc_frame *f)
     const char *keys[4];
     const char *vals[4];
     char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
+    char root[MAX_PATH];
     /* Zeroed HERE, not only on the branch that reads a real file: every
      * refusal branch below (bad_path, too_long, missing, is_directory,
      * locked) falls straight through to the crc/cls _snprintf calls without
@@ -498,7 +591,19 @@ static void do_get(rc_net *net, rc_frame *f)
     DWORD size = 0, got = 0, sent = 0;
     const char *status = "ok";
 
-    if (!id) return;
+    if (!id) {
+        /* NAMED, not dropped in silence. The bridge allocated a future for
+         * this frame and will wait out its whole budget -- 120s for an exec,
+         * 300s for a put or get, 600s for a scan -- with nothing anywhere
+         * saying why. rpc.cpp already explains this exact cost for a WRONGLY
+         * SHAPED ack and treats it as the reason lane-specific ack types
+         * exist; a frame answered with nothing at all is worse and was the
+         * one case nothing logged. There is no id to answer to, so a log
+         * line is all that is available. (audit 01.37) */
+        rc_log("%s: frame carries no id -- dropped, and the bridge will wait "
+               "out its timeout", f->type);
+        return;
+    }
     buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
     if (!buf) {
         const char *k[2]; const char *v[2];
@@ -521,7 +626,11 @@ static void do_get(rc_net *net, rc_frame *f)
      * go back to the bridge acked as the path that was asked for -- so the
      * bridge writes one file's contents over another's, with a crc that
      * matches what it received. */
-    else if (!rc_sync_join(full, sizeof(full), g_root, f->body))
+    /* Snapshot, not the live global: a work-directory change on the UI thread
+     * mid-join splices a path out of two roots (see the note on g_root). */
+    else if (!root_snapshot(root, sizeof(root)))
+        status = "no_root";
+    else if (!rc_sync_join(full, sizeof(full), root, f->body))
         status = "too_long";
     else {
         /* What the path IS, cheaply and WITHOUT reading content -- the same

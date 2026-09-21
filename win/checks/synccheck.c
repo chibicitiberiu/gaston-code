@@ -16,6 +16,8 @@
 #include <io.h>
 #include <fcntl.h>
 #include "sync/sync.h"
+#include "core/str.h"
+
 
 static void emit(void *ctx, const char *rel, const rc_sync_stat *st)
 {
@@ -76,6 +78,85 @@ static int limits(void)
  * happens when the bridge is the thing that is wrong. Prints one line per
  * case so the Python side diffs the verdicts rather than trusting a comment.
  */
+
+/* The do_put path parse, over bodies shaped like the ones the bridge really
+ * sends: "<len> <rel>" with the file's own first chunk glued straight on.
+ *
+ * This is the composition nothing tested. rc_sync_contained was covered by
+ * --contained above with bare paths, and it was correct; the bug was that
+ * do_put handed it a pointer running into the file CONTENT, so any push whose
+ * first chunk held `//` was refused forever as bad_path. `fakegui.py` answers
+ * SYNCPUT with a canned status without parsing the body, so nothing on the
+ * Python side could reach it either.
+ *
+ * Prints "<verdict>\t<path-or-empty>\t<data-offset>\t<label>". */
+static int putpath(void)
+{
+    static const struct { const char *label; const char *path;
+                          const char *data; } cases[] = {
+        /* The finding: ordinary source files whose first bytes hold "//". */
+        { "cpp-line-comment",  "src/main.cpp", "// a C++ comment\n" },
+        { "js-spdx",           "web/app.js",   "// SPDX-License-Identifier\n" },
+        { "url-in-text",       "notes.txt",    "see http://example.com\n" },
+        { "c-block-comment",   "src/main.c",   "/* a C comment */\n" },
+        { "plain-ascii",       "readme.md",    "no slashes here\n" },
+        { "dotdot-in-content", "Makefile",     "CFLAGS=-I/../include\n" },
+        { "backslashes",       "a.txt",        "C:\\\\Windows\\\\System\n" },
+        { "empty-content",     "b.txt",        "" },
+        /* The path itself is still checked -- escapes must still be refused. */
+        { "escape-path",       "../etc/x",     "hello\n" },
+        { "absolute-path",     "/etc/x",       "hello\n" },
+        { "drive-path",        "C:\\\\x",       "hello\n" },
+        { NULL, NULL, NULL }
+    };
+    char body[4096];
+    char out[MAX_PATH];
+    int i;
+
+    for (i = 0; cases[i].label; i++) {
+        unsigned off = 0, blen;
+        int rc, n;
+        /* rc_strf, not sprintf: `make check`'s unbounded-string gate refuses
+         * the overflow family everywhere in win/, tests included -- and it is
+         * right to, because a harness that overflows its own buffer reports a
+         * failure in the code under test. */
+        rc_strf(body, sizeof(body), "%u %s",
+                (unsigned)strlen(cases[i].path), cases[i].path);
+        n = (int)strlen(body);
+        rc_strf(body + n, sizeof(body) - n, "%s", cases[i].data);
+        blen = (unsigned)strlen(body);
+        rc = rc_syncrpc_put_path(body, blen, out, sizeof(out), &off);
+        printf("%s\t%s\t%u\t%s\n",
+               rc == RC_PUTPATH_OK      ? "ok"      :
+               rc == RC_PUTPATH_TOOLONG ? "too_long":
+               rc == RC_PUTPATH_BADPATH ? "bad_path": "no_sep",
+               out, off, cases[i].label);
+    }
+
+    /* A body with no separator at all: the prefix-walk must refuse rather
+     * than step one byte past the allocation. */
+    {
+        unsigned off = 0;
+        int rc;
+        rc_strf(body, sizeof(body), "12345");
+        rc = rc_syncrpc_put_path(body, 5, out, sizeof(out), &off);
+        printf("%s\t%s\t%u\t%s\n",
+               rc == RC_PUTPATH_OK ? "ok" : "no_sep", out, off, "no-separator");
+    }
+    /* A length the bridge declares that is larger than the frame. */
+    {
+        unsigned off = 0;
+        int rc, n;
+        rc_strf(body, sizeof(body), "900 short.txt");
+        n = (int)strlen(body);
+        rc = rc_syncrpc_put_path(body, (unsigned)n, out, sizeof(out), &off);
+        printf("%s\t%s\t%u\t%s\n",
+               rc == RC_PUTPATH_OK ? "ok" : "no_sep", out, off,
+               "length-past-end");
+    }
+    return 0;
+}
+
 static int contained(void)
 {
     static const char *cases[] = {
@@ -129,6 +210,7 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "--limits") == 0) return limits();
     if (argc >= 2 && strcmp(argv[1], "--contained") == 0) return contained();
+    if (argc >= 2 && strcmp(argv[1], "--putpath") == 0) return putpath();
     /* 03.14: the chunk-boundary corpus in test_guest_agreement.py used to
      * hardcode byte offsets 8191/8190 rather than deriving them from
      * RC_SYNC_CHUNK, so a change to the chunk size would leave the
@@ -139,7 +221,7 @@ int main(int argc, char **argv)
         printf("%d\n", (int)RC_SYNC_CHUNK);
         return 0;
     }
-    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--chunk\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--putpath|--chunk\n"); return 2; }
     n = rc_sync_scan(argv[1], emit, NULL);
     if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
     if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }

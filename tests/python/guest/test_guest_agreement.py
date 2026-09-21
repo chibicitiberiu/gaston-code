@@ -414,3 +414,107 @@ def test_sync_status_vocabulary_matches_the_guest():
         f"SyncStatus names {extra}, which this extraction did not find in "
         f"win/sync/syncrpc.cpp -- either the guest no longer sends it, or "
         f"the regexes above need a new case for how it is produced now.")
+
+
+# --- the SYNCPUT path parse, over bodies with real file content -------------
+#
+# The composition that had no test, and the one that broke. `--contained`
+# above drives rc_sync_contained with BARE paths and it was always correct;
+# the defect was in do_put, which handed it a pointer that ran off the end of
+# the path and into the file's own bytes. So any push whose first 8KB held
+# `//` -- an empty path component, and the line-comment token of C++, Java,
+# JavaScript, Go and Rust, plus every `http://` URL -- came back `bad_path`
+# forever, naming the one thing about the request that was not wrong.
+#
+# Nothing could catch it: fakegui.py answers SYNCPUT with a canned status
+# without parsing the body at all, so the Python side never reached this code,
+# and rpccheck only asserts which LANE the frame takes.
+#
+# These drive the real rc_syncrpc_put_path through synccheck --putpath, with
+# bodies shaped exactly as bridge/files/synctransport.py builds them:
+# "<len> <rel>" followed immediately by the chunk, with no separator.
+
+@pytest.fixture(scope="module")
+def guest_putpath():
+    out = conftest.run_guest(EXE_NAME, "--putpath", timeout=300)
+    rows = {}
+    for line in out.stdout.decode("latin-1").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 4:
+            rows[parts[3]] = (parts[0], parts[1], int(parts[2]))
+    assert rows, out.stderr.decode("latin-1", "replace")[:800]
+    return rows
+
+
+@pytest.mark.parametrize("label,path", [
+    ("cpp-line-comment",  "src/main.cpp"),
+    ("js-spdx",           "web/app.js"),
+    ("url-in-text",       "notes.txt"),
+    ("dotdot-in-content", "Makefile"),
+    ("backslashes",       "a.txt"),
+])
+def test_content_after_the_path_cannot_refuse_the_push(guest_putpath,
+                                                       label, path):
+    """A file whose first chunk contains `//`, `/../` or `\\\\` still pushes.
+
+    Every one of these was `bad_path` before the parse was fixed, which meant
+    the agent could not write a source file with a line comment onto a machine
+    whose entire purpose is writing code on it -- and the bridge retried it
+    every thirty seconds forever, because a refused push does not advance the
+    baseline.
+    """
+    verdict, got, _ = guest_putpath[label]
+    assert verdict == "ok", f"{label}: the CONTENT was read as part of the path"
+    assert got == path, f"{label}: parsed the wrong path"
+
+
+@pytest.mark.parametrize("label", [
+    "c-block-comment", "plain-ascii", "empty-content",
+])
+def test_ordinary_bodies_still_parse(guest_putpath, label):
+    assert guest_putpath[label][0] == "ok"
+
+
+@pytest.mark.parametrize("label", [
+    "escape-path", "absolute-path", "drive-path",
+])
+def test_the_path_itself_is_still_checked(guest_putpath, label):
+    """The escape defence must survive the fix.
+
+    Containment is now checked on the bounded COPY rather than on the raw
+    pointer, so the question "did moving the check weaken it" has to be asked
+    out loud. It did not: the path is still fully validated, and the copy is
+    what the rest of do_put actually uses.
+    """
+    verdict, got, _ = guest_putpath[label]
+    assert verdict == "bad_path", f"{label} was ACCEPTED"
+    assert got == "", "a refused path must not be left in the output buffer"
+
+
+def test_a_body_with_no_separator_is_refused(guest_putpath):
+    """`body + plen + 1` would be one byte past the frame allocation.
+
+    net.cpp NUL-terminates the payload over a `len + 1` block, so the
+    prefix-walk stops on that NUL -- and the byte after it is outside the
+    block. Win98 puts no guard page behind a small heap block, so reading
+    there does not fault; it reads adjacent heap and acts on it as a path.
+    """
+    assert guest_putpath["no-separator"][0] == "no_sep"
+
+
+def test_a_declared_length_past_the_frame_is_refused(guest_putpath):
+    """The bridge's `<len>` is wire data and is not believed on its own."""
+    assert guest_putpath["length-past-end"][0] == "no_sep"
+
+
+def test_the_data_offset_is_where_the_content_starts(guest_putpath):
+    """The write offset comes from the parser, not a second computation.
+
+    do_put writes the chunk from this offset. Deriving it anywhere else is how
+    it drifts from the prefix the parser actually consumed, and a wrong offset
+    writes the length prefix into the user's file.
+    """
+    for label, path in (("cpp-line-comment", "src/main.cpp"),
+                        ("plain-ascii", "readme.md")):
+        _, _, off = guest_putpath[label]
+        assert off == len(str(len(path))) + 1 + len(path), label

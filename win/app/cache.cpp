@@ -64,9 +64,16 @@ rc_cache::~rc_cache()
     chat_fp = NULL;
 }
 
-void rc_cache::path_for(char *out, unsigned cap, int n) const
+/* Non-zero if the whole path fit. CHECKED by every caller, because a
+ * truncated one is not a shorter path, it is a DIFFERENT file: with an exe
+ * directory near 250 characters the "P%03d.HTM" suffix is what gets cut, so
+ * P001.HTM and P002.HTM resolve to one name -- page 2 overwrites page 1,
+ * page_count() stops at 1, and paging back offline shows the wrong page with
+ * nothing to say so. Unlikely on a C:\GASTON install; listed because it is
+ * the ignored-return class this codebase set out to close. (audit 01.37) */
+int rc_cache::path_for(char *out, unsigned cap, int n) const
 {
-    rc_strf(out, cap, "%s\\P%03d.HTM", dir, n);
+    return rc_strf(out, cap, "%s\\P%03d.HTM", dir, n);
 }
 
 void rc_cache::open_session(const char *session_id)
@@ -86,7 +93,14 @@ void rc_cache::open_session(const char *session_id)
 
     rc_strf(sess, sizeof(sess), "%s", session_id);
     key_of(session_id, key, sizeof(key));
-    rc_strf(dir, sizeof(dir), "%s\\%s", root, key);
+    /* If the directory itself does not fit there is nowhere to cache; say so
+     * and stay off rather than writing pages into a truncated path shared
+     * with another session. */
+    if (!rc_strf(dir, sizeof(dir), "%s\\%s", root, key)) {
+        rc_log("cache: %s is too long to hold a session directory", root);
+        dir[0] = '\0';
+        return;
+    }
     if (!rc_mkpath(dir)) {
         rc_log("cache: cannot create %s (%lu)", dir,
                (unsigned long)GetLastError());
@@ -163,8 +177,13 @@ void rc_cache::end_page()
     fclose(page_fp);
     page_fp = NULL;
 
-    rc_strf(tmp, sizeof(tmp), "%s\\P%03d.TMP", dir, page_no);
-    path_for(dest, sizeof(dest), page_no);
+    /* Both checked: a truncated pair can alias a DIFFERENT page's file, and
+     * the next two lines delete and rename. */
+    if (!rc_strf(tmp, sizeof(tmp), "%s\\P%03d.TMP", dir, page_no) ||
+        !path_for(dest, sizeof(dest), page_no)) {
+        rc_log("cache: page %d path does not fit; dropping it", page_no);
+        return;
+    }
     DeleteFileA(dest);
     if (!MoveFileA(tmp, dest)) {
         rc_log("cache: rename of page %d failed (%lu)", page_no,
@@ -182,7 +201,7 @@ int rc_cache::load_page(int n, rc_html *html)
     size_t got;
 
     if (!usable || !dir[0] || !html || n < 1) return 0;
-    path_for(path, sizeof(path), n);
+    if (!path_for(path, sizeof(path), n)) return 0;
     fp = fopen(path, "rb");
     if (!fp) return 0;
 
@@ -215,7 +234,7 @@ int rc_cache::page_count() const
 
     if (!usable || !dir[0]) return 0;
     for (;;) {
-        path_for(path, sizeof(path), n + 1);
+        if (!path_for(path, sizeof(path), n + 1)) break;
         if (GetFileAttributesA(path) == 0xFFFFFFFF) break;
         n++;
         if (n >= 999) break;    /* P%03d runs out, and so does patience */
@@ -231,24 +250,43 @@ void rc_cache::begin_chats()
     if (!usable) return;
     rc_strf(tmp, sizeof(tmp), "%s\\CHATS.TMP", root);
     chat_fp = fopen(tmp, "wb");
+    chat_bad = 0;
+    /* Logged, unlike before -- every other fopen in this file says when it
+     * fails, and a chat cache that silently never starts is a cold start that
+     * silently shows nothing. */
+    if (!chat_fp) rc_log("cache: cannot write %s", tmp);
 }
 
 void rc_cache::add_chat(const char *line)
 {
     if (!chat_fp || !line) return;
-    fputs(line, chat_fp);
-    fputc('\n', chat_fp);
+    /* TRACKED, the way rc_cache::add already does it for a page. A disk that
+     * fills partway through a 40-conversation list must not end up replacing
+     * a complete CHATS.TXT with a truncated one -- the next cold start would
+     * show a chat list missing its tail with nothing to say why. */
+    if (fputs(line, chat_fp) == EOF || fputc('\n', chat_fp) == EOF)
+        chat_bad = 1;
 }
 
 void rc_cache::end_chats()
 {
     char tmp[MAX_PATH], dest[MAX_PATH];
+    int bad;
 
     if (!chat_fp) return;
-    fclose(chat_fp);
+    /* The close is part of the verdict: stdio buffers, so the last write
+     * reaches the disk here and nowhere else. */
+    bad = (fclose(chat_fp) != 0) || chat_bad;
     chat_fp = NULL;
     rc_strf(tmp, sizeof(tmp), "%s\\CHATS.TMP", root);
     rc_strf(dest, sizeof(dest), "%s\\CHATS.TXT", root);
+    if (bad) {
+        /* Keep the good copy. A stale chat list is a list; a truncated one
+         * looks current and is not. */
+        rc_log("cache: chat list incomplete, keeping the previous %s", dest);
+        DeleteFileA(tmp);
+        return;
+    }
     DeleteFileA(dest);
     if (!MoveFileA(tmp, dest)) DeleteFileA(tmp);
 }

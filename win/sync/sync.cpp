@@ -11,6 +11,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "sync/sync.h"
 #include "core/log.h"
@@ -265,6 +266,59 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
 
 /* --- containment --------------------------------------------------------- */
 
+/* Parse a SYNCPUT body's length-prefixed path into a bounded, validated
+ * relative path. One function, so the thing that runs is the thing the tests
+ * run -- `synccheck --putpath` drives THIS, over bodies with real file
+ * content glued to the tail.
+ *
+ * The body is "<len> <rel>" followed IMMEDIATELY by up to 8KB of the file's
+ * own bytes, with no separator (bridge/files/synctransport.py builds it as
+ * prefix + piece). Everything here follows from that:
+ *
+ *   - the separator must actually be present, or `body + plen + 1` is one
+ *     past the frame allocation and every read after it walks adjacent heap
+ *     (Win98 has no guard page behind a small block, so it does not fault);
+ *   - the copy is bounded by the bridge's `<len>`, which is unbounded wire
+ *     data, and its return is checked -- a silently cut path is a DIFFERENT
+ *     file, and it goes on to rc_sync_begin_write and rc_sync_commit, which
+ *     delete and rename;
+ *   - containment is checked on the BOUNDED COPY, never on the raw pointer.
+ *     Checking the pointer scanned the path AND the file data as one string,
+ *     so any push whose first chunk held `//` -- an empty component, and the
+ *     line-comment token of half the languages the agent writes -- came back
+ *     bad_path forever, naming the one thing that was not wrong with it.
+ *
+ * Returns RC_PUTPATH_OK, or one of the refusals below. (audit 01.2/01.6/01.30)
+ */
+int rc_syncrpc_put_path(const char *body, unsigned body_len,
+                        char *out, unsigned cap, unsigned *data_off)
+{
+    unsigned plen = 0, rn;
+    const char *rel;
+
+    if (data_off) *data_off = 0;
+    if (!body || !out || !cap) return RC_PUTPATH_NOSEP;
+    out[0] = '\0';
+
+    while (plen < 16 && plen < body_len && body[plen] && body[plen] != ' ')
+        plen++;
+    if (plen >= body_len || body[plen] != ' ') return RC_PUTPATH_NOSEP;
+
+    rn = (unsigned)atoi(body);
+    rel = body + plen + 1;
+    /* The declared length must lie inside the frame. A bridge that says 900
+     * on a 40-byte body is wrong, and believing it reads past the end. */
+    if (rn == 0 || rn > body_len - (plen + 1)) return RC_PUTPATH_NOSEP;
+
+    if (!rc_strf(out, cap, "%.*s", (int)rn, rel)) return RC_PUTPATH_TOOLONG;
+    if (!rc_sync_contained(out)) { out[0] = '\0'; return RC_PUTPATH_BADPATH; }
+    /* Where the file's own bytes start. Derived HERE rather than recomputed
+     * by the caller, so the offset the data is written from cannot drift from
+     * the prefix this function actually consumed. */
+    if (data_off) *data_off = plen + 1 + rn;
+    return RC_PUTPATH_OK;
+}
+
 int rc_sync_contained(const char *rel)
 {
     const char *p = rel;
@@ -411,8 +465,19 @@ static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
         /* ALWAYS the long name, never cAlternateFileName. The 8.3 alias is not
          * stable -- deleting one file renumbers ~1/~2 for the others -- so
          * keying on it would rename files at random. */
-        if (*rel) rc_strf(child, sizeof(child), "%s/%s", rel, fd.cFileName);
-        else      rc_strf(child, sizeof(child), "%s", fd.cFileName);
+        /* CHECKED, because `child` feeds the joins below, and those feed a
+         * DeleteFileA and a MoveFileA. A truncated relative path names a
+         * different file, and this function runs at the top of every
+         * rc_workdir_apply -- i.e. whenever a conversation commits to a
+         * folder -- inside the user's own work directory. Skipping the entry
+         * loses a recovery; acting on a truncated one loses a file. */
+        if (*rel) {
+            if (!rc_strf(child, sizeof(child), "%s/%s", rel, fd.cFileName))
+                continue;
+        } else {
+            if (!rc_strf(child, sizeof(child), "%s", fd.cFileName))
+                continue;
+        }
 
         if (w->count >= RC_SYNC_MAX_FILES) { w->overflow = 1; break; }
 
@@ -556,7 +621,30 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
     rc_sync_stat got;
     DWORD attr;
 
-    rc_sync_join(full, sizeof(full), root, rel);
+    /* MEASURED FROM THE INPUTS, not from the joined string -- the same rule
+     * rc_sync_begin_write states, and for the same reason: the join truncates
+     * silently, so a length test on its OUTPUT is a test on the evidence the
+     * truncation already destroyed.
+     *
+     * This mattered more here than anywhere else, because this is the function
+     * that deletes and renames. A truncated `full` would have made
+     * GetFileAttributesA, MoveFileA(full, aside) and MoveFileA(tmp, full) all
+     * act on an unrelated file -- moving the user's file aside, writing the
+     * synced bytes over it, then deleting the displaced original -- and then
+     * `return 0`, so the bridge advances its baseline over content this
+     * machine never took.
+     *
+     * It was safe before this only by accident: `full` and `aside` are both
+     * MAX_PATH, so a truncated `full` was always long enough to trip the
+     * `aside` reserve check below. Enlarging `aside` -- the obvious way to
+     * stop the -4 refusals, which read like an over-strict limit -- would have
+     * removed the guard with nothing to say so. */
+    if (!rc_sync_join(full, sizeof(full), root, rel)) {
+        rc_log("sync: refusing to commit %s -- the joined path does not fit",
+               rel);
+        DeleteFileA(tmp);
+        return -4;
+    }
 
     /* Verify before replacing anything. A transfer that cannot establish
      * crc(guest) == what was sent is reported, never retried. */
@@ -649,8 +737,16 @@ static void recover_dir(const char *root, const char *rel, int depth)
         if (len > RC_SYNC_SUFFIX_LEN &&
             strcmp(fd.cFileName + len - RC_SYNC_SUFFIX_LEN,
                    RC_SYNC_OLD_SUFFIX) == 0) {
-            rc_sync_join(aside, sizeof(aside), root, child);
-            rc_strf(real, sizeof(real), "%s", aside);
+            /* Both returns checked: see the note on `child` above, and
+             * rc_sync_join's own header -- "a caller that ignores the return
+             * value stats, opens or renames the wrong thing with no way to
+             * find out." walk() at the top of this file is the model. */
+            if (!rc_sync_join(aside, sizeof(aside), root, child)) {
+                rc_log("sync: cannot recover %s -- the joined path does not "
+                       "fit", child);
+                continue;
+            }
+            if (!rc_strf(real, sizeof(real), "%s", aside)) continue;
             /* Safe only transitively -- fd.cFileName was proven longer than
              * the suffix by the strcmp guard above, and MAX_PATH dwarfs it --
              * but nothing at THIS line says so, and an unsigned subtraction
@@ -666,7 +762,13 @@ static void recover_dir(const char *root, const char *rel, int depth)
         } else if (len > RC_SYNC_SUFFIX_LEN &&
                    strcmp(fd.cFileName + len - RC_SYNC_SUFFIX_LEN,
                           RC_SYNC_TMP_SUFFIX) == 0) {
-            rc_sync_join(aside, sizeof(aside), root, child);
+            /* Checked for the same reason, and this one DELETES. */
+            if (!rc_sync_join(aside, sizeof(aside), root, child)) {
+                rc_log("sync: not deleting a temp for %s -- the joined path "
+                       "does not fit, and a truncated one names another file",
+                       child);
+                continue;
+            }
             DeleteFileA(aside);       /* an abandoned transfer */
         }
     } while (FindNextFileA(h, &fd));

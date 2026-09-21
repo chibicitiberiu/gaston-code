@@ -91,8 +91,18 @@ class rc_optmenu {
     char  cur_model[64], cur_effort[64], cur_mode[64];
     /* Where this conversation's files land, as the guest spells it: the full
      * path for the menu, the short form the button wears. The bridge sends
-     * both because a 640px screen has no room for the long one on a button. */
-    char  cur_work[128], cur_work_short[128];
+     * both because a 640px screen has no room for the long one on a button.
+     *
+     * MAX_PATH, not 128. The guest declares maxpath=260 at handshake, so the
+     * bridge is entitled to send a 260-byte path and does -- it echoes back
+     * whatever the user picked through SHBrowseForFolder. At 128 the path was
+     * silently cut, and the cut prefix was then handed to rc_workdir_apply,
+     * which rc_mkpath's it parents and all and re-points the sync root: the
+     * conversation's files were mirrored into a folder the user never named
+     * while the one they did name read as empty, which the bridge sees as a
+     * mass deletion. `cur_work_short` is a label for a 640px button and stays
+     * small, but it is checked too rather than trusted to be short. */
+    char  cur_work[MAX_PATH], cur_work_short[128];
     /* Non-zero once the batch has offered at least one effort level that is
      * not greyed out. Haiku has none, and the bridge says so with a single
      * disabled row -- a toolbar button reading "(effort)" forever is worse
@@ -104,6 +114,7 @@ class rc_optmenu {
      * works until a label is reworded. -1 when nothing is ticked. */
     int   cur_mode_ix;
     int   opts_open;   /* mid-batch, so the next model row appends */
+    int   n_work;      /* work rows this batch -- see the cap in frame() */
     HWND  owner;
     rc_optmenu_send_fn send;
     rc_optmenu_input_fn input;
@@ -114,6 +125,15 @@ class rc_optmenu {
                rc_optmenu_input_fn input_);
 
 public:
+    /* Forget a batch that was CUT. Called from the disconnect branch, beside
+     * the bar's hide_all() and the sync PUT's abort: without it a drop between
+     * the last OPTION row and OPTIONSEND left the batch latched open, and the
+     * resent batch appended to the menus instead of replacing them. Safe to
+     * call when no batch is open -- the menus are rebuilt on reconnect, and
+     * leaving stale ones up while disconnected would claim a model is
+     * selected on a bridge that is not there. */
+    void reset(void);
+
     /* Creates the Model and Effort popups (each seeded with one greyed
      * "(not connected)" placeholder, exactly as build_menu used to) and
      * appends them to `bar` as "&Model"/"&Effort" -- called from build_menu
@@ -126,7 +146,17 @@ public:
      *     rc_optmenu_input_fn above. */
     static rc_optmenu *create(HWND owner, HMENU bar, rc_optmenu_send_fn send,
                               rc_optmenu_input_fn input);
-    ~rc_optmenu() {}
+    /* menu_work and menu_attach are NOT appended to the menu bar (they hang
+     * off toolbar buttons instead), so DestroyMenu(bar) never reaches them
+     * and they leaked for the life of the process -- two handles off the
+     * fixed 64KB USER heap. The other four ARE on the bar and are destroyed
+     * with it; destroying them here too would be a double free. (audit
+     * 01.37) */
+    ~rc_optmenu()
+    {
+        if (menu_work)   DestroyMenu(menu_work);
+        if (menu_attach) DestroyMenu(menu_attach);
+    }
 
     /* OPTION, OPTIONSEND -- the two frame types this module owns. Returns
      * non-zero if `f->type` was one of those. */

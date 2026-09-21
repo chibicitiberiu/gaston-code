@@ -87,6 +87,15 @@ typedef struct {
     unsigned long rx_bytes;
     unsigned long tx_bytes;
     int           started;      /* rc_net_start succeeded; needs teardown */
+    /* THE SESSION ID, and 64 is a limit this client cannot exceed rather
+     * than a guess. app/chatlist.h's chat_ids[] is 64 too, deliberately
+     * symmetric: the strcmp that decides "is this conversation already open"
+     * compares the two, so a size mismatch would make them disagree about
+     * ids longer than the smaller buffer. The bridge's ids are UUID-shaped
+     * (36 bytes) and halt ids are 9, so nothing approaches this -- but the
+     * guest CANNOT represent an id of 64 bytes or more at all, and that had
+     * never been written down anywhere. If the bridge ever lengthens them,
+     * both buffers move together. (audit 01.38) */
     char          sess[64];
 } rc_net;
 
@@ -98,7 +107,32 @@ typedef struct {
 int  rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret, const void *tools, unsigned tools_len);
 void rc_net_stop(rc_net *n);
+/* What a send can answer.
+ *
+ * RC_SEND_FULL is NOT a dead link and must not be reported as one: the wire
+ * is fine and a bulk transfer is simply ahead of this frame in the queue.
+ * Telling the user "the connection is down" for it sent them to look at the
+ * network for a backpressure event and promised a reconnect that was never
+ * coming (audit 01.17). Every caller may still test `!= 0` / `< 0`; only a
+ * caller that wants to SAY something needs to tell the two apart. */
+#define RC_SEND_OK    0
+#define RC_SEND_DEAD (-1)
+#define RC_SEND_FULL (-2)
+
+/* 100ms slices spent waiting for the queue to drain. Bulk senders (the RPC
+ * worker: manifest rows, SYNCDAT, EXECOUT) can afford the full five seconds,
+ * because waiting for the wire is what backpressure is for. A USER GESTURE
+ * cannot: ui_send runs on the window thread and the message pump does not run
+ * while it waits, so five seconds there is a frozen window and a ghost frame. */
+#define RC_SEND_WAIT_BULK 50
+#define RC_SEND_WAIT_UI    5
+
 int  rc_net_send(rc_net *n, const char *type,
+                 const char *const *keys, const char *const *vals, int nkv,
+                 const void *body, unsigned body_len);
+
+/* Same, with the short budget. For frames the user just asked for. */
+int  rc_net_send_ui(rc_net *n, const char *type,
                  const char *const *keys, const char *const *vals, int nkv,
                  const void *body, unsigned body_len);
 const char *rc_state_name(rc_state s);

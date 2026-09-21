@@ -117,7 +117,24 @@ int rc_export::begin(HWND owner, const char *suggested)
     /* The temp file sits beside the destination, not in %TEMP%: the rename at
      * the end has to be within one volume to be atomic, and the user may well
      * have chosen a floppy or a network drive. */
-    rc_strf(tmp, sizeof(tmp), "%s.$$$", path);
+    /* CHECKED, because at the MAX_PATH boundary the format truncates back to
+     * exactly `path` and then tmp == dest. Everything downstream assumes they
+     * are different files: fopen(tmp, "wb") would truncate the user's chosen
+     * file in place before a byte had arrived, EXPORTEND's DeleteFileA(dest)
+     * would delete what had just been written, and every mid-transfer
+     * cleanup() does DeleteFileA(tmp) -- i.e. deletes dest. The outcome is
+     * losing a pre-existing file the bridge never touched, which is the one
+     * thing an export must not do. (audit 01.37) */
+    if (!rc_strf(tmp, sizeof(tmp), "%s.$$$", path)) {
+        rc_log("export: %s leaves no room for a .$$$ beside it",
+               path);
+        if (html)
+            html->error("That path is too long for this machine to write a "
+                        "temporary file beside it. Nothing was written. "
+                        "Choose a shorter path or a folder nearer the root.");
+        tmp[0] = '\0';
+        return 0;
+    }
     fp = fopen(tmp, "wb");
     if (!fp) {
         rc_log("export: cannot open %s", tmp);
@@ -136,7 +153,15 @@ int rc_export::begin(HWND owner, const char *suggested)
 
 void rc_export::give_up(void)
 {
-    if (fp) rc_log("export: abandoned before any data arrived");
+    /* Called on an immediate send failure AND from the disconnect branch in
+     * main.cpp, where a transfer may be part-written rather than not started
+     * -- so the message says how far it got rather than asserting "before any
+     * data arrived", which was only true of the first caller. cleanup()
+     * closes the FILE* and removes the .$$$ either way: a half-written export
+     * is not a smaller export, it is a broken file. */
+    if (fp)
+        rc_log("export: abandoned after %lu of %lu bytes",
+               (unsigned long)got, (unsigned long)total);
     cleanup();
 }
 
@@ -193,8 +218,30 @@ int rc_export::frame(rc_frame *f)
         char msg[320];
 
         if (!fp) return 1;
-        fclose(fp);
-        fp = NULL;
+        /* CHECKED, because stdio buffers and this is where the last buffer
+         * actually reaches the disk.
+         *
+         * Every fwrite above is checked, but a full floppy or network drive
+         * fails inside fclose, which returns EOF -- and that return was
+         * discarded. `got == total` still held, because it counts bytes
+         * handed to fwrite rather than bytes on disk, so a TRUNCATED file was
+         * renamed into the name the user chose. export.h names that exact
+         * outcome as the thing the temp file exists to prevent: "they would
+         * open it, see most of a conversation, and have no way to tell that
+         * the end is missing." */
+        {
+            int closed = fclose(fp);
+            fp = NULL;
+            if (closed != 0) {
+                rc_log("export: fclose failed after %lu bytes -- out of disk?",
+                       (unsigned long)got);
+                if (html)
+                    html->error("The export could not be written to disk and "
+                                "has been discarded. Nothing was written.");
+                cleanup();
+                return 1;
+            }
+        }
 
         if (!ok) {
             rc_log("export: bridge reported failure: %s", why ? why : "?");

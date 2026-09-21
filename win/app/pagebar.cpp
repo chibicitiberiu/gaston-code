@@ -40,21 +40,61 @@ void rc_pagebar::goto_page(const char *which)
 {
     const char *keys[1]; const char *vals[1];
     keys[0] = "page"; vals[0] = which;
-    rc_net_send(net, "GETPAGE", keys, vals, 1, NULL, 0);
+    /* THROUGH ui_send, like the bar and the chat list.
+     *
+     * This was a bare rc_net_send with its return discarded -- the only
+     * user-initiated send in the tree that swallowed failure. main.cpp states
+     * the rule where ui_send is defined: "Ignoring that turns a button press
+     * into silence: the press looks accepted, nothing happens, and there is
+     * nothing on screen to explain it." Pressing Next on a link that had just
+     * dropped did exactly nothing, with no message and no log line. */
+    if (send) send("that page", "GETPAGE", keys, vals, 1, NULL, 0);
+    else rc_net_send(net, "GETPAGE", keys, vals, 1, NULL, 0);
+}
+
+/* A page count off the wire. Clamped where it is PARSED, once, rather than
+ * at each of the six places that used it: atoi of an absent or non-numeric
+ * header is 0 and atoi("-5") is -5, and this is the only integer in the UI
+ * that drives arithmetic straight off the wire. A tree always has at least
+ * one page -- the live one. (audit 01.37) */
+static int wire_total(const char *v, int fallback)
+{
+    int n;
+    if (!v) return fallback;
+    n = atoi(v);
+    return n >= 1 ? n : 1;
+}
+
+/* The same, for a page NUMBER: at least 1, and never past the total. */
+static int wire_page(const char *v, int total, int fallback)
+{
+    int n;
+    if (!v) return fallback;
+    n = atoi(v);
+    if (n > total) n = total;
+    return n >= 1 ? n : 1;
 }
 
 void rc_pagebar::goto_n(int n)
 {
     char buf[16];
-    if (n < 1) n = 1;
+    /* CLAMP HIGH FIRST, THEN LOW. The other order lets a bad `total` win:
+     * `total` is atoi of a wire header, and atoi of an absent or
+     * non-numeric value is 0 while atoi("-5") is -5 -- so with total == 0,
+     * goto_n(1) clamped to n = 0 and put `GETPAGE page=0` on the wire.
+     * set_total() below refuses a total under 1 at the point it is parsed,
+     * which is the real fix; this order means a future parser bug cannot
+     * reach the wire either. */
     if (n > total) n = total;
+    if (n < 1) n = 1;
     rc_strf(buf, sizeof(buf), "%d", n);
     goto_page(buf);
 }
 
 rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-                        rc_html *html_)
-    : view(1), total(1), is_live(1), loading_page(0), net(net_), html(html_)
+                        rc_html *html_, rc_pagebar_send_fn send_)
+    : view(1), total(1), is_live(1), loading_page(0), net(net_), html(html_),
+      send(send_), follow_bmp(NULL)
 {
     /* Deliberately NO WS_TABSTOP on any of these six.
      *
@@ -104,11 +144,18 @@ rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
         0, 0, 0, 0, parent, (HMENU)ID_FOLLOW, inst, NULL);
     check_child("follow", follow);
     if (follow) {
+        /* KEPT, so the destructor can free it. BM_SETIMAGE does NOT take
+         * ownership, and without LR_SHARED this is a fresh GDI object every
+         * time -- one handle off a fixed 64KB USER/GDI heap, leaked for the
+         * life of the process. Small, but this is the heap the rest of the
+         * codebase is careful about. (audit 01.37) */
         HBITMAP bmp = (HBITMAP)LoadImageA(inst, MAKEINTRESOURCE(IDB_PGDN),
                                           IMAGE_BITMAP, 0, 0,
                                           LR_DEFAULTCOLOR);
-        if (bmp)
+        if (bmp) {
+            follow_bmp = bmp;
             SendMessageA(follow, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)bmp);
+        }
         else
             rc_log("pagebar: IDB_PGDN did not load; the autoscroll button "
                    "will be blank");
@@ -131,9 +178,10 @@ rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
 }
 
 rc_pagebar *rc_pagebar::create(HWND parent, HINSTANCE inst, HFONT font,
-                                rc_net *net, rc_html *html)
+                                rc_net *net, rc_html *html,
+                                rc_pagebar_send_fn send)
 {
-    return new rc_pagebar(parent, inst, font, net, html);
+    return new rc_pagebar(parent, inst, font, net, html, send);
 }
 
 /* Right-to-left is not needed here, unlike the permission bar: none of these
@@ -160,8 +208,8 @@ int rc_pagebar::frame(rc_frame *f)
 {
     if (strcmp(f->type, "PAGESTART") == 0) {
         const char *v;
-        v = rc_frame_get(f, "page");  if (v) view = atoi(v);
-        v = rc_frame_get(f, "total"); if (v) total = atoi(v);
+        v = rc_frame_get(f, "total"); total = wire_total(v, total);
+        v = rc_frame_get(f, "page");  view  = wire_page(v, total, view);
         v = rc_frame_get(f, "live");  is_live = (v && *v == '1');
         loading_page = 1;
         /* One page in, one page out: clear before rendering, so the control
@@ -182,7 +230,7 @@ int rc_pagebar::frame(rc_frame *f)
         return 1;
     }
     if (strcmp(f->type, "PAGESEALED") == 0) {
-        const char *v = rc_frame_get(f, "total"); if (v) total = atoi(v);
+        const char *v = rc_frame_get(f, "total"); total = wire_total(v, total);
         /* On the live page, follow the seal forward. On an older page, the
          * counter simply ticks up -- that IS the new-content notification. */
         if (is_live) view = total;
@@ -194,6 +242,15 @@ int rc_pagebar::frame(rc_frame *f)
 
 int rc_pagebar::command(int id)
 {
+    /* ONE PAGE IN FLIGHT AT A TIME.
+     *
+     * Holding Next on a slow link queued N GETPAGEs, and every PAGESTART that
+     * came back called html->clear() -- N page loads of bandwidth on a wire
+     * that may be 5 KB/s, and a transcript that flickered through each one to
+     * land on the last. The bar already tracks loading_page for its own UI;
+     * it simply was not consulted here. Live is exempt: it is the way back if
+     * a page request is lost, so it must never be gated behind one. */
+    if (loading_page && id != ID_LIVE) return 1;
     switch (id) {
     case ID_LIVE:  goto_page("live");   return 1;
     case ID_FIRST: goto_n(1);           return 1;
@@ -219,8 +276,8 @@ int rc_pagebar::follow_on() const
 void rc_pagebar::note_ready(rc_frame *f)
 {
     const char *v;
-    v = rc_frame_get(f, "page");  if (v) view = atoi(v);
-    v = rc_frame_get(f, "total"); if (v) total = atoi(v);
+    v = rc_frame_get(f, "total"); total = wire_total(v, total);
+    v = rc_frame_get(f, "page");  view  = wire_page(v, total, view);
     is_live = 1;
     update_ui();
 }
@@ -228,7 +285,7 @@ void rc_pagebar::note_ready(rc_frame *f)
 void rc_pagebar::note_total(rc_frame *f)
 {
     const char *v = rc_frame_get(f, "total");
-    if (v) total = atoi(v);
+    total = wire_total(v, total);
 }
 
 void rc_pagebar::goto_live()

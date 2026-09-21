@@ -127,13 +127,70 @@ void head(Tmpl &t, WORD count, short cx, short cy, const char *title)
  * running. A modal loop is not available here -- the copy is a synchronous
  * walk -- so the queue is drained by hand between files, which is the same
  * idiom the transfer code uses and the only one that works without a thread.
- * No thread on purpose: this machine has 28KB free after a turn. */
-void pump(void)
+ * No thread on purpose: this machine has 28KB free after a turn.
+ *
+ * But NOT a general message pump, and that is the whole of finding 01.9.
+ *
+ * `PeekMessageA(&m, NULL, ...)` retrieves messages for the whole THREAD, not
+ * just this dialog, and `EnableWindow(parent, FALSE)` does not suppress
+ * WM_TIMER. So draining the queue here dispatched straight back into the main
+ * window's WndProc in the middle of a synchronous, recursive directory walk:
+ *
+ *   - TIMER_RECONNECT fired -> try_connect -> rc_workdir_apply("") -> sharing
+ *     switched off underneath the running copy, the socket torn down and
+ *     rebuilt. The copy then finished, SETWORK went out on the new socket and
+ *     was lost, wait_for_sync watched a counter that would never move, and the
+ *     user was told "N files copied" with the conversation still pointed at
+ *     the old folder.
+ *   - WM_RC_FRAME -> OPTIONSEND -> rc_workdir_apply(want) re-pointed the
+ *     mirror while this thread was ~20KB deep in the walk.
+ *   - WM_QUIT was REMOVED and discarded, so a shutdown arriving during a copy
+ *     was swallowed entirely.
+ *
+ * The dialog's own messages must still be dispatched or Cancel stops working,
+ * and other windows still need to REPAINT or the screen tears. Everything
+ * else waits: it is still in the queue when the copy returns, which is the
+ * right place for it.
+ *
+ * `dlg` is the progress window; NULL is accepted so a caller with no dialog
+ * yet still gets repaints. */
+void pump(HWND dlg)
 {
+    /* Bounded, because deferring works by re-posting to the tail: without a
+     * bound this loop would meet its own re-posted messages and spin. A real
+     * queue between two files is a handful of entries, so this drains it and
+     * the cap is only a backstop. */
+    int budget = 64;
     MSG m;
-    while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&m);
-        DispatchMessageA(&m);
+
+    while (budget-- > 0 && PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+        if (m.message == WM_QUIT) {
+            /* Put the shutdown back and stop. The outer loop owns it; the old
+             * code removed it here and dropped it, so a quit arriving during
+             * a copy was swallowed entirely. */
+            PostQuitMessage((int)m.wParam);
+            return;
+        }
+        if (dlg && (m.hwnd == dlg || IsChild(dlg, m.hwnd))) {
+            TranslateMessage(&m);
+            DispatchMessageA(&m);
+            continue;
+        }
+        /* Another window repaints and does nothing else. WM_PAINT is
+         * regenerated from the update region rather than queued, so it must
+         * be dispatched rather than deferred or it comes straight back. */
+        if (m.message == WM_PAINT || m.message == WM_NCPAINT ||
+            m.message == WM_ERASEBKGND) {
+            DispatchMessageA(&m);
+            continue;
+        }
+        /* Everything else is DEFERRED, not dropped: re-posted to the tail so
+         * the main window handles it once the copy has returned and the walk
+         * is no longer on the stack. Re-posting reorders it against other
+         * pending messages and preserves the property that matters -- it is
+         * still delivered. WM_TIMER, the case that caused this, is idempotent
+         * under that treatment. */
+        PostMessageA(m.hwnd, m.message, m.wParam, m.lParam);
     }
 }
 
@@ -210,7 +267,7 @@ HWND progress_open(HWND parent, HINSTANCE inst, Progress *p)
         }
     }
     ShowWindow(p->dlg, SW_SHOW);
-    pump();
+    pump(p->dlg);
     return p->dlg;
 }
 
@@ -223,7 +280,7 @@ void progress_say(Progress *p, const char *text, unsigned done, unsigned total)
     if (bar)
         SendMessageA(bar, PBM_SETPOS,
                      (WPARAM)(total ? (done * 100) / total : 0), 0);
-    pump();
+    pump(p->dlg);
 }
 
 /* --- the collision question ---------------------------------------------- */
@@ -344,6 +401,16 @@ int on_error(void *ctx, const char *rel, DWORD err)
                          MB_ABORTRETRYIGNORE | MB_ICONEXCLAMATION);
     if (answer == IDRETRY)  return RC_WORK_RETRY;
     if (answer == IDIGNORE) return RC_WORK_SKIP;
+    /* ABORT MEANS ABORT, and it has to be recorded where the caller looks.
+     *
+     * Returning RC_WORK_CANCEL stops the walk, but the caller tests
+     * `p.cancelled` -- which only the progress window's Cancel BUTTON ever
+     * set. So aborting at a locked file stopped the copy and then changed the
+     * work directory anyway: of 200 files, 5 copied, 1 refused, 194 never
+     * attempted, and the completion box mentioned only the one that failed.
+     * That is precisely the "the folder then looks complete and is not"
+     * outcome the note above says must not happen. */
+    r->p->cancelled = 1;
     return RC_WORK_CANCEL;
 }
 
@@ -654,6 +721,9 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
         rc_worksurvey s;
         int mode;
         Progress p;
+        /* Did SETWORK actually go out before Cancel was pressed? The two
+         * sides of that question need opposite completion messages. */
+        int proposed = 0;
         CopyRun run;
         unsigned copied = 0, failed = 0;
 
@@ -690,8 +760,12 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
          * the user sits this is one wait, and closing the bar when the copy
          * finished would say the operation was over while the files were
          * still crossing the wire. */
+        /* Latched BEFORE propose, because Cancel means two different things
+         * on the two sides of it and the completion message has to tell them
+         * apart -- see the cancelled branch at the end of this function. */
         if (!p.cancelled) {
             if (propose) propose(out, mode == RC_WORK_MERGE);
+            proposed = 1;
             progress_say(&p, "Sending to the assistant...", 0,
                          st.dst_files + copied);
             wait_for_sync(&p, st.dst_files + copied);
@@ -707,8 +781,13 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
          * and under "let the assistant merge them" the folder IS the
          * instruction, both to the user and to the agent that will read it. */
         if (failed || s.collisions) {
-            char text[400];
-            char tail[200];
+            char text[MAX_PATH + 400];
+            /* MAX_PATH-sized, not 200. `out` can be 259 bytes, so the
+             * template plus "%s\\%s" guaranteed truncation for any deep
+             * destination -- cutting the one sentence that tells the user
+             * where 40 replaced files went, which is the recovery
+             * instruction. (audit 01.37) */
+            char tail[MAX_PATH + 160];
             tail[0] = '\0';
             if (mode == RC_WORK_MERGE)
                 rc_strf(tail, sizeof(tail),
@@ -747,11 +826,32 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
         rc_log("workdlg: %s -> %s, mode %d, copied %u, failed %u",
                st.current, out, mode, copied, failed);
         if (p.cancelled) {
-            /* Nothing was proposed, so the conversation is still working
-             * where it was -- and the files that did copy are sitting in the
-             * folder that was not chosen. Say both, because either one on its
-             * own is misleading. */
-            char text[320];
+            char text[360];
+            if (proposed) {
+                /* Cancelled during the TRANSFER, after SETWORK went out. The
+                 * proposal is in flight and the next OPTION batch applies the
+                 * new folder, so saying "this conversation still works in
+                 * <old>" -- which this branch used to say unconditionally --
+                 * told the user their files were in one place and the agent
+                 * in another. The folder HAS changed; only the wait was
+                 * interrupted. */
+                rc_strf(text, sizeof(text),
+                        "Stopped waiting. This conversation now works in %s "
+                        "and %u file%s copied there, but the transfer to the "
+                        "assistant was interrupted and may be incomplete. "
+                        "Nothing in %s was removed.",
+                        out, copied, copied == 1 ? " was" : "s were",
+                        st.current);
+                MessageBoxA(parent, text, "Work Directory",
+                            MB_OK | MB_ICONINFORMATION);
+                /* The folder DID change, so the caller must not treat this as
+                 * "no change" -- `out` stays set and this returns 1. */
+                return 1;
+            }
+            /* Cancelled during the COPY, before anything was proposed: the
+             * conversation is still working where it was, and the files that
+             * did copy are sitting in the folder that was not chosen. Say
+             * both, because either one on its own is misleading. */
             rc_strf(text, sizeof(text),
                     "Stopped. This conversation still works in %s, and %u "
                     "file%s already copied into %s. Nothing there was "

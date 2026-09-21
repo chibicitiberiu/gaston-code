@@ -50,15 +50,18 @@ class rc_cache {
     char sess[64];              /* the id `dir` was derived from */
     FILE *page_fp;              /* open only between begin_page and end_page */
     FILE *chat_fp;              /* the chat list, writing or reading */
+    int   chat_bad;             /* a write failed; do not rename over the good copy */
     int   page_no;
     int   usable;               /* zero once the disk has said no */
 
     rc_cache(const rc_cache &);
     rc_cache &operator=(const rc_cache &);
-    rc_cache() : page_fp(0), chat_fp(0), page_no(0), usable(0)
+    rc_cache() : page_fp(0), chat_fp(0), chat_bad(0), page_no(0), usable(0)
     { root[0] = dir[0] = sess[0] = '\0'; }
 
-    void path_for(char *out, unsigned cap, int n) const;
+    /* Non-zero if the path fit. Callers check it -- see the note in
+     * cache.cpp: a truncated page path aliases another page's file. */
+    int path_for(char *out, unsigned cap, int n) const;
 
 public:
     /* `exe_dir` is where retroclaude.exe lives -- the INI and the log are

@@ -51,8 +51,15 @@ typedef int (*rc_chats_confirm_fn)(void);
 
 #define MAX_CHATS 64
 
+/* The longest row label this list ever adds. `text[]` in the owner-draw
+ * handler is sized from it, because LB_GETTEXT takes no size parameter and
+ * must never be handed a buffer smaller than the item it reads. */
+#define RC_CHAT_LABEL 160
+
 class rc_chats {
     /* Session ids, parallel to the list box. */
+    /* 64 to match rc_net::sess -- see the note there. open_selected()
+     * strcmp's one against the other, so they are one decision, not two. */
     char chat_ids[MAX_CHATS][64];
     /* 0 = a session row, 1 = a date-group header. Headers are drawn
      * differently and refuse to be opened. */
@@ -102,7 +109,10 @@ class rc_chats {
              void (*switched_)(rc_frame *f));
 
     int text_width();
-    void fit_label(char *label, unsigned cap, int avail_px);
+    /* `bold` selects the font the row will actually be DRAWN with: the open
+     * conversation is bold and bold is wider, so measuring it as normal let
+     * that one row overflow into the client edge. */
+    void fit_label(char *label, unsigned cap, int avail_px, int bold);
     void on_sessions(rc_frame *f);
     void on_session(rc_frame *f);
     void on_sessionsend(rc_frame *f);
@@ -152,6 +162,14 @@ public:
     void add_row(const char *id, const char *title, const char *group,
                  int current);
     void end_rows();
+
+    /* Undo a begin_rows() whose batch never finished -- called from the
+     * disconnect branch. WM_SETREDRAW(FALSE) is latched by begin_rows and
+     * cleared ONLY by end_rows, so a link that drops between SESSIONS and
+     * SESSIONSEND (a wide window for a 64-row list on a slow wire) left the
+     * flag down for the rest of the session with the visible list and the
+     * backing array disagreeing. */
+    void abort_rows();
 
     int draw(DRAWITEMSTRUCT *dis);
     int measure(MEASUREITEMSTRUCT *mis);

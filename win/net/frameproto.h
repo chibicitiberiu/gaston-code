@@ -63,9 +63,30 @@ void        rc_frame_free(rc_frame *f);
  *                this FIFO before ever looking at the JOB slot).
  *   IMMEDIATE -- answered on the READER thread, before either worker queue
  *                is even touched. Never refused for a JOB or STREAM being
- *                busy, because it never asks them -- EXECKILL is the only
- *                member today, and a quick syscall like Phase 6's
- *                list_windows belongs here too.
+ *                busy, because it never asks them.
+ *
+ *                THE BAR FOR THIS LANE IS THE READER THREAD'S RULE, not
+ *                "is it quick": net.h says, marked not negotiable, that the
+ *                reader NEVER calls a window API that can block or re-enter.
+ *                So a member must not block and must not re-enter -- which
+ *                rules out anything that touches ANOTHER PROCESS'S message
+ *                queue, because a cross-process SendMessage blocks until the
+ *                target's own message loop answers, and a hung application
+ *                never answers. Blocking here stops the socket being read at
+ *                all: the transcript freezes, no PERMEND arrives, no SYNCDAT
+ *                moves, and the bridge times out every outstanding future
+ *                with nothing in the guest's log to say why.
+ *
+ *                This comment used to name Phase 6's list_windows as a
+ *                natural second member. It is not one: PLAN.md requires
+ *                WM_GETTEXT per node, which is exactly that cross-process
+ *                SendMessage. list_windows belongs in JOB, or in a lane of
+ *                its own. BACKLOG.md's note that EnumWindows and
+ *                WM_GETTEXT are "safe from the RPC worker thread" is true
+ *                and is about a DIFFERENT thread from this one. (audit 01.36)
+ *
+ *                EXECKILL is the only member today and genuinely qualifies:
+ *                it sets a flag and calls TerminateProcess.
  *
  * Add a Phase 6 tool by adding a row to RC_LANE_TABLE (frameproto.c), not by
  * adding a branch to rc_rpc_route or rc_rpc_submit. */

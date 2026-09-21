@@ -82,7 +82,17 @@ void do_section(scan *s, const char *ini, const char *name)
         /* The VALUE of the variable, not merely that it is set: `WATCOM` and
          * `INCLUDE` are the two that say where a toolchain actually lives,
          * and an empty one is as informative as an absent one. */
-        if (!GetEnvironmentVariableA(val, env, sizeof(env))) continue;
+        /* A non-zero return is NOT success. GetEnvironmentVariableA returns
+         * the REQUIRED size when the buffer is too small, and leaves the
+         * buffer undefined and unterminated -- so reading any non-zero as
+         * "it worked" formats uninitialised stack into a fact and sends it
+         * out in the HELLO body, from where the bridge folds it into the
+         * agent's system prompt. A variable too long to read is a fact we do
+         * not have, not one to invent. */
+        {
+            DWORD n = GetEnvironmentVariableA(val, env, sizeof(env));
+            if (n == 0 || n >= sizeof(env)) continue;
+        }
         if (!env[0]) continue;
         if (rc_strf(line, sizeof(line), "%s=%s", val, env))
             emit(s, name, "env", line);
@@ -143,10 +153,22 @@ int rc_tooldet_run(const char *exe_dir, rc_tooldet_sink sink, void *ctx)
     /* PATH unconditionally, because every rule on the bridge wants it and no
      * section has to ask. It is the one variable that says where a toolchain
      * was wired up even when its own variable was never set. */
-    if (GetEnvironmentVariableA("PATH", path, sizeof(path)) && path[0]) {
-        char line[MAX_PATH + 8];
-        if (rc_strf(line, sizeof(line), "PATH=%s", path))
-            emit(&s, "machine", "env", line);
+    /* See the env loop above for why the return is range-checked rather than
+     * tested for non-zero: a PATH over 259 bytes is the NORMAL case on a box
+     * with toolchains wired up in autoexec.bat, which is exactly the machine
+     * this feature exists for, and it is the case that would have put
+     * uninitialised stack into the agent's prompt. */
+    {
+        DWORD n = GetEnvironmentVariableA("PATH", path, sizeof(path));
+        if (n > 0 && n < sizeof(path) && path[0]) {
+            char line[MAX_PATH + 8];
+            if (rc_strf(line, sizeof(line), "PATH=%s", path))
+                emit(&s, "machine", "env", line);
+        } else if (n >= sizeof(path)) {
+            rc_log("tooldet: PATH is %lu bytes, too long to read into %u -- "
+                   "reporting nothing rather than a truncated one",
+                   (unsigned long)n, (unsigned)sizeof(path));
+        }
     }
 
     /* OURS FIRST, THE USER'S SECOND, and the order is the point: a section

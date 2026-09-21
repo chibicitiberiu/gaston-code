@@ -53,6 +53,15 @@
  * module's own business and stays in pagebar.cpp. */
 #define PAGEBAR_H 24
 
+/* main.cpp's ui_send: "send something the user just asked for, and say so if
+ * it did not go." The same typedef shape as app/bar.h's rc_bar_send_fn and
+ * app/chatlist.h's rc_chats_send_fn, reused here for the same reason they
+ * exist -- see the note on `send` below. */
+typedef int (*rc_pagebar_send_fn)(const char *what, const char *type,
+                                  const char *const *keys,
+                                  const char *const *vals, int nkv,
+                                  const void *body, unsigned body_len);
+
 class rc_pagebar {
     int view, total;       /* page currently displayed; pages that exist */
     int is_live;
@@ -61,22 +70,30 @@ class rc_pagebar {
     HWND    live, first, prev, next, last, pagelbl, follow;
     rc_net *net;
     rc_html *html;
+    rc_pagebar_send_fn send;
+    /* The autoscroll button's face. BM_SETIMAGE does not take ownership, so
+     * this class does -- see the destructor. */
+    HBITMAP follow_bmp;
 
     rc_pagebar(const rc_pagebar &);
     rc_pagebar &operator=(const rc_pagebar &);
     rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-               rc_html *html_);
+               rc_html *html_, rc_pagebar_send_fn send_);
 
     void update_ui();
     void goto_page(const char *which);
     void goto_n(int n);
 
 public:
-    /* net: goto_page's rc_net_send, made directly by this module -- same as
-     *      app/bar.h's `net` parameter, for the same reason (see the comment
-     *      on that call in bar.cpp): a page request the user just asked for
-     *      either goes out or is worth reporting, and there is no larger
-     *      "what the user asked for" wrapper this needs beyond the raw send.
+    /* net: kept for the fallback path only. This module used to send GETPAGE
+     *      through it directly, with the return discarded, on the reasoning
+     *      that "there is no larger 'what the user asked for' wrapper this
+     *      needs beyond the raw send." That was wrong on its own terms --
+     *      app/bar.h has taken an rc_bar_send_fn for exactly this since it was
+     *      written -- and it made the page strip the one user-initiated send
+     *      in the tree that failed in silence.
+     * send: main.cpp's ui_send. A page request either goes out or the user is
+     *      told why not.
      * html: PAGESTART/PAGEEND clear, notice and scroll the transcript --
      *      that is what those two frames mean, not a policy question to hand
      *      back to main.c the way chatlist.h's confirm/switching/switched
@@ -84,8 +101,9 @@ public:
      *      guarded, exactly as main.c already guards every other g_html
      *      use. */
     static rc_pagebar *create(HWND parent, HINSTANCE inst, HFONT font,
-                               rc_net *net, rc_html *html);
-    ~rc_pagebar() {}
+                               rc_net *net, rc_html *html,
+                               rc_pagebar_send_fn send);
+    ~rc_pagebar() { if (follow_bmp) DeleteObject(follow_bmp); }
 
     /* x: the strip's left edge (where Live starts). y: the strip's top.
      * Unlike the bar, the page strip is never hidden, so there is no

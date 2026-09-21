@@ -50,7 +50,11 @@ typedef struct {
     int           refusal;          /* RC_WORK_* */
 } rc_worksurvey;
 
-/* Look, and change nothing. Non-zero when the copy may proceed.
+/* Look, and change nothing in the SOURCE. The one
+ * exception is the destination itself: rc_worksurvey_run creates it (parents
+ * and all), because "can this be created?" is part of what it reports and
+ * Win32 has no way to ask without doing it. A refusal after that point can
+ * leave an empty destination tree behind. Non-zero when the copy may proceed.
  *
  * `maxpath` is the machine's own limit, which the bridge was told at
  * handshake and which is 260 here -- passed in rather than assumed, because

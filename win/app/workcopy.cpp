@@ -29,10 +29,11 @@ static int ci_prefix(const char *big, const char *small_)
     return 1;
 }
 
-/* Is `inner` at or below `outer`? The tail must be empty or start with a
- * separator, not merely match the prefix: C:\GASTON\CHAT1 is not inside
- * C:\GASTON\CHAT12, and a bare prefix test says it is. */
-static int inside(const char *outer, const char *inner)
+/* Is `inner` at or below `outer`, comparing the STRINGS as given? The tail
+ * must be empty or start with a separator, not merely match the prefix:
+ * C:\GASTON\CHAT1 is not inside C:\GASTON\CHAT12, and a bare prefix test says
+ * it is. */
+static int inside_raw(const char *outer, const char *inner)
 {
     unsigned n = (unsigned)strlen(outer);
     while (n && (outer[n - 1] == '\\' || outer[n - 1] == '/')) n--;
@@ -40,6 +41,65 @@ static int inside(const char *outer, const char *inner)
     if (strlen(inner) < n) return 0;
     if (!ci_prefix(inner, outer)) return 0;
     return inner[n] == '\0' || inner[n] == '\\' || inner[n] == '/';
+}
+
+/* GetShortPathNameA through GetProcAddress, per the standing rule -- it is on
+ * every 9x with LFNs, but an import that cannot resolve kills the image at
+ * load, and a nesting check is not worth the program refusing to start.
+ * Returns non-zero if `out` holds a short form. */
+typedef DWORD (WINAPI *PFN_SHORTPATH)(LPCSTR, LPSTR, DWORD);
+
+static int short_form(const char *path, char *out, unsigned cap)
+{
+    HMODULE k32 = GetModuleHandleA("kernel32.dll");
+    PFN_SHORTPATH fn = k32 ? (PFN_SHORTPATH)GetProcAddress(
+                                 k32, "GetShortPathNameA") : NULL;
+    DWORD n;
+    if (!fn) return 0;
+    n = fn(path, out, cap);
+    return n > 0 && n < cap;
+}
+
+/* Is `inner` at or below `outer`, whatever either one is SPELLED as?
+ *
+ * The check used to be a plain string compare, and the destination is an
+ * editable EDIT control -- so a user who typed `C:\GASTON~1\Copy` against a
+ * current folder of `C:\Gaston Work` was told the two were unrelated. The
+ * copy then wrote into the tree it was reading: `Copy/x` became
+ * `C:\GASTON~1\Copy\Copy\x`, the walk descended into its own output, and the
+ * destination grew `Copy\Copy\Copy...` until RC_SYNC_MAX_DEPTH or
+ * RC_SYNC_MAX_FILES stopped it. Bounded, so nothing hung and nothing was
+ * destroyed -- but the destination was ruined, the walk returned -2, and the
+ * whole garbage tree was then offered to the bridge. A mapped drive against
+ * its UNC path does the same. (audit 01.34)
+ *
+ * Both forms are compared: full (GetFullPathNameA resolves `.`, `..` and a
+ * relative path against the current directory) and short (8.3). Either one
+ * matching is a nesting.
+ *
+ * WHAT THIS STILL DOES NOT CATCH, stated rather than implied: SUBST and
+ * network drive mappings are not resolvable on 9x -- there is no
+ * QueryDosDevice -- so `X:\` SUBST'd to `C:\Gaston Work` still reads as
+ * unrelated. The check is better, not complete. */
+static int inside(const char *outer, const char *inner)
+{
+    char fo[MAX_PATH], fi[MAX_PATH], so[MAX_PATH], si[MAX_PATH];
+
+    if (inside_raw(outer, inner)) return 1;
+
+    if (GetFullPathNameA(outer, sizeof(fo), fo, NULL) &&
+        GetFullPathNameA(inner, sizeof(fi), fi, NULL)) {
+        if (inside_raw(fo, fi)) return 1;
+        if (short_form(fo, so, sizeof(so)) &&
+            short_form(fi, si, sizeof(si)) && inside_raw(so, si))
+            return 1;
+    }
+    /* And the short forms of what was actually typed, for the case where the
+     * long form does not exist yet (the destination is created later). */
+    if (short_form(outer, so, sizeof(so)) &&
+        short_form(inner, si, sizeof(si)) && inside_raw(so, si))
+        return 1;
+    return 0;
 }
 
 /* `<root>\<rel>` with the walk's '/' turned back into the separator Windows
@@ -143,6 +203,25 @@ void survey_sink(void *ctx, const char *rel, const rc_sync_stat *st)
      * thing being measured. This is the check most likely to fire -- a name
      * that fits under C:\Gaston\OK need not fit under C:\Projects\Retro\Src. */
     need = (unsigned)strlen(c->dst) + 1 + (unsigned)strlen(rel) + 1;
+    /* AND THE STAGING PREFIX, because a colliding file is staged under
+     * <dst>\Gaston-Replaced\<rel> (or Gaston-Incoming, the same length) and
+     * that is sixteen characters longer than the plain destination.
+     *
+     * Without this reserve the survey passed at 249 of 260 and the COPY then
+     * failed per file: dosjoin needed 265, stash returned 0, and the file was
+     * counted `failed` with no on_error call, no retry offer and no
+     * explanation. workcopy.h promises "every refusal is made while nothing
+     * has changed, so a refusal never leaves half a tree behind" -- that one
+     * did. The sync layer solves the identical problem with
+     * RC_SYNC_WORK_SUFFIX, computed up front and declared to the bridge; this
+     * is the same reserve for the same reason. (audit 01.31)
+     *
+     * Charged unconditionally rather than only when a collision is possible:
+     * whether a given file collides is not known until the destination is
+     * walked, and a reserve that depends on the answer is a reserve that is
+     * missing exactly when it is needed. Sixteen characters of MAX_PATH is a
+     * cheaper price than a half-copied tree. */
+    need += (unsigned)sizeof(RC_WORK_REPLACED);   /* name + separator */
     if (need > s->longest) {
         s->longest = need;
         rc_strcpy(s->deep, sizeof(s->deep), rel);
@@ -221,7 +300,18 @@ int rc_worksurvey_run(const char *src, const char *dst, unsigned maxpath,
 
     /* Parents and all: the user can type or browse to a folder several
      * levels below anything that exists, and refusing that would make the
-     * dialog's own Browse button able to propose paths it then rejects. */
+     * dialog's own Browse button able to propose paths it then rejects.
+     *
+     * AND THIS IS THE ONE THING THE SURVEY CHANGES, against its own header's
+     * "Look, and change nothing." Creating the destination is how the survey
+     * learns whether it CAN be created, and that answer is what RC_WORK_NODST
+     * reports -- there is no non-destructive way to ask Win32 the same
+     * question. So the guarantee is narrowed rather than pretended: nothing
+     * in the SOURCE is touched, and the only thing that can appear on disk is
+     * the empty destination the user typed. A later TOODEEP or TOOBIG refusal
+     * can therefore leave an empty tree behind, which is stated here so the
+     * rest of the module does not reason from a guarantee that is not
+     * whole. (audit 01.37) */
     if (!rc_mkpath(dst)) {
         out->refusal = RC_WORK_NODST;
         return 0;
@@ -323,8 +413,39 @@ int stash(copy_ctx *c, const char *folder, const char *rel, const char *from)
     /* CopyFile rather than MoveFile: under MERGE `from` is the incoming file
      * and is still wanted where it is, and under REPLACE the target is about
      * to be overwritten in place anyway. Copying leaves the source intact in
-     * both, which is the rule the whole operation runs on. */
-    return CopyFileA(from, aside, FALSE) ? 1 : 0;
+     * both, which is the rule the whole operation runs on.
+     *
+     * FAIL-IF-EXISTS, and then a generation suffix.
+     *
+     * The third argument was FALSE -- overwrite if present -- in the one
+     * folder whose entire job is holding "what was overwritten and would
+     * otherwise be gone" (workcopy.h). So a second REPLACE into the same
+     * destination overwrote the FIRST one's stash: change into C:\Work with
+     * REPLACE, change away, change back with REPLACE again, and
+     * C:\Work\Gaston-Replaced\notes.txt -- the only surviving copy of the
+     * original -- was destroyed with nothing reported. The mechanism meant to
+     * preserve the user's bytes was the thing deleting them, on a path they
+     * chose in order to keep them.
+     *
+     * Same shape as the bridge's own conflict staging, which versions
+     * mine.1, mine.2 for exactly this reason. */
+    if (CopyFileA(from, aside, TRUE)) return 1;
+    if (GetLastError() != ERROR_FILE_EXISTS) return 0;
+    {
+        char gen[MAX_PATH];
+        int n;
+        for (n = 1; n <= 99; n++) {
+            if (!rc_strf(gen, sizeof(gen), "%s.%d", aside, n)) return 0;
+            if (CopyFileA(from, gen, TRUE)) return 1;
+            if (GetLastError() != ERROR_FILE_EXISTS) return 0;
+        }
+    }
+    /* Ninety-nine generations of the same path already stashed. Refusing is
+     * right: :374's caller treats a 0 here as "do not overwrite the live
+     * file", which is the safe direction. */
+    rc_log("workcopy: %s has 99 stashed generations; refusing to add another",
+           rel);
+    return 0;
 }
 
 void copy_sink(void *ctx, const char *rel, const rc_sync_stat *st)

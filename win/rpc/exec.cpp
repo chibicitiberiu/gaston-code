@@ -100,7 +100,7 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
     HANDLE rd = NULL, wr = NULL, in_rd = NULL, in_wr = NULL;
     DWORD start;
     char cmd[EXEC_MAX_CMD];
-    int n;
+    int fit;
 
     memset(out, 0, sizeof(*out));
     out->status = RC_EXEC_SPAWN_FAILED;
@@ -112,18 +112,31 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
 
     if (!command || !*command) return -1;
 
-    /* Build the command line, and REFUSE rather than truncate. */
+    /* Build the command line, and REFUSE rather than truncate.
+     *
+     * `rc_strf` returns 1 if the whole string fit and 0 if it was truncated
+     * (win/core/str.h). It never returns a length and never a negative. This
+     * guard used to read `if (n < 0 || n >= (int)sizeof(cmd))`, which is
+     * `_snprintf`'s contract, not this one -- neither 0 nor 1 can satisfy
+     * either half, so the guard never fired and RC_EXEC_TOO_LONG was
+     * unreachable. An over-long command was truncated at byte 1023 and handed
+     * to the shell, which is exactly the defect this file's own header (see
+     * the top of this file, item 2) says was "rejected here instead":
+     * `del c:\temp\*.tmp` cut short becomes `del c:\temp\*`.
+     *
+     * The bridge applies no length cap of its own, so this is the only guard
+     * in the system. Test it through rc_exec_run rather than trusting the
+     * shape of the expression -- see win/checks/rpccheck.c. */
     if (use_shell)
-        n = rc_strf(cmd, sizeof(cmd), "%s /c %s", shell_name(), command);
+        fit = rc_strf(cmd, sizeof(cmd), "%s /c %s", shell_name(), command);
     else
-        n = rc_strf(cmd, sizeof(cmd), "%s", command);
-    if (n < 0 || n >= (int)sizeof(cmd)) {
+        fit = rc_strf(cmd, sizeof(cmd), "%s", command);
+    if (!fit) {
         rc_log("exec: command too long (%u bytes), refused",
                (unsigned)strlen(command));
         out->status = RC_EXEC_TOO_LONG;
         return -1;
     }
-    cmd[sizeof(cmd) - 1] = '\0';
 
     memset(&sa, 0, sizeof(sa));
     sa.nLength = sizeof(sa);

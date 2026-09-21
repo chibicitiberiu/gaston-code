@@ -23,7 +23,18 @@ int rc_workdir_apply(const char *path)
 {
     char want[MAX_PATH];
 
-    rc_strf(want, sizeof(want), "%s", path ? path : "");
+    /* REFUSE rather than truncate. This path is about to be rc_mkpath'd,
+     * parents and all, and made the sync root -- so a cut one creates a
+     * directory nobody named and mirrors a conversation into it, while the
+     * folder the user did name reads as empty and the bridge sees a mass
+     * deletion. Returning 0 leaves sharing off, which is the state this
+     * function already has a name for. */
+    if (!rc_strf(want, sizeof(want), "%s", path ? path : "")) {
+        rc_log("workdir: %u-byte path does not fit in MAX_PATH -- refusing it "
+               "rather than creating a truncated directory",
+               (unsigned)strlen(path ? path : ""));
+        return 0;
+    }
     if (strcmp(want, g_current) == 0)
         return want[0] ? 1 : 0;     /* already in force; nothing to do */
 

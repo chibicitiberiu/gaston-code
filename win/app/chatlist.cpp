@@ -50,7 +50,7 @@ int rc_chats::text_width()
  *
  * GetTextExtentExPointA answers "how many characters fit in N pixels" in one
  * call, so this stays one GDI round trip per label rather than a search. */
-void rc_chats::fit_label(char *label, unsigned cap, int avail_px)
+void rc_chats::fit_label(char *label, unsigned cap, int avail_px, int bold)
 {
     HDC dc;
     HFONT old;
@@ -69,7 +69,14 @@ void rc_chats::fit_label(char *label, unsigned cap, int avail_px)
 
     dc = GetDC(list);
     if (!dc) return;
-    old = (HFONT)SelectObject(dc, font_normal);
+    /* THE FONT THE ROW IS ACTUALLY DRAWN WITH. The open conversation is
+     * drawn in font_bold (see the draw code below), and bold is wider than
+     * normal -- so measuring every row with font_normal let exactly that row
+     * overflow. That is the condition this file documents as making Win98's
+     * listbox paint over its own WS_EX_CLIENTEDGE border, "measured as white
+     * pixels at x=8,9": the documented fix did not cover the one row most
+     * likely to trigger it. (audit 01.37) */
+    old = (HFONT)SelectObject(dc, bold ? font_bold : font_normal);
     sz.cx = 0;
     if (GetTextExtentExPointA(dc, label, n, avail_px, &fit, NULL, &sz)
         && fit < n) {
@@ -172,7 +179,7 @@ void rc_chats::add_row(const char *id, const char *title, const char *grp,
                        int current)
 {
     if (id && chat_count < MAX_CHATS) {
-        char label[160];
+        char label[RC_CHAT_LABEL];
 
         /* A header row whenever the bucket changes. The list arrives
          * newest first, so these come out in order on their own. */
@@ -205,7 +212,8 @@ void rc_chats::add_row(const char *id, const char *title, const char *grp,
         rc_strcpy(chat_ids[chat_count],
                   sizeof(chat_ids[chat_count]), id);
         chat_is_header[chat_count] = 0;
-        fit_label(label, sizeof(label), text_width() - CHAT_INDENT);
+        /* `current` is the row that gets drawn bold -- measure it that way. */
+        fit_label(label, sizeof(label), text_width() - CHAT_INDENT, current);
         SendMessageA(list, LB_ADDSTRING, 0, (LPARAM)label);
         if (current) {
             chat_current = chat_count;
@@ -231,6 +239,26 @@ void rc_chats::begin_rows()
     chat_current = -1;
 }
 
+/* See the declaration in chatlist.h. */
+void rc_chats::abort_rows()
+{
+    /* The PIXELS are the thing that has to be put right. LB_RESETCONTENT has
+     * already run with redraw off, so the listbox is empty while the screen
+     * still shows the old list -- and chat_ids[]/chat_is_header[] were being
+     * refilled from a batch that stopped halfway. Turning redraw back on and
+     * repainting makes the screen agree with the array again, which is the
+     * whole invariant: open_selected() indexes chat_ids[] by the row the user
+     * clicked, so a screen showing rows the array no longer has means a click
+     * on "Fix the parser" switches to whatever conversation now occupies that
+     * index -- tearing down the live session on a confirmation the user gave
+     * for a different switch.
+     *
+     * Leaving the partial batch in place rather than clearing it: a short list
+     * is honest about what arrived, and the bridge resends the whole list on
+     * reconnect anyway. */
+    end_rows();
+}
+
 void rc_chats::end_rows()
 {
     /* RDW_FRAME as well as the client: the frame is what draws the
@@ -242,8 +270,16 @@ void rc_chats::end_rows()
 
 void rc_chats::on_switched(rc_frame *f)
 {
-    const char *v = rc_frame_get(f, "id");
-    if (v) rc_strf(net->sess, sizeof(net->sess), "%s", v);
+    /* `net->sess` is NOT written here any more. It is rc_net state
+     * (net/net.h), read by HELLO's builder on the CONNECT path, and this
+     * class writing it made a reconnect racing a SWITCHED able to read a
+     * half-written 64-byte buffer and resume the wrong conversation or none.
+     * It is also not this class's to own -- chatlist.h says this class keeps
+     * "id-keyed bookkeeping", and the session id is not that.
+     *
+     * main.cpp is the single writer now, through the `switched` callback
+     * below, which already exists for exactly this: "everything about
+     * SWITCHED that is not the chat list's business." (audit 01.37) */
     /* Deliberately NOT refreshing the list here. Resuming a session
      * rewrites its file, so a refresh re-sorts by modification time and
      * yanks whatever you just opened to the top -- which is startling when
@@ -284,7 +320,8 @@ int rc_chats::measure(MEASUREITEMSTRUCT *mis)
 
 int rc_chats::draw(DRAWITEMSTRUCT *dis)
 {
-    char text[192];
+    /* Sized from the label bound, not a literal -- see LB_GETTEXT below. */
+    char text[RC_CHAT_LABEL + 48];
     RECT rc;
     int header, selected;
     COLORREF oldfg;
@@ -293,8 +330,21 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
     if (!dis || dis->CtlID != ID_CHATS) return 0;
     if ((int)dis->itemID < 0) return 1;
 
+    /* LB_GETTEXT HAS NO SIZE PARAMETER -- it writes as much as the item
+     * holds, so the buffer must be at least as large as the largest string
+     * anything adds. The only two are `label[RC_CHAT_LABEL]` and
+     * chat_group[40]; sizing `text` FROM the label bound makes that a
+     * compile-time fact rather than an invariant nobody states, so widening
+     * the label can no longer turn this into a stack overflow with no
+     * diagnostic. LB_GETTEXTLEN first would be the belt as well as the
+     * braces; the sizing is what removes the hazard. (audit 01.38) */
     text[0] = '\0';
-    SendMessageA(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
+    if (SendMessageA(dis->hwndItem, LB_GETTEXTLEN, dis->itemID, 0)
+            < (LRESULT)sizeof(text))
+        SendMessageA(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
+    else
+        rc_log("chatlist: row %d is longer than %u bytes; not drawing its "
+               "text", (int)dis->itemID, (unsigned)sizeof(text));
     header = ((int)dis->itemID < chat_count
               && chat_is_header[dis->itemID]);
     selected = (dis->itemState & ODS_SELECTED) && !header;

@@ -498,6 +498,22 @@ static void bar_changed(void)
 {
     if (g_main) layout(g_main);
     ui_refresh_enables();
+    /* THE KEYBOARD GOES BACK TO THE INPUT BOX when the bar comes down.
+     *
+     * show() hides the buttons, and Win32 does not reassign focus when the
+     * focused window is hidden -- it lands on the frame, which has no text
+     * handling. So on the most common path in the app (press Allow, PERMEND
+     * arrives, pop(), show()) the user kept typing and the characters went
+     * nowhere until they clicked the input box.
+     *
+     * Here rather than in bar.cpp because this is the layer that knows where
+     * focus belongs; the bar has no business naming the input box. Only when
+     * the bar is actually down, and only if focus is not already somewhere
+     * the user put it deliberately. */
+    if (g_bar && !g_bar->active() && g_inputmod) {
+        HWND f = GetFocus();
+        if (!f || f == g_main) g_inputmod->focus();
+    }
 }
 
 /* Send something the USER just asked for, and say so if it did not go.
@@ -513,14 +529,33 @@ static int ui_send(const char *what, const char *type,
                    const char *const *keys, const char *const *vals, int nkv,
                    const void *body, unsigned body_len)
 {
-    if (rc_net_send(&g_net, type, keys, vals, nkv, body, body_len) == 0)
+    /* The UI budget, not the bulk one: this runs on the window thread and the
+     * message pump does not run while it waits. See RC_SEND_WAIT_UI. */
+    int rc = rc_net_send_ui(&g_net, type, keys, vals, nkv, body, body_len);
+    if (rc == RC_SEND_OK)
         return 1;
-    rc_log("ui: %s (%s) did not reach the bridge", what, type);
+    rc_log("ui: %s (%s) did not reach the bridge (%s)", what, type,
+           rc == RC_SEND_FULL ? "queue full" : "link down");
     {
-        char msg[192];
-        rc_strf(msg, sizeof(msg),
-                "%s could not be sent -- the connection is down. It will not "
-                "have taken effect. Try again once it reconnects.", what);
+        char msg[224];
+        /* TWO DIFFERENT SENTENCES, because they are two different situations
+         * and only one of them is going to fix itself. A full queue means a
+         * bulk transfer is ahead of this frame -- 64KB takes about thirteen
+         * seconds to drain at 40kbit -- and pressing the button again in a
+         * moment works. Saying "the connection is down" for that sent the
+         * user to look at the network and promised a reconnect that was never
+         * coming, while the permission request they were answering was still
+         * outstanding on the bridge. (audit 01.17) */
+        if (rc == RC_SEND_FULL)
+            rc_strf(msg, sizeof(msg),
+                    "%s could not be sent right now -- a file transfer is "
+                    "using the connection. It has NOT taken effect. Try "
+                    "again in a moment.", what);
+        else
+            rc_strf(msg, sizeof(msg),
+                    "%s could not be sent -- the connection is down. It will "
+                    "not have taken effect. Try again once it reconnects.",
+                    what);
         if (g_html) g_html->error(msg);
     }
     return 0;
@@ -783,6 +818,12 @@ static void on_optmenu(rc_frame *f)
  * chat list's business. */
 static void chats_switched(rc_frame *f)
 {
+    /* THE SINGLE WRITER of net.sess. app/chatlist.cpp used to write it from
+     * on_switched, which is the window thread -- while the connect path reads
+     * it when building HELLO. One writer, here, on the thread that owns the
+     * rest of the connection's state. */
+    const char *sid = rc_frame_get(f, "id");
+    if (sid) rc_strf(g_net.sess, sizeof(g_net.sess), "%s", sid);
     /* A prompt belongs to the session that raised it, and switching
      * rebuilds the session -- the bridge denies anything pending as
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
@@ -1053,7 +1094,20 @@ static void render_frame(rc_frame *f)
      * nothing here needs the frame beyond what rc_xferstat::note_rx already
      * parses from it. */
     if (g_xfer) g_xfer->note_rx(f);
-    status_refresh();
+    /* NO status_refresh() HERE.
+     *
+     * note_rx above is the cheap half -- it just accumulates counters -- and
+     * it stays. The refresh was the expensive half: eight SendMessageA calls
+     * to the status bar plus a 256-byte <div class="status"> through
+     * rc_html::status, which is a MultiByteToWideChar, a SysAllocString and a
+     * put_innerHTML, i.e. a real MSHTML reflow. Running that per inbound
+     * frame during a streamed answer doubled the DOM work per frame on a
+     * 200MHz Pentium, and the content was identical between frames because
+     * the only variable in it is a whole-second counter.
+     *
+     * TIMER_STATUS already fires every second and calls status_refresh(),
+     * which is the rate rc_html::status's own comment always claimed. See
+     * audit 01.33. */
 
     for (i = 0; i < sizeof(g_dispatch) / sizeof(g_dispatch[0]); i++) {
         if (strcmp(f->type, g_dispatch[i].type) == 0) {
@@ -1270,15 +1324,30 @@ static void create_children(HWND hwnd, HINSTANCE inst)
                            "Use Configure -> Server Host... to set one.");
         }
     }
-    else
-        /* The INI's autoscroll, applied. Audit 01.2 said this setting was
-         * "loaded from the INI, written back, round-trip-tested by
-         * inicheck.exe, and read by nothing", gave the view a
-         * set_autoscroll() to fix it -- and then nobody called it. The
-         * finding was marked closed on the strength of the method existing.
-         * One line makes the claim true. */
-        g_html->set_autoscroll(g_cfg.autoscroll);
-        if (g_pagebar) g_pagebar->set_follow(g_cfg.autoscroll);
+
+    /* The INI's autoscroll, applied -- UNCONDITIONALLY, and after the page bar
+     * exists.
+     *
+     * Audit 01.2 said this setting was "loaded from the INI, written back,
+     * round-trip-tested by inicheck.exe, and read by nothing", gave the view
+     * a set_autoscroll() to fix it, and nobody called it; it was then closed
+     * a second time on the strength of this call existing. It still was not
+     * true, from one missing pair of braces:
+     *
+     *   - set_autoscroll() sat inside the `else` above, so it ran only when
+     *     boot_local() FAILED -- never on a normal launch.
+     *   - set_follow() was not in the `else` at all, but ran while g_pagebar
+     *     was still NULL, because rc_pagebar::create is ~30 lines below here.
+     *     A no-op on either branch.
+     *
+     * So `autoscroll=0` in retroclaude.ini round-tripped perfectly and the
+     * transcript still yanked to the bottom on every append. Toggling Follow
+     * at runtime was always a separate and correct path; only the PERSISTED
+     * preference was dead -- the one that has to survive a restart.
+     *
+     * Moved below the page bar's creation so both halves have something to
+     * talk to. tests/python/guest/test_guest_config.py now reads the setting
+     * back through the view rather than trusting a call site to exist. */
 
     /* The chat list and its Refresh button: created and owned by
      * app/chatlist.cpp now (rc_chats::create logs its own check_child
@@ -1306,7 +1375,14 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * failures). g_html may be NULL -- rc_pagebar::create is passed it as-is
      * and every use inside pagebar.cpp is guarded, same as everywhere else
      * in this file. */
-    g_pagebar = rc_pagebar::create(hwnd, inst, g_ui_font, &g_net, g_html);
+    g_pagebar = rc_pagebar::create(hwnd, inst, g_ui_font, &g_net, g_html,
+                                   ui_send);
+
+    /* NOW the persisted autoscroll can be applied -- see the long note above
+     * the HTML view's creation for why it could not be done there. Both
+     * halves, unconditionally, with the objects they configure in existence. */
+    if (g_html)    g_html->set_autoscroll(g_cfg.autoscroll);
+    if (g_pagebar) g_pagebar->set_follow(g_cfg.autoscroll);
 
     /* The transfer-progress counters: one instance, created here (ahead of
      * app/input.cpp below, which needs it) and destroyed in WM_DESTROY --
@@ -1556,6 +1632,31 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * sync pass after reconnect resends from the top, so there is
              * nothing here worth resuming. */
             rc_syncrpc_abort();
+            /* And the export sink, which has exactly the same latch.
+             *
+             * `fp` is cleared only by EXPORTEND, by give_up() on an immediate
+             * send failure, or by ~rc_export at WM_DESTROY -- nothing reset it
+             * on a disconnect. A link that dropped after EXPORTSTART and
+             * before EXPORTEND, which on a slow wire is the expected way a
+             * few-hundred-KB transfer ends, left `fp` open for the life of the
+             * process: every later File > Export answered "An export is
+             * already in progress." and did nothing, while a FILE* stayed open
+             * on the .$$$ and that file stayed on disk.
+             *
+             * The sync PUT three lines above was given this treatment and the
+             * export sink was not, which is the whole of the bug. */
+            if (g_export) g_export->give_up();
+            /* And the two other things a CUT BATCH leaves latched.
+             *
+             * An OPTION batch is six frames wide (models, efforts, work,
+             * modes, commands, OPTIONSEND) and a SESSIONS batch is as wide as
+             * the chat list -- both are ordinary places for a slow link to
+             * drop. The menus then appended the resent batch instead of
+             * replacing it, and the chat list kept WM_SETREDRAW(FALSE) down
+             * with its pixels and its backing array disagreeing. Same family
+             * as the bar and the sync PUT above; same place to fix it. */
+            if (g_optmenu) g_optmenu->reset();
+            if (g_chats) g_chats->abort_rows();
             ui_set_busy(0);
             SetTimer(hwnd, TIMER_RECONNECT, (UINT)g_backoff_ms, NULL);
         }
@@ -1616,7 +1717,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_pagebar) {
                 g_cfg.autoscroll = g_pagebar->follow_on();
                 if (g_html) g_html->set_autoscroll(g_cfg.autoscroll);
-                rc_config_save(&g_cfg, g_exe_dir);
+                if (!rc_config_save(&g_cfg, g_exe_dir) && g_html)
+                    g_html->error("That setting could not be saved to "
+                                  "retroclaude.ini and will not survive a "
+                                  "restart. The drive may be full or "
+                                  "write-protected.");
                 rc_log("autoscroll: %s", g_cfg.autoscroll ? "on" : "off");
                 /* Following again means catching up, not waiting for the
                  * next message to arrive before it means anything. */
@@ -1752,7 +1857,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_HOST:
             if (rc_hostdlg_run(hwnd, g_inst, &g_cfg)) {
                 char line[192];
-                rc_config_save(&g_cfg, g_exe_dir);
+                if (!rc_config_save(&g_cfg, g_exe_dir) && g_html)
+                    g_html->error("That setting could not be saved to "
+                                  "retroclaude.ini and will not survive a "
+                                  "restart. The drive may be full or "
+                                  "write-protected.");
 
                 /* Resetting the backoff globals is NOT enough, and a draft of
                  * this said it was.

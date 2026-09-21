@@ -61,8 +61,12 @@ typedef struct {
  * instead of branching on kind. Perm wins the bar over halt (priority 0 < 1):
  * it has a deadline, and a halt does not. */
 static const rc_bar_desc g_desc[] = {
-    { BAR_PERM, 0, "Allow",    "Always", "Deny", 1 },
-    { BAR_HALT, 1, "Continue", NULL,     NULL,   0 },
+    /* These carry the '&' too, because show() writes `primary` straight into
+     * the button with SetWindowTextA -- so a table entry without one silently
+     * removes the mnemonic the constructor set up. Continue takes N, which
+     * Deny also uses: the two are never on screen together. */
+    { BAR_PERM, 0, "A&llow",    "Al&ways", "De&ny", 1 },
+    { BAR_HALT, 1, "Co&ntinue", NULL,      NULL,    0 },
 };
 
 static const rc_bar_desc *bar_desc(int kind)
@@ -73,6 +77,23 @@ static const rc_bar_desc *bar_desc(int kind)
     return NULL;   /* unreachable for a kind this file pushed itself */
 }
 
+/* Is a text control focused right now -- i.e. is somebody mid-sentence?
+ *
+ * By window CLASS rather than by comparing against the input box's HWND, so
+ * this needs no coupling to rc_input and covers the host dialog's fields and
+ * any edit added later for free. GetFocus() answers for the calling thread
+ * only, which is the right scope: show() runs on the window thread, and a
+ * control focused on some other thread is not the one about to receive this
+ * user's next keystroke. */
+static int typing_now(void)
+{
+    HWND f = GetFocus();
+    char cls[16];
+    if (!f) return 0;
+    if (!GetClassNameA(f, cls, sizeof(cls))) return 0;
+    return _stricmp(cls, "EDIT") == 0;
+}
+
 rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
                rc_bar_send_fn send_, void (*changed_)(void))
     : depth(0), net(net_), send(send_), changed(changed_)
@@ -80,24 +101,56 @@ rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
     /* Created hidden and shown with ShowWindow rather than created on
      * demand: the 16-bit USER/GDI heaps on 9x are a fixed 64KB, and churning
      * window handles is exactly what this codebase avoids. */
+    /* SS_NOPREFIX, because this STATIC shows a COMMAND LINE.
+     *
+     * Without it a STATIC treats '&' as a mnemonic introducer: "&&" renders
+     * as a single "&" and a lone "&" vanishes and underlines the next
+     * character. So `rm -rf build && make` was displayed as
+     * `rm -rf build & make`, and `cmd /c backup & del *.bak` as
+     * `cmd /c backup  del *.bak` -- the user approving a visibly different
+     * command from the one that would run, and '&', '&&' and '||' are exactly
+     * the operators that turn one command into two. The bar's whole job is
+     * that what is shown is what is approved. chatlist.cpp already passes
+     * DT_NOPREFIX for the same reason. */
     text = CreateWindowExA(0, "STATIC", "",
-        WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS,
+        WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS | SS_NOPREFIX,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_TEXT, inst, NULL);
     /* WS_TABSTOP on all three, and mnemonics. These were mouse-only, which
      * is the worst place in the app for that: the bar is the one control the
-     * program STOPS for, and show() already moves focus here. Without a tab
-     * stop, focus could land on Allow and never be moved off it by keyboard.
+     * program STOPS for. They carry the whole keyboard route now -- show()
+     * no longer moves focus here when someone is typing, deliberately, so Tab
+     * and the mnemonics below are how a bar raised mid-sentence gets an
+     * answer without the user reaching for the mouse.
      *
-     * A/L/D avoid the menu bar's F/C/M/E/H. Note the captions carry '&' and
-     * the descriptor table in this file does not -- relabel() writes the
-     * table's text into the STATIC, not into these buttons. */
-    allow = CreateWindowExA(0, "BUTTON", "&Allow",
+     * L/W/N, and NOT the obvious A/L/D. The comment here used to read "A/L/D
+     * avoid the menu bar's F/C/M/E/H", which was true when it was written and
+     * stopped being true when app/optmenu.cpp added the Mode and Commands
+     * menus: the bar now owns F, C, **D** (Mo&de), M (&Model), E (&Effort),
+     * **A** (Comm&ands) and H. A menu-bar mnemonic beats a child button's, so
+     * Alt+A opened Commands and Alt+D opened Mode -- two of the bar's three
+     * answers were unreachable from the keyboard.
+     *
+     * Found by pressing Alt+A on the real machine with a permission prompt
+     * up and watching the Commands menu drop down. It matters more since the
+     * bar stopped taking focus on its own (see show()): that change is right,
+     * and it is only safe if the keyboard route it leaves behind actually
+     * works.
+     *
+     * L(al&low), W(al&ways), N(de&ny) are all free of the menu bar. Continue
+     * takes N too -- it and Deny are never on screen together, because a halt
+     * shows one button and a permission prompt shows the other three.
+     *
+     * The descriptor table above carries the '&' too, because show() writes
+     * `primary` into this button with SetWindowTextA on every push -- a table
+     * entry without one would silently undo the caption set here. relabel()
+     * is different: it writes into the STATIC, not into these buttons. */
+    allow = CreateWindowExA(0, "BUTTON", "A&llow",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALLOW, inst, NULL);
-    always = CreateWindowExA(0, "BUTTON", "A&lways",
+    always = CreateWindowExA(0, "BUTTON", "Al&ways",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALWAYS, inst, NULL);
-    deny = CreateWindowExA(0, "BUTTON", "&Deny",
+    deny = CreateWindowExA(0, "BUTTON", "De&ny",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_DENY, inst, NULL);
     if (!text || !allow || !always || !deny)
@@ -192,6 +245,14 @@ void rc_bar::show()
     rc_bar_entry *e = visible();
 
     if (!e) {
+        /* The keyboard is handed back by bar_changed() in main.cpp, which
+         * runs at the end of this function and is the layer that knows where
+         * focus belongs. Hiding the focused window leaves focus on the frame,
+         * which has no text handling -- so on the most common path in the app
+         * (press Allow, PERMEND arrives, pop(), show()) the user carried on
+         * typing and the characters went nowhere until they clicked the input
+         * box. Win32 does not reassign focus when the focused window is
+         * hidden. */
         ShowWindow(text,   SW_HIDE);
         ShowWindow(allow,  SW_HIDE);
         ShowWindow(always, SW_HIDE);
@@ -218,7 +279,29 @@ void rc_bar::show()
         ShowWindow(always, (d->secondary && e->allows_always)
                             ? SW_SHOW : SW_HIDE);
         ShowWindow(deny, d->tertiary ? SW_SHOW : SW_HIDE);
-        SetFocus(allow);
+        /* NOT WHILE THE USER IS TYPING.
+         *
+         * This was an unconditional SetFocus(allow), and push() runs straight
+         * off WM_RC_FRAME at whatever moment the bridge chooses -- a HALT
+         * "owes nothing to the agent's turn" (see the top of this file), so a
+         * bar appearing mid-sentence is the normal case, not a race. Focus
+         * jumped from the input box to Continue, and a BS_PUSHBUTTON with
+         * focus is pressed by VK_SPACE: the next space in the sentence being
+         * typed sent RESUME, lifting the write refusal so the agent merged
+         * over the file the user was editing. The same sequence on a PERMREQ
+         * approved a tool call nobody had read.
+         *
+         * CLAUDE.md's rule is that pressing Continue IS the confirmation. The
+         * whole conflict-safety design rests on that keypress being
+         * deliberate, and a keystroke in a sentence is not.
+         *
+         * Taking focus is still right for a bar raised while the user is idle
+         * -- that is the argument at the button creation above, and it stands
+         * -- so the test is whether a text control has focus, not whether the
+         * bar deserves it. When it does not take focus the bar is still fully
+         * reachable: the buttons carry A/L/D mnemonics and WS_TABSTOP, and
+         * main.cpp's loop runs IsDialogMessageA, so Alt+A/Alt+L/Alt+D work. */
+        if (!typing_now()) SetFocus(allow);
     }
     if (changed) changed();
 }

@@ -19,7 +19,17 @@
  * NT's -- and a modal dialog running its own message loop is exactly when the
  * reader keeps recv-ing while the UI drains slowly. Without a cap the reader
  * outruns the UI and every failed post leaks. */
-#define RC_MAX_INFLIGHT 256
+/* 64, not 256, and the number now comes from the memory budget rather than
+ * from nowhere. Each posted frame holds its payload -- up to RC_MAX_FRAME --
+ * until the UI thread frees it, so the cap IS a memory bound: 64 x 64KB is a
+ * 4MB worst case against 256's 16MB, on a machine with 32MB total. Typical
+ * cost is far lower (the bridge coalesces to ~2KB frames), so this changes
+ * nothing in normal use; it lowers the ceiling for the case that actually
+ * hurts, which is the UI thread stalled in an MSHTML reflow or behind a modal
+ * folder browser while the reader keeps draining the socket. Hitting the cap
+ * blocks the reader, which is ordinary TCP backpressure and the behaviour
+ * this counter exists to produce. */
+#define RC_MAX_INFLIGHT 64
 
 /* One persistent inflate stream for the whole connection.
  *
@@ -31,17 +41,57 @@
 static mz_stream g_inf;
 static int       g_inf_ready = 0;
 
+/* ONE inflate scratch for the whole connection, not one per frame.
+ *
+ * inflate_body used to HeapAlloc its full output cap for EVERY compressed
+ * frame and never shrink it: f->body_len recorded the real length while
+ * f->_body_alloc held the entire block until the UI thread freed the frame.
+ * With the reader posting up to RC_MAX_INFLIGHT frames before it blocks, that
+ * is a per-frame cost measured in hundreds of KB, multiplied by however many
+ * frames the UI has not drained -- and the UI thread stalls whenever MSHTML
+ * reflows or a folder browser is open. On a 32MB machine that is the largest
+ * transient demand in the program, and when HeapAlloc finally failed the
+ * reader dropped the LINK rather than slowing down.
+ *
+ * Now: inflate into this one buffer, then allocate exactly the bytes that came
+ * out and copy. Peak concurrent cost becomes one scratch plus the real sizes.
+ *
+ * Heap rather than BSS so it is not committed at load on a machine where
+ * committed-at-load is audited; lazily allocated per connection and released
+ * with the stream it serves.
+ *
+ * 2x RC_MAX_FRAME, not 4x. The cap exists so a corrupt or hostile frame cannot
+ * expand without limit, and the real bound is far lower: bridge/wire/link.py
+ * caps an UNCOMPRESSED chunk at MAX_FRAME - 1024 = 64,512 bytes before it
+ * compresses, so a legitimate inflated body never exceeds ~63KB. 2x leaves
+ * more than double the largest value the protocol permits. */
+#define RC_INFLATE_SCRATCH (RC_MAX_FRAME * 2)
+static char     *g_inf_scratch = NULL;
+
 static void inflate_begin(void)
 {
     if (g_inf_ready) { mz_inflateEnd(&g_inf); g_inf_ready = 0; }
     memset(&g_inf, 0, sizeof(g_inf));
     if (mz_inflateInit(&g_inf) == MZ_OK) g_inf_ready = 1;
     else rc_log("net: mz_inflateInit failed");
+    if (!g_inf_scratch) {
+        g_inf_scratch = (char *)HeapAlloc(GetProcessHeap(), 0,
+                                          RC_INFLATE_SCRATCH + 1);
+        /* Not fatal here: inflate_body reports the failure per frame, which
+         * is where there is a frame to fail. */
+        if (!g_inf_scratch)
+            rc_log("net: no memory for the %u byte inflate scratch",
+                   (unsigned)RC_INFLATE_SCRATCH);
+    }
 }
 
 static void inflate_finish(void)
 {
     if (g_inf_ready) { mz_inflateEnd(&g_inf); g_inf_ready = 0; }
+    if (g_inf_scratch) {
+        HeapFree(GetProcessHeap(), 0, g_inf_scratch);
+        g_inf_scratch = NULL;
+    }
 }
 
 /* Inflates f->body in place-ish: allocates a new buffer, points body at it,
@@ -49,38 +99,47 @@ static void inflate_finish(void)
 static int inflate_body(rc_frame *f)
 {
     /* Bounded so a malicious or corrupt frame cannot expand without limit.
-     * 16x the wire cap is far more than any real page needs. */
-    unsigned cap = RC_MAX_FRAME * 4;
+     * See the note on g_inf_scratch for why this is one shared buffer and
+     * why the bound is 2x rather than 4x. */
+    unsigned cap = RC_INFLATE_SCRATCH;
+    unsigned got;
     char *out;
     int rc;
 
     if (!g_inf_ready) { rc_log("net: deflate frame but no inflater"); return -1; }
     if (f->body_len == 0) return 0;
-
-    out = (char *)HeapAlloc(GetProcessHeap(), 0, cap + 1);
-    if (!out) return -1;
+    if (!g_inf_scratch) { rc_log("net: no inflate scratch"); return -1; }
 
     g_inf.next_in   = (const unsigned char *)f->body;
     g_inf.avail_in  = f->body_len;
-    g_inf.next_out  = (unsigned char *)out;
+    g_inf.next_out  = (unsigned char *)g_inf_scratch;
     g_inf.avail_out = cap;
 
     rc = mz_inflate(&g_inf, MZ_SYNC_FLUSH);
     if (rc != MZ_OK && rc != MZ_STREAM_END) {
         rc_log("net: mz_inflate failed: %d", rc);
-        HeapFree(GetProcessHeap(), 0, out);
         return -1;
     }
     if (g_inf.avail_in != 0) {
         rc_log("net: inflate left %u bytes unconsumed (output cap hit)",
                g_inf.avail_in);
-        HeapFree(GetProcessHeap(), 0, out);
         return -1;
     }
 
+    /* EXACTLY what came out. This is the allocation the frame carries until
+     * the UI thread frees it, so it is the one that multiplies by the number
+     * of frames in flight. */
+    got = cap - g_inf.avail_out;
+    out = (char *)HeapAlloc(GetProcessHeap(), 0, got + 1);
+    if (!out) {
+        rc_log("net: no memory for a %u byte inflated body", got);
+        return -1;
+    }
+    memcpy(out, g_inf_scratch, got);
+
     f->_body_alloc = out;
-    f->body_len = cap - g_inf.avail_out;
-    out[f->body_len] = '\0';
+    f->body_len = got;
+    out[got] = '\0';
     f->body = out;
     return 0;
 }
@@ -548,7 +607,33 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     }
     n->thread = (HANDLE)_beginthreadex(NULL, 0, reader_thread, n, 0, &tid);
     if (!n->thread) {
-        rc_log("net: _beginthreadex failed");
+        /* THE SAME TEARDOWN AS THE SENDER PATH ABOVE.
+         *
+         * This used to log, set RC_FAILED and return -- leaving a live sender
+         * thread on an open socket, n->running still 1 and the RPC worker
+         * still going. Recovery did save it: WM_RC_STATE arms
+         * TIMER_RECONNECT and try_connect calls rc_net_stop first, with
+         * n->started already 1 so teardown runs. But that made correctness
+         * depend on every future caller preserving an ordering this file
+         * records as having been broken once already, at the cost of three
+         * bridge restarts. _beginthreadex fails under the same USER/GDI and
+         * thread pressure that makes CreateWindowExA fail, which is not a
+         * theoretical condition on this machine.
+         *
+         * Note the sender is stopped by clearing n->running and closing the
+         * socket: it wakes on outq_wake, sees running == 0 and exits. */
+        rc_log("net: could not start reader thread");
+        n->running = 0;
+        rc_rpc_stop();
+        rc_rpc_join(2000);
+        if (n->outq_wake) SetEvent(n->outq_wake);
+        closesocket(n->sock);
+        n->sock = INVALID_SOCKET;
+        if (n->sender) {
+            WaitForSingleObject(n->sender, 2000);
+            CloseHandle(n->sender);
+            n->sender = NULL;
+        }
         set_state(n, RC_FAILED);
         return -1;
     }
@@ -634,9 +719,12 @@ static unsigned __stdcall sender_thread(void *arg)
     return 0;
 }
 
-int rc_net_send(rc_net *n, const char *type,
-                const char *const *keys, const char *const *vals, int nkv,
-                const void *body, unsigned body_len)
+/* The one implementation. `wait_ticks` is how many 100ms slices this caller
+ * will spend waiting for the outbound queue to drain before giving up -- see
+ * the two wrappers at the end of this function for who uses which. */
+static int send_frame(rc_net *n, const char *type,
+                      const char *const *keys, const char *const *vals, int nkv,
+                      const void *body, unsigned body_len, int wait_ticks)
 {
     /* A SHARED static, serialised by send_lock -- which is what the two
      * comments that used to sit here denied. One said "there is no shared
@@ -656,7 +744,7 @@ int rc_net_send(rc_net *n, const char *type,
     int total;
     int waited = 0;
 
-    if (n->sock == INVALID_SOCKET || !n->running) return -1;
+    if (n->sock == INVALID_SOCKET || !n->running) return RC_SEND_DEAD;
 
     /* The lock covers building INTO the shared buffer and copying OUT of it.
      * Neither can block, which is the property that matters: the wire write
@@ -668,13 +756,13 @@ int rc_net_send(rc_net *n, const char *type,
                                body, body_len);
         if (total < 0) {
             rc_log("net: frame too large to build (%s, body=%u)", type, body_len);
-            return -1;
+            return RC_SEND_DEAD;
         }
         it = (rc_outq_item *)HeapAlloc(GetProcessHeap(), 0,
                                        sizeof(rc_outq_item) + (unsigned)total);
         if (!it) {
             rc_log("net: out of memory queueing %s (%d bytes)", type, total);
-            return -1;
+            return RC_SEND_DEAD;
         }
         memcpy(it->data, build, (unsigned)total);
         it->len = (unsigned)total;
@@ -707,7 +795,7 @@ int rc_net_send(rc_net *n, const char *type,
          * instead -- the caller already has to handle rc_net_send returning
          * -1 for every other reason it can fail. */
         while (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES && n->running
-               && waited < 50) {
+               && waited < wait_ticks) {
             LeaveCriticalSection(&n->send_lock);
             WaitForSingleObject(n->outq_room, 100);
             waited++;
@@ -715,14 +803,21 @@ int rc_net_send(rc_net *n, const char *type,
         }
         if (!n->running) {
             outq_free(it);
-            return -1;
+            return RC_SEND_DEAD;
         }
         if (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES) {
+            /* RC_SEND_FULL, not RC_SEND_DEAD, and the distinction is the
+             * whole of finding 01.17. The link is fine -- a bulk transfer is
+             * simply ahead of this frame in a 64KB queue that takes about
+             * thirteen seconds to drain at 40kbit. Reporting it as "the
+             * connection is down" sent the user to look at the network for a
+             * backpressure event, and told them a reconnect was coming when
+             * none was. */
             rc_log("net: send queue full after %dms wait, dropping %s "
                    "(%d bytes, outq_bytes=%u)", waited * 100, type, total,
                    n->outq_bytes);
             outq_free(it);
-            return -1;
+            return RC_SEND_FULL;
         }
         if (n->outq_tail) n->outq_tail->next = it;
         else              n->outq_head = it;
@@ -731,7 +826,37 @@ int rc_net_send(rc_net *n, const char *type,
     }
 
     SetEvent(n->outq_wake);
-    return 0;
+    return RC_SEND_OK;
+}
+
+/* Bulk: the full five-second budget. Manifest rows, SYNCDAT chunks, EXECOUT
+ * -- things produced by the worker, where waiting for the wire is the whole
+ * point of backpressure. */
+int rc_net_send(rc_net *n, const char *type, const char *const *keys,
+                const char *const *vals, int nkv,
+                const void *body, unsigned body_len)
+{
+    return send_frame(n, type, keys, vals, nkv, body, body_len,
+                      RC_SEND_WAIT_BULK);
+}
+
+/* A USER GESTURE: half a second, not five.
+ *
+ * ui_send calls this from the window thread -- Allow/Always/Deny, Send, a
+ * chat switch, New, Export, Permissions, SETWORK -- and the message pump does
+ * not run while it waits. With the bulk budget, pressing Allow while a
+ * SYNCGET was streaming froze the window for five seconds, long enough for
+ * Win98's ghost frame, and then reported the link as down. Half a second is
+ * long enough to ride out an ordinary drain and short enough not to read as a
+ * hang; past it the caller is told the queue is busy and that trying again is
+ * worth it, which is true and is a different sentence from "the connection is
+ * down". (audit 01.17) */
+int rc_net_send_ui(rc_net *n, const char *type, const char *const *keys,
+                   const char *const *vals, int nkv,
+                   const void *body, unsigned body_len)
+{
+    return send_frame(n, type, keys, vals, nkv, body, body_len,
+                      RC_SEND_WAIT_UI);
 }
 
 void rc_net_stop(rc_net *n)

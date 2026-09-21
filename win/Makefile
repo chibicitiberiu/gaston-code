@@ -307,12 +307,19 @@ PYTHON ?= python3
 # symbol kills the EXE at load on Win98, before WinMain, with no log written.
 check: $(BUILD)/retroclaude.exe
 	@echo "=== identity ==="; file $(BUILD)/retroclaude.exe
-	@echo "=== version gate (want 4.0/4.0) ==="
-	@objdump -p $(BUILD)/retroclaude.exe | grep -iE 'OSystemVersion|SubsystemVersion'
-	@echo "=== DLLs ==="; objdump -p $(BUILD)/retroclaude.exe | grep -i 'DLL Name'
-	@echo "=== W-suffix imports (stubs on Win9x) ==="
-	@objdump -p $(BUILD)/retroclaude.exe | grep -E '^\s+[0-9a-f]+\s+<none>' \
-	  | awk '{print $$NF}' | grep -E 'W$$' || echo "   (none)"
+	@echo "=== imports (DLL allow-list, NT-only deny-list, W-suffix, PE 4.0) ==="
+	@# THIS STEP CAN FAIL, which the three shell pipelines it replaces could
+	@# not. They printed the DLL list, printed the W-suffix imports and
+	@# printed the OS/subsystem version -- all three exit 0 whatever they
+	@# find, so CLAUDE.md's "make check audits imports" was a human reading
+	@# scrollback, and under `make all` or in CI a regression went green.
+	@#
+	@# The W-suffix grep also aimed at the wrong class. MoveFileExA is ANSI,
+	@# has no W suffix, lives in KERNEL32 and does not exist on 9x --
+	@# win/sync/sync.cpp says in a comment that somebody will want to call it
+	@# to make the commit atomic. That edit used to pass every gate here and
+	@# then die at load on the guest with no log. See audit 01.29.
+	@$(PYTHON) $(TOP)/tools/check/imports.py $(BUILD)/retroclaude.exe
 	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
 	@# Located, not counted -- see tools/check/cmovcheck.py for why the baseline
 	@# this replaces moved three times without anything being wrong.
