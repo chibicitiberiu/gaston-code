@@ -7,6 +7,7 @@ model is exercised separately by netcheck.exe.
 """
 
 import os
+import contextlib
 import asyncio
 import time
 import zlib
@@ -2258,11 +2259,106 @@ async def test_a_command_reaching_outside_the_mirror_is_announced(harness):
     frame = await _recv(harness, reader, "PERMREQ")
     body = frame.body.decode("cp1252")
 
-    assert body.startswith("! writes outside the mirrored folder: ")
+    # THE COMMAND COMES FIRST, and only a two-character marker precedes it
+    # (02.4). This used to read "! <warning> -- <summary>", and the guest
+    # draws the bar as one SS_ENDELLIPSIS line of roughly seventy legible
+    # characters -- so a user approving a command saw the guard's sentence,
+    # an ellipsis, and nothing at all of what they were approving.
+    assert body.startswith("! ")
+    assert body.index("writes outside the mirrored folder") > 10
     # The path keeps the case the model wrote it in -- only the marker is
     # ours. Shouting the path back loses information for no gain.
     assert "c:\\windows" in body
     task.cancel()
+    await harness.close(writer)
+
+
+async def test_the_warning_is_readable_in_the_transcript_not_just_the_bar(
+    harness,
+):
+    """The bar carries a marker and a clipped tail; the block carries it all.
+
+    Half of 02.4 is that the bar is one line. Moving the command to the front
+    of it is only honest if the sentence it displaced lands somewhere a
+    person can actually read, which is the request block the desk writes into
+    the transcript immediately before the PERMREQ.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge._guest.work_guest = "C:\\WORK"
+
+    task = harness.bridge._guest.claude.ask(
+        "mcp__machine__exec",
+        {"command": "deltree /y c:\\windows", "cwd": "C:\\"})
+    await _recv(harness, reader, "PERMREQ")
+
+    blocks = "".join(harness.bridge._guest.pages.all_text())
+    assert "permwarn" in blocks
+    assert "writes outside the mirrored folder" in blocks
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_a_device_inside_the_mirror_is_not_called_outside_it(harness):
+    """02.11. `CON` is reserved in every directory, so the write does not
+    land in the mirror -- but it is not OUTSIDE it, and saying so is a claim
+    the user can check and find false. A guard whose stated reason is wrong
+    is a guard people stop reading; this module says so itself."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    harness.bridge._guest.work_guest = "C:\\WORK"
+
+    task = harness.bridge._guest.claude.ask(
+        "mcp__machine__exec",
+        {"command": "copy x c:\\work\\con", "cwd": "C:\\WORK"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+
+    assert body.startswith("! ")
+    assert "outside the mirrored folder" not in body
+    assert "device name" in body
+    task.cancel()
+    await harness.close(writer)
+
+
+async def test_a_bridge_with_no_mirror_says_so_once_not_on_every_command(
+    harness,
+):
+    """02.4's other half, and the state every sync-disabled bridge is in.
+
+    `cmdguard.reason` answered "no folder is mirrored from this machine, so
+    nothing on it can be restored" -- 73 characters -- for EVERY command
+    whenever `work_guest` is empty, which is what a bridge started without
+    --sync-dir looks like, and what any guest whose INI has no sync root
+    looks like. Prefixing 100% of prompts with it is the defect this module's
+    own docstring names ("someone who learns the guard's phrasing is wrong
+    stops reading it"), with the added cost that it displaced the command.
+
+    Both existing guard tests set `work_guest` by hand, so neither could see
+    this.
+    """
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    assert not harness.bridge._guest.work_guest
+
+    bodies = []
+    for cmd in ("dir c:\\", "vol c:"):
+        task = harness.bridge._guest.claude.ask(
+            "mcp__machine__exec", {"command": cmd, "cwd": "C:\\"})
+        frame = await _recv(harness, reader, "PERMREQ")
+        bodies.append(frame.body.decode("cp1252"))
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    # Not on the bar, either time.
+    for body in bodies:
+        assert "no folder is mirrored" not in body
+        assert not body.startswith("!")
+
+    # Said once, in the transcript, where there is room for it.
+    transcript = "".join(harness.bridge._guest.pages.all_text())
+    assert transcript.count("no folder is mirrored") == 1
     await harness.close(writer)
 
 

@@ -30,6 +30,8 @@ These tests drive the real `FakeGui` class -- not a re-implementation of it
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 
 import pytest
 
@@ -268,3 +270,117 @@ async def test_fakegui_answers_every_sync_frame_honestly(
     assert frames[0].type == expect_type
     assert frames[0].headers.get("id") == "s1"
     assert frames[0].headers.get("status") == expect_status
+
+
+# --- 02.16: the keepalive and the export sink ------------------------------
+
+
+async def test_fakegui_sweeps_a_keepalive_like_the_guest_does(harness,
+                                                              monkeypatch):
+    """fakegui sent PING only from the typed `/ping`.
+
+    The real guest sweeps every RPC_SWEEP_MS (30s) and sends SYNCDIRTY when
+    it has a sync root or PING when it does not -- win/rpc/rpc.cpp's
+    `rpc_maybe_nudge`, added because the bridge reaps a guest silent for 90
+    seconds while the documented deadline for answering a permission prompt
+    is 600. So a break-glass fakegui session left idle while somebody reads a
+    prompt was hung up on, and the conformance harness never exercised the
+    keepalive at all.
+
+    The sweep interval is monkeypatched so the test takes milliseconds; what
+    is under test is that connect() starts it and that it puts a real PING on
+    the wire, not the constant.
+    """
+    monkeypatch.setattr(FakeGui, "SWEEP_S", 0.05)
+    gui = FakeGui("127.0.0.1", harness.port, "s")
+    await gui.connect()
+    pump = asyncio.create_task(gui.pump())
+    try:
+        guest = await _wait_attached(harness)
+        assert gui._sweep is not None and not gui._sweep.done()
+        # last_seen only moves when a frame arrives, which is the whole point.
+        guest.last_seen = 0.0
+        for _ in range(200):
+            if guest.last_seen > 0.0:
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("no keepalive reached the bridge")
+    finally:
+        pump.cancel()
+        await gui.close()
+    assert gui._sweep is None
+
+
+async def test_fakegui_writes_a_real_export_to_a_file(harness, monkeypatch):
+    """`render` had no case for EXPORTSTART/EXPORTDAT/EXPORTEND at all.
+
+    They fell into the catch-all and printed `[EXPORTDAT {...}] <200 chars of
+    deflated body>` per 63 KB chunk -- so the one transfer path with a real
+    defect in it (02.3: the idle reaper reading a long export as a dead
+    guest) could not be driven from the conformance tool, and there was no
+    export test here to hang off.
+    """
+    gui = FakeGui("127.0.0.1", harness.port, "s")
+    gui.raw = True          # the transcript is fixture, not the subject
+    await gui.connect()
+    pump = asyncio.create_task(gui.pump())
+    try:
+        guest = await _wait_attached(harness)
+        # Something long enough to be chunked, so the multi-frame path and
+        # the `off` continuity check are both exercised.
+        for i in range(400):
+            await harness.bridge._write_block(
+                guest, "<p>paragraph %04d of an exported transcript</p>" % i)
+
+        await harness.bridge._on_export(guest, Frame("EXPORT", {}))
+
+        for _ in range(400):
+            if gui.export_path:
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("the export never finished")
+
+        assert gui._exp is None, "the transfer state was not cleared"
+        with open(gui.export_path, "rb") as fh:
+            got = fh.read()
+        assert b"paragraph 0000" in got and b"paragraph 0399" in got
+    finally:
+        pump.cancel()
+        await gui.close()
+        if gui.export_path:
+            with contextlib.suppress(OSError):
+                os.unlink(gui.export_path)
+
+
+async def test_fakegui_throws_away_an_export_that_did_not_finish(harness):
+    """A shortened export is not a smaller export, it is a broken file --
+    which is what `send_export` refuses to produce and what the guest
+    refuses to keep. The fake client has to refuse it too, or the tool would
+    report success for the one failure the END frame exists to signal."""
+    gui = FakeGui("127.0.0.1", harness.port, "s")
+    gui._export(Frame("EXPORTSTART", {"total": "100"}))
+    path = gui._exp["path"]
+    gui._export(Frame("EXPORTDAT", {"off": "0", "total": "100", "enc": "raw"},
+                      b"x" * 40))
+    gui._export(Frame("EXPORTEND", {"status": "error", "bytes": "40",
+                                    "reason": "the connection dropped"}))
+    assert gui._exp is None
+    assert not os.path.exists(path)
+
+
+async def test_fakegui_refuses_an_export_chunk_that_skips_bytes(harness):
+    """`off` is in decompressed bytes and the guest checks it, because a
+    chunk that does not continue where the last one stopped writes a file
+    with a hole in it -- and a hole is indistinguishable from a complete file
+    afterwards."""
+    gui = FakeGui("127.0.0.1", harness.port, "s")
+    gui._export(Frame("EXPORTSTART", {"total": "100"}))
+    path = gui._exp["path"]
+    gui._export(Frame("EXPORTDAT", {"off": "0", "total": "100", "enc": "raw"},
+                      b"x" * 40))
+    gui._export(Frame("EXPORTDAT", {"off": "60", "total": "100",
+                                    "enc": "raw"}, b"y" * 40))
+    assert gui._exp is None
+    assert not os.path.exists(path)

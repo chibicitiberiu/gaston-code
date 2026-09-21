@@ -7,6 +7,7 @@ it is finished, or streaming reads as a stall.
 """
 
 from bridge.view.html import APPEND, LIVE, HtmlStream, document, esc, inline, user_turn
+from bridge.view import html as H
 
 
 def appended(updates):
@@ -255,3 +256,66 @@ def test_short_output_is_left_exactly_alone():
     out = H.tool_result("Volume in drive C is WIN98")
     assert "<pre>Volume in drive C is WIN98</pre>" in out
 
+
+
+# --- 02.17: a long open block must not be re-sent whole on every flush -------
+
+
+def test_a_live_code_fence_is_capped_not_re_sent_whole():
+    """The quadratic send. `_render(partial=True)` returned the ENTIRE open
+    block on every coalescer flush -- every 100ms on a fast link, 600ms on a
+    slow one -- so a 60 KB fenced file went out as roughly 65 LIVE frames
+    averaging 30 KB: about 2 MB on the wire for 60 KB of content, on a link
+    this project measures in single-digit KB/s. And it ended in silence: past
+    `MAX_FRAME - 1024`, `send_html` drops a LIVE frame without a word."""
+    s = H.HtmlStream()
+    body = "".join("line %04d in a long fenced file\n" % i for i in range(400))
+    ups = s.feed("```python\n" + body)
+    live = [u for u in ups if u.mode == H.LIVE]
+    assert live
+    # A little over the cap: the wrapper, the language label and one line's
+    # worth of overshoot. Emphatically not the 12 KB the block has reached.
+    assert len(live[-1].html) < s.LIVE_CAP + 600
+
+
+def test_a_capped_live_block_shows_the_tail_and_says_it_is_one():
+    """The newest lines are the ones being written, which is what a reader
+    watching a block stream is watching FOR. The elision is marked so nobody
+    reads a fragment as the whole thing."""
+    s = H.HtmlStream()
+    body = "".join("line %04d in a long fenced file\n" % i for i in range(400))
+    live = [u for u in s.feed("```python\n" + body) if u.mode == H.LIVE][-1]
+    assert "line 0399" in live.html
+    assert "line 0000" not in live.html
+    assert "<pre>..." in live.html
+
+
+def test_the_sealed_block_still_carries_every_byte():
+    """Nothing is lost -- only the intermediate copies are bounded. The
+    finished block arrives whole, as an APPEND, the way it always did."""
+    s = H.HtmlStream()
+    body = "".join("line %04d in a long fenced file\n" % i for i in range(400))
+    s.feed("```python\n" + body)
+    whole = "".join(u.html for u in s.flush() if u.mode != H.LIVE)
+    assert "line 0000" in whole and "line 0399" in whole
+    assert "..." not in whole.split("<pre>")[1][:40]
+
+
+def test_a_short_live_block_is_untouched():
+    """The cap must be invisible for ordinary prose, which is all of it."""
+    s = H.HtmlStream()
+    live = [u for u in s.feed("a short paragraph being typed")
+            if u.mode == H.LIVE][-1]
+    assert live.html == "<p>a short paragraph being typed</p>"
+
+
+def test_a_live_table_is_never_capped():
+    """Dropping leading rows drops the header and the separator under it, so
+    `_table` would re-read the table as headerless and the live view would
+    disagree with the sealed one about what the columns are."""
+    s = H.HtmlStream()
+    rows = "".join("| cell %04d | %s |\n" % (i, "x" * 60) for i in range(200))
+    s.feed("| a | b |\n|---|---|\n" + rows)
+    live = [u for u in s.feed("| last | row |\n") if u.mode == H.LIVE]
+    if live and live[-1].html:
+        assert "<th>" in live[-1].html

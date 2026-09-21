@@ -22,15 +22,21 @@ object that should own it did not exist.
    on `bridge/files/reporter.py` for why `Reporter`, built fresh per
    `Pass`, cannot own it.
 
-Both want an object that outlives a `Pass` and is Bridge-lifetime. That
-second part is not a stretch for the halt trio despite the name "guest"
-state: `Bridge._guest` is created once per Bridge process, on the first
-`_attach`, and reused for every reconnect after that -- so a
-`SyncCoordinator` built alongside `Bridge` itself has exactly the lifetime
-the halt bar already had in practice. It is also one step towards the
-per-client split R7 needs (audit §7.1), not a step away from it: "one
-coordinator per client" is a constructor argument once the state that
-needs splitting lives in one place instead of two.
+Both want an object that outlives a `Pass`. 02.43 made it Bridge-lifetime
+and reasoned that this was not a stretch despite the name "guest" state --
+`Bridge._guest` is created once per Bridge process and reused for every
+reconnect, so a coordinator built alongside `Bridge` had exactly the
+lifetime the halt bar already had in practice. True, and it stopped being
+enough the moment anyone read it as finished work: one coordinator per
+BRIDGE means every client shares one halt bar and one notice queue, so with
+two clients agent A resolving its own conflict takes the bar down on B's
+screen and drains B's notices into A's next turn.
+
+So it is a field of `GuestSession` now (audit-2 02.18), which is what the
+paragraph above called "a constructor argument once the state that needs
+splitting lives in one place instead of two". `Bridge.synccoord` survives as
+a property forwarding to the attached guest's -- the single-client shortcut,
+named and in one place, for R7 (audit §7.1) to delete.
 
 Sending frames stays on `Bridge`: it owns the wire (`GuestLink`, `_send`)
 and the connected guest. This class only decides and remembers; its

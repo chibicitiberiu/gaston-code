@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from ..view.html import LIVE
 from . import fold
@@ -164,7 +165,7 @@ class GuestLink:
                 # Between chunks, not merely between calls (04.12): without
                 # this, a big page or a future transcript export starves the
                 # event loop exactly the way sync once did -- see wire_yield.
-                await self.wire_yield()
+                await self.wire_yield(guest)
 
     async def send_export(self, guest, data: bytes) -> None:
         """Stream an export to the guest, chunked, with a START and an END.
@@ -198,11 +199,33 @@ class GuestLink:
             # multi-hundred-KB export would otherwise hold the event loop for
             # its whole duration and a Stop press would wait it out.
             if i + budget < total:
-                await self.wire_yield()
+                await self.wire_yield(guest)
         await self.send(guest, export_end(True, bytes_=sent))
 
-    async def wire_yield(self) -> None:
-        """Give everything else a turn on the wire.
+    async def wire_yield(self, guest=None) -> None:
+        """Give everything else a turn on the wire, and count as liveness.
+
+        THE STAMP IS 02.3. `_pump` does not read the socket again until the
+        handler it is awaiting returns, and two handlers push for a long time
+        while sending: a full-page render and an export of the whole
+        transcript. `guest.last_seen` moved in exactly one place -- `_handle`
+        -- so at `--link-bps 5000` a 450 KB export is 90 seconds of inbound
+        silence, and the reaper read that as a dead guest: it denied whatever
+        prompt was on screen, closed the writer, and `send_export` then tried
+        to report the failure down the socket it had just lost. The user
+        asked for a file and the bridge tore its own connection down to
+        deliver it.
+
+        This is called BETWEEN chunks, which is what makes it the right place
+        to stamp rather than `send`. A single small frame proves nothing --
+        it lands in the kernel buffer whether or not anything is alive at the
+        far end -- but a bulk push that keeps completing chunks is the
+        receive window advancing, which no dead guest can fake. And when the
+        far end IS dead, `drain()` blocks as soon as the window fills, no
+        further chunk completes, nothing is stamped, and the reaper does its
+        job and closes the writer out from under the stalled send. So this
+        exempts a live transfer without making the guest unreapable, which a
+        plain `transferring` flag would have.
 
         Measured, because the obvious reasoning is wrong: a chunk loop over an
         UNCONTENDED lock, with a `drain()` below the high-water mark, contains
@@ -221,6 +244,8 @@ class GuestLink:
         policy is sync's own to apply; see syncrun.py's `guest.perm_pending`
         checks right after the calls to this.
         """
+        if guest is not None:
+            guest.last_seen = time.monotonic()
         await asyncio.sleep(0)
 
     @staticmethod

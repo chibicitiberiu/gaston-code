@@ -65,18 +65,47 @@ def _default_shell() -> str:
     """The shell to judge by when the caller does not say.
 
     Derived, never named here. If exactly one profile carries guard tables
-    that is the shell this bridge knows and there is nothing to choose. With
-    several, refusing to pick is the only honest answer -- and the caller
-    SHOULD be saying which, because detection already reports it.
+    that is the shell this bridge knows and there is nothing to choose.
+
+    THE SECOND CLAUSE IS 02.5, AND IT USED TO BE "REFUSE". The caller passes
+    `""` for every guest that does not report an inventory, and HELLO's body
+    is "empty for any guest built before the body existed, which is every
+    deployed one until it is reflashed" (server.py). So refusing on several
+    profiles meant that ADDING A SECOND SHELL -- the exact change
+    `profiles.py` says supporting a new machine should be, adding a file --
+    silently turned the guard off for every legacy guest: `grammar_for("")`
+    returned NOTHING, and every command came back "the shell on this machine
+    is not one this bridge has rules for". Reproduced by dropping a `[shell]`
+    table into 4dos.toml; `tests/python/meta/test_default_shell.py` now holds
+    that closed.
+
+    A profile says it is the one to assume with `assume_when_unreported`.
+    That is data, like everything else here: which shell a machine that
+    reports nothing is running is a fact about the deployment, not a decision
+    this module gets to make. Exactly one profile may claim it -- two claims
+    is a misconfiguration and refusing is right, because picking either would
+    be inventing the answer.
     """
     known = profiles.shells()
     if len(known) == 1:
         return known[0]
     if not known:
         log.error("no shell profile carries guard tables")
+        return ""
+    assumed = [n for n in known
+               if profiles.shell(n).get("assume_when_unreported")]
+    if len(assumed) == 1:
+        log.debug("%d shells have guard tables; assuming %s for a guest that "
+                  "reported none", len(known), assumed[0])
+        return assumed[0]
+    if assumed:
+        log.error("%d shell profiles claim assume_when_unreported (%s); only "
+                  "one may, so every command will be referred to the user",
+                  len(assumed), ", ".join(sorted(assumed)))
     else:
-        log.error("%d shells have guard tables (%s); the caller did not say "
-                  "which, so every command will be referred to the user",
+        log.error("%d shells have guard tables (%s), none marked "
+                  "assume_when_unreported, and the caller did not say which "
+                  "-- so every command will be referred to the user",
                   len(known), ", ".join(sorted(known)))
     return ""
 
@@ -139,6 +168,9 @@ class Grammar:
     quote: str = ""
     switch: str = ""
     switch_max: int = 0
+    #: What a switch actually LOOKS like on this shell -- the vocabulary, not
+    #: a length. See `Guard.is_switch` for what judging by length cost.
+    switch_token: "re.Pattern | None" = None
     exts: tuple = ()
 
     # --- vocabulary ------------------------------------------------------
@@ -198,6 +230,7 @@ def _grammar(shell: str) -> Grammar:
         quote=str(t.get("quote", "")),
         switch=str(t.get("switch", "")),
         switch_max=int(t.get("switch_max", 0)),
+        switch_token=_pat(t, "switch_token"),
         exts=tuple(str(e).lower() for e in t.get("exts", ())),
         read=fs("read"), write=fs("write"), src_dest=fs("src_dest"),
         conditional_read=fs("conditional_read"), unbounded=fs("unbounded"),
@@ -330,15 +363,34 @@ class Guard:
         return leaf.split(".", 1)[0].lower() in self.g.devices
 
     def is_switch(self, token: str) -> bool:
-        """A switch, not a path.
+        r"""A switch, not a path.
 
         On COMMAND.COM `/` starts a switch AND is accepted as a path
         separator by everything that goes through CreateFileA, so
         `/windows/system/x` is a real path. An early draft discarded every
         `/`-prefixed token before extracting paths, which made that path not
         merely unresolvable but invisible -- the guard reported "writes
-        inside mirror" for a command whose destination it had thrown away. A
-        switch is short and has no separator in it.
+        inside mirror" for a command whose destination it had thrown away.
+
+        BY VOCABULARY, NOT BY LENGTH, and that is 02.10. "Short and
+        separator-free" is not what makes a token a switch, and the bound was
+        a number in a data file that anybody adding a shell would copy.
+        Measured against the real profile with the mirror at C:\GASTON\OK:
+
+            PASS  copy c:\gaston\ok\a.txt /io.sys
+            PASS  move c:\gaston\ok\a.txt /temp
+
+        `/io.sys` is seven characters with no separator, so it was a switch,
+        so `targets` dropped it -- and for a `src_dest` verb the SOURCE was
+        left as the only path, it was inside the mirror, and the command read
+        as fully contained. `switch_token` says what this shell's switches
+        actually look like (a letter or two, optionally `:value`), which
+        rules `/io.sys` out on the dot. `/temp` still matches, which is why
+        `targets` also reports what it dropped.
+
+        The length bound stays as the fallback for a profile that declares no
+        vocabulary: it is the weaker rule, but it is better than treating
+        every `/x` as a path.
 
         A shell with no switch prefix declares none and every token is a
         candidate path.
@@ -348,6 +400,8 @@ class Guard:
         rest = token[len(self.g.switch):]
         if any(s in rest for s in self.g.seps):
             return False
+        if self.g.switch_token is not None:
+            return bool(self.g.switch_token.match(token))
         return len(token) <= self.g.switch_max
 
     def resolve(self, token: str, cwd: str) -> str:
@@ -382,16 +436,41 @@ class Guard:
                 break
         return leaf, stem
 
-    def targets(self, verb: str, args: list[str]) -> list[str]:
-        """Which arguments this verb WRITES to."""
+    def targets(self, verb: str, args: list[str]) -> tuple:
+        r"""`(written_to, dropped_as_switches)` for this verb's arguments.
+
+        The second half is 02.10's other half. A token dropped as a switch is
+        invisible to every check below, and for a verb whose destination is
+        POSITIONAL that is the difference between judging the destination and
+        judging the source: `copy c:\ok\a.txt /temp` leaves one path, the
+        source, and `src_dest`'s "one path means it writes into the working
+        directory" branch then measured containment against it. The caller
+        cannot tell that from an honest one-argument `copy a.txt` unless this
+        says what it threw away.
+        """
+        dropped = [a for a in args if self.is_switch(a)]
         paths = [a for a in args if not self.is_switch(a)]
         if not paths:
-            return []
+            return [], dropped
         if verb in self.g.src_dest:
             # `copy a b` writes b. `copy a` writes into the working
             # directory, which is still a write and still has to be checked.
-            return paths[-1:] if len(paths) > 1 else paths
-        return paths            # del/deltree/ren/md/rd/move: every argument
+            return (paths[-1:] if len(paths) > 1 else paths), dropped
+        # del/deltree/ren/md/rd/move: every argument
+        return paths, dropped
+
+
+#: What `Root.check` found. Not a bool, and 02.11 is why: every caller turned
+#: a False into "writes outside the mirrored folder", including for a path
+#: that is demonstrably INSIDE it and refused for a different, correct reason.
+#: `copy x c:\gaston\ok\con` is inside the mirror; CON is a device in every
+#: directory. Telling the user it writes outside the mirror is false and
+#: checkable, and this module's own note says what that costs: "someone who
+#: learns the guard's phrasing is wrong stops reading it".
+INSIDE = ""
+OUTSIDE = "outside"
+DEVICE = "device"
+UNRESOLVED = "unresolved"
 
 
 class Root:
@@ -403,8 +482,8 @@ class Root:
         self.norm = (guard.norm(self.raw).rstrip(guard.g.sep)
                      if self.raw and guard.g.usable else "")
 
-    def contains(self, token: str) -> bool:
-        """Is this path inside the mirror? Unknown shapes answer False.
+    def check(self, token: str) -> str:
+        """`INSIDE`, or which of the three ways this path is not.
 
         Refuses outright when there is no root. An early draft asserted the
         opposite -- "no mirror, so everything is outside it, so every exec
@@ -414,25 +493,89 @@ class Root:
         deployment, and it failed OPEN.
         """
         if not self.norm:
-            return False
+            return OUTSIDE
         g = self.guard.g
         t = self.guard.norm(token)
         if g.variables is not None and g.variables.search(t):
-            return False            # a variable this cannot expand
+            # A variable this cannot expand. NOT "outside": it may well be
+            # inside, and saying so would be a guess stated as a finding.
+            return UNRESOLVED
         if ".." in t.split(g.sep):
-            return False            # escaped a relative base
+            return UNRESOLVED       # escaped a relative base
         if not t.startswith(self.norm):
-            return False
+            return OUTSIDE
         tail = t[len(self.norm):]
         # Empty or separator-prefixed only: C:\WORK must not match
         # C:\WORK2, C:\WORKBACKUP or C:\WORK.OLD.
         if tail and not tail.startswith(g.sep):
-            return False
-        return not self.guard.leaf_is_device(t)
+            return OUTSIDE
+        if self.guard.leaf_is_device(t):
+            return DEVICE
+        return INSIDE
+
+    def contains(self, token: str) -> bool:
+        """`check(token) == INSIDE`. Kept because "is it inside" is a
+        question worth being able to ask in one word."""
+        return self.check(token) == INSIDE
+
+    def fault(self, token: str, name: str, outside: str,
+              verb: str = "writes") -> "str | None":
+        """One finished sentence for a path that is not INSIDE, or None.
+
+        `name` is the token as the MODEL wrote it, not as `norm` rewrote it
+        -- shouting a path back in upper case loses information for no gain.
+        `outside` is the caller's own sentence for the ordinary case, with
+        one `%s` for the path, because "writes outside the mirrored folder:
+        x" and "removes x, which is outside the mirrored folder" are the
+        same finding in two grammars and both were already on screen. The
+        other two cases are this module's to word, because until 02.11
+        neither had any words of its own.
+        """
+        bad = self.check(token)
+        if bad == INSIDE:
+            return None
+        if bad == DEVICE:
+            return ("%s %s, which is a device name reserved in every "
+                    "directory -- so it is not a file in the mirrored folder "
+                    "even though the path looks like one" % (verb, name))
+        if bad == UNRESOLVED:
+            return "%s %s, which cannot be resolved" % (verb, name)
+        return outside % (name,)
+
+
+def deployment_gap(*, guest_root: str = "", shell: str = "",
+                   caps=None) -> str | None:
+    """Why this bridge cannot judge ANY command here, or None.
+
+    A PROPERTY OF THE DEPLOYMENT, NOT OF A COMMAND, and separating the two is
+    02.4. Both sentences below used to come back from `reason()` as though
+    they were findings about the command line that was passed in -- so a
+    bridge started without `--sync-dir`, or any guest whose INI has no sync
+    root, prefixed EVERY SINGLE exec prompt with "no folder is mirrored from
+    this machine, so nothing on it can be restored". That is 73 characters in
+    front of a bar the guest draws as one `SS_ENDELLIPSIS` line, of which
+    roughly seventy are legible: the user saw the warning, an ellipsis, and
+    nothing whatever of the command they were being asked to approve.
+
+    A warning that fires on 100% of calls is the same defect this module's
+    own note describes -- "someone who learns the guard's phrasing is wrong
+    stops reading it" -- with the added cost of removing the one piece of
+    information the decision rests on. So the caller says this ONCE, when the
+    connection is in this state, and the per-command answer stays about the
+    command.
+    """
+    guard = Guard(grammar_for(shell), caps)
+    if not guard.g.usable:
+        return ("the shell on this machine is not one this bridge has rules "
+                "for, so what a command touches cannot be worked out here")
+    if not Root(guard, guest_root).norm:
+        return ("no folder is mirrored from this machine, so nothing a "
+                "command changes on it can be restored")
+    return None
 
 
 def reason(command: str, *, cwd: str = "", guest_root: str = "",
-           shell: str = "", caps=None) -> str | None:
+           shell: str = "", caps=None, announce_gaps: bool = True) -> str | None:
     """Why this command line may reach outside the mirror, or None.
 
     None means "nothing found", NOT "safe". Nothing here is ever a grant.
@@ -445,21 +588,22 @@ def reason(command: str, *, cwd: str = "", guest_root: str = "",
     reports it, and `toolrules.inventory` sorts shells first for exactly this.
     `caps` is the client's declared path semantics; omitting it assumes the
     restrictive default, which is the safe direction but is an assumption.
+
+    `announce_gaps=False` says the caller has already reported the two
+    DEPLOYMENT-level gaps itself (see `deployment_gap`) and does not want
+    them repeated on every command. The verdict is unchanged either way:
+    neither answer was ever a grant, and the caller asks the user regardless.
     """
     if not command or not command.strip():
         return None
 
+    gap = deployment_gap(guest_root=guest_root, shell=shell, caps=caps)
+    if gap is not None:
+        return gap if announce_gaps else None
+
     guard = Guard(grammar_for(shell), caps)
     g = guard.g
-    if not g.usable:
-        return ("the shell on this machine is not one this bridge has rules "
-                "for, so what this command touches cannot be known")
-
     root = Root(guard, guest_root)
-    if not root.norm:
-        return ("no folder is mirrored from this machine, so nothing on it "
-                "can be restored")
-
     cwd_norm = guard.norm(cwd) if cwd else ""
 
     for raw in g.separators.split(command):
@@ -475,8 +619,10 @@ def reason(command: str, *, cwd: str = "", guest_root: str = "",
                 resolved = guard.resolve(target, cwd_norm)
                 if not resolved:
                     return "writes to %s, which cannot be resolved" % target
-                if not root.contains(resolved):
-                    return "writes outside the mirrored folder: %s" % target
+                bad = root.fault(resolved, target,
+                                 "writes outside the mirrored folder: %s")
+                if bad:
+                    return bad
 
         words = guard.split_args(part)
         if not words:
@@ -505,22 +651,40 @@ def reason(command: str, *, cwd: str = "", guest_root: str = "",
         args = list(words[1:])
 
         if stem in g.write:
-            targets = guard.targets(stem, args)
+            targets, dropped = guard.targets(stem, args)
             if not targets:
                 return "%s with no destination this can resolve" % leaf
+            # THE DESTINATION WAS SWALLOWED. 02.10: a verb whose destination
+            # is positional, one surviving path, and something discarded as a
+            # switch -- `copy c:\ok\a.txt /temp` -- is indistinguishable
+            # from an honest one-argument `copy a.txt`, and the branch below
+            # would measure containment against the SOURCE and pass. Say the
+            # same thing `del` already says when every argument vanishes.
+            if (dropped and (stem in g.src_dest or stem in g.move_like)
+                    and len([a for a in args
+                             if not guard.is_switch(a)]) < 2):
+                return ("%s with no destination this can resolve (%s could be "
+                        "a switch or a path)" % (leaf, dropped[-1]))
             for t in targets:
                 resolved = guard.resolve(t, cwd_norm)
                 if not resolved:
                     return "writes to %s, which cannot be resolved" % t
-                if not root.contains(resolved):
-                    return "writes outside the mirrored folder: %s" % t
+                bad = root.fault(resolved, t,
+                                 "writes outside the mirrored folder: %s")
+                if bad:
+                    return bad
             # A `move`-like verb removes its sources as well as writing.
             if stem in g.move_like:
                 for t in [a for a in args if not guard.is_switch(a)][:-1]:
                     resolved = guard.resolve(t, cwd_norm)
-                    if not resolved or not root.contains(resolved):
-                        return "removes %s, which is outside the mirrored " \
-                               "folder" % t
+                    if not resolved:
+                        return "removes %s, which cannot be resolved" % t
+                    bad = root.fault(
+                        resolved, t,
+                        "removes %s, which is outside the mirrored folder",
+                        verb="removes")
+                    if bad:
+                        return bad
             continue
 
         if stem in g.conditional_read:
@@ -530,9 +694,15 @@ def reason(command: str, *, cwd: str = "", guest_root: str = "",
                 continue
             for t in [a for a in args if not guard.is_switch(a)]:
                 resolved = guard.resolve(t, cwd_norm)
-                if not resolved or not root.contains(resolved):
-                    return ("changes attributes outside the mirrored "
-                            "folder: %s" % t)
+                if not resolved:
+                    return ("changes attributes on %s, which cannot be "
+                            "resolved" % t)
+                bad = root.fault(
+                    resolved, t,
+                    "changes attributes outside the mirrored folder: %s",
+                    verb="changes attributes on")
+                if bad:
+                    return bad
             continue
 
         if stem in g.read:

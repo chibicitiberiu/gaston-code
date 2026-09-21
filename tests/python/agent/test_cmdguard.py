@@ -317,14 +317,53 @@ def test_a_second_shell_does_not_disable_the_guard(two_shells):
                     shell="command.com") is not None
 
 
-def test_an_unnamed_shell_gets_no_verdict_rather_than_the_wrong_one(
-        two_shells, caplog):
-    """With two shells and no way to choose, the honest answer is a refusal.
+def test_an_unnamed_shell_uses_the_profile_that_claims_it(two_shells):
+    """Two shells, a silent caller, and the guard still decides. 02.5.
+
+    THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite was a bug rather
+    than a policy. `PermissionDesk._shell` passes "" for every guest that
+    reports no inventory -- which is every client built before HELLO carried
+    a body, i.e. every deployed one until it is reflashed -- so refusing here
+    meant that ADDING A SECOND SHELL PROFILE silently turned the guard off
+    for all of them. The next line in that file (`test_the_variable_sigil_is
+    _the_shells_own`) shows how thin the line was: the same fixture, one
+    argument different, and the guard works.
+
+    The refusal it was protecting is still here, one test down. What changed
+    is that "I cannot choose" is now answered from the profiles rather than
+    assumed from their count.
+    """
+    assert G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK") is None
+    why = G.reason(r"del C:\WINDOWS\WIN.INI", guest_root=r"C:\WORK")
+    assert why is not None and "outside the mirrored folder" in why
+
+
+def test_two_profiles_claiming_the_fallback_is_still_a_refusal(
+        two_shells, monkeypatch, caplog):
+    """With two candidates and no way to choose, refusing is the answer.
 
     Not a fallback. Four regexes -- including `^[A-Za-z]:` -- used to be
     Python defaults, so this case kept resolving DRIVE LETTERS for a shell it
-    had no tables for.
+    had no tables for. Picking either of two equal claims would be inventing
+    the answer, which is the one thing this module may not do.
     """
+    claimed = dict(SH)
+    claimed["shell"] = dict(SH["shell"], assume_when_unreported=True)
+    monkeypatch.setitem(profiles.ALL, "sh", claimed)
+    with caplog.at_level(logging.ERROR):
+        why = G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK")
+    assert why is not None
+    assert "not one this bridge has rules for" in why
+    assert "assume_when_unreported" in caplog.text
+
+
+def test_no_profile_claiming_the_fallback_is_a_refusal(
+        two_shells, monkeypatch, caplog):
+    """The other half: two shells and nobody claiming is unanswerable too."""
+    bare = dict(profiles.ALL["command.com"])
+    bare["shell"] = {k: v for k, v in bare["shell"].items()
+                     if k != "assume_when_unreported"}
+    monkeypatch.setitem(profiles.ALL, "command.com", bare)
     with caplog.at_level(logging.ERROR):
         why = G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK")
     assert why is not None
@@ -376,3 +415,73 @@ def test_every_shell_profile_declares_a_usable_grammar():
         assert g.variables is not None, (
             f"{name} does not say what an unresolvable token looks like, so "
             f"every variable reference would resolve to a literal path")
+
+
+# --- 02.10: a switch is a vocabulary, not a length --------------------------
+
+
+def test_a_dotted_slash_token_is_a_path_not_a_switch():
+    """`/io.sys` is seven characters with no separator, so the old
+    "short and separator-free" rule called it a switch and `targets` threw it
+    away. The verdict here is the one that matters: this must be reported as
+    a write OUTSIDE the mirror, not as a command whose destination could not
+    be worked out -- the guard knows exactly where it goes."""
+    why = ask(r"del /io.sys")
+    assert why is not None
+    assert "outside the mirrored folder" in why, why
+
+
+def test_a_swallowed_destination_is_reported_rather_than_passed():
+    """Measured against the real profile, this used to come back None.
+
+    For `del` the hole closes itself -- every argument is swallowed, `targets`
+    is empty, and the "no destination" branch asks anyway. For `copy` and
+    `move` it did not: the SOURCE was still a path, `targets` returned it, it
+    was inside the mirror, and the command read as fully contained."""
+    for command in (r"copy C:\GASTON\CHAT1\a.txt /io.sys",
+                    r"move C:\GASTON\CHAT1\a.txt /temp"):
+        assert ask(command) is not None, command
+
+
+def test_an_ambiguous_slash_token_says_it_is_ambiguous():
+    """`/TEMP` really is both a plausible switch and a real root directory on
+    COMMAND.COM. Saying so is the honest answer; guessing either way is not."""
+    why = ask(r"move C:\GASTON\CHAT1\a.txt /temp")
+    assert why is not None and "could be a switch or a path" in why, why
+
+
+def test_a_real_switch_is_still_a_switch():
+    """The fix must not turn every `/S` into a phantom destination."""
+    assert ask(r"xcopy C:\GASTON\CHAT1\src C:\GASTON\CHAT1\bak /s") is None
+    assert ask(r"dir /a:-d C:\GASTON\CHAT1") is None
+
+
+def test_a_newline_does_not_hide_the_line_after_it():
+    """`separators` did not include a newline while `split_args` treated it
+    as ordinary whitespace, so a leading READ verb hid whatever followed it:
+    the whole thing parsed as one `dir` with unusual arguments."""
+    why = ask("dir\ndel c:\\io.sys")
+    assert why is not None and "outside the mirrored folder" in why, why
+
+
+# --- 02.11: a device inside the mirror is not outside it --------------------
+
+
+def test_a_device_inside_the_mirror_gets_its_own_reason():
+    """`CON` is reserved in every directory, so the write does not land in
+    the mirror -- but it is not OUTSIDE it, and every caller turned a False
+    from `contains` into "writes outside the mirrored folder". This module's
+    own note says what a demonstrably wrong reason costs: someone who learns
+    the guard's phrasing is wrong stops reading it."""
+    why = ask(r"copy x C:\GASTON\CHAT1\con")
+    assert why is not None
+    assert "outside the mirrored folder" not in why, why
+    assert "device name" in why, why
+
+
+def test_an_unexpandable_variable_is_unresolved_not_outside():
+    """Same class. `%T%` may well point inside the mirror; saying it points
+    outside is a guess stated as a finding."""
+    why = ask(r"del C:\GASTON\CHAT1\%T%\x")
+    assert why is not None
+    assert "cannot be resolved" in why, why

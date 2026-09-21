@@ -40,10 +40,46 @@ from . import toolrules
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 from ..status import PromptEndReason
+from ..view import html as H
 from ..wire.protocol import permend, permreq, permstate, permwait
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 log = logging.getLogger("bridge.permdesk")
+
+#: What the guest's bar can hold. `rc_bar::base_text` is `char[224]`, and the
+#: control it draws into is one `SS_ENDELLIPSIS` line -- so roughly the first
+#: seventy characters are what a person actually reads, and everything past
+#: 223 is not stored at all.
+BAR_BYTES = 216
+#: How much of that the COMMAND is entitled to before the warning may have
+#: any. `perms.summary` clips itself to 160; this is the floor underneath it.
+BAR_SUMMARY_SHARE = 140
+
+
+def _bar_line(summary: str, warning: str) -> str:
+    """The one line on the guest's prompt bar.
+
+    THE COMMAND COMES FIRST, and that is half of 02.4. It used to read
+    `"! %s -- %s" % (warning, summary)` -- warning first, and the
+    concatenation was not re-clipped, so on a 640x480 bar the user saw
+
+        ! no folder is mirrored from this machine, so nothing on it can be re...
+
+    and nothing whatever of the command they were being asked to approve. The
+    other half of that fix is `_announce_gap`, which stops the commonest
+    warning from being on every prompt in the first place.
+
+    The marker stays at the front because two characters cost nothing and are
+    what tells a reader there is something to read; the warning itself goes
+    at the tail, where it survives for anything that can show more than one
+    line, and into the transcript block in full, which is where it can
+    actually be read.
+    """
+    if not warning:
+        return summary
+    head = summary[:BAR_SUMMARY_SHARE]
+    tail = warning[:BAR_BYTES - BAR_SUMMARY_SHARE - 8]
+    return "! " + head + "  -- " + tail
 
 
 class PermissionDesk:
@@ -85,16 +121,56 @@ class PermissionDesk:
         #: request tools in parallel, so the rest wait rather than racing for
         #: it. `GuestSession.perm_queue` forwards here for the same reason.
         self.queue: deque = deque()
+        #: The DEPLOYMENT-level gap last announced, or None -- see 02.4 and
+        #: `cmdguard.deployment_gap`. Held by value rather than as a flag so
+        #: it is said again if it changes and stops being said the moment it
+        #: is fixed (committing a work folder mid-conversation does exactly
+        #: that).
+        self._gap_said: str | None = None
 
     def _shell(self) -> str:
         """Which shell's rules to judge a command by.
 
         Detection already answers this -- the client reports what it found --
-        so the guard does not have to guess, and an empty answer is honest:
-        it then refers every command to the user rather than judging it by
-        whichever profile happened to be the only one installed.
+        and an empty answer means the client said nothing, which is the
+        ordinary case: HELLO's body is empty for every guest built before it
+        existed.
+
+        THE DOCSTRING HERE USED TO CLAIM THE OPPOSITE OF WHAT THE CODE DID.
+        It said an empty answer "refers every command to the user rather than
+        judging it by whichever profile happened to be the only one
+        installed" -- while `cmdguard._default_shell` did judge by the only
+        one installed, which is the behaviour that works. Two readers would
+        have disagreed about which half was the bug. 02.5 settled it in
+        favour of the code: the single-profile fallback stays, a profile can
+        now declare itself the one to assume when there are several
+        (`assume_when_unreported`), and the refusal is kept for the case
+        nothing can be derived from -- several candidates and no claim.
         """
         return toolrules.shell_of(getattr(self._guest, "tools", None))
+
+    async def _announce_gap(self, root: str) -> None:
+        """Say ONCE why no command here can be judged. See 02.4.
+
+        Both sentences `cmdguard.deployment_gap` returns are facts about the
+        connection, not about any command line, and they used to come back
+        from `reason()` on EVERY prompt -- 73 characters in front of a bar
+        the guest draws as one clipped line, so the user read the warning and
+        none of the command. A bridge started without `--sync-dir` is in that
+        state for every exec it will ever show.
+        """
+        gap = cmdguard.deployment_gap(
+            guest_root=root, shell=self._shell(),
+            caps=getattr(self._guest, "caps", None))
+        if gap == self._gap_said:
+            return
+        self._gap_said = gap
+        if gap:
+            log.info("guard is not deciding anything here: %s", gap)
+            await self._write_block(H.notice(
+                "Commands on your machine cannot be checked against a "
+                "mirrored folder: " + gap + ". You will still be asked "
+                "before each one runs."))
 
     @property
     def busy(self) -> bool:
@@ -174,13 +250,16 @@ class PermissionDesk:
                 # Without the caps it folded case unconditionally, which on a
                 # case-sensitive machine calls `/WORK/x` contained in a mirror
                 # rooted at `/work`.
+                root = str(getattr(self._guest, "work_guest", "") or "")
+                # Said once per connection-state, not once per command (02.4).
+                await self._announce_gap(root)
                 warning = cmdguard.reason(
                     str((args or {}).get("command") or ""),
                     cwd=str((args or {}).get("cwd") or ""),
-                    guest_root=str(
-                        getattr(self._guest, "work_guest", "") or ""),
+                    guest_root=root,
                     shell=self._shell(),
-                    caps=getattr(self._guest, "caps", None))
+                    caps=getattr(self._guest, "caps", None),
+                    announce_gaps=False)
                 if warning:
                     log.info("guard: %s -- %s", warning, str(args)[:80])
 
@@ -190,13 +269,12 @@ class PermissionDesk:
                 tool_name=tool_name,
                 future=loop.create_future(),
                 suggestions=list(getattr(ctx, "suggestions", None) or []),
-                body=render_request(tool_name, args, ctx),
+                body=render_request(tool_name, args, ctx,
+                                    warning=warning or ""),
                 allows=perms.allows_always(
                     tool_name, getattr(ctx, "suggestions", None) or []),
-                summary=(("! %s -- %s"
-                          % (warning, perms.summary(tool_name, ctx, args)))
-                         if warning
-                         else perms.summary(tool_name, ctx, args)),
+                summary=_bar_line(perms.summary(tool_name, ctx, args),
+                                  warning or ""),
             )
 
             try:

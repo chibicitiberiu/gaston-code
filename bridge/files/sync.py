@@ -278,7 +278,7 @@ class Baseline:
     #: The AGENT's copy: cleared when it is actually handed to the model.
     #: Neither delivery implies the other. Before this the agent's copy lived
     #: only in memory (`Bridge._agent_notices`, now
-    #: `Bridge.synccoord.agent_notices` -- 02.43) -- so a bridge restart
+    #: `GuestSession.synccoord.agent_notices` -- 02.43, 02.18) -- so a restart
     #: between a pass writing the user's notice and the agent's next turn
     #: silently lost exactly the news the agent most needed (a conflict that
     #: latched its writes), while the user's copy was already, correctly,

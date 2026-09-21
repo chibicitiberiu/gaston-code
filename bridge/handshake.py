@@ -60,6 +60,20 @@ class Handshake:
     mem_kb: int
 
 
+def _int(headers: dict, name: str, code: str) -> int:
+    """One numeric HELLO header, or `Refused`.
+
+    Every other thing wrong with a HELLO leaves the guest holding a typed
+    error frame it can render. A header that is not a number has to do the
+    same, or it is the one refusal that looks like the bridge crashing.
+    """
+    raw = headers.get(name, "0") or "0"
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise Refused(code, f"{name} is not a number: {str(raw)[:40]!r}")
+
+
 def negotiate(headers: dict, secret: str) -> Handshake:
     """Check version, frame cap, secret and caps against one HELLO's
     headers; raise `Refused` on the first thing wrong.
@@ -76,7 +90,16 @@ def negotiate(headers: dict, secret: str) -> Handshake:
 
     # Checked together with the version: inheriting a peer's idea of the cap
     # is how you end up allocating 32MB on a 32MB machine.
-    peer_cap = int(headers.get("max_frame", "0") or 0)
+    #
+    # PARSED INSIDE A TRY, like `mem_kb` below, because `int()` raises
+    # `ValueError` and `_attach` catches only `Refused`. A guest sending
+    # `max_frame=64k` used to escape negotiation entirely: the traceback came
+    # out of `_on_client`'s catch-all, which closes the socket WITHOUT
+    # sending an ERROR frame, so the guest saw a bare disconnect, applied its
+    # 1/2/4/8s backoff and retried forever while the bridge logged a
+    # traceback per attempt. This line runs BEFORE the secret is compared, so
+    # that was also a log flood any unauthenticated peer could trigger.
+    peer_cap = _int(headers, "max_frame", "bad_frame_cap")
     if peer_cap != MAX_FRAME:
         raise Refused(
             "bad_frame_cap",
@@ -93,7 +116,7 @@ def negotiate(headers: dict, secret: str) -> Handshake:
     # Page size is scaled to the guest's RAM. A 128MB machine can hold a far
     # bigger page than the 32MB floor the design is built around, and the
     # handshake is the only place the bridge learns which it has.
-    mem_kb = int(headers.get("mem_kb", "0") or 0)
+    mem_kb = _int(headers, "mem_kb", "bad_mem")
     page_bytes, page_blocks = limits_for(mem_kb)
 
     return Handshake(caps=caps, page_bytes=page_bytes,

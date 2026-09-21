@@ -360,12 +360,64 @@ class HtmlStream:
         self._lines.append(line)
         return out
 
+    #: How much of an open block a LIVE update may carry. 02.17.
+    #:
+    #: A LIVE update replaces the whole open element, and `_render` returned
+    #: the whole of it every time -- once per coalescer flush, which is every
+    #: 100ms on a fast link and 600ms on a slow one. A 60 KB fenced file
+    #: therefore went out as roughly 65 frames averaging 30 KB: about two
+    #: MEGABYTES on the wire for 60 KB of content, on a link this project
+    #: measures in single-digit KB/s. Worse, it ended in silence -- past
+    #: `MAX_FRAME - 1024` `send_html` drops LIVE frames without a word
+    #: (link.py), so live updating simply stopped partway through a long
+    #: block with nothing said and no way to tell.
+    #:
+    #: Capping the TAIL rather than the head is what streaming is for: the
+    #: newest lines are the ones being written, and they are what a reader
+    #: watching a long code block wants to see. The finished block arrives
+    #: whole, as an APPEND, the way it always did -- nothing is lost, only
+    #: the intermediate copies are bounded.
+    LIVE_CAP = 4096
+
+    def _tail(self, lines: list[str]) -> list[str]:
+        """The last `LIVE_CAP` bytes' worth of an open block, newest first.
+
+        Returned in original order with an elision marker in front when
+        anything was dropped, so the reader can see that the block is longer
+        than what is on screen rather than silently reading a fragment as the
+        whole thing.
+        """
+        if self._kind == "table":
+            # NOT capped. Dropping leading rows drops the header row and the
+            # separator under it, so `_table` would re-read the table as
+            # headerless and the live view would disagree with the sealed one
+            # about what the columns are. A table long enough to matter here
+            # is rare; a table that changes shape while you watch it is not
+            # something to ship to fix a bandwidth problem.
+            return lines
+        total = 0
+        keep: list[str] = []
+        for line in reversed(lines):
+            total += len(line) + 1
+            if keep and total > self.LIVE_CAP:
+                break
+            keep.append(line)
+        keep.reverse()
+        if len(keep) == len(lines):
+            return lines
+        # Plain "...", not an entity: everything but a fence goes through
+        # `inline`, which escapes, so "&hellip;" would appear literally.
+        # Inside a fence everything is literal anyway.
+        return ["..."] + keep
+
     def _render(self, *, partial: bool) -> str:
         lines = list(self._lines)
         if partial and self._pending:
             lines.append(self._pending)
         if not lines:
             return ""
+        if partial:
+            lines = self._tail(lines)
 
         if self._kind is None:
             # Text arrived before any complete line, so no block is open yet.
@@ -520,6 +572,10 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .permhead { font-weight: bold; color: #805000; font-size: 7pt;
             text-transform: uppercase; margin-bottom: 3px; }
 .perm table { margin: 4px 0 0 0; }
+/* The command guard's finding, in the one place there is room to read it.
+   The bar is a single clipped line; this is not. See 02.4. */
+.permwarn { margin: 4px 0 0 0; color: #803000; }
+.permdone .permwarn { color: #706050; }
 .perm th { background: #f6eccc; font-weight: normal; color: #604000;
            white-space: nowrap; vertical-align: top; }
 .perm td { font-family: 'Courier New', monospace; }

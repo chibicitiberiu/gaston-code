@@ -111,7 +111,7 @@ class SyncTransport:
         return self._guest.perm_pending is not None
 
     async def yield_(self) -> None:
-        await self._guest.link.wire_yield()
+        await self._guest.link.wire_yield(self._guest)
 
     async def scan(self) -> S.ScanResult:
         state = self._guest.sync

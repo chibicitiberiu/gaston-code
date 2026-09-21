@@ -665,3 +665,86 @@ Worth recording so the next round does not re-derive them.
   messages, so the chat list and replay are bounded.
 * **`toolrep.parse_rows`** honours the stated length prefix, caps at
   `MAX_FACTS`, and never raises — the right posture for a handshake body.
+
+---
+
+# Resolution — 2026-09-21
+
+All 18 findings are closed. Written as LIVE text, per `00-audit-method.md`:
+nothing above is commented out, so the reasoning that justified each finding
+stays readable and re-checkable.
+
+**Verified how.** `make test`: **2935 passed, 2 xfailed, 0 failed**. The
+non-Wine suites went from 2703 to 2772 — 69 new tests, listed below. Every one
+of them was then checked the only way a test written after a fix can be:
+**the original bug was put back in place and the test was watched to fail**,
+then the fix restored. All 21 reverts were caught. Three were *not* caught on
+the first attempt, and each said something worth keeping — see "What the
+revert pass found".
+
+Fixed: 02.1 A CONVERSATION SWITCH DURING A LIVE TURN — `_switch`, `_new_session` and `_set_effort` are now thin wrappers that call `_quiesce_turn` and then take `guest.turn_lock` around the old bodies (`_switch_locked` and friends). `_quiesce_turn` interrupts first, so the wait is bounded by the turn ending rather than by how long the model feels like streaming; it also sends EXECKILL for anything in flight, for the reason `_on_interrupt` already gives. The other end of the same bug — `registry.add(guest.claude.session_id)` — is guarded the way `context_usage()` eleven lines below it always was.
+
+Fixed: 02.2 `SETMODEL` WAS THE ONE CONTROL PATH WITH NO ERROR HANDLING — wrapped like both its siblings, reported through `H.error` into the transcript, options re-sent. The refused model is also **put back**: `guest.model = model` ran before the call and was persisted, so a model the CLI refused was written to `settings.json`, applied to the next session built, and re-ticked on the menu.
+
+Fixed: 02.3 A LONG OUTBOUND TRANSFER READ AS A DEAD GUEST — `wire_yield` takes the guest and stamps `last_seen`. It is called BETWEEN chunks, which is what makes it the right place rather than `send`: a single small frame lands in the kernel buffer whether or not anything is alive at the far end, but a bulk push that keeps completing chunks is the receive window advancing. And when the far end really is dead, `drain()` blocks as soon as the window fills, no further chunk completes, nothing is stamped, and the reaper still does its job — which a plain `transferring` flag would have prevented.
+
+Fixed: 02.4 THE WARNING ATE THE PERMISSION BAR — both halves. (a) `_bar_line` puts the command first behind a two-character marker and clips the warning to a tail, within the 224 bytes `rc_bar::base_text` actually holds; the full sentence goes into the request block in the transcript, which is the only place with room to read it (`render_request(..., warning=)`, new `.permwarn` rule). (b) "no folder is mirrored" and "this shell is not one this bridge has rules for" are no longer per-command findings: `cmdguard.deployment_gap` answers them, `PermissionDesk._announce_gap` says each ONCE per connection state, and `reason(..., announce_gaps=False)` stops repeating them. Held by value rather than as a flag, so it is said again if it changes and stops being said the moment a work folder is committed.
+
+Fixed: 02.5 THE GUARD TURNED ITSELF OFF ON A SECOND SHELL PROFILE — settled in favour of the code, which was the half that worked. The single-profile fallback stays; with several, a profile declares itself the one to assume for a guest that reported nothing (`assume_when_unreported`, on `command.com.toml`). Exactly one may claim it — two claims, or none, is still a refusal, because picking either would be inventing the answer. `permdesk._shell`'s docstring claimed the opposite of what the code did and has been rewritten. There was no `os` header on HELLO to derive it from, which is why this is data rather than the derivation the finding sketched.
+
+Fixed: 02.6 `fold.use` BOUND THE CODEPAGE AFTER THE BACKGROUND TASKS COPIED THE CONTEXT — the reaper and the sweeper are created AFTER `_attach`, so they inherit the bound `ContextVar`s. Belt and braces: `_sweep_sync` also calls the new `_bind_codepages(guest)` itself before each pass, which is the only thing that can be right once R7 gives the bridge two guests on two codepages. The OEM derivation moved into `_oem_for` so there is one of it rather than two that can disagree.
+
+Fixed: 02.7 THE SYNC PREAMBLE TURNED A SLASH COMMAND INTO PROSE — `_with_sync_preamble` is skipped when `was_command`. Held, not dropped: the queue is drained only when it is delivered, so the notice rides in on the next ordinary turn, which matches the "say it once, on the next turn" discipline the notices already follow.
+
+Fixed: 02.8 THE REAPER DEFEATED `_on_client`'s OWN TEARDOWN — extracted `_mark_lost`, called by both paths and idempotent. The reaper runs it before closing the socket, and `_on_client`'s `finally` now also accepts `guest.writer is None` — a writer of None cannot belong to a newer connection, because `_attach` sets it before `_pump` can return. Either half alone fixes the test, which is itself worth knowing: see below.
+
+Fixed: 02.9 ABANDONING A CONVERSATION NEVER TOLD THE GUEST TO STOP — `_abandon_pending` kills each in-flight exec before failing it, which is what `_on_interrupt` does and for the reason stated there.
+
+Fixed: 02.10 THE GUARD DECIDED "PATH OR SWITCH" BY LENGTH — three changes. `switch_token` in the profile says what a switch on this shell actually looks like (a letter or two, optionally `:value`, never a dot), so `/io.sys` is a path again; `switch_max` survives as the fallback for a profile that declares no vocabulary. `targets` returns what it DROPPED as well as what it writes, and a positional-destination verb with something dropped and fewer than two surviving paths answers "could be a switch or a path" rather than judging the source — `/TEMP` really is ambiguous on COMMAND.COM and saying so is the honest answer. And `\r`/`\n` joined `separators`: `dir\ndel c:\io.sys` used to parse as one `dir` with unusual arguments and report nothing at all.
+
+Fixed: 02.11 A DEVICE INSIDE THE MIRROR WAS REPORTED AS OUTSIDE IT — `Root.contains` became `Root.check`, returning `INSIDE`/`OUTSIDE`/`DEVICE`/`UNRESOLVED`, and `Root.fault` turns that into one finished sentence. The device case gets its own words; so does an unexpandable variable, which used to be reported as "outside the mirrored folder" when it may well point inside. `contains()` is kept as a one-word wrapper. The existing sentences are unchanged for the ordinary case, so nothing a user has learned to read has moved.
+
+Fixed: 02.12 A MALFORMED NUMERIC HELLO HEADER ESCAPED AS `ValueError` — `handshake._int` raises `Refused("bad_frame_cap"/"bad_mem", ...)`. The guest now gets a typed error frame it can render instead of a bare disconnect, a 1/2/4/8s backoff and a traceback per retry — which, since `max_frame` is parsed before the secret is compared, was also a log flood an unauthenticated peer could trigger.
+
+Fixed: 02.13 `_spawn` NEVER LOOKED AT WHAT ITS TASK DID — `_done` logs `task.exception()` with the traceback, ignoring `CancelledError`. It is what would have surfaced 02.1.
+
+Fixed: 02.14 `close()` LEFT THE SWEEPER AND EVERY SPAWNED TASK RUNNING — both loops cancelled, `_tasks` cancelled and gathered. Gathered rather than merely cancelled: a cancel only REQUESTS it, and a task suspended in a `finally` can still be running when the loop is torn down underneath it.
+
+Fixed: 02.15 THE RULES VIEW HAD NOTHING TO SAY ABOUT AUTO — `auto` added to `_MODE_LABELS` and `_MODE_MEANS`, wording taken from `MODE_CAVEAT["auto"]` because that measurement IS the answer. `tests/python/meta/test_mode_descriptions.py` walks `MODE_ORDER` and asserts a label, a meaning, agreement between the two duplicated label tables, and that the rendered view never ends `&mdash; </p>` — so the next mode added cannot ship without a description.
+
+Fixed: 02.16 `fakegui` HAD DRIFTED FROM THE GUEST — a `_keepalive` task on `SWEEP_S = 30.0`, matching `rpc_maybe_nudge`'s `RPC_SWEEP_MS`, started by `connect()` and cancelled by `close()`; and a real `_export` sink with the same three-method shape `win/app/export.cpp` has, including the `off` continuity check and throwing the file away on a failed END. `--raw` dumps the frames and still performs the transfer, because an export is not a rendering and a debugging mode that fails differently from the mode being debugged is worse than none. One difference remains and is written down in `_keepalive` rather than left to be rediscovered: the guest also sends `STAT` from that tick when bytes have moved, and fakegui does not. While fixing this, a stale comment in the GUEST turned up — `main.cpp`'s `on_pong` still said "We do not send PING yet — see BACKLOG", which stopped being true when `rpc_maybe_nudge` grew its keepalive. Corrected.
+
+Fixed: 02.17 A LONG CODE FENCE WAS SENT AS MANY WHOLE COPIES OF ITSELF — `HtmlStream.LIVE_CAP` (4096) bounds a partial render to its TAIL, with a `...` marker so nobody reads a fragment as the whole thing. Measured: a 400-line fence used to grow a LIVE frame to 12KB and climbing; it now stays at 4.1KB, and the sealed APPEND still carries every byte. Capping the tail rather than the head is what streaming is for — the newest lines are the ones being written. A live TABLE is deliberately never capped: dropping leading rows drops the header and the separator under it, so `_table` would re-read it as headerless and the live view would disagree with the sealed one about what the columns are. For the split half, `Paginator.write` now seals BETWEEN blocks whenever the live page already holds runs, and keeps the mid-run split for the one case with no alternative — a single block bigger than a whole page.
+
+Fixed: 02.18 THREE TOOLS TOOK A `guest` AND READ `self._guest` ANYWAY — `_base_path`, `_current_guest_root`, `_load_baseline` and `_edits_outside_the_mirror` all take a guest, and `sync_status_text`, `sync_resolve`/`_sync_resolve_locked`, `_report_abort` and `_reconcile_halt` pass theirs down; the two `_clear_halt(self._guest)` calls inside `_sync_resolve_locked` reach for the parameter that was already there. `SyncCoordinator` is a field of `GuestSession`. `Bridge.synccoord` survives as a property forwarding to the attached guest's — the same idiom `GuestSession.writer` uses for `link.writer`, so thirty-odd call sites and forty test references did not have to change shape, and the single-client assumption is now named in one place for R7 to delete. A coordinator used before any guest attaches is handed to the `GuestSession` when it is built, so its identity survives the handover.
+
+## The 69 new tests
+
+- `tests/python/server/test_session_lifecycle.py` (18, new) — the concurrency cluster: a switch parks on the turn lock instead of working beside the turn; it interrupts rather than waiting the model out; a turn whose session vanished still sends TURN end; a refused model change neither drops the link nor is remembered; a bulk transfer counts as liveness and a single frame does not; `/compact` reaches the CLI as `/compact` and the notice is held; a reaped guest is recorded as lost and its execs are failed; abandoning a conversation sends EXECKILL; a spawned task that raises is logged and a cancelled one is not; `close()` stops the sweeper and everything spawned; the coordinator belongs to the guest and survives the attach; the baseline is addressed by the guest it is asked about.
+- `tests/python/meta/test_mode_descriptions.py` (20, new) — every mode on `MODE_ORDER` has a menu label, a Rules-view label, a meaning longer than a placeholder, agreement between the two tables, and a rendered view that is not a dash with nothing after it.
+- `tests/python/meta/test_default_shell.py` (4, new) — exactly one shipped profile claims the fallback; a two-shell installation still yields a usable grammar and real verdicts for a silent guest; a named shell is still judged by its own rules.
+- `tests/python/agent/test_cmdguard.py` (+9) — `/io.sys` is a path and is reported as OUTSIDE rather than as unresolvable; a swallowed destination is reported for `copy` and `move`; an ambiguous `/TEMP` says it is ambiguous; a real `/S` is still a switch; a newline does not hide the line after it; a device inside the mirror gets its own reason; an unexpandable variable is unresolved rather than outside. The two-shell refusal test was **rewritten**, because it asserted the behaviour 02.5 says is the bug — the refusal it was protecting now lives in the two cases that genuinely cannot be resolved.
+- `tests/python/server/test_server_integration.py` (+3) — the bar starts with the command; the warning is readable in the transcript block; a device is not called outside the mirror; and a bridge with no mirror says so once rather than on every command. The last is the state every sync-disabled bridge is actually in, which both existing guard tests hid by setting `work_guest` by hand.
+- `tests/python/server/test_fakegui_conformance.py` (+4) — the keepalive reaches the bridge; a real chunked export is written to a file; a short export is thrown away; a chunk that skips bytes is refused.
+- `tests/python/view/test_html.py` (+5) and `test_pages.py` (+3) — the live cap, its marker, the sealed block still carrying every byte, short prose untouched, tables never capped; and a block that does not fit moving whole to the next page while one bigger than a page is still split.
+
+## What the revert pass found
+
+Three of the twenty-one reverts did NOT fail the first time, and each was a
+real gap rather than a formality:
+
+- **02.13 passed on the bug.** The assertion was on the exception text, and
+  asyncio's own "Task exception was never retrieved" carries that text too —
+  emitted whenever the task happens to be collected, which is exactly the
+  non-report the finding is about. The test now asserts the bridge's own
+  `background task failed` line.
+- **02.10 had no test at all.** The switch-vocabulary fix was written and the
+  suite stayed green with `switch_token` deleted, because nothing in the
+  378-line guard suite drove a `/`-rooted short destination. Seven cases were
+  added, and each of the three parts of 02.10 was reverted separately.
+- **02.8 is genuinely double-fixed.** Reverting the reaper's `_mark_lost` left
+  the test passing, because `_on_client`'s new `writer is None` disjunct
+  catches the same case. Both halves had to be reverted together to see it
+  fail. That redundancy is deliberate and now stated: the reaper records the
+  loss at the moment it causes it, and the teardown path no longer skips its
+  own bookkeeping because something else got there first.

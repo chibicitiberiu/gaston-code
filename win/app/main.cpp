@@ -1046,11 +1046,14 @@ static void on_export(rc_frame *f)
 static void on_pong(rc_frame *f)
 {
     (void)f;
-    /* The answer to a PING. We do not send PING yet -- see BACKLOG -- so
-     * this cannot arrive today, but handling it here means the day the
-     * keepalive lands it does not read as a protocol error. Nothing to
-     * show: receiving it IS the information, and the reader thread has
-     * already stamped last_seen by getting this far. */
+    /* The answer to a PING, which rpc.cpp's sweep now sends every 30s when
+     * there is no sync root (with one it sends SYNCDIRTY instead). This
+     * comment used to say we did not send PING yet and pointed at BACKLOG;
+     * that stopped being true when rpc_maybe_nudge grew its keepalive, and a
+     * comment describing a frame as unreachable when it arrives twice a
+     * minute is worse than no comment. Nothing to show: receiving it IS the
+     * information, and the reader thread has already stamped last_seen by
+     * getting this far. */
     rc_log("pong");
 }
 

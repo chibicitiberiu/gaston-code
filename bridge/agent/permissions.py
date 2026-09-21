@@ -162,12 +162,20 @@ def _rows(args: dict) -> list[tuple[str, str]]:
     return rows
 
 
-def render_request(tool_name: str, args: dict, ctx) -> str:
+def render_request(tool_name: str, args: dict, ctx,
+                   warning: str = "") -> str:
     """The HTML block describing one request.
 
     The bar itself only shows a one-line summary, because the transcript is not
     guaranteed to be visible -- a user paging back through history would get a
     bar and no context at all. This block is the elaboration, not the message.
+
+    `warning` is the command guard's finding, and it is rendered HERE in full
+    because here is the only place with room for it. On the bar it is a
+    two-character marker and a clipped tail: that control is one
+    `SS_ENDELLIPSIS` line of roughly seventy legible characters, and putting
+    the guard's sentence in front of the command meant the user read the
+    sentence and never saw the command (02.4).
     """
     display = getattr(ctx, "display_name", None) or tool_name
     title = getattr(ctx, "title", None)
@@ -198,6 +206,10 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
         parts.append(" &mdash; " + H.esc(_clip(desc)))
     parts.append("</p>")
 
+    if warning:
+        parts.append('<p class="permwarn"><b>Check this one:</b> '
+                     + H.esc(_clip(warning, 400)) + "</p>")
+
     rows = _rows(args)
     if rows:
         parts.append("<table>")
@@ -217,11 +229,17 @@ def render_request(tool_name: str, args: dict, ctx) -> str:
     log.warning("permission prompt for %s is %d bytes, over the %d byte "
                 "budget; the argument table is too large to display and "
                 "was dropped", tool_name, len(html), MAX_BODY)
+    # The warning survives the fallback. The argument table is what is too
+    # large; the one sentence saying why this call is worth reading is not,
+    # and dropping it would leave the loudest prompt with the least
+    # information on it.
     short = ('<div class="perm" id="perm">'
              '<div class="permhead">Permission required</div>'
              '<div class="permdonehead">Answered</div>'
              "<p><b>" + H.esc(_clip(title or display, 120)) + "</b></p>"
-             "<p><i>(arguments too large to display)</i></p></div>")
+             + ('<p class="permwarn"><b>Check this one:</b> '
+                + H.esc(_clip(warning, 400)) + "</p>" if warning else "")
+             + "<p><i>(arguments too large to display)</i></p></div>")
     return short[:MAX_BODY]
 
 
@@ -437,6 +455,17 @@ _MODE_MEANS = {
     "plan": "the model researches and proposes rather than acting. Tool "
             "calls that would change something are refused by the CLI "
             "before they reach here.",
+    # Auto was on the menu with nothing to say about it, so the one screen
+    # whose whole job is "what can run without asking?" rendered
+    # `<b>Mode: auto</b> &mdash; ` -- the raw token and an empty
+    # explanation. The wording is MODE_CAVEAT["auto"]'s, because that
+    # measurement is the answer: auto here means "the permission prompt
+    # still asks", not "something smarter is watching".
+    "auto": "every tool call that reaches this bridge is still shown to you "
+            "first. Auto does not add a second opinion -- measured on this "
+            "bridge, the model's own danger classifier is not consulted once "
+            "the permission prompt is installed: `git reset --hard` on a "
+            "repo with uncommitted work ran unchanged in Auto and in Manual.",
 }
 
 
@@ -487,8 +516,13 @@ def rules_view(mode: str, tools: list[str], guest_root: str = "") -> str:
 #: MODE_LABEL rather than imported: this module is imported BY the server and
 #: an import back would be a cycle. Two entries drifting apart would show a
 #: wrong word in one place, which is worth less than the cycle would cost.
+#:
+#: Drifting APART is now a test failure rather than a judgement call:
+#: tests/python/meta/test_mode_descriptions.py walks MODE_ORDER and asserts
+#: every mode on the menu has a label and a meaning here. `auto` shipped on
+#: the menu for a release with neither.
 _MODE_LABELS = {"default": "Manual", "acceptEdits": "Accept edits",
-                "plan": "Plan"}
+                "plan": "Plan", "auto": "Auto"}
 
 _TOOL_NOTES = {
     "Read": "reads a file on the bridge's working copy",

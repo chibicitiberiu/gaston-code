@@ -162,16 +162,23 @@ class GuestSession:
     #: bridge/wire/link.py. `writer`/`send_lock`/`zip_out`/`link_bps` below
     #: forward here so the rest of the bridge did not have to change shape.
     link: GuestLink = field(default_factory=GuestLink)
-    #: The halt trio (`halt_id`/`halt_paths`/`halt_text`) that used to live
-    #: here moved to `Bridge.synccoord` (a `SyncCoordinator`,
-    #: bridge/synccoord.py) once that type existed to own the derivation as
-    #: well as the fields -- 02.42 left them here deliberately because
-    #: moving them without an owner for `_reconcile_halt`'s logic would have
-    #: fixed nothing; 02.43 is that owner. `Bridge._guest` is created once
-    #: per process and reused across every reconnect, the same lifetime
-    #: `Bridge.synccoord` has, so nothing about recovery after a reconnect
-    #: or a bridge restart changed by moving where the fields sit -- see
-    #: `Bridge._reconcile_halt`. docs/audit/02-bridge-python.md 02.43.
+    #: The halt bar's state and the agent's notice queue: the halt id, the
+    #: paths it was raised for, the answered-path set. See
+    #: bridge/synccoord.py.
+    #:
+    #: 02.42 moved the halt trio off this class onto a `SyncCoordinator`;
+    #: 02.43 gave that type the derivation as well as the fields -- and left
+    #: the object itself a field of `Bridge`, which is what audit-2's 02.18
+    #: came back for. One coordinator per BRIDGE means one halt bar and one
+    #: notice queue shared by every client, so the moment R7 lands, agent A
+    #: resolving its own conflict takes the bar down on B's screen and
+    #: drains B's notices into A's next turn. It is one per GUEST here, which
+    #: is what `synccoord.py`'s own docstring says the shape should be.
+    #:
+    #: `Bridge.synccoord` still exists and forwards to the attached guest's,
+    #: exactly as `writer`/`zip_out`/`pages` forward the other way -- the
+    #: single-client shortcut, in one place, for R7 to delete.
+    synccoord: SyncCoordinator = field(default_factory=SyncCoordinator)
     # C.from_hello(hello), parsed once in _attach() rather than re-parsed at
     # every site that needs a path rule -- a re-parse cannot raise (already
     # validated at handshake) but silently re-derives what is already known,
@@ -562,16 +569,34 @@ class Bridge:
         #: Resolved baseline file per guest root, so the lookup below is not
         #: repeated on every pass.
         self._base_paths: dict[str, str] = {}
-        #: The halt bar's state and the agent's notice cache -- both outlive
-        #: a `Pass` and are Bridge-lifetime, which `Reporter` (built fresh
-        #: per `Pass`) and `GuestSession` (whose halt trio was a derived
-        #: view, not real guest state) could not honestly own. See
-        #: bridge/synccoord.py and docs/audit/02-bridge-python.md 02.43.
-        self.synccoord = SyncCoordinator()
+        #: Where `self.synccoord` points until a guest exists. Handed to
+        #: the `GuestSession` when it is built, so the object's identity
+        #: survives the handover and anything recorded before the first
+        #: attach is still there afterwards. See the property below.
+        self._preattach_synccoord = SyncCoordinator()
         # How long a pending permission request survives a dropped link. Long
         # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
         # of the 10 minute answer deadline.
         self.perm_grace_s = 60.0
+
+    @property
+    def synccoord(self) -> SyncCoordinator:
+        """The attached guest's coordinator. 02.18.
+
+        A FORWARD, not storage. The halt bar and the agent notice queue are
+        per-machine state and now live on `GuestSession`; this keeps the
+        thirty-odd `self.synccoord` call sites -- and every test that reads
+        `bridge.synccoord` -- reading as they did, the same way
+        `GuestSession.writer` forwards to `link.writer` so that "nothing
+        outside this file had to change shape".
+
+        It is also precisely the single-client assumption, named and in one
+        place: R7 deletes this property and makes each caller say which guest
+        it means. Several already can -- `sync_status_text`, `sync_resolve`
+        and `_reconcile_halt` all take a guest today.
+        """
+        g = self._guest
+        return g.synccoord if g is not None else self._preattach_synccoord
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -585,9 +610,27 @@ class Bridge:
             await self._server.serve_forever()
 
     async def close(self) -> None:
-        if self._reaper is not None:
-            self._reaper.cancel()
-            self._reaper = None
+        # BOTH long-lived loops, and everything _spawn started.
+        #
+        # The sweeper was missed here, so a bridge shut down cleanly left
+        # `_sweep_sync` looping every 120s against a guest whose writer was
+        # gone and a Claude session already closed. `run_sync` returns early
+        # on `not guest.connected`, so it was noise rather than damage -- but
+        # in-process (the test suite, and any future embedding) it is a task
+        # that outlives its owner, and R7 has to fix it here anyway.
+        for name in ("_reaper", "_sweeper"):
+            task = getattr(self, name, None)
+            if task is not None:
+                task.cancel()
+                setattr(self, name, None)
+        pending, self._tasks = list(self._tasks), set()
+        for task in pending:
+            task.cancel()
+        if pending:
+            # Gathered rather than merely cancelled: a cancel only REQUESTS
+            # it, and a task suspended in a `finally` can still be running
+            # when the loop is torn down underneath it.
+            await asyncio.gather(*pending, return_exceptions=True)
         if self._server:
             self._server.close()
             await self._server.wait_closed()
@@ -602,14 +645,6 @@ class Bridge:
         peer = writer.get_extra_info("peername")
         log.info("connection from %s", peer)
         frames = FrameReader()
-        # Started here rather than in serve_forever() because that is not the
-        # only way a bridge gets clients -- the tests drive _on_client
-        # directly, and a liveness mechanism that depends on which entry point
-        # was used is a liveness mechanism you do not have.
-        if self._reaper is None:
-            self._reaper = asyncio.create_task(self._reap_idle())
-        if self._sweeper is None and self.sync_dir:
-            self._sweeper = asyncio.create_task(self._sweep_sync())
 
         try:
             # The frames pipelined behind HELLO travel WITH it rather than
@@ -626,6 +661,29 @@ class Bridge:
             if guest is None:
                 return
 
+            # STARTED AFTER _attach, not before it, and the ordering is the
+            # whole of 02.6. `asyncio.create_task` copies the CURRENT
+            # context, and `_attach` is where `fold.use` binds this
+            # connection's codepages -- so a reaper and a sweeper created up
+            # here ran forever in a context where `fold.codec()` was still
+            # the cp1252 default. A client declaring acp=1251 then got
+            # correctly-encoded sync notices for passes IT triggered and
+            # mojibake for the ones the bridge's own 120s backstop started,
+            # inside a document whose <meta charset> said windows-1251. The
+            # two paths are indistinguishable from the outside, which is what
+            # makes that undiagnosable rather than merely wrong.
+            #
+            # Started here rather than in serve_forever() because that is not
+            # the only way a bridge gets clients -- the tests drive
+            # _on_client directly, and a liveness mechanism that depends on
+            # which entry point was used is a liveness mechanism you do not
+            # have. Nothing needs reaping before a guest exists: _read_hello
+            # has its own 10s deadline.
+            if self._reaper is None:
+                self._reaper = asyncio.create_task(self._reap_idle())
+            if self._sweeper is None and self.sync_dir:
+                self._sweeper = asyncio.create_task(self._sweep_sync())
+
             await self._pump(guest, reader, frames, early)
 
         except ProtocolError as exc:
@@ -639,30 +697,20 @@ class Bridge:
         except Exception:
             log.exception("unhandled error serving %s", peer)
         finally:
-            if self._guest and self._guest.writer is writer:
-                self._guest.writer = None
-                # A pending prompt is NOT denied here. Denying on any drop
-                # tells the model "the user declined" for something the user
-                # never saw -- and on a 1998 NE2000 over a flaky link, a blip
-                # would become a refusal. Instead the prompt is held for a
-                # short grace period: reconnect inside it and the bar comes
-                # back (PERMSTATE), miss it and the reaper denies with a
-                # message that says what actually happened.
-                self._guest.lost_at = time.monotonic()
-                # An in-flight command is a different matter from a pending
-                # prompt: the prompt can wait out a blip, but the command has
-                # already started over there and its output is gone with the
-                # link. Fail it now rather than holding the model for the
-                # whole MCP budget.
-                self._fail_syncs(self._guest,
-                                 "The connected machine disconnected mid-sync.")
-                self._fail_execs(self._guest,
-                                 "The connected machine disconnected while "
-                                 "this command was running. It may or may not "
-                                 "have completed.")
-                if self._guest.perm_pending is not None:
-                    log.info("link lost with a prompt pending; holding %.0fs",
-                             self.perm_grace_s)
+            guest = self._guest
+            # THE SECOND DISJUNCT IS 02.8. The identity check is what stops a
+            # late-closing old connection tearing down a live one, and it is
+            # right for that -- but the idle reaper nulls `writer` ITSELF
+            # before closing the socket, so after a reap this test was False
+            # and the whole block was skipped. `lost_at` then stayed None,
+            # and a prompt raised by the still-running turn afterwards waited
+            # the full 600s answer deadline instead of the 60s grace, because
+            # `_reap_idle`'s expiry branch is gated on `lost_at is not None`.
+            # A writer of None cannot belong to a newer connection: `_attach`
+            # sets it before `_pump` can return.
+            if guest and (guest.writer is writer or guest.writer is None):
+                guest.writer = None
+                self._mark_lost(guest)
             # Graceful close. An abrupt RST is reported to crash Win98's
             # Winsock stack outright, taking the machine with it.
             try:
@@ -676,6 +724,41 @@ class Bridge:
             except Exception:
                 pass
             log.info("connection to %s closed", peer)
+
+    @staticmethod
+    def _oem_for(guest: GuestSession) -> str:
+        """Which codepage this machine's console children write.
+
+        A different question from the ANSI one with a different answer:
+        win/net/net.cpp says exactly that and then never sent an answer, so
+        `decode_oem` defaulted to cp437 for every machine.
+
+        THE MACHINE FIRST, then the shell profile. A profile can say that
+        this shell's children write OEM; only the machine knows which OEM it
+        is set to, and it now sends GetOEMCP() beside GetACP().
+        """
+        caps = guest.caps
+        shell = toolrules.shell_of(guest.tools)
+        return (getattr(caps, "oemcp", "") or
+                (str(profiles.shell(shell).get("oem_codepage", ""))
+                 if shell else ""))
+
+    def _bind_codepages(self, guest: GuestSession) -> None:
+        """Bind this guest's display and console codepages in THIS context.
+
+        `fold` keeps both in `ContextVar`s and `asyncio.create_task` copies
+        the context at creation, so a task that outlives the call that
+        created it -- the sweeper, the reaper -- can only be right if it
+        binds them itself before it writes anything. See 02.6, and _on_client
+        for the ordering half of the same bug.
+        """
+        caps = guest.caps
+        if caps is None:
+            return
+        fold.use(caps.acp)
+        oem = self._oem_for(guest)
+        if oem:
+            fold.use(oem=oem)
 
     async def _read_hello(
         self,
@@ -788,7 +871,12 @@ class Bridge:
             # and it is not a GuestSession() keyword the way `view` below is
             # because there is nothing case-specific about it to pass.
             self._guest = GuestSession(
-                view=TranscriptView(pages=Paginator(page_bytes, page_blocks)))
+                view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
+                # The one built in __init__, not a fresh one: `self.synccoord`
+                # has been answering from it since the process started, and a
+                # notice seeded before the first client connected has to
+                # still be in the queue after it does.
+                synccoord=self._preattach_synccoord)
             # PermissionDesk needs its own owning guest to reach _write_block
             # and _send with, so it cannot be built as a GuestSession()
             # keyword the way `view` above is -- it is assigned right after,
@@ -840,13 +928,10 @@ class Bridge:
         # then never sent an answer, so `decode_oem` defaulted to cp437 for
         # every machine. The shell declares it, because it is the shell that
         # spawns the child whose bytes these are.
-        # THE MACHINE FIRST, then the shell profile. A profile can say that
-        # this shell's children write OEM; only the machine knows which OEM
-        # it is set to, and it now sends GetOEMCP() beside GetACP().
-        _oem = caps.oemcp or (
-            str(profiles.shell(_shell).get("oem_codepage", "")) if _shell else "")
-        if _oem:
-            fold.use(oem=_oem)
+        # THE MACHINE FIRST, then the shell profile -- see _oem_for. Bound
+        # through the same helper the sweeper uses, so there is one
+        # derivation rather than two that can disagree (02.6).
+        self._bind_codepages(guest)
         if guest.tools:
             log.info("machine has: %s", ", ".join(
                 "%s (%s)" % (f.name, f.path) for f in guest.tools))
@@ -1271,6 +1356,15 @@ class Bridge:
         """
         guest.perms.deny_all(
             "rebuild", "The conversation changed before this was answered.")
+        # THE KILL COMES FIRST, and it is 02.9. `_fail_execs` resolves the
+        # futures and clears the table; it sends nothing. So the command kept
+        # running on the guest's single worker thread, and the first `exec`
+        # in the NEW conversation was answered `busy` -- for a command the
+        # model in that conversation never issued and cannot see. This is
+        # what `_on_interrupt` already does, and for the reason it states
+        # there: one abandoned turn must not poison the following one.
+        for exec_id in list(guest.exec_pending):
+            self._kill_exec(guest, exec_id)
         self._fail_execs(guest, "The conversation changed while this command "
                                 "was running.")
 
@@ -1578,14 +1672,37 @@ class Bridge:
         await self._send(guest, turn_start())
 
     def _spawn(self, coro) -> None:
-        """Fire-and-forget, with a reference kept.
+        """Fire-and-forget, with a reference kept AND the result looked at.
 
         asyncio only holds a weak reference to a running task, so a bare
         create_task can be garbage-collected mid-flight.
+
+        Everything fire-and-forget on this bridge goes through here: turns,
+        the Continue turn, sync passes, EXECKILL, the session list on `init`,
+        `_clear_halt` from `sync_resolve`. Nothing used to retrieve the
+        exception, so a raise inside any of them produced NO log line at the
+        moment it happened -- it surfaced later, if at all, as asyncio's
+        "Task exception was never retrieved" whenever the task object was
+        collected. A turn dying mid-flight is not a quiet event: it is a
+        TURN end frame that never goes out, and a guest whose Send button
+        stays disabled until the link is re-established. See _done below.
         """
         task = asyncio.create_task(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._done)
+
+    def _done(self, task: "asyncio.Task") -> None:
+        """Drop a finished task and say so if it raised.
+
+        `CancelledError` is not a failure: `close()` cancels these
+        deliberately, and so does the SDK on an interrupt.
+        """
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("background task failed", exc_info=exc)
 
     def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
         c = guest.coalescers.get(style)
@@ -1821,11 +1938,36 @@ class Bridge:
         # there used to be a silent no-op -- the menu re-ticked the old one
         # and nothing said why. `_make_session` reads `guest.model`, so the
         # choice is applied when the client is finally built.
+        was = guest.model
         guest.model = model
         self._remember_settings(guest)
         log.info("model -> %s", model or "(default)")
         if guest.claude:
-            await guest.claude.set_model(model)
+            # WRAPPED, like its two siblings. `_set_mode` and `_set_effort`
+            # both catch and report; this was the one control path that let
+            # the exception out -- through _handle, through _pump, into
+            # _on_client's catch-all, and the connection went down.
+            #
+            # Not hypothetical, and the cause is measured a few hundred lines
+            # below in _new_session's own comment: the CLI refuses control
+            # requests against a client that exists but has never run a turn,
+            # and `_attach` still builds exactly such a session eagerly on a
+            # fresh connection. So opening the Model menu before typing
+            # anything dropped the link -- and since the reconnect built
+            # another never-run session, the next press did it again.
+            try:
+                await guest.claude.set_model(model)
+            except Exception as exc:
+                log.exception("model change failed")
+                # PUT BACK, so the menu re-ticks what is actually in force
+                # and `settings.json` does not carry a model the CLI
+                # refused into the next session built.
+                guest.model = was
+                self._remember_settings(guest)
+                await self._write_block(guest, H.error(
+                    "Could not change the model: " + str(exc)[:160]))
+                await self._send_options(guest)
+                return
         await self._write_block(guest, H.notice("Model set to " + model))
         await self._send_options(guest)
 
@@ -2172,7 +2314,23 @@ class Bridge:
         # the preserved copy, never merge, and never call sync_resolve, and the
         # path would stay latched for the rest of the session with the agent
         # quietly unable to write to it and no idea why.
-        text = await self._with_sync_preamble(text)
+        #
+        # NOT ONTO A SLASH COMMAND, and that is 02.7. The preamble is
+        # PREPENDED, so `/compact` arrives at the CLI as twenty lines of
+        # prose with `/compact` on the end -- which is not a slash command at
+        # all. The context was not compacted, nothing said so, and the
+        # "finished without sending anything back" notice below did not fire
+        # either, because the model had dutifully answered the preamble. The
+        # comment above already noticed this ordering for the VERDICT and
+        # fixed that; nothing protected the command itself.
+        #
+        # HELD rather than sent separately: the queue is drained only when it
+        # is delivered, so leaving it alone here costs one turn of delay and
+        # matches the "say it once, on the next turn" discipline the notices
+        # already follow. A command turn is also the one turn where the user
+        # is not asking the model to do anything with files.
+        if not was_command:
+            text = await self._with_sync_preamble(text)
         try:
             turn = await guest.claude.send(text)
         except Exception as exc:
@@ -2184,7 +2342,15 @@ class Bridge:
         # Register here, not at start(): the SDK assigns the session id when
         # the first query goes out, so at start() there is nothing to record
         # and the conversation would never appear in the chat list.
-        self.registry.add(guest.claude.session_id)
+        #
+        # GUARDED the way the `context_usage()` call eleven lines below
+        # already is, and for the same reason: `guest.claude` can be None by
+        # the time a turn comes back. The turn lock now stops the session
+        # being swapped mid-turn (02.1), but this line is inside a coroutine
+        # that can be resumed after an interrupt, and the tell that the guard
+        # belongs here was that its neighbour has always had one.
+        if guest.claude:
+            self.registry.add(guest.claude.session_id)
         # Seal only at a message boundary, so a turn is never split
         # mid-sentence while the reader is watching it stream.
         sealed = guest.pages.message_boundary()
@@ -2583,13 +2749,13 @@ class Bridge:
         the codepage change.
         """
         log.warning("sync pass aborted: %s", reason)
-        state = self._base_path()
+        state = self._base_path(guest)
         agent_text = (
             f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
             f"direction until this is resolved. Do not tell the user a file "
             f"has reached their machine; it has not.")
         try:
-            base = self._load_baseline()
+            base = self._load_baseline(guest)
         except Exception:
             # The baseline itself is what could not be read. Nothing to
             # remember it with, so say it every time rather than never: this
@@ -2637,8 +2803,20 @@ class Bridge:
     #: user remembers choosing it.
     TRANSIENT_ABORT_GRACE = 3
 
-    def _base_path(self) -> str:
-        """The baseline file for the root the guest is currently mirroring.
+    def _base_path(self, guest: "GuestSession | None" = None) -> str:
+        """The baseline file for the root `guest` is currently mirroring.
+
+        `guest` IS NOW THREADED THROUGH, and 02.18 is why. `sync_status_text`
+        and `sync_resolve` both already took a guest -- `tools.py` explains
+        that the parameter is what makes an MCP tool address A MACHINE rather
+        than whichever machine happens to be attached -- and then both called
+        down into here, which read `self._guest` directly and undid it. With
+        one guest that is invisible; the moment R7 lands, agent A's
+        `sync_resolve` writes its release into whichever baseline
+        `self._guest.work_guest` currently names, and the halt bar comes down
+        on someone else's screen. Doing it now, while there is one guest and
+        the tests are cheap, is the whole reason `run_on_guest` already takes
+        the parameter.
 
         ONE BASELINE PER ROOT. A baseline records which files existed where,
         and it is bound to a `tree_id` and a `guest_root` -- change the root
@@ -2654,7 +2832,7 @@ class Bridge:
         that root finds its history exactly as it left it.
         """
         legacy = os.path.join(self.sync_state, "base.json")
-        root = self._current_guest_root()
+        root = self._current_guest_root(guest)
         if not root:
             return legacy
         # getattr, because sync_status_text is reachable on a Bridge built
@@ -2686,8 +2864,8 @@ class Bridge:
         cache[root] = path
         return path
 
-    def _current_guest_root(self) -> str:
-        """What the guest is mirroring RIGHT NOW, or "" while it is mirroring
+    def _current_guest_root(self, guest: "GuestSession | None" = None) -> str:
+        """What `guest` is mirroring RIGHT NOW, or "" while it is mirroring
         nothing -- which is every conversation until its first tool call.
 
         THE COMMITTED FOLDER AND NOTHING ELSE. One mirror per conversation
@@ -2702,14 +2880,14 @@ class Bridge:
         put this process's whole shared directory opposite the guest's, which
         is the arrangement per-conversation folders exist to end.
         """
-        g = getattr(self, "_guest", None)
+        g = guest if guest is not None else getattr(self, "_guest", None)
         if g is not None and g.work_guest:
             return g.work_guest
         return ""
 
-    def _load_baseline(self):
+    def _load_baseline(self, guest: "GuestSession | None" = None):
         from .files.sync import Baseline
-        return Baseline.load(self._base_path())
+        return Baseline.load(self._base_path(guest))
 
     def sync_status_text(self, guest: "GuestSession | None" = None) -> str:
         # `guest` is which machine is being asked about. Unused beyond this
@@ -2744,7 +2922,7 @@ class Bridge:
                     "is nothing to diagnose. A folder is created the moment "
                     "you use one, and you will be told its path then.")
         try:
-            base = self._load_baseline()
+            base = self._load_baseline(g)
         except Exception as exc:
             return (f"The synchronisation baseline could not be read ({exc}). "
                     f"No pass will run until that is fixed; tell the user.")
@@ -2813,7 +2991,7 @@ class Bridge:
                        f"{len(base.ignored)} path(s), frozen at their last "
                        f"agreed content.")
 
-        stray, stray_truncated = self._edits_outside_the_mirror()
+        stray, stray_truncated = self._edits_outside_the_mirror(g)
         if stray:
             out.append("\nEDITED HERE BUT OUTSIDE THE MIRRORED FOLDER, so "
                        "these have not reached the user and never will where "
@@ -2837,7 +3015,7 @@ class Bridge:
     STRAY_SCAN_BUDGET = 4000
 
     def _edits_outside_the_mirror(
-        self, limit: int = 20
+        self, guest: "GuestSession | None" = None, limit: int = 20
     ) -> tuple[list[str], bool]:
         """Files under cwd but outside the sync root, newest first.
 
@@ -2858,9 +3036,9 @@ class Bridge:
         # precisely the case this exists to catch, and reading the cwd back
         # off the conversation's folder would declare the two equal and find
         # nothing.
-        guest = getattr(self, "_guest", None)
+        g = guest if guest is not None else getattr(self, "_guest", None)
         cwd = self.cwd or os.getcwd()
-        mirror_dir = (self._mirror_dir(guest) if guest else "") or self.sync_dir
+        mirror_dir = (self._mirror_dir(g) if g else "") or self.sync_dir
         if not mirror_dir or os.path.realpath(cwd) == os.path.realpath(
                 mirror_dir):
             return [], False
@@ -2911,7 +3089,7 @@ class Bridge:
         self, path: str, action: str, guest: "GuestSession | None" = None
     ) -> str:
         try:
-            base = self._load_baseline()
+            base = self._load_baseline(guest)
         except Exception as exc:
             return f"The baseline could not be read ({exc}); nothing changed."
 
@@ -2926,7 +3104,7 @@ class Bridge:
             # pass past the check, after which the ordinary per-path rows
             # decide everything exactly as they always would.
             base.accept_tree = True
-            base.save(self._base_path())
+            base.save(self._base_path(guest))
             log.info("sync: whole-tree revert accepted by the agent")
             return ("The next pass will go ahead without the whole-tree "
                     "check. Its rows are unchanged, so the machine's version "
@@ -2941,7 +3119,7 @@ class Bridge:
         caps = guest.caps if guest is not None and guest.caps is not None \
             else C.from_hello({})
         key = P.canonical(path.replace("\\", "/").strip("/"), caps=caps)
-        state = self._base_path()
+        state = self._base_path(guest)
 
         if action == "release":
             if key not in base.latched:
@@ -2954,8 +3132,12 @@ class Bridge:
             # If nothing else is withheld, the reason for the halt is gone and
             # the bar must come down -- leaving it up would ask the user to
             # press Continue for a conflict that no longer exists.
-            if not base.latched and self._guest is not None:
-                self._spawn(self._clear_halt(self._guest))
+            # ON THE GUEST THIS CALL BELONGS TO, not on whichever one is
+            # attached (02.18). The parameter was already here and this line
+            # reached past it, so with two clients the bar would come down on
+            # the wrong person's screen.
+            if not base.latched and guest is not None:
+                self._spawn(self._clear_halt(guest))
             return (f"Released {path}. Your next write to it will be copied to "
                     f"the user's machine on the next pass. If they change it "
                     f"again in the meantime, it will conflict again -- which "
@@ -2982,8 +3164,12 @@ class Bridge:
                         f"actually withheld.")
             base.save(state)
             log.info("sync: %s revert accepted by the agent", key)
-            if not base.latched and self._guest is not None:
-                self._spawn(self._clear_halt(self._guest))
+            # ON THE GUEST THIS CALL BELONGS TO, not on whichever one is
+            # attached (02.18). The parameter was already here and this line
+            # reached past it, so with two clients the bar would come down on
+            # the wrong person's screen.
+            if not base.latched and guest is not None:
+                self._spawn(self._clear_halt(guest))
             return (f"Accepted the machine's version of {path}. The next pass "
                     f"will copy it here, replacing what was written. The "
                     f"previous content is not kept -- if it is still wanted, "
@@ -3118,7 +3304,7 @@ class Bridge:
             return
         if base is None:
             try:
-                base = self._load_baseline()
+                base = self._load_baseline(guest)
             except Exception:
                 return
         if base.latched and not self.synccoord.halt_id:
@@ -3298,6 +3484,36 @@ class Bridge:
         log.info("exec %s finished: status=%s code=%s bytes=%d",
                  exec_id, status.value, code, len(entry.out))
 
+    def _mark_lost(self, guest: GuestSession) -> None:
+        """Record that this guest's link is gone. Idempotent.
+
+        Called from BOTH teardown paths -- `_on_client`'s `finally` and the
+        idle reaper -- because each used to do only half of it and the reaper
+        stopped the other half from running at all (02.8).
+
+        A pending prompt is NOT denied here. Denying on any drop tells the
+        model "the user declined" for something the user never saw -- and on
+        a 1998 NE2000 over a flaky link, a blip would become a refusal.
+        Instead the prompt is held for a short grace period: reconnect inside
+        it and the bar comes back (PERMSTATE), miss it and the reaper denies
+        with a message that says what actually happened. That expiry is gated
+        on `lost_at`, which is why stamping it is the load-bearing line here.
+        """
+        if guest.lost_at is None:
+            guest.lost_at = time.monotonic()
+        # An in-flight command is a different matter from a pending prompt:
+        # the prompt can wait out a blip, but the command has already started
+        # over there and its output is gone with the link. Fail it now rather
+        # than holding the model for the whole MCP budget.
+        self._fail_syncs(guest, "The connected machine disconnected mid-sync.")
+        self._fail_execs(guest,
+                         "The connected machine disconnected while this "
+                         "command was running. It may or may not have "
+                         "completed.")
+        if guest.perm_pending is not None:
+            log.info("link lost with a prompt pending; holding %.0fs",
+                     self.perm_grace_s)
+
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
         """Resolve every in-flight EXEC, synchronously.
 
@@ -3326,7 +3542,15 @@ class Bridge:
         """
         while True:
             await asyncio.sleep(self.sync_sweep_s)
-            if self.sync_dir and self._guest is not None:
+            guest = self._guest
+            if self.sync_dir and guest is not None:
+                # Bound HERE as well as inherited from _attach's context.
+                # The inheritance is what 02.6 fixed; this is what keeps it
+                # true once a task started for one connection is still
+                # running during the next one -- and once R7 gives the bridge
+                # two guests on two codepages, it is the only thing that can
+                # be right.
+                self._bind_codepages(guest)
                 await self.run_sync("the bridge's own sweep")
 
     async def _reap_idle(self) -> None:
@@ -3369,6 +3593,12 @@ class Bridge:
             guest.perms.deny_all("idle",
                                  "The Windows machine stopped responding.")
             w, guest.writer = guest.writer, None
+            # BEFORE the close, and here rather than only in _on_client.
+            # Nulling `writer` above is what made _on_client's `finally` skip
+            # its own bookkeeping, so a reap left `lost_at` unset and every
+            # sync and exec registered afterwards unfailed -- see _mark_lost
+            # and 02.8. _on_client still calls it too; it is idempotent.
+            self._mark_lost(guest)
             try:
                 if w is not None:
                     w.close()
@@ -3517,7 +3747,75 @@ class Bridge:
                                            hint=hint))
         await self._send(guest, optionsend())
 
+    async def _quiesce_turn(self, guest: GuestSession) -> None:
+        """Stop whatever turn is running, so `turn_lock` can be had.
+
+        The three methods below destroy and replace the object a turn may be
+        running ON. Taking the lock without this would park `_pump` -- and
+        therefore every inbound frame -- for as long as the model felt like
+        streaming.
+
+        The kill goes out first for the same reason `_on_interrupt` sends it:
+        the command is running on the guest's single worker thread and
+        forgetting about it bridge-side leaves the NEXT conversation's first
+        `exec` answered `busy`.
+        """
+        if not guest.turn_lock.locked():
+            return
+        log.info("interrupting the live turn before the conversation changes")
+        for exec_id in list(guest.exec_pending):
+            self._kill_exec(guest, exec_id)
+        if guest.claude:
+            try:
+                await guest.claude.interrupt()
+            except Exception:
+                # Best effort. A client that refuses to be interrupted is
+                # still one we are about to close, and the wait below is
+                # bounded by the turn ending one way or another.
+                log.exception("could not interrupt the running turn")
+
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
+        """See `_set_effort_locked`; this is the turn-lock half (02.1)."""
+        await self._quiesce_turn(guest)
+        async with guest.turn_lock:
+            await self._set_effort_locked(guest, effort)
+
+    async def _new_session(self, guest: GuestSession,
+                           folder: str = "") -> None:
+        """See `_new_session_locked`; this is the turn-lock half (02.1)."""
+        await self._quiesce_turn(guest)
+        async with guest.turn_lock:
+            await self._new_session_locked(guest, folder)
+
+    async def _switch(self, guest: GuestSession, session_id: str) -> None:
+        """See `_switch_locked`; this is the turn-lock half.
+
+        UNDER `guest.turn_lock`, all three of them, and this is 02.1. Each
+        closes `guest.claude` and replaces the transcript, and each is
+        reached from `_handle` -- which runs in `_pump`'s task -- while a
+        turn spawned by `_on_input` may be suspended inside
+        `guest.claude.send()`. They are concurrent by construction, not by
+        race.
+
+        What happened without the lock: `reset_transcript()` replaced
+        `view.pages` and `view.render` and cleared the coalescers, the
+        suspended turn's SDK callbacks kept firing, and the old
+        conversation's remaining prose was appended to the conversation the
+        user had just opened -- into its paginator, so also into its Export
+        and onto its sealed pages. Then `close()` made `receive_response()`
+        end without a `ResultMessage`, `_consume` returned an error Turn
+        rather than raising, and `_run_turn_locked` walked into
+        `self.registry.add(guest.claude.session_id)` with `guest.claude`
+        already None. The AttributeError died inside a task nothing
+        inspected, so no TURN end frame was ever sent and the guest's Send
+        button stayed disabled until the link was re-established.
+        """
+        await self._quiesce_turn(guest)
+        async with guest.turn_lock:
+            await self._switch_locked(guest, session_id)
+
+    async def _set_effort_locked(self, guest: GuestSession,
+                                 effort: str) -> None:
         """Change effort, which means reopening the session.
 
         There is no set_effort() on the client -- effort is fixed when the
@@ -3596,8 +3894,8 @@ class Bridge:
         await self._write_block(guest, H.notice(note))
         await self._send_options(guest)
 
-    async def _new_session(self, guest: GuestSession,
-                           folder: str = "") -> None:
+    async def _new_session_locked(self, guest: GuestSession,
+                                  folder: str = "") -> None:
         """Start a fresh conversation.
 
         NO FOLDER IS CHOSEN HERE, and an earlier version asked for one. A
@@ -3657,7 +3955,8 @@ class Bridge:
         await self._send_page(guest, "live")
         await self._send_options(guest)
 
-    async def _switch(self, guest: GuestSession, session_id: str) -> None:
+    async def _switch_locked(self, guest: GuestSession,
+                             session_id: str) -> None:
         """Close the live client and reopen on a stored session.
 
         One live ClaudeSDKClient at a time, so this is a close + resume rather
@@ -3804,7 +4103,7 @@ class Bridge:
         await guest.link.send_html(guest, html, mode, page_no)
 
     async def wire_yield(self, guest: GuestSession) -> None:
-        await guest.link.wire_yield()
+        await guest.link.wire_yield(guest)
 
     async def _try_send_raw(self, writer: asyncio.StreamWriter,
                             frame: Frame) -> None:

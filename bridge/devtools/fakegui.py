@@ -39,6 +39,7 @@ import argparse
 import asyncio
 import os
 import sys
+import tempfile
 
 from ..wire.compress import StreamDecompressor
 from ..wire.protocol import Frame, FrameReader, ProtocolError, hello
@@ -128,6 +129,18 @@ class FakeGui:
         # this is set is answered `busy`, never queued.
         self._exec_task: asyncio.Task | None = None
         self._exec_id: str | None = None
+        # The keepalive sweep, mirroring win/rpc/rpc.cpp's rpc_maybe_nudge.
+        self._sweep: asyncio.Task | None = None
+        # An export in flight: the temp file being written, where it goes,
+        # and the two counters EXPORTEND checks. Mirrors the three statics in
+        # win/app/export.cpp (tmp/dest/got/total) because that is what
+        # conformance means here -- see _export.
+        self._exp = None
+        #: Where the last FINISHED export landed, or None. The guest shows
+        #: this in a message box; here it is the one piece of the transfer
+        #: worth keeping after the temp file is closed, and it is what a
+        #: caller (or a test) has to look at, since `_exp` is gone by then.
+        self.export_path: str | None = None
 
     # --- connection --------------------------------------------------------
 
@@ -148,8 +161,13 @@ class FakeGui:
         f.headers.update(FAKE_IDENTITY)
         self.writer.write(f.encode())
         await self.writer.drain()
+        if self._sweep is None or self._sweep.done():
+            self._sweep = asyncio.create_task(self._keepalive())
 
     async def close(self) -> None:
+        if self._sweep is not None:
+            self._sweep.cancel()
+            self._sweep = None
         if self.writer:
             # Match what the guest must do: a graceful FIN, never an abrupt
             # close. An RST is reported to crash Win98's Winsock stack.
@@ -169,6 +187,34 @@ class FakeGui:
             return
         self.writer.write(f.encode())
         await self.writer.drain()
+
+    #: win/rpc/rpc.cpp's RPC_SWEEP_MS. The number matters: the bridge reaps a
+    #: guest silent for 90 seconds, and the guest's own answer to that is a
+    #: frame every 30.
+    SWEEP_S = 30.0
+
+    async def _keepalive(self) -> None:
+        """What rpc_maybe_nudge does when there is no sync root. 02.16.
+
+        fakegui sent PING only from the typed `/ping`, so a break-glass
+        session left idle while somebody reads a permission prompt was reaped
+        at 90 seconds -- against the documented 600-second deadline for
+        answering that very prompt -- and the conformance harness never
+        exercised the keepalive at all. That is the exact failure the guest's
+        own sweep was added to fix (rpc.cpp), in the tool whose stated job is
+        "if fakegui works and the guest does not, the bug is in the C".
+
+        The real guest sends SYNCDIRTY INSTEAD of PING when it has a sync
+        root; fakegui has none, so PING is its whole sweep. It also sends
+        STAT from the same tick when bytes have moved, which this does not:
+        that is a remaining difference, written down here rather than left to
+        be rediscovered.
+        """
+        while True:
+            await asyncio.sleep(self.SWEEP_S)
+            if not self.writer or self.writer.is_closing():
+                return
+            await self.send(Frame("PING", {}))
 
     # --- receive -----------------------------------------------------------
 
@@ -215,9 +261,25 @@ class FakeGui:
         if self.raw:
             body = f.body[:80]
             print(f"{DIM}[{f.type} {f.headers} {body!r}]{RESET}")
-            return
+            # NOT a return for EXPORT*. `--raw` says "dump frames instead of
+            # rendering them", and an export is not a rendering: the file
+            # still has to be written, the same way `--raw` does not stop
+            # EXEC from running. Dumping the frame and dropping the transfer
+            # would make the debugging mode fail differently from the mode
+            # being debugged.
+            if not f.type.startswith("EXPORT"):
+                return
 
         t = f.type
+
+        # A file transfer, not a rendering. Decoding the body as text first
+        # would be meaningless for a deflated chunk -- and printing
+        # "[EXPORTDAT {...}] <200 chars of deflated body>" per 63 KB chunk is
+        # exactly what this used to do.
+        if t.startswith("EXPORT"):
+            self._export(f)
+            return
+
         text = f.body.decode("cp1252", errors="replace")
 
         if t == "READY":
@@ -357,6 +419,74 @@ class FakeGui:
                 print(f"{DIM}[halt cleared]{RESET}")
         else:
             print(f"{DIM}[{t} {f.headers}] {text[:200]}{RESET}")
+
+    def _export(self, f: Frame) -> None:
+        """EXPORTSTART / EXPORTDAT / EXPORTEND. 02.16.
+
+        The same three-method shape win/app/export.cpp has, because that is
+        what conformance means: open a temp file on START, append on DAT,
+        rename or discard on END. `render` had no branch for these at all, so
+        all three fell into the catch-all and printed the deflated body --
+        which meant the one transfer path with a real defect in it (02.3, the
+        idle reaper firing during a long export) could not be driven from the
+        conformance tool, and `test_fakegui_conformance.py` had no export
+        test to hang off.
+
+        `off` is checked the way the guest checks it: a chunk that does not
+        continue where the last one stopped would write a file with a hole in
+        it, and a hole is indistinguishable from a complete file afterwards.
+        """
+        if f.type == "EXPORTSTART":
+            if self._exp is not None:
+                print(f"{RED}export: EXPORTSTART while one is in flight"
+                      f"{RESET}")
+                self._exp["fh"].close()
+            fh = tempfile.NamedTemporaryFile(
+                prefix="fakegui-export-", suffix=".html", delete=False)
+            self._exp = {"fh": fh, "path": fh.name, "got": 0,
+                         "total": int(f.headers.get("total", "0") or 0)}
+            print(f"{DIM}[export: {self._exp['total']} bytes incoming]{RESET}")
+            return
+
+        if self._exp is None:
+            # The real guest logs and drops: a chunk with no destination open
+            # has nowhere to go, and inventing one would write a file nobody
+            # asked for.
+            print(f"{DIM}[export: {f.type} with no destination open]{RESET}")
+            return
+
+        exp = self._exp
+        if f.type == "EXPORTDAT":
+            off = int(f.headers.get("off", "0") or 0)
+            if off != exp["got"]:
+                print(f"{RED}export: chunk at {off} does not continue "
+                      f"{exp['got']}; abandoning{RESET}")
+                exp["fh"].close()
+                os.unlink(exp["path"])
+                self._exp = None
+                return
+            exp["fh"].write(f.body)
+            exp["got"] += len(f.body)
+            return
+
+        if f.type == "EXPORTEND":
+            exp["fh"].close()
+            ok = f.headers.get("status") == "ok"
+            short = exp["total"] and exp["got"] != exp["total"]
+            if ok and not short:
+                self.export_path = exp["path"]
+                print(f"{GREEN}exported{RESET} {DIM}{exp['got']} bytes -> "
+                      f"{exp['path']}{RESET}")
+            else:
+                why = f.headers.get("reason", "")
+                if short:
+                    why = (why + " " if why else "") + \
+                          f"(short by {exp['total'] - exp['got']} bytes)"
+                # Thrown away, like the guest does. A shortened export is not
+                # a smaller export, it is a broken file.
+                os.unlink(exp["path"])
+                print(f"{RED}export failed{RESET} {DIM}{why}{RESET}")
+            self._exp = None
 
     def _clear_live(self) -> None:
         """Undo _show_live's cursor move before an APPEND or a fresh LIVE

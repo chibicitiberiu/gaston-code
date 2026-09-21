@@ -18,7 +18,8 @@ a new one with the SAME cache every pass (indistinguishable from
 `_agent_notices` just living on `Bridge`), or making `Reporter` outlive a
 `Pass` -- which is exactly the `SyncCoordinator` object the audit's #1.4
 describes. That type did not exist when this was written; it does now
-(`bridge/synccoord.py`), and owns `agent_notices` as `Bridge.synccoord`,
+(`bridge/synccoord.py`), and owns `agent_notices` as a field of
+`GuestSession` (audit-2 02.18; it was `Bridge.synccoord`),
 not `Reporter`: `Reporter` still lives and dies with one `Pass`, unchanged
 by 02.43, and the queue it durably empties/fills
 (`pending_notice`/`pending_notice_agent` on `Baseline`) is what

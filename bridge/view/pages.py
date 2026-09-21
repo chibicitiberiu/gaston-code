@@ -197,6 +197,24 @@ class Paginator:
                 page.add(style, text)
                 chunks.append((page.number, text))
                 text = ""
+            elif (page.runs and len(text) <= self.hard_bytes):
+                # SEAL BETWEEN BLOCKS RATHER THAN THROUGH ONE. 02.17.
+                #
+                # The run being split is a complete HTML element, and the
+                # split is by byte count with a newline preference -- which
+                # knows nothing about tags. So page N ended with
+                # `<div class="codewrap"><pre>...` unclosed and page N+1
+                # opened with `...</pre></div>`: MSHTML closes the tags
+                # itself, so what the reader gets is a code block that has
+                # lost its frame and a page that starts with stray markup.
+                #
+                # There is a clean boundary available whenever the page
+                # already holds something -- the start of this block -- so
+                # take it, and keep the mid-run split for the one case that
+                # has no alternative: a single block bigger than a whole
+                # page.
+                sealed.append(self._seal(continued=True))
+                continue
             else:
                 # Hard cap reached mid-run. Prefer to break at a newline inside
                 # the allowed span so a code block splits between lines.

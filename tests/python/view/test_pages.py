@@ -285,3 +285,45 @@ def test_a_paginator_honours_its_own_limits():
     for i in range(5):
         p.add("html", "<p>x</p>")
     assert p.live.over_soft_cap(p.max_bytes, p.max_blocks)
+
+
+# --- 02.17: a seal must not run through the middle of an element ------------
+
+
+def test_a_block_that_does_not_fit_moves_to_the_next_page_whole():
+    """The split was by byte count with a newline preference, which knows
+    nothing about tags: page N ended `<div class="codewrap"><pre>...`
+    unclosed and page N+1 opened `...</pre></div>`. MSHTML closes the tags
+    itself, so the reader gets a code block with no frame and a page that
+    starts with stray markup.
+
+    There is a clean boundary available whenever the page already holds
+    something -- the start of this block -- so take it."""
+    p = Paginator(max_bytes=1000, max_blocks=100)
+    p.add("html", "<p>" + "a" * 500 + "</p>")
+    block = "<div><pre>" + "b" * 1500 + "</pre></div>"
+    sealed, chunks = p.write("html", block)
+
+    assert sealed, "the page should have sealed"
+    assert len(chunks) == 1, chunks
+    assert chunks[0][1] == block
+    # And it landed whole on the page AFTER the seal.
+    assert chunks[0][0] == sealed[-1].number + 1
+
+
+def test_one_block_bigger_than_a_whole_page_is_still_split():
+    """The case with no alternative. Reserving the mid-run split for it is
+    the point; removing it would mean an unbounded page."""
+    p = Paginator(max_bytes=1000, max_blocks=100)
+    sealed, chunks = p.write("html", "x" * 6000)
+    assert len(chunks) > 1
+    assert sealed
+    assert "".join(t for _, t in chunks) == "x" * 6000
+
+
+def test_an_empty_page_takes_an_oversized_block_without_sealing_first():
+    """Sealing an empty page would make a blank one, and the block still has
+    to go somewhere."""
+    p = Paginator(max_bytes=1000, max_blocks=100)
+    sealed, chunks = p.write("html", "y" * 1500)
+    assert chunks[0][0] == 1

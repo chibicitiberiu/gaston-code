@@ -28,7 +28,14 @@ env = ["COMSPEC"]
 # because this is the guard's splitter: splitting on a non-separator can
 # only OVER-split, which fails safe, while missing one would let a fragment
 # through uninspected.
-separators = "&&|\\|\\||[&|]"
+#
+# `\r` and `\n` joined them for exactly that reason (02.10). A newline does
+# not chain commands on this shell either, but `split_args` treats it as
+# ordinary whitespace, so a leading READ verb hid everything after it:
+# "dir\ndel c:\io.sys" came back with no finding at all, because the whole
+# thing parsed as one `dir` with some unusual arguments. Over-splitting here
+# can only cost extra prompts; missing a line cost the finding.
+separators = "&&|\\|\\||[&|\\r\\n]"
 redirect_write = "(>>?)\\s*(\\S+)"
 redirect_read = "(<)\\s*(\\S+)"
 drive = "^[A-Za-z]:"
@@ -49,12 +56,34 @@ altsep = '/'
 quote = '"'
 
 # Switches, which are not paths. `/windows/system/x` IS a path, so a switch
-# is recognised by being short and carrying no separator -- discarding every
-# `/`-prefixed token made a real destination invisible, and the guard then
-# reported "writes inside mirror" for a command whose target it had thrown
-# away.
+# carries no separator -- discarding every `/`-prefixed token made a real
+# destination invisible, and the guard then reported "writes inside mirror"
+# for a command whose target it had thrown away.
+#
+# `switch_token` IS THE RULE; `switch_max` is only the fallback for a profile
+# that declares no vocabulary. Judging by length alone was 02.10: `/io.sys`
+# is seven characters with no separator, so `copy c:\gaston\ok\a.txt
+# /io.sys` threw the destination away, judged the SOURCE, found it inside the
+# mirror and reported the command as fully contained. A switch on this shell
+# is a letter or two -- or `?` -- optionally followed by `:value`
+# (`/A:-D`, `/F:1.44`), and never contains a dot.
+#
+# `/TEMP` still matches this, and that is honest: on COMMAND.COM it really is
+# both a plausible switch and a real root directory. The guard says so
+# instead of guessing -- see `targets` and the "could be a switch or a path"
+# answer.
 switch = "/"
+switch_token = '^/[A-Za-z?][A-Za-z0-9]*(:[^\\/]*)?$'
 switch_max = 8
+
+# The shell to assume for a guest that reported no inventory at all -- which
+# is every client built before HELLO carried a body, i.e. every deployed one
+# until it is reflashed. Without this, adding a `[shell]` table to a SECOND
+# profile turned the guard off for all of them (02.5): with two candidates
+# and no word from the caller, `_default_shell` refused to pick and every
+# command came back "the shell on this machine is not one this bridge has
+# rules for". Exactly one profile may claim this.
+assume_when_unreported = true
 
 # How PATH is separated. `;` here because `:` follows a drive letter, which
 # is the whole reason the two families differ.
