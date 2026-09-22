@@ -28,7 +28,7 @@ from .status import EXEC_STATUS_PROSE, ExecStatus, SyncStatus
 from .wire import fold
 from .agent import machine
 from .agent import profiles
-from .agent.registry import Folders, Registry, Settings
+from .agent.conversations import Conversations
 from .wire.coalesce import Coalescer
 from .wire.compress import StreamCompressor
 from .view import html as H
@@ -503,15 +503,13 @@ class Bridge:
         link_bps: float | None = None,
     ) -> None:
         self.secret = secret
-        # Which sessions this bridge started, so the chat list can show those
-        # and not every conversation on the machine. See bridge/registry.py.
-        self.registry = Registry()
-        #: Which folder each conversation works in -- see registry.Folders for
-        #: why this is remembered rather than read back from the session.
-        self.folders = Folders()
-        #: Model, effort and permission mode, per conversation. See
-        #: registry.Settings for why these are not simply left on the guest.
-        self.settings = Settings()
+        #: What this bridge knows about each conversation: whether it
+        #: started it (so the chat list shows those and not every
+        #: conversation on the machine), the model, effort and permission
+        #: mode chosen for it, and the folder it works in on both sides.
+        #: One row, one file -- see agent/conversations.py for why those
+        #: three were not worth three stores.
+        self.conv = Conversations()
         # Measured link speed. None means "unknown, assume it might be slow".
         # Set from the guest's STAT frames; overridable for testing so the
         # dialup path can be exercised without a modem.
@@ -1174,7 +1172,7 @@ class Bridge:
         conv = session_id or guest.conv_id
         if not conv:
             return
-        self.settings.set(conv,
+        self.conv.remember(conv,
                           model=guest.model,
                           effort=guest.effort,
                           mode=guest.perm_mode)
@@ -1189,7 +1187,7 @@ class Bridge:
         chose the default for this chat" are different and only the second
         one is written down.
         """
-        saved = self.settings.get(session_id)
+        saved = self.conv.settings(session_id)
         if not saved:
             return
         if "model" in saved:
@@ -1262,7 +1260,7 @@ class Bridge:
 
         # Unique, and the suffix eats into the 8 characters rather than
         # extending past them -- the name has to stay 8.3 on the other side.
-        taken = self.folders.taken()
+        taken = self.conv.taken()
         stem, n = name, 1
         while os.path.exists(os.path.join(base, name)) or name in taken:
             n += 1
@@ -1279,7 +1277,7 @@ class Bridge:
             return
         guest.work_dir = path
         guest.work_guest = self._guest_path(guest, name)
-        self.folders.set(guest.conv_id, name, guest.work_guest)
+        self.conv.set_folder(guest.conv_id, name, guest.work_guest)
         self._retarget_perms(guest)
         log.info("work directory for %s: %s (%s)",
                  guest.conv_id, path, guest.work_guest)
@@ -1548,12 +1546,14 @@ class Bridge:
                     # message, and the effort fork mints a new one on the
                     # turn after the fork -- so every write before this
                     # moment had nothing to be keyed on and silently did
-                    # nothing. `settings.json` was never created at all on
-                    # this machine, while `folders.json` beside it was,
+                    # nothing. Back when these were three files, the
+                    # settings one was never created at all on this machine
+                    # while the folders one beside it filled up normally,
                     # because a folder is committed at the first TOOL CALL,
-                    # by which time the id exists.
+                    # by which time the id exists. That contrast is what
+                    # made the bug legible, and why they are one store now.
                     #
-                    # The consequence the user sees is the one Settings was
+                    # The consequence the user sees is the one the store was
                     # built to stop: open a chat you had set to Opus and Plan
                     # and you get whatever the last chat was using, because
                     # `_restore_settings` finds no row and deliberately keeps
@@ -1622,7 +1622,7 @@ class Bridge:
         # The id is usually not known yet -- the SDK assigns it when the first
         # query goes out -- so this is a best effort and _run_turn registers it
         # again once it exists.
-        self.registry.add(s.session_id)
+        self.conv.add(s.session_id)
         return s
 
     # --- permissions -------------------------------------------------------
@@ -1645,10 +1645,10 @@ class Bridge:
         # NOT filtered by directory any more. Conversations live in their own
         # folders now, so `list_sessions(directory=self.cwd)` would list only
         # the ones sharing the default -- the chat list would lose a chat the
-        # moment it was given a folder of its own. `registry.filter` was
+        # moment it was given a folder of its own. `Conversations.filter` was
         # always the real filter (only conversations this bridge started);
         # the directory was belt and braces and is now wrong.
-        rows = self.registry.filter(sesslist.listing())
+        rows = self.conv.filter(sesslist.listing())
         await self._send(guest, sessions_start(len(rows)))
         for i, r in enumerate(rows):
             await self._send(guest, session_row(
@@ -1997,7 +1997,7 @@ class Bridge:
             except Exception as exc:
                 log.exception("model change failed")
                 # PUT BACK, so the menu re-ticks what is actually in force
-                # and `settings.json` does not carry a model the CLI
+                # and the store does not carry a model the CLI
                 # refused into the next session built.
                 guest.model = was
                 self._remember_settings(guest)
@@ -2072,7 +2072,7 @@ class Bridge:
 
         guest.work_dir = local
         guest.work_guest = path
-        self.folders.set(guest.conv_id, name, path)
+        self.conv.set_folder(guest.conv_id, name, path)
         self._retarget_perms(guest)
         log.info("work directory for %s: %s (guest: %s)",
                  guest.conv_id, local, path)
@@ -2387,7 +2387,7 @@ class Bridge:
         # that can be resumed after an interrupt, and the tell that the guard
         # belongs here was that its neighbour has always had one.
         if guest.claude:
-            self.registry.add(guest.claude.session_id)
+            self.conv.add(guest.claude.session_id)
         # Seal only at a message boundary, so a turn is never split
         # mid-sentence while the reader is watching it stream.
         sealed = guest.pages.message_boundary()
@@ -3842,7 +3842,7 @@ class Bridge:
         and onto its sealed pages. Then `close()` made `receive_response()`
         end without a `ResultMessage`, `_consume` returned an error Turn
         rather than raising, and `_run_turn_locked` walked into
-        `self.registry.add(guest.claude.session_id)` with `guest.claude`
+        `self.conv.add(guest.claude.session_id)` with `guest.claude`
         already None. The AttributeError died inside a task nothing
         inspected, so no TURN end frame was ever sent and the guest's Send
         button stayed disabled until the link was re-established.
@@ -4037,12 +4037,12 @@ class Bridge:
         # the directory it STARTED in, which is the root. Reopening a chat
         # showed "<unset>" for a conversation whose folder was sitting on
         # disk, because the only place that knew was here.
-        name = self.folders.get(session_id)
+        name = self.conv.folder(session_id)
         if name and self.sync_dir:
             guest.work_dir = os.path.join(self.sync_dir, name)
             # The guest's own spelling, which it may have chosen itself and
             # which cannot be derived from a name on this side.
-            guest.work_guest = (self.folders.guest(session_id)
+            guest.work_guest = (self.conv.guest_folder(session_id)
                                 or self._guest_path(guest, name))
         else:
             guest.work_dir = self._stored_work_dir(session_id)

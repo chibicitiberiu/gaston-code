@@ -554,7 +554,8 @@ whichever tests break.
 **Implementation blockers, once the question above is answered.** Recorded
 2026-09-18 from audits 02.3, 04.18, 04.19, 04.20, 04.21, 04.22, 04.35 and
 01.35 -- eight findings, all the same object seen from `bridge/server.py`,
-`bridge/agent/registry.py` and the guest. None of this is reachable before
+`bridge/agent/conversations.py` and the guest. None of this is reachable
+before
 the mirror decision above; it is what changes in code once it is made.
 
 *Bridge-side per-guest state.* 02.3 counted eight attributes living on
@@ -579,12 +580,14 @@ needed it fixed.
 
 *Mechanical dict-migration, once `self._guests` exists.* Four findings are
 each "this loops over one guest and needs to loop over the dict": `_reap_idle`
-and `close()` (04.22, `server.py:2084` and `:308`); the registry's one
-`~/.gaston-code/sessions.json` set (04.18, `bridge/agent/registry.py:33`)
-becomes `{client_id: [session ids]}` in the same file -- not one file per
-client, since the file is already written on every new session id and an
-atomic replace of one small file is the right cost; `self.cwd` (04.19, read
-at five sites in `server.py`) needs a per-client working directory once
+and `close()` (04.22, `server.py:2084` and `:308`); the conversation store's
+one process-wide `~/.gaston-code/conversations.json` (04.18,
+`bridge/agent/conversations.py` -- it was `sessions.json` plus two files
+beside it until those were merged) needs its `mine` flag to become a client
+id rather than a boolean, still one file, since it is already written on
+every new session id and an atomic replace of one small file is the right
+cost; `self.cwd` (04.19, read at five sites in `server.py`) needs a
+per-client working directory once
 clients get separate mirrors, gated on the mirror-per-client design above,
 not to be decided independently of it; and the duplicate-connection
 "reject, don't evict" check (04.21, `server.py:~460-462`) narrows from "a

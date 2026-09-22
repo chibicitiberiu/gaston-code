@@ -1245,7 +1245,8 @@ has known work left.
   claimed: two conversations about listing files both reduce to `LISTFILE`,
   and the second taking the first's folder would put two conversations' work
   in one place with no way to tell them apart afterwards.
-  The mapping is REMEMBERED (`registry.Folders`), not read back from the
+  The mapping is REMEMBERED (`conversations.Conversations`), not read back
+  from the
   session: the folder is named after the session has already started and
   recorded the directory it started in, which is the root -- so asking the
   SDK gives the wrong answer and a reopened chat showed `<unset>` for a
@@ -1263,7 +1264,7 @@ has known work left.
   makes it real on the guest. One direction of authority, so the two sides
   cannot disagree about which tree is mirrored -- the disagreement that ends
   with files in the wrong place. The guest's own spelling is stored
-  (`registry.Folders`) because `D:\Projects\Retro` cannot be derived from a
+  (the same store) because `D:\Projects\Retro` cannot be derived from a
   folder name on the bridge.
   The INI default is `C:\Gaston`, and the guest CREATES the root if it is
   missing -- a work directory is a place the user named, not one they are

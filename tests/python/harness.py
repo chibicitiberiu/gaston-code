@@ -362,10 +362,11 @@ async def harness(monkeypatch, tmp_path):
     """
     import bridge.server as srv
     monkeypatch.setattr(srv, "Session", FakeSession)
-    # The session registry must not touch the real one in $HOME, and each test
-    # needs to start from an empty one or the chat list depends on what ran
-    # before it.
-    monkeypatch.setenv("GASTON_STATE", str(tmp_path / "sessions.json"))
+    # The conversation store must not touch the real one in $HOME, and each
+    # test needs to start from an empty one or the chat list depends on what
+    # ran before it. Its directory is also where the three legacy files are
+    # looked for, so pointing it at tmp_path isolates those too.
+    monkeypatch.setenv("GASTON_STATE", str(tmp_path / "conversations.json"))
 
     server = None
     b = None

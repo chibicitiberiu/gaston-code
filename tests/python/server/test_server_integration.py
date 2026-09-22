@@ -728,7 +728,7 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
         await harness.send(w, Frame("INPUT", {}, b"Sky color"))
         await harness.recv_until(r, {"TURN"}, 10.0)
         await g.claude.use_tool()
-        assert b.folders.get(sid) == "SKYCOLOR"
+        assert b.conv.folder(sid) == "SKYCOLOR"
 
         # Away and back.
         await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
@@ -771,7 +771,7 @@ async def test_setwork_points_the_conversation_at_the_folder_chosen(
 
     # And it comes back, because the guest's spelling cannot be derived from
     # anything on this side.
-    assert b.folders.guest(sid) == "D:\\Projects\\Retro"
+    assert b.conv.guest_folder(sid) == "D:\\Projects\\Retro"
     await harness.close(w)
 
 
@@ -1245,12 +1245,12 @@ async def test_a_conversation_gets_its_own_settings_back(harness, tmp_path,
     last chat was using, and a bridge restart put everything back on the
     process defaults."""
     import bridge.server as srv
-    from bridge.agent.registry import Settings
+    from bridge.agent.conversations import Conversations
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.settings = Settings(tmp_path / "settings.json")
+    b.conv = Conversations(tmp_path / "conversations.json")
 
     # Speak, so there is a conversation to attach settings to.
     await harness.send(w, Frame("INPUT", {}, b"hello"))
@@ -1262,8 +1262,8 @@ async def test_a_conversation_gets_its_own_settings_back(harness, tmp_path,
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     await harness.send(w, Frame("SETMODEL", {"model": "haiku"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-    assert b.settings.get(first)["mode"] == "plan"
-    assert b.settings.get(first)["model"] == "haiku"
+    assert b.conv.settings(first)["mode"] == "plan"
+    assert b.conv.settings(first)["model"] == "haiku"
 
     # Somewhere else, set differently.
     rows = [{"id": "other", "title": "t", "cwd": "", "modified": "",
@@ -1296,12 +1296,12 @@ async def test_a_conversation_with_nothing_saved_is_left_alone(
     chat" are different, and only the second is written down. A chat from
     before this existed must not reset what is currently selected."""
     import bridge.server as srv
-    from bridge.agent.registry import Settings
+    from bridge.agent.conversations import Conversations
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.settings = Settings(tmp_path / "settings.json")
+    b.conv = Conversations(tmp_path / "conversations.json")
 
     await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
@@ -1324,26 +1324,26 @@ async def test_settings_chosen_before_the_first_message_are_saved(
 ):
     """The two halves together: pick before there is a conversation, and have
     it both apply AND be remembered once the conversation exists."""
-    from bridge.agent.registry import Settings
+    from bridge.agent.conversations import Conversations
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.settings = Settings(tmp_path / "settings.json")
+    b.conv = Conversations(tmp_path / "conversations.json")
 
     await harness.send(w, Frame("NEWSESSION", {}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     assert b._guest.claude is None
     await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-    assert len(b.settings) == 0, "nowhere to write it yet, and it must not"
+    assert len(b.conv) == 0, "nowhere to write it yet, and it must not"
 
     await harness.send(w, Frame("INPUT", {}, b"hello"))
     await harness.recv_until(r, {"TURN"}, 10.0)
 
     conv = b._guest.conv_id
     assert b._guest.claude.permission_mode == "plan", "applied"
-    assert b.settings.get(conv)["mode"] == "plan", "and written down"
+    assert b.conv.settings(conv)["mode"] == "plan", "and written down"
     await harness.close(w)
 
 

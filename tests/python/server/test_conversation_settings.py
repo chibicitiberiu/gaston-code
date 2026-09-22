@@ -32,7 +32,7 @@ async def _connected(harness):
 
 
 def _saved(harness, session_id):
-    return harness.bridge.settings.get(session_id)
+    return harness.bridge.conv.settings(session_id)
 
 
 # --- the write side ---------------------------------------------------------
@@ -98,8 +98,8 @@ async def test_settings_reach_the_file_on_disk(harness):
                                                    {"model": "haiku"}))
     await harness.bridge._run_turn(guest, "hello")
 
-    path = harness.bridge.settings.path
-    assert path.exists(), "settings.json was never created"
+    path = harness.bridge.conv.path
+    assert path.exists(), "the conversation store was never created"
     on_disk = json.loads(path.read_text())
     assert on_disk[guest.conv_id]["model"] == "haiku"
     await harness.close(w)
