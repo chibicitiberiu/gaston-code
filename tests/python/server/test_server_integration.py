@@ -573,6 +573,10 @@ async def test_the_folder_is_named_from_the_title_when_there_is_no_message(
          "cwd": "", "modified": "", "group": ""}]
     try:
         assert g.first_prompt == "", "nothing said in this session"
+        # The id arrives at the top of the first turn, and `_ensure_work_dir`
+        # is only ever reached from inside one. Calling it here without that
+        # would test a state the SDK cannot produce.
+        await g.claude.start_turn()
         await b._ensure_work_dir(g)
     finally:
         srv.sesslist.listing = orig
@@ -711,6 +715,9 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(b.sync_dir, exist_ok=True)
     g = b._guest
+    # AFTER the turn below, not here: a session that has not run one has no
+    # id yet, exactly as the SDK has none to give.
+    await g.claude.start_turn()
     sid = g.claude.session_id
 
     orig = srv.sesslist.listing
@@ -747,6 +754,9 @@ async def test_setwork_points_the_conversation_at_the_folder_chosen(
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(b.sync_dir, exist_ok=True)
     g = b._guest
+    # A work directory belongs to a conversation, and SETWORK refuses when
+    # there is not one yet. The id lands with the first turn's `init`.
+    await g.claude.start_turn()
     sid = g.claude.session_id
 
     await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
@@ -775,6 +785,7 @@ async def test_setwork_tells_the_agent_the_directory_moved(harness, tmp_path):
     b = harness.bridge
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(b.sync_dir, exist_ok=True)
+    await b._guest.claude.start_turn()      # SETWORK needs a conversation
 
     await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
@@ -801,6 +812,7 @@ async def test_choosing_assistant_merge_actually_asks_the_assistant(
     b = harness.bridge
     b.sync_dir = str(tmp_path / "mirror")
     os.makedirs(b.sync_dir, exist_ok=True)
+    await b._guest.claude.start_turn()      # SETWORK needs a conversation
 
     await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro",
                                             "staged": "merge"}))
@@ -852,6 +864,7 @@ async def test_a_new_work_directory_gets_its_own_baseline(harness, tmp_path):
     # baseline on and the legacy file is what an unasked question returns.
     assert b._base_path() == legacy
 
+    await b._guest.claude.start_turn()      # SETWORK needs a conversation
     await harness.send(w, Frame("SETWORK", {"path": "C:\\WORK"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     assert b._base_path() == legacy, "its own root keeps the legacy file"
@@ -1018,11 +1031,32 @@ async def test_ready_names_the_conversation_not_just_the_connection(harness):
     SWITCHED said where pages belonged, and a reconnect does not send one."""
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"READY"})
-    ready_f = [f for f in frames if f.type == "READY"][-1]
     g = harness.bridge._guest
-    assert ready_f.headers.get("conv") == g.conv_id
-    assert ready_f.headers["sess"] != ready_f.headers.get("conv")
+
+    # THE FIRST CONNECT HAS NO CONVERSATION TO NAME, and that is not a
+    # defect: `_attach` builds a client eagerly, but the SDK does not assign
+    # an id until the first turn runs, so there is genuinely nothing to put
+    # in the header yet. This assertion used to read the other way round and
+    # passed only because the test double handed out an id in __init__ --
+    # production has never sent a `conv` on a first connect.
+    ready_f = [f for f in frames if f.type == "READY"][-1]
+    assert not g.conv_id, "no turn has run, so there is no conversation"
+    assert not ready_f.headers.get("conv")
+
+    # The case the header exists for: the guest drops and comes back to a
+    # conversation that is already under way.
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    conv = g.conv_id
+    assert conv
+
     await harness.close(w)
+    r2, w2 = await harness.connect()
+    frames = await harness.recv_until(r2, {"READY"})
+    ready_f = [f for f in frames if f.type == "READY"][-1]
+    assert ready_f.headers.get("conv") == conv
+    assert ready_f.headers["sess"] != ready_f.headers.get("conv")
+    await harness.close(w2)
 
 
 async def test_switching_a_chat_starts_no_process(harness, monkeypatch):

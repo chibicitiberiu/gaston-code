@@ -99,10 +99,40 @@ class FakeSession:
         # reading it back off the guest afterwards would pass even if the
         # prompt had been frozen a moment too early.
         self.system_prompt = kw.get("system_prompt")
+        self.fork = kw.get("fork", False)
         self.started = False
         self.interrupted = False
         FakeSession._seq += 1
-        self.session_id = f"fake-session-{FakeSession._seq}"
+        # DEFERRED, because the real Session's is. `Session._session_id` is
+        # set from the `init` system message and nothing else
+        # (bridge/agent/session.py:353), and that message arrives during the
+        # FIRST TURN -- not at construction and not at start(). This fake
+        # used to hand the id out in __init__, which made `guest.conv_id`
+        # true the moment a client existed and hid a whole class of bug: the
+        # bridge writing per-conversation state at a moment when production
+        # has no id to write it against.
+        #
+        # Resuming keeps the id; forking mints a new one. That is what the
+        # effort fork is FOR, and a fake that kept the id through a fork
+        # would pass a test asserting the forked conversation inherited its
+        # settings when production had lost them.
+        self._pending_id = (self.resume if (self.resume and not self.fork)
+                            else f"fake-session-{FakeSession._seq}")
+        self.session_id = None
+
+    async def start_turn(self):
+        """What the SDK sends at the top of the first turn.
+
+        Public, because a test that drives the bridge's internals directly --
+        `_ensure_work_dir`, a SETWORK frame -- reaches code that asks which
+        conversation it is for, and in production nothing reaches that code
+        before this message has been seen. Idempotent.
+        """
+        if self.session_id is not None:
+            return
+        self.session_id = self._pending_id
+        if self.on_system:
+            await self.on_system("init", {"session_id": self.session_id})
 
     def ask(self, tool_name="Bash", args=None, **ctx_kw):
         """Spawn a permission request the way the SDK does: a detached task.
@@ -111,12 +141,24 @@ class FakeSession:
         gets its PERMEND.
         """
         ctx = FakeCtx(**ctx_kw)
-        coro = self.can_use_tool(tool_name, args or {"command": "vol c:"}, ctx)
-        return asyncio.create_task(coro)
+
+        async def run():
+            # The init message is the FIRST thing in the SDK's stream, so
+            # nothing -- no text, no tool call, no permission request --
+            # reaches the bridge before the conversation has an id. A fake
+            # that let a permission request in first would leave
+            # `_ensure_work_dir` with no id to name a folder against, which
+            # is a state production cannot produce.
+            await self.start_turn()
+            return await self.can_use_tool(
+                tool_name, args or {"command": "vol c:"}, ctx)
+
+        return asyncio.create_task(run())
 
     async def use_tool(self, name="Bash", args=None):
         """Report a tool call the way the SDK does, so the bridge's own
         `on_tool` runs -- including the work-folder commitment."""
+        await self.start_turn()          # ordered as the SDK orders it
         await self.on_tool(name, args or {"command": "vol c:"})
 
     async def start(self):
@@ -169,6 +211,9 @@ class FakeSession:
 
     async def send(self, prompt):
         from bridge.agent.session import Turn
+        # The id arrives here, ahead of any output, exactly as it does from
+        # the CLI.
+        await self.start_turn()
         # A command the CLI resolves locally streams nothing back. Modelled
         # rather than assumed away: the bridge's "returned nothing" notice is
         # only reachable through a turn that really does produce no output.

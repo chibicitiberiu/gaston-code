@@ -1155,18 +1155,26 @@ class Bridge:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.cwd or os.getcwd()
 
-    def _remember_settings(self, guest: GuestSession) -> None:
+    def _remember_settings(self, guest: GuestSession,
+                           session_id: str = "") -> None:
         """Write this conversation's model, effort and mode to disk.
 
-        Called after every change AND once the conversation first gets an id,
-        because a setting picked before the first message has nowhere to be
-        written until then -- `conv_id` is empty for a chat that has been
-        started but not spoken in. Cheap: three strings and an atomic
-        replace, against a change the user made by hand.
+        Called after every change AND at the moment the conversation first
+        gets an id, because a setting picked before the first message has
+        nowhere to be written until then -- `conv_id` is empty for a chat
+        that has been started but not spoken in. Cheap: three strings and an
+        atomic replace, against a change the user made by hand.
+
+        `session_id` names the conversation to write against, for the one
+        caller that knows it before `conv_id` agrees: the SDK's `init`
+        message carries the id in hand, and reading `guest.conv_id` there
+        would be asking a property whose answer depends on which Session
+        object happens to be attached at that instant.
         """
-        if not guest.conv_id:
+        conv = session_id or guest.conv_id
+        if not conv:
             return
-        self.settings.set(guest.conv_id,
+        self.settings.set(conv,
                           model=guest.model,
                           effort=guest.effort,
                           mode=guest.perm_mode)
@@ -1394,10 +1402,13 @@ class Bridge:
                  else "Could not start a new session: ") + str(exc)[:160]))
             return False
         guest.pending_resume = ""
-        # The conversation has an id at last, so anything chosen before the
-        # first message -- which is everything, for a chat started with New
-        # chat -- can finally be written against it.
-        self._remember_settings(guest)
+        # NO _remember_settings HERE, and the comment that used to say "the
+        # conversation has an id at last" was wrong: `Session._session_id` is
+        # set from the SDK's `init` message, which arrives during the first
+        # TURN, and `pending_resume` has just been cleared on the line above
+        # -- so `conv_id` is empty on both branches and the write was a
+        # no-op every time. It lives in `on_system`'s init branch now, which
+        # is the first instant an id exists.
         if not resuming:
             # The guest has been showing an empty id since New chat; tell it
             # which conversation this turned out to be, so the chat list can
@@ -1477,6 +1488,11 @@ class Bridge:
                         "account is over its rate limit. Nothing ran -- try "
                         "again shortly."))
             elif subtype == "conversation_reset":
+                # /clear replaces the conversation id (session.py's
+                # ConversationResetMessage branch), so the settings have to
+                # follow it or the chat the user is now in has no row.
+                self._remember_settings(
+                    guest, str(data.get("new_conversation_id") or ""))
                 await self._write_block(guest, H.notice("Conversation reset."))
             elif subtype == "sdk_event":
                 # An SDK message the session layer does not handle. It used to
@@ -1524,7 +1540,28 @@ class Bridge:
                 # per-client identity wants a handle that outlives every
                 # session a client opens. docs/audit/02-bridge-python.md
                 # 02.24.
-                if data.get("session_id"):
+                sid = str(data.get("session_id") or "")
+                if sid:
+                    # AND THIS IS WHERE THE SETTINGS LAND. Model, effort and
+                    # mode are chosen against a conversation that does not
+                    # have an id yet -- New chat has none until its first
+                    # message, and the effort fork mints a new one on the
+                    # turn after the fork -- so every write before this
+                    # moment had nothing to be keyed on and silently did
+                    # nothing. `settings.json` was never created at all on
+                    # this machine, while `folders.json` beside it was,
+                    # because a folder is committed at the first TOOL CALL,
+                    # by which time the id exists.
+                    #
+                    # The consequence the user sees is the one Settings was
+                    # built to stop: open a chat you had set to Opus and Plan
+                    # and you get whatever the last chat was using, because
+                    # `_restore_settings` finds no row and deliberately keeps
+                    # what is on screen.
+                    #
+                    # Every path arrives here -- new, resumed, forked and
+                    # /clear -- which is why this is the only hook needed.
+                    self._remember_settings(guest, sid)
                     self._spawn(self._send_sessions(guest))
 
         s = Session(
