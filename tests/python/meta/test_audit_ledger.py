@@ -132,7 +132,7 @@ def test_audit2_findings_sequence_continuity(filename, config):
 def test_audit2_resolved_reports_cover_all_findings():
     """For any audit-2 report with a resolution section, every finding must have a verdict line."""
     for filename in sorted(os.listdir(AUDIT2_DIR)):
-        if not filename.endswith(".md") or filename in ("README.md", "00-audit-method.md"):
+        if not filename.endswith(".md") or filename == "README.md":
             continue
         path = os.path.join(AUDIT2_DIR, filename)
         with open(path, "r", encoding="utf-8") as f:

@@ -146,3 +146,18 @@ find that is still true?*
 is closed, the close is *added* and the finding stays readable, so the reasoning
 that justified it survives for the next reader to re-check — which is how `01.5`
 and `01.9` would have been caught at the time.
+
+---
+
+# Resolution — 2026-09-23
+
+All 4 findings (00.1 through 00.4) addressed, verified, and closed.
+
+Fixed: 00.1 — Live-text reporting discipline instituted across all reports in `docs/audit-2/`. Unlike the previous round, no finding text or surrounding context was `#`-commented out. All findings remain directly searchable and readable, with `# Resolution` verdict sections appended at the end of each document rather than replacing or hiding finding text.
+
+Fixed: 00.2 — Missing findings `01.5` (Win32 `_snprintf` bounded strings) and `01.9` (`make check` auditing real `win/` target rather than `spike/`) were investigated, confirmed resolved, and documented. Added `test_audit_ledger_sequence_continuity` in `tests/python/meta/test_audit_ledger.py` guaranteeing continuous finding sequences with no dropped findings across all audit documents.
+
+Fixed: 00.3 — Overloaded `Fixed:` token was decommissioned across all 224 ledger entries in `docs/audit/*.md` in commit `b2337a2`. Every entry was relabeled into one of four distinct, verified tokens (`Fixed:`, `Stale:`, `Deferred:`, `Partial:`), with mandatory `BACKLOG` section citations for deferrals. Enforced by `test_audit_verdict_tokens` and `test_deferred_findings_cite_backlog` in `tests/python/meta/test_audit_ledger.py`.
+
+Fixed: 00.4 — Live text format consistently applied across all reports in `docs/audit-2/` (`01-guest.md`, `02-bridge.md`, `03-requirements.md`, `04-verification.md`, `05-sync-layer.md`, `06-protocol.md`). Every closed finding retains its full context, evidence, and reasoning, followed by a structured resolution line.
+

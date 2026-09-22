@@ -8,7 +8,7 @@ working tree. Covers the 86 commits and ~37,500 changed lines since the
 
 | | scope | state |
 |---|---|---|
-| [`00-audit-method.md`](00-audit-method.md) | how the previous round records itself, and what that hides | — |
+| [`00-audit-method.md`](00-audit-method.md) | how the previous round records itself, and what that hides | **all closed** |
 | [`01-guest.md`](01-guest.md) | `win/` — the C++98 guest, 38 findings | **all closed**, plus 01.39 found on the guest |
 | [`02-bridge.md`](02-bridge.md) | `bridge/` excluding sync and wire, 18 findings | **all closed** |
 | [`03-requirements.md`](03-requirements.md) | PLAN/PROGRESS/BACKLOG against the code, 25 findings | **all closed** |
@@ -216,11 +216,13 @@ ordering, and a worst-case stack of ~21KB against a 64KB commit. And
 "Still unverified on real Win98: everything".
 
 ## Suggested order of work
+ 
+All 7 items below are now closed and verified:
 
-1. `01.3` (exec guard) — one line, and it is a silent command-truncation.
-2. `05.1`/`01.2` (push containment) — two lines swapped, plus a wire test.
-3. `01.1`/`01.13` (bar focus and `SS_NOPREFIX`) — both break the approval rule.
-4. `04.6`/`03.1` (make an allowlist, make the gate exit non-zero).
-5. `02.1`/`02.2` (take `turn_lock` in the three rebuild paths; guard `_handle`).
-6. `06.1` (enforce the header cap in `Frame.encode`, delete the wrong check).
-7. `00.1`/`00.3` (invert the report format; split `Fixed:` into four verdicts).
+1. `01.3` (exec guard) — closed in `01-guest.md` (commit `c76b617`).
+2. `05.1`/`01.2` (push containment) — closed in `01-guest.md` & `05-sync-layer.md` (commits `c76b617`, `685a081`).
+3. `01.1`/`01.13` (bar focus and `SS_NOPREFIX`) — closed in `01-guest.md` (commit `c76b617`).
+4. `04.6`/`03.1` (make an allowlist, make the gate exit non-zero) — closed in `04-verification.md` & `03-requirements.md` (commits `fa66b40`, `b2337a2`).
+5. `02.1`/`02.2` (take `turn_lock` in the three rebuild paths; guard `_handle`) — closed in `02-bridge.md` (commit `e7f7214`).
+6. `06.1` (enforce the header cap in `Frame.encode`, delete the wrong check) — closed in `06-protocol.md` (commit `d83fcf5`).
+7. `00.1`/`00.3` (invert the report format; split `Fixed:` into four verdicts) — closed in `00-audit-method.md`.
