@@ -48,6 +48,9 @@ int main(void)
     P(RC_SHORTNAMES_NONE);
     P(RC_SHORTNAMES_83);
 
+    P(RC_DEFLATE_NONE);
+    P(RC_DEFLATE_STREAM);
+
     /* 03.19: "what this client IS" (RC_CAP_*, what a real Win98 build
      * actually declares in HELLO) and "what the bridge assumes an
      * undeclaring client is" (Caps()'s field defaults in bridge/files/

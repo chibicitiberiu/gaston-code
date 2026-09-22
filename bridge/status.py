@@ -52,17 +52,17 @@ class ExecStatus(str, Enum):
     CANCELLED = "cancelled"
     TOO_LONG = "too_long"
     BUSY = "busy"
+    UNKNOWN = "unknown"
 
     @classmethod
     def parse(cls, value: str) -> "ExecStatus":
-        """The guest's own vocabulary, plus OK for anything this bridge does
-        not recognise -- matching case-of-doubt behaviour before this type
-        existed: an unlisted status fell through every `elif` with no prose
-        and no `isError` tag."""
+        """The guest's own vocabulary, or UNKNOWN for anything this bridge does
+        not recognise. Falling back to OK would read an unrecognised status as
+        success, which is the wrong direction to guess wrong in."""
         try:
             return cls(value)
         except ValueError:
-            return cls.OK
+            return cls.UNKNOWN
 
     @property
     def is_error(self) -> bool:
@@ -90,6 +90,8 @@ EXEC_STATUS_PROSE: dict[ExecStatus, str] = {
         "The connected machine is already running a command."),
     ExecStatus.CANCELLED: (
         "Cancelled -- the machine is shutting down."),
+    ExecStatus.UNKNOWN: (
+        "The guest reported an unrecognised command status."),
 }
 
 

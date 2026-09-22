@@ -148,6 +148,12 @@ DIRRESERVE_WIN32 = 12
 WORKRESERVE_NONE = 0
 WORKRESERVE_GASTON = 11     #: len(".gaston-tmp") == len(".gaston-old")
 
+#: Outbound deflate capability.
+#: 0: client never deflates outbound (default if undeclared)
+#: 1: client may deflate outbound with persistent stream
+DEFLATE_NONE = 0
+DEFLATE_STREAM = 1
+
 #: What a Win32 GetACP() number means to Python. Only the pages a machine of
 #: this era can actually be set to; anything else is refused rather than
 #: guessed, because a wrong codepage is the one failure in this layer that
@@ -255,6 +261,7 @@ class Caps:
     #: would mean reading a checksum as a path length on some trees and not
     #: others. This is the case the handshake exists for.
     manifest: int = 1
+    deflate: int = DEFLATE_NONE
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -282,7 +289,8 @@ class Caps:
                 f"maxfile={self.maxfilepath} "
                 f"maxcomp={self.maxcomp} maxdepth={self.maxdepth} "
                 f"shortnames={'8.3' if self.shortnames else 'long'} "
-                f"manifest=v{self.manifest}")
+                f"manifest=v{self.manifest} "
+                f"deflate={'stream' if self.deflate else 'none'}")
 
 
 class CapsError(Exception):
@@ -340,7 +348,8 @@ def from_hello(h: dict) -> Caps:
     declared = any(k in h for k in (
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames",
-        "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest"))
+        "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
+        "deflate"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -368,6 +377,7 @@ def from_hello(h: dict) -> Caps:
         maxpath=_num(h, "maxpath", 260, 64, 65536),
         maxcomp=_num(h, "maxcomp", 255, 12, 65536),
         manifest=_num(h, "manifest", 1, 1, 2),
+        deflate=_enum(h, "deflate", (DEFLATE_NONE, DEFLATE_STREAM), DEFLATE_NONE),
         declared=declared,
     )
 
@@ -382,7 +392,8 @@ POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              # POSIX client that commits by temp-and-rename needs the same room
              # even though nothing about its filesystem is constrained.
              workreserve=WORKRESERVE_GASTON,
-             maxpath=4096, maxcomp=255, manifest=2, declared=True)
+             maxpath=4096, maxcomp=255, manifest=2, deflate=DEFLATE_STREAM,
+             declared=True)
 
 #: What a client that declares nothing is assumed to be. Named for the
 #: ASSUMPTION, not for an operating system: the values are the conservative

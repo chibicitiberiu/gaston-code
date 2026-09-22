@@ -423,6 +423,35 @@ def test_sync_status_vocabulary_matches_the_guest():
         f"the regexes above need a new case for how it is produced now.")
 
 
+def test_exec_status_vocabulary_matches_the_guest():
+    """ExecStatus (bridge/status.py) must name exactly the tokens
+    win/rpc/rpc.cpp sets in EXECRESULT status headers.
+    """
+    src = pathlib.Path(conftest.HERE, "win", "rpc", "rpc.cpp").read_text()
+
+    found: set[str] = set()
+    for m in re.finditer(r'\bstatus\s*=\s*"([a-z_]+)"', src):
+        found.add(m.group(1))
+    for m in re.finditer(r'(?:k|keys)\[1\]\s*=\s*"status";\s*(?:v|vals)\[1\]\s*=\s*"([a-z_]+)"',
+                         src):
+        found.add(m.group(1))
+    assert found, ("extracted nothing from win/rpc/rpc.cpp -- the "
+                   "regexes above no longer match the file's shape")
+
+    from bridge.status import ExecStatus
+    bridge_side = {s.value for s in ExecStatus}
+
+    missing = found - bridge_side
+    assert not missing, (
+        f"win/rpc/rpc.cpp can send {missing}, which ExecStatus "
+        f"(bridge/status.py) does not name.")
+    extra = bridge_side - found
+    assert not extra, (
+        f"ExecStatus names {extra}, which this extraction did not find in "
+        f"win/rpc/rpc.cpp -- either the guest no longer sends it, or "
+        f"the regexes above need a new case for how it is produced now.")
+
+
 # --- the SYNCPUT path parse, over bodies with real file content -------------
 #
 # The composition that had no test, and the one that broke. `--contained`

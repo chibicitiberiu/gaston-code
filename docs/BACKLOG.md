@@ -17,20 +17,17 @@ message.
 
 The standing rule in `PLAN.md` is that every phase demo runs once over a
 simulated dialup link, because it is the cheapest way to stop LAN-speed
-assumptions leaking into the design. It has never been run: `tc` needs root and
-this environment has no passwordless sudo.
+assumptions leaking into the design. It has never been run: `tc` does not
+require root (unprivileged user namespaces work here, as recorded in §5:
+`pasta --config-net` keeps internet while shaping `lo`).
 
 **Why it matters more now than it did.** The guest gained a sender thread and a
 byte-bounded outbound queue in Stage B, and that code is *precisely* what a slow
 link exercises. It has only ever run at LAN speed, where the queue never fills
-and the backpressure path never executes. Three known weaknesses live behind
-that gate and are unreachable without it:
+and the backpressure path never executes. Two known weaknesses live behind
+that gate and are unreachable without it (a third, soft queue cap, was closed
+at `win/net/net.cpp:719-726` with a hard drop and `-1` return):
 
-- **The queue's byte cap is soft.** A writer that has waited its limit (50 ×
-  100 ms) enqueues anyway rather than dropping the frame, because losing a
-  frame on a stream with no resync is worse than overshooting. So the real
-  ceiling is `RC_OUTQ_MAX_BYTES` plus one frame per blocked writer.
-  (`win/net.h`, `rc_net_send` in `win/net.c`.)
 - **The UI thread can block up to 5 s in `rc_net_send`** under that
   backpressure — from `do_send`, `do_stop`, `chats_switch` and the permission
   bar. The whole point of the sender thread was that no caller blocks on the
@@ -38,10 +35,22 @@ that gate and are unreachable without it:
 - **`n->sock` is read and written without the lock.** `rc_net_stop` closes it
   while the sender may have captured it, and Winsock recycles handle values.
 
-**To close it:** `sudo tc qdisc add dev lo root netem rate 40kbit`, run the
-Phase 3 demos, then `tc qdisc del`. The bridge's `--link-bps` is *not* a
+**To close it:** Inside a user namespace, run `tc qdisc add dev lo root netem rate 40kbit`
+(see §5), run the Phase 3 demos, then `tc qdisc del`. The bridge's `--link-bps` is *not* a
 substitute — it throttles the bridge's own sending logic, not the wire, so it
 exercises the adaptive-codec thresholds but never fills the guest's queue.
+
+---
+
+## 1b. Real hardware gate (period PC)
+
+**Status:** open since Phase 1.9; deferred while developing on QEMU Win98 SE domain.
+
+`PLAN.md:719-721` moved the physical hardware gate up from Phase 2 to Phase 1 so
+hardware quirks, RichEdit issues, and pagination bugs wouldn't stack. Four phases of
+software have accumulated on QEMU without running on the LAN's physical Pentium 200 MMX
+box (`PROGRESS.md:35`). The physical PC is now available and ready to run the validation
+gate.
 
 ---
 
@@ -354,6 +363,12 @@ registered alongside `ICC_BAR_CLASSES`. It was not, so the first
 debugger, presenting as "the progress bar does not appear". (Audit 01.10 found
 the same gap independently; closes that clause of it too.)
 
+**Progress UI scope cut (audit-2 03.14):** `PLAN.md:281-285` originally required
+an ETA, transfer description, and determinate progress bar. These were explicitly
+cut by decision: `win/app/xferstat.h`'s 1 Hz rate and transferred byte counters
+(`rx 12k @ 45k/s`) in the status bar are sufficient to see the link is moving
+without unnecessary UI complexity. `CANCEL` remains owned by this section for Phase 5.
+
 **The primitive itself, now named.** Audit 04.3 counted four ad-hoc chunked
 transfers already shipping with no shared shape: `send_html`
 (`bridge/wire/link.py:84` since the `GuestLink` extraction, and `_send_html`
@@ -651,9 +666,9 @@ was measured and works -- but that is GDI's RLE inside a DIB, a different thing 
 **Two readings, neither confirmed:**
 
 - **Intentional-so-far.** The only traffic that would want RLE over deflate is the
-  screenshot path, which is Phase 6 and does not exist yet. `deflate` alone covers
-  everything that ships today (transcript text, sync file bodies), so there has been
-  nothing to regret.
+  screenshot path, which is Phase 6 and does not exist yet. `deflate` covers
+  transcript text today, and the Phase 4 compression round (audit-2 03.4) brings
+  deflate to sync file bodies as well.
 - **A forgotten scope cut.** The wire-format section named `enc=` as a value that should be
   free to extend "so adding a codec is a value change, not a protocol change" -- and then
   the codec set was never extended when the measured numbers (11.3:1 on `BI_RLE8`,

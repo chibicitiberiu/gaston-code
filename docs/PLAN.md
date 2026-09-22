@@ -114,13 +114,16 @@ is the single most load-bearing principle for fitting in 8–12MB:
 | CP1252 folding | bridge | already |
 | **Screenshot diffing / tiling / scaling** | **bridge** | **[R2]** guest captures one reduced-depth frame, nothing more |
 | **JSON** | **bridge** | guest emits `key=value`, never builds JSON |
-| Compression | **both** | **[R3] the one deliberate exception — see below** |
+| Compression | **both** | **[R3]** first deliberate exception — see below |
+| **CRLF normalization / file classification** | **guest** | **[R6]** second deliberate exception — single disk pass on 1998 platters; pinned by agreement tests |
 
-**[R3] Compression is the single exception to "transforms nothing", and it is earned.**
+**[R3] Compression and sync classification are the two exceptions to "transforms nothing".**
 Decompressing bridge→guest text is near-free and always worth it. Compressing guest→bridge
 uploads costs real CPU, so it is *adaptive*: cheap RLE on a fast link, RLE+deflate on a
-slow one, chosen from measured throughput. Everything else on this list stays on the bridge
-unconditionally.
+slow one, chosen from measured throughput. Sync classification (`win/sync/sync.cpp`)
+classifies text vs binary and CRLF-normalises in a single disk pass on 1998 IDE platters to
+avoid double reading, pinned against the bridge by cross-language agreement tests.
+Everything else on this list stays on the bridge unconditionally.
 
 The screenshot change alone deletes the worst memory item in the plan: `SCREENDIFF` peaked
 around **4.4MB** on the guest (`g_prev_pixels` 1.37 + `curr_pixels` 1.37 live at once +
@@ -278,11 +281,10 @@ per-frame progress updates land at ~12/sec — smooth without flooding the UI th
 dialup the same frame is 13 seconds, which is exactly why progress and Cancel are required
 rather than nice-to-have.
 
-**Progress UI.** A status-bar pane showing direction, what, bytes done / total, rate and
-ETA, plus a comctl32 progress bar and a **Cancel** button for anything over ~1s. The first
-frame of a chunked transfer carries `bytes=<total>` so the guest can render a determinate
-bar rather than a barber pole. Transfers are cancellable mid-stream via a `CANCEL\nid=`
-frame; the sender checks between chunks.
+**Progress UI.** A status-bar pane showing direction, bytes done / total and transfer
+rate (`rx 12k @ 45k/s`) updated at 1 Hz, enough to show the link is moving. Progress
+bar, ETA and named transfer were explicitly cut to keep the UI simple; `CANCEL` is
+deferred to Phase 5 upload (`BACKLOG.md` §6).
 
 **Attachments mostly avoid the wire entirely.** Since the bridge reads attachments off the
 Samba share, a file already on `P:\` costs nothing — it never crosses the guest's socket.
@@ -461,13 +463,16 @@ version, not just the version.
 
 **[R] Reconnect (missing entirely).** Bridge-down-at-startup shows a disabled input box and
 a status-bar message, never a modal that blocks the message loop. Backoff 1/2/4/…/15s
-driven by `WM_TIMER`, never a sleeping loop. On reconnect: `HELLO ... resume=<sess>
-from=<seq>`. **Always `shutdown(SD_SEND)` + short grace before `closesocket`** — FEASIBILITY
+driven by `WM_TIMER`, never a sleeping loop. On reconnect: guest sends fresh `HELLO`
+with `sess=<sess>`; bridge explicitly re-issues live state (`perms.reissue()`,
+`_reissue_halt`, `_reissue_turn`, etc. at `server.py:874-903`) rather than relying on a
+replay buffer. **Always `shutdown(SD_SEND)` + short grace before `closesocket`** — FEASIBILITY
 treats the Win98 Winsock RST crash as real and field-verified.
 
 **[R] Control frames must not queue behind streaming text.** `PERMREQ` shares the GUI
-stream with a flood of `TEXT`; the coalescer drops pending display frames when a control
-frame is queued.
+stream with streaming `TEXT`. Rather than dropping transcript text (which users scroll back
+to), control frames (`PERMREQ`) bypass coalescer buffering and are written directly to the
+socket, while the bridge explicitly flushes pending text before starting a tool call.
 
 **[R] Security, stated rather than inherited.** Plaintext shared secret on a trusted LAN
 segment is an **accepted risk**; the listener binds only to the retro-segment interface.
@@ -775,12 +780,12 @@ With ONLY the app running on the 32MB guest -- no DOS box, no probe:
 
 The original Phase 6 text worried about a 4.4MB `SCREENDIFF` peak on a machine
 with "8-12MB free". There is no longer 8-12MB free; the HTML transcript spends
-almost all of it. `dwAvailPhys` excludes the disk cache, which Win98 shrinks
-under pressure, so this is the cache being squeezed rather than allocation
-failing -- the app stays responsive. But **every allocation in this phase has
-to be bounded and small**, and the one place the old plan still assumed
-otherwise was the screenshot buffer -- which is why screen capture moved out
-of this phase entirely and into Phase 6.
+a significant portion of it. `dwAvailPhys` excludes the disk cache, which Win98 shrinks
+under pressure (measured as low as 0 KB with an app that still functioned normally;
+Phase 4 measured 5.2MB / 4.5MB free). While allocations were not failing, physical RAM
+and 16-bit GDI/USER heaps are tight (see `docs/mem-audit/`). So **every allocation in
+this phase has to be bounded and small**, and screen capture moved out of this phase
+entirely into Phase 6.
 
 #### 3.0 — Permission prompts *(prerequisite, not optional)*
 
@@ -862,8 +867,8 @@ there for: the request cannot be ignored.
 - **A guest that disconnects with a prompt pending is denied immediately**, not
   after the deadline. Waiting ten minutes for a machine that has gone away is
   the failure mode the deadline exists to prevent, not one to reproduce.
-- The pending request survives a **reconnect** the same way display frames do,
-  through the replay buffer: the bar reappears.
+- The pending request survives a **reconnect**: the bridge explicitly re-issues
+  `PERMSTATE` during `_attach`, restoring the bar.
 
 *Demo: ask for something that needs a tool. The bar appears with the CLI's own
 description of what is being requested, the transcript keeps streaming behind
@@ -933,14 +938,12 @@ running it on the UI thread freezes the window and running it on the reader
 thread stops display frames being read.
 
 - `_beginthreadex`, verified by 0.11 along with a message loop.
-- `exec.c` forked with the `send_response(SOCKET, ...)` signature kept and only
-  its body replaced -- that is what makes "lifted verbatim" nearly true.
-- Two bugs to fix while forking, both already identified: `taskkill` is shelled
-  unconditionally on timeout and does not exist on 9x (use `TerminateProcess`,
-  which `probe.c` already does), and `HeapReAlloc` failure leaks the original
-  block at two sites.
+- `win/rpc/exec.cpp` derived from `run_capture()` in `probe.c`, rewritten rather
+  than forked from retro-agent to eliminate six upstream defects (including
+  unconditional `taskkill` and `HeapReAlloc` leaks; see `win/rpc/exec.cpp:8-22`).
 - Output is capped at 32KB and streamed in frames beyond that. On a machine
-  with 28KB free, an unbounded capture buffer is not a performance question.
+  with tight memory (see `docs/mem-audit/`), an unbounded capture buffer is not a
+  performance question.
 
 *Demo: "what is the volume label on C:?" -> `vol c:` runs on the Win98 box,
 the permission dialog appears, and the answer comes back.*
@@ -1079,7 +1082,7 @@ bridge answering `ERROR` and staying up is arguably better than this document's 
 "reply and close", and the guest doing neither is arguably worse than both. Not decided
 here, because picking one is a design call and this section is for recording what is true.
 
-**Capability handshake.** The guest's first frame is always `HELLO`, currently 23 headers
+**Capability handshake.** The guest's first frame is always `HELLO`, currently 25 headers
 (`win/net/net.cpp`, `rc_net_start`), in three groups:
 
 - **Connection identity**, always present: `ver` (protocol version, refused if it does not
@@ -1087,13 +1090,19 @@ here, because picking one is a design call and this section is for recording wha
   `max_frame` (refused if it does not match `RC_MAX_FRAME`/`MAX_FRAME`).
 - **What this machine is**, used for the system prompt and for sizing pages, sent when
   available rather than guaranteed: `sync_root`, `mem_kb`, `mem_free_kb`, `os`, `cpu`,
-  `screen`, `disk_free_kb`, `sess`, `acp`.
+  `screen`, `disk_free_kb`, `sess`, `acp`, `oemcp`.
 - **Filesystem and path capability declaration** (`win/net/caps.h`, mirrored in
-  `bridge/files/caps.py`), eleven headers, each a small integer with a stated meaning
+  `bridge/files/caps.py`), twelve headers, each a small integer with a stated meaning
   rather than a bitfield -- `caps.h`'s own reasoning is that a bit can only ever answer
   yes/no, and an unrecognised value has to be distinguishable from a bit that is clear:
   `case`, `devices`, `trailing`, `illegal`, `eol`, `shortnames`, `dirreserve`,
-  `workreserve`, `maxpath`, `maxcomp`, `manifest`.
+  `workreserve`, `maxpath`, `maxcomp`, `manifest`, `maxdepth`.
+
+**HELLO body.** `HELLO` carries an optional body containing the guest's tool inventory
+(`win/net/net.cpp:603-609`, parsed at `bridge/server.py:830` via `toolrep.parse_rows`).
+It rides `HELLO` rather than its own frame so the bridge has the inventory before
+synthesizing the agent's initial system prompt (`PROGRESS.md:2536`). Format: newline-delimited
+rows with tab-separated fields `tag\tname\tpath\tversion`.
 
 The bridge's `caps.from_hello` refuses rather than guesses: an enum value outside the set
 it knows, or a number outside a declared range, raises `CapsError`, which the handshake
@@ -1124,20 +1133,21 @@ output) · `EXECRESULT` · `STAT` (periodic measured link speed, feeds the adapt
 choice) · `PING` (keepalive, sent only when there is no sync root to make `SYNCDIRTY`
 serve the same purpose).
 
-*Bridge -> guest:* `ERROR` · `READY` (post-handshake session state) · `RESYNC` (a replay
-gap the bridge could not fill) · `DOC` (initial transcript skeleton, once per process) ·
-`TEXT` (a styled transcript block, `mode=append|live`) · `TOOL` (dead: guest keeps a
-handler "for older bridges", nothing builds this frame any more) · `NOTICE` · `TURN`
+*Bridge -> guest:* `ERROR` · `READY` (post-handshake session state) · `RESYNC` (dead: sender
+deleted with replay buffer; guest handler removed) · `DOC` (initial transcript skeleton, once
+per process) · `TEXT` (a styled transcript block, `mode=append|live`) · `TOOL` (dead: guest
+keeps a handler "for older bridges", nothing builds this frame any more) · `NOTICE` · `TURN`
 (start/end/error) · `PERMREQ` / `PERMSTATE` / `PERMWAIT` / `PERMEND` (the permission
 bar) · `HALT` / `HALTEND` (the sync-conflict halt bar) · `SESSIONS` / `SESSION` /
 `SESSIONSEND` (chat list) · `SWITCHED` · `OPTION` / `OPTIONSEND` (model/effort menus) ·
-`PAGESTART` / `PAGEEND` / `PAGESEALED` (pagination) · `ANCHOR` · `EXEC` / `EXECKILL`
-(routed straight to the RPC worker thread, never the UI thread) · `SYNCSCAN` / `SYNCPUT` /
-`SYNCPUTEND` / `SYNCGET` / `SYNCMKDIR` (routed the same way, matched as a `SYNC*` wildcard
-lane rather than five separate table rows -- `win/net/frameproto.cpp`) · `PONG` (answers
-the guest's `PING`; the guest only sends `PING` when it has no sync root configured, since
-`SYNCDIRTY` already serves as the keepalive otherwise -- the guest branch that receives
-`PONG` just logs it, nothing is shown).
+`PAGESTART` / `PAGEEND` / `PAGESEALED` (pagination) · `ANCHOR` (sent every turn; guest logs
+only, jump-to-message feature was cut) · `EXEC` / `EXECKILL` (routed straight to the RPC
+worker thread, never the UI thread) · `SYNCSCAN` / `SYNCPUT` / `SYNCPUTEND` / `SYNCGET` /
+`SYNCMKDIR` (routed the same way, matched as a `SYNC*` wildcard lane rather than five
+separate table rows -- `win/net/frameproto.cpp`) · `PONG` (answers the guest's `PING`;
+the guest only sends `PING` when it has no sync root configured, since `SYNCDIRTY` already
+serves as the keepalive otherwise -- the guest branch that receives `PONG` just logs it,
+nothing is shown).
 
 A tool result is **not** its own frame type on the wire today: it arrives as an ordinary
 `TEXT`/`DOC` block through the normal transcript path, the same as any other message
@@ -1153,13 +1163,12 @@ it through the path that already worked rather than adding the missing handler.
   unanswered auto-denies rather than wedging the session.
 - `EXEC` of a 16-bit tool returns correct non-empty output *through the GUI
   binary on the RPC thread*, not only through `probe.exe`.
-- Guest free memory is measured again at the end of the phase, the same way as
-  above, and compared against the 28KB baseline. A phase that quietly spends
-  another megabyte needs to know it did.
+- Guest free memory is measured again at the end of the phase (see `docs/mem-audit/`).
+  A phase that quietly spends another megabyte needs to know it did.
 - Every demo run once over `tc netem rate 40kbit`, per the standing rule.
-  **Deferred 2026-09-17 to `BACKLOG.md` §1** -- `tc` needs root and this
-  environment has no passwordless sudo. It is the gate that would exercise the
-  sender thread's backpressure path, which has only ever run at LAN speed.
+  **Deferred 2026-09-17 to `BACKLOG.md` §1** -- unprivileged netem setup documented in §5.
+  It is the gate that would exercise the sender thread's backpressure path, which has only
+  ever run at LAN speed.
 
 
 ### Phase 4 — settings and the rest of the surface *(revised 2026-09-17)*
@@ -1523,6 +1532,20 @@ has known work left.
   Only a page the bridge calls complete is kept, so a half-streamed answer is
   never restored as though it had finished.
 
+- **Tool detection. [R -- 2026-09-21] Done (4.18).**
+  The guest environment carries toolchains, compilers and interpreters (Open Watcom,
+  DJGPP, Visual C++, Perl, etc.) that the model needs to know about to invoke the right
+  tools.
+  **Three layers, and the split is the point:**
+  1. `win/tools_detect.ini` declares what to check (environment variables, marker files);
+     `win/app/tooldet.cpp` probes them locally and reports raw observations without deciding
+     identity.
+  2. The inventory rides in `HELLO`'s body (`win/net/net.cpp:603-609`) so the bridge has it
+     before initializing the agent session and building the system prompt (`PROGRESS.md:2536`).
+  3. `bridge/agent/toolrules.py` evaluates detection rules in Python; `toolrep.py` parses wire rows;
+     `toolnotes.py` provides toolchain usage notes; and `machine.py`'s `tools_block` formats
+     the prompt block.
+
 **One SDK question from the original text is now answered** rather than
 guessed, checked against the installed 0.2.153:
 `PermissionResultAllow.updated_permissions` is a **`list[PermissionUpdate]`**.
@@ -1614,7 +1637,7 @@ survives a repaint.
 307,200 -> 27,088 bytes in 14ms, **11.3:1, done by GDI**. The compression is
 free. The problem is the buffer.
 
-**A full-screen DIB is 307KB and there are 28KB free.** So capture proceeds in
+**A full-screen DIB is 307KB and physical memory and heaps are tight (see `docs/mem-audit/`).** So capture proceeds in
 **strips** of N scanlines into a small fixed buffer, each strip compressed and
 sent as it is taken. Region capture is the default -- the control tree already
 returns window rects, so "read this dialog" sends ~10KB instead of ~120KB and
@@ -1844,14 +1867,10 @@ small toolbar. Open Watcom ships `wrc`, so a `.rc` with an `.ico` is the
 mechanism. Cheap, visible, and currently the largest gap between "works" and
 "looks like it belongs on the desktop".
 
-**[R -- 2026-09-18]** The application icon shipped as Phase 4.0, along with
-the resource pipeline it needed (`win/app/gaston.rc`, `tools/gen/mkicon.py`).
-What is left of R5 is the toolbar, which is not a resource problem: it is the
-first real GDI spend against the fixed 64KB USER heap, and `BACKLOG.md` 11
-(04.23) says to count GDI objects before and after. It also has no home yet,
-since `win/app/main.cpp` builds a hand-written menu bar and individual
-buttons and there is no comctl32 toolbar to hang bitmaps on. Blocks Phase
-5.1, not this stage.
+**[R -- 2026-09-18, updated 2026-09-20]** The application icon shipped as Phase 4.0
+(`win/app/gaston.rc`, `tools/gen/mkicon.py`). The comctl32 toolbar shipped as
+`win/app/toolbar.cpp` (373 lines) with dropdown arrows and prompt controls,
+resolving R5 and unblocking Phase 5.1's attach UI (`BACKLOG.md` §11).
 
 ### R6 — **the file layer is a sync layer, not Samba**  *(planned, replaces Phase 3's share)*
 
@@ -1909,12 +1928,13 @@ dangerous case, because one may be mid-turn. Two different clients are fine.
 R1's registry becomes per-client, which is also what makes R1 correct on a
 bridge serving more than one machine.
 
-### R8 — a Command menu  *(planned)*
+### R8 — a Command menu  *(shipped)*
 
-A menu of the slash commands that make sense here -- `/context`, `/goal`, and
-whichever others are useful and cheap -- inserted into the input box rather
-than invented as new protocol. Explicitly not all of them: anything needing a
-UI the guest does not have is not worth faking.
+A menu of the slash commands that make sense here (`bridge/server.py:4260`
+`COMMAND_MENU = ["/compact", "/rename", "/init"]`), filtered at connect against what the
+local CLI provides. `/context` is deliberately excluded because the status bar already
+displays the token gauge, and commands requiring unsupported UI affordances are omitted
+(`bridge/server.py:3868-3887`).
 
 ## Repo layout — one repo
 
@@ -1924,25 +1944,26 @@ RetroAI/
   Makefile                    # exe test lint wine qemu
   make/ow.mk                  # -bm, WLINK_LNK, WINVER=0x0400, verified rules
   win/                        # [R2] one binary, one target -- SOURCE ONLY
-    frameproto.c/.h  net.c/.h  ini.c/.h  log.c/.h  caps.h
-    main.c  htmlview.c/.h
-    rpc.c/.h  exec.c/.h  sync.c/.h  syncrpc.c/.h
+    app/                      # GUI, window, HTML view, toolbar, dialogs
+    core/                     # INI, log, string utils
+    net/                      # Winsock, frameproto, capability headers
+    rpc/                      # RPC dispatch, command exec, process spawn
+    sync/                     # File scanner, CRC32, sync RPC
+    checks/                   # Static and Wine-based contract verification
     third_party/miniz/
   build/                      # ALL generated output, gitignored
-    win/  spike/              # .o .exe .map .err, and the guest's runtime log
-  tmp/                        # scratch from the VM-driving scripts, gitignored
-  bridge/     server.py session.py rpc.py tools.py markdown.py fold.py
-              pages.py paths.py replay.py protocol.py fakegui.py
-  tests/python/  one folder per layer -- agent/ files/ wire/ view/ server/
-                 guest/ meta/ tools/ -- plus conftest.py and harness.py.
-                 See tests/python/README.md.
-  tools/      vm/     drive the guest: qmp.py dos.py vmship.sh runvm.sh ...
-              gen/    make what ships: mkicon.py mktools-iso.sh ...
-              check/  the static gates make check runs
-              probe/  bridge stubs that drive the guest's own code
-              toolkit.py / vmlib.sh -- the repo root and the domain name
-  vm/         disk images and run scripts (all images gitignored)
-  docs/       PLAN.md PROGRESS.md BACKLOG.md FEASIBILITY.md FORKED.md audit/
+    win/                      # .o .exe .map .err, and guest runtime log
+  tmp/                        # scratch from VM scripts, gitignored
+  bridge/
+    agent/                    # Session, tools, permissions, conversations
+    files/                    # Sync engine, manifest, path normalization
+    view/                     # HTML generation, pagination, styling
+    wire/                     # Protocol framing, link socket, compression
+    devtools/                 # fakegui conformance harness
+  tests/python/               # Subdivided: agent/ files/ wire/ view/ server/ guest/ meta/ tools/
+  tools/                      # vm/ gen/ check/ probe/
+  vm/                         # disk images and run scripts (gitignored)
+  docs/                       # PLAN.md PROGRESS.md BACKLOG.md audit/
 ```
 
 `FORKED.md` records which retro-agent files at which commit with what changes — MIT
@@ -1962,11 +1983,12 @@ attribution and upstream-diff tool in one.
 | `GetVersion` threaded/select divergence | MinGW artifact; OW has no emutls, so the concern evaporates |
 | Agent as listener | Dial out: ~60 lines written to delete ~700 |
 | UDP discovery, `wmake`, `registry.c` | Fleet feature / GNU make works / INI instead |
-| `UPLOAD`/`MKDIR`/`DELETE`, `LAUNCH` | Samba covers them; `LAUNCH` drags in the JSON builder |
+| `UPLOAD`/`MKDIR`/`DELETE` (via Samba), `LAUNCH` | Samba superseded by sync layer (R6); `SYNCMKDIR`/`SYNCPUT` exist; `LAUNCH` drags in JSON builder |
 | Channel multiplexing over one socket | Process split already separates them |
-| Scrollback trimming, custom-drawn view, MSHTML | Pagination supersedes / see Architecture |
+| Scrollback trimming, custom-drawn view | Pagination supersedes (MSHTML is the shipping renderer) |
 | Warm multi-session client pool | One live client, switch = close + resume |
 | Integrated QMP auto-recovery | `tools/vm/qmp.py` run by hand |
+| Progress bar, ETA, transfer name | Simpler status-bar rate/counter indicator ("rx @ rate") is sufficient |
 
 ## Effort
 

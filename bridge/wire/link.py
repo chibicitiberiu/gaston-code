@@ -21,7 +21,8 @@ import time
 
 from ..view.html import LIVE
 from . import fold
-from .compress import ENC_DEFLATE, ENC_RAW, StreamCompressor, should_compress
+from .compress import (ENC_DEFLATE, ENC_RAW, StreamCompressor,
+                       StreamDecompressor, should_compress)
 from .protocol import (MAX_FRAME, Frame, ProtocolError,
                        export_data, export_end, export_start)
 from .protocol import text_frame
@@ -45,13 +46,15 @@ class GuestLink:
         # mid-connection would desynchronise the guest's inflater, so it is only
         # reset on reconnect -- see Bridge._attach.
         self.zip_out: StreamCompressor = StreamCompressor()
+        self.zip_in: StreamDecompressor = StreamDecompressor()
         self.link_bps: float | None = None
+        self.deflate_bps: float | None = None
 
     @property
     def connected(self) -> bool:
         return self.writer is not None and not self.writer.is_closing()
 
-    async def send(self, guest, frame: Frame) -> bool:
+    async def send(self, guest, frame: Frame, *, compress: bool = False) -> bool:
         """Returns whether the frame actually reached the wire.
 
         `guest` is currently unused here -- it used to be how this reached
@@ -71,25 +74,19 @@ class GuestLink:
         nothing better to do with that than log and carry on, and a lost
         NOTICE is not fatal. An oversized frame is not: see below.
         """
-        # Genuinely fatal to this send, not "poisons every future replay"
-        # any more -- MAX_FRAME is the wire format's own limit (net.c's
-        # reader never buffers past the length it was told to expect), so a
-        # frame that fails to encode can never reach ANY client, not just a
-        # replay of this one. That is a bug in whatever built the frame, and
-        # returning False here would let it vanish with nothing but a log
-        # line nobody is watching in real time -- so this refuses loudly
-        # (raises) instead of swallowing it. There is no seq left to stamp,
-        # so this IS the real encode: the bytes it produces are exactly what
-        # gets written below, not an estimate of them.
-        try:
-            payload = frame.encode()
-        except ProtocolError:
-            log.error("refusing to send oversized %s frame (%d byte body); "
-                      "it exceeds the %d byte wire cap and can never be "
-                      "delivered -- the caller must chunk or truncate it",
-                      frame.type, len(frame.body), MAX_FRAME)
-            raise
         async with self.send_lock:
+            if compress and frame.body and should_compress(frame.body, self.link_bps, self.deflate_bps):
+                frame = Frame(frame.type,
+                              dict(frame.headers, enc=ENC_DEFLATE),
+                              self.zip_out.compress(frame.body))
+            try:
+                payload = frame.encode()
+            except ProtocolError:
+                log.error("refusing to send oversized %s frame (%d byte body); "
+                          "it exceeds the %d byte wire cap and can never be "
+                          "delivered -- the caller must chunk or truncate it",
+                          frame.type, len(frame.body), MAX_FRAME)
+                raise
             w = self.writer
             if w is None or w.is_closing():
                 # Simply lost: nothing buffers this for a later retry any
@@ -151,16 +148,13 @@ class GuestLink:
         total = len(data)
         for i in range(0, total, budget):
             chunk = data[i:i + budget]
-            enc = ENC_RAW
-            if should_compress(chunk, self.link_bps):
-                chunk = self.zip_out.compress(chunk)
-                enc = ENC_DEFLATE
             # total/off are in DECOMPRESSED bytes and are on every chunk, not
             # just the first: the guest shows a progress figure from them, and
             # a reconnect mid-transfer would otherwise leave it with a
             # denominator it never received.
-            await self.send(guest, text_frame(mode, enc, page_no, chunk,
-                                              total=total, off=i))
+            await self.send(guest, text_frame(mode, ENC_RAW, page_no, chunk,
+                                              total=total, off=i),
+                            compress=True)
             if i + budget < total:
                 # Between chunks, not merely between calls (04.12): without
                 # this, a big page or a future transcript export starves the
@@ -183,11 +177,8 @@ class GuestLink:
         sent = 0
         for i in range(0, total, budget):
             chunk = data[i:i + budget]
-            enc = ENC_RAW
-            if should_compress(chunk, self.link_bps):
-                chunk = self.zip_out.compress(chunk)
-                enc = ENC_DEFLATE
-            if not await self.send(guest, export_data(i, total, enc, chunk)):
+            if not await self.send(guest, export_data(i, total, ENC_RAW, chunk),
+                                   compress=True):
                 log.warning("export: the link went away at %d/%d bytes",
                             i, total)
                 await self.send(guest, export_end(

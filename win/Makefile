@@ -41,7 +41,7 @@ CXXONLY = -xd
 
 CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
-         -DWIN32_LEAN_AND_MEAN \
+         -DWIN32_LEAN_AND_MEAN -DTDEFL_LESS_MEMORY=1 \
          -i="$(CURDIR)" -i="$(CURDIR)/third_party/miniz" \
          -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt"
 
@@ -176,6 +176,9 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 #
 # The cost is a few seconds. A green suite that tested the previous commit is
 # worth far less than that.
+retroclaude: $(BUILD)/retroclaude.exe
+retroclaude.exe: $(BUILD)/retroclaude.exe
+
 all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
      netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 

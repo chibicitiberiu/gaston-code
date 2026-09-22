@@ -58,6 +58,7 @@
  * transcript. See rc_html::poll. */
 #define RC_SLOT_STATUS "s"
 
+#define RC_CSS_STATUS  "status"
 #define RC_CSS_NOTICE  "notice"
 #define RC_CSS_ERROR   "err"
 #define RC_CSS_USER    "you"

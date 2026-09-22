@@ -94,6 +94,74 @@ static void inflate_finish(void)
     }
 }
 
+/* One persistent deflate stream for the whole connection (guest -> bridge). */
+static mz_stream g_def;
+static int       g_def_ready = 0;
+
+#define RC_DEFLATE_SCRATCH (RC_MAX_FRAME + 1024)
+static char     *g_def_scratch = NULL;
+
+static void deflate_begin(void)
+{
+    if (g_def_ready) { mz_deflateEnd(&g_def); g_def_ready = 0; }
+    memset(&g_def, 0, sizeof(g_def));
+    if (mz_deflateInit(&g_def, 1) == MZ_OK) g_def_ready = 1;
+    else rc_log("net: mz_deflateInit failed");
+    if (!g_def_scratch) {
+        g_def_scratch = (char *)HeapAlloc(GetProcessHeap(), 0,
+                                          RC_DEFLATE_SCRATCH);
+        if (!g_def_scratch)
+            rc_log("net: no memory for the %u byte deflate scratch",
+                   (unsigned)RC_DEFLATE_SCRATCH);
+    }
+}
+
+static void deflate_finish(void)
+{
+    if (g_def_ready) { mz_deflateEnd(&g_def); g_def_ready = 0; }
+    if (g_def_scratch) {
+        HeapFree(GetProcessHeap(), 0, g_def_scratch);
+        g_def_scratch = NULL;
+    }
+}
+
+/* Measurement counters for adaptive compression (03.3 / A4) */
+static unsigned long g_deflate_in = 0;
+static unsigned long g_deflate_out = 0;
+static unsigned long g_deflate_us = 0;
+static unsigned long g_deflate_samples = 0;
+static unsigned long g_deflate_bps = 0;
+static unsigned long g_link_bps = 0;
+static LARGE_INTEGER g_perf_freq;
+static int           g_perf_init = 0;
+
+static void perf_init_once(void)
+{
+    if (!g_perf_init) {
+        if (!QueryPerformanceFrequency(&g_perf_freq) || g_perf_freq.QuadPart <= 0)
+            g_perf_freq.QuadPart = 0;
+        g_perf_init = 1;
+    }
+}
+
+void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us)
+{
+    ScopedLock lock(&n->send_lock);
+    if (bytes_in) *bytes_in = g_deflate_in;
+    if (us) *us = g_deflate_us;
+    if (g_deflate_us > 0) {
+        g_deflate_bps = (unsigned long)((double)g_deflate_in * 1000000.0 / g_deflate_us);
+    }
+    g_deflate_in = 0;
+    g_deflate_us = 0;
+}
+
+void rc_net_set_link_bps(rc_net *n, unsigned long bps)
+{
+    ScopedLock lock(&n->send_lock);
+    g_link_bps = bps;
+}
+
 /* Inflates f->body in place-ish: allocates a new buffer, points body at it,
  * and records it for rc_frame_free. Returns 0 on success. */
 static int inflate_body(rc_frame *f)
@@ -455,6 +523,13 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     if (do_connect(n) != 0) { set_state(n, RC_FAILED); return -1; }
 
     inflate_begin();
+    deflate_begin();
+    g_deflate_in = 0;
+    g_deflate_out = 0;
+    g_deflate_us = 0;
+    g_deflate_samples = 0;
+    g_deflate_bps = 0;
+    g_link_bps = 0;
     n->running = 1;
 
     rc_strf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
@@ -496,7 +571,6 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
         OSVERSIONINFOA os;
         SYSTEM_INFO si;
         DWORD spc = 0, bps = 0, freec = 0, totalc = 0;
-        HDC dc;
 
         memset(&ms, 0, sizeof(ms));
         ms.dwLength = sizeof(ms);
@@ -599,6 +673,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
     HDR("manifest",   RC_STR(RC_CAP_MANIFEST));
     HDR("maxdepth",   RC_STR(RC_CAP_MAXDEPTH));
+    HDR("deflate",    RC_STR(RC_CAP_DEFLATE));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the
@@ -784,10 +859,109 @@ static int send_frame(rc_net *n, const char *type,
     {
         ScopedLock lock(&n->send_lock);
 
-        total = rc_frame_build(build, sizeof(build), type, keys, vals, nkv,
-                               body, body_len);
+        /* Backpressure, in bytes. Wait for the sender to drain room before
+         * compressing and allocating `it`. Waiting before mz_deflate ensures
+         * that if the send times out with RC_SEND_FULL, no frame was compressed
+         * into the stream, so the persistent dictionary is never corrupted by
+         * a dropped frame. Furthermore, send_lock is not released after
+         * mz_deflate, preserving strict stream order. */
+        while (n->outq_bytes + body_len + 256 > RC_OUTQ_MAX_BYTES && n->running
+               && waited < wait_ticks) {
+            LeaveCriticalSection(&n->send_lock);
+            WaitForSingleObject(n->outq_room, 100);
+            waited++;
+            EnterCriticalSection(&n->send_lock);
+        }
+        if (!n->running) return RC_SEND_DEAD;
+        if (n->outq_bytes + body_len + 256 > RC_OUTQ_MAX_BYTES) {
+            rc_log("net: send queue full after %dms wait, dropping %s "
+                   "(body=%u bytes, outq_bytes=%u)", waited * 100, type, body_len,
+                   n->outq_bytes);
+            return RC_SEND_FULL;
+        }
+
+        const void *send_body = body;
+        unsigned send_len = body_len;
+        const char *def_keys[RC_HELLO_MAX + 2];
+        const char *def_vals[RC_HELLO_MAX + 2];
+        const char *const *use_keys = keys;
+        const char *const *use_vals = vals;
+        int use_nkv = nkv;
+
+        int is_bulk = (strcmp(type, "EXECOUT") == 0 ||
+                       strcmp(type, "SYNCDAT") == 0 ||
+                       strcmp(type, "SYNCENT") == 0);
+        int should_compress = 0;
+        if (is_bulk && body_len >= 64 && g_def_ready && g_def_scratch) {
+            if (g_deflate_samples < 5) {
+                should_compress = 1;
+            } else if (g_deflate_bps > 0) {
+                if (g_link_bps < g_deflate_bps / 2) {
+                    should_compress = 1;
+                }
+            } else {
+                should_compress = 1;
+            }
+        }
+
+        if (should_compress) {
+            LARGE_INTEGER t0, t1;
+            unsigned long elapsed_us = 0;
+            int def_rc;
+
+            perf_init_once();
+            if (g_perf_freq.QuadPart > 0) QueryPerformanceCounter(&t0);
+            else t0.LowPart = GetTickCount();
+
+            g_def.next_in   = (const unsigned char *)body;
+            g_def.avail_in  = body_len;
+            g_def.next_out  = (unsigned char *)g_def_scratch;
+            g_def.avail_out = RC_DEFLATE_SCRATCH;
+
+            def_rc = mz_deflate(&g_def, MZ_SYNC_FLUSH);
+
+            if (g_perf_freq.QuadPart > 0) {
+                QueryPerformanceCounter(&t1);
+                elapsed_us = (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000ULL) / g_perf_freq.QuadPart);
+            } else {
+                elapsed_us = (GetTickCount() - t0.LowPart) * 1000UL;
+            }
+            if (elapsed_us == 0) elapsed_us = 1;
+
+            if (def_rc == MZ_OK && g_def.avail_in == 0) {
+                unsigned def_out_len = RC_DEFLATE_SCRATCH - g_def.avail_out;
+                g_deflate_in += body_len;
+                g_deflate_out += def_out_len;
+                g_deflate_us += elapsed_us;
+                g_deflate_samples++;
+                if (g_deflate_us > 0) {
+                    g_deflate_bps = (unsigned long)((double)g_deflate_in * 1000000.0 / g_deflate_us);
+                }
+
+                send_body = g_def_scratch;
+                send_len = def_out_len;
+
+                if (nkv < (int)(sizeof(def_keys) / sizeof(def_keys[0])) - 1) {
+                    int i;
+                    for (i = 0; i < nkv; ++i) {
+                        def_keys[i] = keys[i];
+                        def_vals[i] = vals[i];
+                    }
+                    def_keys[nkv] = "enc";
+                    def_vals[nkv] = "deflate";
+                    use_keys = def_keys;
+                    use_vals = def_vals;
+                    use_nkv = nkv + 1;
+                }
+            } else {
+                rc_log("net: mz_deflate failed: %d, avail_in=%u", def_rc, g_def.avail_in);
+            }
+        }
+
+        total = rc_frame_build(build, sizeof(build), type, use_keys, use_vals, use_nkv,
+                               send_body, send_len);
         if (total < 0) {
-            rc_log("net: frame too large to build (%s, body=%u)", type, body_len);
+            rc_log("net: frame too large to build (%s, body=%u)", type, send_len);
             return RC_SEND_DEAD;
         }
         it = (rc_outq_item *)HeapAlloc(GetProcessHeap(), 0,
@@ -801,56 +975,6 @@ static int send_frame(rc_net *n, const char *type,
         it->sent = 0;
         it->next = NULL;
 
-        /* Backpressure, in bytes. Wait for the sender to drain rather than
-         * letting the queue grow without bound on a machine with 28KB free.
-         *
-         * This is a genuine temporary unlock, not a guard that forgot to
-         * release: the wait must not hold send_lock, or the sender thread
-         * could never drain the queue it is waiting on. ScopedLock has no
-         * "pause" -- it is a destructor, not a semaphore -- so the pair below
-         * stays a raw Enter/Leave on the same section the guard holds. The
-         * loop always leaves with the section held again, which is what lets
-         * the guard's own release, on every path out of this block, stay
-         * correct.
-         *
-         * The cap used to be soft: a writer that waited out its budget
-         * enqueued anyway, on the theory that losing a frame on a stream
-         * with no resync is worse than overshooting. tests/python/
-         * test_guest_net.py's slow-reader scenario measured what that
-         * actually does against a peer that stops reading -- not "one frame
-         * over", but unbounded growth, because every subsequent caller waits
-         * out the same budget and then ALSO enqueues anyway: three calls in
-         * a row against a stalled reader queued 65558, then 98337, then
-         * 131116 bytes, each one succeeding. On a machine with 28KB free
-         * that is not a slack budget, it is an unbounded one with extra
-         * steps. A frame that cannot be queued within the wait now fails
-         * instead -- the caller already has to handle rc_net_send returning
-         * -1 for every other reason it can fail. */
-        while (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES && n->running
-               && waited < wait_ticks) {
-            LeaveCriticalSection(&n->send_lock);
-            WaitForSingleObject(n->outq_room, 100);
-            waited++;
-            EnterCriticalSection(&n->send_lock);
-        }
-        if (!n->running) {
-            outq_free(it);
-            return RC_SEND_DEAD;
-        }
-        if (n->outq_bytes + it->len > RC_OUTQ_MAX_BYTES) {
-            /* RC_SEND_FULL, not RC_SEND_DEAD, and the distinction is the
-             * whole of finding 01.17. The link is fine -- a bulk transfer is
-             * simply ahead of this frame in a 64KB queue that takes about
-             * thirteen seconds to drain at 40kbit. Reporting it as "the
-             * connection is down" sent the user to look at the network for a
-             * backpressure event, and told them a reconnect was coming when
-             * none was. */
-            rc_log("net: send queue full after %dms wait, dropping %s "
-                   "(%d bytes, outq_bytes=%u)", waited * 100, type, total,
-                   n->outq_bytes);
-            outq_free(it);
-            return RC_SEND_FULL;
-        }
         if (n->outq_tail) n->outq_tail->next = it;
         else              n->outq_head = it;
         n->outq_tail = it;
@@ -1053,6 +1177,13 @@ void rc_net_stop(rc_net *n)
     } else {
         rc_log("net: reader did not exit; leaking the inflate scratch rather "
                "than freeing it under a live mz_inflate");
+    }
+
+    if (rpcj && sw == WAIT_OBJECT_0) {
+        deflate_finish();
+    } else {
+        rc_log("net: worker/sender did not exit; leaking the deflate scratch rather "
+               "than freeing it under a live mz_deflate");
     }
 
     /* Same argument one step wider. WSACleanup tears Winsock down for the

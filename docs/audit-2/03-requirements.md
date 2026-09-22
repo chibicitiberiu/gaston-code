@@ -685,3 +685,64 @@ Sixteen checked against HEAD.
 Fifteen hold as written. Two (02.6, 03.5) are true of the code but their
 recorded text no longer matches it. One (04.20) is not a fix at all, and it is
 the visible instance of the systematic problem in 03.6.
+
+---
+
+# Resolution — 2026-09-22
+
+All 25 findings are closed. Written as LIVE text, per `00-audit-method.md`:
+nothing above is commented out, so the reasoning that justified each finding
+stays readable and re-checkable.
+
+**Verified how.** `make -C win all && make -C win check`: 202 symbols from 7 DLLs, no NT-only imports, PE 4.0/4.0, zero warnings. Full test suite: **2995 passed, 2 xfailed, 0 failed** (including all 166 guest tests under Wine). Ledger verified with `tests/python/meta/test_audit_ledger.py`.
+
+Stale: 03.1 — PE import allowlist gate was implemented in `tools/check/imports.py` and run via `win/Makefile:322` (checking 7 DLLs, 32 NT-only deny-list symbols, PE 4.0/4.0); `Makefile` updated to include `retroclaude.exe` in `guest-checks` to prevent test skip on clean builds.
+
+Deferred: 03.2 — Phase 1 hardware gate recorded in `docs/BACKLOG.md` §1 as open, not run; machine is available, and `docs/PROGRESS.md:8` clarified that demo was run on QEMU guest while real-hardware gate remains open.
+
+Fixed: 03.3 — Runtime deflate measurement added via QueryPerformanceCounter in `win/net/net.cpp` and `win/rpc/rpc.cpp:214-227` emitting `deflate_bps` in `STAT`; adaptive compression rule (link_bps < 0.5 * deflate_bps) replaced guessed constants in both guest and bridge.
+
+Fixed: 03.4 — Sync file bodies are now compressed in both directions: bridge compresses `SYNCPUT` in `bridge/files/synctransport.py` under `send_lock`, guest compresses bulk frames (`EXECOUT`, `SYNCDAT`, `SYNCENT`) in `win/net/net.cpp` via persistent miniz stream `g_def` (`TDEFL_LESS_MEMORY=1`).
+
+Fixed: 03.5 — Documented the second guest transformation exception (CRLF normalization and checksum fold in `win/sync/sync.cpp:20-130`) in `CLAUDE.md:24-26` and `docs/PLAN.md:104-123`.
+
+Fixed: 03.6 — Relabeled 224 audit ledger items in `docs/audit/*.md` into four distinct tokens (`Fixed:`, `Stale:`, `Deferred:`, `Partial:`) and added continuous sequence and valid token validation in `tests/python/meta/test_audit_ledger.py`.
+
+Fixed: 03.7 — Replaced the misleading "28KB after a turn" allocation constraint in `CLAUDE.md:30` and `docs/PLAN.md` with pointers to measured bounds (5208 KB / 4568 KB at Phase 4 close) and `docs/mem-audit/`.
+
+Fixed: 03.8 — Corrected Protocol reference in `docs/PLAN.md`: updated header count to 25, capability group to 12 (including `maxdepth` and `deflate`), and documented `HELLO` body tool inventory row format.
+
+Fixed: 03.9 — Documented the Phase 4 tool detection subsystem in `docs/PLAN.md`, covering `win/app/tooldet.cpp`, `tools_detect.ini`, `toolrules`/`toolrep`/`toolnotes`, and the HELLO body.
+
+Stale: 03.10 — `ANCHOR` is not dead: sent by bridge per turn from `_start_turn` (`bridge/server.py:2334`) and logged by guest; `docs/PLAN.md:1134` updated to clarify that jump-to-message UI was cut.
+
+Fixed: 03.11 — Marked `RESYNC` as retired in `docs/PLAN.md:1127` and removed dead `RESYNC` handler and dispatch table row from `win/app/main.cpp`.
+
+Fixed: 03.12 — Updated `docs/PLAN.md:464-465` and `:865-866` to describe explicit re-issue on reconnect (`bridge/server.py:874-903`) rather than retired replay buffer.
+
+Fixed: 03.13 — Corrected `docs/PLAN.md:468-470` to match non-blocking priority ordering without dropping display frames; added test verifying `PERMREQ` precedes buffered text in `tests/python/wire/test_compress.py`.
+
+Fixed: 03.14 — Reconciled transfer progress UI in `docs/PLAN.md` and `docs/BACKLOG.md` §6: recorded ETA, transfer name, and progress bar as cut by design; aligned quiet threshold in `win/app/xferstat.h`.
+
+Fixed: 03.15 — Updated `docs/BACKLOG.md` §1: unblocked netem gate via unprivileged user namespaces and noted outbound queue byte cap is hard at `RC_OUTQ_MAX_BYTES` (`win/net/net.cpp:719-726`).
+
+Fixed: 03.16 — Removed DOS paths and built-in names from tool schema descriptions in `bridge/agent/tools.py`; strengthened `tests/python/meta/test_no_os_in_code.py` to ban Windows paths in live strings.
+
+Fixed: 03.17 — Added `RC_CSS_STATUS` define in `win/app/htmlview.h` used in `win/app/main.cpp:356`; updated regex in `tests/python/meta/test_guest_css.py` to match multi-class strings and verify all defines.
+
+Fixed: 03.18 — Added `ExecStatus.UNKNOWN` in `bridge/status.py` and `EXEC_STATUS_PROSE`; updated `bridge/server.py` and `win/rpc/rpc.cpp` to treat unrecognized exec status as error; added agreement test in `tests/python/wire/test_exec_status.py`.
+
+Fixed: 03.19 — Corrected `docs/PLAN.md:1966` and `:1964` to reflect MSHTML as shipping renderer and `SYNCMKDIR` as active wire frame.
+
+Fixed: 03.20 — Updated repository layout in `docs/PLAN.md` to reflect `win/{app,core,net,rpc,sync,checks}` and `bridge/{agent,files,view,wire,devtools}`.
+
+Fixed: 03.21 — Updated `docs/PLAN.md` R5: noted toolbar is implemented and shipped in `win/app/toolbar.cpp`.
+
+Fixed: 03.22 — Reconciled `docs/PLAN.md` R8 with shipping commands in `COMMAND_MENU` and documented deliberate exclusions (`/context`, `/goal`).
+
+Fixed: 03.23 — Corrected `docs/PROGRESS.md` work-folder description to clarify conversation directory lives inside `sync.root`.
+
+Fixed: 03.24 — Corrected `docs/PLAN.md` 3.2 and `docs/FORKED.md` to document `win/rpc/exec.cpp` as a clean rewrite rather than a fork, and `tools/check/imports.py` using `objdump`.
+
+Fixed: 03.25 — Reconciled `STAT` finding 02.6 in `docs/audit/02-bridge-python.md` with `03-contracts.md` and verified `STAT` is sent by guest and handled by bridge.
+

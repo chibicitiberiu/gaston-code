@@ -23,11 +23,13 @@ context on every request. See "the exec test" in `docs/PLAN.md` §3.1.
 
 **The guest transforms nothing.** Markdown, pagination, encoding folds, image
 diffing, OCR and JSON all happen on the bridge. The guest makes syscalls and
-moves bytes. Compression is the one deliberate exception.
+moves bytes. Compression and the sync layer's single-pass text/binary CRLF
+classification (to save disk passes on 1998 IDE platters; pinned by agreement
+tests) are the two deliberate exceptions.
 
-**Memory is the binding constraint.** Measured on the 32MB guest with only the
-app running: 2420 KB free at window creation, 1060 KB after the chat list,
-**28 KB after a turn**. Every allocation must be bounded and small.
+**Memory is the binding constraint.** Every allocation must be bounded and
+small. On a 32MB guest, physical memory and GDI/USER heaps are tight; keep
+buffers capped and static allocations minimal (see `docs/mem-audit/`).
 
 **Nothing NT-only, ever.** A single NT-only static import kills the image at
 load, before `WinMain`, with no log written and nothing to debug. Resolve

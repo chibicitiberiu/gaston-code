@@ -53,6 +53,9 @@ extern "C" {
 #define RC_SHORTNAMES_NONE  0
 #define RC_SHORTNAMES_83    1
 
+#define RC_DEFLATE_NONE     0
+#define RC_DEFLATE_STREAM   1
+
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits
  * inside; Unix reserves none. A NUMBER, not a flag, so a client with a
@@ -119,6 +122,7 @@ typedef char rc_workreserve_matches_sync_h
  * length-prefixed, so both formats parse either way and the bridge would guess
  * wrong on some trees and not others. */
 #define RC_CAP_MANIFEST    2
+#define RC_CAP_DEFLATE     RC_DEFLATE_STREAM
 
 #ifdef __cplusplus
 }

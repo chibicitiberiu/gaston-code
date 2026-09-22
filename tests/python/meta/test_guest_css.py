@@ -28,18 +28,23 @@ HEADER = os.path.join(HERE, "win", "app", "htmlview.h")
 
 def guest_classes() -> dict:
     src = open(HEADER, encoding="utf-8").read()
-    found = dict(re.findall(r'#define\s+(RC_CSS_\w+)\s+"([a-z-]+)"', src))
-    assert found, "no RC_CSS_* defines found; did the header move?"
+    total = len(re.findall(r'#define\s+RC_CSS_\w+', src))
+    found = dict(re.findall(r'#define\s+(RC_CSS_\w+)\s+"([^"]+)"', src))
+    assert total > 0, "no RC_CSS_* defines found; did the header move?"
+    assert len(found) == total, (
+        f"matched {len(found)} of {total} RC_CSS_* defines; check regex or header syntax"
+    )
     return found
 
 
 def test_every_class_the_guest_emits_is_in_the_bridge_s_stylesheet():
     css = H.document()
     for macro, name in guest_classes().items():
-        assert f".{name}" in css, (
-            f"{macro} is \"{name}\" and the bridge's stylesheet has no "
-            f"`.{name}` rule -- the guest's blocks would render unstyled, "
-            f"silently")
+        for cls in name.split():
+            assert f".{cls}" in css, (
+                f"{macro} names class \"{cls}\" and the bridge's stylesheet has no "
+                f"`.{cls}` rule -- the guest's blocks would render unstyled, "
+                f"silently")
 
 
 def test_the_guest_and_the_bridge_agree_on_what_each_class_means():

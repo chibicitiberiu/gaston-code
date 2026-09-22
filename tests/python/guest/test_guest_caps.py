@@ -58,6 +58,8 @@ EXPECTED = {
     # count it as "declared" and kept no field to compare against.
     "RC_SHORTNAMES_NONE":   C.SHORTNAMES_NONE,
     "RC_SHORTNAMES_83":     C.SHORTNAMES_83,
+    "RC_DEFLATE_NONE":      C.DEFLATE_NONE,
+    "RC_DEFLATE_STREAM":    C.DEFLATE_STREAM,
     # Not an enum: the guest's own walk depth, which the bridge assumes when
     # a client does not declare one. If these drift, the bridge refuses paths
     # the guest would have scanned, or accepts ones it will silently stop

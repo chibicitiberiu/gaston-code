@@ -28,14 +28,14 @@ system and to reshaping the response path onto our frame grammar.
 
 | Upstream file | Lines | Destination | Planned changes |
 |---|---:|---|---|
-| `agent/src/exec.c` | 361 | `win/exec.c` | Keep the `send_response(SOCKET, ...)` call shape, replace the body to emit our frame grammar. Drop `handle_launch` (pulls in the JSON builder). Fix: unconditional `taskkill` on timeout (absent on 9x), and two `HeapReAlloc` failure paths that leak the original block. |
-| `agent/src/input.c` | 490 | `win/input.c` | Near-verbatim. `UICLICK`/`UIDRAG`/`UIKEY`/`WINLIST` are pure syscalls. Keep the E0-extended-scancode table and the `VK_SNAPSHOT`-returns-0 fallback to scancode `0x37`. |
+| `agent/src/exec.c` | 361 | — | **Not forked.** Rewritten from `probe.c:run_capture()` into `win/rpc/exec.cpp` to eliminate six defects (including `taskkill` and `HeapReAlloc` leaks). |
+| `agent/src/input.c` | 490 | `win/app/input.cpp` | Near-verbatim. `UICLICK`/`UIDRAG`/`UIKEY`/`WINLIST` are pure syscalls. Keep the E0-extended-scancode table and the `VK_SNAPSHOT`-returns-0 fallback to scancode `0x37`. |
 | `agent/src/screen.c` | 467 | — | **Not forked.** Replaced by ~60 lines under "the guest transforms nothing". The only part worth lifting is `screen_palette_for_capture()`: on an 8bpp display a fresh memory DC carries only the 20 static system colours, so `GetDIBits` needs the live hardware palette selected in or it returns colour-index noise. |
-| `agent/src/handlers.c` | 514 | `win/rpc.c` | Dispatch table pruned to PING / EXEC / EXECW / DOWNLOAD (~130 lines). |
+| `agent/src/handlers.c` | 514 | `win/rpc/rpc.cpp` | Dispatch table pruned to PING / EXEC / EXECW / DOWNLOAD (~130 lines). |
 | `agent/src/main.c` | 1381 | — | **Not forked.** Listener, `select()` multiplex, discovery, service and watchdog scaffolding, all deleted by the single-binary / single-connection design. |
 | `agent/src/util.c` | 259 | — | **Not forked.** ~200 lines of it is the JSON builder, and the guest never emits JSON. |
-| `agent/shared/frameproto.h` | 37 | `win/frameproto.h` | Reference only; our grammar differs (no status byte, full duplex, `key=value` headers). **`MAX_FRAME_SIZE` must NOT be inherited — upstream is 32MB, which is the entire target machine.** Ours is 64KB. |
-| `tests/python/test_agent_win9x_imports.py` | 287 | `tests/python/test_pe_imports.py` | The ~45-line `pe_imports()` PE32 parser is the reusable part. Invert a ban list into an allowlist built from real Win98 DLL exports. |
+| `agent/shared/frameproto.h` | 37 | `win/net/frameproto.h` | Reference only; our grammar differs (no status byte, full duplex, `key=value` headers). **`MAX_FRAME_SIZE` must NOT be inherited — upstream is 32MB, which is the entire target machine.** Ours is 64KB. |
+| `tests/python/test_agent_win9x_imports.py` | 287 | `tools/check/imports.py` | **Not lifted.** Implemented via `tools/check/imports.py` using `objdump` with an allowlist and NT-only denylist rather than lifting the custom PE parser. |
 
 ## Ideas taken without code
 

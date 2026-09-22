@@ -60,6 +60,26 @@ async def test_frame_cap_mismatch_rejected(harness):
     await harness.close(w)
 
 
+async def test_bad_caps_rejected(harness):
+    """An unrecognised or unhonoured capability header is refused at the handshake.
+
+    CLAUDE.md:44-50 promises bad caps become an ERROR bad_caps frame and close the link.
+    """
+    r, w = await harness.connect(hdrs={"eol": "2"})
+    frames = await harness.recv_until(r, {"ERROR"})
+    assert frames[-1].headers["code"] == "bad_caps"
+    await harness.close(w)
+
+
+async def test_hello_timeout_rejected(harness, monkeypatch):
+    """Connecting and sending nothing times out and receives ERROR hello_timeout."""
+    monkeypatch.setattr(harness.bridge, "HELLO_TIMEOUT", 0.05)
+    r, w = await asyncio.open_connection("127.0.0.1", harness.port)
+    frames = await harness.recv_until(r, {"ERROR"}, timeout=1.0)
+    assert frames[-1].headers["code"] == "hello_timeout"
+    await harness.close(w)
+
+
 async def test_second_client_is_rejected_not_evicted(harness):
     """Whoever holds the session may be mid-turn; stealing it silently is
     worse than refusing."""
@@ -1492,6 +1512,28 @@ async def test_deny_does_not_interrupt_the_turn(harness):
     assert isinstance(result, PermissionResultDeny)
     assert result.interrupt is False
     assert result.message
+    await harness.close(writer)
+
+
+async def test_permission_deadline_auto_denies_after_timeout(harness, monkeypatch):
+    """PLAN.md:840-842: A permission request unanswered for 10 minutes (perms.DEADLINE_S)
+    auto-denies rather than wedging the session forever.
+    """
+    from bridge.agent import permissions as perms
+    assert perms.DEADLINE_S == 600.0
+
+    monkeypatch.setattr(perms, "DEADLINE_S", 0.05)
+    reader, writer, task = await _connect_and_ask(harness)
+    f = await _recv(harness, reader, "PERMREQ")
+    assert f.type == "PERMREQ"
+
+    result = await asyncio.wait_for(task, timeout=2.0)
+    assert isinstance(result, PermissionResultDeny)
+    assert "within ten minutes" in result.message
+    assert result.interrupt is False
+
+    end = await _recv(harness, reader, "PERMEND")
+    assert end.headers["reason"] == "timeout"
     await harness.close(writer)
 
 

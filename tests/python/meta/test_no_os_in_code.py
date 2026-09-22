@@ -39,7 +39,7 @@ ROOT = pathlib.Path(conftest.REPO) / "bridge"
 BANNED = ("windows 98", "windows 95", "windows 9x", "win 9x",
           "win9x", "win95", "win98",
           "windows 3.1", "windows nt", "ms-dos", "msdos",
-          "command.com", "cmd.exe", "4dos")
+          "command.com", "cmd.exe", "4dos", "c:\\")
 
 #: `profiles/` is where naming a machine is the POINT, and it is not Python.
 #: `devtools/` is our own test harness, not the product.

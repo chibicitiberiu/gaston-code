@@ -5,9 +5,10 @@ that gets re-planned once Phase 0 answers land.
 
 **Current goal: Phase 5 — Attach.**
 
-Phases 0–4 are done and demoed on the real guest. Phase 4's own list is closed
-except for R7 (multiple clients), which `BACKLOG.md` §7 carries with its
-implementation blockers intact.
+Phases 0–4 are done and demoed on the real guest (the QEMU Win98 SE domain;
+Phase 1.9's period PC physical hardware gate remains open in `BACKLOG.md` §1b).
+Phase 4's own list is closed except for R7 (multiple clients), which
+`BACKLOG.md` §7 carries with its implementation blockers intact.
 
 ---
 
@@ -49,7 +50,7 @@ Everything Linux-side proceeds without these.
 | 0.4 | **Experiment C** — compile retro-agent sources under `wcc386` | **done** | **All five clean, zero errors, zero warnings, unchanged** |
 | 0.5a | miniz builds + runs under OW | **done** | Vendored at `win/third_party/miniz/`; round-trip verified as a Win32 PE |
 | 0.5b | Compression ratios measured | **done** | **~2.16:1**, not the ~3:1 assumed. Plan corrected |
-| 0.5c | Deflate throughput on the real P200MMX | **provisional** | Ran on the guest: L1 7707 KB/s compress, 16379 KB/s inflate, round trip PASS. **Not usable as a threshold**: TCG on a modern host is nothing like a P200, and `probe.c`'s sample is a two-line block repeated (164:1), which flatters deflate badly. Needs a real corpus and real hardware |
+| 0.5c | Deflate throughput on the real P200MMX | **provisional** | Ran on the guest: L1 7707 KB/s compress, 16379 KB/s inflate, round trip PASS. **Not usable as a threshold**: TCG on a modern host is nothing like a P200, and `probe.c`'s sample is a two-line block repeated (164:1), which flatters deflate badly. Replaced by runtime throughput measurement in the guest (`STAT` deflation timings) rather than a static threshold |
 | 0.6 | Win98 SE guest under QEMU | **done** | Unattended via MSBATCH.INF. Required config: TCG (not KVM), no APIC, no ACPI |
 | 0.7 | W-suffix import load test (`GetCommandLineW`/`GetModuleFileNameW`) | **done — PASS** | The image loads on Win98 SE 4.10.2222 A. Both symbols resolve against Win98's kernel32. The last unverified toolchain assumption is settled; Open Watcom stands |
 | 0.8 | Samba LFN over `vers=1.0` | **blocked** | No `smbd` on the host (see blockers). Guest-side LFN itself does work: `copy retrocl.ini "retroclaude.ini"` created and read a long name from COMMAND.COM |
@@ -2366,15 +2367,13 @@ workflows billed by the run, a heap dump to the operator's Desktop.
 **does not exist**. Three of the fifty-three shipped, and `/recap` and `/usage`
 were cut after being tried: both ran, both cost a turn, both rendered nothing.
 
-*The per-chat work folder* was `C:\Gaston\<chat>`, a new mirror per
-conversation. That means a new baseline, a new `tree_id`, a watcher restart and
-a recovery pass — four chances to report deletions nobody made, in the one
-layer that can lose a person's work. The conversation moves **inside** the
-existing mirror instead: same property, one mirror, one baseline, one watcher,
-which is what `BACKLOG.md` §7 said the decision required. It also makes a
-stronger guarantee than the original shape — with the agent's cwd inside the
-mirror, everything it can write is mirrored, so strays are impossible by
-construction.
+*The per-chat work folder* is `C:\Gaston\<chat>`. Rather than maintaining an
+isolated mirror root per conversation (which would require a new baseline, a new
+`tree_id`, a watcher restart and a recovery pass), `C:\Gaston` serves as the
+shared mirror root (`sync.root` in INI) and conversations reside **inside** this
+mirror as `C:\Gaston\<name>`: one mirror, one baseline, one watcher
+(`BACKLOG.md` §7). This guarantees that with the agent's cwd inside the mirror,
+everything it writes is mirrored, making strays impossible by construction.
 
 *The local cache* was going to hold pages in memory. It is files on disk, one
 page each, exactly one in memory at a time — `pagebar.h`'s "the control holds

@@ -182,6 +182,10 @@ long rc_net_inflight(const rc_net *n);
  * asking for it properly. */
 unsigned rc_net_outq_bytes(rc_net *n);
 
+/* Instrumentation for STAT frame: bytes compressed and time spent in mz_deflate. */
+void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us);
+void rc_net_set_link_bps(rc_net *n, unsigned long bps);
+
 #ifdef __cplusplus
 }
 #endif

@@ -42,7 +42,9 @@ import shlex
 import sys
 import tempfile
 
-from ..wire.compress import StreamDecompressor
+from ..wire.compress import (
+    StreamCompressor, StreamDecompressor, LEVEL_UP, MIN_WORTH_COMPRESSING
+)
 from ..wire.protocol import Frame, FrameReader, ProtocolError, hello
 
 RESET = "\033[0m"
@@ -81,6 +83,7 @@ FAKE_CAPS = {
     "maxpath": "260",   # MAX_PATH
     "maxcomp": "255",
     "manifest": "2",    # RC_CAP_MANIFEST
+    "deflate": "1",     # RC_CAP_DEFLATE
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a
@@ -121,6 +124,7 @@ class FakeGui:
         # connect(), which runs on both the first connect and every /resume,
         # exactly where win/net/net.c calls inflate_begin()/inflate_finish().
         self.zip_in: StreamDecompressor | None = None
+        self.zip_out: StreamCompressor | None = None
         self._live_lines = 0   # terminal lines the current LIVE block occupies
         self._doc_seen = False
         self.page_no = 0
@@ -150,6 +154,7 @@ class FakeGui:
             self.host, self.port
         )
         self.zip_in = StreamDecompressor()
+        self.zip_out = StreamCompressor(level=LEVEL_UP)
         f = hello(
             self.secret,
             sess=self.sess if resume else None,
@@ -186,6 +191,11 @@ class FakeGui:
     async def send(self, f: Frame) -> None:
         if not self.writer:
             return
+        is_bulk = f.type in ("EXECOUT", "SYNCDAT", "SYNCENT")
+        if (self.zip_out and is_bulk and f.body
+                and len(f.body) >= MIN_WORTH_COMPRESSING):
+            f = Frame(f.type, dict(f.headers, enc="deflate"),
+                      self.zip_out.compress(f.body))
         self.writer.write(f.encode())
         await self.writer.drain()
 

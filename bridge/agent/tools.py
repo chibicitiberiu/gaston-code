@@ -152,15 +152,14 @@ def build(bridge, guest=None) -> dict:
                         "command through. The system prompt lists the ones "
                         "it has; omit this to use the first of them. Pass "
                         "\"none\" to spawn a program directly instead, which "
-                        "gives cleaner quoting but loses built-ins like dir, "
-                        "vol, copy and type, and loses pipes and "
+                        "gives cleaner quoting but loses built-ins, pipes and "
                         "redirection.",
                 },
                 "cwd": {
                     "type": "string",
                     "description":
-                        "Working directory on the connected machine, e.g. "
-                        "C:\\WORK. Optional -- leave it out and the command "
+                        "Working directory on the connected machine. "
+                        "Optional -- leave it out and the command "
                         "runs in this conversation's own folder on that "
                         "machine, which is where your files arrive.",
                 },

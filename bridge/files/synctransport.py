@@ -146,7 +146,8 @@ class SyncTransport:
                 await self._guest.link.send(
                     self._guest,
                     Frame("SYNCPUT", {"id": sid, "total": str(len(data)),
-                                      "off": str(off)}, prefix + piece))
+                                      "off": str(off)}, prefix + piece),
+                    compress=True)
                 off += CHUNK
                 if off >= len(data):
                     break

@@ -206,6 +206,33 @@ async def test_a_push_converts_endings_and_carries_its_precondition(
     await harness.close(writer)
 
 
+async def test_compressible_syncput_is_compressed_on_wire(harness, tmp_path):
+    """A file >= 64 bytes is sent compressed on the wire as SYNCPUT enc=deflate."""
+    from bridge.wire.compress import StreamDecompressor
+
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    content = b"The quick brown fox jumps over the lazy dog.\n" * 10
+    open(os.path.join(p.root, "large.txt"), "wb").write(content)
+
+    task = asyncio.create_task(p.push("large.txt", None))
+    put = await _recv(harness, reader, "SYNCPUT")
+    end = await _recv(harness, reader, "SYNCPUTEND")
+
+    assert put.headers.get("enc") == "deflate"
+    decomp = StreamDecompressor()
+    inflated = decomp.decompress(put.body)
+    assert inflated.startswith(b"9 large.txt")
+    assert b"The quick brown fox jumps over the lazy dog." in inflated
+
+    await harness.send(writer, Frame("SYNCPUTACK", {
+        "id": put.headers["id"], "status": "ok",
+        "crc": end.headers["crc"]}))
+    assert await asyncio.wait_for(task, 5) is True
+    await harness.close(writer)
+
+
 async def test_a_binary_push_is_not_converted(harness, tmp_path):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")

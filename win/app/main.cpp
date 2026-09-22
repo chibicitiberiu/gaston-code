@@ -353,7 +353,7 @@ static void status_refresh(void)
         if (g_html) {
             char row[256];
             rc_strf(row, sizeof(row),
-                    "<div class=\"status\">"
+                    "<div class=\"" RC_CSS_STATUS "\">"
                     "<img src=\"spin.gif\" width=\"16\" height=\"16\" alt=\"\">"
                     "%s %lus</div>", what, secs);
             g_html->status(row);
@@ -1019,23 +1019,6 @@ static void on_notice(rc_frame *f)
     if (g_html) g_html->notice(f->body);
 }
 
-static void on_resync(rc_frame *f)
-{
-    /* The bridge could not replay what we missed and is telling us the
-     * transcript has a hole in it. Say so, because the alternative is the
-     * user scrolling back through a gap they were never told about.
-     *
-     * Had no branch at all, so it fell through to "unhandled frame type"
-     * -- a log line nobody reads on a machine with no console. */
-    const char *why = rc_frame_get(f, "reason");
-    char msg[256];
-    rc_strf(msg, sizeof(msg),
-            "Some of the conversation could not be restored after the "
-            "reconnection%s%s. Use the page buttons to re-read it.",
-            (why && *why) ? ": " : "", (why && *why) ? why : "");
-    if (g_html) g_html->notice(msg);
-}
-
 /* EXPORTSTART / EXPORTDAT / EXPORTEND -- all three owned by app/export.cpp;
  * see rc_export::frame there for what each one does. */
 static void on_export(rc_frame *f)
@@ -1081,7 +1064,6 @@ static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
     { "HALTEND",     on_bar },
     { "ERROR",       on_error },
     { "NOTICE",      on_notice },
-    { "RESYNC",      on_resync },
     { "EXPORTSTART", on_export },
     { "EXPORTDAT",   on_export },
     { "EXPORTEND",   on_export },

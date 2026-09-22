@@ -17,6 +17,7 @@ from bridge.wire.compress import (
                                   StreamDecompressor,
                                   should_compress,
                                   )
+from bridge.wire.protocol import Frame, FrameReader
 
 SAMPLE = (
     b"The bridge owns markdown, so the wire carries pre-styled runs rather than\n"
@@ -81,10 +82,19 @@ def test_unknown_link_speed_compresses():
     assert should_compress(b"x" * 500, None)
 
 
-def test_fast_link_skips_small_frames_but_not_big_ones():
-    fast = 750_000
-    assert not should_compress(b"x" * 200, fast)
-    assert should_compress(b"x" * 8192, fast)
+def test_adaptive_compression_ratio_decision():
+    """Deflating n bytes is worth it when time to deflate < time saved on wire.
+    With ratio=2.0, compression turns off when link_bps >= deflate_bps * 0.5.
+    """
+    deflate_bps = 1_000_000.0  # 1 MB/s deflate throughput
+    small = b"x" * 200
+
+    # On a slow link (100 KB/s < 500 KB/s), deflating is a net win
+    assert should_compress(small, 100_000, deflate_bps)
+
+    # On a fast link (600 KB/s >= 500 KB/s), deflating wastes more CPU time than wire time
+    assert not should_compress(small, 600_000, deflate_bps)
+    assert not should_compress(b"x" * 8192, 600_000, deflate_bps)
 
 
 def test_slow_link_compresses_small_frames():
@@ -160,3 +170,139 @@ async def test_stop_flushes_pending_text():
     await c.add("trailing")
     await c.stop()
     assert out == ["trailing"], "text must not be lost at turn end"
+
+
+async def test_control_frame_reaches_writer_ahead_of_buffered_text():
+    """03.13: control frames (like PERMREQ) do not queue behind coalescer buffers.
+
+    A buffered TEXT has not reached the wire yet, while a control frame is sent
+    directly via send(), arriving at the writer immediately.
+    """
+    wire = []
+
+    async def wire_writer(frame_type: str, body: str = ""):
+        wire.append((frame_type, body))
+
+    c = Coalescer(lambda text: wire_writer("TEXT", text), interval=10.0, target=2048)
+    c.start()
+
+    # Streaming prose arrives and is buffered in the coalescer
+    await c.add("Thinking about this command...")
+    assert wire == [], "text should still be sitting in the coalescer"
+
+    # A control frame is sent directly
+    await wire_writer("PERMREQ", "tool=exec")
+    assert wire == [("PERMREQ", "tool=exec")], "PERMREQ reaches wire before un-flushed coalescer text"
+
+    # Eventually the coalescer flushes
+    await c.stop()
+    assert wire == [("PERMREQ", "tool=exec"), ("TEXT", "Thinking about this command...")]
+
+
+def test_syncput_compression_round_trip():
+    """A compressed SYNCPUT frame produced with zip_out is decompressed
+    byte-identical with StreamDecompressor (mirroring guest tinfl)."""
+    comp = StreamCompressor()
+    decomp = StreamDecompressor()
+    content = b"function test() {\n    return 'hello world';\n}\n" * 10
+    compressed_body = comp.compress(content)
+    frame = Frame("SYNCPUT", {"path": "test.js", "enc": "deflate"}, compressed_body)
+
+    assert frame.headers["enc"] == "deflate"
+    assert decomp.decompress(frame.body) == content
+
+
+async def test_guest_to_bridge_compressed_frame_inflated():
+    """Guest-sent compressed EXECOUT frame is inflated by the bridge before dispatch."""
+    from bridge.server import Bridge, GuestSession
+    from bridge.agent.identity import GuestIdentity
+    from bridge.view.transcript import TranscriptView
+
+    bridge = Bridge(secret="secret", host="127.0.0.1", port=0)
+    guest = GuestSession()
+
+    received_output = []
+
+    async def mock_on_execout(g, f):
+        received_output.append(f.body)
+
+    bridge._exec_out = mock_on_execout
+
+    # Guest compresses outbound with zip_out
+    guest_compressor = StreamCompressor(level=1)
+    raw_payload = b"Directory of C:\\\n  AUTOEXEC.BAT\n  CONFIG.SYS\n" * 5
+    comp_payload = guest_compressor.compress(raw_payload)
+
+    frame = Frame("EXECOUT", {"id": "cmd1", "enc": "deflate"}, comp_payload)
+    await bridge._handle(guest, frame)
+
+    assert received_output == [raw_payload]
+
+
+async def test_send_lock_prevents_zip_out_desync():
+    """Two concurrent senders sharing GuestLink cannot interleave compressed bytes."""
+    from bridge.wire.link import GuestLink
+
+    link = GuestLink()
+    decomp = StreamDecompressor()
+    received_frames = []
+
+    class MockWriter:
+        def __init__(self):
+            self._closing = False
+            self.buf = bytearray()
+
+        def is_closing(self):
+            return self._closing
+
+        def write(self, data):
+            self.buf.extend(data)
+
+        async def drain(self):
+            await asyncio.sleep(0.001)
+
+    mock_w = MockWriter()
+    link.writer = mock_w
+
+    async def sender(worker_id: int):
+        for i in range(20):
+            payload = f"worker {worker_id} message {i}\n".encode() * 10
+            frame = Frame("TEXT", {}, payload)
+            ok = await link.send(None, frame, compress=True)
+            assert ok
+
+    await asyncio.gather(sender(1), sender(2))
+
+    reader = FrameReader()
+    for f in reader.feed(bytes(mock_w.buf)):
+        assert f.headers.get("enc") == "deflate"
+        uncompressed = decomp.decompress(f.body)
+        received_frames.append(uncompressed)
+
+    assert len(received_frames) == 40
+    for body in received_frames:
+        assert b"worker 1" in body or b"worker 2" in body
+
+
+def test_deflate_cap_negotiation():
+    """Honors declared deflate cap, refuses unknown deflate values."""
+    from bridge.files import caps as C
+
+    # Default undeclared is DEFLATE_NONE
+    c0 = C.from_hello({})
+    assert c0.deflate == C.DEFLATE_NONE
+
+    # Declared stream is accepted
+    c1 = C.from_hello({"deflate": "1"})
+    assert c1.deflate == C.DEFLATE_STREAM
+
+    # Declared none is accepted
+    c2 = C.from_hello({"deflate": "0"})
+    assert c2.deflate == C.DEFLATE_NONE
+
+    # Unknown cap is refused
+    with pytest.raises(C.CapsError):
+        C.from_hello({"deflate": "2"})
+    with pytest.raises(C.CapsError):
+        C.from_hello({"deflate": "bad"})
+

@@ -74,7 +74,7 @@ public:
     void note_tx_done(unsigned long n);
 
     /* status_refresh's middle pane (pane 1): the rx/tx text while something
-     * has moved in the last 1200ms, or an empty string once that has passed
+     * has moved in the last 2500ms, or an empty string once that has passed
      * -- and the reset of all four counters that goes with the empty-string
      * case. out/cap exactly like rc_strf's other callers. */
     void text(char *out, unsigned cap);

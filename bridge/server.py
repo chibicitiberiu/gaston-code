@@ -374,6 +374,10 @@ class GuestSession:
         return self.link.zip_out
 
     @property
+    def zip_in(self) -> StreamDecompressor:
+        return self.link.zip_in
+
+    @property
     def link_bps(self) -> float | None:
         return self.link.link_bps
 
@@ -491,6 +495,8 @@ class GuestSession:
 
 
 class Bridge:
+    HELLO_TIMEOUT: float = 10.0
+
     def __init__(
         self,
         secret: str,
@@ -780,7 +786,7 @@ class Bridge:
         wrong for both shapes.
         """
         try:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(self.HELLO_TIMEOUT):
                 while True:
                     data = await reader.read(4096)
                     if not data:
@@ -864,6 +870,7 @@ class Bridge:
         is_reconnect = self._guest is not None
         if self._guest is not None:
             self._guest.zip_out.reset()
+            self._guest.zip_in.reset()
 
         if self._guest is None:
             # sess_id is not passed here: GuestIdentity's own default_factory
@@ -1864,6 +1871,15 @@ class Bridge:
 
     async def _handle(self, guest: GuestSession, f: Frame) -> None:
         guest.last_seen = time.monotonic()
+        if f.headers.get("enc") == "deflate":
+            try:
+                body = guest.link.zip_in.decompress(f.body)
+            except Exception as e:
+                log.error("cannot inflate frame %s: %s", f.type, e)
+                await self._send(guest, error("corrupt_frame", f.type))
+                return
+            new_headers = {k: v for k, v in f.headers.items() if k != "enc"}
+            f = Frame(f.type, new_headers, body)
         name = self._DISPATCH.get(f.type)
         if name is None:
             log.warning("unknown frame type from guest: %s", f.type)
@@ -1965,6 +1981,13 @@ class Bridge:
         if bps > 0:
             guest.set_link_speed(bps)
             log.info("guest reports %.0f B/s", bps)
+        try:
+            def_bps = float(f.headers.get("deflate_bps", "0"))
+        except ValueError:
+            def_bps = 0.0
+        if def_bps > 0:
+            guest.link.deflate_bps = def_bps
+            log.info("guest reports deflate %.0f B/s", def_bps)
 
     async def _on_ping(self, guest: GuestSession, f: Frame) -> None:
         await self._send(guest, pong())

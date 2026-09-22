@@ -88,19 +88,28 @@ class StreamDecompressor:
         self._do = zlib.decompressobj(WBITS)
 
 
-def should_compress(data: bytes, link_bps: float | None) -> bool:
-    """Decide per payload from the measured link speed.
+ASSUMED_RATIO = 2.0
 
-    On a fast LAN a small frame is not worth the CPU on either end. On dialup
-    almost everything is. The guest reports throughput, so this adapts rather
-    than being configured.
+
+DEFAULT_DEFLATE_BPS = 800_000.0  #: P200 baseline before guest reports STAT deflate_bps
+
+
+def should_compress(data: bytes, link_bps: float | None,
+                    deflate_bps: float | None = None) -> bool:
+    """Decide per payload from the measured link speed and deflate throughput.
+
+    Deflating n bytes is worth it when the time to deflate them is less than
+    the time saved sending n - n/ratio bytes. With an assumed 2:1 ratio:
+        n / deflate_bps < (n - n/2) / link_bps  <=>  link_bps < 0.5 * deflate_bps
+
+    When the link is faster than half the CPU's compression throughput (e.g. a
+    fast LAN on a slow CPU), compressing wastes more wall clock time in CPU than
+    it saves on the wire, so the compression turns itself off.
     """
     if len(data) < MIN_WORTH_COMPRESSING:
         return False
-    if link_bps is None:
-        return True  # unknown link: assume it might be slow
-    # On a genuinely fast LAN, a small frame's compression saves less wall
-    # clock than it costs the P200 to produce. Compress the big ones anyway.
-    if link_bps > 400_000 and len(data) < 1024:
-        return False
+    if link_bps is not None:
+        effective_def = deflate_bps if (deflate_bps is not None and deflate_bps > 0) else DEFAULT_DEFLATE_BPS
+        if link_bps >= effective_def * (1.0 - 1.0 / ASSUMED_RATIO):
+            return False
     return True

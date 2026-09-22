@@ -212,12 +212,23 @@ static void rpc_maybe_nudge(void)
 
         if (elapsed >= 1000 && moved > 0) {
             char bps[24];
-            rc_strf(bps, sizeof(bps), "%lu",
-                    (unsigned long)((double)moved * 1000.0 / elapsed));
+            unsigned long cur_bps = (unsigned long)((double)moved * 1000.0 / elapsed);
+            rc_strf(bps, sizeof(bps), "%lu", cur_bps);
+            rc_net_set_link_bps(g_net, cur_bps);
             {
-                const char *k[1]; const char *v[1];
+                unsigned long def_in = 0, def_us = 0;
+                rc_net_get_deflate_sample(g_net, &def_in, &def_us);
+                const char *k[2]; const char *v[2];
+                int n_stat = 1;
+                char def_bps_str[24];
                 k[0] = "bps"; v[0] = bps;
-                rc_net_send(g_net, "STAT", k, v, 1, NULL, 0);
+                if (def_us > 0) {
+                    unsigned long cur_def_bps = (unsigned long)((double)def_in * 1000000.0 / def_us);
+                    rc_strf(def_bps_str, sizeof(def_bps_str), "%lu", cur_def_bps);
+                    k[1] = "deflate_bps"; v[1] = def_bps_str;
+                    n_stat = 2;
+                }
+                rc_net_send(g_net, "STAT", k, v, n_stat, NULL, 0);
             }
         }
         last_tx = g_net->tx_bytes;
@@ -410,7 +421,8 @@ static void run_one(rc_frame *f)
     case RC_EXEC_SPAWN_FAILED: status = "spawn_failed"; break;
     case RC_EXEC_CANCELLED:    status = "cancelled";    break;
     case RC_EXEC_TOO_LONG:     status = "too_long";     break;
-    default:                   status = "ok";           break;
+    case RC_EXEC_OK:           status = "ok";           break;
+    default:                   status = "unknown";      break;
     }
 
     rc_strf(code, sizeof(code), "%lu", (unsigned long)r.code);
