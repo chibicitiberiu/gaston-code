@@ -643,3 +643,19 @@ def test_a_successful_commit_moves_the_temp_rather_than_deleting_it(commit_cases
     rc, left_behind = commit_cases["ok"]
     assert rc == 0, f"expected a good commit to return 0, got {rc}"
     assert not left_behind
+
+
+def test_successful_commit_preserves_readonly_attribute(commit_cases):
+    """05.4: a commit replacing a read-only target restores FILE_ATTRIBUTE_READONLY."""
+    rc, ro_preserved = commit_cases["readonly_ok"]
+    assert rc == 0, f"expected 0, got {rc}"
+    assert ro_preserved, "read-only attribute was not restored on successful commit"
+
+
+def test_failed_commit_restores_readonly_attribute(commit_cases):
+    """05.4: a failed commit (-3) restores FILE_ATTRIBUTE_READONLY on the target
+    rather than silently leaving write protection stripped."""
+    rc, ro_preserved = commit_cases["readonly_fail"]
+    assert rc == -3, f"expected -3 on locked target, got {rc}"
+    assert ro_preserved, "read-only attribute was stripped by failed commit"
+

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
@@ -367,9 +368,18 @@ class Baseline:
             fh.write(blob)
             fh.flush()
             os.fsync(fh.fileno())
+        # Copy the old baseline aside BEFORE replacing, so the window where
+        # `path` is absent never exists. shutil.copy2 is not atomic but .prev
+        # is only a debugging aid — losing it is harmless; losing `path` is not.
         if os.path.exists(path):
-            os.replace(path, path + ".prev")
+            shutil.copy2(path, path + ".prev")
         os.replace(tmp, path)
+        # Fsync the directory so the rename is durable against a host crash.
+        dfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
 
     @classmethod
     def load(cls, path: str) -> "Baseline":
@@ -379,6 +389,12 @@ class Baseline:
         to run is the safe failure; guessing is not.
         """
         if not os.path.exists(path):
+            if os.path.exists(path + ".prev"):
+                raise RuntimeError(
+                    f"baseline {path!r} is missing but {path + '.prev'!r} "
+                    f"exists — this looks like a crash during save. Refusing "
+                    f"rather than treating it as a first sync, which would "
+                    f"resurrect every deletion.")
             return cls()
         with open(path, encoding="utf-8") as fh:
             d = json.load(fh)          # a JSONDecodeError here must propagate

@@ -120,6 +120,13 @@ SHORTNAME_MAX = 8
 #: reported by a scan again, so it reads as "deleted on the guest" forever.
 MAXDEPTH_GASTON = 16
 
+#: How many files the client's scanner counts before aborting.  The
+#: default mirrors ``win/sync/sync.h``'s RC_SYNC_MAX_FILES for the same
+#: reason MAXDEPTH_GASTON mirrors RC_SYNC_MAX_DEPTH: both are properties
+#: of this client, and guessing them is how the too_many message ends up
+#: quoting a number the real client no longer uses.
+MAXFILES_GASTON = 2000
+
 #: How many characters short of the path limit a DIRECTORY must stop. Win32
 #: reserves twelve so an 8.3 name still fits inside; Unix reserves none. A
 #: number rather than a flag because it is a number, and because a client with
@@ -246,6 +253,7 @@ class Caps:
     eol: int = EOL_CRLF
     shortnames: int = SHORTNAMES_83
     maxdepth: int = MAXDEPTH_GASTON
+    maxfiles: int = MAXFILES_GASTON
     dirreserve: int = DIRRESERVE_WIN32
     workreserve: int = WORKRESERVE_GASTON
     maxpath: int = 260
@@ -288,6 +296,7 @@ class Caps:
                 f"maxpath={self.maxpath} maxdir={self.maxdirpath} "
                 f"maxfile={self.maxfilepath} "
                 f"maxcomp={self.maxcomp} maxdepth={self.maxdepth} "
+                f"maxfiles={self.maxfiles} "
                 f"shortnames={'8.3' if self.shortnames else 'long'} "
                 f"manifest=v{self.manifest} "
                 f"deflate={'stream' if self.deflate else 'none'}")
@@ -349,7 +358,7 @@ def from_hello(h: dict) -> Caps:
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
-        "deflate"))
+        "maxfiles", "deflate"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -372,6 +381,7 @@ def from_hello(h: dict) -> Caps:
         # different walk says so without anyone adding a field. The floor is 1
         # because a client that cannot recurse at all still has a root.
         maxdepth=_num(h, "maxdepth", MAXDEPTH_GASTON, 1, 4096),
+        maxfiles=_num(h, "maxfiles", MAXFILES_GASTON, 1, 1000000),
         dirreserve=_num(h, "dirreserve", DIRRESERVE_WIN32, 0, 64),
         workreserve=_num(h, "workreserve", WORKRESERVE_GASTON, 0, 64),
         maxpath=_num(h, "maxpath", 260, 64, 65536),
@@ -387,6 +397,7 @@ def from_hello(h: dict) -> Caps:
 POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              trailing=TRAILING_KEPT, illegal=ILLEGAL_POSIX, eol=EOL_LF,
              oemcp="latin-1", shortnames=SHORTNAMES_NONE, maxdepth=4096,
+             maxfiles=1000000,
              dirreserve=DIRRESERVE_NONE,
              # Not a Windows rule: the `.gaston-tmp` convention is OURS, so a
              # POSIX client that commits by temp-and-rename needs the same room

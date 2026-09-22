@@ -65,6 +65,9 @@ EXPECTED = {
     # the guest would have scanned, or accepts ones it will silently stop
     # reporting -- the failure that reads as "deleted on the guest" forever.
     "RC_CAP_MAXDEPTH":      C.MAXDEPTH_GASTON,
+    # Same shape: the too_many message quotes this number, so a drift means
+    # the user is told the wrong limit.
+    "RC_CAP_MAXFILES":      C.MAXFILES_GASTON,
 }
 
 

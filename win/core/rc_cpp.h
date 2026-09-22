@@ -439,4 +439,33 @@ public:
     int valid() const { return armed; }
 };
 
+/* Restores a file's read-only attribute on exit from a scope (05.4).
+ *
+ * `rc_sync_commit` clears FILE_ATTRIBUTE_READONLY so DeleteFileA/MoveFileA
+ * can replace the file, but if the commit fails (-3 or -4) the attribute
+ * must be put back -- otherwise an edit conflict or busy file silently
+ * strips the user's write protection with nothing reported.
+ */
+class ReadOnlyGuard {
+    const char *path;
+    DWORD orig;
+    int armed;
+    ReadOnlyGuard(const ReadOnlyGuard &);
+    ReadOnlyGuard &operator=(const ReadOnlyGuard &);
+public:
+    ReadOnlyGuard(const char *p, DWORD attr) : path(p), orig(attr), armed(0)
+    {
+        if (path && orig != 0xFFFFFFFF && (orig & FILE_ATTRIBUTE_READONLY)) {
+            if (SetFileAttributesA(path, orig & ~FILE_ATTRIBUTE_READONLY))
+                armed = 1;
+        }
+    }
+    ~ReadOnlyGuard()
+    {
+        if (armed)
+            SetFileAttributesA(path, orig);
+    }
+    void disarm() { armed = 0; }
+};
+
 #endif

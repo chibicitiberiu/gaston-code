@@ -111,6 +111,13 @@ typedef char rc_workreserve_matches_sync_h
  * so there is nothing to drift and nothing to assert. */
 #define RC_CAP_MAXDEPTH    RC_SYNC_MAX_DEPTH
 
+/* How many files the client's scanner will count before aborting with
+ * too_many.  THE SYMBOL ITSELF, like maxdepth: a change in sync.h is
+ * picked up by the handshake without a second edit.  The bridge quotes
+ * this number in the too_many message (syncrun.py) -- if it has to guess
+ * instead, the message says 2000 and the client may have moved on. */
+#define RC_CAP_MAXFILES    RC_SYNC_MAX_FILES
+
 /* Manifest row format. v2 carries both checksums per row -- the normalised one
  * and the raw one -- so the bridge can honour a .gitattributes `-text` without
  * asking us to scan the tree a second time under a different rule. v1 carried

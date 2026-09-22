@@ -40,14 +40,10 @@ _MOVES_BYTES = frozenset((S.Act.PUSH, S.Act.PULL, S.Act.MKDIR,
 
 MAX_FILE = 1024 * 1024
 
-#: Prose restatement of the guest's own RC_SYNC_MAX_FILES (win/sync/sync.h,
-#: currently 2000) for the message shown to the model (03.24). The guest's
-#: SYNCEND only ever says status=too_many -- the count itself never crosses
-#: the wire, because the scan that would have counted them past the limit is
-#: the same scan that aborted rather than finish -- so this is the only place
-#: the number can come from, the same way EXEC_MAX_CMD is mirrored in
-#: server.py for exec's own too_long. Named rather than a bare literal so a
-#: change on the guest side is at least a grep away from here.
+#: Default value for the guest's own RC_SYNC_MAX_FILES (win/sync/sync.h,
+#: currently 2000).  Used as the fallback when the client does not declare
+#: the maxfiles capability at handshake; declared clients carry their own
+#: value in Caps.maxfiles.
 SYNC_MAX_FILES = 2000
 
 
@@ -184,7 +180,7 @@ class Pass:
             # how many files is too many, or by how much this tree misses it.
             raise SyncError(
                 f"guest scan returned too_many: the tree under the sync root "
-                f"has more than the machine's {SYNC_MAX_FILES}-file scan "
+                f"has more than the machine's {self.caps.maxfiles}-file scan "
                 f"limit. Narrow the sync root, or exclude more of the tree "
                 f"with .gitignore, so the scan stays under that count.")
         if status != SyncStatus.OK:
@@ -226,17 +222,21 @@ class Pass:
         # root also means the baseline's paths, which are relative to it,
         # describe different files: adopting it silently would reconcile one
         # tree against another's history.
-        if root and self.base.guest_root and root != self.base.guest_root:
+        if not root:
+            raise SyncError(
+                "guest SYNCEND did not report a root= header. Refusing: the "
+                "MAX_PATH budget and tree identity require the root to be known "
+                "in full (05.6).")
+        if self.base.guest_root and root != self.base.guest_root:
             raise SyncError(
                 f"this baseline was built against {self.base.guest_root!r} "
                 f"and the machine now reports {root!r}. Refusing: the stored "
                 f"paths are relative to the root, so continuing would compare "
                 f"one tree against another tree's history.")
-        if root and not self.base.guest_root:
+        if not self.base.guest_root:
             self.base.guest_root = root
 
-        if root:
-            self.guest_root = root
+        self.guest_root = root
         return rows
 
     # --- the bridge's half -------------------------------------------------

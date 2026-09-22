@@ -1426,13 +1426,12 @@ async def test_an_unreadable_path_reaches_the_agent_once(harness, tmp_path):
     body = manifest_line("held.c", b"", typ=b"u")
     await harness.send(writer, Frame("SYNCENT", {"id": sid, "n": "1"}, body))
     await harness.send(writer, Frame("SYNCEND", {
-        "id": sid, "status": "ok", "files": "1", "tree_id": "VOL-1"}))
+        "id": sid, "status": "ok", "files": "1", "tree_id": "VOL-1",
+        "root": "C:\\WORK"}))
     got = await asyncio.wait_for(task, 10)
 
     assert any("held.c" in n for n in got["notices"]), got
     # And the reason must not blame a lock, which is one cause of `u` and the
-    # only transient one. Naming it sends the reader after a process that may
-    # not exist.
     assert any("cannot open it" in n for n in got["notices"]), got
 
     # Second pass, same condition: said once.
@@ -1450,7 +1449,8 @@ async def test_an_unreadable_path_reaches_the_agent_once(harness, tmp_path):
     await harness.send(writer, Frame("SYNCENT", {"id": sid, "n": "1"},
                                      manifest_line("held.c", b"", typ=b"u")))
     await harness.send(writer, Frame("SYNCEND", {
-        "id": sid, "status": "ok", "files": "1", "tree_id": "VOL-1"}))
+        "id": sid, "status": "ok", "files": "1", "tree_id": "VOL-1",
+        "root": "C:\\WORK"}))
     second = await asyncio.wait_for(task, 10)
     assert not any("held.c" in n for n in second["notices"]), second
     await harness.close(writer)
@@ -2307,3 +2307,18 @@ def test_the_accept_tree_flag_survives_a_baseline_round_trip(tmp_path):
     b.accept_tree = True
     b.save(state)
     assert Baseline.load(state).accept_tree is True
+
+
+async def test_absent_root_in_syncend_is_refused(harness, tmp_path):
+    """05.6: an absent root disables both the tree-identity check and
+    the MAX_PATH budget check on the root prefix. Refuse rather than
+    defaulting to empty."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    task = asyncio.create_task(p.scan_guest())
+    await fake_scan(harness, reader, writer, {}, root="")
+    with pytest.raises(SyncError, match="root="):
+        await asyncio.wait_for(task, 5)
+    await harness.close(writer)
+

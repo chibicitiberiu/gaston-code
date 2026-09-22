@@ -309,6 +309,31 @@ def test_a_missing_baseline_is_simply_empty(tmp_path):
     assert Baseline.load(str(tmp_path / "nope.json")).rows == {}
 
 
+def test_missing_baseline_with_prev_refuses(tmp_path):
+    """A .prev without a main baseline means a crash during save. Refusing is
+    safer than returning empty — empty resurrects every deletion (05.2)."""
+    p = str(tmp_path / "base.json")
+    # Simulate: .prev exists (old generation) but main is gone.
+    Baseline(generation=1).save(p)
+    Baseline(generation=2).save(p)
+    os.remove(p)  # main gone, .prev remains
+    with pytest.raises(RuntimeError, match="crash during save"):
+        Baseline.load(p)
+
+
+def test_save_is_atomic_path_never_absent(tmp_path):
+    """os.replace(tmp, path) is a single atomic call; the old two-replace
+    window that left `path` absent between calls is gone (05.2)."""
+    p = str(tmp_path / "base.json")
+    Baseline(generation=1).save(p)
+    Baseline(generation=2).save(p)
+    # Both main and .prev exist
+    assert os.path.exists(p)
+    assert os.path.exists(p + ".prev")
+    assert Baseline.load(p).generation == 2
+    assert Baseline.load(p + ".prev").generation == 1
+
+
 # --- ordering ---------------------------------------------------------------
 
 def test_conflicts_are_staged_before_transfers_touch_the_path():

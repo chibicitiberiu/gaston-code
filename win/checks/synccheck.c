@@ -279,6 +279,74 @@ static int commitcases(const char *root)
                GetFileAttributesA(full) != 0xFFFFFFFF);
         DeleteFileA(full);
     }
+
+    /* readonly_ok: target exists with FILE_ATTRIBUTE_READONLY, commit succeeds,
+     * read-only attribute must be restored on the newly-committed file (05.4). */
+    {
+        char full[MAX_PATH];
+        HANDLE hro;
+        DWORD ro_attr;
+        rc_sync_join(full, sizeof(full), root, "cc_rook.txt");
+        hro = CreateFileA(full, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hro != INVALID_HANDLE_VALUE) {
+            WriteFile(hro, "old", 3, &wrote, NULL);
+            CloseHandle(hro);
+            SetFileAttributesA(full, FILE_ATTRIBUTE_READONLY);
+        }
+        h = rc_sync_begin_write(root, "cc_rook.txt", tmp, sizeof(tmp));
+        if (h != INVALID_HANDLE_VALUE) {
+            rc_sync_stat st;
+            WriteFile(h, "new", 3, &wrote, NULL);
+            CloseHandle(h);
+            memset(&st, 0, sizeof(st));
+            rc_sync_stat_file(tmp, &st);
+            rc = rc_sync_commit(root, "cc_rook.txt", tmp,
+                                RC_CRC_FOR(st, RC_CLS_TEXT), RC_CLS_TEXT);
+            ro_attr = GetFileAttributesA(full);
+            printf("readonly_ok\t%d\t%d\n", rc,
+                   (ro_attr != 0xFFFFFFFF && (ro_attr & FILE_ATTRIBUTE_READONLY)) ? 1 : 0);
+            if (ro_attr != 0xFFFFFFFF)
+                SetFileAttributesA(full, ro_attr & ~FILE_ATTRIBUTE_READONLY);
+            DeleteFileA(full);
+        }
+    }
+
+    /* readonly_fail: target exists with FILE_ATTRIBUTE_READONLY, but is held open
+     * so MoveFileA in commit fails (-3). Read-only attribute MUST be restored
+     * on failure (05.4) -- previously it was left stripped. */
+    {
+        char full[MAX_PATH];
+        HANDLE hro, keep;
+        DWORD ro_attr;
+        rc_sync_join(full, sizeof(full), root, "cc_rofail.txt");
+        hro = CreateFileA(full, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hro != INVALID_HANDLE_VALUE) {
+            WriteFile(hro, "old", 3, &wrote, NULL);
+            CloseHandle(hro);
+            SetFileAttributesA(full, FILE_ATTRIBUTE_READONLY);
+        }
+        h = rc_sync_begin_write(root, "cc_rofail.txt", tmp, sizeof(tmp));
+        if (h != INVALID_HANDLE_VALUE) {
+            rc_sync_stat st;
+            WriteFile(h, "new", 3, &wrote, NULL);
+            CloseHandle(h);
+            memset(&st, 0, sizeof(st));
+            rc_sync_stat_file(tmp, &st);
+            keep = CreateFileA(full, GENERIC_READ, 0, NULL, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+            rc = rc_sync_commit(root, "cc_rofail.txt", tmp,
+                                RC_CRC_FOR(st, RC_CLS_TEXT), RC_CLS_TEXT);
+            if (keep != INVALID_HANDLE_VALUE) CloseHandle(keep);
+            ro_attr = GetFileAttributesA(full);
+            printf("readonly_fail\t%d\t%d\n", rc,
+                   (ro_attr != 0xFFFFFFFF && (ro_attr & FILE_ATTRIBUTE_READONLY)) ? 1 : 0);
+            if (ro_attr != 0xFFFFFFFF)
+                SetFileAttributesA(full, ro_attr & ~FILE_ATTRIBUTE_READONLY);
+            DeleteFileA(full);
+        }
+    }
     return 0;
 }
 

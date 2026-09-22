@@ -85,6 +85,7 @@ FAKE_CAPS = {
     "maxcomp": "255",
     "manifest": "2",    # RC_CAP_MANIFEST
     "maxdepth": "8",    # RC_CAP_MAXDEPTH
+    "maxfiles": "2000", # RC_CAP_MAXFILES
     "deflate": "1",     # RC_CAP_DEFLATE
 }
 

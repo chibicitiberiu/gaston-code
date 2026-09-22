@@ -673,6 +673,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("maxcomp",    RC_STR(RC_CAP_MAXCOMP));
     HDR("manifest",   RC_STR(RC_CAP_MANIFEST));
     HDR("maxdepth",   RC_STR(RC_CAP_MAXDEPTH));
+    HDR("maxfiles",   RC_STR(RC_CAP_MAXFILES));
     HDR("deflate",    RC_STR(RC_CAP_DEFLATE));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its

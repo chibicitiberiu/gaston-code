@@ -671,10 +671,12 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
 
     /* A read-only target: DeleteFileA fails on it, then MoveFileA fails because
      * the target exists, and the temp is left in the tree where the next scan
-     * picks it up as a new file and pushes it to the bridge. */
+     * picks it up as a new file and pushes it to the bridge. ReadOnlyGuard
+     * clears the attribute now and restores it on every path out (-3, -4, or 0),
+     * so a failed commit does not leave the file silently stripped of write
+     * protection (05.4). */
     attr = GetFileAttributesA(full);
-    if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_READONLY))
-        SetFileAttributesA(full, attr & ~FILE_ATTRIBUTE_READONLY);
+    ReadOnlyGuard ro(full, attr);
 
     /* Move the old file ASIDE rather than deleting it. There is still an
      * instant with no file at the path -- MoveFileExA(REPLACE_EXISTING) is
@@ -703,8 +705,6 @@ int rc_sync_commit(const char *root, const char *rel, const char *tmp,
         return -3;
     }
     DeleteFileA(aside);
-    if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_READONLY))
-        SetFileAttributesA(full, attr);
     return 0;
 }
 

@@ -73,6 +73,9 @@ int main(void)
      * assumed default has to equal ours. This is RC_SYNC_MAX_DEPTH by
      * definition, and the point of printing it is the BRIDGE side. */
     P(RC_CAP_MAXDEPTH);
+    /* Same shape: the too_many message quotes this number, so the bridge's
+     * default (MAXFILES_GASTON) has to match the guest's. */
+    P(RC_CAP_MAXFILES);
     P(RC_CAP_MAXPATH);
     P(RC_CAP_MAXCOMP);
 
