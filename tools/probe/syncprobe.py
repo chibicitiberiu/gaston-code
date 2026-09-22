@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -78,11 +79,14 @@ class Guest:
             if f.type == "SYNCEND":
                 return rows, f.headers
             for line in f.body.split(b"\n"):
+                line = line.rstrip(b"\r")
                 if not line:
                     continue
                 # v2: both checksums per row. The bridge picks, because it is
                 # the side that reads .gitattributes.
                 p = line.split(b" ", 6)
+                if len(p) < 7:
+                    continue
                 sp = p[6].index(b" ")
                 name = P.wire_decode(p[6][sp + 1:sp + 1 + int(p[6][:sp])])
                 rows[name] = {"type": p[0].decode(), "cls": p[1].decode(),
@@ -198,9 +202,9 @@ def run(g: Guest) -> None:
     _, back = g.get("exact.txt")
     check("and arrives back byte for byte", back, exact)
     rows, _ = g.scan()
-    check("the guest still calls it text on its own", rows["exact.txt"]["cls"],
+    check("the guest still calls it text on its own", rows.get("exact.txt", {}).get("cls"),
           "t")
-    check("but its raw checksum is what we sent", rows["exact.txt"]["crc_raw"],
+    check("but its raw checksum is what we sent", rows.get("exact.txt", {}).get("crc_raw"),
           zlib.crc32(exact))
 
     nxt = b"second\r\nversion\r\n"
@@ -441,9 +445,11 @@ def main() -> int:
     if hello.headers.get("secret") != a.secret:
         print("bad secret")
         return 2
-    # Minimal handshake. The guest needs OPTIONSEND to consider itself live;
-    # nothing else here depends on the session machinery.
+    # Minimal handshake. The guest needs an active work directory and
+    # OPTIONSEND to consider itself live and initialise its sync root.
+    g.send(Frame("OPTION", {"kind": "work", "id": "C:\\WORK", "label": "C:\\WORK"}))
     g.send(Frame("OPTIONSEND", {}))
+    time.sleep(2.0)
     print(f"guest says mem_kb={hello.headers.get('mem_kb')} "
           f"ver={hello.headers.get('ver')}")
 
