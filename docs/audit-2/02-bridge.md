@@ -795,3 +795,25 @@ person actually sees.
 - Two turns completed normally (`done 43s $0.1454`), the chat list renamed the
   conversation, and the permission bar went up and came down three times
   without wedging.
+
+### The second pass, after 02.5 was redone
+
+`PROTO_VERSION` went to 2, so this needed a reflash rather than a reconnect —
+which made the bump its own first test.
+
+- **The refusal works and is legible.** The v1 client reconnected to the v2
+  bridge and rendered `[bad_version] bridge speaks 2, guest speaks 1` on its
+  own screen. The bridge logged **nothing**: `_attach` named only `bad_secret`
+  and `bad_caps`, so every other refusal closed the socket in silence. Fixed
+  while it was in front of me — every `Refused` is now logged by code and
+  message, because the side being debugged is usually this one.
+- **The shell really is chosen on this side now.** Reflashed through
+  `vmship.sh` and `D:\SETUP.BAT`, reconnected on protocol 2, and asked for
+  `vol c:`. It answered `Volume in drive C is WIN98 / Volume Serial Number is
+  8229-1980` — and `vol` is a COMMAND.COM **built-in**, so that answer exists
+  only if the command actually went through a shell. The bridge composed
+  `C:\WINDOWS\COMMAND.COM /c` from what detection found and what the profile
+  declares, the guest spliced it, and nothing on the guest tested
+  `GetVersion()` to get there. `done 22s $0.0956`.
+- The contained command got no marker and no warning on the bar (`Run on your
+  machine: vol c:`), which is 02.4's other half still holding.

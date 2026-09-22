@@ -811,12 +811,16 @@ class Bridge:
         try:
             neg = handshake.negotiate(h, self.secret)
         except handshake.Refused as exc:
-            if exc.code == "bad_secret":
-                log.warning("bad secret from %s",
-                            writer.get_extra_info("peername"))
-            elif exc.code == "bad_caps":
-                log.warning("client declared rules this bridge cannot "
-                            "honour: %s", exc.message)
+            # EVERY refusal is logged, by name. Two were, and the rest closed
+            # the socket in silence -- which stopped being theoretical the
+            # moment PROTO_VERSION first moved: a reflashed bridge refused a
+            # guest that had not been, the guest showed `[bad_version] bridge
+            # speaks 2, guest speaks 1` on its own screen, and the bridge's
+            # log said nothing at all. The side being debugged is usually
+            # this one.
+            log.warning("refused %s: %s (%s)",
+                        writer.get_extra_info("peername"),
+                        exc.code, exc.message)
             await self._try_send_raw(writer, error(exc.code, exc.message))
             return None
 
