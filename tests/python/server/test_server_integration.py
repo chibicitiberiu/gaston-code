@@ -1848,6 +1848,25 @@ async def test_cancelling_a_turn_tells_the_guest_to_kill_the_command(harness):
     await harness.close(writer)
 
 
+async def test_exec_refuses_wire_overlong_cwd(harness):
+    """Audit 06.2: A cwd that is under MAX_HEADER_VALUE in UTF-8 bytes but
+    over MAX_HEADER_VALUE on the wire (due to %XX expansion of CP1252 high bytes)
+    must be refused rather than sent to the guest to drop the frame."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+
+    # 3 bytes + 85 * 2 bytes = 173 UTF-8 bytes (< 255)
+    # Wire length: 3 + 85 * 3 = 258 bytes (> 255)
+    long_cwd = "C:\\" + ("\xe9" * 85)
+    res = await harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell="none", cwd=long_cwd
+    )
+    assert res.get("isError") is True
+    assert "too long to send to the machine" in res["content"][0]["text"]
+    assert "258 bytes on the wire" in res["content"][0]["text"]
+    await harness.close(writer)
+
+
 async def test_exec_is_never_re_delivered(harness):
     """There is no wire replay any more (docs/BACKLOG.md #5) -- nothing
     resends a frame from a log; every frame is sent once, when it is sent.

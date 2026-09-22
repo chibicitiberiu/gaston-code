@@ -77,6 +77,8 @@ def _parse_with_bridge(payload: bytes):
     "one\rtwo",
     "a%0Ab",                    # looks like an escape but is literal text
     "100%%",
+    "C:\\caf\xe9",              # non-ASCII Latin-1 path
+    "caf\xe9 na\xefve \xbd \xa35",
     "",
 ])
 def test_guest_built_headers_survive_the_bridge_parser(value):
@@ -169,11 +171,18 @@ def test_bridge_never_sends_more_headers_than_the_guest_can_hold():
 
 def test_the_guest_limits_are_what_the_header_says():
     """Read from the binary, not from a copy of the constants."""
+    import bridge.wire.protocol as P
     lim = _limits()
     assert lim["RC_MAX_FRAME"] == 64 * 1024
     assert lim["RC_MAX_HEADERS"] == 16
     assert lim["RC_MAX_KEY"] == 32
     assert lim["RC_MAX_VAL"] == 256
+    assert lim["RC_MAX_TYPE"] == 32
+    assert P.MAX_FRAME == lim["RC_MAX_FRAME"]
+    assert P.MAX_HEADERS == lim["RC_MAX_HEADERS"]
+    assert P.MAX_HEADER_KEY == lim["RC_MAX_KEY"] - 1
+    assert P.MAX_HEADER_VALUE == lim["RC_MAX_VAL"] - 1
+    assert P.MAX_TYPE == lim["RC_MAX_TYPE"] - 1
 
 
 def test_framecheck_self_checks_all_pass():

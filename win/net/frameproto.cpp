@@ -12,8 +12,7 @@ static int hexval(char c)
     return -1;
 }
 
-/* Decodes %XX in place. Only %25, %0A and %0D are ever produced by the bridge,
- * but decoding any %XX is the same amount of code and is more forgiving. */
+/* Decodes %XX in place. */
 static void unquote(char *s)
 {
     char *r = s, *w = s;
@@ -59,7 +58,7 @@ const char *rc_frame_get(const rc_frame *f, const char *key)
 {
     int i;
     for (i = 0; i < f->nheaders; i++)
-        if (_stricmp(f->headers[i].key, key) == 0)
+        if (strcmp(f->headers[i].key, key) == 0)
             return f->headers[i].val;
     return NULL;
 }
@@ -202,8 +201,9 @@ static int append(char *buf, unsigned bufsz, unsigned *pos, const char *s)
  * nobody sent, and `id` is what routes an ack. Values here come from the INI,
  * from GetVersionExA and from the filesystem.
  *
- * Encoding only %, LF and CR keeps the parser at strchr, which is the reason
- * the format was chosen. Everything else goes through untouched. */
+ * Percent-encoding matches bridge/wire/protocol.py _SAFE: printable ASCII
+ * (0x20..0x7E) except '%'. Control characters and high bytes (non-ASCII)
+ * are escaped as %XX so the header block is strictly ASCII on the wire. */
 static int append_quoted(char *buf, unsigned bufsz, unsigned *pos,
                          const char *s)
 {
@@ -212,7 +212,7 @@ static int append_quoted(char *buf, unsigned bufsz, unsigned *pos,
 
     for (i = 0; s[i]; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (c == '%' || c == '\n' || c == '\r') {
+        if (c < 0x20 || c > 0x7E || c == '%') {
             if (*pos + 3 > bufsz) return -1;
             buf[(*pos)++] = '%';
             buf[(*pos)++] = HEX[(c >> 4) & 0xF];

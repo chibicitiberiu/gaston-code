@@ -42,6 +42,7 @@ from .agent.identity import GuestIdentity
 from .synccoord import SyncCoordinator
 from .wire.protocol import (
                             MAX_HEADER_VALUE,
+                            _quote,
                             Frame,
                             FrameReader,
                             ProtocolError,
@@ -2591,11 +2592,15 @@ class Bridge:
                 # nobody chose. The guest now drops the frame instead, which
                 # is loud but useless on its own: the bridge is the side that
                 # can say something intelligible about it.
-                if len(cwd.encode("utf-8", "surrogateescape")) > MAX_HEADER_VALUE:
+                #
+                # The limit is on the percent-encoded CP1252 bytes on the wire,
+                # not on UTF-8 bytes (audit 06.2).
+                wire_len = len(_quote(cwd))
+                if wire_len > MAX_HEADER_VALUE:
                     return {
                         "content": [{"type": "text", "text": (
                             f"That working directory is too long to send to "
-                            f"the machine ({len(cwd)} characters; the limit "
+                            f"the machine ({wire_len} bytes on the wire; the limit "
                             f"is {MAX_HEADER_VALUE}). Nothing was run. Use a "
                             f"shorter path, or cd to it inside the command.")}],
                         "isError": True,

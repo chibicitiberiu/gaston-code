@@ -14,7 +14,7 @@ working tree. Covers the 86 commits and ~37,500 changed lines since the
 | [`03-requirements.md`](03-requirements.md) | PLAN/PROGRESS/BACKLOG against the code, 25 findings | **all closed** |
 | [`04-verification.md`](04-verification.md) | what is proved vs. claimed, 16 findings | **all closed** |
 | [`05-sync-layer.md`](05-sync-layer.md) | `bridge/files/` + `win/sync/`, 6 findings | **all closed** |
-| [`06-protocol.md`](06-protocol.md) | the wire protocol, both sides, 7 findings | open |
+| [`06-protocol.md`](06-protocol.md) | the wire protocol, both sides, 7 findings | **all closed** |
 
 Findings are **live text**. Nothing is commented out, for the reason in
 [`00-audit-method.md`](00-audit-method.md). A report that has been worked

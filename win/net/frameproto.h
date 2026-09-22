@@ -4,8 +4,8 @@
  *   payload := TYPE "\n" *(key "=" value "\n") "\n" body
  *
  * Deliberately not JSON: this side has no JSON parser and is not getting one.
- * Header values are percent-encoded for %, \n and \r only, so parsing is
- * strchr and nothing more.
+ * Header values are percent-encoded for %, controls and non-ASCII, so
+ * the wire format is strictly printable ASCII.
  */
 #ifndef RC_FRAMEPROTO_H
 #define RC_FRAMEPROTO_H

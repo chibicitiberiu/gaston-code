@@ -678,7 +678,11 @@ was measured and works -- but that is GDI's RLE inside a DIB, a different thing 
 **To close it:** when Phase 6's screenshot capture lands, decide whether the wire codec
 gets an `rle8` value of its own (cheap: GDI already produces `BI_RLE8` bytes, so the guest
 side may be close to free) or whether `deflate` alone is enough for the compressed sizes
-Phase 6 actually measures, and write down which. Until then this is not blocking anything.
+Phase 6 actually measures, and write down which. Note that general guest->bridge
+deflate compression (audit-2 03.3, 03.4, 06.7) was implemented in win/net/net.cpp for
+bulk frames (EXECOUT, SYNCDAT, SYNCENT) with adaptive throughput measurement; wire codec
+decisions (deflate vs rle8) for screenshots specifically remain deferred to Phase 6. Until
+then this is not blocking anything.
 
 ## 9. Phase 6 input/window tools -- readiness gaps found ahead of the phase
 

@@ -319,3 +319,24 @@ as a threshold"*.
   gives the reason -- the permissive guess is the wrong one -- and `EOL_CR` is
   refused at handshake specifically because the alternative is a per-file CRC
   mismatch forever.
+
+---
+
+# Resolution — 2026-09-23
+
+All 7 findings (06.1 through 06.7) addressed, verified, and closed.
+
+Fixed: 06.1 — Enforced `MAX_HEADER_VALUE` (255 bytes) in `Frame.encode()` in `bridge/wire/protocol.py`, raising `ProtocolError` when any header's percent-encoded wire representation exceeds the guest parser cap. Truncated high-risk producers safely with `truncate_header_value`: `error()` (`code`, `msg`), `option()` (`id`, `label`, `desc`), `session_row` (`title`, `cwd`, `group`), and `anchor_frame` (`preview`), preventing malformed or oversized frames from tearing down the guest connection. Verified in `tests/python/wire/test_protocol.py`.
+
+Fixed: 06.2 — Replaced UTF-8 byte length calculation in `bridge/server.py:2598` with wire length check `len(_quote(cwd)) > MAX_HEADER_VALUE`, ensuring non-ASCII CP1252 characters expanded to `%XX` on the wire are accurately bounded before transmission. Added `test_exec_refuses_wire_overlong_cwd` in `tests/python/server/test_server_integration.py`.
+
+Fixed: 06.3 — Replaced the narrow escaping check in `win/net/frameproto.cpp:append_quoted` with `c < 0x20 || c > 0x7E || c == '%'`, matching `protocol.py:_SAFE` so high bytes (non-ASCII) are escaped as `%XX` on the wire. Switched `Frame.decode` header parsing from lossy `errors="replace"` to strict ASCII decode in `bridge/wire/protocol.py`, raising `ProtocolError` on invalid wire bytes. Added round-trip high-byte tests to `win/checks/framecheck.cpp` and `tests/python/guest/test_guest_frame.py`.
+
+Fixed: 06.4 — Mirrored the guest's parser strictness limits in `bridge/wire/protocol.py`: `MAX_TYPE = 31`, `MAX_HEADERS = 16`, `MAX_HELLO_HEADERS = 32`, and `MAX_HEADER_KEY = 31` alongside `MAX_HEADER_VALUE = 255`. Symmetrically validated all limits in both `Frame.encode()` and `Frame.decode()`. Verified limit synchronization against the compiled guest binary in `tests/python/guest/test_guest_frame.py` (`test_the_guest_limits_are_what_the_header_says`) and encoder/decoder rejection tests in `tests/python/wire/test_protocol.py`.
+
+Fixed: 06.5 — Replaced case-insensitive `_stricmp` with case-sensitive `strcmp` in `win/net/frameproto.cpp:rc_frame_get`, aligning header lookup with `rc_frame_parse` duplicate key check and bridge dict key semantics. Verified with `header-lookup-case-sensitive` in `win/checks/framecheck.cpp`.
+
+Fixed: 06.6 — Handshake declaration for `RC_SYNC_MAX_FILES` was closed via `maxfiles` in commit `685a081` (05.5). Added missing `"maxdepth"` to the `declared` capability check in `bridge/files/caps.py:from_hello`. Verified in `tests/python/files/test_caps.py` (`test_declaring_single_capability_marks_declared`).
+
+Fixed: 06.7 — Guest-to-bridge compression was implemented in commit `b2337a2` (audit-2 03.3/03.4) via persistent miniz deflate stream (`TDEFL_LESS_MEMORY=1`) in `win/net/net.cpp` for bulk frames (`EXECOUT`, `SYNCDAT`, `SYNCENT`) with runtime QPC throughput measurement and adaptive `link_bps < 0.5 * deflate_bps` throttling. Reconciled `docs/BACKLOG.md` §8 to confirm guest deflate is active while screenshot-specific codec choices (`rle8` vs `deflate`) remain deferred to Phase 6.
+

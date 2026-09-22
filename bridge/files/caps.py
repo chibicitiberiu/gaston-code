@@ -356,7 +356,7 @@ def from_hello(h: dict) -> Caps:
 
     declared = any(k in h for k in (
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
-        "shortnames",
+        "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
         "maxfiles", "deflate"))
 

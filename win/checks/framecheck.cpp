@@ -124,6 +124,18 @@ static void encoding_cases(void)
     say("wire-percent-escaped",
         total > 0 && strstr(buf + 4, "k=100%25\n") != NULL,
         "% leaves as %25");
+
+    /* Non-ASCII characters (e.g. \xe9 'é') must be percent-encoded on the wire
+     * so that the header block remains strictly printable ASCII. */
+    say("roundtrip-nonascii",
+        roundtrip("k", "caf\xe9", got, sizeof(got)) == 0
+        && strcmp(got, "caf\xe9") == 0,
+        "high bytes survive round trip");
+
+    total = build1(buf, sizeof(buf), "k", "caf\xe9");
+    say("wire-nonascii-escaped",
+        total > 0 && strstr(buf + 4, "k=caf%E9\n") != NULL,
+        "high byte leaves as %E9");
 }
 
 static void limit_cases(void)
@@ -193,6 +205,24 @@ static void limit_cases(void)
     say("overlong-key-refused",
         rc_frame_parse(payload, pos, &f) != 0,
         "a key past RC_MAX_KEY drops the frame");
+
+    /* Header lookup via rc_frame_get is case-sensitive, matching the duplicate check. */
+    pos = 0;
+    pos = addf(payload, sizeof(payload), pos, "TEST\nkey=val\n\n", 0, 0);
+    say("header-lookup-case-sensitive",
+        rc_frame_parse(payload, pos, &f) == 0
+        && rc_frame_get(&f, "key") != NULL
+        && rc_frame_get(&f, "KEY") == NULL,
+        "rc_frame_get is case sensitive");
+
+    /* An over-long TYPE is refused. */
+    pos = 0;
+    for (i = 0; i < RC_MAX_TYPE + 4; i++) payload[pos++] = 'T';
+    payload[pos++] = '\n';
+    payload[pos++] = '\n';
+    say("overlong-type-refused",
+        rc_frame_parse(payload, pos, &f) != 0,
+        "a type past RC_MAX_TYPE drops the frame");
 }
 
 /* Print the limits so the Python side can assert against the real numbers

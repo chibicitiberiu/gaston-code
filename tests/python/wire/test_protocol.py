@@ -11,12 +11,18 @@ import pytest
 
 from bridge.wire.protocol import (
                                   MAX_FRAME,
+                                  MAX_HEADERS,
+                                  MAX_HEADER_KEY,
+                                  MAX_HEADER_VALUE,
+                                  MAX_TYPE,
                                   PROTO_VERSION,
                                   Frame,
                                   FrameReader,
                                   ProtocolError,
                                   error,
                                   hello,
+                                  option,
+                                  truncate_header_value,
                                   )
 
 
@@ -121,6 +127,96 @@ def test_bad_header_key_rejected_on_encode():
 def test_oversized_frame_rejected_on_encode():
     with pytest.raises(ProtocolError, match="cap"):
         Frame("TEXT", {}, b"x" * MAX_FRAME).encode()
+
+
+def test_oversized_type_rejected_on_encode():
+    with pytest.raises(ProtocolError, match="frame type too long"):
+        Frame("A" * (MAX_TYPE + 1)).encode()
+
+
+def test_too_many_headers_rejected_on_encode():
+    headers = {f"k{i}": "v" for i in range(MAX_HEADERS + 1)}
+    with pytest.raises(ProtocolError, match="too many headers"):
+        Frame("TEST", headers).encode()
+
+
+def test_oversized_key_rejected_on_encode():
+    with pytest.raises(ProtocolError, match="header key too long"):
+        Frame("TEST", {"k" * (MAX_HEADER_KEY + 1): "v"}).encode()
+
+
+def test_oversized_value_rejected_on_encode():
+    with pytest.raises(ProtocolError, match="value too long"):
+        Frame("TEST", {"k": "x" * (MAX_HEADER_VALUE + 1)}).encode()
+
+
+def test_oversized_type_rejected_on_decode():
+    payload = ("A" * (MAX_TYPE + 1)).encode("ascii") + b"\n\n"
+    with pytest.raises(ProtocolError, match="frame type too long"):
+        Frame.decode(payload)
+
+
+def test_too_many_headers_rejected_on_decode():
+    lines = [b"TEST"] + [f"k{i}=v".encode("ascii") for i in range(MAX_HEADERS + 1)] + [b"", b""]
+    with pytest.raises(ProtocolError, match="too many headers"):
+        Frame.decode(b"\n".join(lines))
+
+
+def test_oversized_key_rejected_on_decode():
+    payload = b"TEST\n" + (b"k" * (MAX_HEADER_KEY + 1)) + b"=v\n\n"
+    with pytest.raises(ProtocolError, match="header key too long"):
+        Frame.decode(payload)
+
+
+def test_oversized_value_rejected_on_decode():
+    payload = b"TEST\nk=" + (b"v" * (MAX_HEADER_VALUE + 1)) + b"\n\n"
+    with pytest.raises(ProtocolError, match="header 'k' value too long"):
+        Frame.decode(payload)
+
+
+def test_non_ascii_header_rejected_on_decode():
+    payload = b"TEST\nk=caf\xe9\n\n"
+    with pytest.raises(ProtocolError, match="non-ascii"):
+        Frame.decode(payload)
+
+
+def test_truncate_header_value():
+    assert truncate_header_value("hello", 10) == "hello"
+    long_val = "a" * 300
+    res = truncate_header_value(long_val, MAX_HEADER_VALUE)
+    assert len(res) <= MAX_HEADER_VALUE
+    assert res.endswith("...")
+    # Accented chars expand to %XX (3 bytes each)
+    accents = "é" * 100
+    res2 = truncate_header_value(accents, MAX_HEADER_VALUE)
+    from bridge.wire.protocol import _quote
+    assert len(_quote(res2)) <= MAX_HEADER_VALUE
+    assert res2.endswith("...")
+
+
+def test_error_frame_truncates_oversized_msg():
+    huge_msg = "protocol error details: " + ("x" * 1000)
+    f = error("protocol", huge_msg)
+    wire = f.encode()
+    decoded = Frame.decode(wire[4:])
+    assert decoded.type == "ERROR"
+    assert decoded.headers["code"] == "protocol"
+    assert decoded.headers["msg"].endswith("...")
+    assert len(decoded.headers["msg"]) <= MAX_HEADER_VALUE
+
+
+def test_option_frame_truncates_oversized_values():
+    long_path = "C:\\" + ("a" * 300)
+    f = option("work", long_path, long_path, False, desc=long_path)
+    wire = f.encode()
+    decoded = Frame.decode(wire[4:])
+    assert decoded.type == "OPTION"
+    assert decoded.headers["id"].endswith("...")
+    assert decoded.headers["label"].endswith("...")
+    assert decoded.headers["desc"].endswith("...")
+    assert len(decoded.headers["id"]) <= MAX_HEADER_VALUE
+    assert len(decoded.headers["label"]) <= MAX_HEADER_VALUE
+    assert len(decoded.headers["desc"]) <= MAX_HEADER_VALUE
 
 
 # --- incremental reassembly -------------------------------------------------

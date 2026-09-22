@@ -268,3 +268,11 @@ def test_the_client_declares_what_it_is_asked_about():
         assert name in sent, (
             f"Caps has a {name!r} field, so the bridge believes the client "
             f"declares it, and win/net/net.cpp does not send it")
+
+
+def test_declaring_single_capability_marks_declared():
+    """Declaring only maxdepth (or any other capability) must set declared=True."""
+    assert C.from_hello({"maxdepth": "8"}).declared
+    assert C.from_hello({"maxfiles": "500"}).declared
+    assert C.from_hello({"acp": "1252"}).declared
+    assert C.from_hello({"case": "0"}).declared

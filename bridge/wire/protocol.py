@@ -33,11 +33,14 @@ PROTO_VERSION = 2
 
 # A corrupted length prefix must not be able to allocate the machine away.
 # Anything genuinely larger is chunked by the sender.
-#: The guest's per-header-value limit (`RC_MAX_VAL` in win/frameproto.h),
-#: minus the NUL. A value longer than this is REFUSED by the guest's parser,
-#: which drops the whole frame -- so sending one is a dropped command, and
-#: sending one silently is worse: `cwd` goes straight to CreateProcessA, and a
-#: clipped path names a different, existing directory.
+#: Guest strictness limits mirroring win/net/frameproto.h.
+#: A frame exceeding any of these is REFUSED by the guest's parser
+#: (dropping the whole frame and tearing down the connection).
+MAX_TYPE = 31
+MAX_HEADERS = 16
+MAX_HELLO_HEADERS = 32
+MAX_HEADER_KEY = 31
+MAX_KEY = MAX_HEADER_KEY
 MAX_HEADER_VALUE = 255
 
 MAX_FRAME = 64 * 1024
@@ -102,6 +105,19 @@ def _unquote(value: str) -> str:
     return fold.decode(bytes(raw))
 
 
+def truncate_header_value(val: str, max_wire: int = MAX_HEADER_VALUE) -> str:
+    """Truncate val so that its percent-encoded wire representation does not
+    exceed max_wire bytes. Appends '...' when truncated."""
+    if len(_quote(val)) <= max_wire:
+        return val
+    marker = "..."
+    for end in range(min(len(val), max_wire), 0, -1):
+        candidate = val[:end] + marker
+        if len(_quote(candidate)) <= max_wire:
+            return candidate
+    return marker[:max_wire]
+
+
 @dataclass
 class Frame:
     type: str
@@ -117,12 +133,31 @@ class Frame:
     def encode(self) -> bytes:
         if not self.type or not self.type.isupper():
             raise ProtocolError(f"frame type must be uppercase: {self.type!r}")
+        if len(self.type) > MAX_TYPE:
+            raise ProtocolError(
+                f"frame type too long: {self.type!r} ({len(self.type)} > {MAX_TYPE})"
+            )
+        max_h = MAX_HELLO_HEADERS if self.type == "HELLO" else MAX_HEADERS
+        if len(self.headers) > max_h:
+            raise ProtocolError(
+                f"too many headers: {len(self.headers)} exceeds cap {max_h}"
+            )
 
         out = [self.type.encode("ascii"), b"\n"]
         for k, v in self.headers.items():
             if not k or not all(c.isalnum() or c == "_" for c in k):
                 raise ProtocolError(f"bad header key: {k!r}")
-            out.append(f"{k}={_quote(str(v))}\n".encode("ascii"))
+            if len(k) > MAX_HEADER_KEY:
+                raise ProtocolError(
+                    f"header key too long: {k!r} ({len(k)} > {MAX_HEADER_KEY})"
+                )
+            quoted = _quote(str(v))
+            if len(quoted) > MAX_HEADER_VALUE:
+                raise ProtocolError(
+                    f"header {k!r} value too long: wire length {len(quoted)}B "
+                    f"exceeds guest limit {MAX_HEADER_VALUE}B"
+                )
+            out.append(f"{k}={quoted}\n".encode("ascii"))
         out.append(b"\n")
         out.append(self.body)
 
@@ -136,25 +171,49 @@ class Frame:
 
     @classmethod
     def decode(cls, payload: bytes) -> "Frame":
+        if len(payload) > MAX_FRAME:
+            raise ProtocolError(
+                f"payload {len(payload)}B exceeds MAX_FRAME {MAX_FRAME}B"
+            )
         split = payload.find(_HEADER_END)
         if split < 0:
             raise ProtocolError("no header terminator in frame")
 
-        head = payload[:split].decode("ascii", errors="replace")
+        try:
+            head = payload[:split].decode("ascii")
+        except UnicodeDecodeError as e:
+            raise ProtocolError(f"non-ascii byte in header block: {e}") from e
         body = payload[split + 2 :]
 
         lines = head.split("\n")
         ftype = lines[0]
         if not ftype:
             raise ProtocolError("empty frame type")
+        if len(ftype) > MAX_TYPE:
+            raise ProtocolError(
+                f"frame type too long: {ftype!r} ({len(ftype)} > {MAX_TYPE})"
+            )
 
+        max_h = MAX_HELLO_HEADERS if ftype == "HELLO" else MAX_HEADERS
         headers: dict[str, str] = {}
         for line in lines[1:]:
             if not line:
                 continue
+            if len(headers) >= max_h:
+                raise ProtocolError(
+                    f"too many headers: exceeds {max_h}"
+                )
             k, eq, v = line.partition("=")
             if not eq:
                 raise ProtocolError(f"header line without '=': {line!r}")
+            if len(k) > MAX_HEADER_KEY:
+                raise ProtocolError(
+                    f"header key too long: {k!r} ({len(k)} > {MAX_HEADER_KEY})"
+                )
+            if len(v) > MAX_HEADER_VALUE:
+                raise ProtocolError(
+                    f"header {k!r} value too long: wire length {len(v)} > {MAX_HEADER_VALUE}"
+                )
             if k in headers:
                 raise ProtocolError(f"duplicate header key: {k!r}")
             headers[k] = _unquote(v)
@@ -244,7 +303,10 @@ def hello(secret: str, sess: str | None = None) -> Frame:
 def error(code: str, msg: str) -> Frame:
     """Errors need a frame type of their own, or a version-mismatch rejection
     arrives as bytes the peer cannot parse."""
-    return Frame("ERROR", {"code": code, "msg": msg})
+    return Frame("ERROR", {
+        "code": truncate_header_value(code, MAX_HEADER_VALUE),
+        "msg": truncate_header_value(msg, MAX_HEADER_VALUE),
+    })
 
 
 # --- session lifecycle --------------------------------------------------
@@ -299,9 +361,9 @@ def session_row(i: int, sess_id: str, title: str, cwd: str, group: str,
     return Frame("SESSION", {
         "i": str(i),
         "id": sess_id,
-        "title": title[:120],
-        "cwd": cwd[:120],
-        "group": group,
+        "title": truncate_header_value(title[:120], MAX_HEADER_VALUE),
+        "cwd": truncate_header_value(cwd[:120], MAX_HEADER_VALUE),
+        "group": truncate_header_value(group, MAX_HEADER_VALUE),
         "current": "1" if current else "0",
     })
 
@@ -370,7 +432,8 @@ def anchor_frame(page: int, off: int, preview: str) -> Frame:
     """Where a user turn landed in the transcript, so the guest can jump
     back to it from history."""
     return Frame("ANCHOR", {
-        "page": str(page), "off": str(off), "preview": preview,
+        "page": str(page), "off": str(off),
+        "preview": truncate_header_value(preview, MAX_HEADER_VALUE),
     })
 
 
@@ -574,14 +637,16 @@ def option(kind: str, id: str, label: str, current: bool, *,
     label is also what a toolbar button shows and "Haiku 4.5 - Fastest for
     quick answers" does not fit on a 640px screen while "Haiku" does.
     """
-    h = {"kind": kind, "id": id, "label": label,
+    h = {"kind": kind,
+         "id": truncate_header_value(id, MAX_HEADER_VALUE),
+         "label": truncate_header_value(label, MAX_HEADER_VALUE),
          "current": "1" if current else "0"}
     if disabled:
         h["disabled"] = "1"
     if hint:
         h["hint"] = "1"
     if desc:
-        h["desc"] = desc
+        h["desc"] = truncate_header_value(desc, MAX_HEADER_VALUE)
     return Frame("OPTION", h)
 
 
