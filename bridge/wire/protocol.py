@@ -24,7 +24,12 @@ import struct
 from dataclasses import dataclass, field
 
 from . import fold
-PROTO_VERSION = 1
+#: 1 -> 2: EXEC's `shell` header stopped being a flag and became the
+#: invocation prefix the guest splices in front of the command (see
+#: `exec_cmd`). A version 1 guest reads a prefix as a truthy flag and runs
+#: everything through a shell it chose itself, so the two cannot be mixed --
+#: which is what a version number is for.
+PROTO_VERSION = 2
 
 # A corrupted length prefix must not be able to allocate the machine away.
 # Anything genuinely larger is chunked by the sender.
@@ -510,7 +515,7 @@ def export_end(ok: bool, *, bytes_: int = 0, reason: str = "") -> Frame:
 # --- exec ----------------------------------------------------------------
 
 
-def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: bool,
+def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: str = "",
              cwd: str = "") -> Frame:
     """The command goes in the BODY, never a header: a header value is
     truncated at 255 bytes silently, and a truncated command is still
@@ -524,8 +529,21 @@ def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: bool,
     It raises on a character CP1252 cannot carry. Callers refuse; nobody
     approximates a command line.
     """
+    # `shell` IS THE INVOCATION PREFIX, not a flag -- e.g.
+    # `C:\\WINDOWS\\COMMAND.COM /c`, composed from what detection found and
+    # what that shell's profile says its run switch is. The guest splices it
+    # in front of the command and knows nothing else about shells; empty
+    # means spawn the program directly.
+    #
+    # It was "1"/"0", which made the guest pick the shell itself from
+    # `GetVersion()`. That put the choice on the one machine that cannot be
+    # told about a second shell being installed, and left the command guard
+    # over here judging by a grammar the guest might not have been running.
+    # PROTO_VERSION went to 2 for this: an older guest reading a prefix as a
+    # flag would run everything through the wrong thing, so it is refused at
+    # the handshake instead.
     headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
-               "shell": "1" if shell else "0"}
+               "shell": shell or ""}
     if cwd:
         headers["cwd"] = cwd
     return Frame("EXEC", headers, fold.encode_exact(command))

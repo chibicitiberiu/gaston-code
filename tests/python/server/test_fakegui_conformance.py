@@ -189,7 +189,7 @@ async def test_fakegui_runs_exec_end_to_end(harness):
         await _wait_attached(harness)
         result = await asyncio.wait_for(
             harness.bridge.run_on_guest("echo hello-from-fakegui",
-                                        timeout_ms=5000, shell=True, cwd=""),
+                                        timeout_ms=5000, shell="", cwd=""),
             10)
         text = result["content"][0]["text"]
         assert "hello-from-fakegui" in text

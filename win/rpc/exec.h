@@ -39,7 +39,18 @@ void rc_exec_arm(void);
 /* Kill any running child. Safe from another thread; that is the point. */
 void rc_exec_cancel(void);
 
-int  rc_exec_run(const char *command, const char *cwd, int use_shell,
+/* `shell` is the invocation prefix to splice in front of `command` -- the
+ * bridge sends it on the EXEC frame, e.g. "C:\\WINDOWS\\COMMAND.COM /c".
+ * NULL or empty spawns `command` directly.
+ *
+ * THE GUEST NO LONGER CHOOSES. This used to be `int use_shell`, and the
+ * shell itself came from a `GetVersion()` test right here -- so a machine
+ * with a second shell installed (4DOS beside COMMAND.COM) could not be asked
+ * to use it, and the bridge's command guard was judging a command against
+ * whichever grammar it had guessed rather than the one that would run it.
+ * The machine reports which shells it HAS; the model picks one per call; this
+ * splices what it is told and knows nothing else about shells. */
+int  rc_exec_run(const char *command, const char *cwd, const char *shell,
                  DWORD timeout_ms, rc_exec_sink sink, void *ctx,
                  rc_exec_result *out);
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 
+from . import toolrules
 from . import toolnotes as notes
 
 
@@ -227,6 +228,32 @@ def tools_block(found: "list", path: "list | None" = None) -> str:
         "fine; a survey of the disk is not. An entry being absent means",
         "nothing matched, not that the thing is missing.",
     ]
+
+    # THE SHELLS, NAMED, because the model is the one that picks.
+    #
+    # A machine has as many shells as it has -- `command.com` and `4dos` on a
+    # DOS box, `sh`/`bash`/`zsh`/`csh` on a Unix one -- and which of them a
+    # command runs under changes what the command line may contain. Nothing
+    # on this side chooses: the machine reports the list, this prints it, and
+    # `exec` takes the name. Before, the GUEST picked from `GetVersion()` and
+    # told nobody, so a second installed shell was unreachable and the
+    # bridge's command guard was judging by a grammar the guest might not
+    # have been running.
+    shells = toolrules.usable_shells(found)
+    if shells:
+        names = ", ".join(f"`{f.name}`" for f in shells)
+        out += [
+            "",
+            f"Shells on that machine: {names}.",
+            "",
+            f"`exec` runs through `{shells[0].name}` unless you name",
+            "another in its `shell` argument, and what a command line may",
+            "contain -- how (or whether) commands chain, what quoting means,",
+            "which built-ins exist -- is that shell's business. Pass",
+            "`shell: \"none\"` to spawn a program directly instead, which",
+            "gives cleaner quoting and loses every built-in and all",
+            "redirection.",
+        ]
 
     # THE PATH, STATED, because `Bad command or file name` names the PROGRAM
     # and not the environment -- and three separate sessions read that as

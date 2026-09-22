@@ -21,6 +21,7 @@ Covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -483,4 +484,119 @@ async def test_the_baseline_is_addressed_by_the_guest_it_is_asked_about(
 
     assert b._base_path(attached) != b._base_path(other)
     assert b._base_path() == b._base_path(attached)
+    await harness.close(w)
+
+
+# --- 02.5: the model picks the shell, from what the machine reported --------
+
+
+async def test_an_unknown_shell_is_refused_by_name(harness):
+    """The model can write anything into that argument, and the string ends
+    up in front of a command line. A name the machine never reported has to
+    come back as an error that says what it DOES have -- falling back to
+    another shell would run the command under a grammar it was not written
+    for, which is not a smaller version of what was asked."""
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    guest = harness.bridge._guest
+    guest.tools = [srv.Found("command.com", "shell",
+                             r"C:\WINDOWS\COMMAND.COM", True)]
+
+    out = await harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell="bash", cwd="C:\\WORK")
+    assert out["isError"] is True
+    text = out["content"][0]["text"]
+    assert "bash" in text and "command.com" in text
+    assert "Nothing was run" in text
+    await harness.close(w)
+
+
+async def test_the_named_shell_becomes_the_invocation_prefix(harness):
+    """Path from detection, switch from the profile, spliced by the guest.
+    The guest used to choose between command.com and cmd.exe itself from
+    GetVersion(), so a machine with a second shell installed could not be
+    asked to use it."""
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    guest = harness.bridge._guest
+    guest.tools = [srv.Found("command.com", "shell",
+                             r"C:\WINDOWS\COMMAND.COM", True)]
+
+    task = asyncio.create_task(harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell="command.com", cwd="C:\\WORK"))
+    req = await _recv(harness, r, "EXEC")
+    assert req.headers["shell"] == r"C:\WINDOWS\COMMAND.COM /c"
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await harness.close(w)
+
+
+async def test_none_means_spawn_the_program_directly(harness):
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    harness.bridge._guest.tools = [
+        srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
+
+    task = asyncio.create_task(harness.bridge.run_on_guest(
+        "hello.exe", timeout_ms=5000, shell="none", cwd="C:\\WORK"))
+    req = await _recv(harness, r, "EXEC")
+    assert req.headers["shell"] == ""
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await harness.close(w)
+
+
+async def test_naming_nothing_uses_the_first_shell_the_machine_reported(
+    harness,
+):
+    """Not the first profile this bridge ships -- the first the MACHINE
+    said it has. Counting installed profiles is what made adding a second
+    shell profile turn the guard off (02.5)."""
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    harness.bridge._guest.tools = [
+        srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
+
+    task = asyncio.create_task(harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
+    req = await _recv(harness, r, "EXEC")
+    assert req.headers["shell"] == r"C:\WINDOWS\COMMAND.COM /c"
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await harness.close(w)
+
+
+async def test_a_machine_that_reported_no_shell_runs_directly(harness):
+    """No list to pick from and nothing named. Spawning directly is the only
+    thing left that is not a guess."""
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    assert not harness.bridge._guest.tools
+
+    task = asyncio.create_task(harness.bridge.run_on_guest(
+        "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
+    req = await _recv(harness, r, "EXEC")
+    assert req.headers["shell"] == ""
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await harness.close(w)
+
+
+async def test_the_guard_judges_by_the_shell_the_call_named(harness):
+    """The whole reason the name has to reach the desk. A command approved
+    under one grammar and run under another is a guard that is confidently
+    wrong, which this module's own docstring says is worse than none."""
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    desk = harness.bridge._guest.perms
+    harness.bridge._guest.tools = [
+        srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
+
+    assert desk._shell({"shell": "zzsh"}) == "zzsh"
+    assert desk._shell({"shell": "none"}) == "command.com"
+    assert desk._shell({}) == "command.com"
     await harness.close(w)

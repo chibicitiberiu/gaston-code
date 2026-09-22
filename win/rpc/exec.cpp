@@ -101,14 +101,28 @@ static void set_child(HANDLE h)
     }
 }
 
-/* The shell for this OS. The only place the guest's vintage should appear:
- * everything else here is OS-neutral. */
-static const char *shell_name(void)
-{
-    return (GetVersion() & 0x80000000) ? "command.com" : "cmd.exe";
-}
-
-int rc_exec_run(const char *command, const char *cwd, int use_shell,
+/* THE SHELL USED TO BE CHOSEN HERE.
+ *
+ *     static const char *shell_name(void)
+ *     {
+ *         return (GetVersion() & 0x80000000) ? "command.com" : "cmd.exe";
+ *     }
+ *
+ * It was called "the only place the guest's vintage should appear", and it
+ * was one place too many. A machine has as many shells as it has -- 4DOS
+ * beside COMMAND.COM here, sh/bash/zsh/csh on the Unix box this surface is
+ * supposed to survive being pointed at -- and a test that returns one name
+ * cannot express that. Worse, it was a decision made where nobody could see
+ * it: the bridge's command guard judged each command against a grammar it
+ * had guessed at, which on a two-shell machine need not be the grammar that
+ * would run it.
+ *
+ * So the machine now REPORTS its shells (detection, HELLO's body), the model
+ * picks one per call from that list, and the bridge sends the invocation
+ * prefix on the EXEC frame. This file splices a string and knows nothing
+ * else -- which is what "the guest transforms nothing" means when applied to
+ * the one decision it was still making. */
+int rc_exec_run(const char *command, const char *cwd, const char *shell,
                 DWORD timeout_ms, rc_exec_sink sink, void *ctx,
                 rc_exec_result *out)
 {
@@ -151,8 +165,8 @@ int rc_exec_run(const char *command, const char *cwd, int use_shell,
      * The bridge applies no length cap of its own, so this is the only guard
      * in the system. Test it through rc_exec_run rather than trusting the
      * shape of the expression -- see win/checks/rpccheck.c. */
-    if (use_shell)
-        fit = rc_strf(cmd, sizeof(cmd), "%s /c %s", shell_name(), command);
+    if (shell && *shell)
+        fit = rc_strf(cmd, sizeof(cmd), "%s %s", shell, command);
     else
         fit = rc_strf(cmd, sizeof(cmd), "%s", command);
     if (!fit) {

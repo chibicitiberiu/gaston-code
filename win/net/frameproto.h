@@ -14,7 +14,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RC_PROTO_VERSION 1
+#define RC_PROTO_VERSION 2
 
 /* 64KB, NOT retro-agent's 32MB. 32MB is the entire target machine: one
  * corrupted length prefix would allocate the box away. */

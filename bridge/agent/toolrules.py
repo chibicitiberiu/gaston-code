@@ -159,18 +159,85 @@ def inventory(facts: list[Fact]) -> list[Found]:
     return out
 
 
-def shell_of(found) -> str:
-    """Which shell this machine reported, or "" if it reported none.
+def shells_of(found) -> list:
+    """Every shell this machine reported, in inventory order.
 
-    One answer to this question, because two callers need it -- the system
-    prompt, which says how commands must be written, and the command guard,
-    which judges them. `inventory` already sorts shells first for exactly
-    this reason.
+    A LIST, because a machine has as many shells as it has. `command.com`
+    and `4dos` on a DOS box; `sh`, `bash`, `zsh` and `csh` on a Unix one.
+    Nothing here picks between them -- the machine says what it has, the
+    system prompt says so too, and the model names the one it wants on each
+    `exec` call. `inventory` already sorts shells first.
     """
-    for f in found or ():
-        if getattr(f, "kind", "") == "shell":
-            return getattr(f, "name", "") or ""
-    return ""
+    return [f for f in (found or ())
+            if getattr(f, "kind", "") == "shell"]
+
+
+def shell_of(found) -> str:
+    """The FIRST shell this machine reported, or "" if it reported none.
+
+    A convenience over `shells_of`, and deliberately not a choice about
+    which shell to RUN anything through -- that is the model's call, per
+    call, from the list. This answers the narrower questions that are
+    properties of the machine rather than of a command: which separator its
+    PATH uses, and which codepage its console children write.
+
+    It is also the fallback the command guard judges by when a call named no
+    shell, which is the one place it stands in for a decision. Referring to
+    the first of what the machine reported is not the same as assuming a
+    shell nobody mentioned.
+    """
+    shells = shells_of(found)
+    return (getattr(shells[0], "name", "") or "") if shells else ""
+
+
+def shell_command(found, name: str) -> "str | None":
+    """How to tell `name` on this machine to run one command line.
+
+    Returns e.g. `C:\\WINDOWS\\COMMAND.COM /c`, which the guest splices in
+    front of the command and otherwise knows nothing about -- or None if this
+    machine did not report a shell by that name.
+
+    BOTH HALVES ARE DATA. The path is what detection actually found, so a
+    4DOS at `D:\\4DOS` is invoked from `D:\\4DOS`; the switch comes from that
+    shell's own profile, because "how do I tell this program to run one
+    command" is a fact about the program. Neither is written in Python, and
+    the guest holds neither: it used to decide `command.com` vs `cmd.exe`
+    from `GetVersion()` itself, which meant a machine with a second shell
+    installed could not be told to use it, and the bridge's guard was
+    judging a grammar the guest might not be running.
+    """
+    if not name:
+        return None
+    want = name.strip().lower()
+    for f in shells_of(found):
+        if (getattr(f, "name", "") or "").lower() != want:
+            continue
+        switch = str(profiles.shell(f.name).get("run_switch", "")).strip()
+        if not switch:
+            # REPORTED BUT NOT INVOCABLE. The machine has this shell and no
+            # profile says how to hand it one command line, so composing
+            # something would be a guess -- and the guess runs. `4dos` is the
+            # live example: it has a profile, it is detected, and until its
+            # `[shell]` table names a switch the honest answer is that this
+            # bridge cannot drive it.
+            log.warning("%s is installed on that machine but its profile "
+                        "declares no run_switch, so nothing can be run "
+                        "through it", f.name)
+            return None
+        path = getattr(f, "path", "") or f.name
+        return f"{path} {switch}"
+    return None
+
+
+def usable_shells(found) -> list:
+    """The shells this bridge can actually hand a command line to.
+
+    `shells_of` is what the MACHINE has; this is the subset the model may
+    pick from, which is smaller exactly when a profile has not said how to
+    invoke one. Listing a shell that cannot be selected would be a lie in
+    the one paragraph the model reads to decide.
+    """
+    return [f for f in shells_of(found) if shell_command(found, f.name)]
 
 
 def path_dirs(facts: list[Fact], shell: str = "") -> list[str]:

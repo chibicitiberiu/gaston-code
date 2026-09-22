@@ -156,7 +156,10 @@ async def test_exec_defaults_timeout_and_shell_and_binds_its_own_guest(
     await handlers["exec"]({"command": "dir"})
     call = bridge.exec_calls[0]
     assert call["timeout_ms"] == T.DEFAULT_TIMEOUT_MS
-    assert call["shell"] is True
+    # EMPTY, meaning "whichever shell that machine reported first". Naming a
+    # shell here would be this file deciding for a machine it has never
+    # seen, which is the whole of what 02.5 took out.
+    assert call["shell"] == ""
     assert call["cwd"] == "C:\\WORK", (
         "no cwd means this conversation's own folder on the user's machine, "
         "not empty -- an empty one makes the guest pass NULL to "
@@ -195,11 +198,34 @@ async def test_exec_clamps_timeout_ms_to_the_documented_range(monkeypatch):
     assert bridge.exec_calls[-1]["timeout_ms"] == T.MAX_TIMEOUT_MS
 
 
-async def test_exec_shell_false_is_honoured(monkeypatch):
+async def test_exec_runs_a_program_directly_when_asked(monkeypatch):
     bridge = _FakeBridge()
     _, handlers = _build_tools(monkeypatch, bridge)
+    await handlers["exec"]({"command": "dir", "shell": "none"})
+    assert bridge.exec_calls[-1]["shell"] == "none"
+
+
+async def test_exec_passes_a_named_shell_straight_through(monkeypatch):
+    """A machine has as many shells as it has, and which one is a fact about
+    that machine -- so this layer must not vet the name against a list it
+    does not have. `run_on_guest` refuses one the machine did not report,
+    and names what it did."""
+    bridge = _FakeBridge()
+    _, handlers = _build_tools(monkeypatch, bridge)
+    await handlers["exec"]({"command": "dir", "shell": "4dos"})
+    assert bridge.exec_calls[-1]["shell"] == "4dos"
+
+
+async def test_exec_still_understands_the_old_boolean(monkeypatch):
+    """`shell` was a boolean for long enough that a model may have learned
+    it. True meant "the shell somebody picked" and False meant "no shell",
+    which is exactly what "" and "none" mean now."""
+    bridge = _FakeBridge()
+    _, handlers = _build_tools(monkeypatch, bridge)
+    await handlers["exec"]({"command": "dir", "shell": True})
+    assert bridge.exec_calls[-1]["shell"] == ""
     await handlers["exec"]({"command": "dir", "shell": False})
-    assert bridge.exec_calls[-1]["shell"] is False
+    assert bridge.exec_calls[-1]["shell"] == "none"
 
 
 async def test_two_builds_bind_two_different_guests(monkeypatch):

@@ -132,12 +132,29 @@ def build(bridge, guest=None) -> dict:
                         f"minutes.",
                 },
                 "shell": {
-                    "type": "boolean",
+                    # A NAME, not a boolean, because a machine has as many
+                    # shells as it has: `command.com` and `4dos` on a DOS
+                    # box, `sh`/`bash`/`zsh`/`csh` on a Unix one. A boolean
+                    # could only mean "the one somebody else picked", and
+                    # the somebody was the guest, deciding from
+                    # `GetVersion()` and telling nobody -- so a second
+                    # installed shell was unreachable and the command guard
+                    # on this side was judging by a grammar the other side
+                    # might not have been running.
+                    #
+                    # The options are not listed HERE: this description
+                    # ships to every machine, and which shells exist is a
+                    # fact about one. The system prompt names them from what
+                    # that machine reported.
+                    "type": "string",
                     "description":
-                        "Run through the shell (default true). Set false to "
-                        "spawn an executable directly, which gives cleaner "
-                        "quoting but loses built-ins like dir, vol, copy and "
-                        "type, and loses pipes and redirection.",
+                        "Which of the connected machine's shells to run the "
+                        "command through. The system prompt lists the ones "
+                        "it has; omit this to use the first of them. Pass "
+                        "\"none\" to spawn a program directly instead, which "
+                        "gives cleaner quoting but loses built-ins like dir, "
+                        "vol, copy and type, and loses pipes and "
+                        "redirection.",
                 },
                 "cwd": {
                     "type": "string",
@@ -162,8 +179,18 @@ def build(bridge, guest=None) -> dict:
             timeout_ms = DEFAULT_TIMEOUT_MS
         timeout_ms = max(1000, min(timeout_ms, MAX_TIMEOUT_MS))
 
+        # PASSED ON AS WRITTEN, resolved in run_on_guest. A name this
+        # machine does not have has to come back as an error naming what it
+        # does have, and that list lives with the guest, not here.
+        #
+        # A bool is still understood, because the schema said boolean for
+        # long enough that a model may have learned it: True means "the
+        # machine's first shell" and False means "none", which is what those
+        # values meant when they were the whole vocabulary.
         shell = args.get("shell")
-        shell = True if shell is None else bool(shell)
+        if isinstance(shell, bool):
+            shell = "" if shell else "none"
+        shell = str(shell or "").strip()
         # Defaulted to THIS conversation's folder on the user's machine, not
         # left empty. An empty cwd means the guest passes NULL to
         # CreateProcess and the child inherits the GUI process's directory --

@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shlex
 import sys
 import tempfile
 
@@ -528,10 +529,19 @@ class FakeGui:
             cwd = f.headers.get("cwd") or None
             timeout_ms = int(f.headers.get("timeout_ms", "20000") or "20000")
             cmd = f.body.decode("cp1252", errors="replace")
+            # THE SHELL HEADER, WHICH THIS USED TO IGNORE ENTIRELY.
+            #
+            # It always ran through a shell, so the one branch the real guest
+            # has -- spawn the program directly -- was never exercised from
+            # the conformance tool at all. The header is the invocation
+            # prefix now rather than a flag, which is what makes honouring it
+            # meaningful here: a Win98 prefix is nonsense on Linux, but the
+            # SHAPE is the thing under test, and it is the same shape.
+            shell = f.headers.get("shell") or ""
             print(f"\n{CYAN}[exec {eid}]{RESET} {DIM}{cmd[:160]}{RESET}")
             self._exec_id = eid
             self._exec_task = asyncio.create_task(
-                self._exec_run(eid, cmd, cwd, timeout_ms))
+                self._exec_run(eid, cmd, cwd, timeout_ms, shell))
             return
 
         # SYNC*: fakegui has no mirrored directory, so it answers exactly as
@@ -558,17 +568,32 @@ class FakeGui:
                                    "crc": "0", "cls": "t"}))
 
     async def _exec_run(self, eid: str, cmd: str, cwd: str | None,
-                        timeout_ms: int) -> None:
+                        timeout_ms: int, shell: str = "") -> None:
         """Actually run it. This is the one RPC frame family worth truly
         implementing here: EXECOUT/EXECRESULT exercise the bridge's exec
         plumbing end to end, and a subprocess is not a second implementation
         of anything -- unlike SYNC*, there is no manifest format to agree
-        with, just bytes out and a status in."""
+        with, just bytes out and a status in.
+
+        `shell` is the invocation prefix from the EXEC frame, spliced in
+        front of the command exactly as `rc_exec_run` splices it, or empty to
+        spawn the program directly. A prefix naming a Win98 shell will not
+        run here and is not meant to: what conformance means for this branch
+        is that an empty header spawns directly and a non-empty one does not,
+        which is the distinction the guest makes."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd, cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT)
+            if shell:
+                proc = await asyncio.create_subprocess_shell(
+                    f"{shell} {cmd}", cwd=cwd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT)
+            else:
+                # Directly, the way CreateProcessA is given the command line
+                # with no shell in front of it.
+                proc = await asyncio.create_subprocess_exec(
+                    *shlex.split(cmd), cwd=cwd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT)
         except Exception as exc:
             print(f"{RED}[exec {eid}] spawn failed: {exc}{RESET}")
             await self.send(Frame("EXECRESULT",

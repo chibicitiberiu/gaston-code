@@ -166,17 +166,23 @@ static void immediate_survives_busy_job(void)
      * marker once per pass, which is what makes "still running" observable
      * from out here without a live bridge to carry an EXECRESULT back.
      *
-     * shell=0, and cmd.exe named explicitly in the body: exec.c's shell_name()
-     * picks command.com whenever GetVersion()'s high bit is set, which this
-     * project's Wine prefix deliberately does (CLAUDE.md: "verify on the
-     * guest, not under Wine" -- the whole point is that the guest code runs
-     * unmodified), and Wine has no command.com to spawn. That is a property of
-     * WHICH SHELL RUNS, not of the JOB/IMMEDIATE lane machinery this check
-     * exists to test, so it is worked around with the wire protocol's own
-     * `shell` header rather than by faking anything. */
+     * An EMPTY `shell` header, with cmd.exe named explicitly in the body.
+     *
+     * The header is the invocation prefix the bridge composes from whichever
+     * shell the model picked, and empty means "spawn this directly" -- so
+     * this runs cmd.exe itself rather than asking for a shell. It has to:
+     * this project's Wine prefix reports itself as 9x (CLAUDE.md: "verify on
+     * the guest, not under Wine" -- the whole point is that the guest code
+     * runs unmodified) and Wine has no command.com to spawn. Which shell
+     * runs is not what the JOB/IMMEDIATE lane machinery here is about, so it
+     * is sidestepped through the wire protocol's own header rather than by
+     * faking anything.
+     *
+     * It used to be `shell=0` against a flag, and exec.c picked the shell
+     * itself from GetVersion(). It picks nothing now -- see rc_exec_run. */
     xkeys[0] = "id";         xvals[0] = "x1";
     xkeys[1] = "timeout_ms"; xvals[1] = "8000";
-    xkeys[2] = "shell";      xvals[2] = "0";
+    xkeys[2] = "shell";      xvals[2] = "";
     slow = make_frame("EXEC", xkeys, xvals, 3,
                       "cmd.exe /c for /l %i in (1,1,50000000) do echo t>>"
                       MARKER_FILE);
@@ -326,18 +332,21 @@ static void exec_refuses_an_overlong_command(void)
     big[sizeof(big) - 1] = '\0';
 
     memset(&r, 0, sizeof(r));
-    rc = rc_exec_run(big, NULL, 0, 1000, NULL, NULL, &r);
+    rc = rc_exec_run(big, NULL, NULL, 1000, NULL, NULL, &r);
     ok = (rc != 0 && r.status == RC_EXEC_TOO_LONG);
     if (!ok) g_failures++;
     printf("%s\ta %u-byte command is refused as too_long\tgot rc=%d status=%d\n",
            ok ? "pass" : "FAIL", (unsigned)strlen(big), rc, (int)r.status);
 
-    /* And the shell form, which prepends "command.com /c " and so crosses the
-     * limit at a LOWER input length -- the branch a fix could easily miss. */
+    /* And the shell form, which prepends the bridge's invocation prefix and
+     * so crosses the limit at a LOWER input length -- the branch a fix could
+     * easily miss. The prefix is now a caller argument rather than something
+     * this file picks, so the test states it. */
     memset(big, 'y', 1100);
     big[1100] = '\0';
     memset(&r, 0, sizeof(r));
-    rc = rc_exec_run(big, NULL, 1, 1000, NULL, NULL, &r);
+    rc = rc_exec_run(big, NULL, "C:\\WINDOWS\\COMMAND.COM /c", 1000,
+                     NULL, NULL, &r);
     ok = (rc != 0 && r.status == RC_EXEC_TOO_LONG);
     if (!ok) g_failures++;
     printf("%s\ta 1100-byte shell command is refused as too_long\tgot rc=%d status=%d\n",
@@ -347,7 +356,7 @@ static void exec_refuses_an_overlong_command(void)
      * for a guard that refuses everything. */
     memset(&r, 0, sizeof(r));
     r.status = RC_EXEC_TOO_LONG;
-    rc_exec_run("", NULL, 0, 1000, NULL, NULL, &r);
+    rc_exec_run("", NULL, NULL, 1000, NULL, NULL, &r);
     ok = (r.status != RC_EXEC_TOO_LONG);
     if (!ok) g_failures++;
     printf("%s\ta short command is not refused as too_long\tgot status=%d\n",
@@ -365,12 +374,12 @@ static void exec_timeout_clamp_is_logged(void)
     /* Absurdly over the 120000ms ceiling; the command itself is instant, so
      * this check is not itself waiting anywhere near that long -- only the
      * clamp decision, made before the child is even spawned, is being
-     * proven. shell=0 + cmd.exe named explicitly: see the long comment in
-     * immediate_survives_busy_job() for why that combination is what runs
-     * under this project's Wine prefix. */
+     * proven. An empty `shell` + cmd.exe named explicitly: see the long
+     * comment in immediate_survives_busy_job() for why that combination is
+     * what runs under this project's Wine prefix. */
     xkeys[0] = "id";         xvals[0] = "x2";
     xkeys[1] = "timeout_ms"; xvals[1] = "999999999";
-    xkeys[2] = "shell";      xvals[2] = "0";
+    xkeys[2] = "shell";      xvals[2] = "";
     f = make_frame("EXEC", xkeys, xvals, 3, "cmd.exe /c echo hi");
     if (!f) {
         printf("FAIL\tbuild clamp EXEC frame\t(alloc)\n");

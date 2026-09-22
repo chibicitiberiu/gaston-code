@@ -128,28 +128,37 @@ class PermissionDesk:
         #: that).
         self._gap_said: str | None = None
 
-    def _shell(self) -> str:
+    def _shell(self, args: "dict | None" = None) -> str:
         """Which shell's rules to judge a command by.
 
-        Detection already answers this -- the client reports what it found --
-        and an empty answer means the client said nothing, which is the
-        ordinary case: HELLO's body is empty for every guest built before it
-        existed.
+        THE ONE THE CALL NAMED, first. A machine has as many shells as it
+        has, the model picks one per `exec` from the list the machine
+        reported, and judging by any other is judging a grammar the command
+        will not run under -- which is how a guard comes to be confidently
+        wrong. `run_on_guest` refuses a name the machine does not have, so a
+        name that gets here is one of its own.
+
+        Falling back to the machine's first reported shell is what `exec`
+        itself falls back to, so the two agree by construction.
 
         THE DOCSTRING HERE USED TO CLAIM THE OPPOSITE OF WHAT THE CODE DID.
         It said an empty answer "refers every command to the user rather than
         judging it by whichever profile happened to be the only one
         installed" -- while `cmdguard._default_shell` did judge by the only
-        one installed, which is the behaviour that works. Two readers would
-        have disagreed about which half was the bug. 02.5 settled it in
-        favour of the code: the single-profile fallback stays, a profile can
-        now declare itself the one to assume when there are several
-        (`assume_when_unreported`), and the refusal is kept for the case
-        nothing can be derived from -- several candidates and no claim.
+        one installed. Two readers would have disagreed about which half was
+        the bug.
+
+        02.5 removed the disagreement instead of settling it: there is no
+        guess left to defend. The machine says which shells it has, the model
+        says which one it wants, and only a machine that reported nothing and
+        a call that named nothing reaches the profile count at all.
         """
+        named = str((args or {}).get("shell") or "").strip()
+        if named and named.lower() != "none":
+            return named
         return toolrules.shell_of(getattr(self._guest, "tools", None))
 
-    async def _announce_gap(self, root: str) -> None:
+    async def _announce_gap(self, root: str, shell: str) -> None:
         """Say ONCE why no command here can be judged. See 02.4.
 
         Both sentences `cmdguard.deployment_gap` returns are facts about the
@@ -158,9 +167,15 @@ class PermissionDesk:
         the guest draws as one clipped line, so the user read the warning and
         none of the command. A bridge started without `--sync-dir` is in that
         state for every exec it will ever show.
+
+        `shell` is per call now, because the model picks one, so "this bridge
+        has no rules for that shell" is a state the connection can move in
+        and out of. Held by value rather than as a flag for exactly that
+        reason: it is said again when it becomes true of a different shell,
+        and stops being said the moment a call names one that is covered.
         """
         gap = cmdguard.deployment_gap(
-            guest_root=root, shell=self._shell(),
+            guest_root=root, shell=shell,
             caps=getattr(self._guest, "caps", None))
         if gap == self._gap_said:
             return
@@ -251,13 +266,16 @@ class PermissionDesk:
                 # case-sensitive machine calls `/WORK/x` contained in a mirror
                 # rooted at `/work`.
                 root = str(getattr(self._guest, "work_guest", "") or "")
+                # THE SHELL THIS CALL NAMED. Judging by any other is judging
+                # a grammar the command will not run under.
+                shell = self._shell(args)
                 # Said once per connection-state, not once per command (02.4).
-                await self._announce_gap(root)
+                await self._announce_gap(root, shell)
                 warning = cmdguard.reason(
                     str((args or {}).get("command") or ""),
                     cwd=str((args or {}).get("cwd") or ""),
                     guest_root=root,
-                    shell=self._shell(),
+                    shell=shell,
                     caps=getattr(self._guest, "caps", None),
                     announce_gaps=False)
                 if warning:

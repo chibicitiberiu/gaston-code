@@ -76,14 +76,17 @@ switch = "/"
 switch_token = '^/[A-Za-z?][A-Za-z0-9]*(:[^\\/]*)?$'
 switch_max = 8
 
-# The shell to assume for a guest that reported no inventory at all -- which
-# is every client built before HELLO carried a body, i.e. every deployed one
-# until it is reflashed. Without this, adding a `[shell]` table to a SECOND
-# profile turned the guard off for all of them (02.5): with two candidates
-# and no word from the caller, `_default_shell` refused to pick and every
-# command came back "the shell on this machine is not one this bridge has
-# rules for". Exactly one profile may claim this.
-assume_when_unreported = true
+# How this shell is told to run one command line and exit.
+#
+# The bridge composes `<detected path> <run_switch>` and sends that to the
+# guest, which splices it in front of the command and knows nothing else
+# about shells. It used to pick between `command.com` and `cmd.exe` itself
+# from `GetVersion()` -- so a machine with a second shell installed could not
+# be asked to use it, and the guard on this side was judging by a grammar the
+# other side might not have been running.
+#
+# A shell that needs no switch omits this and gets the bare path.
+run_switch = "/c"
 
 # How PATH is separated. `;` here because `:` follows a drive letter, which
 # is the whole reason the two families differ.

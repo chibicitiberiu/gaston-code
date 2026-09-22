@@ -67,45 +67,38 @@ def _default_shell() -> str:
     Derived, never named here. If exactly one profile carries guard tables
     that is the shell this bridge knows and there is nothing to choose.
 
-    THE SECOND CLAUSE IS 02.5, AND IT USED TO BE "REFUSE". The caller passes
-    `""` for every guest that does not report an inventory, and HELLO's body
-    is "empty for any guest built before the body existed, which is every
-    deployed one until it is reflashed" (server.py). So refusing on several
-    profiles meant that ADDING A SECOND SHELL -- the exact change
-    `profiles.py` says supporting a new machine should be, adding a file --
-    silently turned the guard off for every legacy guest: `grammar_for("")`
-    returned NOTHING, and every command came back "the shell on this machine
-    is not one this bridge has rules for". Reproduced by dropping a `[shell]`
-    table into 4dos.toml; `tests/python/meta/test_default_shell.py` now holds
-    that closed.
+    THE LAST RESORT, and 02.5 is why it is only that now. The caller used to
+    reach here for every guest that reported no tool inventory, and HELLO's
+    body is "empty for any guest built before the body existed, which is
+    every deployed one until it is reflashed" (server.py) -- so refusing
+    whenever there was more than one profile meant that ADDING A SECOND SHELL
+    PROFILE, the exact change `profiles.py` says supporting a new machine
+    should be, silently turned the guard off for all of them: `grammar_for("")`
+    returned NOTHING and every command came back "the shell on this machine
+    is not one this bridge has rules for".
 
-    A profile says it is the one to assume with `assume_when_unreported`.
-    That is data, like everything else here: which shell a machine that
-    reports nothing is running is a fact about the deployment, not a decision
-    this module gets to make. Exactly one profile may claim it -- two claims
-    is a misconfiguration and refusing is right, because picking either would
-    be inventing the answer.
+    That is fixed where it belongs rather than here. The machine reports
+    which shells it HAS (detection; `toolrules.shells_of`), the system prompt
+    prints them, the model names one on each `exec` call, and
+    `PermissionDesk` judges by that name -- falling back to the first shell
+    the machine reported. Nothing on this side picks a shell out of the
+    profiles it happens to ship any more, which is what made the count
+    matter in the first place.
+
+    So this is reached only when the machine named no shell AND reported
+    none. One installed profile is then the only candidate there is; several
+    is genuinely unanswerable, and inventing an answer is the one thing this
+    module may not do.
     """
     known = profiles.shells()
     if len(known) == 1:
         return known[0]
     if not known:
         log.error("no shell profile carries guard tables")
-        return ""
-    assumed = [n for n in known
-               if profiles.shell(n).get("assume_when_unreported")]
-    if len(assumed) == 1:
-        log.debug("%d shells have guard tables; assuming %s for a guest that "
-                  "reported none", len(known), assumed[0])
-        return assumed[0]
-    if assumed:
-        log.error("%d shell profiles claim assume_when_unreported (%s); only "
-                  "one may, so every command will be referred to the user",
-                  len(assumed), ", ".join(sorted(assumed)))
     else:
-        log.error("%d shells have guard tables (%s), none marked "
-                  "assume_when_unreported, and the caller did not say which "
-                  "-- so every command will be referred to the user",
+        log.error("%d shells have guard tables (%s), the machine reported "
+                  "none and the call named none, so every command will be "
+                  "referred to the user",
                   len(known), ", ".join(sorted(known)))
     return ""
 

@@ -2448,9 +2448,18 @@ class Bridge:
     # --- running commands on the guest -------------------------------------
 
     async def run_on_guest(self, command: str, *, timeout_ms: int,
-                           shell: bool, cwd: str,
+                           shell: str, cwd: str,
                            guest: "GuestSession | None" = None) -> dict:
         """Body of mcp__machine__exec. Returns an MCP tool result.
+
+        `shell` NAMES one of the machine's shells, or is `"none"` to spawn
+        the program directly, or is empty for the first shell the machine
+        reported. It used to be a bool, which could only ever mean "the shell
+        somebody else picked" -- and the somebody was the guest, choosing
+        between `command.com` and `cmd.exe` from `GetVersion()` and telling
+        nobody. A machine has as many shells as it has, so the machine
+        reports the list, the system prompt prints it, and the model names
+        one here.
 
         `guest` is the session this tool belongs to. It defaults to the only
         one there can be today, but passing it is what makes the tool address
@@ -2474,6 +2483,30 @@ class Bridge:
                     "The connected machine is not reachable right now -- it is "
                     "not connected to this proxy. Nothing was run."}],
                     "isError": True}
+
+        # RESOLVED HERE, against what THIS machine reported, and refused by
+        # name rather than silently falling back -- a command that was meant
+        # for one shell and ran under another is not a smaller version of
+        # what was asked for.
+        prefix = ""
+        want = (shell or "").strip()
+        if want.lower() != "none":
+            usable = toolrules.usable_shells(guest.tools)
+            if want:
+                prefix = toolrules.shell_command(guest.tools, want) or ""
+                if not prefix:
+                    have = ", ".join(f.name for f in usable)
+                    return {"content": [{"type": "text", "text": (
+                        f"There is no shell called {want!r} that this bridge "
+                        f"can run commands through on that machine. "
+                        + (f"It has: {have}." if have else
+                           "It reported no shell this bridge knows how to "
+                           "drive.")
+                        + " Nothing was run.")}],
+                        "isError": True}
+            elif usable:
+                prefix = toolrules.shell_command(guest.tools,
+                                                 usable[0].name) or ""
 
         # One worker thread over there means one command at a time.
         async with guest.exec_lock:
@@ -2550,8 +2583,8 @@ class Bridge:
             # exec_pending or send an EXEC/EXECKILL. See
             # test_exec_is_never_re_delivered.
             await self._send(guest, exec_cmd(exec_id, command,
-                                             timeout_ms=timeout_ms, shell=shell,
-                                             cwd=cwd))
+                                             timeout_ms=timeout_ms,
+                                             shell=prefix, cwd=cwd))
             log.info("exec %s: %s", exec_id, command[:160])
 
             # Above the guest's own limit, so a slow command produces a

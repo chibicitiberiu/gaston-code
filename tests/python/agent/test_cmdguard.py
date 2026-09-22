@@ -317,58 +317,24 @@ def test_a_second_shell_does_not_disable_the_guard(two_shells):
                     shell="command.com") is not None
 
 
-def test_an_unnamed_shell_uses_the_profile_that_claims_it(two_shells):
-    """Two shells, a silent caller, and the guard still decides. 02.5.
+def test_an_unnamed_shell_gets_no_verdict_rather_than_the_wrong_one(
+        two_shells, caplog):
+    """With two shells, nothing named and nothing reported, refusing is the
+    answer.
 
-    THIS TEST USED TO ASSERT THE OPPOSITE, and the opposite was a bug rather
-    than a policy. `PermissionDesk._shell` passes "" for every guest that
-    reports no inventory -- which is every client built before HELLO carried
-    a body, i.e. every deployed one until it is reflashed -- so refusing here
-    meant that ADDING A SECOND SHELL PROFILE silently turned the guard off
-    for all of them. The next line in that file (`test_the_variable_sigil_is
-    _the_shells_own`) shows how thin the line was: the same fixture, one
-    argument different, and the guard works.
+    Not a fallback. Four regexes -- including `^[A-Za-z]:`, a drive letter --
+    used to be Python defaults, so this case kept resolving DRIVE LETTERS for
+    a shell it had no tables for.
 
-    The refusal it was protecting is still here, one test down. What changed
-    is that "I cannot choose" is now answered from the profiles rather than
-    assumed from their count.
+    This is now the LAST resort rather than the ordinary path for a guest
+    that reported no inventory, which is what made it a bug: see
+    tests/python/meta/test_shell_selection.py for who picks instead.
     """
-    assert G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK") is None
-    why = G.reason(r"del C:\WINDOWS\WIN.INI", guest_root=r"C:\WORK")
-    assert why is not None and "outside the mirrored folder" in why
-
-
-def test_two_profiles_claiming_the_fallback_is_still_a_refusal(
-        two_shells, monkeypatch, caplog):
-    """With two candidates and no way to choose, refusing is the answer.
-
-    Not a fallback. Four regexes -- including `^[A-Za-z]:` -- used to be
-    Python defaults, so this case kept resolving DRIVE LETTERS for a shell it
-    had no tables for. Picking either of two equal claims would be inventing
-    the answer, which is the one thing this module may not do.
-    """
-    claimed = dict(SH)
-    claimed["shell"] = dict(SH["shell"], assume_when_unreported=True)
-    monkeypatch.setitem(profiles.ALL, "sh", claimed)
     with caplog.at_level(logging.ERROR):
         why = G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK")
     assert why is not None
     assert "not one this bridge has rules for" in why
-    assert "assume_when_unreported" in caplog.text
-
-
-def test_no_profile_claiming_the_fallback_is_a_refusal(
-        two_shells, monkeypatch, caplog):
-    """The other half: two shells and nobody claiming is unanswerable too."""
-    bare = dict(profiles.ALL["command.com"])
-    bare["shell"] = {k: v for k, v in bare["shell"].items()
-                     if k != "assume_when_unreported"}
-    monkeypatch.setitem(profiles.ALL, "command.com", bare)
-    with caplog.at_level(logging.ERROR):
-        why = G.reason(r"del C:\WORK\x", guest_root=r"C:\WORK")
-    assert why is not None
-    assert "not one this bridge has rules for" in why
-    assert "did not say which" in caplog.text
+    assert "the machine reported none" in caplog.text
 
 
 def test_the_variable_sigil_is_the_shells_own(two_shells):

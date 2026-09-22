@@ -398,8 +398,11 @@ static void run_one(rc_frame *f)
     }
 
     memset(&r, 0, sizeof(r));
-    rc_exec_run(f->body ? f->body : "", cwd,
-                (sh && *sh == '0') ? 0 : 1,
+    /* Straight through. `sh` is the bridge's invocation prefix for whichever
+     * shell the model picked from the list this machine reported, or empty
+     * to spawn the program directly -- this used to be read as a flag and
+     * the shell chosen locally. See rc_exec_run. */
+    rc_exec_run(f->body ? f->body : "", cwd, sh,
                 timeout_ms, send_out, &ctx, &r);
 
     switch (r.status) {
