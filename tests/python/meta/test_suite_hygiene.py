@@ -31,7 +31,10 @@ TESTS = os.path.join(conftest.REPO, "tests", "python")
 LAYERS = {"agent", "files", "wire", "view", "server", "guest", "meta", "tools"}
 
 #: What a suite touches when it needs a built guest binary under Wine.
-GUEST_API = {"guest_exe", "WINE", "wine_env", "have_toolchain"}
+GUEST_API = {
+    "guest_exe", "WINE", "wine_env", "have_toolchain",
+    "run_guest", "guest_verdicts", "wine_path",
+}
 
 
 def _modules():
@@ -52,10 +55,13 @@ def _modules():
 
 
 def _uses_guest_api(tree) -> bool:
-    """Does this module import the Wine plumbing out of conftest?"""
+    """Does this module import or use the Wine plumbing out of conftest?"""
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "conftest":
             if GUEST_API & {a.name for a in node.names}:
+                return True
+        elif isinstance(node, ast.Attribute) and getattr(node.value, "id", "") == "conftest":
+            if node.attr in GUEST_API:
                 return True
     return False
 

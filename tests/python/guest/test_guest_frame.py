@@ -107,29 +107,64 @@ def test_bridge_never_sends_more_headers_than_the_guest_can_hold():
     """The guest REFUSES a frame past RC_MAX_HEADERS rather than dropping the
     surplus silently, which makes the bridge's own maximum load-bearing.
 
-    Counted from the Frame(...) literals in protocol.py rather than asserted
-    as a number here, so adding a header to a frame is what moves this.
+    Audit 04.9: the previous guard checked only literal ast.Dict arguments to Frame(...),
+    which missed the dynamic frames most likely to grow (READY has 10 headers,
+    TURN has 6, TEXT has 3, EXEC has 4). We now analyze each function in protocol.py
+    for all keys that can be added to the header dict, and verify all constructors
+    dynamically as well.
     """
     import ast
     import bridge.wire.protocol as P
 
-    tree = ast.parse(open(P.__file__).read())
-    worst = 0
-    where = None
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call)
-                and getattr(node.func, "id", "") == "Frame"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Dict)):
-            if len(node.args[1].keys) > worst:
-                worst = len(node.args[1].keys)
-                where = node.lineno
-
     cap = _limits()["RC_MAX_HEADERS"]
-    assert worst <= cap, (
-        f"protocol.py:{where} builds a frame with {worst} headers and the "
-        f"guest refuses anything over {cap} -- that is a dropped LINK, not a "
-        f"dropped header")
+
+    # 1. AST analysis: for every function constructing a Frame, find all keys added
+    # to the headers dict (initial literal keys + subscript assignments h["..."] = ...).
+    tree = ast.parse(open(P.__file__).read())
+    for fn in [n for n in tree.body if isinstance(n, ast.FunctionDef)]:
+        # Track dict variables and their possible keys
+        dict_keys: dict[str, set[str]] = {}
+        for stmt in ast.walk(fn):
+            if isinstance(stmt, ast.Assign):
+                if isinstance(stmt.value, ast.Dict) and stmt.targets:
+                    target = stmt.targets[0]
+                    if isinstance(target, ast.Name):
+                        keys = {k.value for k in stmt.value.keys if isinstance(k, ast.Constant)}
+                        dict_keys[target.id] = keys
+            elif isinstance(stmt, ast.Assign) and isinstance(stmt.targets[0], ast.Subscript):
+                sub = stmt.targets[0]
+                if isinstance(sub.value, ast.Name) and isinstance(sub.slice, ast.Constant):
+                    dict_keys.setdefault(sub.value.id, set()).add(sub.slice.value)
+
+        # Check any Frame(type, headers, ...) call in this function
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Frame" and len(node.args) >= 2:
+                arg = node.args[1]
+                if isinstance(arg, ast.Dict):
+                    keys = {k.value for k in arg.keys if isinstance(k, ast.Constant)}
+                elif isinstance(arg, ast.Name) and arg.id in dict_keys:
+                    keys = dict_keys[arg.id]
+                else:
+                    continue
+                assert len(keys) <= cap, (
+                    f"protocol.py:{fn.name} can build a frame with {len(keys)} headers "
+                    f"({sorted(keys)}), exceeding guest cap {cap}"
+                )
+
+    # 2. Dynamic check: invoke constructors with all optional fields populated
+    test_frames = [
+        P.hello("sec", sess="s1"),
+        P.ready("s1", "claude", 1, 5, conv="c1"),
+        P.turn_end(ok=True, subtype="done", cost_usd=0.05, ms=1200, ctx_pct=42),
+        P.exec_cmd("e1", "cmd", cwd="C:\\", timeout_ms=5000, shell="cmd.exe"),
+        P.option("m", "model1", "Model 1", current=True, disabled=True, hint=True, desc="desc"),
+        P.text_frame("append", "raw", 1, b"hello", total=5, off=0),
+        P.export_end(ok=True, bytes_=123, reason="done"),
+    ]
+    for frame in test_frames:
+        assert len(frame.headers) <= cap, (
+            f"Frame {frame.type} generated {len(frame.headers)} headers, exceeding cap {cap}"
+        )
 
 
 def test_the_guest_limits_are_what_the_header_says():

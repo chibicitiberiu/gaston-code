@@ -395,12 +395,21 @@ static void exec_timeout_clamp_is_logged(void)
         return;
     }
 
-    /* The clamp is decided and logged before the child is spawned, so this
-     * only has to outlast the dequeue -- generous against CreateProcess under
-     * Wine being the slow part elsewhere in this file. */
-    Sleep(1500);
-
-    ok = log_contains("clamped");
+    /* The clamp is decided and logged before the child is spawned.
+     * Poll with a bounded wait rather than an arbitrary fixed sleep,
+     * so slow CI/load does not produce false-negative flakes. */
+    {
+        int waited = 0;
+        ok = 0;
+        while (waited < 3000) {
+            if (log_contains("clamped")) {
+                ok = 1;
+                break;
+            }
+            Sleep(50);
+            waited += 50;
+        }
+    }
     if (!ok) g_failures++;
     printf("%s\texec timeout clamp is logged, not silent\t(log contains \"clamped\")\n",
            ok ? "pass" : "FAIL");
@@ -492,14 +501,216 @@ static int putend_cases(const char *root)
     return 0;
 }
 
+static unsigned long scan_bytes(const void *data, unsigned len, char *cls_out)
+{
+    rc_sync_scanner *s = rc_sync_scanner_begin();
+    char cls = RC_CLS_TEXT;
+    unsigned long crc = 0;
+    if (!s) return 0;
+    rc_sync_scanner_feed(s, data, len);
+    rc_sync_scanner_finish(s, &cls, &crc);
+    if (cls_out) *cls_out = cls;
+    return crc;
+}
+
+static int sync_rpc_cases(const char *root)
+{
+    rc_net net;
+    rc_frame *f;
+    char body[512];
+    const char *keys[4];
+    const char *vals[4];
+    char target_path[MAX_PATH];
+    char tmp_path[MAX_PATH];
+    char sub_path[MAX_PATH];
+    char crc_str[32];
+    char cls_str[4];
+    char read_buf[64];
+    const char *content1 = "hello from syncrpc\n";
+    const char *content2 = "new overwriting content\n";
+    unsigned long moved_start;
+    unsigned long crc;
+    char cls;
+    int n, ok;
+    HANDLE h;
+    DWORD read_bytes, attr;
+
+    memset(&net, 0, sizeof(net));
+    rc_syncrpc_set_root(root);
+    moved_start = rc_syncrpc_moved();
+
+    /* 1. Happy PUT + PUTEND commit: writes file, verifies content, removes temp, increments moved */
+    rc_strf(body, sizeof(body), "%u %s", (unsigned)strlen("put_ok.txt"), "put_ok.txt");
+    n = (int)strlen(body);
+    rc_strf(body + n, sizeof(body) - n, "%s", content1);
+
+    keys[0] = "id";  vals[0] = "put1";
+    keys[1] = "off"; vals[1] = "0";
+    f = make_frame("SYNCPUT", keys, vals, 2, body);
+    if (!f) { fprintf(stderr, "no frame for put1\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    /* Verify temp file exists before commit */
+    rc_strf(tmp_path, sizeof(tmp_path), "%s\\put_ok.txt.gaston-tmp", root);
+    ok = (GetFileAttributesA(tmp_path) != 0xFFFFFFFF);
+    if (!ok) g_failures++;
+    printf("%s\tsyncrpc: temp file exists during put\t%s\n",
+           ok ? "pass" : "FAIL", tmp_path);
+
+    crc = scan_bytes(content1, (unsigned)strlen(content1), &cls);
+    rc_strf(crc_str, sizeof(crc_str), "%lu", crc);
+    cls_str[0] = cls; cls_str[1] = '\0';
+
+    keys[0] = "id";     vals[0] = "put1";
+    keys[1] = "crc";    vals[1] = crc_str;
+    keys[2] = "cls";    vals[2] = cls_str;
+    keys[3] = "if_crc"; vals[3] = "absent";
+    f = make_frame("SYNCPUTEND", keys, vals, 4, "");
+    if (!f) { fprintf(stderr, "no frame for putend1\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    /* Verify target exists with matching content and temp file is gone */
+    rc_strf(target_path, sizeof(target_path), "%s\\put_ok.txt", root);
+    ok = (GetFileAttributesA(target_path) != 0xFFFFFFFF) &&
+         (GetFileAttributesA(tmp_path) == 0xFFFFFFFF);
+    if (ok) {
+        h = CreateFileA(target_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            memset(read_buf, 0, sizeof(read_buf));
+            ReadFile(h, read_buf, sizeof(read_buf) - 1, &read_bytes, NULL);
+            CloseHandle(h);
+            if (strcmp(read_buf, content1) != 0) ok = 0;
+        } else {
+            ok = 0;
+        }
+    }
+    if (!ok) g_failures++;
+    printf("%s\tsyncrpc: put commits data to target and cleans temp\t%s\n",
+           ok ? "pass" : "FAIL", target_path);
+
+    /* 2. PUTEND CRC mismatch refusal: corrupted chunk never replaces target */
+    rc_strf(body, sizeof(body), "%u %s", (unsigned)strlen("put_bad.txt"), "put_bad.txt");
+    n = (int)strlen(body);
+    rc_strf(body + n, sizeof(body) - n, "corrupted bytes");
+
+    keys[0] = "id";  vals[0] = "put2";
+    keys[1] = "off"; vals[1] = "0";
+    f = make_frame("SYNCPUT", keys, vals, 2, body);
+    if (!f) { fprintf(stderr, "no frame for put2\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    keys[0] = "id";     vals[0] = "put2";
+    keys[1] = "crc";    vals[1] = "99999999";
+    keys[2] = "cls";    vals[2] = "t";
+    keys[3] = "if_crc"; vals[3] = "absent";
+    f = make_frame("SYNCPUTEND", keys, vals, 4, "");
+    if (!f) { fprintf(stderr, "no frame for putend2\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    rc_strf(target_path, sizeof(target_path), "%s\\put_bad.txt", root);
+    rc_strf(tmp_path, sizeof(tmp_path), "%s\\put_bad.txt.gaston-tmp", root);
+    ok = (GetFileAttributesA(target_path) == 0xFFFFFFFF) &&
+         (GetFileAttributesA(tmp_path) == 0xFFFFFFFF);
+    if (!ok) g_failures++;
+    printf("%s\tsyncrpc: putend crc mismatch refuses and cleans temp\t%s\n",
+           ok ? "pass" : "FAIL", target_path);
+
+    /* 3. PUTEND if_crc mismatch preserves existing file on guest */
+    rc_strf(body, sizeof(body), "%u %s", (unsigned)strlen("put_ok.txt"), "put_ok.txt");
+    n = (int)strlen(body);
+    rc_strf(body + n, sizeof(body) - n, "%s", content2);
+
+    keys[0] = "id";  vals[0] = "put3";
+    keys[1] = "off"; vals[1] = "0";
+    f = make_frame("SYNCPUT", keys, vals, 2, body);
+    if (!f) { fprintf(stderr, "no frame for put3\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    /* Send if_crc that does not match content1's CRC */
+    crc = scan_bytes(content2, (unsigned)strlen(content2), &cls);
+    rc_strf(crc_str, sizeof(crc_str), "%lu", crc);
+
+    keys[0] = "id";     vals[0] = "put3";
+    keys[1] = "crc";    vals[1] = crc_str;
+    keys[2] = "cls";    vals[2] = "t";
+    keys[3] = "if_crc"; vals[3] = "11111111";
+    f = make_frame("SYNCPUTEND", keys, vals, 4, "");
+    if (!f) { fprintf(stderr, "no frame for putend3\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    rc_strf(target_path, sizeof(target_path), "%s\\put_ok.txt", root);
+    rc_strf(tmp_path, sizeof(tmp_path), "%s\\put_ok.txt.gaston-tmp", root);
+    ok = (GetFileAttributesA(tmp_path) == 0xFFFFFFFF);
+    if (ok) {
+        h = CreateFileA(target_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            memset(read_buf, 0, sizeof(read_buf));
+            ReadFile(h, read_buf, sizeof(read_buf) - 1, &read_bytes, NULL);
+            CloseHandle(h);
+            if (strcmp(read_buf, content1) != 0) ok = 0; /* must still be content1! */
+        } else {
+            ok = 0;
+        }
+    }
+    if (!ok) g_failures++;
+    printf("%s\tsyncrpc: putend if_crc mismatch preserves existing file\t%s\n",
+           ok ? "pass" : "FAIL", target_path);
+
+    /* 4. SYNCMKDIR creates directory hierarchy */
+    keys[0] = "id"; vals[0] = "m1";
+    f = make_frame("SYNCMKDIR", keys, vals, 1, "test_dir/nested_sub");
+    if (!f) { fprintf(stderr, "no frame for mkdir\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+
+    rc_strf(sub_path, sizeof(sub_path), "%s\\test_dir\\nested_sub", root);
+    attr = GetFileAttributesA(sub_path);
+    ok = (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY));
+    if (!ok) g_failures++;
+    printf("%s\tsyncrpc: mkdir creates directory hierarchy\t%s\n",
+           ok ? "pass" : "FAIL", sub_path);
+
+    /* 5. SYNCGET reads existing file */
+    keys[0] = "id"; vals[0] = "g1";
+    f = make_frame("SYNCGET", keys, vals, 1, "put_ok.txt");
+    if (!f) { fprintf(stderr, "no frame for get\n"); return 3; }
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    printf("pass\tsyncrpc: get executes without error on existing file\tput_ok.txt\n");
+
+    /* 6. Moved counter: put1 incremented moved */
+    ok = (rc_syncrpc_moved() >= moved_start + 1);
+    if (!ok) g_failures++;
+    printf("%s\tsyncrpc: moved counter increments on commit\tcount=%lu\n",
+           ok ? "pass" : "FAIL", rc_syncrpc_moved());
+
+    return g_failures ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
-    rc_log_open(".");
+    if (rc_log_open(".") != 0) {
+        fprintf(stderr, "rpccheck: cannot open retroclaude.log\n");
+        return 1;
+    }
 
     /* A mode rather than another always-on case: it needs a directory to
      * work in, and the SYNCPUT path writes real files. */
     if (argc >= 3 && strcmp(argv[1], "--putend") == 0) {
         int rc = putend_cases(argv[2]);
+        rc_log_close();
+        return rc;
+    }
+    if (argc >= 3 && strcmp(argv[1], "--sync-rpc") == 0) {
+        int rc = sync_rpc_cases(argv[2]);
         rc_log_close();
         return rc;
     }

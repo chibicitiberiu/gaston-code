@@ -72,6 +72,7 @@ EXEC_MAX_OUT = 32 * 1024
 # the same header; change one, change the other two.
 FAKE_CAPS = {
     "acp": "1252",
+    "oemcp": "437",
     "case": "1",        # RC_CASE_FOLD
     "devices": "1",     # RC_DEVICES_DOS
     "trailing": "1",    # RC_TRAILING_STRIP
@@ -83,6 +84,7 @@ FAKE_CAPS = {
     "maxpath": "260",   # MAX_PATH
     "maxcomp": "255",
     "manifest": "2",    # RC_CAP_MANIFEST
+    "maxdepth": "8",    # RC_CAP_MAXDEPTH
     "deflate": "1",     # RC_CAP_DEFLATE
 }
 

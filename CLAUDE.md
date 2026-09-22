@@ -36,7 +36,9 @@ load, before `WinMain`, with no log written and nothing to debug. Resolve
 optional DLLs with `LoadLibrary`/`GetProcAddress`. `make check` audits imports.
 
 **Verify on the guest, not under Wine.** Wine proves the code, never the
-platform. `tools/vm/vmship.sh` ejects before inserting, because
+platform. Wine checks prove C algorithmic logic, data structures, and cross-language
+agreements (~40% headless subset); FAT32 filesystem edge cases, MAX_PATH, and modal
+dialogs require the real guest VM. `tools/vm/vmship.sh` ejects before inserting, because
 `change-media --update` to the same path is a no-op and has served a stale
 binary before.
 

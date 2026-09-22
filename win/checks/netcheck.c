@@ -114,7 +114,10 @@ static int slowsend_main(int argc, char **argv)
     unsigned max_outq = 0;
     DWORD stop_t0, stop_ms;
 
-    rc_log_open(".");
+    if (rc_log_open(".") != 0) {
+        printf("FAIL: cannot open log\n");
+        return 2;
+    }
 
     memset(&wc, 0, sizeof(wc));
     /* This scenario never dispatches a frame -- it only cares what
@@ -232,7 +235,10 @@ int main(int argc, char **argv)
     secret = (argc > 3) ? argv[3] : "dev-secret";
     if (argc > 4) g_prompt = argv[4];
 
-    rc_log_open(".");
+    if (rc_log_open(".") != 0) {
+        printf("FAIL: cannot open log\n");
+        return 2;
+    }
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = sink_proc;

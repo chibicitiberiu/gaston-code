@@ -23,6 +23,7 @@ cannot build or run the guest.
 import os
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
@@ -167,9 +168,14 @@ def run_guest(name: str, *args, cwd=None, timeout: float = 60,
     needs a longer one and passes it, which is the point of the parameter.
     """
     argv = [WINE, guest_exe(name), *[str(a) for a in args]]
-    return subprocess.run(argv, capture_output=True, text=text,
-                          timeout=timeout, cwd=str(cwd) if cwd else None,
-                          env=env if env is not None else wine_env())
+    if cwd is not None:
+        return subprocess.run(argv, capture_output=True, text=text,
+                              timeout=timeout, cwd=str(cwd),
+                              env=env if env is not None else wine_env())
+    with tempfile.TemporaryDirectory(prefix="rc-guest-") as tmpdir:
+        return subprocess.run(argv, capture_output=True, text=text,
+                              timeout=timeout, cwd=tmpdir,
+                              env=env if env is not None else wine_env())
 
 
 def guest_says(out) -> str:
@@ -186,7 +192,7 @@ def guest_says(out) -> str:
     return err[:800]
 
 
-def guest_verdicts(name: str, *args, timeout: float = 300) -> dict:
+def guest_verdicts(name: str, *args, cwd=None, timeout: float = 300) -> dict:
     """Run a check binary that prints `verdict<TAB>case<TAB>detail` rows.
 
     `cppcheck` and `rpccheck` print exactly this and had byte-identical
@@ -201,7 +207,7 @@ def guest_verdicts(name: str, *args, timeout: float = 300) -> dict:
     nothing parses to `{}`, and a suite that then iterates over `{}` passes
     every assertion it makes while checking nothing at all.
     """
-    out = run_guest(name, *args, timeout=timeout)
+    out = run_guest(name, *args, cwd=cwd, timeout=timeout)
     rows = {}
     for line in out.stdout.decode("latin-1", "replace").splitlines():
         parts = line.split("\t")

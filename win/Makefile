@@ -365,12 +365,14 @@ check: $(BUILD)/retroclaude.exe
 	@# bytes. `objdump -h` reports the RAW section size, which omits BSS
 	@# entirely and makes this look 7x smaller than it is, so read the PE
 	@# section headers directly.
-	@$(PYTHON) -c "import struct;d=open('$(BUILD)/retroclaude.exe','rb').read();\
+	@$(PYTHON) -c "import struct, sys;d=open('$(BUILD)/retroclaude.exe','rb').read();\
 pe=struct.unpack_from('<I',d,0x3c)[0];\
 n=struct.unpack_from('<H',d,pe+6)[0];o=pe+24+struct.unpack_from('<H',d,pe+20)[0];\
 rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII',d,o+i*40+8) for i in range(n)];\
 [print('   %-8s image %7d  file %7d  bss %7d' % (r[0],r[1],r[3],max(0,r[1]-r[3]))) for r in rows];\
-print('   total committed at load: %d bytes' % sum(max(r[1],r[3]) for r in rows))"
+tot=sum(max(r[1],r[3]) for r in rows);\
+print('   total committed at load: %d bytes (cap 450000)' % tot);\
+sys.exit(1) if tot > 450000 else None"
 
 clean:
 	@rm -rf $(BUILD)

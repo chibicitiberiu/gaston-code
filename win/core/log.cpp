@@ -11,7 +11,7 @@ static CRITICAL_SECTION g_lock;
 static int g_ready = 0;
 static char g_path[MAX_PATH];
 
-void rc_log_open(const char *exe_dir)
+int rc_log_open(const char *exe_dir)
 {
     rc_strf(g_path, sizeof(g_path), "%s\\retroclaude.log", exe_dir);
 
@@ -20,7 +20,9 @@ void rc_log_open(const char *exe_dir)
 
     g_fh = CreateFileA(g_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (g_fh == INVALID_HANDLE_VALUE) return -1;
     rc_log("=== retroclaude starting ===");
+    return 0;
 }
 
 void rc_log(const char *fmt, ...)

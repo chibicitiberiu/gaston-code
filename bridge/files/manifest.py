@@ -66,6 +66,8 @@ def parse_rows(body: bytes, caps) -> tuple[dict, dict]:
             sp = plen_and_path.index(b" ")
             plen = int(plen_and_path[:sp])
             raw = plen_and_path[sp + 1:sp + 1 + plen]
+            if len(raw) != plen:
+                raise ValueError(f"declared path length {plen} but only got {len(raw)} bytes")
 
             # EVERYTHING BELOW USED TO SIT OUTSIDE THIS `try`, and the
             # docstring above promised it did not. Splitting the line was

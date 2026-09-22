@@ -19,7 +19,7 @@ BUILD_DIRS = build tmp
 # default goal -- `make` printed the help and built nothing.
 .DEFAULT_GOAL := all
 
-.PHONY: all guest guest-checks check wine-smoke lint test test-fast clean help
+.PHONY: all guest guest-checks check wine-smoke lint test test-fast gates clean help
 
 help:
 	@echo "all         build the Win98 guest binary"
@@ -27,6 +27,7 @@ help:
 	@echo "wine-smoke  run the shipping C under Wine -- code, never the platform"
 	@echo "test        python tests, all of them (~3 min)"
 	@echo "test-fast   python tests except the Wine suites (~15s) -- the inner loop"
+	@echo "gates       run all verification gates together (check, test, lint)"
 	@echo "clean       remove build/ and tmp/ entirely"
 
 all: guest
@@ -46,8 +47,20 @@ check:
 
 # The Wine gate. These suites run the SHIPPING guest C under Wine and diff its
 # answers against the bridge's -- the only automated check that the two
-# implementations of the classifier, the INI round-trip, the frame codec and
-# the caps enums still agree.
+# implementations of the classifier, the INI round-trip, the frame codec,
+# sync transfer handlers and caps enums still agree.
+#
+# Boundaries and verification scope (Audit 04.3 & 04.11):
+# - Code proof vs platform proof: Wine proves the C algorithmic logic and
+#   cross-language data agreements; it does NOT prove FAT32 filesystem
+#   semantics, MAX_PATH kernel clamping, or modal dialog behaviour on real
+#   Windows 98. Those require real VM testing via tools/vm/vmship.sh and
+#   tools/probe/*probe.py.
+# - Headless C vs GUI: This automated gate covers headless RPC, networking,
+#   data structures, and sync transfer handlers (~40% of the guest code).
+#   The Win32 GUI layer (main.cpp, htmlview.cpp, workdlg.cpp, etc., ~60%)
+#   has no headless runner and is checked via probes, contract tests
+#   (test_frame_contract.py, test_guest_css.py), and manual VM acceptance.
 #
 # Wine proves the code and never the platform; the real gate is the guest.
 #
@@ -125,6 +138,12 @@ test: guest-checks
 # third one.
 test-fast:
 	@$(PY) -m pytest tests/python -m "not guest" -q
+
+# Run all verification gates together: static PE audit (imports, CMOV, frames,
+# BSS budget ceiling), the full python test suite (including guest Wine checks),
+# and static syntax lints.
+gates: check test lint
+	@echo "All verification gates passed."
 
 clean:
 	@$(MAKE) -C win clean

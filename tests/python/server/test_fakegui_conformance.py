@@ -89,8 +89,40 @@ async def test_fakegui_hello_declares_capabilities_like_the_real_guest(
         # bridge/view/pages.py's limits_for and bridge/machine.py's prompt.
         assert guest.hello.get("mem_kb") == "32768"
         assert guest.hello.get("os", "").startswith("Windows")
+        assert guest.caps.maxdepth == 8
+        assert guest.caps.deflate == 1
     finally:
         await gui.close()
+
+
+def test_fakegui_hello_headers_match_guest_net_cpp():
+    """Audit 04.8: FakeGui must not snapshot HELLO headers by hand.
+
+    Parse the HDR() macro calls in win/net/net.cpp and assert that
+    fakegui's HELLO frame declares the same keys.
+    """
+    import re
+    import conftest
+    from bridge.devtools.fakegui import FAKE_CAPS, FAKE_IDENTITY
+    from bridge.wire.protocol import hello
+
+    net_cpp = os.path.join(conftest.REPO, "win", "net", "net.cpp")
+    src = open(net_cpp, encoding="utf-8").read()
+    hdr_keys = set(re.findall(r'HDR\("([a-z0-9_]+)"', src))
+    assert hdr_keys, "no HDR() calls found in net.cpp"
+
+    fake_headers = set(hello("test-secret").headers.keys()) | set(FAKE_CAPS.keys()) | set(FAKE_IDENTITY.keys())
+
+    # Optional headers that depend on runtime configuration/state:
+    # sync_root (only if configured), sess (only on resume).
+    optional_runtime = {"sync_root", "sess"}
+    required_keys = hdr_keys - optional_runtime
+
+    missing = required_keys - fake_headers
+    assert not missing, (
+        f"FakeGui's HELLO headers are missing keys declared by win/net/net.cpp: "
+        f"{sorted(missing)}. Update FAKE_CAPS or FAKE_IDENTITY."
+    )
 
 
 # --- 03.29: PERMREQ/PERMSTATE must not read `waiting` ----------------------

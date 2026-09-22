@@ -343,20 +343,18 @@ def test_the_guest_s_real_manifest_rows_parse_with_the_bridge_s_real_parser(
 
 
 def test_a_row_that_would_not_fit_is_refused_rather_than_truncated():
-    """rc_sync_manifest_row returns 0 rather than writing a short row.
+    """A row whose length prefix disagrees with what follows is dropped, not
+    guessed at -- the parser logs and skips, and the caller catches the
+    short count against SYNCEND's files=.
 
-    A truncated row is not a short row, it is a DIFFERENT row: the length
-    prefix stops matching the bytes after it, so the parser reads the next
-    row's fields as this one's path. manifest_add flushes and retries, and
-    gives up only if a single row cannot fit an empty buffer.
+    Finding 04.5: the old assertion used `assert rows == {} or all(r.type for r in rows.values())`,
+    which was vacuous because all() is always True for any parsed Entry. The assertion
+    must strictly prove that the malformed row was refused.
     """
     from bridge.files import caps as C
     from bridge.files import manifest
-    # A row whose length prefix disagrees with what follows is dropped, not
-    # guessed at -- the parser logs and skips, and the CALLER catches the
-    # short count against SYNCEND's files=.
     rows, _ = manifest.parse_rows(b"f t 6 0 1 2 99 short\n", C.WIN9X)
-    assert rows == {} or all(r.type for r in rows.values())
+    assert rows == {}
 
 
 # --- the status vocabulary ---------------------------------------------------

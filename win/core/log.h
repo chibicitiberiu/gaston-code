@@ -13,7 +13,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void rc_log_open(const char *exe_dir);
+int  rc_log_open(const char *exe_dir);
 void rc_log(const char *fmt, ...);
 void rc_log_close(void);
 

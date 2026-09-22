@@ -12,7 +12,7 @@ working tree. Covers the 86 commits and ~37,500 changed lines since the
 | [`01-guest.md`](01-guest.md) | `win/` — the C++98 guest, 38 findings | **all closed**, plus 01.39 found on the guest |
 | [`02-bridge.md`](02-bridge.md) | `bridge/` excluding sync and wire, 18 findings | **all closed** |
 | [`03-requirements.md`](03-requirements.md) | PLAN/PROGRESS/BACKLOG against the code, 25 findings | **all closed** |
-| [`04-verification.md`](04-verification.md) | what is proved vs. claimed, 16 findings | open |
+| [`04-verification.md`](04-verification.md) | what is proved vs. claimed, 16 findings | **all closed** |
 | [`05-sync-layer.md`](05-sync-layer.md) | `bridge/files/` + `win/sync/`, 6 findings | 05.3 closed with 01.6; rest open |
 | [`06-protocol.md`](06-protocol.md) | the wire protocol, both sides, 7 findings | open |
 

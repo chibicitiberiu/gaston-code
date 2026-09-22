@@ -732,3 +732,27 @@ and that the **BSS budget** has not run away, on a project whose binding
 constraint is memory (04.6).
 
 And the gate itself fails one run in three (04.2).
+
+---
+
+# Resolution — 2026-09-22
+
+All 16 findings (04.1 through 04.16) addressed, verified, and closed.
+
+- **04.1 (Guest sync transfer handlers test):** Fixed. Added `--sync-rpc` mode in `win/checks/rpccheck.c` executing `rc_syncrpc_handle` for `SYNCPUT` + `SYNCPUTEND` (happy-path commit, CRC mismatch refusal, `if_crc` refusal), `SYNCMKDIR` (nested hierarchy creation), and `SYNCGET`. Added `test_guest_syncrpc_handlers` in `tests/python/guest/test_guest_rpc.py` driving this under Wine and asserting both C-level verdicts and Python-side filesystem state (atomic commit, temp file cleanup, directory structure).
+- **04.2 (Shared log file in repo root & clamp timing):** Fixed. `tests/python/conftest.py`'s `run_guest` now isolates Wine executions into a temporary directory when `cwd is None`, eliminating `retroclaude.log` root collision. `win/core/log.h` and `log.cpp` return `int` (0 on success, -1 on failure), checked by `rpccheck.c` and `netcheck.c`. Replaced fixed 1500ms sleep in `rpccheck.c` with a 50ms polling loop up to 3000ms.
+- **04.3 (GUI layer verification boundary):** Fixed. Explicitly documented the boundary between headless automated C logic and the 6,993 lines of Win32 GUI message pump/window controls in `Makefile` and `CLAUDE.md`. Cross-language contract tests (`test_frame_contract.py`, `test_guest_css.py`) guard interface drift, and manual VM acceptance (`tools/probe/*probe.py`) verifies windowing.
+- **04.4 (Frame-type inventory contract):** Fixed. Created `tests/python/meta/test_frame_contract.py` parsing `g_dispatch[]` (`win/app/main.cpp`), `RC_LANE_TABLE` (`win/net/frameproto.cpp`), and `rc_syncrpc_handle` (`win/sync/syncrpc.cpp`), diffing bidirectional frame vocabularies against `bridge/wire/protocol.py` and `bridge/files/synctransport.py`.
+- **04.5 (Vacuous manifest refusal assertion & parser fix):** Fixed. Corrected assertion in `tests/python/guest/test_guest_agreement.py` (`test_a_row_that_would_not_fit_is_refused_rather_than_truncated`) to strictly require `rows == {}`. Fixed latent parsing bug in `bridge/files/manifest.py:parse_rows` where slice extraction failed to validate `len(raw) == plen`, silently accepting truncated paths.
+- **04.6 (Static PE audit BSS budget ceiling):** Fixed. Added budget ceiling check in `win/Makefile`'s `check` target asserting BSS usage is <= 450,000 bytes (currently ~377k bytes), failing with non-zero exit if exceeded.
+- **04.7 (Wine helpers in hygiene test):** Fixed. Updated `tests/python/meta/test_suite_hygiene.py` `GUEST_API` to include `run_guest`, `guest_verdicts`, and `wine_path`, and updated AST visitors to detect both `ast.ImportFrom` and `conftest.<attr>` accesses.
+- **04.8 (FakeGui HELLO contract with net.cpp):** Fixed. Added missing capability headers (`oemcp: "437"`, `maxdepth: "8"`) to `FAKE_CAPS` in `bridge/devtools/fakegui.py`. Added `test_fakegui_hello_headers_match_guest_net_cpp` in `tests/python/server/test_fakegui_conformance.py` parsing `HDR("...", ...)` from `win/net/net.cpp`.
+- **04.9 (Frame-header-count dynamic inspection in `test_guest_frame.py`):** Fixed. Enhanced `test_bridge_never_sends_more_headers_than_the_guest_can_hold` with AST dictionary mutation analysis across all `protocol.py` functions and dynamic constructor invocation with all optional headers populated.
+- **04.10 (Behavioral baseline advance on pull):** Fixed. In `tests/python/files/test_sync_apply_coverage.py`, replaced brittle source slicing with a behavioral test executing `Pass.run` with a concurrent edit upon pull completion, verifying the baseline row matches the ack CRC and subsequent diff produces a PUSH.
+- **04.11 (Code proof vs platform proof boundary):** Fixed. Clarified code proof vs platform proof in `Makefile`, `CLAUDE.md`, and audit documentation: Wine proves C code logic, data structures, and cross-language contracts, while FAT32, MAX_PATH, and modal dialog behaviors require real Win98 VM execution.
+- **04.12 (CSS contract):** Fixed. Replaced bare literal `<div class="status">` in `win/app/main.cpp` with `RC_CSS_STATUS` in `win/app/htmlview.h`, and updated regex in `tests/python/meta/test_guest_css.py` to match multi-class definitions including `RC_CSS_PENDING`.
+- **04.13 (Bridge socket layer error branches):** Fixed. Created `tests/python/wire/test_link.py` testing `GuestLink.send` oversized frame `ProtocolError`, closed writer `return False`, `ConnectionResetError`/`BrokenPipeError` resetting writer to `None`, and chunking/drop behavior in `send_html` and `send_export`.
+- **04.14 (`make gates` target):** Fixed. Added unified `gates: check test lint` target in `Makefile` and documented in `help`.
+- **04.15 (Pytest strictness & warnings):** Fixed. Added `--strict-config` and `filterwarnings` (`error`, `ignore::ResourceWarning`, `ignore::pytest.PytestCacheWarning`) to `pytest.ini`.
+- **04.16 (Strong verification patterns acknowledged):** Preserved and documented.
+

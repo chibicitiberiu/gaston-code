@@ -130,3 +130,36 @@ def test_a_refused_conditional_push_leaves_no_temp_file(tmp_path):
         f"a refused conditional push left {sorted(left)} in the sync tree. "
         f"The scanner skips that name, so nothing will report it and nothing "
         f"will remove it until the next rc_sync_recover on start-up.")
+
+
+def test_guest_syncrpc_handlers(tmp_path):
+    """Audit 04.1: automated verification of rc_syncrpc_handle in the shipping C.
+
+    Executes SYNCPUT, SYNCPUTEND (happy path and CRC/if_crc mismatch refusals),
+    SYNCMKDIR, and SYNCGET. Verifies both the C-level assertions and the actual
+    filesystem state (atomic file creation, temp file cleanup, directory hierarchy).
+    """
+    out = conftest.run_guest("rpccheck.exe", "--sync-rpc",
+                             conftest.wine_path(tmp_path),
+                             cwd=tmp_path, timeout=120)
+    verdicts = {}
+    for line in out.stdout.decode("latin-1").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] in ("pass", "FAIL"):
+            verdicts[parts[1]] = (parts[0], parts[2] if len(parts) > 2 else "")
+    assert verdicts, out.stderr.decode("latin-1", "replace")[:800]
+    bad = {k: v for k, v in verdicts.items() if v[0] != "pass"}
+    assert not bad, bad
+
+    # Python-side filesystem verification of files written by Wine guest:
+    put_ok = tmp_path / "put_ok.txt"
+    assert put_ok.exists(), "put_ok.txt should have been committed to disk"
+    assert put_ok.read_bytes() == b"hello from syncrpc\n"
+    assert not (tmp_path / "put_ok.txt.gaston-tmp").exists(), "temp file must be cleaned up"
+
+    assert not (tmp_path / "put_bad.txt").exists(), "corrupted put should not be committed"
+    assert not (tmp_path / "put_bad.txt.gaston-tmp").exists(), "corrupted put temp file must be cleaned up"
+
+    nested_dir = tmp_path / "test_dir" / "nested_sub"
+    assert nested_dir.is_dir(), "SYNCMKDIR should have created nested directory hierarchy"
+
