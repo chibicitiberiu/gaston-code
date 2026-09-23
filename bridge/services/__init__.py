@@ -14,10 +14,12 @@ from bridge.services.options import (
     MODE_ORDER,
     OptionsService,
 )
+from bridge.services.workspace import WorkspaceService
 
 __all__ = [
     "BridgeConfig",
     "OptionsService",
+    "WorkspaceService",
     "COMMAND_MENU",
     "EFFORT_LABEL",
     "EFFORT_ORDER",

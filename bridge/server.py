@@ -93,6 +93,7 @@ from .services.options import (
     MODE_ORDER,
     OptionsService,
 )
+from .services.workspace import WorkspaceService
 
 log = logging.getLogger("bridge.server")
 
@@ -614,6 +615,13 @@ class Bridge:
             config=self.config,
             write_block=self._write_block,
             set_effort=self._set_effort,
+        )
+        self.workspace = WorkspaceService(
+            config=self.config,
+            conv=self.conv,
+            write_block=self._write_block,
+            send_options=self._send_options,
+            spawn_sync=lambda reason: self._spawn(self.run_sync(reason)),
         )
 
         # One guest, one session. See PLAN.md "Multi-session".
@@ -1219,62 +1227,16 @@ class Bridge:
     _title_folder = staticmethod(P.title_folder)
 
     def _stored_work_dir(self, session_id: str) -> str:
-        """The folder a stored conversation was started in, if it is ours.
-
-        Only a folder INSIDE the mirror is accepted. A session started by
-        something else -- the CLI in a terminal, a different bridge -- can
-        have any cwd at all, and resuming it must not point this bridge's
-        agent at a directory the rest of the system knows nothing about.
-        """
-        base = self.sync_dir
-        if not base:
-            return ""
-        for r in sesslist.listing():
-            if r["id"] != session_id:
-                continue
-            cwd = r.get("cwd") or ""
-            if not cwd:
-                return ""
-            try:
-                rel = os.path.relpath(cwd, base)
-            except ValueError:
-                return ""
-            if rel in (".", "") or rel.startswith(".."):
-                return ""
-            return os.path.join(base, rel)
-        return ""
+        return self.workspace.stored_work_dir(session_id)
 
     def _retarget_perms(self, guest: GuestSession) -> None:
-        """Point the permission desk at this conversation's folder.
-
-        `off_limits` refuses a path tool reaching outside the working
-        directory, and the desk was handed one at connect time and never told
-        it had changed. Leaving it stale would refuse the conversation's OWN
-        files while allowing the previous conversation's, which is the check
-        inverted rather than merely wrong.
-        """
-        desk = getattr(guest, "perms", None)
-        if desk is not None:
-            desk._cwd = self._work_dir(guest)
+        self.workspace.retarget_perms(guest)
 
     def _mirror_dir(self, guest: GuestSession) -> str:
-        """The directory on THIS side that pairs with the guest's work folder,
-        or "" while this conversation has not committed to one.
-
-        NO FALLBACK, and that is the whole point. `_work_dir` falls back to
-        `self.cwd` because the agent has to run somewhere; a mirror has no
-        such obligation, and inventing one pairs this bridge's entire shared
-        directory against whatever tree the guest happens to have open. That
-        is not hypothetical: a restarted bridge, told by HELLO that the
-        machine was mirroring ``C:\\Gaston\\OK``, offered its whole tree
-        against it. Nothing is mirrored until both sides have been told the same
-        folder.
-        """
-        return guest.work_dir or ""
+        return self.workspace.mirror_dir(guest)
 
     def _work_dir(self, guest: GuestSession) -> str:
-        """Where the agent works for THIS conversation."""
-        return guest.work_dir or self.cwd or os.getcwd()
+        return self.workspace.work_dir(guest)
 
     def _validate_attach_target(self, guest: GuestSession, attach: str) -> str | None:
         """Validate and resolve attachment relative path within the guest's work directory.
@@ -1330,139 +1292,23 @@ class Bridge:
         log.info("restored settings for %s: %s", session_id, saved)
 
     async def _ensure_work_dir(self, guest: GuestSession) -> None:
-        """Commit this conversation to a folder, if it has not already.
-
-        THE FIRST TOOL CALL IS THE COMMITMENT. Before it nothing is mirrored
-        -- no folder exists, the guest's sync layer is pointed at nothing,
-        and no pass runs -- because a chat that is only being talked to has
-        no files to share and creating a directory for it is litter. At the
-        first tool the folder is made, sharing turns on and the toolbar stops
-        saying "<unset>".
-
-        Idempotent and called from both the render path and the exec path,
-        because which of the two arrives first is an ordering detail of the
-        SDK rather than something to depend on.
-        """
-        if guest.work_guest:
-            if guest.conv_id:
-                name = self.folder_name(
-                    guest.work_guest.replace("\\", "/").rsplit("/", 1)[-1],
-                    guest.caps) or "WORK"
-                self.conv.set_folder(guest.conv_id, name, guest.work_guest)
-            return
-        await self._name_work_dir(guest)
-        if guest.work_guest:
-            await self._send_options(guest)
+        await self.workspace.ensure_work_dir(guest)
 
     async def _name_work_dir(self, guest: GuestSession) -> None:
-        """Give this conversation its folder.
-
-        NAMED FROM THE FIRST MESSAGE, not from the CLI's title. A folder is
-        named after the conversation and the CLI does title a conversation
-        from its first message -- but it does so at the end of the turn, and
-        the folder is needed the moment a tool runs, which can be inside that
-        same turn. The alternative was a placeholder renamed afterwards,
-        which means a new `tree_id` and a new baseline for a tree sync has
-        already scanned, and a window in which both sides have to move
-        together. The title is the fallback, for a conversation resumed from
-        the chat list that never got a folder.
-
-        UNIQUE, by suffix. Two conversations about listing files both reduce
-        to LISTFILE, and the second one taking the first one's folder would
-        put two conversations' work in one place with no way to tell them
-        apart afterwards.
-        """
-        if guest.work_guest or not guest.conv_id:
-            return
-        base = self.sync_dir
-        if not base:
-            return
-        # No mirror on the guest means the folder would exist only here, and
-        # the one thing it is for is telling the user where their files are.
-        # Leave it unset and let the agent work in the shared root.
-        if not self._guest_path(guest, "x"):
-            return
-
-        source = guest.first_prompt
-        if not source:
-            for r in sesslist.listing():
-                if r["id"] == guest.conv_id:
-                    source = r.get("title") or ""
-                    break
-        name = self._title_folder(source, guest.caps)
-        if not name:
-            return
-
-        # Unique, and the suffix eats into the 8 characters rather than
-        # extending past them -- the name has to stay 8.3 on the other side.
-        taken = self.conv.taken()
-        stem, n = name, 1
-        while os.path.exists(os.path.join(base, name)) or name in taken:
-            n += 1
-            if n > 99:
-                return
-            tail = str(n)
-            name = stem[:Bridge.folder_max(guest.caps) - len(tail)] + tail
-
-        path = os.path.join(base, name)
-        try:
-            os.makedirs(path, exist_ok=True)
-        except OSError:
-            log.exception("could not create %s", path)
-            return
-        guest.work_dir = path
-        guest.work_guest = self._guest_path(guest, name)
-        self.conv.set_folder(guest.conv_id, name, guest.work_guest)
-        self._retarget_perms(guest)
-        log.info("work directory for %s: %s (%s)",
-                 guest.conv_id, path, guest.work_guest)
-        await self._write_block(guest, H.notice(
-            "This conversation works in " + guest.work_guest
-            + " on your machine."))
-        # AND THE AGENT, which is the half that was missing. Its system
-        # prompt was written before this folder existed and says so; without
-        # this the only way it could learn the path was to call sync_status
-        # and read it out of a status report, which is a tool call to
-        # discover something we already knew.
-        note = (f"This conversation's folder now exists: write in {path} "
-                f"here, which is mirrored to {guest.work_guest} on the "
-                f"user's machine. Anything written outside it stays on this "
-                f"proxy.")
-        if note not in self.synccoord.agent_notices:
-            self.synccoord.agent_notices.append(note)
+        await self.workspace.name_work_dir(guest)
 
     @staticmethod
     def _sep_of(root: str) -> str:
-        r"""The separator this machine spells its own paths with.
-
-        Read off the root rather than declared, and that is the honest source:
-        the guest SENT this string, so whatever it joins with is what it uses.
-        `caps` has no separator field and adding one would ask the client to
-        repeat something it has already demonstrated.
-
-        Backslash only if the root actually contains one.
-        """
         return P.sep_of(root)
 
     def _guest_path(self, guest: GuestSession, name: str) -> str:
-        r"""`<mirror root><sep><name>`, spelled the way the guest spells it."""
-        root = (guest.hello or {}).get("sync_root") or self.guest_sync_root
-        return P.guest_path(root, name)
+        return self.workspace.guest_path(guest, name)
 
     def guest_work_root(self, guest: GuestSession) -> str:
-        r"""Where commands run, spelled the way the guest spells it.
-
-        This conversation's own folder once it has one, and the mirror root
-        until then -- a command has to run SOMEWHERE from the first message,
-        and the root is where the agent is working at that point.
-        """
-        if guest.work_guest:
-            return guest.work_guest
-        return (guest.hello or {}).get("sync_root") or self.guest_sync_root
+        return self.workspace.guest_work_root(guest)
 
     def _sub_of(self, guest: GuestSession) -> str:
-        """This conversation's folder name relative to the mirror, or ""."""
-        return P.sub_of(guest.work_dir, self.sync_dir)
+        return self.workspace.sub_of(guest)
 
     def _effective_effort(self, guest: GuestSession) -> str:
         return self.options.effective_effort(guest)
@@ -2147,95 +1993,7 @@ class Bridge:
             guest.perm_mode, tools, root))
 
     async def _on_setwork(self, guest: GuestSession, f: Frame) -> None:
-        """The user picked a folder on their machine for this conversation.
-
-        A PROPOSAL, recorded here and sent back in the options -- the guest
-        applies what it is told rather than what it picked, so the two sides
-        cannot end up disagreeing about which tree is mirrored.
-
-        The path is the GUEST'S and is never touched with os.path: it is a
-        DOS path and this process is on Linux, where `os.path.basename`
-        of `C:\\Gaston\\NOTES` is the whole string. That mistake is what
-        bridge/files/paths.py exists to have stopped happening.
-        """
-        path = (f.headers.get("path") or "").strip()
-        if not path:
-            return
-
-        # The bridge-side half is still a folder under --sync-dir, because
-        # that is the tree this process can actually write to. What changed is
-        # the GUEST'S half, which is the one the user chose.
-        name = self.folder_name(
-            path.replace("\\", "/").rsplit("/", 1)[-1], guest.caps)
-        if not name:
-            name = (self.folder_name(guest.conv_id[:8], guest.caps)
-                    if guest.conv_id else "WORK")
-        base = self.sync_dir
-        if not base:
-            await self._write_block(guest, H.error(
-                "This bridge has no mirrored folder, so a work directory "
-                "would have nothing on this side to pair with."))
-            return
-        local = os.path.join(base, name)
-        try:
-            os.makedirs(local, exist_ok=True)
-        except OSError as exc:
-            log.exception("could not create %s", local)
-            await self._write_block(guest, H.error(
-                "Could not create the folder on this side: " + str(exc)[:160]))
-            return
-
-        guest.work_dir = local
-        guest.work_guest = path
-        if guest.conv_id:
-            self.conv.set_folder(guest.conv_id, name, path)
-        self._retarget_perms(guest)
-        log.info("work directory for %s: %s (guest: %s)",
-                 guest.conv_id or "<initial>", local, path)
-        await self._write_block(guest, H.notice(
-            "This conversation works in " + path + " on your machine."))
-
-        # If the conversation hasn't started yet, reset the idle client so that
-        # when the initial turn runs, it starts fresh with cwd=local and guest_root=path.
-        if not guest.conv_id and guest.claude:
-            try:
-                await guest.claude.close()
-            except Exception:
-                pass
-            guest.claude = None
-
-        if guest.conv_id:
-            note = (f"THE WORK DIRECTORY HAS CHANGED. This conversation now "
-                    f"works in {local} here, mirrored to {path} on the user's "
-                    f"machine. The folder you were using before is no longer "
-                    f"mirrored -- anything written there from now on stays on "
-                    f"this proxy, however well the write appears to succeed.")
-            if f.headers.get("staged") == "merge":
-                note += (
-                    f"\n\nThe user asked YOU to merge the files they brought "
-                    f"across. Copies whose names clashed are in "
-                    f"{os.path.join(local, 'Gaston-Incoming')}; the versions that "
-                    f"were already here are in place beside it. Reconcile them "
-                    f"file by file, say what you changed, and ask before "
-                    f"discarding either side. Do not delete anything in "
-                    f"Gaston-Incoming until the user agrees the merge is right.")
-            if note not in self.synccoord.agent_notices:
-                self.synccoord.agent_notices.append(note)
-        elif f.headers.get("staged") == "merge":
-            note = (
-                f"The user asked YOU to merge the files they brought "
-                f"across into {path}. Copies whose names clashed are in "
-                f"{os.path.join(local, 'Gaston-Incoming')}; the versions that "
-                f"were already here are in place beside it. Reconcile them "
-                f"file by file, say what you changed, and ask before "
-                f"discarding either side. Do not delete anything in "
-                f"Gaston-Incoming until the user agrees the merge is right.")
-            if note not in self.synccoord.agent_notices:
-                self.synccoord.agent_notices.append(note)
-
-        await self._send_options(guest)
-        if self.sync_dir:
-            self._spawn(self.run_sync("the work directory was set"))
+        await self.workspace.on_setwork(guest, f)
 
     async def _on_export(self, guest: GuestSession, f: Frame) -> None:
         """Assemble the whole conversation into one file and stream it.
