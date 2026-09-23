@@ -94,6 +94,7 @@ from .services.options import (
     OptionsService,
 )
 from .services.workspace import WorkspaceService
+from .services.presentation import PresentationService
 
 log = logging.getLogger("bridge.server")
 
@@ -609,17 +610,18 @@ class Bridge:
         #: One row, one file -- see agent/conversations.py for why those
         #: three were not worth three stores.
         self.conv = Conversations()
+        self.presentation = PresentationService(connection=self)
         self.options = OptionsService(
             connection=self,
             conv=self.conv,
             config=self.config,
-            write_block=self._write_block,
+            write_block=self.presentation.write_block,
             set_effort=self._set_effort,
         )
         self.workspace = WorkspaceService(
             config=self.config,
             conv=self.conv,
-            write_block=self._write_block,
+            write_block=self.presentation.write_block,
             send_options=self._send_options,
             spawn_sync=lambda reason: self._spawn(self.run_sync(reason)),
         )
@@ -1712,102 +1714,23 @@ class Bridge:
             log.error("background task failed", exc_info=exc)
 
     def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
-        c = guest.coalescers.get(style)
-        if c is None:
-            if style == "plain":
-                # Assistant prose is markdown; the renderer turns it into
-                # finished HTML blocks plus the block still being written.
-                async def sink(text: str) -> None:
-                    await self._write_updates(guest, guest.render.feed(text))
-            else:
-                # Thinking and anything else is not markdown; wrap it rather
-                # than parsing it.
-                async def sink(text: str, _s=style) -> None:
-                    await self._write_block(
-                        guest, f'<div class="{_s}">' + H.esc(text) + "</div>")
-            c = Coalescer(sink)
-            c.set_link_speed(guest.link_bps)
-            c.start()
-            guest.coalescers[style] = c
-        return c
+        return self.presentation.coalescer(guest, style)
 
     async def _emit_text(self, guest: GuestSession, text: str,
                          *, style: str) -> None:
-        """Buffer a delta. The coalescer decides when it goes out."""
-        if not text:
-            return
-        await self._coalescer(guest, style).add(text)
+        await self.presentation.emit_text(guest, text, style=style)
 
     async def _flush_text(self, guest: GuestSession) -> None:
-        for c in list(guest.coalescers.values()):
-            await c.flush()
-        # A model can stop mid-sentence; whatever the parser is holding for
-        # lookahead has to come out or the last line is silently lost.
-        await self._write_updates(guest, guest.render.flush())
+        await self.presentation.flush_text(guest)
 
     async def _write_updates(self, guest: GuestSession,
                              updates: list) -> None:
-        """Send a batch of renderer updates.
-
-        Only APPEND blocks are recorded: a LIVE block is the paragraph still
-        being written, and it is replaced on every update, so storing it would
-        put a dozen half-finished copies of the same sentence into the page.
-        The final state of that block always arrives as an APPEND.
-        """
-        for u in updates:
-            if u.mode == APPEND:
-                await self._write_block(guest, u.html)
-            else:
-                await self._send_html(guest, u.html, LIVE,
-                                      guest.pages.live.number)
+        await self.presentation.write_updates(guest, updates)
 
     async def _write_block(self, guest: GuestSession, html: str,
                            *, stream: bool = True,
                            notify: bool = True) -> None:
-        """Record a finished block into the paginator, then send it.
-
-        `stream=False` records without sending the APPEND, for a block the
-        guest has already put on screen itself -- the echo of the user's own
-        line. It still has to reach the paginator, because a sealed page is
-        re-sent in full when the reader pages back, and a transcript of
-        answers with no questions in it is close to useless.
-
-        `notify=False` additionally withholds PAGESEALED, and exists for ONE
-        caller: replaying a conversation's history in `_switch` (02.39).
-
-        The two flags are separate because the echo case genuinely needs the
-        seal notification -- the user's own message can be what fills a page,
-        and the guest's page counter would go stale without it. History replay
-        is the opposite: the guest has not been told it is looking at this
-        conversation yet, SWITCHED carries a fresh total immediately
-        afterwards, and `_send_page` then puts the live page on screen. Seals
-        announced during that loop describe a session the guest does not think
-        it is viewing, which is why routing replay through here was twice
-        looked at and twice backed out before the flag existed.
-        """
-        if not html:
-            return
-
-        page_no = guest.pages.live.number
-        sealed, chunks = guest.pages.write("html", html)
-
-        # Only stream when the guest is watching the live page. In HISTORY mode
-        # the bridge keeps buffering silently and the page counter ticking up
-        # is the notification.
-        #
-        # A run this long can split across a seal (pages.write above), so only
-        # the piece that actually landed on page_no belongs in this APPEND --
-        # sending the whole block under page_no double-renders the tail once
-        # the reader pages forward to where pages.write actually put it
-        # (02.33). The tail reaches the guest when it is paged to.
-        if stream and (guest.view_page is None or guest.view_page == page_no):
-            on_this_page = "".join(text for pg, text in chunks if pg == page_no)
-            if on_this_page:
-                await self._send_html(guest, on_this_page, APPEND, page_no)
-
-        if notify:
-            for pg in sealed:
-                await self._send(guest, pagesealed(pg.number, guest.pages.count))
+        await self.presentation.write_block(guest, html, stream=stream, notify=notify)
 
     # --- frame pump --------------------------------------------------------
 
@@ -4068,52 +3991,10 @@ class Bridge:
         await self._send_options(guest)
 
     async def _send_page(self, guest: GuestSession, want: str) -> None:
-        """Render one page to the guest. LIVE is requested as page=live."""
-        if want == "live":
-            number = guest.pages.live.number
-            guest.view_page = None
-        else:
-            try:
-                number = int(want)
-            except ValueError:
-                await self._send(guest, error("bad_page", want))
-                return
-            guest.view_page = (None if number == guest.pages.live.number
-                               else number)
+        await self.presentation.send_page(guest, want)
 
-        page = guest.pages.page(number)
-        if page is None:
-            await self._send(guest, error("no_such_page", want))
-            return
-
-        await self._send(guest, pagestart(
-            page.number, guest.pages.count, guest.view_page is None,
-            page.continued))
-        for run in page.runs:
-            await self._send_html(guest, run.text, APPEND, page.number)
-            # Between blocks, not just between chunks inside one (04.12): a
-            # page can hold many runs, and this loop had no await point that
-            # actually suspends any more than send_html's did on its own.
-            await self.wire_yield(guest)
-        await self._send(guest, pageend(page.number))
-
-        # An empty LIVE page is a conversation nobody has spoken in yet, and
-        # it looked exactly like a conversation whose transcript failed to
-        # arrive: PAGESTART clears the view, there are no runs, PAGEEND lands,
-        # and the reader is left facing a blank white rectangle. The cold-start
-        # placeholder the guest draws for itself (main.cpp, boot_local) is gone
-        # by then -- the first PAGESTART cleared it -- and "Connected to
-        # bridge." is gated on the FIRST connect, so New chat produced nothing
-        # at all.
-        #
-        # A NOTICE, not a recorded block: it belongs to this view of this
-        # moment, not to the transcript. Paginating it would put "Type a
-        # message to start." above the first reply for the rest of the
-        # conversation's life, and page 1 would still carry it when you paged
-        # back to it a thousand messages later.
-        if guest.view_page is None and not page.runs:
-            await self._send(guest, notice(
-                "empty", "Type a message below to start this conversation."))
+    def mark_user_turn(self, guest: GuestSession, line: str) -> Any:
+        return self.presentation.mark_user_turn(guest, line)
 
     # --- sending -------------------------------------------------------
     #
@@ -4127,6 +4008,10 @@ class Bridge:
 
     async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:
+        await guest.link.send_html(guest, html, mode, page_no)
+
+    async def send_html(self, guest: GuestSession, html: str, mode: str,
+                        page_no: int) -> None:
         await guest.link.send_html(guest, html, mode, page_no)
 
     async def wire_yield(self, guest: GuestSession) -> None:
