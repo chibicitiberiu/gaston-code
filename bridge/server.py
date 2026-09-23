@@ -83,6 +83,7 @@ from .files.syncrun import SyncError
 from .agent.session import TOOLS, Session
 from .agent import toolrep, toolrules
 from .agent.toolrules import Found
+from .services.config import BridgeConfig
 
 log = logging.getLogger("bridge.server")
 
@@ -570,8 +571,9 @@ class Bridge:
 
     def __init__(
         self,
-        secret: str,
+        secret: str = "",
         *,
+        config: BridgeConfig | None = None,
         host: str = "127.0.0.1",
         port: int = DEFAULT_PORT,
         cwd: str | None = None,
@@ -579,7 +581,17 @@ class Bridge:
         effort: str | None = None,
         link_bps: float | None = None,
     ) -> None:
-        self.secret = secret
+        if config is None:
+            config = BridgeConfig(
+                secret=secret,
+                host=host,
+                port=port,
+                cwd=cwd,
+                model=model,
+                effort=effort,
+                link_bps=link_bps,
+            )
+        self.config = config
         #: What this bridge knows about each conversation: whether it
         #: started it (so the chat list shows those and not every
         #: conversation on the machine), the model, effort and permission
@@ -587,15 +599,6 @@ class Bridge:
         #: One row, one file -- see agent/conversations.py for why those
         #: three were not worth three stores.
         self.conv = Conversations()
-        # Measured link speed. None means "unknown, assume it might be slow".
-        # Set from the guest's STAT frames; overridable for testing so the
-        # dialup path can be exercised without a modem.
-        self.link_bps = link_bps
-        self.host = host
-        self.port = port
-        self.cwd = cwd
-        self.model = model
-        self.effort = effort
 
         # One guest, one session. See PLAN.md "Multi-session".
         self._guest: GuestSession | None = None
@@ -606,18 +609,6 @@ class Bridge:
         # Frames pipelined behind HELLO in a single read, handed to _pump.
         self._reaper: asyncio.Task | None = None
         self._sweeper: asyncio.Task | None = None
-        #: How often the bridge checks the tree itself. Longer than the
-        #: guest's own 30s sweep because it is a backstop, not the mechanism:
-        #: a pass it starts is one the guest failed to ask for.
-        self.sync_sweep_s = 120.0
-        # The guest pings every few seconds, so silence much longer than that
-        # means it is gone rather than quiet. Generous, because a 200MHz box
-        # under load genuinely does pause.
-        self.idle_timeout_s = 90.0
-        self.idle_check_s = 15.0
-        #: Sync is OFF unless a root is named. Defaulting to the bridge's own
-        #: working directory would point it at .venv and vm/*.qcow2.
-        self.sync_dir: str | None = None
         #: See _models(). None means "not asked yet", never "asked and empty".
         self._models_cache: list[dict] | None = None
         #: The CLI's slash-command list, cached beside the model list and for
@@ -625,13 +616,6 @@ class Bridge:
         #: conversation opened from the chat list has no client to ask until
         #: the first message. Cleared wherever the model cache is.
         self._commands_cache: list[dict] | None = None
-        # None, matching sync_dir's sentinel (02.36). Every caller of
-        # _load_baseline is guarded by `if not self.sync_dir`, and this used
-        # to default to "" instead -- so if that invariant ever broke,
-        # os.path.join("", "base.json") would silently read and WRITE
-        # ./base.json relative to the bridge PROCESS's cwd rather than
-        # failing loudly.
-        self.sync_state: str | None = None
         #: The guest's own path for the mirror, learned from SYNCEND. Held here
         #: so the system prompt can NAME the folder rather than say "the sync
         #: folder" -- an agent told only that its edits reach the user has no
@@ -649,10 +633,110 @@ class Bridge:
         #: survives the handover and anything recorded before the first
         #: attach is still there afterwards. See the property below.
         self._preattach_synccoord = SyncCoordinator()
-        # How long a pending permission request survives a dropped link. Long
-        # enough for the guest's 1/2/4/8s reconnect backoff to win, far short
-        # of the 10 minute answer deadline.
-        self.perm_grace_s = 60.0
+
+    @property
+    def secret(self) -> str:
+        return self.config.secret
+
+    @secret.setter
+    def secret(self, val: str) -> None:
+        self.config.secret = val
+
+    @property
+    def host(self) -> str:
+        return self.config.host
+
+    @host.setter
+    def host(self, val: str) -> None:
+        self.config.host = val
+
+    @property
+    def port(self) -> int:
+        return self.config.port
+
+    @port.setter
+    def port(self, val: int) -> None:
+        self.config.port = val
+
+    @property
+    def cwd(self) -> str | None:
+        return self.config.cwd
+
+    @cwd.setter
+    def cwd(self, val: str | None) -> None:
+        self.config.cwd = val
+
+    @property
+    def model(self) -> str | None:
+        return self.config.model
+
+    @model.setter
+    def model(self, val: str | None) -> None:
+        self.config.model = val
+
+    @property
+    def effort(self) -> str | None:
+        return self.config.effort
+
+    @effort.setter
+    def effort(self, val: str | None) -> None:
+        self.config.effort = val
+
+    @property
+    def link_bps(self) -> float | None:
+        return self.config.link_bps
+
+    @link_bps.setter
+    def link_bps(self, val: float | None) -> None:
+        self.config.link_bps = val
+
+    @property
+    def sync_dir(self) -> str | None:
+        return self.config.sync_dir
+
+    @sync_dir.setter
+    def sync_dir(self, val: str | None) -> None:
+        self.config.sync_dir = val
+
+    @property
+    def sync_state(self) -> str | None:
+        return self.config.sync_state
+
+    @sync_state.setter
+    def sync_state(self, val: str | None) -> None:
+        self.config.sync_state = val
+
+    @property
+    def sync_sweep_s(self) -> float:
+        return self.config.sync_sweep_s
+
+    @sync_sweep_s.setter
+    def sync_sweep_s(self, val: float) -> None:
+        self.config.sync_sweep_s = val
+
+    @property
+    def idle_timeout_s(self) -> float:
+        return self.config.idle_timeout_s
+
+    @idle_timeout_s.setter
+    def idle_timeout_s(self, val: float) -> None:
+        self.config.idle_timeout_s = val
+
+    @property
+    def idle_check_s(self) -> float:
+        return self.config.idle_check_s
+
+    @idle_check_s.setter
+    def idle_check_s(self, val: float) -> None:
+        self.config.idle_check_s = val
+
+    @property
+    def perm_grace_s(self) -> float:
+        return self.config.perm_grace_s
+
+    @perm_grace_s.setter
+    def perm_grace_s(self, val: float) -> None:
+        self.config.perm_grace_s = val
 
     @property
     def synccoord(self) -> SyncCoordinator:
@@ -4622,44 +4706,28 @@ def main() -> None:
         secret = "dev-secret"
         log.warning("RETROCLAUDE_SECRET unset; using %r (development only)", secret)
 
-    bridge = Bridge(secret, host=args.host, port=args.port,
-                    cwd=args.cwd, model=args.model, effort=args.effort,
-                    link_bps=args.link_bps)
-    if args.sync_dir:
-        bridge.sync_dir = os.path.abspath(args.sync_dir)
-        bridge.sync_state = os.path.abspath(
-            args.sync_state
-            or os.path.join(bridge.sync_dir, os.pardir, ".gaston-state"))
-        # The baseline must not live inside the tree it describes, or a full
-        # second copy of every file is mirrored to the guest, then scanned,
-        # then copied again.
-        if os.path.commonpath([bridge.sync_state, bridge.sync_dir]) \
-                == bridge.sync_dir:
-            raise SystemExit(
-                "--sync-state must be OUTSIDE --sync-dir: a baseline inside "
-                "the tree it describes gets mirrored to the guest and recurses")
-        # And it must not live inside the WORKING DIRECTORY either, which is a
-        # different requirement that happened to hold by default. off_limits
-        # refuses paths outside cwd; it does not cover Bash, and nothing else
-        # guards the baseline. A state directory under cwd is therefore one
-        # `sed -i` away from a baseline that still parses and is wrong -- and a
-        # three-way diff reaches confident conclusions from it, in whichever
-        # direction the corruption points.
-        if bridge.cwd:
-            wd = os.path.realpath(bridge.cwd)
-            try:
-                under_cwd = os.path.commonpath(
-                    [os.path.realpath(bridge.sync_state), wd]) == wd
-            except ValueError:
-                under_cwd = False
-            if under_cwd:
-                raise SystemExit(
-                    "--sync-state must be OUTSIDE --cwd: the agent can reach "
-                    "anything under the working directory with Bash, and a "
-                    "baseline that has been edited still parses")
-        os.makedirs(bridge.sync_state, exist_ok=True)
+    try:
+        config = BridgeConfig(
+            secret=secret,
+            host=args.host,
+            port=args.port,
+            cwd=args.cwd,
+            model=args.model,
+            effort=args.effort,
+            link_bps=args.link_bps,
+            sync_dir=args.sync_dir,
+            sync_state=args.sync_state,
+        )
+        config.validate()
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+    if config.sync_state:
+        os.makedirs(config.sync_state, exist_ok=True)
         log.info("sync: %s <-> guest, baseline in %s",
-                 bridge.sync_dir, bridge.sync_state)
+                 config.sync_dir, config.sync_state)
+
+    bridge = Bridge(config=config)
     try:
         asyncio.run(bridge.serve_forever())
     except KeyboardInterrupt:
