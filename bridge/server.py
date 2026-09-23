@@ -95,27 +95,11 @@ from .services.options import (
 )
 from .services.workspace import WorkspaceService
 from .services.presentation import PresentationService
+from .services.guest_exec import ExecCall, GuestExecService
 
 log = logging.getLogger("bridge.server")
 
 DEFAULT_PORT = 7890
-
-
-@dataclass
-class ExecCall:
-    """One outstanding EXEC, and what has happened to it so far.
-
-    Was an ad-hoc `{"future", "out"}` dict grown post-hoc with `"killed"`
-    (set by `_kill_exec`) and `"capped"` (set by `_exec_out`), so every read
-    was a defensive `entry.get(...)` because the key might not exist yet. A
-    dataclass makes both booleans False by construction -- the exec-side twin
-    of `sync.Wait` (02.4). docs/audit/02-bridge-python.md 02.13.
-    """
-
-    future: "asyncio.Future"
-    out: bytearray = field(default_factory=bytearray)
-    killed: bool = False
-    capped: bool = False
 
 
 def turn_verdict(ok: bool, degraded: str, produced: bool,
@@ -624,6 +608,11 @@ class Bridge:
             write_block=self.presentation.write_block,
             send_options=self._send_options,
             spawn_sync=lambda reason: self._spawn(self.run_sync(reason)),
+        )
+        self.guest_exec = GuestExecService(
+            connection=self,
+            spawn=self._spawn,
+            pre_exec=self._pre_exec,
         )
 
         # One guest, one session. See PLAN.md "Multi-session".
@@ -2454,191 +2443,19 @@ class Bridge:
 
     # --- running commands on the guest -------------------------------------
 
+    async def _pre_exec(self, guest: GuestSession, command: str) -> None:
+        await self._ensure_work_dir(guest)
+        await self.ensure_sync_flush(guest, why=f"mcp exec: {command[:32]}")
+
     async def run_on_guest(self, command: str, *, timeout_ms: int,
                            shell: str, cwd: str,
                            guest: "GuestSession | None" = None) -> dict:
-        """Body of mcp__machine__exec. Returns an MCP tool result.
-
-        `shell` NAMES one of the machine's shells, or is `"none"` to spawn
-        the program directly, or is empty for the first shell the machine
-        reported. It used to be a bool, which could only ever mean "the shell
-        somebody else picked" -- and the somebody was the guest, choosing
-        between `command.com` and `cmd.exe` from `GetVersion()` and telling
-        nobody. A machine has as many shells as it has, so the machine
-        reports the list, the system prompt prints it, and the model names
-        one here.
-
-        `guest` is the session this tool belongs to. It defaults to the only
-        one there can be today, but passing it is what makes the tool address
-        A MACHINE rather than whichever machine happens to be attached when
-        the model calls it: the MCP closure captured the Bridge, so with two
-        clients this would run a command on the WRONG machine, with the right
-        person's approval on their own screen. Three call sites today, eleven
-        after Phase 6.
-        """
-        guest = guest or self._guest
-        if guest is not None:
-            # Same commitment as `on_tool`, from the other side. Which of the
-            # two the SDK reaches first is its business; a command must not
-            # run in a folder that does not exist yet either way.
-            await self._ensure_work_dir(guest)
-            await self.ensure_sync_flush(guest, why=f"mcp exec: {command[:32]}")
-        if guest is None or not guest.connected:
-            # Structured error, never a hang. This is the cost of the
-            # single-binary design and it was accepted on condition it is
-            # handled here rather than left to the MCP timeout.
-            return {"content": [{"type": "text", "text":
-                    "The connected machine is not reachable right now -- it is "
-                    "not connected to this proxy. Nothing was run."}],
-                    "isError": True}
-
-        # RESOLVED HERE, against what THIS machine reported, and refused by
-        # name rather than silently falling back -- a command that was meant
-        # for one shell and ran under another is not a smaller version of
-        # what was asked for.
-        prefix = ""
-        want = (shell or "").strip()
-        if want.lower() != "none":
-            usable = toolrules.usable_shells(guest.tools)
-            if want:
-                prefix = toolrules.shell_command(guest.tools, want) or ""
-                if not prefix:
-                    have = ", ".join(f.name for f in usable)
-                    return {"content": [{"type": "text", "text": (
-                        f"There is no shell called {want!r} that this bridge "
-                        f"can run commands through on that machine. "
-                        + (f"It has: {have}." if have else
-                           "It reported no shell this bridge knows how to "
-                           "drive.")
-                        + " Nothing was run.")}],
-                        "isError": True}
-            elif usable:
-                prefix = toolrules.shell_command(guest.tools,
-                                                 usable[0].name) or ""
-
-        # One worker thread over there means one command at a time.
-        async with guest.exec_lock:
-            # Re-check: acquiring the lock can take as long as the command
-            # ahead of us, and _fail_execs in the disconnect path only covers
-            # entries that existed when it ran -- ours would be registered
-            # after it, and would then wait out the whole budget for a frame
-            # that was never transmitted.
-            if not guest.connected:
-                return {"content": [{"type": "text", "text":
-                        "The connected machine went away while this command "
-                        "was waiting to run. Nothing was run."}],
-                        "isError": True}
-            guest.exec_seq += 1
-            exec_id = f"x{guest.exec_seq}"
-            fut = asyncio.get_running_loop().create_future()
-            guest.exec_pending[exec_id] = ExecCall(future=fut)
-
-            # Refuse a command the wire would REWRITE.
-            #
-            # Header values and, until this was fixed, the EXEC body went
-            # through fold -- the display transliterator -- which turns
-            # U+00B7 into '.', U+2502 into '|', U+00BB into '>>' and U+2044
-            # into '/'. So a command could be inspected in one form and
-            # executed in another: `del c:\work\<U+00B7><U+00B7>\..` arrives
-            # at the guest as `del c:\work\..\..`, with a path separator and
-            # a parent-directory hop invented between the two.
-            #
-            # exec_cmd now raises instead of folding, and `cwd` is checked
-            # here because it travels as a header and _quote still folds --
-            # correctly, for every other header, which carries prose.
-            #
-            # Refusing rather than stripping: the model did not type these by
-            # accident, and a command with characters removed is no more the
-            # command it wrote than one with characters added.
-            for label, value in (("command", command), ("cwd", cwd)):
-                bad = fold.unrepresentable(value)
-                if bad is None:
-                    continue
-                return {"content": [{"type": "text", "text": (
-                    f"That {label} contains {bad!r} (U+{ord(bad):04X}), which "
-                    f"the machine's codepage cannot represent. Nothing was "
-                    f"run. Rewrite it using plain ASCII -- do not assume a "
-                    f"lookalike character will be understood, because the "
-                    f"machine will read whatever byte it is given.")}],
-                    "isError": True}
-
-            if cwd:
-                # Refuse rather than let the guest drop the frame.
-                #
-                # `cwd` travels as a header, and the guest's parser caps a
-                # header value at 255 bytes. It used to CLIP there, silently,
-                # and hand the short path to CreateProcessA -- which names a
-                # different, existing directory, so the command ran somewhere
-                # nobody chose. The guest now drops the frame instead, which
-                # is loud but useless on its own: the bridge is the side that
-                # can say something intelligible about it.
-                #
-                # The limit is on the percent-encoded CP1252 bytes on the wire,
-                # not on UTF-8 bytes (audit 06.2).
-                wire_len = len(_quote(cwd))
-                if wire_len > MAX_HEADER_VALUE:
-                    return {
-                        "content": [{"type": "text", "text": (
-                            f"That working directory is too long to send to "
-                            f"the machine ({wire_len} bytes on the wire; the limit "
-                            f"is {MAX_HEADER_VALUE}). Nothing was run. Use a "
-                            f"shorter path, or cd to it inside the command.")}],
-                        "isError": True,
-                    }
-            # Nothing re-sends an EXEC on reconnect, and nothing must: a
-            # redelivered EXEC would RE-RUN the command -- `del c:\temp\*`
-            # twice is not a redraw. There is no wire replay any more (the
-            # buffer that word used to mean is retired, docs/BACKLOG.md #5),
-            # so the only re-delivery mechanism left is the explicit reissue
-            # path after a reconnect (_reissue_halt, _reissue_turn,
-            # PermissionDesk.reissue) -- and none of those touch
-            # exec_pending or send an EXEC/EXECKILL. See
-            # test_exec_is_never_re_delivered.
-            await self._send(guest, exec_cmd(exec_id, command,
-                                             timeout_ms=timeout_ms,
-                                             shell=prefix, cwd=cwd))
-            log.info("exec %s: %s", exec_id, command[:160])
-
-            # Above the guest's own limit, so a slow command produces a
-            # "timed out" result FROM the guest rather than the bridge
-            # abandoning it with the child still running over there.
-            budget = (timeout_ms / 1000.0) + 30.0
-            try:
-                return await asyncio.wait_for(fut, timeout=budget)
-            except asyncio.TimeoutError:
-                self._kill_exec(guest, exec_id)
-                return {"content": [{"type": "text", "text":
-                        f"No reply from the connected machine after "
-                        f"{budget:.0f}s; it has been asked to stop the "
-                        f"command."}], "isError": True}
-            except asyncio.CancelledError:
-                # The turn was interrupted. Without telling the guest, the
-                # command keeps running over there and the NEXT call is
-                # answered `busy` -- so one interrupted turn poisons the
-                # following one for a reason the model cannot see or act on.
-                # Scheduled rather than awaited: we are inside a cancelled
-                # scope, where an await aborts before it happens.
-                self._kill_exec(guest, exec_id)
-                raise
-            finally:
-                guest.exec_pending.pop(exec_id, None)
+        return await self.guest_exec.run_on_guest(
+            command, timeout_ms=timeout_ms, shell=shell, cwd=cwd, guest=guest
+        )
 
     def _kill_exec(self, guest: GuestSession, exec_id: str) -> None:
-        """Ask the guest to stop a command we are no longer waiting for.
-
-        Synchronous on purpose: the cancellation path cannot await.
-
-        Deduplicated because both triggers can fire for one Stop -- the
-        INTERRUPT handler always, and run_on_guest's CancelledError path when
-        the SDK happens to cancel the tool as well. One kill is enough.
-        """
-        entry = guest.exec_pending.get(exec_id)
-        if entry is not None:
-            if entry.killed:
-                return
-            entry.killed = True
-        log.info("asking the guest to kill exec %s", exec_id)
-        self._spawn(self._send(guest, exec_kill(exec_id)))
+        self.guest_exec.kill_exec(guest, exec_id)
 
     async def ensure_sync_flush(self, guest: "GuestSession | None" = None,
                                 why: str = "mcp command") -> dict:
@@ -3523,74 +3340,10 @@ class Bridge:
     EXEC_MAX_CMD = 1024
 
     async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
-        entry = guest.exec_pending.get(f.headers.get("id", ""))
-        if entry is None:
-            return          # late chunk for a call we gave up on
-        room = self.EXEC_OUT_MAX - len(entry.out)
-        if room <= 0:
-            entry.capped = True
-            return
-        if len(f.body) > room:
-            entry.out.extend(f.body[:room])
-            entry.capped = True
-            return
-        entry.out.extend(f.body)
+        await self.guest_exec.exec_out(guest, f)
 
     async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
-        exec_id = f.headers.get("id", "")
-        entry = guest.exec_pending.get(exec_id)
-        if entry is None:
-            # Expected after a kill: the caller has already given up and
-            # cleaned up, and this is the guest confirming it stopped. Not a
-            # problem, so do not log it like one.
-            log.debug("EXECRESULT for %s, which nobody is waiting for "
-                      "(usually a kill that has already been handled)",
-                      exec_id)
-            return
-        fut = entry.future
-        if fut.done():
-            return
-
-        status = ExecStatus.parse(f.headers.get("status", "ok"))
-        code = f.headers.get("code", "")
-        # Either side may have cut it: the guest at its 32KB cap, or us at
-        # ours. Both mean the same thing to the model -- what arrived is not
-        # the whole of it -- so they are reported the same way.
-        truncated = f.headers.get("truncated", "0") == "1" or entry.capped
-
-        # COMMAND.COM writes the OEM codepage, not the ANSI one. Using
-        # fold.decode here instead is the classic Win9x encoding bug and turns
-        # a `dir` listing into mojibake.
-        text = fold.decode_oem(bytes(entry.out))
-
-        parts = []
-        prose = EXEC_STATUS_PROSE.get(status)
-        if prose:
-            parts.append(prose.format(max_cmd=self.EXEC_MAX_CMD))
-        if code not in ("", "0") and status == ExecStatus.OK:
-            parts.append(f"Exit code {code}.")
-        if truncated:
-            # Whichever side actually cut it (03.16). entry.capped means OUR
-            # OWN EXEC_OUT_MAX bit first; the guest's own 32KB cap is the
-            # ordinary case and is what f.headers["truncated"] reports on its
-            # own. Blaming the guest's cap unconditionally was wrong whenever
-            # ours was the one that actually fired.
-            if entry.capped:
-                parts.append(f"Output was capped at "
-                            f"{self.EXEC_OUT_MAX // 1024}KB by this bridge "
-                            f"and truncated.")
-            else:
-                parts.append("Output was capped at 32KB by the connected "
-                            "machine and truncated.")
-
-        body = text if text.strip() else "(no output)"
-        head = (" ".join(parts) + "\n\n") if parts else ""
-        fut.set_result({
-            "content": [{"type": "text", "text": head + body}],
-            "isError": status.is_error,
-        })
-        log.info("exec %s finished: status=%s code=%s bytes=%d",
-                 exec_id, status.value, code, len(entry.out))
+        await self.guest_exec.exec_result(guest, f)
 
     def _mark_lost(self, guest: GuestSession) -> None:
         """Record that this guest's link is gone. Idempotent.
@@ -3623,19 +3376,7 @@ class Bridge:
                      self.perm_grace_s)
 
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
-        """Resolve every in-flight EXEC, synchronously.
-
-        Called where the guest goes away or the session is rebuilt. A future
-        nobody will complete holds the model for the whole MCP budget.
-        """
-        if guest is None:
-            return
-        for exec_id, entry in list(guest.exec_pending.items()):
-            fut = entry.future
-            if not fut.done():
-                fut.set_result({"content": [{"type": "text", "text": why}],
-                                "isError": True})
-        guest.exec_pending.clear()
+        self.guest_exec.fail_execs(guest, why)
 
     async def _perm_reply(self, guest: GuestSession, f: Frame) -> None:
         """Answer from the guest's prompt bar."""

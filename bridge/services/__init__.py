@@ -5,6 +5,7 @@ through constructors, and state scoped to GuestSession flowing through parameter
 """
 
 from bridge.services.config import BridgeConfig
+from bridge.services.guest_exec import ExecCall, GuestExecService
 from bridge.services.options import (
     COMMAND_MENU,
     EFFORT_LABEL,
@@ -19,6 +20,8 @@ from bridge.services.workspace import WorkspaceService
 
 __all__ = [
     "BridgeConfig",
+    "ExecCall",
+    "GuestExecService",
     "OptionsService",
     "PresentationService",
     "WorkspaceService",
