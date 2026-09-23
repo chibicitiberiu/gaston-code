@@ -39,7 +39,7 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
      * and command lists these two are not the bridge's to choose. They are
      * what this client will be able to do, and the bridge has no opinion. */
     menu_attach = CreatePopupMenu();
-    AppendMenuA(menu_attach, MF_STRING | MF_GRAYED, IDM_ATTFILE,
+    AppendMenuA(menu_attach, MF_STRING, IDM_ATTFILE,
                 "&File...");
     AppendMenuA(menu_attach, MF_STRING | MF_GRAYED, IDM_ATTSHOT,
                 "&Screenshot of this screen");
@@ -219,6 +219,8 @@ int rc_optmenu::frame(rc_frame *f)
                                         : "Not set until this conversation "
                                           "has been used");
                 AppendMenuA(menu_work, MF_SEPARATOR, 0, NULL);
+                AppendMenuA(menu_work, cur_work[0] ? MF_STRING : MF_GRAYED,
+                            IDM_WORKOPEN, "&Open work directory");
                 AppendMenuA(menu_work, MF_STRING, IDM_WORKSET,
                             "Change &work directory...");
             } else if (strcmp(kind, "command") == 0 && n_cmd < MAX_OPTS) {

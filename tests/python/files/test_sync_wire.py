@@ -673,6 +673,48 @@ async def test_a_deletion_on_both_sides_tombstones_and_does_not_resurrect(
     await harness.close(writer)
 
 
+async def test_guest_deletion_unmodified_removes_bridge_file_and_tombstones(
+        harness, tmp_path):
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    file_path = os.path.join(p.root, "deleted.txt")
+    with open(file_path, "wb") as f:
+        f.write(b"content\n")
+    b_entries = p.scan_bridge()
+    p.base.rows["deleted.txt"] = b_entries["deleted.txt"]
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {})
+    await asyncio.wait_for(task, 10)
+
+    assert not os.path.exists(file_path), "File should be deleted on bridge"
+    assert "deleted.txt" in p.base.tombs
+    assert "deleted.txt" not in p.base.rows
+    await harness.close(writer)
+
+
+async def test_guest_deletion_modified_preserves_bridge_file_and_reports(
+        harness, tmp_path):
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    file_path = os.path.join(p.root, "modified.txt")
+    with open(file_path, "wb") as f:
+        f.write(b"bridge modified\n")
+    p.base.rows["modified.txt"] = Entry(type=Type.FILE, crc=9999, display="modified.txt")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {})
+    await asyncio.wait_for(task, 10)
+
+    assert os.path.exists(file_path), "Modified file should be preserved on bridge"
+    assert "modified.txt" in p.base.rows
+    assert "modified.txt" not in p.base.tombs
+    assert any("deleted on the guest" in r for r in p.reports)
+    await harness.close(writer)
+
+
 async def test_a_failed_mkdir_withholds_the_pushes_under_it_without_spam(
         harness, tmp_path):
     """03.45: a directory whose MKDIR the guest refuses used to still get

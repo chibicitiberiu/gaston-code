@@ -107,13 +107,23 @@ def test_deleted_on_both_sides_tombstones():
     assert only({}, {}, b).act is Act.TOMBSTONE
 
 
-def test_guest_deleted_but_bridge_still_has_it_reports_and_does_NOT_tombstone():
-    """A tombstone here would make crc(B) == T.crc read as 'untouched',
-    quietly freezing a live file the agent keeps editing."""
+def test_guest_deleted_bridge_unmodified_tombstones():
+    """When the user deletes or renames a file on the guest and the bridge
+    has not modified it, tombstone it so it gets deleted on the bridge."""
     b = Baseline(rows={"a": f(1)})
     dec = only({}, {"a": f(1)}, b)
+    assert dec.act is Act.TOMBSTONE
+    assert "deleted on the guest" in dec.reason
+
+
+def test_guest_deleted_bridge_modified_reports_and_does_NOT_tombstone():
+    """If the bridge/agent edited the file while the user deleted it on the
+    guest, do NOT delete the agent's work -- report the divergence."""
+    b = Baseline(rows={"a": f(1)})
+    dec = only({}, {"a": f(2)}, b)
     assert dec.act is Act.REPORT
     assert dec.act is not Act.TOMBSTONE
+    assert dec.reason == S.GONE_ON_GUEST
 
 
 def test_bridge_deleted_half_of_a_rename_never_resurrects():

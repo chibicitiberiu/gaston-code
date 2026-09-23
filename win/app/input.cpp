@@ -3,6 +3,7 @@
 
 #include "app/input.h"
 #include "core/log.h"
+#include "core/str.h"
 
 /* The longest message that can be composed and sent in one go. The frame
  * protocol would carry far more, but this is exactly one page and do_send's
@@ -106,6 +107,33 @@ void rc_input::do_send(void)
     n = GetWindowTextA(box, buf, RC_INPUT_MAX);
     if (n <= 0) { HeapFree(GetProcessHeap(), 0, buf); return; }
 
+    /* If staged_attach is set, verify that the tag is still present in the text.
+     * If the user deleted the [Attached: ...] text, unattach it. */
+    if (staged_attach[0]) {
+        char tag[MAX_PATH + 32];
+        rc_strf(tag, sizeof(tag), "[Attached: %s]", staged_attach);
+        if (!strstr(buf, tag)) {
+            staged_attach[0] = '\0';
+        }
+    }
+    /* If staged_attach is empty, check whether the user typed or edited
+     * an [Attached: <path>] tag in the input box. */
+    if (!staged_attach[0]) {
+        const char *p = strstr(buf, "[Attached: ");
+        if (p) {
+            const char *start = p + 11;
+            const char *end = strchr(start, ']');
+            if (end && (size_t)(end - start) < sizeof(staged_attach)) {
+                size_t tlen = (size_t)(end - start);
+                memcpy(staged_attach, start, tlen);
+                staged_attach[tlen] = '\0';
+                for (char *c = staged_attach; *c; c++) {
+                    if (*c == '\\') *c = '/';
+                }
+            }
+        }
+    }
+
     /* status_refresh() used to run between note_tx_done and the
      * SetWindowTextA that clears the box; it now runs just after, bundled
      * into `sent` with ui_set_busy(1) -- both are synchronous UI refreshes
@@ -132,19 +160,55 @@ int rc_input::send_text(const char *text)
         return 0;
     }
 
+    const char *keys[1];
+    const char *vals[1];
+    int nkv = 0;
+    if (staged_attach[0]) {
+        char tag[MAX_PATH + 32];
+        rc_strf(tag, sizeof(tag), "[Attached: %s]", staged_attach);
+        if (strstr(text, tag)) {
+            keys[0] = "attach";
+            vals[0] = staged_attach;
+            nkv = 1;
+        }
+    }
+
     /* Echoed BEFORE the send attempt, exactly as a typed message is, so a
      * command picked from a menu appears in the transcript in the place it
      * was sent from rather than only when the reply arrives. */
     echo_user_block(text);
 
     if (xfer) xfer->note_tx_start((unsigned long)n);
-    if (rc_net_send(net, "INPUT", NULL, NULL, 0, text, n) == 0) {
+    if (rc_net_send(net, "INPUT", keys, vals, nkv, text, n) == 0) {
+        staged_attach[0] = '\0';
         if (xfer) xfer->note_tx_done((unsigned long)n);
         if (sent_fn) sent_fn();
         return 1;
     }
     if (html) html->error("Not connected.");
     return 0;
+}
+
+int rc_input::attach(const char *rel_path)
+{
+    char tag[MAX_PATH + 32];
+    int len;
+
+    if (!box || !rel_path || !*rel_path) return 0;
+    rc_strf(staged_attach, sizeof(staged_attach), "%s", rel_path);
+
+    len = GetWindowTextLengthA(box);
+    if (len == 0) {
+        rc_strf(tag, sizeof(tag), "[Attached: %s]\r\n", rel_path);
+        SetWindowTextA(box, tag);
+    } else {
+        rc_strf(tag, sizeof(tag), "\r\n[Attached: %s]", rel_path);
+        SendMessageA(box, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+        SendMessageA(box, EM_REPLACESEL, FALSE, (LPARAM)tag);
+    }
+    SendMessageA(box, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SetFocus(box);
+    return 1;
 }
 
 int rc_input::compose(const char *text)
@@ -184,6 +248,11 @@ LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     if (m == WM_CHAR && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
         return 0;   /* swallow the beep */
+
+    if (m == WM_DROPFILES) {
+        SendMessageA(GetParent(h), WM_DROPFILES, w, l);
+        return 0;
+    }
 
     /* Ctrl+A selects all.
      *

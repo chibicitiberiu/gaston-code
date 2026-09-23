@@ -845,15 +845,98 @@ async def test_choosing_assistant_merge_actually_asks_the_assistant(
     await harness.close(w)
 
 
-async def test_setwork_before_the_conversation_exists_is_refused(harness):
-    """A work directory belongs to a conversation, and there is not one yet."""
+async def test_setwork_before_conversation_starts_sets_work_for_initial_message(
+    harness, tmp_path
+):
+    """Setting a work directory before the conversation starts is allowed and applies to the initial message."""
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.sync_dir, exist_ok=True)
+
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
-    harness.bridge._guest.identity.claude.session_id = None
-    harness.bridge._guest.pending_resume = ""
-    await harness.send(w, Frame("SETWORK", {"path": "D:\\Nope"}))
-    frames = await harness.recv_until(r, {"TEXT"}, 10.0)
-    assert b"Send a message first" in harness.body(frames)
+    g = b._guest
+    assert not g.conv_id
+
+    await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
+    frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    assert g.work_guest == "D:\\Projects\\Retro"
+    assert g.work_dir == os.path.join(b.sync_dir, "RETRO")
+    assert os.path.isdir(g.work_dir), "folder created on bridge side"
+
+    row = [f.headers for f in frames if f.type == "OPTION"
+           and f.headers.get("kind") == "work"][-1]
+    assert row["id"] == "D:\\Projects\\Retro"
+    assert row["label"] == "D:\\Projects\\Retro"
+
+    # Initial turn uses the chosen work directory
+    await harness.send(w, Frame("INPUT", {}, b"Hello initial turn"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await harness.recv_until(r, {"TURN"}, 10.0)
+
+    sid = g.claude.session_id
+    assert sid is not None
+    assert g.work_guest == "D:\\Projects\\Retro"
+    assert b.conv.guest_folder(sid) == "D:\\Projects\\Retro"
+    await harness.close(w)
+
+
+async def test_mcp_exec_flushes_sync_and_sends_status_frame(harness, tmp_path):
+    """Calling run_on_guest flushes sync, blocks until done, and wraps it in STATUS frames."""
+    b = harness.bridge
+    b.sync_dir = str(tmp_path / "mirror")
+    b.sync_state = str(tmp_path / "state")
+    os.makedirs(b.sync_dir, exist_ok=True)
+    os.makedirs(b.sync_state, exist_ok=True)
+
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = b._guest
+
+    # Set work directory and create a local file
+    await harness.send(w, Frame("SETWORK", {"path": "C:\\Gaston\\WORK"}))
+    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+
+    test_file = os.path.join(g.work_dir, "test.c")
+    with open(test_file, "w") as fh:
+        fh.write("int main() { return 0; }\n")
+
+    sync_calls = []
+
+    async def tracking_run_sync(why, wait=False, guest=None):
+        sync_calls.append((why, wait))
+        return {"reports": [], "notices": []}
+
+    b.run_sync = tracking_run_sync
+
+    # Launch run_on_guest in background
+    task = asyncio.create_task(
+        b.run_on_guest("wcl386 test.c", timeout_ms=5000, shell="", cwd="", guest=g)
+    )
+
+    # Receive frames until EXEC
+    frames = await harness.recv_until(r, {"EXEC"}, 10.0)
+
+    # Verify STATUS frames occurred before EXEC
+    status_frames = [f for f in frames if f.type == "STATUS"]
+    assert len(status_frames) >= 2, f"Expected at least 2 STATUS frames, got {status_frames}"
+    assert status_frames[0].headers.get("text") == "waiting for sync..."
+    assert status_frames[1].headers.get("text") == ""
+
+    # Followed by the EXEC frame itself
+    f_exec = next(f for f in frames if f.type == "EXEC")
+    assert b"wcl386 test.c" in f_exec.body
+
+    # Reply with output and result so run_on_guest finishes
+    exec_id = f_exec.headers.get("id")
+    await harness.send(w, Frame("EXECOUT", {"id": exec_id}, b"Compiled OK\n"))
+    await harness.send(w, Frame("EXECRESULT", {"id": exec_id, "status": "ok", "exit": "0"}))
+    res = await task
+    assert "Compiled OK" in res["content"][0]["text"]
+
+    # Verify run_sync was called with wait=True
+    assert any(wait is True for why, wait in sync_calls)
     await harness.close(w)
 
 

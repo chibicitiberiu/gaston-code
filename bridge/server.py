@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import asyncio
+import base64
+from collections.abc import AsyncIterable
 import contextlib
 import logging
 import json
@@ -65,6 +67,7 @@ from .wire.protocol import (
                             sessions_end,
                             sessions_start,
                             switched,
+                            status_frame,
                             turn_end,
                             turn_error,
                             turn_start,
@@ -1165,6 +1168,33 @@ class Bridge:
         """Where the agent works for THIS conversation."""
         return guest.work_dir or self.cwd or os.getcwd()
 
+    def _validate_attach_target(self, guest: GuestSession, attach: str) -> str | None:
+        """Validate and resolve attachment relative path within the guest's work directory.
+
+        Enforces strict path containment (docs/BACKLOG.md 04.24), rejecting path traversal,
+        absolute paths, drive letters, and symlinks resolving outside the work directory.
+        Returns the absolute local path if valid and contained, or None if invalid.
+        """
+        if not attach or not isinstance(attach, str) or "\0" in attach or ":" in attach:
+            return None
+        clean = attach.replace("\\", "/").strip()
+        if not clean or clean.startswith("/") or os.path.isabs(clean):
+            return None
+        base = os.path.abspath(self._work_dir(guest))
+        target = os.path.abspath(os.path.join(base, clean))
+        try:
+            if os.path.commonpath([base, target]) != base:
+                return None
+            base_real = os.path.realpath(base)
+            target_real = os.path.realpath(target)
+            if os.path.commonpath([base_real, target_real]) != base_real:
+                return None
+        except ValueError:
+            return None
+        if target == base:
+            return None
+        return target
+
     def _remember_settings(self, guest: GuestSession,
                            session_id: str = "") -> None:
         """Write this conversation's model, effort and mode to disk.
@@ -1226,6 +1256,11 @@ class Bridge:
         SDK rather than something to depend on.
         """
         if guest.work_guest:
+            if guest.conv_id:
+                name = self.folder_name(
+                    guest.work_guest.replace("\\", "/").rsplit("/", 1)[-1],
+                    guest.caps) or "WORK"
+                self.conv.set_folder(guest.conv_id, name, guest.work_guest)
             return
         await self._name_work_dir(guest)
         if guest.work_guest:
@@ -1573,6 +1608,11 @@ class Bridge:
                     #
                     # Every path arrives here -- new, resumed, forked and
                     # /clear -- which is why this is the only hook needed.
+                    if guest.work_guest:
+                        name = self.folder_name(
+                            guest.work_guest.replace("\\", "/").rsplit("/", 1)[-1],
+                            guest.caps) or "WORK"
+                        self.conv.set_folder(sid, name, guest.work_guest)
                     self._remember_settings(guest, sid)
                     self._spawn(self._send_sessions(guest))
 
@@ -1891,13 +1931,22 @@ class Bridge:
     async def _on_input(self, guest: GuestSession, f: Frame) -> None:
         text = fold.decode(f.body)
         log.info("input: %s", text[:120])
+        attach = f.headers.get("attach")
         # The first thing said in a conversation is what its folder is named
         # after, and by the time a tool runs the SDK has not titled the
         # conversation yet. Recorded only while the folder is still open --
         # once committed, the name is the name.
         if not guest.work_guest and not guest.first_prompt:
             guest.first_prompt = text
-        self._spawn(self._run_turn(guest, text))
+        if attach:
+            await self._ensure_work_dir(guest)
+            target = self._validate_attach_target(guest, attach)
+            if not target:
+                log.warning("rejected unsafe attachment path: %s", attach)
+                await self._send(guest, error("bad_attach",
+                    f"Attachment outside work directory: {attach}"))
+                return
+        self._spawn(self._run_turn(guest, text, attach=attach))
 
     async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
         # The user pressed Continue on the halt bar. THAT is the signal the
@@ -2070,11 +2119,6 @@ class Bridge:
         path = (f.headers.get("path") or "").strip()
         if not path:
             return
-        if not guest.conv_id:
-            await self._write_block(guest, H.error(
-                "Send a message first -- a work directory belongs to a "
-                "conversation, and this one has not started yet."))
-            return
 
         # The bridge-side half is still a folder under --sync-dir, because
         # that is the tree this process can actually write to. What changed is
@@ -2082,7 +2126,8 @@ class Bridge:
         name = self.folder_name(
             path.replace("\\", "/").rsplit("/", 1)[-1], guest.caps)
         if not name:
-            name = self.folder_name(guest.conv_id[:8], guest.caps) or "WORK"
+            name = (self.folder_name(guest.conv_id[:8], guest.caps)
+                    if guest.conv_id else "WORK")
         base = self.sync_dir
         if not base:
             await self._write_block(guest, H.error(
@@ -2100,43 +2145,55 @@ class Bridge:
 
         guest.work_dir = local
         guest.work_guest = path
-        self.conv.set_folder(guest.conv_id, name, path)
+        if guest.conv_id:
+            self.conv.set_folder(guest.conv_id, name, path)
         self._retarget_perms(guest)
         log.info("work directory for %s: %s (guest: %s)",
-                 guest.conv_id, local, path)
+                 guest.conv_id or "<initial>", local, path)
         await self._write_block(guest, H.notice(
             "This conversation works in " + path + " on your machine."))
-        # AND THE AGENT. It had no idea this had happened: the notice above
-        # goes to the transcript, `_send_options` goes to the toolbar, and
-        # the system prompt was written before either. So the agent went on
-        # writing into the folder it was told about when the session was
-        # built -- which is no longer mirrored anywhere.
-        #
-        # Through agent_notices, which rides in on the next turn's preamble.
-        # That is the right moment and the only one: nothing reaches a
-        # session except an INPUT, and manufacturing a turn to deliver a
-        # directory change would bill the user for an announcement.
-        note = (f"THE WORK DIRECTORY HAS CHANGED. This conversation now "
-                f"works in {local} here, mirrored to {path} on the user's "
-                f"machine. The folder you were using before is no longer "
-                f"mirrored -- anything written there from now on stays on "
-                f"this proxy, however well the write appears to succeed.")
-        if f.headers.get("staged") == "merge":
-            # The user picked "let the assistant merge them" in the dialog,
-            # which is an instruction to the assistant. Without this the
-            # copies land in Gaston-Incoming and nothing ever asks anyone to
-            # reconcile them, so that answer did half of what its label said.
-            note += (
-                f"\n\nThe user asked YOU to merge the files they brought "
-                f"across. Copies whose names clashed are in "
+
+        # If the conversation hasn't started yet, reset the idle client so that
+        # when the initial turn runs, it starts fresh with cwd=local and guest_root=path.
+        if not guest.conv_id and guest.claude:
+            try:
+                await guest.claude.close()
+            except Exception:
+                pass
+            guest.claude = None
+
+        if guest.conv_id:
+            note = (f"THE WORK DIRECTORY HAS CHANGED. This conversation now "
+                    f"works in {local} here, mirrored to {path} on the user's "
+                    f"machine. The folder you were using before is no longer "
+                    f"mirrored -- anything written there from now on stays on "
+                    f"this proxy, however well the write appears to succeed.")
+            if f.headers.get("staged") == "merge":
+                note += (
+                    f"\n\nThe user asked YOU to merge the files they brought "
+                    f"across. Copies whose names clashed are in "
+                    f"{os.path.join(local, 'Gaston-Incoming')}; the versions that "
+                    f"were already here are in place beside it. Reconcile them "
+                    f"file by file, say what you changed, and ask before "
+                    f"discarding either side. Do not delete anything in "
+                    f"Gaston-Incoming until the user agrees the merge is right.")
+            if note not in self.synccoord.agent_notices:
+                self.synccoord.agent_notices.append(note)
+        elif f.headers.get("staged") == "merge":
+            note = (
+                f"The user asked YOU to merge the files they brought "
+                f"across into {path}. Copies whose names clashed are in "
                 f"{os.path.join(local, 'Gaston-Incoming')}; the versions that "
                 f"were already here are in place beside it. Reconcile them "
                 f"file by file, say what you changed, and ask before "
                 f"discarding either side. Do not delete anything in "
                 f"Gaston-Incoming until the user agrees the merge is right.")
-        if note not in self.synccoord.agent_notices:
-            self.synccoord.agent_notices.append(note)
+            if note not in self.synccoord.agent_notices:
+                self.synccoord.agent_notices.append(note)
+
         await self._send_options(guest)
+        if self.sync_dir:
+            self._spawn(self.run_sync("the work directory was set"))
 
     async def _on_export(self, guest: GuestSession, f: Frame) -> None:
         """Assemble the whole conversation into one file and stream it.
@@ -2317,7 +2374,8 @@ class Bridge:
                 "were doing.", echo=False)
 
     async def _run_turn(self, guest: GuestSession, text: str,
-                        *, echo: bool = True) -> None:
+                        *, echo: bool = True,
+                        attach: str | None = None) -> None:
         # The first message is what starts the process -- for a chat opened
         # from the list AND for one started with New chat, neither of which
         # spawns anything by itself. Before the lock, because building it is
@@ -2337,14 +2395,18 @@ class Bridge:
         # dropping either on the floor is the one thing worse than running it
         # late. The wait is bounded by the turn ahead of it finishing.
         async with guest.turn_lock:
-            await self._run_turn_locked(guest, text, echo=echo)
+            await self._run_turn_locked(guest, text, echo=echo, attach=attach)
 
     async def _run_turn_locked(self, guest: GuestSession, text: str,
-                               *, echo: bool = True) -> None:
+                               *, echo: bool = True,
+                               attach: str | None = None) -> None:
         if not guest.claude:
             return
+        display_text = text
+        if attach and "[Attached:" not in text:
+            display_text = f"[Attached: {attach}]\n{text}"
         # User turns are the landmarks a reader navigates by.
-        anchor = guest.pages.mark_user_turn(text)
+        anchor = guest.pages.mark_user_turn(display_text)
         # The guest echoed this line itself the moment Send was pressed, so it
         # is recorded but not streamed. USER_BLOCK is shared with the guest so
         # the two renderings are the same string, not merely similar.
@@ -2354,7 +2416,7 @@ class Bridge:
         # "Resolve the sync conflict" would put words in their mouth in a
         # transcript they can scroll back through later.
         if echo:
-            await self._write_block(guest, H.user_turn(text), stream=False)
+            await self._write_block(guest, H.user_turn(display_text), stream=False)
         await self._send(guest, anchor_frame(
             anchor.page, anchor.offset, anchor.preview))
         # Cleared at the START of a turn, not only at its end.
@@ -2396,8 +2458,123 @@ class Bridge:
         # is not asking the model to do anything with files.
         if not was_command:
             text = await self._with_sync_preamble(text)
+        prompt_payload: str | AsyncIterable[dict] = text
+        if attach and not was_command:
+            clean_attach = attach.replace("\\", "/").strip()
+            target = self._validate_attach_target(guest, clean_attach)
+            if target and not os.path.exists(target) and self.sync_dir:
+                try:
+                    await self.run_sync("attachment not found locally")
+                except Exception as exc:
+                    log.warning("sync before attachment failed: %s", exc)
+
+            ext = os.path.splitext(clean_attach)[1].lower()
+            image_types = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+            }
+            clean_text = text
+            for tag in (f"[Attached: {attach}]", f"[Attached: {clean_attach}]"):
+                clean_text = clean_text.replace(tag + "\r\n", "").replace(tag + "\n", "").replace(tag, "")
+            clean_text = clean_text.strip()
+            prompt_text = clean_text if clean_text else text
+
+            if target and ext in image_types and os.path.isfile(target):
+                try:
+                    file_size = os.path.getsize(target)
+                    if file_size <= 10 * 1024 * 1024:
+                        with open(target, "rb") as img_f:
+                            b64_data = base64.b64encode(img_f.read()).decode("ascii")
+                        media_type = image_types[ext]
+
+                        async def _image_prompt(mtype=media_type, data=b64_data, ptext=prompt_text):
+                            content: list[dict] = [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": mtype,
+                                        "data": data,
+                                    },
+                                }
+                            ]
+                            if ptext:
+                                content.append({"type": "text", "text": ptext})
+                            yield {
+                                "type": "user",
+                                "message": {
+                                    "role": "user",
+                                    "content": content,
+                                },
+                                "parent_tool_use_id": None,
+                            }
+                        prompt_payload = _image_prompt()
+                    else:
+                        log.warning("image attachment %s exceeds 10MB limit (%d bytes)",
+                                    clean_attach, file_size)
+                        if f"[Attached workspace file: {clean_attach}" not in prompt_text:
+                            prompt_payload = (
+                                f"[Attached workspace file: {clean_attach} "
+                                f"(file too large for image block)]\n{prompt_text}"
+                            )
+                except OSError:
+                    log.exception("failed to read image attachment %s", target)
+                    if f"[Attached workspace file: {clean_attach}" not in prompt_text:
+                        prompt_payload = f"[Attached workspace file: {clean_attach}]\n{prompt_text}"
+            else:
+                if f"[Attached workspace file: {clean_attach}" not in prompt_text:
+                    file_content_block = ""
+                    if target and os.path.isfile(target):
+                        try:
+                            file_size = os.path.getsize(target)
+                            if file_size == 0:
+                                file_content_block = (
+                                    f"[Attached workspace file: {clean_attach} (empty file)]\n"
+                                )
+                            elif file_size > 256 * 1024:
+                                file_content_block = (
+                                    f"[Attached workspace file: {clean_attach} "
+                                    f"({file_size} bytes, file too large to inline directly)]\n"
+                                )
+                            else:
+                                with open(target, "rb") as f:
+                                    raw_bytes = f.read()
+                                is_binary = b"\x00" in raw_bytes
+                                if not is_binary:
+                                    try:
+                                        content_str = raw_bytes.decode("utf-8")
+                                    except UnicodeDecodeError:
+                                        try:
+                                            content_str = raw_bytes.decode("cp1252")
+                                        except UnicodeDecodeError:
+                                            content_str = None
+                                    if content_str is not None:
+                                        file_content_block = (
+                                            f"[Attached workspace file: {clean_attach}]\n"
+                                            f"Contents of {clean_attach}:\n"
+                                            f"```\n"
+                                            f"{content_str}\n"
+                                            f"```\n"
+                                        )
+                                if not file_content_block:
+                                    file_content_block = (
+                                        f"[Attached workspace file: {clean_attach} "
+                                        f"({file_size} bytes, binary file)]\n"
+                                    )
+                        except OSError as exc:
+                            log.warning("failed to read attachment %s: %s", target, exc)
+                    if not file_content_block:
+                        file_content_block = f"[Attached workspace file: {clean_attach}]\n"
+                    prompt_payload = (
+                        f"{file_content_block}{prompt_text}"
+                        if prompt_text else file_content_block.strip()
+                    )
         try:
-            turn = await guest.claude.send(text)
+            turn = await guest.claude.send(prompt_payload)
+
         except Exception as exc:
             log.exception("turn failed")
             await self._flush_text(guest)
@@ -2503,6 +2680,7 @@ class Bridge:
             # two the SDK reaches first is its business; a command must not
             # run in a folder that does not exist yet either way.
             await self._ensure_work_dir(guest)
+            await self.ensure_sync_flush(guest, why=f"mcp exec: {command[:32]}")
         if guest is None or not guest.connected:
             # Structured error, never a hang. This is the cost of the
             # single-binary design and it was accepted on condition it is
@@ -2660,7 +2838,33 @@ class Bridge:
         log.info("asking the guest to kill exec %s", exec_id)
         self._spawn(self._send(guest, exec_kill(exec_id)))
 
-    async def run_sync(self, why: str) -> dict:
+    async def ensure_sync_flush(self, guest: "GuestSession | None" = None,
+                                why: str = "mcp command") -> dict:
+        """Run sync and block until finished, displaying 'waiting for sync...' status on the guest.
+
+        Ensures all local host file edits are pushed to the guest before
+        running an MCP tool (e.g. compiling or inspecting on the machine).
+        """
+        guest = guest or self._guest
+        if guest is None or not guest.connected or not self.sync_dir:
+            return {}
+        if not self._mirror_dir(guest):
+            return {}
+
+        await self._set_status_override(guest, "waiting for sync...")
+        try:
+            return await self.run_sync(why, wait=True, guest=guest)
+        finally:
+            await self._set_status_override(guest, "")
+
+    async def _set_status_override(self, guest: "GuestSession", text: str) -> None:
+        try:
+            await self._send(guest, status_frame(text))
+        except Exception as exc:
+            log.debug("could not send status frame: %s", exc)
+
+    async def run_sync(self, why: str, *, wait: bool = False,
+                       guest: "GuestSession | None" = None) -> dict:
         """One pass, serialised against every other trigger.
 
         Without the lock two passes would both read the baseline and both
@@ -2682,7 +2886,7 @@ class Bridge:
           * a bridge-side sweep, as the backstop for a guest that has stopped
             telling us anything.
         """
-        guest = self._guest
+        guest = guest or self._guest
         if guest is None or not guest.connected or not self.sync_dir:
             return {}
         # NOTHING IS MIRRORED UNTIL A CONVERSATION COMMITS TO A FOLDER, so
@@ -2695,7 +2899,7 @@ class Bridge:
         if not self._mirror_dir(guest):
             log.debug("nothing mirrored yet; skipping sync (%s)", why)
             return {}
-        if guest.sync_lock.locked():
+        if not wait and guest.sync_lock.locked():
             log.debug("sync already running; coalescing (%s)", why)
             return {}
 

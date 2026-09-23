@@ -7,6 +7,8 @@
  */
 #include <windows.h>
 #include <commctrl.h>
+#include <commdlg.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -181,6 +183,7 @@ static HWND  g_main, g_status;
 typedef enum { TURN_IDLE, TURN_THINKING, TURN_STREAMING } rc_turn_state;
 static rc_turn_state g_turn_state = TURN_IDLE;
 static DWORD g_turn_start_ms = 0;
+static char g_status_override[128] = "";
 
 static void think_show(void);
 static void turn_done(void);
@@ -335,6 +338,7 @@ static void status_refresh(void)
          * number has the same problem and is left alone for now: it is the
          * turn's wall time, which is what "has this hung?" wants. */
         const char *what = (g_bar && g_bar->active()) ? "waiting for you..."
+                         : (g_status_override[0]) ? g_status_override
                          : g_turn_state == TURN_STREAMING
                                ? "receiving..." : "Claude is thinking...";
         unsigned long secs =
@@ -395,6 +399,7 @@ static void build_menu(HWND hwnd)
     HMENU help = CreatePopupMenu();
 
     AppendMenuA(file, MF_STRING, IDM_NEW, "&New Session\tCtrl+N");
+    AppendMenuA(file, MF_STRING, IDM_ATTFILE, "&Attach File...");
     AppendMenuA(file, MF_SEPARATOR, 0, NULL);
     AppendMenuA(file, MF_STRING, IDM_EXPORT, "&Export as HTML...");
     AppendMenuA(file, MF_SEPARATOR, 0, NULL);
@@ -1019,6 +1024,19 @@ static void on_notice(rc_frame *f)
     if (g_html) g_html->notice(f->body);
 }
 
+static void on_status(rc_frame *f)
+{
+    const char *text = rc_frame_get(f, "text");
+    if (text && *text) {
+        rc_strf(g_status_override, sizeof(g_status_override), "%s", text);
+    } else if (f->body && *f->body) {
+        rc_strf(g_status_override, sizeof(g_status_override), "%s", f->body);
+    } else {
+        g_status_override[0] = '\0';
+    }
+    status_refresh();
+}
+
 /* EXPORTSTART / EXPORTDAT / EXPORTEND -- all three owned by app/export.cpp;
  * see rc_export::frame there for what each one does. */
 static void on_export(rc_frame *f)
@@ -1064,6 +1082,7 @@ static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
     { "HALTEND",     on_bar },
     { "ERROR",       on_error },
     { "NOTICE",      on_notice },
+    { "STATUS",      on_status },
     { "EXPORTSTART", on_export },
     { "EXPORTDAT",   on_export },
     { "EXPORTEND",   on_export },
@@ -1154,6 +1173,7 @@ static void turn_receiving(void)
 static void turn_done(void)
 {
     g_turn_state = TURN_IDLE;
+    g_status_override[0] = '\0';
     SetWindowTextA(g_main, RC_TITLE);
     /* The status line is a statement about right now, so it goes when "right
      * now" stops being true. Leaving "receiving... 41s" under a finished
@@ -1425,6 +1445,20 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * font (and, for the page bar and Stop, their initial enabled state)
      * inside rc_chats::create/rc_bar::create/rc_pagebar::create/
      * rc_input::create above. */
+
+    /* Accept file drops from Explorer onto the window and the input box */
+    {
+        typedef void (WINAPI *PFN_DRAGACCEPTFILES)(HWND, BOOL);
+        Dll sh(LoadLibraryA("shell32.dll"));
+        PFN_DRAGACCEPTFILES accept = sh.valid()
+            ? (PFN_DRAGACCEPTFILES)GetProcAddress(sh.get(), "DragAcceptFiles")
+            : NULL;
+        if (accept) {
+            accept(hwnd, TRUE);
+            if (g_inputmod && g_inputmod->get_box())
+                accept(g_inputmod->get_box(), TRUE);
+        }
+    }
 }
 
 /* -------------------------------------------------------------- main proc */
@@ -1499,6 +1533,59 @@ static void try_connect(HWND hwnd)
     status_refresh();
 }
 
+static void handle_attach_path(HWND hwnd, const char *path)
+{
+    const char *work;
+    size_t wlen;
+    const char *rel_start;
+    char rel[MAX_PATH];
+    char *p;
+
+    if (!path || !*path) return;
+
+    work = rc_workdir_current();
+    if (!work || !*work) {
+        MessageBoxA(hwnd,
+                    "The work directory is not set yet for this conversation.\n\n"
+                    "Send a message first or select 'Change work directory...' before attaching files.",
+                    RC_TITLE, MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    wlen = strlen(work);
+    /* Path must be inside work directory */
+    if (_strnicmp(path, work, wlen) != 0 ||
+        (path[wlen] != '\\' && path[wlen] != '/' && path[wlen] != '\0')) {
+        char msg[MAX_PATH * 2 + 160];
+        rc_strf(msg, sizeof(msg),
+                "That file is outside the mirrored work folder:\n%s\n\n"
+                "Work folder is:\n%s\n\n"
+                "In this version, only files inside the work folder can be attached directly. "
+                "Copy the file into the work folder, or use 'Change work directory...'.",
+                path, work);
+        MessageBoxA(hwnd, msg, "Attach File", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    /* Extract relative path */
+    rel_start = path + wlen;
+    if (*rel_start == '\\' || *rel_start == '/') rel_start++;
+    if (!*rel_start) {
+        MessageBoxA(hwnd, "Cannot attach the work directory itself. Select a file inside it.",
+                    "Attach File", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    rc_strf(rel, sizeof(rel), "%s", rel_start);
+    /* Convert DOS backslashes to forward slashes */
+    for (p = rel; *p; p++) {
+        if (*p == '\\') *p = '/';
+    }
+
+    if (g_inputmod)
+        g_inputmod->attach(rel);
+}
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -1507,6 +1594,26 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetTimer(hwnd, TIMER_STATUS, 1000, NULL);
         PostMessage(hwnd, WM_RC_CONNECT, 0, 0);
         return 0;
+
+    case WM_DROPFILES: {
+        HDROP hDrop = (HDROP)wp;
+        typedef UINT (WINAPI *PFN_DRAGQUERYFILEA)(HDROP, UINT, LPSTR, UINT);
+        typedef void (WINAPI *PFN_DRAGFINISH)(HDROP);
+        Dll sh(LoadLibraryA("shell32.dll"));
+        PFN_DRAGQUERYFILEA query = sh.valid()
+            ? (PFN_DRAGQUERYFILEA)GetProcAddress(sh.get(), "DragQueryFileA")
+            : NULL;
+        PFN_DRAGFINISH finish = sh.valid()
+            ? (PFN_DRAGFINISH)GetProcAddress(sh.get(), "DragFinish")
+            : NULL;
+        if (query && finish) {
+            char path[MAX_PATH];
+            if (query(hDrop, 0, path, sizeof(path)) > 0)
+                handle_attach_path(hwnd, path);
+            finish(hDrop);
+        }
+        return 0;
+    }
 
     case WM_RC_CONNECT:
         try_connect(hwnd);
@@ -1806,6 +1913,59 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * invent. */
             ui_send("The permissions view", "RULES", NULL, NULL, 0, NULL, 0);
             return 0;
+
+        case IDM_WORKOPEN: {
+            const char *cur = rc_workdir_current();
+            if (cur && *cur) {
+                typedef HINSTANCE (WINAPI *PFN_SHEXEC)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
+                Dll sh(LoadLibraryA("shell32.dll"));
+                PFN_SHEXEC go = sh.valid()
+                    ? (PFN_SHEXEC)GetProcAddress(sh.get(), "ShellExecuteA")
+                    : NULL;
+                if (go)
+                    go(hwnd, "open", cur, NULL, NULL, SW_SHOWNORMAL);
+                else
+                    MessageBoxA(hwnd, cur, "Work Directory", MB_OK | MB_ICONINFORMATION);
+            }
+            return 0;
+        }
+
+        case IDM_ATTFILE: {
+            typedef BOOL (WINAPI *PFN_GETOPENFILENAMEA)(LPOPENFILENAMEA);
+            OPENFILENAMEA ofn;
+            char file[MAX_PATH];
+            const char *work = rc_workdir_current();
+
+            if (!work || !*work) {
+                MessageBoxA(hwnd,
+                            "The work directory is not set yet for this conversation.\n\n"
+                            "Send a message first or select 'Change work directory...' before attaching files.",
+                            RC_TITLE, MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
+
+            file[0] = '\0';
+            memset(&ofn, 0, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = "All Files (*.*)\0*.*\0Text / Code (*.c;*.h;*.txt;*.md)\0*.c;*.h;*.txt;*.md;*.py;*.json\0Images (*.bmp;*.png;*.jpg;*.gif)\0*.bmp;*.png;*.jpg;*.jpeg;*.gif\0\0";
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = sizeof(file);
+            ofn.lpstrInitialDir = work;
+            ofn.lpstrTitle = "Attach file from work directory";
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+
+            {
+                Dll dll(LoadLibraryA("comdlg32.dll"));
+                PFN_GETOPENFILENAMEA fn = dll.valid()
+                    ? (PFN_GETOPENFILENAMEA)GetProcAddress(dll.get(), "GetOpenFileNameA")
+                    : NULL;
+                if (fn && fn(&ofn)) {
+                    handle_attach_path(hwnd, file);
+                }
+            }
+            return 0;
+        }
 
         case IDM_WORKSET: {
             /* CHANGE WORK DIRECTORY -- this conversation's, not a parent it

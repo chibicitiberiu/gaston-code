@@ -38,6 +38,7 @@
 #define IDM_EFFORT0 1300      /* .. IDM_EFFORT0 + MAX_OPTS */
 #define IDM_MODE0   1400      /* .. IDM_MODE0 + MAX_OPTS */
 #define IDM_CMD0    1500      /* .. IDM_CMD0 + MAX_OPTS */
+#define IDM_WORKOPEN 1598     /* "Open work directory" */
 #define IDM_WORKSET 1599      /* "Change work directory..." */
 #define IDM_ATTFILE 1600      /* Attach > File... */
 #define IDM_ATTSHOT 1601      /* Attach > Screenshot */

@@ -69,10 +69,14 @@ class rc_input {
     void do_send(void);
     void do_stop(void);
 
+    char         staged_attach[MAX_PATH];
+
     rc_input(const rc_input &);
     rc_input &operator=(const rc_input &);
     rc_input() : box(0), send_btn(0), stop_btn(0), oldproc(0), net(0),
-                 html(0), xfer(0), send_fn(0), blocked_fn(0), sent_fn(0) {}
+                 html(0), xfer(0), send_fn(0), blocked_fn(0), sent_fn(0) {
+        staged_attach[0] = '\0';
+    }
 
 public:
     /* net: the one raw rc_net_send this module makes itself, for INPUT.
@@ -136,6 +140,13 @@ public:
      * sent one, and a menu that silently ate two paragraphs would be the
      * worst thing on this toolbar. Non-zero if the box now holds `text`. */
     int  compose(const char *text);
+
+    /* Stage an attachment: records the relative path to be sent with the next
+     * INPUT frame, and reflects it in the input box so the user can see what
+     * was attached and type their question around it. */
+    int  attach(const char *rel_path);
+    const char *get_staged_attach(void) const { return staged_attach; }
+    HWND get_box(void) const { return box; }
 
     /* Is the box empty, and does it have the keyboard?
      *

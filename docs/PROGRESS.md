@@ -2963,3 +2963,62 @@ the generator guard asserted `"gaston.ico" in output`, which
 
 `make test-fast` runs everything except the ten Wine suites: 2683 tests in
 16s, against 3 minutes for the lot.
+
+## 5.1 -- Mirrored file attachment, drag-and-drop & workdir open
+
+Phase 5.1 lands file attachment from the active mirrored workspace folder without
+transiting guest memory, along with Win32 Explorer integration:
+
+1. **Attach File Picker & Staging**: Enabled `Attach > File...` using `GetOpenFileNameA`
+   dynamically loaded from `comdlg32.dll` (preserving the zero-static-import PE allowlist).
+   Selected paths are validated against `rc_workdir_current()`; inside paths stage
+   `m_staged_attach` and populate the compose box with `[Attached: <rel_path>]`.
+2. **Drag & Drop**: Registered `DragAcceptFiles` dynamically from `shell32.dll` on
+   the main window and edit box, handling `WM_DROPFILES` anywhere in Gaston.
+3. **Open Work Directory**: Added `Open work directory` (`IDM_WORKOPEN`) to the
+   Work Directory toolbar dropdown, launching Explorer via dynamically resolved `ShellExecuteA`.
+4. **Wire Protocol**: `INPUT` frames carry `attach=<rel_path>` headers.
+5. **Bridge Path Containment Guard (finding 04.24)**: `_validate_attach_target` enforces
+   `commonpath(base, target) == base` and `commonpath(base_real, target_real) == base_real`,
+   rejecting relative path traversal, absolute paths, drive letters, and symlink escapes with
+   an `ERROR` frame (`code="bad_attach"`).
+6. **Multimodal & Code Inspection**: Image attachments (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`
+   under 10MB) are dispatched to Claude SDK as base64 image blocks; code and text files instruct
+   Claude to inspect the workspace file directly.
+7. **Aggressive Guest Deletion & Text Inlining**:
+   - Files deleted on the guest that were unmodified on the bridge (`b.same_content(a)`) are now
+     aggressively deleted on the bridge filesystem and tombstoned (`Act.TOMBSTONE`), avoiding persistent
+     ghost files on the bridge and preventing recurring `Act.REPORT` spam in `agent_notices`.
+     If the agent/bridge edited the file while the guest deleted it, it remains `Act.REPORT` to prevent
+     silent data loss.
+   - Text and code attachments (<= 256 KB) have their contents inlined into the Claude prompt block
+     immediately upon user turn submission, with missing files pulled via a pre-turn sync pass.
+     Client-rendered `[Attached: ...]` UI tags in the message body are automatically stripped to
+     prevent duplication. Empty files are annotated with `(empty file)`.
+8. **Pre-conversation Work Directory Setting**:
+   - Setting a work directory before a conversation has started (e.g. from the dropdown or menu on a
+     fresh session where `conv_id` is not yet assigned) is now allowed. Previously, `_on_setwork`
+     refused with "Send a message first".
+   - Now, the directory proposal is adopted, mirrored on the bridge (`guest.work_dir` and `guest.work_guest`),
+     and confirmed to the client via `OPTION (kind="work")` so the toolbar updates from `<unset>`.
+   - The idle pre-spawned session is reset so that when the initial turn runs, Claude is initialized
+     with `cwd=local` and `guest_root=path`, and the folder association is committed to `self.conv`
+     when the session ID is received.
+9. **Unattaching via Tag Deletion & Manual Tag Editing (`win/app/input.cpp`)**:
+   - `rc_input::do_send` now synchronizes `staged_attach` with the compose box: if the user deletes the
+     `[Attached: <path>]` tag (or clears the box), `staged_attach` is cleared, un-attaching the file.
+   - Editing the tag or typing `[Attached: <path>]` manually updates `staged_attach` with normalized forward slashes.
+   - `rc_input::send_text` only attaches `keys[0] = "attach"` when `[Attached: %s]` is actually present in the text
+     being sent, preventing staged attachments from accidentally leaking into Commands menu prompts.
+10. **Pre-Command Sync Flush & Guest Status Display (`bridge/server.py`, `bridge/wire/protocol.py`, `win/app/main.cpp`)**:
+    - Addressed the issue where the agent edits a file and immediately attempts to compile or run it on the
+      guest while sync has not finished or was coalesced.
+    - `run_on_guest` (`mcp__machine__exec`) now invokes `ensure_sync_flush(guest)` before dispatching commands.
+    - `ensure_sync_flush` displays a transient `"waiting for sync..."` status on the guest via `STATUS` wire frame,
+      awaits `run_sync(why, wait=True)` so that any in-flight pass finishes and a fresh pass transfers all local host
+      edits to the guest disk, and then clears the status override via `STATUS text=""`.
+    - The guest application handles `STATUS` in `g_dispatch`, displaying `"waiting for sync... <N>s"` in both
+      the status bar (pane 2) and the active transcript spinner until completion.
+    - Read-only tools (`mcp__machine__sync_status`) and state resolvers (`mcp__machine__sync_resolve`) do not trigger
+      sync flushes, keeping them cheap and non-blocking.
+

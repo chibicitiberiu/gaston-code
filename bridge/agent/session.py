@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass
 
 from claude_agent_sdk import (
@@ -233,7 +233,7 @@ class Session:
             return 0
         return int(pct + 0.5) if pct <= 100 else 100
 
-    async def send(self, prompt: str) -> Turn:
+    async def send(self, prompt: str | AsyncIterable[dict]) -> Turn:
         """Send one user turn and consume events until the turn ends."""
         if not self._client:
             raise RuntimeError("session not started")

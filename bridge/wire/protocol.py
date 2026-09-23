@@ -376,6 +376,10 @@ def notice(kind: str, text: str) -> Frame:
     return Frame("NOTICE", {"kind": kind}, fold.encode(text))
 
 
+def status_frame(text: str = "") -> Frame:
+    return Frame("STATUS", {"text": text})
+
+
 # --- turns ----------------------------------------------------------------
 
 

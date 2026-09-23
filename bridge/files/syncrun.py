@@ -639,7 +639,7 @@ class Pass:
             return              # a first sync has nothing to regress from
         reverted = [d for d in decisions if d.reason == S.REVERTED_PUSH]
         regressive = reverted + [d for d in decisions
-                                 if d.reason == S.GONE_ON_GUEST]
+                                 if d.reason in (S.GONE_ON_GUEST, "deleted on the guest")]
         if (len(regressive) < self.REVERT_FLOOR
                 or len(regressive) < tracked * self.REVERT_SHARE):
             return
@@ -937,6 +937,15 @@ class Pass:
                 old = self.base.rows.pop(dec.key, None)
                 if old is not None:
                     self.base.tombs[dec.key] = S.Tomb(cls=old.cls, crc=old.crc)
+                target = os.path.join(self.root, dec.display or (b.display if b else dec.key))
+                if os.path.lexists(target):
+                    try:
+                        if os.path.isdir(target) and not os.path.islink(target):
+                            os.rmdir(target)
+                        else:
+                            os.remove(target)
+                    except OSError as exc:
+                        log.warning("could not remove tombstoned %s: %s", target, exc)
             elif dec.act is S.Act.CLEAR_TOMBSTONE:
                 self.base.tombs.pop(dec.key, None)
                 self.base.rows[dec.key] = g or b

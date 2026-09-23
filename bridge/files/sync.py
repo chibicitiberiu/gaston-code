@@ -565,10 +565,15 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             out.append(Decision(key, Act.TOMBSTONE, "deleted on both sides"))
             continue
         if not g:
-            # The user deleted it and the bridge still holds it. NO TOMBSTONE:
-            # one here would make crc(B) == T.crc read as "untouched", quietly
-            # freezing a live file the agent keeps editing.
-            out.append(Decision(key, Act.REPORT, GONE_ON_GUEST))
+            # The user deleted it and the bridge still holds it.
+            # If the bridge hasn't touched it since the baseline (b.same_content(a)),
+            # delete it aggressively on the bridge and tombstone it so it doesn't resurrect.
+            # If the bridge DID edit it, doing anything loses data, so report.
+            if b and a and b.same_content(a):
+                out.append(Decision(key, Act.TOMBSTONE, "deleted on the guest",
+                                    display=b.display))
+            else:
+                out.append(Decision(key, Act.REPORT, GONE_ON_GUEST))
             continue
         if not b:
             same = g.same_content(a)
