@@ -99,37 +99,11 @@ from .services.permission import PermissionService
 from .services.sync import SyncService
 from .services.attachment import AttachmentService
 from .services.session import SessionService
+from .services.turn_runner import TurnRunner, turn_verdict
 
 log = logging.getLogger("bridge.server")
 
 DEFAULT_PORT = 7890
-
-
-def turn_verdict(ok: bool, degraded: str, produced: bool,
-                 subtype: str) -> tuple[bool, str]:
-    """What the status bar should say when a turn ends.
-
-    The SDK's own verdict, unless it told us something during the turn that
-    contradicts it AND the turn has nothing to show for itself. Both halves
-    are needed, and the second was learned the hard way on the real machine.
-
-    A rate-limited turn can come back `ok=True` having produced nothing, and
-    reporting that as a success puts "done" in the status bar directly beneath
-    a notice saying the request may not have run. But the SAME event arrives on
-    a turn the SDK then RETRIES AND COMPLETES -- measured on the guest: the
-    notice appeared, the command ran, the answer rendered, and the status bar
-    still said "failed". That is the same contradiction wearing the opposite
-    sign, and it is the worse of the two: a user who reads "failed" under a
-    full, correct answer learns to disbelieve the status bar, and then the one
-    time it is right they will not believe it either.
-
-    `produced` comes only from the SDK's own callbacks, so a notice the BRIDGE
-    wrote -- the sync preamble, the rate-limit warning itself -- does not count
-    as the model having answered.
-    """
-    failed_silently = bool(degraded) and not produced
-    return (ok and not failed_silently,
-            degraded if failed_silently else subtype)
 
 
 class GuestState(Enum):
@@ -644,6 +618,19 @@ class Bridge:
             guest_exec=self.guest_exec,
             conv=self.conv,
             spawn=self._spawn,
+        )
+        self.turn_runner = TurnRunner(
+            config=self.config,
+            connection=self,
+            presentation=self.presentation,
+            attachment=self.attachment,
+            sync=self.sync,
+            guest_exec=self.guest_exec,
+            permission=self.permissions,
+            options=self.options,
+            workspace=self.workspace,
+            session=self.session,
+            conv=self.conv,
         )
 
         # One guest, one session. See PLAN.md "Multi-session".
@@ -1701,272 +1688,36 @@ class Bridge:
     }
 
     def _seed_agent_notices(self) -> None:
-        """Fold whatever the baseline still owes the agent into memory.
-
-        `synccoord.agent_notices` is a Bridge-lifetime cache of
-        `base.pending_notice_agent` (02.20): the durable queue is the source
-        of truth, and this is what makes a bridge that just restarted catch
-        up on a notice a PREVIOUS process wrote and delivered to the user's
-        screen, but never got to hand to the model before it stopped. Called
-        at every attach rather than once at startup, so it also catches a
-        notice written by a pass that ran while nothing was connected --
-        merged, not replaced, so it cannot drop one already waiting in
-        memory for a turn that has not started yet.
-        """
-        try:
-            base = self._load_baseline()
-        except Exception:
-            return
-        for text in base.pending_notice_agent:
-            if text not in self.synccoord.agent_notices:
-                self.synccoord.agent_notices.append(text)
+        self.turn_runner.seed_agent_notices()
 
     async def _with_sync_preamble(self, text: str) -> str:
-        """Prepend anything sync needs the agent to know, and mark it delivered.
-
-        Marked delivered when it is handed to the model, not when the model
-        acts on it -- there is no signal for the latter, and re-sending on every
-        turn until the agent happens to mention it would bury the next one.
-
-        The in-memory queue is cleared first, synchronously, so a notice
-        raised while the durable clear below is in flight is not lost (the
-        same reason `notices_delivered` clears by value rather than by
-        emptying the list). The disk clear is best-effort: a crash in the
-        narrow window between the model seeing these lines and the save below
-        means they are handed over once more after a restart, which is the
-        safe direction to err -- see 02.20.
-        """
-        if not self.sync_dir or not self.synccoord.agent_notices:
-            return text
-        pending, self.synccoord.agent_notices = self.synccoord.agent_notices, []
-        lines = ["[Automatic message from the file synchronisation layer, not "
-                 "from the user.]", ""]
-        lines.extend(pending)
-        lines.append("")
-        lines.append(
-            "Deal with this before continuing with whatever was asked. A "
-            "conflicted path REFUSES your writes until you call "
-            "mcp__machine__sync_resolve on it, so writing to it again is not "
-            "something you can do -- read the preserved copy and the ancestor "
-            "beside it, work out the merge, and ask the user whether they have "
-            "finished with the file. They approve that call on their own "
-            "screen, which is how they tell you they are done.")
-        lines.append("")
-        lines.append("--- the user's message follows ---")
-        lines.append("")
-        await self._clear_agent_notices(pending)
-        return "\n".join(lines) + text
+        return await self.turn_runner.with_sync_preamble(text)
 
     async def _clear_agent_notices(self, delivered: list) -> None:
-        """Durable half of `_with_sync_preamble` -- see there and 02.20."""
-        if not delivered or not self.sync_dir:
-            return
-        async with self._baseline_lock():
-            try:
-                base = self._load_baseline()
-            except Exception:
-                return
-            gone = list(delivered)
-            keep = []
-            for t in base.pending_notice_agent:
-                if t in gone:
-                    gone.remove(t)
-                else:
-                    keep.append(t)
-            base.pending_notice_agent = keep
-            try:
-                base.save(self._base_path())
-            except Exception as exc:      # pragma: no cover - disk failure
-                log.warning("could not record delivered agent notices: %s",
-                           exc)
+        await self.turn_runner.clear_agent_notices(delivered)
 
     async def _resume_turn(self, guest: GuestSession, answered) -> None:
-        """Continue: wait for the wire to be ours, THEN unlatch, THEN explain.
-
-        Never unlatch before the lock. A turn already running has not been told
-        about this conflict -- that is why the latch exists -- and lifting the
-        refusal while it runs is exactly the loss the latch was added to stop.
-        """
-        async with guest.turn_lock:
-            freed = await self._release_all_latches(only=answered)
-            if freed:
-                log.info("sync: released %d latched path(s) on Continue", freed)
-            await self._run_turn_locked(
-                guest,
-                "Resolve the sync conflict, then continue with what you "
-                "were doing.", echo=False)
+        await self.turn_runner.resume_turn(guest, answered)
 
     async def _run_turn(self, guest: GuestSession, text: str,
                         *, echo: bool = True,
                         attach: str | None = None,
                         attach_id: str | None = None,
                         attach_name: str | None = None) -> None:
-        # The first message is what starts the process -- for a chat opened
-        # from the list AND for one started with New chat, neither of which
-        # spawns anything by itself. Before the lock, because building it is
-        # slow and holding the turn lock across a subprocess start would make
-        # a second message queue behind a client that does not exist yet.
-        #
-        # Unconditional now. It used to run only when `pending_resume` was
-        # set, so once New chat stopped spawning eagerly the first message
-        # into a new conversation would have fallen through to the `return`
-        # below and vanished without a word.
-        if not guest.claude:
-            if not await self._resume_pending(guest):
-                return
-        if not guest.claude:
-            return
-        # QUEUED, not rejected. The user pressed Continue, or typed something;
-        # dropping either on the floor is the one thing worse than running it
-        # late. The wait is bounded by the turn ahead of it finishing.
-        async with guest.turn_lock:
-            await self._run_turn_locked(guest, text, echo=echo, attach=attach,
-                                        attach_id=attach_id, attach_name=attach_name)
+        await self.turn_runner.run_turn(
+            guest, text, echo=echo, attach=attach,
+            attach_id=attach_id, attach_name=attach_name,
+        )
 
     async def _run_turn_locked(self, guest: GuestSession, text: str,
                                *, echo: bool = True,
                                attach: str | None = None,
                                attach_id: str | None = None,
                                attach_name: str | None = None) -> None:
-        if not guest.claude:
-            return
-        display_names = self.attachment.parse_display_names(attach, attach_name)
-        display_text = self.attachment.format_display_text(text, display_names)
-        # User turns are the landmarks a reader navigates by.
-        anchor = guest.pages.mark_user_turn(display_text)
-        # The guest echoed this line itself the moment Send was pressed, so it
-        # is recorded but not streamed. USER_BLOCK is shared with the guest so
-        # the two renderings are the same string, not merely similar.
-        #
-        # `echo=False` for a turn the bridge started on the user's behalf --
-        # pressing Continue on a halt. Rendering it as though they had typed
-        # "Resolve the sync conflict" would put words in their mouth in a
-        # transcript they can scroll back through later.
-        if echo:
-            await self._write_block(guest, H.user_turn(display_text), stream=False)
-        await self._send(guest, anchor_frame(
-            anchor.page, anchor.offset, anchor.preview))
-        # Cleared at the START of a turn, not only at its end.
-        #
-        # `turn_degraded` used to be cleared only after a verdict was taken,
-        # so a turn whose `send()` RAISED returned early (see the except
-        # below) and left the event name set -- and the NEXT turn, which had
-        # nothing to do with it, was judged against it.
-        guest.turn_produced = False
-        guest.turn_degraded = ""
-        await self._send(guest, turn_start())
-        # Captured BEFORE _with_sync_preamble rewrites `text`: the preamble is
-        # prepended, so the leading "/" this is testing for would no longer be
-        # leading by the time the turn ends.
-        was_command = text.lstrip().startswith("/")
-        # Anything sync found while the agent was idle rides in on this turn.
-        #
-        # `_run_turn` is the only path into a session, and it fires only on
-        # INPUT. A conflict found by the timer between turns therefore reaches
-        # the USER's screen -- which is right, they are the one who can act on
-        # it -- and reaches the agent nowhere at all. So it would never read
-        # the preserved copy, never merge, and never call sync_resolve, and the
-        # path would stay latched for the rest of the session with the agent
-        # quietly unable to write to it and no idea why.
-        #
-        # NOT ONTO A SLASH COMMAND, and that is 02.7. The preamble is
-        # PREPENDED, so `/compact` arrives at the CLI as twenty lines of
-        # prose with `/compact` on the end -- which is not a slash command at
-        # all. The context was not compacted, nothing said so, and the
-        # "finished without sending anything back" notice below did not fire
-        # either, because the model had dutifully answered the preamble. The
-        # comment above already noticed this ordering for the VERDICT and
-        # fixed that; nothing protected the command itself.
-        #
-        # HELD rather than sent separately: the queue is drained only when it
-        # is delivered, so leaving it alone here costs one turn of delay and
-        # matches the "say it once, on the next turn" discipline the notices
-        # already follow. A command turn is also the one turn where the user
-        # is not asking the model to do anything with files.
-        if not was_command:
-            text = await self._with_sync_preamble(text)
-        prompt_payload: str | AsyncIterable[dict] = text
-        if (attach or attach_id) and not was_command:
-            prompt_payload = await self.attachment.assemble_prompt(
-                guest, text, attach=attach, attach_id=attach_id, attach_name=attach_name
-            )
-        try:
-            turn = await guest.claude.send(prompt_payload)
-
-        except Exception as exc:
-            log.exception("turn failed")
-            await self._flush_text(guest)
-            await self._send(guest, turn_error(str(exc)))
-            return
-        await self._flush_text(guest)
-        # Register here, not at start(): the SDK assigns the session id when
-        # the first query goes out, so at start() there is nothing to record
-        # and the conversation would never appear in the chat list.
-        #
-        # GUARDED the way the `context_usage()` call eleven lines below
-        # already is, and for the same reason: `guest.claude` can be None by
-        # the time a turn comes back. The turn lock now stops the session
-        # being swapped mid-turn (02.1), but this line is inside a coroutine
-        # that can be resumed after an interrupt, and the tell that the guard
-        # belongs here was that its neighbour has always had one.
-        if guest.claude:
-            self.conv.add(guest.claude.session_id)
-        # Seal only at a message boundary, so a turn is never split
-        # mid-sentence while the reader is watching it stream.
-        sealed = guest.pages.message_boundary()
-        if sealed:
-            await self._send(guest, pagesealed(sealed.number,
-                                               guest.pages.count))
-        raw, comp = guest.zip_out.stats
-        if comp:
-            log.info("deflate so far: %d -> %d bytes (%.2f:1)",
-                     raw, comp, guest.zip_out.ratio)
-        # The SDK's own verdict, unless it told us something during the turn
-        # that contradicts it -- AND the turn has nothing to show for itself.
-        #
-        # Both halves are needed and the second was learned the hard way. A
-        # rate-limited turn can come back ok=True having produced nothing, and
-        # reporting that as a success puts "done" in the status bar directly
-        # beneath a notice saying the request may not have run. But the SAME
-        # event also arrives on a turn the SDK then RETRIES AND COMPLETES --
-        # measured on the guest: the notice appeared, the tool ran, the answer
-        # rendered, and the status bar still said "failed". That is the same
-        # contradiction wearing the opposite sign, and it is worse, because a
-        # user who sees a full answer under the word "failed" learns to
-        # disbelieve the status bar.
-        #
-        # `turn_produced` is set only from the SDK's own callbacks, so a notice
-        # the bridge wrote does not count as the model having answered.
-        degraded = guest.turn_degraded
-        guest.turn_degraded = ""
-        ok, subtype = turn_verdict(turn.ok, degraded, guest.turn_produced,
-                                   turn.subtype)
-        # A slash command that answered nothing.
-        #
-        # The CLI resolves some commands entirely locally and sends no message
-        # back at all. Measured on the guest: /recap and /usage each cost a
-        # turn and left the transcript blank, and a /compact that declines
-        # looks exactly like one that ran. Those two are off the Commands menu
-        # now (COMMAND_MENU), but a command can also be TYPED, and the install
-        # decides which ones exist -- so the silence is worth naming wherever
-        # it happens. "Nothing happened" and "it worked" must not look alike.
-        if ok and was_command and not guest.turn_produced:
-            await self._write_block(guest, H.notice(
-                "That command finished without sending anything back. Some "
-                "commands only affect the session itself."))
-        # How full the context window is, asked at the one moment it has
-        # just changed and the guest is already listening. A live control
-        # request, NOT ResultMessage.model_usage -- that is cumulative over
-        # the turn and would read past 100% on any multi-tool turn. See
-        # Session.context_usage.
-        ctx_pct = await guest.claude.context_usage() if guest.claude else None
-        await self._send(guest, turn_end(ok, subtype,
-                                         turn.cost_usd, turn.duration_ms,
-                                         ctx_pct))
-        # The folder is NOT committed here. It is committed at the first tool
-        # call (_ensure_work_dir), which is the first moment anything needs
-        # one -- a conversation that is only being talked to shares no files
-        # at all, and a turn that ran no tool has nothing to have shared.
+        await self.turn_runner.run_turn_locked(
+            guest, text, echo=echo, attach=attach,
+            attach_id=attach_id, attach_name=attach_name,
+        )
 
     # --- running commands on the guest -------------------------------------
 

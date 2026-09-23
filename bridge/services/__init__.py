@@ -20,6 +20,7 @@ from bridge.services.permission import PermissionService
 from bridge.services.presentation import PresentationService
 from bridge.services.session import SessionService
 from bridge.services.sync import SyncService
+from bridge.services.turn_runner import TurnRunner, turn_verdict
 from bridge.services.workspace import WorkspaceService
 
 __all__ = [
@@ -32,7 +33,9 @@ __all__ = [
     "PresentationService",
     "SessionService",
     "SyncService",
+    "TurnRunner",
     "WorkspaceService",
+    "turn_verdict",
     "COMMAND_MENU",
     "EFFORT_LABEL",
     "EFFORT_ORDER",
