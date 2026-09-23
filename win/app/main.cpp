@@ -40,27 +40,8 @@
 #include "app/workdlg.h"
 #include "app/pillbar.h"
 #include "app/screenshot.h"
+#include "app/statusbar.h"
 #include "net/caps.h"
-
-/* SBARS_TOOLTIPS, which this build's headers do not define.
- *
- * commctrl.h gates it behind `_WIN32_IE >= 0x0500` and win/Makefile pins
- * 0x0400 on purpose, so the constant is simply absent and the style could
- * never be set -- which is why SB_SETTIPTEXT has been accepted and discarded
- * for as long as it has been called.
- *
- * Defining it here is safe in a way BTNS_WHOLEDROPDOWN was not, and the
- * difference is worth stating because the same question comes up every time.
- * That one changes how a button DISPATCHES, so a comctl32 that does not know
- * it leaves clicks going somewhere else. This is a window style bit on a
- * status bar: a control that does not recognise it ignores it, and the
- * degradation is "no tooltips", which is exactly where we are now. IE5 is
- * what this guest runs; an IE4 machine loses a tooltip and nothing else. */
-#ifndef SBARS_TOOLTIPS
-#define SBARS_TOOLTIPS 0x0800L
-#endif
-
-#define ID_STATUS     1005
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
  * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, ID_LIVE/FIRST/PREV/NEXT/
  * LAST/PAGELBL in app/pagebar.h, and ID_INPUT/ID_SEND/ID_STOP in
@@ -141,7 +122,8 @@ static rc_pagebar *g_pagebar;
  * zeroes that queue too. Announcing after PAGEEND is the one point that is
  * past both. */
 static int      g_announce_connected;
-static HWND  g_main, g_status;
+static HWND          g_main;
+static rc_statusbar *g_status;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
@@ -183,10 +165,8 @@ static HWND  g_main, g_status;
  * to be waiting on, and saying "thinking" while text is visibly streaming is
  * just wrong -- that distinction is the whole reason this needs three states
  * and not two. */
-typedef enum { TURN_IDLE, TURN_THINKING, TURN_STREAMING } rc_turn_state;
 static rc_turn_state g_turn_state = TURN_IDLE;
 static DWORD g_turn_start_ms = 0;
-static char g_status_override[128] = "";
 
 static void think_show(void);
 static void turn_done(void);
@@ -232,17 +212,7 @@ static char  g_exe_dir[MAX_PATH];
  * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
  * other way to reach it. */
 static HINSTANCE g_inst;
-/* The status bar's connection light. Loaded once; resource icons are owned
- * by the module and must not be DestroyIcon'd. */
-static HICON g_ico_ok, g_ico_warn, g_ico_bad;
-/* Which one is showing, so the icon is only swapped when it changes --
- * status_refresh runs every second and SB_SETICON repaints. */
-static HICON g_ico_shown;
-/* The context gauge: nine frames, and the last percentage the bridge sent.
- * -1 means "never told", which is drawn as nothing at all rather than as an
- * empty context -- the two are different and only one of them is news. */
-static HICON g_ico_pie[RC_PIE_STEPS + 1];
-static int   g_ctx_pct = -1;
+
 
 /* ------------------------------------------------------------------ utils */
 
@@ -257,115 +227,14 @@ static void exe_dir(char *out, unsigned n)
     out[n - 1] = '\0';
 }
 
-static void status_set(int pane, const char *text)
-{
-    if (g_status) SendMessageA(g_status, SB_SETTEXTA, (WPARAM)pane, (LPARAM)text);
-}
+#define status_set(pane, text) do { if (g_status) g_status->set_pane(pane, text); } while (0)
 
 static void status_refresh(void)
 {
-    char buf[128];
-
-    /* The state is the ICON now, not a word. "connected 10.0.2.2:7890" spent
-     * a third of a 220px pane spelling out what a green light says at a
-     * glance, and the address -- the part you actually need when it is
-     * wrong -- was what got squeezed.
-     *
-     * The full sentence moves to the tooltip. If Win98's status bar declines
-     * to show it, nothing is lost that the icon and the address do not
-     * already carry; that is why the wording does not depend on it. */
-    {
-        HICON want = (g_net.state == RC_CONNECTED) ? g_ico_ok
-                   : (g_net.state == RC_CONNECTING) ? g_ico_warn
-                   : g_ico_bad;
-        if (want && want != g_ico_shown) {
-            SendMessageA(g_status, SB_SETICON, 0, (LPARAM)want);
-            g_ico_shown = want;
-        }
-    }
-    rc_strf(buf, sizeof(buf), " %s:%d", g_cfg.host, g_cfg.port);
-    status_set(0, buf);
-
-    /* The context gauge. Silent until the bridge has said something: an
-     * empty pie would claim the context is empty, which is a different
-     * statement from not knowing. */
-    if (g_ctx_pct < 0)
-        SendMessageA(g_status, SB_SETTIPTEXTA, 3,
-                     (LPARAM)"How full the conversation's context window is "
-                             "-- known once a request has finished");
-    if (g_ctx_pct >= 0) {
-        int step = (g_ctx_pct * RC_PIE_STEPS + 50) / 100;
-        if (step < 0) step = 0;
-        if (step > RC_PIE_STEPS) step = RC_PIE_STEPS;
-        if (g_ico_pie[step])
-            SendMessageA(g_status, SB_SETICON, 3, (LPARAM)g_ico_pie[step]);
-        rc_strf(buf, sizeof(buf), " %d%%", g_ctx_pct);
-        status_set(3, buf);
-        {
-            char tip[96];
-            rc_strf(tip, sizeof(tip),
-                    "Context window %d%% full", g_ctx_pct);
-            SendMessageA(g_status, SB_SETTIPTEXTA, 3, (LPARAM)tip);
-        }
-    }
-    {
-        char tip[160];
-        rc_strf(tip, sizeof(tip),
-                "%s  -  %s:%d.  Double-click to change the server.",
-                rc_state_name(g_net.state), g_cfg.host, g_cfg.port);
-        SendMessageA(g_status, SB_SETTIPTEXTA, 0, (LPARAM)tip);
-    }
-    /* app/xferstat.cpp owns the rx/tx counters and this pane's formatting,
-     * including the "nothing for 1200ms" reset -- see app/xferstat.h. */
-    if (g_xfer) g_xfer->text(buf, sizeof(buf));
-    else        buf[0] = '\0';
-    status_set(1, buf);
-    /* All four panes carry one, not two of them. A status bar pane is a few
-     * characters wide and says things like "rx 12k @ 4k/s" and "done 73s
-     * $0.12"; the tooltip is where the sentence goes. */
-    SendMessageA(g_status, SB_SETTIPTEXTA, 1,
-                 (LPARAM)"Bytes moving between this machine and the bridge, "
-                         "and how fast");
-    SendMessageA(g_status, SB_SETTIPTEXTA, 2,
-                 (LPARAM)"What the current request is doing, how long it has "
-                         "taken and what it cost");
-
-    /* Tick the elapsed seconds while a turn is in flight. A counter that moves
-     * is the difference between "working" and "hung", and it costs one
-     * SB_SETTEXT a second rather than touching the transcript. */
-    if (g_turn_active && g_turn_start_ms) {
-        /* "receiving..." while a permission bar is up is false: nothing is
-         * arriving, the bridge is blocked on a person. Measured on the guest
-         * -- the pane counted "receiving... 3s / 8s / 56s" while the prompt
-         * sat there, and most of that was somebody deciding. The elapsed
-         * number has the same problem and is left alone for now: it is the
-         * turn's wall time, which is what "has this hung?" wants. */
-        const char *what = (g_bar && g_bar->active()) ? "waiting for you..."
-                         : (g_status_override[0]) ? g_status_override
-                         : g_turn_state == TURN_STREAMING
-                               ? "receiving..." : "Claude is thinking...";
-        unsigned long secs =
-            (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000);
-        rc_strf(buf, sizeof(buf), " %s %lus", what, secs);
-        status_set(2, buf);
-
-        /* And the same thing at the bottom of the transcript, which is where
-         * the eye already is. The status bar is 400 pixels away from the
-         * text you are reading; a line under the last paragraph is not.
-         *
-         * The spinner is a real file beside the document because IE5
-         * animates GIFs but has no data: URI support. If it is missing the
-         * <img> renders as nothing and the line still reads correctly --
-         * which is why the wording never depends on it. */
-        if (g_html) {
-            char row[256];
-            rc_strf(row, sizeof(row),
-                    "<div class=\"" RC_CSS_STATUS "\">"
-                    "<img src=\"spin.gif\" width=\"16\" height=\"16\" alt=\"\">"
-                    "%s %lus</div>", what, secs);
-            g_html->status(row);
-        }
-    }
+    if (g_status)
+        g_status->refresh(g_net.state, g_cfg.host, g_cfg.port, g_xfer,
+                          g_turn_active, g_turn_start_ms, (int)g_turn_state,
+                          g_bar && g_bar->active(), g_html);
 }
 
 /* Free physical memory, as the system sees it.
@@ -786,9 +655,9 @@ static void on_turn(rc_frame *f)
                  * omits it when the reading was unavailable, and drawing an
                  * empty pie then would be a confident wrong answer. */
                 const char *cp = rc_frame_get(f, "ctx_pct");
-                if (cp && *cp) {
+                if (cp && *cp && g_status) {
                     int pct = atoi(cp);
-                    if (pct >= 0 && pct <= 100) g_ctx_pct = pct;
+                    if (pct >= 0 && pct <= 100) g_status->set_ctx_pct(pct);
                 }
             }
             v = rc_frame_get(f, "cost_usd");
@@ -1036,13 +905,8 @@ static void on_notice(rc_frame *f)
 static void on_status(rc_frame *f)
 {
     const char *text = rc_frame_get(f, "text");
-    if (text && *text) {
-        rc_strf(g_status_override, sizeof(g_status_override), "%s", text);
-    } else if (f->body && *f->body) {
-        rc_strf(g_status_override, sizeof(g_status_override), "%s", f->body);
-    } else {
-        g_status_override[0] = '\0';
-    }
+    if (!text || !*text) text = f->body;
+    if (g_status) g_status->set_override(text);
     status_refresh();
 }
 
@@ -1182,7 +1046,7 @@ static void turn_receiving(void)
 static void turn_done(void)
 {
     g_turn_state = TURN_IDLE;
-    g_status_override[0] = '\0';
+    if (g_status) g_status->clear_override();
     SetWindowTextA(g_main, RC_TITLE);
     /* The status line is a statement about right now, so it goes when "right
      * now" stops being true. Leaving "receiving... 41s" under a finished
@@ -1207,13 +1071,11 @@ static void layout(HWND hwnd)
 {
     RECT rc;
     int sb_h = 0, y, ybar, w, h;
-    RECT srect;
 
     GetClientRect(hwnd, &rc);
     if (g_status) {
-        SendMessageA(g_status, WM_SIZE, 0, 0);
-        GetWindowRect(g_status, &srect);
-        sb_h = srect.bottom - srect.top;
+        g_status->resize();
+        sb_h = g_status->height();
     }
 
     w = rc.right - rc.left;
@@ -1291,7 +1153,6 @@ static void check_child(const char *what, HWND h)
 
 static void create_children(HWND hwnd, HINSTANCE inst)
 {
-    int parts[4];
     NONCLIENTMETRICSA ncm;
 
     /* The menu bar FIRST, because the toolbar below borrows the Model and
@@ -1440,24 +1301,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     if (!g_cache) rc_log("cache: not created; history will not survive a "
                          "disconnection");
 
-    /* SBARS_TOOLTIPS is NOT optional decoration here, it is what makes
-     * SB_SETTIPTEXT do anything at all. Without it the control never creates
-     * the tooltip window, every SB_SETTIPTEXT is accepted and discarded, and
-     * the panes that were given tooltip text have been silently showing none
-     * since they were written. */
-    g_status = CreateWindowExA(0, STATUSCLASSNAMEA, "",
-        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP | SBARS_TOOLTIPS,
-        0, 0, 0, 0, hwnd, (HMENU)ID_STATUS, inst, NULL);
-    check_child("status", g_status);
-    /* Four parts: connection, transfer, turn, context.
-     *
-     * The widths were 220/340/-1 and are re-picked rather than nudged --
-     * dropping the word "connected" for an icon freed most of pane 0, and
-     * the turn pane is the one that actually needs room ("waiting for
-     * you... 127s"). The last part keeps ~72px, enough for a 16px gauge and
-     * "100%", and SBARS_SIZEGRIP eats about 16 of the window's right edge. */
-    parts[0] = 150; parts[1] = 300; parts[2] = 560; parts[3] = -1;
-    SendMessageA(g_status, SB_SETPARTS, 4, (LPARAM)parts);
+    g_status = rc_statusbar::create(hwnd, inst);
+    check_child("status", g_status ? g_status->hwnd() : NULL);
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
@@ -1680,13 +1525,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lp;
         if (g_toolbar && g_toolbar->notify(nh)) return 0;
-        if (nh && nh->hwndFrom == g_status && nh->code == NM_DBLCLK) {
-            NMMOUSE *nm = (NMMOUSE *)lp;
-            if (nm->dwItemSpec == 0) {
-                SendMessageA(hwnd, WM_COMMAND, IDM_HOST, 0);
-                return 0;
-            }
-        }
+        if (g_status && g_status->notify(nh, hwnd)) return 0;
         break;
     }
 
@@ -2135,6 +1974,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_optmenu = NULL;
         delete g_pagebar;
         g_pagebar = NULL;
+        delete g_status;
+        g_status = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
         if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
@@ -2312,27 +2153,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     rc_log("main window hwnd=%p", (void *)g_main);
     log_mem("window created");
 
-    {
-        /* SM_CXSMICON, not a literal 16: it is 16 on this guest and it is the
-         * metric the status bar actually asks for. */
-        int sw = GetSystemMetrics(SM_CXSMICON);
-        int sh = GetSystemMetrics(SM_CYSMICON);
-        g_ico_ok   = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_NET_OK),
-                                       IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
-        g_ico_warn = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_NET_WARN),
-                                       IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
-        g_ico_bad  = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_NET_BAD),
-                                       IMAGE_ICON, sw, sh, LR_DEFAULTCOLOR);
-        if (!g_ico_ok || !g_ico_warn || !g_ico_bad)
-            rc_log("status: connection icons failed to load");
-        {
-            int i;
-            for (i = 0; i <= RC_PIE_STEPS; i++)
-                g_ico_pie[i] = (HICON)LoadImageA(
-                    inst, MAKEINTRESOURCE(IDI_PIE0 + i), IMAGE_ICON,
-                    sw, sh, LR_DEFAULTCOLOR);
-        }
-    }
+
 
     g_accel = LoadAcceleratorsA(inst, MAKEINTRESOURCE(IDA_MAIN));
     if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
