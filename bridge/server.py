@@ -97,6 +97,7 @@ from .services.workspace import WorkspaceService
 from .services.presentation import PresentationService
 from .services.guest_exec import ExecCall, GuestExecService
 from .services.permission import PermissionService
+from .services.sync import SyncService
 
 log = logging.getLogger("bridge.server")
 
@@ -564,6 +565,7 @@ class GuestSession:
 
 class Bridge:
     HELLO_TIMEOUT: float = 10.0
+    STRAY_SCAN_BUDGET: int = SyncService.STRAY_SCAN_BUDGET
 
     def __init__(
         self,
@@ -621,6 +623,13 @@ class Bridge:
             workspace=self.workspace,
             spawn=self._spawn,
         )
+        self.sync = SyncService(
+            config=self.config,
+            connection=self,
+            workspace=self.workspace,
+            presentation=self.presentation,
+            spawn=self._spawn,
+        )
 
         # One guest, one session. See PLAN.md "Multi-session".
         self._guest: GuestSession | None = None
@@ -649,109 +658,153 @@ class Bridge:
         #: attach is still there afterwards. See the property below.
         self._preattach_synccoord = SyncCoordinator()
 
+    def _ensure_config(self) -> BridgeConfig:
+        if not hasattr(self, "config"):
+            self.config = BridgeConfig(secret="")
+        return self.config
+
+    def _ensure_sync(self) -> SyncService:
+        if not hasattr(self, "sync"):
+            cfg = self._ensure_config()
+            conv = getattr(self, "conv", None) or Conversations()
+            self.conv = conv
+            pres = getattr(self, "presentation", None) or PresentationService(connection=self)
+            self.presentation = pres
+            ws = getattr(self, "workspace", None) or WorkspaceService(
+                config=cfg,
+                conv=conv,
+                write_block=pres.write_block,
+                send_options=getattr(self, "_send_options", lambda *a, **kw: None),
+                spawn_sync=lambda reason: None,
+            )
+            self.workspace = ws
+            self.sync = SyncService(
+                config=cfg,
+                connection=self,
+                workspace=ws,
+                presentation=pres,
+                spawn=getattr(self, "_spawn", lambda coro: None),
+            )
+        return self.sync
+
+    @property
+    def conv(self) -> Conversations:
+        c = getattr(self, "_conv", None)
+        if c is None:
+            c = self._conv = Conversations()
+        return c
+
+    @conv.setter
+    def conv(self, val: Conversations) -> None:
+        self._conv = val
+        if hasattr(self, "options") and self.options is not None:
+            self.options.conv = val
+        if hasattr(self, "workspace") and self.workspace is not None:
+            self.workspace.conv = val
+
     @property
     def secret(self) -> str:
-        return self.config.secret
+        return self._ensure_config().secret
 
     @secret.setter
     def secret(self, val: str) -> None:
-        self.config.secret = val
+        self._ensure_config().secret = val
 
     @property
     def host(self) -> str:
-        return self.config.host
+        return self._ensure_config().host
 
     @host.setter
     def host(self, val: str) -> None:
-        self.config.host = val
+        self._ensure_config().host = val
 
     @property
     def port(self) -> int:
-        return self.config.port
+        return self._ensure_config().port
 
     @port.setter
     def port(self, val: int) -> None:
-        self.config.port = val
+        self._ensure_config().port = val
 
     @property
     def cwd(self) -> str | None:
-        return self.config.cwd
+        return self._ensure_config().cwd
 
     @cwd.setter
     def cwd(self, val: str | None) -> None:
-        self.config.cwd = val
+        self._ensure_config().cwd = val
 
     @property
     def model(self) -> str | None:
-        return self.config.model
+        return self._ensure_config().model
 
     @model.setter
     def model(self, val: str | None) -> None:
-        self.config.model = val
+        self._ensure_config().model = val
 
     @property
     def effort(self) -> str | None:
-        return self.config.effort
+        return self._ensure_config().effort
 
     @effort.setter
     def effort(self, val: str | None) -> None:
-        self.config.effort = val
+        self._ensure_config().effort = val
 
     @property
     def link_bps(self) -> float | None:
-        return self.config.link_bps
+        return self._ensure_config().link_bps
 
     @link_bps.setter
     def link_bps(self, val: float | None) -> None:
-        self.config.link_bps = val
+        self._ensure_config().link_bps = val
 
     @property
     def sync_dir(self) -> str | None:
-        return self.config.sync_dir
+        return self._ensure_config().sync_dir
 
     @sync_dir.setter
     def sync_dir(self, val: str | None) -> None:
-        self.config.sync_dir = val
+        self._ensure_config().sync_dir = val
 
     @property
     def sync_state(self) -> str | None:
-        return self.config.sync_state
+        return self._ensure_config().sync_state
 
     @sync_state.setter
     def sync_state(self, val: str | None) -> None:
-        self.config.sync_state = val
+        self._ensure_config().sync_state = val
 
     @property
     def sync_sweep_s(self) -> float:
-        return self.config.sync_sweep_s
+        return self._ensure_config().sync_sweep_s
 
     @sync_sweep_s.setter
     def sync_sweep_s(self, val: float) -> None:
-        self.config.sync_sweep_s = val
+        self._ensure_config().sync_sweep_s = val
 
     @property
     def idle_timeout_s(self) -> float:
-        return self.config.idle_timeout_s
+        return self._ensure_config().idle_timeout_s
 
     @idle_timeout_s.setter
     def idle_timeout_s(self, val: float) -> None:
-        self.config.idle_timeout_s = val
+        self._ensure_config().idle_timeout_s = val
 
     @property
     def idle_check_s(self) -> float:
-        return self.config.idle_check_s
+        return self._ensure_config().idle_check_s
 
     @idle_check_s.setter
     def idle_check_s(self, val: float) -> None:
-        self.config.idle_check_s = val
+        self._ensure_config().idle_check_s = val
 
     @property
     def perm_grace_s(self) -> float:
-        return self.config.perm_grace_s
+        return self._ensure_config().perm_grace_s
 
     @perm_grace_s.setter
     def perm_grace_s(self, val: float) -> None:
-        self.config.perm_grace_s = val
+        self._ensure_config().perm_grace_s = val
 
     @property
     def _models_cache(self) -> list[dict] | None:
@@ -2461,266 +2514,18 @@ class Bridge:
 
     async def ensure_sync_flush(self, guest: "GuestSession | None" = None,
                                 why: str = "mcp command") -> dict:
-        """Run sync and block until finished, displaying 'waiting for sync...' status on the guest.
-
-        Ensures all local host file edits are pushed to the guest before
-        running an MCP tool (e.g. compiling or inspecting on the machine).
-        """
-        guest = guest or self._guest
-        if guest is None or not guest.connected or not self.sync_dir:
-            return {}
-        if not self._mirror_dir(guest):
-            return {}
-
-        await self._set_status_override(guest, "waiting for sync...")
-        try:
-            return await self.run_sync(why, wait=True, guest=guest)
-        finally:
-            await self._set_status_override(guest, "")
+        return await self.sync.ensure_sync_flush(guest, why=why)
 
     async def _set_status_override(self, guest: "GuestSession", text: str) -> None:
-        try:
-            await self._send(guest, status_frame(text))
-        except Exception as exc:
-            log.debug("could not send status frame: %s", exc)
+        await self.sync.set_status_override(guest, text)
 
     async def run_sync(self, why: str, *, wait: bool = False,
                        guest: "GuestSession | None" = None) -> dict:
-        """One pass, serialised against every other trigger.
-
-        Without the lock two passes would both read the baseline and both
-        advance it, the second carrying a generation the first is about to
-        invalidate.
-
-        THE TRIGGERS, and this comment used to name three that did not exist.
-        For most of Phase 3 there was exactly one caller -- the SYNCDIRTY
-        handler -- so the entire 30-second cadence that the say-it-once
-        machinery (first_report, reported_lines, aborted) is designed around
-        lived in win/rpc.c, on the guest. If the guest's watcher thread died,
-        or the guest was built without one, nothing on this side would ever
-        have noticed:
-
-          * the guest's watcher, via SYNCDIRTY -- still the primary one, and
-            the only one that reacts to an actual change rather than a clock;
-          * ON ATTACH, because a reconnecting guest may have been edited while
-            it was away and nothing reconciled that;
-          * a bridge-side sweep, as the backstop for a guest that has stopped
-            telling us anything.
-        """
-        guest = guest or self._guest
-        if guest is None or not guest.connected or not self.sync_dir:
-            return {}
-        # NOTHING IS MIRRORED UNTIL A CONVERSATION COMMITS TO A FOLDER, so
-        # there is no pass to run. A chat that is only being talked to shares
-        # no files: sharing begins at the first tool call and not before.
-        # Without this a pass would pair this process's whole shared
-        # directory against whatever the guest had open, which is how a
-        # restarted bridge came to push four conversations' folders at one
-        # conversation's tree.
-        if not self._mirror_dir(guest):
-            log.debug("nothing mirrored yet; skipping sync (%s)", why)
-            return {}
-        if not wait and guest.sync_lock.locked():
-            log.debug("sync already running; coalescing (%s)", why)
-            return {}
-
-        async with guest.sync_lock:
-            guest.sync_active = True
-            try:
-                from .files.syncrun import Pass
-                # 02.19: Pass takes the transport and the caps, nothing else
-                # -- not this Bridge, not the whole GuestSession.
-                transport = SyncTransport(guest)
-                # THE CONVERSATION'S FOLDER, not the whole tree.
-                #
-                # One mirror per conversation means both ends narrow, not
-                # one: the guest re-points its sync layer at the folder the
-                # chat works in, and if this side kept offering
-                # `~/gaston-work` against the guest's `C:\Gaston\OK` it would
-                # push every other conversation's files into it.
-                p = Pass(transport, guest.caps, self._mirror_dir(guest),
-                         self._base_path())
-                got = await p.run()
-                self.guest_sync_root = p.guest_root
-                # Kept so sync_status can answer without re-running a pass --
-                # which would be a scan of the whole tree on a 200MHz machine
-                # every time the agent wondered whether its file had arrived.
-                self._last_sync_reports = list(got.get("reports", []))
-                log.info("sync (%s): %s", why,
-                         {k: v for k, v in got.items()
-                          if k not in ("reports", "notices")})
-                # Reports are the only record of a path that did NOT move,
-                # and a counter of zero says nothing about why. Logging them is
-                # how "six of seven files transferred" stops looking like
-                # success -- but only what CHANGED, because this pass runs
-                # every thirty seconds and an unfixable name would otherwise
-                # print until nobody reads the warnings.
-                for line in got.get("new_reports", []):
-                    log.warning("sync: %s", line)
-                delivered = []
-                for note in got.get("notices", []):
-                    await self._write_block(guest, H.notice(note))
-                    delivered.append(note)
-                # The agent needs the same news, and it has no other way to
-                # get it: nothing reaches a session except an INPUT. Merged
-                # rather than replaced or matched 1:1 against the user's set
-                # above: pending_notice_agent is its OWN durable queue
-                # (02.20), so it can carry an entry the user's copy already
-                # dropped (delivered last pass, bridge restarted before the
-                # agent's next turn) -- and a `not in` merge cannot drop one
-                # already waiting in memory for a turn that has not started.
-                for note in got.get("agent_notices", []):
-                    if note not in self.synccoord.agent_notices:
-                        self.synccoord.agent_notices.append(note)
-
-                # A conflict STOPS the agent, and stopping it means saying so
-                # on the user's screen with a way to start it again. The
-                # transcript already carries the explanation; this is the
-                # button. Without it "wait for the user to confirm they have
-                # finished with the file" has no confirmation -- the latch
-                # would sit there until the agent happened to call
-                # sync_resolve, which it has no reason to do unprompted.
-                # NEW conflicts, not the running total. An unapplyable conflict
-                # -- a file on the guest where the bridge holds a directory --
-                # is re-decided on every pass because nothing can advance, so
-                # raising on the total put the bar back up thirty seconds after
-                # the user had answered it, spawned a "resolve the conflict"
-                # turn with an empty preamble because the notice had already
-                # been delivered, and did it again a minute later. Asked twice,
-                # in the purest form the design has.
-                if got.get("new_conflicts"):
-                    # Short, because the bar at 640x480 gives the label about
-                    # seventy characters before SS_ENDELLIPSIS cuts it. The
-                    # first version ended "...Press Continue when you have
-                    # finished with the file(s)" and was truncated at "you
-                    # have" -- losing the half that said what the button does,
-                    # on the one control the user needs. The button is labelled
-                    # Continue and the whole explanation is in the transcript
-                    # immediately above; the bar only has to say why it is up.
-                    # The new count too, not the total: a standing conflict the
-                    # user has already been told about should not inflate the
-                    # number they are being stopped for.
-                    n = got["new_conflicts"]
-                    await self._raise_halt(
-                        guest,
-                        f"Stopped: {n} conflicting edit"
-                        f"{'' if n == 1 else 's'}. Your copy was kept.",
-                        paths=got.get("conflict_paths", ()))
-                # Covers the same gap _reconcile_halt closes at attach, from
-                # the other direction: latched paths this PASS did not just
-                # raise for (a standing conflict from before a bridge
-                # restart, discovered on the first pass a fresh process
-                # runs) still need a bar, and one that WAS raised needs to
-                # come down once nothing is latched any more.
-                await self._reconcile_halt(guest, base=p.base)
-                # Only after they are on the wire. The queue is pending work,
-                # not a log: leaving them on it re-delivered every notice on
-                # every pass, which buries the next real one.
-                p.notices_delivered(delivered)
-                self._transient_aborts = 0
-                return got
-            except SyncError as exc:
-                # A DELIBERATE refusal: a tree_id mismatch, a changed guest
-                # root, a manifest that arrived short, or too many paths
-                # going backwards at once (a tree restored from a backup).
-                # The whole pass stops, which is right -- and used to be a log warning and
-                # nothing else, so sync could be dead for an hour with the
-                # agent and the user both believing it was working.
-                #
-                # EXCEPT WHILE THE TWO SIDES ARE MID-HANDOVER. `no_root` means
-                # the machine has no root at this instant, which is what every
-                # work directory change looks like for about a second -- and
-                # announcing it wrote a matched "synchronisation has stopped"
-                # and "it is working again" into the transcript every time. It
-                # still becomes news if it keeps happening, because then it is
-                # not a handover, it is a folder that cannot be made.
-                if getattr(exc, "transient", False):
-                    self._transient_aborts += 1
-                    if self._transient_aborts <= self.TRANSIENT_ABORT_GRACE:
-                        log.info("sync: %s (retrying; %d of %d)", exc,
-                                 self._transient_aborts,
-                                 self.TRANSIENT_ABORT_GRACE)
-                        return {"retry": str(exc)}
-                await self._report_abort(guest, str(exc))
-                return {"error": str(exc)}
-            except Exception as exc:
-                # NOT a refusal: a bug. The bare `except` here used to catch
-                # both and describe both as "aborted", which is how the
-                # directory-versus-file crash hid -- a total stop wearing the
-                # words of a considered decision. Log the traceback and say
-                # plainly that it was not deliberate.
-                log.exception("sync pass FAILED (not a refusal): %s", exc)
-                await self._report_abort(
-                    guest, f"an internal error in the sync layer: {exc}",
-                    bug=True)
-                return {"error": str(exc)}
-            finally:
-                guest.sync_active = False
-
-    # --- what the agent can ask about sync ---------------------------------
+        return await self.sync.run_sync(why, wait=wait, guest=guest)
 
     async def _report_abort(self, guest: GuestSession, reason: str, *,
                             bug: bool = False) -> None:
-        """Say ONCE that a whole pass refused to run.
-
-        Once is the hard part. A `tree_id` mismatch aborts every pass, and a
-        pass runs every thirty seconds, so the obvious "stop swallowing the
-        exception" would have re-announced the same thing twice a minute --
-        exactly the bug that `first_report` exists to prevent for a single
-        path. `first_report` cannot be reused: an abort has no path key, and it
-        raises BEFORE the pass saves anything, so there is no write to hang the
-        fingerprint on. Hence a field on the baseline, written here.
-
-        Keyed on the reason, so a DIFFERENT abort is still news -- a second
-        machine connecting after a codepage change is not the same event as
-        the codepage change.
-        """
-        log.warning("sync pass aborted: %s", reason)
-        state = self._base_path(guest)
-        agent_text = (
-            f"SYNC HAS STOPPED -- {reason} No file is being copied in either "
-            f"direction until this is resolved. Do not tell the user a file "
-            f"has reached their machine; it has not.")
-        try:
-            base = self._load_baseline(guest)
-        except Exception:
-            # The baseline itself is what could not be read. Nothing to
-            # remember it with, so say it every time rather than never: this
-            # is the one abort that cannot be fixed by waiting.
-            base = None
-        if base is not None:
-            # Anything already said since the last successful pass, not just
-            # the last thing said. Two alternating reasons defeat a
-            # last-reason check entirely, and two guests sharing a baseline
-            # produce exactly that.
-            if reason in base.announced:
-                base.aborted = reason
-                return
-            base.aborted = reason
-            base.announced.append(reason)
-            # Durable, same as a Pass.note() (02.20): a bridge restart
-            # between this and the agent's next turn must not silently lose
-            # the one notice that tells it sync has stopped entirely.
-            base.pending_notice_agent.append(agent_text)
-            try:
-                base.save(state)
-            except Exception as exc:          # pragma: no cover - disk failure
-                log.warning("could not record the abort: %s", exc)
-
-        what = ("File synchronisation stopped because of a fault in the "
-                "bridge, not because of anything on your machine."
-                if bug else
-                "File synchronisation has stopped and is not copying "
-                "anything in either direction.")
-        text = (f"{what}\n\n{reason}\n\nNothing has been changed on either "
-                f"side. Files edited here and there will both be kept, and "
-                f"will reconcile once this is resolved.")
-        await self._write_block(guest, H.notice(text))
-        # The agent needs it too, and for the same reason the conflict notices
-        # go this way: it will otherwise report a file as delivered when the
-        # layer that delivers it has not run for an hour.
-        if agent_text not in self.synccoord.agent_notices:
-            self.synccoord.agent_notices.append(agent_text)
+        await self.sync.report_abort(guest, reason, bug=bug)
 
     #: How many passes in a row may be refused for a self-fixing reason
     #: before it is announced anyway. Passes run about every thirty seconds
@@ -2731,595 +2536,52 @@ class Bridge:
     TRANSIENT_ABORT_GRACE = 3
 
     def _base_path(self, guest: "GuestSession | None" = None) -> str:
-        """The baseline file for the root `guest` is currently mirroring.
-
-        `guest` IS NOW THREADED THROUGH, and 02.18 is why. `sync_status_text`
-        and `sync_resolve` both already took a guest -- `tools.py` explains
-        that the parameter is what makes an MCP tool address A MACHINE rather
-        than whichever machine happens to be attached -- and then both called
-        down into here, which read `self._guest` directly and undid it. With
-        one guest that is invisible; the moment R7 lands, agent A's
-        `sync_resolve` writes its release into whichever baseline
-        `self._guest.work_guest` currently names, and the halt bar comes down
-        on someone else's screen. Doing it now, while there is one guest and
-        the tests are cheap, is the whole reason `run_on_guest` already takes
-        the parameter.
-
-        ONE BASELINE PER ROOT. A baseline records which files existed where,
-        and it is bound to a `tree_id` and a `guest_root` -- change the root
-        and `scan_guest` refuses, correctly, because treating a different
-        directory as the same one would conflict the whole tree. That refusal
-        is right and it is also what the user hits the moment they use
-        "Change work directory...", which is not a corner case, it is the
-        feature.
-
-        So a root gets its own file instead of fighting over one. Nothing is
-        migrated and nothing is deleted: the legacy `base.json` keeps
-        belonging to whichever root it already records, so switching back to
-        that root finds its history exactly as it left it.
-        """
-        legacy = os.path.join(self.sync_state, "base.json")
-        root = self._current_guest_root(guest)
-        if not root:
-            return legacy
-        # getattr, because sync_status_text is reachable on a Bridge built
-        # with __new__ in the tests -- the same reason _current_guest_root
-        # below guards _guest.
-        cache = getattr(self, "_base_paths", None)
-        if cache is None:
-            cache = self._base_paths = {}
-        hit = cache.get(root)
-        if hit:
-            return hit
-
-        recorded = None
-        try:
-            with open(legacy, encoding="utf-8") as fh:
-                recorded = json.load(fh).get("guest_root", "")
-        except (OSError, ValueError):
-            recorded = None
-
-        if recorded is None or recorded == "" or recorded == root:
-            # No legacy baseline, or it is already this root's.
-            path = legacy
-        else:
-            import hashlib
-            slug = hashlib.sha1(root.encode("utf-8", "replace")).hexdigest()
-            path = os.path.join(self.sync_state, "base-%s.json" % slug[:10])
-            log.info("baseline for %s is %s (%s belongs to %s)",
-                     root, os.path.basename(path), "base.json", recorded)
-        cache[root] = path
-        return path
+        return self._ensure_sync().base_path(guest)
 
     def _current_guest_root(self, guest: "GuestSession | None" = None) -> str:
-        """What `guest` is mirroring RIGHT NOW, or "" while it is mirroring
-        nothing -- which is every conversation until its first tool call.
-
-        THE COMMITTED FOLDER AND NOTHING ELSE. One mirror per conversation
-        means the guest re-points its sync layer at the folder the chat works
-        in, so `C:\\Gaston\\OK` and not `C:\\Gaston` is what its scan
-        reports, and a baseline keyed on the latter refuses every pass for an
-        identity mismatch.
-
-        HELLO's `sync_root` used to be the fallback here and must not be: it
-        now carries the machine's CONFIGURED root, which is where folders get
-        created and never a tree anyone is pairing. Falling back to it would
-        put this process's whole shared directory opposite the guest's, which
-        is the arrangement per-conversation folders exist to end.
-        """
-        g = guest if guest is not None else getattr(self, "_guest", None)
-        if g is not None and g.work_guest:
-            return g.work_guest
-        return ""
+        return self._ensure_sync().current_guest_root(guest)
 
     def _load_baseline(self, guest: "GuestSession | None" = None):
-        from .files.sync import Baseline
-        return Baseline.load(self._base_path(guest))
+        return self._ensure_sync().load_baseline(guest)
 
     def sync_status_text(self, guest: "GuestSession | None" = None) -> str:
-        # `guest` is which machine is being asked about. Unused beyond this
-        # note today because there is one; taking it means the tool addresses
-        # a machine rather than "whichever is attached", which is what R7
-        # needs and what makes the single-client assumption visible here
-        # rather than buried in a closure.
-        """Everything the agent cannot otherwise find out.
-
-        Writing a file on the bridge always succeeds. Whether it reached the
-        user's machine is a completely separate question, and without this
-        there is no way to ask it -- so the agent reports a file as delivered
-        because the write returned, which is true and useless.
-        """
-        if not self.sync_dir:
-            return ("File synchronisation is not switched on for this session. "
-                    "Nothing you write here reaches the user's machine, and "
-                    "there is no tool that would copy it.")
-        g = guest or self._guest
-        mirror = self._mirror_dir(g) if g is not None else ""
-        if not mirror:
-            # NOT A FAULT, and it has to say so in as many words. An agent
-            # told "mirrored: <shared root> <-> <configured root>" while the
-            # baseline still named an older tree concluded synchronisation
-            # was broken and refused to write the file it had been asked for,
-            # which is the most expensive possible reading of "nothing has
-            # been set up yet".
-            return ("This conversation does not have a folder on the user's "
-                    "machine yet, so nothing is being copied in either "
-                    "direction. That is the normal state of a conversation "
-                    "that has not used a tool -- it is not a fault and there "
-                    "is nothing to diagnose. A folder is created the moment "
-                    "you use one, and you will be told its path then.")
-        try:
-            base = self._load_baseline(g)
-        except Exception as exc:
-            return (f"The synchronisation baseline could not be read ({exc}). "
-                    f"No pass will run until that is fixed; tell the user.")
-
-        out = [f"Mirrored: {mirror} here <-> "
-               f"{g.work_guest or self.guest_sync_root or '(not reported yet)'}"
-               f" on the machine.",
-               f"Last pass: generation {base.generation}."
-               + (f"  Bound to tree {base.tree_id}." if base.tree_id else "")]
-
-        # First, and in capitals, because it makes everything below it stale.
-        # A pass-level abort stops the entire layer -- no file moves in either
-        # direction -- and it used to be a log line, so the honest answer to
-        # "did my file arrive" was unavailable to the agent AND the user.
-        if base.aborted:
-            out.append("")
-            out.append("SYNCHRONISATION IS STOPPED. No file is being copied "
-                       "in either direction, and nothing below this line has "
-                       "moved since it stopped.")
-            out.append(f"  Reason: {base.aborted}")
-            out.append("  Tell the user. Do not report any file as having "
-                       "reached their machine while this is the case.")
-
-        # Why a file is treated the way it is. Without this the agent can see
-        # that a path is byte-exact and has no way to learn that the tree ASKED
-        # for that -- so a deliberate `-text` reads as a misclassification and
-        # invites it to "fix" something that is already correct.
-        try:
-            from .files import attrs as A
-            at = A.load(mirror)
-        except Exception:
-            at = None
-        if at is not None and len(at):
-            where = ", ".join(sorted(
-                os.path.relpath(f, mirror) for f in at.sources)) or "?"
-            out.append(
-                f"\nLine-ending and text rules: {len(at)} in force, from "
-                f"{where}. `-text`/`binary` means the two sides hold identical "
-                f"bytes and nothing is converted; `eol=lf` or `eol=crlf` sets "
-                f"what lands on the machine for that path. These are the "
-                f"tree's own instructions -- do not override them to make a "
-                f"file look tidier.")
-
-        if base.latched:
-            out.append("\nREFUSING YOUR WRITES -- these conflicted and the "
-                       "user's copy won. Your version is preserved under "
-                       f"{mirror.rstrip('/')}/../.gaston/conflict/ with "
-                       "the common ancestor beside it. Read it, merge, ask the "
-                       "user whether they have finished with the file, and "
-                       "only then call sync_resolve:")
-            for k, why in sorted(base.latched.items()):
-                out.append(f"  {k} -- {why}")
-
-        if self._last_sync_reports:
-            out.append("\nFrom the last pass (skips are permanent until the "
-                       "name or the path changes -- a skipped file NEVER "
-                       "reaches the user, however many times you write it):")
-            for line in self._last_sync_reports:
-                out.append(f"  {line}")
-
-        if base.tombs:
-            out.append(f"\nDeleted on both sides and not tracked: "
-                       f"{len(base.tombs)} path(s).")
-        if base.ignored:
-            out.append(f"Out of scope (.gitignore/.gastonignore): "
-                       f"{len(base.ignored)} path(s), frozen at their last "
-                       f"agreed content.")
-
-        stray, stray_truncated = self._edits_outside_the_mirror(g)
-        if stray:
-            out.append("\nEDITED HERE BUT OUTSIDE THE MIRRORED FOLDER, so "
-                       "these have not reached the user and never will where "
-                       "they are:")
-            out.extend(f"  {p}" for p in stray)
-            if stray_truncated:
-                out.append(f"  (stopped after {self.STRAY_SCAN_BUDGET} files "
-                          f"outside the mirror; there may be more)")
-
-        if len(out) == 2:
-            out.append("\nNothing outstanding: no conflicts, no skips, "
-                       "nothing withheld.")
-        return "\n".join(out)
-
-    #: Upper bound on how many files under cwd _edits_outside_the_mirror will
-    #: stat in one call (02.34). It is called from sync_status, which tools.py
-    #: advertises to the model as "free to call" -- but an unbounded os.walk
-    #: of the whole working directory costs work that scales with a tree the
-    #: agent itself grows, on every call, which is not free at all. Bounded
-    #: like everything else here rather than assumed small.
-    STRAY_SCAN_BUDGET = 4000
+        return self._ensure_sync().sync_status_text(guest)
 
     def _edits_outside_the_mirror(
         self, guest: "GuestSession | None" = None, limit: int = 20
     ) -> tuple[list[str], bool]:
-        """Files under cwd but outside the sync root, newest first.
-
-        The other way an agent achieves nothing and reports success:
-        `off_limits` confines it to cwd, the mirror is a directory inside cwd,
-        and an edit anywhere else succeeds and stays here forever.
-
-        Returns `(paths, truncated)`: `truncated` is True when the walk hit
-        STRAY_SCAN_BUDGET before finishing, so the caller can say the list may
-        be incomplete rather than imply it is exhaustive.
-        """
-        # WHERE THE AGENT ACTUALLY RUNS against WHAT IS ACTUALLY MIRRORED,
-        # and the two are not the same question. A session's cwd is fixed
-        # when the session is built, which for a new conversation is BEFORE
-        # it has committed to a folder -- so the agent goes on running in
-        # `self.cwd` while the mirror narrows to the folder underneath it,
-        # and everything it writes beside that folder is a stray. That is
-        # precisely the case this exists to catch, and reading the cwd back
-        # off the conversation's folder would declare the two equal and find
-        # nothing.
-        g = guest if guest is not None else getattr(self, "_guest", None)
-        cwd = self.cwd or os.getcwd()
-        mirror_dir = (self._mirror_dir(g) if g else "") or self.sync_dir
-        if not mirror_dir or os.path.realpath(cwd) == os.path.realpath(
-                mirror_dir):
-            return [], False
-        mirror = os.path.realpath(mirror_dir)
-        found: list[tuple[float, str]] = []
-        seen = 0
-        truncated = False
-        for dirpath, dirnames, filenames in os.walk(cwd):
-            real = os.path.realpath(dirpath)
-            if real == mirror or real.startswith(mirror + os.sep):
-                dirnames[:] = []
-                continue
-            dirnames[:] = [d for d in dirnames
-                           if not d.startswith(".") and d != "__pycache__"]
-            for name in filenames:
-                seen += 1
-                if seen > self.STRAY_SCAN_BUDGET:
-                    truncated = True
-                    break
-                full = os.path.join(dirpath, name)
-                try:
-                    found.append((os.stat(full).st_mtime,
-                                  os.path.relpath(full, cwd)))
-                except OSError:
-                    continue
-            if truncated:
-                break
-        found.sort(reverse=True)
-        return [p for _, p in found[:limit]], truncated
+        return self._ensure_sync().edits_outside_the_mirror(guest, limit=limit)
 
     async def sync_resolve(self, path: str, action: str,
                            guest: "GuestSession | None" = None) -> str:
-        """Lift one halt. Recorded in the baseline BEFORE it takes effect.
-
-        Under sync_lock for the same reason as _release_all_latches: a Pass
-        holds the baseline in memory and rewrites the whole of it at the end,
-        so a release landing mid-pass was silently undone. This is the route
-        the design tells the agent to use, which made it the likelier of the
-        two to be lost -- the agent calls it while a pass is in flight because
-        a pass is in flight most of the time.
-        """
-        if not self.sync_dir:
-            return "File synchronisation is not switched on for this session."
-        async with self._baseline_lock(guest):
-            return self._sync_resolve_locked(path, action, guest or self._guest)
+        return await self._ensure_sync().sync_resolve(path, action, guest=guest)
 
     def _sync_resolve_locked(
         self, path: str, action: str, guest: "GuestSession | None" = None
     ) -> str:
-        try:
-            base = self._load_baseline(guest)
-        except Exception as exc:
-            return f"The baseline could not be read ({exc}); nothing changed."
-
-        if action == "accept-tree":
-            # PATH-LESS, and that is the point rather than an omission: the
-            # aggregate-revert check refuses a WHOLE PASS, so answering it one
-            # path at a time would mean fifty calls to lift one refusal, and
-            # the thing being agreed to is a property of the tree rather than
-            # of any file in it.
-            #
-            # It does not change a single row. All it does is let the next
-            # pass past the check, after which the ordinary per-path rows
-            # decide everything exactly as they always would.
-            base.accept_tree = True
-            base.save(self._base_path(guest))
-            log.info("sync: whole-tree revert accepted by the agent")
-            return ("The next pass will go ahead without the whole-tree "
-                    "check. Its rows are unchanged, so the machine's version "
-                    "of each path wins where it moved -- which is what was "
-                    "being refused. Nothing has moved yet.")
-
-        from .files import paths as P
-        # guest.caps was parsed once at handshake (02.22). No guest at all
-        # (never attached this process) is the one case with nothing to read
-        # -- from_hello({}) is the documented restrictive Win9x default for
-        # "no declaration", which is the honest answer here too.
-        caps = guest.caps if guest is not None and guest.caps is not None \
-            else C.from_hello({})
-        key = P.canonical(path.replace("\\", "/").strip("/"), caps=caps)
-        state = self._base_path(guest)
-
-        if action == "release":
-            if key not in base.latched:
-                return (f"{path} is not withheld. Nothing to release; if a "
-                        f"write is not arriving, call sync_status -- it is "
-                        f"more likely a skipped name than a conflict.")
-            why = base.latched.pop(key)
-            base.save(state)
-            log.info("sync: %s released by the agent (was: %s)", key, why)
-            # If nothing else is withheld, the reason for the halt is gone and
-            # the bar must come down -- leaving it up would ask the user to
-            # press Continue for a conflict that no longer exists.
-            # ON THE GUEST THIS CALL BELONGS TO, not on whichever one is
-            # attached (02.18). The parameter was already here and this line
-            # reached past it, so with two clients the bar would come down on
-            # the wrong person's screen.
-            if not base.latched and guest is not None:
-                self._spawn(self._clear_halt(guest))
-            return (f"Released {path}. Your next write to it will be copied to "
-                    f"the user's machine on the next pass. If they change it "
-                    f"again in the meantime, it will conflict again -- which "
-                    f"is correct, not a failure.")
-
-        if action == "accept-revert":
-            # The guest holds exactly what the last push REPLACED, so `diff`
-            # called it a reverted push and preserved the agent's version
-            # rather than pulling (sync.py, row 15). That guard exists for a
-            # stale editor buffer writing back an old copy, and it cannot tell
-            # that from a person who genuinely undid the change -- which is
-            # the whole reason this action exists rather than the agent being
-            # told to "edit it again".
-            #
-            # Dropping `prev` is the entire mechanism: with no record of what
-            # the push replaced, the guest simply differs from the ancestor,
-            # and the ordinary "the guest moved" row pulls it. Nothing here
-            # transfers anything or decides what the content should be.
-            prev = base.prev.pop(key, None)
-            was_latched = base.latched.pop(key, None) is not None
-            if prev is None and not was_latched:
-                return (f"{path} is not being held as a reverted push. "
-                        f"Nothing changed -- call sync_status to see what is "
-                        f"actually withheld.")
-            base.save(state)
-            log.info("sync: %s revert accepted by the agent", key)
-            # ON THE GUEST THIS CALL BELONGS TO, not on whichever one is
-            # attached (02.18). The parameter was already here and this line
-            # reached past it, so with two clients the bar would come down on
-            # the wrong person's screen.
-            if not base.latched and guest is not None:
-                self._spawn(self._clear_halt(guest))
-            return (f"Accepted the machine's version of {path}. The next pass "
-                    f"will copy it here, replacing what was written. The "
-                    f"previous content is not kept -- if it is still wanted, "
-                    f"read the file after the pull and re-apply the change.")
-
-        if action != "forget":
-            # A THIRD action made this fallthrough dangerous. Until now the
-            # function had exactly two, so "not release" meant "forget" and
-            # the only guard on that was in tools.py, a different file. An
-            # unrecognised action reaching here dropped the row -- the
-            # destructive one of the pair -- which is the wrong way round for
-            # a default.
-            return (f"Unknown action {action!r}; use release, accept-revert "
-                    f"or forget.")
-
-        removed = (base.tombs.pop(key, None) is not None
-                   or base.rows.pop(key, None) is not None)
-        base.latched.pop(key, None)
-        base.save(state)
-        if not removed:
-            return f"{path} was not tracked; nothing to forget."
-        log.info("sync: %s forgotten by the agent", key)
-        return (f"Stopped tracking {path}. If it reappears on either side it "
-                f"will be treated as new.")
+        return self._ensure_sync().sync_resolve_locked(path, action, guest=guest)
 
     def _baseline_lock(self, guest: "GuestSession | None" = None):
-        """The lock that serialises writers to base.json.
-
-        It lives on the guest because that is where `Pass` takes it, and a pass
-        cannot run without a guest -- so with no guest there is nothing to
-        serialise against and a null context is not a shortcut, it is the
-        accurate answer.
-        """
-        guest = guest or self._guest
-        return guest.sync_lock if guest is not None else contextlib.nullcontext()
+        return self._ensure_sync().baseline_lock(guest)
 
     async def _release_all_latches(self, only=None) -> int:
-        """Lift the write refusals the user has just answered.
-
-        All the ones the BAR named, not one: the bar says "N conflicting
-        edits" and the user answers it once. Releasing a single path would
-        leave the rest withheld with no bar up to say so, and the agent
-        silently unable to write to files nobody has mentioned.
-
-        But not paths the bar never named either. `_raise_halt` is idempotent
-        while a bar is showing, so a conflict found in the meantime puts
-        nothing on screen -- and releasing it on a press that predates it lifts
-        the refusal on a path the agent has not been told about. It writes, and
-        that write reaches the user's machine. `only` is the set the bar was
-        raised for; None means everything, which is right when there is no bar
-        to have named a subset.
-
-        UNDER sync_lock, and that is the whole point of it being a coroutine.
-        A Pass loads the baseline into memory when it starts and writes the
-        WHOLE object back when it finishes -- so a release that lands in
-        between was simply overwritten a moment later: latches restored, no
-        bar up to say so, and no notice. The user pressed Continue and nothing
-        happened, which is the one outcome the halt bar exists to prevent.
-        And the press almost always lands mid-pass, because the pass that
-        raised the bar is usually still running.
-        """
-        if not self.sync_dir:
-            return 0
-        async with self._baseline_lock():
-            try:
-                base = self._load_baseline()
-            except Exception as exc:
-                log.warning("could not release latches: %s", exc)
-                return 0
-            # Only what the bar was raised for. Anything latched since then
-            # has never been on screen, so the press cannot be an answer to it.
-            answered = set(only) if only is not None else set(base.latched)
-            n = 0
-            for key in answered:
-                if base.latched.pop(key, None) is not None:
-                    n += 1
-            if n:
-                base.save(self._base_path())
-            left = len(base.latched)
-            if left:
-                log.info("sync: %d path(s) latched after the release; they "
-                         "were raised after the bar went up and will raise "
-                         "their own", left)
-            return n
+        return await self.sync.release_all_latches(only=only)
 
     async def _raise_halt(self, guest: GuestSession, line: str,
                           paths=()) -> None:
-        """Put the Continue bar up. Idempotent while one is already showing.
-
-        `paths` is what this bar is ANSWERING FOR. Continue releases those and
-        leaves anything latched later alone, because the idempotence above
-        means a later conflict puts nothing on screen and the user cannot have
-        answered a question they were never asked.
-
-        The state lives on `self.synccoord` (a `SyncCoordinator`), not here:
-        it decides and remembers, this method only sends the frame that
-        follows. docs/audit/02-bridge-python.md 02.43.
-        """
-        hid = self.synccoord.raise_halt(line, paths)
-        if hid is None:
-            return
-        await self._send(guest, halt(hid, line))
+        await self.sync.raise_halt(guest, line, paths=paths)
 
     async def _clear_halt(self, guest: GuestSession) -> None:
-        """Take it down because the reason went away, not because it was
-        answered -- the agent called sync_resolve itself, say."""
-        hid = self.synccoord.clear_halt()
-        if hid is None:
-            return
-        await self._send(guest, haltend(hid))
+        await self.sync.clear_halt(guest)
 
     async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
-        """The halt is a VIEW of base.latched, not independent state.
-
-        synccoord.halt_id is memory; base.latched is disk. Nothing but a
-        fresh conflict (the new_conflicts branch above) or a reconnect
-        (_reissue_halt) ever moved synccoord.halt_id to agree with it -- so a
-        BRIDGE restart with paths still latched came back with no bar, a
-        fresh SyncCoordinator whose halt_id starts empty, and every latched
-        path going on refusing the agent's writes with nothing on the user's
-        screen to explain why or let them clear it. The only way out used to
-        be the agent proactively calling sync_status and sync_resolve.
-
-        Called at attach (base loaded fresh) and at the end of every pass
-        (base is the Pass's own, already current) so both directions --
-        a bar that should be up and is not, one that is up and should not
-        be -- self-correct instead of depending on whichever call site last
-        had a chance to set synccoord.halt_id. docs/audit/02-bridge-python.md
-        02.21.
-        """
-        if not self.sync_dir:
-            return
-        if base is None:
-            try:
-                base = self._load_baseline(guest)
-            except Exception:
-                return
-        if base.latched and not self.synccoord.halt_id:
-            n = len(base.latched)
-            await self._raise_halt(
-                guest,
-                f"Stopped: {n} conflicting edit{'' if n == 1 else 's'}. "
-                f"Your copy was kept.",
-                paths=base.latched.keys())
-        elif not base.latched and self.synccoord.halt_id:
-            await self._clear_halt(guest)
+        await self.sync.reconcile_halt(guest, base=base)
 
     async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
-        """Route one SYNC* reply to whoever is waiting for it."""
-        sid = f.headers.get("id", "")
-        entry = guest.sync_pending.get(sid)
-        if entry is None:
-            # Expected after an abort: the caller gave up and cleaned up, and
-            # this is the guest finishing what it had already started.
-            log.debug("sync frame %s for %s, which nobody awaits", f.type, sid)
-            return
-
-        if f.type == "SYNCENT":
-            # A manifest row against an id that is not a scan means the guest
-            # is confused. Say so and carry on: this used to index a key that
-            # only a scan entry has, and the KeyError is caught nowhere
-            # between here and the read loop, so a malformed frame took the
-            # whole connection down with it.
-            if entry.kind != "scan":
-                log.warning("SYNCENT for %s, which is a %s -- ignoring",
-                            sid, entry.kind)
-                return
-            # The guest's own codepage, never an assumption. Decoding a
-            # manifest with the wrong table produces names that look right and
-            # cannot be encoded back to ask for the file. Parsed once at
-            # handshake (02.22) rather than re-derived here.
-            rows, display = manifest.parse_rows(f.body, guest.caps)
-            entry.rows.update(rows)
-            entry.display.update(display)
-
-        elif f.type == "SYNCEND":
-            fut = entry.future
-            if not fut.done():
-                fut.set_result(ScanResult(
-                    status=SyncStatus.parse(f.headers.get("status", "ok")),
-                    files=int(f.headers.get("files", "0")),
-                    tree_id=f.headers.get("tree_id", ""),
-                    root=f.headers.get("root", ""),
-                    rows=entry.rows, display=entry.display))
-
-        elif f.type in ("SYNCPUTACK", "SYNCMKDIRACK"):
-            fut = entry.future
-            if not fut.done():
-                fut.set_result(AckResult(
-                    status=SyncStatus.parse(f.headers.get("status", "ok")),
-                    crc=int(f.headers.get("crc", "0"))))
-
-        elif f.type == "SYNCDAT":
-            if entry.kind != "get":
-                log.warning("SYNCDAT for %s, which is a %s -- ignoring",
-                            sid, entry.kind)
-                return
-            entry.data.extend(f.body)
-
-        elif f.type == "SYNCDATEND":
-            fut = entry.future
-            if not fut.done():
-                fut.set_result(GetResult(
-                    status=SyncStatus.parse(f.headers.get("status", "ok")),
-                    crc=int(f.headers.get("crc", "0")),
-                    cls=f.headers.get("cls", P.CLASS_TEXT),
-                    data=bytes(entry.data or b"")))
+        await self.sync.sync_frame(guest, f)
 
     def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
-        """Resolve every in-flight sync transfer, synchronously."""
-        if guest is None:
-            return
-        for sid, entry in list(guest.sync_pending.items()):
-            # entry.future is a required field on S.Wait, not an optional
-            # one -- this used to be entry.get("future") from when
-            # sync_pending held ad-hoc dicts (pre-02.4), and calling .get on
-            # a Wait dataclass raises AttributeError instead of failing the
-            # transfer, which is the one thing this method exists to do.
-            fut = entry.future
-            if not fut.done():
-                fut.set_exception(SyncError(why))
-        guest.sync_pending.clear()
-        guest.sync_active = False
+        self.sync.fail_syncs(guest, why)
 
     #: The bridge's own ceiling on captured output. The guest caps at 32KB, and
     #: this is the same number with room to spare -- it exists because the cap

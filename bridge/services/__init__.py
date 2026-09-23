@@ -17,6 +17,7 @@ from bridge.services.options import (
 )
 from bridge.services.permission import PermissionService
 from bridge.services.presentation import PresentationService
+from bridge.services.sync import SyncService
 from bridge.services.workspace import WorkspaceService
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "OptionsService",
     "PermissionService",
     "PresentationService",
+    "SyncService",
     "WorkspaceService",
     "COMMAND_MENU",
     "EFFORT_LABEL",

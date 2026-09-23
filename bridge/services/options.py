@@ -113,7 +113,7 @@ class OptionsService:
     ) -> None:
         """Persist the model, effort and mode chosen for this conversation."""
         conv_id = session_id or guest.conv_id
-        if not conv_id or not self.conv:
+        if not conv_id or self.conv is None:
             return
         self.conv.remember(
             conv_id,

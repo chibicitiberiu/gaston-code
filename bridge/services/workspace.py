@@ -100,7 +100,7 @@ class WorkspaceService:
     async def ensure_work_dir(self, guest: GuestSession) -> None:
         """Commit this conversation to a folder, if it has not already."""
         if guest.work_guest:
-            if guest.conv_id and self.conv:
+            if guest.conv_id and self.conv is not None:
                 name = (
                     P.folder_name(
                         guest.work_guest.replace("\\", "/").rsplit("/", 1)[-1],
@@ -134,7 +134,7 @@ class WorkspaceService:
         if not name:
             return
 
-        taken = self.conv.taken() if self.conv else set()
+        taken = self.conv.taken() if self.conv is not None else set()
         stem, n = name, 1
         while os.path.exists(os.path.join(base, name)) or name in taken:
             n += 1
@@ -151,7 +151,7 @@ class WorkspaceService:
             return
         guest.work_dir = path
         guest.work_guest = self.guest_path(guest, name)
-        if self.conv:
+        if self.conv is not None:
             self.conv.set_folder(guest.conv_id, name, guest.work_guest)
         self.retarget_perms(guest)
         log.info(
@@ -220,7 +220,7 @@ class WorkspaceService:
 
         guest.work_dir = local
         guest.work_guest = path
-        if guest.conv_id and self.conv:
+        if guest.conv_id and self.conv is not None:
             self.conv.set_folder(guest.conv_id, name, path)
         self.retarget_perms(guest)
         log.info(

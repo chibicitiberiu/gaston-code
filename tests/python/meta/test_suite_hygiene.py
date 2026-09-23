@@ -28,7 +28,7 @@ TESTS = os.path.join(conftest.REPO, "tests", "python")
 #: One directory per layer, and every suite in one of them. The names are
 #: listed rather than discovered so that adding a folder is a decision
 #: somebody made, not a directory that appeared.
-LAYERS = {"agent", "files", "wire", "view", "server", "guest", "meta", "tools"}
+LAYERS = {"agent", "files", "wire", "view", "server", "guest", "meta", "tools", "services"}
 
 #: What a suite touches when it needs a built guest binary under Wine.
 GUEST_API = {
