@@ -5,5 +5,23 @@ through constructors, and state scoped to GuestSession flowing through parameter
 """
 
 from bridge.services.config import BridgeConfig
+from bridge.services.options import (
+    COMMAND_MENU,
+    EFFORT_LABEL,
+    EFFORT_ORDER,
+    MODE_CAVEAT,
+    MODE_LABEL,
+    MODE_ORDER,
+    OptionsService,
+)
 
-__all__ = ["BridgeConfig"]
+__all__ = [
+    "BridgeConfig",
+    "OptionsService",
+    "COMMAND_MENU",
+    "EFFORT_LABEL",
+    "EFFORT_ORDER",
+    "MODE_CAVEAT",
+    "MODE_LABEL",
+    "MODE_ORDER",
+]

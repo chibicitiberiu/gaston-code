@@ -84,6 +84,15 @@ from .agent.session import TOOLS, Session
 from .agent import toolrep, toolrules
 from .agent.toolrules import Found
 from .services.config import BridgeConfig
+from .services.options import (
+    COMMAND_MENU,
+    EFFORT_LABEL,
+    EFFORT_ORDER,
+    MODE_CAVEAT,
+    MODE_LABEL,
+    MODE_ORDER,
+    OptionsService,
+)
 
 log = logging.getLogger("bridge.server")
 
@@ -599,6 +608,13 @@ class Bridge:
         #: One row, one file -- see agent/conversations.py for why those
         #: three were not worth three stores.
         self.conv = Conversations()
+        self.options = OptionsService(
+            connection=self,
+            conv=self.conv,
+            config=self.config,
+            write_block=self._write_block,
+            set_effort=self._set_effort,
+        )
 
         # One guest, one session. See PLAN.md "Multi-session".
         self._guest: GuestSession | None = None
@@ -609,13 +625,6 @@ class Bridge:
         # Frames pipelined behind HELLO in a single read, handed to _pump.
         self._reaper: asyncio.Task | None = None
         self._sweeper: asyncio.Task | None = None
-        #: See _models(). None means "not asked yet", never "asked and empty".
-        self._models_cache: list[dict] | None = None
-        #: The CLI's slash-command list, cached beside the model list and for
-        #: the same reasons: it is a property of the installed CLI, and a
-        #: conversation opened from the chat list has no client to ask until
-        #: the first message. Cleared wherever the model cache is.
-        self._commands_cache: list[dict] | None = None
         #: The guest's own path for the mirror, learned from SYNCEND. Held here
         #: so the system prompt can NAME the folder rather than say "the sync
         #: folder" -- an agent told only that its edits reach the user has no
@@ -737,6 +746,25 @@ class Bridge:
     @perm_grace_s.setter
     def perm_grace_s(self, val: float) -> None:
         self.config.perm_grace_s = val
+
+    @property
+    def _models_cache(self) -> list[dict] | None:
+        return self.options._models_cache
+
+    @_models_cache.setter
+    def _models_cache(self, val: list[dict] | None) -> None:
+        self.options._models_cache = val
+
+    @property
+    def _commands_cache(self) -> list[dict] | None:
+        return self.options._commands_cache
+
+    @_commands_cache.setter
+    def _commands_cache(self, val: list[dict] | None) -> None:
+        self.options._commands_cache = val
+
+    async def send(self, guest: GuestSession, frame: Frame) -> bool:
+        return await self._send(guest, frame)
 
     @property
     def synccoord(self) -> SyncCoordinator:
@@ -1162,16 +1190,7 @@ class Bridge:
     # --- Claude session ----------------------------------------------------
 
     def _effective_model(self, guest: GuestSession) -> str:
-        """What model this guest's session actually runs on.
-
-        `guest.model` is empty until the Model menu is used, so the CLI's
-        `--model` (`self.model`) is the fallback -- the same rule
-        `_make_session` applies. `_send_options` reads this too (02.23): it
-        used to read `guest.model` alone, so a bridge started with a CLI
-        default ticked "default" in the menu while the session actually ran
-        on the CLI's choice.
-        """
-        return guest.model or self.model or ""
+        return self.options.effective_model(guest)
 
     # --- the conversation's own folder -------------------------------------
     #
@@ -1286,27 +1305,7 @@ class Bridge:
 
     def _remember_settings(self, guest: GuestSession,
                            session_id: str = "") -> None:
-        """Write this conversation's model, effort and mode to disk.
-
-        Called after every change AND at the moment the conversation first
-        gets an id, because a setting picked before the first message has
-        nowhere to be written until then -- `conv_id` is empty for a chat
-        that has been started but not spoken in. Cheap: three strings and an
-        atomic replace, against a change the user made by hand.
-
-        `session_id` names the conversation to write against, for the one
-        caller that knows it before `conv_id` agrees: the SDK's `init`
-        message carries the id in hand, and reading `guest.conv_id` there
-        would be asking a property whose answer depends on which Session
-        object happens to be attached at that instant.
-        """
-        conv = session_id or guest.conv_id
-        if not conv:
-            return
-        self.conv.remember(conv,
-                          model=guest.model,
-                          effort=guest.effort,
-                          mode=guest.perm_mode)
+        self.options.remember_settings(guest, session_id)
 
     def _restore_settings(self, guest: GuestSession, session_id: str) -> None:
         """Put back what this conversation was last set to.
@@ -1466,8 +1465,7 @@ class Bridge:
         return P.sub_of(guest.work_dir, self.sync_dir)
 
     def _effective_effort(self, guest: GuestSession) -> str:
-        """Effort's counterpart to `_effective_model` -- see there."""
-        return guest.effort or self.effort or ""
+        return self.options.effective_effort(guest)
 
     def _abandon_pending(self, guest: GuestSession) -> None:
         """Orphan everything the conversation being left behind still owes.
@@ -2127,50 +2125,13 @@ class Bridge:
         await self._new_session(guest, f.headers.get("folder", ""))
 
     async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
-        model = f.headers.get("model", "")
-        # RECORDED whether or not a client exists. A conversation opened from
-        # the chat list has none until the first message, and picking a model
-        # there used to be a silent no-op -- the menu re-ticked the old one
-        # and nothing said why. `_make_session` reads `guest.model`, so the
-        # choice is applied when the client is finally built.
-        was = guest.model
-        guest.model = model
-        self._remember_settings(guest)
-        log.info("model -> %s", model or "(default)")
-        if guest.claude:
-            # WRAPPED, like its two siblings. `_set_mode` and `_set_effort`
-            # both catch and report; this was the one control path that let
-            # the exception out -- through _handle, through _pump, into
-            # _on_client's catch-all, and the connection went down.
-            #
-            # Not hypothetical, and the cause is measured a few hundred lines
-            # below in _new_session's own comment: the CLI refuses control
-            # requests against a client that exists but has never run a turn,
-            # and `_attach` still builds exactly such a session eagerly on a
-            # fresh connection. So opening the Model menu before typing
-            # anything dropped the link -- and since the reconnect built
-            # another never-run session, the next press did it again.
-            try:
-                await guest.claude.set_model(model)
-            except Exception as exc:
-                log.exception("model change failed")
-                # PUT BACK, so the menu re-ticks what is actually in force
-                # and the store does not carry a model the CLI
-                # refused into the next session built.
-                guest.model = was
-                self._remember_settings(guest)
-                await self._write_block(guest, H.error(
-                    "Could not change the model: " + str(exc)[:160]))
-                await self._send_options(guest)
-                return
-        await self._write_block(guest, H.notice("Model set to " + model))
-        await self._send_options(guest)
+        await self.options.on_setmodel(guest, f)
 
     async def _on_seteffort(self, guest: GuestSession, f: Frame) -> None:
-        await self._set_effort(guest, f.headers.get("effort", ""))
+        await self.options.on_seteffort(guest, f)
 
     async def _on_setmode(self, guest: GuestSession, f: Frame) -> None:
-        await self._set_mode(guest, f.headers.get("mode", ""))
+        await self.options.on_setmode(guest, f)
 
     async def _on_rules(self, guest: GuestSession, f: Frame) -> None:
         """What can run without asking, as a transcript block.
@@ -4072,146 +4033,13 @@ class Bridge:
                 pass
 
     async def _models(self, guest: GuestSession) -> list[dict]:
-        """The CLI's model list, fetched once per process (04.14).
-
-        This was re-fetched from the CLI on every options refresh -- which
-        happens on every attach, every model change and every effort change --
-        and it shells out. The list is a property of the installed CLI, not of
-        a session or a guest, so it cannot differ between the calls that were
-        making it. Cached on the Bridge rather than on GuestSession for the
-        same reason: a second client would get the same answer.
-
-        Failure is not cached. A CLI that was briefly unavailable should be
-        asked again rather than leaving the menu empty for the life of the
-        process.
-        """
-        if self._models_cache is None:
-            if not guest.claude:
-                return []
-            models = await guest.claude.server_models()
-            if not models:
-                return []
-            self._models_cache = models
-        return self._models_cache
+        return await self.options._models(guest)
 
     async def _commands(self, guest: GuestSession) -> list[dict]:
-        """The CLI's slash-command list, cached like `_models`.
-
-        Same lifetime and the same reason: it comes from the init result the
-        SDK cached at connect, so it cannot differ between calls within one
-        client, and a conversation with no client yet still has a Commands
-        menu to fill. Failure is not cached.
-        """
-        if self._commands_cache is None:
-            if not guest.claude:
-                return []
-            cmds = await guest.claude.server_commands()
-            if not cmds:
-                return []
-            self._commands_cache = cmds
-        return self._commands_cache
+        return await self.options._commands(guest)
 
     async def _send_options(self, guest: GuestSession) -> None:
-        """The model and effort menus, with the one in use marked.
-
-        The list comes from the CLI rather than from a table here, so the names
-        stay correct without a release. There is deliberately no "Default"
-        entry: it is not a model, it is an alias, and a menu that says
-        "Default" does not tell you what you are talking to. The alias is
-        resolved and the real model it points at is the one ticked.
-        """
-        # A conversation opened from the chat list has no client until the
-        # first message, and its menus must still be right: the model list is
-        # a property of the installed CLI, and mode and effort are the
-        # guest's own. `_models` answers from the cache in that state; only a
-        # bridge that has never built a session at all has nothing to say.
-        if not guest.claude and self._models_cache is None:
-            return
-        models = await self._models(guest)
-
-        # What is actually in effect, as a concrete model name.
-        def resolved_of(value: str) -> str:
-            for m in models:
-                if m.get("value") == value:
-                    return m.get("resolvedModel") or value
-            return value
-
-        in_use = resolved_of(self._effective_model(guest) or "default")
-
-        chosen = None
-        for m in models:
-            value = m.get("value") or ""
-            if value == "default":
-                continue        # an alias, not a model
-            label = m.get("displayName") or value
-            current = (m.get("resolvedModel") or value) == in_use
-            if current and chosen is None:
-                chosen = m
-            # `description` rides as its own header, not folded into the
-            # label: the label is what the toolbar BUTTON shows, and "Haiku
-            # 4.5 - Fastest for quick answers" does not fit on a 640px screen
-            # while "Haiku" does. The menu shows both, which is where the
-            # question "which of these is which?" is actually asked -- four
-            # display names alone do not answer it.
-            await self._send(guest, option("model", value, label, current,
-                                           desc=m.get("description") or ""))
-
-        # Effort is a property of the model: Haiku has none at all, so an
-        # Effort menu offering five levels would be lying.
-        levels = (chosen or {}).get("supportedEffortLevels") or []
-        if not levels:
-            await self._send(guest, option(
-                "effort", "", "(not available for this model)", False,
-                disabled=True))
-        else:
-            for lvl in EFFORT_ORDER:
-                if lvl not in levels:
-                    continue
-                await self._send(guest, option(
-                    "effort", lvl, EFFORT_LABEL.get(lvl, lvl),
-                    lvl == self._effective_effort(guest)))
-
-        # Where this conversation's files live, as the GUEST spells it. One
-        # row, no tick -- it is a fact about the conversation rather than a
-        # choice among alternatives, and the guest shows it on the toolbar so
-        # that "where do my files go?" is answerable without asking.
-        #
-        # `id` is the full path and `label` is the short form the button
-        # wears; the same split the model rows use, and for the same reason:
-        # a 640px screen has no room for C:\WORK\SOMETHING on a button.
-        await self._send(guest, option(
-            "work", guest.work_guest, guest.work_guest or "<unset>", False,
-            desc=guest.work_guest))
-
-        # AFTER the models and efforts, not before: the guest clears all three
-        # menus when it sees the first `model` row of a batch, which is how it
-        # knows a batch has started without a frame type saying so. A mode row
-        # sent ahead of that would be appended and then deleted.
-        for mode in MODE_ORDER:
-            await self._send(guest, option(
-                "mode", mode, MODE_LABEL.get(mode, mode),
-                mode == guest.perm_mode))
-
-        # Intersected with what this CLI actually offers rather than sent from
-        # the table alone: a menu entry for a command the install does not
-        # have would fail as a typed prompt, several seconds later, with the
-        # model apologising for it.
-        have = {}
-        for c in await self._commands(guest):
-            n = c.get("name")
-            if isinstance(n, str) and n:
-                have["/" + n] = c.get("argumentHint") or ""
-        for cmd in COMMAND_MENU:
-            if cmd not in have:
-                continue
-            # The hint goes in the LABEL, because the menu is where the
-            # question "what does this one take?" is actually asked. The id
-            # stays the bare command -- it is what gets sent.
-            hint = have[cmd]
-            label = (cmd + " " + hint) if hint else cmd
-            await self._send(guest, option("command", cmd, label, False,
-                                           hint=hint))
-        await self._send(guest, optionsend())
+        await self.options.send_options(guest)
 
     async def _quiesce_turn(self, guest: GuestSession) -> None:
         """Stop whatever turn is running, so `turn_lock` can be had.
@@ -4331,35 +4159,7 @@ class Bridge:
         await self._send_options(guest)
 
     async def _set_mode(self, guest: GuestSession, mode: str) -> None:
-        """Change the permission mode, live -- no fork, unlike effort.
-
-        Refused rather than passed through if it is not one we offer: the
-        header is model-free but it still arrives off a socket, and
-        `bypassPermissions` would silently stop the permission bar from ever
-        appearing again.
-        """
-        if mode not in MODE_ORDER:
-            log.warning("ignoring unknown permission mode %r", mode)
-            return
-        guest.perm_mode = mode
-        self._remember_settings(guest)
-        label = MODE_LABEL.get(mode, mode)
-        if guest.claude:
-            try:
-                await guest.claude.set_permission_mode(mode)
-            except Exception as exc:
-                log.exception("permission mode change failed")
-                await self._write_block(guest, H.error(
-                    "Could not change the permission mode: " + str(exc)[:160]))
-                await self._send_options(guest)
-                return
-        log.info("permission mode -> %s", mode)
-        note = "Permission mode set to " + label + "."
-        caveat = MODE_CAVEAT.get(mode)
-        if caveat:
-            note += " " + caveat
-        await self._write_block(guest, H.notice(note))
-        await self._send_options(guest)
+        await self.options.set_mode(guest, mode)
 
     async def _new_session_locked(self, guest: GuestSession,
                                   folder: str = "") -> None:
@@ -4579,80 +4379,7 @@ class Bridge:
         await GuestLink.send_raw(writer, frame)
 
 
-# Effort levels, in the order they should appear. Which of these a given model
-# actually offers comes from the CLI, not from here.
-EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"]
-EFFORT_LABEL = {"low": "Low", "medium": "Medium", "high": "High",
-                "xhigh": "Extra high", "max": "Maximum"}
 
-# Permission modes offered to the guest, in menu order. THREE OF THE SDK'S
-# SIX, and the three that are missing are missing for measured reasons:
-#
-#   bypassPermissions  the docs say can_use_tool is never invoked. The bar
-#                      would stop appearing and nothing would say why.
-#   dontAsk            denies anything not pre-approved by an allow rule, and
-#                      we persist no allow rules yet (4.1j). Today it would
-#                      deny everything, which is not a mode, it is a fault.
-#
-# `auto` IS offered, and was withheld for one release. It was asked for by
-# name, and taking it off the menu on the strength of a measurement was the
-# wrong call to make silently: the measurement says what auto does NOT do, and
-# that belongs in front of the person choosing it rather than in a decision
-# made for them. What was measured, on this bridge: with `can_use_tool`
-# installed the model's own danger classifier is not consulted at all --
-# `git reset --hard` on a repo with real uncommitted work, a documented
-# blocked-by-default action, executed unchanged in `auto` and in `default`.
-# So auto here means "the permission prompt still asks", not "something
-# smarter is watching". `_set_mode` says so in the transcript when it is
-# picked.
-MODE_ORDER = ["default", "acceptEdits", "plan", "auto"]
-MODE_LABEL = {"default": "Manual", "acceptEdits": "Accept edits",
-              "plan": "Plan", "auto": "Auto"}
-#: Said once, when the mode is chosen, for modes whose name promises more than
-#: this client can deliver.
-MODE_CAVEAT = {
-    "auto": "Measured on this bridge: with the permission prompt installed, "
-            "the model's own danger classifier is not consulted -- "
-            "`git reset --hard` on a repo with uncommitted work ran "
-            "unchanged in Auto and in Manual. Auto still asks you; it does "
-            "not add a second opinion.",
-}
-
-# Slash commands offered on the Commands menu, in menu order.
-#
-# THREE OF FIFTY-THREE, and the ratio is the point. The CLI's own list is
-# whatever the operator's install happens to carry -- on the machine this was
-# written against: plugin management, cloud workflows billed by the run, a JS
-# heap dump written to the operator's Desktop, three ways to grant a web
-# service access to a design system. None of that means anything on a Win98
-# box, and some of it spends money or touches the bridge host.
-#
-# There is no SDK list to lean on. `terminal_slash_commands` was assumed to
-# exist and does not (see Session.server_commands). So the subset is ours, and
-# the rule for adding to it is: does this do something a person sitting at a
-# 640x480 screen with no terminal actually wants, that no other control here
-# already does, without spending money by surprise?
-#
-# Deliberately NOT here, so nobody "completes" the list:
-#   /model, /effort     the toolbar owns those. Going through the CLI would
-#                       change the model WITHOUT a SETMODEL frame, so the
-#                       dropdown would keep showing the old one -- a control
-#                       that lies is worse than one that is missing.
-#   /clear              New chat already does it, through a path that resets
-#                       the transcript and the paginator too.
-#   /context            the status bar has the gauge.
-#   /code-review, /security-review, /ultrareview
-#                       cloud agents billed per run, launched by one click on
-#                       a machine whose owner cannot see what they cost.
-#   /doctor, /config, /mcp, /reload-plugins, /import, /heapdump, /fast, /color
-#                       operator-environment features. They configure or
-#                       inspect the BRIDGE HOST, which is not the machine the
-#                       person at the keyboard is sitting at.
-#   /recap, /usage      MEASURED on the guest: both ran, both cost a turn,
-#                       and both rendered an empty transcript. The CLI
-#                       resolves them locally and sends nothing back. They
-#                       were on this list until they were tried.
-COMMAND_MENU = ["/compact", "/rename", "/init"]
 
 
 def _summarise(args: dict) -> str:
