@@ -100,6 +100,7 @@ from .services.sync import SyncService
 from .services.attachment import AttachmentService
 from .services.session import SessionService
 from .services.turn_runner import TurnRunner, turn_verdict
+from .services.coordinator import SessionCoordinator
 
 log = logging.getLogger("bridge.server")
 
@@ -631,6 +632,16 @@ class Bridge:
             workspace=self.workspace,
             session=self.session,
             conv=self.conv,
+        )
+        self.coordinator = SessionCoordinator(
+            connection=self,
+            turn_runner=self.turn_runner,
+            sync=self.sync,
+            permission=self.permissions,
+            session=self.session,
+            workspace=self.workspace,
+            guest_exec=self.guest_exec,
+            spawn=self._spawn,
         )
 
         # One guest, one session. See PLAN.md "Multi-session".
@@ -1344,56 +1355,13 @@ class Bridge:
         await self.session.send_sessions(guest)
 
     async def _reissue_halt(self, guest: GuestSession) -> None:
-        """After a reconnect, put the Continue bar back.
-
-        The third leg of the same idea as `guest.perms.reissue()`, and the one
-        whose
-        absence was worst. `synccoord.halt_id` lives on the SyncCoordinator
-        and survives a reconnect (same Bridge, same process); `latched` lives
-        on disk. So a guest that reconnected while a halt was up came back
-        with NO BAR, a bridge still holding the halt, and every latched path
-        refusing the agent's writes -- unanswerable, because RESUME is only
-        accepted against a matching id and raising is idempotent while one is
-        outstanding. Nothing short of restarting the bridge or hand-editing
-        the baseline would have recovered it.
-
-        No new frame type: the guest's HALT handler is idempotent, so re-sending
-        the same one restores the bar.
-        """
-        sc = self.synccoord
-        if not sc.halt_id:
-            return
-        log.info("re-issuing halt %s after reconnect", sc.halt_id)
-        await self._send(guest, halt(sc.halt_id, sc.halt_text))
+        await self.coordinator.reissue_halt(guest)
 
     async def _reissue_turn(self, guest: GuestSession) -> None:
-        """After a reconnect, restore the busy UI if a turn is still running.
+        await self.coordinator.reissue_turn(guest)
 
-        Nothing re-sent TURN either, so a guest that blipped mid-turn came back
-        with Send enabled and `g_turn_active` clear while the bridge-side turn
-        was still streaming -- which is one of the ways two turns end up on one
-        session, on a stream that can only have one consumer.
-
-        Again no new frame: the guest's `TURN state=start` branch already sets
-        the busy UI and the thinking indicator, so re-sending it is the whole
-        fix. It restarts the elapsed timer, which is cosmetic.
-        """
-        session = guest.claude
-        if session is None or not getattr(session, "busy", False):
-            return
-        log.info("re-issuing turn state after reconnect")
-        # Both halves, not one.
-        #
-        # This reset `turn_produced` alone, which meant a guest that blipped
-        # AFTER the model had already streamed text came back looking like a
-        # turn that had answered nothing -- and then any stale `turn_degraded`
-        # turned that into a reported failure under a visible answer. The
-        # verdict needs the two fields to agree about which turn they
-        # describe, and the only honest answer here is "we stopped watching",
-        # which is what clearing both says.
-        guest.turn_produced = False
-        guest.turn_degraded = ""
-        await self._send(guest, turn_start())
+    async def sync_state_to_guest(self, guest: GuestSession) -> None:
+        await self.coordinator.sync_state_to_guest(guest)
 
     def _spawn(self, coro) -> None:
         """Fire-and-forget, with a reference kept AND the result looked at.
@@ -1485,73 +1453,10 @@ class Bridge:
         await getattr(self, name)(guest, f)
 
     async def _on_input(self, guest: GuestSession, f: Frame) -> None:
-        text = fold.decode(f.body)
-        log.info("input: %s", text[:120])
-        attach = f.headers.get("attach")
-        attach_id = f.headers.get("attach_id")
-        attach_name = f.headers.get("attach_name")
-        # The first thing said in a conversation is what its folder is named
-        # after, and by the time a tool runs the SDK has not titled the
-        # conversation yet. Recorded only while the folder is still open --
-        # once committed, the name is the name.
-        if not guest.work_guest and not guest.first_prompt:
-            guest.first_prompt = text
-        if attach:
-            await self._ensure_work_dir(guest)
-            for part in attach.split("|"):
-                part = part.strip()
-                if not part:
-                    continue
-                target = self._validate_attach_target(guest, part)
-                if not target:
-                    log.warning("rejected unsafe attachment path: %s", part)
-                    await self._send(guest, error("bad_attach",
-                        f"Attachment outside work directory: {part}"))
-                    return
-        self._spawn(self._run_turn(guest, text, attach=attach,
-                                  attach_id=attach_id, attach_name=attach_name))
+        await self.coordinator.on_input(guest, f)
 
     async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
-        # The user pressed Continue on the halt bar. THAT is the signal the
-        # design has been waiting for -- not an INPUT, and not a timer.
-        #
-        # "The agent stops until the user confirms they have finished with
-        # the file" needs a confirmation, and until now the only inbound
-        # channels were INPUT and PERMREPLY. Reading it off the next INPUT
-        # was worse than useless: the most natural reaction to the notice
-        # is to type "wait, stop", which is precisely the message that
-        # would have restarted it.
-        sc = self.synccoord
-        if not (f.headers.get("id", "") == sc.halt_id and sc.halt_id):
-            return
-        hid, sc.halt_id = sc.halt_id, ""
-        log.info("user pressed Continue on the sync halt")
-        # Acknowledge, because the guest no longer takes its own bar
-        # down on the click. A press that never reached us used to look
-        # answered on their screen while we still held the halt -- and
-        # since raising is idempotent, no later bar could appear and
-        # every latched path refused the agent for good.
-        await self._send(guest, haltend(hid))
-        # Pressing Continue IS the confirmation, so it lifts the
-        # refusal here. Making the agent ask again -- a permission
-        # prompt for sync_resolve -- would put a second dialog in front
-        # of a user who has just answered the question, on a 640x480
-        # screen, and the second one carries no information the first
-        # did not. `sync_resolve` stays for the case the user never
-        # sees: the agent finishing a merge on its own.
-        # The release travels WITH the turn that explains it, and
-        # that ordering is the whole of M1.
-        #
-        # It used to run here, synchronously, and the informing turn
-        # was spawned after it -- so an in-flight turn that had been
-        # told nothing found the path no longer refusing its writes,
-        # wrote, and the write went to the user's machine. Queueing the
-        # turn (above) makes that window arbitrarily long, so the two
-        # have to move together: _run_turn takes the lock, waits out
-        # any turn ahead of it, and only then lifts the refusals it is
-        # about to explain.
-        answered, sc.halt_paths = sc.halt_paths, frozenset()
-        self._spawn(self._resume_turn(guest, answered))
+        await self.coordinator.on_resume(guest, f)
 
     async def _on_syncdirty(self, guest: GuestSession, f: Frame) -> None:
         # The guest noticed its tree move. It never reconciles anything
@@ -1559,20 +1464,7 @@ class Bridge:
         self._spawn(self.run_sync("the guest reported a change"))
 
     async def _on_interrupt(self, guest: GuestSession, f: Frame) -> None:
-        # Stop must reach the command too, not just the model.
-        #
-        # The CancelledError path in run_on_guest turns out to be largely
-        # unreachable: on mcp 1.x the SDK does NOT cancel an in-flight
-        # tool call when a turn is interrupted (types.py:653-662), so the
-        # coroutine is never cancelled and never sends EXECKILL. Measured
-        # on the guest -- `pause` kept running for its full 90s clamp
-        # after Stop was pressed. Killing from here is the trigger that
-        # actually fires, and it is the one the user meant: they pressed
-        # Stop, so stop.
-        for exec_id in list(guest.exec_pending):
-            self._kill_exec(guest, exec_id)
-        if guest.claude:
-            await guest.claude.interrupt()
+        await self.coordinator.on_interrupt(guest, f)
 
     async def _on_getsessions(self, guest: GuestSession, f: Frame) -> None:
         await self.session.on_getsessions(guest, f)
@@ -1950,71 +1842,17 @@ class Bridge:
         await self.options.send_options(guest)
 
     async def _quiesce_turn(self, guest: GuestSession) -> None:
-        """Stop whatever turn is running, so `turn_lock` can be had.
-
-        The three methods below destroy and replace the object a turn may be
-        running ON. Taking the lock without this would park `_pump` -- and
-        therefore every inbound frame -- for as long as the model felt like
-        streaming.
-
-        The kill goes out first for the same reason `_on_interrupt` sends it:
-        the command is running on the guest's single worker thread and
-        forgetting about it bridge-side leaves the NEXT conversation's first
-        `exec` answered `busy`.
-        """
-        if not guest.turn_lock.locked():
-            return
-        log.info("interrupting the live turn before the conversation changes")
-        for exec_id in list(guest.exec_pending):
-            self._kill_exec(guest, exec_id)
-        if guest.claude:
-            try:
-                await guest.claude.interrupt()
-            except Exception:
-                # Best effort. A client that refuses to be interrupted is
-                # still one we are about to close, and the wait below is
-                # bounded by the turn ending one way or another.
-                log.exception("could not interrupt the running turn")
+        await self.coordinator.quiesce_turn(guest)
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
-        """See `_set_effort_locked`; this is the turn-lock half (02.1)."""
-        await self._quiesce_turn(guest)
-        async with guest.turn_lock:
-            await self._set_effort_locked(guest, effort)
+        await self.coordinator.set_effort(guest, effort)
 
     async def _new_session(self, guest: GuestSession,
                            folder: str = "") -> None:
-        """See `_new_session_locked`; this is the turn-lock half (02.1)."""
-        await self._quiesce_turn(guest)
-        async with guest.turn_lock:
-            await self._new_session_locked(guest, folder)
+        await self.coordinator.new_session(guest, folder=folder)
 
     async def _switch(self, guest: GuestSession, session_id: str) -> None:
-        """See `_switch_locked`; this is the turn-lock half.
-
-        UNDER `guest.turn_lock`, all three of them, and this is 02.1. Each
-        closes `guest.claude` and replaces the transcript, and each is
-        reached from `_handle` -- which runs in `_pump`'s task -- while a
-        turn spawned by `_on_input` may be suspended inside
-        `guest.claude.send()`. They are concurrent by construction, not by
-        race.
-
-        What happened without the lock: `reset_transcript()` replaced
-        `view.pages` and `view.render` and cleared the coalescers, the
-        suspended turn's SDK callbacks kept firing, and the old
-        conversation's remaining prose was appended to the conversation the
-        user had just opened -- into its paginator, so also into its Export
-        and onto its sealed pages. Then `close()` made `receive_response()`
-        end without a `ResultMessage`, `_consume` returned an error Turn
-        rather than raising, and `_run_turn_locked` walked into
-        `self.conv.add(guest.claude.session_id)` with `guest.claude`
-        already None. The AttributeError died inside a task nothing
-        inspected, so no TURN end frame was ever sent and the guest's Send
-        button stayed disabled until the link was re-established.
-        """
-        await self._quiesce_turn(guest)
-        async with guest.turn_lock:
-            await self._switch_locked(guest, session_id)
+        await self.coordinator.switch(guest, session_id)
 
     async def _set_effort_locked(self, guest: GuestSession,
                                  effort: str) -> None:

@@ -16,6 +16,7 @@ from bridge.services.options import (
     MODE_ORDER,
     OptionsService,
 )
+from bridge.services.coordinator import SessionCoordinator
 from bridge.services.permission import PermissionService
 from bridge.services.presentation import PresentationService
 from bridge.services.session import SessionService
@@ -31,6 +32,7 @@ __all__ = [
     "OptionsService",
     "PermissionService",
     "PresentationService",
+    "SessionCoordinator",
     "SessionService",
     "SyncService",
     "TurnRunner",
