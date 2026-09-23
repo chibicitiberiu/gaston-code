@@ -38,6 +38,8 @@
 #include "app/tooldet.h"
 #include "app/workdir.h"
 #include "app/workdlg.h"
+#include "app/pillbar.h"
+#include "app/screenshot.h"
 #include "net/caps.h"
 
 /* SBARS_TOOLTIPS, which this build's headers do not define.
@@ -107,6 +109,7 @@ static rc_bar  *g_bar;
 static rc_chats *g_chats;
 static rc_xferstat *g_xfer;
 static rc_input    *g_inputmod;
+static rc_pillbar  *g_pillbar;
 static rc_toolbar  *g_toolbar;
 /* The export sink. One instance, created in create_children and destroyed
  * in WM_DESTROY, the same shape as g_html -- see app/export.h. */
@@ -485,10 +488,16 @@ static int input_blocked(void)
     return g_turn_active || (g_bar && g_bar->blocks_send());
 }
 
+static void pillbar_detached(void)
+{
+    if (g_main) layout(g_main);
+}
+
 static void input_sent(void)
 {
     status_refresh();
     ui_set_busy(1);
+    if (g_main) layout(g_main);
 }
 
 /* ------------------------------------------------------- permission bar */
@@ -1220,7 +1229,9 @@ static void layout(HWND hwnd)
      * was written for. Stop is positioned from this same `y`, so it moves
      * with the row rather than being left behind by it. */
     y = h - INPUT_HEIGHT - GUTTER - (g_toolbar ? TOOLBAR_H : 0);
-    ybar = (g_bar && g_bar->active()) ? (y - PERM_H - GUTTER) : y;
+    int pill_h = (g_pillbar && g_pillbar->active()) ? PILL_H : 0;
+    int y_pill = y - pill_h;
+    ybar = (g_bar && g_bar->active()) ? (y_pill - PERM_H - GUTTER) : y_pill;
 
     /* Chat list down the left, with its Refresh button under it -- both
      * positioned by app/chatlist.cpp now. */
@@ -1241,6 +1252,8 @@ static void layout(HWND hwnd)
          * an edit at this exact spot too). */
         if (g_bar && g_bar->active())
             g_bar->move(cx, ybar, w - GUTTER);
+        if (g_pillbar && g_pillbar->active())
+            g_pillbar->move(cx, y_pill, cw);
         /* The input box, Send and Stop position their own three controls
          * now -- app/input.cpp, see app/input.h. */
         if (g_inputmod) g_inputmod->move(cx, y, cw, w);
@@ -1395,6 +1408,11 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * core/rc_cpp.h); every use, here and in input.cpp, is guarded. */
     g_xfer = rc_xferstat::create();
 
+    /* Attachment pill bar: sits between transcript and input box */
+    rc_syncrpc_set_attachment_lookup(rc_pillbar_lookup_attachment);
+    rc_syncrpc_set_attachment_done(rc_pillbar_transfer_done);
+    g_pillbar = rc_pillbar::create(hwnd, inst, g_ui_font, pillbar_detached);
+
     /* The input box and Send/Stop: created and owned by app/input.cpp now
      * (rc_input::create logs its own check_child failures and subclasses the
      * input box itself). ui_send is main.c's "send something the user just
@@ -1402,7 +1420,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * answers to the two policy questions that module does not own -- see
      * the callback comments on rc_input::create in app/input.h. */
     g_inputmod = rc_input::create(hwnd, inst, g_ui_font, &g_net, g_html,
-                                  g_xfer, ui_send,
+                                  g_xfer, g_pillbar, ui_send,
                      input_blocked, input_sent);
 
     /* After the option menus, because it borrows their HMENUs and their
@@ -1536,54 +1554,57 @@ static void try_connect(HWND hwnd)
 static void handle_attach_path(HWND hwnd, const char *path)
 {
     const char *work;
-    size_t wlen;
-    const char *rel_start;
-    char rel[MAX_PATH];
-    char *p;
+    size_t wlen = 0;
+    DWORD file_sz = 0;
+    HANDLE hf;
 
-    if (!path || !*path) return;
+    if (!path || !*path || !g_pillbar) return;
+
+    hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf != INVALID_HANDLE_VALUE) {
+        file_sz = GetFileSize(hf, NULL);
+        CloseHandle(hf);
+    }
 
     work = rc_workdir_current();
-    if (!work || !*work) {
-        MessageBoxA(hwnd,
-                    "The work directory is not set yet for this conversation.\n\n"
-                    "Send a message first or select 'Change work directory...' before attaching files.",
-                    RC_TITLE, MB_OK | MB_ICONINFORMATION);
+    if (work && *work) {
+        wlen = strlen(work);
+    }
+
+    /* Check if path is inside mirrored work directory */
+    if (wlen > 0 && _strnicmp(path, work, wlen) == 0 &&
+        (path[wlen] == '\\' || path[wlen] == '/' || path[wlen] == '\0')) {
+        const char *rel_start = path + wlen;
+        char rel[MAX_PATH];
+        char *p;
+        if (*rel_start == '\\' || *rel_start == '/') rel_start++;
+        if (!*rel_start) {
+            MessageBoxA(hwnd, "Cannot attach the work directory itself. Select a file inside it.",
+                        "Attach File", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        rc_strf(rel, sizeof(rel), "%s", rel_start);
+        for (p = rel; *p; p++) {
+            if (*p == '\\') *p = '/';
+        }
+        g_pillbar->stage_workspace(rel, file_sz);
+        layout(hwnd);
         return;
     }
 
-    wlen = strlen(work);
-    /* Path must be inside work directory */
-    if (_strnicmp(path, work, wlen) != 0 ||
-        (path[wlen] != '\\' && path[wlen] != '/' && path[wlen] != '\0')) {
-        char msg[MAX_PATH * 2 + 160];
-        rc_strf(msg, sizeof(msg),
-                "That file is outside the mirrored work folder:\n%s\n\n"
-                "Work folder is:\n%s\n\n"
-                "In this version, only files inside the work folder can be attached directly. "
-                "Copy the file into the work folder, or use 'Change work directory...'.",
-                path, work);
-        MessageBoxA(hwnd, msg, "Attach File", MB_OK | MB_ICONWARNING);
-        return;
-    }
+    /* Outside work directory: attach as external file */
+    {
+        static unsigned s_ext_seq = 0;
+        char att_id[16];
+        const char *fname = strrchr(path, '\\');
+        if (!fname) fname = strrchr(path, '/');
+        fname = fname ? (fname + 1) : path;
 
-    /* Extract relative path */
-    rel_start = path + wlen;
-    if (*rel_start == '\\' || *rel_start == '/') rel_start++;
-    if (!*rel_start) {
-        MessageBoxA(hwnd, "Cannot attach the work directory itself. Select a file inside it.",
-                    "Attach File", MB_OK | MB_ICONWARNING);
-        return;
+        rc_strf(att_id, sizeof(att_id), "att_%u", ++s_ext_seq);
+        g_pillbar->stage_external(att_id, path, fname, file_sz, 0 /* not temp */);
+        layout(hwnd);
     }
-
-    rc_strf(rel, sizeof(rel), "%s", rel_start);
-    /* Convert DOS backslashes to forward slashes */
-    for (p = rel; *p; p++) {
-        if (*p == '\\') *p = '/';
-    }
-
-    if (g_inputmod)
-        g_inputmod->attach(rel);
 }
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -1763,6 +1784,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_STOP:
             if (g_inputmod) g_inputmod->command(id);
             return 0;
+        case 1030: case 1031: case 1032: case 1033:
+        case 1034: case 1035: case 1036: case 1037:
+            if (g_pillbar) g_pillbar->command(id);
+            return 0;
         /* All three of the bar's own buttons dispatch through one call now
          * -- see app/bar.h. command() knows which kind is on screen and what
          * each button means for it (audit finding 01.15: this used to be a
@@ -1936,23 +1961,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             char file[MAX_PATH];
             const char *work = rc_workdir_current();
 
-            if (!work || !*work) {
-                MessageBoxA(hwnd,
-                            "The work directory is not set yet for this conversation.\n\n"
-                            "Send a message first or select 'Change work directory...' before attaching files.",
-                            RC_TITLE, MB_OK | MB_ICONINFORMATION);
-                return 0;
-            }
-
             file[0] = '\0';
             memset(&ofn, 0, sizeof(ofn));
             ofn.lStructSize = sizeof(ofn);
             ofn.hwndOwner = hwnd;
-            ofn.lpstrFilter = "All Files (*.*)\0*.*\0Text / Code (*.c;*.h;*.txt;*.md)\0*.c;*.h;*.txt;*.md;*.py;*.json\0Images (*.bmp;*.png;*.jpg;*.gif)\0*.bmp;*.png;*.jpg;*.jpeg;*.gif\0\0";
+            ofn.lpstrFilter = "All Files (*.*)\0*.*\0Images (*.bmp;*.pcx;*.tga;*.tif;*.png;*.jpg;*.gif)\0*.bmp;*.dib;*.pcx;*.tga;*.tif;*.tiff;*.png;*.jpg;*.jpeg;*.gif;*.ico\0Text / Code (*.c;*.h;*.txt;*.md;*.ini)\0*.c;*.h;*.txt;*.md;*.py;*.json;*.ini;*.bat\0\0";
             ofn.lpstrFile = file;
             ofn.nMaxFile = sizeof(file);
-            ofn.lpstrInitialDir = work;
-            ofn.lpstrTitle = "Attach file from work directory";
+            ofn.lpstrInitialDir = (work && *work) ? work : "C:\\";
+            ofn.lpstrTitle = "Attach file";
             ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
 
             {
@@ -1963,6 +1980,29 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (fn && fn(&ofn)) {
                     handle_attach_path(hwnd, file);
                 }
+            }
+            return 0;
+        }
+
+        case IDM_ATTSHOT: {
+            char temp_dir[MAX_PATH];
+            if (!GetTempPathA(sizeof(temp_dir), temp_dir))
+                rc_strf(temp_dir, sizeof(temp_dir), "%s\\", g_exe_dir);
+            static unsigned s_shot_seq = 0;
+            char shot_path[MAX_PATH];
+            rc_strf(shot_path, sizeof(shot_path), "%sretro_shot_%u.bmp", temp_dir, ++s_shot_seq);
+            DWORD shot_sz = 0;
+            if (!rc_screenshot_capture(shot_path, &shot_sz)) {
+                MessageBoxA(hwnd, "Failed to capture desktop screenshot.", RC_TITLE, MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            char att_id[16];
+            rc_strf(att_id, sizeof(att_id), "shot_%u", s_shot_seq);
+            if (g_pillbar) {
+                char shot_title[64];
+                rc_strf(shot_title, sizeof(shot_title), "Screenshot #%u", s_shot_seq);
+                g_pillbar->stage_external(att_id, shot_path, shot_title, shot_sz, 1 /* is_temp */);
+                layout(hwnd);
             }
             return 0;
         }
@@ -2081,6 +2121,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_chats = NULL;
         delete g_inputmod;
         g_inputmod = NULL;
+        delete g_pillbar;
+        g_pillbar = NULL;
         delete g_xfer;
         g_xfer = NULL;
         delete g_cache;

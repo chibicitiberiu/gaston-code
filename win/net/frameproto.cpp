@@ -40,7 +40,8 @@ static void unquote(char *s)
  * on one side and not the other. */
 const rc_lane_row RC_LANE_TABLE[] = {
     { "EXEC",     RC_LANE_JOB },
-    { "EXECKILL", RC_LANE_IMMEDIATE }
+    { "EXECKILL", RC_LANE_IMMEDIATE },
+    { "ATTGET",   RC_LANE_STREAM }
 };
 const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
 

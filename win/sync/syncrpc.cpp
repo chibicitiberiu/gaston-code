@@ -757,6 +757,100 @@ static void do_get(rc_net *net, rc_frame *f)
     HeapFree(GetProcessHeap(), 0, buf);
 }
 
+static rc_att_lookup_fn g_att_lookup = NULL;
+static rc_att_done_fn   g_att_done = NULL;
+
+void rc_syncrpc_set_attachment_lookup(rc_att_lookup_fn fn)
+{
+    g_att_lookup = fn;
+}
+
+void rc_syncrpc_set_attachment_done(rc_att_done_fn fn)
+{
+    g_att_done = fn;
+}
+
+static void do_attget(rc_net *net, rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    const char *att = rc_frame_get(f, "att");
+    const char *keys[4];
+    const char *vals[4];
+    char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
+    unsigned long crc = 0;
+    char cls = 0;
+    HANDLE h;
+    rc_sync_scanner *scan;
+    char *buf;
+    DWORD attr;
+    DWORD size = 0, got = 0, sent = 0;
+    const char *status = "ok";
+
+    if (!id) {
+        rc_log("sync: ATTGET frame carries no id");
+        return;
+    }
+
+    buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
+    if (!buf) {
+        const char *k[2]; const char *v[2];
+        k[0] = "id";     v[0] = id;
+        k[1] = "status"; v[1] = "locked";
+        rc_log("sync: no memory for an attget buffer");
+        rc_net_send(net, "SYNCDATEND", k, v, 2, NULL, 0);
+        return;
+    }
+
+    full[0] = '\0';
+    if (!att || !g_att_lookup || !g_att_lookup(att, full, sizeof(full)) || !full[0]) {
+        status = "bad_path";
+    } else {
+        attr = GetFileAttributesA(full);
+        if (attr == 0xFFFFFFFF)                   status = "missing";
+        else if (attr & FILE_ATTRIBUTE_DIRECTORY) status = "is_directory";
+        else {
+            h = CreateFileA(full, GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (h == INVALID_HANDLE_VALUE) status = "locked";
+            else {
+                scan = rc_sync_scanner_begin();
+                if (!scan) {
+                    status = "locked";
+                } else {
+                    size = GetFileSize(h, NULL);
+                    rc_strf(total, sizeof(total), "%lu", (unsigned long)size);
+                    while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
+                        rc_sync_scanner_feed(scan, buf, got);
+                        rc_strf(offs, sizeof(offs), "%lu", (unsigned long)sent);
+                        keys[0] = "id";    vals[0] = id;
+                        keys[1] = "total"; vals[1] = total;
+                        keys[2] = "off";   vals[2] = offs;
+                        if (rc_net_send(net, "SYNCDAT", keys, vals, 3, buf, got) != 0) {
+                            status = "locked";
+                            break;
+                        }
+                        sent += got;
+                    }
+                    rc_sync_scanner_finish(scan, &cls, &crc);
+                }
+                CloseHandle(h);
+            }
+        }
+    }
+
+    rc_strf(crcs, sizeof(crcs), "%lu", crc);
+    rc_strf(clss, sizeof(clss), "%c", cls ? cls : RC_CLS_TEXT);
+    if (strcmp(status, "ok") == 0) g_moved++;
+    keys[0] = "id";     vals[0] = id;
+    keys[1] = "status"; vals[1] = status;
+    keys[2] = "crc";    vals[2] = crcs;
+    keys[3] = "cls";    vals[3] = clss;
+    rc_net_send(net, "SYNCDATEND", keys, vals, 4, NULL, 0);
+    if (g_att_done && att) g_att_done(att);
+    HeapFree(GetProcessHeap(), 0, buf);
+}
+
 void rc_syncrpc_handle(rc_net *net, rc_frame *f)
 {
     if      (strcmp(f->type, "SYNCSCAN")   == 0) do_scan(net, f);
@@ -764,5 +858,6 @@ void rc_syncrpc_handle(rc_net *net, rc_frame *f)
     else if (strcmp(f->type, "SYNCPUTEND") == 0) do_putend(net, f);
     else if (strcmp(f->type, "SYNCMKDIR")  == 0) do_mkdir(net, f);
     else if (strcmp(f->type, "SYNCGET")    == 0) do_get(net, f);
+    else if (strcmp(f->type, "ATTGET")     == 0) do_attget(net, f);
     else rc_log("sync: unhandled frame %s", f->type);
 }

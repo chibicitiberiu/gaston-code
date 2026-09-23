@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "app/input.h"
+#include "app/pillbar.h"
 #include "core/log.h"
 #include "core/str.h"
 
@@ -105,33 +106,9 @@ void rc_input::do_send(void)
     }
 
     n = GetWindowTextA(box, buf, RC_INPUT_MAX);
-    if (n <= 0) { HeapFree(GetProcessHeap(), 0, buf); return; }
-
-    /* If staged_attach is set, verify that the tag is still present in the text.
-     * If the user deleted the [Attached: ...] text, unattach it. */
-    if (staged_attach[0]) {
-        char tag[MAX_PATH + 32];
-        rc_strf(tag, sizeof(tag), "[Attached: %s]", staged_attach);
-        if (!strstr(buf, tag)) {
-            staged_attach[0] = '\0';
-        }
-    }
-    /* If staged_attach is empty, check whether the user typed or edited
-     * an [Attached: <path>] tag in the input box. */
-    if (!staged_attach[0]) {
-        const char *p = strstr(buf, "[Attached: ");
-        if (p) {
-            const char *start = p + 11;
-            const char *end = strchr(start, ']');
-            if (end && (size_t)(end - start) < sizeof(staged_attach)) {
-                size_t tlen = (size_t)(end - start);
-                memcpy(staged_attach, start, tlen);
-                staged_attach[tlen] = '\0';
-                for (char *c = staged_attach; *c; c++) {
-                    if (*c == '\\') *c = '/';
-                }
-            }
-        }
+    if (n <= 0 && (!pillbar || !pillbar->active())) {
+        HeapFree(GetProcessHeap(), 0, buf);
+        return;
     }
 
     /* status_refresh() used to run between note_tx_done and the
@@ -148,67 +125,86 @@ int rc_input::send_text(const char *text)
 {
     unsigned n;
 
-    if (!text || !*text) return 0;
+    if ((!text || !*text) && (!pillbar || !pillbar->active())) return 0;
     /* The same refusal the Send button gets, not a second opinion about it:
      * a menu entry that sends a prompt mid-turn would be the one path around
      * the check that stops two turns overlapping. */
     if (blocked_fn && blocked_fn()) return 0;
 
-    n = (unsigned)strlen(text);
+    n = text ? (unsigned)strlen(text) : 0;
     if (n >= RC_INPUT_MAX) {
         if (html) html->error("That message is too long to send.");
         return 0;
     }
 
-    const char *keys[1];
-    const char *vals[1];
+    const char *keys[4];
+    const char *vals[4];
     int nkv = 0;
-    if (staged_attach[0]) {
-        char tag[MAX_PATH + 32];
-        rc_strf(tag, sizeof(tag), "[Attached: %s]", staged_attach);
-        if (strstr(text, tag)) {
-            keys[0] = "attach";
-            vals[0] = staged_attach;
-            nkv = 1;
+    char *att_work = NULL;
+    char *ws_buf = NULL;
+    char *ext_ids = NULL;
+    char *ext_names = NULL;
+    char *echo_pills = NULL;
+
+    if (pillbar && pillbar->active()) {
+        att_work = (char *)HeapAlloc(GetProcessHeap(), 0, 1024 * 3 + 256);
+        if (att_work) {
+            ws_buf = att_work;
+            ext_ids = ws_buf + 1024;
+            ext_names = ext_ids + 256;
+            echo_pills = ext_names + 1024;
+
+            if (pillbar->get_workspace_attachments(ws_buf, 1024)) {
+                keys[nkv] = "attach";
+                vals[nkv] = ws_buf;
+                nkv++;
+            }
+            if (pillbar->get_external_attachments(ext_ids, 256, ext_names, 1024)) {
+                keys[nkv] = "attach_id";
+                vals[nkv] = ext_ids;
+                nkv++;
+                keys[nkv] = "attach_name";
+                vals[nkv] = ext_names;
+                nkv++;
+            }
+            pillbar->get_echo_string(echo_pills, 1024);
         }
     }
 
-    /* Echoed BEFORE the send attempt, exactly as a typed message is, so a
-     * command picked from a menu appears in the transcript in the place it
-     * was sent from rather than only when the reply arrives. */
-    echo_user_block(text);
+    /* Echoed BEFORE the send attempt, matching bridge transcript. */
+    if (echo_pills && echo_pills[0]) {
+        size_t echo_len = strlen(echo_pills);
+        char *echo_buf = (char *)HeapAlloc(GetProcessHeap(), 0, n + echo_len + 64);
+        if (echo_buf) {
+            if (n > 0) {
+                rc_strf(echo_buf, n + echo_len + 64, "%s\r\n%s", echo_pills, text);
+            } else {
+                rc_strf(echo_buf, n + echo_len + 64, "%s", echo_pills);
+            }
+            echo_user_block(echo_buf);
+            HeapFree(GetProcessHeap(), 0, echo_buf);
+        } else {
+            echo_user_block(text ? text : "");
+        }
+    } else {
+        echo_user_block(text ? text : "");
+    }
 
     if (xfer) xfer->note_tx_start((unsigned long)n);
-    if (rc_net_send(net, "INPUT", keys, vals, nkv, text, n) == 0) {
-        staged_attach[0] = '\0';
+    int sent = (rc_net_send(net, "INPUT", keys, vals, nkv, text ? text : "", n) == 0);
+    if (att_work) {
+        HeapFree(GetProcessHeap(), 0, att_work);
+    }
+    if (sent) {
+        if (pillbar && pillbar->active()) {
+            pillbar->on_send();
+        }
         if (xfer) xfer->note_tx_done((unsigned long)n);
         if (sent_fn) sent_fn();
         return 1;
     }
     if (html) html->error("Not connected.");
     return 0;
-}
-
-int rc_input::attach(const char *rel_path)
-{
-    char tag[MAX_PATH + 32];
-    int len;
-
-    if (!box || !rel_path || !*rel_path) return 0;
-    rc_strf(staged_attach, sizeof(staged_attach), "%s", rel_path);
-
-    len = GetWindowTextLengthA(box);
-    if (len == 0) {
-        rc_strf(tag, sizeof(tag), "[Attached: %s]\r\n", rel_path);
-        SetWindowTextA(box, tag);
-    } else {
-        rc_strf(tag, sizeof(tag), "\r\n[Attached: %s]", rel_path);
-        SendMessageA(box, EM_SETSEL, (WPARAM)len, (LPARAM)len);
-        SendMessageA(box, EM_REPLACESEL, FALSE, (LPARAM)tag);
-    }
-    SendMessageA(box, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-    SetFocus(box);
-    return 1;
 }
 
 int rc_input::compose(const char *text)
@@ -279,6 +275,7 @@ LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 rc_input *rc_input::create(HWND parent, HINSTANCE inst, HFONT font,
                            rc_net *net_, rc_html *html_, rc_xferstat *xfer_,
+                           rc_pillbar *pillbar_,
                            rc_input_send_fn send, int (*blocked)(void),
                            void (*sent)(void))
 {
@@ -288,6 +285,7 @@ rc_input *rc_input::create(HWND parent, HINSTANCE inst, HFONT font,
     p->net = net_;
     p->html = html_;
     p->xfer = xfer_;
+    p->pillbar = pillbar_;
     p->send_fn = send;
     p->blocked_fn = blocked;
     p->sent_fn = sent;

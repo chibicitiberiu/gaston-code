@@ -176,6 +176,18 @@ class SyncTransport:
         finally:
             state.pending.pop(sid, None)
 
+    async def get_attachment(self, att_id: str) -> S.GetResult:
+        state = self._guest.sync
+        sid = state.next_id()
+        fut = asyncio.get_running_loop().create_future()
+        state.pending[sid] = S.Wait(kind="get", future=fut, data=bytearray())
+        try:
+            await self._guest.link.send(
+                self._guest, Frame("ATTGET", {"id": sid, "att": att_id}))
+            return await asyncio.wait_for(fut, timeout=300)
+        finally:
+            state.pending.pop(sid, None)
+
     async def mkdir(self, rel_wire: bytes) -> S.AckResult:
         state = self._guest.sync
         sid = state.next_id()

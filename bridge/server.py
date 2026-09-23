@@ -1932,6 +1932,8 @@ class Bridge:
         text = fold.decode(f.body)
         log.info("input: %s", text[:120])
         attach = f.headers.get("attach")
+        attach_id = f.headers.get("attach_id")
+        attach_name = f.headers.get("attach_name")
         # The first thing said in a conversation is what its folder is named
         # after, and by the time a tool runs the SDK has not titled the
         # conversation yet. Recorded only while the folder is still open --
@@ -1940,13 +1942,18 @@ class Bridge:
             guest.first_prompt = text
         if attach:
             await self._ensure_work_dir(guest)
-            target = self._validate_attach_target(guest, attach)
-            if not target:
-                log.warning("rejected unsafe attachment path: %s", attach)
-                await self._send(guest, error("bad_attach",
-                    f"Attachment outside work directory: {attach}"))
-                return
-        self._spawn(self._run_turn(guest, text, attach=attach))
+            for part in attach.split("|"):
+                part = part.strip()
+                if not part:
+                    continue
+                target = self._validate_attach_target(guest, part)
+                if not target:
+                    log.warning("rejected unsafe attachment path: %s", part)
+                    await self._send(guest, error("bad_attach",
+                        f"Attachment outside work directory: {part}"))
+                    return
+        self._spawn(self._run_turn(guest, text, attach=attach,
+                                  attach_id=attach_id, attach_name=attach_name))
 
     async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
         # The user pressed Continue on the halt bar. THAT is the signal the
@@ -2375,7 +2382,9 @@ class Bridge:
 
     async def _run_turn(self, guest: GuestSession, text: str,
                         *, echo: bool = True,
-                        attach: str | None = None) -> None:
+                        attach: str | None = None,
+                        attach_id: str | None = None,
+                        attach_name: str | None = None) -> None:
         # The first message is what starts the process -- for a chat opened
         # from the list AND for one started with New chat, neither of which
         # spawns anything by itself. Before the lock, because building it is
@@ -2395,16 +2404,25 @@ class Bridge:
         # dropping either on the floor is the one thing worse than running it
         # late. The wait is bounded by the turn ahead of it finishing.
         async with guest.turn_lock:
-            await self._run_turn_locked(guest, text, echo=echo, attach=attach)
+            await self._run_turn_locked(guest, text, echo=echo, attach=attach,
+                                        attach_id=attach_id, attach_name=attach_name)
 
     async def _run_turn_locked(self, guest: GuestSession, text: str,
                                *, echo: bool = True,
-                               attach: str | None = None) -> None:
+                               attach: str | None = None,
+                               attach_id: str | None = None,
+                               attach_name: str | None = None) -> None:
         if not guest.claude:
             return
         display_text = text
-        if attach and "[Attached:" not in text:
-            display_text = f"[Attached: {attach}]\n{text}"
+        display_names: list[str] = []
+        if attach_name:
+            display_names.extend([n.strip() for n in attach_name.split("|") if n.strip()])
+        if attach:
+            display_names.extend([os.path.basename(p.replace("\\", "/").strip()) or p.strip()
+                                  for p in attach.split("|") if p.strip()])
+        if display_names and "[Attached:" not in text:
+            display_text = f"[Attached: {', '.join(display_names)}]\n{text}"
         # User turns are the landmarks a reader navigates by.
         anchor = guest.pages.mark_user_turn(display_text)
         # The guest echoed this line itself the moment Send was pressed, so it
@@ -2459,119 +2477,187 @@ class Bridge:
         if not was_command:
             text = await self._with_sync_preamble(text)
         prompt_payload: str | AsyncIterable[dict] = text
-        if attach and not was_command:
-            clean_attach = attach.replace("\\", "/").strip()
-            target = self._validate_attach_target(guest, clean_attach)
-            if target and not os.path.exists(target) and self.sync_dir:
-                try:
-                    await self.run_sync("attachment not found locally")
-                except Exception as exc:
-                    log.warning("sync before attachment failed: %s", exc)
-
-            ext = os.path.splitext(clean_attach)[1].lower()
-            image_types = {
+        if (attach or attach_id) and not was_command:
+            native_images = {
                 ".png": "image/png",
                 ".jpg": "image/jpeg",
                 ".jpeg": "image/jpeg",
                 ".gif": "image/gif",
                 ".webp": "image/webp",
             }
+            items: list[dict] = []
+            if attach_id and attach_name:
+                ids = [i.strip() for i in attach_id.split("|") if i.strip()]
+                names = [n.strip() for n in attach_name.split("|") if n.strip()]
+                for aid, aname in zip(ids, names):
+                    items.append({"kind": "external", "id": aid, "name": aname, "path": None})
+            if attach:
+                for p in attach.split("|"):
+                    p = p.strip()
+                    if p:
+                        clean_path = p.replace("\\", "/").strip()
+                        fn = os.path.basename(clean_path) or clean_path
+                        items.append({"kind": "workspace", "id": None, "name": clean_path, "display_name": fn, "path": clean_path})
+
+            image_blocks: list[dict] = []
+            text_blocks: list[str] = []
+
+            for item in items:
+                filename = item["name"]
+                ext = os.path.splitext(filename)[1].lower()
+                att_bytes: bytes | None = None
+                file_too_large_image = False
+                if item["kind"] == "external" and item["id"]:
+                    try:
+                        transport = SyncTransport(guest)
+                        res = await transport.get_attachment(item["id"])
+                        if res.status == SyncStatus.OK:
+                            att_bytes = res.data
+                        else:
+                            log.warning("failed to fetch attachment %s: %s", item["id"], res.status)
+                    except Exception as exc:
+                        log.warning("exception fetching attachment %s: %s", item["id"], exc)
+                elif item["kind"] == "workspace" and item["path"]:
+                    clean_attach = item["path"]
+                    target = self._validate_attach_target(guest, clean_attach)
+                    if target and not os.path.exists(target) and self.sync_dir:
+                        try:
+                            await self.run_sync("attachment not found locally")
+                        except Exception as exc:
+                            log.warning("sync before attachment failed: %s", exc)
+                    if target and os.path.isfile(target):
+                        try:
+                            file_size = os.path.getsize(target)
+                            if ext in native_images and file_size > 10 * 1024 * 1024:
+                                file_too_large_image = True
+                                log.warning("image attachment %s exceeds 10MB limit (%d bytes)",
+                                            clean_attach, file_size)
+                            else:
+                                with open(target, "rb") as f:
+                                    att_bytes = f.read()
+                        except OSError as exc:
+                            log.warning("failed to read attachment %s: %s", target, exc)
+
+                if file_too_large_image:
+                    prefix = "Attached workspace file" if item["kind"] == "workspace" else "Referenced file"
+                    text_blocks.append(f"[{prefix}: {filename} (file too large for image block)]\n")
+                    continue
+
+                image_data: bytes | None = None
+                media_type: str = "image/png"
+                if att_bytes:
+                    if ext in native_images and len(att_bytes) <= 10 * 1024 * 1024:
+                        image_data = att_bytes
+                        media_type = native_images[ext]
+                    else:
+                        try:
+                            from PIL import Image
+                            import io
+                            with Image.open(io.BytesIO(att_bytes)) as img:
+                                buf = io.BytesIO()
+                                if img.mode not in ("RGB", "RGBA"):
+                                    img = img.convert("RGBA" if ("transparency" in img.info or img.mode == "P") else "RGB")
+                                img.save(buf, format="PNG")
+                                converted = buf.getvalue()
+                                if len(converted) <= 10 * 1024 * 1024:
+                                    image_data = converted
+                                    media_type = "image/png"
+                                else:
+                                    log.warning("converted image %s exceeds 10MB limit (%d bytes)", filename, len(converted))
+                        except Exception:
+                            pass
+
+                if image_data:
+                    b64_data = base64.b64encode(image_data).decode("ascii")
+                    image_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64_data,
+                        },
+                    })
+                else:
+                    label = "Attached workspace file" if item["kind"] == "workspace" else "Attached file"
+                    ref_label = "Attached workspace file" if item["kind"] == "workspace" else "Referenced file"
+                    if att_bytes is not None:
+                        file_size = len(att_bytes)
+                        if file_size == 0:
+                            text_blocks.append(f"[{label}: {filename} (empty file)]\n")
+                        elif file_size > 256 * 1024:
+                            text_blocks.append(
+                                f"[{label}: {filename} "
+                                f"({file_size} bytes, file too large to inline directly)]\n"
+                            )
+                        else:
+                            is_binary = b"\x00" in att_bytes
+                            content_str: str | None = None
+                            if not is_binary:
+                                if att_bytes.startswith(b"\xef\xbb\xbf"):
+                                    try:
+                                        content_str = att_bytes[3:].decode("utf-8")
+                                    except UnicodeDecodeError:
+                                        pass
+                                if content_str is None:
+                                    try:
+                                        content_str = att_bytes.decode("utf-8")
+                                    except UnicodeDecodeError:
+                                        pass
+                                if content_str is None and hasattr(guest, "caps") and getattr(guest.caps, "acp", None):
+                                    try:
+                                        content_str = att_bytes.decode(guest.caps.acp)
+                                    except (UnicodeDecodeError, LookupError):
+                                        pass
+                                if content_str is None:
+                                    try:
+                                        content_str = att_bytes.decode("cp1252")
+                                    except UnicodeDecodeError:
+                                        pass
+                            if content_str is not None:
+                                text_blocks.append(
+                                    f"[{label}: {filename}]\n"
+                                    f"Contents of {filename}:\n"
+                                    f"```\n"
+                                    f"{content_str}\n"
+                                    f"```\n"
+                                )
+                            else:
+                                text_blocks.append(
+                                    f"[{ref_label}: {filename} ({file_size} bytes, binary file)]\n"
+                                )
+                    else:
+                        text_blocks.append(f"[{label}: {filename} (failed to read file)]\n")
+
             clean_text = text
-            for tag in (f"[Attached: {attach}]", f"[Attached: {clean_attach}]"):
+            for item in items:
+                tag = f"[Attached: {item['name']}]"
+                clean_text = clean_text.replace(tag + "\r\n", "").replace(tag + "\n", "").replace(tag, "")
+            if display_names:
+                tag = f"[Attached: {', '.join(display_names)}]"
                 clean_text = clean_text.replace(tag + "\r\n", "").replace(tag + "\n", "").replace(tag, "")
             clean_text = clean_text.strip()
             prompt_text = clean_text if clean_text else text
 
-            if target and ext in image_types and os.path.isfile(target):
-                try:
-                    file_size = os.path.getsize(target)
-                    if file_size <= 10 * 1024 * 1024:
-                        with open(target, "rb") as img_f:
-                            b64_data = base64.b64encode(img_f.read()).decode("ascii")
-                        media_type = image_types[ext]
+            if text_blocks:
+                header = "".join(text_blocks)
+                prompt_text = f"{header}{prompt_text}" if prompt_text else header.strip()
 
-                        async def _image_prompt(mtype=media_type, data=b64_data, ptext=prompt_text):
-                            content: list[dict] = [
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": mtype,
-                                        "data": data,
-                                    },
-                                }
-                            ]
-                            if ptext:
-                                content.append({"type": "text", "text": ptext})
-                            yield {
-                                "type": "user",
-                                "message": {
-                                    "role": "user",
-                                    "content": content,
-                                },
-                                "parent_tool_use_id": None,
-                            }
-                        prompt_payload = _image_prompt()
-                    else:
-                        log.warning("image attachment %s exceeds 10MB limit (%d bytes)",
-                                    clean_attach, file_size)
-                        if f"[Attached workspace file: {clean_attach}" not in prompt_text:
-                            prompt_payload = (
-                                f"[Attached workspace file: {clean_attach} "
-                                f"(file too large for image block)]\n{prompt_text}"
-                            )
-                except OSError:
-                    log.exception("failed to read image attachment %s", target)
-                    if f"[Attached workspace file: {clean_attach}" not in prompt_text:
-                        prompt_payload = f"[Attached workspace file: {clean_attach}]\n{prompt_text}"
+            if image_blocks:
+                async def _multimodal_prompt(blocks=list(image_blocks), ptext=prompt_text):
+                    content: list[dict] = list(blocks)
+                    if ptext:
+                        content.append({"type": "text", "text": ptext})
+                    yield {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": content,
+                        },
+                        "parent_tool_use_id": None,
+                    }
+                prompt_payload = _multimodal_prompt()
             else:
-                if f"[Attached workspace file: {clean_attach}" not in prompt_text:
-                    file_content_block = ""
-                    if target and os.path.isfile(target):
-                        try:
-                            file_size = os.path.getsize(target)
-                            if file_size == 0:
-                                file_content_block = (
-                                    f"[Attached workspace file: {clean_attach} (empty file)]\n"
-                                )
-                            elif file_size > 256 * 1024:
-                                file_content_block = (
-                                    f"[Attached workspace file: {clean_attach} "
-                                    f"({file_size} bytes, file too large to inline directly)]\n"
-                                )
-                            else:
-                                with open(target, "rb") as f:
-                                    raw_bytes = f.read()
-                                is_binary = b"\x00" in raw_bytes
-                                if not is_binary:
-                                    try:
-                                        content_str = raw_bytes.decode("utf-8")
-                                    except UnicodeDecodeError:
-                                        try:
-                                            content_str = raw_bytes.decode("cp1252")
-                                        except UnicodeDecodeError:
-                                            content_str = None
-                                    if content_str is not None:
-                                        file_content_block = (
-                                            f"[Attached workspace file: {clean_attach}]\n"
-                                            f"Contents of {clean_attach}:\n"
-                                            f"```\n"
-                                            f"{content_str}\n"
-                                            f"```\n"
-                                        )
-                                if not file_content_block:
-                                    file_content_block = (
-                                        f"[Attached workspace file: {clean_attach} "
-                                        f"({file_size} bytes, binary file)]\n"
-                                    )
-                        except OSError as exc:
-                            log.warning("failed to read attachment %s: %s", target, exc)
-                    if not file_content_block:
-                        file_content_block = f"[Attached workspace file: {clean_attach}]\n"
-                    prompt_payload = (
-                        f"{file_content_block}{prompt_text}"
-                        if prompt_text else file_content_block.strip()
-                    )
+                prompt_payload = prompt_text
         try:
             turn = await guest.claude.send(prompt_payload)
 
@@ -4514,7 +4600,8 @@ def main() -> None:
                     help="bind address; use the retro-segment interface, not 0.0.0.0")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--cwd", default=None, help="working directory for Claude")
-    ap.add_argument("--model", default=None)
+    ap.add_argument("--model", default="sonnet",
+                    help="model for sessions (default: sonnet)")
     ap.add_argument("--effort", default=None, choices=[None, "low", "medium",
                                                        "high", "xhigh", "max"])
     # Deliberately separate from --cwd and never defaulted. Defaulting to the

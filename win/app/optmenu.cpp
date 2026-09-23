@@ -41,7 +41,7 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
     menu_attach = CreatePopupMenu();
     AppendMenuA(menu_attach, MF_STRING, IDM_ATTFILE,
                 "&File...");
-    AppendMenuA(menu_attach, MF_STRING | MF_GRAYED, IDM_ATTSHOT,
+    AppendMenuA(menu_attach, MF_STRING, IDM_ATTSHOT,
                 "&Screenshot of this screen");
     AppendMenuA(menu_model, MF_STRING | MF_GRAYED, 0, "(not connected)");
     AppendMenuA(menu_effort, MF_STRING | MF_GRAYED, 0, "(not connected)");

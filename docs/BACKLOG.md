@@ -1048,13 +1048,12 @@ the Resource Meter on the guest first.
 
 **04.24 -- `off_limits` is not wired to a path that does not exist yet.**
 `off_limits` (`bridge/agent/permissions.py:220`) refuses path-tool calls
-outside `cwd`, but nothing in `win/net/`, `win/rpc/` or `win/sync/` sends or
-handles an `ATTACH` frame today -- grepped, zero hits. The finding is
-accurate as a requirement and premature as a defect: there is no live path
-where a guest could send `ATTACH path=/etc/shadow`, because there is no
-`ATTACH`. Record it as a one-line requirement for Phase 5.2's first cut --
-apply the same containment check to the attach path when it is built -- not
-as something to fix now.
+outside `cwd`. In Phase 5.1, `_validate_attach_target` applied the strict
+containment check to mirrored attachments (`attach` parameter), forbidding
+any path escapes or symlink traversals. In Phase 5.2/5.3, out-of-band streaming
+via `ATTGET` directly streams external files and memory-safe 16-scanline strip
+desktop screenshots over the wire using `SYNCDAT`/`SYNCDATEND` chunks without
+workspace pollution or wire-exposed traversal holes. Closed in Phase 5.3.
 
 **04.34 -- no shared frame-dispatch table, only a closed instance of the bug
 it enables.** The specific failure -- `TOOLRESULT` going unrendered for all
@@ -1105,3 +1104,138 @@ agent believes it knows the path of; naming the folder in the prompt before
 it exists is exactly what `_sync_paragraph`'s docstring says sent an agent
 off to diagnose a sync fault. Wants its own measurement, against this
 transcript as the baseline.
+
+---
+
+## 12. RetroAI as an external MCP server, and the two restart problems behind it
+
+**Status:** deferred by decision, 2026-09-23. Designed and reviewed against the
+source; nothing built.
+
+The idea: expose the bridge as an external MCP server so an agent running on
+the modern host (Claude Code, Antigravity, Cursor) drives the retro machine
+directly, editing files with host tooling while the sync layer carries them
+across. Gaston Code keeps working; this is a second front end, not a
+replacement.
+
+It is recorded here rather than started because the design review turned up a
+bootstrap problem that is worth solving deliberately, and because the one piece
+that is unambiguously worth building is separable from the rest.
+
+### What the review settled, so it is not re-derived
+
+- **The endpoint has to live inside `bridge.server`.** The bridge owns the TCP
+  socket to the guest, the `SyncCoordinator`, the `GuestSession` and
+  `exec_lock`; a separate process has none of them, and reaching them means a
+  second RPC protocol beside the one the project already has. The `mcp` package
+  is already in `.venv`.
+- **`permdesk` is not only a dialog.** The path is `can_use_tool` ->
+  `PermissionDesk` -> `cmdguard.reason()` (`bridge/agent/cmdguard.py:570`),
+  which parses the command under the named shell's grammar to find writes
+  outside the mirror, device names and unresolvable paths -- *"None means
+  'nothing found', NOT 'safe'. Nothing here is ever a grant."* An external path
+  must **keep `cmdguard` and skip only the bar**, returning the finding in the
+  tool result so the host agent's own prompt shows it. Bypassing the desk
+  wholesale loses the analysis that makes the host's prompt worth answering.
+- **A `sync_init` that takes a guest directory cannot work.** `win/core/ini.cpp:35`
+  defaults `sync.root` to `C:\Gaston` and `rc_sync_contained` refuses anything
+  outside it, so the obvious default of `C:\WORK` is refused by the guest.
+  It must take `host_dir` only and derive the guest side under the existing
+  mirror, which also keeps §7's one-mirror-one-baseline invariant.
+- **Tools are named bare** (`exec`, not `mcp__machine__exec`). The prefix is
+  synthesised by the client from its own config key --
+  `bridge/agent/tools.py:3-7` states it.
+- **`sync_status` and `sync_resolve` already exist** (`tools.py:204`, `:218`).
+  Without the second, an external agent can reach a conflict it cannot clear.
+- **`read_file` fails the exec test** -- `type` does the job. If it is ever
+  wanted, build it on the existing `SYNCGET` path rather than a new RPC.
+- **No shell may be named in the schema.** Since 02.5 the machine reports what
+  it has; `"command.com"` and `"cmd.exe"` are both in
+  `tests/python/meta/test_no_os_in_code.py`'s `BANNED` list.
+
+### The bootstrap problem, which is the real reason this is deferred
+
+Anything that is both the agent's hands and the thing being edited cannot
+restart itself. It happens twice, one layer apart.
+
+**The bridge.** The MCP endpoint lives in the process being edited, so applying
+a bridge change kills the agent's own connection. The workable answer is to
+invert the lifecycle: MCP clients *spawn* stdio servers, so `python -m
+bridge.mcp` becomes a supervisor that owns the bridge daemon as a child,
+proxies machine tools to it, and carries control tools (`bridge_status`,
+`bridge_restart`, `bridge_logs`) that still work while the bridge is down. The
+agent's session never drops because the supervisor never dies. It also removes
+the `pkill -f "python -m bridge.server"` trap, which matches the wrapping shell
+of the command running it. The recursion does not vanish -- editing the
+supervisor still needs a human -- so it stays small and boring.
+
+**The guest.** `RETROCL.EXE` serves the RPC that would replace `RETROCL.EXE`,
+and Win98 maps the running image: `tools/vm/dos.py:151` records that the
+resulting `COPY` failure *"prints as one line in a console whose screendumps
+are frequently stale, so it reads as success. Twice a test ran against the
+previous binary and its result was taken at face value."* Today's workaround is
+to install under a fresh name each run. **This is why `tools/vm/` cannot be
+deleted** -- the out-of-band channel is structurally required, and any plan
+claiming external MCP removes it is wrong.
+
+### The guest-side updater, if this is picked up
+
+A small, rarely-changing `RETROUPD.EXE` gets the update in-band without
+splitting the client into a service and a GUI -- the `[R2]` one-binary decision
+(`PLAN.md:1981`) stands. The agent syncs the new exe into the mirror (286KB
+against `MAX_FILE`'s 1MB), execs the stub, the stub waits for the client to
+exit, swaps, relaunches, and the client reconnects on its own backoff.
+
+- **Do not invent the swap.** `rc_sync_commit` (`win/sync/sync.cpp:612`) already
+  does it on 9x: CRC-verify first, move the old aside rather than deleting it,
+  move the old back if the second move fails, with `rc_sync_recover` knowing the
+  naming. `MoveFileExA(REPLACE_EXISTING)` is NT-only, so it cannot be atomic and
+  the aside is what makes every intermediate state recoverable.
+- **Roll back on failure to start**, which is what makes an in-band updater
+  responsible rather than a way to brick the guest in-band.
+- **Liveness is not the test.** A binary can start perfectly and never connect
+  -- the `PROTO_VERSION` 1->2 bump produced exactly that (`[bad_version] bridge
+  speaks 2, guest speaks 1`), and it is the failure most likely while iterating
+  on the wire.
+- **Invert the marker.** Wait for the absence of a *failure* marker, not the
+  presence of a success one, or starting the client while the bridge is off
+  rolls back a good binary. The guest already distinguishes a refusal (an
+  `ERROR` frame it received and renders) from an unreachable bridge (a socket
+  error and a backoff).
+- Leave `RETROCL.INI` out of the rollback: it is read from the exe's own
+  directory and `win/core/ini.cpp` defaults anything missing.
+- Still uncovered: a page fault leaves an orphaned child, because
+  `rc_exec_cancel()` runs only on the graceful path (`rc_net_stop` ->
+  `rc_rpc_stop`, `win/rpc/rpc.cpp:808`). Survivable on a dev box; worth knowing.
+
+### What already works, which makes this cheaper than it looks
+
+- `run_on_guest(..., guest=None)` (`bridge/server.py:2655`) already binds a
+  guest rather than resolving `bridge._guest` at call time -- audit 04.1. The
+  multi-machine question is already answered.
+- The guest reconnects by itself, 1/2/4/8->15s on `WM_TIMER`. A bridge restart
+  needs nothing done on the retro side.
+- No orphaned children on a clean link loss (`win/rpc/rpc.cpp:808`), and
+  `_fail_execs` (`server.py:3823`) resolves the bridge's pending futures.
+- Baselines persist per root as `base-<slug>.json` under `--sync-state`, forced
+  outside `--sync-dir` (`server.py:4556-4559`), so they survive a restart.
+- `asyncio.start_server` sets `SO_REUSEADDR`, so rebinding is not the hazard; an
+  old process still holding the port is.
+
+### The one piece worth doing anyway
+
+**Rootless execution has no MCP dependency and fixes litter in the product as it
+stands.** `run_on_guest` calls `_ensure_work_dir` unconditionally
+(`server.py:2682`), whose docstring states the rule -- *"THE FIRST TOOL CALL IS
+THE COMMITMENT"* (`:1247`) -- so asking "what is the volume label on C:" creates
+a mirrored folder. Guarding that on sync actually being initialised is a small,
+testable change. `ensure_sync_flush` needs no guard added; it already returns
+early without a mirror (`:2849-2852`).
+
+**To close it:** decide whether the agent restarts the bridge itself (the
+supervisor) or a human does; decide what happens when two MCP clients each want
+to own one bridge daemon (pidfile-and-attach, or refuse the second and say who
+holds it); then build rootless execution, `init_sync_root`, the embedded
+endpoint, and the stdio supervisor, in that order. The updater stub is
+independent of all of it and can land whenever the guest reflash loop becomes
+the bottleneck.

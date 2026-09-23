@@ -46,12 +46,15 @@ typedef int (*rc_input_send_fn)(const char *what, const char *type,
                                  const char *const *vals, int nkv,
                                  const void *body, unsigned body_len);
 
+class rc_pillbar;
+
 class rc_input {
     HWND         box, send_btn, stop_btn;
     WNDPROC      oldproc;
     rc_net      *net;
     rc_html     *html;
     rc_xferstat *xfer;
+    rc_pillbar  *pillbar;
     rc_input_send_fn send_fn;
     int        (*blocked_fn)(void);
     void       (*sent_fn)(void);
@@ -69,35 +72,16 @@ class rc_input {
     void do_send(void);
     void do_stop(void);
 
-    char         staged_attach[MAX_PATH];
-
     rc_input(const rc_input &);
     rc_input &operator=(const rc_input &);
     rc_input() : box(0), send_btn(0), stop_btn(0), oldproc(0), net(0),
-                 html(0), xfer(0), send_fn(0), blocked_fn(0), sent_fn(0) {
-        staged_attach[0] = '\0';
+                 html(0), xfer(0), pillbar(0), send_fn(0), blocked_fn(0), sent_fn(0) {
     }
 
 public:
-    /* net: the one raw rc_net_send this module makes itself, for INPUT.
-     *      do_send has always had its own "Not connected" refusal rather
-     *      than going through main.c's ui_send (which would report a
-     *      different message), so that is preserved rather than folded into
-     *      `send` below.
-     * html: user()/error() -- the local echo of a sent message and the
-     *      "too long"/"not connected" refusals. May be NULL, as everywhere
-     *      else that guards the view; every call here is guarded too.
-     * xfer: do_send's own side of the rx/tx counters.
-     * send: main.c's ui_send, for INTERRUPT (do_stop).
-     * blocked: "is Send currently refused" -- g_turn_active or the bar
-     *      blocking it. do_send checks this itself rather than trusting the
-     *      button's enabled state, because Enter reaches do_send directly
-     *      through box_proc and bypasses whatever EnableWindow last set.
-     * sent: called once a typed INPUT has actually gone, after the box is
-     *      cleared -- status_refresh plus ui_set_busy(1) today, chrome this
-     *      module does not own. */
     static rc_input *create(HWND parent, HINSTANCE inst, HFONT font,
                             rc_net *net, rc_html *html, rc_xferstat *xfer,
+                            rc_pillbar *pillbar,
                             rc_input_send_fn send, int (*blocked)(void),
                             void (*sent)(void));
     /* Same reason as rc_chats': box_proc dereferences s_instance and the
@@ -141,11 +125,6 @@ public:
      * worst thing on this toolbar. Non-zero if the box now holds `text`. */
     int  compose(const char *text);
 
-    /* Stage an attachment: records the relative path to be sent with the next
-     * INPUT frame, and reflects it in the input box so the user can see what
-     * was attached and type their question around it. */
-    int  attach(const char *rel_path);
-    const char *get_staged_attach(void) const { return staged_attach; }
     HWND get_box(void) const { return box; }
 
     /* Is the box empty, and does it have the keyboard?

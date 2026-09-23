@@ -699,7 +699,8 @@ static void reject_sync_busy(rc_frame *f)
         return;
     }
     if (strcmp(f->type, "SYNCSCAN") == 0)        ack = "SYNCEND";
-    else if (strcmp(f->type, "SYNCGET") == 0)    ack = "SYNCDATEND";
+    else if (strcmp(f->type, "SYNCGET") == 0 ||
+             strcmp(f->type, "ATTGET") == 0)     ack = "SYNCDATEND";
     else if (strcmp(f->type, "SYNCMKDIR") == 0)  ack = "SYNCMKDIRACK";
 
     keys[0] = "id";     vals[0] = id;

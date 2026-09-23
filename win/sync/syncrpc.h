@@ -53,6 +53,12 @@ int         rc_syncrpc_home_copy(char *out, unsigned cap);
  * thread -- see the definition for why no lock is needed. */
 unsigned long rc_syncrpc_moved(void);
 
+/* Out-of-band attachment lookup and transfer completion hooks */
+typedef int (*rc_att_lookup_fn)(const char *att_id, char *out_path, size_t cap);
+typedef void (*rc_att_done_fn)(const char *att_id);
+void rc_syncrpc_set_attachment_lookup(rc_att_lookup_fn fn);
+void rc_syncrpc_set_attachment_done(rc_att_done_fn fn);
+
 #ifdef __cplusplus
 }
 #endif
