@@ -18,6 +18,7 @@ from bridge.services.options import (
 )
 from bridge.services.permission import PermissionService
 from bridge.services.presentation import PresentationService
+from bridge.services.session import SessionService
 from bridge.services.sync import SyncService
 from bridge.services.workspace import WorkspaceService
 
@@ -29,6 +30,7 @@ __all__ = [
     "OptionsService",
     "PermissionService",
     "PresentationService",
+    "SessionService",
     "SyncService",
     "WorkspaceService",
     "COMMAND_MENU",

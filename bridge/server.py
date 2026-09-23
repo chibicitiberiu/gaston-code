@@ -98,6 +98,7 @@ from .services.guest_exec import ExecCall, GuestExecService
 from .services.permission import PermissionService
 from .services.sync import SyncService
 from .services.attachment import AttachmentService
+from .services.session import SessionService
 
 log = logging.getLogger("bridge.server")
 
@@ -635,6 +636,15 @@ class Bridge:
             workspace=self.workspace,
             sync=self.sync,
         )
+        self.session = SessionService(
+            connection=self,
+            presentation=self.presentation,
+            workspace=self.workspace,
+            options=self.options,
+            guest_exec=self.guest_exec,
+            conv=self.conv,
+            spawn=self._spawn,
+        )
 
         # One guest, one session. See PLAN.md "Multi-session".
         self._guest: GuestSession | None = None
@@ -706,6 +716,8 @@ class Bridge:
             self.options.conv = val
         if hasattr(self, "workspace") and self.workspace is not None:
             self.workspace.conv = val
+        if hasattr(self, "session") and self.session is not None:
+            self.session.conv = val
 
     @property
     def secret(self) -> str:
@@ -1297,26 +1309,7 @@ class Bridge:
         self.options.remember_settings(guest, session_id)
 
     def _restore_settings(self, guest: GuestSession, session_id: str) -> None:
-        """Put back what this conversation was last set to.
-
-        ONLY WHAT WAS RECORDED. A conversation with nothing saved -- one from
-        before this existed, or one opened on another machine -- keeps
-        whatever is currently selected rather than being reset to the
-        process defaults, because "I have not chosen for this chat" and "I
-        chose the default for this chat" are different and only the second
-        one is written down.
-        """
-        saved = self.conv.settings(session_id)
-        if not saved:
-            return
-        if "model" in saved:
-            guest.model = saved["model"]
-        if "effort" in saved:
-            guest.effort = saved["effort"]
-        mode = saved.get("mode")
-        if mode in MODE_ORDER:
-            guest.perm_mode = mode
-        log.info("restored settings for %s: %s", session_id, saved)
+        self.session.restore_settings(guest, session_id)
 
     async def _ensure_work_dir(self, guest: GuestSession) -> None:
         await self.workspace.ensure_work_dir(guest)
@@ -1341,286 +1334,15 @@ class Bridge:
         return self.options.effective_effort(guest)
 
     def _abandon_pending(self, guest: GuestSession) -> None:
-        """Orphan everything the conversation being left behind still owes.
-
-        A prompt belongs to the session that raised it, and so does a running
-        EXEC. Leaving either pending against a conversation the user has
-        walked away from is the unanswerable state `_reissue_halt` exists to
-        prevent -- worse now than when this lived inside `_make_session`,
-        because a switch no longer rebuilds anything and would otherwise
-        clean up nothing at all. The guest hides its bar on the strength of
-        the deny, so the deny has to happen whether or not a new client is
-        built.
-        """
-        guest.perms.deny_all(
-            "rebuild", "The conversation changed before this was answered.")
-        # THE KILL COMES FIRST, and it is 02.9. `_fail_execs` resolves the
-        # futures and clears the table; it sends nothing. So the command kept
-        # running on the guest's single worker thread, and the first `exec`
-        # in the NEW conversation was answered `busy` -- for a command the
-        # model in that conversation never issued and cannot see. This is
-        # what `_on_interrupt` already does, and for the reason it states
-        # there: one abandoned turn must not poison the following one.
-        for exec_id in list(guest.exec_pending):
-            self._kill_exec(guest, exec_id)
-        self._fail_execs(guest, "The conversation changed while this command "
-                                "was running.")
+        self.session.abandon_pending(guest)
 
     async def _resume_pending(self, guest: GuestSession) -> bool:
-        """Build the client for a conversation that has not been spoken in.
-
-        NEITHER opening a chat from the list NOR pressing New chat spawns
-        anything: both are pure bookkeeping, and this is where the process
-        finally starts -- at the first message, which is also the first
-        moment it could do anything. Resumes a stored conversation when one
-        is pending and starts a fresh one otherwise.
-
-        Returns False and tells the user if it fails; the caller must not
-        proceed. A message that vanishes because there was no client is the
-        one outcome worse than an error.
-        """
-        if guest.claude:
-            return True
-        resuming = bool(guest.pending_resume)
-        try:
-            guest.claude = await self._make_session(
-                guest, resume=guest.pending_resume or None)
-        except Exception as exc:
-            log.exception("deferred session start failed")
-            await self._write_block(guest, H.error(
-                ("Could not reopen the conversation: " if resuming
-                 else "Could not start a new session: ") + str(exc)[:160]))
-            return False
-        guest.pending_resume = ""
-        # NO _remember_settings HERE, and the comment that used to say "the
-        # conversation has an id at last" was wrong: `Session._session_id` is
-        # set from the SDK's `init` message, which arrives during the first
-        # TURN, and `pending_resume` has just been cleared on the line above
-        # -- so `conv_id` is empty on both branches and the write was a
-        # no-op every time. It lives in `on_system`'s init branch now, which
-        # is the first instant an id exists.
-        if not resuming:
-            # The guest has been showing an empty id since New chat; tell it
-            # which conversation this turned out to be, so the chat list can
-            # mark it and a reconnect knows what to resume.
-            await self._send(guest, switched(guest.claude.session_id or "",
-                                             guest.pages.count))
-        # The menus were filled from the cache while there was no client; now
-        # there is one, and it is the thing that decides what `default`
-        # resolves to.
-        await self._send_options(guest)
-        return True
+        return await self.session.resume_pending(guest)
 
     async def _make_session(self, guest: GuestSession,
                             resume: str | None = None,
                             fork: bool = False) -> Session:
-        # The model list is whatever the CLI reported when the CLIENT
-        # connected -- get_server_info() hands back the cached init result --
-        # so a CLI upgraded under a running bridge cannot reach the menu
-        # until a new client exists. This is that moment, and it is the only
-        # one: re-fetching at any other point re-reads the same init result.
-        self._models_cache = None
-        self._commands_cache = None
-        async def on_text(t: str) -> None:
-            guest.turn_produced = True
-            await self._emit_text(guest, t, style="plain")
-
-        async def on_thinking(t: str) -> None:
-            await self._emit_text(guest, t, style="thinking")
-
-        async def on_tool(name: str, args: dict) -> None:
-            guest.turn_produced = True
-            # THE FIRST TOOL IS THE COMMITMENT: this conversation gets its
-            # folder here, and file sharing begins. Before the block is
-            # written, so the notice naming the folder comes first and the
-            # tool line lands under it rather than above it.
-            await self._ensure_work_dir(guest)
-            # Flush buffered text first: a tool line that jumps ahead of the
-            # prose that introduced it reads as a non sequitur.
-            await self._flush_text(guest)
-            await self._write_block(guest, H.tool_call(name, _summarise(args)))
-
-        async def on_tool_result(tool_id: str, body: str, is_err: bool) -> None:
-            # A finished block, like every other thing the user reads.
-            #
-            # This was a raw TOOLRESULT frame carrying plain text, and the
-            # guest has no branch for that frame type -- so it fell through to
-            # "unhandled frame type" and tool results have never appeared on
-            # Windows 98 at all. The user saw "Bash: ls", then nothing, then
-            # the model discussing output they could not see.
-            #
-            # Through _write_block it also enters the paginator, so it survives
-            # a reconnect and is still there when paging back. A raw frame
-            # never was. The tool_id is dropped: nothing correlated it, and the
-            # result already follows its own call in the transcript.
-            await self._flush_text(guest)
-            await self._write_block(guest, H.tool_result(body, error=is_err))
-
-        async def on_system(subtype: str, data: dict) -> None:
-            if subtype == "compact_boundary":
-                await self._write_block(guest, H.notice("History condensed."))
-            elif subtype == "rate_limit":
-                # Only "rejected" means anything was refused. The CLI emits
-                # this on every status TRANSITION, including into "allowed",
-                # and treating all of them as trouble is what put "the request
-                # may not have run" under turns that ran perfectly -- and, on
-                # an output-less turn, reported a completed one as failed.
-                #
-                # Deliberately NOT marking the turn degraded on a warning.
-                # `allowed_warning` means the account is near a ceiling, which
-                # is worth knowing and is not a reason to disbelieve an answer
-                # the user can read on the same screen.
-                status = str(data.get("status") or "")
-                if status == "rejected":
-                    guest.turn_degraded = "rate_limited"
-                    await self._write_block(guest, H.notice(
-                        "The model provider refused this request: the "
-                        "account is over its rate limit. Nothing ran -- try "
-                        "again shortly."))
-            elif subtype == "conversation_reset":
-                # /clear replaces the conversation id (session.py's
-                # ConversationResetMessage branch), so the settings have to
-                # follow it or the chat the user is now in has no row.
-                self._remember_settings(
-                    guest, str(data.get("new_conversation_id") or ""))
-                await self._write_block(guest, H.notice("Conversation reset."))
-            elif subtype == "sdk_event":
-                # An SDK message the session layer does not handle. It used to
-                # be a DEBUG line and nothing else, which meant a
-                # RateLimitEvent ended the turn with the screen unchanged and
-                # the user's prompt apparently ignored. Whatever it is, saying
-                # so beats silence -- the turn may well produce nothing after
-                # it, and an unexplained no-op is the worst possible answer.
-                #
-                # RateLimitEvent and ConversationResetMessage used to arrive
-                # here; both have real branches in session.py now. What is
-                # left is genuinely unknown, which is the only case where
-                # "assume the worst" is the right reading.
-                event = str(data.get("event", "")) or "an unknown event"
-                guest.turn_degraded = event
-                await self._write_block(guest, H.notice(
-                    f"The agent reported {event}, which this bridge does "
-                    f"not handle yet. If nothing follows, the request did "
-                    f"not run."))
-            elif subtype == "init":
-                # The conversation id becomes known HERE, not at start().
-                #
-                # Session._session_id is only set from this message, which
-                # arrives during the first turn. Refresh the chat list once
-                # it does -- PLAN.md Phase 4 records the symptom ("the
-                # transcript says the conversation was forked; the list does
-                # not") from the time this used to be gated on `guest.sess_id`
-                # changing: immediately after the effort fork guest.sess_id
-                # was reassigned from guest.claude.session_id, which was
-                # still None at that point, so the comparison saw no change
-                # and never pushed. This fires once per Session object's
-                # lifetime (the SDK's own first-turn system message), so no
-                # dedup against a previous value is needed.
-                #
-                # guest.sess_id itself is NOT touched here, or anywhere a
-                # session is rebuilt. It used to be re-pointed at whatever
-                # session happened to be live -- "a bridge handle" on a fresh
-                # connection, "the SDK session" after a new-session or a
-                # fork, and simply stale after a switch, which never updated
-                # it at all. Nothing reads it for anything but READY's header
-                # and logging, which is exactly why it was free to drift.
-                # It is now a stable per-connection handle, set once in
-                # _attach and never overwritten -- the SDK's own id already
-                # travels in SWITCHED and in this message, and R7's
-                # per-client identity wants a handle that outlives every
-                # session a client opens. docs/audit/02-bridge-python.md
-                # 02.24.
-                sid = str(data.get("session_id") or "")
-                if sid:
-                    # AND THIS IS WHERE THE SETTINGS LAND. Model, effort and
-                    # mode are chosen against a conversation that does not
-                    # have an id yet -- New chat has none until its first
-                    # message, and the effort fork mints a new one on the
-                    # turn after the fork -- so every write before this
-                    # moment had nothing to be keyed on and silently did
-                    # nothing. Back when these were three files, the
-                    # settings one was never created at all on this machine
-                    # while the folders one beside it filled up normally,
-                    # because a folder is committed at the first TOOL CALL,
-                    # by which time the id exists. That contrast is what
-                    # made the bug legible, and why they are one store now.
-                    #
-                    # The consequence the user sees is the one the store was
-                    # built to stop: open a chat you had set to Opus and Plan
-                    # and you get whatever the last chat was using, because
-                    # `_restore_settings` finds no row and deliberately keeps
-                    # what is on screen.
-                    #
-                    # Every path arrives here -- new, resumed, forked and
-                    # /clear -- which is why this is the only hook needed.
-                    if guest.work_guest:
-                        name = self.folder_name(
-                            guest.work_guest.replace("\\", "/").rsplit("/", 1)[-1],
-                            guest.caps) or "WORK"
-                        self.conv.set_folder(sid, name, guest.work_guest)
-                    self._remember_settings(guest, sid)
-                    self._spawn(self._send_sessions(guest))
-
-        s = Session(
-            cwd=self._work_dir(guest),
-            # APPENDED to Claude Code's own prompt, never substituted. Without
-            # it the model answers as though it were on this machine, and the
-            # machine that matters is the 200MHz one on the other end.
-            system_prompt={
-                "type": "preset",
-                "preset": "claude_code",
-                # The sync root and the guest's own path for it, because the
-                # prompt has to say WHICH directory is mirrored. Saying "your
-                # edits reach the user" without naming the folder is how an
-                # agent writes outside it and reports success.
-                # THIS CONVERSATION'S folder, which is usually empty here:
-                # the prompt is built when the session is, and a folder is
-                # committed at the first TOOL CALL. `guest_work_root` would
-                # fall back to the configured root and name a mirror that
-                # does not exist -- which is exactly what sent an agent off
-                # to diagnose a sync fault instead of writing the file it
-                # was asked for. `home` is what the folder will sit under,
-                # so the prompt can describe what is about to happen.
-                "append": machine.system_prompt(
-                    guest.hello, self._work_dir(guest),
-                    sync_dir=self._work_dir(guest) if self.sync_dir else None,
-                    guest_root=guest.work_guest,
-                    home=(guest.hello or {}).get("sync_root") or "",
-                    # From HELLO, so it is fixed for the life of the
-                    # connection and every conversation on it sees the same
-                    # machine. Empty for any guest built before the body
-                    # existed, which is every deployed one until it is
-                    # reflashed -- and empty prints nothing at all.
-                    tools=guest.tools, path=guest.path),
-            },
-            # The per-guest values, not the process defaults: the menu changes
-            # these and a later reconnect or fork has to keep the choice.
-            model=self._effective_model(guest),
-            effort=self._effective_effort(guest),
-            # Same reasoning: a rebuild (switch, new session, effort fork)
-            # must not drop the user back into Manual without saying so.
-            permission_mode=guest.perm_mode,
-            resume=resume,
-            fork=fork,
-            # Every tool call the CLI does not resolve locally comes back
-            # through here as a prompt on the guest's screen.
-            can_use_tool=guest.perms.callback(),
-            # The key here becomes the mcp__<key>__<tool> prefix.
-            mcp_servers=machine_tools.build(self, guest),
-            on_text=on_text,
-            on_thinking=on_thinking,
-            on_tool=on_tool,
-            on_tool_result=on_tool_result,
-            on_system=on_system,
-        )
-        await s.start()
-        log.info("session in %s for guest machine:\n%s",
-                 self._work_dir(guest), machine.describe(guest.hello))
-        # The id is usually not known yet -- the SDK assigns it when the first
-        # query goes out -- so this is a best effort and _run_turn registers it
-        # again once it exists.
-        self.conv.add(s.session_id)
-        return s
+        return await self.session.make_session(guest, resume=resume, fork=fork)
 
     # --- permissions -------------------------------------------------------
     #
@@ -1632,26 +1354,7 @@ class Bridge:
     # 02.41).
 
     async def _send_sessions(self, guest: GuestSession) -> None:
-        """The chat list. Only conversations this bridge started -- the rest
-        belong to a machine with a different way of working.
-
-        Extracted so the list can be pushed when the conversation id CHANGES
-        as well as when the guest asks. The effort fork changes it, and until
-        now nothing told the guest.
-        """
-        # NOT filtered by directory any more. Conversations live in their own
-        # folders now, so `list_sessions(directory=self.cwd)` would list only
-        # the ones sharing the default -- the chat list would lose a chat the
-        # moment it was given a folder of its own. `Conversations.filter` was
-        # always the real filter (only conversations this bridge started);
-        # the directory was belt and braces and is now wrong.
-        rows = self.conv.filter(sesslist.listing())
-        await self._send(guest, sessions_start(len(rows)))
-        for i, r in enumerate(rows):
-            await self._send(guest, session_row(
-                i, r["id"], r["title"], r["cwd"], r.get("group", ""),
-                bool(guest.conv_id and guest.conv_id == r["id"])))
-        await self._send(guest, sessions_end())
+        await self.session.send_sessions(guest)
 
     async def _reissue_halt(self, guest: GuestSession) -> None:
         """After a reconnect, put the Continue bar back.
@@ -1885,7 +1588,7 @@ class Bridge:
             await guest.claude.interrupt()
 
     async def _on_getsessions(self, guest: GuestSession, f: Frame) -> None:
-        await self._send_sessions(guest)
+        await self.session.on_getsessions(guest, f)
 
     async def _on_switch(self, guest: GuestSession, f: Frame) -> None:
         await self._switch(guest, f.headers.get("id", ""))
@@ -1944,38 +1647,10 @@ class Bridge:
         await self.workspace.on_setwork(guest, f)
 
     async def _on_export(self, guest: GuestSession, f: Frame) -> None:
-        """Assemble the whole conversation into one file and stream it.
-
-        Assembled HERE and not on the guest, like everything else: the guest
-        has tens of kilobytes free and a transcript is hundreds. It never
-        holds the document -- each chunk goes straight from the socket to a
-        file -- which is the same rule `do_put` already follows for sync.
-        """
-        title = self._conv_title(guest)
-        when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-        doc = H.export_document(title, guest.pages.all_text(),
-                                "Exported from Gaston Code, " + when)
-        # CP1252 on the way out, because the file is read on the machine that
-        # saved it, by a browser that will be told windows-1252 in the meta
-        # tag the document carries.
-        data = fold.encode(doc)
-        log.info("export: %d bytes for %r", len(data), title)
-        await guest.link.send_export(guest, data)
+        await self.session.on_export(guest, f)
 
     def _conv_title(self, guest: GuestSession) -> str:
-        """What this conversation is called, for the export's heading.
-
-        From the chat list rather than from anything the bridge invents: the
-        title the user is looking at in the list is the one they expect on the
-        file. Falls back to the id, and then to a flat noun, because an
-        untitled conversation is still exportable.
-        """
-        cid = guest.conv_id
-        if cid:
-            for r in sesslist.listing():
-                if r["id"] == cid:
-                    return r["title"]
-        return cid or "Conversation"
+        return self.session.conv_title(guest)
 
     #: One entry per inbound frame type, built once at class definition
     #: time -- 02.30: this used to be a 17-branch if/elif mixing one-line
@@ -2592,204 +2267,18 @@ class Bridge:
 
     async def _set_effort_locked(self, guest: GuestSession,
                                  effort: str) -> None:
-        """Change effort, which means reopening the session.
-
-        There is no set_effort() on the client -- effort is fixed when the
-        session starts -- so this closes the current client and resumes the
-        same conversation with fork_session=True. The fork is why the history
-        survives and why the session id changes.
-        """
-        assert guest.turn_lock.locked()
-        label = EFFORT_LABEL.get(effort, effort or "default")
-
-        # No client means a conversation opened from the chat list and not yet
-        # spoken in -- there is nothing to fork, and nothing needs forking.
-        # Record it and let the deferred resume start with it. Picking an
-        # effort there used to be a silent no-op.
-        if not guest.claude:
-            guest.effort = effort
-            self._remember_settings(guest)
-            log.info("effort -> %s (no client yet)", effort or "(default)")
-            await self._write_block(guest, H.notice(
-                "Effort set to " + label + "."))
-            await self._send_options(guest)
-            return
-
-        old = guest.claude.session_id
-        self._abandon_pending(guest)
-        guest.effort = effort
-        self._remember_settings(guest)
-        log.info("effort -> %s (forking %s)", effort or "(default)", old)
-        await self._write_block(guest, H.notice(
-            "Effort set to " + label
-            + ". Effort cannot be changed on a running session, so this "
-              "conversation has been forked -- the history is intact and "
-              "replies from here use the new setting."))
-
-        await guest.claude.close()
-        try:
-            guest.claude = await self._make_session(guest, resume=old,
-                                                    fork=True)
-        except Exception as exc:
-            log.exception("effort change failed")
-            await self._write_block(guest, H.error(
-                "Could not reopen the session: " + str(exc)[:160]))
-            await self._send_options(guest)
-            return
-        # guest.sess_id is a stable per-connection handle now, not the SDK's
-        # own id (02.24) -- nothing to update here.
-        await self._send_options(guest)
+        await self.session.set_effort_locked(guest, effort)
 
     async def _set_mode(self, guest: GuestSession, mode: str) -> None:
         await self.options.set_mode(guest, mode)
 
     async def _new_session_locked(self, guest: GuestSession,
                                   folder: str = "") -> None:
-        """Start a fresh conversation.
-
-        NO FOLDER IS CHOSEN HERE, and an earlier version asked for one. A
-        folder is named after the conversation and the conversation has no
-        name yet -- the CLI titles it from the first message -- so the prompt
-        was asking the user to invent something before there was anything to
-        base it on, and then live with it. `folder` is still accepted so an
-        older guest is not broken by a header the bridge stopped reading.
-        """
-        assert guest.turn_lock.locked()
-        name = ""
-        log.info("new session requested")
-        self._abandon_pending(guest)
-        if guest.claude:
-            await guest.claude.close()
-        # A fresh conversation is not a resumed one: whatever the chat list
-        # opened and never spoke in is abandoned here too, or the first
-        # message in the NEW chat would resume the OLD one.
-        guest.pending_resume = ""
-
-        # CREATED HERE, not lazily: the session is about to be built with
-        # this as its cwd, and the CLI is entitled to a directory that
-        # exists. Inside the mirror, so the folder and everything in it
-        # reaches the user's machine on the next pass without anything else
-        # being told about it.
-        # Back to unnamed, and back to sharing nothing. The new conversation
-        # commits to a folder at its first tool call, like every other one,
-        # and is named after its own first message rather than the one that
-        # named the chat being left.
-        guest.work_dir = ""
-        guest.work_guest = ""
-        guest.first_prompt = ""
-        self._retarget_perms(guest)
-
-        await guest.reset_transcript()
-
-        # NOTHING IS SPAWNED HERE either, the same as opening a chat from the
-        # list. It used to build the client immediately, and that made the
-        # settings unusable in the one window where a user most wants them:
-        # between pressing New chat and typing, Model, Effort and Mode all
-        # acted on a client that existed but had never run a turn, and the
-        # CLI refuses control requests against one -- so picking a mode said
-        # "Could not change the permission mode" and picking an effort tried
-        # to fork a session with no history to fork.
-        #
-        # With no client there is nothing to refuse. All three handlers
-        # already have a "record it and move on" path, written for the chat
-        # list, and `_make_session` reads guest.model, guest.effort and
-        # guest.perm_mode when the first message finally builds one -- so a
-        # setting chosen now applies to the first message rather than being
-        # an error the user has to work around.
-        #
-        # Safe because the cleanup this used to carry moved out:
-        # `_abandon_pending` above denies the old conversation's prompts and
-        # fails its execs whether or not anything is rebuilt.
-        guest.claude = None
-        await self._send(guest, switched("", guest.pages.count))
-        await self._send_page(guest, "live")
-        await self._send_options(guest)
+        await self.session.new_session_locked(guest, folder=folder)
 
     async def _switch_locked(self, guest: GuestSession,
                              session_id: str) -> None:
-        """Close the live client and reopen on a stored session.
-
-        One live ClaudeSDKClient at a time, so this is a close + resume rather
-        than a pool lookup. The history is replayed into a fresh paginator so
-        the guest can page back through it exactly as if it had streamed.
-        """
-        assert guest.turn_lock.locked()
-        if not session_id:
-            await self._send(guest, error("bad_session", "no id"))
-            return
-
-        log.info("switching to session %s", session_id)
-        await self._send(guest, notice("switching", "Loading conversation..."))
-
-        # Whatever the conversation being left behind still owes, it owes to a
-        # client that is about to stop existing. This used to happen inside
-        # _make_session, which this path no longer calls at all.
-        self._abandon_pending(guest)
-        if guest.claude:
-            await guest.claude.close()
-        guest.claude = None
-
-        # NOTHING IS SPAWNED HERE. Opening a conversation to read it used to
-        # start a full CLI subprocess with --resume: no turn ran and nothing
-        # was billed, but on a machine where the user browses the list to find
-        # something, every click paid for a process start. Replay is a file
-        # read. The client is built at the first message instead
-        # (_resume_pending), which is the first moment it can do anything.
-        guest.pending_resume = session_id
-        # Its OWN model, effort and mode, not the ones the chat being left
-        # happened to be using. Before this, opening a conversation you had
-        # set to Plan and Opus gave you whatever was on screen a moment ago.
-        self._restore_settings(guest, session_id)
-        # And its folder comes back with it. A conversation started in
-        # C:\WORK\NOTES has to resume there, or the second half of it would
-        # be written somewhere the first half is not -- so this is read from
-        # the stored session's own cwd rather than left on whatever the
-        # previous conversation was using.
-        # FROM OUR OWN RECORD, not from the session's cwd. The folder is
-        # named after the conversation and the conversation is named from its
-        # first message -- by which point the session has already recorded
-        # the directory it STARTED in, which is the root. Reopening a chat
-        # showed "<unset>" for a conversation whose folder was sitting on
-        # disk, because the only place that knew was here.
-        name = self.conv.folder(session_id)
-        if name and self.sync_dir:
-            guest.work_dir = os.path.join(self.sync_dir, name)
-            # The guest's own spelling, which it may have chosen itself and
-            # which cannot be derived from a name on this side.
-            guest.work_guest = (self.conv.guest_folder(session_id)
-                                or self._guest_path(guest, name))
-        else:
-            guest.work_dir = self._stored_work_dir(session_id)
-            guest.work_guest = ""
-        # A conversation resumed from the chat list has a title already, and
-        # that is what names it if it still has no folder -- so this must not
-        # carry the previous chat's opening line into it.
-        guest.first_prompt = ""
-        self._retarget_perms(guest)
-
-        # Fresh transcript state. Anything the old session had is on disk.
-        await guest.reset_transcript()
-
-        for block in sesslist.history_html(session_id):
-            # Through _write_block, not pages.add (02.39): one path records a
-            # block, so the split-across-a-seal handling that 02.33 fixed
-            # cannot be right in one place and wrong in the other. Both sends
-            # are withheld -- see _write_block's docstring for why replay is
-            # the one caller that wants neither.
-            await self._write_block(guest, block, stream=False, notify=False)
-            if guest.pages.live.over_soft_cap():
-                guest.pages.message_boundary()
-
-        # reset_transcript() above already set view_page to None; nothing
-        # in between reads or writes it.
-        await self._send(guest, switched(session_id, guest.pages.count))
-        await self._send_page(guest, "live")
-        # The menus follow the conversation even though no client exists --
-        # the model list is a property of the CLI, not of a session, and mode
-        # and effort are the guest's own. _switch was the only session-
-        # changing path that never re-sent them (02.x); now it does, and from
-        # the cache rather than from a process it deliberately did not start.
-        await self._send_options(guest)
+        await self.session.switch_locked(guest, session_id)
 
     async def _send_page(self, guest: GuestSession, want: str) -> None:
         await self.presentation.send_page(guest, want)
