@@ -83,6 +83,7 @@ from .agent.session import TOOLS, Session
 from .agent import toolrep, toolrules
 from .agent.toolrules import Found
 from .services.config import BridgeConfig
+from .services.connection import ConnectionService
 from .services.options import (
     COMMAND_MENU,
     EFFORT_LABEL,
@@ -573,6 +574,18 @@ class Bridge:
         #: One row, one file -- see agent/conversations.py for why those
         #: three were not worth three stores.
         self.conv = Conversations()
+        self.connection = ConnectionService(
+            config=self.config,
+            create_guest=self._create_guest,
+            on_attach=self._post_attach,
+            handle_frame=self._dispatch_frame,
+            on_lost=self._on_lost,
+            ensure_background_tasks=self._ensure_background_tasks,
+            spawn=self._spawn,
+            get_hello_timeout=lambda: getattr(self, "HELLO_TIMEOUT", 10.0),
+        )
+        if hasattr(self, "_fallback_guest") and self._fallback_guest is not None:
+            self.connection.guest = self._fallback_guest
         self.presentation = PresentationService(connection=self)
         self.options = OptionsService(
             connection=self,
@@ -645,7 +658,6 @@ class Bridge:
         )
 
         # One guest, one session. See PLAN.md "Multi-session".
-        self._guest: GuestSession | None = None
         self._server: asyncio.Server | None = None
         # Strong references to fire-and-forget tasks. asyncio holds only a
         # weak one, so a bare create_task can be collected mid-flight.
@@ -837,8 +849,27 @@ class Bridge:
     def _commands_cache(self, val: list[dict] | None) -> None:
         self.options._commands_cache = val
 
+    @property
+    def _guest(self) -> GuestSession | None:
+        conn = getattr(self, "connection", None)
+        if conn is not None:
+            return conn.guest
+        return getattr(self, "_fallback_guest", None)
+
+    @_guest.setter
+    def _guest(self, val: GuestSession | None) -> None:
+        conn = getattr(self, "connection", None)
+        if conn is not None:
+            conn.guest = val
+        else:
+            self._fallback_guest = val
+
+    @property
+    def guest(self) -> GuestSession | None:
+        return self._guest
+
     async def send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await self._send(guest, frame)
+        return await self.connection.send(guest, frame)
 
     @property
     def synccoord(self) -> SyncCoordinator:
@@ -900,312 +931,15 @@ class Bridge:
 
     # --- connection --------------------------------------------------------
 
-    async def _on_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        peer = writer.get_extra_info("peername")
-        log.info("connection from %s", peer)
-        frames = FrameReader()
+    def _create_guest(self, page_bytes: int, page_blocks: int) -> GuestSession:
+        g = GuestSession(
+            view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
+            synccoord=self._preattach_synccoord,
+        )
+        self.permissions.attach(g, cwd=self.cwd)
+        return g
 
-        try:
-            # The frames pipelined behind HELLO travel WITH it rather than
-            # through an attribute on the Bridge. They used to live in
-            # self._early, which is per-process: a second client's HELLO
-            # overwrote the first client's pipelined frames before _pump had
-            # consumed them -- and it did so BEFORE being rejected as a
-            # duplicate, so the rejected connection corrupted the live one.
-            hello, early = await self._read_hello(reader, frames, writer)
-            if hello is None:
-                return
-
-            guest = await self._attach(hello, writer)
-            if guest is None:
-                return
-
-            # STARTED AFTER _attach, not before it, and the ordering is the
-            # whole of 02.6. `asyncio.create_task` copies the CURRENT
-            # context, and `_attach` is where `fold.use` binds this
-            # connection's codepages -- so a reaper and a sweeper created up
-            # here ran forever in a context where `fold.codec()` was still
-            # the cp1252 default. A client declaring acp=1251 then got
-            # correctly-encoded sync notices for passes IT triggered and
-            # mojibake for the ones the bridge's own 120s backstop started,
-            # inside a document whose <meta charset> said windows-1251. The
-            # two paths are indistinguishable from the outside, which is what
-            # makes that undiagnosable rather than merely wrong.
-            #
-            # Started here rather than in serve_forever() because that is not
-            # the only way a bridge gets clients -- the tests drive
-            # _on_client directly, and a liveness mechanism that depends on
-            # which entry point was used is a liveness mechanism you do not
-            # have. Nothing needs reaping before a guest exists: _read_hello
-            # has its own 10s deadline.
-            # 02.6 Background tasks must be created after _attach binds ContextVars
-            assert guest is not None and guest.caps is not None
-
-            if self._reaper is None:
-                self._reaper = asyncio.create_task(self._reap_idle())
-            if self._sweeper is None and self.sync_dir:
-                self._sweeper = asyncio.create_task(self._sweep_sync())
-
-            await self._pump(guest, reader, frames, early)
-
-        except ProtocolError as exc:
-            # Framing is lost; never try to resync a byte stream.
-            log.warning("protocol error from %s: %s", peer, exc)
-            await self._try_send_raw(writer, error("protocol", str(exc)))
-        except (ConnectionResetError, BrokenPipeError):
-            log.info("%s dropped", peer)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("unhandled error serving %s", peer)
-        finally:
-            guest = self._guest
-            # THE SECOND DISJUNCT IS 02.8. The identity check is what stops a
-            # late-closing old connection tearing down a live one, and it is
-            # right for that -- but the idle reaper nulls `writer` ITSELF
-            # before closing the socket, so after a reap this test was False
-            # and the whole block was skipped. `lost_at` then stayed None,
-            # and a prompt raised by the still-running turn afterwards waited
-            # the full 600s answer deadline instead of the 60s grace, because
-            # `_reap_idle`'s expiry branch is gated on `lost_at is not None`.
-            # A writer of None cannot belong to a newer connection: `_attach`
-            # sets it before `_pump` can return.
-            if guest and (guest.writer is writer or guest.writer is None):
-                guest.writer = None
-                self._mark_lost(guest)
-            # Graceful close. An abrupt RST is reported to crash Win98's
-            # Winsock stack outright, taking the machine with it.
-            try:
-                if writer.can_write_eof():
-                    writer.write_eof()
-            except Exception:
-                pass
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
-            log.info("connection to %s closed", peer)
-
-    @staticmethod
-    def _oem_for(guest: GuestSession) -> str:
-        """Which codepage this machine's console children write.
-
-        A different question from the ANSI one with a different answer:
-        win/net/net.cpp says exactly that and then never sent an answer, so
-        `decode_oem` defaulted to cp437 for every machine.
-
-        THE MACHINE FIRST, then the shell profile. A profile can say that
-        this shell's children write OEM; only the machine knows which OEM it
-        is set to, and it now sends GetOEMCP() beside GetACP().
-        """
-        caps = guest.caps
-        shell = toolrules.shell_of(guest.tools)
-        return (getattr(caps, "oemcp", "") or
-                (str(profiles.shell(shell).get("oem_codepage", ""))
-                 if shell else ""))
-
-    def _bind_codepages(self, guest: GuestSession) -> None:
-        """Bind this guest's display and console codepages in THIS context.
-
-        `fold` keeps both in `ContextVar`s and `asyncio.create_task` copies
-        the context at creation, so a task that outlives the call that
-        created it -- the sweeper, the reaper -- can only be right if it
-        binds them itself before it writes anything. See 02.6, and _on_client
-        for the ordering half of the same bug.
-        """
-        caps = guest.caps
-        if caps is None:
-            return
-        fold.use(caps.acp)
-        oem = self._oem_for(guest)
-        if oem:
-            fold.use(oem=oem)
-
-    async def _read_hello(
-        self,
-        reader: asyncio.StreamReader,
-        frames: FrameReader,
-        writer: asyncio.StreamWriter,
-    ) -> "tuple[Frame | None, list[Frame]]":
-        """First frame must be HELLO, within a short deadline.
-
-        Returns `(hello, pipelined)`. A TWO-tuple on every path, which it was
-        not: the three refusals below each returned `None, [], []` while the
-        one caller unpacks two (`hello, early = await self._read_hello(...)`).
-        So an EOF, a non-HELLO first frame and a handshake timeout all raised
-        `ValueError: too many values to unpack` into `_on_client`'s catch-all
-        and were logged as an unhandled error with a traceback.
-
-        Nobody noticed because the refusal frame is sent by `_try_send_raw`
-        BEFORE the return, so the client saw the right thing and only the
-        bridge's own log was wrong -- which is exactly the shape of bug that
-        survives a test suite. The annotation said `Frame | None` and was
-        wrong for both shapes.
-        """
-        try:
-            async with asyncio.timeout(self.HELLO_TIMEOUT):
-                while True:
-                    data = await reader.read(4096)
-                    if not data:
-                        return None, []
-                    batch = frames.feed(data)
-                    for i, f in enumerate(batch):
-                        if f.type != "HELLO":
-                            await self._try_send_raw(
-                                writer, error("expected_hello",
-                                              f"first frame was {f.type}")
-                            )
-                            return None, []
-                        # Anything pipelined behind HELLO in the same read has
-                        # already been parsed out of the FrameReader's buffer,
-                        # so returning here would drop it silently. Hand the
-                        # rest to _pump instead.
-                        return f, batch[i + 1:]
-        except TimeoutError:
-            await self._try_send_raw(writer, error("hello_timeout",
-                                                   "no HELLO within 10s"))
-            return None, []
-
-    async def _attach(
-        self, hello: Frame, writer: asyncio.StreamWriter
-    ) -> GuestSession | None:
-        h = hello.headers
-
-        try:
-            neg = handshake.negotiate(h, self.secret)
-        except handshake.Refused as exc:
-            # EVERY refusal is logged, by name. Two were, and the rest closed
-            # the socket in silence -- which stopped being theoretical the
-            # moment PROTO_VERSION first moved: a reflashed bridge refused a
-            # guest that had not been, the guest showed `[bad_version] bridge
-            # speaks 2, guest speaks 1` on its own screen, and the bridge's
-            # log said nothing at all. The side being debugged is usually
-            # this one.
-            log.warning("refused %s: %s (%s)",
-                        writer.get_extra_info("peername"),
-                        exc.code, exc.message)
-            await self._try_send_raw(writer, error(exc.code, exc.message))
-            return None
-
-        # A second client is rejected, not evicted: whoever is already holding
-        # the session may be mid-turn, and silently stealing it is worse than
-        # refusing. Checked here rather than inside negotiate() because it is
-        # live Bridge state, not a fact about the HELLO frame -- see
-        # bridge/handshake.py.
-        if self._guest and self._guest.connected:
-            await self._try_send_raw(writer, error(
-                "busy", "another client holds this session"))
-            return None
-
-        page_bytes, page_blocks, caps = neg.page_bytes, neg.page_blocks, neg.caps
-        log.info("guest has %d MB; pages capped at %d bytes / %d blocks",
-                 neg.mem_kb // 1024, page_bytes, page_blocks)
-        # What the bridge now believes the machine IS. Logged at connect
-        # because "why did that file not sync" starts here, and because a
-        # client that declares nothing is indistinguishable from one that
-        # declares the defaults until someone can see which happened.
-        log.info("client rules: %s", caps.summary())
-        # And which tree it says it is mirroring. The root is the
-        # first thing that goes wrong when files do not move, and it
-        # is the ONE fact the guest reports that the bridge cannot
-        # derive -- a conversation folder applied before a bridge
-        # restart outlives that restart on the guest's side, so a
-        # HELLO can name a narrower tree than this process knows
-        # anything about.
-        log.info("guest mirrors %s", h.get("sync_root")
-                 or "(file sharing is off)")
-
-        # A fresh connection means a fresh inflater on the guest, so the
-        # compressor must restart in lockstep or the first frame is garbage.
-        # There used to be a second consequence: the (now-retired) replay
-        # buffer had to be invalidated here too, because _write_block runs a
-        # block through the PERSISTENT compressor before _send ever sees it,
-        # so a deflated frame kept for replay was output from a stream that
-        # no longer exists once the guest's inflater restarts. Nothing keeps
-        # frames around to replay any more, so there is nothing left to
-        # invalidate -- see docs/BACKLOG.md #5.
-        is_reconnect = self._guest is not None
-        if self._guest is not None:
-            self._guest.zip_out.reset()
-            self._guest.zip_in.reset()
-
-        if self._guest is None:
-            # sess_id is not passed here: GuestIdentity's own default_factory
-            # generates it (bridge/agent/identity.py), the same uuid4() this
-            # used to construct inline -- sess_id stopped being a GuestSession
-            # field directly when Identity moved onto its own type (02.42),
-            # and it is not a GuestSession() keyword the way `view` below is
-            # because there is nothing case-specific about it to pass.
-            self._guest = GuestSession(
-                view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
-                # The one built in __init__, not a fresh one: `self.synccoord`
-                # has been answering from it since the process started, and a
-                # notice seeded before the first client connected has to
-                # still be in the queue after it does.
-                synccoord=self._preattach_synccoord)
-            # PermissionDesk needs its own owning guest to reach _write_block
-            # and _send with, so it cannot be built as a GuestSession()
-            # keyword the way `view` above is -- it is assigned right after,
-            # same lifetime as the guest itself (a prompt must survive a
-            # reconnect).
-            self.permissions.attach(self._guest, cwd=self.cwd)
-        guest = self._guest
-        guest.writer = writer
-        guest.page_bytes = page_bytes
-        guest.page_blocks = page_blocks
-        guest.hello = dict(h)
-        guest.caps = caps
-        # BIND THE DISPLAY CODEPAGE FOR THIS CONNECTION, here, because this is
-        # the first moment it is known and everything below writes text.
-        #
-        # `caps.acp` has been negotiated since the handshake was written and
-        # only the FILE layer read it. `fold` hardcoded cp1252 at six places
-        # and `protocol.py` at two more, so a client reporting acp=1251
-        # connected, synced its filenames perfectly, and saw every one of them
-        # as `??????.txt` in the transcript. Set once per connection; asyncio
-        # tasks spawned from here inherit it.
-        fold.use(caps.acp)
-        # THE INVENTORY, off HELLO's body rather than a frame of its own.
-        #
-        # It has to be here, above _make_session below, because that call
-        # freezes the system prompt for the session -- and on a fresh
-        # connection that is the session the user then talks to. A TOOLS
-        # frame sent after connect would arrive after _pump starts reading,
-        # which is after this, which is too late every time.
-        #
-        # Decoded through `caps`, not the raw `acp` header: the header is a
-        # codepage number and the codec name comes from codec_for_acp. A path
-        # under C:\Program Files is ASCII, but a German machine's is not.
-        _facts = toolrep.parse_rows(hello.body or b"", caps)
-        guest.tools = toolrules.inventory(_facts)
-        # PATH separately from the inventory: it is not a tool, it is the
-        # reason a tool that IS installed comes back "Bad command or file
-        # name". Every exec is a fresh shell, so the machine's own start-up
-        # scripts have not run.
-        _shell = toolrules.shell_of(guest.tools)
-        guest.path = toolrules.path_dirs(_facts, _shell)
-        # The CONSOLE codepage, which is a different question from the ANSI
-        # one with a different answer -- win/net/net.cpp says exactly that and
-        # then never sent an answer, so `decode_oem` defaulted to cp437 for
-        # every machine. The shell declares it, because it is the shell that
-        # spawns the child whose bytes these are.
-        # THE MACHINE FIRST, then the shell profile -- see _oem_for. Bound
-        # through the same helper the sweeper uses, so there is one
-        # derivation rather than two that can disagree (02.6).
-        self._bind_codepages(guest)
-        if guest.tools:
-            log.info("machine has: %s", ", ".join(
-                "%s (%s)" % (f.name, f.path) for f in guest.tools))
-
-        guest.set_link_speed(self.link_bps)
-
-        # Not when a conversation is open-but-unspoken: the guest reconnecting
-        # must not start the process that switching to it deliberately did
-        # not. This is the one place a fresh bridge DOES build eagerly, and it
-        # is what warms the model cache the deferred path then reads.
+    async def _post_attach(self, guest: GuestSession, is_reconnect: bool) -> None:
         if guest.claude is None and not guest.pending_resume:
             guest.claude = await self._make_session(guest)
 
@@ -1216,45 +950,43 @@ class Bridge:
             guest.pages.live.number, guest.pages.count,
             conv=guest.conv_id))
 
-        # The stylesheet and the document skeleton live here rather than in
-        # the guest, so the look can be changed by restarting the bridge
-        # instead of rebuilding and re-deploying a binary.
         await self._send(guest, doc(H.document()))
         await self._send_options(guest)
-        # There is no replay to rely on for anything a reconnect needs back
-        # (docs/BACKLOG.md #5: the guest never sent `from=`, so that path was
-        # always dead code) -- every piece of live state below is re-issued
-        # explicitly instead, or a reconnect would arrive with the bar gone
-        # and the future still pending bridge-side.
+
         guest.lost_at = None
-        # A fresh connection shows the fresh DOC skeleton just sent above --
-        # the guest has no memory of which page it was reading before it
-        # dropped (BACKLOG: it never re-requests page content on reconnect
-        # either), so it is looking at LIVE now regardless of what it was
-        # doing before. Leaving view_page on its old HISTORY value here made
-        # _write_block (02.25) keep silently buffering into the paginator
-        # forever -- the guest sees nothing new and the bridge believes that
-        # is correct, because nothing ever reset the flag that says so.
-        guest.view_page = None
-        await guest.perms.reissue()
-        await self._reissue_halt(guest)
-        await self._reissue_turn(guest)
-        # _reissue_halt above handles a GUEST reconnect: the same Bridge (and
-        # its synccoord) survives it, so synccoord.halt_id already agrees
-        # with base.latched. It does NOT handle a BRIDGE restart, which
-        # starts a brand new SyncCoordinator with halt_id empty while
-        # base.latched is still whatever the old process left on disk
-        # (02.21) -- so derive it instead of trusting whichever path last
-        # had a chance to set it.
-        await self._reconcile_halt(guest)
-        # A guest that was away may have been edited while it was away, and
-        # nothing reconciled that until its watcher next happened to fire.
+        await self.coordinator.sync_state_to_guest(guest)
+        await self.sync.reconcile_halt(guest)
+
         if self.sync_dir:
-            self._seed_agent_notices()
+            self.turn_runner.seed_agent_notices()
             self._spawn(self.run_sync("the machine reconnected"))
 
         log.info("attached sess=%s (reconnect=%s)", guest.sess_id, is_reconnect)
-        return guest
+
+    async def _on_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        await self.connection.on_client(reader, writer)
+
+    @staticmethod
+    def _oem_for(guest: GuestSession) -> str:
+        return ConnectionService.oem_for(guest)
+
+    def _bind_codepages(self, guest: GuestSession) -> None:
+        self.connection.bind_codepages(guest)
+
+    async def _read_hello(
+        self,
+        reader: asyncio.StreamReader,
+        frames: FrameReader,
+        writer: asyncio.StreamWriter,
+    ) -> tuple[Frame | None, list[Frame]]:
+        return await self.connection.read_hello(reader, frames, writer)
+
+    async def _attach(
+        self, hello: Frame, writer: asyncio.StreamWriter
+    ) -> GuestSession | None:
+        return await self.connection.attach(hello, writer)
 
     # --- Claude session ----------------------------------------------------
 
@@ -1424,27 +1156,12 @@ class Bridge:
         frames: FrameReader,
         early: list,
     ) -> None:
-        # Frames that arrived in the same read as HELLO. See _read_hello.
-        for f in early:
-            await self._handle(guest, f)
-        while True:
-            data = await reader.read(8192)
-            if not data:
-                return
-            for f in frames.feed(data):
-                await self._handle(guest, f)
+        await self.connection.pump(guest, reader, frames, early)
 
     async def _handle(self, guest: GuestSession, f: Frame) -> None:
-        guest.last_seen = time.monotonic()
-        if f.headers.get("enc") == "deflate":
-            try:
-                body = guest.link.zip_in.decompress(f.body)
-            except Exception as e:
-                log.error("cannot inflate frame %s: %s", f.type, e)
-                await self._send(guest, error("corrupt_frame", f.type))
-                return
-            new_headers = {k: v for k, v in f.headers.items() if k != "enc"}
-            f = Frame(f.type, new_headers, body)
+        await self.connection.handle(guest, f)
+
+    async def _dispatch_frame(self, guest: GuestSession, f: Frame) -> None:
         name = self._DISPATCH.get(f.type)
         if name is None:
             log.warning("unknown frame type from guest: %s", f.type)
@@ -1724,35 +1441,16 @@ class Bridge:
     async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
         await self.guest_exec.exec_result(guest, f)
 
-    def _mark_lost(self, guest: GuestSession) -> None:
-        """Record that this guest's link is gone. Idempotent.
-
-        Called from BOTH teardown paths -- `_on_client`'s `finally` and the
-        idle reaper -- because each used to do only half of it and the reaper
-        stopped the other half from running at all (02.8).
-
-        A pending prompt is NOT denied here. Denying on any drop tells the
-        model "the user declined" for something the user never saw -- and on
-        a 1998 NE2000 over a flaky link, a blip would become a refusal.
-        Instead the prompt is held for a short grace period: reconnect inside
-        it and the bar comes back (PERMSTATE), miss it and the reaper denies
-        with a message that says what actually happened. That expiry is gated
-        on `lost_at`, which is why stamping it is the load-bearing line here.
-        """
-        if guest.lost_at is None:
-            guest.lost_at = time.monotonic()
-        # An in-flight command is a different matter from a pending prompt:
-        # the prompt can wait out a blip, but the command has already started
-        # over there and its output is gone with the link. Fail it now rather
-        # than holding the model for the whole MCP budget.
+    def _on_lost(self, guest: GuestSession) -> None:
         self._fail_syncs(guest, "The connected machine disconnected mid-sync.")
-        self._fail_execs(guest,
-                         "The connected machine disconnected while this "
-                         "command was running. It may or may not have "
-                         "completed.")
-        if guest.perm_pending is not None:
-            log.info("link lost with a prompt pending; holding %.0fs",
-                     self.perm_grace_s)
+        self._fail_execs(
+            guest,
+            "The connected machine disconnected while this command was "
+            "running. It may or may not have completed.",
+        )
+
+    def _mark_lost(self, guest: GuestSession) -> None:
+        self.connection.mark_lost(guest)
 
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
         self.guest_exec.fail_execs(guest, why)
@@ -1780,57 +1478,14 @@ class Bridge:
                 self._bind_codepages(guest)
                 await self.run_sync("the bridge's own sweep")
 
-    async def _reap_idle(self) -> None:
-        """P2: a guest that stops talking must eventually be let go.
+    def _ensure_background_tasks(self, guest: GuestSession) -> None:
+        if self._reaper is None:
+            self._reaper = asyncio.create_task(self._reap_idle())
+        if self._sweeper is None and self.sync_dir:
+            self._sweeper = asyncio.create_task(self._sweep_sync())
 
-        _pump blocks in read() with no timeout, so a guest that GPFs or is
-        reset leaves no FIN behind and _on_client parks forever -- with
-        `connected` still True, which rejects every reconnect as "busy". The
-        machine crashing is the expected case here, not the exotic one.
-        """
-        while True:
-            await asyncio.sleep(self.idle_check_s)
-            guest = self._guest
-            if guest is None:
-                continue
-            if not guest.connected:
-                # Disconnected: expire any prompt whose grace has run out.
-                if (guest.perm_pending is not None and guest.lost_at is not None
-                        and time.monotonic() - guest.lost_at
-                        > self.perm_grace_s):
-                    guest.perms.deny_all(
-                        "gone",
-                        "The Windows machine disconnected before anyone could "
-                        "answer, so this was not approved. It was not refused "
-                        "on purpose -- ask again if you still need it.")
-                continue
-            if guest.exec_pending or guest.sync_active:
-                # A command can run quietly for up to two minutes -- longer
-                # than the idle timeout -- and the guest has no keepalive of
-                # its own, so `last_seen` only moves when output happens to
-                # arrive. Reaping here would tear down the link mid-command,
-                # which then drives the guest into its reconnect path. A
-                # chatty command masks this; the first quiet one would not.
-                continue
-            idle = time.monotonic() - guest.last_seen
-            if idle < self.idle_timeout_s:
-                continue
-            log.warning("guest silent for %.0fs; closing so it can reconnect",
-                        idle)
-            guest.perms.deny_all("idle",
-                                 "The Windows machine stopped responding.")
-            w, guest.writer = guest.writer, None
-            # BEFORE the close, and here rather than only in _on_client.
-            # Nulling `writer` above is what made _on_client's `finally` skip
-            # its own bookkeeping, so a reap left `lost_at` unset and every
-            # sync and exec registered afterwards unfailed -- see _mark_lost
-            # and 02.8. _on_client still calls it too; it is idempotent.
-            self._mark_lost(guest)
-            try:
-                if w is not None:
-                    w.close()
-            except Exception:
-                pass
+    async def _reap_idle(self) -> None:
+        await self.connection.reap_idle()
 
     async def _models(self, guest: GuestSession) -> list[dict]:
         return await self.options._models(guest)
@@ -1883,7 +1538,7 @@ class Bridge:
     # syncrun.py's Pass and tests/python reach them by these names.
 
     async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await guest.link.send(guest, frame)
+        return await self.connection.send(guest, frame)
 
     async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:
@@ -1898,7 +1553,7 @@ class Bridge:
 
     async def _try_send_raw(self, writer: asyncio.StreamWriter,
                             frame: Frame) -> None:
-        await GuestLink.send_raw(writer, frame)
+        await self.connection.try_send_raw(writer, frame)
 
 
 
