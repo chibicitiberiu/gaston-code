@@ -15,6 +15,7 @@ from bridge.services.options import (
     MODE_ORDER,
     OptionsService,
 )
+from bridge.services.permission import PermissionService
 from bridge.services.presentation import PresentationService
 from bridge.services.workspace import WorkspaceService
 
@@ -23,6 +24,7 @@ __all__ = [
     "ExecCall",
     "GuestExecService",
     "OptionsService",
+    "PermissionService",
     "PresentationService",
     "WorkspaceService",
     "COMMAND_MENU",

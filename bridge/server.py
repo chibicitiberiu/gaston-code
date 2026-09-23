@@ -96,6 +96,7 @@ from .services.options import (
 from .services.workspace import WorkspaceService
 from .services.presentation import PresentationService
 from .services.guest_exec import ExecCall, GuestExecService
+from .services.permission import PermissionService
 
 log = logging.getLogger("bridge.server")
 
@@ -614,6 +615,12 @@ class Bridge:
             spawn=self._spawn,
             pre_exec=self._pre_exec,
         )
+        self.permissions = PermissionService(
+            connection=self,
+            presentation=self.presentation,
+            workspace=self.workspace,
+            spawn=self._spawn,
+        )
 
         # One guest, one session. See PLAN.md "Multi-session".
         self._guest: GuestSession | None = None
@@ -1076,12 +1083,7 @@ class Bridge:
             # keyword the way `view` above is -- it is assigned right after,
             # same lifetime as the guest itself (a prompt must survive a
             # reconnect).
-            self._guest.perms = PermissionDesk(
-                self._guest, cwd=self.cwd,
-                write_block=lambda html: self._write_block(self._guest, html),
-                send=lambda frame: self._send(self._guest, frame),
-                spawn=self._spawn,
-                ensure_work=lambda: self._ensure_work_dir(self._guest))
+            self.permissions.attach(self._guest, cwd=self.cwd)
         guest = self._guest
         guest.writer = writer
         guest.page_bytes = page_bytes
@@ -3380,8 +3382,7 @@ class Bridge:
 
     async def _perm_reply(self, guest: GuestSession, f: Frame) -> None:
         """Answer from the guest's prompt bar."""
-        await guest.perms.reply(f.headers.get("id", ""),
-                                f.headers.get("action", "deny"))
+        await self.permissions.reply(guest, f)
 
     async def _sweep_sync(self) -> None:
         """The backstop trigger. See run_sync for why it exists.
