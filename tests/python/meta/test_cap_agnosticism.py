@@ -48,4 +48,5 @@ def test_no_hardcoded_assumptions_in_code():
     assert "[:8]" not in source, "Do not hardcode slice limits, use Bridge.folder_max(caps)"
     
     # Also verify the test itself didn't just pass by coincidence if the source had hardcoded values
-    assert "[:Bridge.folder_max(caps)]" in source, "The slice should use the caps-aware folder_max"
+    assert ("[:folder_max(caps)]" in source or
+            "[:Bridge.folder_max(caps)]" in source), "The slice should use the caps-aware folder_max"

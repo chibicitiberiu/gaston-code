@@ -454,3 +454,68 @@ def wire_decode(raw: bytes, *, acp: str = "cp1252") -> str:
     `surrogateescape` is exactly reversible by `wire_encode`.
     """
     return raw.decode(acp, "surrogateescape")
+
+
+# --- conversation folder naming & guest path helpers ------------------------
+
+FOLDER_MAX_LONG = 32
+
+
+def folder_max(caps=None) -> int:
+    """How long this client's conversation folder may be."""
+    caps = caps if caps is not None else DEFAULT
+    if caps.shortnames:
+        return C.SHORTNAME_MAX
+    return min(caps.maxcomp, FOLDER_MAX_LONG)
+
+
+def folder_name(raw: str, caps=None) -> str:
+    """A folder name that is safe on both sides, or "" if nothing is left."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    caps = caps if caps is not None else DEFAULT
+    bad = illegal_chars(caps) | {"/", ":", ".."}
+    if any(b in raw for b in bad):
+        return ""
+    text = raw.upper() if caps.shortnames else raw
+    out = "".join(c for c in text
+                  if c.isascii() and (c.isalnum() or c in "-_"))
+    out = out.strip("-_")[:folder_max(caps)]
+    return "" if out and component_ok(out, caps) else out
+
+
+def title_folder(title: str, caps=None) -> str:
+    """A folder name from a conversation title, reduced not refused."""
+    keep = []
+    for ch in (title or ""):
+        keep.append(ch if (ch.isascii() and (ch.isalnum() or ch in "-_"))
+                    else " ")
+    return folder_name("".join(keep).replace(" ", ""), caps)
+
+
+def sep_of(root: str) -> str:
+    """The separator the guest's path uses."""
+    return "\\" if "\\" in root else "/"
+
+
+def guest_path(root: str, name: str) -> str:
+    r"""`<mirror root><sep><name>`, spelled the way the guest spells it."""
+    if not root:
+        return ""
+    if not name:
+        return root
+    sep = sep_of(root)
+    return root.rstrip("\\/") + sep + name
+
+
+def sub_of(work_dir: str, sync_dir: str) -> str:
+    """A conversation's folder name relative to the mirror, or ""."""
+    if not work_dir or not sync_dir:
+        return ""
+    try:
+        rel = posixpath.relpath(work_dir.replace("\\", "/"),
+                                sync_dir.replace("\\", "/"))
+    except ValueError:
+        return ""
+    return "" if rel in (".", "") or rel.startswith("..") else rel

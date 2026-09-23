@@ -1110,75 +1110,10 @@ class Bridge:
     #: it is capped for legibility as well as by the filesystem. A client with
     #: long names gets a readable slice of the conversation title rather than
     #: 255 characters of it.
-    FOLDER_MAX_LONG = 32
-
-    @staticmethod
-    def folder_max(caps=None) -> int:
-        """How long this client's conversation folder may be.
-
-        `shortnames` has been on the wire since the handshake was written and
-        was discarded on arrival -- it counted toward `declared` and had no
-        field, so a client asking IN WRITING for the restrictive rule was
-        answered with a hardcoded 8. Now the 8 is what a silent client is
-        assumed to want, and a client that says otherwise is believed.
-        """
-        caps = caps if caps is not None else P.DEFAULT
-        if caps.shortnames:
-            return C.SHORTNAME_MAX
-        return min(caps.maxcomp, Bridge.FOLDER_MAX_LONG)
-
-    @staticmethod
-    def folder_name(raw: str, caps=None) -> str:
-        """A folder name that is safe on both sides, or "" if nothing is left.
-
-        Refuses rather than repairs anything carrying a separator or a `..`:
-        a name with one in it is not a typo to fix, it is a way out of the
-        folder, and quietly rewriting it into something that works is how a
-        guard becomes decoration. Everything else is reduced rather than
-        refused, because this is usually fed a CONVERSATION TITLE -- prose
-        with spaces and punctuation in it -- and refusing "List files in
-        C:\\RETRO" would mean no folder at all.
-
-        The illegal set comes from `caps`, not from a literal here. It used to
-        be spelled out -- separators, `..`, and `* ? " < > |` -- which is
-        COMMAND.COM's set written into the bridge while `caps.illegal` sat
-        negotiated and unread, and `paths._component_ok` did the same job
-        correctly two modules away.
-        """
-        raw = (raw or "").strip()
-        if not raw:
-            return ""
-        caps = caps if caps is not None else P.DEFAULT
-        # Separators and `..` are refused whatever the client says: they are
-        # how a name leaves the folder, which is not a filesystem question.
-        bad = P.illegal_chars(caps) | {"/", ":", ".."}
-        if any(b in raw for b in bad):
-            return ""
-        # Uppercased only where the volume aliases, because the alias itself
-        # is uppercase. Elsewhere the title's own case is worth keeping.
-        text = raw.upper() if caps.shortnames else raw
-        out = "".join(c for c in text
-                      if c.isascii() and (c.isalnum() or c in "-_"))
-        out = out.strip("-_")[:Bridge.folder_max(caps)]
-        # Last word to the same check every synced path gets, so a folder
-        # cannot be called CON on a machine where that is a device.
-        return "" if out and P.component_ok(out, caps) else out
-
-    @staticmethod
-    def _title_folder(title: str, caps=None) -> str:
-        """A folder name from a conversation title, reduced not refused.
-
-        The title is prose and the folder is 8.3, so punctuation goes and the
-        rest is truncated. "List files in C:\\RETRO" has a colon in it, which
-        `folder_name` refuses on purpose -- so the separators are stripped
-        HERE, where they are known to be part of a sentence rather than an
-        attempt to leave the folder.
-        """
-        keep = []
-        for ch in (title or ""):
-            keep.append(ch if (ch.isascii() and (ch.isalnum() or ch in "-_"))
-                        else " ")
-        return Bridge.folder_name("".join(keep).replace(" ", ""), caps)
+    FOLDER_MAX_LONG = P.FOLDER_MAX_LONG
+    folder_max = staticmethod(P.folder_max)
+    folder_name = staticmethod(P.folder_name)
+    _title_folder = staticmethod(P.title_folder)
 
     def _stored_work_dir(self, session_id: str) -> str:
         """The folder a stored conversation was started in, if it is ours.
@@ -1422,23 +1357,14 @@ class Bridge:
         `caps` has no separator field and adding one would ask the client to
         repeat something it has already demonstrated.
 
-        Backslash only if the root actually contains one. This line used to be
-        `root.rstrip("\\") + "\\" + name` unconditionally -- the one place the
-        bridge spells a guest path, and it spelled it for exactly one family
-        of machines while `paths.py` carefully kept "/" as the wire separator
-        everywhere else.
+        Backslash only if the root actually contains one.
         """
-        return "\\" if "\\" in root else "/"
+        return P.sep_of(root)
 
     def _guest_path(self, guest: GuestSession, name: str) -> str:
         r"""`<mirror root><sep><name>`, spelled the way the guest spells it."""
         root = (guest.hello or {}).get("sync_root") or self.guest_sync_root
-        if not root:
-            return ""
-        if not name:
-            return root
-        sep = self._sep_of(root)
-        return root.rstrip("\\/") + sep + name
+        return P.guest_path(root, name)
 
     def guest_work_root(self, guest: GuestSession) -> str:
         r"""Where commands run, spelled the way the guest spells it.
@@ -1453,13 +1379,7 @@ class Bridge:
 
     def _sub_of(self, guest: GuestSession) -> str:
         """This conversation's folder name relative to the mirror, or ""."""
-        if not guest.work_dir or not self.sync_dir:
-            return ""
-        try:
-            rel = os.path.relpath(guest.work_dir, self.sync_dir)
-        except ValueError:
-            return ""
-        return "" if rel in (".", "") or rel.startswith("..") else rel
+        return P.sub_of(guest.work_dir, self.sync_dir)
 
     def _effective_effort(self, guest: GuestSession) -> str:
         """Effort's counterpart to `_effective_model` -- see there."""
