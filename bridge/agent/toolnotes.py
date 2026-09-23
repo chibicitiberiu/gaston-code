@@ -43,9 +43,13 @@ class Note:
     #: layout fact true of one release is false of the next.
     measured: str
     body: str
+    default_version: str = ""
 
-    def render(self, root: str) -> str:
-        return self.body.replace("{root}", root).strip("\n")
+    def render(self, root: str, version: str = "") -> str:
+        v = version or self.default_version
+        return (self.body.replace("{root}", root)
+                         .replace("{version}", v)
+                         .strip("\n"))
 
 
 def _build() -> dict[str, Note]:
@@ -54,9 +58,13 @@ def _build() -> dict[str, Note]:
         n = profiles.note(name)
         if not n:
             continue
+        d = profiles.detect(name)
+        vinfo = d.get("version", {})
+        default_ver = str(vinfo.get("default", "")) if isinstance(vinfo, dict) else ""
         out[name] = Note(title=n.get("title", name),
                          measured=n.get("measured", ""),
-                         body=n.get("body", ""))
+                         body=n.get("body", ""),
+                         default_version=default_ver)
     return out
 
 

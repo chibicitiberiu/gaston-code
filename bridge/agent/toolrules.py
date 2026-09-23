@@ -51,13 +51,10 @@ log = logging.getLogger("bridge.toolrules")
 @dataclass(frozen=True)
 class Rule:
     kind: str
-    #: None means the marker IS the answer: a single program, where the path
-    #: to the program is what anyone wants. A tuple means the marker is one
-    #: file inside a tree, and the tree is what is wanted -- drop the file
-    #: name, then drop the directory it sat in if that directory is named
-    #: here. `()` keeps the containing directory unconditionally.
     bins: "tuple | None" = None
     env: tuple = ()             # variables that name the root directly
+    version_markers: tuple = () # tuple of (marker_suffix, version_str)
+    version_default: str = ""
 
 
 def _build() -> dict[str, Rule]:
@@ -67,9 +64,14 @@ def _build() -> dict[str, Rule]:
         if not d.get("kind"):
             continue
         bins = d.get("bins")
+        vinfo = d.get("version", {})
+        vdefault = str(vinfo.get("default", "")) if isinstance(vinfo, dict) else ""
+        vmarkers = tuple((k.upper(), str(v)) for k, v in vinfo.items() if k != "default") if isinstance(vinfo, dict) else ()
         out[name] = Rule(kind=d["kind"],
                          bins=tuple(bins) if bins is not None else None,
-                         env=tuple(d.get("env", ())))
+                         env=tuple(d.get("env", ())),
+                         version_markers=vmarkers,
+                         version_default=vdefault)
     return out
 
 
@@ -82,6 +84,7 @@ class Found:
     kind: str
     path: str
     verified: bool
+    version: str = ""
 
     @property
     def basis(self) -> str:
@@ -132,11 +135,13 @@ def inventory(facts: list[Fact]) -> list[Found]:
     """
     by_file: dict[str, str] = {}
     by_env: dict[str, str] = {}
+    tool_facts: dict[str, list[Fact]] = {}
 
     for f in facts:
         rule = RULES.get(f.name)
         if rule is None:
             continue
+        tool_facts.setdefault(f.name, []).append(f)
         if f.kind == "file":
             # First marker wins: the INI lists them most-likely-first, and a
             # machine with two Watcoms installed is a problem the assistant
@@ -149,10 +154,16 @@ def inventory(facts: list[Fact]) -> list[Found]:
     out: list[Found] = []
     for name in sorted(set(by_file) | set(by_env)):
         rule = RULES[name]
-        if name in by_file:
-            out.append(Found(name, rule.kind, by_file[name], True))
-        else:
-            out.append(Found(name, rule.kind, by_env[name], False))
+        path = by_file[name] if name in by_file else by_env[name]
+        verified = name in by_file
+        version = rule.version_default
+        if rule.version_markers:
+            found_markers = [f.value.upper() for f in tool_facts.get(name, []) if f.kind == "file"]
+            for marker, ver in rule.version_markers:
+                if any(m.endswith(marker) or marker in m for m in found_markers):
+                    version = ver
+                    break
+        out.append(Found(name, rule.kind, path, verified, version=version))
     # Shells first: which shell is present changes how every single command
     # must be written, so it is the fact with the widest blast radius.
     out.sort(key=lambda f: (f.kind != "shell", f.name))

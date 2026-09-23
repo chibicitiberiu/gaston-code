@@ -198,6 +198,7 @@ from bridge.agent.toolrules import Found
 
 SHELL = Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", False)
 WATCOM = Found("watcom", "toolchain", r"C:\WATCOM", True)
+CSCRIPT = Found("cscript", "tool", r"C:\WINDOWS\COMMAND\CSCRIPT.EXE", True, version="5.0")
 
 
 def test_nothing_detected_says_nothing_at_all():
@@ -303,6 +304,21 @@ def test_the_shell_note_is_not_charged_against_the_toolchain_cap():
 def test_a_machine_with_only_a_shell_gets_the_shell_note():
     out = tools_block([SHELL])
     assert "2>&1" in out
+
+
+def test_cscript_note_is_resident_alongside_shell_and_toolchain():
+    """cscript is a standalone tool, so it has its own slot. All three
+    notes compose and are resident."""
+    out = tools_block([SHELL, CSCRIPT, WATCOM])
+    assert "Too many parameters" in out
+    assert "-l=nt_win" in out
+    assert "Windows Script Host 5.0" in out
+    assert "CSCRIPT.EXE (v5.0)" in out
+
+
+def test_cscript_alone_with_shell_stays_inside_budget():
+    out = tools_block([SHELL, CSCRIPT])
+    assert len(out) < MAX_BLOCK_CHARS
 
 
 #: RAISED DELIBERATELY from 1,400, and the reasoning belongs here rather than

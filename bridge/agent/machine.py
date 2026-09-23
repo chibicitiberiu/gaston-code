@@ -212,7 +212,10 @@ def tools_block(found: "list", path: "list | None" = None) -> str:
         return ""
 
     width = max(len(f.name) for f in found)
-    rows = [f"  {f.name:<{width}}  {f.kind:<9}  {f.path}" for f in found]
+    rows = []
+    for f in found:
+        ver = f" (v{f.version})" if getattr(f, "version", "") else ""
+        rows.append(f"  {f.name:<{width}}  {f.kind:<9}  {f.path}{ver}")
     # The basis goes on its own aligned column so the eye reads down it.
     pad = max(len(r) for r in rows)
     rows = [f"{r:<{pad}}   {f.basis}" for r, f in zip(rows, found)]
@@ -284,16 +287,24 @@ def tools_block(found: "list", path: "list | None" = None) -> str:
     # present changes how every single command must be written, and unlike a
     # toolchain there is no moment when the agent could look it up first --
     # the first command fails before it knows to ask.
-    budget = MAX_FACT_BLOCKS
+    # Toolchains are capped at MAX_FACT_BLOCKS (1) so multiple compilers do
+    # not overwhelm the prompt. Standalone tools get their own budget.
+    toolchain_budget = MAX_FACT_BLOCKS
+    tool_budget = 1
     for f in found:
         note = notes.NOTES.get(f.name)
         if note is None:
             continue
-        if f.kind != "shell":
-            if budget <= 0:
+        if f.kind == "toolchain":
+            if toolchain_budget <= 0:
                 continue
-            budget -= 1
-        out += ["", note.render(f.path)]
+            toolchain_budget -= 1
+        elif f.kind != "shell":
+            if tool_budget <= 0:
+                continue
+            tool_budget -= 1
+        version = getattr(f, "version", "")
+        out += ["", note.render(f.path, version=version)]
 
     return "\n".join(out)
 

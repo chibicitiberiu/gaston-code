@@ -239,3 +239,16 @@ def test_a_single_program_reports_the_program_and_not_its_folder(name):
         value = section[key].strip()
         if value:
             assert root_of(value, rule) == value
+
+
+def test_cscript_detection_defaults_to_wsh_5_0():
+    got = inventory([Fact("cscript", "file", r"C:\WINDOWS\COMMAND\CSCRIPT.EXE")])
+    assert got == [Found("cscript", "tool", r"C:\WINDOWS\COMMAND\CSCRIPT.EXE", True, version="5.0")]
+
+
+def test_cscript_detection_identifies_wsh_5_6_when_wshcon_present():
+    got = inventory([
+        Fact("cscript", "file", r"C:\WINDOWS\COMMAND\CSCRIPT.EXE"),
+        Fact("cscript", "file", r"C:\WINDOWS\SYSTEM\WSHCON.DLL"),
+    ])
+    assert got == [Found("cscript", "tool", r"C:\WINDOWS\COMMAND\CSCRIPT.EXE", True, version="5.6")]

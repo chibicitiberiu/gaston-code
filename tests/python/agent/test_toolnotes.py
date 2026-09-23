@@ -96,3 +96,25 @@ def test_every_note_is_keyed_on_something_the_guest_looks_for():
     cp.read(INI, encoding="latin-1")
     missing = sorted(set(NOTES) - set(cp.sections()))
     assert not missing, f"notes nothing is looked for: {missing}"
+
+
+def test_cscript_note_renders_root_and_version():
+    note = NOTES["cscript"]
+    out = note.render(r"C:\WINDOWS\COMMAND\CSCRIPT.EXE", version="5.0")
+    assert r"C:\WINDOWS\COMMAND\CSCRIPT.EXE" in out
+    assert "Windows Script Host 5.0" in out
+    assert "{root}" not in out
+    assert "{version}" not in out
+
+
+def test_cscript_note_warns_against_wscript():
+    body = NOTES["cscript"].body
+    assert "wscript" in body.lower()
+    assert "modal dialogs" in body or "dialog" in body
+
+
+def test_cscript_note_includes_batch_and_timeout_flags():
+    body = NOTES["cscript"].body
+    assert "//nologo" in body
+    assert "//B" in body
+    assert "//T:" in body
