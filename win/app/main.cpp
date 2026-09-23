@@ -41,6 +41,7 @@
 #include "app/pillbar.h"
 #include "app/screenshot.h"
 #include "app/statusbar.h"
+#include "app/reconnect.h"
 #include "net/caps.h"
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
  * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, ID_LIVE/FIRST/PREV/NEXT/
@@ -54,12 +55,6 @@
  * IDM_NEW and friends moved to app/resource.h, because gaston.rc's
  * ACCELERATORS block names IDM_NEW and wrc cannot see a #define that lives
  * in a .cpp. Duplicating the number in two files is how the two drift. */
-
-#define TIMER_RECONNECT 1
-#define TIMER_STATUS    2
-/* Navigation is asynchronous, so the document is polled for readiness until it
- * arrives, then the timer stops. */
-#define TIMER_HTMLPOLL  3
 
 /* WM_APP-offset messages this file posts to itself. One block, so Phase 6's
  * cross-thread posts have somewhere to go instead of a fourth style turning
@@ -124,6 +119,7 @@ static rc_pagebar *g_pagebar;
 static int      g_announce_connected;
 static HWND          g_main;
 static rc_statusbar *g_status;
+static rc_reconnect *g_reconn;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
@@ -176,6 +172,7 @@ static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
 static int  ui_send_text(const char *text, int compose);
+static void cache_restore(void);
 
 /* app/workdlg.h's `propose` callback. The dialog calls this ITSELF, between
  * the copy and the wait, so one progress window covers both halves of what
@@ -204,9 +201,6 @@ static void propose_workdir(const char *path, int staged)
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
 static int   g_turn_active = 0;
-static int   g_backoff_ms = 1000;
-/* Whether this outage has already been announced in the transcript. */
-static int   g_retry_noted;
 static char  g_exe_dir[MAX_PATH];
 /* WinMain's HINSTANCE, kept because the Server Host dialog needs it and
  * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
@@ -484,8 +478,7 @@ static void on_ready(rc_frame *f)
      * app/pagebar.h's rc_pagebar::note_ready. */
     if (g_pagebar) g_pagebar->note_ready(f);
     if (g_chats) g_chats->request();
-    g_backoff_ms = 1000;
-    g_retry_noted = 0;
+    if (g_reconn) g_reconn->on_connected();
     v = rc_frame_get(f, "model");
     rc_log("ready: sess=%s model=%s", g_net.sess, v ? v : "?");
     /* A reconnect gets a fresh transcript from the bridge, so whatever was
@@ -1322,79 +1315,12 @@ static void create_children(HWND hwnd, HINSTANCE inst)
                 accept(g_inputmod->get_box(), TRUE);
         }
     }
+
+    g_reconn = rc_reconnect::create(hwnd, &g_net, &g_cfg, g_exe_dir, g_html,
+                                    status_refresh, cache_restore);
 }
 
 /* -------------------------------------------------------------- main proc */
-
-static void try_connect(HWND hwnd)
-{
-    const char *tools;
-    unsigned tools_len = 0;
-
-    status_refresh();
-    /* SHARING OFF before saying hello.
-     *
-     * HELLO carries `sync_root` straight from the live sync layer, and the
-     * live value is whatever conversation was open when the last connection
-     * ended -- which outlives a bridge restart, because it is held here and
-     * not there. So a bridge that had just started was told the guest was
-     * mirroring C:\Gaston\OK, picked that tree's baseline, and then ran its
-     * first pass against its own whole mirrored directory. The two sides
-     * disagreed about which tree they were pairing before a conversation was
-     * even open.
-     *
-     * A connection therefore starts with nothing mirrored, and the bridge
-     * names the tree when a conversation commits to one -- the one direction
-     * of authority workdir.h describes. */
-    rc_workdir_apply("");
-    /* Tear the previous attempt down FIRST.
-     *
-     * rc_net_start is not idempotent: it re-initialises the critical section,
-     * zeroes the outbound queue and overwrites the thread handles. Calling it
-     * with the sender and worker from a dead connection still alive put two
-     * senders on one socket and corrupted the queue. rc_net_stop is a no-op
-     * when there is nothing to stop. */
-    rc_net_stop(&g_net);
-    /* WHAT THIS MACHINE HAS, carried on HELLO so the bridge can tell the
-     * agent before it writes the system prompt. Cached: this function runs
-     * again every few seconds while the bridge is down, and a rescan per
-     * retry would walk the FAT on a loop for an answer that cannot change
-     * without a restart. The scan itself suppresses critical-error dialogs,
-     * which matters because we are on the thread that pumps messages. */
-    tools = rc_tooldet_cached(g_exe_dir, &tools_len);
-    if (rc_net_start(&g_net, hwnd, g_cfg.host, g_cfg.port, g_cfg.secret,
-                     tools, tools_len) != 0) {
-        /* Say it ONCE per outage, not once per retry.
-         *
-         * Appending on every attempt filled the transcript with hundreds of
-         * identical "Cannot reach ... retrying in 15s" lines while the bridge
-         * was down -- which is not merely ugly: it is unbounded growth in the
-         * one structure this machine cannot afford to grow, on a box measured
-         * at 28KB free. The status bar already shows the live state, and that
-         * is the right place for something that changes every few seconds. */
-        if (!g_retry_noted) {
-            char msg[160];
-            rc_strf(msg, sizeof(msg), "Cannot reach %s:%d - retrying",
-                      g_cfg.host, g_cfg.port);
-            /* Escaped now. The host comes from the INI, so this was
-             * unescaped user-supplied text going into the document. */
-            if (g_html) g_html->notice(msg);
-            g_retry_noted = 1;
-            /* Once per outage, right after the one notice that is also once
-             * per outage -- the retry timer fires every few seconds and
-             * redrawing the transcript under someone reading it would be
-             * worse than the empty window this replaces. */
-            cache_restore();
-        }
-
-        /* Backoff on a timer, never a sleeping loop -- the message queue has
-         * to keep pumping or the window is a dead rectangle. */
-        SetTimer(hwnd, TIMER_RECONNECT, (UINT)g_backoff_ms, NULL);
-        g_backoff_ms *= 2;
-        if (g_backoff_ms > 15000) g_backoff_ms = 15000;
-    }
-    status_refresh();
-}
 
 static void handle_attach_path(HWND hwnd, const char *path)
 {
@@ -1457,7 +1383,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_CREATE:
         create_children(hwnd, ((LPCREATESTRUCT)lp)->hInstance);
-        SetTimer(hwnd, TIMER_STATUS, 1000, NULL);
         PostMessage(hwnd, WM_RC_CONNECT, 0, 0);
         return 0;
 
@@ -1482,7 +1407,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_RC_CONNECT:
-        try_connect(hwnd);
+        if (g_reconn) g_reconn->try_connect();
         return 0;
 
     case WM_SIZE:
@@ -1534,14 +1459,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_TIMER:
-        if (wp == TIMER_RECONNECT) {
-            KillTimer(hwnd, TIMER_RECONNECT);
-            try_connect(hwnd);
-        } else if (wp == TIMER_STATUS) {
-            status_refresh();
-        } else if (wp == TIMER_HTMLPOLL) {
-            if (g_html && g_html->poll()) KillTimer(hwnd, TIMER_HTMLPOLL);
-        }
+        if (g_reconn && g_reconn->handle_timer(wp)) return 0;
         return 0;
 
     case WM_RC_FRAME: {
@@ -1610,7 +1528,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_optmenu) g_optmenu->reset();
             if (g_chats) g_chats->abort_rows();
             ui_set_busy(0);
-            SetTimer(hwnd, TIMER_RECONNECT, (UINT)g_backoff_ms, NULL);
+            if (g_reconn) g_reconn->schedule();
         }
         return 0;
 
@@ -1896,9 +1814,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                  * still has to expire first. Fixing a typo'd host would still
                  * mean waiting out the old wait, which is the entire point of
                  * the dialog. Kill it, reset, and reconnect now. */
-                KillTimer(hwnd, TIMER_RECONNECT);
-                g_backoff_ms = 1000;
-                g_retry_noted = 0;
+                if (g_reconn) g_reconn->reset();
 
                 /* The host is user-supplied text going into an HTML
                  * document. main.cpp:930's notice already escapes it for
@@ -1908,7 +1824,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                             g_cfg.host, g_cfg.port);
                     g_html->notice(line);   /* notice() escapes */
                 }
-                try_connect(hwnd);
+                if (g_reconn) g_reconn->try_connect();
             }
             return 0;
 
@@ -1949,8 +1865,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_DESTROY:
-        KillTimer(hwnd, TIMER_STATUS);
-        KillTimer(hwnd, TIMER_RECONNECT);
+        delete g_reconn;
+        g_reconn = NULL;
         rc_net_stop(&g_net);
         delete g_html;
         g_html = NULL;
