@@ -47,6 +47,9 @@ CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
 
 LFLAGS = system nt_win option quiet, osversion=4.0
 
+# Memory budget ceiling: fail if committed memory exceeds baseline
+COMMITTED_CAP ?= 397000
+
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
 # forwarder to ws2_32). comctl32 is for the status bar.
@@ -365,15 +368,14 @@ check: $(BUILD)/retroclaude.exe
 	@# app does anything -- rc_net_send's frame build buffer alone is 66,560
 	@# bytes. `objdump -h` reports the RAW section size, which omits BSS
 	@# entirely and makes this look 7x smaller than it is, so read the PE
-	@# section headers directly.
 	@$(PYTHON) -c "import struct, sys;d=open('$(BUILD)/retroclaude.exe','rb').read();\
 pe=struct.unpack_from('<I',d,0x3c)[0];\
 n=struct.unpack_from('<H',d,pe+6)[0];o=pe+24+struct.unpack_from('<H',d,pe+20)[0];\
 rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII',d,o+i*40+8) for i in range(n)];\
 [print('   %-8s image %7d  file %7d  bss %7d' % (r[0],r[1],r[3],max(0,r[1]-r[3]))) for r in rows];\
 tot=sum(max(r[1],r[3]) for r in rows);\
-print('   total committed at load: %d bytes (cap 450000)' % tot);\
-sys.exit(1) if tot > 450000 else None"
+print('   total committed at load: %d bytes (budget $(COMMITTED_CAP))' % tot);\
+sys.exit(1) if tot > $(COMMITTED_CAP) else None"
 
 clean:
 	@rm -rf $(BUILD)

@@ -22,6 +22,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 from . import handshake
 from .files import caps as C
@@ -130,6 +131,28 @@ def turn_verdict(ok: bool, degraded: str, produced: bool,
     failed_silently = bool(degraded) and not produced
     return (ok and not failed_silently,
             degraded if failed_silently else subtype)
+
+
+class GuestState(Enum):
+    """Derived guest state — a projection over existing fields.
+
+    This is a COMPUTED PROPERTY, not a stored field.  It is derived from
+    ``turn_lock``, ``synccoord.halt_id``, ``perms.pending``,
+    ``exec_pending`` and ``writer``/``lost_at``.
+
+    Used for logging and diagnostics ONLY.  **No gating** —
+    gating inbound frames on this enum is intentionally avoided: the
+    RESUME flow (which starts a turn AND lifts a halt in one operation)
+    must not be blocked by a naive single-state gate.
+
+    The axes are orthogonal — turn-running, halt-raised, permission-
+    pending and exec-in-flight can all be true at the same time.  This
+    enum is a projection, not a replacement.
+    """
+    IDLE = auto()
+    RUNNING_TURN = auto()
+    HALTED = auto()
+    DISCONNECTED = auto()
 
 
 @dataclass
@@ -497,6 +520,50 @@ class GuestSession:
         `_new_session`/`_switch` did not have to change shape (02.2)."""
         await self.view.reset()
 
+    # --- derived state, for logging and diagnostics -------------------------
+
+    @property
+    def state(self) -> GuestState:
+        """Derived state — a projection over existing fields.
+
+        Priority: DISCONNECTED > HALTED > RUNNING_TURN > IDLE.
+
+        The axes are orthogonal (turn-running, halt-raised, permission-
+        pending and exec-in-flight can all be true simultaneously), so
+        this is an observational projection, not an authoritative gate.
+        """
+        if not self.connected:
+            return GuestState.DISCONNECTED
+        if self.synccoord.halt_id:
+            return GuestState.HALTED
+        if self.turn_lock.locked():
+            return GuestState.RUNNING_TURN
+        return GuestState.IDLE
+
+    @property
+    def state_detail(self) -> str:
+        """Human-readable state detail for log lines.
+
+        Captures the orthogonal axes the single enum cannot represent:
+        which combination of turn/halt/perm/exec is active right now.
+        """
+        parts = []
+        if not self.connected:
+            parts.append("disconnected")
+            if self.lost_at is not None:
+                parts.append(f"lost={time.monotonic() - self.lost_at:.0f}s ago")
+        if self.synccoord.halt_id:
+            parts.append(f"halted={self.synccoord.halt_id}")
+        if self.turn_lock.locked():
+            parts.append("turn-running")
+        if self.perm_pending is not None:
+            parts.append("perm-pending")
+        if self.exec_pending:
+            parts.append(f"exec={len(self.exec_pending)}")
+        if self.sync_active:
+            parts.append("sync-active")
+        return ", ".join(parts) or "idle"
+
 
 class Bridge:
     HELLO_TIMEOUT: float = 10.0
@@ -687,6 +754,9 @@ class Bridge:
             # which entry point was used is a liveness mechanism you do not
             # have. Nothing needs reaping before a guest exists: _read_hello
             # has its own 10s deadline.
+            # 02.6 Background tasks must be created after _attach binds ContextVars
+            assert guest is not None and guest.caps is not None
+
             if self._reaper is None:
                 self._reaper = asyncio.create_task(self._reap_idle())
             if self._sweeper is None and self.sync_dir:
@@ -4215,6 +4285,7 @@ class Bridge:
         same conversation with fork_session=True. The fork is why the history
         survives and why the session id changes.
         """
+        assert guest.turn_lock.locked()
         label = EFFORT_LABEL.get(effort, effort or "default")
 
         # No client means a conversation opened from the chat list and not yet
@@ -4297,6 +4368,7 @@ class Bridge:
         base it on, and then live with it. `folder` is still accepted so an
         older guest is not broken by a header the bridge stopped reading.
         """
+        assert guest.turn_lock.locked()
         name = ""
         log.info("new session requested")
         self._abandon_pending(guest)
@@ -4355,6 +4427,7 @@ class Bridge:
         than a pool lookup. The history is replayed into a fresh paginator so
         the guest can page back through it exactly as if it had streamed.
         """
+        assert guest.turn_lock.locked()
         if not session_id:
             await self._send(guest, error("bad_session", "no id"))
             return

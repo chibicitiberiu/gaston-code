@@ -1,0 +1,29 @@
+[
+  {
+    "body": "Stopped: 1 conflicting edit.",
+    "headers": {
+      "id": "<HALT_ID>"
+    },
+    "type": "HALT"
+  },
+  {
+    "headers": {
+      "id": "<HALT_ID>"
+    },
+    "type": "HALTEND"
+  },
+  {
+    "headers": {
+      "off": "0",
+      "page": "1",
+      "preview": "Resolve the sync conflict, then continue"
+    },
+    "type": "ANCHOR"
+  },
+  {
+    "headers": {
+      "state": "start"
+    },
+    "type": "TURN"
+  }
+]

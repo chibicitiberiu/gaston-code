@@ -1,0 +1,142 @@
+[
+  {
+    "headers": {
+      "off": "0",
+      "page": "1",
+      "preview": "Run vol c:"
+    },
+    "type": "ANCHOR"
+  },
+  {
+    "headers": {
+      "state": "start"
+    },
+    "type": "TURN"
+  },
+  {
+    "body": "<p>Executing command...</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "off": "0",
+      "page": "1",
+      "total": "27"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<p>Executing command...</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "27"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "page": "1"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<div class=\"tool\"><span class=\"toolname\">Bash</span> command: vol c:</div>",
+    "headers": {
+      "enc": "deflate",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "74"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<div class=\"perm\" id=\"perm\"><div class=\"permhead\">Permission required</div><div class=\"permdonehead\">Answered</div><p><b>Bash</b> &mdash; vol c:</p><table><tr><th>command</th><td>vol c:</td></tr></table></div>",
+    "headers": {
+      "enc": "deflate",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "209"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "Bash: vol c:",
+    "headers": {
+      "allows": "1",
+      "id": "toolu_test_1",
+      "tool": "Bash",
+      "waiting": "0"
+    },
+    "type": "PERMREQ"
+  },
+  {
+    "headers": {
+      "count": "0"
+    },
+    "type": "SESSIONS"
+  },
+  {
+    "headers": {},
+    "type": "SESSIONSEND"
+  },
+  {
+    "headers": {
+      "id": "toolu_test_1",
+      "reason": "answered"
+    },
+    "type": "PERMEND"
+  },
+  {
+    "body": "vol c:",
+    "headers": {
+      "id": "x1",
+      "shell": "",
+      "timeout_ms": "5000"
+    },
+    "type": "EXEC"
+  },
+  {
+    "body": "<p>Output: Volume in drive C is DOS</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "39"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "page": "1"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "page": "1"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "cost_usd": "<COST>",
+      "ctx_pct": "42",
+      "ms": "<MS>",
+      "ok": "1",
+      "state": "end",
+      "subtype": "success"
+    },
+    "type": "TURN"
+  }
+]

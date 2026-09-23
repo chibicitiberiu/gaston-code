@@ -136,7 +136,11 @@ test: guest-checks
 # into fifteen seconds. Not a gate -- `make test` is -- but the difference
 # between running the tests after every edit and running them after every
 # third one.
-test-fast:
+# Ensures retroclaude.exe is present so test_import_gate.py runs in full on clean checkouts
+guest-retroclaude:
+	@$(MAKE) -C win retroclaude
+
+test-fast: guest-retroclaude
 	@$(PY) -m pytest tests/python -m "not guest" -q
 
 # Run all verification gates together: static PE audit (imports, CMOV, frames,

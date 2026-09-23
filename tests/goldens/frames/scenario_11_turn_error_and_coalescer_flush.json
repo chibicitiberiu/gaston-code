@@ -1,0 +1,53 @@
+[
+  {
+    "headers": {
+      "off": "0",
+      "page": "1",
+      "preview": "Fail this turn"
+    },
+    "type": "ANCHOR"
+  },
+  {
+    "headers": {
+      "state": "start"
+    },
+    "type": "TURN"
+  },
+  {
+    "body": "<p>Partial output before error.</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "off": "0",
+      "page": "1",
+      "total": "35"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<p>Partial output before error.</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "35"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "page": "1"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "API connection failure",
+    "headers": {
+      "state": "error"
+    },
+    "type": "TURN"
+  }
+]

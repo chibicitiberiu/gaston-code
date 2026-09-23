@@ -213,40 +213,44 @@ class FakeSession:
 
     async def send(self, prompt):
         from bridge.agent.session import Turn
-        # The id arrives here, ahead of any output, exactly as it does from
-        # the CLI.
-        await self.start_turn()
-        self.last_prompt = prompt
-        self.last_prompt_messages = []
-        # A command the CLI resolves locally streams nothing back. Modelled
-        # rather than assumed away: the bridge's "returned nothing" notice is
-        # only reachable through a turn that really does produce no output.
-        if getattr(self, "silent", False):
-            return Turn(ok=True, subtype="success", cost_usd=0.0,
-                        num_turns=1, duration_ms=10)
-        display_text = prompt
-        if hasattr(prompt, "__aiter__"):
-            collected = []
-            async for item in prompt:
-                collected.append(item)
-            self.last_prompt_messages = collected
-            parts = []
-            for msg in collected:
-                content = msg.get("message", {}).get("content", "")
-                if isinstance(content, str):
-                    parts.append(content)
-                elif isinstance(content, list):
-                    for b in content:
-                        if isinstance(b, dict):
-                            if b.get("type") == "text":
-                                parts.append(b.get("text", ""))
-                            elif b.get("type") == "image":
-                                parts.append("[image]")
-            display_text = " ".join(parts)
-        if self.on_text:
-            await self.on_text(f"echo: {display_text}\n")
-        return Turn(ok=True, subtype="success", cost_usd=0.01,
-                    num_turns=1, duration_ms=5)
+        self.busy = True
+        try:
+            # The id arrives here, ahead of any output, exactly as it does from
+            # the CLI.
+            await self.start_turn()
+            self.last_prompt = prompt
+            self.last_prompt_messages = []
+            # A command the CLI resolves locally streams nothing back. Modelled
+            # rather than assumed away: the bridge's "returned nothing" notice is
+            # only reachable through a turn that really does produce no output.
+            if getattr(self, "silent", False):
+                return Turn(ok=True, subtype="success", cost_usd=0.0,
+                            num_turns=1, duration_ms=10)
+            display_text = prompt
+            if hasattr(prompt, "__aiter__"):
+                collected = []
+                async for item in prompt:
+                    collected.append(item)
+                self.last_prompt_messages = collected
+                parts = []
+                for msg in collected:
+                    content = msg.get("message", {}).get("content", "")
+                    if isinstance(content, str):
+                        parts.append(content)
+                    elif isinstance(content, list):
+                        for b in content:
+                            if isinstance(b, dict):
+                                if b.get("type") == "text":
+                                    parts.append(b.get("text", ""))
+                                elif b.get("type") == "image":
+                                    parts.append("[image]")
+                display_text = " ".join(parts)
+            if self.on_text:
+                await self.on_text(f"echo: {display_text}\n")
+            return Turn(ok=True, subtype="success", cost_usd=0.01,
+                        num_turns=1, duration_ms=5)
+        finally:
+            self.busy = False
 
     #: Context-window fullness, 0-100. Implemented here rather than letting
     #: the call site use getattr: this fake stands in for the whole Session

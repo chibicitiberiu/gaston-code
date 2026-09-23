@@ -1,0 +1,9 @@
+[
+  {
+    "headers": {
+      "code": "busy",
+      "msg": "another client holds this session"
+    },
+    "type": "ERROR"
+  }
+]

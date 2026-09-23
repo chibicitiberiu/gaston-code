@@ -1,0 +1,86 @@
+[
+  {
+    "headers": {
+      "off": "0",
+      "page": "1",
+      "preview": "[Attached: SAMPLE.TXT] Inspect this file"
+    },
+    "type": "ANCHOR"
+  },
+  {
+    "headers": {
+      "state": "start"
+    },
+    "type": "TURN"
+  },
+  {
+    "headers": {
+      "att": "att_1",
+      "id": "<SYNC_ID>"
+    },
+    "type": "ATTGET"
+  },
+  {
+    "body": "<p>echo: [Attached file: SAMPLE.TXT]<br>Contents of SAMPLE.TXT:</p>",
+    "headers": {
+      "enc": "deflate",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "67"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<div class=\"codewrap\"><pre>Hello from Windows 98\n</pre></div>",
+    "headers": {
+      "enc": "raw",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "61"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<p>Inspect this file</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "off": "0",
+      "page": "1",
+      "total": "24"
+    },
+    "type": "TEXT"
+  },
+  {
+    "body": "<p>Inspect this file</p>",
+    "headers": {
+      "enc": "raw",
+      "mode": "append",
+      "off": "0",
+      "page": "1",
+      "total": "24"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "enc": "raw",
+      "mode": "live",
+      "page": "1"
+    },
+    "type": "TEXT"
+  },
+  {
+    "headers": {
+      "cost_usd": "<COST>",
+      "ctx_pct": "42",
+      "ms": "<MS>",
+      "ok": "1",
+      "state": "end",
+      "subtype": "success"
+    },
+    "type": "TURN"
+  }
+]

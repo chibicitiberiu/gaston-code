@@ -334,6 +334,11 @@ class PermissionDesk:
         # paginates and survives paging away and back. The bar itself carries
         # only the summary, because a guest in HISTORY mode never sees this.
         await self._write_block(prompt.body)
+        
+        # Coalescers must be flushed before the bar is shown, or buffered text
+        # arrives out of order behind the prompt.
+        assert not any(c._buf for c in self._guest.coalescers.values())
+
         await self._send(permreq(
             prompt.tool_use_id, prompt.tool_name, prompt.allows,
             len(self.queue), prompt.summary))
