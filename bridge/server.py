@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import asyncio
-import base64
 from collections.abc import AsyncIterable
 import contextlib
 import logging
@@ -27,7 +26,7 @@ from enum import Enum, auto
 from . import handshake
 from .files import caps as C
 from .files import manifest
-from .status import EXEC_STATUS_PROSE, ExecStatus, SyncStatus
+from .status import EXEC_STATUS_PROSE, ExecStatus
 from .wire import fold
 from .agent import machine
 from .agent import profiles
@@ -74,7 +73,7 @@ from .wire.protocol import (
                             turn_start,
                             )
 from .wire.link import GuestLink
-from .files.synctransport import GuestSyncState, SyncTransport
+from .files.synctransport import GuestSyncState
 from .view.transcript import TranscriptView
 from .agent import sessions as sesslist
 from .files.sync import Entry as SyncEntry, Type as SyncType
@@ -98,6 +97,7 @@ from .services.presentation import PresentationService
 from .services.guest_exec import ExecCall, GuestExecService
 from .services.permission import PermissionService
 from .services.sync import SyncService
+from .services.attachment import AttachmentService
 
 log = logging.getLogger("bridge.server")
 
@@ -629,6 +629,11 @@ class Bridge:
             workspace=self.workspace,
             presentation=self.presentation,
             spawn=self._spawn,
+        )
+        self.attachment = AttachmentService(
+            connection=self,
+            workspace=self.workspace,
+            sync=self.sync,
         )
 
         # One guest, one session. See PLAN.md "Multi-session".
@@ -1285,31 +1290,7 @@ class Bridge:
         return self.workspace.work_dir(guest)
 
     def _validate_attach_target(self, guest: GuestSession, attach: str) -> str | None:
-        """Validate and resolve attachment relative path within the guest's work directory.
-
-        Enforces strict path containment (docs/BACKLOG.md 04.24), rejecting path traversal,
-        absolute paths, drive letters, and symlinks resolving outside the work directory.
-        Returns the absolute local path if valid and contained, or None if invalid.
-        """
-        if not attach or not isinstance(attach, str) or "\0" in attach or ":" in attach:
-            return None
-        clean = attach.replace("\\", "/").strip()
-        if not clean or clean.startswith("/") or os.path.isabs(clean):
-            return None
-        base = os.path.abspath(self._work_dir(guest))
-        target = os.path.abspath(os.path.join(base, clean))
-        try:
-            if os.path.commonpath([base, target]) != base:
-                return None
-            base_real = os.path.realpath(base)
-            target_real = os.path.realpath(target)
-            if os.path.commonpath([base_real, target_real]) != base_real:
-                return None
-        except ValueError:
-            return None
-        if target == base:
-            return None
-        return target
+        return self.attachment.validate_attach_target(guest, attach)
 
     def _remember_settings(self, guest: GuestSession,
                            session_id: str = "") -> None:
@@ -2174,15 +2155,8 @@ class Bridge:
                                attach_name: str | None = None) -> None:
         if not guest.claude:
             return
-        display_text = text
-        display_names: list[str] = []
-        if attach_name:
-            display_names.extend([n.strip() for n in attach_name.split("|") if n.strip()])
-        if attach:
-            display_names.extend([os.path.basename(p.replace("\\", "/").strip()) or p.strip()
-                                  for p in attach.split("|") if p.strip()])
-        if display_names and "[Attached:" not in text:
-            display_text = f"[Attached: {', '.join(display_names)}]\n{text}"
+        display_names = self.attachment.parse_display_names(attach, attach_name)
+        display_text = self.attachment.format_display_text(text, display_names)
         # User turns are the landmarks a reader navigates by.
         anchor = guest.pages.mark_user_turn(display_text)
         # The guest echoed this line itself the moment Send was pressed, so it
@@ -2238,186 +2212,9 @@ class Bridge:
             text = await self._with_sync_preamble(text)
         prompt_payload: str | AsyncIterable[dict] = text
         if (attach or attach_id) and not was_command:
-            native_images = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-            }
-            items: list[dict] = []
-            if attach_id and attach_name:
-                ids = [i.strip() for i in attach_id.split("|") if i.strip()]
-                names = [n.strip() for n in attach_name.split("|") if n.strip()]
-                for aid, aname in zip(ids, names):
-                    items.append({"kind": "external", "id": aid, "name": aname, "path": None})
-            if attach:
-                for p in attach.split("|"):
-                    p = p.strip()
-                    if p:
-                        clean_path = p.replace("\\", "/").strip()
-                        fn = os.path.basename(clean_path) or clean_path
-                        items.append({"kind": "workspace", "id": None, "name": clean_path, "display_name": fn, "path": clean_path})
-
-            image_blocks: list[dict] = []
-            text_blocks: list[str] = []
-
-            for item in items:
-                filename = item["name"]
-                ext = os.path.splitext(filename)[1].lower()
-                att_bytes: bytes | None = None
-                file_too_large_image = False
-                if item["kind"] == "external" and item["id"]:
-                    try:
-                        transport = SyncTransport(guest)
-                        res = await transport.get_attachment(item["id"])
-                        if res.status == SyncStatus.OK:
-                            att_bytes = res.data
-                        else:
-                            log.warning("failed to fetch attachment %s: %s", item["id"], res.status)
-                    except Exception as exc:
-                        log.warning("exception fetching attachment %s: %s", item["id"], exc)
-                elif item["kind"] == "workspace" and item["path"]:
-                    clean_attach = item["path"]
-                    target = self._validate_attach_target(guest, clean_attach)
-                    if target and not os.path.exists(target) and self.sync_dir:
-                        try:
-                            await self.run_sync("attachment not found locally")
-                        except Exception as exc:
-                            log.warning("sync before attachment failed: %s", exc)
-                    if target and os.path.isfile(target):
-                        try:
-                            file_size = os.path.getsize(target)
-                            if ext in native_images and file_size > 10 * 1024 * 1024:
-                                file_too_large_image = True
-                                log.warning("image attachment %s exceeds 10MB limit (%d bytes)",
-                                            clean_attach, file_size)
-                            else:
-                                with open(target, "rb") as f:
-                                    att_bytes = f.read()
-                        except OSError as exc:
-                            log.warning("failed to read attachment %s: %s", target, exc)
-
-                if file_too_large_image:
-                    prefix = "Attached workspace file" if item["kind"] == "workspace" else "Referenced file"
-                    text_blocks.append(f"[{prefix}: {filename} (file too large for image block)]\n")
-                    continue
-
-                image_data: bytes | None = None
-                media_type: str = "image/png"
-                if att_bytes:
-                    if ext in native_images and len(att_bytes) <= 10 * 1024 * 1024:
-                        image_data = att_bytes
-                        media_type = native_images[ext]
-                    else:
-                        try:
-                            from PIL import Image
-                            import io
-                            with Image.open(io.BytesIO(att_bytes)) as img:
-                                buf = io.BytesIO()
-                                if img.mode not in ("RGB", "RGBA"):
-                                    img = img.convert("RGBA" if ("transparency" in img.info or img.mode == "P") else "RGB")
-                                img.save(buf, format="PNG")
-                                converted = buf.getvalue()
-                                if len(converted) <= 10 * 1024 * 1024:
-                                    image_data = converted
-                                    media_type = "image/png"
-                                else:
-                                    log.warning("converted image %s exceeds 10MB limit (%d bytes)", filename, len(converted))
-                        except Exception:
-                            pass
-
-                if image_data:
-                    b64_data = base64.b64encode(image_data).decode("ascii")
-                    image_blocks.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64_data,
-                        },
-                    })
-                else:
-                    label = "Attached workspace file" if item["kind"] == "workspace" else "Attached file"
-                    ref_label = "Attached workspace file" if item["kind"] == "workspace" else "Referenced file"
-                    if att_bytes is not None:
-                        file_size = len(att_bytes)
-                        if file_size == 0:
-                            text_blocks.append(f"[{label}: {filename} (empty file)]\n")
-                        elif file_size > 256 * 1024:
-                            text_blocks.append(
-                                f"[{label}: {filename} "
-                                f"({file_size} bytes, file too large to inline directly)]\n"
-                            )
-                        else:
-                            is_binary = b"\x00" in att_bytes
-                            content_str: str | None = None
-                            if not is_binary:
-                                if att_bytes.startswith(b"\xef\xbb\xbf"):
-                                    try:
-                                        content_str = att_bytes[3:].decode("utf-8")
-                                    except UnicodeDecodeError:
-                                        pass
-                                if content_str is None:
-                                    try:
-                                        content_str = att_bytes.decode("utf-8")
-                                    except UnicodeDecodeError:
-                                        pass
-                                if content_str is None and hasattr(guest, "caps") and getattr(guest.caps, "acp", None):
-                                    try:
-                                        content_str = att_bytes.decode(guest.caps.acp)
-                                    except (UnicodeDecodeError, LookupError):
-                                        pass
-                                if content_str is None:
-                                    try:
-                                        content_str = att_bytes.decode("cp1252")
-                                    except UnicodeDecodeError:
-                                        pass
-                            if content_str is not None:
-                                text_blocks.append(
-                                    f"[{label}: {filename}]\n"
-                                    f"Contents of {filename}:\n"
-                                    f"```\n"
-                                    f"{content_str}\n"
-                                    f"```\n"
-                                )
-                            else:
-                                text_blocks.append(
-                                    f"[{ref_label}: {filename} ({file_size} bytes, binary file)]\n"
-                                )
-                    else:
-                        text_blocks.append(f"[{label}: {filename} (failed to read file)]\n")
-
-            clean_text = text
-            for item in items:
-                tag = f"[Attached: {item['name']}]"
-                clean_text = clean_text.replace(tag + "\r\n", "").replace(tag + "\n", "").replace(tag, "")
-            if display_names:
-                tag = f"[Attached: {', '.join(display_names)}]"
-                clean_text = clean_text.replace(tag + "\r\n", "").replace(tag + "\n", "").replace(tag, "")
-            clean_text = clean_text.strip()
-            prompt_text = clean_text if clean_text else text
-
-            if text_blocks:
-                header = "".join(text_blocks)
-                prompt_text = f"{header}{prompt_text}" if prompt_text else header.strip()
-
-            if image_blocks:
-                async def _multimodal_prompt(blocks=list(image_blocks), ptext=prompt_text):
-                    content: list[dict] = list(blocks)
-                    if ptext:
-                        content.append({"type": "text", "text": ptext})
-                    yield {
-                        "type": "user",
-                        "message": {
-                            "role": "user",
-                            "content": content,
-                        },
-                        "parent_tool_use_id": None,
-                    }
-                prompt_payload = _multimodal_prompt()
-            else:
-                prompt_payload = prompt_text
+            prompt_payload = await self.attachment.assemble_prompt(
+                guest, text, attach=attach, attach_id=attach_id, attach_name=attach_name
+            )
         try:
             turn = await guest.claude.send(prompt_payload)
 
