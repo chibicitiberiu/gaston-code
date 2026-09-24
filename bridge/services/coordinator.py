@@ -13,6 +13,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..status import GuestState
 from ..wire import fold
 from ..wire.protocol import Frame, error, halt, haltend, turn_start
 
@@ -131,6 +132,27 @@ class SessionCoordinator:
 
     async def on_input(self, guest: GuestSession, f: Frame) -> None:
         """Handle inbound INPUT frame."""
+        state = getattr(guest, "state", None)
+        if state == GuestState.RUNNING_TURN:
+            log.warning(
+                "rejected INPUT while turn is active (state=%s)",
+                getattr(guest, "state_detail", "turn-running"),
+            )
+            await self._send(guest, error("busy", "A prompt is already running."))
+            return
+        if state == GuestState.HALTED:
+            log.warning(
+                "rejected INPUT while session is halted (state=%s)",
+                getattr(guest, "state_detail", "halted"),
+            )
+            await self._send(
+                guest, error("halted", "Session is halted awaiting resolution.")
+            )
+            return
+        if state == GuestState.DISCONNECTED:
+            log.warning("rejected INPUT while disconnected")
+            return
+
         text = fold.decode(f.body)
         log.info("input: %s", text[:120])
         attach = f.headers.get("attach")

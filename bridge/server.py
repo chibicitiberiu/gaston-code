@@ -93,6 +93,7 @@ from .services.options import (
     MODE_ORDER,
     OptionsService,
 )
+from .status import GuestState
 from .services.workspace import WorkspaceService
 from .services.presentation import PresentationService
 from .services.guest_exec import ExecCall, GuestExecService
@@ -106,28 +107,6 @@ from .services.coordinator import SessionCoordinator
 log = logging.getLogger("bridge.server")
 
 DEFAULT_PORT = 7890
-
-
-class GuestState(Enum):
-    """Derived guest state — a projection over existing fields.
-
-    This is a COMPUTED PROPERTY, not a stored field.  It is derived from
-    ``turn_lock``, ``synccoord.halt_id``, ``perms.pending``,
-    ``exec_pending`` and ``writer``/``lost_at``.
-
-    Used for logging and diagnostics ONLY.  **No gating** —
-    gating inbound frames on this enum is intentionally avoided: the
-    RESUME flow (which starts a turn AND lifts a halt in one operation)
-    must not be blocked by a naive single-state gate.
-
-    The axes are orthogonal — turn-running, halt-raised, permission-
-    pending and exec-in-flight can all be true at the same time.  This
-    enum is a projection, not a replacement.
-    """
-    IDLE = auto()
-    RUNNING_TURN = auto()
-    HALTED = auto()
-    DISCONNECTED = auto()
 
 
 @dataclass

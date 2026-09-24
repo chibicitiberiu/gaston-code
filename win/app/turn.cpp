@@ -55,6 +55,14 @@ void rc_turn::turn_done()
     if (m_html) m_html->status("");
 }
 
+void rc_turn::note_input()
+{
+    m_active = 1;
+    m_start_ms = GetTickCount();
+    think_show();
+    if (m_busy_fn) m_busy_fn(1);
+}
+
 void rc_turn::abort()
 {
     m_active = 0;

@@ -36,7 +36,26 @@ every call site that reaches `permend()` uses `.value` explicitly: a bare
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum, auto
+
+
+class GuestState(Enum):
+    """Derived guest session state — a projection over orthogonal runtime axes.
+
+    This is a COMPUTED PROPERTY, not a stored field. It is derived from
+    ``turn_lock``, ``synccoord.halt_id``, ``perms.pending``,
+    ``exec_pending`` and ``writer``/``lost_at``.
+
+    Priority: DISCONNECTED > HALTED > RUNNING_TURN > IDLE.
+
+    The axes are orthogonal — turn-running, halt-raised, permission-
+    pending and exec-in-flight can all be true at the same time. This
+    enum is a projection, not a replacement.
+    """
+    IDLE = auto()
+    RUNNING_TURN = auto()
+    HALTED = auto()
+    DISCONNECTED = auto()
 
 
 class ExecStatus(str, Enum):

@@ -3022,3 +3022,69 @@ transiting guest memory, along with Win32 Explorer integration:
     - Read-only tools (`mcp__machine__sync_status`) and state resolvers (`mcp__machine__sync_resolve`) do not trigger
       sync flushes, keeping them cheap and non-blocking.
 
+
+## Bridge Services Architecture & Client Extraction Refactoring
+
+A comprehensive architectural refactoring of the Python bridge and C++ guest client,
+fulfilling the architectural goals of `plan_bridge_services_refactoring.md`.
+
+### 1. Service Layering & Dependency Graph (bridge/services/)
+
+`bridge/server.py` is decomposed from a monolithic composition and dispatch module into
+strictly layered, single-responsibility services assembled in topological order:
+
+* **L1 `BridgeConfig`**: Immutable runtime and wire configuration.
+* **L2 `ConnectionService`**: Socket listener, framing pump, handshake attachment, heartbeat/reaper,
+  and connection lifecycle. Holds the singular active `GuestSession` (`self.guest`).
+* **L3 `PresentationService`**, **`WorkspaceService`**, **`OptionsService`**: Transcript view updates,
+  workspace mirroring, and model/effort/mode options.
+* **L4 `GuestExecService`**, **`PermissionService`**, **`SyncService`**: Remote guest execution,
+  modeless permission queue and authorization, and bidirectional filesystem synchronization.
+* **L5 `AttachmentService`**: Mirrored and staged attachment validation, image transcoding, and text inlining.
+* **L6 `SessionService`**: Low-level session creation, conversation switching, and persistence (`*_locked` methods).
+* **L7 `TurnRunner`**: Turn lifecycle orchestration, multimodal prompt assembly, and SDK stream execution.
+* **L8 `SessionCoordinator`**: Quiescing turns, wrapping session transitions, reconnect recovery (`sync_state_to_guest`),
+  and inbound frame routing.
+* **L9 `Bridge`**: Composition root in `bridge/server.py`, wiring dependencies in strictly topological order.
+
+Enforced via `tests/python/meta/test_service_layering.py` across all services.
+
+### 2. The Two Invariants Keeping the Graph Acyclic
+
+1. **Dependencies flow through constructors; state flows through parameters.**
+   Services are singletons with no mutable session state stored on `self` (with the single documented
+   exception of `ConnectionService.guest`). All operations take `guest: GuestSession` explicitly.
+2. **Resolve a future; do not call back. Derive state; do not push it.**
+   `PermissionService` resolves `PendingPrompt.future` rather than calling back into `TurnRunner`.
+   `GuestExecService` tracks in-flight execs via futures. Session state (`guest.state`) is a derived
+   projection over orthogonal axes (`turn_lock`, `synccoord.halt_id`, `perms.pending`, `exec_pending`),
+   not a pushed enum.
+
+### 3. SessionCoordinator and SessionService Resolution
+
+Eliminated the mutual dependency cycle between session management and turn quiescing:
+* **`SessionService`** has zero awareness of turns or locks, implementing pure state mutations under lock
+  (`switch_locked`, `new_session_locked`, `set_effort_locked`).
+* **`SessionCoordinator`** sits in L8 above `SessionService` (L6) and `TurnRunner` (L7). It owns
+  `quiesce_turn`, acquires `guest.turn_lock`, and invokes `SessionService`'s locked bodies.
+
+### 4. Inbound State Gating & Two-Sided State Contract
+
+* **Bridge**: `SessionCoordinator.on_input` consults `guest.state`. If the guest is `RUNNING_TURN` or `HALTED`,
+  the frame is refused with an `ERROR` frame (`code="busy"` or `code="halted"`).
+* **Guest Client**: `rc_turn::note_input()` is invoked synchronously when input is sent (`input_sent()`),
+  immediately marking `m_active = 1` and disabling Send / Enter until completion.
+  On bridge `ERROR`, `on_error` calls `g_turn->abort()`, clearing active turn state and re-enabling the UI.
+
+### 5. Client Extraction (win/app/)
+
+Extracted discrete subsystems out of `win/app/main.cpp` following Open Watcom C++98 discipline
+(no RTTI, no exceptions, no static ctors, stack frames < 4096 bytes):
+* `rc_statusbar` (`win/app/statusbar.{h,cpp}`): Status bar panes, timer refreshes, transfer rates.
+* `rc_reconnect` (`win/app/reconnect.{h,cpp}`): Reconnection timer, backoff schedule, and auto-retry loop.
+* `rc_turn` (`win/app/turn.{h,cpp}`): Thinking/streaming indicators, frame handlers, elapsed timing, and turn state.
+
+Static memory footprint verified via `make -C win check`: committed-at-load is 398,820 bytes (within budget 399,000).
+All 3,190 tests and 16 golden traces pass.
+
+

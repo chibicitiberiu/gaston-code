@@ -345,6 +345,7 @@ static void pillbar_detached(void)
 
 static void input_sent(void)
 {
+    if (g_turn) g_turn->note_input();
     status_refresh();
     ui_set_busy(1);
     if (g_main) layout(g_main);
@@ -738,6 +739,7 @@ static void on_error(rc_frame *f)
      * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
      * ended the document. */
     if (g_html) g_html->error(line);
+    if (g_turn) g_turn->abort();
     ui_set_busy(0);
 }
 

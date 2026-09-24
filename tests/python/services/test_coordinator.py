@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from bridge.services.coordinator import SessionCoordinator
+from bridge.status import GuestState
 from bridge.wire.protocol import Frame, error, halt, haltend, turn_start
 
 
@@ -267,3 +268,49 @@ async def test_on_interrupt(coordinator_deps):
     await coord.on_interrupt(guest)
     coordinator_deps["guest_exec"].kill_exec.assert_called_once_with(guest, "exec_2")
     guest.claude.interrupt.assert_called_once()
+
+
+async def test_on_input_rejected_when_running_turn(coordinator_deps):
+    coord = coordinator_deps["coordinator"]
+    guest = coordinator_deps["guest"]
+    connection = coordinator_deps["connection"]
+    guest.state = GuestState.RUNNING_TURN
+
+    frame = Frame("INPUT", {}, b"concurrent prompt")
+    await coord.on_input(guest, frame)
+
+    assert connection.send.call_count == 1
+    err = connection.send.call_args[0][1]
+    assert err.type == "ERROR"
+    assert err.headers["code"] == "busy"
+    assert len(coordinator_deps["spawn_calls"]) == 0
+
+
+async def test_on_input_rejected_when_halted(coordinator_deps):
+    coord = coordinator_deps["coordinator"]
+    guest = coordinator_deps["guest"]
+    connection = coordinator_deps["connection"]
+    guest.state = GuestState.HALTED
+
+    frame = Frame("INPUT", {}, b"prompt during halt")
+    await coord.on_input(guest, frame)
+
+    assert connection.send.call_count == 1
+    err = connection.send.call_args[0][1]
+    assert err.type == "ERROR"
+    assert err.headers["code"] == "halted"
+    assert len(coordinator_deps["spawn_calls"]) == 0
+
+
+async def test_on_input_ignored_when_disconnected(coordinator_deps):
+    coord = coordinator_deps["coordinator"]
+    guest = coordinator_deps["guest"]
+    connection = coordinator_deps["connection"]
+    guest.state = GuestState.DISCONNECTED
+
+    frame = Frame("INPUT", {}, b"prompt when disconnected")
+    await coord.on_input(guest, frame)
+
+    assert connection.send.call_count == 0
+    assert len(coordinator_deps["spawn_calls"]) == 0
+

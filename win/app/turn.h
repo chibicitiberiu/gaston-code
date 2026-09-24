@@ -54,6 +54,7 @@ public:
     rc_turn_state state() const { return m_state; }
     DWORD start_ms() const { return m_start_ms; }
 
+    void note_input();
     void think_show();
     void turn_receiving();
     void turn_done();
