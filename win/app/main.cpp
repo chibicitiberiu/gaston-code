@@ -42,6 +42,7 @@
 #include "app/screenshot.h"
 #include "app/statusbar.h"
 #include "app/reconnect.h"
+#include "app/turn.h"
 #include "net/caps.h"
 /* ID_CHATS/ID_REFRESH are declared in app/chatlist.h now,
  * ID_PERM_TEXT/ALLOW/ALWAYS/DENY in app/bar.h, ID_LIVE/FIRST/PREV/NEXT/
@@ -120,6 +121,7 @@ static int      g_announce_connected;
 static HWND          g_main;
 static rc_statusbar *g_status;
 static rc_reconnect *g_reconn;
+static rc_turn      *g_turn;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
@@ -150,24 +152,7 @@ static rc_reconnect *g_reconn;
  * right vintage for the machine it runs on. */
 #define RC_TITLE "Gaston Code"
 
-/* Where the current turn is, for the title bar and status pane.
- *
- * Replaces g_think_mark, a `long` that only ever held -1 or 1 -- a leftover
- * from the RichEdit era when it was a real character offset into the
- * control -- and g_streaming, a boolean spelled backwards. Together the two
- * were encoding this same three-way state ("nothing running" / "waiting on
- * the model" / "text is arriving") as two booleans, one of them redundant
- * with the other's negation. "Thinking" and "receiving" are different things
- * to be waiting on, and saying "thinking" while text is visibly streaming is
- * just wrong -- that distinction is the whole reason this needs three states
- * and not two. */
-static rc_turn_state g_turn_state = TURN_IDLE;
-static DWORD g_turn_start_ms = 0;
-
-static void think_show(void);
-static void turn_done(void);
 static void layout(HWND hwnd);
-static void turn_receiving(void);
 static int  ui_send(const char *what, const char *type,
                     const char *const *keys, const char *const *vals,
                     int nkv, const void *body, unsigned body_len);
@@ -200,7 +185,6 @@ static void propose_workdir(const char *path, int staged)
  * WM_DESTROY, the same shape as g_html. */
 static HFONT g_ui_font;
 static HFONT g_ui_font_bold;
-static int   g_turn_active = 0;
 static char  g_exe_dir[MAX_PATH];
 /* WinMain's HINSTANCE, kept because the Server Host dialog needs it and
  * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
@@ -227,7 +211,9 @@ static void status_refresh(void)
 {
     if (g_status)
         g_status->refresh(g_net.state, g_cfg.host, g_cfg.port, g_xfer,
-                          g_turn_active, g_turn_start_ms, (int)g_turn_state,
+                          g_turn ? g_turn->active() : 0,
+                          g_turn ? g_turn->start_ms() : 0,
+                          g_turn ? (int)g_turn->state() : (int)TURN_IDLE,
                           g_bar && g_bar->active(), g_html);
 }
 
@@ -294,7 +280,7 @@ static void build_menu(HWND hwnd)
  * lost took real time to produce. */
 static int chats_confirm(void)
 {
-    return !g_turn_active
+    return !(g_turn && g_turn->active())
         || MessageBoxA(g_main,
                        "A request is still running.\n\n"
                        "Opening another conversation will stop it. Continue?",
@@ -331,14 +317,15 @@ static void ui_refresh_enables(void)
      * has wedged, and it is how the cancellation path gets exercised at all --
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
-    if (g_inputmod) g_inputmod->enable_send((g_turn_active || (g_bar && g_bar->blocks_send()))
+    int active = g_turn && g_turn->active();
+    if (g_inputmod) g_inputmod->enable_send((active || (g_bar && g_bar->blocks_send()))
                           ? 0 : 1);
+    if (g_inputmod) g_inputmod->enable_stop(active);
 }
 
 static void ui_set_busy(int busy)
 {
-    g_turn_active = busy;
-    if (g_inputmod) g_inputmod->enable_stop(busy);
+    (void)busy;
     ui_refresh_enables();
 }
 
@@ -348,7 +335,7 @@ static void ui_set_busy(int busy)
  * gone out. */
 static int input_blocked(void)
 {
-    return g_turn_active || (g_bar && g_bar->blocks_send());
+    return (g_turn && g_turn->active()) || (g_bar && g_bar->blocks_send());
 }
 
 static void pillbar_detached(void)
@@ -507,158 +494,22 @@ static void on_ready(rc_frame *f)
 
 static void on_doc(rc_frame *f)
 {
-    /* The stylesheet and skeleton come from the bridge, so the look can be
-     * changed by restarting it rather than by rebuilding and re-deploying
-     * the guest binary.
-     *
-     * Unconditional now. This used to be guarded by a g_doc_sent flag that
-     * was per PROCESS, not per connection, so the bridge's skeleton was
-     * installed once at first contact and never again -- which meant a
-     * stylesheet edit could not reach a running guest at all, and the guest
-     * could not have a document before a bridge answered.
-     *
-     * rc_html::set_document now decides: identical content is a no-op (the
-     * bridge re-sends the same skeleton on every attach, and re-navigating
-     * would throw the transcript away for nothing), different content
-     * re-navigates. The cold-start document beside the exe is what the app
-     * boots with; this is what keeps it current. */
-    if (g_html) g_html->set_document(f->body);
-    /* The control may have been created here rather than with the other
-     * children, in which case it has missed every layout so far and is still
-     * sized to whatever DoVerb was given. Cheap enough to always do. */
-    layout(g_main);
-    SetTimer(g_main, TIMER_HTMLPOLL, 100, NULL);
+    if (g_turn) g_turn->on_doc(f);
 }
 
 static void on_text(rc_frame *f)
 {
-    /* Body is not NUL-terminated by the protocol; the reader
-     * over-allocates by one and terminates it, so this is safe.
-     *
-     * "live" replaces the block still being written; anything else --
-     * including no mode= at all -- is a finished block appended to the
-     * end and never touched again. That "anything else" is deliberate
-     * for an absent header, but not for one that is PRESENT and wrong: a
-     * misspelled "live" would silently fall into the append branch below
-     * and grow the transcript by a full copy of the answer per token, on
-     * a 32MB guest that measures free memory in KB. So an unrecognized
-     * but non-empty mode= is logged loudly rather than swallowed -- see
-     * audit finding 03.22. */
-    const char *mode = rc_frame_get(f, "mode");
-    turn_receiving();
-    /* Finished markup from the bridge -- the guest transforms nothing --
-     * so this is the one path that does NOT escape. The scroll decision
-     * moved into the view, which is the only place that can apply it
-     * consistently. */
-    if (mode && strcmp(mode, "live") == 0) {
-        if (g_html) g_html->live(f->body);
-    } else {
-        if (mode && strcmp(mode, "append") != 0)
-            rc_log("TEXT: unrecognized mode=\"%s\" (want \"append\" or "
-                   "\"live\"); treating as a finished block", mode);
-        /* The same bytes the view is about to be handed. "The guest
-         * transforms nothing" applies to the cache too: what comes back out
-         * is what the bridge sent, so rendering a cached page is the same
-         * call on the same string. Dropped unless a page is open, which is
-         * what keeps a streamed reply out of the cached copy. */
-        if (g_cache) g_cache->add(f->body, f->body_len);
-        if (g_html) g_html->block(f->body);
-    }
+    if (g_turn) g_turn->on_text(f);
 }
 
 static void on_tool(rc_frame *f)
 {
-    /* The bridge sends tool activity as a finished block now; this branch
-     * only survives for older bridges. */
-    (void)f;
-    turn_receiving();
+    if (g_turn) g_turn->on_tool(f);
 }
 
 static void on_turn(rc_frame *f)
 {
-    const char *v;
-    const char *state = rc_frame_get(f, "state");
-    if (state && strcmp(state, "start") == 0) {
-        ui_set_busy(1);
-        g_turn_start_ms = GetTickCount();
-        status_set(2, " Claude is thinking...");
-        think_show();
-    } else {
-        turn_done();
-        ui_set_busy(0);
-        /* Now, and only now, re-fetch the list. Sending a message is what
-         * makes a conversation the most recent one, so this is where the
-         * reordering belongs -- not on merely opening one. */
-        if (g_chats) g_chats->request();
-        /* state=="error" used to fall into the same branch as a normal
-         * end and render identically -- turn_error() (protocol.py) sends
-         * `msg` and no `cost_usd`, so "done $?" is what a failed turn
-         * looked like. Distinguished now: an error goes to the transcript
-         * as an error and the status bar says so, instead of reading like
-         * a quiet success. See audit finding 03.50. */
-        if (state && strcmp(state, "error") == 0) {
-            /* The message is in the BODY, not a header. It used to be a
-             * `msg=` header, and the more informative the error the more
-             * likely the user got a dropped LINK instead of the text: a
-             * multi-line message percent-encodes past RC_MAX_VAL, the guest
-             * refuses an over-long header value by design (01.44), and
-             * net.cpp treats an unparseable frame as a dead stream. See
-             * turn_error() in protocol.py. */
-            if (g_html)
-                g_html->error((f->body && *f->body)
-                              ? f->body
-                              : "The turn ended with an error.");
-            status_set(2, " error");
-        } else if (state && strcmp(state, "end") == 0
-                   && (v = rc_frame_get(f, "ok")) != NULL
-                   && strcmp(v, "0") == 0) {
-            /* A TURN THAT CAME BACK NOT-OK IS NOT A QUIET SUCCESS.
-             *
-             * 03.50 fixed state="error", which is the path an EXCEPTION
-             * takes. This is the other one, and it is the one a quota or
-             * rate-limit refusal actually takes: the SDK returns normally
-             * with ok=0 and nothing streamed, so the turn used to render as
-             * `done $?` with an empty transcript -- the user's own report was
-             * "i'm just getting interrupted with no message nothing".
-             *
-             * `subtype` is the SDK's own word for what went wrong and is the
-             * only thing here that carries any information, so it is shown
-             * rather than swallowed. Empty subtype still gets a sentence:
-             * "something failed and we do not know what" is a far better
-             * answer than a cost line for a turn that produced nothing. */
-            const char *why = rc_frame_get(f, "subtype");
-            char line[256];
-            rc_strf(line, sizeof(line),
-                    "The request did not complete%s%s. Nothing was returned "
-                    "-- it may not have run at all.",
-                    (why && *why) ? ": " : "", (why && *why) ? why : "");
-            if (g_html) g_html->error(line);
-            status_set(2, " failed");
-        } else {
-            char buf[96];
-            /* Keep the elapsed time. It used to be overwritten by the cost,
-             * so the moment a turn ended you lost how long it took -- and
-             * "that took 90 seconds" is the more useful of the two when you
-             * are deciding whether to ask for something smaller next time. */
-            unsigned long secs = g_turn_start_ms
-                ? (unsigned long)((GetTickCount() - g_turn_start_ms) / 1000)
-                : 0;
-            {
-                /* Absent means "leave the gauge alone", not zero. The bridge
-                 * omits it when the reading was unavailable, and drawing an
-                 * empty pie then would be a confident wrong answer. */
-                const char *cp = rc_frame_get(f, "ctx_pct");
-                if (cp && *cp && g_status) {
-                    int pct = atoi(cp);
-                    if (pct >= 0 && pct <= 100) g_status->set_ctx_pct(pct);
-                }
-            }
-            v = rc_frame_get(f, "cost_usd");
-            rc_strf(buf, sizeof(buf), " done  %lus  $%s",
-                    secs, (v && *v) ? v : "?");
-            status_set(2, buf);
-        }
-    }
+    if (g_turn) g_turn->on_turn(f);
 }
 
 /* OPTION, OPTIONSEND -- both owned by app/optmenu.cpp now; see
@@ -829,7 +680,7 @@ static void cache_restore(void)
 static void on_pagebar(rc_frame *f)
 {
     if (strcmp(f->type, "PAGESTART") == 0) {
-        g_turn_state = TURN_IDLE;
+        if (g_turn) g_turn->turn_done();
         /* Cache the page the bridge is about to send. Only a page it says is
          * complete is kept -- see app/cache.h -- so this opens a temporary
          * file that PAGEEND renames and anything else throws away. */
@@ -1014,39 +865,7 @@ static void render_frame(rc_frame *f)
  * something a user might scroll back through or export. The title says that
  * something is happening, the status pane ticks the seconds so it is visibly
  * not a hang, and both clear themselves. */
-static void think_show(void)
-{
-    if (g_turn_state != TURN_IDLE) return;
-    g_turn_state = TURN_THINKING;
-    SetWindowTextA(g_main, RC_TITLE "  -  working...");
-    /* The bridge has the message: it started a turn for it. Drop the echo's
-     * provisional styling in place -- the block does not move or re-render,
-     * it just stops looking unsent. */
-    if (g_html) g_html->settle_pending();
-}
 
-/* First output of the turn. The title stays as it is until the turn actually
- * ends -- the window is still busy -- but the wording in the status bar
- * changes, because there is now something to look at. Was think_hide(): that
- * name was accurate when this deleted the indicator out of a RichEdit
- * control; now it only advances a state enum, and nothing is hidden. */
-static void turn_receiving(void)
-{
-    if (g_turn_state == TURN_IDLE) return;
-    g_turn_state = TURN_STREAMING;
-}
-
-static void turn_done(void)
-{
-    g_turn_state = TURN_IDLE;
-    if (g_status) g_status->clear_override();
-    SetWindowTextA(g_main, RC_TITLE);
-    /* The status line is a statement about right now, so it goes when "right
-     * now" stops being true. Leaving "receiving... 41s" under a finished
-     * answer would be the same class of lie as the status bar saying
-     * "receiving" while a permission prompt waits for a human. */
-    if (g_html) g_html->status("");
-}
 
 /* echo_user_block, do_send, do_stop and input_proc (the Enter-sends/
  * Shift+Enter-inserts-a-newline subclass) moved to app/input.cpp -- audit
@@ -1318,6 +1137,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     g_reconn = rc_reconnect::create(hwnd, &g_net, &g_cfg, g_exe_dir, g_html,
                                     status_refresh, cache_restore);
+    g_turn = rc_turn::create(hwnd, g_html, g_status, g_cache, g_chats,
+                             ui_set_busy, status_refresh);
 }
 
 /* -------------------------------------------------------------- main proc */
@@ -1527,6 +1348,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * as the bar and the sync PUT above; same place to fix it. */
             if (g_optmenu) g_optmenu->reset();
             if (g_chats) g_chats->abort_rows();
+            if (g_turn) g_turn->abort();
             ui_set_busy(0);
             if (g_reconn) g_reconn->schedule();
         }
@@ -1606,7 +1428,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
 
         case IDM_NEW:
-            if (g_turn_active
+            if ((g_turn && g_turn->active())
                 && MessageBoxA(hwnd,
                                "A request is still running.\n\n"
                                "Starting a new session will stop it. Continue?",
@@ -1867,6 +1689,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_DESTROY:
         delete g_reconn;
         g_reconn = NULL;
+        delete g_turn;
+        g_turn = NULL;
         rc_net_stop(&g_net);
         delete g_html;
         g_html = NULL;

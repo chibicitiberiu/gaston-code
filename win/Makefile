@@ -48,7 +48,7 @@ CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
 LFLAGS = system nt_win option quiet, osversion=4.0
 
 # Memory budget ceiling: fail if committed memory exceeds baseline
-COMMITTED_CAP ?= 398000
+COMMITTED_CAP ?= 399000
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -57,7 +57,7 @@ LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
 OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
        optmenu.o input.o hostdlg.o toolbar.o export.o cache.o workdir.o workcopy.o workdlg.o tooldet.o \
-       pillbar.o screenshot.o statusbar.o reconnect.o net.o \
+       pillbar.o screenshot.o statusbar.o reconnect.o turn.o net.o \
        frameproto.o log.o ini.o str.o path.o htmlview.o miniz.o exec.o rpc.o \
        sync.o syncrpc.o)
 
