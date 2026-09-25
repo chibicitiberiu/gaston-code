@@ -78,7 +78,7 @@ MINIZ = third_party/miniz/miniz.c
 # the full source path the compiler recorded (`/.../win/core/str.c`), not the
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
-CORE_SRCS = core/log.cpp core/ini.cpp core/str.c core/path.c
+CORE_SRCS = core/log.cpp core/ini.cpp core/str.c core/path.c core/inifile.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this
@@ -94,7 +94,7 @@ CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
 
-.PHONY: synccheck inicheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: synccheck inicheck inifilecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -128,6 +128,17 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 INICHECK_OBJS = $(call objs,checks/inicheck.c) $(LIBCORE)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# IniFile's refusals, against INI files it writes itself: a bare filename the
+# profile API would read from C:\WINDOWS, an inline comment that becomes part
+# of the value, a value one byte too long, an unknown key. See
+# docs/REMOTE.md, Configuration.
+INIFILECHECK_OBJS = $(call objs,checks/inifilecheck.cpp) $(LIBCORE)
+inifilecheck: $(BUILD)/inifilecheck.exe
+$(BUILD)/inifilecheck.exe: $(INIFILECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -216,7 +227,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
-all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
+all: $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck cppcheck framecheck \
      netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
