@@ -32,6 +32,12 @@
 #include "miniz.h"
 
 static FILE *g_log;
+/* COM1, when the VM has a file-backed serial port. Everything say() emits
+ * goes out of the machine as it happens, so a run can be watched from the
+ * host with `tail -f` instead of screenshotting an 80x25 DOS box and losing
+ * whatever scrolled off. NULL when there is no port, which is not an error:
+ * fopen on a device Win98 never enumerated simply fails. */
+static HANDLE g_com = INVALID_HANDLE_VALUE;
 
 static void say(const char *fmt, ...)
 {
@@ -45,6 +51,13 @@ static void say(const char *fmt, ...)
     fputs("\n", stdout);
     fflush(stdout);
     if (g_log) { fputs(buf, g_log); fputs("\n", g_log); fflush(g_log); }
+    /* CRLF: the host reads this as a text file, and a bare LF makes every
+     * line of a 200-line dump run together in half the tools that open it. */
+    if (g_com != INVALID_HANDLE_VALUE) {
+        DWORD wrote;
+        WriteFile(g_com, buf, (DWORD)strlen(buf), &wrote, NULL);
+        WriteFile(g_com, "\r\n", 2, &wrote, NULL);
+    }
 }
 
 static void head(const char *t) { say(""); say("=== %s ===", t); }
@@ -1569,7 +1582,24 @@ int main(int argc, char **argv)
      * ("probe threads", "probe exec", ...) and a truncating open means the
      * log only ever holds whichever section ran last. */
     g_log = fopen("PROBE.LOG", "a");
+    /* Expected to fail on this guest, and kept because the failure is the
+     * useful part: it prints "no COM1" and tells you to redirect instead.
+     *
+     * Win32 cannot open the port here. fopen("COM1","w") cannot -- "w" is
+     * CREATE_ALWAYS underneath and a character device cannot be created --
+     * and CreateFile with OPEN_EXISTING cannot either, because Win98 never
+     * bound a driver to the port QEMU added. Meanwhile `ECHO x > COM1` from
+     * the same DOS box works, because DOS device redirection reaches the
+     * hardware without going through the Windows COM driver at all.
+     *
+     * So the way to get a run off the machine is the SHELL's redirection,
+     * not this handle:  D:\PROBE.EXE <section> > COM1  -- which streams the
+     * whole run to vm/serial.log on the host as it happens. */
+    g_com = CreateFileA("COM1", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0,
+                        NULL);
     say("RetroClaude Phase 0 probe");
+    say("serial out: %s",
+        g_com != INVALID_HANDLE_VALUE ? "COM1 open" : "no COM1");
     say("built %s %s", __DATE__, __TIME__);
 
     if (!only || !strcmp(only, "platform")) probe_platform();
@@ -1588,5 +1618,6 @@ int main(int argc, char **argv)
     say("");
     say("=== done -- results also in PROBE.LOG ===");
     if (g_log) fclose(g_log);
+    if (g_com != INVALID_HANDLE_VALUE) CloseHandle(g_com);
     return 0;
 }
