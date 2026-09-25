@@ -24,23 +24,23 @@ IF EXIST PROBE.LOG DEL PROBE.LOG
 CLS
 ECHO  PART ONE -- nothing needs to be on screen for these.
 ECHO.
-ECHO  [1/17] platform, CPU and memory
+ECHO  [1/18] platform, CPU and memory
 PROBE.EXE platform
-ECHO  [2/17] threads
+ECHO  [2/18] threads
 PROBE.EXE threads
-ECHO  [3/17] 16-bit EXEC capture
+ECHO  [3/18] 16-bit EXEC capture
 PROBE.EXE exec
-ECHO  [4/17] deflate throughput  -- THE number we cannot fake
+ECHO  [4/18] deflate throughput  -- THE number we cannot fake
 PROBE.EXE deflate
-ECHO  [5/17] which hook APIs exist
+ECHO  [5/18] which hook APIs exist
 PROBE.EXE hooks
-ECHO  [6/17] do they deliver, and whose process (Notepad)
+ECHO  [6/18] do they deliver, and whose process (Notepad)
 PROBE.EXE events
-ECHO  [7/17] event latency and completeness    (Notepad)
+ECHO  [7/18] event latency and completeness    (Notepad)
 PROBE.EXE evlat
-ECHO  [8/17] WaitForControl / WaitForText      (Notepad)
+ECHO  [8/18] WaitForControl / WaitForText      (Notepad)
 PROBE.EXE waitfor
-ECHO  [9/17] can our DLL get into a process    (Notepad)
+ECHO  [9/18] can our DLL get into a process    (Notepad)
 PROBE.EXE inject
 CLS
 ECHO ==============================================================
@@ -64,22 +64,24 @@ ECHO.
 ECHO  Waiting for you. Press a key once the page is up.
 PAUSE
 CLS
-ECHO  [10/17] screen capture and BI_RLE8
+ECHO  [10/18] screen capture and BI_RLE8
 PROBE.EXE screen
-ECHO  [11/17] depth ladder, raw vs deflate vs RLE
+ECHO  [11/18] depth ladder, raw vs deflate vs RLE
 PROBE.EXE depths
-ECHO  [12/17] writing BMPs for off-machine checking
+ECHO  [12/18] writing BMPs for off-machine checking
 PROBE.EXE verify
-ECHO  [13/17] ImageClick, cost of a template scan
+ECHO  [13/18] ImageClick, cost of a template scan
 PROBE.EXE imgfind
-ECHO  [14/17] oleacc, foreground lock, window census
+ECHO  [14/18] oleacc, foreground lock, window census
 PROBE.EXE automation
-ECHO  [15/17] cost of a window walk
+ECHO  [15/18] cost of a window walk
 PROBE.EXE uiwalk
-ECHO  [16/17] what MSAA adds
+ECHO  [16/18] what MSAA adds
 PROBE.EXE msaa
-ECHO  [17/17] reading the browser page as a tree
+ECHO  [17/18] reading the browser page as a tree
 PROBE.EXE dom
+ECHO  [18/18] the automation library itself
+AUTOCHK.EXE > AUTOCHK.TXT
 CLS
 CLS
 ECHO ==============================================================
@@ -87,6 +89,7 @@ ECHO   Done. Please send back, from this folder:
 ECHO ==============================================================
 ECHO.
 ECHO      PROBE.LOG      all the numbers
+ECHO      AUTOCHK.TXT    the library's own checks
 ECHO      S24.BMP        the same strip, three ways
 ECHO      S8.BMP
 ECHO      S8R.BMP

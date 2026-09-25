@@ -18,6 +18,7 @@ OUT="$HERE/build/gaston-w98-tests.zip"
 
 PROBE="$HERE/build/win/probe.exe"
 DLL="$HERE/build/win/HOOKDLL.DLL"
+AUTO="$HERE/build/win/autocheck.exe"
 if [ ! -f "$PROBE" ]; then
   echo "mkw98kit: $PROBE is missing. Run: make -C win probe" >&2
   exit 1
@@ -26,6 +27,10 @@ fi
 # does not work on this machine" -- the exact wrong conclusion.
 if [ ! -f "$DLL" ]; then
   echo "mkw98kit: $DLL is missing. Run: make -C win hookdll" >&2
+  exit 1
+fi
+if [ ! -f "$AUTO" ]; then
+  echo "mkw98kit: $AUTO is missing. Run: make -C win autocheck" >&2
   exit 1
 fi
 
@@ -43,9 +48,10 @@ cp "$SRC/TEST.BAT"     "$STAGE/TEST.BAT"
 cp "$SRC/README.TXT"   "$STAGE/README.TXT"
 cp "$SRC/UITEST.HTM"   "$STAGE/UITEST.HTM"
 cp "$DLL"              "$STAGE/HOOKDLL.DLL"
+cp "$AUTO"             "$STAGE/AUTOCHK.EXE"
 
 rm -f "$OUT"
-( cd "$STAGE" && zip -q -X "$OUT" PROBE.EXE HOOKDLL.DLL TEST.BAT README.TXT UITEST.HTM )
+( cd "$STAGE" && zip -q -X "$OUT" PROBE.EXE AUTOCHK.EXE HOOKDLL.DLL TEST.BAT README.TXT UITEST.HTM )
 
 echo "built $OUT"
 unzip -l "$OUT" | sed -n '3,$p'
