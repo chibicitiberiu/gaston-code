@@ -1585,7 +1585,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * The native browser, not a text field: it is what a Windows user
              * reaches for, and it makes a typo impossible where a typed path
              * would have quietly created one. It is reached through
-             * rc_workdlg_run's Browse button when the folder being left has
+             * runWorkDirDialog's Browse button when the folder being left has
              * files in it, and directly when it does not -- because a
              * question about what to do with zero files is noise.
              *
@@ -1596,9 +1596,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * rather than one that grows under it during the first pass. */
             char picked[MAX_PATH];
             if (g_optmenu)
-                rc_workdlg_run(hwnd, g_inst, rc_workdir_current(),
-                               RC_CAP_MAXPATH, propose_workdir,
-                               picked, sizeof(picked));
+                runWorkDirDialog(hwnd, g_inst, rc_workdir_current(),
+                                 RC_CAP_MAXPATH, g_window,
+                                 picked, sizeof(picked));
             return 0;
         }
 
@@ -1961,4 +1961,9 @@ void MainWindow::onAttachmentsChanged()
 bool MainWindow::submitCommand(const char *text, bool compose)
 {
     return ui_send_text(text, compose ? 1 : 0) != 0;
+}
+
+void MainWindow::proposeWorkDir(const char *path, bool staged)
+{
+    propose_workdir(path, staged ? 1 : 0);
 }

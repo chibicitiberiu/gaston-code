@@ -53,7 +53,7 @@ namespace {
  * AT FILE SCOPE, not inside Tmpl, and that is not a style choice. Three of
  * these are built in one call chain -- the dialog, then the collision
  * question, then the progress window -- and the compiler inlines all three
- * into `rc_workdlg_run`, which gave it a 6256-byte stack frame. A frame of
+ * into what is now `runWorkDirDialog`, which gave it a 6256-byte stack frame. A frame of
  * a page or more steps over the guard page and faults the moment the stack
  * has grown past its commit, which `make check` catches and which would
  * otherwise be a crash with no log on a machine with no debugger.
@@ -473,7 +473,7 @@ struct State {
     /* A COPY, not the pointer rc_workdir_current() returns.
      *
      * That pointer aliases workdir.cpp's own global, and this dialog CHANGES
-     * it half way through: `propose` sends SETWORK, the bridge answers with
+     * it half way through: the proposer sends SETWORK, the bridge answers with
      * an OPTION batch, and the guest applies it -- all while the message
      * loop is being pumped for the progress bar. So by the time the
      * completion box is formatted, a stored pointer reads the NEW folder,
@@ -633,15 +633,15 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
 }  /* namespace */
 
-int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
-                   unsigned maxpath, rc_workdlg_propose propose,
+bool runWorkDirDialog(HWND parent, HINSTANCE inst, const char *current,
+                      unsigned maxpath, WorkDirProposer *proposer,
                    char *out, unsigned cap)
 {
     State st;
     Tmpl t;
     INT_PTR r;
 
-    if (!out || cap < 2) return 0;
+    if (!out || cap < 2) return false;
     out[0] = '\0';
     rc_strcpy(st.current, sizeof(st.current), current ? current : "");
     st.maxpath = maxpath ? maxpath : MAX_PATH;
@@ -653,9 +653,9 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
      * dialog would be in the way of the common case rather than protecting
      * anything. */
     if (!st.current[0] || !st.cur_files) {
-        if (!rc_workdir_browse(parent, st.current, out, cap)) return 0;
-        if (propose) propose(out, 0);
-        return 1;
+        if (!rc_workdir_browse(parent, st.current, out, cap)) return false;
+        if (proposer) proposer->proposeWorkDir(out, false);
+        return true;
     }
 
     head(t, 13, 252, 174, "Change Work Directory");
@@ -687,12 +687,12 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
          CLS_BUTTON, "Cancel");
     if (t.overflowed()) {
         rc_log("workdlg: template overflowed; not showing");
-        return 0;
+        return false;
     }
 
     r = DialogBoxIndirectParamA(inst, (LPCDLGTEMPLATE)t.buf, parent,
                                 dlg_proc, (LPARAM)&st);
-    if (r <= 0) return 0;
+    if (r <= 0) return false;
 
     rc_strcpy(out, cap, st.chosen);
     if (r == 1) {
@@ -707,14 +707,14 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
         p.dlg = NULL;
         p.cancelled = 0;
         progress_open(parent, inst, &p);
-        if (propose) propose(out, 0);
+        if (proposer) proposer->proposeWorkDir(out, false);
         progress_say(&p, "Sending to the assistant...", 0, st.dst_files);
         EnableWindow(parent, FALSE);
         wait_for_sync(&p, st.dst_files);
         EnableWindow(parent, TRUE);
         if (p.dlg) DestroyWindow(p.dlg);
         SetActiveWindow(parent);
-        return 1;
+        return true;
     }
 
     /* BRING. Everything that can refuse, refuses now -- before a byte is
@@ -734,13 +734,13 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
             rc_worksurvey_why(&s, st.current, out, why, sizeof(why));
             MessageBoxA(parent, why, "Work Directory",
                         MB_OK | MB_ICONEXCLAMATION);
-            return 0;
+            return false;
         }
 
         mode = RC_WORK_KEEP;
         if (s.collisions) {
             mode = ask_clash(parent, inst, &s, out);
-            if (mode < 0) return 0;
+            if (mode < 0) return false;
         }
 
         p.dlg = NULL;
@@ -766,7 +766,7 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
          * on the two sides of it and the completion message has to tell them
          * apart -- see the cancelled branch at the end of this function. */
         if (!p.cancelled) {
-            if (propose) propose(out, mode == RC_WORK_MERGE);
+            if (proposer) proposer->proposeWorkDir(out, mode == RC_WORK_MERGE);
             proposed = 1;
             progress_say(&p, "Sending to the assistant...", 0,
                          st.dst_files + copied);
@@ -847,8 +847,8 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
                 MessageBoxA(parent, text, "Work Directory",
                             MB_OK | MB_ICONINFORMATION);
                 /* The folder DID change, so the caller must not treat this as
-                 * "no change" -- `out` stays set and this returns 1. */
-                return 1;
+                 * "no change" -- `out` stays set and this returns true. */
+                return true;
             }
             /* Cancelled during the COPY, before anything was proposed: the
              * conversation is still working where it was, and the files that
@@ -862,8 +862,8 @@ int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
             MessageBoxA(parent, text, "Work Directory",
                         MB_OK | MB_ICONINFORMATION);
             out[0] = '\0';
-            return 0;
+            return false;
         }
     }
-    return 1;
+    return true;
 }

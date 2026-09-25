@@ -25,6 +25,7 @@
 #include "app/bar.h"
 #include "app/pillbar.h"
 #include "app/optmenu.h"
+#include "app/workdlg.h"
 
 #include "app/title.h"
 
@@ -35,7 +36,8 @@
 class MainWindow : public Service, public ReconnectListener, public TurnListener,
                    public FrameSender, public ChatListListener,
                    public ComposeListener, public PermissionBarListener,
-                   public AttachmentBarListener, public OptionMenusListener
+                   public AttachmentBarListener, public OptionMenusListener,
+                   public WorkDirProposer
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -74,6 +76,9 @@ public:
 
     /* OptionMenusListener */
     bool submitCommand(const char *text, bool compose);
+
+    /* WorkDirProposer */
+    void proposeWorkDir(const char *path, bool staged);
 
     /* FrameSender */
     bool sendFrame(const char *what, const char *type,

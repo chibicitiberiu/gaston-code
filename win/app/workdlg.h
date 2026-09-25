@@ -26,23 +26,29 @@
 
 #include <windows.h>
 
-/* Send the chosen folder to the bridge. Called from inside the dialog's own
- * flow, between the copy and the wait, so ONE progress window covers both --
- * from where the user sits it is one wait, and two bars for one action
- * invite the belief that the first one finishing means it is done. */
-typedef void (*rc_workdlg_propose)(const char *path, int staged);
+/* Sends the chosen folder to the bridge. Called from inside the dialog's
+ * own flow, between the copy and the wait, so ONE progress window covers
+ * both -- from where the user sits it is one wait, and two bars for one
+ * action invite the belief that the first one finishing means it is done.
+ * `staged` is true when the user asked the assistant to merge the copies. */
+class WorkDirProposer
+{
+public:
+    virtual ~WorkDirProposer() {}
+    virtual void proposeWorkDir(const char *path, bool staged) = 0;
+};
 
 /* Ask for a new work directory, deal with the files in the old one, and stay
  * up until the new folder has reached the assistant.
  *
  * `current` is the folder in force, which may be "". `out` receives the
- * folder chosen. Non-zero if the user chose one; by then the copying they
- * asked for has been done and `propose` has been called.
+ * folder chosen. True if the user chose one; by then the copying they
+ * asked for has been done and the proposer has been called.
  *
  * `maxpath` is what the machine declared at handshake; it is what the
  * pre-flight measures destination paths against. */
-int rc_workdlg_run(HWND parent, HINSTANCE inst, const char *current,
-                   unsigned maxpath, rc_workdlg_propose propose,
-                   char *out, unsigned cap);
+bool runWorkDirDialog(HWND parent, HINSTANCE inst, const char *current,
+                      unsigned maxpath, WorkDirProposer *proposer,
+                      char *out, unsigned cap);
 
 #endif
