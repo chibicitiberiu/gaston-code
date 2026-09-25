@@ -104,10 +104,12 @@ LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
             core/app.cpp core/window.cpp core/heap.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
-# The frame codec (docs/REMOTE.md, step 2). Knows the wire format and no
-# frame types; each protocol's types and lanes live with its exe. Listed
-# BEFORE libcore wherever both are linked, because it calls into libcore.
-WIRE_SRCS = wire/frame.cpp
+# libwire (docs/REMOTE.md, step 2): the frame codec and Connection, the
+# framed TCP link. Knows the wire format and no frame types; each protocol's
+# types and lanes live with its exe. Listed BEFORE libcore wherever both are
+# linked, because it calls into libcore. Connection compresses with miniz,
+# which each exe that links it lists as an object ($(MINIZ)).
+WIRE_SRCS = wire/frame.cpp wire/connection.cpp wire/listener.cpp
 LIBWIRE = $(LIBDIR)/libwire.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
@@ -131,7 +133,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
 
-.PHONY: autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -186,6 +188,17 @@ $(BUILD)/inifilecheck.exe: $(INIFILECHECK_OBJS)
 APPCHECK_OBJS = $(call objs,checks/appcheck.cpp) $(LIBCORE)
 appcheck: $(BUILD)/appcheck.exe
 $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# libwire end to end (wire/connection.cpp, wire/listener.cpp): a Connection
+# against one adopted from a Listener over loopback -- round trips, deflate,
+# a near-cap frame, order, the idle timeout, the four-call stop. The server
+# half has no other user until gremote.
+WIRECHECK_OBJS = $(call objs,checks/wirecheck.cpp $(MINIZ)) $(LIBWIRE) $(LIBCORE)
+wirecheck: $(BUILD)/wirecheck.exe
+$(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -308,7 +321,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
-all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck autocheck hookdll \
+all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
      netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises

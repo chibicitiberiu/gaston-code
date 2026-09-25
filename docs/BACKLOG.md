@@ -26,7 +26,8 @@ byte-bounded outbound queue in Stage B, and that code is *precisely* what a slow
 link exercises. It has only ever run at LAN speed, where the queue never fills
 and the backpressure path never executes. Two known weaknesses live behind
 that gate and are unreachable without it (a third, soft queue cap, was closed
-at `win/net/net.cpp:719-726` with a hard drop and `-1` return):
+in `Connection::send` (`win/wire/connection.cpp`) with a hard drop and
+`RC_SEND_FULL`):
 
 - **The UI thread can block up to 5 s in `rc_net_send`** under that
   backpressure — from `do_send`, `do_stop`, `chats_switch` and the permission
@@ -254,7 +255,7 @@ the preamble; the guest re-requests page content on every `READY` via
 `goto_live()`; `reject_sync_busy` now answers with the ack type each sync frame
 expects; and the shutdown drain's acks leave before `running` is cleared,
 measured on hardware at 0 before and 24 after. `n->sock` is deliberately NOT
-lock-serialised -- `net.cpp:740` argues a lock would block shutdown behind an
+lock-serialised -- `Connection::signalStop` (`win/wire/connection.cpp`) argues a lock would block shutdown behind an
 idle blocking `recv` -- the race is removed by joining the reader and sender
 before `closesocket`, and leaking the socket if a thread will not exit.
 
@@ -869,7 +870,7 @@ the switch-conversation confirmation (`win/app/main.cpp:417-421`) and the
 new-session confirmation (`:1692-1696`). A settings dialog lengthens the
 window rather than opening a new class of failure. What genuinely has not run
 is the other half, the `RC_MAX_INFLIGHT` backpressure gate
-(`win/net/net.cpp:22,206-207`) -- a real `Sleep(10)` loop in the reader
+(`RC_MAX_INFLIGHT` and `ClientLink::onFrame` in `win/net/net.cpp`) -- a real `Sleep(10)` loop in the reader
 thread, which fires only if the UI thread stops draining frames, and a
 pumping modal does not stop draining them. Worth keeping the two apart: the
 first is worth testing because it already happens, the second is reachable

@@ -654,3 +654,21 @@ def test_failed_commit_restores_readonly_attribute(commit_cases):
     assert rc == -3, f"expected -3 on locked target, got {rc}"
     assert ro_preserved, "read-only attribute was stripped by failed commit"
 
+
+
+# --------------------------------------------------------------------------
+# The scanner's normalisation buffer holds a chunk PLUS a carried-in CR.
+#
+# A CR at the end of one chunk is emitted in front of the next chunk's first
+# byte, so a full chunk normalises to RC_SYNC_CHUNK + 1 bytes. The buffer was
+# one byte short, and on the real machine a SYNCGET of a file with a chunk
+# ending in 0x0D wrote past the scanner's heap block: the client died in
+# KERNEL32's heap code with nothing logged (drainprobe, 2026-09-25). Wine's
+# heap rounds blocks up and hides that, so synccheck --scanner grows the
+# block and watches the bytes just past the struct itself.
+
+def test_the_scanner_writes_nothing_past_its_own_block():
+    out = conftest.run_guest(EXE_NAME, "--scanner", timeout=60)
+    text = out.stdout.decode("latin-1", "replace")
+    assert out.returncode == 0 and text.startswith("pass\tscanner"), (
+        text, out.stderr.decode("latin-1", "replace")[:800])

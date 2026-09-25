@@ -289,7 +289,7 @@ int main(int argc, char **argv)
 
     printf("\n--- reply ---\n%s\n-------------\n", g_text);
     printf("rx=%lu tx=%lu inflight=%ld\n",
-           g_net.rx_bytes, g_net.tx_bytes, rc_net_inflight(&g_net));
+           rc_net_rx_bytes(&g_net), rc_net_tx_bytes(&g_net), rc_net_inflight(&g_net));
 
     if (g_fail)        { printf("FAIL: error frame or link failure\n"); return 1; }
     if (!g_done)       { printf("FAIL: timed out\n"); return 1; }

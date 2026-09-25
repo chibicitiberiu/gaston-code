@@ -1,5 +1,13 @@
 # Threads, and what they share
 
+> **Moved, 2026-09-25 (R9 step 2).** The transport left `net.cpp` for
+> `win/wire/connection.cpp` (`Connection`); `net.cpp` is now the client's
+> adapter (`ClientLink`, HELLO, the RPC worker's place in the stop sequence).
+> References below name the symbol and its file rather than a line number.
+> The `rc_net` fields `sock`, `send_lock`, `running`, the outbound queue and
+> the thread handles are `Connection` members now (`m_sock`, `m_lock`,
+> `m_running`, ...).
+
 ## The model
 
 Four threads, not three. `win/Makefile:4` still says *"three threads (UI /
@@ -10,8 +18,8 @@ Makefile, since it is the first thing a new reader meets.
 | thread | created | entry | owns |
 |---|---|---|---|
 | UI | `WinMain` | `win/app/main.cpp` | every window, the ten module objects, start/stop |
-| reader | `net.cpp:608` | `reader_thread` | `recv`, frame parse, inflate, routing |
-| sender | `net.cpp:594` | `sender_thread` | every byte written to the socket |
+| reader | `Connection::start` (`wire/connection.cpp`) | `Connection::readerEntry` | `recv`, frame parse, inflate, routing |
+| sender | `Connection::start` | `Connection::senderEntry` | every byte written to the socket |
 | RPC worker | `rpc.cpp:612` | `rpc_thread` | `exec`, all `SYNC*`, the directory watcher |
 
 All created with `_beginthreadex`, never `CreateThread` — required twice
@@ -23,7 +31,7 @@ over: Watcom's multithreaded CRT allocates its per-thread block there, and
 
 | lock | guards | init | deleted |
 |---|---|---|---|
-| `n->send_lock` (`net.h:79`) | the outbound queue only, never the wire | `net.cpp:404` | `:992`, only if all three threads joined |
+| `Connection::m_lock` (`wire/connection.h`) | the outbound queue, the build buffer and the codec, never the wire | `Connection::connect` | `Connection::release`, only if all three threads joined |
 | `g_lock` (`rpc.cpp:58`) | `g_sync_root`, `g_syncq[]`, `g_queued` | `rpc.cpp:596` | never, deliberately |
 | `g_child_lock` (`exec.cpp:49`) | `g_child` | `exec.cpp:55` | never, deliberately |
 | `g_lock` (`log.cpp:9`) | the log file handle | `log.cpp:17` | `:74`, unconditionally — see F6 |
@@ -33,7 +41,7 @@ destroyed under a thread that might still enter them. That is the right
 trade, it is argued in place, and it is the pattern `log.cpp` does not
 follow.
 
-**`ScopedLock` is used once**, at `net.cpp:753`. Every other
+**`ScopedLock` was used once** at the time of this audit, in `net.cpp`'s send path. Every other
 `EnterCriticalSection`/`LeaveCriticalSection` in the guest is hand-paired —
 `rpc.cpp` and `exec.cpp` do not include `rc_cpp.h` at all. I traced every
 pair: **none has an early return between the two that skips the `Leave`**,
@@ -46,7 +54,7 @@ This is the interesting part, and mostly it is deliberate.
 
 | variable | written by | read by | what makes it safe |
 |---|---|---|---|
-| `n->running` (`volatile LONG`) | UI, reader, sender | all four | `volatile` + aligned word write; the two meanings it used to carry were split by *sequencing* instead (`net.cpp:872-895`) |
+| `n->running` (`volatile LONG`) | UI, reader, sender | all four | `volatile` + aligned word write; the two meanings it used to carry were split by *sequencing* instead (`rc_net_stop`'s three phases in `net.cpp`) |
 | `n->inflight` (`volatile LONG`) | reader (`InterlockedIncrement`), UI (`InterlockedDecrement`) | reader | properly interlocked |
 | `n->state` | UI, reader | UI | the UI's real view arrives as a value copy in `WM_RC_STATE`'s `wParam`, not by reading the field |
 | `n->sock` | UI (close), reader, sender | four actors | **ordering, not a lock** — see below |
@@ -57,7 +65,7 @@ This is the interesting part, and mostly it is deliberate.
 
 The socket deserves its own note, because it is the best piece of reasoning
 in the codebase. `n->sock` is touched by four threads with no lock, and
-`net.cpp:936-941` explains why a lock is the *wrong* fix: the reader holds
+`Connection::signalStop` (`wire/connection.cpp`) explains why a lock is the *wrong* fix: the reader holds
 the socket across a blocking `recv`, so any mutex covering it would be held
 for the length of an idle connection and `rc_net_stop` would wait behind it.
 The race is removed by ordering instead — `shutdown(SD_SEND)` first to unblock
@@ -88,10 +96,10 @@ same rules, in the same ways, and their comments do not mention them.
 Only `PostMessage`, never `SendMessage` — the rule at `net.h:6-8` and it is
 honoured. Two messages:
 
-- `WM_RC_FRAME` (`net.cpp:291`) carries an `rc_frame *` in `LPARAM`. The
+- `WM_RC_FRAME` (`ClientLink::onFrame`, `net.cpp`) carries an `rc_frame *` in `LPARAM`. The
   ownership rule is three-way and correctly implemented; see F4 for the one
   trap next to it.
-- `WM_RC_STATE` (`net.cpp:182`) carries an enum by value. Nothing to own.
+- `WM_RC_STATE` (`set_state`, `net.cpp`) carries an enum by value. Nothing to own.
 
 ## What a scope guard does and does not buy here
 
@@ -102,10 +110,9 @@ honoured. Two messages:
   takes the lock only when a flag is set is a five-line class, and it would
   also close F6's window by making the `g_ready` test happen once instead of
   twice.
-- **The deliberate temporary unlock.** `net.cpp:799-802` leaves and re-takes
+- **The deliberate temporary unlock.** `Connection::send` leaves and re-takes
   the section inside the `ScopedLock`'s own scope, so a full-queue writer
-  does not block the sender that has to drain it. The comment at `:772-781`
-  explains this is intentional: *"ScopedLock has no 'pause' — it is a
+  does not block the sender that has to drain it. Its comment explains this is intentional: *"ScopedLock has no 'pause' — it is a
   destructor, not a semaphore."* That is correct and should stay as it is.
 
 And a guard buys **nothing at all** for the thing this layer actually gets

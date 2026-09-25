@@ -194,6 +194,50 @@ def run(cmd: str, settle: float = 3.0) -> None:
     time.sleep(settle)
 
 
+
+def serial_log() -> str:
+    """Where the guest's COM1 lands on the host, from the domain's own XML.
+
+    Read, not assumed: the file belongs to whichever checkout set the device
+    up, and a second clone working the same VM has no copy of its own.
+    """
+    import re
+    dom = os.environ.get("RC_DOMAIN", "retroclaude-win98")
+    uri = os.environ.get("LIBVIRT_DEFAULT_URI", "qemu:///session")
+    xml = subprocess.run(["virsh", "-c", uri, "dumpxml", dom], check=True,
+                         capture_output=True, text=True).stdout
+    m = re.search(r"<serial type='file'>\s*<source path='([^']+)'", xml)
+    if not m:
+        raise SystemExit(f"{dom} has no file-backed serial port")
+    return m.group(1)
+
+
+def fetch(guest_path: str, quiet: float = 1.5, limit: float = 60.0) -> str:
+    """A guest TEXT file's contents, by `TYPE <path> > COM1`.
+
+    Screenshots of a scrolling DOS box were how a guest log used to be read,
+    a page at a time. This returns it whole. The serial file is appended to
+    and shared, so only what arrives after the command is returned; the
+    transfer is taken as finished once the file stops growing for `quiet`
+    seconds. TEXT only: TYPE stops at the first ^Z, so a binary file comes
+    back cut short. A file the guest still holds open (the client's own log,
+    while it runs) may come back stale -- FAT updates the entry on close.
+    """
+    path = serial_log()
+    start = os.path.getsize(path) if os.path.exists(path) else 0
+    run(f"TYPE {guest_path} > COM1", settle=0.5)
+    size, still, waited = start, 0.0, 0.0
+    while waited < limit and still < quiet:
+        time.sleep(0.25)
+        waited += 0.25
+        now = os.path.getsize(path)
+        still = still + 0.25 if now == size else 0.0
+        size = now
+    with open(path, "rb") as f:
+        f.seek(start)
+        data = f.read()
+    return data.decode("cp1252", "replace").replace("\r\n", "\n")
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("usage: dos.py <command> [<command> ...]", file=sys.stderr)

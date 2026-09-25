@@ -350,6 +350,64 @@ static int commitcases(const char *root)
     return 0;
 }
 
+/* The scanner's normalisation buffer must hold a chunk PLUS the CR carried
+ * in from the one before it: that CR is emitted ahead of the new chunk's
+ * first byte, so a full chunk that does not itself end in CR normalises to
+ * RC_SYNC_CHUNK + 1 bytes. With the buffer one byte short, that last byte
+ * went past the scanner's heap block, into the next block's header, and on
+ * the real machine a SYNCGET flood died in KERNEL32's heap code
+ * (drainprobe, 2026-09-25).
+ *
+ * HeapValidate cannot see it under Wine, which rounds a block up and so
+ * gives the stray byte slack to land in. So the block is made to own the
+ * bytes past the struct: grown by 16 with HeapReAlloc (the struct holds no
+ * pointers into itself, so a move is harmless, and finish frees whatever
+ * pointer it is handed), with a canary at the struct's old end. Any write
+ * there is a write past the scanner. Fed through the public scanner, the way
+ * do_get uses it. Prints one verdict row. */
+static int scanner(void)
+{
+    static unsigned char chunk[RC_SYNC_CHUNK];
+    rc_sync_scanner *s;
+    unsigned char *end;
+    SIZE_T size;
+    char cls;
+    unsigned long crc;
+
+    s = rc_sync_scanner_begin();
+    if (!s) { printf("FAIL\tscanner\tno memory\n"); return 1; }
+    size = HeapSize(GetProcessHeap(), 0, s);
+    {
+        rc_sync_scanner *grown = (rc_sync_scanner *)HeapReAlloc(
+            GetProcessHeap(), 0, s, size + 16);
+        if (size == (SIZE_T)-1 || !grown) {
+            rc_sync_scanner_finish(s, NULL, NULL);
+            printf("FAIL\tscanner\tcannot grow the block to watch it\n");
+            return 1;
+        }
+        s = grown;
+    }
+    end = (unsigned char *)s + size;
+    memset(end, 0xA5, 16);
+
+    memset(chunk, 'A', sizeof chunk);
+    chunk[RC_SYNC_CHUNK - 1] = '\r';               /* carried into the next */
+    rc_sync_scanner_feed(s, chunk, RC_SYNC_CHUNK);
+    memset(chunk, 'A', sizeof chunk);              /* no LF: the CR is lone */
+    rc_sync_scanner_feed(s, chunk, RC_SYNC_CHUNK);
+
+    if (end[0] != 0xA5) {
+        rc_sync_scanner_finish(s, &cls, &crc);
+        printf("FAIL\tscanner\twrote past its %lu byte block\n",
+               (unsigned long)size);
+        return 1;
+    }
+    rc_sync_scanner_finish(s, &cls, &crc);
+    printf("pass\tscanner\t%lu byte block, nothing written past it\n",
+           (unsigned long)size);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int n;
@@ -369,6 +427,7 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--limits") == 0) return limits();
     if (argc >= 2 && strcmp(argv[1], "--contained") == 0) return contained();
     if (argc >= 2 && strcmp(argv[1], "--putpath") == 0) return putpath();
+    if (argc >= 2 && strcmp(argv[1], "--scanner") == 0) return scanner();
     if (argc >= 3 && strcmp(argv[1], "--commit") == 0) return commitcases(argv[2]);
     /* 03.14: the chunk-boundary corpus in test_guest_agreement.py used to
      * hardcode byte offsets 8191/8190 rather than deriving them from
@@ -380,7 +439,7 @@ int main(int argc, char **argv)
         printf("%d\n", (int)RC_SYNC_CHUNK);
         return 0;
     }
-    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--putpath|--commit <dir>|--chunk\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: synccheck <dir>|--wire <dir>|--limits|--contained|--putpath|--commit <dir>|--chunk|--scanner\n"); return 2; }
     n = rc_sync_scan(argv[1], emit, NULL);
     if (n == -1) { fprintf(stderr, "no_root\n"); return 3; }
     if (n == -2) { fprintf(stderr, "too_many\n"); return 4; }

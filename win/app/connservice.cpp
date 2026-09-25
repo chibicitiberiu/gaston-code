@@ -17,7 +17,7 @@ bool ConnectionService::init()
 
 bool ConnectionService::join(DWORD timeoutMs)
 {
+    /* rc_net_stop times its own joins; the budget is its, not the App's. */
     (void)timeoutMs;
-    rc_net_stop(m_net);
-    return true;
+    return rc_net_stop(m_net) != 0;
 }

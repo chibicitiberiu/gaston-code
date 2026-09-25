@@ -2,11 +2,10 @@
  *
  * Links the real frameproto.c and rpc.c, so this exercises the same lane
  * table and the same worker rc_rpc_route drives, without needing a live
- * bridge -- rc_net_send is a safe no-op whenever `net->running` is 0, which a
- * zeroed rc_net never sets, so every EXECRESULT/EXECOUT this check provokes
- * is built, discarded, and never touches a socket. See net.c's rc_net_send:
- * `if (n->sock == INVALID_SOCKET || !n->running) return -1;` is checked
- * before anything that would need a real connection.
+ * bridge -- rc_net_send on an rc_net with no connection returns
+ * RC_SEND_DEAD before anything else, and a zeroed rc_net has none, so every
+ * EXECRESULT/EXECOUT this check provokes is dropped without touching a
+ * socket. See net.cpp's send_frame.
  *
  * Two properties, matching the two things 04.5 asked for:
  *
@@ -29,10 +28,9 @@
 #include "sync/syncrpc.h"
 #include "core/str.h"
 
-/* Zero-initialised: sock is 0 (not a real socket) and running is 0, which is
- * the field rc_net_send actually checks before touching the wire. rc_rpc_*
- * never calls rc_net_start, so `running` stays 0 for the whole check and
- * every send from inside the worker is a guaranteed, harmless no-op. */
+/* Zero-initialised: `conn` is NULL, which is what rc_net_send checks first.
+ * rc_rpc_* never calls rc_net_start, so it stays NULL for the whole check
+ * and every send from inside the worker is a guaranteed, harmless no-op. */
 static rc_net g_net;
 static volatile LONG g_always_running = 1;
 
@@ -97,8 +95,7 @@ static rc_frame *make_frame(const char *type, const char *const *keys,
 static void free_frame(rc_frame *f)
 {
     if (!f) return;
-    rc_frame_free(f);
-    HeapFree(GetProcessHeap(), 0, f);
+    rc_frame_delete(f);
 }
 
 /* --- the table itself ----------------------------------------------------- */
@@ -432,8 +429,8 @@ static void exec_timeout_clamp_is_logged(void)
  * nothing reported it either.
  *
  * Driven through the real rc_syncrpc_handle with the real frames, against a
- * zeroed rc_net whose `running` is 0 -- so rc_net_send builds the ack and
- * drops it without touching a socket, exactly as the rest of this file does.
+ * zeroed rc_net with no connection -- so rc_net_send drops the ack without
+ * touching a socket, exactly as the rest of this file does.
  *
  * Prints the directory's contents after the put and after the refusal, so
  * the Python side can assert on names rather than on a count it has to
@@ -469,7 +466,7 @@ static int putend_cases(const char *root)
     const char *vals[4];
     int n;
 
-    /* running == 0, so rc_net_send is the documented no-op. */
+    /* No connection, so rc_net_send is the documented no-op. */
     memset(&net, 0, sizeof(net));
     rc_syncrpc_set_root(root);
 

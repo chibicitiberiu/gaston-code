@@ -40,8 +40,21 @@ struct rc_sync_scanner {
     int  pending_cr;            /* last byte of the previous chunk was CR */
     /* The normalised copy of the chunk being scanned. It lives HERE, in a
      * heap-allocated state block, and not as a local in scan_chunk -- see the
-     * note on rc_sync_stat_file. */
-    unsigned char nb[RC_SYNC_CHUNK];
+     * note on rc_sync_stat_file.
+     *
+     * ONE BYTE MORE THAN A CHUNK, and the byte is load-bearing. A CR carried
+     * in from the previous chunk is emitted in front of this chunk's first
+     * byte, so an n-byte chunk that does not itself end in CR normalises to
+     * n + 1 bytes. At RC_SYNC_CHUNK that wrote one byte past the scanner's
+     * heap block -- into the next block's header -- whenever a chunk of a
+     * streamed file ended in 0x0D. do_get and attget allocate the scanner on
+     * its own, so a SYNCGET of such a file corrupted the heap, and the process
+     * died later in KERNEL32's heap code with nothing logged, or its sender
+     * failed with WSAEINVAL on a queued item whose length had been
+     * overwritten (drainprobe, 2026-09-25). rc_sync_stat_file never showed
+     * it: its scratch follows this struct, so the stray byte landed in bytes
+     * already consumed. */
+    unsigned char nb[RC_SYNC_CHUNK + 1];
 };
 typedef struct rc_sync_scanner scan_state;
 

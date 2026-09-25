@@ -42,6 +42,12 @@ def main() -> int:
     ap.add_argument("--path", default="big.bin",
                     help="a file in the sync root big enough that answering "
                          "it takes real work (8KB chunks)")
+    ap.add_argument("--work", default="",
+                    help="the folder to arm as the sync root; default is "
+                         "the sync_root the guest reports in HELLO")
+    ap.add_argument("--settle", type=float, default=3.0,
+                    help="seconds between arming the sync root and the "
+                         "burst")
     a = ap.parse_args()
 
     conn, _peer = probelib.listen_for_guest(a.host, a.port)
@@ -72,7 +78,22 @@ def main() -> int:
         return 2
     print(f"guest says mem_kb={hello.headers.get('mem_kb')} "
           f"root={hello.headers.get('sync_root')}")
+    # The work directory arms the guest's sync root. Without it every
+    # SYNCGET is answered at once with no_root, nothing ever queues, and the
+    # drain has nothing to answer -- a pass that tests nothing. The guest
+    # takes it from an OPTION batch since per-conversation work folders, so
+    # say it the way the bridge does (bridge/services/options.py).
+    work = a.work or hello.headers.get("sync_root") or ""
+    if not work:
+        print("guest reported no sync_root and --work was not given")
+        return 2
+    conn.sendall(Frame("OPTION", {"kind": "work", "id": work,
+                                  "label": work, "current": "1"}).encode())
     conn.sendall(Frame("OPTIONSEND", {}).encode())
+    # The guest arms the root on its WINDOW thread and answers SYNCGET on its
+    # worker, so a burst sent at once can race the arming and come back
+    # entirely no_root -- seen on a first start after a reboot.
+    time.sleep(a.settle)
 
     # SYNCGET's body is the bare encoded path. Only SYNCPUT length-prefixes
     # it, because a put carries file bytes after the name and a get does not.

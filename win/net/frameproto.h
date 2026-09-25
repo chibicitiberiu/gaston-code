@@ -83,6 +83,11 @@ extern const int         RC_LANE_TABLE_N;
  * defaulting to RC_LANE_UI. */
 rc_lane rc_frame_lane(const char *type);
 
+/* Worth deflating: the client's bulk frame types (EXECOUT, SYNCDAT,
+ * SYNCENT). Protocol vocabulary, so it lives beside the lane table rather
+ * than in the transport. */
+int rc_frame_compressible(const char *type);
+
 #ifdef __cplusplus
 }
 #endif

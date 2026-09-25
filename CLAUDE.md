@@ -81,6 +81,13 @@ where a Win32 call fills a fixed buffer (the OS limit is real there). No
 throws `std::bad_alloc` (`core/heap.cpp`); only `App::run` and thread entry
 points catch it, and nothing else uses exceptions for control flow.
 
+**Watcom is C++98: `new T()` does not zero a class.** A class with any
+private member is a non-POD, and C++98 gives a non-POD with no constructor
+default-initialisation -- heap garbage, `()` or not. Every class that is
+heap-allocated gets a constructor that sets every member. Moving a file
+static (zero because static) onto the heap is exactly how this bites: the
+Codec in `wire/connection.cpp` jumped through a garbage `zfree`.
+
 **New C++ naming: PascalCase types, camelCase methods, Allman braces.** Members
 keep `m_`; C files and `extern "C"` APIs keep `rc_snake_case`. The client's older
 code is renamed as it is touched, not in a sweep (`docs/REMOTE.md`).
