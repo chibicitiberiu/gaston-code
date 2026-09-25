@@ -28,9 +28,12 @@ moves bytes. Compression and the sync layer's single-pass text/binary CRLF
 classification (to save disk passes on 1998 IDE platters; pinned by agreement
 tests) are the two deliberate exceptions.
 
-**Memory is the binding constraint.** Every allocation must be bounded and
-small. On a 32MB guest, physical memory and GDI/USER heaps are tight; keep
-buffers capped and static allocations minimal (see `docs/mem-audit/`).
+**Memory is the binding constraint.** Every allocation must be bounded. On a
+32MB guest, physical memory and GDI/USER heaps are tight; keep buffers capped
+and static allocations minimal (see `docs/mem-audit/`). Bounded does not mean
+fixed at the maximum: a container sized to what is actually there beats a
+`MAX_*` table held full at worst case, as long as anything the wire or the
+disk can grow is still refused past an explicit cap.
 
 **Nothing NT-only, ever.** A single NT-only static import kills the image at
 load, before `WinMain`, with no log written and nothing to debug. Resolve
@@ -69,6 +72,14 @@ structs; an invalid value refuses startup. Windows derive from `Window` or
 instance. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libui`) know
 nothing of each other's ops or of the wire, except `libwire`. See
 `docs/REMOTE.md`.
+
+**Open Watcom's STL where it makes sense** (exceptions on, `-xs`, since
+2026-09-25): `std::vector`, `std::string`, `std::wstring`, `std::list` in
+place of fixed `MAX_*` tables and hand-built string code. Keep `Buf`/`Path`
+where a Win32 call fills a fixed buffer (the OS limit is real there). No
+`<iostream>`/`<fstream>`: static constructors and size. `operator new`
+throws `std::bad_alloc` (`core/heap.cpp`); only `App::run` and thread entry
+points catch it, and nothing else uses exceptions for control flow.
 
 **New C++ naming: PascalCase types, camelCase methods, Allman braces.** Members
 keep `m_`; C files and `extern "C"` APIs keep `rc_snake_case`. The client's older
