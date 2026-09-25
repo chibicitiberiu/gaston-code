@@ -42,7 +42,7 @@ def _read(name):
 def menu_bar_mnemonics():
     """Top-level menu-bar entries, from both files that append to it."""
     claimed = {}
-    for src in ("main.cpp", "optmenu.cpp"):
+    for src in ("mainwindow.cpp", "optmenu.cpp"):
         text = _read(src)
         for lit in re.findall(r'AppendMenuA\(\s*bar\s*,[^;]*?"([^"]*&[^"]*)"',
                               text, re.S):

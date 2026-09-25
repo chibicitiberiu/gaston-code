@@ -6,7 +6,7 @@ While those instances were resolved, finding 04.4 noted that the defect class re
 open without an automated contract test verifying that the bridge's outbound vocabulary
 is completely covered by the guest's dispatch tables.
 
-This test parses the guest's dispatch tables out of win/app/main.cpp, win/net/frameproto.cpp,
+This test parses the guest's dispatch tables out of win/app/mainwindow.cpp, win/net/frameproto.cpp,
 and win/sync/syncrpc.cpp, and diffs them against the bridge's outbound Frame() constructors
 in bridge/wire/protocol.py and bridge/files/synctransport.py.
 """
@@ -18,7 +18,7 @@ import re
 import conftest
 
 REPO = conftest.REPO
-MAIN_CPP = os.path.join(REPO, "win", "app", "main.cpp")
+MAIN_CPP = os.path.join(REPO, "win", "app", "mainwindow.cpp")
 FRAMEPROTO_CPP = os.path.join(REPO, "win", "net", "frameproto.cpp")
 SYNCRPC_CPP = os.path.join(REPO, "win", "sync", "syncrpc.cpp")
 PROTOCOL_PY = os.path.join(REPO, "bridge", "wire", "protocol.py")
@@ -29,7 +29,7 @@ def guest_handled_types() -> set[str]:
     """Parse all frame types the guest handles across UI, RPC worker, and sync lanes."""
     handled = set()
 
-    # 1. UI thread dispatch table: g_dispatch[] in win/app/main.cpp
+    # 1. UI thread dispatch table: g_dispatch[] in win/app/mainwindow.cpp
     main_src = open(MAIN_CPP, encoding="utf-8").read()
     m = re.search(r'g_dispatch\[\]\s*=\s*\{([^;]+)\};', main_src, re.S)
     assert m, f"Could not find g_dispatch[] in {MAIN_CPP}"

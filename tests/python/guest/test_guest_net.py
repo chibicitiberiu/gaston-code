@@ -4,7 +4,7 @@ green `make test` said nothing about the guest's networking and framing code.
 
 `netcheck.exe` links the REAL net.cpp and frameproto.cpp (see win/checks/
 netcheck.c) and drives a full connect / HELLO / INPUT / TEXT / TURN round
-trip -- the same code path win/app/main.cpp uses, without needing GUI
+trip -- the same code path win/app/mainwindow.cpp uses, without needing GUI
 automation to drive it.
 
 The one thing it cannot do unattended is talk to a real model: its default
