@@ -15,6 +15,7 @@
 
 #include <windows.h>
 #include "core/app.h"
+#include "core/window.h"
 #include "app/config.h"
 #include "net/net.h"
 #include "app/reconnect.h"
@@ -33,7 +34,7 @@
  * by it, so it is named once, here. */
 #define RC_MAIN_CLASS "RetroClaudeWnd"
 
-class MainWindow : public Service, public ReconnectListener, public TurnListener,
+class MainWindow : public Service, public Window, public ReconnectListener, public TurnListener,
                    public FrameSender, public ChatListListener,
                    public ComposeListener, public PermissionBarListener,
                    public AttachmentBarListener, public OptionMenusListener,
@@ -42,6 +43,7 @@ class MainWindow : public Service, public ReconnectListener, public TurnListener
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
                ConfigStore *store, const char *exeDir, rc_net *net);
+    ~MainWindow();
 
     const char *name() const;
     bool init();
@@ -84,6 +86,9 @@ public:
     bool sendFrame(const char *what, const char *type,
                    const char *const *keys, const char *const *vals,
                    int nkv, const void *body, unsigned bodyLen);
+
+protected:
+    LRESULT handle(UINT msg, WPARAM wp, LPARAM lp);
 
 private:
     MainWindow(const MainWindow &);

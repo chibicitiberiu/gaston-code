@@ -1,4 +1,4 @@
-/* The main window: its class, its children, wnd_proc, and the state they
+/* The main window: its class, its children, handle(), and the state they
  * share. WinMain (app/main.cpp) builds it as a service and hands it its
  * dependencies (docs/REMOTE.md, C5a).
  *
@@ -67,7 +67,7 @@
  * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
  * to the code that posts them, not duplicated here. */
 #define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
-/* WM_RC_OPENCHAT (chatlist.cpp's ChatList::ListBox::handle -> wnd_proc: open a
+/* WM_RC_OPENCHAT (chatlist.cpp's ChatList::ListBox::handle -> MainWindow::handle: open a
  * chat) is declared in app/chatlist.h now, next to the module that posts
  * it. */
 
@@ -1183,8 +1183,11 @@ static void handle_attach_path(HWND hwnd, const char *path)
     }
 }
 
-static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
 {
+    /* The body predates the class: it names its window `hwnd` throughout,
+     * so that name is kept for the handle. */
+    HWND hwnd = Window::hwnd();
     switch (msg) {
     case WM_CREATE:
         create_children(hwnd, ((LPCREATESTRUCT)lp)->hInstance);
@@ -1752,7 +1755,6 @@ bool MainWindow::init()
 {
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc   = wnd_proc;
     wc.hInstance     = m_inst;
     /* Two sizes, loaded separately and deliberately.
      *
@@ -1775,20 +1777,18 @@ bool MainWindow::init()
     wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszClassName = RC_MAIN_CLASS;
-    if (!RegisterClassA(&wc))
-    {
-        rc_log("RegisterClass failed");
+    if (!Window::registerClass(m_inst, RC_MAIN_CLASS, &wc))
         return false;
-    }
 
-    g_main = CreateWindowExA(0, RC_MAIN_CLASS, RC_TITLE,
+    Window::create(0, RC_MAIN_CLASS, RC_TITLE,
         /* WS_CLIPCHILDREN: without it the parent's background erase
          * paints over its own children, which on a window that is
          * almost entirely children means flicker at best and erased
          * controls at worst. */
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
-        NULL, NULL, m_inst, NULL);
+        NULL, NULL, m_inst);
+    g_main = Window::hwnd();
     if (!g_main)
     {
         rc_log("CreateWindowEx failed");
@@ -1831,10 +1831,18 @@ bool MainWindow::start()
 bool MainWindow::join(DWORD timeoutMs)
 {
     (void)timeoutMs;
-    if (g_main)
-        DestroyWindow(g_main);
+    /* Runs WM_DESTROY, which deletes the children. */
+    destroy();
     g_main = NULL;
     return true;
+}
+
+MainWindow::~MainWindow()
+{
+    /* Here, not in ~Window, so this class's handle() still sees
+     * WM_DESTROY if the window is still up (core/window.h). */
+    destroy();
+    g_main = NULL;
 }
 
 
