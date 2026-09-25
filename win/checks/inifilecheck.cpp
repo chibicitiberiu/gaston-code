@@ -211,6 +211,47 @@ int main(void)
         say("absent-section-passes", got, "[nosuch]");
     }
 
+    /* --- writes ---------------------------------------------------------- */
+    {
+        Path wpath;
+        writeIni(wpath, "write.ini", "");
+        IniFile out(wpath.str());
+        bool wrote = out.setString("bridge", "host", "10.0.2.2") &&
+                     out.setInt("bridge", "port", 7890) &&
+                     out.setInt("ui", "offset", -3) &&
+                     out.setBool("ui", "autoscroll", false);
+        out.flush();
+        /* Read back through a separate reader, as the next launch would. */
+        IniFile back(wpath.str());
+        char host[32];
+        long port = 0, offset = 0;
+        bool scroll = true;
+        bool read = back.getString("bridge", "host", "", host, sizeof host) &&
+                    back.getInt("bridge", "port", 0, 1, 65535, &port) &&
+                    back.getInt("ui", "offset", 0, -10, 10, &offset) &&
+                    back.getBool("ui", "autoscroll", true, &scroll);
+        say("write-then-read-back",
+            wrote && read && strcmp(host, "10.0.2.2") == 0 && port == 7890 &&
+            offset == -3 && !scroll, host);
+        DeleteFileA(wpath.str());
+    }
+    {
+        IniFile bare("gremote.ini");
+        say("write-to-bare-name-refused",
+            !bare.setString("a", "b", "c"), bare.error());
+    }
+    {
+        /* A directory that does not exist: the write must fail and say so,
+         * not report success for a value that went nowhere. */
+        Path missing;
+        char dir[MAX_PATH];
+        GetCurrentDirectoryA(sizeof dir, dir);
+        missing.join(dir, "no-such-dir\\x.ini");
+        IniFile nowhere(missing.str());
+        say("write-failure-reported",
+            !nowhere.setInt("a", "b", 1), nowhere.error());
+    }
+
     DeleteFileA(path.str());
     return 0;
 }

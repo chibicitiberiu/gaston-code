@@ -19,6 +19,11 @@
  *
  * Holds no handle and allocates only while reading; the Win32 profile API
  * opens and closes the file on every call.
+ *
+ * WRITES report failure. On read-only or full media WritePrivateProfileString
+ * fails, and a settings dialog that closes as if it had been accepted then
+ * reads the old values back on the next launch (audit 01.37). Win9x also
+ * caches the last profile file it wrote; flush() pushes it to disk.
  */
 #ifndef RC_INIFILE_H
 #define RC_INIFILE_H
@@ -49,6 +54,20 @@ public:
     bool getInt(const char *section, const char *key, long def, long lo,
                 long hi, long *out);
     bool getBool(const char *section, const char *key, bool def, bool *out);
+
+    /* Each setter: true if the value reached the profile API. A caller
+     * saving several values should attempt all of them and report once, so
+     * a partially writable file gets as much as it can hold. */
+    bool setString(const char *section, const char *key, const char *value);
+    bool setInt(const char *section, const char *key, long value);
+    bool setBool(const char *section, const char *key, bool value);
+
+    /* Write the Win9x profile cache for this file to disk. Returns nothing
+     * because it cannot know: with all three arguments null,
+     * WritePrivateProfileString "always returns FALSE after flushing the
+     * cache, regardless of whether the flush succeeds or fails" (MSDN). A
+     * failed write is still caught by the setter that made it. */
+    void flush();
 
     /* False if `section` holds a key not in `known`: a typo such as `prot=`
      * would otherwise leave `port` at its default without a word. */

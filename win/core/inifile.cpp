@@ -137,6 +137,39 @@ bool IniFile::getBool(const char *section, const char *key, bool def,
     return true;
 }
 
+bool IniFile::setString(const char *section, const char *key,
+                        const char *value)
+{
+    if (!m_ok)
+        return fail(section, key, "no usable ini path");
+    if (!WritePrivateProfileStringA(section, key, value ? value : "",
+                                    m_path.str()))
+    {
+        char why[48];
+        rc_strf(why, sizeof why, "write failed, error %lu", GetLastError());
+        return fail(section, key, why);
+    }
+    return true;
+}
+
+bool IniFile::setInt(const char *section, const char *key, long value)
+{
+    char text[INT_TEXT];
+    rc_strf(text, sizeof text, "%ld", value);
+    return setString(section, key, text);
+}
+
+bool IniFile::setBool(const char *section, const char *key, bool value)
+{
+    return setString(section, key, value ? "1" : "0");
+}
+
+void IniFile::flush()
+{
+    if (m_ok)
+        WritePrivateProfileStringA(0, 0, 0, m_path.str());
+}
+
 bool IniFile::checkKeys(const char *section, const char *const *known,
                         unsigned count)
 {

@@ -29,7 +29,7 @@ def test_every_case_passes(verdicts):
 
 def test_every_case_ran(verdicts):
     """A case that silently stops printing would otherwise pass by absence."""
-    assert len(verdicts) == 28, sorted(verdicts)
+    assert len(verdicts) == 31, sorted(verdicts)
 
 
 def test_bare_filename_is_refused(verdicts):
@@ -53,3 +53,10 @@ def test_one_byte_over_is_told_apart_from_an_exact_fit(verdicts):
 def test_a_typo_is_an_error_not_a_default(verdicts):
     assert verdicts["unknown-key-refused"][0] == "pass"
     assert "prot" in verdicts["unknown-key-refused"][1]
+
+
+def test_a_failed_write_is_reported(verdicts):
+    """audit 01.37: a settings dialog closed as if accepted while nothing
+    reached the file, and the next launch read the old values back."""
+    assert verdicts["write-failure-reported"][0] == "pass"
+    assert verdicts["write-then-read-back"][0] == "pass"
