@@ -552,6 +552,14 @@ first. Each C-step is a small commit that leaves the client working.
   `FrameSender` replaces five copies of the `ui_send` typedef. Verified on
   the guest: reconnect, busy state, Allow and a full turn, switching chats.
   Budget 412,000 as headroom for the rest of C5.
+- *C5e done 2026-09-25:* App became a lifecycle (initialize ... cleanup)
+  with UniqueObj service members; `Window`/`SubclassedWindow` in libcore;
+  every module callback became a listener interface MainWindow implements:
+  `ChatList` (listbox a `SubclassedWindow`), `ComposeBox` (edit a
+  `SubclassedWindow`), `PermissionBar`, `AttachmentBar` (a `Window`; the sync
+  worker reaches it through a context), `OptionMenus`, `WorkDirProposer`.
+  Verified on the guest: click-to-open, Enter-to-send, Allow, a screenshot
+  attachment end to end, a Commands entry, Ctrl+A.
 - **C5+. `main.cpp`'s statics become objects**, one module per commit:
   context-free callbacks (`rc_refresh_fn`, `rc_turn_busy_fn`, ...) gain a
   context, and the state they close over moves into the window service.
