@@ -27,7 +27,7 @@ def test_every_case_passes(verdicts):
 def test_every_case_ran(verdicts):
     #: A hard count, so a case that stops being emitted fails instead of
     #: vanishing. Raise it deliberately when cases are added.
-    assert len(verdicts) == 49, sorted(verdicts)
+    assert len(verdicts) == 59, sorted(verdicts)
 
 
 def test_the_grammar_refuses_what_it_should(verdicts):
@@ -129,3 +129,35 @@ def test_sendinput_is_resolved_and_not_imported(verdicts):
     with GetProcAddress and the fallback is keybd_event.
     """
     assert verdicts["input-resolves-sendinput-dynamically"][0] == "pass"
+
+
+def test_the_capture_is_a_bmp_a_decoder_accepts(tmp_path):
+    """Decode it, do not trust the byte count.
+
+    The in-process checks verify that bfSize agrees with what came out of
+    the sink and that an 8bpp file carries its palette. Both would still
+    pass on a file no decoder opens, which is the failure that matters --
+    the bridge is the consumer and it will not be reading our header
+    arithmetic. Same discipline as the RLE8 gate, which was rewritten as an
+    off-machine comparison for exactly this reason.
+    """
+    png = pytest.importorskip("PIL.Image", reason="Pillow decodes the result")
+
+    out_name = "shot.bmp"
+    out = conftest.run_guest(EXE_NAME, "--shot", out_name,
+                             cwd=str(tmp_path), timeout=60)
+    assert out.returncode == 0, conftest.guest_says(out)
+
+    w, h, bpp, written = (int(x) for x in out.stdout.split())
+    path = tmp_path / out_name
+    assert path.exists(), f"{EXE_NAME} --shot wrote nothing"
+    assert path.stat().st_size == written, (path.stat().st_size, written)
+
+    im = png.open(str(path))
+    assert im.size == (w, h), (im.size, (w, h))
+    #: Bottom-up rows are the easy thing to get wrong: capture the strips
+    #: top-down, write them in order, and every band is individually correct
+    #: while the picture is in the wrong order. A decoder that opens the file
+    #: and reports the right size proves the header; converting proves the
+    #: pixel data is walkable to the end.
+    im.convert("RGB").tobytes()
