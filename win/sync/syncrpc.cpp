@@ -759,15 +759,14 @@ static void do_get(rc_net *net, rc_frame *f)
 
 static rc_att_lookup_fn g_att_lookup = NULL;
 static rc_att_done_fn   g_att_done = NULL;
+static void            *g_att_ctx = NULL;
 
-void rc_syncrpc_set_attachment_lookup(rc_att_lookup_fn fn)
+void rc_syncrpc_set_attachment_hooks(rc_att_lookup_fn lookup,
+                                     rc_att_done_fn done, void *ctx)
 {
-    g_att_lookup = fn;
-}
-
-void rc_syncrpc_set_attachment_done(rc_att_done_fn fn)
-{
-    g_att_done = fn;
+    g_att_lookup = lookup;
+    g_att_done = done;
+    g_att_ctx = ctx;
 }
 
 static void do_attget(rc_net *net, rc_frame *f)
@@ -802,7 +801,7 @@ static void do_attget(rc_net *net, rc_frame *f)
     }
 
     full[0] = '\0';
-    if (!att || !g_att_lookup || !g_att_lookup(att, full, sizeof(full)) || !full[0]) {
+    if (!att || !g_att_lookup || !g_att_lookup(g_att_ctx, att, full, sizeof(full)) || !full[0]) {
         status = "bad_path";
     } else {
         attr = GetFileAttributesA(full);
@@ -847,7 +846,7 @@ static void do_attget(rc_net *net, rc_frame *f)
     keys[2] = "crc";    vals[2] = crcs;
     keys[3] = "cls";    vals[3] = clss;
     rc_net_send(net, "SYNCDATEND", keys, vals, 4, NULL, 0);
-    if (g_att_done && att) g_att_done(att);
+    if (g_att_done && att) g_att_done(g_att_ctx, att);
     HeapFree(GetProcessHeap(), 0, buf);
 }
 

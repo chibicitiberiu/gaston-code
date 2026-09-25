@@ -54,10 +54,15 @@ int         rc_syncrpc_home_copy(char *out, unsigned cap);
 unsigned long rc_syncrpc_moved(void);
 
 /* Out-of-band attachment lookup and transfer completion hooks */
-typedef int (*rc_att_lookup_fn)(const char *att_id, char *out_path, size_t cap);
-typedef void (*rc_att_done_fn)(const char *att_id);
-void rc_syncrpc_set_attachment_lookup(rc_att_lookup_fn fn);
-void rc_syncrpc_set_attachment_done(rc_att_done_fn fn);
+/* How the worker reaches the attachment bar: looks up a staged attachment's
+ * path by id, and reports a transfer finished. `ctx` is handed back to both,
+ * so the bar needs no global instance. Set on the UI thread before the
+ * connection starts, and cleared (null) before the bar is destroyed. */
+typedef int (*rc_att_lookup_fn)(void *ctx, const char *att_id, char *out_path,
+                                size_t cap);
+typedef void (*rc_att_done_fn)(void *ctx, const char *att_id);
+void rc_syncrpc_set_attachment_hooks(rc_att_lookup_fn lookup,
+                                     rc_att_done_fn done, void *ctx);
 
 #ifdef __cplusplus
 }

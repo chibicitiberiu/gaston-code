@@ -97,7 +97,7 @@ static PermissionBar *g_bar;
 static ChatList *g_chats;
 static rc_xferstat *g_xfer;
 static ComposeBox  *g_inputmod;
-static rc_pillbar  *g_pillbar;
+static AttachmentBar *g_pillbar;
 static rc_toolbar  *g_toolbar;
 /* The export sink. One instance, created in create_children and destroyed
  * in WM_DESTROY, the same shape as g_html -- see app/export.h. */
@@ -1065,9 +1065,12 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_xfer = rc_xferstat::create();
 
     /* Attachment pill bar: sits between transcript and input box */
-    rc_syncrpc_set_attachment_lookup(rc_pillbar_lookup_attachment);
-    rc_syncrpc_set_attachment_done(rc_pillbar_transfer_done);
-    g_pillbar = rc_pillbar::create(hwnd, inst, g_ui_font, pillbar_detached);
+    g_pillbar = AttachmentBar::create(hwnd, inst, g_ui_font, g_window);
+    /* The sync worker reaches the bar through these, with it as context.
+     * Registered before the connection can start (WM_RC_CONNECT is posted
+     * after WM_CREATE), cleared in WM_DESTROY before the bar is deleted. */
+    rc_syncrpc_set_attachment_hooks(AttachmentBar::lookupAttachment,
+                                    AttachmentBar::transferDone, g_pillbar);
 
     /* The input box and Send/Stop: created and owned by app/input.cpp now
      * (ComposeBox::create logs its own check_child failures and subclasses the
@@ -1161,7 +1164,7 @@ static void handle_attach_path(HWND hwnd, const char *path)
         for (p = rel; *p; p++) {
             if (*p == '\\') *p = '/';
         }
-        g_pillbar->stage_workspace(rel, file_sz);
+        g_pillbar->stageWorkspace(rel, file_sz);
         layout(hwnd);
         return;
     }
@@ -1175,7 +1178,7 @@ static void handle_attach_path(HWND hwnd, const char *path)
         fname = fname ? (fname + 1) : path;
 
         rc_strf(att_id, sizeof(att_id), "att_%u", ++s_ext_seq);
-        g_pillbar->stage_external(att_id, path, fname, file_sz, 0 /* not temp */);
+        g_pillbar->stageExternal(att_id, path, fname, file_sz, 0 /* not temp */);
         layout(hwnd);
     }
 }
@@ -1561,7 +1564,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_pillbar) {
                 char shot_title[64];
                 rc_strf(shot_title, sizeof(shot_title), "Screenshot #%u", s_shot_seq);
-                g_pillbar->stage_external(att_id, shot_path, shot_title, shot_sz, 1 /* is_temp */);
+                g_pillbar->stageExternal(att_id, shot_path, shot_title, shot_sz, 1 /* is_temp */);
                 layout(hwnd);
             }
             return 0;
@@ -1688,6 +1691,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_chats = NULL;
         delete g_inputmod;
         g_inputmod = NULL;
+        rc_syncrpc_set_attachment_hooks(NULL, NULL, NULL);
         delete g_pillbar;
         g_pillbar = NULL;
         delete g_xfer;
@@ -1947,4 +1951,9 @@ void MainWindow::onSent()
 void MainWindow::onBarChanged()
 {
     bar_changed();
+}
+
+void MainWindow::onAttachmentsChanged()
+{
+    pillbar_detached();
 }

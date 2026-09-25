@@ -147,12 +147,12 @@ bool ComposeBox::sendText(const char *text)
             ext_names = ext_ids + 256;
             echo_pills = ext_names + 1024;
 
-            if (m_pillbar->get_workspace_attachments(ws_buf, 1024)) {
+            if (m_pillbar->getWorkspaceAttachments(ws_buf, 1024)) {
                 keys[nkv] = "attach";
                 vals[nkv] = ws_buf;
                 nkv++;
             }
-            if (m_pillbar->get_external_attachments(ext_ids, 256, ext_names, 1024)) {
+            if (m_pillbar->getExternalAttachments(ext_ids, 256, ext_names, 1024)) {
                 keys[nkv] = "attach_id";
                 vals[nkv] = ext_ids;
                 nkv++;
@@ -160,7 +160,7 @@ bool ComposeBox::sendText(const char *text)
                 vals[nkv] = ext_names;
                 nkv++;
             }
-            m_pillbar->get_echo_string(echo_pills, 1024);
+            m_pillbar->getEchoString(echo_pills, 1024);
         }
     }
 
@@ -190,7 +190,7 @@ bool ComposeBox::sendText(const char *text)
     }
     if (sent) {
         if (m_pillbar && m_pillbar->active()) {
-            m_pillbar->on_send();
+            m_pillbar->onSend();
         }
         if (m_xfer) m_xfer->note_tx_done((unsigned long)n);
         if (m_listener) m_listener->onSent();
@@ -266,7 +266,7 @@ LRESULT ComposeBox::EditBox::handle(UINT m, WPARAM w, LPARAM l)
 
 ComposeBox *ComposeBox::create(HWND parent, HINSTANCE inst, HFONT font,
                                rc_net *m_net, rc_html *m_html, rc_xferstat *m_xfer,
-                               rc_pillbar *m_pillbar, FrameSender *m_sender,
+                               AttachmentBar *m_pillbar, FrameSender *m_sender,
                                ComposeListener *listener)
 {
     ComposeBox *p = new ComposeBox();

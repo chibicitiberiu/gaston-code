@@ -23,6 +23,7 @@
 #include "app/chatlist.h"
 #include "app/input.h"
 #include "app/bar.h"
+#include "app/pillbar.h"
 
 #include "app/title.h"
 
@@ -32,7 +33,8 @@
 
 class MainWindow : public Service, public ReconnectListener, public TurnListener,
                    public FrameSender, public ChatListListener,
-                   public ComposeListener, public PermissionBarListener
+                   public ComposeListener, public PermissionBarListener,
+                   public AttachmentBarListener
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -65,6 +67,9 @@ public:
 
     /* PermissionBarListener */
     void onBarChanged();
+
+    /* AttachmentBarListener */
+    void onAttachmentsChanged();
 
     /* FrameSender */
     bool sendFrame(const char *what, const char *type,

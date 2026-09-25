@@ -9,35 +9,13 @@
 #include "core/log.h"
 #include <string.h>
 
-static rc_pillbar *s_instance = NULL;
-static CRITICAL_SECTION g_pill_cs;
-static int g_pill_cs_init = 0;
-static int g_pillbar_class_registered = 0;
+static const char BAR_CLASS[] = "GastonAttachmentBar";
 
 static void check_child(const char *what, HWND h)
 {
     if (!h)
         rc_log("pillbar: %s failed to create (GetLastError=%lu)",
                what, (unsigned long)GetLastError());
-}
-
-static void register_pillbar_class(HINSTANCE inst)
-{
-    if (!g_pillbar_class_registered) {
-        WNDCLASSA wc;
-        memset(&wc, 0, sizeof(wc));
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc = rc_pillbar::bar_proc;
-        wc.hInstance = inst;
-        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-        wc.lpszClassName = "rc_pillbar";
-        if (!RegisterClassA(&wc)) {
-            rc_log("pillbar: RegisterClass failed (%lu)", (unsigned long)GetLastError());
-        } else {
-            g_pillbar_class_registered = 1;
-        }
-    }
 }
 
 static void format_size(DWORD bytes, char *out, size_t cap)
@@ -55,97 +33,85 @@ static void format_size(DWORD bytes, char *out, size_t cap)
     }
 }
 
-rc_pillbar::rc_pillbar(HWND parent, HINSTANCE inst, HFONT font_, void (*on_detach)(void))
-    : parent_hwnd(parent), app_inst(inst), font(font_), on_detach_cb(on_detach),
-      hwnd_bar(NULL), m_count(0), m_ui_active(0),
-      m_pressed_idx(-1), m_pressed_state(0),
-      m_transferring_count(0)
+AttachmentBar::AttachmentBar(HWND parent, HINSTANCE inst, HFONT font,
+                             AttachmentBarListener *listener)
+    : m_parent(parent), m_font(font), m_listener(listener),
+      m_count(0), m_uiActive(0), m_pressedIdx(-1), m_pressedState(0),
+      m_transferringCount(0)
 {
     memset(m_pills, 0, sizeof(m_pills));
     memset(m_transferring, 0, sizeof(m_transferring));
+    InitializeCriticalSection(&m_lock);
 
-    register_pillbar_class(inst);
-
-    hwnd_bar = CreateWindowExA(
-        0, "rc_pillbar", "",
-        WS_CHILD | WS_CLIPSIBLINGS,
-        0, 0, 0, 0, parent, NULL, inst, NULL);
-    check_child("pillbar window", hwnd_bar);
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    if (Window::registerClass(inst, BAR_CLASS, &wc))
+        Window::create(0, BAR_CLASS, "", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+                       parent, NULL, inst);
+    check_child("pillbar window", hwnd());
 }
 
-rc_pillbar::~rc_pillbar()
+AttachmentBar::~AttachmentBar()
 {
     clear();
-    if (hwnd_bar) {
-        DestroyWindow(hwnd_bar);
-        hwnd_bar = NULL;
-    }
-    s_instance = NULL;
+    /* In the derived destructor, so this class's handle() still sees the
+     * window's last messages (core/window.h). */
+    destroy();
+    /* The sync worker that shares m_lock has been joined by now: the
+     * connection is stopped before the window that owns this bar. */
+    DeleteCriticalSection(&m_lock);
 }
 
-rc_pillbar *rc_pillbar::create(HWND parent, HINSTANCE inst, HFONT font, void (*on_detach)(void))
+AttachmentBar *AttachmentBar::create(HWND parent, HINSTANCE inst, HFONT font,
+                                     AttachmentBarListener *listener)
 {
-    if (!g_pill_cs_init) {
-        InitializeCriticalSection(&g_pill_cs);
-        g_pill_cs_init = 1;
-    }
-    rc_pillbar *pb = new rc_pillbar(parent, inst, font, on_detach);
-    s_instance = pb;
-    return pb;
+    return new AttachmentBar(parent, inst, font, listener);
 }
 
-LRESULT CALLBACK rc_pillbar::bar_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+LRESULT AttachmentBar::handle(UINT msg, WPARAM wp, LPARAM lp)
 {
-    rc_pillbar *self = s_instance;
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        if (self) self->paint(hdc);
-        EndPaint(hwnd, &ps);
+        HDC hdc = BeginPaint(hwnd(), &ps);
+        paint(hdc);
+        EndPaint(hwnd(), &ps);
         return 0;
     }
     case WM_ERASEBKGND: {
         HDC hdc = (HDC)wp;
         RECT rc;
-        GetClientRect(hwnd, &rc);
+        GetClientRect(hwnd(), &rc);
         FillRect(hdc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
         return 1;
     }
-    case WM_LBUTTONDOWN: {
-        int x = (short)LOWORD(lp);
-        int y = (short)HIWORD(lp);
-        if (self) self->on_lbutton_down(x, y);
+    case WM_LBUTTONDOWN:
+        onLButtonDown((short)LOWORD(lp), (short)HIWORD(lp));
         return 0;
-    }
-    case WM_MOUSEMOVE: {
-        int x = (short)LOWORD(lp);
-        int y = (short)HIWORD(lp);
-        if (self) self->on_mouse_move(x, y);
+    case WM_MOUSEMOVE:
+        onMouseMove((short)LOWORD(lp), (short)HIWORD(lp));
         return 0;
-    }
-    case WM_LBUTTONUP: {
-        int x = (short)LOWORD(lp);
-        int y = (short)HIWORD(lp);
-        if (self) self->on_lbutton_up(x, y);
+    case WM_LBUTTONUP:
+        onLButtonUp((short)LOWORD(lp), (short)HIWORD(lp));
         return 0;
-    }
-    case WM_SETCURSOR: {
+    case WM_SETCURSOR:
         SetCursor(LoadCursor(NULL, IDC_ARROW));
         return TRUE;
     }
-    }
-    return DefWindowProcA(hwnd, msg, wp, lp);
+    return Window::handle(msg, wp, lp);
 }
 
-void rc_pillbar::paint(HDC hdc)
+void AttachmentBar::paint(HDC hdc)
 {
-    HFONT old_font = font ? (HFONT)SelectObject(hdc, font) : NULL;
+    HFONT old_font = m_font ? (HFONT)SelectObject(hdc, m_font) : NULL;
     SetBkMode(hdc, TRANSPARENT);
 
     for (int i = 0; i < m_count; i++) {
-        RECT rc_lbl = m_pills[i].rc_label;
-        RECT rc_cls = m_pills[i].rc_close;
+        RECT rc_lbl = m_pills[i].rcLabel;
+        RECT rc_cls = m_pills[i].rcClose;
 
         /* 1. Left Box: Label with 3D raised border */
         FillRect(hdc, &rc_lbl, (HBRUSH)(COLOR_BTNFACE + 1));
@@ -165,7 +131,7 @@ void rc_pillbar::paint(HDC hdc)
 
         /* 2. Right Box: Close button with 3D raised border (sunken when pressed) */
         FillRect(hdc, &rc_cls, (HBRUSH)(COLOR_BTNFACE + 1));
-        int is_pressed = (m_pressed_idx == i && m_pressed_state);
+        int is_pressed = (m_pressedIdx == i && m_pressedState);
         if (is_pressed) {
             DrawEdge(hdc, &rc_cls, EDGE_SUNKEN, BF_RECT);
         } else {
@@ -182,56 +148,56 @@ void rc_pillbar::paint(HDC hdc)
     if (old_font) SelectObject(hdc, old_font);
 }
 
-void rc_pillbar::on_lbutton_down(int x, int y)
+void AttachmentBar::onLButtonDown(int x, int y)
 {
     POINT pt = { x, y };
     for (int i = 0; i < m_count; i++) {
-        if (PtInRect(&m_pills[i].rc_close, pt)) {
-            m_pressed_idx = i;
-            m_pressed_state = 1;
-            SetCapture(hwnd_bar);
-            InvalidateRect(hwnd_bar, &m_pills[i].rc_close, TRUE);
+        if (PtInRect(&m_pills[i].rcClose, pt)) {
+            m_pressedIdx = i;
+            m_pressedState = 1;
+            SetCapture(hwnd());
+            InvalidateRect(hwnd(), &m_pills[i].rcClose, TRUE);
             break;
         }
     }
 }
 
-void rc_pillbar::on_mouse_move(int x, int y)
+void AttachmentBar::onMouseMove(int x, int y)
 {
-    if (m_pressed_idx >= 0 && m_pressed_idx < m_count) {
+    if (m_pressedIdx >= 0 && m_pressedIdx < m_count) {
         POINT pt = { x, y };
-        int in_btn = PtInRect(&m_pills[m_pressed_idx].rc_close, pt);
-        if (in_btn != m_pressed_state) {
-            m_pressed_state = in_btn;
-            InvalidateRect(hwnd_bar, &m_pills[m_pressed_idx].rc_close, TRUE);
+        int in_btn = PtInRect(&m_pills[m_pressedIdx].rcClose, pt);
+        if (in_btn != m_pressedState) {
+            m_pressedState = in_btn;
+            InvalidateRect(hwnd(), &m_pills[m_pressedIdx].rcClose, TRUE);
         }
     }
 }
 
-void rc_pillbar::on_lbutton_up(int x, int y)
+void AttachmentBar::onLButtonUp(int x, int y)
 {
-    if (m_pressed_idx >= 0) {
-        int idx = m_pressed_idx;
-        int state = m_pressed_state;
-        m_pressed_idx = -1;
-        m_pressed_state = 0;
+    if (m_pressedIdx >= 0) {
+        int idx = m_pressedIdx;
+        int state = m_pressedState;
+        m_pressedIdx = -1;
+        m_pressedState = 0;
         ReleaseCapture();
 
         POINT pt = { x, y };
-        if (state && idx < m_count && PtInRect(&m_pills[idx].rc_close, pt)) {
-            remove_pill(idx);
+        if (state && idx < m_count && PtInRect(&m_pills[idx].rcClose, pt)) {
+            removePill(idx);
         } else {
-            InvalidateRect(hwnd_bar, NULL, TRUE);
+            InvalidateRect(hwnd(), NULL, TRUE);
         }
     }
 }
 
-void rc_pillbar::update_layout(int width)
+void AttachmentBar::updateLayout(int width)
 {
     if (m_count <= 0) return;
 
-    HDC hdc = GetDC(hwnd_bar ? hwnd_bar : parent_hwnd);
-    HFONT old_font = font ? (HFONT)SelectObject(hdc, font) : NULL;
+    HDC hdc = GetDC(valid() ? hwnd() : m_parent);
+    HFONT old_font = m_font ? (HFONT)SelectObject(hdc, m_font) : NULL;
 
     int cur_x = 2;
     int pill_y = 1;
@@ -255,108 +221,108 @@ void rc_pillbar::update_layout(int width)
             if (lbl_w < 20) lbl_w = 20;
         }
 
-        m_pills[i].rc_label.left   = cur_x;
-        m_pills[i].rc_label.top    = pill_y;
-        m_pills[i].rc_label.right  = cur_x + lbl_w;
-        m_pills[i].rc_label.bottom = pill_y + pill_h;
+        m_pills[i].rcLabel.left   = cur_x;
+        m_pills[i].rcLabel.top    = pill_y;
+        m_pills[i].rcLabel.right  = cur_x + lbl_w;
+        m_pills[i].rcLabel.bottom = pill_y + pill_h;
 
-        m_pills[i].rc_close.left   = cur_x + lbl_w;
-        m_pills[i].rc_close.top    = pill_y;
-        m_pills[i].rc_close.right  = cur_x + lbl_w + close_w;
-        m_pills[i].rc_close.bottom = pill_y + pill_h;
+        m_pills[i].rcClose.left   = cur_x + lbl_w;
+        m_pills[i].rcClose.top    = pill_y;
+        m_pills[i].rcClose.right  = cur_x + lbl_w + close_w;
+        m_pills[i].rcClose.bottom = pill_y + pill_h;
 
         cur_x += lbl_w + close_w + 6; /* 6px gap to next pill */
     }
 
     if (old_font) SelectObject(hdc, old_font);
-    ReleaseDC(hwnd_bar ? hwnd_bar : parent_hwnd, hdc);
+    ReleaseDC(valid() ? hwnd() : m_parent, hdc);
 }
 
-void rc_pillbar::move(int cx, int y, int cw)
+void AttachmentBar::move(int cx, int y, int cw)
 {
-    if (!hwnd_bar) return;
+    if (!valid()) return;
     if (active()) {
-        update_layout(cw);
-        MoveWindow(hwnd_bar, cx, y, cw, PILL_H, TRUE);
-        ShowWindow(hwnd_bar, SW_SHOW);
-        InvalidateRect(hwnd_bar, NULL, TRUE);
+        updateLayout(cw);
+        MoveWindow(hwnd(), cx, y, cw, PILL_H, TRUE);
+        ShowWindow(hwnd(), SW_SHOW);
+        InvalidateRect(hwnd(), NULL, TRUE);
     } else {
-        ShowWindow(hwnd_bar, SW_HIDE);
+        ShowWindow(hwnd(), SW_HIDE);
     }
 }
 
-int rc_pillbar::command(int id)
+bool AttachmentBar::command(int id)
 {
     /* Retained for backward compatibility */
     (void)id;
-    return 0;
+    return false;
 }
 
-int rc_pillbar::remove_pill(int idx)
+int AttachmentBar::removePill(int idx)
 {
-    ScopedLock lock(&g_pill_cs);
+    ScopedLock lock(&m_lock);
     if (idx < 0 || idx >= m_count) return 0;
 
-    if (m_pills[idx].is_temp && m_pills[idx].path[0]) {
+    if (m_pills[idx].isTemp && m_pills[idx].path[0]) {
         DeleteFileA(m_pills[idx].path);
     }
 
     for (int i = idx; i < m_count - 1; i++) {
         m_pills[i] = m_pills[i + 1];
     }
-    memset(&m_pills[m_count - 1], 0, sizeof(rc_pill_item));
+    memset(&m_pills[m_count - 1], 0, sizeof(PillItem));
 
     m_count--;
     if (m_count == 0) {
-        m_ui_active = 0;
+        m_uiActive = 0;
     }
 
-    if (hwnd_bar) {
+    if (valid()) {
         RECT rc;
-        GetClientRect(hwnd_bar, &rc);
-        update_layout(rc.right - rc.left);
-        InvalidateRect(hwnd_bar, NULL, TRUE);
+        GetClientRect(hwnd(), &rc);
+        updateLayout(rc.right - rc.left);
+        InvalidateRect(hwnd(), NULL, TRUE);
     }
 
-    if (on_detach_cb) on_detach_cb();
+    if (m_listener) m_listener->onAttachmentsChanged();
     return 1;
 }
 
-int rc_pillbar::stage_workspace(const char *rel_path, DWORD size_bytes)
+int AttachmentBar::stageWorkspace(const char *relPath, DWORD sizeBytes)
 {
-    ScopedLock lock(&g_pill_cs);
+    ScopedLock lock(&m_lock);
     for (int i = 0; i < m_count; i++) {
-        if (!m_pills[i].is_external && strcmp(m_pills[i].path, rel_path) == 0) {
+        if (!m_pills[i].isExternal && strcmp(m_pills[i].path, relPath) == 0) {
             return 1;
         }
     }
     if (m_count >= RC_MAX_PILLS) return 0;
 
     int idx = m_count++;
-    m_ui_active = 1;
+    m_uiActive = 1;
     m_pills[idx].id[0] = '\0';
-    rc_strf(m_pills[idx].name, sizeof(m_pills[idx].name), "%s", rel_path ? rel_path : "");
-    rc_strf(m_pills[idx].path, sizeof(m_pills[idx].path), "%s", rel_path ? rel_path : "");
-    m_pills[idx].size = size_bytes;
-    m_pills[idx].is_external = 0;
-    m_pills[idx].is_temp = 0;
+    rc_strf(m_pills[idx].name, sizeof(m_pills[idx].name), "%s", relPath ? relPath : "");
+    rc_strf(m_pills[idx].path, sizeof(m_pills[idx].path), "%s", relPath ? relPath : "");
+    m_pills[idx].size = sizeBytes;
+    m_pills[idx].isExternal = 0;
+    m_pills[idx].isTemp = 0;
 
-    if (hwnd_bar) {
+    if (valid()) {
         RECT rc;
-        GetClientRect(hwnd_bar, &rc);
-        update_layout(rc.right - rc.left);
-        InvalidateRect(hwnd_bar, NULL, TRUE);
+        GetClientRect(hwnd(), &rc);
+        updateLayout(rc.right - rc.left);
+        InvalidateRect(hwnd(), NULL, TRUE);
     }
     return 1;
 }
 
-int rc_pillbar::stage_external(const char *id, const char *abs_path, const char *display_name,
-                               DWORD size_bytes, int is_temp)
+int AttachmentBar::stageExternal(const char *id, const char *absPath, const char *displayName,
+                               DWORD sizeBytes, int isTemp)
 {
-    ScopedLock lock(&g_pill_cs);
-    if (!is_temp) {
+    ScopedLock lock(&m_lock);
+    if (!isTemp) {
         for (int i = 0; i < m_count; i++) {
-            if (m_pills[i].is_external && strcmp(m_pills[i].path, abs_path) == 0) {
+            if (m_pills[i].isExternal && strcmp(m_pills[i].path, absPath) == 0) {
                 return 1;
             }
         }
@@ -364,79 +330,79 @@ int rc_pillbar::stage_external(const char *id, const char *abs_path, const char 
     if (m_count >= RC_MAX_PILLS) return 0;
 
     int idx = m_count++;
-    m_ui_active = 1;
+    m_uiActive = 1;
     rc_strf(m_pills[idx].id, sizeof(m_pills[idx].id), "%s", id ? id : "");
-    rc_strf(m_pills[idx].name, sizeof(m_pills[idx].name), "%s", display_name ? display_name : abs_path);
-    rc_strf(m_pills[idx].path, sizeof(m_pills[idx].path), "%s", abs_path ? abs_path : "");
-    m_pills[idx].size = size_bytes;
-    m_pills[idx].is_external = 1;
-    m_pills[idx].is_temp = is_temp;
+    rc_strf(m_pills[idx].name, sizeof(m_pills[idx].name), "%s", displayName ? displayName : absPath);
+    rc_strf(m_pills[idx].path, sizeof(m_pills[idx].path), "%s", absPath ? absPath : "");
+    m_pills[idx].size = sizeBytes;
+    m_pills[idx].isExternal = 1;
+    m_pills[idx].isTemp = isTemp;
 
-    if (hwnd_bar) {
+    if (valid()) {
         RECT rc;
-        GetClientRect(hwnd_bar, &rc);
-        update_layout(rc.right - rc.left);
-        InvalidateRect(hwnd_bar, NULL, TRUE);
+        GetClientRect(hwnd(), &rc);
+        updateLayout(rc.right - rc.left);
+        InvalidateRect(hwnd(), NULL, TRUE);
     }
     return 1;
 }
 
-void rc_pillbar::on_send()
+void AttachmentBar::onSend()
 {
-    ScopedLock lock(&g_pill_cs);
+    ScopedLock lock(&m_lock);
     for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].is_external) {
-            if (m_transferring_count < RC_MAX_PILLS) {
-                m_transferring[m_transferring_count++] = m_pills[i];
+        if (m_pills[i].isExternal) {
+            if (m_transferringCount < RC_MAX_PILLS) {
+                m_transferring[m_transferringCount++] = m_pills[i];
             }
         }
     }
     memset(m_pills, 0, sizeof(m_pills));
     m_count = 0;
-    m_ui_active = 0;
-    m_pressed_idx = -1;
-    m_pressed_state = 0;
-    if (hwnd_bar) {
-        ShowWindow(hwnd_bar, SW_HIDE);
+    m_uiActive = 0;
+    m_pressedIdx = -1;
+    m_pressedState = 0;
+    if (valid()) {
+        ShowWindow(hwnd(), SW_HIDE);
     }
-    if (on_detach_cb) on_detach_cb();
+    if (m_listener) m_listener->onAttachmentsChanged();
 }
 
-void rc_pillbar::clear()
+void AttachmentBar::clear()
 {
-    ScopedLock lock(&g_pill_cs);
+    ScopedLock lock(&m_lock);
     for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].is_temp && m_pills[i].path[0]) {
+        if (m_pills[i].isTemp && m_pills[i].path[0]) {
             DeleteFileA(m_pills[i].path);
         }
     }
     memset(m_pills, 0, sizeof(m_pills));
     m_count = 0;
-    m_ui_active = 0;
-    m_pressed_idx = -1;
-    m_pressed_state = 0;
+    m_uiActive = 0;
+    m_pressedIdx = -1;
+    m_pressedState = 0;
 
-    for (int i = 0; i < m_transferring_count; i++) {
-        if (m_transferring[i].is_temp && m_transferring[i].path[0]) {
+    for (int i = 0; i < m_transferringCount; i++) {
+        if (m_transferring[i].isTemp && m_transferring[i].path[0]) {
             DeleteFileA(m_transferring[i].path);
         }
     }
-    m_transferring_count = 0;
+    m_transferringCount = 0;
 
-    if (hwnd_bar) {
-        ShowWindow(hwnd_bar, SW_HIDE);
+    if (valid()) {
+        ShowWindow(hwnd(), SW_HIDE);
     }
-    if (on_detach_cb) on_detach_cb();
+    if (m_listener) m_listener->onAttachmentsChanged();
 }
 
-int rc_pillbar::get_workspace_attachments(char *out, size_t cap) const
+int AttachmentBar::getWorkspaceAttachments(char *out, size_t cap) const
 {
     if (!out || cap == 0) return 0;
     out[0] = '\0';
     int found = 0;
     size_t used = 0;
     for (int i = 0; i < m_count; i++) {
-        if (!m_pills[i].is_external) {
+        if (!m_pills[i].isExternal) {
             if (found > 0) {
                 if (used + 1 < cap) {
                     out[used++] = '|';
@@ -455,38 +421,38 @@ int rc_pillbar::get_workspace_attachments(char *out, size_t cap) const
     return found;
 }
 
-int rc_pillbar::get_external_attachments(char *out_ids, size_t cap_ids,
-                                         char *out_names, size_t cap_names) const
+int AttachmentBar::getExternalAttachments(char *outIds, size_t capIds,
+                                         char *outNames, size_t capNames) const
 {
-    if (!out_ids || cap_ids == 0 || !out_names || cap_names == 0) return 0;
-    out_ids[0] = '\0';
-    out_names[0] = '\0';
+    if (!outIds || capIds == 0 || !outNames || capNames == 0) return 0;
+    outIds[0] = '\0';
+    outNames[0] = '\0';
     int found = 0;
     size_t used_ids = 0;
     size_t used_names = 0;
     for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].is_external) {
+        if (m_pills[i].isExternal) {
             if (found > 0) {
-                if (used_ids + 1 < cap_ids) {
-                    out_ids[used_ids++] = '|';
-                    out_ids[used_ids] = '\0';
+                if (used_ids + 1 < capIds) {
+                    outIds[used_ids++] = '|';
+                    outIds[used_ids] = '\0';
                 }
-                if (used_names + 1 < cap_names) {
-                    out_names[used_names++] = '|';
-                    out_names[used_names] = '\0';
+                if (used_names + 1 < capNames) {
+                    outNames[used_names++] = '|';
+                    outNames[used_names] = '\0';
                 }
             }
             size_t id_len = strlen(m_pills[i].id);
-            if (used_ids + id_len < cap_ids) {
-                memcpy(out_ids + used_ids, m_pills[i].id, id_len);
+            if (used_ids + id_len < capIds) {
+                memcpy(outIds + used_ids, m_pills[i].id, id_len);
                 used_ids += id_len;
-                out_ids[used_ids] = '\0';
+                outIds[used_ids] = '\0';
             }
             size_t name_len = strlen(m_pills[i].name);
-            if (used_names + name_len < cap_names) {
-                memcpy(out_names + used_names, m_pills[i].name, name_len);
+            if (used_names + name_len < capNames) {
+                memcpy(outNames + used_names, m_pills[i].name, name_len);
                 used_names += name_len;
-                out_names[used_names] = '\0';
+                outNames[used_names] = '\0';
             }
             found++;
         }
@@ -494,7 +460,7 @@ int rc_pillbar::get_external_attachments(char *out_ids, size_t cap_ids,
     return found;
 }
 
-int rc_pillbar::get_echo_string(char *out, size_t cap) const
+int AttachmentBar::getEchoString(char *out, size_t cap) const
 {
     if (!out || cap == 0) return 0;
     out[0] = '\0';
@@ -521,56 +487,50 @@ int rc_pillbar::get_echo_string(char *out, size_t cap) const
     return (int)used;
 }
 
-int rc_pillbar::lookup_transferring(const char *att_id, char *out_path, size_t cap)
+int AttachmentBar::lookupTransferring(const char *attId, char *outPath, size_t cap)
 {
-    if (!att_id || !*att_id || !out_path || cap == 0) return 0;
-    for (int i = 0; i < m_transferring_count; i++) {
-        if (strcmp(m_transferring[i].id, att_id) == 0) {
-            rc_strf(out_path, cap, "%s", m_transferring[i].path);
+    if (!attId || !*attId || !outPath || cap == 0) return 0;
+    for (int i = 0; i < m_transferringCount; i++) {
+        if (strcmp(m_transferring[i].id, attId) == 0) {
+            rc_strf(outPath, cap, "%s", m_transferring[i].path);
             return 1;
         }
     }
     for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].is_external && strcmp(m_pills[i].id, att_id) == 0) {
-            rc_strf(out_path, cap, "%s", m_pills[i].path);
+        if (m_pills[i].isExternal && strcmp(m_pills[i].id, attId) == 0) {
+            rc_strf(outPath, cap, "%s", m_pills[i].path);
             return 1;
         }
     }
     return 0;
 }
 
-void rc_pillbar::finish_transfer(const char *att_id)
+void AttachmentBar::finishTransfer(const char *attId)
 {
-    if (!att_id) return;
-    for (int i = 0; i < m_transferring_count; i++) {
-        if (strcmp(m_transferring[i].id, att_id) == 0) {
-            if (m_transferring[i].is_temp && m_transferring[i].path[0]) {
+    if (!attId) return;
+    for (int i = 0; i < m_transferringCount; i++) {
+        if (strcmp(m_transferring[i].id, attId) == 0) {
+            if (m_transferring[i].isTemp && m_transferring[i].path[0]) {
                 DeleteFileA(m_transferring[i].path);
             }
-            for (int j = i; j < m_transferring_count - 1; j++) {
+            for (int j = i; j < m_transferringCount - 1; j++) {
                 m_transferring[j] = m_transferring[j + 1];
             }
-            m_transferring_count--;
+            m_transferringCount--;
             break;
         }
     }
 }
 
-int rc_pillbar_lookup_attachment(const char *att_id, char *out_path, size_t cap)
+int AttachmentBar::lookupAttachment(void *ctx, const char *attId,
+                                    char *outPath, size_t cap)
 {
-    if (!g_pill_cs_init || !att_id || !*att_id || !out_path || cap == 0) return 0;
-    ScopedLock lock(&g_pill_cs);
-    if (s_instance) {
-        return s_instance->lookup_transferring(att_id, out_path, cap);
-    }
-    return 0;
+    return ctx ? ((AttachmentBar *)ctx)->lookupTransferring(attId, outPath,
+                                                            cap) : 0;
 }
 
-void rc_pillbar_transfer_done(const char *att_id)
+void AttachmentBar::transferDone(void *ctx, const char *attId)
 {
-    if (!g_pill_cs_init || !att_id) return;
-    ScopedLock lock(&g_pill_cs);
-    if (s_instance) {
-        s_instance->finish_transfer(att_id);
-    }
+    if (ctx)
+        ((AttachmentBar *)ctx)->finishTransfer(attId);
 }

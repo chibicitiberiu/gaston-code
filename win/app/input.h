@@ -40,7 +40,7 @@
  * button width is this module's own business and stays in input.cpp. */
 #define INPUT_HEIGHT 56
 
-class rc_pillbar;
+class AttachmentBar;
 
 /* What the compose box asks of whoever owns the window: whether a send is
  * allowed right now (a turn running, a permission bar waiting), and to be
@@ -58,7 +58,7 @@ class ComposeBox
 public:
     static ComposeBox *create(HWND parent, HINSTANCE inst, HFONT font,
                               rc_net *net, rc_html *html, rc_xferstat *xfer,
-                              rc_pillbar *pillbar, FrameSender *sender,
+                              AttachmentBar *pillbar, FrameSender *sender,
                               ComposeListener *listener);
     /* m_edit's destructor destroys the edit control, which ends the
      * subclass on the way (WM_NCDESTROY). */
@@ -145,7 +145,7 @@ private:
     rc_net *m_net;
     rc_html *m_html;
     rc_xferstat *m_xfer;
-    rc_pillbar *m_pillbar;
+    AttachmentBar *m_pillbar;
     FrameSender *m_sender;
     ComposeListener *m_listener;
 };

@@ -3,13 +3,15 @@
  * Displays active staged attachments (workspace files, external files,
  * or screenshots) as small individual pills matching the toolbar split-button style:
  * | file1.txt | X |   | file2.png | X |
- * Modeless and child of g_main, matching app/bar.h and app/pagebar.h.
+ * Modeless and a child of the main window, matching app/bar.h and
+ * app/pagebar.h. A Window (core/window.h): its own class, no s_instance.
  */
 #ifndef RC_PILLBAR_H
 #define RC_PILLBAR_H
 
 #include <windows.h>
 #include "core/rc_cpp.h"
+#include "core/window.h"
 
 #ifndef __cplusplus
 #error "pillbar.h is C++; the pill bar is a class now"
@@ -21,76 +23,94 @@
 
 #define PILL_H 22
 
-struct rc_pill_item {
+struct PillItem {
     char  id[16];           /* e.g. "att_1", or empty if workspace file */
     char  name[MAX_PATH];   /* Display name: "WIN.INI", "src/main.c" */
     char  path[MAX_PATH];   /* Full guest path or relative workspace path */
     DWORD size;             /* File size in bytes */
-    int   is_external;      /* 1 if outside workspace (needs ATTGET) */
-    int   is_temp;          /* 1 if temp file (e.g. screenshot BMP) */
-    RECT  rc_label;         /* Screen rect within pillbar for label box */
-    RECT  rc_close;         /* Screen rect within pillbar for close button */
+    int   isExternal;       /* 1 if outside workspace (needs ATTGET) */
+    int   isTemp;           /* 1 if temp file (e.g. screenshot BMP) */
+    RECT  rcLabel;          /* Rect within the bar for the label box */
+    RECT  rcClose;          /* Rect within the bar for the close button */
 };
 
-class rc_pillbar {
-    HWND      parent_hwnd;
-    HINSTANCE app_inst;
-    HFONT     font;
-    void    (*on_detach_cb)(void);
-
-    HWND         hwnd_bar;
-    rc_pill_item m_pills[RC_MAX_PILLS];
-    int          m_count;
-    int          m_ui_active;
-
-    int          m_pressed_idx;
-    int          m_pressed_state;
-
-    /* Background transfer queue for attachments in flight after send */
-    rc_pill_item m_transferring[RC_MAX_PILLS];
-    int          m_transferring_count;
-
-    void update_layout(int width);
-    int  remove_pill(int idx);
-
-    rc_pillbar(const rc_pillbar &);
-    rc_pillbar &operator=(const rc_pillbar &);
-    rc_pillbar(HWND parent, HINSTANCE inst, HFONT font_, void (*on_detach)(void));
-
+/* Told whenever the set of staged attachments changes (one detached, all
+ * sent or cleared), so the owner can re-run its layout: the bar's row comes
+ * and goes with its contents. */
+class AttachmentBarListener
+{
 public:
-    static rc_pillbar *create(HWND parent, HINSTANCE inst, HFONT font, void (*on_detach)(void));
-    ~rc_pillbar();
+    virtual ~AttachmentBarListener() {}
+    virtual void onAttachmentsChanged() = 0;
+};
 
-    static LRESULT CALLBACK bar_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+class AttachmentBar : public Window
+{
+public:
+    static AttachmentBar *create(HWND parent, HINSTANCE inst, HFONT font,
+                                 AttachmentBarListener *listener);
+    ~AttachmentBar();
 
     void move(int cx, int y, int cw);
-    int  command(int id);      /* Retained for backward-compat routing */
+    bool command(int id);      /* Retained for backward-compat routing */
 
-    int  active() const { return m_ui_active && (m_count > 0); }
+    bool active() const { return m_uiActive && (m_count > 0); }
     int  count() const  { return m_count; }
 
-    int  stage_workspace(const char *rel_path, DWORD size_bytes = 0);
-    int  stage_external(const char *id, const char *abs_path, const char *display_name,
-                        DWORD size_bytes = 0, int is_temp = 0);
-    void on_send();
+    int  stageWorkspace(const char *relPath, DWORD sizeBytes = 0);
+    int  stageExternal(const char *id, const char *absPath,
+                       const char *displayName, DWORD sizeBytes = 0,
+                       int isTemp = 0);
+    void onSend();
     void clear();
 
-    int get_workspace_attachments(char *out, size_t cap) const;
-    int get_external_attachments(char *out_ids, size_t cap_ids,
-                                 char *out_names, size_t cap_names) const;
-    int get_echo_string(char *out, size_t cap) const;
+    int getWorkspaceAttachments(char *out, size_t cap) const;
+    int getExternalAttachments(char *outIds, size_t capIds,
+                               char *outNames, size_t capNames) const;
+    int getEchoString(char *out, size_t cap) const;
 
-    int  lookup_transferring(const char *att_id, char *out_path, size_t cap);
-    void finish_transfer(const char *att_id);
+    /* For the sync worker thread, which reaches this object through
+     * rc_syncrpc_set_attachment_hooks with it as the context. Both take the
+     * lock; the connection is stopped before this object is destroyed. */
+    static int lookupAttachment(void *ctx, const char *attId, char *outPath,
+                                size_t cap);
+    static void transferDone(void *ctx, const char *attId);
+
+protected:
+    LRESULT handle(UINT msg, WPARAM wp, LPARAM lp);
+
+private:
+    AttachmentBar(HWND parent, HINSTANCE inst, HFONT font,
+                  AttachmentBarListener *listener);
+    AttachmentBar(const AttachmentBar &);
+    AttachmentBar &operator=(const AttachmentBar &);
+
+    void updateLayout(int width);
+    int  removePill(int idx);
+    int  lookupTransferring(const char *attId, char *outPath, size_t cap);
+    void finishTransfer(const char *attId);
 
     void paint(HDC hdc);
-    void on_lbutton_down(int x, int y);
-    void on_mouse_move(int x, int y);
-    void on_lbutton_up(int x, int y);
-};
+    void onLButtonDown(int x, int y);
+    void onMouseMove(int x, int y);
+    void onLButtonUp(int x, int y);
 
-/* Global accessor for RPC worker to lookup staged attachments and notify transfer completion */
-int  rc_pillbar_lookup_attachment(const char *att_id, char *out_path, size_t cap);
-void rc_pillbar_transfer_done(const char *att_id);
+    HWND m_parent;
+    HFONT m_font;
+    AttachmentBarListener *m_listener;
+
+    PillItem m_pills[RC_MAX_PILLS];
+    int m_count;
+    int m_uiActive;
+
+    int m_pressedIdx;
+    int m_pressedState;
+
+    /* Background transfer queue for attachments in flight after send,
+     * shared with the sync worker thread under m_lock. */
+    PillItem m_transferring[RC_MAX_PILLS];
+    int m_transferringCount;
+    CRITICAL_SECTION m_lock;
+};
 
 #endif
