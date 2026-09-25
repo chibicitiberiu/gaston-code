@@ -137,6 +137,6 @@ async def test_prompt_golden_04_sync_preamble_variations(harness, tmp_path):
         "A background sync pass found 1 conflict: README.TXT was edited on both machines.",
         "The file on your machine has been preserved as README.BAK.",
     ]
-    preamble = await harness.bridge._with_sync_preamble("User request text")
+    preamble = await harness.bridge.turn_runner.with_sync_preamble("User request text")
     assert_matches_prompt_golden("prompt_04_sync_preamble_with_notices", preamble)
     await harness.close(w)

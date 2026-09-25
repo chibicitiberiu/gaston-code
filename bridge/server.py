@@ -989,19 +989,8 @@ class Bridge:
     _title_folder = staticmethod(P.title_folder)
 
 
-    def _mirror_dir(self, guest: GuestSession) -> str:
-        return self.workspace.mirror_dir(guest)
-
-
-    def _restore_settings(self, guest: GuestSession, session_id: str) -> None:
-        self.session.restore_settings(guest, session_id)
-
     async def _ensure_work_dir(self, guest: GuestSession) -> None:
         await self.workspace.ensure_work_dir(guest)
-
-
-    def _abandon_pending(self, guest: GuestSession) -> None:
-        self.session.abandon_pending(guest)
 
 
     async def _make_session(self, guest: GuestSession,
@@ -1061,9 +1050,6 @@ class Bridge:
     # --- frame pump --------------------------------------------------------
 
 
-    async def _handle(self, guest: GuestSession, f: Frame) -> None:
-        await self.connection.handle(guest, f)
-
     async def _dispatch_frame(self, guest: GuestSession, f: Frame) -> None:
         handler = self._dispatch.get(f.type)
         if handler is None:
@@ -1071,9 +1057,6 @@ class Bridge:
             await self._send(guest, error("unknown_type", f.type))
             return
         await handler(guest, f)
-
-    async def _on_input(self, guest: GuestSession, f: Frame) -> None:
-        await self.coordinator.on_input(guest, f)
 
 
     async def _on_stat(self, guest: GuestSession, f: Frame) -> None:
@@ -1096,10 +1079,6 @@ class Bridge:
             log.info("guest reports deflate %.0f B/s", def_bps)
 
 
-    async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
-        await self.options.on_setmodel(guest, f)
-
-
     async def _on_rules(self, guest: GuestSession, f: Frame) -> None:
         """What can run without asking, as a transcript block.
 
@@ -1112,25 +1091,6 @@ class Bridge:
         root = (guest.hello or {}).get("sync_root", "") or ""
         await self._write_block(guest, perms.rules_view(
             guest.perm_mode, tools, root))
-
-
-    async def _on_export(self, guest: GuestSession, f: Frame) -> None:
-        await self.session.on_export(guest, f)
-
-
-    async def _with_sync_preamble(self, text: str) -> str:
-        return await self.turn_runner.with_sync_preamble(text)
-
-
-    async def _run_turn(self, guest: GuestSession, text: str,
-                        *, echo: bool = True,
-                        attach: str | None = None,
-                        attach_id: str | None = None,
-                        attach_name: str | None = None) -> None:
-        await self.turn_runner.run_turn(
-            guest, text, echo=echo, attach=attach,
-            attach_id=attach_id, attach_name=attach_name,
-        )
 
 
     # --- running commands on the guest -------------------------------------
@@ -1156,9 +1116,6 @@ class Bridge:
                        guest: "GuestSession | None" = None) -> dict:
         return await self.sync.run_sync(why, wait=wait, guest=guest)
 
-    async def _report_abort(self, guest: GuestSession, reason: str, *,
-                            bug: bool = False) -> None:
-        await self.sync.report_abort(guest, reason, bug=bug)
 
     #: How many passes in a row may be refused for a self-fixing reason
     #: before it is announced anyway. Passes run about every thirty seconds
@@ -1188,18 +1145,6 @@ class Bridge:
     async def sync_resolve(self, path: str, action: str,
                            guest: "GuestSession | None" = None) -> str:
         return await self._ensure_sync().sync_resolve(path, action, guest=guest)
-
-
-    async def _release_all_latches(self, only=None) -> int:
-        return await self.sync.release_all_latches(only=only)
-
-    async def _raise_halt(self, guest: GuestSession, line: str,
-                          paths=()) -> None:
-        await self.sync.raise_halt(guest, line, paths=paths)
-
-
-    async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
-        await self.sync.reconcile_halt(guest, base=base)
 
 
     def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
@@ -1234,8 +1179,6 @@ class Bridge:
             "running. It may or may not have completed.",
         )
 
-    def _mark_lost(self, guest: GuestSession) -> None:
-        self.connection.mark_lost(guest)
 
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
         self.guest_exec.fail_execs(guest, why)
@@ -1276,17 +1219,6 @@ class Bridge:
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
         await self.coordinator.set_effort(guest, effort)
-
-    async def _new_session(self, guest: GuestSession,
-                           folder: str = "") -> None:
-        await self.coordinator.new_session(guest, folder=folder)
-
-    async def _switch(self, guest: GuestSession, session_id: str) -> None:
-        await self.coordinator.switch(guest, session_id)
-
-
-    async def _set_mode(self, guest: GuestSession, mode: str) -> None:
-        await self.options.set_mode(guest, mode)
 
 
     # --- sending -------------------------------------------------------

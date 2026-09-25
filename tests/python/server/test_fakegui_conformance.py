@@ -183,7 +183,7 @@ async def test_fakegui_answers_a_halt_end_to_end(harness):
         assert harness.bridge.synccoord.halt_id == "", (
             "test setup: no halt should be up yet")
 
-        await harness.bridge._raise_halt(guest, "conflict on notes.txt")
+        await harness.bridge.sync.raise_halt(guest, "conflict on notes.txt")
 
         for _ in range(200):
             if gui.halt_id:
@@ -362,10 +362,10 @@ async def test_fakegui_writes_a_real_export_to_a_file(harness, monkeypatch):
         # Something long enough to be chunked, so the multi-frame path and
         # the `off` continuity check are both exercised.
         for i in range(400):
-            await harness.bridge._write_block(
+            await harness.bridge.presentation.write_block(
                 guest, "<p>paragraph %04d of an exported transcript</p>" % i)
 
-        await harness.bridge._on_export(guest, Frame("EXPORT", {}))
+        await harness.bridge.session.on_export(guest, Frame("EXPORT", {}))
 
         for _ in range(400):
             if gui.export_path:

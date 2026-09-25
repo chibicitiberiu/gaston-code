@@ -49,15 +49,15 @@ async def test_a_model_chosen_before_the_first_message_is_remembered(harness):
     either branch.
     """
     r, w, guest = await _connected(harness)
-    await harness.bridge._new_session(guest, "")
+    await harness.bridge.coordinator.new_session(guest, "")
     assert not guest.conv_id, "a fresh chat must not claim an id yet"
 
-    await harness.bridge._on_setmodel(guest, Frame("SETMODEL",
+    await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "opus"}))
     assert guest.model == "opus"
     assert _saved(harness, "") == {}, "nothing may be keyed on the empty id"
 
-    await harness.bridge._run_turn(guest, "hello")
+    await harness.bridge.turn_runner.run_turn(guest, "hello")
     conv = guest.conv_id
     assert conv, "the turn should have produced a conversation id"
     assert _saved(harness, conv).get("model") == "opus"
@@ -73,12 +73,12 @@ async def test_the_effort_fork_carries_its_settings_to_the_new_id(harness):
     was the first thing lost when they switched away and back.
     """
     r, w, guest = await _connected(harness)
-    await harness.bridge._run_turn(guest, "first")
+    await harness.bridge.turn_runner.run_turn(guest, "first")
     before = guest.conv_id
     assert before
 
-    await harness.bridge._set_effort(guest, "high")
-    await harness.bridge._run_turn(guest, "second")
+    await harness.bridge.coordinator.set_effort(guest, "high")
+    await harness.bridge.turn_runner.run_turn(guest, "second")
     after = guest.conv_id
 
     assert after != before, "the fork should have changed the id"
@@ -94,9 +94,9 @@ async def test_settings_reach_the_file_on_disk(harness):
     are different claims and only the second one is the complaint.
     """
     r, w, guest = await _connected(harness)
-    await harness.bridge._on_setmodel(guest, Frame("SETMODEL",
+    await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "haiku"}))
-    await harness.bridge._run_turn(guest, "hello")
+    await harness.bridge.turn_runner.run_turn(guest, "hello")
 
     path = harness.bridge.conv.path
     assert path.exists(), "the conversation store was never created"
@@ -119,25 +119,25 @@ async def test_switching_back_restores_that_chat_s_model(harness):
     r, w, guest = await _connected(harness)
 
     # Conversation A, on opus.
-    await bridge._on_setmodel(guest, Frame("SETMODEL", {"model": "opus"}))
-    await bridge._run_turn(guest, "in A")
+    await bridge.options.on_setmodel(guest, Frame("SETMODEL", {"model": "opus"}))
+    await bridge.turn_runner.run_turn(guest, "in A")
     conv_a = guest.conv_id
 
     # Conversation B, on haiku.
-    await bridge._new_session(guest, "")
-    await bridge._on_setmodel(guest, Frame("SETMODEL", {"model": "haiku"}))
-    await bridge._run_turn(guest, "in B")
+    await bridge.coordinator.new_session(guest, "")
+    await bridge.options.on_setmodel(guest, Frame("SETMODEL", {"model": "haiku"}))
+    await bridge.turn_runner.run_turn(guest, "in B")
     conv_b = guest.conv_id
     assert conv_b != conv_a
 
     # Back to A.
-    await bridge._switch(guest, conv_a)
+    await bridge.coordinator.switch(guest, conv_a)
     assert guest.model == "opus", (
         "switching back gave the model the other chat was using")
 
     # And the session built for it actually runs on that model, rather than
     # merely being labelled with it.
-    await bridge._run_turn(guest, "again in A")
+    await bridge.turn_runner.run_turn(guest, "again in A")
     assert guest.claude.model == "opus"
 
     # B is untouched by the visit to A.
@@ -153,9 +153,9 @@ async def test_a_chat_with_nothing_saved_keeps_what_is_selected(harness):
     from before this existed must not be reset to the process defaults.
     """
     r, w, guest = await _connected(harness)
-    await harness.bridge._on_setmodel(guest, Frame("SETMODEL",
+    await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "opus"}))
-    harness.bridge._restore_settings(guest, "a-conversation-never-seen")
+    harness.bridge.session.restore_settings(guest, "a-conversation-never-seen")
     assert guest.model == "opus"
     await harness.close(w)
 
@@ -165,20 +165,20 @@ async def test_the_mode_and_effort_travel_with_the_model(harness):
     bridge = harness.bridge
     r, w, guest = await _connected(harness)
 
-    await bridge._set_mode(guest, "plan")
-    await bridge._on_setmodel(guest, Frame("SETMODEL", {"model": "opus"}))
-    await bridge._run_turn(guest, "hello")
+    await bridge.options.set_mode(guest, "plan")
+    await bridge.options.on_setmodel(guest, Frame("SETMODEL", {"model": "opus"}))
+    await bridge.turn_runner.run_turn(guest, "hello")
     conv = guest.conv_id
 
     saved = _saved(harness, conv)
     assert saved.get("mode") == "plan"
     assert saved.get("model") == "opus"
 
-    await bridge._new_session(guest, "")
-    await bridge._set_mode(guest, "default")
-    await bridge._run_turn(guest, "elsewhere")
+    await bridge.coordinator.new_session(guest, "")
+    await bridge.options.set_mode(guest, "default")
+    await bridge.turn_runner.run_turn(guest, "elsewhere")
 
-    await bridge._switch(guest, conv)
+    await bridge.coordinator.switch(guest, conv)
     assert guest.perm_mode == "plan"
     assert guest.model == "opus"
     await harness.close(w)

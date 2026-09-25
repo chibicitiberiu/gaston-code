@@ -57,7 +57,7 @@ async def _hold_turn(harness, guest, *, unwind=0.0):
 
     session.send = slow_send
     session.interrupt = interrupt
-    await harness.bridge._on_input(guest, Frame("INPUT", {}, b"hello"))
+    await harness.bridge.coordinator.on_input(guest, Frame("INPUT", {}, b"hello"))
     for _ in range(300):
         if guest.turn_lock.locked():
             return gate
@@ -100,7 +100,7 @@ async def test_a_switch_waits_for_the_live_turn(harness, monkeypatch):
     await _hold_turn(harness, guest, unwind=0.3)
 
     pages_before = guest.pages
-    task = asyncio.create_task(harness.bridge._switch(guest, "stored-1"))
+    task = asyncio.create_task(harness.bridge.coordinator.switch(guest, "stored-1"))
     await asyncio.sleep(0.1)
     # The interrupt has gone out and has not landed yet, so the turn still
     # holds the lock -- and the transcript has NOT been replaced underneath
@@ -127,7 +127,7 @@ async def test_a_switch_interrupts_rather_than_waiting_out_the_model(
     session = guest.claude
     await _hold_turn(harness, guest)
 
-    await asyncio.wait_for(harness.bridge._switch(guest, "stored-1"), 10)
+    await asyncio.wait_for(harness.bridge.coordinator.switch(guest, "stored-1"), 10)
     assert session.interrupted, "the live turn was never interrupted"
     await harness.close(w)
 
@@ -151,7 +151,7 @@ async def test_a_turn_that_lost_its_session_still_ends(harness):
         return turn
 
     session.send = send_then_vanish
-    await harness.bridge._run_turn(guest, "hello")
+    await harness.bridge.turn_runner.run_turn(guest, "hello")
     await _turn_end(harness, r)
     await harness.close(w)
 
@@ -176,7 +176,7 @@ async def test_a_refused_model_change_does_not_drop_the_link(harness):
         raise RuntimeError("Could not change the model")
 
     guest.claude.set_model = refuse
-    await harness.bridge._on_setmodel(guest, Frame("SETMODEL",
+    await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "opus"}))
     await _recv(harness, r, "OPTIONSEND")
     assert guest.connected, "the connection was torn down"
@@ -196,7 +196,7 @@ async def test_a_refused_model_is_not_remembered(harness):
         raise RuntimeError("nope")
 
     guest.claude.set_model = refuse
-    await harness.bridge._on_setmodel(guest, Frame("SETMODEL",
+    await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "opus"}))
     assert guest.model == before
     await harness.close(w)
@@ -230,7 +230,7 @@ async def test_a_single_frame_is_not_evidence_of_life(harness):
     await _recv(harness, r, "OPTIONSEND")
     guest = harness.bridge._guest
     guest.last_seen = 0.0
-    await harness.bridge._send(guest, Frame("PONG", {}))
+    await harness.bridge.connection.send(guest, Frame("PONG", {}))
     assert guest.last_seen == 0.0
     await harness.close(w)
 
@@ -260,7 +260,7 @@ async def test_a_slash_command_is_not_buried_under_the_sync_preamble(
         return await real_send(prompt)
 
     guest.claude.send = capture
-    await b._run_turn(guest, "/compact")
+    await b.turn_runner.run_turn(guest, "/compact")
     assert sent and sent[0] == "/compact"
     # And the notice is HELD, not dropped -- it rides in on the next
     # ordinary turn.
@@ -284,7 +284,7 @@ async def test_an_ordinary_turn_still_carries_the_preamble(harness):
         return await real_send(prompt)
 
     guest.claude.send = capture
-    await b._run_turn(guest, "please carry on")
+    await b.turn_runner.run_turn(guest, "please carry on")
     assert sent and "SYNC CONFLICT notes.txt" in sent[0]
     assert sent[0].endswith("please carry on")
     await harness.close(w)
@@ -332,7 +332,7 @@ async def test_an_exec_registered_after_a_reap_is_still_failed(harness):
     fut = loop.create_future()
     guest.exec_pending["e1"] = srv.ExecCall(future=fut)
 
-    b._mark_lost(guest)
+    b.connection.mark_lost(guest)
     assert fut.done()
     assert fut.result()["isError"] is True
     assert not guest.exec_pending
@@ -355,7 +355,7 @@ async def test_abandoning_a_conversation_tells_the_guest_to_stop(harness):
     loop = asyncio.get_running_loop()
     guest.exec_pending["e1"] = srv.ExecCall(future=loop.create_future())
 
-    b._abandon_pending(guest)
+    b.session.abandon_pending(guest)
     kill = await _recv(harness, r, "EXECKILL")
     assert kill.headers["id"] == "e1"
     await harness.close(w)

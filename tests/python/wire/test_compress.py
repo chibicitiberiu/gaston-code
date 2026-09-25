@@ -234,7 +234,7 @@ async def test_guest_to_bridge_compressed_frame_inflated():
     comp_payload = guest_compressor.compress(raw_payload)
 
     frame = Frame("EXECOUT", {"id": "cmd1", "enc": "deflate"}, comp_payload)
-    await bridge._handle(guest, frame)
+    await bridge.connection.handle(guest, frame)
 
     assert received_output == [raw_payload]
 

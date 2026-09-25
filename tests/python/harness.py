@@ -402,7 +402,7 @@ async def harness(monkeypatch, tmp_path):
         port = _next_port[0]
         b = Bridge("s", host="127.0.0.1", port=port)
         try:
-            server = await asyncio.start_server(b._on_client, "127.0.0.1", port)
+            server = await asyncio.start_server(b.connection.on_client, "127.0.0.1", port)
         except OSError:
             continue
         break

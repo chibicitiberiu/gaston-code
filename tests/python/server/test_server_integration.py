@@ -404,7 +404,7 @@ async def test_a_block_split_across_a_page_boundary_is_not_rendered_twice(harnes
     second_half = "B" * 10000
     big = first_half + "\n" + second_half
 
-    await harness.bridge._write_block(guest, big)
+    await harness.bridge.presentation.write_block(guest, big)
     frames = await harness.recv_until(r, {"PAGESEALED"}, timeout=5)
 
     sealed = [f for f in frames if f.type == "PAGESEALED"]
@@ -542,9 +542,9 @@ async def test_talking_to_a_chat_shares_no_files_at_all(harness, tmp_path):
 
     assert g.work_guest == "", "unset until a tool has run"
     assert g.work_dir == ""
-    assert b._mirror_dir(g) == "", "no mirror without a committed folder"
+    assert b.workspace.mirror_dir(g) == "", "no mirror without a committed folder"
     assert b._current_guest_root() == ""
-    assert await b.run_sync("test") == {}, "no pass without a mirror"
+    assert await b.sync.run_sync("test") == {}, "no pass without a mirror"
     assert os.listdir(b.sync_dir) == [], "and no folder littered on disk"
     await harness.close(w)
 
@@ -570,7 +570,7 @@ async def test_the_first_tool_call_commits_the_folder(harness, tmp_path):
     assert g.work_dir == os.path.join(b.sync_dir, "LISTFILE")
     assert os.path.isdir(g.work_dir), "created, not merely named"
     assert g.work_guest == "C:\\Gaston\\LISTFILE"
-    assert b._mirror_dir(g) == g.work_dir, "and sharing is on now"
+    assert b.workspace.mirror_dir(g) == g.work_dir, "and sharing is on now"
     await harness.close(w)
 
 
@@ -598,7 +598,7 @@ async def test_the_folder_is_named_from_the_title_when_there_is_no_message(
         # is only ever reached from inside one. Calling it here without that
         # would test a state the SDK cannot produce.
         await g.claude.start_turn()
-        await b._ensure_work_dir(g)
+        await b.workspace.ensure_work_dir(g)
     finally:
         srv.sesslist.listing = orig
 
@@ -673,7 +673,7 @@ async def test_a_new_chat_is_not_asked_for_a_folder_at_all(harness, tmp_path):
     g = b._guest
     assert g.work_dir == "", "a new chat has no folder until its first tool"
     assert g.work_guest == ""
-    assert b._mirror_dir(g) == "", "and mirrors nothing until then"
+    assert b.workspace.mirror_dir(g) == "", "and mirrors nothing until then"
     assert os.listdir(b.sync_dir) == [], "nothing created on the way past"
 
     row = [f.headers for f in frames if f.type == "OPTION"
@@ -1810,16 +1810,16 @@ async def test_send_reports_whether_the_frame_actually_went(harness):
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
 
-    ok = await harness.bridge._send(guest, srv.notice("k", "an ordinary notice"))
+    ok = await harness.bridge.connection.send(guest, srv.notice("k", "an ordinary notice"))
     assert ok is True
 
     huge = srv.Frame("NOTICE", {"kind": "k"}, b"x" * 200_000)
     with pytest.raises(ProtocolError):
-        await harness.bridge._send(guest, huge)
+        await harness.bridge.connection.send(guest, huge)
 
     await harness.close(writer)
     await asyncio.sleep(0.1)
-    dropped = await harness.bridge._send(guest, srv.notice("k", "after close"))
+    dropped = await harness.bridge.connection.send(guest, srv.notice("k", "after close"))
     assert dropped is False, "a closed writer must report that nothing was sent"
 
 
@@ -2127,7 +2127,7 @@ async def test_a_tool_result_reaches_the_guest_as_a_block(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
-    await harness.bridge._write_block(
+    await harness.bridge.presentation.write_block(
         guest, srv.H.tool_result("total 4\ndrwxr-xr-x  work\n"))
 
     frame = await _recv(harness, reader, "TEXT")
@@ -2601,7 +2601,7 @@ async def test_turn_end_carries_context_fullness(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     await harness.bridge._guest.claude.send("hello")
-    await harness.bridge._run_turn(harness.bridge._guest, "hello")
+    await harness.bridge.turn_runner.run_turn(harness.bridge._guest, "hello")
     frame = await _recv(harness, reader, "TURN")
     while frame.headers.get("state") != "end":
         frame = await _recv(harness, reader, "TURN")
@@ -2617,7 +2617,7 @@ async def test_an_unavailable_context_reading_is_absent_not_zero(harness):
     await _recv(harness, reader, "OPTIONSEND")
     harness.bridge._guest.claude.context_pct = None
 
-    await harness.bridge._run_turn(harness.bridge._guest, "hello")
+    await harness.bridge.turn_runner.run_turn(harness.bridge._guest, "hello")
     frame = await _recv(harness, reader, "TURN")
     while frame.headers.get("state") != "end":
         frame = await _recv(harness, reader, "TURN")

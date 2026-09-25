@@ -148,7 +148,7 @@ async def test_golden_03_sync_conflict_halt_and_resume(harness, tmp_path):
     collector = FrameCollector(r, harness)
 
     # 1. Raise HALT
-    await harness.bridge._raise_halt(
+    await harness.bridge.sync.raise_halt(
         harness.bridge._guest, "Stopped: 1 conflicting edit."
     )
     await collector.recv_until({"HALT"})
@@ -236,7 +236,7 @@ async def test_golden_05_reconnect_while_halted(harness, tmp_path):
     os.makedirs(harness.bridge.sync_state, exist_ok=True)
     Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
 
-    await harness.bridge._raise_halt(
+    await harness.bridge.sync.raise_halt(
         harness.bridge._guest, "Stopped: 1 conflicting edit."
     )
     await harness.recv_until(r1, {"HALT"})
