@@ -94,7 +94,7 @@ CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
 
-.PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: synccheck inicheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -364,26 +364,20 @@ PYTHON ?= python3
 
 # Static PE audit. The import table is the gate that matters: a single NT-only
 # symbol kills the EXE at load on Win98, before WinMain, with no log written.
-check: $(BUILD)/retroclaude.exe
-	@echo "=== identity ==="; file $(BUILD)/retroclaude.exe
-	@echo "=== imports (DLL allow-list, NT-only deny-list, W-suffix, PE 4.0) ==="
-	@# THIS STEP CAN FAIL, which the three shell pipelines it replaces could
-	@# not. They printed the DLL list, printed the W-suffix imports and
-	@# printed the OS/subsystem version -- all three exit 0 whatever they
-	@# find, so CLAUDE.md's "make check audits imports" was a human reading
-	@# scrollback, and under `make all` or in CI a regression went green.
-	@#
-	@# The W-suffix grep also aimed at the wrong class. MoveFileExA is ANSI,
-	@# has no W suffix, lives in KERNEL32 and does not exist on 9x --
-	@# win/sync/sync.cpp says in a comment that somebody will want to call it
-	@# to make the commit atomic. That edit used to pass every gate here and
-	@# then die at load on the guest with no log. See audit 01.29.
-	@$(PYTHON) $(TOP)/tools/check/imports.py $(BUILD)/retroclaude.exe
-	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
-	@# Located, not counted -- see tools/check/cmovcheck.py for why the baseline
-	@# this replaces moved three times without anything being wrong.
-	@$(PYTHON) $(CURDIR)/../tools/check/cmovcheck.py $(BUILD)/retroclaude.exe \
-	   $(BUILD)/retroclaude.map $(OBJS)
+# `make check` runs the per-exe gates for every shipping exe, plus the
+# source-tree checks once. Each exe declares what it OWNS -- the objects and
+# our own static libs it links, which the CMOV and stack-frame gates must
+# treat as ours -- and its committed-at-load budget. gremote.exe joins with
+# two more lines (docs/REMOTE.md).
+#
+# check-<exe> is deliberately not .PHONY: a phony target skips implicit rule
+# search, and the gates live in the check-% pattern rule below.
+check: check-sources check-retroclaude
+
+check-retroclaude: CHECK_OWNED = $(OBJS)
+check-retroclaude: CHECK_CAP   = $(COMMITTED_CAP)
+
+check-sources:
 	@echo "=== unbounded string functions (the overflow family) ==="
 	@# These write until a NUL that may not be there. rc_strcpy/rc_strncpy/
 	@# rc_strf replace them and always terminate, so the READING family
@@ -401,6 +395,27 @@ check: $(BUILD)/retroclaude.exe
 	   echo "   FAIL: use rc_strcpy/rc_strncpy/rc_strf (win/core/str.h)"; \
 	   exit 1; \
 	 else echo "   ok: none"; fi
+
+check-%: $(BUILD)/%.exe
+	@echo "=== identity ==="; file $(BUILD)/$*.exe
+	@echo "=== imports (DLL allow-list, NT-only deny-list, W-suffix, PE 4.0) ==="
+	@# THIS STEP CAN FAIL, which the three shell pipelines it replaces could
+	@# not. They printed the DLL list, printed the W-suffix imports and
+	@# printed the OS/subsystem version -- all three exit 0 whatever they
+	@# find, so CLAUDE.md's "make check audits imports" was a human reading
+	@# scrollback, and under `make all` or in CI a regression went green.
+	@#
+	@# The W-suffix grep also aimed at the wrong class. MoveFileExA is ANSI,
+	@# has no W suffix, lives in KERNEL32 and does not exist on 9x --
+	@# win/sync/sync.cpp says in a comment that somebody will want to call it
+	@# to make the commit atomic. That edit used to pass every gate here and
+	@# then die at load on the guest with no log. See audit 01.29.
+	@$(PYTHON) $(TOP)/tools/check/imports.py $(BUILD)/$*.exe
+	@echo "=== CMOV (a Pentium MMX has none; 686+ only) ==="
+	@# Located, not counted -- see tools/check/cmovcheck.py for why the baseline
+	@# this replaces moved three times without anything being wrong.
+	@$(PYTHON) $(CURDIR)/../tools/check/cmovcheck.py $(BUILD)/$*.exe \
+	   $(BUILD)/$*.map $(CHECK_OWNED)
 	@echo "=== static constructors (they run BEFORE WinMain, so before the log) ==="
 	@# Verified on the target: a file-scope object's constructor runs before
 	@# WinMain and its destructor at exit. log.c opens retroclaude.log from
@@ -408,27 +423,27 @@ check: $(BUILD)/retroclaude.exe
 	@# signal that main never ran -- so a static ctor that faults reproduces
 	@# exactly the undebuggable position the logging discipline exists to
 	@# avoid. POD statics only.
-	@if objdump -t $(BUILD)/retroclaude.exe 2>/dev/null \
+	@if objdump -t $(BUILD)/$*.exe 2>/dev/null \
 	   | grep -qE '__CPP_INIT|__sti__|_STI__'; then \
 	  echo "   FAIL: a static constructor is linked in; see win/core/rc_cpp.h"; \
 	  exit 1; \
 	else echo "   ok: none"; fi
 	@echo "=== stack frames (a frame >= one page steps over the guard page) ==="
-	@$(PYTHON) $(TOP)/tools/check/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map \
-	   $(LIBCORE)
+	@$(PYTHON) $(TOP)/tools/check/stackframes.py $(BUILD)/$*.exe $(BUILD)/$*.map \
+	   $(filter %.lib,$(CHECK_OWNED))
 	@echo "=== static allocation (the guest has 28KB free after a turn) ==="
 	@# Uninitialised statics are committed at load and are spent before the
 	@# app does anything -- rc_net_send's frame build buffer alone is 66,560
 	@# bytes. `objdump -h` reports the RAW section size, which omits BSS
 	@# entirely and makes this look 7x smaller than it is, so read the PE
-	@$(PYTHON) -c "import struct, sys;d=open('$(BUILD)/retroclaude.exe','rb').read();\
+	@$(PYTHON) -c "import struct, sys;d=open('$(BUILD)/$*.exe','rb').read();\
 pe=struct.unpack_from('<I',d,0x3c)[0];\
 n=struct.unpack_from('<H',d,pe+6)[0];o=pe+24+struct.unpack_from('<H',d,pe+20)[0];\
 rows=[(d[o+i*40:o+i*40+8].rstrip(bytes(1)).decode(),)+struct.unpack_from('<IIII',d,o+i*40+8) for i in range(n)];\
 [print('   %-8s image %7d  file %7d  bss %7d' % (r[0],r[1],r[3],max(0,r[1]-r[3]))) for r in rows];\
 tot=sum(max(r[1],r[3]) for r in rows);\
-print('   total committed at load: %d bytes (budget $(COMMITTED_CAP))' % tot);\
-sys.exit(1) if tot > $(COMMITTED_CAP) else None"
+print('   total committed at load: %d bytes (budget $(CHECK_CAP))' % tot);\
+sys.exit(1) if tot > $(CHECK_CAP) else None"
 
 clean:
 	@rm -rf $(BUILD)
