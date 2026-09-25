@@ -45,6 +45,9 @@ def main() -> int:
     ap.add_argument("--work", default="",
                     help="the folder to arm as the sync root; default is "
                          "the sync_root the guest reports in HELLO")
+    ap.add_argument("--settle", type=float, default=3.0,
+                    help="seconds between arming the sync root and the "
+                         "burst")
     a = ap.parse_args()
 
     conn, _peer = probelib.listen_for_guest(a.host, a.port)
@@ -87,6 +90,10 @@ def main() -> int:
     conn.sendall(Frame("OPTION", {"kind": "work", "id": work,
                                   "label": work, "current": "1"}).encode())
     conn.sendall(Frame("OPTIONSEND", {}).encode())
+    # The guest arms the root on its WINDOW thread and answers SYNCGET on its
+    # worker, so a burst sent at once can race the arming and come back
+    # entirely no_root -- seen on a first start after a reboot.
+    time.sleep(a.settle)
 
     # SYNCGET's body is the bare encoded path. Only SYNCPUT length-prefixes
     # it, because a put carries file bytes after the name and a get does not.
