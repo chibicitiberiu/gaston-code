@@ -414,7 +414,7 @@ async def test_close_stops_the_sweeper_and_everything_spawned(harness):
     b = harness.bridge
     b.sync_dir = b.sync_dir or "/tmp"
     if b._sweeper is None:
-        b._sweeper = asyncio.create_task(b._sweep_sync())
+        b._sweeper = asyncio.create_task(b.sync.sweep_sync())
     sweeper = b._sweeper
 
     async def sleeper():
@@ -482,8 +482,8 @@ async def test_the_baseline_is_addressed_by_the_guest_it_is_asked_about(
     other = srv.GuestSession()
     other.work_guest = "C:\\OTHER"
 
-    assert b._base_path(attached) != b._base_path(other)
-    assert b._base_path() == b._base_path(attached)
+    assert b.sync.base_path(attached) != b.sync.base_path(other)
+    assert b.sync.base_path() == b.sync.base_path(attached)
     await harness.close(w)
 
 
@@ -502,7 +502,7 @@ async def test_an_unknown_shell_is_refused_by_name(harness):
     guest.tools = [srv.Found("command.com", "shell",
                              r"C:\WINDOWS\COMMAND.COM", True)]
 
-    out = await harness.bridge.run_on_guest(
+    out = await harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="bash", cwd="C:\\WORK")
     assert out["isError"] is True
     text = out["content"][0]["text"]
@@ -522,7 +522,7 @@ async def test_the_named_shell_becomes_the_invocation_prefix(harness):
     guest.tools = [srv.Found("command.com", "shell",
                              r"C:\WINDOWS\COMMAND.COM", True)]
 
-    task = asyncio.create_task(harness.bridge.run_on_guest(
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="command.com", cwd="C:\\WORK"))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == r"C:\WINDOWS\COMMAND.COM /c"
@@ -538,7 +538,7 @@ async def test_none_means_spawn_the_program_directly(harness):
     harness.bridge._guest.tools = [
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
-    task = asyncio.create_task(harness.bridge.run_on_guest(
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "hello.exe", timeout_ms=5000, shell="none", cwd="C:\\WORK"))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == ""
@@ -559,7 +559,7 @@ async def test_naming_nothing_uses_the_first_shell_the_machine_reported(
     harness.bridge._guest.tools = [
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
-    task = asyncio.create_task(harness.bridge.run_on_guest(
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == r"C:\WINDOWS\COMMAND.COM /c"
@@ -576,7 +576,7 @@ async def test_a_machine_that_reported_no_shell_runs_directly(harness):
     await _recv(harness, r, "OPTIONSEND")
     assert not harness.bridge._guest.tools
 
-    task = asyncio.create_task(harness.bridge.run_on_guest(
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
     req = await _recv(harness, r, "EXEC")
     assert req.headers["shell"] == ""

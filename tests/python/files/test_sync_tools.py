@@ -61,7 +61,7 @@ def test_status_says_so_before_a_folder_exists(b):
     refused to write the file it had been asked for. Nothing being mirrored
     yet is the normal state of a conversation, and it has to read that way."""
     b._guest = _committed_guest("", "")
-    out = b.sync_status_text()
+    out = b.sync.sync_status_text()
     assert "does not have a folder on the user's machine yet" in out
     assert "not a fault" in out
     assert "Mirrored:" not in out
@@ -69,7 +69,7 @@ def test_status_says_so_before_a_folder_exists(b):
 
 def test_status_says_so_plainly_when_sync_is_off(tmp_path):
     bridge = Bridge("s", host="127.0.0.1", port=0)
-    out = bridge.sync_status_text()
+    out = bridge.sync.sync_status_text()
     assert "not switched on" in out
     assert "no tool that would copy it" in out
 
@@ -94,38 +94,38 @@ def test_stray_scan_is_bounded_and_says_so(b, monkeypatch):
     for i in range(6):
         open(os.path.join(b.cwd, f"stray{i}.txt"), "w").write("x")
 
-    stray, truncated = b._edits_outside_the_mirror()
+    stray, truncated = b.sync.edits_outside_the_mirror()
     assert truncated
     assert len(stray) <= 3
 
-    out = b.sync_status_text()
+    out = b.sync.sync_status_text()
     assert "stopped after 3 files" in out
 
 
 def test_stray_scan_under_budget_is_not_flagged_truncated(b):
     open(os.path.join(b.cwd, "stray.txt"), "w").write("x")
-    stray, truncated = b._edits_outside_the_mirror()
+    stray, truncated = b.sync.edits_outside_the_mirror()
     assert stray == ["stray.txt"]
     assert not truncated
-    assert "stopped after" not in b.sync_status_text()
+    assert "stopped after" not in b.sync.sync_status_text()
 
 
 def test_status_names_both_ends(b):
-    out = b.sync_status_text()
+    out = b.sync.sync_status_text()
     assert b.sync_dir in out
     assert "C:\\WORK" in out
 
 
 def test_status_is_quiet_when_there_is_nothing_to_say(b):
-    assert "Nothing outstanding" in b.sync_status_text()
+    assert "Nothing outstanding" in b.sync.sync_status_text()
 
 
 def test_status_reports_a_withheld_path_and_how_to_clear_it(b):
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(os.path.join(b.sync_state, "base.json"))
 
-    out = b.sync_status_text()
+    out = b.sync.sync_status_text()
     assert "REFUSING YOUR WRITES" in out
     assert "src/main.c" in out
     assert "sync_resolve" in out
@@ -135,7 +135,7 @@ def test_status_repeats_the_last_passs_skips(b):
     """A skipped name never reaches the user however many times it is written,
     and after the first pass nothing says so."""
     b._guest.last_sync_reports = ["skipped aux.c: reserved device name"]
-    out = b.sync_status_text()
+    out = b.sync.sync_status_text()
     assert "aux.c" in out
     assert "NEVER" in out
 
@@ -146,7 +146,7 @@ def test_status_lists_edits_that_missed_the_mirror(b):
     open(os.path.join(b.cwd, "notes.md"), "wb").write(b"lost work\n")
     open(os.path.join(b.sync_dir, "real.c"), "wb").write(b"int x;\n")
 
-    out = b.sync_status_text()
+    out = b.sync.sync_status_text()
     assert "OUTSIDE THE MIRRORED FOLDER" in out
     assert "notes.md" in out
     assert "real.c" not in out
@@ -154,45 +154,45 @@ def test_status_lists_edits_that_missed_the_mirror(b):
 
 async def test_resolve_release_lifts_the_refusal(b):
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(path)
 
-    out = await b.sync_resolve("src/main.c", "release")
+    out = await b.sync.sync_resolve("src/main.c", "release")
     assert "Released" in out
-    assert not b._load_baseline().latched
+    assert not b.sync.load_baseline().latched
 
 
 async def test_resolve_release_is_honest_when_there_was_no_latch(b):
     """Otherwise the agent 'fixes' a missing file by releasing a path that was
     never withheld, and the real reason -- a skipped name -- goes unread."""
-    out = await b.sync_resolve("src/main.c", "release")
+    out = await b.sync.sync_resolve("src/main.c", "release")
     assert "not withheld" in out
     assert "sync_status" in out
 
 
 async def test_resolve_matches_case_insensitively_like_the_guest_does(b):
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(path)
 
-    assert "Released" in await b.sync_resolve("SRC/MAIN.C", "release")
+    assert "Released" in await b.sync.sync_resolve("SRC/MAIN.C", "release")
 
 
 async def test_resolve_forget_drops_a_tombstone(b):
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.tombs["gone.c"] = Tomb(cls="t", crc=7)
     base.save(path)
 
-    out = await b.sync_resolve("gone.c", "forget")
+    out = await b.sync.sync_resolve("gone.c", "forget")
     assert "Stopped tracking" in out
-    assert not b._load_baseline().tombs
+    assert not b.sync.load_baseline().tombs
 
 
 async def test_resolve_forget_on_an_untracked_path_says_so(b):
-    assert "not tracked" in await b.sync_resolve("never-existed.c", "forget")
+    assert "not tracked" in await b.sync.sync_resolve("never-existed.c", "forget")
 
 
 async def test_resolve_accept_revert_drops_the_prev_that_blocked_the_pull(b):
@@ -203,14 +203,14 @@ async def test_resolve_accept_revert_drops_the_prev_that_blocked_the_pull(b):
     the whole mechanism: with no record of what the push replaced, the guest
     just differs from the ancestor and the ordinary row pulls it."""
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.prev["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=11)
     base.latched["src/main.c"] = "the guest reverted a push"
     base.save(path)
 
-    out = await b.sync_resolve("src/main.c", "accept-revert")
+    out = await b.sync.sync_resolve("src/main.c", "accept-revert")
     assert "Accepted the machine's version" in out
-    after = b._load_baseline()
+    after = b.sync.load_baseline()
     assert "src/main.c" not in after.prev
     assert not after.latched
 
@@ -220,16 +220,16 @@ async def test_resolve_accept_revert_says_the_old_content_is_not_kept(b):
     Saying so is the difference between the agent re-applying its change and
     the agent believing the bridge kept a copy it can ask for."""
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.prev["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=11)
     base.save(path)
 
-    out = await b.sync_resolve("src/main.c", "accept-revert")
+    out = await b.sync.sync_resolve("src/main.c", "accept-revert")
     assert "not kept" in out
 
 
 async def test_resolve_accept_revert_is_honest_when_nothing_was_reverted(b):
-    assert "not being held as a reverted push" in await b.sync_resolve(
+    assert "not being held as a reverted push" in await b.sync.sync_resolve(
         "src/main.c", "accept-revert")
 
 
@@ -239,20 +239,20 @@ async def test_resolve_refuses_an_unknown_action_instead_of_forgetting(b):
     reaching the bridge dropped the row, which is the DESTRUCTIVE half of the
     pair and the wrong way round for a default."""
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.tombs["gone.c"] = Tomb(cls="t", crc=7)
     base.save(path)
 
-    out = await b.sync_resolve("gone.c", "acccept-revert")   # typo, deliberate
+    out = await b.sync.sync_resolve("gone.c", "acccept-revert")   # typo, deliberate
     assert "Unknown action" in out
-    assert b._load_baseline().tombs, "an unknown action must not forget the row"
+    assert b.sync.load_baseline().tombs, "an unknown action must not forget the row"
 
 
 async def test_resolve_survives_a_baseline_it_cannot_read(b):
     """Refuse, never treat an unreadable baseline as an empty one -- that
     would make every file new on both sides."""
     open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
-    out = await b.sync_resolve("a.c", "release")
+    out = await b.sync.sync_resolve("a.c", "release")
     assert "could not be read" in out
     assert "nothing changed" in out
 
@@ -313,13 +313,13 @@ async def test_continue_lifts_every_withheld_path(b):
     has mentioned.
     """
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.latched["src/util.c"] = "both sides moved"
     base.save(path)
 
     assert await b.sync.release_all_latches() == 2
-    assert not b._load_baseline().latched
+    assert not b.sync.load_baseline().latched
 
 
 async def test_releasing_when_nothing_is_withheld_is_harmless(b):
@@ -336,9 +336,9 @@ async def test_releasing_survives_an_unreadable_baseline(b):
 async def test_resolve_accept_tree_takes_no_path(b):
     """It answers a WHOLE-PASS refusal, so requiring a path would mean fifty
     calls to lift one refusal -- and there is no single file it is about."""
-    out = await b.sync_resolve("", "accept-tree")
+    out = await b.sync.sync_resolve("", "accept-tree")
     assert "next pass" in out
-    assert b._load_baseline().accept_tree is True
+    assert b.sync.load_baseline().accept_tree is True
 
 
 async def test_resolve_accept_tree_changes_no_rows(b):
@@ -346,11 +346,11 @@ async def test_resolve_accept_tree_changes_no_rows(b):
     baseline it would be deciding the outcome instead of permitting it, and
     the per-path rows are what should decide."""
     path = os.path.join(b.sync_state, "base.json")
-    base = b._load_baseline()
+    base = b.sync.load_baseline()
     base.rows["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=3)
     base.save(path)
 
-    await b.sync_resolve("", "accept-tree")
-    after = b._load_baseline()
+    await b.sync.sync_resolve("", "accept-tree")
+    after = b.sync.load_baseline()
     assert after.rows["src/main.c"].crc == 3
     assert not after.tombs

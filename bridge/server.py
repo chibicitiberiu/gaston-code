@@ -560,22 +560,20 @@ class Bridge:
             ensure_background_tasks=self._ensure_background_tasks,
             spawn=self._spawn,
         )
-        if hasattr(self, "_fallback_guest") and self._fallback_guest is not None:
-            self.connection.guest = self._fallback_guest
         self.presentation = PresentationService(connection=self.connection)
         self.options = OptionsService(
             connection=self.connection,
             conv=self.conv,
             config=self.config,
             write_block=self.presentation.write_block,
-            set_effort=self._set_effort,
+            set_effort=lambda g, e: self.coordinator.set_effort(g, e),
         )
         self.workspace = WorkspaceService(
             config=self.config,
             conv=self.conv,
             write_block=self.presentation.write_block,
-            send_options=self._send_options,
-            spawn_sync=lambda reason: self._spawn(self.run_sync(reason)),
+            send_options=self.options.send_options,
+            spawn_sync=lambda reason: self._spawn(self.sync.run_sync(reason)),
         )
         self.guest_exec = GuestExecService(
             connection=self.connection,
@@ -683,54 +681,6 @@ class Bridge:
         # are the only copies. The pre-attach SyncCoordinator moved to
         # ConnectionService, which owns the guest slot it precedes.
 
-    def _ensure_config(self) -> BridgeConfig:
-        if not hasattr(self, "config"):
-            self.config = BridgeConfig(secret="")
-        return self.config
-
-    def _ensure_connection(self) -> ConnectionService:
-        """The link service, created on demand.
-
-        Tests build a Bridge with `__new__` and no `__init__`, so every lazy
-        bootstrap below has to be able to stand one up. Services depend on
-        ConnectionService rather than on this composition root, so it is the
-        one that has to exist first.
-        """
-        conn = getattr(self, "connection", None)
-        if conn is None:
-            conn = self.connection = ConnectionService(config=self._ensure_config())
-            # `_guest` parks the session on `_fallback_guest` while there is
-            # no link service to hold it. Hand it over, or a guest assigned
-            # before the first lazy bootstrap is silently lost.
-            fallback = getattr(self, "_fallback_guest", None)
-            if fallback is not None:
-                conn.guest = fallback
-        return conn
-
-    def _ensure_sync(self) -> SyncService:
-        if not hasattr(self, "sync"):
-            cfg = self._ensure_config()
-            conn = self._ensure_connection()
-            conv = getattr(self, "conv", None) or Conversations()
-            self.conv = conv
-            pres = getattr(self, "presentation", None) or PresentationService(connection=conn)
-            self.presentation = pres
-            ws = getattr(self, "workspace", None) or WorkspaceService(
-                config=cfg,
-                conv=conv,
-                write_block=pres.write_block,
-                send_options=getattr(self, "_send_options", lambda *a, **kw: None),
-                spawn_sync=lambda reason: None,
-            )
-            self.workspace = ws
-            self.sync = SyncService(
-                config=cfg,
-                connection=conn,
-                workspace=ws,
-                presentation=pres,
-                spawn=getattr(self, "_spawn", lambda coro: None),
-            )
-        return self.sync
 
     @property
     def conv(self) -> Conversations:
@@ -752,115 +702,108 @@ class Bridge:
 
     @property
     def host(self) -> str:
-        return self._ensure_config().host
+        return self.config.host
 
     @host.setter
     def host(self, val: str) -> None:
-        self._ensure_config().host = val
+        self.config.host = val
 
     @property
     def port(self) -> int:
-        return self._ensure_config().port
+        return self.config.port
 
     @port.setter
     def port(self, val: int) -> None:
-        self._ensure_config().port = val
+        self.config.port = val
 
     @property
     def cwd(self) -> str | None:
-        return self._ensure_config().cwd
+        return self.config.cwd
 
     @cwd.setter
     def cwd(self, val: str | None) -> None:
-        self._ensure_config().cwd = val
+        self.config.cwd = val
 
     @property
     def model(self) -> str | None:
-        return self._ensure_config().model
+        return self.config.model
 
     @model.setter
     def model(self, val: str | None) -> None:
-        self._ensure_config().model = val
+        self.config.model = val
 
     @property
     def effort(self) -> str | None:
-        return self._ensure_config().effort
+        return self.config.effort
 
     @effort.setter
     def effort(self, val: str | None) -> None:
-        self._ensure_config().effort = val
+        self.config.effort = val
 
     @property
     def link_bps(self) -> float | None:
-        return self._ensure_config().link_bps
+        return self.config.link_bps
 
     @link_bps.setter
     def link_bps(self, val: float | None) -> None:
-        self._ensure_config().link_bps = val
+        self.config.link_bps = val
 
     @property
     def sync_dir(self) -> str | None:
-        return self._ensure_config().sync_dir
+        return self.config.sync_dir
 
     @sync_dir.setter
     def sync_dir(self, val: str | None) -> None:
-        self._ensure_config().sync_dir = val
+        self.config.sync_dir = val
 
     @property
     def sync_state(self) -> str | None:
-        return self._ensure_config().sync_state
+        return self.config.sync_state
 
     @sync_state.setter
     def sync_state(self, val: str | None) -> None:
-        self._ensure_config().sync_state = val
+        self.config.sync_state = val
 
     @property
     def sync_sweep_s(self) -> float:
-        return self._ensure_config().sync_sweep_s
+        return self.config.sync_sweep_s
 
     @sync_sweep_s.setter
     def sync_sweep_s(self, val: float) -> None:
-        self._ensure_config().sync_sweep_s = val
+        self.config.sync_sweep_s = val
 
     @property
     def idle_timeout_s(self) -> float:
-        return self._ensure_config().idle_timeout_s
+        return self.config.idle_timeout_s
 
     @idle_timeout_s.setter
     def idle_timeout_s(self, val: float) -> None:
-        self._ensure_config().idle_timeout_s = val
+        self.config.idle_timeout_s = val
 
     @property
     def idle_check_s(self) -> float:
-        return self._ensure_config().idle_check_s
+        return self.config.idle_check_s
 
     @idle_check_s.setter
     def idle_check_s(self, val: float) -> None:
-        self._ensure_config().idle_check_s = val
+        self.config.idle_check_s = val
 
     @property
     def perm_grace_s(self) -> float:
-        return self._ensure_config().perm_grace_s
+        return self.config.perm_grace_s
 
     @perm_grace_s.setter
     def perm_grace_s(self, val: float) -> None:
-        self._ensure_config().perm_grace_s = val
+        self.config.perm_grace_s = val
 
 
     @property
     def _guest(self) -> GuestSession | None:
-        conn = getattr(self, "connection", None)
-        if conn is not None:
-            return conn.guest
-        return getattr(self, "_fallback_guest", None)
+        return self.connection.guest
 
     @_guest.setter
     def _guest(self, val: GuestSession | None) -> None:
-        conn = getattr(self, "connection", None)
-        if conn is not None:
-            conn.guest = val
-        else:
-            self._fallback_guest = val
+        self.connection.guest = val
 
 
     @property
@@ -879,13 +822,13 @@ class Bridge:
         it means. Several already can -- `sync_status_text`, `sync_resolve`
         and `_reconcile_halt` all take a guest today.
         """
-        return self._ensure_connection().synccoord
+        return self.connection.synccoord
 
     # --- lifecycle ---------------------------------------------------------
 
     async def serve_forever(self) -> None:
         self._server = await asyncio.start_server(
-            self._on_client, self.host, self.port
+            self.connection.on_client, self.host, self.port
         )
         addr = ", ".join(str(s.getsockname()) for s in self._server.sockets or [])
         log.info("listening on %s", addr)
@@ -925,24 +868,24 @@ class Bridge:
     def _create_guest(self, page_bytes: int, page_blocks: int) -> GuestSession:
         g = GuestSession(
             view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
-            synccoord=self._ensure_connection()._preattach_synccoord,
+            synccoord=self.connection._preattach_synccoord,
         )
         self.permissions.attach(g, cwd=self.cwd)
         return g
 
     async def _post_attach(self, guest: GuestSession, is_reconnect: bool) -> None:
         if guest.claude is None and not guest.pending_resume:
-            guest.claude = await self._make_session(guest)
+            guest.claude = await self.session.make_session(guest)
 
-        await self._send(guest, ready(
+        await self.connection.send(guest, ready(
             guest.sess_id,
             (guest.claude.model if guest.claude else guest.model)
             or "(default)",
             guest.pages.live.number, guest.pages.count,
             conv=guest.conv_id))
 
-        await self._send(guest, doc(H.document()))
-        await self._send_options(guest)
+        await self.connection.send(guest, doc(H.document()))
+        await self.options.send_options(guest)
 
         guest.lost_at = None
         await self.coordinator.sync_state_to_guest(guest)
@@ -950,14 +893,9 @@ class Bridge:
 
         if self.sync_dir:
             self.turn_runner.seed_agent_notices()
-            self._spawn(self.run_sync("the machine reconnected"))
+            self._spawn(self.sync.run_sync("the machine reconnected"))
 
         log.info("attached sess=%s (reconnect=%s)", guest.sess_id, is_reconnect)
-
-    async def _on_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        await self.connection.on_client(reader, writer)
 
 
     # --- Claude session ----------------------------------------------------
@@ -989,15 +927,6 @@ class Bridge:
     folder_name = staticmethod(P.folder_name)
     _title_folder = staticmethod(P.title_folder)
 
-
-    async def _ensure_work_dir(self, guest: GuestSession) -> None:
-        await self.workspace.ensure_work_dir(guest)
-
-
-    async def _make_session(self, guest: GuestSession,
-                            resume: str | None = None,
-                            fork: bool = False) -> Session:
-        return await self.session.make_session(guest, resume=resume, fork=fork)
 
     # --- permissions -------------------------------------------------------
     #
@@ -1043,11 +972,6 @@ class Bridge:
             log.error("background task failed", exc_info=exc)
 
 
-    async def _write_block(self, guest: GuestSession, html: str,
-                           *, stream: bool = True,
-                           notify: bool = True) -> None:
-        await self.presentation.write_block(guest, html, stream=stream, notify=notify)
-
     # --- frame pump --------------------------------------------------------
 
 
@@ -1055,67 +979,16 @@ class Bridge:
         handler = self._dispatch.get(f.type)
         if handler is None:
             log.warning("unknown frame type from guest: %s", f.type)
-            await self._send(guest, error("unknown_type", f.type))
+            await self.connection.send(guest, error("unknown_type", f.type))
             return
         await handler(guest, f)
-
-
-    async def _on_stat(self, guest: GuestSession, f: Frame) -> None:
-        # The guest measures its own throughput for the progress UI; the
-        # sender uses it to pick a codec. This is what makes one build work
-        # on both a 10Mbit LAN and a modem.
-        try:
-            bps = float(f.headers.get("bps", "0"))
-        except ValueError:
-            bps = 0.0
-        if bps > 0:
-            guest.set_link_speed(bps)
-            log.info("guest reports %.0f B/s", bps)
-        try:
-            def_bps = float(f.headers.get("deflate_bps", "0"))
-        except ValueError:
-            def_bps = 0.0
-        if def_bps > 0:
-            guest.link.deflate_bps = def_bps
-            log.info("guest reports deflate %.0f B/s", def_bps)
-
-
-    async def _on_rules(self, guest: GuestSession, f: Frame) -> None:
-        """What can run without asking, as a transcript block.
-
-        A block rather than a dialog: it is prose with a table in it, the
-        guest already renders both, and a dialog on a 640x480 screen would
-        need scrolling it does not have. It also belongs in the transcript --
-        the answer depends on the mode, and the mode changes.
-        """
-        tools = list(TOOLS) + ["mcp__machine__exec"]
-        root = (guest.hello or {}).get("sync_root", "") or ""
-        await self._write_block(guest, perms.rules_view(
-            guest.perm_mode, tools, root))
 
 
     # --- running commands on the guest -------------------------------------
 
     async def _pre_exec(self, guest: GuestSession, command: str) -> None:
-        await self._ensure_work_dir(guest)
-        await self.ensure_sync_flush(guest, why=f"mcp exec: {command[:32]}")
-
-    async def run_on_guest(self, command: str, *, timeout_ms: int,
-                           shell: str, cwd: str,
-                           guest: "GuestSession | None" = None) -> dict:
-        return await self.guest_exec.run_on_guest(
-            command, timeout_ms=timeout_ms, shell=shell, cwd=cwd, guest=guest
-        )
-
-
-    async def ensure_sync_flush(self, guest: "GuestSession | None" = None,
-                                why: str = "mcp command") -> dict:
-        return await self.sync.ensure_sync_flush(guest, why=why)
-
-
-    async def run_sync(self, why: str, *, wait: bool = False,
-                       guest: "GuestSession | None" = None) -> dict:
-        return await self.sync.run_sync(why, wait=wait, guest=guest)
+        await self.workspace.ensure_work_dir(guest)
+        await self.sync.ensure_sync_flush(guest, why=f"mcp exec: {command[:32]}")
 
 
     #: How many passes in a row may be refused for a self-fixing reason
@@ -1126,39 +999,6 @@ class Bridge:
     #: user remembers choosing it.
     TRANSIENT_ABORT_GRACE = 3
 
-    def _base_path(self, guest: "GuestSession | None" = None) -> str:
-        return self._ensure_sync().base_path(guest)
-
-    def _current_guest_root(self, guest: "GuestSession | None" = None) -> str:
-        return self._ensure_sync().current_guest_root(guest)
-
-    def _load_baseline(self, guest: "GuestSession | None" = None):
-        return self._ensure_sync().load_baseline(guest)
-
-    def guest_work_root(self, guest: "GuestSession | None" = None) -> str:
-        """Where a command runs, spelled the way the guest spells it.
-
-        Reached from `agent/tools.py` to default `exec`'s cwd, which is why
-        it stays on the composition root: the MCP closure is handed a Bridge
-        on purpose (audit 04.1).
-        """
-        return self.workspace.guest_work_root(guest or self._guest)
-
-    def sync_status_text(self, guest: "GuestSession | None" = None) -> str:
-        return self._ensure_sync().sync_status_text(guest)
-
-    def _edits_outside_the_mirror(
-        self, guest: "GuestSession | None" = None, limit: int = 20
-    ) -> tuple[list[str], bool]:
-        return self._ensure_sync().edits_outside_the_mirror(guest, limit=limit)
-
-    async def sync_resolve(self, path: str, action: str,
-                           guest: "GuestSession | None" = None) -> str:
-        return await self._ensure_sync().sync_resolve(path, action, guest=guest)
-
-
-    def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
-        self.sync.fail_syncs(guest, why)
 
     #: The bridge's own ceiling on captured output. The guest caps at 32KB, and
     #: this is the same number with room to spare -- it exists because the cap
@@ -1182,53 +1022,19 @@ class Bridge:
 
 
     def _on_lost(self, guest: GuestSession) -> None:
-        self._fail_syncs(guest, "The connected machine disconnected mid-sync.")
-        self._fail_execs(
+        self.sync.fail_syncs(guest, "The connected machine disconnected mid-sync.")
+        self.guest_exec.fail_execs(
             guest,
             "The connected machine disconnected while this command was "
             "running. It may or may not have completed.",
         )
 
 
-    def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
-        self.guest_exec.fail_execs(guest, why)
-
-
-    async def _sweep_sync(self) -> None:
-        """The backstop trigger. See run_sync for why it exists.
-
-        Coalesced by run_sync's own lock, so a sweep that lands during a pass
-        the guest asked for costs a debug line and nothing else.
-        """
-        while True:
-            await asyncio.sleep(self.sync_sweep_s)
-            guest = self._guest
-            if self.sync_dir and guest is not None:
-                # Bound HERE as well as inherited from _attach's context.
-                # The inheritance is what 02.6 fixed; this is what keeps it
-                # true once a task started for one connection is still
-                # running during the next one -- and once R7 gives the bridge
-                # two guests on two codepages, it is the only thing that can
-                # be right.
-                self.connection.bind_codepages(guest)
-                await self.run_sync("the bridge's own sweep")
-
     def _ensure_background_tasks(self, guest: GuestSession) -> None:
         if self._reaper is None:
-            self._reaper = asyncio.create_task(self._reap_idle())
+            self._reaper = asyncio.create_task(self.connection.reap_idle())
         if self._sweeper is None and self.sync_dir:
-            self._sweeper = asyncio.create_task(self._sweep_sync())
-
-    async def _reap_idle(self) -> None:
-        await self.connection.reap_idle()
-
-
-    async def _send_options(self, guest: GuestSession) -> None:
-        await self.options.send_options(guest)
-
-
-    async def _set_effort(self, guest: GuestSession, effort: str) -> None:
-        await self.coordinator.set_effort(guest, effort)
+            self._sweeper = asyncio.create_task(self.sync.sweep_sync())
 
 
     # --- sending -------------------------------------------------------
@@ -1237,13 +1043,6 @@ class Bridge:
     # chunking -- lives in GuestLink (bridge/wire/link.py) now. These three
     # stay on Bridge, as thin delegations to guest.link, because both
     # syncrun.py's Pass and tests/python reach them by these names.
-
-    async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await self.connection.send(guest, frame)
-
-    async def _send_html(self, guest: GuestSession, html: str, mode: str,
-                         page_no: int) -> None:
-        await guest.link.send_html(guest, html, mode, page_no)
 
 
 def _summarise(args: dict) -> str:

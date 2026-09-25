@@ -133,7 +133,7 @@ def test_sync_status_explains_the_rules_to_the_agent(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
 
-    b = Bridge.__new__(Bridge)
+    b = Bridge("s", host="127.0.0.1", port=0)
     b.sync_dir = str(root)
     b.sync_state = str(state)
     # A conversation with a folder: without one nothing is mirrored and the
@@ -145,7 +145,7 @@ def test_sync_status_explains_the_rules_to_the_agent(tmp_path, monkeypatch):
     b._guest.guest_sync_root = "C:\\WORK"
     b._guest.last_sync_reports = []
     b.cwd = str(tmp_path)
-    text = b.sync_status_text()
+    text = b.sync.sync_status_text()
     assert "2 in force" in text
     assert ".gitattributes" in text
     assert "-text" in text and "eol=lf" in text

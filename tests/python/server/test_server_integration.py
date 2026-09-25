@@ -543,7 +543,7 @@ async def test_talking_to_a_chat_shares_no_files_at_all(harness, tmp_path):
     assert g.work_guest == "", "unset until a tool has run"
     assert g.work_dir == ""
     assert b.workspace.mirror_dir(g) == "", "no mirror without a committed folder"
-    assert b._current_guest_root() == ""
+    assert b.sync.current_guest_root() == ""
     assert await b.sync.run_sync("test") == {}, "no pass without a mirror"
     assert os.listdir(b.sync_dir) == [], "and no folder littered on disk"
     await harness.close(w)
@@ -913,7 +913,7 @@ async def test_mcp_exec_flushes_sync_and_sends_status_frame(harness, tmp_path):
 
     # Launch run_on_guest in background
     task = asyncio.create_task(
-        b.run_on_guest("wcl386 test.c", timeout_ms=5000, shell="", cwd="", guest=g)
+        b.guest_exec.run_on_guest("wcl386 test.c", timeout_ms=5000, shell="", cwd="", guest=g)
     )
 
     # Receive frames until EXEC
@@ -966,16 +966,16 @@ async def test_a_new_work_directory_gets_its_own_baseline(harness, tmp_path):
 
     # Nothing committed, nothing mirrored, so there is no root to key a
     # baseline on and the legacy file is what an unasked question returns.
-    assert b._base_path() == legacy
+    assert b.sync.base_path() == legacy
 
     await b._guest.claude.start_turn()      # SETWORK needs a conversation
     await harness.send(w, Frame("SETWORK", {"path": "C:\\WORK"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-    assert b._base_path() == legacy, "its own root keeps the legacy file"
+    assert b.sync.base_path() == legacy, "its own root keeps the legacy file"
 
     await harness.send(w, Frame("SETWORK", {"path": "C:\\Gaston\\OK"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-    other = b._base_path()
+    other = b.sync.base_path()
     assert other != legacy
     assert os.path.basename(other).startswith("base-")
     assert os.path.exists(legacy), "and the old one is not touched"
@@ -1916,7 +1916,7 @@ async def test_cancelling_a_turn_tells_the_guest_to_kill_the_command(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     task = asyncio.create_task(
-        harness.bridge.run_on_guest("dir /s c:\\", timeout_ms=60000,
+        harness.bridge.guest_exec.run_on_guest("dir /s c:\\", timeout_ms=60000,
                                     shell="", cwd=""))
     f = await _recv(harness, reader, "EXEC")
     exec_id = f.headers["id"]
@@ -1942,7 +1942,7 @@ async def test_exec_refuses_wire_overlong_cwd(harness):
     # 3 bytes + 85 * 2 bytes = 173 UTF-8 bytes (< 255)
     # Wire length: 3 + 85 * 3 = 258 bytes (> 255)
     long_cwd = "C:\\" + ("\xe9" * 85)
-    res = await harness.bridge.run_on_guest(
+    res = await harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="none", cwd=long_cwd
     )
     assert res.get("isError") is True
@@ -1966,7 +1966,7 @@ async def test_exec_is_never_re_delivered(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     task = asyncio.create_task(
-        harness.bridge.run_on_guest("ver", timeout_ms=5000, shell="", cwd=""))
+        harness.bridge.guest_exec.run_on_guest("ver", timeout_ms=5000, shell="", cwd=""))
     await _recv(harness, reader, "EXEC")
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -2000,7 +2000,7 @@ async def test_stop_kills_a_running_command(harness):
     await _recv(harness, reader, "OPTIONSEND")
 
     task = asyncio.create_task(
-        harness.bridge.run_on_guest("pause", timeout_ms=90000,
+        harness.bridge.guest_exec.run_on_guest("pause", timeout_ms=90000,
                                     shell="", cwd=""))
     f = await _recv(harness, reader, "EXEC")
     exec_id = f.headers["id"]
@@ -2027,7 +2027,7 @@ async def test_a_command_line_too_long_says_so_rather_than_spawn_failed(
     told it."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = asyncio.create_task(harness.bridge.run_on_guest("x" * 2000, timeout_ms=5000,
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("x" * 2000, timeout_ms=5000,
                                     shell="", cwd=""))
     req = await _recv(harness, reader, "EXEC")
     await harness.send(writer, Frame("EXECRESULT", {
@@ -2047,7 +2047,7 @@ async def test_output_is_capped_here_too_and_says_it_was(harness):
     the buffer for as long as the call has left to run."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = asyncio.create_task(harness.bridge.run_on_guest("dir", timeout_ms=5000,
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("dir", timeout_ms=5000,
                                     shell="", cwd=""))
     req = await _recv(harness, reader, "EXEC")
     eid = req.headers["id"]
@@ -2076,7 +2076,7 @@ async def test_guest_truncation_is_attributed_to_the_guest_not_the_bridge(
     but wrong whenever the bridge's own EXEC_OUT_MAX was the actual cause."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = asyncio.create_task(harness.bridge.run_on_guest("dir", timeout_ms=5000,
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("dir", timeout_ms=5000,
                                     shell="", cwd=""))
     req = await _recv(harness, reader, "EXEC")
     eid = req.headers["id"]
@@ -2098,7 +2098,7 @@ async def test_a_timed_out_command_is_reported_as_an_error(harness):
     failure."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = asyncio.create_task(harness.bridge.run_on_guest("pause", timeout_ms=5000,
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest("pause", timeout_ms=5000,
                                     shell="", cwd=""))
     req = await _recv(harness, reader, "EXEC")
     await harness.send(writer, Frame("EXECRESULT", {
@@ -2169,7 +2169,7 @@ async def test_an_overlong_cwd_is_refused_rather_than_clipped(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    got = await harness.bridge.run_on_guest(
+    got = await harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="", cwd="C:\\" + "d" * 300)
     text = got["content"][0]["text"]
     assert "too long" in text
@@ -2182,7 +2182,7 @@ async def test_an_ordinary_cwd_still_goes_through(harness):
     """The guard must not fire on the case it exists to protect."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = asyncio.create_task(harness.bridge.run_on_guest(
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
     req = await _recv(harness, reader, "EXEC")
     assert req.headers["cwd"] == "C:\\WORK"
@@ -2306,7 +2306,7 @@ async def test_an_oversized_block_is_truncated_not_split_mid_element(harness):
     guest = harness.bridge._guest
 
     huge = '<div class="tool">' + ("x" * 90_000) + "</div>"
-    await harness.bridge._send_html(guest, huge, srv.APPEND, 1)
+    await harness.bridge.connection.send_html(guest, huge, srv.APPEND, 1)
 
     got = await harness.recv_until(reader, {"TURN", "TEXT"}, timeout=3)
     texts = [f for f in got if f.type == "TEXT"]
@@ -2370,7 +2370,7 @@ async def test_a_command_the_wire_would_rewrite_is_refused(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
 
-    out = await harness.bridge.run_on_guest(
+    out = await harness.bridge.guest_exec.run_on_guest(
         "type c:\\work\u2044..\u2044windows\\win.ini",
         timeout_ms=5000, shell="", cwd="")
 
@@ -2388,7 +2388,7 @@ async def test_an_unrepresentable_cwd_is_refused(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
 
-    out = await harness.bridge.run_on_guest(
+    out = await harness.bridge.guest_exec.run_on_guest(
         "ver", timeout_ms=5000, shell="", cwd="c:\\w\u2502rk")
 
     assert out["isError"] is True
@@ -2403,7 +2403,7 @@ async def test_a_cp1252_command_still_runs(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
 
-    task = asyncio.create_task(harness.bridge.run_on_guest(
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "type c:\\caf\u00e9.txt", timeout_ms=5000, shell="", cwd=""))
     frame = await _recv(harness, reader, "EXEC")
     assert frame.body == b"type c:\\caf\xe9.txt"

@@ -1542,7 +1542,7 @@ async def test_continue_waits_for_the_pass_rather_than_racing_it(harness,
 
     guest.sync_lock.release()
     assert await asyncio.wait_for(task, 5) == 1
-    assert not harness.bridge._load_baseline().latched
+    assert not harness.bridge.sync.load_baseline().latched
     await harness.close(writer)
 
 
@@ -1561,13 +1561,13 @@ async def test_the_agents_resolve_waits_for_the_pass_too(harness, tmp_path):
 
     await guest.sync_lock.acquire()
     task = asyncio.create_task(
-        harness.bridge.sync_resolve("src/main.c", "release"))
+        harness.bridge.sync.sync_resolve("src/main.c", "release"))
     await asyncio.sleep(0.05)
     assert not task.done(), "sync_resolve did not wait for the pass"
 
     guest.sync_lock.release()
     assert "Released" in await asyncio.wait_for(task, 5)
-    assert not harness.bridge._load_baseline().latched
+    assert not harness.bridge.sync.load_baseline().latched
     await harness.close(writer)
 
 
@@ -1636,7 +1636,7 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
     harness.bridge.sync_state = os.path.dirname(p.state)
     state = os.path.join(harness.bridge.sync_state, "base.json")
 
-    base = harness.bridge._load_baseline()
+    base = harness.bridge.sync.load_baseline()
     base.latched["seen.c"] = "both sides moved"
     base.save(state)
     await harness.bridge.sync.raise_halt(guest, "Stopped: 1 conflicting edit.",
@@ -1644,7 +1644,7 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
     await _recv(harness, reader, "HALT")
 
     # A second conflict lands while the bar is up. No new bar: there is one.
-    base = harness.bridge._load_baseline()
+    base = harness.bridge.sync.load_baseline()
     base.latched["unseen.c"] = "both sides moved"
     base.save(state)
     await harness.bridge.sync.raise_halt(guest, "Stopped: 1 more.",
@@ -1654,7 +1654,7 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
                        Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
     await asyncio.sleep(0.15)
 
-    left = harness.bridge._load_baseline().latched
+    left = harness.bridge.sync.load_baseline().latched
     assert "unseen.c" in left, "released a path the user was never shown"
     assert "seen.c" not in left
     await harness.close(writer)
@@ -1822,10 +1822,10 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     # And the agent, which would otherwise keep reporting files as delivered.
     assert any("SYNC HAS STOPPED" in n
                for n in harness.bridge.synccoord.agent_notices)
-    assert harness.bridge._load_baseline().aborted
+    assert harness.bridge.sync.load_baseline().aborted
 
     # sync_status leads with it, because it makes everything else stale.
-    status = harness.bridge.sync_status_text()
+    status = harness.bridge.sync.sync_status_text()
     assert "SYNCHRONISATION IS STOPPED" in status
 
     # Second pass, same refusal: silent.
@@ -1865,7 +1865,7 @@ async def test_a_handover_is_not_announced_as_a_failure(harness, tmp_path):
     assert not harness.bridge.synccoord.agent_notices, (
         "the agent must not be told synchronisation has stopped for a "
         "handover that fixes itself")
-    assert not harness.bridge._load_baseline().aborted
+    assert not harness.bridge.sync.load_baseline().aborted
 
 
 async def test_a_handover_that_never_ends_is_announced(harness, tmp_path):
@@ -1909,7 +1909,7 @@ async def test_recovery_is_announced_too(harness, tmp_path):
     await fake_scan(harness, reader, writer, {})
     got = await asyncio.wait_for(task, 10)
     assert got.get("recovered") == "something stopped it earlier"
-    assert not harness.bridge._load_baseline().aborted
+    assert not harness.bridge.sync.load_baseline().aborted
     assert any("working again" in n for n in got["notices"]), got["notices"]
     await harness.close(writer)
 
@@ -2054,13 +2054,13 @@ async def test_continue_unlatches_only_once_the_wire_is_free(harness, tmp_path):
     await _recv(harness, reader, "HALTEND")
     await asyncio.sleep(0.1)
 
-    assert harness.bridge._load_baseline().latched, (
+    assert harness.bridge.sync.load_baseline().latched, (
         "unlatched while a turn that was never told about it is still running")
 
     live.set()
     await asyncio.wait_for(running, 5)
     await asyncio.sleep(0.2)
-    assert not harness.bridge._load_baseline().latched, (
+    assert not harness.bridge.sync.load_baseline().latched, (
         "never unlatched once the wire was free")
     await harness.close(writer)
 
@@ -2222,7 +2222,7 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
         f"each distinct reason once, then silence -- got {said}")
 
     # And a pass that works clears the slate, so a later failure is news.
-    base = harness.bridge._load_baseline()
+    base = harness.bridge.sync.load_baseline()
     base.announced = []
     base.aborted = ""
     base.save(os.path.join(harness.bridge.sync_state, "base.json"))

@@ -7,7 +7,7 @@ the whole object graph, and a method deleted from Bridge breaks it at runtime
 rather than at import.
 
 WHY THIS TEST EXISTS. `agent/tools.py` used to be handed the Bridge and call
-`bridge.guest_work_root(...)`, `bridge.run_on_guest(...)` and two more. That
+`bridge.workspace.guest_work_root(...)`, `bridge.guest_exec.run_on_guest(...)` and two more. That
 worked only because Bridge forwarded each one to a service. When the services
 stopped being reached through it, the closure was left calling methods the
 object it had been handed no longer had -- and nothing failed. The unit tests

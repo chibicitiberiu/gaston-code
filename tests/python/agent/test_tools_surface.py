@@ -96,12 +96,18 @@ def test_the_tools_are_bound_to_a_guest_not_just_the_bridge():
     assert "guest" in sig.parameters, \
         "tools.build must take the guest its tools address"
 
-    from bridge.server import Bridge
-    for name in ("run_on_guest", "sync_status_text", "sync_resolve"):
-        params = inspect.signature(getattr(Bridge, name)).parameters
+    # The operations moved off Bridge and onto the services that own them,
+    # but the invariant is the same one: whoever runs a command has to be
+    # TOLD which machine, not left to resolve "whichever is attached".
+    from bridge.services.guest_exec import GuestExecService
+    from bridge.services.sync import SyncService
+    for svc, name in ((GuestExecService, "run_on_guest"),
+                      (SyncService, "sync_status_text"),
+                      (SyncService, "sync_resolve")):
+        params = inspect.signature(getattr(svc, name)).parameters
         assert "guest" in params, (
-            f"Bridge.{name} still resolves the guest itself, so the tool "
-            f"cannot say which machine it means")
+            f"{svc.__name__}.{name} still resolves the guest itself, so the "
+            f"tool cannot say which machine it means")
 
 
 # --- a tool description is unconditional -----------------------------------

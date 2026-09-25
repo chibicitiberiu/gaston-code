@@ -210,7 +210,7 @@ async def test_fakegui_answers_a_halt_end_to_end(harness):
 
 
 async def test_fakegui_runs_exec_end_to_end(harness):
-    """Drives a real EXEC through bridge.run_on_guest and lets the real
+    """Drives a real EXEC through bridge.guest_exec.run_on_guest and lets the real
     FakeGui's own RPC handling answer it by actually running a subprocess
     and streaming EXECOUT/EXECRESULT back -- the whole tool-call path,
     through the fake client, for the first time."""
@@ -220,7 +220,7 @@ async def test_fakegui_runs_exec_end_to_end(harness):
     try:
         await _wait_attached(harness)
         result = await asyncio.wait_for(
-            harness.bridge.run_on_guest("echo hello-from-fakegui",
+            harness.bridge.guest_exec.run_on_guest("echo hello-from-fakegui",
                                         timeout_ms=5000, shell="", cwd=""),
             10)
         text = result["content"][0]["text"]

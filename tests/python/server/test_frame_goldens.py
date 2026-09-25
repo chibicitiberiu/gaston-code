@@ -84,7 +84,7 @@ async def test_golden_02_full_turn_with_perm_and_exec(harness):
         )
         perm = await claude.can_use_tool("Bash", {"command": "vol c:"}, ctx)
         if isinstance(perm, PermissionResultAllow):
-            res = await harness.bridge.run_on_guest(
+            res = await harness.bridge.guest_exec.run_on_guest(
                 "vol c:",
                 timeout_ms=5000,
                 shell="",
