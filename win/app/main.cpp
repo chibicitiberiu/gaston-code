@@ -16,6 +16,8 @@
 #include "net/frameproto.h"
 #include "app/config.h"
 #include "core/app.h"
+#include "app/oleservice.h"
+#include "app/connservice.h"
 #include "core/log.h"
 #include "core/path.h"
 #include "core/str.h"
@@ -1759,41 +1761,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
  * because each can end the process before there is anything to stop.
  */
 
-/* The OLE apartment MSHTML needs. OleInitialize, not CoInitialize: in-place
- * activation of an embedded control needs the full OLE apartment. Registered
- * first, so it is torn down last, after the window has released MSHTML. */
-class OleService : public Service
-{
-public:
-    OleService() : m_up(false) {}
-    const char *name() const { return "ole"; }
-
-    bool init()
-    {
-        if (FAILED(OleInitialize(NULL)))
-        {
-            rc_log("OleInitialize failed");
-            MessageBoxA(NULL, "OLE could not start.", RC_TITLE,
-                        MB_OK | MB_ICONERROR);
-            return false;
-        }
-        m_up = true;
-        return true;
-    }
-
-    bool join(DWORD timeoutMs)
-    {
-        (void)timeoutMs;
-        if (m_up)
-            OleUninitialize();
-        m_up = false;
-        return true;
-    }
-
-private:
-    bool m_up;
-};
-
 /* The main window: class, window, children (WM_CREATE), accelerators, and
  * the keys the message loop handles before dispatch. Destroying it in join()
  * runs WM_DESTROY, which deletes the children. */
@@ -1958,28 +1925,6 @@ private:
     int m_show;
 };
 
-/* The bridge connection. rc_reconnect starts it from the UI; this service
- * owns stopping it, which App does before the window it posts to is
- * destroyed. rc_net_stop bounds and times its own joins (up to about 42 s)
- * and leaks what did not stop, so join() always reports done. */
-class ConnectionService : public Service
-{
-public:
-    explicit ConnectionService(rc_net *net) : m_net(net) {}
-    const char *name() const { return "connection"; }
-    bool init() { return true; }
-
-    bool join(DWORD timeoutMs)
-    {
-        (void)timeoutMs;
-        rc_net_stop(m_net);
-        return true;
-    }
-
-private:
-    rc_net *m_net;
-};
-
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     INITCOMMONCONTROLSEX icc;
@@ -2099,7 +2044,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
      * refuses, so each service is allocated only once the one before it is
      * in, and nothing is left unowned on a failure. */
     g_app = App::create(inst);
-    bool built = g_app && g_app->addService(new OleService());
+    bool built = g_app && g_app->addService(new OleService(RC_TITLE));
     MainWindow *window = built ? new MainWindow(inst, show) : 0;
     built = built && g_app->addService(window) &&
             g_app->addMessageFilter(window) &&

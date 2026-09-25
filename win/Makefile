@@ -98,7 +98,7 @@ CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
-       app/config.cpp \
+       app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
