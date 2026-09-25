@@ -456,6 +456,15 @@ bool Connection::connect(const char *host, int port)
         return false;
     }
 
+    m_build.reset((char *)HeapAlloc(GetProcessHeap(), 0, BUILD_CAP));
+    if (!m_build.valid())
+    {
+        rc_log("net: no memory for the %u byte build buffer",
+               (unsigned)BUILD_CAP);
+        setState(RC_FAILED);
+        return false;
+    }
+
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(1, 1), &wsa) != 0)
     {
@@ -766,16 +775,6 @@ int Connection::send(const char *type, const char *const *keys,
                      const char *const *vals, int nkv, const void *body,
                      unsigned bodyLen, int waitTicks, bool compressible)
 {
-    /* SHARED by every Connection, serialised by ITS OWN lock only -- so two
-     * live connections would race over it. There is one today; step 2b-d
-     * makes it per-connection before gremote can have two.
-     *
-     * 66,560 bytes committed at load, the single largest static in the
-     * image. The largest frame actually built is SYNCENT at 63,488 plus
-     * headers, and rc_frame_build refuses anything over RC_MAX_FRAME, so
-     * the + 1024 of slack is roughly 1020 bytes more than can ever be used.
-     * BACKLOG.md 2 owns the memory pass. */
-    static char build[RC_MAX_FRAME + 1024];
     int waited = 0;
 
     if (!m_running || !m_sock.valid())
@@ -847,7 +846,16 @@ int Connection::send(const char *type, const char *const *keys,
             }
         }
 
-        int total = rc_frame_build(build, sizeof(build), type, useKeys,
+        /* THE CONNECTION'S OWN build buffer, under its own lock. It was a
+         * function static -- 66,560 bytes committed at load, the largest
+         * static in the image, and shared by every Connection while each
+         * locked only itself, which two live connections would have raced
+         * over. Per connection it is heap, made by connect() and only while
+         * a link exists. The largest frame actually built is SYNCENT at
+         * 63,488 plus headers, so the + 1024 of slack is about 1020 bytes
+         * more than is ever used; BACKLOG.md 2 owns trimming it. */
+        char *build = m_build.get();
+        int total = rc_frame_build(build, BUILD_CAP, type, useKeys,
                                    useVals, useNkv, sendBody, sendLen);
         if (total < 0)
         {
@@ -1034,6 +1042,7 @@ bool Connection::release(bool othersGone)
             m_lockUp = false;
             m_wake.reset();
             m_room.reset();
+            m_build.reset();
         }
         else
         {
@@ -1043,6 +1052,7 @@ bool Connection::release(bool othersGone)
                    othersGone ? 1 : 0);
             m_wake.release();
             m_room.release();
+            m_build.release();
         }
     }
 

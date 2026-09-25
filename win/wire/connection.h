@@ -114,6 +114,8 @@ private:
     Connection &operator=(const Connection &);
 
     struct OutItem;
+    /* The largest frame rc_frame_build will make, plus its slack. */
+    enum { BUILD_CAP = RC_MAX_FRAME + 1024 };
     class Codec;
 
     static unsigned __stdcall readerEntry(void *self);
@@ -140,6 +142,9 @@ private:
     unsigned m_queued;
     Handle m_wake;              /* the sender waits on this */
     Handle m_room;              /* a full-queue writer waits on this */
+    /* Where send() encodes a frame before copying it onto the queue; under
+     * m_lock like the queue. BUILD_CAP bytes, allocated by connect(). */
+    HeapPtr<char> m_build;
     volatile LONG m_running;
     unsigned long m_rxBytes;
     unsigned long m_txBytes;

@@ -338,7 +338,14 @@ class HeapPtr {
     HeapPtr &operator=(const HeapPtr &);
 public:
     explicit HeapPtr(T *v = 0) : p(v) {}
-    ~HeapPtr() { if (p) HeapFree(GetProcessHeap(), 0, p); }
+    ~HeapPtr() { reset(); }
+    /* Local first, as Unique::reset does. */
+    void reset(T *v = 0)
+    {
+        T *old = p;
+        p = v;
+        if (old) HeapFree(GetProcessHeap(), 0, old);
+    }
     T *get() const { return p; }
     T *operator->() const { return p; }
     int valid() const { return p != 0; }
