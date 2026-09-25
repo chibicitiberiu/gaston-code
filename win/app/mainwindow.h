@@ -30,6 +30,16 @@
 
 #include "app/title.h"
 
+/* The children MainWindow holds by pointer; their headers stay out of this
+ * one. */
+class rc_html;
+class rc_xferstat;
+class rc_toolbar;
+class rc_export;
+class rc_cache;
+class rc_pagebar;
+class rc_statusbar;
+
 /* The window class. WinMain's single-instance check finds the running copy
  * by it, so it is named once, here. */
 #define RC_MAIN_CLASS "RetroClaudeWnd"
@@ -94,8 +104,56 @@ private:
     MainWindow(const MainWindow &);
     MainWindow &operator=(const MainWindow &);
 
+    void buildMenu(HWND hwnd);
+    void refreshEnables();
+    void onReady(rc_frame *f);
+    void onDoc(rc_frame *f);
+    void onText(rc_frame *f);
+    void onTool(rc_frame *f);
+    void onTurn(rc_frame *f);
+    void onOptions(rc_frame *f);
+    void onChats(rc_frame *f);
+    void onPageBar(rc_frame *f);
+    void onAnchor(rc_frame *f);
+    void onBar(rc_frame *f);
+    void onError(rc_frame *f);
+    void onNotice(rc_frame *f);
+    void onStatus(rc_frame *f);
+    void onExport(rc_frame *f);
+    void onPong(rc_frame *f);
+    void renderFrame(rc_frame *f);
+    void layout(HWND hwnd);
+    void createChildren(HWND hwnd, HINSTANCE inst);
+    void handleAttachPath(HWND hwnd, const char *path);
+
     HINSTANCE m_inst;
     int m_show;
+    /* Owned by the app and handed in; they outlive this window. */
+    ClientConfig *m_cfg;
+    ConfigStore *m_store;
+    App *m_app;
+    rc_net *m_net;
+    /* The children, created in WM_CREATE and deleted in WM_DESTROY. */
+    rc_html *m_html;
+    PermissionBar *m_bar;
+    ChatList *m_chats;
+    rc_xferstat *m_xfer;
+    ComposeBox *m_input;
+    AttachmentBar *m_attachments;
+    rc_toolbar *m_toolbar;
+    rc_export *m_export;
+    rc_cache *m_cache;
+    int m_cacheShown;
+    HACCEL m_accel;
+    OptionMenus *m_options;
+    rc_pagebar *m_pageBar;
+    int m_announceConnected;
+    rc_statusbar *m_status;
+    Reconnector *m_reconnector;
+    Turn *m_turn;
+    HFONT m_uiFont;
+    HFONT m_uiFontBold;
+    const char *m_exeDir;
 };
 
 #endif

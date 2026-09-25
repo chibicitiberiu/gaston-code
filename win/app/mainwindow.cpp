@@ -85,36 +85,18 @@
 
 /* Owned by WinMain and handed to MainWindow's constructor, which points
  * these at them. */
-static ClientConfig *g_cfg;
-static ConfigStore  *g_store;
-static App          *g_app;
 /* The one MainWindow, for the modules WM_CREATE hands it to as their
  * listener. Set by the constructor; goes when the statics become members. */
-static MainWindow   *g_window;
-static rc_net       *g_net;
-static rc_html *g_html;
-static PermissionBar *g_bar;
-static ChatList *g_chats;
-static rc_xferstat *g_xfer;
-static ComposeBox  *g_inputmod;
-static AttachmentBar *g_pillbar;
-static rc_toolbar  *g_toolbar;
 /* The export sink. One instance, created in create_children and destroyed
  * in WM_DESTROY, the same shape as g_html -- see app/export.h. */
-static rc_export   *g_export;
 /* The on-disk transcript cache -- see app/cache.h. One instance, created in
  * create_children and destroyed in WM_DESTROY, the same shape as g_html. */
-static rc_cache    *g_cache;
 /* Has the cached transcript already been put on screen for this outage? The
  * reconnect timer fires every few seconds while the bridge is down, and
  * restoring on each one would clear and redraw the transcript under someone
  * who is reading it. */
-static int          g_cache_shown;
 /* The accelerator table. Loaded once in WinMain; owned by the module, so it
  * is not destroyed (DestroyAcceleratorTable is for CreateAcceleratorTable). */
-static HACCEL       g_accel;
-static OptionMenus *g_optmenu;
-static rc_pagebar *g_pagebar;
 /* "Connected to bridge." is announced AFTER the page that follows READY, not
  * before it.
  *
@@ -128,11 +110,6 @@ static rc_pagebar *g_pagebar;
  * not exist yet, so the notice goes into the pre-ready queue, and clear()
  * zeroes that queue too. Announcing after PAGEEND is the one point that is
  * past both. */
-static int      g_announce_connected;
-static HWND          g_main;
-static rc_statusbar *g_status;
-static Reconnector *g_reconn;
-static Turn         *g_turn;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
@@ -158,12 +135,6 @@ static Turn         *g_turn;
  * created in create_children and destroyed in WM_DESTROY, the same shape as
  * g_html. */
 
-static void layout(HWND hwnd);
-static int  ui_send(const char *what, const char *type,
-                    const char *const *keys, const char *const *vals,
-                    int nkv, const void *body, unsigned body_len);
-static int  ui_send_text(const char *text, int compose);
-static void cache_restore(void);
 
 /* app/workdlg.h's `propose` callback. The dialog calls this ITSELF, between
  * the copy and the wait, so one progress window covers both halves of what
@@ -172,7 +143,7 @@ static void cache_restore(void);
  * A PROPOSAL, not the change. The bridge records it against the conversation
  * and sends it back in the next OPTION batch, which is what makes it real on
  * this side -- see app/workdir.h for why the authority runs that way. */
-static void propose_workdir(const char *path, int staged)
+void MainWindow::proposeWorkDir(const char *path, bool staged)
 {
     const char *keys[2], *vals[2];
     if (!path || !*path) return;
@@ -183,34 +154,30 @@ static void propose_workdir(const char *path, int staged)
      * Gaston-Incoming and nothing ever asks anyone to reconcile them, which
      * makes that answer do half of what its label says. */
     keys[1] = "staged"; vals[1] = staged ? "merge" : "";
-    ui_send("The work directory change", "SETWORK", keys, vals, 2, NULL, 0);
+    sendFrame("The work directory change", "SETWORK", keys, vals, 2, NULL, 0);
 }
 
 /* Pagination state moved to app/pagebar.cpp -- see app/pagebar.h. g_pagebar
  * is the one instance, created in create_children and destroyed in
  * WM_DESTROY, the same shape as g_html. */
-static HFONT g_ui_font;
-static HFONT g_ui_font_bold;
-static const char *g_exe_dir;
 /* WinMain's HINSTANCE, kept because the Server Host dialog needs it and
  * DialogBoxIndirectParam is called from a WM_COMMAND handler that has no
  * other way to reach it. */
-static HINSTANCE g_inst;
 
 
 /* ------------------------------------------------------------------ utils */
 
 
-#define status_set(pane, text) do { if (g_status) g_status->set_pane(pane, text); } while (0)
+#define status_set(pane, text) do { if (m_status) m_status->set_pane(pane, text); } while (0)
 
-static void status_refresh(void)
+void MainWindow::refreshStatus()
 {
-    if (g_status)
-        g_status->refresh(g_net->state, g_cfg->host, (int)g_cfg->port, g_xfer,
-                          g_turn ? g_turn->active() : 0,
-                          g_turn ? g_turn->startMs() : 0,
-                          g_turn ? (int)g_turn->state() : (int)TURN_IDLE,
-                          g_bar && g_bar->active(), g_html);
+    if (m_status)
+        m_status->refresh(m_net->state, m_cfg->host, (int)m_cfg->port, m_xfer,
+                          m_turn ? m_turn->active() : 0,
+                          m_turn ? m_turn->startMs() : 0,
+                          m_turn ? (int)m_turn->state() : (int)TURN_IDLE,
+                          m_bar && m_bar->active(), m_html);
 }
 
 /* Free physical memory, as the system sees it.
@@ -224,7 +191,7 @@ static void status_refresh(void)
 
 /* Build the menu bar in code rather than from a resource: it is a dozen
  * items, and the two interesting menus are filled in at runtime anyway. */
-static void build_menu(HWND hwnd)
+void MainWindow::buildMenu(HWND hwnd)
 {
     HMENU bar = CreateMenu();
     HMENU file = CreatePopupMenu();
@@ -248,7 +215,7 @@ static void build_menu(HWND hwnd)
     /* The Model and Effort popups: created and appended to `bar` by
      * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
      * so the menu order is unchanged. */
-    g_optmenu = OptionMenus::create(hwnd, bar, g_window, g_window);
+    m_options = OptionMenus::create(hwnd, bar, this, this);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
 }
@@ -259,10 +226,10 @@ static void build_menu(HWND hwnd)
  * client, which kills a running request; ask rather than doing it silently
  * -- a click in the list is easy to make by accident and the reply that is
  * lost took real time to produce. */
-static int chats_confirm(void)
+bool MainWindow::confirmSwitch()
 {
-    return !(g_turn && g_turn->active())
-        || MessageBoxA(g_main,
+    return !(m_turn && m_turn->active())
+        || MessageBoxA(Window::hwnd(),
                        "A request is still running.\n\n"
                        "Opening another conversation will stop it. Continue?",
                        RC_TITLE, MB_YESNO | MB_ICONQUESTION) == IDYES;
@@ -272,9 +239,9 @@ static int chats_confirm(void)
  * to go out on the wire. Loading a conversation means closing the live
  * client, resuming, and replaying its history, which is not instant. Say so
  * rather than looking frozen. */
-static void chats_switching(void)
+void MainWindow::onSwitching()
 {
-    SetWindowTextA(g_main, RC_TITLE "  -  loading...");
+    SetWindowTextA(Window::hwnd(), RC_TITLE "  -  loading...");
     status_set(2, " loading conversation...");
 }
 
@@ -287,7 +254,7 @@ static void chats_switching(void)
  * app/bar.h): showing, hiding or relabelling the bar never touches
  * g_turn_active, but always wants Send's enabled state re-checked against
  * blocks_send(). */
-static void ui_refresh_enables(void)
+void MainWindow::refreshEnables()
 {
     /* A pending permission request blocks Send too. That is the one property
      * a modal dialog would have given us: the request cannot be ignored.
@@ -298,38 +265,38 @@ static void ui_refresh_enables(void)
      * has wedged, and it is how the cancellation path gets exercised at all --
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
-    int active = g_turn && g_turn->active();
-    if (g_inputmod) g_inputmod->enableSend((active || (g_bar && g_bar->blocksSend()))
+    int active = m_turn && m_turn->active();
+    if (m_input) m_input->enableSend((active || (m_bar && m_bar->blocksSend()))
                           ? 0 : 1);
-    if (g_inputmod) g_inputmod->enableStop(active);
+    if (m_input) m_input->enableStop(active);
 }
 
-static void ui_set_busy(int busy)
+void MainWindow::setBusy(bool busy)
 {
     (void)busy;
-    ui_refresh_enables();
+    refreshEnables();
 }
 
 /* app/input.h's `blocked`/`sent` callbacks: do_send's own guard (checked
  * again because Enter reaches do_send directly, bypassing whatever
  * EnableWindow last set) and what runs after a typed INPUT has actually
  * gone out. */
-static int input_blocked(void)
+bool MainWindow::isSendBlocked()
 {
-    return (g_turn && g_turn->active()) || (g_bar && g_bar->blocksSend());
+    return (m_turn && m_turn->active()) || (m_bar && m_bar->blocksSend());
 }
 
-static void pillbar_detached(void)
+void MainWindow::onAttachmentsChanged()
 {
-    if (g_main) layout(g_main);
+    if (Window::hwnd()) layout(Window::hwnd());
 }
 
-static void input_sent(void)
+void MainWindow::onSent()
 {
-    if (g_turn) g_turn->noteInput();
-    status_refresh();
-    ui_set_busy(1);
-    if (g_main) layout(g_main);
+    if (m_turn) m_turn->noteInput();
+    refreshStatus();
+    setBusy(1);
+    if (Window::hwnd()) layout(Window::hwnd());
 }
 
 /* ------------------------------------------------------- permission bar */
@@ -340,10 +307,10 @@ static void input_sent(void)
  * showing the controls. This replaces bar_layout() + ui_set_busy(g_turn_active)
  * being called together, by hand, at every one of the bar's own show/hide
  * sites -- there is now exactly one place that pairing can be forgotten. */
-static void bar_changed(void)
+void MainWindow::onBarChanged()
 {
-    if (g_main) layout(g_main);
-    ui_refresh_enables();
+    if (Window::hwnd()) layout(Window::hwnd());
+    refreshEnables();
     /* THE KEYBOARD GOES BACK TO THE INPUT BOX when the bar comes down.
      *
      * show() hides the buttons, and Win32 does not reassign focus when the
@@ -356,9 +323,9 @@ static void bar_changed(void)
      * focus belongs; the bar has no business naming the input box. Only when
      * the bar is actually down, and only if focus is not already somewhere
      * the user put it deliberately. */
-    if (g_bar && !g_bar->active() && g_inputmod) {
+    if (m_bar && !m_bar->active() && m_input) {
         HWND f = GetFocus();
-        if (!f || f == g_main) g_inputmod->focus();
+        if (!f || f == Window::hwnd()) m_input->focus();
     }
 }
 
@@ -371,13 +338,13 @@ static void bar_changed(void)
  * why it must be checked sat above the Continue button while the bar's own
  * reply helper (now bar.cpp's bar_reply) -- the same bar, the other three
  * buttons -- did not check at all. */
-static int ui_send(const char *what, const char *type,
+bool MainWindow::sendFrame(const char *what, const char *type,
                    const char *const *keys, const char *const *vals, int nkv,
                    const void *body, unsigned body_len)
 {
     /* The UI budget, not the bulk one: this runs on the window thread and the
      * message pump does not run while it waits. See RC_SEND_WAIT_UI. */
-    int rc = rc_net_send_ui(g_net, type, keys, vals, nkv, body, body_len);
+    int rc = rc_net_send_ui(m_net, type, keys, vals, nkv, body, body_len);
     if (rc == RC_SEND_OK)
         return 1;
     rc_log("ui: %s (%s) did not reach the bridge (%s)", what, type,
@@ -402,7 +369,7 @@ static int ui_send(const char *what, const char *type,
                     "%s could not be sent -- the connection is down. It will "
                     "not have taken effect. Try again once it reconnects.",
                     what);
-        if (g_html) g_html->error(msg);
+        if (m_html) m_html->error(msg);
     }
     return 0;
 }
@@ -416,10 +383,10 @@ static int ui_send(const char *what, const char *type,
  * menus (create_children runs at WM_CREATE, build_menu at its top), so this
  * can be called before g_inputmod exists only if a frame arrives first,
  * which cannot happen -- guarded anyway. */
-static int ui_send_text(const char *text, int compose)
+bool MainWindow::submitCommand(const char *text, bool compose)
 {
-    if (!g_inputmod) return 0;
-    return compose ? g_inputmod->compose(text) : g_inputmod->sendText(text);
+    if (!m_input) return 0;
+    return compose ? m_input->compose(text) : m_input->sendText(text);
 }
 
 /* ------------------------------------------------------------ frame render */
@@ -435,33 +402,33 @@ static int ui_send_text(const char *text, int compose)
  * frameproto.h's own "four lanes" table already uses one layer down. A
  * linear walk of it is no slower than the chain it replaces, and it is one
  * place to read the full list of frame types this binary understands. */
-typedef void (*rc_frame_fn)(rc_frame *f);
+typedef void (MainWindow::*FrameHandler)(rc_frame *f);
 
-static void on_ready(rc_frame *f)
+void MainWindow::onReady(rc_frame *f)
 {
     const char *v;
     v = rc_frame_get(f, "sess");
-    if (v) rc_strf(g_net->sess, sizeof(g_net->sess), "%s", v);
+    if (v) rc_strf(m_net->sess, sizeof(m_net->sess), "%s", v);
     /* page/total (if present), marking the session live, and the button
      * refresh that follows are app/pagebar.cpp's business now -- see
      * app/pagebar.h's rc_pagebar::note_ready. */
-    if (g_pagebar) g_pagebar->note_ready(f);
-    if (g_chats) g_chats->request();
-    if (g_reconn) g_reconn->onConnected();
+    if (m_pageBar) m_pageBar->note_ready(f);
+    if (m_chats) m_chats->request();
+    if (m_reconnector) m_reconnector->onConnected();
     v = rc_frame_get(f, "model");
-    rc_log("ready: sess=%s model=%s", g_net->sess, v ? v : "?");
+    rc_log("ready: sess=%s model=%s", m_net->sess, v ? v : "?");
     /* A reconnect gets a fresh transcript from the bridge, so whatever was
      * restored from the cache during the outage is about to be replaced by
      * the real thing. Re-arm for the NEXT outage. */
-    g_cache_shown = 0;
+    m_cacheShown = 0;
     /* WHICH conversation, not which connection. `sess` above is the
      * per-connection handle and is never a conversation id; `conv` is the
      * one the transcript arriving next belongs to. Without this, a plain
      * reconnect cached nothing at all -- only a SWITCHED told the cache
      * where to put pages, and a reconnect does not send one. */
     v = rc_frame_get(f, "conv");
-    if (g_cache) g_cache->open_session(v ? v : "");
-    g_announce_connected = 1;
+    if (m_cache) m_cache->open_session(v ? v : "");
+    m_announceConnected = 1;
     /* READY carries page/total for the session as it stands. goto_live()
      * re-requests the live page explicitly, which clears the control
      * (PAGESTART) and repopulates it from what the bridge now has -- cheap
@@ -470,83 +437,83 @@ static void on_ready(rc_frame *f)
      *
      * It is also what used to eat the "Connected to bridge." notice this
      * handler wrote one line earlier; see g_announce_connected. */
-    if (g_pagebar) g_pagebar->goto_live();
-    status_refresh();
+    if (m_pageBar) m_pageBar->goto_live();
+    refreshStatus();
 }
 
-static void on_doc(rc_frame *f)
+void MainWindow::onDoc(rc_frame *f)
 {
-    if (g_turn) g_turn->onDoc(f);
+    if (m_turn) m_turn->onDoc(f);
 }
 
-static void on_text(rc_frame *f)
+void MainWindow::onText(rc_frame *f)
 {
-    if (g_turn) g_turn->onText(f);
+    if (m_turn) m_turn->onText(f);
 }
 
-static void on_tool(rc_frame *f)
+void MainWindow::onTool(rc_frame *f)
 {
-    if (g_turn) g_turn->onTool(f);
+    if (m_turn) m_turn->onTool(f);
 }
 
-static void on_turn(rc_frame *f)
+void MainWindow::onTurn(rc_frame *f)
 {
-    if (g_turn) g_turn->onTurn(f);
+    if (m_turn) m_turn->onTurn(f);
 }
 
 /* OPTION, OPTIONSEND -- both owned by app/optmenu.cpp now; see
  * OptionMenus::frame's own comments there for what each one does. */
-static void on_optmenu(rc_frame *f)
+void MainWindow::onOptions(rc_frame *f)
 {
-    if (g_optmenu) g_optmenu->frame(f);
+    if (m_options) m_options->frame(f);
     /* The work directory arrives in this batch like the model and the mode,
      * and THIS is what makes it real on this side: the sync layer is
      * re-pointed at it, the watcher follows, and the folder is created if it
      * has never existed. Called on every batch because rc_workdir_apply
      * returns without touching anything when the path has not changed. */
-    if (g_optmenu && strcmp(f->type, "OPTIONSEND") == 0) {
-        const char *want = g_optmenu->workPath();
-        if (!rc_workdir_apply(want) && want && *want && g_html) {
+    if (m_options && strcmp(f->type, "OPTIONSEND") == 0) {
+        const char *want = m_options->workPath();
+        if (!rc_workdir_apply(want) && want && *want && m_html) {
             char msg[256];
             rc_strf(msg, sizeof(msg),
                     "Could not use %s as the work directory. Files will not "
                     "be shared until this is fixed.", want);
-            g_html->error(msg);
+            m_html->error(msg);
         }
     }
     /* The toolbar shows the ticked entries as its button text, so it has to
      * be told when a batch lands. Cheap enough to do on every OPTION row
      * rather than only OPTIONSEND: re-labelling is two TB_SETBUTTONINFO
      * calls and the batch is a handful of frames once per session. */
-    if (g_toolbar) g_toolbar->refresh();
+    if (m_toolbar) m_toolbar->refresh();
 }
 
 /* app/chatlist.h's `switched` callback: a SWITCHED frame has already been
  * folded into the chat list's own bookkeeping (the newly-open conversation
  * marked and redrawn) -- this is everything about SWITCHED that is not the
  * chat list's business. */
-static void chats_switched(rc_frame *f)
+void MainWindow::onSwitched(rc_frame *f)
 {
     /* THE SINGLE WRITER of net.sess. app/chatlist.cpp used to write it from
      * on_switched, which is the window thread -- while the connect path reads
      * it when building HELLO. One writer, here, on the thread that owns the
      * rest of the connection's state. */
     const char *sid = rc_frame_get(f, "id");
-    if (sid) rc_strf(g_net->sess, sizeof(g_net->sess), "%s", sid);
+    if (sid) rc_strf(m_net->sess, sizeof(m_net->sess), "%s", sid);
     /* A prompt belongs to the session that raised it, and switching
      * rebuilds the session -- the bridge denies anything pending as
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
      * that no longer exists, on a conversation the user has left. */
-    if (g_bar) g_bar->hideAll();
+    if (m_bar) m_bar->hideAll();
     /* The page total is app/pagebar.cpp's state now -- see app/pagebar.h's
      * rc_pagebar::note_total. No button refresh here, matching what this
      * call site always did. */
-    if (g_pagebar) g_pagebar->note_total(f);
+    if (m_pageBar) m_pageBar->note_total(f);
     /* SWITCHED is the only frame that names the conversation now on screen,
      * so it is where the cache learns which folder its pages belong in. The
      * pages themselves arrive immediately afterwards. */
-    if (g_cache) g_cache->open_session(rc_frame_get(f, "id"));
-    SetWindowTextA(g_main, RC_TITLE);
+    if (m_cache) m_cache->open_session(rc_frame_get(f, "id"));
+    SetWindowTextA(Window::hwnd(), RC_TITLE);
     status_set(2, "");
 }
 
@@ -564,12 +531,12 @@ static void chats_switched(rc_frame *f)
  * file being written one line at a time anyway. Four headers per row, not
  * the framing, because ChatList::addRow is the path a cached row takes back
  * in and it wants values, not frames. */
-static void on_chats(rc_frame *f)
+void MainWindow::onChats(rc_frame *f)
 {
-    if (g_chats) g_chats->frame(f);
+    if (m_chats) m_chats->frame(f);
 
     if (strcmp(f->type, "SESSIONS") == 0) {
-        if (g_cache) g_cache->begin_chats();
+        if (m_cache) m_cache->begin_chats();
     } else if (strcmp(f->type, "SESSION") == 0) {
         const char *id = rc_frame_get(f, "id");
         const char *title = rc_frame_get(f, "title");
@@ -582,8 +549,8 @@ static void on_chats(rc_frame *f)
         rc_strf(line, sizeof(line), "%s\t%s\t%s\t%s",
                 id ? id : "", title ? title : "", grp ? grp : "",
                 (cur && *cur == '1') ? "1" : "0");
-        if (g_cache) {
-            g_cache->add_chat(line);
+        if (m_cache) {
+            m_cache->add_chat(line);
             /* The chat list is also where a BRAND NEW conversation's id
              * first reaches the guest. READY carries `conv`, but the SDK
              * does not assign an id until the first query goes out, so on a
@@ -591,10 +558,10 @@ static void on_chats(rc_frame *f)
              * something says otherwise. The row marked current is that
              * something. */
             if (cur && *cur == '1' && id && *id)
-                g_cache->open_session(id);
+                m_cache->open_session(id);
         }
     } else if (strcmp(f->type, "SESSIONSEND") == 0) {
-        if (g_cache) g_cache->end_chats();
+        if (m_cache) m_cache->end_chats();
         rc_log_mem("chat list loaded");
     }
 }
@@ -606,21 +573,21 @@ static void on_chats(rc_frame *f)
  * left alone because paging back through a cached conversation needs the
  * bridge and saying otherwise with buttons would be a lie you can click.
  */
-static void cache_restore(void)
+void MainWindow::restoreCache()
 {
     char sess[64];
     char line[220];
     int pages;
 
-    if (!g_cache || !g_cache->ok() || g_cache_shown) return;
-    g_cache_shown = 1;
+    if (!m_cache || !m_cache->ok() || m_cacheShown) return;
+    m_cacheShown = 1;
 
     /* The chat list first: it is the smaller of the two and it is what makes
      * the window look like an application rather than a failure. One line at
      * a time, so nothing here scales with how many conversations there are. */
-    if (g_chats && g_cache->chats_open()) {
-        g_chats->beginRows();
-        while (g_cache->chats_next(line, sizeof(line))) {
+    if (m_chats && m_cache->chats_open()) {
+        m_chats->beginRows();
+        while (m_cache->chats_next(line, sizeof(line))) {
             char *fields[4];
             int nf = 0;
             char *p = line;
@@ -630,25 +597,25 @@ static void cache_restore(void)
                 p++;
             }
             if (nf == 4 && fields[0][0])
-                g_chats->addRow(fields[0], fields[1], fields[2],
+                m_chats->addRow(fields[0], fields[1], fields[2],
                                  fields[3][0] == '1');
         }
-        g_cache->chats_close();
-        g_chats->endRows();
+        m_cache->chats_close();
+        m_chats->endRows();
     }
 
     /* Then the conversation that was open, newest page first -- which is
      * where the reader was. */
-    g_cache->last_session(sess, sizeof(sess));
+    m_cache->last_session(sess, sizeof(sess));
     if (!sess[0]) return;
-    g_cache->open_session(sess);
-    pages = g_cache->page_count();
+    m_cache->open_session(sess);
+    pages = m_cache->page_count();
     if (pages <= 0) return;
-    if (g_html) {
-        g_html->notice("The bridge is not reachable. This is the last page "
+    if (m_html) {
+        m_html->notice("The bridge is not reachable. This is the last page "
                        "of your conversation as it was cached here; it is "
                        "not live, and nothing typed now will be sent.");
-        g_cache->load_page(pages, g_html);
+        m_cache->load_page(pages, m_html);
     }
     rc_log("cache: showed page %d of %d for %s", pages, pages, sess);
 }
@@ -659,32 +626,32 @@ static void cache_restore(void)
  * here, the same split on_chats already makes around ChatList::frame:
  * resetting main.c's own turn-state enum (the control is about to be
  * cleared) and log_mem, main.c's memory-milestone diagnostic. */
-static void on_pagebar(rc_frame *f)
+void MainWindow::onPageBar(rc_frame *f)
 {
     if (strcmp(f->type, "PAGESTART") == 0) {
-        if (g_turn) g_turn->turnDone();
+        if (m_turn) m_turn->turnDone();
         /* Cache the page the bridge is about to send. Only a page it says is
          * complete is kept -- see app/cache.h -- so this opens a temporary
          * file that PAGEEND renames and anything else throws away. */
-        if (g_cache) {
+        if (m_cache) {
             const char *n = rc_frame_get(f, "page");
-            g_cache->begin_page(n ? atoi(n) : 0);
+            m_cache->begin_page(n ? atoi(n) : 0);
         }
     }
-    if (g_pagebar) g_pagebar->frame(f);
+    if (m_pageBar) m_pageBar->frame(f);
     if (strcmp(f->type, "PAGEEND") == 0) {
-        if (g_cache) g_cache->end_page();
+        if (m_cache) m_cache->end_page();
         rc_log_mem("page loaded");
         /* Past PAGESTART's clear() and past the pre-ready queue, so this is
          * the first moment the line can be written and survive. */
-        if (g_announce_connected) {
-            g_announce_connected = 0;
-            if (g_html) g_html->notice("Connected to bridge.");
+        if (m_announceConnected) {
+            m_announceConnected = 0;
+            if (m_html) m_html->notice("Connected to bridge.");
         }
     }
 }
 
-static void on_anchor(rc_frame *f)
+void MainWindow::onAnchor(rc_frame *f)
 {
     const char *page = rc_frame_get(f, "page");
     const char *preview = rc_frame_get(f, "preview");
@@ -695,20 +662,20 @@ static void on_anchor(rc_frame *f)
 /* PERMREQ, PERMSTATE, PERMWAIT, PERMEND, HALT, HALTEND -- all six owned by
  * app/bar.cpp now; see PermissionBar::frame's own comments there for what each one
  * does. One handler serves all six rows in the table below. */
-static void on_bar(rc_frame *f)
+void MainWindow::onBar(rc_frame *f)
 {
-    if (g_bar) g_bar->frame(f);
+    if (m_bar) m_bar->frame(f);
     /* The transcript copy of the request collapses when the bar does. Here
      * rather than in app/bar.cpp for the same reason log_mem is not in
      * app/chatlist.cpp: the bar owns the bar, and the transcript is this
      * file's business. Unconditional -- settle_perm finds nothing and
      * returns when there is no block on screen, which is the case for a
      * PERMEND that arrives for a request the guest never showed. */
-    if (strcmp(f->type, "PERMEND") == 0 && g_html)
-        g_html->settle_perm();
+    if (strcmp(f->type, "PERMEND") == 0 && m_html)
+        m_html->settle_perm();
 }
 
-static void on_error(rc_frame *f)
+void MainWindow::onError(rc_frame *f)
 {
     char line[512];
     const char *code = rc_frame_get(f, "code");
@@ -719,32 +686,32 @@ static void on_error(rc_frame *f)
     /* Escaped, which it was not: this pushed the bridge's own `code` and
      * `msg` straight into insertAdjacentHTML, so a '<' anywhere in either
      * ended the document. */
-    if (g_html) g_html->error(line);
-    if (g_turn) g_turn->abort();
-    ui_set_busy(0);
+    if (m_html) m_html->error(line);
+    if (m_turn) m_turn->abort();
+    setBusy(0);
 }
 
-static void on_notice(rc_frame *f)
+void MainWindow::onNotice(rc_frame *f)
 {
-    if (g_html) g_html->notice(f->body);
+    if (m_html) m_html->notice(f->body);
 }
 
-static void on_status(rc_frame *f)
+void MainWindow::onStatus(rc_frame *f)
 {
     const char *text = rc_frame_get(f, "text");
     if (!text || !*text) text = f->body;
-    if (g_status) g_status->set_override(text);
-    status_refresh();
+    if (m_status) m_status->set_override(text);
+    refreshStatus();
 }
 
 /* EXPORTSTART / EXPORTDAT / EXPORTEND -- all three owned by app/export.cpp;
  * see rc_export::frame there for what each one does. */
-static void on_export(rc_frame *f)
+void MainWindow::onExport(rc_frame *f)
 {
-    if (g_export) g_export->frame(f);
+    if (m_export) m_export->frame(f);
 }
 
-static void on_pong(rc_frame *f)
+void MainWindow::onPong(rc_frame *f)
 {
     (void)f;
     /* The answer to a PING, which rpc.cpp's sweep now sends every 30s when
@@ -758,46 +725,47 @@ static void on_pong(rc_frame *f)
     rc_log("pong");
 }
 
-static const struct { const char *type; rc_frame_fn fn; } g_dispatch[] = {
-    { "READY",       on_ready },
-    { "DOC",         on_doc },
-    { "TEXT",        on_text },
-    { "TOOL",        on_tool },
-    { "TURN",        on_turn },
-    { "OPTION",      on_optmenu },
-    { "OPTIONSEND",  on_optmenu },
-    { "SESSIONS",    on_chats },
-    { "SESSION",     on_chats },
-    { "SESSIONSEND", on_chats },
-    { "SWITCHED",    on_chats },
-    { "PAGESTART",   on_pagebar },
-    { "PAGEEND",     on_pagebar },
-    { "PAGESEALED",  on_pagebar },
-    { "ANCHOR",      on_anchor },
-    { "PERMREQ",     on_bar },
-    { "PERMSTATE",   on_bar },
-    { "PERMWAIT",    on_bar },
-    { "PERMEND",     on_bar },
-    { "HALT",        on_bar },
-    { "HALTEND",     on_bar },
-    { "ERROR",       on_error },
-    { "NOTICE",      on_notice },
-    { "STATUS",      on_status },
-    { "EXPORTSTART", on_export },
-    { "EXPORTDAT",   on_export },
-    { "EXPORTEND",   on_export },
-    { "PONG",        on_pong },
-};
 
-static void render_frame(rc_frame *f)
+void MainWindow::renderFrame(rc_frame *f)
 {
     unsigned i;
+    /* Function-local so it can name this class's private handlers. */
+    static const struct { const char *type; FrameHandler fn; } g_dispatch[] = {
+        { "READY",       &MainWindow::onReady },
+        { "DOC",         &MainWindow::onDoc },
+        { "TEXT",        &MainWindow::onText },
+        { "TOOL",        &MainWindow::onTool },
+        { "TURN",        &MainWindow::onTurn },
+        { "OPTION",      &MainWindow::onOptions },
+        { "OPTIONSEND",  &MainWindow::onOptions },
+        { "SESSIONS",    &MainWindow::onChats },
+        { "SESSION",     &MainWindow::onChats },
+        { "SESSIONSEND", &MainWindow::onChats },
+        { "SWITCHED",    &MainWindow::onChats },
+        { "PAGESTART",   &MainWindow::onPageBar },
+        { "PAGEEND",     &MainWindow::onPageBar },
+        { "PAGESEALED",  &MainWindow::onPageBar },
+        { "ANCHOR",      &MainWindow::onAnchor },
+        { "PERMREQ",     &MainWindow::onBar },
+        { "PERMSTATE",   &MainWindow::onBar },
+        { "PERMWAIT",    &MainWindow::onBar },
+        { "PERMEND",     &MainWindow::onBar },
+        { "HALT",        &MainWindow::onBar },
+        { "HALTEND",     &MainWindow::onBar },
+        { "ERROR",       &MainWindow::onError },
+        { "NOTICE",      &MainWindow::onNotice },
+        { "STATUS",      &MainWindow::onStatus },
+        { "EXPORTSTART", &MainWindow::onExport },
+        { "EXPORTDAT",   &MainWindow::onExport },
+        { "EXPORTEND",   &MainWindow::onExport },
+        { "PONG",        &MainWindow::onPong },
+    };
 
     /* Progress accounting, before anything else looks at the frame -- see
      * app/xferstat.h. Moved out whole rather than left calling back in:
      * nothing here needs the frame beyond what rc_xferstat::note_rx already
      * parses from it. */
-    if (g_xfer) g_xfer->note_rx(f);
+    if (m_xfer) m_xfer->note_rx(f);
     /* NO status_refresh() HERE.
      *
      * note_rx above is the cheap half -- it just accumulates counters -- and
@@ -815,7 +783,7 @@ static void render_frame(rc_frame *f)
 
     for (i = 0; i < sizeof(g_dispatch) / sizeof(g_dispatch[0]); i++) {
         if (strcmp(f->type, g_dispatch[i].type) == 0) {
-            g_dispatch[i].fn(f);
+            (this->*g_dispatch[i].fn)(f);
             return;
         }
     }
@@ -862,15 +830,15 @@ static void render_frame(rc_frame *f)
 
 /* ----------------------------------------------------------------- layout */
 
-static void layout(HWND hwnd)
+void MainWindow::layout(HWND hwnd)
 {
     RECT rc;
     int sb_h = 0, y, ybar, w, h;
 
     GetClientRect(hwnd, &rc);
-    if (g_status) {
-        g_status->resize();
-        sb_h = g_status->height();
+    if (m_status) {
+        m_status->resize();
+        sb_h = m_status->height();
     }
 
     w = rc.right - rc.left;
@@ -885,45 +853,45 @@ static void layout(HWND hwnd)
      * deliberate amendment to the rule above and not a re-run of the bug it
      * was written for. Stop is positioned from this same `y`, so it moves
      * with the row rather than being left behind by it. */
-    y = h - INPUT_HEIGHT - GUTTER - (g_toolbar ? TOOLBAR_H : 0);
-    int pill_h = (g_pillbar && g_pillbar->active()) ? PILL_H : 0;
+    y = h - INPUT_HEIGHT - GUTTER - (m_toolbar ? TOOLBAR_H : 0);
+    int pill_h = (m_attachments && m_attachments->active()) ? PILL_H : 0;
     int y_pill = y - pill_h;
-    ybar = (g_bar && g_bar->active()) ? (y_pill - PERM_H - GUTTER) : y_pill;
+    ybar = (m_bar && m_bar->active()) ? (y_pill - PERM_H - GUTTER) : y_pill;
 
     /* Chat list down the left, with its Refresh button under it -- both
      * positioned by app/chatlist.cpp now. */
-    if (g_chats) g_chats->move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
+    if (m_chats) m_chats->move(GUTTER, GUTTER, CHATS_W, h - 2 * GUTTER);
 
     /* Page bar across the top of the transcript column: positions its own
      * six controls from app/pagebar.cpp now -- see app/pagebar.h. */
-    if (g_pagebar) g_pagebar->move(GUTTER * 2 + CHATS_W, GUTTER);
+    if (m_pageBar) m_pageBar->move(GUTTER * 2 + CHATS_W, GUTTER);
 
     {
         int cx = GUTTER * 2 + CHATS_W;
         int cw = w - cx - GUTTER;
-        if (g_html)
-            g_html->move(cx, GUTTER + PAGEBAR_H, cw, ybar - GUTTER - PAGEBAR_H);
+        if (m_html)
+            m_html->move(cx, GUTTER + PAGEBAR_H, cw, ybar - GUTTER - PAGEBAR_H);
         /* The bar positions its own controls -- see app/bar.h -- from its
          * own descriptor table, which is what used to be the "g_bar_mode ==
          * BAR_PERM" branch here (audit finding 01.15: a new bar state needed
          * an edit at this exact spot too). */
-        if (g_bar && g_bar->active())
-            g_bar->move(cx, ybar, w - GUTTER);
-        if (g_pillbar && g_pillbar->active())
-            g_pillbar->move(cx, y_pill, cw);
+        if (m_bar && m_bar->active())
+            m_bar->move(cx, ybar, w - GUTTER);
+        if (m_attachments && m_attachments->active())
+            m_attachments->move(cx, y_pill, cw);
         /* The input box, Send and Stop position their own three controls
          * now -- app/input.cpp, see app/input.h. */
-        if (g_inputmod) g_inputmod->move(cx, y, cw, w);
+        if (m_input) m_input->move(cx, y, cw, w);
         /* In the TRANSCRIPT column, not across the full width: the chat
          * list's Refresh button sits at the bottom of the left column and a
          * full-width bar draws straight over it. */
-        if (g_toolbar) {
-            g_toolbar->move(cx, h - TOOLBAR_H, cw);
+        if (m_toolbar) {
+            m_toolbar->move(cx, h - TOOLBAR_H, cw);
             /* New chat at the FAR RIGHT of the page-bar row, the opposite
              * end of the window from the settings. Same y as the page bar,
              * which positions its own six controls from the left and leaves
              * this half of the row empty. */
-            g_toolbar->move_top(cx, GUTTER, cw);
+            m_toolbar->move_top(cx, GUTTER, cw);
         }
     }
 }
@@ -946,7 +914,7 @@ static void check_child(const char *what, HWND h)
                what, (unsigned long)GetLastError());
 }
 
-static void create_children(HWND hwnd, HINSTANCE inst)
+void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
 {
     NONCLIENTMETRICSA ncm;
 
@@ -957,28 +925,28 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * dropdowns read "(model)"/"(effort)" for the rest of the session while
      * the menu bar two inches above showed Haiku ticked. SetMenu before the
      * window is shown needs no DrawMenuBar. */
-    build_menu(hwnd);
+    buildMenu(hwnd);
 
     memset(&ncm, 0, sizeof(ncm));
     ncm.cbSize = sizeof(ncm);
     if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
-        g_ui_font = CreateFontIndirectA(&ncm.lfMessageFont);
+        m_uiFont = CreateFontIndirectA(&ncm.lfMessageFont);
         /* A bold companion, used for the conversation that is currently open.
          * Without it the only cue is the selection highlight, which Win98
          * greys out the moment the list loses focus -- so as soon as you click
          * into the input box you can no longer tell which chat you are in. */
         ncm.lfMessageFont.lfWeight = FW_BOLD;
-        g_ui_font_bold = CreateFontIndirectA(&ncm.lfMessageFont);
+        m_uiFontBold = CreateFontIndirectA(&ncm.lfMessageFont);
     } else {
-        g_ui_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        g_ui_font_bold = g_ui_font;
+        m_uiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        m_uiFontBold = m_uiFont;
     }
 
-    g_html = rc_html::create(hwnd);
-    if (!g_html)
+    m_html = rc_html::create(hwnd);
+    if (!m_html)
         MessageBoxA(hwnd, "Could not create the HTML view.", RC_TITLE,
                     MB_OK | MB_ICONERROR);
-    else if (g_html->boot_local()) {
+    else if (m_html->boot_local()) {
         /* There is a document now, before anything has been connected to.
          * The poll timer is what notices it has finished loading; on_doc
          * arms one too and re-arming is harmless. */
@@ -988,13 +956,13 @@ static void create_children(HWND hwnd, HINSTANCE inst)
          * did, it stayed that way, with the only sign of trouble a word in
          * the status bar. This goes through the pre-ready queue and appears
          * when the document finishes loading. */
-        if (g_cfg->host[0]) {
+        if (m_cfg->host[0]) {
             char line[160];
             rc_strf(line, sizeof(line), "Connecting to %s:%ld...",
-                    g_cfg->host, g_cfg->port);
-            g_html->notice(line);
+                    m_cfg->host, m_cfg->port);
+            m_html->notice(line);
         } else {
-            g_html->notice("No bridge is configured. "
+            m_html->notice("No bridge is configured. "
                            "Use Configure -> Server Host... to set one.");
         }
     }
@@ -1032,8 +1000,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * are this file's answers to the policy questions the chat list does
      * not own -- see the callback comments on ChatList::create in
      * app/chatlist.h. */
-    g_chats = ChatList::create(hwnd, inst, g_net, g_ui_font, g_ui_font_bold,
-                               g_window, g_window);
+    m_chats = ChatList::create(hwnd, inst, m_net, m_uiFont, m_uiFontBold,
+                               this, this);
 
     /* The permission/halt bar: its own controls, created and owned by
      * app/bar.cpp now (PermissionBar::create logs its own check_child-equivalent
@@ -1041,36 +1009,36 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * for" and bar_changed is the layout + enables refresh the bar needs
      * after any visible change -- see the `send`/`changed` comment on
      * PermissionBar::create in app/bar.h. */
-    g_bar = PermissionBar::create(hwnd, inst, g_ui_font, g_net, g_window,
-                                  g_window);
+    m_bar = PermissionBar::create(hwnd, inst, m_uiFont, m_net, this,
+                                  this);
 
     /* The page bar: its own six controls, created and owned by
      * app/pagebar.cpp now (rc_pagebar::create logs its own check_child
      * failures). g_html may be NULL -- rc_pagebar::create is passed it as-is
      * and every use inside pagebar.cpp is guarded, same as everywhere else
      * in this file. */
-    g_pagebar = rc_pagebar::create(hwnd, inst, g_ui_font, g_net, g_html,
-                                   g_window);
+    m_pageBar = rc_pagebar::create(hwnd, inst, m_uiFont, m_net, m_html,
+                                   this);
 
     /* NOW the persisted autoscroll can be applied -- see the long note above
      * the HTML view's creation for why it could not be done there. Both
      * halves, unconditionally, with the objects they configure in existence. */
-    if (g_html)    g_html->set_autoscroll(g_cfg->autoscroll);
-    if (g_pagebar) g_pagebar->set_follow(g_cfg->autoscroll);
+    if (m_html)    m_html->set_autoscroll(m_cfg->autoscroll);
+    if (m_pageBar) m_pageBar->set_follow(m_cfg->autoscroll);
 
     /* The transfer-progress counters: one instance, created here (ahead of
      * app/input.cpp below, which needs it) and destroyed in WM_DESTROY --
      * the same shape as g_html. May be NULL if `new` itself failed (see
      * core/rc_cpp.h); every use, here and in input.cpp, is guarded. */
-    g_xfer = rc_xferstat::create();
+    m_xfer = rc_xferstat::create();
 
     /* Attachment pill bar: sits between transcript and input box */
-    g_pillbar = AttachmentBar::create(hwnd, inst, g_ui_font, g_window);
+    m_attachments = AttachmentBar::create(hwnd, inst, m_uiFont, this);
     /* The sync worker reaches the bar through these, with it as context.
      * Registered before the connection can start (WM_RC_CONNECT is posted
      * after WM_CREATE), cleared in WM_DESTROY before the bar is deleted. */
     rc_syncrpc_set_attachment_hooks(AttachmentBar::lookupAttachment,
-                                    AttachmentBar::transferDone, g_pillbar);
+                                    AttachmentBar::transferDone, m_attachments);
 
     /* The input box and Send/Stop: created and owned by app/input.cpp now
      * (ComposeBox::create logs its own check_child failures and subclasses the
@@ -1078,28 +1046,28 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * asked for", for INTERRUPT; input_blocked/input_sent are this file's
      * answers to the two policy questions that module does not own -- see
      * the callback comments on ComposeBox::create in app/input.h. */
-    g_inputmod = ComposeBox::create(hwnd, inst, g_ui_font, g_net, g_html,
-                                    g_xfer, g_pillbar, g_window, g_window);
+    m_input = ComposeBox::create(hwnd, inst, m_uiFont, m_net, m_html,
+                                    m_xfer, m_attachments, this, this);
 
     /* After the option menus, because it borrows their HMENUs and their
      * current labels rather than keeping its own copy. */
-    g_toolbar = rc_toolbar::create(hwnd, inst, g_ui_font, g_optmenu);
-    if (!g_toolbar) rc_log("toolbar: not created; settings stay on the menus");
+    m_toolbar = rc_toolbar::create(hwnd, inst, m_uiFont, m_options);
+    if (!m_toolbar) rc_log("toolbar: not created; settings stay on the menus");
 
     /* The export sink. Created here and not on demand so that an EXPORTDAT
      * arriving without a request -- a replayed one after a reconnect --
      * reaches something that knows to drop it rather than an unhandled frame
      * type nobody reads the log for. */
-    g_export = rc_export::create(g_html);
-    if (!g_export) rc_log("export: sink not created; File > Export will not "
+    m_export = rc_export::create(m_html);
+    if (!m_export) rc_log("export: sink not created; File > Export will not "
                           "work");
 
-    g_cache = rc_cache::create(g_exe_dir);
-    if (!g_cache) rc_log("cache: not created; history will not survive a "
+    m_cache = rc_cache::create(m_exeDir);
+    if (!m_cache) rc_log("cache: not created; history will not survive a "
                          "disconnection");
 
-    g_status = rc_statusbar::create(hwnd, inst);
-    check_child("status", g_status ? g_status->hwnd() : NULL);
+    m_status = rc_statusbar::create(hwnd, inst);
+    check_child("status", m_status ? m_status->hwnd() : NULL);
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
@@ -1115,26 +1083,26 @@ static void create_children(HWND hwnd, HINSTANCE inst)
             : NULL;
         if (accept) {
             accept(hwnd, TRUE);
-            if (g_inputmod && g_inputmod->box())
-                accept(g_inputmod->box(), TRUE);
+            if (m_input && m_input->box())
+                accept(m_input->box(), TRUE);
         }
     }
 
-    g_reconn = Reconnector::create(hwnd, g_net, g_cfg, g_exe_dir, g_html,
-                                   g_window);
-    g_turn = Turn::create(hwnd, g_html, g_status, g_cache, g_chats, g_window);
+    m_reconnector = Reconnector::create(hwnd, m_net, m_cfg, m_exeDir, m_html,
+                                   this);
+    m_turn = Turn::create(hwnd, m_html, m_status, m_cache, m_chats, this);
 }
 
 /* -------------------------------------------------------------- main proc */
 
-static void handle_attach_path(HWND hwnd, const char *path)
+void MainWindow::handleAttachPath(HWND hwnd, const char *path)
 {
     const char *work;
     size_t wlen = 0;
     DWORD file_sz = 0;
     HANDLE hf;
 
-    if (!path || !*path || !g_pillbar) return;
+    if (!path || !*path || !m_attachments) return;
 
     hf = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1164,7 +1132,7 @@ static void handle_attach_path(HWND hwnd, const char *path)
         for (p = rel; *p; p++) {
             if (*p == '\\') *p = '/';
         }
-        g_pillbar->stageWorkspace(rel, file_sz);
+        m_attachments->stageWorkspace(rel, file_sz);
         layout(hwnd);
         return;
     }
@@ -1178,7 +1146,7 @@ static void handle_attach_path(HWND hwnd, const char *path)
         fname = fname ? (fname + 1) : path;
 
         rc_strf(att_id, sizeof(att_id), "att_%u", ++s_ext_seq);
-        g_pillbar->stageExternal(att_id, path, fname, file_sz, 0 /* not temp */);
+        m_attachments->stageExternal(att_id, path, fname, file_sz, 0 /* not temp */);
         layout(hwnd);
     }
 }
@@ -1190,7 +1158,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
     HWND hwnd = Window::hwnd();
     switch (msg) {
     case WM_CREATE:
-        create_children(hwnd, ((LPCREATESTRUCT)lp)->hInstance);
+        createChildren(hwnd, ((LPCREATESTRUCT)lp)->hInstance);
         PostMessage(hwnd, WM_RC_CONNECT, 0, 0);
         return 0;
 
@@ -1208,14 +1176,14 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         if (query && finish) {
             char path[MAX_PATH];
             if (query(hDrop, 0, path, sizeof(path)) > 0)
-                handle_attach_path(hwnd, path);
+                handleAttachPath(hwnd, path);
             finish(hDrop);
         }
         return 0;
     }
 
     case WM_RC_CONNECT:
-        if (g_reconn) g_reconn->tryConnect();
+        if (m_reconnector) m_reconnector->tryConnect();
         return 0;
 
     case WM_SIZE:
@@ -1223,18 +1191,18 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_SETFOCUS:
-        if (g_inputmod) g_inputmod->focus();
+        if (m_input) m_input->focus();
         return 0;
 
     /* Owner-draw so a date header reads as a header instead of as a
      * conversation named "Today" -- app/chatlist.cpp's own business now,
      * since ID_CHATS is the only owner-draw control this window has. */
     case WM_MEASUREITEM:
-        if (g_chats) g_chats->measure((MEASUREITEMSTRUCT *)lp);
+        if (m_chats) m_chats->measure((MEASUREITEMSTRUCT *)lp);
         return TRUE;
 
     case WM_DRAWITEM:
-        if (g_chats) g_chats->draw((DRAWITEMSTRUCT *)lp);
+        if (m_chats) m_chats->draw((DRAWITEMSTRUCT *)lp);
         return TRUE;
 
     /* Double-clicking the connection pane opens the Server Host dialog.
@@ -1257,32 +1225,32 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
      * through. */
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lp;
-        if (g_toolbar && g_toolbar->notify(nh)) return 0;
-        if (g_status && g_status->notify(nh, hwnd)) return 0;
+        if (m_toolbar && m_toolbar->notify(nh)) return 0;
+        if (m_status && m_status->notify(nh, hwnd)) return 0;
         break;
     }
 
     case WM_RC_OPENCHAT:
-        if (g_chats) g_chats->openSelected();
+        if (m_chats) m_chats->openSelected();
         return 0;
 
     case WM_TIMER:
-        if (g_reconn && g_reconn->handleTimer(wp)) return 0;
+        if (m_reconnector && m_reconnector->handleTimer(wp)) return 0;
         return 0;
 
     case WM_RC_FRAME: {
         rc_frame *f = (rc_frame *)lp;
-        render_frame(f);
+        renderFrame(f);
         /* The UI thread owns every posted frame and is the only thing that
          * frees one -- except when PostMessage itself failed, which the reader
          * handles. rc_net_frame_done (net.h) is the two-free-plus-decrement
          * contract in one call; see audit finding 01.24. */
-        rc_net_frame_done(g_net, f);
+        rc_net_frame_done(m_net, f);
         return 0;
     }
 
     case WM_RC_STATE:
-        status_refresh();
+        refreshStatus();
         if ((rc_state)wp == RC_FAILED || (rc_state)wp == RC_DISCONNECTED) {
             /* Take the bar down FIRST.
              *
@@ -1298,7 +1266,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * reattach: _reissue_prompt re-sends PERMSTATE and _reissue_halt
              * re-sends HALT, so whatever is genuinely still outstanding comes
              * back, and whatever is not, does not. */
-            if (g_bar) g_bar->hideAll();
+            if (m_bar) m_bar->hideAll();
             /* And abandon a SYNCPUT the drop caught mid-stream. The RPC
              * worker thread survives a reconnect (rc_rpc_start's
              * if (g_thread) return 0), so its state survives with it; a PUT
@@ -1323,7 +1291,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              *
              * The sync PUT three lines above was given this treatment and the
              * export sink was not, which is the whole of the bug. */
-            if (g_export) g_export->give_up();
+            if (m_export) m_export->give_up();
             /* And the two other things a CUT BATCH leaves latched.
              *
              * An OPTION batch is six frames wide (models, efforts, work,
@@ -1333,11 +1301,11 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * replacing it, and the chat list kept WM_SETREDRAW(FALSE) down
              * with its pixels and its backing array disagreeing. Same family
              * as the bar and the sync PUT above; same place to fix it. */
-            if (g_optmenu) g_optmenu->reset();
-            if (g_chats) g_chats->abortRows();
-            if (g_turn) g_turn->abort();
-            ui_set_busy(0);
-            if (g_reconn) g_reconn->schedule();
+            if (m_options) m_options->reset();
+            if (m_chats) m_chats->abortRows();
+            if (m_turn) m_turn->abort();
+            setBusy(0);
+            if (m_reconnector) m_reconnector->schedule();
         }
         return 0;
 
@@ -1348,11 +1316,11 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
          * app/input.h. */
         case ID_SEND:
         case ID_STOP:
-            if (g_inputmod) g_inputmod->command(id);
+            if (m_input) m_input->command(id);
             return 0;
         case 1030: case 1031: case 1032: case 1033:
         case 1034: case 1035: case 1036: case 1037:
-            if (g_pillbar) g_pillbar->command(id);
+            if (m_attachments) m_attachments->command(id);
             return 0;
         /* All three of the bar's own buttons dispatch through one call now
          * -- see app/bar.h. command() knows which kind is on screen and what
@@ -1362,7 +1330,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         case ID_PERM_ALLOW:
         case ID_PERM_ALWAYS:
         case ID_PERM_DENY:
-            if (g_bar) g_bar->command(id);
+            if (m_bar) m_bar->command(id);
             return 0;
         /* All five of the page bar's own buttons dispatch through one call
          * now too -- see app/pagebar.h. */
@@ -1371,7 +1339,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         case ID_PREV:
         case ID_NEXT:
         case ID_LAST:
-            if (g_pagebar) g_pagebar->command(id);
+            if (m_pageBar) m_pageBar->command(id);
             return 0;
         /* The toolbar's own buttons, through one call -- same shape as the
          * bar's and the page bar's above.
@@ -1389,7 +1357,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         case ID_TB_CMD:
         case ID_TB_WORK:
         case ID_TB_NEW:
-            if (g_toolbar) g_toolbar->command(id);
+            if (m_toolbar) m_toolbar->command(id);
             return 0;
         case ID_FOLLOW:
             /* The autoscroll toggle, beside the page controls. The BUTTON
@@ -1397,25 +1365,25 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * already flipped it by the time this runs -- and everything
              * else follows from reading it back, so the button and the
              * setting cannot disagree about which is true. */
-            if (g_pagebar) {
-                g_cfg->autoscroll = g_pagebar->follow_on() != 0;
-                if (g_html) g_html->set_autoscroll(g_cfg->autoscroll);
-                if (!g_store->save(*g_cfg) && g_html)
-                    g_html->error("That setting could not be saved to "
+            if (m_pageBar) {
+                m_cfg->autoscroll = m_pageBar->follow_on() != 0;
+                if (m_html) m_html->set_autoscroll(m_cfg->autoscroll);
+                if (!m_store->save(*m_cfg) && m_html)
+                    m_html->error("That setting could not be saved to "
                                   "retroclaude.ini and will not survive a "
                                   "restart. The drive may be full or "
                                   "write-protected.");
-                rc_log("autoscroll: %s", g_cfg->autoscroll ? "on" : "off");
+                rc_log("autoscroll: %s", m_cfg->autoscroll ? "on" : "off");
                 /* Following again means catching up, not waiting for the
                  * next message to arrive before it means anything. */
-                if (g_cfg->autoscroll && g_html) g_html->scroll_bottom();
+                if (m_cfg->autoscroll && m_html) m_html->scroll_bottom();
             }
             return 0;
 
-        case ID_REFRESH: if (g_chats) g_chats->request(); return 0;
+        case ID_REFRESH: if (m_chats) m_chats->request(); return 0;
 
         case IDM_NEW:
-            if ((g_turn && g_turn->active())
+            if ((m_turn && m_turn->active())
                 && MessageBoxA(hwnd,
                                "A request is still running.\n\n"
                                "Starting a new session will stop it. Continue?",
@@ -1430,7 +1398,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * the shortcut would be unreachable exactly when you are using
              * the app. Guard the destructive act, not the key. "The person at
              * the keyboard never loses a byte." */
-            if (g_inputmod && !g_inputmod->isEmpty()
+            if (m_input && !m_input->isEmpty()
                 && MessageBoxA(hwnd,
                                "You have a message you have not sent.\n\n"
                                "Starting a new session will discard it. "
@@ -1451,8 +1419,8 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * all. The bridge stopped reading the `folder` header when that
              * landed, so by the end this dialog was asking a question and
              * discarding the answer, which is worse than not asking. */
-            SetWindowTextA(g_main, RC_TITLE "  -  new session...");
-            ui_send("Starting a new conversation", "NEWSESSION",
+            SetWindowTextA(Window::hwnd(), RC_TITLE "  -  new session...");
+            sendFrame("Starting a new conversation", "NEWSESSION",
                     NULL, NULL, 0, NULL, 0);
             return 0;
 
@@ -1465,22 +1433,22 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
          * the buttons' enable state honest, which a direct goto_n would
          * bypass. See app/resource.h for why these are not ID_PREV/ID_NEXT. */
         case IDA_PAGEPREV:
-            if (g_pagebar) g_pagebar->command(ID_PREV);
+            if (m_pageBar) m_pageBar->command(ID_PREV);
             return 0;
 
         case IDA_PAGENEXT:
-            if (g_pagebar) g_pagebar->command(ID_NEXT);
+            if (m_pageBar) m_pageBar->command(ID_NEXT);
             return 0;
 
         case IDA_REFRESH:
-            if (g_chats) g_chats->request();
+            if (m_chats) m_chats->request();
             return 0;
 
         case IDA_MODENEXT:
             /* Not guarded on the input box having focus, unlike PgUp/PgDn:
              * this changes a setting rather than taking a key away from
              * something you are in the middle of, and it loses nothing. */
-            if (g_optmenu) g_optmenu->cycleMode();
+            if (m_options) m_options->cycleMode();
             return 0;
 
         case IDM_EXPORT:
@@ -1489,10 +1457,10 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * request then fails to reach the bridge, the file that was just
              * opened has to go with it, or the next export would refuse to
              * start against a sink that is holding a path nobody asked for. */
-            if (g_export && g_export->begin(hwnd, "CHAT.HTM")) {
-                if (!ui_send("The export request", "EXPORT",
+            if (m_export && m_export->begin(hwnd, "CHAT.HTM")) {
+                if (!sendFrame("The export request", "EXPORT",
                              NULL, NULL, 0, NULL, 0))
-                    g_export->give_up();
+                    m_export->give_up();
             }
             return 0;
 
@@ -1502,7 +1470,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * -- and half of it (what Claude Code resolves locally and never
              * reports) is knowledge this side does not have and must not
              * invent. */
-            ui_send("The permissions view", "RULES", NULL, NULL, 0, NULL, 0);
+            sendFrame("The permissions view", "RULES", NULL, NULL, 0, NULL, 0);
             return 0;
 
         case IDM_WORKOPEN: {
@@ -1544,7 +1512,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
                     ? (PFN_GETOPENFILENAMEA)GetProcAddress(dll.get(), "GetOpenFileNameA")
                     : NULL;
                 if (fn && fn(&ofn)) {
-                    handle_attach_path(hwnd, file);
+                    handleAttachPath(hwnd, file);
                 }
             }
             return 0;
@@ -1553,7 +1521,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
         case IDM_ATTSHOT: {
             char temp_dir[MAX_PATH];
             if (!GetTempPathA(sizeof(temp_dir), temp_dir))
-                rc_strf(temp_dir, sizeof(temp_dir), "%s\\", g_exe_dir);
+                rc_strf(temp_dir, sizeof(temp_dir), "%s\\", m_exeDir);
             static unsigned s_shot_seq = 0;
             char shot_path[MAX_PATH];
             rc_strf(shot_path, sizeof(shot_path), "%sretro_shot_%u.bmp", temp_dir, ++s_shot_seq);
@@ -1564,10 +1532,10 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             }
             char att_id[16];
             rc_strf(att_id, sizeof(att_id), "shot_%u", s_shot_seq);
-            if (g_pillbar) {
+            if (m_attachments) {
                 char shot_title[64];
                 rc_strf(shot_title, sizeof(shot_title), "Screenshot #%u", s_shot_seq);
-                g_pillbar->stageExternal(att_id, shot_path, shot_title, shot_sz, 1 /* is_temp */);
+                m_attachments->stageExternal(att_id, shot_path, shot_title, shot_sz, 1 /* is_temp */);
                 layout(hwnd);
             }
             return 0;
@@ -1598,18 +1566,18 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * bridge is about to mirror is the tree the user asked for
              * rather than one that grows under it during the first pass. */
             char picked[MAX_PATH];
-            if (g_optmenu)
-                runWorkDirDialog(hwnd, g_inst, rc_workdir_current(),
-                                 RC_CAP_MAXPATH, g_window,
+            if (m_options)
+                runWorkDirDialog(hwnd, m_inst, rc_workdir_current(),
+                                 RC_CAP_MAXPATH, this,
                                  picked, sizeof(picked));
             return 0;
         }
 
         case IDM_HOST:
-            if (rc_hostdlg_run(hwnd, g_inst, g_cfg)) {
+            if (rc_hostdlg_run(hwnd, m_inst, m_cfg)) {
                 char line[192];
-                if (!g_store->save(*g_cfg) && g_html)
-                    g_html->error("That setting could not be saved to "
+                if (!m_store->save(*m_cfg) && m_html)
+                    m_html->error("That setting could not be saved to "
                                   "retroclaude.ini and will not survive a "
                                   "restart. The drive may be full or "
                                   "write-protected.");
@@ -1623,17 +1591,17 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
                  * still has to expire first. Fixing a typo'd host would still
                  * mean waiting out the old wait, which is the entire point of
                  * the dialog. Kill it, reset, and reconnect now. */
-                if (g_reconn) g_reconn->reset();
+                if (m_reconnector) m_reconnector->reset();
 
                 /* The host is user-supplied text going into an HTML
                  * document. main.cpp:930's notice already escapes it for
                  * that reason; this is the second, more direct way in. */
-                if (g_html) {
+                if (m_html) {
                     rc_strf(line, sizeof(line), "Now connecting to %s:%ld.",
-                            g_cfg->host, g_cfg->port);
-                    g_html->notice(line);   /* notice() escapes */
+                            m_cfg->host, m_cfg->port);
+                    m_html->notice(line);   /* notice() escapes */
                 }
-                if (g_reconn) g_reconn->tryConnect();
+                if (m_reconnector) m_reconnector->tryConnect();
             }
             return 0;
 
@@ -1645,7 +1613,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
                       "Built with Open Watcom; the transcript is MSHTML.\n\n"
                       "Not affiliated with Anthropic.\n\n"
                       "Bridge: %s:%ld (%s)",
-                      g_cfg->host, g_cfg->port, rc_state_name(g_net->state));
+                      m_cfg->host, m_cfg->port, rc_state_name(m_net->state));
             msg[sizeof(msg) - 1] = '\0';
             MessageBoxA(hwnd, msg, "About " RC_TITLE,
                         MB_OK | MB_ICONINFORMATION);
@@ -1657,13 +1625,13 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
              * memory. LBN_SELCHANGE is deliberately not used: it also fires
              * for arrow keys, and switching on those would tear down a live
              * session every time the list was scrolled from the keyboard. */
-            if (HIWORD(wp) == LBN_DBLCLK && g_chats) g_chats->openSelected();
+            if (HIWORD(wp) == LBN_DBLCLK && m_chats) m_chats->openSelected();
             return 0;
 
         default:
             /* The IDM_MODEL0/IDM_EFFORT0 ranges: app/optmenu.cpp's business
              * now -- see app/optmenu.h. */
-            if (g_optmenu && g_optmenu->command(id)) return 0;
+            if (m_options && m_options->command(id)) return 0;
             break;
         }
         return 0;
@@ -1675,55 +1643,55 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
          * first, while this window -- which its reader thread posts frames
          * to -- still exists, and only then the window itself. The network
          * used to be stopped from inside WM_DESTROY below. */
-        if (g_app) g_app->quit(0);
+        if (m_app) m_app->quit(0);
         else DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
         /* Normally reached from MainWindow::join during App's shutdown, with
          * the connection already stopped. */
-        delete g_reconn;
-        g_reconn = NULL;
-        delete g_turn;
-        g_turn = NULL;
-        delete g_html;
-        g_html = NULL;
-        delete g_bar;
-        g_bar = NULL;
-        delete g_chats;
-        g_chats = NULL;
-        delete g_inputmod;
-        g_inputmod = NULL;
+        delete m_reconnector;
+        m_reconnector = NULL;
+        delete m_turn;
+        m_turn = NULL;
+        delete m_html;
+        m_html = NULL;
+        delete m_bar;
+        m_bar = NULL;
+        delete m_chats;
+        m_chats = NULL;
+        delete m_input;
+        m_input = NULL;
         rc_syncrpc_set_attachment_hooks(NULL, NULL, NULL);
-        delete g_pillbar;
-        g_pillbar = NULL;
-        delete g_xfer;
-        g_xfer = NULL;
-        delete g_cache;
-        g_cache = NULL;
-        delete g_export;
-        g_export = NULL;
-        delete g_toolbar;
-        g_toolbar = NULL;
-        delete g_optmenu;
-        g_optmenu = NULL;
-        delete g_pagebar;
-        g_pagebar = NULL;
-        delete g_status;
-        g_status = NULL;
+        delete m_attachments;
+        m_attachments = NULL;
+        delete m_xfer;
+        m_xfer = NULL;
+        delete m_cache;
+        m_cache = NULL;
+        delete m_export;
+        m_export = NULL;
+        delete m_toolbar;
+        m_toolbar = NULL;
+        delete m_options;
+        m_options = NULL;
+        delete m_pageBar;
+        m_pageBar = NULL;
+        delete m_status;
+        m_status = NULL;
         /* Both fonts, and only once: the fallback path points both at the
          * same stock object, which must not be deleted at all. */
-        if (g_ui_font_bold && g_ui_font_bold != g_ui_font)
-            DeleteObject(g_ui_font_bold);
-        g_ui_font_bold = NULL;
-        if (g_ui_font) DeleteObject(g_ui_font);
+        if (m_uiFontBold && m_uiFontBold != m_uiFont)
+            DeleteObject(m_uiFontBold);
+        m_uiFontBold = NULL;
+        if (m_uiFont) DeleteObject(m_uiFont);
         /* Nulled like every other handle above it. It was the one that was
          * not, and a stale HFONT outliving WM_DESTROY is a deleted GDI
          * object that still looks valid to anything that reads it. */
-        g_ui_font = NULL;
+        m_uiFont = NULL;
         /* If anything other than App's shutdown destroyed the window, end
          * the loop too; during shutdown this is a no-op message. */
-        if (g_app) g_app->quit(0);
+        if (m_app) m_app->quit(0);
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
@@ -1733,17 +1701,13 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
 
 MainWindow::MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
                        ConfigStore *store, const char *exeDir, rc_net *net)
-    : m_inst(inst), m_show(show)
+    : m_inst(inst), m_show(show), m_cfg(cfg), m_store(store), m_app(app),
+      m_net(net), m_html(0), m_bar(0), m_chats(0), m_xfer(0), m_input(0),
+      m_attachments(0), m_toolbar(0), m_export(0), m_cache(0),
+      m_cacheShown(0), m_accel(0), m_options(0), m_pageBar(0),
+      m_announceConnected(0), m_status(0), m_reconnector(0), m_turn(0),
+      m_uiFont(0), m_uiFontBold(0), m_exeDir(exeDir)
 {
-    /* Transitional: the statics this file still runs on are pointed at what
-     * WinMain owns. C5 moves them into members one module at a time. */
-    g_window = this;
-    g_inst = inst;
-    g_app = app;
-    g_cfg = cfg;
-    g_store = store;
-    g_exe_dir = exeDir;
-    g_net = net;
 }
 
 const char *MainWindow::name() const
@@ -1788,8 +1752,7 @@ bool MainWindow::init()
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
         NULL, NULL, m_inst);
-    g_main = Window::hwnd();
-    if (!g_main)
+    if (!Window::hwnd())
     {
         rc_log("CreateWindowEx failed");
         return false;
@@ -1805,14 +1768,14 @@ bool MainWindow::init()
                                              GetSystemMetrics(SM_CYSMICON),
                                              LR_DEFAULTCOLOR);
         if (small_icon)
-            SendMessageA(g_main, WM_SETICON, ICON_SMALL,
+            SendMessageA(Window::hwnd(), WM_SETICON, ICON_SMALL,
                          (LPARAM)small_icon);
     }
-    rc_log("main window hwnd=%p", (void *)g_main);
+    rc_log("main window hwnd=%p", (void *)Window::hwnd());
     rc_log_mem("window created");
 
-    g_accel = LoadAcceleratorsA(m_inst, MAKEINTRESOURCE(IDA_MAIN));
-    if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
+    m_accel = LoadAcceleratorsA(m_inst, MAKEINTRESOURCE(IDA_MAIN));
+    if (!m_accel) rc_log("accelerators: LoadAccelerators failed");
     return true;
 }
 
@@ -1822,8 +1785,8 @@ bool MainWindow::start()
     /* build_menu moved into create_children (WM_CREATE) -- see the
      * comment there; the toolbar has to be able to see the option
      * menus. */
-    ShowWindow(g_main, m_show);
-    UpdateWindow(g_main);
+    ShowWindow(Window::hwnd(), m_show);
+    UpdateWindow(Window::hwnd());
     return true;
 }
 
@@ -1833,7 +1796,6 @@ bool MainWindow::join(DWORD timeoutMs)
     (void)timeoutMs;
     /* Runs WM_DESTROY, which deletes the children. */
     destroy();
-    g_main = NULL;
     return true;
 }
 
@@ -1842,7 +1804,6 @@ MainWindow::~MainWindow()
     /* Here, not in ~Window, so this class's handle() still sees
      * WM_DESTROY if the window is still up (core/window.h). */
     destroy();
-    g_main = NULL;
 }
 
 
@@ -1857,7 +1818,7 @@ bool MainWindow::filter(MSG &msg)
      * change what it matches, and a draft of this plan claimed otherwise.
      * What makes it safe is the confirmation in IDM_NEW, not where the
      * key is translated. */
-    if (g_accel && TranslateAcceleratorA(g_main, g_accel, &msg))
+    if (m_accel && TranslateAcceleratorA(Window::hwnd(), m_accel, &msg))
         return true;
 
     /* Enter opens the highlighted conversation. Caught here rather than by
@@ -1865,8 +1826,8 @@ bool MainWindow::filter(MSG &msg)
      * route it to the default pushbutton and the keyboard would have no
      * way to open a chat at all. */
     if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
-        && g_chats && msg.hwnd == g_chats->hwnd()) {
-        g_chats->openSelected();
+        && m_chats && msg.hwnd == m_chats->hwnd()) {
+        m_chats->openSelected();
         return true;
     }
     /* Scrolling the transcript from the keyboard, and why these CANNOT be
@@ -1886,92 +1847,25 @@ bool MainWindow::filter(MSG &msg)
      * Ctrl is deliberately not checked for PgUp/PgDn: Ctrl+PgUp/PgDn is
      * the accelerator above, which moves between SEALED PAGES, and that
      * is a different axis from scrolling within one. */
-    if (msg.message == WM_KEYDOWN && g_html && g_inputmod
-        && g_inputmod->isEmpty()
+    if (msg.message == WM_KEYDOWN && m_html && m_input
+        && m_input->isEmpty()
         && !(GetKeyState(VK_CONTROL) & 0x8000)) {
-        if (msg.wParam == VK_PRIOR) { g_html->scroll_page(-1); return true; }
-        if (msg.wParam == VK_NEXT)  { g_html->scroll_page(1);  return true; }
+        if (msg.wParam == VK_PRIOR) { m_html->scroll_page(-1); return true; }
+        if (msg.wParam == VK_NEXT)  { m_html->scroll_page(1);  return true; }
     }
-    if (msg.message == WM_KEYDOWN && g_html && g_inputmod
-        && g_inputmod->isEmpty()
+    if (msg.message == WM_KEYDOWN && m_html && m_input
+        && m_input->isEmpty()
         && (GetKeyState(VK_CONTROL) & 0x8000)) {
-        if (msg.wParam == VK_HOME) { g_html->scroll_top();    return true; }
-        if (msg.wParam == VK_END)  { g_html->scroll_bottom(); return true; }
+        if (msg.wParam == VK_HOME) { m_html->scroll_top();    return true; }
+        if (msg.wParam == VK_END)  { m_html->scroll_bottom(); return true; }
     }
     /* Esc denies a pending permission request (a halt has no "deny" --
      * see PermissionBar::escape). It has to be intercepted before
      * IsDialogMessageA, which eats VK_ESCAPE and would never let it
      * reach the bar. */
     if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
-        && g_bar && g_bar->escape()) {
+        && m_bar && m_bar->escape()) {
         return true;
     }
-    return IsDialogMessageA(g_main, &msg) != 0;
-}
-
-void MainWindow::refreshStatus()
-{
-    status_refresh();
-}
-
-void MainWindow::restoreCache()
-{
-    cache_restore();
-}
-
-void MainWindow::setBusy(bool busy)
-{
-    ui_set_busy(busy ? 1 : 0);
-}
-
-bool MainWindow::sendFrame(const char *what, const char *type,
-                           const char *const *keys, const char *const *vals,
-                           int nkv, const void *body, unsigned bodyLen)
-{
-    return ui_send(what, type, keys, vals, nkv, body, bodyLen) != 0;
-}
-
-bool MainWindow::confirmSwitch()
-{
-    return chats_confirm() != 0;
-}
-
-void MainWindow::onSwitching()
-{
-    chats_switching();
-}
-
-void MainWindow::onSwitched(rc_frame *f)
-{
-    chats_switched(f);
-}
-
-bool MainWindow::isSendBlocked()
-{
-    return input_blocked() != 0;
-}
-
-void MainWindow::onSent()
-{
-    input_sent();
-}
-
-void MainWindow::onBarChanged()
-{
-    bar_changed();
-}
-
-void MainWindow::onAttachmentsChanged()
-{
-    pillbar_detached();
-}
-
-bool MainWindow::submitCommand(const char *text, bool compose)
-{
-    return ui_send_text(text, compose ? 1 : 0) != 0;
-}
-
-void MainWindow::proposeWorkDir(const char *path, bool staged)
-{
-    propose_workdir(path, staged ? 1 : 0);
+    return IsDialogMessageA(Window::hwnd(), &msg) != 0;
 }
