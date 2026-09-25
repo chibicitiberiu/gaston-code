@@ -12,20 +12,13 @@ not over the socket. These goldens ensure the prompt text migration
 can be verified byte-for-byte.
 """
 
-import json
 import os
 import re
-from typing import Any
 
-import pytest
-
-from bridge.agent import machine
-from bridge.agent import profiles
-from bridge.agent import toolrep
-from bridge.agent import toolrules
-from bridge.files import caps
-from bridge.wire.protocol import hello
 from harness import harness  # noqa: F401
+
+from bridge.agent import machine, toolrep, toolrules
+from bridge.wire.protocol import hello
 from tests.python.server.golden_utils import (
     PROMPT_GOLDENS_DIR,
     UPDATE_GOLDENS,
@@ -45,7 +38,7 @@ def assert_matches_prompt_golden(golden_name: str, actual_prompt: str) -> None:
             if not normalized.endswith("\n"):
                 f.write("\n")
 
-    with open(golden_file, "r", encoding="utf-8") as f:
+    with open(golden_file, encoding="utf-8") as f:
         expected = f.read()
 
     assert normalized.strip() == expected.strip()

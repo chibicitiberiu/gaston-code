@@ -9,17 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ..guest import ExecCall, GuestSession
 from ..agent import toolrules
+from ..guest import ExecCall, GuestSession
 from ..status import EXEC_STATUS_PROSE, ExecStatus
 from ..wire import fold
 from ..wire.protocol import MAX_HEADER_VALUE, Frame, _quote, exec_cmd, exec_kill
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.guest_exec")
 
@@ -182,7 +178,7 @@ class GuestExecService:
             budget = (timeout_ms / 1000.0) + 30.0
             try:
                 return await asyncio.wait_for(fut, timeout=budget)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self.kill_exec(guest, exec_id)
                 return {
                     "content": [

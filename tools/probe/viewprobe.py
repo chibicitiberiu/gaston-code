@@ -27,18 +27,18 @@ cannot touch the guest's disk.
 from __future__ import annotations
 
 import os
-import socket
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import toolkit                                            # noqa: E402
-import probelib                                           # noqa: E402
+import probelib
+import toolkit
+
 toolkit.on_path()
 
-from bridge.view import html as H                         # noqa: E402
-from bridge.wire import protocol as PR                    # noqa: E402
-from bridge.wire.protocol import Frame, FrameReader       # noqa: E402
+from bridge.view import html as H  # noqa: E402
+from bridge.wire import protocol as PR  # noqa: E402
+from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
 
 
 def main() -> int:
@@ -120,7 +120,7 @@ def main() -> int:
                 break
             for f in r.feed(data):
                 print(f"  guest -> {f.type} {f.headers}")
-    except socket.timeout:
+    except TimeoutError:
         print("hold expired")
     except KeyboardInterrupt:
         pass

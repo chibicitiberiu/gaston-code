@@ -4,11 +4,12 @@
 import base64
 import io
 import os
+
 import pytest
+from harness import harness  # noqa: F401
 from PIL import Image
 
 from bridge.wire.protocol import Frame
-from harness import harness  # noqa: F401
 
 
 def make_test_bmp(width=4, height=4, color=(255, 0, 0)) -> bytes:

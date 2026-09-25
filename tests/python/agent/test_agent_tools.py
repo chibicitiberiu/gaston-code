@@ -18,10 +18,7 @@ from __future__ import annotations
 import ast
 import inspect
 
-import pytest
-
 from bridge.agent import tools as T
-
 
 # --- 04.26: every @tool-decorated function in build() must be registered --
 

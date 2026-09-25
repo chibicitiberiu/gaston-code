@@ -16,16 +16,14 @@ reads.
 """
 
 import configparser
+import logging
 import pathlib
 
-import logging
-
+import conftest
 import pytest
 
 from bridge.agent.toolrep import Fact
 from bridge.agent.toolrules import RULES, Found, inventory, path_dirs, root_of
-
-import conftest
 
 INI = pathlib.Path(conftest.REPO) / "win" / "tools_detect.ini"
 

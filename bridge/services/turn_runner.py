@@ -9,22 +9,18 @@ calculation (turn_verdict).
 from __future__ import annotations
 
 import logging
-import os
-from typing import TYPE_CHECKING, Any, AsyncIterable, Callable
+from collections.abc import AsyncIterable
+from typing import Any
 
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import (
-    Frame,
     anchor_frame,
     pagesealed,
     turn_end,
     turn_error,
     turn_start,
 )
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.turn")
 

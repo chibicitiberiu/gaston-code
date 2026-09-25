@@ -6,27 +6,39 @@ round trips. Mocking the session keeps it deterministic and fast; the real
 model is exercised separately by netcheck.exe.
 """
 
-import os
-import contextlib
 import asyncio
+import contextlib
+import os
 import time
 import zlib
-from dataclasses import dataclass, field
 
 import pytest
+from claude_agent_sdk import (
+    PermissionResultAllow,
+    PermissionResultDeny,
+)
+from harness import (  # noqa: F401
+    FakeCtx,
+    FakeRule,
+    FakeSession,
+    Harness,
+    _connect_and_ask,
+    _recv,
+    harness,
+)
 
-from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
-                              PermissionUpdate)
-
-from bridge.wire.compress import StreamDecompressor
-from bridge.files import paths
-from bridge.wire.protocol import (Frame, FrameReader, MAX_FRAME, PROTO_VERSION,
-                                  ProtocolError, hello)
 from bridge import server as srv
+from bridge.files import paths
 from bridge.server import Bridge
+from bridge.wire.protocol import (
+    MAX_FRAME,
+    PROTO_VERSION,
+    Frame,
+    FrameReader,
+    ProtocolError,
+    hello,
+)
 
-from harness import (FakeCtx, FakeRule, FakeSession, Harness,   # noqa: F401
-                     harness, _connect_and_ask, _recv)
 
 async def test_happy_handshake(harness):
     r, w = await harness.connect()

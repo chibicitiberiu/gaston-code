@@ -22,11 +22,7 @@ line of output rather than a table.
 """
 from __future__ import annotations
 
-
-import pytest
-
 import conftest
-
 
 pytestmark = conftest.needs_guest
 

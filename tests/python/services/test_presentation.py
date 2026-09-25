@@ -1,7 +1,9 @@
 """Unit tests for PresentationService."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from bridge.services.presentation import PresentationService
 from bridge.view.transcript import TranscriptView
 

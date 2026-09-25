@@ -12,12 +12,11 @@ that detection exists to discover.
 import configparser
 import pathlib
 
+import conftest
 import pytest
 
-from bridge.agent.toolnotes import NOTES, Note
+from bridge.agent.toolnotes import NOTES
 from bridge.agent.toolrules import RULES
-
-import conftest
 
 INI = pathlib.Path(conftest.REPO) / "win" / "tools_detect.ini"
 

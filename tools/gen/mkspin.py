@@ -17,11 +17,10 @@ Run:  python3 tools/gen/mkspin.py   (writes win/resources/spin.gif)
 
 import math
 import os
-import sys                                                # noqa: E402
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import toolkit                                            # noqa: E402
-
-
+import toolkit
 from PIL import Image, ImageDraw
 
 SIZE = 16          # what the <img> asks for; drawn 4x and downsampled

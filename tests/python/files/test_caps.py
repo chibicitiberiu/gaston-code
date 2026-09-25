@@ -11,12 +11,11 @@ import inspect
 import pathlib
 import re
 
+import conftest
 import pytest
 
 from bridge.files import caps as C
 from bridge.files import paths as P
-
-import conftest
 
 
 def test_a_client_that_says_nothing_is_the_one_that_already_exists():

@@ -26,12 +26,11 @@ import json
 import logging
 
 import pytest
+from harness import _recv, harness  # noqa: F401
 
 import bridge.server as srv
-from bridge.wire.protocol import Frame
 from bridge.guest import ExecCall
-
-from harness import harness, _recv   # noqa: F401
+from bridge.wire.protocol import Frame
 
 
 async def _hold_turn(harness, guest, *, unwind=0.0):

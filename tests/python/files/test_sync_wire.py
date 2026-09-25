@@ -8,23 +8,24 @@ covered by test_guest_agreement.py, which runs the shipping C.
 """
 
 import asyncio
-import pathlib
 import os
+import os as _os
+import pathlib
+import sys as _sys
 import zlib
 
 import pytest
 
 from bridge.files import ignores as I
-from bridge.files import sync as S
 from bridge.files import paths as P
-from bridge.wire.protocol import Frame
+from bridge.files import sync as S
 from bridge.files.sync import Baseline, Entry, Type
 from bridge.files.syncrun import Pass, SyncError
 from bridge.files.synctransport import SyncTransport
+from bridge.wire.protocol import Frame
 
-import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from harness import _recv, harness  # noqa: E402,F401
+from harness import _recv, harness  # noqa: F401
 
 
 def manifest_line(rel: str, data: bytes, typ=b"f", v=1) -> bytes:

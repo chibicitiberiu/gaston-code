@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..wire.coalesce import Coalescer
 from .html import HtmlStream
 from .pages import Paginator
-from ..wire.coalesce import Coalescer
 
 #: Paginator's own defaults, used when a guest's scaled limits are still 0
 #: -- either genuinely unset (limits_for() has not run yet, e.g. a bare

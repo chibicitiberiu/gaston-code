@@ -15,13 +15,9 @@ profile API has its own quirks about defaults and missing sections, which is
 where both bugs lived.
 """
 
-import os
 import subprocess
 
-import pytest
-
 import conftest
-
 
 EXE_NAME = "inicheck.exe"
 

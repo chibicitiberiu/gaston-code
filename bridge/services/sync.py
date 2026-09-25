@@ -13,15 +13,15 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from ..guest import GuestSession
+from ..files import caps as C
 from ..files import manifest
 from ..files import paths as P
 from ..files.sync import AckResult, Baseline, GetResult, ScanResult
 from ..files.syncrun import Pass, SyncError
 from ..files.synctransport import SyncTransport
+from ..guest import GuestSession
 from ..status import SyncStatus
 from ..view import html as H
-from ..files import caps as C
 from ..wire.protocol import Frame, halt, haltend, status_frame
 
 if TYPE_CHECKING:
@@ -315,13 +315,13 @@ class SyncService:
 
                 await self.reconcile_halt(g, base=p.base)
                 p.notices_delivered(delivered)
-                setattr(g, "transient_aborts", 0)
+                g.transient_aborts = 0
                 return got
             except SyncError as exc:
                 transient_aborts = getattr(g, "transient_aborts", 0)
                 if getattr(exc, "transient", False):
                     transient_aborts += 1
-                    setattr(g, "transient_aborts", transient_aborts)
+                    g.transient_aborts = transient_aborts
                     if transient_aborts <= self.TRANSIENT_ABORT_GRACE:
                         log.info(
                             "sync: %s (retrying; %d of %d)",

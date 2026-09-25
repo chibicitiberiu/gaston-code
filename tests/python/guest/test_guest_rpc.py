@@ -15,10 +15,8 @@ same discipline test_guest_cpp.py uses for the C++ prelude's guards.
 """
 
 
-import pytest
-
 import conftest
-
+import pytest
 
 EXE_NAME = "rpccheck.exe"
 

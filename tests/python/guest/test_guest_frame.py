@@ -19,11 +19,8 @@ from __future__ import annotations
 
 import struct
 
-
-import pytest
-
 import conftest
-from conftest import guest_exe
+import pytest
 
 from bridge.wire.protocol import FrameReader
 
@@ -116,6 +113,7 @@ def test_bridge_never_sends_more_headers_than_the_guest_can_hold():
     dynamically as well.
     """
     import ast
+
     import bridge.wire.protocol as P
 
     cap = _limits()["RC_MAX_HEADERS"]

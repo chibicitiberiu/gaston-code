@@ -8,17 +8,15 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from ..guest import GuestSession
 from ..agent import sessions as sesslist
 from ..files import paths as P
+from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import Frame
 from .config import BridgeConfig
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.workspace")
 

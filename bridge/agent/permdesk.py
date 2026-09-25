@@ -35,14 +35,14 @@ import logging
 import os
 from collections import deque
 
-from . import cmdguard
-from . import toolrules
-from . import permissions as perms
-from .permissions import PendingPrompt, render_request
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
 from ..status import PromptEndReason
 from ..view import html as H
 from ..wire.protocol import permend, permreq, permstate, permwait
-from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+from . import cmdguard, toolrules
+from . import permissions as perms
+from .permissions import PendingPrompt, render_request
 
 log = logging.getLogger("bridge.permdesk")
 
@@ -128,7 +128,7 @@ class PermissionDesk:
         #: that).
         self._gap_said: str | None = None
 
-    def _shell(self, args: "dict | None" = None) -> str:
+    def _shell(self, args: dict | None = None) -> str:
         """Which shell's rules to judge a command by.
 
         THE ONE THE CALL NAMED, first. A machine has as many shells as it
@@ -299,7 +299,7 @@ class PermissionDesk:
                 await self._enqueue(prompt)
                 return await asyncio.wait_for(prompt.future,
                                               timeout=perms.DEADLINE_S)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._finish(prompt, PromptEndReason.TIMEOUT)
                 return PermissionResultDeny(
                     message=("Nobody answered the permission request on the "
@@ -334,7 +334,7 @@ class PermissionDesk:
         # paginates and survives paging away and back. The bar itself carries
         # only the summary, because a guest in HISTORY mode never sees this.
         await self._write_block(prompt.body)
-        
+
         # Coalescers must be flushed before the bar is shown, or buffered text
         # arrives out of order behind the prompt.
         assert not any(c._buf for c in self._guest.view.coalescers.values())

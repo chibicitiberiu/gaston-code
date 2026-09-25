@@ -102,7 +102,7 @@ def assert_matches_golden(golden_file: str, actual_data: Any) -> None:
             json.dump(actual_data, f, indent=2, sort_keys=True)
             f.write("\n")
 
-    with open(golden_file, "r", encoding="utf-8") as f:
+    with open(golden_file, encoding="utf-8") as f:
         expected = json.load(f)
 
     assert actual_data == expected

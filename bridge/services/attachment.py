@@ -11,15 +11,12 @@ from __future__ import annotations
 import base64
 import logging
 import os
-from typing import TYPE_CHECKING, Any, AsyncIterable
+from collections.abc import AsyncIterable
+from typing import Any
 
-from ..guest import GuestSession
-from ..files import paths as P
 from ..files.synctransport import SyncTransport
+from ..guest import GuestSession
 from ..status import SyncStatus
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.attachment")
 
@@ -225,8 +222,9 @@ class AttachmentService:
                     media_type = NATIVE_IMAGES[ext]
                 else:
                     try:
-                        from PIL import Image
                         import io
+
+                        from PIL import Image
 
                         with Image.open(io.BytesIO(att_bytes)) as img:
                             buf = io.BytesIO()

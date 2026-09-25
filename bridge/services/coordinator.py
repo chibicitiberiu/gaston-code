@@ -9,17 +9,14 @@ _reissue_turn, sync_state_to_guest), and inbound frame routing for turn-affectin
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..guest import GuestSession
 from ..status import GuestState
 from ..wire import fold
 from ..wire.protocol import Frame, error, halt, haltend, turn_start
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.coordinator")
 

@@ -3,9 +3,7 @@
 The unit half. The wire half -- a `-text` file actually surviving a push and a
 pull byte for byte -- is in test_sync_wire.py, because it needs both sides.
 """
-import os
 
-import pytest
 
 from bridge.files import attrs as A
 from bridge.files import paths as P
@@ -138,7 +136,7 @@ def test_sync_status_explains_the_rules_to_the_agent(tmp_path, monkeypatch):
     b.config.sync_state = str(state)
     # A conversation with a folder: without one nothing is mirrored and the
     # status is a sentence saying so rather than a report about a tree.
-    from bridge.server import GuestSession, TranscriptView, Paginator
+    from bridge.server import GuestSession, Paginator, TranscriptView
     b.connection.guest = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
     b.connection.guest.work_dir = str(root)
     b.connection.guest.work_guest = "C:\\WORK"

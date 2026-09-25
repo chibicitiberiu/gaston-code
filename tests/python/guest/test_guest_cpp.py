@@ -10,13 +10,10 @@ whose search pattern was exactly one byte short, and a checked append that
 only caught overflow would have missed it.
 """
 
-import os
 
-
-import pytest
 
 import conftest
-
+import pytest
 
 EXE_NAME = "cppcheck.exe"
 

@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import os
 
-from . import prompts
-from . import toolrules
+from . import prompts, toolrules
 from . import toolnotes as notes
 
 
@@ -104,7 +103,7 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
 MAX_FACT_BLOCKS = 1
 
 
-def tools_block(found: "list", path: "list | None" = None) -> str:
+def tools_block(found: list, path: list | None = None) -> str:
     r"""The inventory, plus the measured notes for what was found.
 
     `found` is `toolrules.inventory(...)`. Empty gives "" -- a heading over
@@ -221,8 +220,8 @@ def tools_block(found: "list", path: "list | None" = None) -> str:
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
                   guest_root: str | None = None,
                   home: str | None = None,
-                  tools: "list | None" = None,
-                  path: "list | None" = None) -> str:
+                  tools: list | None = None,
+                  path: list | None = None) -> str:
     """Text appended to Claude Code's own system prompt.
 
     APPENDED, never substituted: the preset is what makes Claude Code work,

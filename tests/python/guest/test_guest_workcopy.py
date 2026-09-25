@@ -17,10 +17,8 @@ Win98 guest by hand at least once per change to it; see docs/PROGRESS.md.
 """
 
 
-import pytest
-
 import conftest
-
+import pytest
 
 EXE_NAME = "workcheck.exe"
 

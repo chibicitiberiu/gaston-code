@@ -30,12 +30,13 @@ import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import toolkit                                            # noqa: E402
-import probelib                                           # noqa: E402
+import probelib
+import toolkit
+
 toolkit.on_path()
 
-from bridge.files import paths as P                      # noqa: E402
-from bridge.wire.protocol import Frame, FrameReader     # noqa: E402
+from bridge.files import paths as P  # noqa: E402
+from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
 
 CHUNK = 8192
 
@@ -186,7 +187,7 @@ def run(g: Guest) -> None:
           zlib.crc32(body))
     check("the row carries the raw checksum too", rows["probe.txt"]["crc_raw"],
           zlib.crc32(stored))
-    check("and they differ for a CRLF file", 
+    check("and they differ for a CRLF file",
           rows["probe.txt"]["crc_norm"] != rows["probe.txt"]["crc_raw"], True)
 
     print("\n== a -text override: byte-exact against a file it calls text ==")

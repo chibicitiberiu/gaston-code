@@ -18,11 +18,9 @@ from __future__ import annotations
 
 import json
 
-import pytest
+from harness import _recv, harness  # noqa: F401
 
 from bridge.wire.protocol import Frame
-
-from harness import harness, _recv   # noqa: F401
 
 
 async def _connected(harness):

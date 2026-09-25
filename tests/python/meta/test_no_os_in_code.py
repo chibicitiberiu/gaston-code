@@ -23,9 +23,8 @@ neither lives in a string.
 import ast
 import pathlib
 
-import pytest
-
 import conftest
+import pytest
 
 ROOT = pathlib.Path(conftest.REPO) / "bridge"
 

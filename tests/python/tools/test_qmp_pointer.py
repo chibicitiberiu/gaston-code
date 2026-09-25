@@ -24,15 +24,13 @@ while trying to debug something else.
 import os
 import sys
 
-import pytest
-
 import conftest
+import pytest
 
 HERE = conftest.REPO
 sys.path.insert(0, os.path.join(HERE, "tools", "vm"))
 
-import qmp                                                    # noqa: E402
-
+import qmp  # noqa: E402
 
 
 class Model:

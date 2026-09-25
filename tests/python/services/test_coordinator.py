@@ -7,7 +7,7 @@ import pytest
 
 from bridge.services.coordinator import SessionCoordinator
 from bridge.status import GuestState
-from bridge.wire.protocol import Frame, error, halt, haltend, turn_start
+from bridge.wire.protocol import Frame
 
 
 @pytest.fixture

@@ -11,19 +11,14 @@ Wine. Wine cannot model FAT granularity or case-insensitivity, but it models
 byte-level file reading perfectly well, which is all this needs.
 """
 
-import os
 import pathlib
 import re
-
 import zlib
 
+import conftest
 import pytest
 
-from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, classify,
-                                normalise)
-
-import conftest
-
+from bridge.files.paths import CLASS_EXACT, CLASS_TEXT, classify, normalise
 
 EXE_NAME = "synccheck.exe"
 

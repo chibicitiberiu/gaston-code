@@ -23,10 +23,10 @@ Run:  python3 tools/gen/mkicon.py   (writes win/resources/gaston.ico)
 
 import os
 import struct
-import sys                                                # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import toolkit                                            # noqa: E402
+import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit
 
 # The Windows 16-colour palette, in its canonical index order.
 PALETTE = [
@@ -54,7 +54,7 @@ CH = {"k": 0, "m": 1, "e": 2, "o": 3, "n": 4, "p": 5, "t": 6, "s": 7,
 TRANSPARENT = None
 
 
-class Canvas(object):
+class Canvas:
     def __init__(self, w, h):
         self.w = w
         self.h = h

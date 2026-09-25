@@ -3,10 +3,9 @@
 import pathlib
 import re
 
-import pytest
-
-from bridge.status import ExecStatus, EXEC_STATUS_PROSE
 import conftest
+
+from bridge.status import EXEC_STATUS_PROSE, ExecStatus
 
 
 def test_exec_status_parse_known():

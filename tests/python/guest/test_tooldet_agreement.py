@@ -15,16 +15,14 @@ what it does model well, which is all this needs. The things it cannot check
 are on the guest: `docs/PROGRESS.md` has the run.
 """
 
-import os
 
 
-import pytest
-
-from bridge.agent.toolrep import parse_rows
-from bridge.agent.toolrules import inventory
 
 import conftest
 from conftest import wine_env
+
+from bridge.agent.toolrep import parse_rows
+from bridge.agent.toolrules import inventory
 
 pytestmark = conftest.needs_guest
 

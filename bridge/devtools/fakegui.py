@@ -43,7 +43,10 @@ import sys
 import tempfile
 
 from ..wire.compress import (
-    StreamCompressor, StreamDecompressor, LEVEL_UP, MIN_WORTH_COMPRESSING
+    LEVEL_UP,
+    MIN_WORTH_COMPRESSING,
+    StreamCompressor,
+    StreamDecompressor,
 )
 from ..wire.protocol import Frame, FrameReader, ProtocolError, hello
 
@@ -640,7 +643,7 @@ class FakeGui:
 
             await asyncio.wait_for(pump_out(), timeout=timeout_ms / 1000.0)
             code = await proc.wait()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             status = "timeout"
             proc.kill()
             await proc.wait()

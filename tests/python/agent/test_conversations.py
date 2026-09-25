@@ -8,10 +8,10 @@ load rather than converted once.
 """
 
 import json
+
 import pytest
 
 from bridge.agent.conversations import Conversations
-
 
 # --- whose conversation it is ----------------------------------------------
 

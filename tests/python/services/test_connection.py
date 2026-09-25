@@ -7,7 +7,7 @@ import pytest
 
 from bridge.services.config import BridgeConfig
 from bridge.services.connection import ConnectionService
-from bridge.wire.protocol import Frame, error
+from bridge.wire.protocol import Frame
 
 
 @pytest.fixture

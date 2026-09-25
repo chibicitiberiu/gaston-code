@@ -55,8 +55,8 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from . import profiles
 from ..files import caps as C
+from . import profiles
 
 log = logging.getLogger("bridge.cmdguard")
 
@@ -103,7 +103,7 @@ def _default_shell() -> str:
     return ""
 
 
-def _pat(table: dict, key: str) -> "re.Pattern | None":
+def _pat(table: dict, key: str) -> re.Pattern | None:
     """A regex from the profile, or None. NO FALLBACK, deliberately.
 
     The fallbacks this replaces were the whole bug: with the verb lists
@@ -146,16 +146,16 @@ class Grammar:
     name: str = ""
 
     # --- grammar ---------------------------------------------------------
-    separators: "re.Pattern | None" = None
-    redirect_write: "re.Pattern | None" = None
-    redirect_read: "re.Pattern | None" = None
-    drive: "re.Pattern | None" = None
+    separators: re.Pattern | None = None
+    redirect_write: re.Pattern | None = None
+    redirect_read: re.Pattern | None = None
+    drive: re.Pattern | None = None
     #: A token matching this contains something this cannot expand -- a
     #: variable, a home-directory shorthand, a substitution. It is therefore
     #: UNRESOLVABLE, which means "ask", not "safe". The old code hardcoded
     #: `"%" in t`, which is correct for COMMAND.COM and silently wrong for
     #: every shell whose sigil is `$` or `~`.
-    variables: "re.Pattern | None" = None
+    variables: re.Pattern | None = None
     sep: str = ""
     altsep: str = ""
     quote: str = ""
@@ -163,7 +163,7 @@ class Grammar:
     switch_max: int = 0
     #: What a switch actually LOOKS like on this shell -- the vocabulary, not
     #: a length. See `Guard.is_switch` for what judging by length cost.
-    switch_token: "re.Pattern | None" = None
+    switch_token: re.Pattern | None = None
     exts: tuple = ()
 
     # --- vocabulary ------------------------------------------------------
@@ -512,7 +512,7 @@ class Root:
         return self.check(token) == INSIDE
 
     def fault(self, token: str, name: str, outside: str,
-              verb: str = "writes") -> "str | None":
+              verb: str = "writes") -> str | None:
         """One finished sentence for a path that is not INSIDE, or None.
 
         `name` is the token as the MODEL wrote it, not as `norm` rewrote it

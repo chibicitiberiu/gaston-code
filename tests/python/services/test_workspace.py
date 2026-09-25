@@ -1,7 +1,9 @@
 """Unit tests for WorkspaceService."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from bridge.services.config import BridgeConfig
 from bridge.services.workspace import WorkspaceService
 

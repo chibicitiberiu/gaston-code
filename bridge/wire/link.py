@@ -21,11 +21,22 @@ import time
 
 from ..view.html import LIVE
 from . import fold
-from .compress import (ENC_DEFLATE, ENC_RAW, StreamCompressor,
-                       StreamDecompressor, should_compress)
-from .protocol import (MAX_FRAME, Frame, ProtocolError,
-                       export_data, export_end, export_start)
-from .protocol import text_frame
+from .compress import (
+    ENC_DEFLATE,
+    ENC_RAW,
+    StreamCompressor,
+    StreamDecompressor,
+    should_compress,
+)
+from .protocol import (
+    MAX_FRAME,
+    Frame,
+    ProtocolError,
+    export_data,
+    export_end,
+    export_start,
+    text_frame,
+)
 
 log = logging.getLogger("bridge.link")
 

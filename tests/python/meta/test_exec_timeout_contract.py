@@ -23,9 +23,9 @@ import inspect
 import re
 from pathlib import Path
 
-from bridge.agent import tools as bridge_tools
-
 import conftest
+
+from bridge.agent import tools as bridge_tools
 
 RPC_CPP = Path(conftest.HERE) / "win" / "rpc" / "rpc.cpp"
 

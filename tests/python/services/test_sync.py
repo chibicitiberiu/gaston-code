@@ -2,12 +2,12 @@
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from bridge.services.config import BridgeConfig
 from bridge.services.sync import SyncService
 from bridge.synccoord import SyncCoordinator
-from bridge.wire.protocol import Frame
 
 
 @pytest.fixture

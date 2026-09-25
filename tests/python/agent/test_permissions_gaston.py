@@ -9,8 +9,14 @@ version of work the user's edit displaced.
 import logging
 import os
 
-from bridge.agent.permissions import MAX_BODY, off_limits, render_request, summary
-from bridge.agent.permissions import telling_argument, _PATH_TOOLS
+from bridge.agent.permissions import (
+    _PATH_TOOLS,
+    MAX_BODY,
+    off_limits,
+    render_request,
+    summary,
+    telling_argument,
+)
 
 
 def test_reading_a_conflict_copy_is_allowed(tmp_path):

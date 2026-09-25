@@ -19,9 +19,8 @@ Nothing here runs a guest binary or needs a toolchain. It reads the tree.
 import ast
 import os
 
-import pytest
-
 import conftest
+import pytest
 
 TESTS = os.path.join(conftest.REPO, "tests", "python")
 
@@ -162,3 +161,50 @@ def test_needs_guest_carries_both_a_selector_and_a_condition():
     """
     names = {m.name for m in conftest.needs_guest}
     assert names == {"guest", "skipif"}, names
+
+
+# --- bridge.server's public surface -----------------------------------------
+
+
+def test_everything_in_server_all_actually_resolves():
+    """`__all__` is a promise; an entry that does not resolve is a lie.
+
+    It also protects the imports a lint pass would call dead. Two of them are
+    reached BY NAME rather than imported: `SessionService._resolve_session_cls`
+    asks `hasattr(sys.modules["bridge.server"], "Session")` so a test can swap
+    the SDK session for a fake, and tests monkeypatch `srv.sesslist.listing`.
+    `ruff --fix` removed both as unused and 248 tests failed at once.
+    """
+    import bridge.server as srv
+
+    missing = [n for n in srv.__all__ if not hasattr(srv, n)]
+    assert not missing, (
+        f"bridge.server.__all__ names {missing}, which do not exist. Either "
+        f"the import was removed as unused -- it is in __all__ precisely so "
+        f"that does not happen -- or the name moved.")
+
+
+def test_names_reached_through_bridge_server_are_declared():
+    """Anything tests reach as `srv.<name>` has to be in `__all__`.
+
+    Otherwise the next lint pass deletes the import and nothing says so until
+    the suite runs.
+    """
+    import pathlib
+    import re
+
+    import bridge.server as srv
+    import conftest
+
+    root = pathlib.Path(conftest.REPO)
+    blob = "\n".join(
+        p.read_text(encoding="utf-8", errors="ignore")
+        for p in list((root / "tests").rglob("*.py"))
+        + list((root / "tools").rglob("*.py")))
+    reached = set(re.findall(r"\bsrv\.(\w+)", blob))
+    reached |= set(re.findall(r"\bbridge\.server\.(\w+)", blob))
+    undeclared = sorted(
+        n for n in reached
+        if hasattr(srv, n) and not n.startswith("_") and n not in srv.__all__)
+    assert not undeclared, (
+        f"reached through bridge.server but not in its __all__: {undeclared}")

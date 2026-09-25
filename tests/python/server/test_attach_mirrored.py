@@ -3,11 +3,11 @@
 
 import base64
 import os
-import pytest
 
-from bridge.wire.protocol import Frame
+import pytest
 from harness import harness  # noqa: F401
 
+from bridge.wire.protocol import Frame
 
 # 1x1 transparent PNG bytes
 TINY_PNG = base64.b64decode(

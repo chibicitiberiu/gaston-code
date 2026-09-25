@@ -9,9 +9,16 @@ import pytest
 
 from bridge.files import caps as C
 from bridge.files import paths as P
-from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, canonical,
-                                check, classify, normalise, to_bridge,
-                                to_guest)
+from bridge.files.paths import (
+    CLASS_EXACT,
+    CLASS_TEXT,
+    canonical,
+    check,
+    classify,
+    normalise,
+    to_bridge,
+    to_guest,
+)
 
 ROOT = "C:\\WORK"
 
@@ -227,7 +234,7 @@ def test_a_cp1252_name_goes_out_as_cp1252_not_utf8():
     the real machine, exactly like that.
     """
     assert P.wire_encode("café.md") == b"caf\xe9.md"
-    assert P.wire_encode("café.md") != "café.md".encode("utf-8")
+    assert P.wire_encode("café.md") != "café.md".encode()
     assert P.wire_decode(b"caf\xe9.md") == "café.md"
 
 

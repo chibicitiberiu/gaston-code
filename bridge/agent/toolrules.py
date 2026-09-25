@@ -27,7 +27,6 @@ fine; a survey is not" rather than "do not check".
 from __future__ import annotations
 
 import logging
-
 from dataclasses import dataclass
 
 from . import profiles
@@ -51,7 +50,7 @@ log = logging.getLogger("bridge.toolrules")
 @dataclass(frozen=True)
 class Rule:
     kind: str
-    bins: "tuple | None" = None
+    bins: tuple | None = None
     env: tuple = ()             # variables that name the root directly
     version_markers: tuple = () # tuple of (marker_suffix, version_str)
     version_default: str = ""
@@ -201,7 +200,7 @@ def shell_of(found) -> str:
     return (getattr(shells[0], "name", "") or "") if shells else ""
 
 
-def shell_command(found, name: str) -> "str | None":
+def shell_command(found, name: str) -> str | None:
     """How to tell `name` on this machine to run one command line.
 
     Returns e.g. `C:\\WINDOWS\\COMMAND.COM /c`, which the guest splices in

@@ -19,8 +19,6 @@ is exactly the shape a comment cannot keep true.
 import os
 import re
 
-import pytest
-
 import conftest
 
 WIN = os.path.join(conftest.REPO, "win", "app")

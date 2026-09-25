@@ -7,15 +7,13 @@ configuration, permission modes, and emitting OPTION frames to the guest.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import Frame, option, optionsend
 from .config import BridgeConfig
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.options")
 

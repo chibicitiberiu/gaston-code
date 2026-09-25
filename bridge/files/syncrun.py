@@ -17,15 +17,18 @@ import os
 import shutil
 import zlib
 
+from ..status import SyncStatus
 from . import attrs as A
 from . import caps as C
 from . import ignores as I
 from . import paths as P
 from . import sync as S
 from .reporter import Reporter
-from .scanner import WORKING_SUFFIXES, scan_bridge_tree  # noqa: F401 (WORKING_SUFFIXES re-export)
+from .scanner import (
+    WORKING_SUFFIXES,
+    scan_bridge_tree,
+)
 from .synctransport import CHUNK, SyncTransport  # noqa: F401 (CHUNK re-export)
-from ..status import SyncStatus
 
 log = logging.getLogger("bridge.syncrun")
 
@@ -83,7 +86,7 @@ class Pass:
     guest_root = ""
     caps = C.Caps()
 
-    def __init__(self, transport: "SyncTransport", caps: "C.Caps | None",
+    def __init__(self, transport: SyncTransport, caps: C.Caps | None,
                 root: str, state_dir: str):
         # 02.19: this used to be `Pass(bridge, guest, root, state_dir)` --
         # the entire Bridge and the entire GuestSession, of which four

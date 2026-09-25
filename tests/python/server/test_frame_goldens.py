@@ -22,14 +22,13 @@ The frame trace is the contract:
 
 import asyncio
 import os
-import time
-import zlib
+
 from claude_agent_sdk import PermissionResultAllow
+from harness import FakeCtx, harness  # noqa: F401
+
 from bridge.agent.session import Turn
-from bridge.wire.protocol import Frame, hello
-from bridge.view import html as H
 from bridge.files.sync import Baseline
-from harness import harness, FakeCtx  # noqa: F401
+from bridge.wire.protocol import Frame, hello
 from tests.python.server.golden_utils import (
     FRAME_GOLDENS_DIR,
     assert_matches_golden,

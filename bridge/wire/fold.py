@@ -94,10 +94,13 @@ _EXPLICIT: dict[str, str] = {
     "‑": "-",      # non-breaking hyphen
     "〜": "~",      # wave dash
     # Spaces
-    " ": " ",      # nbsp -- CP1252 has it, but a literal space is safer
-    " ": " ", " ": " ", " ": " ", " ": " ",
-    "​": "",       # zero-width space
-    "﻿": "",       # BOM
+    "\u00a0": " ",  # nbsp -- CP1252 has it, but a literal space is safer
+    "\u2002": " ",  # en space
+    "\u2003": " ",  # em space
+    "\u2009": " ",  # thin space
+    "\u202f": " ",  # narrow no-break space
+    "\u200b": "",  # zero-width space
+    "\ufeff": "",  # BOM
     # Arrows: extremely common in model explanations
     "←": "<-", "→": "->", "↔": "<->",
     "⇐": "<=", "⇒": "=>", "⇔": "<=>",

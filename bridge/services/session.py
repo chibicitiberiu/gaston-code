@@ -11,15 +11,15 @@ import datetime as _dt
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from ..guest import GuestSession
 from ..agent import machine
 from ..agent import permissions as perms
 from ..agent import sessions as sesslist
 from ..agent import tools as machine_tools
-from ..agent.conversations import Conversations
 from ..agent.session import Session
+from ..guest import GuestSession
 from ..view import html as H
 from ..wire import fold
 from ..wire.protocol import (
@@ -31,9 +31,6 @@ from ..wire.protocol import (
     sessions_start,
     switched,
 )
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.session")
 

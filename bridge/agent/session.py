@@ -220,7 +220,7 @@ class Session:
             return None
         try:
             usage = await self._client.get_context_usage()
-        except Exception as exc:          # noqa: BLE001 -- see docstring
+        except Exception as exc:
             log.debug("context usage unavailable: %s", exc)
             return None
         if not usage:

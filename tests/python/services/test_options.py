@@ -1,10 +1,11 @@
 """Unit tests for OptionsService."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-from bridge.services.options import OptionsService, MODE_ORDER
+
+import pytest
+
 from bridge.services.config import BridgeConfig
-from bridge.wire.protocol import Frame
+from bridge.services.options import OptionsService
 
 
 @pytest.fixture

@@ -32,8 +32,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from . import sync as S
 from ..wire.protocol import Frame
+from . import sync as S
 
 #: Matched against the guest's own chunked-read size by
 #: test_guest_agreement.py, which imports this as `syncrun.CHUNK` --

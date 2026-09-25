@@ -21,7 +21,6 @@ cannot build or run the guest.
 """
 
 import os
-import shutil
 import subprocess
 import tempfile
 

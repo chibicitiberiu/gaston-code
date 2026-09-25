@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from bridge.agent.conversations import Conversations
 from bridge.services.session import SessionService
 from bridge.wire.protocol import Frame

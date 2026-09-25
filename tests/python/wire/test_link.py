@@ -11,13 +11,11 @@ Covers failure paths and invariants called out in Audit 04.13:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
 import pytest
 
+from bridge.view.html import APPEND, LIVE
 from bridge.wire.link import GuestLink
-from bridge.wire.protocol import Frame, MAX_FRAME, ProtocolError
-from bridge.view.html import LIVE, APPEND
+from bridge.wire.protocol import MAX_FRAME, Frame, ProtocolError
 
 
 class FakeWriter:

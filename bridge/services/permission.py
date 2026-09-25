@@ -9,16 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ..guest import GuestSession
 from ..agent import permissions as perms
 from ..agent.permdesk import PermissionDesk
 from ..agent.session import TOOLS
+from ..guest import GuestSession
 from ..wire.protocol import Frame
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("bridge.permission")
 

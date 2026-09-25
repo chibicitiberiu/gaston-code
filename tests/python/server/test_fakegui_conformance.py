@@ -35,16 +35,16 @@ import os
 
 import pytest
 
-from bridge.devtools.fakegui import FakeGui
-from bridge.wire.protocol import Frame, FrameReader
-from bridge.files import caps as C
-
 # The `harness` fixture (a real Bridge on a real port) and `_recv` are
 # defined in test_server_integration.py, not duplicated here -- importing
 # them keeps this file honest against the one Harness the rest of the suite
 # already trusts, rather than a second implementation that could drift from
 # it.
-from harness import harness, _recv   # noqa: F401
+from harness import _recv, harness  # noqa: F401
+
+from bridge.devtools.fakegui import FakeGui
+from bridge.files import caps as C
+from bridge.wire.protocol import Frame, FrameReader
 
 
 async def _wait_attached(harness, timeout=5.0):
@@ -102,7 +102,9 @@ def test_fakegui_hello_headers_match_guest_net_cpp():
     fakegui's HELLO frame declares the same keys.
     """
     import re
+
     import conftest
+
     from bridge.devtools.fakegui import FAKE_CAPS, FAKE_IDENTITY
     from bridge.wire.protocol import hello
 

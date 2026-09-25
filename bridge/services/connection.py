@@ -13,15 +13,16 @@ import asyncio
 import logging
 import sys
 import time
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from .. import handshake
-from ..guest import GuestSession
 from ..agent import profiles, toolrep, toolrules
+from ..guest import GuestSession
+from ..synccoord import SyncCoordinator
 from ..view.pages import Paginator
 from ..view.transcript import TranscriptView
 from ..wire import fold
-from ..synccoord import SyncCoordinator
 from ..wire.link import GuestLink
 from ..wire.protocol import Frame, FrameReader, ProtocolError, error, pong
 

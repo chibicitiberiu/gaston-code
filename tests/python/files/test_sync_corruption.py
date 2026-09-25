@@ -18,8 +18,15 @@ import zlib
 
 import pytest
 
-from bridge.files.paths import (CLASS_EXACT, CLASS_TEXT, canonical, check, classify,
-                                normalise, to_bridge, to_guest)
+from bridge.files.paths import (
+    CLASS_EXACT,
+    canonical,
+    check,
+    classify,
+    normalise,
+    to_bridge,
+    to_guest,
+)
 
 ROOT = "C:\\WORK"
 
@@ -61,7 +68,7 @@ def _text_corpus():
     yield b"a\n" * 500
     yield b"a\r\n" * 500
     yield "café\nnaïve\n".encode("cp1252")
-    yield "café\nnaïve\n".encode("utf-8")
+    yield "café\nnaïve\n".encode()
     yield b"\xef\xbb\xbfBOM at the start\n"          # UTF-8 BOM
     yield b"trailing spaces   \nand tabs\t\n"
 

@@ -18,8 +18,8 @@ import os
 
 import pytest
 
-from bridge.server import Bridge
 from bridge.files.sync import Baseline, Entry, Tomb, Type
+from bridge.server import Bridge
 
 
 def _committed_guest(local: str, guest_root: str):
@@ -29,7 +29,7 @@ def _committed_guest(local: str, guest_root: str):
     these tests reach, and the paths around it want `sync_lock` and the rest
     of the machinery a namespace does not have.
     """
-    from bridge.server import GuestSession, TranscriptView, Paginator
+    from bridge.server import GuestSession, Paginator, TranscriptView
     g = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
     g.work_dir = local
     g.work_guest = guest_root

@@ -7,6 +7,7 @@ through constructors, and state scoped to GuestSession flowing through parameter
 from bridge.services.attachment import AttachmentService
 from bridge.services.config import BridgeConfig
 from bridge.services.connection import ConnectionService
+from bridge.services.coordinator import SessionCoordinator
 from bridge.services.guest_exec import GuestExecService
 from bridge.services.options import (
     COMMAND_MENU,
@@ -17,7 +18,6 @@ from bridge.services.options import (
     MODE_ORDER,
     OptionsService,
 )
-from bridge.services.coordinator import SessionCoordinator
 from bridge.services.permission import PermissionService
 from bridge.services.presentation import PresentationService
 from bridge.services.session import SessionService
@@ -26,6 +26,12 @@ from bridge.services.turn_runner import TurnRunner, turn_verdict
 from bridge.services.workspace import WorkspaceService
 
 __all__ = [
+    "COMMAND_MENU",
+    "EFFORT_LABEL",
+    "EFFORT_ORDER",
+    "MODE_CAVEAT",
+    "MODE_LABEL",
+    "MODE_ORDER",
     "AttachmentService",
     "BridgeConfig",
     "ConnectionService",
@@ -39,10 +45,4 @@ __all__ = [
     "TurnRunner",
     "WorkspaceService",
     "turn_verdict",
-    "COMMAND_MENU",
-    "EFFORT_LABEL",
-    "EFFORT_ORDER",
-    "MODE_CAVEAT",
-    "MODE_LABEL",
-    "MODE_ORDER",
 ]

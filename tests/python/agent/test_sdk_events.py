@@ -129,6 +129,7 @@ class _Info:
 async def _dispatch_rate_limit(status):
     """Drive the real dispatcher with a real RateLimitEvent."""
     from claude_agent_sdk import RateLimitEvent
+
     from bridge.agent import session as S
 
     seen: list[tuple[str, dict]] = []
@@ -172,6 +173,7 @@ async def test_a_conversation_reset_is_not_an_sdk_event():
     misfired identically: a reset produces no text and no tool call, so it
     looked like a degraded turn that answered nothing."""
     from claude_agent_sdk import ConversationResetMessage
+
     from bridge.agent import session as S
 
     seen: list[tuple[str, dict]] = []

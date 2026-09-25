@@ -7,16 +7,13 @@ recording into paginator, and sending PAGESTART/PAGEEND and HTML frames.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..guest import GuestSession
 from ..view import html as H
 from ..view.html import APPEND, LIVE
 from ..wire.coalesce import Coalescer
-from ..wire.protocol import error, notice, pageend, pagesealed, pagestart
-
-if TYPE_CHECKING:
-    pass
+from ..wire.protocol import Frame, error, notice, pageend, pagesealed, pagestart
 
 log = logging.getLogger("bridge.presentation")
 

@@ -15,9 +15,9 @@ import logging
 
 from claude_agent_sdk import get_session_messages, list_sessions
 
-from . import permissions as _perms
 from ..view import html as H
 from ..view.html import APPEND, HtmlStream
+from . import permissions as _perms
 
 # How a piece of a stored message is tagged on the way to the renderer. These
 # are internal to the replay path -- the wire carries HTML, not styles -- and

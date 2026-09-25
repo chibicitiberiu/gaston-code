@@ -173,7 +173,6 @@ def test_trademark_and_ligatures():
 
 def test_nothing_in_the_80_9f_range_survives_folding():
     """The property that matters, rather than a list of examples."""
-    import codecs
     for b in range(0x80, 0xA0):
         try:
             ch = bytes([b]).decode("cp1252")

@@ -117,15 +117,15 @@ class Coalescer:
     async def _ticker(self) -> None:
         """Timeout flush, so text never sits waiting for a line that a model
         stopped mid-sentence will never send."""
-        try:
-            while True:
-                await asyncio.sleep(self._interval)
-                async with self._lock:
-                    due = (
-                        bool(self._buf)
-                        and (time.monotonic() - self._last_flush) >= self._interval
-                    )
-                if due:
-                    await self.flush()
-        except asyncio.CancelledError:
-            raise
+        # Cancellation propagates: `stop()` cancels this task deliberately and
+        # awaits it. There used to be an `except CancelledError: raise` here,
+        # which is what the language already does.
+        while True:
+            await asyncio.sleep(self._interval)
+            async with self._lock:
+                due = (
+                    bool(self._buf)
+                    and (time.monotonic() - self._last_flush) >= self._interval
+                )
+            if due:
+                await self.flush()

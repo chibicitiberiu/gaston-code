@@ -22,9 +22,8 @@ import os
 import shutil
 import subprocess
 
-import pytest
-
 import conftest
+import pytest
 
 TOOLS = os.path.join(conftest.REPO, "tools")
 

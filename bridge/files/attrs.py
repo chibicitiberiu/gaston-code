@@ -78,7 +78,7 @@ class PathAttrs:
     `text is None` means nobody said, which is what lets a later file override
     an earlier one without having to re-state everything."""
 
-    __slots__ = ("text", "eol")
+    __slots__ = ("eol", "text")
 
     def __init__(self, text=None, eol=None):
         #: True (force text), False (force byte-exact), or None (decide by

@@ -93,7 +93,7 @@ def _translate(pat: str) -> re.Pattern:
 
 
 class _Rule:
-    __slots__ = ("negate", "dir_only", "anchored", "rx", "base")
+    __slots__ = ("anchored", "base", "dir_only", "negate", "rx")
 
     def __init__(self, pattern: str, base: str):
         self.base = base

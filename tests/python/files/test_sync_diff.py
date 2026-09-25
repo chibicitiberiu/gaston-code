@@ -11,10 +11,9 @@ import time
 
 import pytest
 
-from bridge.files import sync as S
 from bridge.files import paths as P
-from bridge.files.sync import (Act, Baseline, Decision, Entry, Tomb, Type, diff,
-                               order)
+from bridge.files import sync as S
+from bridge.files.sync import Act, Baseline, Decision, Entry, Tomb, Type, diff, order
 
 
 def f(crc, cls=P.CLASS_TEXT, display="", mtime=0.0):

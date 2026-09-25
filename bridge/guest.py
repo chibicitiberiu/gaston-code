@@ -24,17 +24,19 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from .agent import permissions as perms
 from .agent.session import Session
 from .files.synctransport import GuestSyncState
 from .status import GuestState
 from .synccoord import SyncCoordinator
-from .view.html import HtmlStream
-from .view.pages import Paginator
 from .view.transcript import TranscriptView
-from .wire.compress import StreamCompressor
 from .wire.link import GuestLink
+
+if TYPE_CHECKING:  # annotations only -- importing these for real is a cycle
+    from .agent.permdesk import PermissionDesk
+    from .agent.toolrules import Found
+    from .files import caps as C
 
 @dataclass
 class ExecCall:
@@ -163,7 +165,7 @@ class GuestSession:
     # and one prior re-parse site used to fall back to {} when this guest was
     # merely unset, guessing Win9x defaults instead of reading what the
     # client actually declared. See docs/audit/02-bridge-python.md #02.22.
-    caps: "C.Caps | None" = None
+    caps: C.Caps | None = None
 
     #: What that machine has installed, as HELLO's body said and the rules in
     #: bridge/agent/toolrules.py read it. Set once per CONNECTION, not once
@@ -171,9 +173,9 @@ class GuestSession:
     #: connection sees the same inventory. A guest built before this existed
     #: sends no body and lands here as [], which is the same thing the prompt
     #: does with "nothing was detected" -- says nothing at all.
-    tools: "list[Found]" = field(default_factory=list)
+    tools: list[Found] = field(default_factory=list)
     #: That machine's PATH, as it was at connect. Same lifetime as `tools`.
-    path: "list[str]" = field(default_factory=list)
+    path: list[str] = field(default_factory=list)
 
     #: What this guest is watching and how much of it fits: the paginator,
     #: the renderer, the per-stream coalescers, which page is on screen, and
@@ -195,7 +197,7 @@ class GuestSession:
     #: guest and three of Bridge's own operations, so it is built and
     #: assigned in `_attach` right after the `GuestSession` itself.
     #: docs/audit/02-bridge-python.md 02.41.
-    perms: "PermissionDesk | None" = None
+    perms: PermissionDesk | None = None
     # When the guest was last heard from, for the idle reaper. A guest that
     # GPFs leaves no FIN behind, so without this _on_client parks forever and
     # `connected` stays True -- which rejects every reconnect as "busy".

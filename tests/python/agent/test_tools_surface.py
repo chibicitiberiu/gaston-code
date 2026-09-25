@@ -90,6 +90,7 @@ def test_the_tools_are_bound_to_a_guest_not_just_the_bridge():
     something else. Three call sites today, eleven after Phase 6.
     """
     import inspect
+
     from bridge.agent import tools
 
     sig = inspect.signature(tools.build)

@@ -21,17 +21,17 @@ was sent, so an ack that arrives AFTER the close is visibly the drain's.
 from __future__ import annotations
 
 import os
-import socket
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import toolkit                                            # noqa: E402
-import probelib                                           # noqa: E402
+import probelib
+import toolkit
+
 toolkit.on_path()
 
-from bridge.files import paths as P                       # noqa: E402
-from bridge.wire.protocol import Frame, FrameReader       # noqa: E402
+from bridge.files import paths as P  # noqa: E402
+from bridge.wire.protocol import Frame, FrameReader  # noqa: E402
 
 
 def main() -> int:
@@ -98,7 +98,7 @@ def main() -> int:
             print(f"[{(time.time()-t0)*1000:8.0f}ms] {f.type:<14} "
                   f"id={f.headers.get('id',''):<4} "
                   f"{('status=' + st) if st else ''}")
-    except socket.timeout:
+    except TimeoutError:
         print("timed out waiting")
     except KeyboardInterrupt:
         pass

@@ -10,9 +10,9 @@ Finding IDs within each audit document must form a continuous sequence with no g
 import glob
 import os
 import re
-import pytest
 
 import conftest
+import pytest
 
 DOCS = os.path.join(conftest.REPO, "docs")
 AUDIT_DIR = os.path.join(DOCS, "audit")
@@ -50,7 +50,7 @@ def test_audit_verdict_tokens():
 
     for path in files:
         rel = os.path.relpath(path, conftest.REPO)
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
                 m = VERDICT_LINE_RE.match(line)
                 if m:
@@ -66,7 +66,7 @@ def test_deferred_findings_cite_backlog():
     pattern = os.path.join(DOCS, "audit*", "*.md")
     for path in sorted(glob.glob(pattern)):
         rel = os.path.relpath(path, conftest.REPO)
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
                 if line.startswith("Deferred:"):
                     assert "BACKLOG" in line, (
@@ -81,7 +81,7 @@ def test_audit_ledger_sequence_continuity(filename, config):
     path = os.path.join(AUDIT_DIR, filename)
     assert os.path.exists(path), f"File {filename} missing"
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
 
     verdicts = VERDICT_LINE_RE.findall(text)
@@ -115,7 +115,7 @@ def test_audit2_findings_sequence_continuity(filename, config):
     path = os.path.join(AUDIT2_DIR, filename)
     assert os.path.exists(path), f"File {filename} missing"
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         text = f.read()
 
     header_ids = re.findall(r"^#{2,3}\s+([0-9]{2}\.[0-9]+)\b", text, re.M)
@@ -135,7 +135,7 @@ def test_audit2_resolved_reports_cover_all_findings():
         if not filename.endswith(".md") or filename == "README.md":
             continue
         path = os.path.join(AUDIT2_DIR, filename)
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             text = f.read()
 
         verdicts = VERDICT_LINE_RE.findall(text)

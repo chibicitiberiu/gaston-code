@@ -263,14 +263,14 @@ def test_page_limits_scale_with_memory():
     """A 128MB machine can hold a bigger page than the 32MB floor the design
     is built around; making it page every 90 blocks would be a restriction
     inherited from a machine it is not running on."""
-    from bridge.view.pages import limits_for, MAX_BYTES, MAX_BLOCKS
+    from bridge.view.pages import MAX_BLOCKS, limits_for
     assert limits_for(32 * 1024) == (MAX_BYTES, MAX_BLOCKS)
     assert limits_for(64 * 1024) == (MAX_BYTES * 2, MAX_BLOCKS * 2)
     assert limits_for(128 * 1024) == (MAX_BYTES * 4, MAX_BLOCKS * 4)
 
 
 def test_a_smaller_machine_never_gets_smaller_pages_than_the_floor():
-    from bridge.view.pages import limits_for, MAX_BYTES, MAX_BLOCKS
+    from bridge.view.pages import MAX_BLOCKS, limits_for
     assert limits_for(16 * 1024) == (MAX_BYTES, MAX_BLOCKS)
     assert limits_for(0) == (MAX_BYTES, MAX_BLOCKS)
 

@@ -22,12 +22,12 @@ might be the start of ``**bold**`` and you cannot tell yet.
 
 from __future__ import annotations
 
-from ..files import caps as C
-from ..wire import fold
-
 import html as _html
 import re
 from dataclasses import dataclass
+
+from ..files import caps as C
+from ..wire import fold
 
 APPEND = "append"
 LIVE = "live"

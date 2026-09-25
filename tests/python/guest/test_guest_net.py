@@ -44,15 +44,14 @@ from __future__ import annotations
 import asyncio
 import socket
 
-import pytest
-
 import conftest
+import pytest
 from conftest import WINE, guest_exe, wine_env
 
 # harness (a real Bridge, Session monkeypatched to FakeSession, on its own
 # port) is defined in test_server_integration.py and re-used rather than
 # duplicated, same as test_fakegui_conformance.py already does.
-from harness import harness   # noqa: F401
+from harness import harness  # noqa: F401
 
 pytestmark = conftest.needs_guest
 
@@ -74,7 +73,7 @@ async def netcheck_result(harness):
         env=wine_env())
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         proc.kill()
         await proc.communicate()
         pytest.fail("netcheck.exe did not finish within 60s")
@@ -165,7 +164,7 @@ async def stalled_reader():
         server.close()
         try:
             await asyncio.wait_for(server.wait_closed(), 1.0)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
 
 
@@ -177,7 +176,7 @@ async def _run_slowsend(port):
         env=wine_env())
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=90)
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         proc.kill()
         await proc.communicate()
         pytest.fail("netcheck.exe --slowsend did not finish within 90s -- "

@@ -19,7 +19,7 @@ BUILD_DIRS = build tmp
 # default goal -- `make` printed the help and built nothing.
 .DEFAULT_GOAL := all
 
-.PHONY: all guest guest-checks check wine-smoke lint test test-fast gates clean help
+.PHONY: all guest guest-checks check wine-smoke lint pylint-py test test-fast gates clean help
 
 help:
 	@echo "all         build the Win98 guest binary"
@@ -27,6 +27,7 @@ help:
 	@echo "wine-smoke  run the shipping C under Wine -- code, never the platform"
 	@echo "test        python tests, all of them (~3 min)"
 	@echo "test-fast   python tests except the Wine suites (~15s) -- the inner loop"
+	@echo "lint        ruff + mypy on the Python, and the guest RichEdit grep"
 	@echo "gates       run all verification gates together (check, test, lint)"
 	@echo "clean       remove build/ and tmp/ entirely"
 
@@ -111,7 +112,21 @@ guest-checks:
 # grep-based gate added here must list *.cpp.
 RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_GETTEXTLENGTHEX \
            EM_SETTABSTOPS EM_SETMARGINS
-lint:
+# --- Python: lint + types ---------------------------------------------------
+#
+# Both, in one target, because the two find different things and a project that
+# runs only one of them believes it is checked. ruff finds the dead import and
+# the blocking call in an async function; mypy finds the None that is not
+# guarded. Neither finds the other's.
+#
+# Config lives in pyproject.toml so this target and every editor agree.
+pylint-py:
+	@echo "=== ruff (lint) ==="
+	@$(PY) -m ruff check bridge/ tools/ tests/
+	@echo "=== mypy (types) ==="
+	@$(PY) -m mypy
+
+lint: pylint-py
 	@fail=0; \
 	for m in $(RE3_ONLY); do \
 	  if grep -rn --include='*.c' --include='*.cpp' --include='*.h' "\b$$m\b" win/ 2>/dev/null; then \

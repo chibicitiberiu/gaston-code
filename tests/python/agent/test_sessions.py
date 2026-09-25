@@ -5,8 +5,14 @@ across releases, so the tests lean on malformed input. A KeyError in there
 would break the whole chat list rather than one message.
 """
 
-from bridge.agent.sessions import STYLE_CODE, STYLE_PLAIN, STYLE_TOOL, STYLE_USER
-from bridge.agent.sessions import _compact_summary, _text_of
+from bridge.agent.sessions import (
+    STYLE_CODE,
+    STYLE_PLAIN,
+    STYLE_TOOL,
+    STYLE_USER,
+    _compact_summary,
+    _text_of,
+)
 
 
 def styles(runs):
@@ -71,8 +77,8 @@ def test_a_replayed_tool_call_is_the_same_markup_as_a_live_one():
     """The renderer takes (name, summary); replay used to hand it the literal
     word "tool" and everything else as the summary, so the tool name was not
     in `.toolname` and did not get the styling a live one did."""
-    from bridge.view import html as H
     from bridge.agent import sessions as S
+    from bridge.view import html as H
 
     live = H.tool_call("Bash", "command: ls")
     runs = S._text_of({

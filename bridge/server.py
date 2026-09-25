@@ -12,98 +12,63 @@ approving permission prompts and, from Phase 3, feeding tool results to Claude.
 
 from __future__ import annotations
 
-import datetime as _dt
 import argparse
 import asyncio
-from collections.abc import AsyncIterable
-import contextlib
 import logging
-import json
 import os
-import time
-from dataclasses import dataclass, field
-from enum import Enum, auto
 
-from . import handshake
-from .files import caps as C
-from .files import manifest
-from .status import EXEC_STATUS_PROSE, ExecStatus
-from .wire import fold
-from .agent import machine
-from .agent import profiles
-from .agent.conversations import Conversations
-from .wire.coalesce import Coalescer
-from .wire.compress import StreamCompressor
-from .view import html as H
-from .view.html import APPEND, LIVE, HtmlStream
-from .view.pages import Paginator, limits_for
-from .files import paths as P
 from .agent import permissions as perms
-from .agent import tools as machine_tools
-from .agent.permdesk import PermissionDesk
-from .synccoord import SyncCoordinator
-from .wire.protocol import (
-                            MAX_HEADER_VALUE,
-                            _quote,
-                            Frame,
-                            FrameReader,
-                            ProtocolError,
-                            anchor_frame,
-                            doc,
-                            error,
-                            exec_cmd,
-                            exec_kill,
-                            halt,
-                            haltend,
-                            notice,
-                            option,
-                            optionsend,
-                            pageend,
-                            pagesealed,
-                            pagestart,
-                            pong,
-                            ready,
-                            session_row,
-                            sessions_end,
-                            sessions_start,
-                            switched,
-                            status_frame,
-                            turn_end,
-                            turn_error,
-                            turn_start,
-                            )
-from .wire.link import GuestLink
-from .files.synctransport import GuestSyncState
-from .view.transcript import TranscriptView
-from .agent import sessions as sesslist
-from .files.sync import Entry as SyncEntry, Type as SyncType
-from .files.sync import AckResult, GetResult, ScanResult
-from .files.syncrun import SyncError
-from .agent.session import TOOLS, Session
-from .agent import toolrep, toolrules
+from .agent.conversations import Conversations
 from .agent.toolrules import Found
+from .files import paths as P
+from .agent import sessions as sesslist
+from .agent.session import Session
+from .guest import ExecCall, GuestSession
+from .services.attachment import AttachmentService
 from .services.config import BridgeConfig
 from .services.connection import ConnectionService
+from .services.coordinator import SessionCoordinator
+from .services.guest_exec import GuestExecService
 from .services.options import (
-    COMMAND_MENU,
-    EFFORT_LABEL,
-    EFFORT_ORDER,
-    MODE_CAVEAT,
     MODE_LABEL,
     MODE_ORDER,
     OptionsService,
 )
-from .guest import GuestSession
-from .status import GuestState
-from .services.workspace import WorkspaceService
-from .services.presentation import PresentationService
-from .services.guest_exec import GuestExecService
 from .services.permission import PermissionService
-from .services.sync import SyncService
-from .services.attachment import AttachmentService
+from .services.presentation import PresentationService
 from .services.session import SessionService
+from .services.sync import SyncService
 from .services.turn_runner import TurnRunner, turn_verdict
-from .services.coordinator import SessionCoordinator
+from .services.workspace import WorkspaceService
+from .view import html as H
+from .view.html import APPEND
+from .view.pages import Paginator
+from .view.transcript import TranscriptView
+from .wire.protocol import (
+    Frame,
+    doc,
+    error,
+    notice,
+    ready,
+)
+
+#: Re-exported on purpose. These are not used inside this module -- tests and
+#: tools import them from here because this is where the bridge's public
+#: surface has always been, and naming them keeps a lint pass from deciding
+#: they are dead.
+__all__ = [
+    "APPEND", "Bridge", "ExecCall", "Found", "Frame", "GuestSession", "H",
+    "MODE_LABEL", "MODE_ORDER", "Paginator", "Session", "TranscriptView",
+    "init_logging", "load_config", "main", "notice", "parse_args",
+    "prepare_state", "serve", "sesslist", "turn_verdict",
+]
+
+#: `Session` and `sesslist` are reached through this module BY NAME rather
+#: than imported from it: `SessionService._resolve_session_cls` asks
+#: `hasattr(sys.modules["bridge.server"], "Session")` so a test can swap the
+#: SDK session for a fake, and tests monkeypatch `srv.sesslist.listing`. A
+#: lint pass called them unused imports -- which they are -- and removing them
+#: took out 248 tests at once. That is what this list is protecting.
 
 log = logging.getLogger("bridge.server")
 
@@ -444,7 +409,7 @@ class Bridge:
         self._tasks.add(task)
         task.add_done_callback(self._done)
 
-    def _done(self, task: "asyncio.Task") -> None:
+    def _done(self, task: asyncio.Task) -> None:
         """Drop a finished task and say so if it raised.
 
         `CancelledError` is not a failure: `close()` cancels these
@@ -553,7 +518,7 @@ def _summarise(args: dict) -> str:
 # by a test, and `serve` can be called by anything that already has a config.
 
 
-def parse_args(argv: "list[str] | None" = None) -> "argparse.Namespace":
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="RetroClaude bridge")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use the retro-segment interface, not 0.0.0.0")
@@ -586,7 +551,7 @@ def init_logging(verbose: bool = False) -> None:
     )
 
 
-def load_config(args: "argparse.Namespace") -> BridgeConfig:
+def load_config(args: argparse.Namespace) -> BridgeConfig:
     """Command line plus environment, validated, or `SystemExit`.
 
     The secret is the one thing that is not an argument: a shared secret on a
@@ -642,7 +607,7 @@ async def serve(config: BridgeConfig) -> None:
         await bridge.close()
 
 
-def main(argv: "list[str] | None" = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     init_logging(args.verbose)
     config = load_config(args)

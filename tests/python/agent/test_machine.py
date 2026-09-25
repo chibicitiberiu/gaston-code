@@ -171,6 +171,7 @@ def test_the_conflict_path_agrees_with_the_sync_layer():
     """Computed two ways in two files. If they drift, the model is sent
     somewhere empty again and nothing else notices."""
     import os
+
     from bridge.files.syncrun import Pass
 
     workdir = "/work/CHAT"

@@ -18,9 +18,9 @@ and cannot be one of the checks that skips silently.
 import os
 import re
 
-from bridge.view import html as H
-
 import conftest
+
+from bridge.view import html as H
 
 HERE = conftest.REPO
 HEADER = os.path.join(HERE, "win", "app", "htmlview.h")

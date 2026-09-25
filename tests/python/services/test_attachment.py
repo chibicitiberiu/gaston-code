@@ -2,6 +2,7 @@
 
 import os
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from bridge.services.attachment import AttachmentService

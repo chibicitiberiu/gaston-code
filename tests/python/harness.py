@@ -15,22 +15,16 @@ it to be shared; the `# noqa: F401` at each call site marks that the name is
 used by pytest rather than by the module.
 """
 
-import os
 import asyncio
-import time
-import zlib
 from dataclasses import dataclass, field
 
 import pytest
+from claude_agent_sdk import PermissionUpdate
 
-from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
-                              PermissionUpdate)
-
-from bridge.wire.compress import StreamDecompressor
-from bridge.wire.protocol import (Frame, FrameReader, MAX_FRAME, PROTO_VERSION,
-                                  ProtocolError, hello)
 from bridge import server as srv
 from bridge.server import Bridge
+from bridge.wire.compress import StreamDecompressor
+from bridge.wire.protocol import FrameReader, hello
 
 
 @dataclass
@@ -352,7 +346,7 @@ class Harness:
 
         try:
             await asyncio.wait_for(run(), timeout)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
         return frames
 
@@ -387,7 +381,6 @@ async def harness(monkeypatch, tmp_path):
     TIME_WAIT from the previous test makes bind() fail intermittently and that
     reads as a flaky test rather than what it is.
     """
-    import bridge.server as srv
     monkeypatch.setattr(srv, "Session", FakeSession)
     # The conversation store must not touch the real one in $HOME, and each
     # test needs to start from an empty one or the chat list depends on what
@@ -419,7 +412,7 @@ async def harness(monkeypatch, tmp_path):
         server.close()
         try:
             await asyncio.wait_for(server.wait_closed(), 1.0)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
         await b.close()
 

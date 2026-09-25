@@ -21,11 +21,8 @@ each one equals the bridge constant of the matching name.
 """
 from __future__ import annotations
 
-
-import pytest
-
 import conftest
-
+import pytest
 
 from bridge.files import caps as C
 

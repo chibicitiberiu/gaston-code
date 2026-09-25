@@ -20,11 +20,9 @@ point of the finding.
 
 import importlib.util
 import os
-import sys
-
-import pytest
 
 import conftest
+import pytest
 
 GATE = os.path.join(conftest.REPO, "tools", "check", "imports.py")
 

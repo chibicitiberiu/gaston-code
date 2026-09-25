@@ -1,8 +1,8 @@
 """Unit tests for BridgeConfig and directory containment validation."""
 
-import os
 import pytest
-from bridge.services.config import BridgeConfig, DEFAULT_PORT
+
+from bridge.services.config import DEFAULT_PORT, BridgeConfig
 
 
 def test_config_defaults():

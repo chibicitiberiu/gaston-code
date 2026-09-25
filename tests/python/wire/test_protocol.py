@@ -10,20 +10,20 @@ import struct
 import pytest
 
 from bridge.wire.protocol import (
-                                  MAX_FRAME,
-                                  MAX_HEADERS,
-                                  MAX_HEADER_KEY,
-                                  MAX_HEADER_VALUE,
-                                  MAX_TYPE,
-                                  PROTO_VERSION,
-                                  Frame,
-                                  FrameReader,
-                                  ProtocolError,
-                                  error,
-                                  hello,
-                                  option,
-                                  truncate_header_value,
-                                  )
+    MAX_FRAME,
+    MAX_HEADER_KEY,
+    MAX_HEADER_VALUE,
+    MAX_HEADERS,
+    MAX_TYPE,
+    PROTO_VERSION,
+    Frame,
+    FrameReader,
+    ProtocolError,
+    error,
+    hello,
+    option,
+    truncate_header_value,
+)
 
 
 def roundtrip(f: Frame) -> Frame:

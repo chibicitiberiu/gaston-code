@@ -74,7 +74,7 @@ class ExecStatus(str, Enum):
     UNKNOWN = "unknown"
 
     @classmethod
-    def parse(cls, value: str) -> "ExecStatus":
+    def parse(cls, value: str) -> ExecStatus:
         """The guest's own vocabulary, or UNKNOWN for anything this bridge does
         not recognise. Falling back to OK would read an unrecognised status as
         success, which is the wrong direction to guess wrong in."""
@@ -159,7 +159,7 @@ class SyncStatus(str, Enum):
     UNKNOWN = "unknown"
 
     @classmethod
-    def parse(cls, value: str) -> "SyncStatus":
+    def parse(cls, value: str) -> SyncStatus:
         """Unlike `ExecStatus.parse`, this does NOT fall back to OK.
 
         Every sync call site tests for OK by inequality (`if status != "ok"`)

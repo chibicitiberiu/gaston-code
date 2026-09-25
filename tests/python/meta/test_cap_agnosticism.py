@@ -11,9 +11,11 @@ restrictive rules was answered with a hardcoded assumption that everyone gets.
 """
 
 import inspect
+
 from bridge.files import caps as C
 from bridge.files import paths as P
 from bridge.server import Bridge
+
 
 def test_naming_and_path_helpers_consult_caps():
     caps_short = C.CONSTRAINED
@@ -27,14 +29,14 @@ def test_naming_and_path_helpers_consult_caps():
     long_name = "MyLongFolderName"
     short_res = Bridge.folder_name(long_name, caps_short)
     long_res = Bridge.folder_name(long_name, caps_long)
-    
+
     assert short_res == "MYLONGFO", "Shortnames client must truncate and uppercase"
     assert long_res == "MyLongFolderName", "Longnames client must preserve name and case"
-    
+
     # 3. illegal_chars
     illegal_short = P.illegal_chars(caps_short)
     illegal_long = P.illegal_chars(caps_long)
-    
+
     assert ">" in illegal_short and ":" in illegal_short, "DOS illegal chars should be present for short caps"
     assert ">" not in illegal_long and ":" not in illegal_long, "DOS illegal chars should NOT be present for long caps"
 
@@ -46,7 +48,7 @@ def test_no_hardcoded_assumptions_in_code():
     """
     source = inspect.getsource(Bridge.folder_name)
     assert "[:8]" not in source, "Do not hardcode slice limits, use Bridge.folder_max(caps)"
-    
+
     # Also verify the test itself didn't just pass by coincidence if the source had hardcoded values
     assert ("[:folder_max(caps)]" in source or
             "[:Bridge.folder_max(caps)]" in source), "The slice should use the caps-aware folder_max"

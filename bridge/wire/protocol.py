@@ -24,6 +24,7 @@ import struct
 from dataclasses import dataclass, field
 
 from . import fold
+
 #: 1 -> 2: EXEC's `shell` header stopped being a flag and became the
 #: invocation prefix the guest splices in front of the command (see
 #: `exec_cmd`). A version 1 guest reads a prefix as a truthy flag and runs
@@ -170,7 +171,7 @@ class Frame:
         return struct.pack("<I", len(payload)) + payload
 
     @classmethod
-    def decode(cls, payload: bytes) -> "Frame":
+    def decode(cls, payload: bytes) -> Frame:
         if len(payload) > MAX_FRAME:
             raise ProtocolError(
                 f"payload {len(payload)}B exceeds MAX_FRAME {MAX_FRAME}B"

@@ -32,8 +32,9 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 
-from . import paths as P
 from ..status import SyncStatus
+from . import paths as P
+
 # A file whose mtime is this close to now might still be inside its FAT tick, so
 # a CRC taken from it must not be CACHED -- see Entry.cacheable. Two saves in one
 # tick with the same size are otherwise indistinguishable, and the second is
@@ -124,7 +125,7 @@ class Entry:
         """
         return (time.time() - self.mtime) > SETTLE_S
 
-    def as_class(self, cls: str) -> "Entry":
+    def as_class(self, cls: str) -> Entry:
         """This row re-read under `cls`, for an attributes override.
 
         Returns self when nothing moves, so the common path allocates nothing.
@@ -134,7 +135,7 @@ class Entry:
         crc = P.crc_for(cls, self.crc_norm, self.crc_raw)
         return replace(self, cls=cls, crc=crc)
 
-    def same_content(self, other: "Entry | None") -> bool:
+    def same_content(self, other: Entry | None) -> bool:
         """Cross-side equality: (type, class, crc).
 
         Size and mtime are per-side cache keys and are NEVER compared between
@@ -382,7 +383,7 @@ class Baseline:
             os.close(dfd)
 
     @classmethod
-    def load(cls, path: str) -> "Baseline":
+    def load(cls, path: str) -> Baseline:
         """Raises on a corrupt baseline rather than returning an empty one.
 
         "No baseline" is a first sync, which conflicts the entire tree. Refusing

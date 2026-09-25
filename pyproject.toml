@@ -1,0 +1,53 @@
+# Tool configuration only. The bridge is run from the source tree and has no
+# build step; this file exists so `make lint` and every editor agree on what
+# the rules are, rather than each carrying its own flags.
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = [".venv", "vm", "build", "tests/python/.wineprefix"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes -- undefined names, unused imports, dead locals
+    "E", "W", # pycodestyle
+    "I",      # import ordering
+    "B",      # bugbear -- mutable defaults, shadowed loop vars
+    "UP",     # pyupgrade
+    "SIM",    # simplifiable constructs
+    "TC",     # typing-only imports in the wrong place
+    "ASYNC",  # blocking calls in async code -- this codebase is all asyncio
+    "RUF",
+]
+ignore = [
+    # The codebase logs with %-style deliberately: the formatting is deferred
+    # to the handler, so a message that is never emitted is never built.
+    "UP031", "UP032",
+    # `except Exception` at a task boundary is how a background task reports
+    # instead of dying silently -- audit 02.13. Each one is deliberate.
+    "BLE001",
+    "E501",   # long lines are mostly prose in comments; W505 is not enabled
+    # Moving imports into `if TYPE_CHECKING` is how three annotations in
+    # guest.py became unresolvable strings that nothing could check. The
+    # runtime cost of a real import here is nil; TC005 (an EMPTY block) stays
+    # on, because that one only ever finds leftovers.
+    "TC001", "TC003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Profiles and prompts are data; the fakegui is a harness, not the product.
+"bridge/devtools/*" = ["ASYNC", "SIM"]
+"tests/**" = ["B", "SIM", "ASYNC"]
+# fold.py's table is ABOUT confusable and invisible characters -- flagging
+# them there is flagging the subject matter.
+"bridge/wire/fold.py" = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["bridge"]
+ignore_missing_imports = true      # claude_agent_sdk and PIL ship no stubs
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Deliberately NOT `disallow_untyped_defs` yet: it would report several
+# hundred at once and none of them is a defect. The rules that find real
+# defects are on; the annotation debt is a separate, later pass.

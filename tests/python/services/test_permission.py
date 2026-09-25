@@ -1,6 +1,7 @@
 """Unit tests for PermissionService."""
 
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from bridge.services.permission import PermissionService
