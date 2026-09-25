@@ -67,7 +67,7 @@
  * (WM_RC_STATE) -- those are net.c's messages to this window, declared next
  * to the code that posts them, not duplicated here. */
 #define WM_RC_CONNECT  (WM_APP + 99)  /* self-post: connect after first paint */
-/* WM_RC_OPENCHAT (chatlist.cpp's rc_chats::list_proc -> wnd_proc: open a
+/* WM_RC_OPENCHAT (chatlist.cpp's ChatList::ListBox::handle -> wnd_proc: open a
  * chat) is declared in app/chatlist.h now, next to the module that posts
  * it. */
 
@@ -94,7 +94,7 @@ static MainWindow   *g_window;
 static rc_net       *g_net;
 static rc_html *g_html;
 static rc_bar  *g_bar;
-static rc_chats *g_chats;
+static ChatList *g_chats;
 static rc_xferstat *g_xfer;
 static rc_input    *g_inputmod;
 static rc_pillbar  *g_pillbar;
@@ -253,7 +253,7 @@ static void build_menu(HWND hwnd)
     SetMenu(hwnd, bar);
 }
 
-/* app/chatlist.h's rc_chats_confirm_fn: "a switch is about to happen, is a
+/* app/chatlist.h's ChatListListener::confirmSwitch: "a switch is about to happen, is a
  * turn running, may I?" -- the chat list module does not own this policy
  * question (see the header comment there). Switching closes the live
  * client, which kills a running request; ask rather than doing it silently
@@ -562,7 +562,7 @@ static void chats_switched(rc_frame *f)
  * whole list in a static array, which cost 12.8KB of BSS on a machine
  * measured at 28 KB free after a turn -- for data whose destination is a
  * file being written one line at a time anyway. Four headers per row, not
- * the framing, because rc_chats::add_row is the path a cached row takes back
+ * the framing, because ChatList::addRow is the path a cached row takes back
  * in and it wants values, not frames. */
 static void on_chats(rc_frame *f)
 {
@@ -619,7 +619,7 @@ static void cache_restore(void)
      * the window look like an application rather than a failure. One line at
      * a time, so nothing here scales with how many conversations there are. */
     if (g_chats && g_cache->chats_open()) {
-        g_chats->begin_rows();
+        g_chats->beginRows();
         while (g_cache->chats_next(line, sizeof(line))) {
             char *fields[4];
             int nf = 0;
@@ -630,11 +630,11 @@ static void cache_restore(void)
                 p++;
             }
             if (nf == 4 && fields[0][0])
-                g_chats->add_row(fields[0], fields[1], fields[2],
+                g_chats->addRow(fields[0], fields[1], fields[2],
                                  fields[3][0] == '1');
         }
         g_cache->chats_close();
-        g_chats->end_rows();
+        g_chats->endRows();
     }
 
     /* Then the conversation that was open, newest page first -- which is
@@ -656,7 +656,7 @@ static void cache_restore(void)
 /* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
  * see rc_pagebar::frame's own comments there for what each one does. Two
  * things about PAGESTART/PAGEEND are not app/pagebar.cpp's business and stay
- * here, the same split on_chats already makes around rc_chats::frame:
+ * here, the same split on_chats already makes around ChatList::frame:
  * resetting main.c's own turn-state enum (the control is about to be
  * cleared) and log_mem, main.c's memory-milestone diagnostic. */
 static void on_pagebar(rc_frame *f)
@@ -1024,17 +1024,16 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * back through the view rather than trusting a call site to exist. */
 
     /* The chat list and its Refresh button: created and owned by
-     * app/chatlist.cpp now (rc_chats::create logs its own check_child
+     * app/chatlist.cpp now (ChatList::create logs its own check_child
      * failures, and the LBS_NOINTEGRALHEIGHT/WS_CLIPSIBLINGS/
      * LBS_OWNERDRAWFIXED/no-WS_HSCROLL comment that used to be here moved
      * with the CreateWindowExA call it explains). g_ui_font/g_ui_font_bold
      * are already set above; chats_confirm/chats_switching/chats_switched
      * are this file's answers to the policy questions the chat list does
-     * not own -- see the callback comments on rc_chats::create in
+     * not own -- see the callback comments on ChatList::create in
      * app/chatlist.h. */
-    g_chats = rc_chats::create(hwnd, inst, g_net, g_ui_font, g_ui_font_bold,
-                                chats_confirm, g_window, chats_switching,
-                                chats_switched);
+    g_chats = ChatList::create(hwnd, inst, g_net, g_ui_font, g_ui_font_bold,
+                               g_window, g_window);
 
     /* The permission/halt bar: its own controls, created and owned by
      * app/bar.cpp now (rc_bar::create logs its own check_child-equivalent
@@ -1101,7 +1100,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
-     * inside rc_chats::create/rc_bar::create/rc_pagebar::create/
+     * inside ChatList::create/rc_bar::create/rc_pagebar::create/
      * rc_input::create above. */
 
     /* Accept file drops from Explorer onto the window and the input box */
@@ -1258,7 +1257,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_RC_OPENCHAT:
-        if (g_chats) g_chats->open_selected();
+        if (g_chats) g_chats->openSelected();
         return 0;
 
     case WM_TIMER:
@@ -1329,7 +1328,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * with its pixels and its backing array disagreeing. Same family
              * as the bar and the sync PUT above; same place to fix it. */
             if (g_optmenu) g_optmenu->reset();
-            if (g_chats) g_chats->abort_rows();
+            if (g_chats) g_chats->abortRows();
             if (g_turn) g_turn->abort();
             ui_set_busy(0);
             if (g_reconn) g_reconn->schedule();
@@ -1652,7 +1651,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * memory. LBN_SELCHANGE is deliberately not used: it also fires
              * for arrow keys, and switching on those would tear down a live
              * session every time the list was scrolled from the keyboard. */
-            if (HIWORD(wp) == LBN_DBLCLK && g_chats) g_chats->open_selected();
+            if (HIWORD(wp) == LBN_DBLCLK && g_chats) g_chats->openSelected();
             return 0;
 
         default:
@@ -1855,7 +1854,7 @@ bool MainWindow::filter(MSG &msg)
      * way to open a chat at all. */
     if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
         && g_chats && msg.hwnd == g_chats->hwnd()) {
-        g_chats->open_selected();
+        g_chats->openSelected();
         return true;
     }
     /* Scrolling the transcript from the keyboard, and why these CANNOT be
@@ -1918,4 +1917,19 @@ bool MainWindow::sendFrame(const char *what, const char *type,
                            int nkv, const void *body, unsigned bodyLen)
 {
     return ui_send(what, type, keys, vals, nkv, body, bodyLen) != 0;
+}
+
+bool MainWindow::confirmSwitch()
+{
+    return chats_confirm() != 0;
+}
+
+void MainWindow::onSwitching()
+{
+    chats_switching();
+}
+
+void MainWindow::onSwitched(rc_frame *f)
+{
+    chats_switched(f);
 }

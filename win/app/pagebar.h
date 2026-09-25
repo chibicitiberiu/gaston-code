@@ -108,7 +108,7 @@ public:
      * main.c's own turn-state enum on PAGESTART, and log_mem on PAGEEND, are
      * not this module's business and stay in main.c's own wrapper around
      * this call -- the same split on_chats already makes around
-     * rc_chats_frame. */
+     * ChatList::frame. */
     int frame(rc_frame *f);
 
     /* WM_COMMAND for ID_LIVE/FIRST/PREV/NEXT/LAST. Returns non-zero if `id`

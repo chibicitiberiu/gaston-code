@@ -10,7 +10,7 @@
 #include "core/str.h"
 
 Turn::Turn(HWND hwnd, rc_html *html, rc_statusbar *status,
-           rc_cache *cache, rc_chats *chats, TurnListener *listener)
+           rc_cache *cache, ChatList *chats, TurnListener *listener)
     : m_hwnd(hwnd), m_html(html), m_status(status),
       m_cache(cache), m_chats(chats), m_listener(listener),
       m_state(TURN_IDLE), m_active(false), m_startMs(0)
@@ -18,7 +18,7 @@ Turn::Turn(HWND hwnd, rc_html *html, rc_statusbar *status,
 }
 
 Turn *Turn::create(HWND hwnd, rc_html *html, rc_statusbar *status,
-                   rc_cache *cache, rc_chats *chats, TurnListener *listener)
+                   rc_cache *cache, ChatList *chats, TurnListener *listener)
 {
     return new Turn(hwnd, html, status, cache, chats, listener);
 }

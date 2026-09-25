@@ -35,7 +35,7 @@ class Turn
 {
 public:
     static Turn *create(HWND hwnd, rc_html *html, rc_statusbar *status,
-                        rc_cache *cache, rc_chats *chats,
+                        rc_cache *cache, ChatList *chats,
                         TurnListener *listener);
     ~Turn() {}
 
@@ -56,7 +56,7 @@ public:
 
 private:
     Turn(HWND hwnd, rc_html *html, rc_statusbar *status, rc_cache *cache,
-         rc_chats *chats, TurnListener *listener);
+         ChatList *chats, TurnListener *listener);
     Turn(const Turn &);
     Turn &operator=(const Turn &);
 
@@ -64,7 +64,7 @@ private:
     rc_html *m_html;
     rc_statusbar *m_status;
     rc_cache *m_cache;
-    rc_chats *m_chats;
+    ChatList *m_chats;
     TurnListener *m_listener;
 
     rc_turn_state m_state;

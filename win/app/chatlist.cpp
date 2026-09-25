@@ -16,28 +16,14 @@
 #define CHAT_INDENT 10   /* session rows sit under their date header */
 #define CHAT_ROW_H  15
 
-rc_chats *rc_chats::s_instance;
-
-rc_chats::~rc_chats()
-{
-    /* Restore BEFORE clearing s_instance: the order matters, because
-     * anything dispatched between the two would otherwise reach list_proc
-     * with a null singleton. After this the listbox is an ordinary listbox
-     * and can be destroyed by Windows in its own time. */
-    if (list && oldproc)
-        SetWindowLongA(list, GWL_WNDPROC, (LONG)oldproc);
-    oldproc = NULL;
-    if (s_instance == this) s_instance = NULL;
-}
-
 /* Width available for an item's text: the client area less the vertical
  * scrollbar and the couple of pixels the listbox insets text by. */
-int rc_chats::text_width()
+int ChatList::textWidth()
 {
     RECT rc;
 
-    if (!list) return 0;
-    GetClientRect(list, &rc);
+    if (!m_list) return 0;
+    GetClientRect(m_list, &rc);
     return (rc.right - rc.left) - GetSystemMetrics(SM_CXVSCROLL) - 6;
 }
 
@@ -50,7 +36,7 @@ int rc_chats::text_width()
  *
  * GetTextExtentExPointA answers "how many characters fit in N pixels" in one
  * call, so this stays one GDI round trip per label rather than a search. */
-void rc_chats::fit_label(char *label, unsigned cap, int avail_px, int bold)
+void ChatList::fitLabel(char *label, unsigned cap, int availPx, bool bold)
 {
     SIZE sz;
     INT fit = 0;
@@ -61,23 +47,23 @@ void rc_chats::fit_label(char *label, unsigned cap, int avail_px, int bold)
      * array, so the invariant held by accident of there being a single call
      * site. C89: declarations first. */
     if (!label || !cap) return;
-    if (!list || avail_px <= 0) return;
+    if (!m_list || availPx <= 0) return;
     n = (int)strlen(label);
     if (n <= 0) return;
 
     {
-        WindowDC dc(list);
+        WindowDC dc(m_list);
         if (!dc.valid()) return;
         /* THE FONT THE ROW IS ACTUALLY DRAWN WITH. The open conversation is
-         * drawn in font_bold (see the draw code below), and bold is wider
-         * than normal -- so measuring every row with font_normal let exactly
+         * drawn in m_fontBold (see the draw code below), and bold is wider
+         * than normal -- so measuring every row with m_fontNormal let exactly
          * that row overflow. That is the condition this file documents as
          * making Win98's listbox paint over its own WS_EX_CLIENTEDGE border,
          * "measured as white pixels at x=8,9": the documented fix did not
          * cover the one row most likely to trigger it. (audit 01.37) */
-        Selected sel(dc.get(), bold ? font_bold : font_normal);
+        Selected sel(dc.get(), bold ? m_fontBold : m_fontNormal);
         sz.cx = 0;
-        if (GetTextExtentExPointA(dc.get(), label, n, avail_px, &fit, NULL, &sz)
+        if (GetTextExtentExPointA(dc.get(), label, n, availPx, &fit, NULL, &sz)
             && fit < n) {
             if (fit > 3) fit -= 3; else fit = 1;
             rc_strf(buf, sizeof(buf), "%.*s...", fit, label);
@@ -87,40 +73,40 @@ void rc_chats::fit_label(char *label, unsigned cap, int avail_px, int bold)
     }
 }
 
-void rc_chats::request()
+void ChatList::request()
 {
-    rc_net_send(net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
+    rc_net_send(m_net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
 }
 
-void rc_chats::open_selected()
+void ChatList::openSelected()
 {
-    int sel = (int)SendMessageA(list, LB_GETCURSEL, 0, 0);
+    int sel = (int)SendMessageA(m_list, LB_GETCURSEL, 0, 0);
     const char *keys[1]; const char *vals[1];
 
-    if (sel == LB_ERR || sel < 0 || sel >= chat_count) return;
-    if (chat_is_header[sel]) return;              /* a date header, not a chat */
-    if (strcmp(chat_ids[sel], net->sess) == 0) return;   /* already open */
+    if (sel == LB_ERR || sel < 0 || sel >= m_count) return;
+    if (m_isHeader[sel]) return;              /* a date header, not a chat */
+    if (strcmp(m_ids[sel], m_net->sess) == 0) return;   /* already open */
 
     /* Switching closes the live client, which kills a running request. Ask
      * rather than doing it silently -- a click in the list is easy to make by
      * accident and the reply that is lost took real time to produce. That
      * policy question is not this class's to answer -- see rc_chats_confirm_fn
      * in app/chatlist.h. */
-    if (confirm && !confirm()) {
+    if (m_listener && !m_listener->confirmSwitch()) {
         /* Put the highlight back on the conversation that is actually open. */
-        if (chat_current >= 0)
-            SendMessageA(list, LB_SETCURSEL, chat_current, 0);
+        if (m_current >= 0)
+            SendMessageA(m_list, LB_SETCURSEL, m_current, 0);
         return;
     }
 
-    keys[0] = "id"; vals[0] = chat_ids[sel];
-    rc_log("switching to session %s", chat_ids[sel]);
+    keys[0] = "id"; vals[0] = m_ids[sel];
+    rc_log("switching to session %s", m_ids[sel]);
     /* Loading a conversation means closing the live client, resuming, and
      * replaying its history, which is not instant. Say so rather than
      * looking frozen -- that is main.c's title bar and status pane, not
      * this class's, hence the callback. */
-    if (switching) switching();
-    sender->sendFrame("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
+    if (m_listener) m_listener->onSwitching();
+    m_sender->sendFrame("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
 }
 
 /* Open a conversation on a plain click.
@@ -134,60 +120,51 @@ void rc_chats::open_selected()
  * click (and releases capture) before the transcript is torn down and
  * rebuilt.
  *
- * A static trampoline rather than a member function: WNDPROC's signature is
- * fixed by Windows, and there is only ever one instance -- s_instance is the
- * same singleton assumption the pre-class g_chats_oldproc already relied
- * on. */
-LRESULT CALLBACK rc_chats::list_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+ */
+LRESULT ChatList::ListBox::handle(UINT msg, WPARAM wp, LPARAM lp)
 {
-    LRESULT r;
-    /* The destructor un-subclasses, so this should be unreachable with a
-     * null singleton. It is checked anyway: the cost is one compare and the
-     * alternative was a page fault with no log line. */
-    if (!s_instance || !s_instance->oldproc)
-        return DefWindowProcA(h, m, w, l);
-    r = CallWindowProc(s_instance->oldproc, h, m, w, l);
-    if (m == WM_LBUTTONUP)
-        PostMessageA(GetParent(h), WM_RC_OPENCHAT, 0, 0);
+    LRESULT r = previous(msg, wp, lp);
+    if (msg == WM_LBUTTONUP)
+        PostMessageA(GetParent(hwnd()), WM_RC_OPENCHAT, 0, 0);
     return r;
 }
 
-void rc_chats::on_sessions(rc_frame *f)
+void ChatList::onSessions(rc_frame *f)
 {
     (void)f;
-    begin_rows();
+    beginRows();
 }
 
-void rc_chats::on_session(rc_frame *f)
+void ChatList::onSession(rc_frame *f)
 {
-    add_row(rc_frame_get(f, "id"), rc_frame_get(f, "title"),
+    addRow(rc_frame_get(f, "id"), rc_frame_get(f, "title"),
             rc_frame_get(f, "group"),
             (rc_frame_get(f, "current")
              && *rc_frame_get(f, "current") == '1'));
 }
 
-/* The body of on_session, with the frame taken off the front.
+/* The body of onSession, with the frame taken off the front.
  *
  * Split out so the disk cache can replay a list without building frames the
  * wire never sent -- app/cache.h keeps the rows, not the framing, and a
  * cached row and a live one have to land in the list by the same path or
  * they will differ in some detail nobody thinks to check until it is wrong
  * on one of them. */
-void rc_chats::add_row(const char *id, const char *title, const char *grp,
-                       int current)
+void ChatList::addRow(const char *id, const char *title, const char *grp,
+                      bool current)
 {
-    if (id && chat_count < MAX_CHATS) {
+    if (id && m_count < MAX_CHATS) {
         char label[RC_CHAT_LABEL];
 
         /* A header row whenever the bucket changes. The list arrives
          * newest first, so these come out in order on their own. */
-        if (grp && *grp && strcmp(grp, chat_group) != 0
-            && chat_count < MAX_CHATS - 1) {
-            rc_strf(chat_group, sizeof(chat_group), "%s", grp);
-            chat_ids[chat_count][0] = '\0';
-            chat_is_header[chat_count] = 1;
-            SendMessageA(list, LB_ADDSTRING, 0, (LPARAM)chat_group);
-            chat_count++;
+        if (grp && *grp && strcmp(grp, m_group) != 0
+            && m_count < MAX_CHATS - 1) {
+            rc_strf(m_group, sizeof(m_group), "%s", grp);
+            m_ids[m_count][0] = '\0';
+            m_isHeader[m_count] = 1;
+            SendMessageA(m_list, LB_ADDSTRING, 0, (LPARAM)m_group);
+            m_count++;
         }
 
         /* No "* " marker any more: the selection highlight already says
@@ -204,48 +181,48 @@ void rc_chats::add_row(const char *id, const char *title, const char *grp,
          * widened copy, and strcmp at the two call sites below would have
          * walked off the end. rc_strcpy does not have that problem: it
          * always writes a terminator within cap, truncating or not -- which
-         * matters more now than it did, since chat_ids is a heap-allocated
+         * matters more now than it did, since m_ids is a heap-allocated
          * member of this class (see core/rc_cpp.h's operator new) and there
          * is no zero-filled BSS behind it to fall back on. */
-        rc_strcpy(chat_ids[chat_count],
-                  sizeof(chat_ids[chat_count]), id);
-        chat_is_header[chat_count] = 0;
+        rc_strcpy(m_ids[m_count],
+                  sizeof(m_ids[m_count]), id);
+        m_isHeader[m_count] = 0;
         /* `current` is the row that gets drawn bold -- measure it that way. */
-        fit_label(label, sizeof(label), text_width() - CHAT_INDENT, current);
-        SendMessageA(list, LB_ADDSTRING, 0, (LPARAM)label);
+        fitLabel(label, sizeof(label), textWidth() - CHAT_INDENT, current);
+        SendMessageA(m_list, LB_ADDSTRING, 0, (LPARAM)label);
         if (current) {
-            chat_current = chat_count;
-            SendMessageA(list, LB_SETCURSEL, chat_count, 0);
+            m_current = m_count;
+            SendMessageA(m_list, LB_SETCURSEL, m_count, 0);
         }
-        chat_count++;
+        m_count++;
     }
 }
 
-void rc_chats::on_sessionsend(rc_frame *f)
+void ChatList::onSessionsEnd(rc_frame *f)
 {
     (void)f;
-    end_rows();
-    rc_log("chat list: %d sessions", chat_count);
+    endRows();
+    rc_log("chat list: %d sessions", m_count);
 }
 
-void rc_chats::begin_rows()
+void ChatList::beginRows()
 {
-    SendMessageA(list, WM_SETREDRAW, FALSE, 0);
-    SendMessageA(list, LB_RESETCONTENT, 0, 0);
-    chat_count = 0;
-    chat_group[0] = '\0';
-    chat_current = -1;
+    SendMessageA(m_list, WM_SETREDRAW, FALSE, 0);
+    SendMessageA(m_list, LB_RESETCONTENT, 0, 0);
+    m_count = 0;
+    m_group[0] = '\0';
+    m_current = -1;
 }
 
 /* See the declaration in chatlist.h. */
-void rc_chats::abort_rows()
+void ChatList::abortRows()
 {
     /* The PIXELS are the thing that has to be put right. LB_RESETCONTENT has
      * already run with redraw off, so the listbox is empty while the screen
-     * still shows the old list -- and chat_ids[]/chat_is_header[] were being
+     * still shows the old list -- and m_ids[]/m_isHeader[] were being
      * refilled from a batch that stopped halfway. Turning redraw back on and
      * repainting makes the screen agree with the array again, which is the
-     * whole invariant: open_selected() indexes chat_ids[] by the row the user
+     * whole invariant: openSelected() indexes m_ids[] by the row the user
      * clicked, so a screen showing rows the array no longer has means a click
      * on "Fix the parser" switches to whatever conversation now occupies that
      * index -- tearing down the live session on a confirmation the user gave
@@ -254,21 +231,21 @@ void rc_chats::abort_rows()
      * Leaving the partial batch in place rather than clearing it: a short list
      * is honest about what arrived, and the bridge resends the whole list on
      * reconnect anyway. */
-    end_rows();
+    endRows();
 }
 
-void rc_chats::end_rows()
+void ChatList::endRows()
 {
     /* RDW_FRAME as well as the client: the frame is what draws the
      * client edge, and repainting only the interior leaves it stale. */
-    SendMessageA(list, WM_SETREDRAW, TRUE, 0);
-    RedrawWindow(list, NULL, NULL,
+    SendMessageA(m_list, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(m_list, NULL, NULL,
                  RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
 }
 
-void rc_chats::on_switched(rc_frame *f)
+void ChatList::onSwitchedFrame(rc_frame *f)
 {
-    /* `net->sess` is NOT written here any more. It is rc_net state
+    /* `m_net->sess` is NOT written here any more. It is rc_net state
      * (net/net.h), read by HELLO's builder on the CONNECT path, and this
      * class writing it made a reconnect racing a SWITCHED able to read a
      * half-written 64-byte buffer and resume the wrong conversation or none.
@@ -287,36 +264,36 @@ void rc_chats::on_switched(rc_frame *f)
     {   /* Mark the newly opened conversation in place. Re-fetching the
          * list would reorder it, which is exactly what we are avoiding. */
         int i;
-        chat_current = -1;
-        for (i = 0; i < chat_count; i++) {
-            if (!chat_is_header[i]
-                && strcmp(chat_ids[i], net->sess) == 0) {
-                chat_current = i;
+        m_current = -1;
+        for (i = 0; i < m_count; i++) {
+            if (!m_isHeader[i]
+                && strcmp(m_ids[i], m_net->sess) == 0) {
+                m_current = i;
                 break;
             }
         }
-        InvalidateRect(list, NULL, TRUE);
+        InvalidateRect(m_list, NULL, TRUE);
     }
-    if (switched) switched(f);
+    if (m_listener) m_listener->onSwitched(f);
 }
 
-int rc_chats::frame(rc_frame *f)
+bool ChatList::frame(rc_frame *f)
 {
-    if (strcmp(f->type, "SESSIONS") == 0)    { on_sessions(f);    return 1; }
-    if (strcmp(f->type, "SESSION") == 0)     { on_session(f);     return 1; }
-    if (strcmp(f->type, "SESSIONSEND") == 0) { on_sessionsend(f); return 1; }
-    if (strcmp(f->type, "SWITCHED") == 0)    { on_switched(f);    return 1; }
-    return 0;
+    if (strcmp(f->type, "SESSIONS") == 0)    { onSessions(f);    return true; }
+    if (strcmp(f->type, "SESSION") == 0)     { onSession(f);     return true; }
+    if (strcmp(f->type, "SESSIONSEND") == 0) { onSessionsEnd(f); return true; }
+    if (strcmp(f->type, "SWITCHED") == 0)    { onSwitchedFrame(f); return true; }
+    return false;
 }
 
-int rc_chats::measure(MEASUREITEMSTRUCT *mis)
+bool ChatList::measure(MEASUREITEMSTRUCT *mis)
 {
-    if (!mis || mis->CtlID != ID_CHATS) return 0;
+    if (!mis || mis->CtlID != ID_CHATS) return false;
     mis->itemHeight = CHAT_ROW_H;
-    return 1;
+    return true;
 }
 
-int rc_chats::draw(DRAWITEMSTRUCT *dis)
+bool ChatList::draw(DRAWITEMSTRUCT *dis)
 {
     /* Sized from the label bound, not a literal -- see LB_GETTEXT below. */
     char text[RC_CHAT_LABEL + 48];
@@ -325,13 +302,13 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
     COLORREF oldfg;
     int oldbk;
 
-    if (!dis || dis->CtlID != ID_CHATS) return 0;
-    if ((int)dis->itemID < 0) return 1;
+    if (!dis || dis->CtlID != ID_CHATS) return false;
+    if ((int)dis->itemID < 0) return true;
 
     /* LB_GETTEXT HAS NO SIZE PARAMETER -- it writes as much as the item
      * holds, so the buffer must be at least as large as the largest string
      * anything adds. The only two are `label[RC_CHAT_LABEL]` and
-     * chat_group[40]; sizing `text` FROM the label bound makes that a
+     * m_group[40]; sizing `text` FROM the label bound makes that a
      * compile-time fact rather than an invariant nobody states, so widening
      * the label can no longer turn this into a stack overflow with no
      * diagnostic. LB_GETTEXTLEN first would be the belt as well as the
@@ -343,8 +320,8 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
     else
         rc_log("chatlist: row %d is longer than %u bytes; not drawing its "
                "text", (int)dis->itemID, (unsigned)sizeof(text));
-    header = ((int)dis->itemID < chat_count
-              && chat_is_header[dis->itemID]);
+    header = ((int)dis->itemID < m_count
+              && m_isHeader[dis->itemID]);
     selected = (dis->itemState & ODS_SELECTED) && !header;
     rc = dis->rcItem;
 
@@ -368,7 +345,7 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
             r2.top = r2.bottom - 1;
             FillRect(dis->hDC, &r2, (HBRUSH)line.get());
         }
-        return 1;
+        return true;
     }
 
     {
@@ -381,8 +358,8 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
     oldbk = SetBkMode(dis->hDC, TRANSPARENT);
     rc.left += CHAT_INDENT;
     {
-        HFONT want = ((int)dis->itemID == chat_current && font_bold)
-                     ? font_bold : font_normal;
+        HFONT want = ((int)dis->itemID == m_current && m_fontBold)
+                     ? m_fontBold : m_fontNormal;
         /* dis->hDC is CALLER-OWNED -- only the SelectObject save/restore is
          * ours to do here, never a WindowDC around it. */
         Selected sel(dis->hDC, want);
@@ -394,19 +371,19 @@ int rc_chats::draw(DRAWITEMSTRUCT *dis)
 
     if (dis->itemState & ODS_FOCUS)
         DrawFocusRect(dis->hDC, &dis->rcItem);
-    return 1;
+    return true;
 }
 
-HWND rc_chats::hwnd() const
+HWND ChatList::hwnd() const
 {
-    return list;
+    return m_list;
 }
 
-void rc_chats::move(int x, int y, int w, int col_h)
+void ChatList::move(int x, int y, int w, int col_h)
 {
     int list_h = col_h - 24;
-    MoveWindow(list, x, y, w, list_h, TRUE);
-    MoveWindow(refresh, x, y + list_h + 2, w, 22, TRUE);
+    MoveWindow(m_list, x, y, w, list_h, TRUE);
+    MoveWindow(m_refresh, x, y + list_h + 2, w, 22, TRUE);
 }
 
 static void check_child(const char *what, HWND h)
@@ -416,16 +393,14 @@ static void check_child(const char *what, HWND h)
                what, (unsigned long)GetLastError());
 }
 
-rc_chats::rc_chats(HWND parent, HINSTANCE inst, rc_net *net_, HFONT normal,
-                    HFONT bold, rc_chats_confirm_fn confirm_,
-                    FrameSender *send_, void (*switching_)(void),
-                    void (*switched_)(rc_frame *f))
-    : chat_current(-1), chat_count(0), font_normal(normal), font_bold(bold),
-      net(net_), confirm(confirm_), sender(send_), switching(switching_),
-      switched(switched_)
+ChatList::ChatList(HWND parent, HINSTANCE inst, rc_net *net, HFONT normal,
+                   HFONT bold, FrameSender *sender,
+                   ChatListListener *listener)
+    : m_current(-1), m_count(0), m_list(0), m_refresh(0),
+      m_fontNormal(normal), m_fontBold(bold), m_net(net), m_sender(sender),
+      m_listener(listener)
 {
-    chat_group[0] = '\0';
-    s_instance = this;
+    m_group[0] = '\0';
 
     /* WS_CLIPSIBLINGS: keeps neighbours out of its rectangle.
      *
@@ -434,38 +409,38 @@ rc_chats::rc_chats(HWND parent, HINSTANCE inst, rc_net *net_, HFONT normal,
      *   lets a date-group header look like a header rather than like a
      *   conversation called "Today".
      *
-     * No WS_HSCROLL: labels are truncated to fit instead, see fit_label().
+     * No WS_HSCROLL: labels are truncated to fit instead, see fitLabel().
      * An item wider than the client area makes Win98's listbox paint over its
      * own WS_EX_CLIENTEDGE border -- measured as white pixels at x=8,9 where
      * (128,128,128) and (0,0,0) should be, on exactly the rows whose text
      * overflowed, surviving both a scroll and a minimise/restore. */
-    list = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
+    HWND box = CreateWindowExA(WS_EX_CLIENTEDGE, "LISTBOX", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
         WS_CLIPSIBLINGS | LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT |
         LBS_OWNERDRAWFIXED,
         0, 0, 0, 0, parent, (HMENU)ID_CHATS, inst, NULL);
-    check_child("chats", list);
+    check_child("chats", box);
+    /* Owned and subclassed from here; the listbox is destroyed with this
+     * object rather than left to its parent. */
+    if (box && !m_listBox.attach(box))
+        DestroyWindow(box);
+    m_list = m_listBox.hwnd();
 
     /* WS_TABSTOP and a mnemonic: this was mouse-only. The menu bar owns
      * F/C/M/E/H, so R is free. */
-    refresh = CreateWindowExA(0, "BUTTON", "&Refresh",
+    m_refresh = CreateWindowExA(0, "BUTTON", "&Refresh",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0,
         parent, (HMENU)ID_REFRESH, inst, NULL);
-    check_child("refresh", refresh);
+    check_child("refresh", m_refresh);
 
-    SendMessageA(list,    WM_SETFONT, (WPARAM)font_normal, TRUE);
-    SendMessageA(refresh, WM_SETFONT, (WPARAM)font_normal, TRUE);
+    SendMessageA(m_list,    WM_SETFONT, (WPARAM)m_fontNormal, TRUE);
+    SendMessageA(m_refresh, WM_SETFONT, (WPARAM)m_fontNormal, TRUE);
 
-    oldproc = (WNDPROC)SetWindowLongA(list, GWL_WNDPROC,
-                                      (LONG)(LONG_PTR)list_proc);
 }
 
-rc_chats *rc_chats::create(HWND parent, HINSTANCE inst, rc_net *net,
-                            HFONT normal, HFONT bold,
-                            rc_chats_confirm_fn confirm,
-                            FrameSender *send, void (*switching)(void),
-                            void (*switched)(rc_frame *f))
+ChatList *ChatList::create(HWND parent, HINSTANCE inst, rc_net *net,
+                           HFONT normal, HFONT bold, FrameSender *sender,
+                           ChatListListener *listener)
 {
-    return new rc_chats(parent, inst, net, normal, bold, confirm, send,
-                         switching, switched);
+    return new ChatList(parent, inst, net, normal, bold, sender, listener);
 }

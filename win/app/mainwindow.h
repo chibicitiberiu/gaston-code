@@ -20,6 +20,7 @@
 #include "app/reconnect.h"
 #include "app/turn.h"
 #include "app/sender.h"
+#include "app/chatlist.h"
 
 #include "app/title.h"
 
@@ -28,7 +29,7 @@
 #define RC_MAIN_CLASS "RetroClaudeWnd"
 
 class MainWindow : public Service, public ReconnectListener, public TurnListener,
-                   public FrameSender
+                   public FrameSender, public ChatListListener
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -49,6 +50,11 @@ public:
 
     /* TurnListener */
     void setBusy(bool busy);
+
+    /* ChatListListener */
+    bool confirmSwitch();
+    void onSwitching();
+    void onSwitched(rc_frame *f);
 
     /* FrameSender */
     bool sendFrame(const char *what, const char *type,
