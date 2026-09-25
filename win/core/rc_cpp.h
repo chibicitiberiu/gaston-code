@@ -18,8 +18,11 @@
  * string instead of leaving it to be checked.
  *
  * DIALECT: C++98/03 as Open Watcom implements it. No nullptr, no move
- * semantics, no templates beyond the trivial, no exceptions (-xd), no RTTI.
- * Nothing here allocates unless told to.
+ * semantics, no RTTI. Exceptions ARE on (-xs, since 2026-09-25) so Open
+ * Watcom's STL -- std::vector, std::string, std::wstring -- can be used
+ * where a fixed table or hand-built string was the alternative; operator new
+ * throws std::bad_alloc (core/heap.cpp), caught at App::run and at each
+ * thread's entry point. Nothing here allocates unless told to.
  *
  * RULE: no file-scope objects with non-trivial constructors. Static ctors DO
  * run under `nt_win` before WinMain, which is before rc_log_open, so anything
@@ -42,32 +45,9 @@ extern "C" {
 
 /* --- allocation ----------------------------------------------------------
  *
- * Over GetProcessHeap(), not the CRT heap. The guest deliberately uses
- * HeapAlloc everywhere -- "memory is the binding constraint" -- and letting
- * `new` reach a second allocator would split the budget in two. Returns null
- * rather than throwing: with -xd and a null return Watcom SKIPS the
- * constructor, so the existing `if (!p) return;` discipline carries over
- * unchanged from the C.
+ * operator new/delete are defined once, in core/heap.cpp: over
+ * GetProcessHeap(), throwing std::bad_alloc on failure.
  */
-inline void *operator new(size_t n)
-{
-    return HeapAlloc(GetProcessHeap(), 0, n ? n : 1);
-}
-
-inline void *operator new[](size_t n)
-{
-    return HeapAlloc(GetProcessHeap(), 0, n ? n : 1);
-}
-
-inline void operator delete(void *p)
-{
-    if (p) HeapFree(GetProcessHeap(), 0, p);
-}
-
-inline void operator delete[](void *p)
-{
-    if (p) HeapFree(GetProcessHeap(), 0, p);
-}
 
 /* --- a string that knows whether it fits ---------------------------------
  *

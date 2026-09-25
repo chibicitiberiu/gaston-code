@@ -6,6 +6,8 @@
 #include "core/rc_cpp.h"
 #include "net/net.h"
 #include "net/caps.h"
+#include <new>
+#include "core/heap.h"
 #include "core/log.h"
 #include "core/str.h"
 #include "rpc/rpc.h"
@@ -268,7 +270,7 @@ static int recv_exact(SOCKET s, char *buf, unsigned len, volatile LONG *running)
     return 0;
 }
 
-static unsigned __stdcall reader_thread(void *arg)
+static unsigned reader_thread_body(void *arg)
 {
     rc_net *n = (rc_net *)arg;
     unsigned char hdr[4];
@@ -391,6 +393,21 @@ static unsigned __stdcall reader_thread(void *arg)
         set_state(n, was_running ? RC_FAILED : RC_DISCONNECTED);
     }
     rc_log("net: reader thread exiting (rx=%lu tx=%lu)", n->rx_bytes, n->tx_bytes);
+    return 0;
+}
+
+/* Catches std::bad_alloc, which operator new throws (core/heap.cpp): an
+ * exception leaving a thread's entry point ends the process with no log. */
+static unsigned __stdcall reader_thread(void *arg)
+{
+    try
+    {
+        return reader_thread_body(arg);
+    }
+    catch (std::bad_alloc &)
+    {
+        rc_out_of_memory("the network reader");
+    }
     return 0;
 }
 
@@ -782,7 +799,7 @@ static void outq_clear(rc_net *n)
     if (n->outq_room) SetEvent(n->outq_room);
 }
 
-static unsigned __stdcall sender_thread(void *arg)
+static unsigned sender_thread_body(void *arg)
 {
     rc_net *n = (rc_net *)arg;
 
@@ -824,6 +841,21 @@ static unsigned __stdcall sender_thread(void *arg)
         outq_free(it);
     }
     outq_clear(n);
+    return 0;
+}
+
+/* Catches std::bad_alloc, which operator new throws (core/heap.cpp): an
+ * exception leaving a thread's entry point ends the process with no log. */
+static unsigned __stdcall sender_thread(void *arg)
+{
+    try
+    {
+        return sender_thread_body(arg);
+    }
+    catch (std::bad_alloc &)
+    {
+        rc_out_of_memory("the network sender");
+    }
     return 0;
 }
 

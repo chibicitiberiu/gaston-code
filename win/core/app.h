@@ -162,6 +162,7 @@ private:
      * members. */
     friend class HiddenWindow;
 
+    int runLifecycle(const char *cmdLine);
     bool onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
     void shutdown();
 

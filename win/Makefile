@@ -34,15 +34,23 @@ export WLINK_LNK = $(OWBIN)/wlink.lnk
 # WINVER pinned at 0x0400: raising it silently changes sizeof(NONCLIENTMETRICS)
 #      and breaks SPI_GETNONCLIENTMETRICS on the guest.
 # _WIN32_IE left at its 0x0400 default so TBSTYLE_* stays available.
-# -xd: no exceptions, no RTTI. Exception support alone measured 9.2 KB, and
-# this codebase has no use for it -- the discipline is "return null and let the
-# caller decide", which C++ preserves because with -xd and a null-returning
-# operator new, Watcom SKIPS the constructor.
-CXXONLY = -xd
+# -xs: exceptions ON, for the STL (vector, string, wstring), by decision on
+# 2026-09-25 after measuring the cost: +27 KB committed at load for the
+# switch alone, about +40 KB with the containers in use. The fixed MAX_*
+# tables and hand-rolled string building were costing more than that in
+# code and in memory held at worst case. Open Watcom's STL does not compile
+# without it. operator new throws std::bad_alloc (core/heap.cpp); App::run
+# and thread entry points catch it.
+# -DNOMINMAX: windows.h's min/max macros break <limits> and friends.
+# -wcd=433: "mangled name truncated" fires for ordinary instantiations such
+# as vector<string>. Checked: vector<string> and vector<wstring>, both
+# truncated, instantiated in two objects and linked into one exe, each ran
+# its own code correctly (150 and 350 from a Wine run).
+CXXONLY = -xs -wcd=433
 
 CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
-         -DWIN32_LEAN_AND_MEAN -DTDEFL_LESS_MEMORY=1 \
+         -DWIN32_LEAN_AND_MEAN -DTDEFL_LESS_MEMORY=1 -DNOMINMAX \
          -i="$(CURDIR)" -i="$(CURDIR)/third_party/miniz" \
          -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt"
 
@@ -57,8 +65,11 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # is -32 KB) comes after the refactor, by decision. 408,000 -> 412,000 at
 # C5b (408,060 measured): headroom for the rest of C5, where each module's
 # callbacks become an interface with a vtable. The memory pass tightens it
-# again. Raise it only with a measured reason.
-COMMITTED_CAP ?= 412000
+# again. 412,000 -> 450,000 when exceptions went on for the STL (by
+# decision, 2026-09-25): the switch measured 434,648 before any container
+# is used, and the headroom is for the modules that move onto
+# vector/string. Raise it only with a measured reason.
+COMMITTED_CAP ?= 450000
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -88,7 +99,7 @@ MINIZ = third_party/miniz/miniz.c
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
-            core/app.cpp core/window.cpp
+            core/app.cpp core/window.cpp core/heap.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this

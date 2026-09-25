@@ -1,5 +1,8 @@
 #include "core/app.h"
 
+#include <new>
+#include "core/heap.h"
+
 /* quit()'s message. WM_APP, not WM_USER: this is our own window class.
  * core/ takes WM_APP + 0x100 upward, clear of net.h's WM_APP + 1..2 and the
  * client's low offsets; it was WM_APP + 1, the same number as WM_RC_FRAME,
@@ -26,6 +29,21 @@ App::~App()
 }
 
 int App::run(const char *cmdLine)
+{
+    /* operator new throws (core/heap.cpp); the main thread's boundary is
+     * here. The other threads catch at their own entry points. */
+    try
+    {
+        return runLifecycle(cmdLine);
+    }
+    catch (std::bad_alloc &)
+    {
+        rc_out_of_memory("the main thread");
+    }
+    return RUN_FAILED;
+}
+
+int App::runLifecycle(const char *cmdLine)
 {
     if (m_ran)
         return RUN_FAILED;

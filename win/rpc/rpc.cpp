@@ -21,6 +21,8 @@
 #include "rpc/exec.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
+#include <new>
+#include "core/heap.h"
 #include "core/log.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
@@ -479,7 +481,7 @@ static void drop(rc_frame *f)
     HeapFree(GetProcessHeap(), 0, f);
 }
 
-static unsigned __stdcall rpc_thread(void *arg)
+static unsigned rpc_thread_body(void *arg)
 {
     (void)arg;
     while (g_running) {
@@ -601,6 +603,21 @@ static unsigned __stdcall rpc_thread(void *arg)
             reject_busy(last);
             drop(last);
         }
+    }
+    return 0;
+}
+
+/* Catches std::bad_alloc, which operator new throws (core/heap.cpp): an
+ * exception leaving a thread's entry point ends the process with no log. */
+static unsigned __stdcall rpc_thread(void *arg)
+{
+    try
+    {
+        return rpc_thread_body(arg);
+    }
+    catch (std::bad_alloc &)
+    {
+        rc_out_of_memory("the RPC worker");
     }
     return 0;
 }
