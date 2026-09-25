@@ -5,8 +5,7 @@ it may not pull in any other bridge module (the folding, the caps, the view).
 import subprocess
 import sys
 
-from bridge.wire import frame
-from bridge.wire import protocol
+from bridge.wire import frame, protocol
 
 
 def test_importing_the_codec_loads_no_other_bridge_module():
