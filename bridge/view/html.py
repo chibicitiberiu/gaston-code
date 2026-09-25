@@ -122,15 +122,10 @@ def tool_call(name: str, summary: str) -> str:
 def tool_result(body: str, *, error: bool = False) -> str:
     """What a tool actually returned, as a finished block.
 
-    This used to go out as a raw TOOLRESULT frame carrying plain text, and the
-    guest had NO handler for it -- so tool results have never appeared on
-    Windows 98 at all. The user saw the call ("Bash: ls") and then silence,
-    then whatever the model said next about output they could not see.
-
-    Rendered here rather than there for the reason everything else is: the
-    guest transforms nothing. Going through _write_block also puts it in the
-    paginator, so it survives a reconnect and is still there when paging back
-    -- which a raw frame never was.
+    Rendered here, not sent as a raw TOOLRESULT frame, for the reason
+    everything else is: the guest transforms nothing. Going through
+    _write_block also puts it in the paginator, so it survives a reconnect
+    and is still there paging back.
 
     Capped, because a tool can return a great deal more than a 640x480 screen
     or a 32MB machine wants, and the model already has the full text.
@@ -362,21 +357,17 @@ class HtmlStream:
 
     #: How much of an open block a LIVE update may carry. 02.17.
     #:
-    #: A LIVE update replaces the whole open element, and `_render` returned
-    #: the whole of it every time -- once per coalescer flush, which is every
-    #: 100ms on a fast link and 600ms on a slow one. A 60 KB fenced file
-    #: therefore went out as roughly 65 frames averaging 30 KB: about two
-    #: MEGABYTES on the wire for 60 KB of content, on a link this project
-    #: measures in single-digit KB/s. Worse, it ended in silence -- past
-    #: `MAX_FRAME - 1024` `send_html` drops LIVE frames without a word
-    #: (link.py), so live updating simply stopped partway through a long
-    #: block with nothing said and no way to tell.
+    #: A LIVE update replaces the whole open element and `_render` returned
+    #: all of it every coalescer flush (100-600ms), so a 60 KB fenced file
+    #: went out as ~65 frames averaging 30 KB -- about two MEGABYTES on the
+    #: wire for 60 KB of content, on a link measured in single-digit KB/s.
+    #: Worse, past `MAX_FRAME - 1024` `send_html` drops LIVE frames without a
+    #: word (link.py), so live updating just stopped partway through with no
+    #: way to tell.
     #:
-    #: Capping the TAIL rather than the head is what streaming is for: the
-    #: newest lines are the ones being written, and they are what a reader
-    #: watching a long code block wants to see. The finished block arrives
-    #: whole, as an APPEND, the way it always did -- nothing is lost, only
-    #: the intermediate copies are bounded.
+    #: Capping the TAIL, not the head: the newest lines are what a reader
+    #: watching a long code block wants to see, and the finished block still
+    #: arrives whole as an APPEND -- only the intermediate copies are bounded.
     LIVE_CAP = 4096
 
     def _tail(self, lines: list[str]) -> list[str]:
@@ -605,7 +596,7 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .permdone p { margin: 0; color: #606050; }
 """
 
-# Three containers: finished blocks accumulate in #t, #line holds the one block
+# Three containers: finished blocks accumulate in #t, #l holds the one block
 # still being written (replaced wholesale on each update), and #s is the
 # status line that sits under both. Keeping them separate is what lets the
 # guest stream without ever re-parsing what is already there.

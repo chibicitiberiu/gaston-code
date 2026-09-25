@@ -88,34 +88,6 @@ def turn_deps():
     )
 
 
-def test_turn_runner_init(turn_deps):
-    cfg, conn, pres, att, sync, ge, perm, opt, ws, sess, conv = turn_deps
-    runner = TurnRunner(
-        config=cfg,
-        connection=conn,
-        presentation=pres,
-        attachment=att,
-        sync=sync,
-        guest_exec=ge,
-        permission=perm,
-        options=opt,
-        workspace=ws,
-        session=sess,
-        conv=conv,
-    )
-    assert runner.config is cfg
-    assert runner.connection is conn
-    assert runner.presentation is pres
-    assert runner.attachment is att
-    assert runner.sync is sync
-    assert runner.guest_exec is ge
-    assert runner.permission is perm
-    assert runner.options is opt
-    assert runner.workspace is ws
-    assert runner.session is sess
-    assert runner.conv is conv
-
-
 @pytest.mark.asyncio
 async def test_run_turn_locked_success(turn_deps):
     cfg, conn, pres, att, sync, ge, perm, opt, ws, sess, conv = turn_deps

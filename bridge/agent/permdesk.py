@@ -1,26 +1,21 @@
 """PermissionDesk: one guest's permission-prompt bar, and the queue behind it.
 
-Before this, `Bridge` held roughly 250 lines split across the callback the
-SDK calls into (`_can_use_tool`), the queue (`_enqueue_prompt`/
-`_show_prompt`/`_send_waiting`/`_pump_queue`), reconnect recovery
-(`_reissue_prompt`), the two ways a prompt ends without an answer
-(`_finish_prompt` for a timeout or a cancellation, `_perm_reply` for a real
-one), and the denial-on-teardown path (`_resolve_all`). All of it read or
-wrote exactly two fields, `guest.perms.pending` and `guest.perms.queue` -- the
-audit's "Prompts" `GuestSession` group (docs/audit/02-bridge-python.md #2,
-#1.3) -- and nothing else in `Bridge` has a reason to reach into them
-directly any more.
+This used to be ~250 lines spread across `Bridge`, all of it reading or
+writing exactly two fields, `guest.perms.pending` and `guest.perms.queue` --
+the audit's "Prompts" `GuestSession` group (docs/audit/02-bridge-python.md
+#2, #1.3). Nothing else in `Bridge` has a reason to reach into them directly
+any more.
 
-`_finish_prompt` (here, `_finish`) and `_resolve_all` (here, `deny_all`)
-must stay synchronous: both run inside a cancelled scope -- the SDK's own
-cancellation of an in-flight tool call, and `ConnectionService.on_client`'s teardown
-before its first `await` -- where an `await` would simply never complete.
-`_finish` schedules its continuation with `spawn` rather than awaiting it,
-which is exactly what `Bridge._spawn` already existed for.
+`_finish` and `deny_all` must stay synchronous: both run inside a cancelled
+scope -- the SDK's own cancellation of an in-flight tool call, and
+`ConnectionService.on_client`'s teardown before its first `await` -- where an
+`await` would simply never complete. `_finish` schedules its continuation
+with `spawn` rather than awaiting it, which is exactly what `Bridge._spawn`
+already existed for.
 
-Built once per `GuestSession`, in `ConnectionService.attach`, and held there as
-`guest.perms` -- the same lifetime as the guest itself, because a prompt on
-screen must survive a reconnect. `write_block`, `send` and `spawn` are the
+Built once per `GuestSession`, in `ConnectionService.attach`, and held there
+as `guest.perms` -- the same lifetime as the guest itself, because a prompt
+on screen must survive a reconnect. `write_block`, `send` and `spawn` are the
 only things this needs from `Bridge`: writing the prompt's description into
 the transcript, putting a frame on the wire, and scheduling a continuation
 from a cancelled scope. The policy -- what is off-limits, which suggestions
@@ -119,7 +114,7 @@ class PermissionDesk:
         self.pending: PendingPrompt | None = None
         #: Prompts waiting behind it. A guest can show one bar; the model can
         #: request tools in parallel, so the rest wait rather than racing for
-        #: it. `GuestSession.perm_queue` forwards here for the same reason.
+        #: it.
         self.queue: deque = deque()
         #: The DEPLOYMENT-level gap last announced, or None -- see 02.4 and
         #: `cmdguard.deployment_gap`. Held by value rather than as a flag so
@@ -141,17 +136,10 @@ class PermissionDesk:
         Falling back to the machine's first reported shell is what `exec`
         itself falls back to, so the two agree by construction.
 
-        THE DOCSTRING HERE USED TO CLAIM THE OPPOSITE OF WHAT THE CODE DID.
-        It said an empty answer "refers every command to the user rather than
-        judging it by whichever profile happened to be the only one
-        installed" -- while `cmdguard._default_shell` did judge by the only
-        one installed. Two readers would have disagreed about which half was
-        the bug.
-
-        02.5 removed the disagreement instead of settling it: there is no
-        guess left to defend. The machine says which shells it has, the model
-        says which one it wants, and only a machine that reported nothing and
-        a call that named nothing reaches the profile count at all.
+        02.5: there is no guess left to defend here. The machine says which
+        shells it has, the model says which one it wants, and only a machine
+        that reported nothing and a call that named nothing reaches the
+        profile count (`cmdguard._default_shell`) at all.
         """
         named = str((args or {}).get("shell") or "").strip()
         if named and named.lower() != "none":
@@ -230,41 +218,29 @@ class PermissionDesk:
                 return PermissionResultDeny(message=refuse, interrupt=False)
 
             # What this command reaches outside the mirrored folder, if
-            # anything. It ONLY EVER ADDS A WARNING.
-            #
-            # That asymmetry is the whole design. The bar clips its line at
-            # 160 characters and "Run on your machine: " eats 21 of them, so
-            # roughly 139 bytes of a command that may be ~1000 are visible --
-            # and attaching a reassuring "stays in the mirrored folder" to a
-            # truncated line would be manufactured reassurance, strictly less
-            # honest than today's bare command. So a contained command is
-            # annotated with nothing at all, and the user reads the command
-            # exactly as they do now.
-            #
-            # It gates nothing yet either. The verdict is displayed and
-            # nothing acts on it, which is deliberate: it earns its way onto
-            # real traffic before anything depends on it.
+            # anything. It ONLY EVER ADDS A WARNING, never a reassurance: the
+            # bar clips at 160 characters, so a truncated "stays in the
+            # mirrored folder" tag on a contained command would be
+            # manufactured reassurance, less honest than today's bare
+            # command. It also gates nothing yet -- displayed, not acted on,
+            # until it earns its way onto real traffic.
             warning = None
             if tool_name.startswith("mcp__machine__"):
                 if self._ensure_work is not None:
                     await self._ensure_work()
-                # THE LIVE FOLDER, not HELLO's `sync_root`. That header
-                # carries the machine's CONFIGURED root -- where folders get
-                # created -- and containment has to be measured against the
-                # tree actually being mirrored for THIS conversation, which
-                # is narrower. Measuring against the parent would call a
-                # write into a sibling conversation's folder "inside the
-                # mirror", which is the check inverted rather than loose.
-                # An empty root means nothing is mirrored, and
-                # cmdguard.reason refuses outright on one rather than letting
-                # `"".startswith("")` call every path contained.
+                # THE LIVE FOLDER, not HELLO's `sync_root` (the machine's
+                # CONFIGURED root). Containment must be measured against the
+                # tree actually mirrored for THIS conversation, which is
+                # narrower -- the parent would call a sibling conversation's
+                # folder "inside the mirror". An empty root means nothing is
+                # mirrored; cmdguard.reason refuses outright on one rather
+                # than letting `"".startswith("")` call every path contained.
                 #
-                # THE SHELL AND THE CAPS ARE BOTH PASSED, and neither used to
-                # be. Without the shell, the guard picked one by counting
-                # profiles, so adding a second shell disabled it entirely.
-                # Without the caps it folded case unconditionally, which on a
-                # case-sensitive machine calls `/WORK/x` contained in a mirror
-                # rooted at `/work`.
+                # Shell and caps are both passed: without the shell, the
+                # guard picked one by counting profiles, so a second shell
+                # disabled it entirely; without caps it folded case
+                # unconditionally, calling `/WORK/x` contained in a mirror
+                # rooted at `/work` on a case-sensitive machine.
                 root = str(getattr(self._guest, "work_guest", "") or "")
                 # THE SHELL THIS CALL NAMED. Judging by any other is judging
                 # a grammar the command will not run under.

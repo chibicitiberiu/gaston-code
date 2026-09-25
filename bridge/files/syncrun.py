@@ -34,9 +34,6 @@ from .synctransport import CHUNK, SyncTransport  # noqa: F401 (CHUNK re-export)
 
 log = logging.getLogger("bridge.syncrun")
 
-#: One file must never hold the wire for long. The guest has one sender thread
-#: and one outbound queue, so a big transfer starves permission prompts and exec
-#: output behind it.
 #: The acts that actually put bytes on the wire, and therefore the ones that
 #: have to yield first. A REPORT or a TOMBSTONE touches nothing and pausing
 #: before one would only make a pass slower for no benefit.
@@ -45,10 +42,8 @@ _MOVES_BYTES = frozenset((S.Act.PUSH, S.Act.PULL, S.Act.MKDIR,
 
 MAX_FILE = 1024 * 1024
 
-#: Default value for the guest's own RC_SYNC_MAX_FILES (win/sync/sync.h,
-#: currently 2000).  Used as the fallback when the client does not declare
-#: the maxfiles capability at handshake; declared clients carry their own
-#: value in Caps.maxfiles.
+#: Fallback for a client that doesn't declare `maxfiles` at handshake,
+#: mirroring the guest's own RC_SYNC_MAX_FILES default (win/sync/sync.h).
 SYNC_MAX_FILES = 2000
 
 
@@ -105,61 +100,37 @@ class PassResult(TypedDict, total=False):
 class Pass:
     """One reconciliation pass against one guest."""
 
-    #: Class-level fallbacks. `__init__` always overwrites both on a real
-    #: `Pass`, but `test_sync_wire.py` builds bare `Pass` subclasses that skip
-    #: `__init__` to exercise `scan_bridge` in isolation, and those reach these
-    #: directly -- verified live by `make test` before this was trimmed away.
-    #: EMPTY, not a path. This used to read `C:\\WORK` -- a drive letter and a
-    #: separator, in behaviour rather than a comment, and a live input to the
-    #: MAX_PATH budget `P.check` measures. Nothing in production ever reads
-    #: it (`run()` calls `scan_guest`, which sets the real root from SYNCEND,
-    #: before anything is pushed), so naming one machine's convention here
-    #: bought nothing and asserted something the bridge had not been told.
+    #: Class-level fallbacks for `test_sync_wire.py`'s bare `Pass` subclasses,
+    #: which skip `__init__` to exercise `scan_bridge` in isolation.
+    #: `guest_root` stays EMPTY rather than a placeholder path: it is a live
+    #: input to the MAX_PATH budget `P.check` measures, and an invented root
+    #: would assert something the machine had not actually told us.
     guest_root = ""
     caps = C.Caps()
 
     def __init__(self, transport: SyncTransport, caps: C.Caps | None,
                 root: str, state_dir: str):
-        # 02.19: this used to be `Pass(bridge, guest, root, state_dir)` --
-        # the entire Bridge and the entire GuestSession, of which four
-        # things were ever used (bridge._send, bridge.wire_yield,
-        # guest.sync.pending, guest.sync.seq) plus a fifth the audit's count
-        # missed, guest.perms.pending. `transport` is those, wrapped by
-        # bridge/files/synctransport.py's SyncTransport; `caps` is passed
-        # explicitly rather than fished out of a guest that might not be one.
+        # `transport` wraps the one guest connection `Pass` needs (see
+        # synctransport.py); `caps` is passed explicitly rather than fished
+        # out of a guest that might not be one.
         self.transport = transport
         self.root = root
-        # `state_dir` may name the FILE rather than the directory.
-        #
-        # One baseline per guest root (SyncService.base_path) means the caller is
-        # the only thing that knows which file this pass belongs to, and
-        # re-deriving `base.json` here silently ignored that -- the bridge
-        # chose base-<root>.json, the pass loaded base.json, and every pass
-        # was refused for an identity mismatch the bridge had already
-        # resolved. Both spellings are accepted so the existing callers that
-        # pass a directory keep working.
+        # `state_dir` may name the FILE rather than the directory: re-deriving
+        # a name from a directory here risked disagreeing with the one
+        # `SyncService.base_path` (one baseline per guest root) already chose.
         self.state = (state_dir if str(state_dir).endswith(".json")
                       else os.path.join(state_dir, "base.json"))
         self.base = S.Baseline.load(self.state)
-        #: "What has already been said, to whom" -- `first_report`/`note`/
-        #: `notices_delivered`/`agent_notices_delivered` below are thin
-        #: forwards onto this, moved out the same way `scan_bridge` was
-        #: (docs/audit/02-bridge-python.md #4.2, #02.40). Built over the same
-        #: `self.base` object, not a copy, so the `self.base.acp = keying`
-        #: assignment a few lines down is visible to it too.
+        #: "What has already been said, to whom" (reporter.py) -- over the
+        #: same `self.base`, not a copy, so `self.base.acp =` below is visible too.
         self.reporter = Reporter(self.base, self.state)
 
-        # The class-level `caps = C.Caps()` fallback above is for the
-        # bare-subclass tests that skip __init__ entirely and never call
-        # this at all.
         self.caps = caps if caps is not None else C.Caps()
 
-        # A codepage or case-rule CHANGE re-keys the whole baseline, because
-        # `canonical` folds through both. Every row would then miss, read as
-        # "absent on both sides", and resolve as a tombstone or a first-sync
-        # conflict -- across the entire tree, in one pass, with the agent's
-        # work staged into conflict/ at best. Refuse, exactly like a tree_id
-        # mismatch, and let a human decide.
+        # A codepage or case-rule CHANGE re-keys the whole baseline, since
+        # `canonical` folds through both -- every row would then miss, read
+        # as absent on both sides, and conflict the entire tree in one pass.
+        # Refuse, like a tree_id mismatch, and let a human decide.
         keying = f"{self.caps.acp}/{self.caps.case}"
         if self.base.acp and self.base.acp != keying:
             raise SyncError(
@@ -170,22 +141,16 @@ class Pass:
                 f"deleted.")
         self.base.acp = keying
         self.reports: list[str] = []
-        #: Where the guest keeps the mirror. Reported by SYNCEND, because the
-        #: MAX_PATH test measures the FULL path the guest would hold and has to
-        #: run here, before a push -- the guest cannot create the file in order
-        #: to tell us it is too long. Until SYNCEND arrives this is the
-        #: conventional default; scan_bridge always runs after scan_guest.
-        #: Empty rather than a guess: an invented root is a length budget
-        #: measured against a path this machine may not have.
+        #: Where the guest keeps the mirror, set for real from SYNCEND (see
+        #: the class-level fallback above); empty until then rather than a
+        #: guess, since scan_bridge always runs after scan_guest.
         self.guest_root = ""
         #: Rows established by a pull's ack, keyed by canonical path. The
-        #: baseline takes its value from HERE and never from a re-scan of our
-        #: own tree -- a re-scan could pick up a write the agent made during
-        #: the transfer, and the next pass would then pull over it.
+        #: baseline takes its value from HERE, never from a re-scan of our
+        #: own tree, which could pick up a write the agent made mid-transfer.
         self._pulled: dict[str, S.Entry] = {}
-        #: The tree's `.gitattributes`/`.gastonattributes`, loaded once per
-        #: pass. None until `run` loads it, so a caller driving scan_bridge
-        #: directly gets content-only classification.
+        #: The tree's `.gitattributes`/`.gastonattributes`. None until `run`
+        #: loads it, so calling scan_bridge directly gets content-only rules.
         self.attrs: A.Attrs | None = None
         #: Inside the agent's reach so it can read a conflict and its ancestor
         #: without a new permission path -- unlike the baseline itself, which
@@ -207,12 +172,9 @@ class Pass:
         tree_id, root, rows = result.tree_id, result.root, result.rows
 
         if status == SyncStatus.TOO_MANY:
-            # 03.24: the limit itself never crosses the wire -- SYNCEND only
-            # ever says status=too_many, because the scan that would have
-            # counted past it is the same scan that aborted instead of
-            # finishing. Without a number here the message only ever said
-            # "too_many", and nobody reading it -- user or agent -- could tell
-            # how many files is too many, or by how much this tree misses it.
+            # The limit itself never crosses the wire -- SYNCEND only ever
+            # says status=too_many -- so it is added here, or nobody reading
+            # the message could tell how many files is too many (03.24).
             raise SyncError(
                 f"guest scan returned too_many: the tree under the sync root "
                 f"has more than the machine's {self.caps.maxfiles}-file scan "
@@ -220,20 +182,14 @@ class Pass:
                 f"with .gitignore, so the scan stays under that count.")
         if status != SyncStatus.OK:
             # A truncated manifest is indistinguishable from a mass deletion,
-            # and the natural implementation acts on what arrived -- pushing the
-            # bridge's whole tree at a machine that just said it had too many
-            # files.
-            # .value, not the bare member: f"{SyncStatus.X}" is
-            # "SyncStatus.X" (a bare (str, Enum)'s __format__ defers to
-            # Enum.__str__, not the plain string content), confirmed against
-            # this interpreter -- server.py's _exec_result hits the same
-            # thing and already spells it out this way for ExecStatus.
+            # so this must abort rather than act on what arrived. `.value`,
+            # not the bare member: a bare (str, Enum)'s __format__ defers to
+            # Enum.__str__, so f"{status}" would read "SyncStatus.X".
             raise SyncError(
                 f"guest scan returned {status.value}",
-                # The machine has no root right now, which during a work
-                # directory change is true for about a second and is nobody's
-                # fault. run_sync retries rather than announcing it; it only
-                # becomes news if it keeps happening.
+                # `no_root`: the two sides are mid-handover (a work directory
+                # change), resolves within a second, and is nobody's fault --
+                # `transient` lets run_sync retry instead of announcing it.
                 transient=status is SyncStatus.NO_ROOT)
         if len(rows) != files:
             raise SyncError(
@@ -249,14 +205,9 @@ class Pass:
         if not self.base.tree_id and tree_id:
             self.base.tree_id = tree_id
 
-        # The root, compared in full, because tree_id cannot be trusted to
-        # differ when the root does. The guest builds it as
-        # "%08lX-%s" % (serial, root) into 64 bytes, so only the first 54
-        # characters of the root survive -- two roots on one volume sharing
-        # that prefix give the SAME id and the check above passes. A changed
-        # root also means the baseline's paths, which are relative to it,
-        # describe different files: adopting it silently would reconcile one
-        # tree against another's history.
+        # Compared in full, not just via tree_id, which truncates the root
+        # (see Baseline.guest_root in sync.py) -- a changed root would
+        # otherwise silently reconcile one tree against another's history.
         if not root:
             raise SyncError(
                 "guest SYNCEND did not report a root= header. Refusing: the "
@@ -300,11 +251,11 @@ class Pass:
     def _too_long_detail(self, status: SyncStatus, rel: str, *,
                         is_dir: bool = False) -> str:
         """03.41: `too_long` named no limit in a push/mkdir refusal, unlike
-        exec's own too_long (`_exec_result`), which tells the model the exact
-        character count. The number was always available here -- it is the
-        same `P.check` the pre-push scan already ran on this path -- so this
-        re-runs it purely to explain a refusal the guest has already made,
-        never to decide anything.
+        exec's own too_long (`exec_result` in guest_exec.py), which tells the
+        model the exact character count. The number was always available
+        here -- it is the same `P.check` the pre-push scan already ran on
+        this path -- so this re-runs it purely to explain a refusal the
+        guest has already made, never to decide anything.
 
         Also catches the two rules disagreeing: if the bridge's own check
         finds nothing wrong with a path the guest just refused as too_long,
@@ -329,10 +280,9 @@ class Pass:
                 f"skipped {rel}: {len(data)} bytes exceeds the {MAX_FILE} cap; "
                 f"one file must not hold the wire")
             return False
-        # The tree's rules, not just the content's. `-text` turns off both the
-        # conversion and the folded comparison; `eol=lf` keeps the folded
-        # comparison and changes only what lands on the client -- which is the
-        # whole point for a Makefile a cross toolchain has to read.
+        # The tree's rules, not just the content's: `-text` turns off both
+        # conversion and folded comparison, `eol=lf` keeps the comparison and
+        # changes only what lands on the client (the Makefile case).
         cls = P.classify(data)
         eol = self.caps.eol
         if self.attrs is not None:
@@ -344,9 +294,8 @@ class Pass:
 
         result = await self.transport.put(
             rb, wire, crc=crc, cls=cls,
-            # The precondition. The guest re-reads and refuses if the world
-            # moved -- which turns a silent overwrite into a conflict the
-            # next pass resolves correctly.
+            # The precondition: the guest re-reads and refuses if the world
+            # moved, turning a silent overwrite into a conflict.
             if_crc=str(expect.crc) if expect else "absent")
         status, ack_crc = result.status, result.crc
 
@@ -393,20 +342,16 @@ class Pass:
             self.reports.append(f"pull {rel} refused: {status.value}")
             return False
 
-        # `cls` is the client's own reading of the bytes, and it is the right
-        # thing to interpret the wire with and to verify the transfer against:
-        # it is what the client checksummed. The tree's attributes decide what
-        # we STORE and compare under, which can differ -- and when it says
-        # byte-exact, the client's bytes are kept exactly as they arrived
-        # rather than folded on the way in.
+        # `cls` is what the client checksummed, so it is the right reading to
+        # verify the transfer against. The tree's attributes decide what we
+        # STORE and compare under, which can differ.
         want = cls
         if self.attrs is not None:
             want, _ = self.attrs.effective_class(rel, cls)
         data = wire if want == P.CLASS_EXACT else P.to_bridge(wire, cls)
         got = zlib.crc32(P.normalise(wire, cls))
         if got != crc:
-            # Invariant 2: after a transfer the two sides agree, or it is
-            # reported. Never retried -- retrying the same transfer is how a
+            # Invariant 2: agree or report, never retry -- retrying is how a
             # livelock starts.
             self.reports.append(
                 f"pull {rel}: the guest said crc {crc}, the bytes that arrived "
@@ -417,8 +362,7 @@ class Pass:
             return False
         if want == cls and P.classify(data) != cls:
             # The guest's judgement and ours must agree on the bytes we now
-            # hold, or the next pass CRCs different functions on each side and
-            # the path never converges.
+            # hold, or the next pass CRCs different functions forever.
             self.reports.append(
                 f"pull {rel}: the guest called it class {cls!r} and the same "
                 f"bytes read as {P.classify(data)!r} here. Nothing written.")
@@ -465,11 +409,9 @@ class Pass:
         self.reports.append(f"mkdir {rel} refused: {status.value}"
                             + self._too_long_detail(status, rel, is_dir=True))
         if status == SyncStatus.NO_PARENT:
-            # 03.45: the guest already tells us this is specifically a
-            # missing-PARENT problem, not a permissions one -- distinct from
-            # `bad_path`, which blames the name (win/sync/syncrpc.c). Saying
-            # so plainly means the agent stops looking for a permissions fix
-            # that does not exist.
+            # A missing-PARENT problem, not a permissions one (distinct from
+            # `bad_path`, which blames the name) -- said plainly so the agent
+            # stops looking for a permissions fix that does not exist.
             self.note(f"SYNC: could not create the directory {rel} on the "
                       f"machine -- its own parent directory does not exist "
                       f"there. Nothing under {rel} can be copied there until "
@@ -500,12 +442,8 @@ class Pass:
         src = os.path.join(self.root, rel)
         if os.path.isdir(src):
             # A type change: the guest put a file where we hold a directory.
-            # The whole subtree is the thing being protected -- row 3 preserves
-            # descendants, and copying only the leaf would lose every file
-            # under it. `open(src, "rb")` used to run here and raised
-            # IsADirectoryError, which the caller does not catch, so ONE such
-            # collision aborted the entire pass -- every other path with it,
-            # on every pass, until someone renamed the file by hand.
+            # The whole subtree is what's being protected, since row 3
+            # preserves descendants and copying only the leaf would lose them.
             shutil.copytree(src, mine, symlinks=True)
         elif os.path.exists(src):
             with open(src, "rb") as fh:
@@ -539,10 +477,9 @@ class Pass:
             if want == row.cls:
                 out[key] = row
             elif not usable or not row.dual:
-                # The client sent one checksum for its own classification and
-                # the other cannot be derived -- a pure-LF file has them equal,
-                # so equality proves nothing. Honouring the override here would
-                # compare a normalised checksum against a raw one forever.
+                # One checksum, computed for the client's own classification;
+                # the other can't be derived, so honouring the override would
+                # compare normalised to raw forever.
                 out[key] = row
                 if self.reporter.first_report(key, "attrs:v1-client", None, None):
                     self.reports.append(
@@ -558,13 +495,9 @@ class Pass:
 
     # --- reporting -----------------------------------------------------------
     #
-    # first_report/note/notices_delivered/agent_notices_delivered are thin
-    # forwards onto self.reporter (bridge/files/reporter.py, docs/audit/
-    # 02-bridge-python.md #4.2/#02.40) -- kept as same-named Pass methods so
-    # `run()`'s many internal callers and test_sync_wire.py's direct calls
-    # (`p.note(...)`, `p.notices_delivered(...)`) did not have to change
-    # shape, the same pattern `scan_bridge` above already follows for
-    # `scanner.scan_bridge_tree`.
+    # `note`/`notices_delivered` are thin forwards onto self.reporter (see
+    # reporter.py); `first_report`/`agent_notices_delivered` have no such
+    # wrapper, and callers use `self.reporter.first_report(...)` directly.
 
 
     def note(self, text: str) -> None:
@@ -607,9 +540,8 @@ class Pass:
         if ignore is None:
             ignore = I.load(self.root)
 
-        # The trailing slash is load-bearing: `build/` is a pattern about a
-        # DIRECTORY and will not match the string "build". A row's type is the
-        # only thing that knows which question to ask.
+        # The trailing slash is load-bearing: `build/` matches a DIRECTORY,
+        # not the string "build", and a row's type is what knows which to ask.
         def ig(row) -> bool:
             return ignore(row.display + ("/" if row.type is S.Type.DIR else ""))
 
@@ -632,12 +564,9 @@ class Pass:
                 f"resume from their stored ancestor")
         return ignore
 
-    #: How many regressive rows in one pass before it stops looking like work
-    #: and starts looking like a restored backup, as an absolute floor AND as
-    #: a share of the tracked tree. Both, because either alone is wrong: a
-    #: fraction misfires on a four-file tree where one revert is 25%, and a
-    #: flat count misfires on a tree of three thousand where twelve reverts is
-    #: an ordinary afternoon.
+    #: How many regressive rows before a pass looks like a restored backup
+    #: rather than work -- a floor AND a share, since either alone misfires
+    #: (a fraction on a four-file tree; a flat count on a tree of thousands).
     REVERT_FLOOR = 5
     REVERT_SHARE = 0.25
 
@@ -659,9 +588,8 @@ class Pass:
         `accept-tree` is how they say it really was intended.
         """
         if self.base.accept_tree:
-            # Consumed here, not on a later success: the point of the flag is
-            # to get PAST this check once, and leaving it set would disarm the
-            # guard for every pass afterwards.
+            # Consumed here, not on later success, or it would disarm the
+            # guard for every pass afterwards instead of just this one.
             self.base.accept_tree = False
             log.info("sync: aggregate-revert check waived for this pass")
             return
@@ -674,24 +602,13 @@ class Pass:
         if (len(regressive) < self.REVERT_FLOOR
                 or len(regressive) < tracked * self.REVERT_SHARE):
             return
-        # AT LEAST ONE PATH MUST HAVE GONE BACKWARDS IN CONTENT, not merely
-        # vanished, and this condition is what stops the check becoming a trap
-        # rather than a guard.
-        #
-        # `REPORT` does not advance the baseline -- it counts and says so --
-        # so a row that vanished from the machine is re-decided identically on
-        # every pass, forever. Without this clause, deleting a tenth of a small
-        # tree (`del *.tmp`, a cleared build directory) would refuse the pass,
-        # and would refuse it again thirty seconds later, and every thirty
-        # seconds after that, with `accept-tree` buying exactly one pass each
-        # time. A guard that must be answered forever is worse than no guard:
-        # it teaches the answer reflexively, and the one time it matters it
-        # gets the same reflex.
-        #
-        # Vanishing alone is deletion, which is already handled and already
-        # harmless -- nothing is applied and nothing is lost. What distinguishes
-        # a RESTORED tree is content coming back to an older state, and that is
-        # what must be present before the whole pass is stopped.
+        # At least one path must have gone BACKWARDS in content, not merely
+        # vanished, or this becomes a trap rather than a guard: `REPORT` never
+        # advances the baseline, so an ordinary bulk deletion (`del *.tmp`)
+        # would re-trip it every pass forever, with `accept-tree` buying only
+        # one pass at a time -- training a reflexive answer for the one time
+        # it matters. Vanishing alone is deletion, already handled harmlessly;
+        # a RESTORED tree specifically brings content back to an older state.
         if not reverted:
             return
         sample = ", ".join(sorted(d.key for d in regressive)[:5])
@@ -715,10 +632,8 @@ class Pass:
         guest_rows = await self.scan_guest()
         ignore = await asyncio.to_thread(self._ignores, ignore)
         self.attrs = await asyncio.to_thread(A.load, self.root)
-        # ONE decision, for both sides. Overriding here and not there is worse
-        # than not overriding at all: the two sides would then be compared as
-        # different classes, which is a permanent disagreement rather than a
-        # missing feature.
+        # ONE decision, for both sides -- overriding here and not there would
+        # compare them as different classes, a permanent disagreement.
         usable = self.caps.manifest >= 2
         guest_rows = self._apply_attrs(guest_rows, usable)
         bridge_rows = await asyncio.to_thread(
@@ -726,35 +641,25 @@ class Pass:
 
         decisions = S.order(S.diff(guest_rows, bridge_rows, self.base))
         self._refuse_aggregate_revert(decisions)
-        #: Conflicts that CANNOT be applied -- a file on one side, a directory
-        #: on the other. They never resolve, so the pruning below must not
-        #: forget it announced them or they are announced again every pass.
+        #: Conflicts that CANNOT be applied (file vs directory). They never
+        #: resolve, so the pruning below must not forget it announced them.
         standing: set[str] = set()
         done: PassResult = {
             "pushed": 0, "pulled": 0, "dirs": 0, "conflicts": 0,
             "reported": 0, "skipped": 0, "latched": 0, "unhandled": 0,
-            # Conflicts ANNOUNCED this pass, which is not the same as
-            # conflicts found. A conflict that cannot be applied -- a file
-            # where we hold a directory -- never resolves, so every pass
-            # finds it again; counting those towards the halt put the bar
-            # back up every thirty seconds after the user had answered it.
-            # See run_sync, which raises the halt on this and not on the
-            # total.
+            # ANNOUNCED this pass, not the same as found: an unapplyable
+            # conflict recurs every pass, so counting it toward the halt would
+            # raise the bar again right after the user had answered it.
             "new_conflicts": 0}
 
-        # Which paths this pass is stopping the user for. The halt bar answers
-        # these and nothing else -- see SyncCoordinator.halt_paths
-        # (bridge/synccoord.py).
+        #: Which paths this pass is stopping the user for -- what the halt bar
+        #: answers (see SyncCoordinator.halt_paths, bridge/synccoord.py).
         new_conflict_paths: set[str] = set()
 
-        #: 03.45: directories whose MKDIR failed THIS pass, as key-prefixes
-        #: ("dir/"). `order()` puts a directory's own MKDIR ahead of anything
-        #: under it (ranked first, then by depth), so by the time a PUSH or a
-        #: nested MKDIR under a failed one is reached, the failure is already
-        #: known. Without this, one refused directory turned into one refusal
-        #: per file inside it -- every one of them individually reported as
-        #: `no_parent` against the guest, every single pass, for a cause the
-        #: first line already explained.
+        #: Directories whose MKDIR failed THIS pass, as key-prefixes ("dir/").
+        #: `order()` ranks a directory's MKDIR ahead of anything under it, so
+        #: the failure is known by the time a PUSH reaches it -- without this,
+        #: one refused directory became one `no_parent` refusal per file (03.45).
         failed_dirs: set[str] = set()
 
         for dec in decisions:
@@ -773,19 +678,12 @@ class Pass:
                         f"machine this pass")
                     continue
 
-            # Sync never holds the wire for more than one file. A pass is a
-            # sequence of small operations that can be interleaved, never a
-            # batch that runs to completion -- and while the user is looking at
-            # a permission prompt, the next file waits for the pass after this
-            # one. Each path commits independently, so stopping here leaves
-            # some paths at the new agreement and the rest at the old one, and
-            # both are valid resting states.
-            #
-            # The pause-for-a-prompt decision is sync's own policy (04.12):
-            # wire_yield only yields the wire now, so the check against
-            # perm_pending happens here rather than inside it -- a future
-            # bulk sender that is not sync (an export) has no reason to
-            # inherit this behaviour just by calling the same primitive.
+            # Sync never holds the wire for more than one file: each path
+            # commits independently, so pausing for an open permission prompt
+            # leaves some paths at the new agreement and the rest at the old,
+            # both valid resting states. Sync's own policy (04.12), not
+            # `wire_yield`'s -- a future bulk sender that isn't sync shouldn't
+            # inherit it just by calling the same primitive.
             if dec.act in _MOVES_BYTES:
                 await self.transport.yield_()
                 if self.transport.has_pending_prompt:
@@ -798,80 +696,56 @@ class Pass:
             if dec.act is S.Act.SKIP:
                 done["skipped"] += 1
                 self.reports.append(f"{dec.key}: {dec.reason}")
-                # An unreadable path is worth saying out loud; an ignored one
-                # is the normal state of most of a tree and would bury it.
-                #
-                # This went nowhere at all before: `reports` is only read if
-                # the agent thinks to call sync_status, so a file it had just
-                # written and could not deliver produced silence. Through
-                # first_report, so a name the machine can never open is
-                # announced once rather than every thirty seconds.
+                # Worth telling the agent (`note`), not just `reports` (which
+                # only surfaces on sync_status) -- through first_report, so
+                # it's announced once, not every thirty seconds.
                 if dec.reason is S.UNREADABLE and self.reporter.first_report(
                         dec.key, dec.reason, g, b):
                     self.note(f"SYNC: {dec.key} -- {dec.reason}")
             elif dec.act is S.Act.REPORT:
                 done["reported"] += 1
                 self.reports.append(f"{dec.key}: {dec.reason}")
-                # Announced ONCE per distinct situation. A divergence the
-                # design cannot resolve -- the agent deleted a file the user
-                # still has -- is a standing condition, and this pass runs
-                # every thirty seconds. Telling the agent about the same
-                # unresolvable thing forever trains it to ignore the channel
-                # that also carries conflicts. The fingerprint includes the
-                # content, so the user EDITING that file is news again.
+                # Announced ONCE per distinct situation, or an unresolvable
+                # standing condition (found every pass) trains the agent to
+                # ignore the channel that also carries conflicts. The
+                # fingerprint includes content, so an edit is news again.
                 if self.reporter.first_report(dec.key, dec.reason, g, b):
                     self.note(f"SYNC: {dec.key} -- {dec.reason}")
             elif dec.act is S.Act.CONFLICT:
                 done["conflicts"] += 1
                 rel = (b.display if b else dec.key)
 
-                # A conflict is COPY -> PULL -> ADVANCE -> NOTIFY, and for a
-                # while this branch did only the copy and the notify. The
-                # divergence therefore survived the pass, so the next one found
-                # it again: a fresh mine.N/base.N pair and another notice every
-                # thirty seconds, forever, with the guest's version never
-                # reaching the bridge at all. Advancing the baseline is what
-                # makes the conflict happen ONCE, which is what it did.
-                #
-                # Order matters and is not arbitrary. The copy first, because
-                # it is the thing being protected. The notice next, written
-                # durably before anything moves, so a crash mid-resolution
-                # cannot leave the agent's work staged with nobody told. The
-                # pull after that. The baseline LAST, from the pull's ack --
-                # Invariant 1. Advancing it earlier and then crashing inverts
-                # the direction on the next pass and overwrites the user's file
-                # on their own machine, with no copy of it anywhere.
+                # A conflict is COPY -> PULL -> ADVANCE -> NOTIFY, in that
+                # order: copy first since it's what's being protected, the
+                # notice durably before anything moves so a crash mid-
+                # resolution can't strand the agent's work unannounced, and
+                # the baseline LAST from the pull's ack (Invariant 1) -- earlier,
+                # a crash would invert direction and overwrite the user's file.
 
-                # Can the guest's side actually be applied here? Only if it
-                # is a plain file AND we do not hold a directory at that path
-                # -- a pull writes a file, and it cannot replace a directory
-                # without a delete primitive we deliberately do not have.
+                # Applicable only if the guest's side is a plain file and we
+                # don't hold a directory there -- a pull can't replace a
+                # directory without a delete primitive we deliberately lack.
                 applicable = (
                     g is not None and g.type is S.Type.FILE
                     and (b is None or b.type is S.Type.FILE))
 
-                # An unapplyable conflict never resolves, so nothing advances,
-                # so the next pass decides it again. Staging it every time gave
-                # a fresh mine.N -- and a fresh notice -- every thirty seconds
-                # forever, which is the same "say it once" bug the standing
-                # divergences had, wearing a type change as a disguise.
+                # Unapplyable never resolves, so it recurs every pass; gate on
+                # first_report so it's staged and announced once, not every
+                # thirty seconds (the same bug standing divergences have).
                 if not applicable:
                     standing.add(dec.key)
                     if not self.reporter.first_report(dec.key, dec.reason, g, b):
                         done["latched"] += 1
                         continue
 
-                # Past the gate above, so this one is genuinely news: either it
-                # can be applied (and therefore resolves, and cannot recur), or
-                # it cannot and first_report has just said so for the first
-                # time. Either way it is worth stopping the user for.
+                # Past the gate, so this is genuinely news either way: worth
+                # stopping the user for.
                 done["new_conflicts"] += 1
                 new_conflict_paths.add(dec.key)
                 mine = self.stage_conflict(rel)
 
-                # A latched path REFUSES pushes. The agent's in-flight turn
-                # cannot react to a conflict it has not been told about yet,
-                # so "the agent stops" is enforced here rather than requested.
+                # Refuses pushes: the agent's in-flight turn can't react to a
+                # conflict it hasn't been told about yet.
                 self.base.latched[dec.key] = dec.reason
                 done["latched"] += 1
                 if applicable:
@@ -886,10 +760,9 @@ class Pass:
                         f"file, so do not ask them again -- say what each side "
                         f"changed and what you kept.")
                 else:
-                    # Telling the agent to "merge the two" here would send it
-                    # looking for a file that is a directory on one side. The
-                    # situation needs a human decision about which shape the
-                    # path should have, so say exactly that instead.
+                    # "Merge the two" would send the agent looking for a file
+                    # that's a directory on one side; this needs a human
+                    # decision about shape instead.
                     self.note(
                         f"SYNC CONFLICT {rel} -- {dec.reason}. One side holds "
                         f"a file and the other a directory, so nothing was "
@@ -899,26 +772,21 @@ class Pass:
                         f"every other path keeps syncing.")
 
                 if applicable:
-                    # `applicable` is only true when g is not None (see its
-                    # definition above).
-                    assert g is not None
+                    assert g is not None  # true whenever applicable is
                     if await self.pull(dec.key, g.display or dec.key, b):
                         done["pulled"] += 1
                         self.base.rows[dec.key] = self._pulled[dec.key]
                     else:
-                        # The guest's version could not be fetched, so the
-                        # baseline must NOT advance -- it would then claim an
-                        # agreement that does not exist. The latch holds and
-                        # the next pass tries again.
+                        # Fetch failed, so the baseline must NOT advance -- it
+                        # would claim an agreement that doesn't exist. The
+                        # latch holds and the next pass tries again.
                         self.reports.append(
                             f"{rel}: conflict staged, but the machine's version "
                             f"could not be fetched; nothing here was changed")
                 else:
-                    # A type change in either direction. There is no file to
-                    # fetch, or we hold a directory where the machine holds a
-                    # file and applying it would mean deleting that subtree.
-                    # The honest outcome is the staged copy plus the report --
-                    # said once, because nothing here will change it.
+                    # A type change: no file to fetch, or applying it would
+                    # mean deleting a subtree we hold as a directory. The
+                    # staged copy plus this report is the honest outcome.
                     self.reports.append(
                         f"{rel}: conflict staged; a file on one side and a "
                         f"directory on the other, so nothing here was changed")
@@ -927,9 +795,7 @@ class Pass:
                     done["latched"] += 1
                     self.reports.append(f"{dec.key}: latched, push withheld")
                     continue
-                # PUSH is only decided when the bridge holds the path (see
-                # sync.py's diff()), so b is never None here.
-                assert b is not None
+                assert b is not None  # PUSH only decided when the bridge holds the path
                 rel = b.display or dec.key
                 if await self.push(rel, g):
                     done["pushed"] += 1
@@ -950,21 +816,15 @@ class Pass:
                 rel = dec.display or (b.display if b else dec.key)
                 if await self.mkdir(rel):
                     done["dirs"] += 1
-                    # MKDIR is only decided for a directory that exists on
-                    # the bridge (see sync.py's diff()), so b is not None.
-                    assert b is not None
+                    assert b is not None  # MKDIR only decided for a bridge-side dir
                     self.base.rows[dec.key] = b
                 else:
                     failed_dirs.add(dec.key + "/")
             elif dec.act is S.Act.ADOPT:
-                # A directory the guest has and we do not is adopted, and
-                # adopting it means CREATING it -- otherwise the row says the
-                # two sides agree while the bridge has nothing there, and an
-                # empty directory the user made on their own machine never
-                # appears for the agent at all. Files inside one arrive anyway
-                # because `pull` makes parents, so the case that actually goes
-                # missing is the empty directory, which is exactly the one
-                # nobody notices until a build fails.
+                # Adopting a guest-only directory means CREATING it here too,
+                # or the row claims agreement while the bridge has nothing
+                # there -- an empty directory nobody notices missing until a
+                # build fails (files inside arrive via `pull`'s own parents).
                 if g is not None and g.type is S.Type.DIR and b is None:
                     try:
                         os.makedirs(os.path.join(self.root, g.display),
@@ -973,9 +833,7 @@ class Pass:
                     except OSError as exc:
                         self.reports.append(f"mkdir {g.display} here: {exc}")
                         continue
-                # ADOPT is only decided when at least one side has the
-                # entry (see sync.py's diff()), so this is never None.
-                adopted = g if g is not None else b
+                adopted = g if g is not None else b  # ADOPT needs at least one side
                 assert adopted is not None
                 self.base.rows[dec.key] = adopted
             elif dec.act is S.Act.TOMBSTONE:
@@ -993,18 +851,13 @@ class Pass:
                         log.warning("could not remove tombstoned %s: %s", target, exc)
             elif dec.act is S.Act.CLEAR_TOMBSTONE:
                 self.base.tombs.pop(dec.key, None)
-                # CLEAR_TOMBSTONE is only decided when both sides recreated
-                # the path identically (see sync.py's diff()), so both g
-                # and b are present; `g or b` just picks either.
-                cleared = g if g is not None else b
+                cleared = g if g is not None else b  # both sides agree; either works
                 assert cleared is not None
                 self.base.rows[dec.key] = cleared
             else:
-                # An action with no branch used to fall off the end of this
-                # chain and vanish. That is how MKDIR was lost: `src` was never
-                # created, every push into it came back `readonly`, and the
-                # pass reported six of seven files transferred with no error
-                # anywhere. Silence is the one outcome this layer may not have.
+                # An action with no branch must never fall off the end of
+                # this chain and vanish silently -- that is how MKDIR was
+                # lost once, with no error anywhere to point at it.
                 done["unhandled"] += 1
                 self.reports.append(
                     f"{dec.key}: BUG -- no handler for {dec.act.value}")
@@ -1020,14 +873,9 @@ class Pass:
             del self.base.reported[key]
 
         self.base.generation += 1
-        # What the log should say. The full set goes to sync_status, which is
-        # asked on demand; the log wants the delta, or a name that can never
-        # be fixed prints a warning twice a minute until warnings stop being
-        # read at all.
         # This pass ran, so whatever stopped the last one is over. Clearing it
-        # is what makes the next abort news again -- and a recovery worth
-        # saying, because "sync has stopped" with no matching "sync resumed"
-        # leaves the user believing it is still down.
+        # makes the next abort news again, and a recovery worth saying -- or
+        # the user goes on believing sync is still down.
         if self.base.aborted or self.base.announced:
             log.info("sync: recovered from %r", self.base.aborted)
             self.base.announced = []
@@ -1036,6 +884,8 @@ class Pass:
                       "stopped: " + self.base.aborted)
             self.base.aborted = ""
 
+        # `sync_status` wants the full standing set; the log wants only the
+        # delta, or an unfixable one repeats forever.
         was = set(self.base.reported_lines)
         done["new_reports"] = [r for r in self.reports if r not in was]
         self.base.reported_lines = list(self.reports)
@@ -1044,8 +894,7 @@ class Pass:
         done["notices"] = list(self.base.pending_notice)
         done["agent_notices"] = list(self.base.pending_notice_agent)
         done["conflict_paths"] = sorted(new_conflict_paths)
-        # `dict()`, not `done` bare: the caller (SyncService.run_sync,
-        # bridge/services/sync.py) declares this a plain `dict` and treats
-        # it as an open-ended one -- returning the TypedDict itself would
-        # tie that unrelated file to PassResult's exact shape.
+        # `dict()`, not `done` bare: the caller (SyncService.run_sync) treats
+        # this as an open-ended plain dict, and returning the TypedDict itself
+        # would tie that unrelated file to PassResult's exact shape.
         return dict(done)

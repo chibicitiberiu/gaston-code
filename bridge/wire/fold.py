@@ -14,18 +14,14 @@ Folding direction is deliberately asymmetric. Display text is folded (lossy,
 best-effort, must never fail). Anything on the RPC path stays UTF-8 and is not
 touched by this module.
 
-WHICH CODEPAGE IS NEGOTIATED, AND THIS MODULE USED TO IGNORE IT. `caps.py`
+WHICH CODEPAGE IS NEGOTIATED, and this module must not guess it. `caps.py`
 reads GetACP() off HELLO, maps it through a 28-entry table, and refuses
-rather than guesses; `paths.py` and `syncrun.py` honour it on every filename.
-The display path did not -- `cp1252` was a literal at six places here and two
-more in `protocol.py` -- so a guest reporting acp=1251 connected fine and got
-this:
-
-    filename on the wire -> b'\xcf\xf0\xe8\xe2\xe5\xf2.txt'   round-trips: True
-    the same text as PROSE -> b'??????.txt'
-
-Its files synced perfectly and its own filenames were unreadable in every
-transcript line, permission prompt and export.
+rather than guesses; `paths.py`, `syncrun.py` and this module all honour that
+negotiated value rather than assuming CP1252 -- a guest reporting acp=1251
+whose display path used a hardcoded CP1252 would sync files fine while every
+filename came back unreadable in the transcript, since the round-trip through
+the wrong codepage is silent (`b'\xcf\xf0\xe8\xe2\xe5\xf2.txt'` decodes to
+something, just not the guest's own text).
 
 A CONTEXT VARIABLE RATHER THAN A PARAMETER, and the reason is the shape of
 the call graph rather than convenience. The codepage is fixed for the life of
@@ -249,18 +245,12 @@ def encode_exact(text: str, cp: str = "") -> bytes:
     """Encode for the RPC path: no transliteration, and a refusal rather than
     a rewrite. Raises UnicodeEncodeError.
 
-    This is the counterpart to encode() and the module docstring's rule --
-    "Anything on the RPC path stays UTF-8 and is not touched by this module"
-    -- made available rather than merely asserted. EXEC used encode() for
-    three phases, which meant the bridge silently REWROTE the command between
-    the moment anything inspected it and the moment the guest ran it:
-
-        typed:  del c:\\work\\<U+00B7><U+00B7>\\<U+00B7><U+00B7>\\windows\\win.ini
-        ran:    del c:\\work\\..\\..\\windows\\win.ini
-
-    U+00B7 folds to '.', U+2502 folds to '|', U+00BB folds to '>>' and U+2044
-    folds to '/' -- a path separator, a pipe and a redirection invented from
-    nothing. paths.py:16 already warns about exactly this for sync paths.
+    This is the counterpart to encode() and enforces the module docstring's
+    rule that the RPC path stays UTF-8. Using encode() here instead would let
+    the bridge silently REWRITE a command between the moment anything
+    inspected it and the moment the guest ran it -- e.g. U+00B7 folds to '.',
+    so `del c:\\work\\<U+00B7><U+00B7>\\windows\\win.ini` would run as
+    `del c:\\work\\..\\windows\\win.ini`, a path separator invented from nothing.
 
     Folding is right for prose, where the alternative to an approximate glyph
     is no glyph. It is wrong for anything executable, where the alternative to

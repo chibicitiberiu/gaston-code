@@ -7,23 +7,23 @@ be built and tested before any Win98 code exists, and afterwards it stays as:
     the bug is in the C, not the bridge),
   - the break-glass tool when a permission prompt has the session wedged.
 
-Conformance means matching win/app/main.c's render_frame frame-for-frame: TEXT
+Conformance means matching win/app/main.cpp's render_frame frame-for-frame: TEXT
 is rendered by `mode=`, never the `style=` header the bridge stopped sending
 when the run-based renderer was replaced by the HTML one, and a `deflate` body
 is inflated through ONE persistent stream per connection, created and torn down
-exactly where win/net/net.c's inflate_begin()/inflate_finish() do -- decoding
+exactly where win/net/net.cpp's inflate_begin()/inflate_finish() do -- decoding
 out of order, or with a fresh stream per frame, is not what the guest does and
 would hide the very drift this tool exists to catch.
 
 EXEC*/SYNC* frames never reach render_frame on the real guest either --
-win/net/net.c's reader routes them straight to the RPC worker
-(win/rpc/rpc.c, win/sync/syncrpc.c) before the UI thread ever sees them -- so
-fakegui intercepts them the same way and answers them the way a guest with no
-configured sync root genuinely would: EXEC actually runs (a subprocess,
+win/net/net.cpp's reader routes them straight to the RPC worker
+(win/rpc/rpc.cpp, win/sync/syncrpc.cpp) before the UI thread ever sees them --
+so fakegui intercepts them the same way and answers them the way a guest with
+no configured sync root genuinely would: EXEC actually runs (a subprocess,
 streamed back as EXECOUT/EXECRESULT, killable by EXECKILL), and every SYNC*
 frame gets the honest `no_root`/equivalent answer, which is what SYNCSCAN
 already returns on a real guest with no root configured -- rather than this
-script reimplementing the manifest-and-CRC machinery in win/sync/syncrpc.c,
+script reimplementing the manifest-and-CRC machinery in win/sync/syncrpc.cpp,
 which is not what a ~200 line break-glass tool is for.
 
 No longer ~200 lines -- restoring conformance cost the length back. Still
@@ -59,7 +59,7 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 GREEN = "\033[32m"
 
-# win/rpc/exec.c's EXEC_MAX_OUT: the guest never reports more output than
+# win/rpc/exec.cpp's EXEC_MAX_OUT: the guest never reports more output than
 # this, so answering with more here would exercise a path the guest cannot.
 EXEC_MAX_OUT = 32 * 1024
 
@@ -144,7 +144,7 @@ class FakeGui:
         self._turn_active = False
         # One persistent inflate stream per CONNECTION -- recreated in
         # connect(), which runs on both the first connect and every /resume,
-        # exactly where win/net/net.c calls inflate_begin()/inflate_finish().
+        # exactly where win/net/net.cpp calls inflate_begin()/inflate_finish().
         self.zip_in: StreamDecompressor | None = None
         self.zip_out: StreamCompressor | None = None
         self._live_lines = 0   # terminal lines the current LIVE block occupies
@@ -152,7 +152,7 @@ class FakeGui:
         self.page_no = 0
         self.page_total = 0
         # The one command the RPC worker runs at a time, mirroring
-        # win/rpc/rpc.c's one queued job slot: a second EXEC arriving while
+        # win/rpc/rpc.cpp's one queued job slot: a second EXEC arriving while
         # this is set is answered `busy`, never queued.
         self._exec_task: asyncio.Task | None = None
         self._exec_id: str | None = None
@@ -258,7 +258,7 @@ class FakeGui:
     SWEEP_S = 30.0
 
     async def _keepalive(self) -> None:
-        """What rpc_maybe_nudge does when there is no sync root. 02.16.
+        """What rpc_maybe_nudge does when there is no sync root. 02.7.
 
         fakegui sent PING only from the typed `/ping`, so a break-glass
         session left idle while somebody reads a permission prompt was reaped
@@ -294,7 +294,7 @@ class FakeGui:
                 for f in frames.feed(data):
                     self._inflate(f)
                     # EXEC*/SYNC* never reach render_frame on the real guest
-                    # either -- net.c's reader routes them to the RPC worker
+                    # either -- net.cpp's reader routes them to the RPC worker
                     # before the UI thread sees them. Mirror that split here.
                     if f.type in ("EXEC", "EXECKILL") or f.type.startswith("SYNC"):
                         self._spawn(self._handle_rpc(f))
@@ -308,7 +308,7 @@ class FakeGui:
     def _inflate(self, f: Frame) -> None:
         """Inflate f.body in place if enc=deflate, through the one persistent
         stream for this connection -- never a fresh one, never out of order.
-        A failure here is exactly what win/net/net.c treats as fatal: drop
+        A failure here is exactly what win/net/net.cpp treats as fatal: drop
         the link rather than guess at a desynchronised stream."""
         if f.headers.get("enc", "raw") != "deflate":
             return
@@ -319,7 +319,7 @@ class FakeGui:
         except Exception as exc:
             raise ProtocolError(f"cannot inflate frame: {exc}") from exc
 
-    # --- rendering: mirrors win/app/main.c's render_frame ------------------
+    # --- rendering: mirrors win/app/main.cpp's render_frame -----------------
 
     def render(self, f: Frame) -> None:
         if self.raw:
@@ -336,10 +336,8 @@ class FakeGui:
 
         t = f.type
 
-        # A file transfer, not a rendering. Decoding the body as text first
-        # would be meaningless for a deflated chunk -- and printing
-        # "[EXPORTDAT {...}] <200 chars of deflated body>" per 63 KB chunk is
-        # exactly what this used to do.
+        # A file transfer, not a rendering: decoding the body as text first
+        # would be meaningless for a deflated chunk.
         if t.startswith("EXPORT"):
             self._export(f)
             return
@@ -485,16 +483,16 @@ class FakeGui:
             print(f"{DIM}[{t} {f.headers}] {text[:200]}{RESET}")
 
     def _export(self, f: Frame) -> None:
-        """EXPORTSTART / EXPORTDAT / EXPORTEND. 02.16.
+        """EXPORTSTART / EXPORTDAT / EXPORTEND.
 
         The same three-method shape win/app/export.cpp has, because that is
         what conformance means: open a temp file on START, append on DAT,
         rename or discard on END. `render` had no branch for these at all, so
         all three fell into the catch-all and printed the deflated body --
-        which meant the one transfer path with a real defect in it (02.3, the
-        idle reaper firing during a long export) could not be driven from the
-        conformance tool, and `test_fakegui_conformance.py` had no export
-        test to hang off.
+        which meant the one transfer path with a real defect in it (the idle
+        reaper firing during a long export -- see GuestLink.wire_yield) could
+        not be driven from the conformance tool, and
+        `test_fakegui_conformance.py` had no export test to hang off.
 
         `off` is checked the way the guest checks it: a chunk that does not
         continue where the last one stopped would write a file with a hole in
@@ -583,7 +581,7 @@ class FakeGui:
         if f.type == "EXEC":
             eid = f.headers.get("id", "")
             if self._exec_task is not None:
-                # win/rpc/rpc.c: one job at a time; a second EXEC while one
+                # win/rpc/rpc.cpp: one job at a time; a second EXEC while one
                 # runs is answered busy, not queued.
                 await self.send(Frame("EXECRESULT",
                                       {"id": eid, "status": "busy",
@@ -592,14 +590,11 @@ class FakeGui:
             cwd = f.headers.get("cwd") or None
             timeout_ms = int(f.headers.get("timeout_ms", "20000") or "20000")
             cmd = f.body.decode("cp1252", errors="replace")
-            # THE SHELL HEADER, WHICH THIS USED TO IGNORE ENTIRELY.
-            #
-            # It always ran through a shell, so the one branch the real guest
-            # has -- spawn the program directly -- was never exercised from
-            # the conformance tool at all. The header is the invocation
-            # prefix now rather than a flag, which is what makes honouring it
-            # meaningful here: a Win98 prefix is nonsense on Linux, but the
-            # SHAPE is the thing under test, and it is the same shape.
+            # `shell` is the invocation prefix (see protocol.exec_cmd), not a
+            # flag -- honouring it here exercises the real guest's other
+            # branch too, spawning the program directly when it is empty. A
+            # Win98 prefix is nonsense on Linux, but the SHAPE is the thing
+            # under test, and it is the same shape.
             shell = f.headers.get("shell") or ""
             print(f"\n{CYAN}[exec {eid}]{RESET} {DIM}{cmd[:160]}{RESET}")
             self._exec_id = eid

@@ -3,10 +3,11 @@
 Before this, the outbound half of the protocol was 44 `self._send(...)`
 calls and 38 hand-built `Frame(...)` literals spread across `Bridge` -- so
 header stringification and `fold.encode` were decided independently at every
-call site (docs/audit/02-bridge-python.md #1). This class owns the writer,
-the send lock, the persistent compressor and the line that chunks outbound
-HTML under the frame cap. `Bridge` still decides WHAT to send and WHEN; this
-decides how it reaches the wire.
+call site. This class owns the writer, the send lock, the persistent
+compressor and the line that chunks outbound HTML under the frame cap. The
+services (`ConnectionService`, `PresentationService`, and the others that
+hold a `guest`) still decide WHAT to send and WHEN; this decides how it
+reaches the wire.
 
 Deliberately NOT the frame vocabulary itself -- see
 `bridge/wire/protocol.py`'s typed constructors for that. This module never
@@ -77,13 +78,10 @@ class GuestLink:
         replay -- and a future per-guest send policy has somewhere to hang
         without another signature change.
 
-        02.16: this used to return None unconditionally, so every caller
-        believed it had sent even when the frame was refused for being
-        oversized or dropped because the writer was gone -- silently, in
-        both cases. A closed writer is an ordinary, expected condition (the
-        guest is simply gone) and still returns False -- most callers have
-        nothing better to do with that than log and carry on, and a lost
-        NOTICE is not fatal. An oversized frame is not: see below.
+        A closed writer is an ordinary, expected condition (the guest is
+        simply gone) and returns False -- most callers have nothing better
+        to do with that than log and carry on, and a lost NOTICE is not
+        fatal. An oversized frame is not ordinary: see below.
         """
         async with self.send_lock:
             if compress and frame.body and should_compress(frame.body, self.link_bps, self.deflate_bps):
@@ -100,8 +98,7 @@ class GuestLink:
                 raise
             w = self.writer
             if w is None or w.is_closing():
-                # Simply lost: nothing buffers this for a later retry any
-                # more (02.11/02.16; the buffer that would have is retired).
+                # Simply lost: nothing buffers this for a later retry.
                 return False
             try:
                 w.write(payload)
@@ -167,9 +164,8 @@ class GuestLink:
                                               total=total, off=i),
                             compress=True)
             if i + budget < total:
-                # Between chunks, not merely between calls (04.12): without
-                # this, a big page or a future transcript export starves the
-                # event loop exactly the way sync once did -- see wire_yield.
+                # Between chunks, not merely between calls: without this, a
+                # big page or export starves the event loop -- see wire_yield.
                 await self.wire_yield(guest)
 
     async def send_export(self, guest, data: bytes) -> None:
@@ -207,11 +203,12 @@ class GuestLink:
     async def wire_yield(self, guest=None) -> None:
         """Give everything else a turn on the wire, and count as liveness.
 
-        THE STAMP IS 02.3. `_pump` does not read the socket again until the
-        handler it is awaiting returns, and two handlers push for a long time
-        while sending: a full-page render and an export of the whole
-        transcript. `guest.last_seen` moved in exactly one place -- `_handle`
-        -- so at `--link-bps 5000` a 450 KB export is 90 seconds of inbound
+        The liveness stamp matters here because `ConnectionService.pump` does
+        not read the socket again until the handler it is awaiting returns,
+        and two handlers push for a long time while sending: a full-page
+        render and an export of the whole transcript. `guest.last_seen` is
+        otherwise only set in `ConnectionService.handle` -- so at
+        `--link-bps 5000` a 450 KB export is 90 seconds of inbound
         silence, and the reaper read that as a dead guest: it denied whatever
         prompt was on screen, closed the writer, and `send_export` then tried
         to report the failure down the socket it had just lost. The user
@@ -238,7 +235,7 @@ class GuestLink:
         gets scheduled.
 
         `sleep(0)` is what reschedules us behind whatever is already
-        runnable. That is the whole of this function's job now (04.12): it
+        runnable. That is the whole of this function's job: it
         used to also return whether sync should pause for an open permission
         prompt, which made it the wrong primitive for any OTHER bulk sender
         to call -- a page or a future transcript export has no reason to cut

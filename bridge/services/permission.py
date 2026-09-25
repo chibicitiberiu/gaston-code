@@ -92,10 +92,7 @@ class PermissionService:
         """Resolve every pending and queued prompt as denied.
 
         Takes the None-guard that `perms: PermissionDesk | None` needs, so
-        the callers do not each repeat it. It used to drop `message`
-        entirely -- `PermissionDesk.deny_all` has taken two arguments since
-        it was written, and the only caller was a test asserting against a
-        MagicMock, which accepts any arity.
+        the callers do not each repeat it.
         """
         if guest is not None and guest.perms is not None:
             guest.perms.deny_all(reason, message)

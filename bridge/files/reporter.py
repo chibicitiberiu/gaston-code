@@ -1,31 +1,20 @@
 """Reporter: what has already been said, to whom.
 
 `first_report`, `note`, `notices_delivered` and `agent_notices_delivered`
-were one idea spread across three places: the fingerprinting logic on
-`Pass`, the two durable queues (`pending_notice`/`pending_notice_agent`)
-and the `reported` fingerprint map on `Baseline`, and -- on the Bridge side
--- `the old Bridge-wide agent-notice cache`, a deliberately separate in-memory cache of the
-agent queue (`server.py`, 02.20). This class gathers the `Pass`/`Baseline`
-half (docs/audit/02-bridge-python.md #4.2, fix item 4); the Bridge half
-stayed where it was for the reason below, until 02.43.
+gather the per-`Pass` half of notice-tracking: the fingerprinting logic, the
+two durable queues (`pending_notice`/`pending_notice_agent`), and the
+`reported` fingerprint map, all on one `Baseline` (docs/audit/
+02-bridge-python.md #4.2, fix item 4).
 
-Why the Bridge half was not folded in here too: `Reporter` is built per
-`Pass`, which is built per reconciliation pass against one guest, while
-`_agent_notices` is a Bridge-lifetime cache that outlives any single pass
-and is read by `_with_sync_preamble` between passes, on every turn. Giving
-`Reporter` a reference to Bridge state would have meant either constructing
-a new one with the SAME cache every pass (indistinguishable from
-`_agent_notices` just living on `Bridge`), or making `Reporter` outlive a
-`Pass` -- which is exactly the `SyncCoordinator` object the audit's #1.4
-describes. That type did not exist when this was written; it does now
-(`bridge/synccoord.py`), and owns `agent_notices` as a field of
-`GuestSession` (audit-2 02.18; it was `Bridge.synccoord`),
-not `Reporter`: `Reporter` still lives and dies with one `Pass`, unchanged
-by 02.43, and the queue it durably empties/fills
-(`pending_notice`/`pending_notice_agent` on `Baseline`) is what
-`SyncCoordinator.agent_notices` is a Bridge-lifetime cache OF -- the two
-objects still answer different questions, on different timelines, and
-neither was folded into the other.
+The Bridge-lifetime half stays separate, on purpose. `Reporter` is built
+fresh per `Pass` -- one reconciliation against one guest -- while the
+in-memory agent-notice cache has to outlive any single pass, since
+`TurnRunner.with_sync_preamble` reads it between passes on every turn.
+Giving `Reporter` a reference to that state would mean either rebuilding it
+identically every pass, or making `Reporter` itself Bridge-lifetime, which is
+what `SyncCoordinator` is for instead (`bridge/synccoord.py`, reached via
+`GuestSession.synccoord.agent_notices`). The two objects answer different
+questions on different timelines and were never meant to merge.
 """
 
 from __future__ import annotations

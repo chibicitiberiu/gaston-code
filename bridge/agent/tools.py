@@ -135,10 +135,10 @@ def build(guest_exec, sync, workspace, guest=None) -> dict:
     )
     async def machine_exec(args: dict) -> dict:
 
-        # LOGGED HERE, because this is the outermost frame on our side of
-        # the MCP boundary. Above it the SDK turns an exception into a tool
-        # result the MODEL reads, and nothing reaches the bridge log -- so a
-        # bug in this path is visible only as the model reporting "a
+        # The except below logs, because this is the outermost frame on our
+        # side of the MCP boundary. Above it the SDK turns an exception into
+        # a tool result the MODEL reads, and nothing reaches the bridge log
+        # -- so a bug in this path is visible only as the model reporting "a
         # connection problem" on a 640x480 screen. Same shape as 02.13.
         try:
             command = (args or {}).get("command") or ""
@@ -171,11 +171,6 @@ def build(guest_exec, sync, workspace, guest=None) -> dict:
             # relative path when it is unset.
             cwd = (args or {}).get("cwd") or workspace.guest_work_root(guest)
 
-            # LOGGED HERE, because this is the outermost frame on our side of
-            # the MCP boundary. Above it the SDK turns an exception into a tool
-            # result the MODEL reads, and nothing reaches the bridge's own log --
-            # so a bug in this path is visible only as the model reporting "a
-            # connection problem" on a 640x480 screen. Same shape as 02.13.
             return await guest_exec.run_on_guest(
                 command, timeout_ms=timeout_ms, shell=shell, cwd=cwd,
                 guest=guest)

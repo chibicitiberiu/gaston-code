@@ -38,15 +38,12 @@ log = logging.getLogger("bridge.toolrules")
 #: `bridge/profiles/<tool>.toml`. The marker is what exists; the root is what
 #: the assistant needs, because INCLUDE and LIB are relative to it.
 #:
-#: `bins` rather than a hop count, and that was not the first design. A count
-#: is per-section, but a section deliberately lists markers at DIFFERENT
-#: depths -- Turbo C 2.01 installs flat (`C:\TC\TCC.EXE`) and 3.x uses
-#: `C:\TC\BIN\TCC.EXE`, and both are listed because either may be what is on
-#: the disk. "Drop two components" is right for one and turns the other into
-#: `C:`, which is a wrong root stated as verified: the assistant then sets
-#: INCLUDE to `C:\INCLUDE` and every compile fails for a reason it has been
-#: told not to go exploring about. So the rule names the directories a
-#: compiler is found IN and one is dropped only if it is actually there.
+#: `bins` rather than a hop count: a section deliberately lists markers at
+#: DIFFERENT depths -- Turbo C 2.01 installs flat (`C:\TC\TCC.EXE`), 3.x uses
+#: `C:\TC\BIN\TCC.EXE` -- and "drop two components" is right for one, wrong
+#: for the other (turns it into `C:`, a wrong root stated as verified). So the
+#: rule names the directories a compiler is found IN, and one is dropped only
+#: if it is actually there.
 @dataclass(frozen=True)
 class Rule:
     kind: str
@@ -207,14 +204,10 @@ def shell_command(found, name: str) -> str | None:
     front of the command and otherwise knows nothing about -- or None if this
     machine did not report a shell by that name.
 
-    BOTH HALVES ARE DATA. The path is what detection actually found, so a
-    4DOS at `D:\\4DOS` is invoked from `D:\\4DOS`; the switch comes from that
-    shell's own profile, because "how do I tell this program to run one
-    command" is a fact about the program. Neither is written in Python, and
-    the guest holds neither: it used to decide `command.com` vs `cmd.exe`
-    from `GetVersion()` itself, which meant a machine with a second shell
-    installed could not be told to use it, and the bridge's guard was
-    judging a grammar the guest might not be running.
+    BOTH HALVES ARE DATA, not Python: the path is what detection actually
+    found (a 4DOS at `D:\\4DOS` is invoked from `D:\\4DOS`), and the switch
+    comes from that shell's own profile, because "how do I tell this program
+    to run one command" is a fact about the program, not this bridge.
     """
     if not name:
         return None

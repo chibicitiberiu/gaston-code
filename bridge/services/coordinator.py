@@ -1,10 +1,10 @@
 """SessionCoordinator: guest lifecycle, turn quiescing, session transitions, and state recovery.
 
 Owns the coordination of guest session transitions against in-flight turns and sync states:
-quiescing running turns (_quiesce_turn), session switching and creation with quiescing
-(_switch, _new_session, _set_effort), syncing guest UI state on reconnect (_reissue_halt,
-_reissue_turn, sync_state_to_guest), and inbound frame routing for turn-affecting messages
-(_on_input, _on_resume, _on_interrupt).
+quiescing running turns (quiesce_turn), session switching and creation with quiescing
+(switch, new_session, set_effort), syncing guest UI state on reconnect (reissue_halt,
+reissue_turn, sync_state_to_guest), and inbound frame routing for turn-affecting messages
+(on_input, on_resume, on_interrupt).
 """
 
 from __future__ import annotations

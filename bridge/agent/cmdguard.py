@@ -67,27 +67,21 @@ def _default_shell() -> str:
     Derived, never named here. If exactly one profile carries guard tables
     that is the shell this bridge knows and there is nothing to choose.
 
-    THE LAST RESORT, and 02.5 is why it is only that now. The caller used to
-    reach here for every guest that reported no tool inventory, and HELLO's
-    body is "empty for any guest built before the body existed, which is
-    every deployed one until it is reflashed" (server.py) -- so refusing
-    whenever there was more than one profile meant that ADDING A SECOND SHELL
-    PROFILE, the exact change `profiles.py` says supporting a new machine
-    should be, silently turned the guard off for all of them: `grammar_for("")`
-    returned NOTHING and every command came back "the shell on this machine
-    is not one this bridge has rules for".
+    THE LAST RESORT, and 02.5 is why it is only that now. This used to be
+    reached for every guest reporting no tool inventory -- which every
+    deployed guest does until reflashed -- so adding a second shell profile
+    silently turned the guard off for all of them (`grammar_for("")` returned
+    NOTHING).
 
-    That is fixed where it belongs rather than here. The machine reports
-    which shells it HAS (detection; `toolrules.shells_of`), the system prompt
-    prints them, the model names one on each `exec` call, and
-    `PermissionDesk` judges by that name -- falling back to the first shell
-    the machine reported. Nothing on this side picks a shell out of the
-    profiles it happens to ship any more, which is what made the count
-    matter in the first place.
+    Fixed where it belongs: the machine reports which shells it HAS
+    (`toolrules.shells_of`), the model names one on each `exec` call, and
+    `PermissionDesk` judges by that name, falling back to the first shell
+    reported. Nothing here picks a shell out of the profiles it ships any
+    more.
 
     So this is reached only when the machine named no shell AND reported
-    none. One installed profile is then the only candidate there is; several
-    is genuinely unanswerable, and inventing an answer is the one thing this
+    none. One installed profile is then the only candidate; several is
+    genuinely unanswerable, and inventing an answer is the one thing this
     module may not do.
     """
     known = profiles.shells()
@@ -366,21 +360,16 @@ class Guard:
         merely unresolvable but invisible -- the guard reported "writes
         inside mirror" for a command whose destination it had thrown away.
 
-        BY VOCABULARY, NOT BY LENGTH, and that is 02.10. "Short and
-        separator-free" is not what makes a token a switch, and the bound was
-        a number in a data file that anybody adding a shell would copy.
-        Measured against the real profile with the mirror at C:\GASTON\OK:
-
-            PASS  copy c:\gaston\ok\a.txt /io.sys
-            PASS  move c:\gaston\ok\a.txt /temp
-
-        `/io.sys` is seven characters with no separator, so it was a switch,
-        so `targets` dropped it -- and for a `src_dest` verb the SOURCE was
-        left as the only path, it was inside the mirror, and the command read
-        as fully contained. `switch_token` says what this shell's switches
-        actually look like (a letter or two, optionally `:value`), which
-        rules `/io.sys` out on the dot. `/temp` still matches, which is why
-        `targets` also reports what it dropped.
+        BY VOCABULARY, NOT BY LENGTH, and that is 02.10: "short and
+        separator-free" is not what makes a token a switch. Measured against
+        the real profile with the mirror at C:\GASTON\OK, `/io.sys` (seven
+        characters, no separator) was a switch by the old length rule, so
+        `targets` dropped it -- leaving the SOURCE as the only path for
+        `copy c:\gaston\ok\a.txt /io.sys`, which read as fully contained.
+        `switch_token` says what this shell's switches actually look like (a
+        letter or two, optionally `:value`), which rules `/io.sys` out on the
+        dot while `/temp` still matches -- so `targets` also reports what it
+        dropped.
 
         The length bound stays as the fallback for a profile that declares no
         vocabulary: it is the weaker rule, but it is better than treating
@@ -454,13 +443,12 @@ class Guard:
         return paths, dropped
 
 
-#: What `Root.check` found. Not a bool, and 02.11 is why: every caller turned
-#: a False into "writes outside the mirrored folder", including for a path
-#: that is demonstrably INSIDE it and refused for a different, correct reason.
-#: `copy x c:\gaston\ok\con` is inside the mirror; CON is a device in every
-#: directory. Telling the user it writes outside the mirror is false and
-#: checkable, and this module's own note says what that costs: "someone who
-#: learns the guard's phrasing is wrong stops reading it".
+#: What `Root.check` found. Not a bool (02.11): a bare False turned every
+#: refusal into "writes outside the mirrored folder", including for
+#: `copy x c:\gaston\ok\con` -- inside the mirror, but CON is a device in
+#: every directory. That is a false and checkable claim, and this module's
+#: own note says what it costs: "someone who learns the guard's phrasing is
+#: wrong stops reading it".
 INSIDE = ""
 OUTSIDE = "outside"
 DEVICE = "device"
@@ -541,22 +529,18 @@ def deployment_gap(*, guest_root: str = "", shell: str = "",
                    caps=None) -> str | None:
     """Why this bridge cannot judge ANY command here, or None.
 
-    A PROPERTY OF THE DEPLOYMENT, NOT OF A COMMAND, and separating the two is
-    02.4. Both sentences below used to come back from `reason()` as though
-    they were findings about the command line that was passed in -- so a
-    bridge started without `--sync-dir`, or any guest whose INI has no sync
-    root, prefixed EVERY SINGLE exec prompt with "no folder is mirrored from
-    this machine, so nothing on it can be restored". That is 73 characters in
-    front of a bar the guest draws as one `SS_ENDELLIPSIS` line, of which
-    roughly seventy are legible: the user saw the warning, an ellipsis, and
-    nothing whatever of the command they were being asked to approve.
+    A PROPERTY OF THE DEPLOYMENT, NOT OF A COMMAND (02.4). Both sentences
+    below used to come back from `reason()` as findings about the command
+    line itself, so a bridge started without `--sync-dir` prefixed EVERY
+    exec prompt with "no folder is mirrored from this machine..." -- 73
+    characters in front of a bar that draws one clipped line, so the user saw
+    the warning and nothing of the command being approved.
 
-    A warning that fires on 100% of calls is the same defect this module's
-    own note describes -- "someone who learns the guard's phrasing is wrong
-    stops reading it" -- with the added cost of removing the one piece of
-    information the decision rests on. So the caller says this ONCE, when the
-    connection is in this state, and the per-command answer stays about the
-    command.
+    A warning that fires on 100% of calls is the defect this module's own
+    note describes ("someone who learns the guard's phrasing is wrong stops
+    reading it"), plus it removes the one piece of information the decision
+    rests on. So the caller says this ONCE, when the connection is in this
+    state, and the per-command answer stays about the command.
     """
     guard = Guard(grammar_for(shell), caps)
     if not guard.g.usable:

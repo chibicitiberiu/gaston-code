@@ -79,23 +79,23 @@ def _as_permission_mode(mode: str) -> PermissionMode:
         return mode
     return "default"
 
-# Hand-maintained: there is no list_models() in the SDK. Checked 2026-09-16.
-# The tool surface this product offers, declared explicitly.
+# The tool surface this product offers, declared explicitly -- there is no
+# list_models() equivalent in the SDK to read it from (checked 2026-09-16).
 #
 # Without this the session inherits whatever the OPERATOR's machine happens to
-# be configured with, which was measured to include CronCreate, Workflow,
-# Monitor, SendMessage, PushNotification, RemoteTrigger, ScheduleWakeup and
-# live claude.ai connectors for Gmail, Google Drive and Calendar. A Windows 98
-# client session has no business holding a tool that reads the operator's
-# email, and none of that is reproducible between machines.
+# be configured with: CronCreate, Workflow, Monitor, SendMessage,
+# PushNotification, RemoteTrigger, ScheduleWakeup and live claude.ai
+# connectors for Gmail, Drive and Calendar were all measured present. A
+# Windows 98 client session has no business holding a tool that reads the
+# operator's email, and none of that is reproducible between machines.
 #
-# It also FIXES a real gap rather than only removing things: Glob and Grep were
-# not in the default set at all -- they sit behind ToolSearch as deferred tools,
-# so the model had to go looking for them and frequently did not. On the guest
-# this looked like "tool calls are failing".
+# It also fixes a real gap: Glob and Grep were not in the default set at all
+# -- they sit behind ToolSearch as deferred tools, so the model had to go
+# looking for them and frequently did not, which looked like "tool calls are
+# failing" on the guest.
 #
-# `tools` is the AVAILABILITY list. It is a different thing from
-# `allowed_tools`, which is the auto-approve list and stays empty.
+# `tools` is the AVAILABILITY list, distinct from `allowed_tools` (the
+# auto-approve list, which stays empty).
 TOOLS = [
     "Read", "Write", "Edit",      # the staging working copy
     "Glob", "Grep",               # deferred by default; named here so they exist
@@ -155,26 +155,21 @@ class Session:
         on_thinking: Callable[[str], Awaitable[None]] | None = None,
         on_system: Callable[[str, dict], Awaitable[None]] | None = None,
     ) -> None:
-        # Phase 1 default is an EMPTY allow list, deliberately.
-        #
-        # The plan review caught that leaving this unset means Claude runs Bash
-        # unrestricted on the *bridge host* from the very first demo -- exactly
-        # the threat model FEASIBILITY condemns in claudewin9x. Tools arrive in
-        # Phase 3, behind a permission prompt, not before.
+        # EMPTY allow list, deliberately: leaving this unset means Claude runs
+        # Bash unrestricted on the *bridge host*, exactly the threat model
+        # FEASIBILITY condemns in claudewin9x. Tools arrive later, behind a
+        # permission prompt, not before.
         self._opts = ClaudeAgentOptions(
             cwd=cwd,
             model=model,
-            # None, never "". The bridge's _effective_effort ends in `or ""`
-            # so that a per-guest setting can fall back to the CLI default,
-            # and that empty string used to be handed straight through --
-            # which made the CLI print
-            #   Warning: Unknown --effort value '' -- ignoring it
-            # on every single start. It was harmless and it was also the kind
-            # of warning people learn to read past, which is how a real one
-            # gets missed. Empty means "no preference", and the way to say
-            # that to the SDK is to not say anything -- `_as_effort` folds
-            # any other unrecognised value into the same None, which is also
-            # what the SDK's own Literal type now requires.
+            # None, never "". OptionsService.effective_effort ends in `or ""`
+            # so a per-guest setting can fall back to the CLI default, but an
+            # empty string handed straight through made the CLI print
+            # `Warning: Unknown --effort value '' -- ignoring it` on every
+            # start -- harmless, and exactly the kind of warning people learn
+            # to read past. Empty means "no preference", said by not saying
+            # anything; `_as_effort` folds any other unrecognised value into
+            # the same None, which the SDK's own Literal type now requires.
             effort=_as_effort(effort),
             # A preset dict with an "append" extends Claude Code's own prompt.
             # Passing a bare string here would REPLACE it, which would throw
@@ -413,9 +408,7 @@ class Session:
         if isinstance(msg, AssistantMessage):
             for block in msg.content:
                 if isinstance(block, TextBlock):
-                    # When streaming, the deltas already carried this text --
-                    # rendering the completed block too would duplicate every
-                    # word on screen.
+                    # Deltas already carried this text while streaming.
                     if not self._streaming and self.on_text:
                         await self.on_text(block.text)
                 elif isinstance(block, ThinkingBlock):
@@ -445,20 +438,13 @@ class Session:
         if isinstance(msg, ResultMessage):
             return
 
-        # RateLimitEvent is INFORMATIONAL, and treating it as an error was a
-        # bug of mine from 3.4.
-        #
-        # The CLI emits it whenever rate-limit status TRANSITIONS, including
-        # into "allowed". It used to fall through to the catch-all below,
-        # which forwards only the class name -- so the bridge marked the turn
-        # degraded, printed "The model provider is rate limiting this account.
-        # The request may not have run", and on an output-less turn (a
-        # /compact, say) turn_verdict then reported a completed turn as
-        # failed. All three on turns that were fine.
-        #
-        # The payload was there the whole time and nobody read it: only
-        # `rejected` means anything was actually refused. Note the nesting --
-        # it is msg.rate_limit_info.status, not msg.status.
+        # RateLimitEvent is INFORMATIONAL: the CLI emits it on every
+        # rate-limit status TRANSITION, including into "allowed", and only
+        # `status == "rejected"` means anything was actually refused. Falling
+        # through to the catch-all below would mark a fine turn degraded (and
+        # on an output-less turn, e.g. /compact, turn_verdict would call it
+        # failed). Note the nesting -- msg.rate_limit_info.status, not
+        # msg.status.
         if isinstance(msg, RateLimitEvent):
             info = getattr(msg, "rate_limit_info", None)
             status = str(getattr(info, "status", "") or "")
@@ -485,23 +471,15 @@ class Session:
                                      {"new_conversation_id": new_id})
             return
 
-        # NOT log.debug, and this is a bug that cost a real message.
-        #
-        # An SDK message type this layer does not know about used to be
-        # invisible: DEBUG, dropped, turn over. One of them is RateLimitEvent,
-        # which ends a turn having produced nothing -- so the user typed a
-        # prompt, watched the app go back to idle, and there was nothing
-        # anywhere on screen to say why. "The person at the keyboard never
-        # loses a byte" is the first standing rule in CLAUDE.md, and a
-        # silently swallowed rate limit breaks it.
-        #
-        # Found by smoke testing the real app on the real machine. No test in
-        # this suite could have found it: it needs the live SDK to be in a
-        # state nothing here can fake.
-        #
-        # Loud in the log AND handed to on_system, so the bridge can put it in
-        # the transcript. A type we do not understand is exactly the kind of
-        # thing the user should be told about rather than protected from.
+        # NOT log.debug: an unrecognised SDK message type ending a turn with
+        # no text and no tool call (RateLimitEvent was one, before the branch
+        # above) used to leave the user staring at an idle app with nothing
+        # on screen to say why -- silently breaking CLAUDE.md's "the person at
+        # the keyboard never loses a byte". No test in this suite can catch
+        # this class of bug; it needs the live SDK in a state nothing here
+        # fakes. Loud in the log AND handed to on_system so the bridge can put
+        # it in the transcript -- a type we don't understand is something the
+        # user should be told about, not protected from.
         name = type(msg).__name__
         log.warning("unhandled SDK message type: %s", name)
         if self.on_system:

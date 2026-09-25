@@ -63,7 +63,7 @@ from dataclasses import dataclass
 
 # --- the enums -------------------------------------------------------------
 #
-# Mirrored in win/caps.h. A value the bridge does not recognise is a REFUSAL,
+# Mirrored in win/net/caps.h. A value the bridge does not recognise is a REFUSAL,
 # never a fallback to the default: an unrecognised value means the client knows
 # something we do not, and guessing is how the permissive branch gets taken by
 # accident.

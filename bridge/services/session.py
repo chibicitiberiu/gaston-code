@@ -1,8 +1,8 @@
 """SessionService: session lifecycle, deferred start, switching, and history export.
 
-Owns the locked inner transitions (_new_session_locked, _switch_locked, _set_effort_locked),
-session creation with tool bindings and event callbacks (_make_session), deferred resume
-(_resume_pending), session list presentation (_send_sessions), and transcript export (_on_export).
+Owns the locked inner transitions (new_session_locked, switch_locked, set_effort_locked),
+session creation with tool bindings and event callbacks (make_session), deferred resume
+(resume_pending), session list presentation (send_sessions), and transcript export (on_export).
 """
 
 from __future__ import annotations
@@ -172,12 +172,12 @@ class SessionService:
 
         A prompt belongs to the session that raised it, and so does a running
         EXEC. Leaving either pending against a conversation the user has
-        walked away from is the unanswerable state `_reissue_halt` exists to
-        prevent -- worse now than when this lived inside `_make_session`,
-        because a switch no longer rebuilds anything and would otherwise
-        clean up nothing at all. The guest hides its bar on the strength of
-        the deny, so the deny has to happen whether or not a new client is
-        built.
+        walked away from is the unanswerable state `SessionCoordinator.
+        reissue_halt` exists to prevent -- worse now than when this lived
+        inside `make_session`, because a switch no longer rebuilds anything
+        and would otherwise clean up nothing at all. The guest hides its bar
+        on the strength of the deny, so the deny has to happen whether or
+        not a new client is built.
         """
         if guest.perms:
             guest.perms.deny_all(

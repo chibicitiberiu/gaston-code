@@ -59,16 +59,11 @@ def default_path() -> Path:
                                   / "conversations.json")
 
 
-#: The three files this replaced, oldest first. READ FOREVER, NEVER WRITTEN.
-#:
-#: Not a migration step that runs once. A one-shot conversion has a moment
-#: where it has half happened, and this machine has a bridge from before this
-#: change that may still be running and still appending to `sessions.json` --
-#: which would then be a conversation that silently never reaches the chat
-#: list again. Reading them on every load instead means the old files stay
-#: authoritative for anything the new one has not been told about, an old
-#: bridge running alongside loses nothing, and rolling back is running the
-#: previous binary rather than restoring anything.
+#: The three files this replaced, oldest first. READ FOREVER, NEVER WRITTEN --
+#: not a one-shot migration, because an old bridge may still be running
+#: alongside this one and still appending to `sessions.json`. Reading them on
+#: every load means the old files stay authoritative for anything the new one
+#: hasn't been told, and rolling back is just running the previous binary.
 LEGACY = ("sessions.json", "folders.json", "settings.json")
 
 

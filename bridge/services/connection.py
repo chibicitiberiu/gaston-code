@@ -1,10 +1,10 @@
 """ConnectionService: TCP admission, HELLO handshake, codepage binding, and frame pump.
 
 Owns the transport and connection lifecycle for a GuestSession:
-connection admission (_on_client), HELLO negotiation and deadline (_read_hello),
-session attachment and reconnect recovery (_attach), Windows codepage mapping
-(_bind_codepages, _oem_for), raw frame transmission (_try_send_raw), framing pump
-and inflation (_pump, _handle), idle reaping (_reap_idle), and disconnect marking (_mark_lost).
+connection admission (on_client), HELLO negotiation and deadline (read_hello),
+session attachment and reconnect recovery (attach), Windows codepage mapping
+(bind_codepages, oem_for), raw frame transmission (try_send_raw), framing pump
+and inflation (pump, handle), idle reaping (reap_idle), and disconnect marking (mark_lost).
 """
 
 from __future__ import annotations
@@ -55,8 +55,9 @@ class ConnectionService:
         self.spawn = spawn
         self.guest: GuestSession | None = None
         #: Where the halt bar and the agent-notice queue live until a guest
-        #: attaches and brings its own. A forward, not storage -- see
-        #: `Bridge.synccoord` for the 02.18 reasoning and why R7 deletes it.
+        #: attaches and brings its own. A forward, not storage -- see the
+        #: `synccoord` property below; R7 deletes this once there can be
+        #: more than one guest.
         self._preattach_synccoord = SyncCoordinator()
 
     @property

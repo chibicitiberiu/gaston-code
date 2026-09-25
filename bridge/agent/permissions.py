@@ -37,16 +37,12 @@ log = logging.getLogger("bridge.permissions")
 DEADLINE_S = 600.0
 
 # What one prompt's HTML body may occupy. The frame cap is 64KB and _send
-# gets no headroom for headers, so the body is capped well below it: a Write
-# with a large `content`, a Task prompt or an Edit with a long new_string --
-# or, since a single value is already clipped to MAX_VALUE, a tool called
-# with an unusually large number of distinct arguments -- would otherwise
-# produce a frame GuestLink.send refuses outright (it exceeds the wire's own
-# MAX_FRAME and can never be delivered to any client). Losing the argument
-# table is survivable; losing the connection over one oversized prompt is
-# not, so this degrades to a short fallback instead. The degrade is logged
-# (below) because that is the only place an operator would ever see it --
-# the guest only shows the fallback text, never that a table was cut.
+# gets no headroom for headers, so a large Write/Task/Edit body -- or just
+# many distinct arguments -- could otherwise produce a frame GuestLink.send
+# refuses outright (over the wire's MAX_FRAME, undeliverable to any client).
+# Losing the argument table is survivable; losing the connection is not, so
+# this degrades to a short fallback instead, logged below since the guest
+# itself never shows that a table was cut.
 MAX_BODY = 8 * 1024
 
 # Per-value cap inside the rendered argument table. Long enough for a real
@@ -61,12 +57,9 @@ _PREFERRED = ("command", "file_path", "path", "pattern", "url", "prompt",
 # The argument most worth naming in a ONE-LINE description -- narrower than
 # _PREFERRED above, which orders a whole table: old_string/new_string/content
 # belong in a row, not as the short label everything else is built from.
-# render_request's `desc` fallback, `summary`'s bar text and
-# server._summarise's activity-pane line each used to answer "which argument
-# matters" independently, in three different orderings, so a tool added with
-# a new interesting argument needed all three edited by hand -- and missing
-# one is exactly how a permission bar reading "Click" with no coordinates
-# ships. docs/audit/02-bridge-python.md 02.15.
+# render_request's `desc` fallback, `summary`'s bar text, and
+# server._summarise's activity-pane line all read this one table instead of
+# picking their own order by hand. docs/audit/02-bridge-python.md 02.15.
 _SUMMARY_KEYS = ("command", "file_path", "pattern", "path", "url", "prompt")
 
 
@@ -97,9 +90,8 @@ class PendingPrompt:
     # re-rendering it from a context object that is long out of scope.
     body: str = ""
     allows: bool = False
-    # The bar's one-line STATIC text. Was attached dynamically after
-    # construction (server.py), which made every reader a defensive
-    # getattr(prompt, "summary", prompt.tool_name) -- declared here instead.
+    # The bar's one-line STATIC text, declared as a real field so readers
+    # never need a defensive getattr(prompt, "summary", prompt.tool_name).
     summary: str = ""
 
 
@@ -186,18 +178,11 @@ def render_request(tool_name: str, args: dict, ctx,
         if told:
             desc = told[1]
 
-    # Two heads, one shown at a time, and an id.
-    #
-    # The guest flips the container's class when the request is answered (see
-    # rc_html::settle_perm), and flipping ONE class has to change the heading
-    # as well as hide the table -- rewriting text through the DOM would mean
-    # finding a child element and a second failure mode. The CSS shows
-    # whichever head matches the state.
-    #
-    # The id is fixed rather than the tool_use_id: the desk shows one prompt
-    # at a time and queues the rest, so there is never more than one
-    # outstanding -- the same reasoning RC_ID_PENDING already uses for the
-    # echo, including dropping the id on settle so the next one is unique.
+    # Two heads, one shown at a time, and a fixed id (not tool_use_id: the
+    # desk shows one prompt at a time, so there is never more than one
+    # outstanding -- same reasoning RC_ID_PENDING uses for the echo).
+    # rc_html::settle_perm flips the container's class on answer; the CSS
+    # picks whichever head matches, so no DOM text rewrite is needed.
     parts = ['<div class="perm" id="perm">',
              '<div class="permhead">Permission required</div>',
              '<div class="permdonehead">Answered</div>',
@@ -222,17 +207,13 @@ def render_request(tool_name: str, args: dict, ctx,
     html = "".join(parts)
     if len(html) <= MAX_BODY:
         return html
-    # Losing the argument table is survivable; losing the connection is not.
-    # The guest only ever sees the fallback text below -- log loudly here,
-    # or a tool that is routinely too large to show in full degrades in
-    # total silence as far as anyone watching the bridge can tell.
+    # Log loudly here -- the guest only ever shows the fallback text, so this
+    # is the only place an operator would see that a table got dropped.
     log.warning("permission prompt for %s is %d bytes, over the %d byte "
                 "budget; the argument table is too large to display and "
                 "was dropped", tool_name, len(html), MAX_BODY)
-    # The warning survives the fallback. The argument table is what is too
-    # large; the one sentence saying why this call is worth reading is not,
-    # and dropping it would leave the loudest prompt with the least
-    # information on it.
+    # The guard's warning survives even though the argument table doesn't --
+    # it is the one sentence saying why this call is worth reading.
     short = ('<div class="perm" id="perm">'
              '<div class="permhead">Permission required</div>'
              '<div class="permdonehead">Answered</div>'
@@ -294,21 +275,19 @@ def off_limits(tool_name: str, args: dict, workdir: str | None,
     The proxy is infrastructure, not the subject of the conversation. Every
     request the user makes is about THEIR machine, so a tool call reaching into
     the proxy's filesystem is either a mistake or an attempt to answer a
-    question about the user's computer with the proxy's answer -- which is
-    wrong even when the file it read was real.
+    question about the user's computer with the proxy's answer -- wrong even
+    when the file it read was real.
 
-    Note the symmetry with what was deleted from this module: the plan wanted a
-    containment check to auto-ALLOW reads inside the working copy, and that was
-    dead code, because Claude Code approves those locally and never asks us.
-    The same check inverted is not dead at all -- by the time a path tool
-    reaches this callback, the path is already somewhere it should not be.
+    The same containment check that would have been dead code as an
+    auto-ALLOW (Claude Code approves in-cwd reads locally and never asks us)
+    is very much alive inverted: by the time a path tool reaches this
+    callback, the path is already somewhere it should not be.
 
     `shared` is the directory the agent's session actually RUNS in, which is
-    not always `workdir`: a session's cwd is fixed when it is built, which for
-    a new conversation is before it has committed to a folder, so the agent
-    goes on running in the shared root while the mirror narrows to a folder
-    underneath it. Passing it buys a second, much more useful refusal -- see
-    the two returns below.
+    not always `workdir`: a new conversation's cwd is fixed before it commits
+    to a folder, so the agent runs in the shared root while the mirror
+    narrows to a folder underneath it. Passing it buys a second, more useful
+    refusal -- see the two returns below.
     """
     if not workdir:
         return None
@@ -337,17 +316,16 @@ def off_limits(tool_name: str, args: dict, workdir: str | None,
 
     # THE CONFLICT DIRECTORY IS OUTSIDE cwd AND MUST STILL BE READABLE.
     #
-    # `syncrun.Pass._conflict_dir` is `dirname(work_dir)/.gaston/conflict` --
-    # deliberately outside the mirrored folder, because `off_limits` does not
-    # cover Bash and a staged copy inside the tree would sync back. But the
-    # whole point of staging is that the agent reads `mine.N` and `base.N` to
-    # merge, and `server.py`'s conflict notice tells it to. Without this it
-    # hits the near-miss refusal below and is told there is nothing to
-    # diagnose -- for the one directory it was just instructed to open.
+    # `syncrun.Pass._conflict_dir` (`dirname(work_dir)/.gaston/conflict`) sits
+    # outside the mirrored folder on purpose, because a staged copy inside the
+    # tree would sync back. But the agent is told by `server.py`'s conflict
+    # notice to read `mine.N`/`base.N` there to merge -- without this it would
+    # hit the near-miss refusal below for the one directory it was just told
+    # to open.
     #
-    # Reads only. `_inside_gaston` below refuses writes wherever `.gaston`
-    # sits, and that has to keep being true here: a staged copy is the only
-    # remaining copy of the agent's own work.
+    # Reads only: `_inside_gaston` below still refuses writes wherever
+    # `.gaston` sits, since a staged copy is the only remaining copy of the
+    # agent's own work.
     if shared and tool_name not in _WRITE_TOOLS:
         try:
             staged = os.path.join(os.path.realpath(shared), ".gaston")
@@ -356,12 +334,11 @@ def off_limits(tool_name: str, args: dict, workdir: str | None,
         except (OSError, ValueError):
             pass
 
-    # NEAR MISS, and it deserves its own answer. `/home/x/work/notes.txt` is
-    # just as much "on the proxy" as `/etc/passwd` is, so the refusal below
-    # explains nothing about why one is refused and its sibling directory is
-    # not -- and an agent that had written one directory too high went off to
-    # diagnose a synchronisation fault instead of moving the file. The honest
-    # answer names the folder and is one sentence long.
+    # NEAR MISS deserves its own answer: `/home/x/work/notes.txt` is just as
+    # much "on the proxy" as `/etc/passwd`, so the generic refusal below
+    # explains nothing about why a sibling directory is fine and this one
+    # isn't -- an agent that wrote one directory too high needs to be told
+    # which folder, not sent off diagnosing a sync fault.
     if shared:
         try:
             near = os.path.commonpath(
@@ -392,21 +369,19 @@ def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
 
     A staged copy exists precisely because the user's version won and the
     agent's was about to be lost, so it is the only remaining copy of that
-    work. Destroying it is the one outcome this whole layer is built to
-    prevent -- and the containment check above only refuses what is OUTSIDE,
-    so without this the same placement that lets the agent read a staged copy
-    let it overwrite one.
+    work; destroying it is the one outcome this layer is built to prevent.
+    The containment check above only refuses paths OUTSIDE `workdir`, so
+    without this the same placement that lets the agent read a staged copy
+    would let it overwrite one.
 
-    BOTH LOCATIONS, because the documentation and the code disagreed about
-    where `.gaston` is. `syncrun.Pass` puts it at
-    `dirname(work_dir)/.gaston` (outside cwd, so Bash cannot reach it either)
-    while this function only ever guarded `work_dir/.gaston`, which is a
-    directory nothing creates. Guarding the phantom is not a guard.
+    BOTH LOCATIONS: `syncrun.Pass` puts `.gaston` at `dirname(work_dir)/.gaston`
+    (outside cwd, so Bash cannot reach it either), not at `work_dir/.gaston`,
+    which nothing creates -- guarding only the phantom path was not a guard.
 
-    Reads are untouched -- that is what the staged copies are for. So is
-    Bash, which this module deliberately does not parse: the baseline itself
-    is out of its reach by PLACEMENT instead, since `--sync-state` must
-    resolve outside the working directory.
+    Reads are untouched, which is what the staged copies are for. So is Bash:
+    this module deliberately does not parse it, so the baseline is kept out
+    of reach by PLACEMENT instead (`--sync-state` must resolve outside the
+    working directory).
     """
     if tool_name not in _WRITE_TOOLS:
         return None
@@ -433,18 +408,16 @@ def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
 
 # --- what can run without asking --------------------------------------------
 #
-# NOT a rules table read from `.claude/settings*.json`, which is what the plan
-# asked for and would have been actively misleading. `Session` runs with
-# `setting_sources=[]` on purpose -- "the tool set a Win98 client gets must not
-# depend on whose laptop runs the bridge" -- so the operator's permission rules
-# ARE NOT IN EFFECT here. A table of them would answer the question "what can
-# happen without asking?" with rules that cannot happen at all.
+# NOT a rules table read from `.claude/settings*.json`: `Session` runs with
+# `setting_sources=[]` on purpose -- the tool set a Win98 client gets must not
+# depend on whose laptop runs the bridge -- so the operator's rules ARE NOT IN
+# EFFECT here, and listing them would answer "what can happen?" with rules
+# that cannot happen at all.
 #
-# It also has to admit what it cannot see, which is the point of 04.16:
-# measured in this project, Claude Code resolves Read/Glob/Grep inside its
-# working directory and sandboxed Bash LOCALLY and never calls `can_use_tool`,
-# so nothing on the bridge observes them. A view that listed only what reaches
-# the prompt would read as "this is everything that can happen", which is
+# It also has to admit what it cannot see (04.16): Claude Code resolves
+# Read/Glob/Grep inside its working directory and sandboxed Bash LOCALLY and
+# never calls `can_use_tool`, so nothing on the bridge observes them. A view
+# that listed only what reaches the prompt would read as complete when it is
 # already known to be false.
 
 _MODE_MEANS = {
@@ -455,12 +428,9 @@ _MODE_MEANS = {
     "plan": "the model researches and proposes rather than acting. Tool "
             "calls that would change something are refused by the CLI "
             "before they reach here.",
-    # Auto was on the menu with nothing to say about it, so the one screen
-    # whose whole job is "what can run without asking?" rendered
-    # `<b>Mode: auto</b> &mdash; ` -- the raw token and an empty
-    # explanation. The wording is MODE_CAVEAT["auto"]'s, because that
-    # measurement is the answer: auto here means "the permission prompt
-    # still asks", not "something smarter is watching".
+    # Auto here means "the permission prompt still asks", not "something
+    # smarter is watching" -- measured below, since that measurement is the
+    # actual answer.
     "auto": "every tool call that reaches this bridge is still shown to you "
             "first. Auto does not add a second opinion -- measured on this "
             "bridge, the model's own danger classifier is not consulted once "
@@ -513,14 +483,10 @@ def rules_view(mode: str, tools: list[str], guest_root: str = "") -> str:
 
 
 #: Mode names as the menus spell them, duplicated from bridge/server.py's
-#: MODE_LABEL rather than imported: this module is imported BY the server and
-#: an import back would be a cycle. Two entries drifting apart would show a
-#: wrong word in one place, which is worth less than the cycle would cost.
-#:
-#: Drifting APART is now a test failure rather than a judgement call:
-#: tests/python/meta/test_mode_descriptions.py walks MODE_ORDER and asserts
-#: every mode on the menu has a label and a meaning here. `auto` shipped on
-#: the menu for a release with neither.
+#: MODE_LABEL rather than imported (this module is imported BY the server, so
+#: an import back would be a cycle). Drifting apart is a test failure, not a
+#: judgement call: tests/python/meta/test_mode_descriptions.py walks
+#: MODE_ORDER and asserts every mode has a label and a meaning here.
 _MODE_LABELS = {"default": "Manual", "acceptEdits": "Accept edits",
                 "plan": "Plan", "auto": "Auto"}
 

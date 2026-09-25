@@ -30,8 +30,7 @@ class PresentationService:
         if c is None:
             async def sink(text: str) -> None:
                 # `style` is captured, not defaulted: this closure is built
-                # once per call and `style` does not change under it. It used
-                # to be `_s=style` on a second, differently-shaped `sink`.
+                # once per call and `style` does not change under it.
                 if style == "plain":
                     await self.write_updates(
                         guest, guest.view.render.feed(text))

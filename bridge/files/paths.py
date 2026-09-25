@@ -31,55 +31,32 @@ from dataclasses import dataclass
 
 from . import caps as C
 
-# 03.20: MAX_PATH/MAX_DIR_PATH/MAX_COMPONENT used to be defined here as
-# module-level constants (260, 260-12, 255) -- a FOURTH copy of the Win9x
-# path limits, alongside caps.h's RC_CAP_MAXPATH/RC_CAP_MAXCOMP, the `Caps`
-# dataclass defaults and paths.DEFAULT below. They had no consumers: `check`
-# and `_component_ok` below both already read the negotiated `caps` object
-# (`caps.maxpath`, `caps.maxdirpath`, `caps.maxcomp`), nothing in this repo
-# imported the three names, and grepping for them turns up only this
-# comment and tests/python/test_paths.py's docstrings, which cite the RULE
-# ("within 12 of MAX_PATH"), not these variables. Removed rather than kept
-# "for documentation" -- they carried the most authoritative-looking
-# comments in the file, so editing them changed nothing while looking like
-# it should, which is worse than not having them.
-#
-# The one thing worth keeping from that comment: the directory reserve was
-# found the honest way. The bridge measured 256 bytes, allowed it, and the
-# guest answered `too_long` to the SYNCMKDIR -- letting the receiver be the
-# limit check is exactly what the design says not to do, since the guest
-# cannot create the file in order to report the problem. That is why `check`
-# below refuses a too-long directory BEFORE anything is sent, using
-# `caps.dirreserve`/`caps.maxdirpath` rather than a local copy of 12 or 260.
+# No local copy of MAX_PATH/MAX_DIR_PATH/MAX_COMPONENT here (03.20): `check`
+# and `_component_ok` below read the negotiated `caps` object instead
+# (`caps.maxpath`, `caps.maxdirpath`, `caps.maxcomp`). The directory reserve
+# of 12 was found empirically -- the bridge allowed a 256-byte path and the
+# guest answered `too_long` to the SYNCMKDIR, proof the receiver cannot be
+# the limit check since it can't create the file to report the problem --
+# which is why `check` below refuses a too-long directory BEFORE anything is
+# sent, using `caps.dirreserve`/`caps.maxdirpath` rather than a hardcoded 12
+# or 260.
 
-# The guest's own walk (win/sync/sync.h: RC_SYNC_MAX_DEPTH, win/sync/sync.cpp)
-# refuses to recurse past this many directory levels, and says NOTHING when it
-# stops -- no status, no count, nothing on the wire. A path this deep still
-# WRITES fine: rc_sync_begin_write has no depth check of its own, only the
-# scanner does. So a push into a path 18 components deep lands on the guest,
-# the guest acks it, the baseline advances -- and the very next scan simply
-# never visits it again, because the directory that would have to be
-# recursed into to find it is one level past where the walk gives up.
-# From the diff's point of view that reads as "deleted on the guest, kept
-# here" forever: not a re-push, but a standing false report that never
-# resolves and a path that can never be edited-and-synced again after its
-# first push, with nothing anywhere saying why (03.25).
+# The guest's own walk (win/sync/sync.h RC_SYNC_MAX_DEPTH, win/sync/sync.cpp)
+# refuses to recurse past this many directory levels and says NOTHING when it
+# stops. A push deeper than this still lands and is acked, and the baseline
+# advances -- but the next scan never visits it again, since the directory
+# that would need recursing into to find it is past where the walk gives up.
+# That reads as "deleted on the guest, kept here" forever, with nothing
+# anywhere saying why (03.25).
 #
-# The only place this can actually be caught is here, before the first push --
-# same reasoning as the directory-reserve check below (`caps.dirreserve`),
-# and the same reason a directory reservation cannot be enforced by the
-# receiver. `unreachable at depth D`
-# below is a component count, not the guest's own zero-based recursion depth:
-# walking with RC_SYNC_MAX_DEPTH == 16 still lists the children of the 17th
-# level (they are enumerated by the call that is listing ITS parent), so
-# nothing is invisible until the 18th component.
+# This is the only place it can be caught, before the first push -- the guest
+# gives no signal when its walk gives up. `caps.maxdepth` is one MORE than
+# the guest's own zero-based recursion depth: with RC_SYNC_MAX_DEPTH == 16
+# the walk still lists the children of the 17th level (enumerated by the call
+# listing their parent), so nothing is invisible until the 18th component.
 #
-# 04.36: DECLARED, not assumed. This is a client rule like `dirreserve` and
-# `maxcomp`, and it was the one such rule with no caps field -- sixty lines
-# arguing that it belongs to one specific client's walk, and a bare 16 that
-# every client got. It now lives in `caps.maxdepth`; this is the default a
-# client that says nothing is assumed to have, kept here so the paragraph
-# above still has something to point at.
+# Declared (04.36), not assumed: lives in `caps.maxdepth`; this is only the
+# default a client that says nothing is assumed to have.
 MAX_DEPTH = C.MAXDEPTH_GASTON
 
 # Reserved device names on Windows 9x. These are devices **in every directory**
@@ -198,7 +175,7 @@ def check(relpath: str, *, guest_root: str, caps=DEFAULT,
     with its own separator, which is why "\\" is illegal everywhere -- it must
     never arrive inside a component.
 
-    `caps` is what the client said it is (`bridge/caps.py`). Every rule below
+    `caps` is what the client said it is (`bridge/files/caps.py`). Every rule below
     that varies between clients reads it; the ones that do not vary are stated
     as constants and are deliberately NOT negotiable.
 
@@ -327,7 +304,7 @@ CLASS_EXACT = "b"       # binary, mixed endings, or lone CR; byte-exact
 def crc_for(cls: str, crc_norm: int, crc_raw: int) -> int:
     """Which of the two checksums a class is compared under.
 
-    The mirror of `RC_CRC_FOR` in `win/sync.h`, whose comment says why it is a
+    The mirror of `RC_CRC_FOR` in `win/sync/sync.h`, whose comment says why it is a
     macro there: *"One place, because getting it wrong in one of the four call
     sites is a permanent disagreement, not a glitch."* Python then open-coded
     the same expression at four sites and had no such place. This is it.

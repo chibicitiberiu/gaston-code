@@ -77,13 +77,11 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
     inside = (prompts.text("machine.sync.inside_all") if rel == "."
               else prompts.text("machine.sync.inside_one", rel=rel))
     # WHERE THE STAGED COPIES ACTUALLY ARE, computed the same way
-    # `syncrun.Pass._conflict_dir` computes it: one level above the working
+    # `syncrun.Pass._conflict_dir` does: one level above the working
     # directory, so a staged copy does not sync back to the machine it was
-    # staged away from. This used to be written as a bare relative
-    # `.gaston/conflict/...`, which resolves from the agent's cwd to a
-    # directory nothing creates -- the model was told to read a path that has
-    # never existed, and a Read of the real one was refused as being outside
-    # the working copy.
+    # staged away from. A bare relative `.gaston/conflict/...` resolves from
+    # the agent's cwd to a directory nothing creates -- naming the absolute
+    # path here is what makes it readable.
     conflicts = os.path.join(
         os.path.dirname(workdir.rstrip(os.sep)), ".gaston", "conflict")
     return prompts.text("machine.sync.mirrored", workdir=workdir,
@@ -141,16 +139,12 @@ def tools_block(found: list, path: list | None = None) -> str:
         "nothing matched, not that the thing is missing.",
     ]
 
-    # THE SHELLS, NAMED, because the model is the one that picks.
-    #
-    # A machine has as many shells as it has -- `command.com` and `4dos` on a
-    # DOS box, `sh`/`bash`/`zsh`/`csh` on a Unix one -- and which of them a
-    # command runs under changes what the command line may contain. Nothing
-    # on this side chooses: the machine reports the list, this prints it, and
-    # `exec` takes the name. Before, the GUEST picked from `GetVersion()` and
-    # told nobody, so a second installed shell was unreachable and the
-    # bridge's command guard was judging by a grammar the guest might not
-    # have been running.
+    # THE SHELLS, NAMED, because the model is the one that picks: a machine
+    # has as many shells as it has (`command.com`/`4dos` on DOS,
+    # `sh`/`bash`/`zsh`/`csh` on Unix), and which one a command runs under
+    # changes what the command line may contain. Nothing on this side
+    # chooses -- the machine reports the list, this prints it, `exec` takes
+    # the name.
     shells = toolrules.usable_shells(found)
     if shells:
         names = ", ".join(f"`{f.name}`" for f in shells)
@@ -168,19 +162,15 @@ def tools_block(found: list, path: list | None = None) -> str:
         ]
 
     # THE PATH, STATED, because `Bad command or file name` names the PROGRAM
-    # and not the environment -- and three separate sessions read that as
-    # "the compiler is not installed" and went hunting the disk, which is
-    # exactly what the inventory above exists to prevent.
+    # and not the environment -- three separate sessions read that as "the
+    # compiler is not installed" and went hunting the disk, which is exactly
+    # what the inventory above exists to prevent.
     #
-    # PRINTED FROM DETECTION, never asserted, and that distinction was nearly
-    # lost. The corpus contains a measured `PATH=C:\WINDOWS;C:\WINDOWS\
-    # COMMAND` and a note saying the machine's start-up scripts had not run.
-    # Both were true when recorded and neither is true now: installing Open
-    # Watcom put SETVARS.BAT into AUTOEXEC.BAT, and `exec` inherits the
-    # client's environment (CreateProcessA with lpEnvironment=NULL,
-    # win/rpc/exec.cpp:180), so today the same command answers
-    # `...;C:\WATCOM\BINNT`. A measurement has a shelf life; printing the
-    # live value has none.
+    # PRINTED FROM DETECTION, never asserted: `exec` inherits the client's
+    # environment (CreateProcessA with lpEnvironment=NULL, win/rpc/exec.cpp),
+    # so this PATH can change between two sessions on the same machine (e.g.
+    # installing a toolchain that edits AUTOEXEC.BAT). A measurement has a
+    # shelf life; printing the live value has none.
     if path:
         out += [
             "",

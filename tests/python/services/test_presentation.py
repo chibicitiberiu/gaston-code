@@ -21,9 +21,6 @@ def mock_conn():
 def mock_guest():
     guest = MagicMock()
     guest.view = TranscriptView()
-    guest.view.pages = guest.view.pages
-    guest.view.render = guest.view.render
-    guest.view.coalescers = guest.view.coalescers
     guest.view.view_page = None
     guest.link.link_bps = 5000
     return guest

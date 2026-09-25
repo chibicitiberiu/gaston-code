@@ -76,26 +76,6 @@ def test_oem_for_and_bind_codepages(conn_service):
         assert mock_use.call_count >= 1
 
 
-async def test_send(conn_service):
-    svc = conn_service["service"]
-    guest = conn_service["guest"]
-    frame = Frame("TEST", {}, b"")
-
-    res = await svc.send(guest, frame)
-    assert res is True
-    guest.link.send.assert_called_once_with(guest, frame)
-
-
-async def test_try_send_raw(conn_service):
-    svc = conn_service["service"]
-    writer = MagicMock()
-    frame = Frame("TEST", {}, b"")
-
-    with patch("bridge.wire.link.GuestLink.send_raw", new_callable=AsyncMock) as mock_send_raw:
-        await svc.try_send_raw(writer, frame)
-        mock_send_raw.assert_called_once_with(writer, frame)
-
-
 async def test_read_hello_valid(conn_service):
     svc = conn_service["service"]
     reader = AsyncMock()
@@ -224,7 +204,11 @@ async def test_handle_frame(conn_service):
     f = Frame("INPUT", {}, b"hello")
 
     await svc.handle(guest, f)
+    # The control for the deflate case below: with no `enc`, the body must
+    # reach the dispatcher byte for byte and the frame must not be rebuilt.
     conn_service["handle_frame"].assert_called_once_with(guest, f)
+    assert conn_service["handle_frame"].call_args[0][1].body == b"hello"
+    guest.link.zip_in.decompress.assert_not_called()
 
 
 async def test_handle_deflate_frame(conn_service):

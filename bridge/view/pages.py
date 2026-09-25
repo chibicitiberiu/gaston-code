@@ -198,21 +198,14 @@ class Paginator:
                 chunks.append((page.number, text))
                 text = ""
             elif (page.runs and len(text) <= self.hard_bytes):
-                # SEAL BETWEEN BLOCKS RATHER THAN THROUGH ONE. 02.17.
-                #
-                # The run being split is a complete HTML element, and the
-                # split is by byte count with a newline preference -- which
-                # knows nothing about tags. So page N ended with
-                # `<div class="codewrap"><pre>...` unclosed and page N+1
-                # opened with `...</pre></div>`: MSHTML closes the tags
-                # itself, so what the reader gets is a code block that has
-                # lost its frame and a page that starts with stray markup.
-                #
-                # There is a clean boundary available whenever the page
-                # already holds something -- the start of this block -- so
-                # take it, and keep the mid-run split for the one case that
-                # has no alternative: a single block bigger than a whole
-                # page.
+                # SEAL BETWEEN BLOCKS RATHER THAN THROUGH ONE (02.17). A
+                # byte-count split knows nothing about HTML tags: splitting
+                # mid-element left page N ending `<div class="codewrap">
+                # <pre>...` unclosed and page N+1 opening `...</pre></div>`,
+                # which MSHTML "fixes" into a code block missing its frame.
+                # There is a clean boundary whenever the page already holds
+                # something -- the start of this block -- so take it; the
+                # mid-run split stays only for a block bigger than a page.
                 sealed.append(self._seal(continued=True))
                 continue
             else:

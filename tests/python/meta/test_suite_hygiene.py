@@ -209,3 +209,82 @@ def test_names_reached_through_bridge_server_are_declared():
         if hasattr(srv, n) and not n.startswith("_") and n not in srv.__all__)
     assert not undeclared, (
         f"reached through bridge.server but not in its __all__: {undeclared}")
+
+
+# --- comments that outlive the code they describe ---------------------------
+#
+# Every false comment found in the September cleanup had the same shape: a
+# field was deleted or moved, and the block documenting it stayed put --
+# either stranded above an unrelated field, or as a section banner with
+# nothing left under it. Both are cheap to detect and neither has a
+# legitimate use, so they are errors rather than style.
+
+BRIDGE = os.path.join(conftest.REPO, "bridge")
+
+
+def _bridge_sources():
+    for root, dirs, names in os.walk(BRIDGE):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for name in sorted(names):
+            if name.endswith(".py"):
+                yield os.path.join(root, name)
+
+
+def _next_code_line(lines, i):
+    """The first line after `i` that is neither blank nor a comment."""
+    for j in range(i + 1, len(lines)):
+        stripped = lines[j].strip()
+        if stripped and not stripped.startswith("#"):
+            return j
+    return None
+
+
+@pytest.mark.parametrize(
+    "path", sorted(_bridge_sources()),
+    ids=lambda p: os.path.relpath(p, conftest.REPO))
+def test_a_doc_comment_block_still_has_something_to_document(path):
+    """A `#:` block must be followed by the thing it documents.
+
+    Two stacked `#:` blocks with no field between them means the first one's
+    field is gone. That is how `bridge/guest.py` came to explain the halt
+    coordinator directly above `guest_sync_root`.
+    """
+    lines = open(path, encoding="utf-8").read().splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("#:"):
+            continue
+        if i + 1 < len(lines) and lines[i + 1].strip().startswith("#:"):
+            continue                       # still inside the same block
+        j = _next_code_line(lines, i)
+        assert j is not None, (
+            f"{os.path.relpath(path, conftest.REPO)}:{i + 1} `#:` block "
+            f"documents nothing -- it runs to the end of the file")
+        between = lines[i + 1:j]
+        assert not any(b.strip().startswith("#:") for b in between), (
+            f"{os.path.relpath(path, conftest.REPO)}:{i + 1} `#:` block is "
+            f"stranded: the next thing is another `#:` block, so whatever "
+            f"this one documented is gone")
+
+
+@pytest.mark.parametrize(
+    "path", sorted(_bridge_sources()),
+    ids=lambda p: os.path.relpath(p, conftest.REPO))
+def test_a_section_banner_still_has_a_section(path):
+    """A `# --- name ---` banner must have code under it.
+
+    An empty one is left behind when everything it introduced moved out, and
+    it then reads as a promise the file does not keep.
+    """
+    lines = open(path, encoding="utf-8").read().splitlines()
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("# ---"):
+            continue
+        j = _next_code_line(lines, i)
+        assert j is not None, (
+            f"{os.path.relpath(path, conftest.REPO)}:{i + 1} banner "
+            f"{line.strip()[:48]!r} introduces nothing -- end of file")
+        between = lines[i + 1:j]
+        assert not any(b.strip().startswith("# ---") for b in between), (
+            f"{os.path.relpath(path, conftest.REPO)}:{i + 1} banner "
+            f"{line.strip()[:48]!r} introduces nothing -- the next thing is "
+            f"another banner")

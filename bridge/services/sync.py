@@ -574,23 +574,16 @@ class SyncService:
 
         Coalesced by run_sync's own lock, so a sweep that lands during a pass
         the guest asked for costs a debug line and nothing else.
-
-        This used to exist twice: here, and on Bridge. Only Bridge's was ever
-        wired up, and this copy was the worse of the two -- it did not bind
-        the codepages and it swallowed every exception, so whoever eventually
-        reached for the one in the service would have lost 02.6 and gained a
-        sweep that failed silently. One body now, and it is the one that ran.
         """
         while True:
             await asyncio.sleep(self.config.sync_sweep_s)
             guest = self._get_guest(None)
             if self.config.sync_dir and guest is not None:
-                # Bound HERE as well as inherited from _attach's context.
-                # The inheritance is what 02.6 fixed; this is what keeps it
-                # true once a task started for one connection is still
-                # running during the next one -- and once R7 gives the bridge
-                # two guests on two codepages, it is the only thing that can
-                # be right.
+                # Bound HERE as well as inherited from ConnectionService.
+                # attach's context: this keeps it true once a task started
+                # for one connection is still running during the next one --
+                # and once R7 gives the bridge two guests on two codepages,
+                # it is the only thing that can be right.
                 self.connection.bind_codepages(guest)
                 await self.run_sync("the bridge's own sweep")
 

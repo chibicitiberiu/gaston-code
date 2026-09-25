@@ -56,13 +56,9 @@ class ProtocolError(Exception):
 
 # Header values are printable ASCII on the wire. Everything else -- control
 # characters and every byte a CP1252 text would use above 0x7E -- is
-# percent-encoded.
-#
-# Escaping only %, LF and CR was not enough, and the gap was not theoretical:
-# SESSION frames carry session titles, which are arbitrary user text, so the
-# first real chat list from the guest crashed the bridge with
-#   UnicodeEncodeError: 'ascii' codec can't encode character '\u2442'
-# on every reconnect attempt.
+# percent-encoded. Escaping only %, LF and CR is not enough: SESSION frames
+# carry session titles, which are arbitrary user text and can contain bytes
+# outside ASCII.
 _SAFE = frozenset(range(0x20, 0x7F)) - {ord("%")}
 
 _PCT = re.compile(r"%([0-9A-Fa-f]{2})")
@@ -254,46 +250,32 @@ class FrameReader:
 # This IS the protocol's vocabulary, as far as the bridge -> guest direction
 # goes: one constructor per frame type the bridge sends, so header
 # stringification and `fold.encode` are decided once here rather than
-# independently at every `Frame(...)` call site (docs/audit/02-bridge-python.md
-# #1.1). `GuestLink` (bridge/wire/link.py) is the seam that owns HOW a frame
-# reaches the wire -- the writer, the send lock, the compressor, the chunking.
-# These functions are what decides WHAT the bridge is allowed to send: a
-# constructor takes the values that vary and returns a `Frame` whose headers
-# are always shaped the same way for that type.
+# independently at every `Frame(...)` call site. `GuestLink`
+# (bridge/wire/link.py) is the seam that owns HOW a frame reaches the wire --
+# the writer, the send lock, the compressor, the chunking. These functions
+# decide WHAT the bridge is allowed to send: a constructor takes the values
+# that vary and returns a `Frame` whose headers are always shaped the same
+# way for that type.
 #
-# `stamp=` used to live at the `GuestLink.send` call site, marking which
-# frames entered the per-session replay buffer -- an EXEC or EXECKILL must
-# never be replayed, a reissue after reconnect must not replay either, but a
-# fresh TURN start should. Retired with the buffer itself (2026-09-18,
-# docs/BACKLOG.md #5): the guest never sent `from=`, so nothing ever replayed
-# anything, and every frame just goes out once, when it is sent. The
-# never-replay invariant for EXEC/EXECKILL/SYNC* still holds -- see
-# `test_exec_is_never_re_delivered` in test_server_integration.py -- it is
-# just no longer a flag this module hands to the sender.
+# There is no replay buffer and no `stamp=` flag on a send: every frame goes
+# out once, when it is sent. The never-replay invariant for
+# EXEC/EXECKILL/SYNC* is enforced by never replaying anything -- see
+# `test_exec_is_never_re_delivered` in test_server_integration.py.
 #
-# HELLO and ERROR predate this: they are sent before a GuestSession exists to
-# hang a send helper off (both fakegui and the guest open a connection with
-# HELLO; ERROR is sent standalone by the bridge whenever a handshake step
+# HELLO and ERROR predate the rest: they are sent before a GuestSession
+# exists to hang a send helper off (both fakegui and the guest open a
+# connection with HELLO; ERROR is sent standalone whenever a handshake step
 # fails before any session-scoped state exists to send it through).
 #
-# Four other constructors used to live here -- text(), user_input(), status(),
-# interrupt() -- and were dead: no caller anywhere in bridge/, win/ or tests/.
-# text()'s own `style=` parameter named a frame shape the bridge had already
-# stopped sending. Removed rather than fixed, in the same pass that reworked
-# fakegui.py to render TEXT by the `mode=` header the bridge actually sends.
-# `text_frame()` below is a new, unrelated constructor for the TEXT frame the
-# bridge actually sends today.
+# `text_frame()` below is the constructor for the TEXT frame the bridge sends
+# today; it is unrelated to any similarly-named helper elsewhere.
 
 
 def hello(secret: str, sess: str | None = None) -> Frame:
     """First frame from the guest. Carries the protocol version and the cap so
     a mismatch is caught before anything else, and optionally names the
-    session it is reattaching to.
-
-    Used to also carry `from=<seq>`, asking the bridge to replay whatever the
-    guest missed. Retired 2026-09-18 (docs/BACKLOG.md #5) along with the
-    replay buffer it drove: the guest never sent it, so the path it would
-    have triggered was dead code from Phase 1 onward.
+    session it is reattaching to. There is no replay cursor here -- reconnect
+    always resumes from current state, never from a missed-frame log.
     """
     h = {"ver": str(PROTO_VERSION), "secret": secret, "max_frame": str(MAX_FRAME)}
     if sess:
@@ -325,10 +307,6 @@ def ready(sess: str, model: str, page: int, total: int,
     nothing told a freshly connected guest which conversation it was looking
     at unless a SWITCHED happened to follow -- which it does after a switch
     and does not after a plain reconnect.
-
-    Used to also carry `next_seq=`, the replay cursor a `from=` on the next
-    HELLO would resume from. Retired with `hello()`'s `from_seq` -- see its
-    docstring.
     """
     h = {
         "sess": sess,
@@ -601,15 +579,8 @@ def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: str = "",
     # `C:\\WINDOWS\\COMMAND.COM /c`, composed from what detection found and
     # what that shell's profile says its run switch is. The guest splices it
     # in front of the command and knows nothing else about shells; empty
-    # means spawn the program directly.
-    #
-    # It was "1"/"0", which made the guest pick the shell itself from
-    # `GetVersion()`. That put the choice on the one machine that cannot be
-    # told about a second shell being installed, and left the command guard
-    # over here judging by a grammar the guest might not have been running.
-    # PROTO_VERSION went to 2 for this: an older guest reading a prefix as a
-    # flag would run everything through the wrong thing, so it is refused at
-    # the handshake instead.
+    # means spawn the program directly. See PROTO_VERSION above for why an
+    # older guest cannot be handed this.
     headers = {"id": exec_id, "timeout_ms": str(timeout_ms),
                "shell": shell or ""}
     if cwd:

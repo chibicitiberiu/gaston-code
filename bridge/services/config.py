@@ -52,14 +52,12 @@ class BridgeConfig:
         else:
             self.sync_state = os.path.abspath(self.sync_state)
 
-        # Baseline outside sync_dir
         if os.path.commonpath([self.sync_state, self.sync_dir]) == self.sync_dir:
             raise ValueError(
                 "--sync-state must be OUTSIDE --sync-dir: a baseline inside "
                 "the tree it describes gets mirrored to the guest and recurses"
             )
 
-        # Baseline outside cwd
         if self.cwd:
             wd = os.path.realpath(self.cwd)
             try:

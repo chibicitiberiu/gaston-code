@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from bridge.services.permission import PermissionService
-from bridge.wire.protocol import Frame
 
 
 @pytest.fixture
@@ -38,27 +37,6 @@ def test_attach_creates_desk(mock_conn, mock_guest):
     assert desk._cwd == "/local/work"
 
 
-@pytest.mark.asyncio
-async def test_reply_delegates(mock_conn, mock_guest):
-    svc = PermissionService(connection=mock_conn)
-    mock_guest.perms = MagicMock()
-    mock_guest.perms.reply = AsyncMock()
-
-    f = Frame("PERMREPLY", {"id": "p1", "action": "allow"})
-    await svc.reply(mock_guest, f)
-    mock_guest.perms.reply.assert_awaited_once_with("p1", "allow")
-
-
-@pytest.mark.asyncio
-async def test_reissue_delegates(mock_conn, mock_guest):
-    svc = PermissionService(connection=mock_conn)
-    mock_guest.perms = MagicMock()
-    mock_guest.perms.reissue = AsyncMock()
-
-    await svc.reissue(mock_guest)
-    mock_guest.perms.reissue.assert_awaited_once()
-
-
 def test_deny_all_passes_both_the_reason_and_the_message(mock_conn, mock_guest):
     """`PermissionDesk.deny_all` takes a reason AND a message the user reads.
 
@@ -80,14 +58,6 @@ def test_deny_all_is_a_no_op_without_a_desk(mock_conn, mock_guest):
     mock_guest.perms = None
     svc.deny_all(mock_guest, "idle", "gone")   # must not raise
     svc.deny_all(None, "idle", "gone")
-
-
-def test_callback_delegates(mock_conn, mock_guest):
-    svc = PermissionService(connection=mock_conn)
-    mock_guest.perms = MagicMock()
-    mock_guest.perms.callback.return_value = "dummy_cb"
-
-    assert svc.callback(mock_guest) == "dummy_cb"
 
 
 def test_retarget(mock_conn, mock_guest):

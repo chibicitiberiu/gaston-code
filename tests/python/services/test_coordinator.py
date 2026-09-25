@@ -1,13 +1,19 @@
 """Tests for SessionCoordinator service."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from bridge.guest import GuestSession
 from bridge.services.coordinator import SessionCoordinator
-from bridge.status import GuestState
 from bridge.wire.protocol import Frame
+
+
+class _OpenWriter:
+    """Just enough writer for `GuestLink.connected` to be True."""
+
+    def is_closing(self) -> bool:
+        return False
 
 
 @pytest.fixture
@@ -15,10 +21,6 @@ def coordinator_deps():
     connection = MagicMock()
     connection.send = AsyncMock(return_value=True)
     connection._send = AsyncMock(return_value=True)
-    connection.synccoord = MagicMock()
-    connection.synccoord.halt_id = ""
-    connection.synccoord.halt_text = ""
-    connection.synccoord.halt_paths = frozenset()
 
     turn_runner = MagicMock()
     turn_runner.run_turn = AsyncMock()
@@ -59,18 +61,20 @@ def coordinator_deps():
         spawn=mock_spawn,
     )
 
-    guest = MagicMock()
-    guest.turn_lock = asyncio.Lock()
-    guest.exec_pending = set()
+    # A REAL GuestSession, not a MagicMock. `on_input` gates on `guest.state`,
+    # which is a property derived from the link, the halt id and the turn
+    # lock. Against a mock it returns a mock, every gate falls through, and
+    # the gates can rot without a test noticing -- which is exactly what
+    # happened when the fields the property reads were renamed.
+    guest = GuestSession()
+    guest.link.writer = _OpenWriter()
     guest.claude = MagicMock()
     guest.claude.busy = False
     guest.claude.interrupt = AsyncMock()
     guest.perms = MagicMock()
     guest.perms.reissue = AsyncMock()
-    guest.synccoord = connection.synccoord
-    guest.work_guest = ""
-    guest.first_prompt = ""
-    guest.view.view_page = "1"
+    connection.synccoord = guest.synccoord
+    guest.view.view_page = 1
     guest.turn_produced = True
     guest.turn_degraded = "rate_limit"
 
@@ -103,7 +107,7 @@ async def test_quiesce_turn_not_locked(coordinator_deps):
 async def test_quiesce_turn_locked(coordinator_deps):
     coord = coordinator_deps["coordinator"]
     guest = coordinator_deps["guest"]
-    guest.exec_pending.add("exec_1")
+    guest.exec_pending["exec_1"] = MagicMock()
 
     async with guest.turn_lock:
         await coord.quiesce_turn(guest)
@@ -268,7 +272,7 @@ async def test_on_resume(coordinator_deps):
 async def test_on_interrupt(coordinator_deps):
     coord = coordinator_deps["coordinator"]
     guest = coordinator_deps["guest"]
-    guest.exec_pending.add("exec_2")
+    guest.exec_pending["exec_2"] = MagicMock()
 
     await coord.on_interrupt(guest)
     coordinator_deps["guest_exec"].kill_exec.assert_called_once_with(guest, "exec_2")
@@ -279,10 +283,9 @@ async def test_on_input_rejected_when_running_turn(coordinator_deps):
     coord = coordinator_deps["coordinator"]
     guest = coordinator_deps["guest"]
     connection = coordinator_deps["connection"]
-    guest.state = GuestState.RUNNING_TURN
-
     frame = Frame("INPUT", {}, b"concurrent prompt")
-    await coord.on_input(guest, frame)
+    async with guest.turn_lock:
+        await coord.on_input(guest, frame)
 
     assert connection.send.call_count == 1
     err = connection.send.call_args[0][1]
@@ -295,7 +298,7 @@ async def test_on_input_rejected_when_halted(coordinator_deps):
     coord = coordinator_deps["coordinator"]
     guest = coordinator_deps["guest"]
     connection = coordinator_deps["connection"]
-    guest.state = GuestState.HALTED
+    guest.synccoord.halt_id = "h-open"
 
     frame = Frame("INPUT", {}, b"prompt during halt")
     await coord.on_input(guest, frame)
@@ -311,7 +314,7 @@ async def test_on_input_ignored_when_disconnected(coordinator_deps):
     coord = coordinator_deps["coordinator"]
     guest = coordinator_deps["guest"]
     connection = coordinator_deps["connection"]
-    guest.state = GuestState.DISCONNECTED
+    guest.link.writer = None
 
     frame = Frame("INPUT", {}, b"prompt when disconnected")
     await coord.on_input(guest, frame)

@@ -144,12 +144,9 @@ class OptionsService:
             current = (m.get("resolvedModel") or value) == in_use
             if current and chosen is None:
                 chosen = m
-            # `description` rides as its own header, not folded into the
-            # label: the label is what the toolbar BUTTON shows, and "Haiku
-            # 4.5 - Fastest for quick answers" does not fit on a 640px screen
-            # while "Haiku" does. The menu shows both, which is where the
-            # question "which of these is which?" is actually asked -- four
-            # display names alone do not answer it.
+            # `description` rides as its own header rather than folding into
+            # `label`, which also drives the toolbar button -- see `option`'s
+            # docstring in wire/protocol.py.
             await self.connection.send(
                 guest,
                 option("model", value, label, current, desc=m.get("description") or ""),
@@ -183,7 +180,6 @@ class OptionsService:
                     ),
                 )
 
-        # Work dir option
         await self.connection.send(
             guest,
             option(
@@ -195,7 +191,6 @@ class OptionsService:
             ),
         )
 
-        # Mode options
         for mode in MODE_ORDER:
             await self.connection.send(
                 guest,
@@ -207,7 +202,6 @@ class OptionsService:
                 ),
             )
 
-        # Command options
         have = {}
         for c in await self._commands(guest):
             n = c.get("name")

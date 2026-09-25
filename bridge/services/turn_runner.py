@@ -1,8 +1,8 @@
 """TurnRunner: turn orchestration, sync preamble, multimodal turns, and stream lifecycle.
 
-Owns the execution of turns on GuestSession (_run_turn, _run_turn_locked, _resume_turn),
-injection of synchronization preambles and delivery tracking (_with_sync_preamble,
-_seed_agent_notices, _clear_agent_notices), transcript anchor placement, and turn verdict
+Owns the execution of turns on GuestSession (run_turn, run_turn_locked, resume_turn),
+injection of synchronization preambles and delivery tracking (with_sync_preamble,
+seed_agent_notices, clear_agent_notices), transcript anchor placement, and turn verdict
 calculation (turn_verdict).
 """
 

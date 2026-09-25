@@ -64,24 +64,6 @@ def mock_deps(tmp_path):
     return connection, presentation, workspace, options, guest_exec, conv
 
 
-def test_session_service_init(mock_deps):
-    conn, pres, ws, opt, ge, conv = mock_deps
-    svc = SessionService(
-        connection=conn,
-        presentation=pres,
-        workspace=ws,
-        options=opt,
-        guest_exec=ge,
-        conv=conv,
-    )
-    assert svc.connection is conn
-    assert svc.presentation is pres
-    assert svc.workspace is ws
-    assert svc.options is opt
-    assert svc.guest_exec is ge
-    assert svc.conv is conv
-
-
 def test_conv_title(mock_deps):
     conn, pres, ws, opt, ge, conv = mock_deps
     svc = SessionService(conn, pres, ws, opt, ge, conv)

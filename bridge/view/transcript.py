@@ -7,7 +7,7 @@ guest's RAM at handshake. `GuestLink` (bridge/wire/link.py) already moved
 the "Link" group out the same way; this follows it.
 
 Deliberately NOT the "paginate, stream only if live, then seal" rule
-itself (02.18): that stays on `PresentationService.write_block`/`_send_page`, because
+itself (02.18): that stays on `PresentationService.write_block`/`send_page`, because
 enforcing it here would mean this class sending frames, which means it
 needs the guest's `GuestLink` -- and `GuestLink.send(guest, frame)` takes
 the owning `GuestSession` back on purpose, to keep `GuestLink` reachable
@@ -18,7 +18,7 @@ fields cannot hold a `GuestLink` of its own without a construction-order
 cycle. `_switch`'s own bypass of that rule during history replay is a separate,
 already-investigated question (02.39) and is unaffected by this move: it
 still reaches `.pages` directly, now through `guest.view.pages` rather than
-`guest.view.pages`, exactly as deliberately as before.
+`guest.pages`, exactly as deliberately as before.
 """
 
 from __future__ import annotations

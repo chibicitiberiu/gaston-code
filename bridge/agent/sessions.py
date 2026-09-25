@@ -95,24 +95,15 @@ def listing(cwd: str | None = None, limit: int = 50) -> list[dict]:
 
 
 #: How Claude Code opens the synthetic message it writes at a compaction
-#: boundary. MATCHED ON THE TEXT, which wants justifying because it looks like
-#: the fragile option.
+#: boundary. MATCHED ON THE TEXT rather than the stored `isCompactSummary:
+#: true` flag, because `SessionMessage.message` is the raw Anthropic dict
+#: (`{content, role}`) and does not surface it -- reading it back means
+#: opening the JSONL, which this module's docstring says not to.
 #:
-#: The record carries `isCompactSummary: true` -- measured, it is a TOP-LEVEL
-#: key on the stored line, beside `cwd`, `gitBranch` and `uuid`. But
-#: `SessionMessage` does not surface it: its `message` attribute is the raw
-#: Anthropic dict and carries `{content, role}` and nothing else, so the flag
-#: is dropped by the accessor. Reading it back means opening the JSONL, and
-#: this module's own docstring says not to -- "that format is internal and
-#: changes between releases."
-#:
-#: So the choice is between reaching around the documented accessor and
-#: matching a sentence. The sentence wins on how each one FAILS. If the
-#: wording changes, this stops matching and a compacted session replays its
-#: summary as a user bubble again, which is exactly today's behaviour. If the
-#: file format changes, a JSONL reader raises or silently returns nothing for
-#: every session in the list. One degrades to the status quo; the other
-#: breaks the chat list.
+#: The sentence wins on how each option FAILS: if the wording changes, this
+#: just stops matching (today's behaviour); if the JSONL format changes
+#: instead, a reader raises or silently returns nothing for every session in
+#: the list.
 _COMPACT_OPENER = ("This session is being continued from a previous "
                    "conversation")
 
@@ -168,19 +159,12 @@ def _text_of(message) -> list[tuple[str, str]]:
         elif btype == "thinking":
             continue  # not replayed: it is long and was never the point
         elif btype == "tool_use":
-            # THE SAME LINE THE LIVE PATH WRITES, not a shorter one.
-            #
-            # This used to emit "  -> Write", which the renderer turned into
-            # `tool  -> Write` -- while the live path writes
-            # `Write file_path: /home/.../plan.md`. So a conversation looked
-            # one way as it happened and a duller way when you came back to
-            # it, which is exactly the "opening an old conversation makes it
-            # lose formatting" complaint this replay path was built to fix,
-            # surviving in the one block type nobody checked.
-            #
-            # `telling_argument` is the shared answer to "which argument
-            # matters" (02.15); using it here keeps the two paths from
-            # drifting the way they already had.
+            # THE SAME LINE THE LIVE PATH WRITES, not a shorter one -- a
+            # replayed call used to read `tool -> Write` while the live path
+            # wrote `Write file_path: /home/.../plan.md`, so an old
+            # conversation looked duller than the one you were having.
+            # `telling_argument` (02.15) is the shared answer to "which
+            # argument matters", keeping the two paths from drifting again.
             name = block.get("name", "?")
             args = block.get("input")
             told = _perms.telling_argument(args) if isinstance(args, dict) \

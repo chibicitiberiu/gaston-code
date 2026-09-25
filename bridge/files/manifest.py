@@ -1,7 +1,7 @@
 """The manifest row format, parsed in exactly one place.
 
-The format was written four times and verified zero times: `win/syncrpc.c`
-produces it, `bridge/server.py` parsed it inline, `tests/python/test_sync_wire.py`
+The format was written four times and verified zero times: `win/sync/syncrpc.cpp`
+produces it, `bridge/server.py` parsed it inline, `tests/python/files/test_sync_wire.py`
 re-implemented the producer for the tests, and `tools/probe/syncprobe.py`
 re-implemented the parser. `synccheck.exe` -- the only thing that runs the real
 C against the real Python -- printed a *different*, tab-separated format of its
@@ -10,8 +10,8 @@ format. A field added on one side passed the whole suite.
 
 Pulling the parser out of the frame handler is half the fix. The other half is
 `synccheck --wire`, which now emits rows through the SAME C function the guest
-puts on the wire, so `tests/python/test_guest_manifest.py` can feed real guest
-output to this real parser and compare the result against the bridge's own
+puts on the wire, so `tests/python/guest/test_guest_agreement.py` can feed real
+guest output to this real parser and compare the result against the bridge's own
 classification. The loop is closed: a field added on either side fails.
 
 Row format, both versions:
@@ -75,8 +75,8 @@ def parse_rows(body: bytes, caps) -> tuple[dict, dict]:
             # docstring above promised it did not. Splitting the line was
             # guarded; converting it was not. So an unrecognised type letter,
             # a non-numeric mtime, or a checksum that was not a number raised
-            # ValueError straight out of parse_rows, up through _sync_frame
-            # and _handle, to the connection pump's outermost `except
+            # ValueError straight out of parse_rows, up through `sync_frame`
+            # and `handle`, to the connection pump's outermost `except
             # Exception`. That does not skip a row -- it drops the guest's
             # connection in the middle of a manifest.
             #

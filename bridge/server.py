@@ -238,21 +238,12 @@ class Bridge:
             "SETWORK":      self.workspace.on_setwork,
         }
 
-        # One guest, one session. See PLAN.md "Multi-session".
         self._server: asyncio.Server | None = None
         # Strong references to fire-and-forget tasks. asyncio holds only a
         # weak one, so a bare create_task can be collected mid-flight.
         self._tasks: set = set()
-        # Frames pipelined behind HELLO in a single read, handed to _pump.
         self._reaper: asyncio.Task | None = None
         self._sweeper: asyncio.Task | None = None
-        # The mirror root the guest reported, the reports from the last pass,
-        # the resolved baseline path and the transient-abort count all used to
-        # be mirrored here as well as on the GuestSession that owns them. A
-        # second guest could read the first one's, so the mirrors are gone and
-        # `guest.guest_sync_root` / `.last_sync_reports` / `.transient_aborts`
-        # are the only copies. The pre-attach SyncCoordinator moved to
-        # ConnectionService, which owns the guest slot it precedes.
 
 
     @property
@@ -275,11 +266,10 @@ class Bridge:
 
     # --- lifecycle ---------------------------------------------------------
 
-    #: Config that used to be reachable as `bridge.<name>` through a property
-    #: pair. Removing those turned `bridge.sync_dir = x` from a write into a
-    #: silent no-op: the attribute lands on the Bridge, `config` keeps its old
-    #: value, and nothing says so. Two tests found two of them; this finds the
-    #: rest at the moment of the mistake.
+    #: Config that is reachable only as `bridge.config.<name>`. Assigning
+    #: `bridge.sync_dir = x` is otherwise a silent no-op -- the attribute
+    #: lands on the Bridge, `config` keeps its old value, and nothing says
+    #: so. `__setattr__` below turns that into an error at the mistake.
     _CONFIG_FIELDS = frozenset((
         "cwd", "effort", "host", "idle_check_s", "idle_timeout_s", "link_bps",
         "model", "perm_grace_s", "port", "sync_dir", "sync_state",
@@ -304,14 +294,10 @@ class Bridge:
             await self._server.serve_forever()
 
     async def close(self) -> None:
-        # BOTH long-lived loops, and everything _spawn started.
-        #
-        # The sweeper was missed here, so a bridge shut down cleanly left
-        # `_sweep_sync` looping every 120s against a guest whose writer was
-        # gone and a Claude session already closed. `run_sync` returns early
-        # on `not guest.link.connected`, so it was noise rather than damage -- but
-        # in-process (the test suite, and any future embedding) it is a task
-        # that outlives its owner, and R7 has to fix it here anyway.
+        # BOTH long-lived loops, and everything _spawn started. Missing
+        # either one leaves a task looping against a guest whose writer is
+        # gone -- harmless out of process, a leak in the test suite and in
+        # any future embedding.
         for name in ("_reaper", "_sweeper"):
             task = getattr(self, name, None)
             if task is not None:
@@ -366,44 +352,22 @@ class Bridge:
         log.info("attached sess=%s (reconnect=%s)", guest.sess_id, is_reconnect)
 
 
-    # --- Claude session ----------------------------------------------------
-
-
     # --- the conversation's own folder -------------------------------------
     #
-    # A SUBFOLDER OF THE MIRROR, never a second mirror. BACKLOG.md §7 settled
-    # that a mirror belongs to a conversation; what it did not settle is
-    # whether "the folder moves" means moving the sync root, and moving it
-    # would mean a new baseline, a new `tree_id`, a watcher restart and a
-    # recovery pass on the new tree -- four chances to report deletions
-    # nobody made, in the one layer of this system that can lose a person's
-    # work. Putting the conversation inside the existing mirror gets the same
-    # property (each chat has its own folder, and two chats cannot overwrite
-    # each other's files) with one mirror, one baseline and one watcher,
-    # exactly as §7 says the decision requires.
-    #
-    # It also makes a nicer guarantee than the original shape: with the
-    # agent's cwd INSIDE the mirror, everything it can write is mirrored, so
-    # `_scan_strays` has nothing to find by construction.
+    # A SUBFOLDER OF THE MIRROR, never a second mirror (BACKLOG.md §7).
+    # Moving the sync root instead would mean a new baseline, a new
+    # `tree_id`, a watcher restart and a recovery pass -- four chances to
+    # report deletions nobody made, in the one layer that can lose a person's
+    # work. Inside the mirror gets each chat its own folder with one
+    # baseline and one watcher, and makes everything the agent can write
+    # mirrored by construction.
 
     #: A folder name is read by a person, in a title bar and a status line, so
-    #: it is capped for legibility as well as by the filesystem. A client with
-    #: long names gets a readable slice of the conversation title rather than
-    #: 255 characters of it.
+    #: it is capped for legibility as well as by the filesystem.
     FOLDER_MAX_LONG = P.FOLDER_MAX_LONG
     folder_max = staticmethod(P.folder_max)
     folder_name = staticmethod(P.folder_name)
     _title_folder = staticmethod(P.title_folder)
-
-
-    # --- permissions -------------------------------------------------------
-    #
-    # The prompt bar itself -- the can_use_tool callback, the queue, reconnect
-    # recovery, and the two ways a prompt ends -- lives on `guest.perms`
-    # (bridge/agent/permdesk.py) now. What is left here is what still
-    # genuinely needs the whole Bridge: the chat list and the halt bar, which
-    # are not part of the audit's "Prompts" group (docs/audit/02-bridge-python.md
-    # 02.41).
 
 
     def _spawn(self, coro) -> None:
@@ -412,15 +376,12 @@ class Bridge:
         asyncio only holds a weak reference to a running task, so a bare
         create_task can be garbage-collected mid-flight.
 
-        Everything fire-and-forget on this bridge goes through here: turns,
-        the Continue turn, sync passes, EXECKILL, the session list on `init`,
-        `_clear_halt` from `sync_resolve`. Nothing used to retrieve the
-        exception, so a raise inside any of them produced NO log line at the
-        moment it happened -- it surfaced later, if at all, as asyncio's
-        "Task exception was never retrieved" whenever the task object was
-        collected. A turn dying mid-flight is not a quiet event: it is a
-        TURN end frame that never goes out, and a guest whose Send button
-        stays disabled until the link is re-established. See _done below.
+        Everything fire-and-forget on this bridge goes through here, and the
+        reason it must is `_done`: without it a raise produces no log line at
+        the moment it happens, only asyncio's "Task exception was never
+        retrieved" whenever the task is collected. A turn dying mid-flight is
+        a TURN end frame that never goes out and a Send button that stays
+        disabled until the link is re-established.
         """
         task = asyncio.create_task(coro)
         self._tasks.add(task)
@@ -468,24 +429,19 @@ class Bridge:
     TRANSIENT_ABORT_GRACE = 3
 
 
-    #: The bridge's own ceiling on captured output. The guest caps at 32KB, and
-    #: this is the same number with room to spare -- it exists because the cap
-    #: that mattered lived entirely in the OTHER binary. Nothing else here
-    #: trusts a length a guest supplies, and a client that lied, or a regression
-    #: in exec.c, could grow this buffer for as long as the call has left to
-    #: run: 64KB a frame for up to 150 seconds.
+    #: The bridge's own ceiling on captured output -- the guest caps at 32KB
+    #: and this is the same number with room to spare. It exists because
+    #: nothing else here trusts a length a guest supplies: a client that
+    #: lied could otherwise grow this buffer at 64KB a frame for as long as
+    #: the call has left to run.
     EXEC_OUT_MAX = 64 * 1024
 
-    #: Prose restatement of the guest's own EXEC_MAX_CMD (win/rpc/exec.cpp,
-    #: currently 1024) for the message shown to the model (03.17). Named
-    #: rather than a bare literal in the string so a change on the guest side
-    #: is at least a grep away from here instead of two independent numbers
-    #: nothing ties together. Not enforced bridge-side before sending: the
-    #: guest prepends its own shell prefix (`command.com /c ` vs `cmd.exe
-    #: /c `, chosen by probe_exec from GetVersion()) whose length this side
-    #: does not know, so a bridge-side pre-check would either reject commands
-    #: that would have fit or pass some that would not -- the guest's own
-    #: too_long refusal is the only place that number is authoritative.
+    #: The guest's own EXEC_MAX_CMD (win/rpc/exec.cpp, currently 1024),
+    #: named here only so the message shown to the model is a grep away from
+    #: the number it quotes. NOT enforced before sending: the guest prepends
+    #: its own shell prefix, whose length this side does not know, so a
+    #: bridge-side pre-check would reject commands that would have fit. The
+    #: guest's `too_long` refusal is the authoritative one.
     EXEC_MAX_CMD = 1024
 
 
@@ -505,20 +461,11 @@ class Bridge:
             self._sweeper = asyncio.create_task(self.sync.sweep_sync())
 
 
-    # --- sending -------------------------------------------------------
-    #
-    # The transport itself -- the writer, the send lock, the compressor, the
-    # chunking -- lives in GuestLink (bridge/wire/link.py) now. These three
-    # stay on Bridge, as thin delegations to guest.link, because both
-    # syncrun.py's Pass and tests/python reach them by these names.
-
-
 def _summarise(args: dict) -> str:
     """One readable line for the tool-activity pane.
 
-    perms.telling_argument is the one place "which argument matters" is
-    decided now -- this used to be a fourth, independently-ordered copy of
-    the same list. See docs/audit/02-bridge-python.md 02.15.
+    `perms.telling_argument` is the one place "which argument matters" is
+    decided; do not grow a second list here.
     """
     told = perms.telling_argument(args)
     if told:
@@ -608,14 +555,11 @@ def prepare_state(config: BridgeConfig) -> None:
 async def serve(config: BridgeConfig) -> None:
     """Build the services, serve, and shut down -- always in that order.
 
-    THE `finally` IS THE POINT. `close()` cancels the reaper and the sweeper,
-    cancel-gathers everything `_spawn` started, closes the listener and closes
-    the agent session (02.14). Nothing called it: `main` ran `serve_forever`
-    and swallowed KeyboardInterrupt, so on Ctrl+C the guest's SDK session was
-    never closed and the listening socket was never shut down -- the process
-    simply died and the kernel tidied up. The test suite was the only caller,
-    which made a fix that had been carefully reasoned about into one that had
-    never run.
+    THE `finally` IS THE POINT. `close()` cancels the reaper and the
+    sweeper, cancel-gathers everything `_spawn` started, closes the listener
+    and closes the agent session. It had no caller outside the test suite:
+    `main` ran `serve_forever` and swallowed KeyboardInterrupt, so on Ctrl+C
+    none of that ran and the process simply died.
     """
     bridge = Bridge(config=config)
     try:

@@ -37,33 +37,26 @@ from typing import Any
 from ..status import SyncStatus
 from . import paths as P
 
-# A file whose mtime is this close to now might still be inside its FAT tick, so
-# a CRC taken from it must not be CACHED -- see Entry.cacheable. Two saves in one
-# tick with the same size are otherwise indistinguishable, and the second is
-# silently never seen.
+# A file saved this recently may still be inside its FAT 2-second tick, so its
+# CRC must not be CACHED (Entry.cacheable) -- two saves in one tick, same size,
+# are indistinguishable, and the second would be lost.
 SETTLE_S = 3.0
 
-#: Why a path was skipped when a side reported it unreadable. A constant rather
-#: than a literal because the apply loop has to tell this SKIP apart from an
-#: `ignored` one: this is worth telling the agent about, and `ignored` is the
-#: normal state of most of a tree.
+#: A constant, not a literal: the apply loop has to tell this SKIP apart from
+#: an `ignored` one, which is the normal state of most of a tree and not worth
+#: reporting.
 UNREADABLE = ("the machine can see this file but cannot open it -- it may be "
               "open in another program, or its name may be one the machine "
               "cannot address")
 
-#: Out of the scan set, and silent by design.
 IGNORED = "ignored"
 
-#: Inside a directory a side could not list. Silent too: the directory itself
-#: is announced through UNREADABLE, and repeating that per descendant would
-#: turn one problem into a hundred messages.
+#: The directory itself is announced through UNREADABLE; repeating that per
+#: descendant would turn one problem into a hundred messages.
 UNDER_UNREADABLE = "inside a directory the machine could not list"
 
-#: The two rows a RESTORED BACKUP produces in bulk, named so the aggregate
-#: check in syncrun.py counts the same thing `diff` decided rather than
-#: re-deriving it from a string that could drift. Individually both are
-#: ordinary and correct; it is only their number, in one pass, that means
-#: something no single row can.
+#: Named so syncrun.py's aggregate-revert check counts what `diff` already
+#: decided instead of re-deriving it from a string that could drift.
 REVERTED_PUSH = ("the guest reverted a push (stale editor buffer?) -- "
                  "preserving the pushed version")
 GONE_ON_GUEST = "deleted on the guest, kept here"
@@ -98,22 +91,16 @@ class Entry:
     cls: str = P.CLASS_TEXT
     mtime: float = 0.0
     crc: int = 0
-    #: BOTH checksums, when the side that produced this row could supply them.
-    #: The class is no longer a property of the content alone -- `.gitattributes`
-    #: can declare a path byte-exact that the content reads as text -- so the
-    #: row has to be re-classifiable without re-reading the file, which on the
-    #: guest's side would mean a second scan over the wire.
+    #: BOTH checksums, when the producer had them: `.gitattributes` can call a
+    #: path byte-exact that reads as text, so a row must be re-classifiable
+    #: without a second scan over the wire.
     crc_raw: int = 0
     crc_norm: int = 0
-    #: Whether `crc_raw`/`crc_norm` are real. A client that sends one checksum
-    #: computed it for its OWN classification, and the other cannot be derived
-    #: from it -- a pure-LF file has them equal, so their being equal proves
-    #: nothing. Without this, an override against such a client compares a
-    #: normalised checksum to a raw one and the path conflicts forever.
+    #: Whether `crc_raw`/`crc_norm` are real, not equal by accident -- a
+    #: client sending one checksum computed it for its own classification.
     dual: bool = False
-    #: The spelling THIS side holds. The canonical key folds case for matching;
-    #: this is what actually gets written, because writing at the folded path
-    #: would create a second file beside README.md on a case-sensitive bridge.
+    #: The spelling THIS side holds. The canonical key folds case for
+    #: matching; the folded spelling is never what gets written.
     display: str = ""
 
     @property
@@ -168,7 +155,7 @@ class Wait:
 
     These were four different ad-hoc dict shapes sharing one id namespace:
     a scan carried {"future", "rows", "display"} and a put, get or mkdir
-    carried {"future"} alone. `_sync_frame` then indexed entry["rows"]
+    carried {"future"} alone. `sync_frame` then indexed entry["rows"]
     whenever a SYNCENT arrived -- so a SYNCENT bearing a PUT's id raised
     KeyError, which is not caught anywhere between there and the read loop,
     and took the whole connection down.
@@ -179,31 +166,22 @@ class Wait:
     """
 
     kind: str                       # "scan" | "put" | "get" | "mkdir"
-    #: Typed, not `object`. It was `object`, so every `fut.set_result(...)`
-    #: and `fut.done()` in the two modules that resolve these was unchecked
-    #: -- a checker could not tell a future from anything else.
+    #: Typed, not `object`: every `fut.set_result(...)`/`fut.done()` that
+    #: resolves these was otherwise unchecked by mypy.
     future: asyncio.Future[Any]
-    #: Scans only. None on the others, which is what makes a mismatched
-    #: frame detectable rather than a KeyError.
+    #: Scans only; None on the others, which makes a mismatched frame
+    #: detectable rather than a KeyError.
     rows: dict | None = None
     display: dict | None = None
-    #: Gets only: the file bytes as SYNCDAT chunks arrive. A fifth ad-hoc
-    #: shape before this -- it was conjured by setdefault on whatever dict
-    #: happened to be there, so a stray SYNCDAT could attach a buffer to a
-    #: scan or a put and nothing would notice.
+    #: Gets only: file bytes as SYNCDAT chunks arrive.
     data: bytearray | None = None
 
 
 # --- what a Wait resolves TO -------------------------------------------
 #
-# The crash `Wait` above fixes was the connection dying on a mismatched
-# frame; this is the readability half that was split out separately
-# (02.37): the four `sync_pending` futures still resolved to positional
-# tuples of four different arities (a 6-tuple for a scan, two flavours of
-# 2-tuple for a put/mkdir ack, a 4-tuple for a get), unpacked positionally
-# at the call site with nothing to check the shape a guest actually sent
-# against what the caller expects to unpack. A fifth shape was one typo
-# away.
+# Readability half of the same fix: these futures used to resolve to
+# positional tuples of different arities per kind, unpacked with nothing to
+# check the shape against what the caller expected.
 
 
 @dataclass
@@ -264,17 +242,10 @@ class Baseline:
     #: editor buffer detectable -- see diff().
     prev: dict[str, Entry] = field(default_factory=dict)
     tree_id: str = ""
-    #: The sync root the guest reported, in full. `tree_id` is
-    #: "%08lX-%s" % (volume serial, root) built into a 64-byte buffer on the
-    #: guest, so it keeps only the first 54 characters of the root -- two roots
-    #: on one volume sharing a 54-character prefix produce the SAME id and the
-    #: mismatch guard passes when it should refuse.
-    #:
-    #: Compared here rather than lengthening the guest's buffer, because
-    #: changing how the id is computed changes it for every existing baseline
-    #: with a long root, which would then refuse every pass afterwards with no
-    #: way to say "this is the same tree". `root=` is already on the wire, in
-    #: full, and was never compared to anything.
+    #: The sync root the guest reported, in full. `tree_id` truncates the root
+    #: to 54 characters (a 64-byte buffer on the guest), so two roots sharing
+    #: that prefix produce the SAME id. Compared here in full instead, since
+    #: lengthening the guest's buffer would re-key every existing baseline.
     guest_root: str = ""
     #: The codepage the matching keys were folded through. Changing it re-keys
     #: every row, so the pass refuses rather than re-keying in place.
@@ -282,58 +253,29 @@ class Baseline:
     generation: int = 0
     #: The USER's copy: cleared when it actually reaches their screen.
     pending_notice: list[str] = field(default_factory=list)
-    #: The AGENT's copy: cleared when it is actually handed to the model.
-    #: Neither delivery implies the other. Before this the agent's copy lived
-    #: only in memory (`the old Bridge-wide agent-notice cache`, now
-    #: `GuestSession.synccoord.agent_notices` -- 02.43, 02.18) -- so a restart
-    #: between a pass writing the user's notice and the agent's next turn
-    #: silently lost exactly the news the agent most needed (a conflict that
-    #: latched its writes), while the user's copy was already, correctly,
-    #: gone. docs/audit/02-bridge-python.md 02.20.
+    #: The AGENT's copy: cleared when handed to the model. Durable, not just
+    #: in-memory, so a restart before the agent's next turn cannot lose it (02.20).
     pending_notice_agent: list[str] = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
-    #: What has already been announced, per path, as a fingerprint of the
-    #: situation. A divergence that cannot be resolved -- `aux.c`, a path the
-    #: agent deleted that the user still has -- is a STANDING condition, and
-    #: the pass that finds it runs every thirty seconds. Without this the agent
-    #: is told about the same unresolvable thing forever, which trains it to
-    #: ignore the channel that also carries conflicts. The fingerprint, rather
-    #: than a bare flag, so that the situation CHANGING is announced again.
+    #: Fingerprint of what's already been announced, per path -- a STANDING
+    #: divergence recurs every pass, and a bare flag would silence it forever.
     reported: dict[str, str] = field(default_factory=dict)
-    #: Every report line the last pass produced. `sync_status` wants the whole
-    #: standing set every time it is asked; the LOG wants only what changed,
-    #: or an unfixable `aux.c` prints a warning twice a minute until the
-    #: warnings stop being read.
+    #: The last pass's full report lines. `sync_status` wants the whole
+    #: standing set; the LOG wants only the delta, or an unfixable one repeats.
     reported_lines: list = field(default_factory=list)
-    #: The reason the last pass REFUSED to run, if it did. A pass-level abort
-    #: touches no row and raises before anything is saved, so it left no trace
-    #: at all -- it was a log warning and nothing else, on a timer that fires
-    #: every thirty seconds. Recorded here so it can be said once, so a
-    #: DIFFERENT abort is said again, and so sync_status can answer "why has
-    #: nothing moved for an hour" without the answer being "read the log".
+    #: Why the last pass REFUSED to run, if it did -- so recovery can be
+    #: announced, and a DIFFERENT abort announced again.
     aborted: str = ""
-    #: Set by `sync_resolve(action="accept-tree")` and consumed by the next
-    #: pass. The aggregate-revert refusal is a speed bump, not a verdict: it
-    #: cannot tell a tree restored from a backup from a person who really did
-    #: revert fifty files, and refusing forever would be its own kind of data
-    #: loss -- a machine that has stopped synchronising and will not say yes.
-    #: One pass, then it clears itself.
+    #: Set by `sync_resolve(action="accept-tree")`, consumed by the next pass.
+    #: A speed bump, not a verdict -- refusing forever is data loss too.
     accept_tree: bool = False
-    #: Every abort reason already announced since the last SUCCESSFUL pass.
-    #:
-    #: `aborted` alone is the last reason, and comparing against it only
-    #: suppresses a REPEAT. Two reasons that alternate defeat it completely --
-    #: which is not hypothetical: two guests sharing one --sync-state each
-    #: refuse the other's tree_id, so the reasons alternate every pass and
-    #: both users get a "synchronisation has stopped" notice twice a minute,
-    #: forever. Bounded by the number of distinct failure modes between two
-    #: successes, which is small, and cleared entirely by a pass that works.
+    #: Every abort reason announced since the last SUCCESSFUL pass, not just
+    #: `aborted` (the latest) -- two reasons alternating would otherwise
+    #: defeat repeat-suppression. Cleared on success.
     announced: list = field(default_factory=list)
-    #: (size, mtime, auto_class, crc_raw, crc_norm, content_size) per path, so
-    #: an unchanged tree is not re-read end to end every thirty seconds. It
-    #: caches what the CONTENT says, never the effective class, so changing
-    #: `.gitattributes` re-decides every path without invalidating anything.
-    #: Entries are written only when `Entry.cacheable` allows it.
+    #: (size, mtime, auto_class, crc_raw, crc_norm, content_size) per path.
+    #: Caches what the CONTENT says, never the effective class, so
+    #: `.gitattributes` changing re-decides every path for free.
     scan_cache: dict = field(default_factory=dict)
 
     # --- persistence -------------------------------------------------------
@@ -443,15 +385,10 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
     baseline states; every combination resolves to a stated action.
     """
     out: list[Decision] = []
-    # `ignored` is in the union deliberately: an ignored path may exist on
-    # neither side right now, and it still has to be visitable so it can be
-    # reported and so un-ignoring it later resumes from the real ancestor.
-    # A directory reported unreadable has NO descendants in that manifest --
-    # the side that could not list it could not enumerate what is inside it
-    # either. Without this, every file under it looks absent, which is row 12:
-    # "deleted on the guest, kept here", once per file, for a directory nobody
-    # touched. One unreadable directory would announce its whole subtree as
-    # deletions.
+    # `ignored` is in the union deliberately, so it stays visitable to report
+    # and un-ignoring resumes from the real ancestor. An unreadable directory
+    # has NO descendants here -- without this, every file under it reads as
+    # absent, announcing a whole subtree as deletions instead of one.
     unreadable_dirs = tuple(
         k + "/" for k, e in list(guest.items()) + list(bridge.items())
         if e is not None and e.type is Type.UNREADABLE)
@@ -467,14 +404,9 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
         a = base.rows.get(key)
         t = base.tombs.get(key)
 
-        # 1. Unreadable. Not absent, not unchanged -- just not this pass.
-        #
-        # The reason used to say "locked by another process", which is only one
-        # of the causes and the only transient one. The machine also reports
-        # `u` for a name it can enumerate but not open -- one carrying a byte
-        # with no form in its codepage, say -- and that never clears. Claiming
-        # a lock sends the reader after a process that does not exist, and
-        # because this was never announced at all, nobody found out either way.
+        # 1. Unreadable. Not absent, not unchanged -- just not this pass. Not
+        # necessarily "locked": `u` also covers a name the machine can
+        # enumerate but never open at all, which never clears.
         if (g and g.type is Type.UNREADABLE) or (b and b.type is Type.UNREADABLE):
             out.append(Decision(key, Act.SKIP, UNREADABLE))
             continue
@@ -492,22 +424,11 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             out.append(Decision(key, Act.CONFLICT, "type changed (file <-> directory)"))
             continue
 
-        # Directories carry no CONTENT, so there is nothing to merge -- but
-        # existence still has a history, and this branch used to read "no
-        # content" as "no history" and never look at the ancestor. Every
-        # one-sided absence therefore became a creation: a directory the user
-        # deleted on the machine was present on the bridge, absent on the
-        # guest, and MKDIR put it straight back. Thirty seconds later, again.
-        # Deleting a build directory on your own machine and watching it
-        # reappear until you give up is the "never asked twice" rule failing in
-        # the one shape nobody had enumerated, and `BACKLOG.md` §4's claim that
-        # deletions are "reported and never silently resurrected" was true for
-        # files and false here. (02.45)
-        #
-        # The ancestor answers it, exactly as rows 11-13 answer it for files,
-        # and the answer is the same one: REPORT. Propagating the deletion is
-        # not available -- there is no SYNCDEL and §4 defers it by decision --
-        # so the honest action is to say so and touch neither side.
+        # Directories carry no CONTENT, so existence's own history matters:
+        # ignoring the ancestor made every one-sided absence a creation, so a
+        # directory deleted on the machine kept reappearing via MKDIR every
+        # pass (02.45). The ancestor now answers it exactly as rows 11-13 do
+        # for files: REPORT, since there is no SYNCDEL (BACKLOG §4).
         if (g and g.type is Type.DIR) or (b and b.type is Type.DIR):
             if g and b:
                 out.append(Decision(key, Act.NOTHING))
@@ -520,9 +441,7 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
                                     "directory deleted on the bridge, still on "
                                     "the machine"))
             else:
-                # g is falsy here, so the outer `or` above can only have
-                # matched through b -- b.type is Type.DIR, which means b
-                # itself is not None.
+                # g is falsy, so the outer `or` matched through b: b is not None.
                 assert b is not None
                 out.append(Decision(key, Act.MKDIR, "directory only on the bridge",
                                     display=b.display)
@@ -548,8 +467,7 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
                     out.append(Decision(key, Act.PUSH,
                                         "edited on the bridge after deletion",
                                         display=b.display))
-            # By elimination of the three branches above, g and b are both
-            # present here; the `is not None` only narrows the type for mypy.
+            # g, b present by elimination; `is not None` just narrows for mypy.
             elif g is not None and g.same_content(b):
                 out.append(Decision(key, Act.CLEAR_TOMBSTONE, "recreated identically"))
             else:
@@ -565,8 +483,7 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             elif b and not g:
                 out.append(Decision(key, Act.PUSH, "new on the bridge",
                                     display=b.display))
-            # By elimination of the three branches above, g and b are both
-            # present here; the `is not None` only narrows the type for mypy.
+            # g, b present by elimination; `is not None` just narrows for mypy.
             elif g is not None and g.same_content(b):
                 out.append(Decision(key, Act.ADOPT, "same content, no ancestor"))
             else:
@@ -579,10 +496,8 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             out.append(Decision(key, Act.TOMBSTONE, "deleted on both sides"))
             continue
         if not g:
-            # The user deleted it and the bridge still holds it.
-            # If the bridge hasn't touched it since the baseline (b.same_content(a)),
-            # delete it aggressively on the bridge and tombstone it so it doesn't resurrect.
-            # If the bridge DID edit it, doing anything loses data, so report.
+            # Guest deleted it. Untouched here since baseline: tombstone so it
+            # doesn't resurrect. Edited here since: report, or the edit is lost.
             if b and a and b.same_content(a):
                 out.append(Decision(key, Act.TOMBSTONE, "deleted on the guest",
                                     display=b.display))
@@ -603,11 +518,9 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
         if not g_moved and not b_moved:
             out.append(Decision(key, Act.NOTHING))
         elif g_moved and not b_moved:
-            # A stale editor buffer reverts a push and looks exactly like an
-            # edit. If the guest now holds what the LAST PUSH REPLACED, it was
-            # reverted, not edited -- and pulling would erase the agent's work
-            # with no conflict copy, because B == A means it was never "the
-            # agent's version".
+            # A stale editor buffer reverts a push and looks like an edit; if
+            # the guest holds what the LAST PUSH REPLACED, pulling would erase
+            # the agent's work with no conflict copy.
             prev = base.prev.get(key)
             if prev is not None and g.same_content(prev):
                 out.append(Decision(key, Act.CONFLICT, REVERTED_PUSH))

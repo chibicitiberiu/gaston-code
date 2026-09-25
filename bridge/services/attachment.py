@@ -50,8 +50,8 @@ class AttachmentService:
     ) -> str | None:
         """Validate and resolve attachment relative path within the guest's work directory.
 
-        Enforces strict path containment (docs/BACKLOG.md 04.24), rejecting path traversal,
-        absolute paths, drive letters, and symlinks resolving outside the work directory.
+        Enforces strict path containment, rejecting path traversal, absolute
+        paths, drive letters, and symlinks resolving outside the work directory.
         Returns the absolute local path if valid and contained, or None if invalid.
         """
         if not attach or not isinstance(attach, str) or "\0" in attach or ":" in attach:
