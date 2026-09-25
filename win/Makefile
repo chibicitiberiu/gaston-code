@@ -93,7 +93,7 @@ LIBCORE = $(LIBDIR)/libcore.lib
 # turns them into wlink directives. `library` may repeat.
 LINKIN = file {$(filter %.o,$^)} $(foreach l,$(filter %.lib,$^),library $(l))
 
-CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
+CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        app/pagebar.cpp app/optmenu.cpp app/input.cpp app/hostdlg.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
