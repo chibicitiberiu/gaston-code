@@ -70,17 +70,14 @@ bool IniFile::getString(const char *section, const char *key,
     /* One byte more than the caller's buffer. GetPrivateProfileString
      * returns cap-1 both for a value that exactly fits and for one it cut
      * short, so reading into cap+1 is the only way to tell them apart. */
-    char *tmp = new char[cap + 1];
-    if (!tmp)
+    UniqueArr<char> tmp(new char[cap + 1]);
+    if (!tmp.valid())
         return fail(section, key, "out of memory");
-    DWORD n = GetPrivateProfileStringA(section, key, "", tmp, cap + 1,
+    DWORD n = GetPrivateProfileStringA(section, key, "", tmp.get(), cap + 1,
                                        m_path.str());
-    bool fits = n < cap;
-    if (fits)
-        rc_strcpy(out, cap, tmp);
-    delete[] tmp;
-    if (!fits)
+    if (n >= cap)
         return fail(section, key, "value too long");
+    rc_strcpy(out, cap, tmp.get());
     return true;
 }
 
@@ -146,22 +143,19 @@ bool IniFile::checkKeys(const char *section, const char *const *known,
     if (!m_ok)
         return fail(section, "*", "no usable ini path");
 
-    char *list = new char[KEY_LIST];
-    if (!list)
+    UniqueArr<char> list(new char[KEY_LIST]);
+    if (!list.valid())
         return fail(section, "*", "out of memory");
 
     /* NULL key: every key in the section, NUL-separated, double-NUL at the
      * end. Returns size-2 when the list did not fit. */
-    DWORD n = GetPrivateProfileStringA(section, 0, "", list, KEY_LIST,
+    DWORD n = GetPrivateProfileStringA(section, 0, "", list.get(), KEY_LIST,
                                        m_path.str());
     if (n >= KEY_LIST - 2)
-    {
-        delete[] list;
         return fail(section, "*", "too many keys to check");
-    }
 
     bool good = true;
-    for (const char *k = list; *k && good; k += strlen(k) + 1)
+    for (const char *k = list.get(); *k && good; k += strlen(k) + 1)
     {
         bool found = false;
         for (unsigned i = 0; i < count && !found; i++)
@@ -172,6 +166,5 @@ bool IniFile::checkKeys(const char *section, const char *const *known,
         if (!found)
             good = fail(section, k, "unknown key");
     }
-    delete[] list;
     return good;
 }

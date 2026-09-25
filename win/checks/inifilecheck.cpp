@@ -27,13 +27,12 @@ static bool writeIni(Path &out, const char *name, const char *body)
         return false;
     if (!out.join(dir, name))
         return false;
-    HANDLE h = CreateFileA(out.str(), GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE)
+    Handle file(CreateFileA(out.str(), GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, 0));
+    if (!file.valid())
         return false;
     DWORD wrote = 0;
-    BOOL good = WriteFile(h, body, (DWORD)strlen(body), &wrote, 0);
-    CloseHandle(h);
+    BOOL good = WriteFile(file.get(), body, (DWORD)strlen(body), &wrote, 0);
     return good && wrote == strlen(body);
 }
 
