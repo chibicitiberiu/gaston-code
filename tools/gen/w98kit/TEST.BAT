@@ -19,33 +19,30 @@ ECHO.
 PAUSE
 IF EXIST PROBE.LOG DEL PROBE.LOG
 CLS
-ECHO  [1/10] platform, CPU and memory
+ECHO  PART ONE -- nothing needs to be on screen for these.
+ECHO.
+ECHO  [1/13] platform, CPU and memory
 PROBE.EXE platform
-ECHO  [2/10] threads
+ECHO  [2/13] threads
 PROBE.EXE threads
-ECHO  [3/10] 16-bit EXEC capture
+ECHO  [3/13] 16-bit EXEC capture
 PROBE.EXE exec
-ECHO  [4/10] deflate throughput  -- THE number we cannot fake
+ECHO  [4/13] deflate throughput  -- THE number we cannot fake
 PROBE.EXE deflate
-ECHO  [5/10] screen capture and BI_RLE8
-PROBE.EXE screen
-ECHO  [6/10] depth ladder, four bands, raw vs deflate vs RLE
-PROBE.EXE depths
-ECHO  [7/10] writing BMPs for off-machine checking
-PROBE.EXE verify
-ECHO  [8/10] oleacc, foreground lock, window census
-PROBE.EXE automation
-ECHO  [9/10] cost of a window walk
-PROBE.EXE uiwalk
-ECHO  [10/10] what MSAA adds
-PROBE.EXE msaa
+ECHO  [5/13] hooks and change notification
+PROBE.EXE hooks
 CLS
 ECHO ==============================================================
-ECHO   One step left, and it needs a browser window.
+ECHO   PART TWO needs a busy screen.
 ECHO ==============================================================
 ECHO.
+ECHO  The rest measure capturing and reading the screen, and they
+ECHO  are meaningless against an empty desktop -- one of them will
+ECHO  say so and refuse rather than print a flattering zero.
+ECHO.
 ECHO  Internet Explorer is about to open UITEST.HTM. Let it finish
-ECHO  loading, LEAVE IT OPEN, come back here and press a key.
+ECHO  loading and LEAVE IT OPEN, somewhere it is not completely
+ECHO  hidden behind this window. Then come back and press a key.
 ECHO.
 ECHO  If IE does not open by itself, open UITEST.HTM from this
 ECHO  folder by hand.
@@ -55,6 +52,22 @@ START UITEST.HTM
 ECHO.
 ECHO  Waiting for you. Press a key once the page is up.
 PAUSE
+CLS
+ECHO  [6/13] screen capture and BI_RLE8
+PROBE.EXE screen
+ECHO  [7/13] depth ladder, four bands, raw vs deflate vs RLE
+PROBE.EXE depths
+ECHO  [8/13] writing BMPs for off-machine checking
+PROBE.EXE verify
+ECHO  [9/13] ImageClick, cost of finding a picture on screen
+PROBE.EXE imgfind
+ECHO  [10/13] oleacc, foreground lock, window census
+PROBE.EXE automation
+ECHO  [11/13] cost of a window walk
+PROBE.EXE uiwalk
+ECHO  [12/13] what MSAA adds
+PROBE.EXE msaa
+ECHO  [13/13] reading the browser page as a tree
 PROBE.EXE dom
 CLS
 ECHO ==============================================================

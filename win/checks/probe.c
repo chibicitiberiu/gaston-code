@@ -1732,6 +1732,467 @@ static void probe_verify(void)
     say("now decode all three on the host and compare S8 against S8R");
 }
 
+/* ------------------------------------------------------------- 0.15 */
+/* Can we be TOLD when the UI changes, instead of asking?
+ *
+ * Everything so far polls: walk the windows, read them, walk them again.
+ * That is the expensive way and it cannot say WHEN something changed, only
+ * that it is different now. Three mechanisms might replace it, in
+ * decreasing order of how much they would buy and increasing order of how
+ * invasive they are:
+ *
+ *   SetWinEventHook   the right answer if it exists. MSAA's own
+ *                     notification channel: the system tells us a control
+ *                     got focus, changed value, was created or destroyed.
+ *                     Documented for 2000+ in USER32; MSAA 1.3 for 9x is
+ *                     supposed to add it. Nobody here has checked.
+ *
+ *   SetWindowsHookEx  ancient and certainly present, but a GLOBAL hook has
+ *                     to live in a DLL that the system maps into every
+ *                     process. This section proves the local case works
+ *                     and measures it; the injected case needs that DLL
+ *                     and is tested separately.
+ *
+ *   WaitForInputIdle  not a change notification at all, but the readiness
+ *                     question: has the app finished chewing on what we
+ *                     sent it and gone back to its message loop.
+ *
+ * Availability first, because two of the three are only rumoured to be on
+ * this OS, and everything downstream is shaped by which survive.
+ */
+/* HWINEVENTHOOK and WINEVENTPROC live behind WINVER >= 0x0500 and the
+ * build pins 0x0400, so they are spelled out here. The handle is opaque. */
+typedef HANDLE RC_HWINEVENTHOOK;
+typedef void (CALLBACK *RC_WINEVENTPROC)(RC_HWINEVENTHOOK, DWORD, HWND,
+                                         LONG, LONG, DWORD, DWORD);
+typedef RC_HWINEVENTHOOK (WINAPI *PFN_SETWINEVENT)(DWORD, DWORD, HMODULE,
+                                                   RC_WINEVENTPROC, DWORD,
+                                                   DWORD, DWORD);
+typedef BOOL (WINAPI *PFN_UNHOOKWINEVENT)(RC_HWINEVENTHOOK);
+typedef DWORD (WINAPI *PFN_WAITIDLE)(HANDLE, DWORD);
+
+static int g_hook_calls;
+static int g_cbt_calls;
+
+static LRESULT CALLBACK cwp_hook(int code, WPARAM w, LPARAM l)
+{
+    if (code >= 0) g_hook_calls++;
+    return CallNextHookEx(0, code, w, l);
+}
+
+static LRESULT CALLBACK cbt_hook(int code, WPARAM w, LPARAM l)
+{
+    if (code >= 0) g_cbt_calls++;
+    return CallNextHookEx(0, code, w, l);
+}
+
+static LRESULT CALLBACK hook_sink_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    return DefWindowProc(h, m, w, l);
+}
+
+static void probe_hooks(void)
+{
+    HMODULE u32, k32;
+    PFN_SETWINEVENT setwinevent;
+    PFN_UNHOOKWINEVENT unhookwinevent;
+    PFN_WAITIDLE waitidle;
+    WNDCLASSA wc;
+    HWND sink;
+    HHOOK h;
+    DWORD t0, t1;
+    int i;
+    const int N = 2000;
+
+    head("0.15  can we be told, instead of asking?");
+
+    u32 = GetModuleHandleA("user32.dll");
+    k32 = GetModuleHandleA("kernel32.dll");
+    setwinevent = (PFN_SETWINEVENT)GetProcAddress(u32, "SetWinEventHook");
+    unhookwinevent = (PFN_UNHOOKWINEVENT)GetProcAddress(u32, "UnhookWinEvent");
+    /* USER32 first. WaitForInputIdle is a USER32 export, not a KERNEL32
+     * one -- it has to be, since "is this app idle" is a question about a
+     * message queue. Looking only in kernel32 reported it absent on a
+     * machine that has it, which is the same shape of mistake as asking
+     * MSAA for OBJID_WINDOW and concluding it knows nothing. */
+    waitidle = (PFN_WAITIDLE)GetProcAddress(u32, "WaitForInputIdle");
+    if (!waitidle)
+        waitidle = (PFN_WAITIDLE)GetProcAddress(k32, "WaitForInputIdle");
+
+    say("user32!SetWinEventHook  : %s",
+        setwinevent ? "PRESENT" : "absent");
+    say("user32!UnhookWinEvent   : %s",
+        unhookwinevent ? "PRESENT" : "absent");
+    say("user32!NotifyWinEvent   : %s",
+        GetProcAddress(u32, "NotifyWinEvent") ? "PRESENT" : "absent");
+    say("WaitForInputIdle        : %s (user32=%s kernel32=%s)",
+        waitidle ? "PRESENT" : "absent",
+        GetProcAddress(u32, "WaitForInputIdle") ? "y" : "n",
+        GetProcAddress(k32, "WaitForInputIdle") ? "y" : "n");
+    say("user32!SetWindowsHookExA: %s",
+        GetProcAddress(u32, "SetWindowsHookExA") ? "PRESENT" : "absent");
+    if (!setwinevent)
+        say("   -> no WinEvents: change detection is polling or a hook DLL.");
+
+    /* A window to send messages to. WS_POPUP, never shown, and messages are
+     * SENT not posted, so the proc runs on this thread and no pump is
+     * needed -- the same trick win/checks/windowcheck.cpp uses. */
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)hook_sink_proc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "GastonProbeSink";
+    RegisterClassA(&wc);
+    sink = CreateWindowExA(0, "GastonProbeSink", "sink", WS_POPUP,
+                           0, 0, 10, 10, NULL, NULL, wc.hInstance, NULL);
+    if (!sink) { say("could not create the sink window"); return; }
+
+    /* Baseline: N sends with no hook installed. */
+    t0 = GetTickCount();
+    for (i = 0; i < N; i++) SendMessageA(sink, WM_NULL, 0, 0);
+    t1 = GetTickCount();
+    say("%d sends, no hook    : %lu ms", N, (unsigned long)(t1 - t0));
+
+    /* The same with a thread-local WH_CALLWNDPROC in the way. The delta is
+     * what a hook costs per message, which is the number that decides
+     * whether hooking the whole desktop is affordable at 200MHz. */
+    g_hook_calls = 0;
+    h = SetWindowsHookExA(WH_CALLWNDPROC, cwp_hook, NULL, GetCurrentThreadId());
+    if (!h) {
+        say("WH_CALLWNDPROC local  : FAILED (%lu)", GetLastError());
+    } else {
+        t0 = GetTickCount();
+        for (i = 0; i < N; i++) SendMessageA(sink, WM_NULL, 0, 0);
+        t1 = GetTickCount();
+        say("%d sends, hooked     : %lu ms, %d hook calls",
+            N, (unsigned long)(t1 - t0), g_hook_calls);
+        UnhookWindowsHookEx(h);
+    }
+
+    /* WH_CBT is the one that would report window create/destroy/activate,
+     * which is the change feed we actually want. Local first. */
+    g_cbt_calls = 0;
+    h = SetWindowsHookExA(WH_CBT, cbt_hook, NULL, GetCurrentThreadId());
+    if (!h) {
+        say("WH_CBT local          : FAILED (%lu)", GetLastError());
+    } else {
+        HWND tmp = CreateWindowExA(0, "GastonProbeSink", "t", WS_POPUP,
+                                   0, 0, 10, 10, NULL, NULL, wc.hInstance,
+                                   NULL);
+        if (tmp) DestroyWindow(tmp);
+        say("WH_CBT local          : OK, %d calls for one create+destroy",
+            g_cbt_calls);
+        UnhookWindowsHookEx(h);
+    }
+
+    /* A GLOBAL hook with no DLL. Expected to fail, and the failure is the
+     * point: it is what says an injected DLL is not optional. Passing a
+     * hook proc that lives in an EXE to a system-wide hook cannot work,
+     * because the system has to map the code into every other process. */
+    h = SetWindowsHookExA(WH_CBT, cbt_hook, GetModuleHandleA(NULL), 0);
+    if (h) {
+        /* Win98 ACCEPTS this and the hook never fires -- 0.15b installed
+         * the same thing, started another program, pumped for five seconds
+         * and counted zero calls, not even for this process. So a returned
+         * handle means nothing here, which is a nastier failure than a
+         * refusal: the code looks installed and silently watches nothing. */
+        say("WH_CBT global, no DLL : handle returned -- but see 0.15b, it");
+        say("                        delivers NOTHING. Needs a real DLL.");
+        UnhookWindowsHookEx(h);
+    } else {
+        say("WH_CBT global, no DLL : refused (%lu) -> needs a DLL",
+            GetLastError());
+    }
+
+    DestroyWindow(sink);
+    UnregisterClassA("GastonProbeSink", wc.hInstance);
+}
+
+/* ------------------------------------------------------------ 0.15b */
+/* Presence is not delivery. 0.15 found SetWinEventHook exported and a
+ * system-wide WH_CBT accepted where it was expected to be refused; neither
+ * says a single event ever arrives, still less one from ANOTHER process,
+ * which is the only kind worth having.
+ *
+ * So: install both, start a second program, pump for a few seconds, and
+ * count what turns up and whose window it was about. The cross-process
+ * count is the whole answer. If it is zero for the hook, 9x accepted an
+ * installation that only ever watches us, and a real DLL is needed after
+ * all. If it is non-zero, injection is a solved problem on this OS and the
+ * DLL question goes away.
+ *
+ * Notepad is the second program: it starts fast, opens one plain window,
+ * and has nothing to lose when it is closed again.
+ */
+#define RC_EVENT_MIN                 0x00000001L
+#define RC_EVENT_OBJECT_VALUECHANGE  0x0000800EL
+#define RC_WINEVENT_OUTOFCONTEXT     0x0000
+
+static int g_we_all, g_we_other;
+static int g_cbt_all, g_cbt_other;
+static DWORD g_self_pid;
+
+static int hwnd_is_other(HWND h)
+{
+    DWORD pid = 0;
+    if (!h || !IsWindow(h)) return 0;
+    GetWindowThreadProcessId(h, &pid);
+    return pid && pid != g_self_pid;
+}
+
+static void CALLBACK we_proc(RC_HWINEVENTHOOK hook, DWORD ev, HWND h,
+                             LONG obj, LONG child, DWORD tid, DWORD ms)
+{
+    (void)hook; (void)ev; (void)obj; (void)child; (void)tid; (void)ms;
+    g_we_all++;
+    if (hwnd_is_other(h)) g_we_other++;
+}
+
+static LRESULT CALLBACK cbt_global(int code, WPARAM w, LPARAM l)
+{
+    if (code >= 0) {
+        g_cbt_all++;
+        /* For HCBT_CREATEWND / HCBT_ACTIVATE / HCBT_DESTROYWND the wParam
+         * is the window in question. Good enough to attribute an owner. */
+        if (hwnd_is_other((HWND)w)) g_cbt_other++;
+    }
+    return CallNextHookEx(0, code, w, l);
+}
+
+static void pump_for(DWORD ms)
+{
+    DWORD until = GetTickCount() + ms;
+    MSG msg;
+    while ((long)(GetTickCount() - until) < 0) {
+        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+        Sleep(10);
+    }
+}
+
+static void probe_events(void)
+{
+    HMODULE u32 = GetModuleHandleA("user32.dll");
+    PFN_SETWINEVENT setwinevent =
+        (PFN_SETWINEVENT)GetProcAddress(u32, "SetWinEventHook");
+    PFN_UNHOOKWINEVENT unhookwinevent =
+        (PFN_UNHOOKWINEVENT)GetProcAddress(u32, "UnhookWinEvent");
+    RC_HWINEVENTHOOK weh = 0;
+    HHOOK cbt = 0;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    int started;
+
+    head("0.15b  do those hooks deliver, and from whose process?");
+    g_self_pid = GetCurrentProcessId();
+    g_we_all = g_we_other = g_cbt_all = g_cbt_other = 0;
+
+    if (setwinevent) {
+        /* OUTOFCONTEXT means the callback runs HERE, on our thread, out of
+         * the target's message dispatch. That is the safe variant and the
+         * one that needs no DLL: the system posts to our queue, which is
+         * why the pump below is not optional. */
+        weh = setwinevent(RC_EVENT_MIN, RC_EVENT_OBJECT_VALUECHANGE,
+                          NULL, we_proc, 0, 0, RC_WINEVENT_OUTOFCONTEXT);
+        say("SetWinEventHook install : %s", weh ? "OK" : "FAILED");
+    } else {
+        say("SetWinEventHook install : not available");
+    }
+
+    cbt = SetWindowsHookExA(WH_CBT, cbt_global, GetModuleHandleA(NULL), 0);
+    say("WH_CBT system-wide      : %s", cbt ? "installed" : "refused");
+
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    started = CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE,
+                             0, NULL, NULL, &si, &pi);
+    say("notepad started         : %s", started ? "yes" : "no");
+
+    pump_for(5000);
+
+    if (started) {
+        /* Ask first, insist second. Notepad with nothing typed into it has
+         * no reason to argue, but a terminate on a process that was about
+         * to show a "save changes?" box would leave a modal on screen for
+         * whoever is sitting at the machine. */
+        pump_for(500);
+        TerminateProcess(pi.hProcess, 0);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+
+    pump_for(500);
+
+    if (weh && unhookwinevent) unhookwinevent(weh);
+    if (cbt) UnhookWindowsHookEx(cbt);
+
+    say("WinEvents  : %d total, %d about another process's window",
+        g_we_all, g_we_other);
+    say("WH_CBT     : %d total, %d about another process's window",
+        g_cbt_all, g_cbt_other);
+    if (g_we_other > 0) {
+        say("   -> WinEvents cross the process boundary. Change detection");
+        say("      can be a subscription, not a poll, with no DLL at all.");
+    }
+    if (cbt && g_cbt_other == 0) {
+        say("   -> the system-wide hook installed but only ever saw us,");
+        say("      so a real injected DLL would be needed for that route.");
+    }
+    if (cbt && g_cbt_other > 0) {
+        say("   -> the system-wide hook sees other processes WITHOUT a DLL.");
+        say("      That is a 9x-ism worth building on, and worth distrusting");
+        say("      until it is seen twice.");
+    }
+}
+
+/* ------------------------------------------------------------- 0.16 */
+/* ImageClick: find a small bitmap on screen and click it. The question is
+ * not whether it works -- it is a scan, it always works -- but WHERE the
+ * scan runs.
+ *
+ * On the bridge it is free and correct, at the cost of shipping a capture
+ * across the wire first. On the guest it costs no wire at all and spends
+ * P200 cycles on the thing a P200 is worst at. "The guest transforms
+ * nothing" says bridge, and this section is here to find out how badly the
+ * rule would hurt if it were broken, because a number beats an argument.
+ *
+ * Two strategies, because the naive one is not what anyone would ship:
+ *
+ *   naive     compare the template at every position
+ *   filtered  scan for the template's first byte, compare only on a hit
+ *
+ * The filtered one is what a real implementation does and can be
+ * hundreds of times faster on a screen with large flat areas -- or barely
+ * faster, if the first byte happens to be the desktop's own colour. Both
+ * are measured against the same screen, which is whatever is in front of
+ * the machine, so the ratio is a real-world one and not a contrived best
+ * case.
+ */
+static void probe_imgfind(void)
+{
+    static unsigned char shot[512 * 1024];
+    static unsigned char info[sizeof(BITMAPINFOHEADER) + 256 * 4];
+    static unsigned char tmpl[32 * 32];
+    BITMAPINFOHEADER *bi = (BITMAPINFOHEADER *)info;
+    const int TW = 32, TH = 32;
+    HDC screen, mem;
+    HBITMAP area, oldbmp;
+    int w, h, rows, sx, sy, x, y, i, j;
+    unsigned long stride;
+    DWORD t0, t1;
+    int found_x, found_y, hits;
+
+    head("0.16  ImageClick: what a template scan costs on this machine");
+
+    screen = GetDC(NULL);
+    if (!screen) { say("GetDC failed"); return; }
+    w = GetDeviceCaps(screen, HORZRES);
+    h = GetDeviceCaps(screen, VERTRES);
+
+    /* 8bpp, because a template match wants indices to compare, not colour
+     * triples, and because it is the depth a capture would arrive in. */
+    stride = (((unsigned long)w * 8 + 31) / 32) * 4;
+    rows = (int)(sizeof(shot) / stride);
+    if (rows > h) rows = h;
+    say("screen %dx%d; searching %dx%d (%lu bytes), template %dx%d",
+        w, h, w, rows, stride * rows, TW, TH);
+
+    mem = CreateCompatibleDC(screen);
+    area = CreateCompatibleBitmap(screen, w, rows);
+    oldbmp = (HBITMAP)SelectObject(mem, area);
+    BitBlt(mem, 0, 0, w, rows, screen, 0, 0, SRCCOPY);
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = rows; bi->biPlanes = 1;
+    bi->biBitCount = 8; bi->biCompression = BI_RGB;
+    if (GetDIBits(mem, area, 0, rows, shot, (BITMAPINFO *)info,
+                  DIB_RGB_COLORS) != rows) {
+        say("GetDIBits failed; cannot measure");
+        goto done;
+    }
+
+    /* Lift the template from the most VARIED block on screen, not from the
+     * middle. Taking the middle produced a uniform patch of desktop, which
+     * matches at (0,0) on the first comparison, and both strategies then
+     * "found" it in 0ms having measured nothing at all. A template worth
+     * timing is one that appears once, which means one with detail in it.
+     *
+     * Scored by how many distinct byte values a block holds: flat colour
+     * scores 1, a button with text on it scores dozens. */
+    {
+        int bestscore = -1, cx, cy;
+        sx = sy = 0;
+        for (cy = 0; cy + TH <= rows; cy += TH) {
+            for (cx = 0; cx + TW <= w; cx += TW) {
+                unsigned char seen[256];
+                int score = 0;
+                memset(seen, 0, sizeof(seen));
+                for (j = 0; j < TH; j++)
+                    for (i = 0; i < TW; i++) {
+                        unsigned char v = shot[(cy + j) * stride + cx + i];
+                        if (!seen[v]) { seen[v] = 1; score++; }
+                    }
+                if (score > bestscore) { bestscore = score; sx = cx; sy = cy; }
+            }
+        }
+        say("template from (%d,%d), %d distinct values", sx, sy, bestscore);
+        if (bestscore < 8) {
+            say("   *** screen too uniform to time a search honestly.");
+            say("   *** open a window with text in it and run this again.");
+        }
+    }
+    for (j = 0; j < TH; j++)
+        for (i = 0; i < TW; i++)
+            tmpl[j * TW + i] = shot[(sy + j) * stride + sx + i];
+
+    /* Naive. */
+    found_x = found_y = -1;
+    t0 = GetTickCount();
+    for (y = 0; y <= rows - TH && found_y < 0; y++) {
+        for (x = 0; x <= w - TW; x++) {
+            int ok = 1;
+            for (j = 0; j < TH && ok; j++)
+                for (i = 0; i < TW; i++)
+                    if (shot[(y + j) * stride + x + i] != tmpl[j * TW + i])
+                        { ok = 0; break; }
+            if (ok) { found_x = x; found_y = y; break; }
+        }
+    }
+    t1 = GetTickCount();
+    say("naive     : %lu ms, found at (%d,%d)",
+        (unsigned long)(t1 - t0), found_x, found_y);
+
+    /* Filtered: look for the first byte, only then compare the block. */
+    found_x = found_y = -1;
+    hits = 0;
+    t0 = GetTickCount();
+    for (y = 0; y <= rows - TH && found_y < 0; y++) {
+        const unsigned char *row = shot + (unsigned long)y * stride;
+        for (x = 0; x <= w - TW; x++) {
+            int ok = 1;
+            if (row[x] != tmpl[0]) continue;
+            hits++;
+            for (j = 0; j < TH && ok; j++)
+                for (i = 0; i < TW; i++)
+                    if (shot[(y + j) * stride + x + i] != tmpl[j * TW + i])
+                        { ok = 0; break; }
+            if (ok) { found_x = x; found_y = y; break; }
+        }
+    }
+    t1 = GetTickCount();
+    say("filtered  : %lu ms, found at (%d,%d), %d first-byte hits",
+        (unsigned long)(t1 - t0), found_x, found_y, hits);
+    say("   (a correct run finds it at or before (%d,%d))", sx, sy);
+
+done:
+    SelectObject(mem, oldbmp);
+    DeleteObject(area);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -1774,6 +2235,9 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "dom"))      probe_dom();
     if (!only || !strcmp(only, "depths"))   probe_depths();
     if (!only || !strcmp(only, "verify"))   probe_verify();
+    if (!only || !strcmp(only, "hooks"))    probe_hooks();
+    if (!only || !strcmp(only, "imgfind"))  probe_imgfind();
+    if (!only || !strcmp(only, "events"))   probe_events();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
