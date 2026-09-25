@@ -113,7 +113,8 @@ LIBWIRE = $(LIBDIR)/libwire.lib
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
 # libcore only: it knows nothing of the wire, and turning a tree into
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
-AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp
+AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp \
+                  automation/input.cpp
 LIBAUTOMATION = $(LIBDIR)/libautomation.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this

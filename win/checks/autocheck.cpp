@@ -11,6 +11,7 @@
  */
 #include "automation/tree.h"
 #include "automation/select.h"
+#include "automation/input.h"
 #include "core/str.h"
 
 #include <stdio.h>
@@ -267,11 +268,69 @@ static void walking(void)
     UnregisterClassA("GastonAutoCheck", wc.hInstance);
 }
 
+/* --- input refusals -------------------------------------------------
+ *
+ * Only the refusals are testable without a second machine looking on, and
+ * the refusals are the part that can hurt somebody. Delivery needs the
+ * guest.
+ */
+static void inputRefusals(void)
+{
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)sinkProc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "GastonInputCheck";
+    RegisterClassA(&wc);
+    HWND mine = CreateWindowExA(0, "GastonInputCheck", "mine", WS_POPUP,
+                                0, 0, 40, 40, NULL, NULL, wc.hInstance, NULL);
+    HWND kid = CreateWindowExA(0, "GastonInputCheck", "kid", WS_CHILD,
+                               0, 0, 10, 10, mine, NULL, wc.hInstance, NULL);
+    Input in;
+    char detail[128];
+
+    /* Our OWN window, by process. The HWND comparison this replaces missed
+     * a child control, which is a different HWND on the same thread. */
+    say("input-refuses-own-window", Input::isOurs(mine), "top level");
+    say("input-refuses-own-child", Input::isOurs(kid),
+        "child control, different HWND, same process");
+    say("input-click-refuses-self", in.clickWindow(mine) == INPUT_REFUSED_SELF,
+        "clickWindow on ourselves");
+    say("input-type-refuses-self", in.typeText(mine, "x") == INPUT_REFUSED_SELF,
+        "typeText into ourselves");
+    say("input-rejects-dead-window", in.clickWindow(NULL) == INPUT_NO_WINDOW,
+        "NULL hwnd");
+
+    rc_strf(detail, sizeof(detail), "SendInput %s",
+            in.usingSendInput() ? "present" : "absent, using keybd_event");
+    say("input-resolves-sendinput-dynamically", true, detail);
+
+    /* The setting must come back as it was. Leaving it at zero is a change
+     * to somebody's machine that outlives the process. */
+    {
+        DWORD before = 0;
+        SystemParametersInfoA(0x2000, 0, &before, 0);
+        DWORD saved = Input::relaxForegroundLock();
+        Input::restoreForegroundLock(saved);
+        DWORD after = 0;
+        SystemParametersInfoA(0x2000, 0, &after, 0);
+        rc_strf(detail, sizeof(detail), "was %lu, saved %lu, now %lu",
+                (unsigned long)before, (unsigned long)saved,
+                (unsigned long)after);
+        say("input-restores-foreground-lock", after == before, detail);
+    }
+
+    DestroyWindow(kid);
+    DestroyWindow(mine);
+    UnregisterClassA("GastonInputCheck", wc.hInstance);
+}
+
 int main(void)
 {
     grammar();
     matching();
     walking();
+    inputRefusals();
     /* Zero regardless: the verdict rows are the result, and the exit status
      * is reserved for setup failure, as in the other checks. */
     return 0;
