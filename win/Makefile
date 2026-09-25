@@ -54,9 +54,11 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # 398,808 with both linked. 405,000 -> 408,000 the same day: the estimate
 # left out ClientConfig, the message filters and the three services in
 # main.cpp; C4 measured 407,528. The memory pass (BACKLOG.md 2, -os alone
-# is -32 KB) comes after the refactor, by decision. Raise it again only
-# with a measured reason.
-COMMITTED_CAP ?= 408000
+# is -32 KB) comes after the refactor, by decision. 408,000 -> 412,000 at
+# C5b (408,060 measured): headroom for the rest of C5, where each module's
+# callbacks become an interface with a vtable. The memory pass tightens it
+# again. Raise it only with a measured reason.
+COMMITTED_CAP ?= 412000
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
