@@ -65,12 +65,14 @@ class SessionService:
         guest_exec: Any,
         conv: Any,
         spawn: Callable[..., Any] | None = None,
+        sync: Any = None,
     ) -> None:
         self.connection = connection
         self.presentation = presentation
         self.workspace = workspace
         self.options = options
         self.guest_exec = guest_exec
+        self.sync = sync
         self.conv = conv
         self.spawn = spawn
 
@@ -299,7 +301,7 @@ class SessionService:
             resume=resume,
             fork=fork,
             can_use_tool=can_use_tool_cb,
-            mcp_servers=machine_tools.build(self.connection, guest),
+            mcp_servers=machine_tools.build(self, guest),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,

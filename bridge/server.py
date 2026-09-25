@@ -606,6 +606,7 @@ class Bridge:
             workspace=self.workspace,
             options=self.options,
             guest_exec=self.guest_exec,
+            sync=self.sync,
             conv=self.conv,
             spawn=self._spawn,
         )
@@ -1133,6 +1134,15 @@ class Bridge:
 
     def _load_baseline(self, guest: "GuestSession | None" = None):
         return self._ensure_sync().load_baseline(guest)
+
+    def guest_work_root(self, guest: "GuestSession | None" = None) -> str:
+        """Where a command runs, spelled the way the guest spells it.
+
+        Reached from `agent/tools.py` to default `exec`'s cwd, which is why
+        it stays on the composition root: the MCP closure is handed a Bridge
+        on purpose (audit 04.1).
+        """
+        return self.workspace.guest_work_root(guest or self._guest)
 
     def sync_status_text(self, guest: "GuestSession | None" = None) -> str:
         return self._ensure_sync().sync_status_text(guest)

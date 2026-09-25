@@ -39,8 +39,15 @@ def _text(body: str, *, error: bool = False) -> dict:
     return out
 
 
-def build(bridge, guest=None) -> dict:
-    """Create the `machine` server bound to one bridge AND ONE GUEST.
+def build(host, guest=None) -> dict:
+    """Create the `machine` server bound to one HOST and ONE GUEST.
+
+    `host` supplies the three services the tools act through -- `guest_exec`,
+    `sync` and `workspace`. It used to be the Bridge itself, which worked only
+    because the Bridge forwarded everything; when the services stopped being
+    reached through it, this closure was left calling methods the object it
+    had been handed did not have, and the only symptom was the model telling
+    the user it could not reach their machine.
 
     The guest matters. These closures used to capture only the Bridge and let
     each tool resolve `bridge._guest` when it ran -- so the tool addressed
@@ -125,38 +132,56 @@ def build(bridge, guest=None) -> dict:
         },
     )
     async def machine_exec(args: dict) -> dict:
-        command = (args or {}).get("command") or ""
-        if not command.strip():
-            return _text("No command was given.", error=True)
 
+        # LOGGED HERE, because this is the outermost frame on our side of
+        # the MCP boundary. Above it the SDK turns an exception into a tool
+        # result the MODEL reads, and nothing reaches the bridge log -- so a
+        # bug in this path is visible only as the model reporting "a
+        # connection problem" on a 640x480 screen. Same shape as 02.13.
         try:
-            timeout_ms = int(args.get("timeout_ms") or DEFAULT_TIMEOUT_MS)
-        except (TypeError, ValueError):
-            timeout_ms = DEFAULT_TIMEOUT_MS
-        timeout_ms = max(1000, min(timeout_ms, MAX_TIMEOUT_MS))
+            command = (args or {}).get("command") or ""
+            if not command.strip():
+                return _text("No command was given.", error=True)
 
-        # PASSED ON AS WRITTEN, resolved in run_on_guest. A name this
-        # machine does not have has to come back as an error naming what it
-        # does have, and that list lives with the guest, not here.
-        #
-        # A bool is still understood, because the schema said boolean for
-        # long enough that a model may have learned it: True means "the
-        # machine's first shell" and False means "none", which is what those
-        # values meant when they were the whole vocabulary.
-        shell = args.get("shell")
-        if isinstance(shell, bool):
-            shell = "" if shell else "none"
-        shell = str(shell or "").strip()
-        # Defaulted to THIS conversation's folder on the user's machine, not
-        # left empty. An empty cwd means the guest passes NULL to
-        # CreateProcess and the child inherits the GUI process's directory --
-        # a value the bridge has never been told and cannot derive, which is
-        # also why bridge/agent/cmdguard.py has to answer ASK for every
-        # relative path when it is unset.
-        cwd = (args or {}).get("cwd") or bridge.guest_work_root(guest)
+            try:
+                timeout_ms = int(args.get("timeout_ms") or DEFAULT_TIMEOUT_MS)
+            except (TypeError, ValueError):
+                timeout_ms = DEFAULT_TIMEOUT_MS
+            timeout_ms = max(1000, min(timeout_ms, MAX_TIMEOUT_MS))
 
-        return await bridge.run_on_guest(command, timeout_ms=timeout_ms,
-                                         shell=shell, cwd=cwd, guest=guest)
+            # PASSED ON AS WRITTEN, resolved in run_on_guest. A name this
+            # machine does not have has to come back as an error naming what it
+            # does have, and that list lives with the guest, not here.
+            #
+            # A bool is still understood, because the schema said boolean for
+            # long enough that a model may have learned it: True means "the
+            # machine's first shell" and False means "none", which is what those
+            # values meant when they were the whole vocabulary.
+            shell = args.get("shell")
+            if isinstance(shell, bool):
+                shell = "" if shell else "none"
+            shell = str(shell or "").strip()
+            # Defaulted to THIS conversation's folder on the user's machine, not
+            # left empty. An empty cwd means the guest passes NULL to
+            # CreateProcess and the child inherits the GUI process's directory --
+            # a value the bridge has never been told and cannot derive, which is
+            # also why bridge/agent/cmdguard.py has to answer ASK for every
+            # relative path when it is unset.
+            cwd = (args or {}).get("cwd") or host.workspace.guest_work_root(guest)
+
+            # LOGGED HERE, because this is the outermost frame on our side of
+            # the MCP boundary. Above it the SDK turns an exception into a tool
+            # result the MODEL reads, and nothing reaches the bridge's own log --
+            # so a bug in this path is visible only as the model reporting "a
+            # connection problem" on a 640x480 screen. Same shape as 02.13.
+            return await host.guest_exec.run_on_guest(
+                command, timeout_ms=timeout_ms, shell=shell, cwd=cwd,
+                guest=guest)
+
+        except Exception:
+            log.exception("mcp__machine__exec failed: %r",
+                          str((args or {}).get("command"))[:80])
+            raise
 
     @tool(
         "sync_status",
@@ -164,7 +189,7 @@ def build(bridge, guest=None) -> dict:
         {},
     )
     async def machine_sync_status(args: dict) -> dict:
-        return _text(bridge.sync_status_text(guest))
+        return _text(host.sync.sync_status_text(guest))
 
     @tool(
         "sync_resolve",
@@ -192,7 +217,7 @@ def build(bridge, guest=None) -> dict:
         # that was correctly formed.
         if not path and action != "accept-tree":
             return _text("No path was given.", error=True)
-        return _text(await bridge.sync_resolve(path, action, guest))
+        return _text(await host.sync.sync_resolve(path, action, guest))
 
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
