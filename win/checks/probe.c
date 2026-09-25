@@ -19,7 +19,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/str.h"
+/* Open Watcom's two OLE headers disagree about VARIANT unless this is set.
+ * oaidl.h:130 picks the NAMED layout (n1.n2.n3) on `__STDC__`, but
+ * oleauto.h:125's V_VT/V_I4 accessors only check NONAMELESSUNION, so they
+ * expand to `(x)->vt` against a struct that has no such member and the
+ * error names a field you can see in the header. Defining it makes both
+ * agree on the named form. */
+#define NONAMELESSUNION
 #include <objbase.h>
+#include <oleauto.h>
 #include <oleacc.h>
 #include "miniz.h"
 
@@ -776,6 +784,15 @@ static void probe_watch(void)
 #ifndef OBJID_WINDOW
 #define OBJID_WINDOW 0x00000000L
 #endif
+#ifndef OBJID_CLIENT
+#define OBJID_CLIENT 0xFFFFFFFCL
+#endif
+/* oleacc.h:112 opens the STATE_SYSTEM_* block with `#ifndef
+ * STATE_SYSTEM_UNAVAILABLE` and then defines every member of it EXCEPT
+ * that one, so the guard names the only constant it omits. */
+#ifndef STATE_SYSTEM_UNAVAILABLE
+#define STATE_SYSTEM_UNAVAILABLE 0x00000001L
+#endif
 
 /* {618736E0-3C3D-11CF-810C-00AA00389B71} -- spelled out rather than linked
  * from uuid.lib, so a missing IID_IAccessible cannot fail the link on a
@@ -990,6 +1007,461 @@ static void probe_automation(void)
     ReleaseDC(NULL, screen);
 }
 
+/* ------------------------------------------------------------ 0.13b */
+/* What a TREE walk actually costs, broken down, because the only number
+ * anyone had was arithmetic: 44 nodes times a 2000ms call_timeout_ms is 88
+ * seconds, and that is the cost only if every window on the desktop is
+ * wedged. Nobody has timed a real one.
+ *
+ * Five passes over the SAME node list, each adding one thing, so the
+ * difference between two adjacent rows is the cost of the thing added:
+ *
+ *   A  enumerate only                 EnumWindows + GW_CHILD/GW_HWNDNEXT
+ *   B  + GetClassName                 same-process, no message sent
+ *   C  + WM_GETTEXT, 2000ms budget    cross-process, blocks on their pump
+ *   D  + WM_GETTEXT, 200ms budget     is the budget doing the damage?
+ *   E  + MSAA name per node           is oleacc the expensive part?
+ *
+ * GetTickCount on 9x ticks about every 55ms, so anything quick is timed
+ * over repeats and divided. A single pass of a slow one is enough.
+ */
+#define UIW_MAX 4096
+static HWND g_uiw[UIW_MAX];
+static int g_uiw_n;
+
+/* Visible-only, and this is not an optimisation.
+ *
+ * Walking hidden windows MOVED the desktop: `probe msaa` left the Start
+ * menu open every run while `probe screen`, same driving, never did. A
+ * closed Start menu is a window that still exists and is merely hidden, and
+ * asking oleacc for its accessible object appears to realise it. A tool
+ * whose job is to report what is on screen must not change what is on
+ * screen, so hidden windows are not walked at all.
+ *
+ * It is also free and it halves the work: 45 to 47 of the 83 nodes on this
+ * desktop were invisible.
+ */
+static int g_uiw_all;                    /* 1 = walk hidden ones too */
+
+static void collect_kids(HWND parent)
+{
+    HWND c;
+    for (c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (g_uiw_n >= UIW_MAX) return;
+        if (!g_uiw_all && !IsWindowVisible(c)) continue;
+        g_uiw[g_uiw_n++] = c;
+        collect_kids(c);
+    }
+}
+
+static BOOL CALLBACK collect_top(HWND h, LPARAM lp)
+{
+    (void)lp;
+    if (g_uiw_n >= UIW_MAX) return FALSE;
+    if (!g_uiw_all && !IsWindowVisible(h)) return TRUE;
+    g_uiw[g_uiw_n++] = h;
+    collect_kids(h);
+    return TRUE;
+}
+
+static void probe_uiwalk(void)
+{
+    DWORD t0, t1;
+    int i, r, timeouts;
+    char buf[256];
+    const int REPS = 20;
+
+    head("0.13b  what a TREE walk costs, one column at a time");
+
+    /* A -- enumeration alone. */
+    t0 = GetTickCount();
+    for (r = 0; r < REPS; r++) { g_uiw_n = 0; EnumWindows(collect_top, 0); }
+    t1 = GetTickCount();
+    say("A enum only    : %d nodes, %lu ms/walk",
+        g_uiw_n, (unsigned long)(t1 - t0) / REPS);
+
+    /* B -- plus the class name. GetClassName reads the class atom out of
+     * USER's own tables; it sends no message, so this should be nearly
+     * free and is here to prove that rather than assume it. */
+    t0 = GetTickCount();
+    for (r = 0; r < REPS; r++)
+        for (i = 0; i < g_uiw_n; i++)
+            GetClassNameA(g_uiw[i], buf, sizeof(buf));
+    t1 = GetTickCount();
+    say("B + class      : %lu ms/walk", (unsigned long)(t1 - t0) / REPS);
+
+    /* C -- plus the text, at the budget REMOTE.md proposes. This is the
+     * one that can block: WM_GETTEXT is marshalled by USER32 and does not
+     * return until the target's own message loop answers it. */
+    timeouts = 0;
+    t0 = GetTickCount();
+    for (i = 0; i < g_uiw_n; i++) {
+        DWORD_PTR res = 0;
+        buf[0] = '\0';
+        if (!SendMessageTimeoutA(g_uiw[i], WM_GETTEXT, sizeof(buf),
+                                 (LPARAM)buf, SMTO_ABORTIFHUNG, 2000, &res))
+            timeouts++;
+    }
+    t1 = GetTickCount();
+    say("C + text 2000ms: %lu ms total, %d timed out",
+        (unsigned long)(t1 - t0), timeouts);
+
+    /* D -- the same again on a tenth of the budget. If C and D agree, the
+     * budget is not what costs; if D is ten times faster, the walk is
+     * spending its life waiting on windows that were never going to
+     * answer, and the fix is a short first pass. */
+    timeouts = 0;
+    t0 = GetTickCount();
+    for (i = 0; i < g_uiw_n; i++) {
+        DWORD_PTR res = 0;
+        buf[0] = '\0';
+        if (!SendMessageTimeoutA(g_uiw[i], WM_GETTEXT, sizeof(buf),
+                                 (LPARAM)buf, SMTO_ABORTIFHUNG, 200, &res))
+            timeouts++;
+    }
+    t1 = GetTickCount();
+    say("D + text 200ms : %lu ms total, %d timed out",
+        (unsigned long)(t1 - t0), timeouts);
+
+    /* E -- plus MSAA. One IAccessible per node, asked for its name, then
+     * released. If this dwarfs C, the answer is to fetch MSAA lazily for
+     * the nodes the caller asks about rather than for the whole walk. */
+    {
+        HMODULE acc = LoadLibraryA("oleacc.dll");
+        PFN_AOFW aofw = acc ? (PFN_AOFW)GetProcAddress(
+            acc, "AccessibleObjectFromWindow") : 0;
+        if (!aofw) {
+            say("E + msaa       : skipped, oleacc unavailable");
+        } else {
+            int made = 0, named = 0;
+            CoInitialize(NULL);
+            t0 = GetTickCount();
+            for (i = 0; i < g_uiw_n; i++) {
+                IAccessible *ia = 0;
+                if (aofw(g_uiw[i], OBJID_WINDOW, &RC_IID_IAccessible,
+                         (void **)&ia) == S_OK && ia) {
+                    VARIANT self;
+                    BSTR nm = 0;
+                    made++;
+                    /* V_VT/V_I4 rather than .vt/.lVal: Open Watcom's C mode
+                     * has no anonymous unions, so the members are really
+                     * n1.n2.vt and n1.n2.n3.lVal (oleauto.h:127-133). */
+                    V_VT(&self) = VT_I4;
+                    V_I4(&self) = 0;             /* CHILDID_SELF */
+                    if (ia->lpVtbl->get_accName(ia, self, &nm) == S_OK && nm) {
+                        named++;
+                        SysFreeString(nm);
+                    }
+                    ia->lpVtbl->Release(ia);
+                }
+            }
+            t1 = GetTickCount();
+            say("E + msaa       : %lu ms total, %d objects, %d named",
+                (unsigned long)(t1 - t0), made, named);
+            CoUninitialize();
+        }
+        if (acc) FreeLibrary(acc);
+    }
+
+    say("   (55ms tick: A and B are over %d repeats and divided)", REPS);
+}
+
+/* ------------------------------------------------------------ 0.13c */
+/* Is MSAA worth 7.6ms a node? 0.13b said it names 17 of 45; it did not say
+ * what those names are worth, and a name we already had from WM_GETTEXT is
+ * worth nothing.
+ *
+ * So: for every node, fetch both sides and count where MSAA adds something
+ * the plain window tree could not give. The fields that can only come from
+ * MSAA are state (is this checkbox CHECKED -- the window tree cannot say
+ * without sending BM_GETCHECK, and that is per-control-class guesswork),
+ * value (an edit control's contents, a slider's position) and the default
+ * action. Role mostly duplicates the class name for standard controls but
+ * separates push button from checkbox from radio, which are style bits.
+ */
+static void bstr_narrow(BSTR b, char *out, int cap)
+{
+    out[0] = '\0';
+    if (!b) return;
+    WideCharToMultiByte(CP_ACP, 0, b, -1, out, cap, NULL, NULL);
+    out[cap - 1] = '\0';
+}
+
+static void msaa_pass(PFN_AOFW aofw, LONG objid, const char *label)
+{
+    int i;
+    int n_text = 0, n_name = 0, n_name_only = 0, n_diff = 0;
+    int n_value = 0, n_action = 0, n_role = 0, n_state = 0;
+    int n_checked = 0, n_focused = 0, n_unavail = 0, n_invis = 0;
+    int shown = 0;
+    int n_obj = 0;
+
+    say("-- %s --", label);
+    for (i = 0; i < g_uiw_n; i++) {
+        char text[128], name[128], value[128], action[64], cls[64];
+        DWORD_PTR res = 0;
+        IAccessible *ia = 0;
+        VARIANT self, vrole, vstate;
+        BSTR b = 0;
+        long role = 0, state = 0;
+
+        text[0] = name[0] = value[0] = action[0] = '\0';
+        GetClassNameA(g_uiw[i], cls, sizeof(cls));
+        SendMessageTimeoutA(g_uiw[i], WM_GETTEXT, sizeof(text), (LPARAM)text,
+                            SMTO_ABORTIFHUNG, 200, &res);
+        if (text[0]) n_text++;
+
+        if (aofw(g_uiw[i], objid, &RC_IID_IAccessible,
+                 (void **)&ia) != S_OK || !ia)
+            continue;
+        n_obj++;
+
+        V_VT(&self) = VT_I4;
+        V_I4(&self) = 0;
+
+        if (ia->lpVtbl->get_accName(ia, self, &b) == S_OK && b) {
+            bstr_narrow(b, name, sizeof(name));
+            SysFreeString(b);
+            b = 0;
+        }
+        if (ia->lpVtbl->get_accValue(ia, self, &b) == S_OK && b) {
+            bstr_narrow(b, value, sizeof(value));
+            SysFreeString(b);
+            b = 0;
+        }
+        if (ia->lpVtbl->get_accDefaultAction(ia, self, &b) == S_OK && b) {
+            bstr_narrow(b, action, sizeof(action));
+            SysFreeString(b);
+            b = 0;
+        }
+        V_VT(&vrole) = VT_EMPTY;
+        if (ia->lpVtbl->get_accRole(ia, self, &vrole) == S_OK
+            && V_VT(&vrole) == VT_I4)
+            role = V_I4(&vrole);
+        V_VT(&vstate) = VT_EMPTY;
+        if (ia->lpVtbl->get_accState(ia, self, &vstate) == S_OK
+            && V_VT(&vstate) == VT_I4)
+            state = V_I4(&vstate);
+
+        if (name[0]) n_name++;
+        if (name[0] && !text[0]) n_name_only++;
+        if (name[0] && text[0] && strcmp(name, text)) n_diff++;
+        if (value[0]) n_value++;
+        if (action[0]) n_action++;
+        if (role) n_role++;
+        if (state) n_state++;
+        if (state & STATE_SYSTEM_CHECKED)     n_checked++;
+        if (state & STATE_SYSTEM_FOCUSED)     n_focused++;
+        if (state & STATE_SYSTEM_UNAVAILABLE) n_unavail++;
+        if (state & STATE_SYSTEM_INVISIBLE)   n_invis++;
+
+        /* Raw: every node, every field, no filtering and no summary. The
+         * counts hid exactly what was wanted -- `value 0` looked like MSAA
+         * having nothing to say when it was the wrong objid being asked. */
+        shown++;
+        say("%-13.13s|%-14.14s|%-14.14s|%-10.10s|%-7.7s|r%ld s%lx",
+            cls, text[0] ? text : "-", name[0] ? name : "-",
+            value[0] ? value : "-", action[0] ? action : "-",
+            role, (unsigned long)state);
+        ia->lpVtbl->Release(ia);
+    }
+
+    say("-- %s: %d nodes, %d objs, %d rows --", label, g_uiw_n, n_obj, shown);
+    (void)n_text; (void)n_name; (void)n_name_only; (void)n_diff;
+    (void)n_value; (void)n_action; (void)n_role; (void)n_state;
+    (void)n_checked; (void)n_focused; (void)n_unavail; (void)n_invis;
+}
+
+static void probe_msaa(void)
+{
+    HMODULE acc;
+    PFN_AOFW aofw;
+
+    head("0.13c  what MSAA actually adds over the window tree");
+
+    acc = LoadLibraryA("oleacc.dll");
+    aofw = acc ? (PFN_AOFW)GetProcAddress(acc, "AccessibleObjectFromWindow")
+               : 0;
+    if (!aofw) { say("oleacc unavailable"); if (acc) FreeLibrary(acc); return; }
+
+    g_uiw_n = 0;
+    EnumWindows(collect_top, 0);
+    CoInitialize(NULL);
+
+    /* Both object ids, because asking the wrong one is the obvious way to
+     * conclude MSAA is poor when it is not. OBJID_WINDOW is the frame --
+     * caption, menu, scrollbars. OBJID_CLIENT is the control itself, and it
+     * is where an edit's contents and a checkbox's state actually live.
+     * Most MSAA clients ask for CLIENT; the first pass here asked for
+     * WINDOW and reported value=0 across 48 nodes, which is exactly the
+     * result a wrong objid produces. */
+    msaa_pass(aofw, OBJID_WINDOW, "OBJID_WINDOW (frame)");
+    msaa_pass(aofw, OBJID_CLIENT, "OBJID_CLIENT (the control)");
+
+    CoUninitialize();
+    FreeLibrary(acc);
+}
+
+/* ------------------------------------------------------------ 0.13d */
+/* Can we read a web page as a control tree, or only as pixels?
+ *
+ * 0.13c walked HWNDs and found `chk 0` with a checked checkbox plainly on
+ * screen. That is not MSAA being poor, it is the question being wrong: IE
+ * renders the whole document into ONE window of class
+ * `Internet Explorer_Server`, so no amount of EnumChildWindows reaches a
+ * link or an input. The DOM is reachable only by asking that window's
+ * accessible object for its CHILDREN and recursing -- which is a different
+ * traversal from the HWND tree and has to be written as one.
+ *
+ * If this returns the headings, links and form controls, a browser is
+ * readable exactly and cheaply and the screenshot path is not needed for
+ * it. If it returns one opaque node, a browser is pixels and OCR.
+ */
+typedef HRESULT (WINAPI *PFN_ACHILDREN)(IAccessible *, LONG, LONG,
+                                        VARIANT *, LONG *);
+typedef UINT (WINAPI *PFN_ROLETEXT)(DWORD, LPSTR, UINT);
+
+static PFN_ACHILDREN g_achildren;
+static PFN_ROLETEXT  g_roletext;
+static int g_dom_n;
+static int g_dom_shown;
+
+static void dom_fields(IAccessible *acc, VARIANT child,
+                       char *name, int ncap, char *val, int vcap, long *role)
+{
+    BSTR b = 0;
+    VARIANT vr;
+    name[0] = val[0] = '\0';
+    *role = 0;
+    if (acc->lpVtbl->get_accName(acc, child, &b) == S_OK && b) {
+        bstr_narrow(b, name, ncap); SysFreeString(b); b = 0;
+    }
+    if (acc->lpVtbl->get_accValue(acc, child, &b) == S_OK && b) {
+        bstr_narrow(b, val, vcap); SysFreeString(b); b = 0;
+    }
+    V_VT(&vr) = VT_EMPTY;
+    if (acc->lpVtbl->get_accRole(acc, child, &vr) == S_OK && V_VT(&vr) == VT_I4)
+        *role = V_I4(&vr);
+}
+
+static void dom_emit(const char *name, const char *val, long role, int depth)
+{
+    char rt[48];
+    rt[0] = '\0';
+    if (g_roletext) g_roletext((DWORD)role, rt, sizeof(rt));
+    g_dom_shown++;
+    say("%*s%-12.12s|%-26.26s|%.22s", depth, "",
+        rt[0] ? rt : "?", name[0] ? name : "-", val[0] ? val : "");
+}
+
+static void dom_walk(IAccessible *acc, int depth)
+{
+    long kids = 0, got = 0, i;
+    VARIANT *v;
+
+    if (depth > 10 || g_dom_n > 300) return;
+    if (acc->lpVtbl->get_accChildCount(acc, &kids) != S_OK || kids <= 0) return;
+    v = (VARIANT *)HeapAlloc(GetProcessHeap(), 0, sizeof(VARIANT) * kids);
+    if (!v) return;
+    if (g_achildren(acc, 0, kids, v, &got) < 0) {
+        HeapFree(GetProcessHeap(), 0, v);
+        return;
+    }
+    for (i = 0; i < got; i++) {
+        char name[64], val[64];
+        long role = 0;
+        g_dom_n++;
+        if (V_VT(&v[i]) == VT_DISPATCH && V_DISPATCH(&v[i])) {
+            /* A real object: it can have children of its own. */
+            IAccessible *kid = 0;
+            IDispatch *d = V_DISPATCH(&v[i]);
+            if (d->lpVtbl->QueryInterface(d, &RC_IID_IAccessible,
+                                          (void **)&kid) == S_OK && kid) {
+                VARIANT self;
+                V_VT(&self) = VT_I4; V_I4(&self) = 0;
+                dom_fields(kid, self, name, sizeof(name), val, sizeof(val),
+                           &role);
+                dom_emit(name, val, role, depth);
+                dom_walk(kid, depth + 1);
+                kid->lpVtbl->Release(kid);
+            }
+            d->lpVtbl->Release(d);
+        } else if (V_VT(&v[i]) == VT_I4) {
+            /* A leaf the PARENT describes: ask the parent, using the id. */
+            dom_fields(acc, v[i], name, sizeof(name), val, sizeof(val), &role);
+            dom_emit(name, val, role, depth);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, v);
+}
+
+static BOOL CALLBACK find_ie(HWND h, LPARAM lp)
+{
+    char cls[64];
+    HWND *out = (HWND *)lp;
+    GetClassNameA(h, cls, sizeof(cls));
+    if (!strcmp(cls, "Internet Explorer_Server")) { *out = h; return FALSE; }
+    { HWND c;
+      for (c = GetWindow(h, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+          if (!find_ie(c, lp)) return FALSE;
+      } }
+    return TRUE;
+}
+
+static void probe_dom(void)
+{
+    HMODULE acc;
+    PFN_AOFW aofw;
+    HWND ie = 0;
+    DWORD t0, t1;
+
+    head("0.13d  is a web page a control tree, or just pixels?");
+
+    acc = LoadLibraryA("oleacc.dll");
+    aofw = acc ? (PFN_AOFW)GetProcAddress(acc, "AccessibleObjectFromWindow") : 0;
+    g_achildren = acc ? (PFN_ACHILDREN)GetProcAddress(acc, "AccessibleChildren")
+                      : 0;
+    g_roletext = acc ? (PFN_ROLETEXT)GetProcAddress(acc, "GetRoleTextA") : 0;
+    if (!aofw || !g_achildren) {
+        say("oleacc: aofw=%p children=%p", (void *)aofw, (void *)g_achildren);
+        if (acc) FreeLibrary(acc);
+        return;
+    }
+    say("GetRoleTextA %s", g_roletext ? "found" : "MISSING");
+
+    EnumWindows(find_ie, (LPARAM)&ie);
+    if (!ie) {
+        say("no 'Internet Explorer_Server' window -- open a page first");
+        FreeLibrary(acc);
+        return;
+    }
+
+    CoInitialize(NULL);
+    {
+        IAccessible *doc = 0;
+        if (aofw(ie, OBJID_CLIENT, &RC_IID_IAccessible, (void **)&doc) == S_OK
+            && doc) {
+            char name[64], val[64];
+            long role = 0;
+            VARIANT self;
+            V_VT(&self) = VT_I4; V_I4(&self) = 0;
+            dom_fields(doc, self, name, sizeof(name), val, sizeof(val), &role);
+            say("document       : role=%ld name=%.28s", role, name);
+            g_dom_n = g_dom_shown = 0;
+            t0 = GetTickCount();
+            dom_walk(doc, 1);
+            t1 = GetTickCount();
+            say("DOM nodes %d in %lu ms (showing first %d)",
+                g_dom_n, (unsigned long)(t1 - t0), g_dom_shown);
+            doc->lpVtbl->Release(doc);
+        } else {
+            say("AccessibleObjectFromWindow failed on the IE server window");
+        }
+    }
+    CoUninitialize();
+    FreeLibrary(acc);
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -1010,6 +1482,9 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "html"))     probe_html();
     if (!only || !strcmp(only, "watch"))    probe_watch();
     if (!only || !strcmp(only, "automation")) probe_automation();
+    if (!only || !strcmp(only, "uiwalk"))   probe_uiwalk();
+    if (!only || !strcmp(only, "msaa"))     probe_msaa();
+    if (!only || !strcmp(only, "dom"))      probe_dom();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
