@@ -13,12 +13,12 @@ directly any more.
 
 `_finish_prompt` (here, `_finish`) and `_resolve_all` (here, `deny_all`)
 must stay synchronous: both run inside a cancelled scope -- the SDK's own
-cancellation of an in-flight tool call, and `Bridge._on_client`'s teardown
+cancellation of an in-flight tool call, and `ConnectionService.on_client`'s teardown
 before its first `await` -- where an `await` would simply never complete.
 `_finish` schedules its continuation with `spawn` rather than awaiting it,
 which is exactly what `Bridge._spawn` already existed for.
 
-Built once per `GuestSession`, in `Bridge._attach`, and held there as
+Built once per `GuestSession`, in `ConnectionService.attach`, and held there as
 `guest.perms` -- the same lifetime as the guest itself, because a prompt on
 screen must survive a reconnect. `write_block`, `send` and `spawn` are the
 only things this needs from `Bridge`: writing the prompt's description into
@@ -86,7 +86,7 @@ class PermissionDesk:
     """What is on the guest's screen right now, and what is queued behind it.
 
     `write_block(html)`, `send(frame)` and `spawn(coro)` are bound closures
-    over one `GuestSession`, handed in at construction (`Bridge._attach`)
+    over one `GuestSession`, handed in at construction (`ConnectionService.attach`)
     rather than reached for through a stored `Bridge` reference -- the same
     reason `SyncTransport` (bridge/files/synctransport.py) holds a `guest`
     rather than a `bridge`.
@@ -427,7 +427,7 @@ class PermissionDesk:
     def deny_all(self, reason: str, message: str) -> None:
         """Deny everything outstanding, synchronously.
 
-        Called from `Bridge._on_client`'s finally before its first await, and
+        Called from `ConnectionService.on_client`'s finally before its first await, and
         from the session-rebuild paths. Denying rather than leaving them
         pending is the point: a future nobody will ever complete hangs the
         turn until the deadline, on a machine that has already gone away.

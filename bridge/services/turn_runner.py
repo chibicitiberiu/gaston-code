@@ -82,9 +82,7 @@ class TurnRunner:
         """Fold whatever the baseline still owes the agent into memory."""
         g = guest or getattr(self.connection, "guest", None)
         try:
-            load_fn = getattr(self.sync, "load_baseline", None) or getattr(
-                self.connection, "_load_baseline", None
-            )
+            load_fn = getattr(self.sync, 'load_baseline', None)
             if not load_fn:
                 return
             base = load_fn(g)
@@ -103,22 +101,17 @@ class TurnRunner:
     ) -> None:
         """Durable half of with_sync_preamble."""
         sync_dir = (
-            getattr(self.config, "sync_dir", None)
-            or getattr(self.connection, "sync_dir", None)
+            getattr(self.config, 'sync_dir', None)
         )
         if not delivered or not sync_dir:
             return
         g = guest or getattr(self.connection, "guest", None)
-        lock_ctx = getattr(self.sync, "baseline_lock", None) or getattr(
-            self.connection, "_baseline_lock", None
-        )
+        lock_ctx = getattr(self.sync, 'baseline_lock', None)
         if not lock_ctx:
             return
         async with lock_ctx(g):
             try:
-                load_fn = getattr(self.sync, "load_baseline", None) or getattr(
-                    self.connection, "_load_baseline", None
-                )
+                load_fn = getattr(self.sync, 'load_baseline', None)
                 if not load_fn:
                     return
                 base = load_fn(g)
@@ -133,9 +126,7 @@ class TurnRunner:
                     keep.append(t)
             base.pending_notice_agent = keep
             try:
-                base_path_fn = getattr(self.sync, "base_path", None) or getattr(
-                    self.connection, "_base_path", None
-                )
+                base_path_fn = getattr(self.sync, 'base_path', None)
                 path = base_path_fn(g) if base_path_fn else ""
                 if path:
                     base.save(path)
@@ -147,8 +138,7 @@ class TurnRunner:
     ) -> str:
         """Prepend anything sync needs the agent to know, and mark it delivered."""
         sync_dir = (
-            getattr(self.config, "sync_dir", None)
-            or getattr(self.connection, "sync_dir", None)
+            getattr(self.config, 'sync_dir', None)
         )
         g = guest or getattr(self.connection, "guest", None)
         sc = getattr(g, "synccoord", None) or getattr(
@@ -182,9 +172,7 @@ class TurnRunner:
     async def resume_turn(self, guest: GuestSession, answered) -> None:
         """Continue: wait for the wire to be ours, THEN unlatch, THEN explain."""
         async with guest.turn_lock:
-            release_fn = getattr(self.sync, "release_all_latches", None) or getattr(
-                self.connection, "_release_all_latches", None
-            )
+            release_fn = getattr(self.sync, 'release_all_latches', None)
             freed = await release_fn(only=answered) if release_fn else 0
             if freed:
                 log.info("sync: released %d latched path(s) on Continue", freed)
@@ -208,8 +196,7 @@ class TurnRunner:
         """Orchestrate turn start, deferred session resumption, and locking."""
         if not guest.claude:
             resume_fn = (
-                getattr(self.session, "resume_pending", None)
-                or getattr(self.connection, "_resume_pending", None)
+                getattr(self.session, 'resume_pending', None)
             )
             if resume_fn and not await resume_fn(guest):
                 return
@@ -272,7 +259,7 @@ class TurnRunner:
             return
         await self.presentation.flush_text(guest)
         if guest.claude:
-            conv_store = self.conv or getattr(self.connection, "conv", None)
+            conv_store = self.conv
             if conv_store is not None:
                 conv_store.add(guest.claude.session_id)
         sealed = guest.view.pages.message_boundary()
@@ -309,10 +296,3 @@ class TurnRunner:
             ),
         )
 
-    # Aliases
-    _run_turn = run_turn
-    _run_turn_locked = run_turn_locked
-    _resume_turn = resume_turn
-    _with_sync_preamble = with_sync_preamble
-    _clear_agent_notices = clear_agent_notices
-    _seed_agent_notices = seed_agent_notices

@@ -96,7 +96,7 @@ class Pass:
         self.root = root
         # `state_dir` may name the FILE rather than the directory.
         #
-        # One baseline per guest root (Bridge._base_path) means the caller is
+        # One baseline per guest root (SyncService.base_path) means the caller is
         # the only thing that knows which file this pass belongs to, and
         # re-deriving `base.json` here silently ignored that -- the bridge
         # chose base-<root>.json, the pass loaded base.json, and every pass

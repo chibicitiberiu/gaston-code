@@ -154,10 +154,3 @@ class PresentationService:
         """Record a user turn marker in the paginator."""
         return guest.view.pages.mark_user_turn(line)
 
-    # Private method aliases for bridge facade
-    _coalescer = coalescer
-    _emit_text = emit_text
-    _flush_text = flush_text
-    _write_updates = write_updates
-    _write_block = write_block
-    _send_page = send_page

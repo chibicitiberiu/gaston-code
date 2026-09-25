@@ -44,7 +44,7 @@ class GuestLink:
         self.send_lock: asyncio.Lock = asyncio.Lock()
         # One persistent deflate stream for the whole connection. Resetting it
         # mid-connection would desynchronise the guest's inflater, so it is only
-        # reset on reconnect -- see Bridge._attach.
+        # reset on reconnect -- see ConnectionService.attach.
         self.zip_out: StreamCompressor = StreamCompressor()
         self.zip_in: StreamDecompressor = StreamDecompressor()
         self.link_bps: float | None = None

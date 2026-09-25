@@ -278,7 +278,7 @@ class Baseline:
     pending_notice: list = field(default_factory=list)
     #: The AGENT's copy: cleared when it is actually handed to the model.
     #: Neither delivery implies the other. Before this the agent's copy lived
-    #: only in memory (`Bridge._agent_notices`, now
+    #: only in memory (`the old Bridge-wide agent-notice cache`, now
     #: `GuestSession.synccoord.agent_notices` -- 02.43, 02.18) -- so a restart
     #: between a pass writing the user's notice and the agent's next turn
     #: silently lost exactly the news the agent most needed (a conflict that

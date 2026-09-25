@@ -283,13 +283,3 @@ class WorkspaceService:
         if self.config.sync_dir and self.spawn_sync:
             self.spawn_sync("the work directory was set")
 
-    # Private method aliases for bridge facade
-    _stored_work_dir = stored_work_dir
-    _mirror_dir = mirror_dir
-    _work_dir = work_dir
-    _guest_path = guest_path
-    _sub_of = sub_of
-    _retarget_perms = retarget_perms
-    _ensure_work_dir = ensure_work_dir
-    _name_work_dir = name_work_dir
-    _on_setwork = on_setwork

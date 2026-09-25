@@ -296,8 +296,3 @@ class GuestExecService:
                 )
         guest.exec_pending.clear()
 
-    # Private method aliases for bridge facade
-    _exec_out = exec_out
-    _exec_result = exec_result
-    _kill_exec = kill_exec
-    _fail_execs = fail_execs

@@ -181,9 +181,7 @@ class AttachmentService:
                 ) or bool(getattr(self.connection, "sync_dir", None))
                 if target and not os.path.exists(target) and has_sync:
                     try:
-                        run_sync = getattr(self.sync, "run_sync", None) or getattr(
-                            self.connection, "run_sync", None
-                        )
+                        run_sync = getattr(self.sync, 'run_sync', None)
                         if run_sync is not None:
                             await run_sync(
                                 "attachment not found locally", guest=guest

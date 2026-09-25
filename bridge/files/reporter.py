@@ -4,7 +4,7 @@
 were one idea spread across three places: the fingerprinting logic on
 `Pass`, the two durable queues (`pending_notice`/`pending_notice_agent`)
 and the `reported` fingerprint map on `Baseline`, and -- on the Bridge side
--- `Bridge._agent_notices`, a deliberately separate in-memory cache of the
+-- `the old Bridge-wide agent-notice cache`, a deliberately separate in-memory cache of the
 agent queue (`server.py`, 02.20). This class gathers the `Pass`/`Baseline`
 half (docs/audit/02-bridge-python.md #4.2, fix item 4); the Bridge half
 stayed where it was for the reason below, until 02.43.

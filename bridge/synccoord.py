@@ -14,17 +14,17 @@ object that should own it did not exist.
    live on `GuestSession` as a derived VIEW of `base.latched` -- the 02.42
    comment that used to sit on those fields explains why extracting a
    `GuestHalt` there would have moved three fields sideways without fixing
-   anything: `Bridge._reconcile_halt` already derives them at every attach
+   anything: `SyncService.reconcile_halt` already derives them at every attach
    and every pass. What needed a home was the derivation and the fields
    together, not either alone.
-2. `Bridge._agent_notices` is a Bridge-lifetime cache read between passes by
-   `Bridge._with_sync_preamble`, on every turn -- see the module docstring
+2. `the old Bridge-wide agent-notice cache` is a Bridge-lifetime cache read between passes by
+   `TurnRunner.with_sync_preamble`, on every turn -- see the module docstring
    on `bridge/files/reporter.py` for why `Reporter`, built fresh per
    `Pass`, cannot own it.
 
 Both want an object that outlives a `Pass`. 02.43 made it Bridge-lifetime
 and reasoned that this was not a stretch despite the name "guest" state --
-`Bridge._guest` is created once per Bridge process and reused for every
+`ConnectionService.guest` is created once per Bridge process and reused for every
 reconnect, so a coordinator built alongside `Bridge` had exactly the
 lifetime the halt bar already had in practice. True, and it stopped being
 enough the moment anyone read it as finished work: one coordinator per
@@ -55,7 +55,7 @@ class SyncCoordinator:
     """Bridge-lifetime owner of the latch set's two derived views: the halt
     bar shown on the guest's screen, and the notices still owed to the
     agent. One instance per `Bridge`, constructed alongside it and never
-    replaced -- matching `Bridge._guest`, which is also built once per
+    replaced -- matching `ConnectionService.guest`, which is also built once per
     process and reused across every reconnect.
     docs/audit/02-bridge-python.md 02.43.
     """
@@ -64,7 +64,7 @@ class SyncCoordinator:
     #: bridge stopping the agent and handing the decision to the person at
     #: the keyboard; it clears when they press Continue, and never on a
     #: timer. This is not independent state -- it is a VIEW of
-    #: `base.latched` on disk, and `Bridge._reconcile_halt` derives it at
+    #: `base.latched` on disk, and `SyncService.reconcile_halt` derives it at
     #: every attach and at the end of every pass (docs/audit/
     #: 02-bridge-python.md 02.21).
     halt_id: str = ""
@@ -88,7 +88,7 @@ class SyncCoordinator:
         """Idempotent while a bar is already showing.
 
         Returns the new id to send a HALT for, or None if nothing changed
-        because one was already up -- the caller (`Bridge._raise_halt`)
+        because one was already up -- the caller (`SyncService.raise_halt`)
         sends the frame; this only decides and remembers.
         """
         if self.halt_id:
@@ -102,7 +102,7 @@ class SyncCoordinator:
         """Idempotent while no bar is showing.
 
         Returns the id to send HALTEND for, or None if there was nothing to
-        clear -- the caller (`Bridge._clear_halt`) sends the frame.
+        clear -- the caller (`SyncService.clear_halt`) sends the frame.
         """
         if not self.halt_id:
             return None

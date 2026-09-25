@@ -7,7 +7,7 @@ guest's RAM at handshake. `GuestLink` (bridge/wire/link.py) already moved
 the "Link" group out the same way; this follows it.
 
 Deliberately NOT the "paginate, stream only if live, then seal" rule
-itself (02.18): that stays on `Bridge._write_block`/`_send_page`, because
+itself (02.18): that stays on `PresentationService.write_block`/`_send_page`, because
 enforcing it here would mean this class sending frames, which means it
 needs the guest's `GuestLink` -- and `GuestLink.send(guest, frame)` takes
 the owning `GuestSession` back on purpose, to keep `GuestLink` reachable

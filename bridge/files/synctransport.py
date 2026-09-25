@@ -46,7 +46,7 @@ CHUNK = 8192
 class GuestSyncState:
     """The sync subprotocol's own id namespace, in-flight table and lock.
 
-    Reached directly by `Bridge._sync_frame`/`_fail_syncs`/`run_sync`, which
+    Reached directly by `SyncService.sync_frame`/`_fail_syncs`/`run_sync`, which
     still index `.pending` and toggle `.active` themselves -- they are
     answering "which `Wait` does this reply belong to" and "is a pass
     running", the same questions `SyncTransport` answers for `Pass`, and do
@@ -61,7 +61,7 @@ class GuestSyncState:
     seq: int = 0
     #: Serialises writers to base.json. Lives here, in the group the audit
     #: calls "Sync RPC", rather than with the file itself -- see
-    #: `Bridge._baseline_lock`'s own docstring, which the audit's §5.3
+    #: `SyncService.baseline_lock`'s own docstring, which the audit's §5.3
     #: criticises for the same reason without asking this pass to relocate
     #: it; that is a separate, unassigned finding, and this class only
     #: gives the existing placement a name.
@@ -78,7 +78,7 @@ class GuestSyncState:
 class SyncTransport:
     """What `Pass` needs from the connection, and nothing else.
 
-    One instance per pass, built by `Bridge.run_sync` from the guest whose
+    One instance per pass, built by `SyncService.run_sync` from the guest whose
     `.link` and `.sync` it wraps. `Pass` itself never sees a `Bridge` or a
     `GuestSession` -- it is handed this and a `Caps`.
     """

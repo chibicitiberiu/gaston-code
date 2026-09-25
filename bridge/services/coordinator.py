@@ -169,9 +169,7 @@ class SessionCoordinator:
                         ),
                     )
                     return
-        run_fn = getattr(self.turn_runner, "run_turn", None) or getattr(
-            self.connection, "_run_turn", None
-        )
+        run_fn = getattr(self.turn_runner, 'run_turn', None)
         self._spawn_coro(
             run_fn(
                 guest,
@@ -193,9 +191,7 @@ class SessionCoordinator:
         log.info("user pressed Continue on the sync halt")
         await self.connection.send(guest, haltend(hid))
         answered, sc.halt_paths = sc.halt_paths, frozenset()
-        resume_fn = getattr(self.turn_runner, "resume_turn", None) or getattr(
-            self.connection, "_resume_turn", None
-        )
+        resume_fn = getattr(self.turn_runner, 'resume_turn', None)
         self._spawn_coro(resume_fn(guest, answered))
 
     async def on_interrupt(
@@ -207,13 +203,3 @@ class SessionCoordinator:
         if guest.claude:
             await guest.claude.interrupt()
 
-    # Aliases
-    _quiesce_turn = quiesce_turn
-    _set_effort = set_effort
-    _new_session = new_session
-    _switch = switch
-    _reissue_halt = reissue_halt
-    _reissue_turn = reissue_turn
-    _on_input = on_input
-    _on_resume = on_resume
-    _on_interrupt = on_interrupt

@@ -384,15 +384,3 @@ class ConnectionService:
                 pass
             log.info("connection to %s closed", peer)
 
-    # Aliases
-    _bind_codepages = bind_codepages
-    _oem_for = oem_for
-    _read_hello = read_hello
-    _attach = attach
-    _pump = pump
-    _handle = handle
-    _mark_lost = mark_lost
-    _reap_idle = reap_idle
-    _try_send_raw = try_send_raw
-    _on_client = on_client
-    _send = send

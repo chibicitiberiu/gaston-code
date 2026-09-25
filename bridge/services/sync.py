@@ -59,9 +59,7 @@ class SyncService:
     def _get_guest(self, guest: GuestSession | None) -> GuestSession | None:
         if guest is not None:
             return guest
-        return getattr(self.connection, "guest", None) or getattr(
-            self.connection, "_guest", None
-        )
+        return getattr(self.connection, 'guest', None)
 
 
     async def set_status_override(
@@ -720,9 +718,7 @@ class SyncService:
             for k, why in sorted(base.latched.items()):
                 out.append(f"  {k} -- {why}")
 
-        reports = getattr(g, "last_sync_reports", None) or getattr(
-            self.connection, "_last_sync_reports", None
-        )
+        reports = getattr(g, 'last_sync_reports', None)
         if reports:
             out.append(
                 "\nFrom the last pass (skips are permanent until the "
@@ -770,20 +766,3 @@ class SyncService:
             )
         return "\n".join(out)
 
-    # Private method aliases for bridge facade
-    _run_sync = run_sync
-    _ensure_sync_flush = ensure_sync_flush
-    _sync_resolve_locked = sync_resolve_locked
-    _base_path = base_path
-    _current_guest_root = current_guest_root
-    _load_baseline = load_baseline
-    _baseline_lock = baseline_lock
-    _release_all_latches = release_all_latches
-    _raise_halt = raise_halt
-    _clear_halt = clear_halt
-    _reconcile_halt = reconcile_halt
-    _sync_frame = sync_frame
-    _fail_syncs = fail_syncs
-    _set_status_override = set_status_override
-    _report_abort = report_abort
-    _edits_outside_the_mirror = edits_outside_the_mirror

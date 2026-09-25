@@ -63,7 +63,6 @@ class PermissionService:
             )
         return guest.perms
 
-    create_desk = attach
 
     async def on_rules(self, guest: GuestSession, f: Frame) -> None:
         """What can run without asking, as a transcript block.
@@ -108,5 +107,3 @@ class PermissionService:
         if guest is not None and guest.perms is not None:
             guest.perms._cwd = cwd
 
-    # Private method aliases for bridge facade
-    _perm_reply = reply

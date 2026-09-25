@@ -1,7 +1,7 @@
 """HELLO negotiation: the checks between "a TCP connection landed" and "a
 GuestSession may be built or resumed for it".
 
-Before this, `Bridge._attach` (`server.py`) did five separable things in one
+Before this, `ConnectionService.attach` (`server.py`) did five separable things in one
 115-line method: read the first frame under a deadline (still `_read_hello`,
 not here), check version and frame cap, compare the secret, parse and
 validate caps, and only then attach -- create or resume the `GuestSession`
@@ -11,8 +11,8 @@ socket, a `GuestSession`, or the rest of `Bridge`'s state, which is exactly
 why `test_server_integration.py`'s real-socket tests were the only way to
 reach any of them. `negotiate` below is directly callable in a unit test.
 
-Deliberately NOT here: the busy check (`Bridge._guest and
-Bridge._guest.connected`). It answers "is another client already holding
+Deliberately NOT here: the busy check (`ConnectionService.guest and
+ConnectionService.guest.connected`). It answers "is another client already holding
 THIS bridge's one session", which is live process state, not a fact about
 the HELLO frame -- and it is also exactly the check R7 (multi-client) has to
 grow a `client_id` lookup into (docs/audit/02-bridge-python.md #7.1), so it
@@ -78,7 +78,7 @@ def negotiate(headers: dict, secret: str) -> Handshake:
     """Check version, frame cap, secret and caps against one HELLO's
     headers; raise `Refused` on the first thing wrong.
 
-    Order matches the previous inline checks in `Bridge._attach`: a version
+    Order matches the previous inline checks in `ConnectionService.attach`: a version
     mismatch is reported ahead of a bad secret, because a guest speaking the
     wrong protocol version needs to know that before anything else it is
     told can be trusted.

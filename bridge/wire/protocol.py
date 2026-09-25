@@ -384,7 +384,7 @@ def status_frame(text: str = "") -> Frame:
 
 
 def turn_start() -> Frame:
-    """Sent both for a fresh turn and, by `Bridge._reissue_turn`, to restore
+    """Sent both for a fresh turn and, by `SessionCoordinator.reissue_turn`, to restore
     the busy UI after a reconnect -- same headers either way."""
     return Frame("TURN", {"state": "start"})
 

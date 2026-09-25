@@ -449,15 +449,3 @@ class SessionService:
             return
         await self.options.send_options(guest)
 
-    # Aliases
-    _make_session = make_session
-    _resume_pending = resume_pending
-    _new_session_locked = new_session_locked
-    _switch_locked = switch_locked
-    _set_effort_locked = set_effort_locked
-    _send_sessions = send_sessions
-    _on_getsessions = on_getsessions
-    _on_export = on_export
-    _conv_title = conv_title
-    _abandon_pending = abandon_pending
-    _restore_settings = restore_settings
