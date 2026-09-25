@@ -18,6 +18,7 @@ WCC   = $(OWBIN)/wcc386
 WPP   = $(OWBIN)/wpp386
 WLINK = $(OWBIN)/wlink
 WRC   = $(OWBIN)/wrc
+WLIB  = $(OWBIN)/wlib
 
 # wlink finds wlink.lnk (which defines `nt_win`) via PATH, not via $WATCOM and
 # not via its own directory. WLINK_LNK is stricter and immune to another
@@ -69,15 +70,29 @@ objs = $(patsubst %,$(OBJ)/%.o,$(basename $(1)))
 
 MINIZ = third_party/miniz/miniz.c
 
+# Static libraries (docs/REMOTE.md). Each is built from its sources' mirrored
+# objects into $(LIBDIR), and targets list it among their inputs like any
+# object. wlink pulls in only the members something references.
+#
+# No duplicate-name check is needed inside a lib: wlib names each member by
+# the full source path the compiler recorded (`/.../win/core/str.c`), not the
+# object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
+LIBDIR = $(BUILD)/lib
+CORE_SRCS = core/log.cpp core/ini.cpp core/str.c core/path.c
+LIBCORE = $(LIBDIR)/libcore.lib
+
+# A target's inputs are objects, libraries and (for the client) a .res; this
+# turns them into wlink directives. `library` may repeat.
+LINKIN = file {$(filter %.o,$^)} $(foreach l,$(filter %.lib,$^),library $(l))
+
 CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        app/pagebar.cpp app/optmenu.cpp app/input.cpp app/hostdlg.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
-       net/net.cpp net/frameproto.cpp core/log.cpp core/ini.cpp core/str.c \
-       core/path.c app/htmlview.cpp $(MINIZ) rpc/exec.cpp rpc/rpc.cpp \
-       sync/sync.cpp sync/syncrpc.cpp
-OBJS = $(call objs,$(CLIENT_SRCS))
+       net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
+       rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
+OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
 
 .PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
@@ -94,50 +109,48 @@ HTMLSPIKE_OBJS = $(call objs,checks/htmlspike.c)
 htmlspike: $(BUILD)/htmlspike.exe
 $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 	@$(WLINK) $(LFLAGS) library ole32.lib, oleaut32.lib, uuid.lib \
-	  name $@ file {$(HTMLSPIKE_OBJS)}
+	  name $@ $(LINKIN)
 	@echo "built $@"
 	@objdump -p $@ | grep -i 'DLL Name'
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp core/log.cpp \
-                 core/str.c core/path.c $(MINIZ))
+SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp $(MINIZ)) $(LIBCORE)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(SYNCCHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = $(call objs,checks/inicheck.c core/ini.cpp core/log.cpp core/str.c)
+INICHECK_OBJS = $(call objs,checks/inicheck.c) $(LIBCORE)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(INICHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
 # The frame header contract, run against the shipping frameproto.o. Exists
 # because frameproto.h claimed for three phases that header values were
 # percent-encoded, and that was true of the parser and false of the builder --
 # nothing ran the two halves against each other.
-FRAMECHECK_OBJS = $(call objs,checks/framecheck.cpp net/frameproto.cpp core/str.c \
-                  core/log.cpp)
+FRAMECHECK_OBJS = $(call objs,checks/framecheck.cpp net/frameproto.cpp) $(LIBCORE)
 framecheck: $(BUILD)/framecheck.exe
 $(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(FRAMECHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
 # Asserts the C++ guards actually guard: that Buf reports truncation at and
 # past the limit, and that every destructor fires, in order, on every path.
 # Guard code that is wrong is worse than no guard, because it is trusted.
-CPPCHECK_OBJS = $(call objs,checks/cppcheck.cpp core/str.c core/log.cpp)
+CPPCHECK_OBJS = $(call objs,checks/cppcheck.cpp) $(LIBCORE)
 cppcheck: $(BUILD)/cppcheck.exe
 $(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(CPPCHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
 # 03.12: prints the guest's own capability-enum values by name (stringified
@@ -148,7 +161,7 @@ CAPSCHECK_OBJS = $(call objs,checks/capscheck.c)
 capscheck: $(BUILD)/capscheck.exe
 $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(CAPSCHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
 # The three answers to a filename collision, run against real directories.
@@ -161,26 +174,25 @@ $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 # guest and for the tests, so the format Python parses is the format that
 # ships. Takes a directory so it can run under Wine against a synthetic tree
 # with its own INI, without the toolchains actually being installed.
-TOOLCHECK_OBJS = $(call objs,checks/toolcheck.cpp app/tooldet.cpp core/str.c \
-                 core/log.cpp)
+TOOLCHECK_OBJS = $(call objs,checks/toolcheck.cpp app/tooldet.cpp) $(LIBCORE)
 toolcheck: $(BUILD)/toolcheck.exe
 $(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(TOOLCHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
-WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp core/path.c \
-                 core/str.c core/log.cpp sync/sync.cpp $(MINIZ))
+WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp sync/sync.cpp \
+                 $(MINIZ)) $(LIBCORE)
 workcheck: $(BUILD)/workcheck.exe
 $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  file {$(WORKCHECK_OBJS)}
+	  $(LINKIN)
 	@echo "built $@"
 
-PROBE_OBJS = $(call objs,checks/probe.c core/str.c $(MINIZ))
+PROBE_OBJS = $(call objs,checks/probe.c $(MINIZ)) $(LIBCORE)
 probe: $(BUILD)/probe.exe
 $(BUILD)/probe.exe: $(PROBE_OBJS)
-	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(PROBE_OBJS)}
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 	@echo "--- import audit (an NT-only symbol here would kill it at load) ---"
 	@objdump -p $@ | grep -i 'DLL Name'
@@ -212,11 +224,11 @@ all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
-                core/log.cpp core/str.c core/path.c $(MINIZ) rpc/exec.cpp \
-                rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp)
+                $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
+                sync/syncrpc.cpp) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
-	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 
 # Headless conformance check for 04.5's lane table: links the REAL rpc.c and
@@ -225,11 +237,11 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
-                core/log.cpp core/str.c core/path.c $(MINIZ) rpc/exec.cpp \
-                rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp)
+                $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
+                sync/syncrpc.cpp) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
-	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(RPCCHECK_OBJS)}
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 
 # Header dependencies come from the compiler. They used to be "every object
@@ -319,11 +331,15 @@ $(BUILD)/gaston.res: app/gaston.rc app/resource.h \
 $(BUILD):
 	@mkdir -p $(BUILD)
 
+$(LIBCORE): $(call objs,$(CORE_SRCS))
+	@mkdir -p $(@D)
+	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
+
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
 $(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res
 	@$(WLINK) $(LFLAGS), resource=$(BUILD)/gaston.res, \
-	  map=$(BUILD)/retroclaude.map $(LIBS) name $@ file {$(OBJS)}
+	  map=$(BUILD)/retroclaude.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # The CMOV gate used to be a count against a baseline, and the baseline moved
@@ -398,7 +414,8 @@ check: $(BUILD)/retroclaude.exe
 	  exit 1; \
 	else echo "   ok: none"; fi
 	@echo "=== stack frames (a frame >= one page steps over the guard page) ==="
-	@$(PYTHON) $(TOP)/tools/check/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map
+	@$(PYTHON) $(TOP)/tools/check/stackframes.py $(BUILD)/retroclaude.exe $(BUILD)/retroclaude.map \
+	   $(LIBCORE)
 	@echo "=== static allocation (the guest has 28KB free after a turn) ==="
 	@# Uninitialised statics are committed at load and are spent before the
 	@# app does anything -- rc_net_send's frame build buffer alone is 66,560
