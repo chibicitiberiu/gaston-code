@@ -493,7 +493,12 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
      (9 lifecycle traces) run under Wine by `tests/python/guest/`. The client
      links none of it yet; committed at load still 398,808.
    - **Step 1 is complete.**
-2. **libwire, extracted from `net.cpp`, not written fresh.** Its shutdown order
+2. *2a done 2026-09-25 (`4ea30a1`, `961cfd8`):* the frame codec is libwire
+   (`win/wire/frame.{h,cpp}`); `net/frameproto.*` keeps the client's version
+   and lane table. On the bridge side `bridge/wire/frame.py` is the codec,
+   stdlib only, with header text as a pluggable `TextCodec`;
+   `protocol.Frame`/`FrameReader` plug in the CP1252 folding.
+   **libwire, extracted from `net.cpp`, not written fresh.** Its shutdown order
    (FIN before join, leak on join timeout, no descriptor reuse) cost many fixes.
    Split `frameproto` into the codec (libwire) and the client's lane table
    (stays in `net/`). Add `Listener` and the server-side reader. `net.cpp` is
