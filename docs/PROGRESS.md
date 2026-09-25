@@ -3127,3 +3127,49 @@ libcore members an exe references). The client does not use `IniFile` or
 - **Resources go in `rc_cpp.h` guards** (`WindowGuard`, `Handle`,
   `UniqueObj`, `UniqueArr`). The first cut of `App` and `IniFile` held raw
   handles and `new[]`; the user caught it, and it is now a CLAUDE.md rule.
+
+## R9 -- the client onto the STL (2026-09-25)
+
+By decision, after measuring: exceptions on (`-xs`) so Open Watcom's STL can
+replace fixed `MAX_*` tables and hand-built strings where that helps.
+
+| Commit | What |
+|---|---|
+| `909dfe2` | `-xs`, `-DNOMINMAX`, `-wcd=433`; `operator new` once in `core/heap.cpp`, throwing `bad_alloc`; caught at `App::run` and the three thread entry points |
+| `66c18ea` | `ChatList` rows: `vector<Row>` of `std::string` |
+| `20a95d4` | all of `app/` compiled with `-os` |
+| `6f8e7d5` | `OptionMenus`: `vector<string>`, `vector<Command>`, `std::string` labels |
+| `898a0a1` | `AttachmentBar`: `vector<PillItem>`, `list<PillItem>` transfer queue, string getters; the worker's calls now lock |
+| `b24bb0a` | the HTML view's pre-ready queue is a `std::string`; `to_bstr` widens straight into the BSTR |
+| fix | the chat list bolds the conversation just opened (pre-existing, found on the guest) |
+
+Committed at load: 405,976 before; 434,648 with exceptions and no containers;
+451,081 now, with `app/` at `-os` (budget 470,000).
+
+### Decisions made while doing it
+
+- **Measured before accepting.** Exceptions alone are +27 KB committed at
+  load. The first container module added about 14 KB (`std::string` and
+  `vector` code linked in once), and each later one 5-12 KB for its own
+  instantiations. Watcom's `-ot` output for template code is large, so `app/`
+  moved to `-os`, which saved 19 KB and more than paid for the options menus.
+- **`W433` (mangled name truncated) is suppressed only after a test:**
+  `vector<string>` and `vector<wstring>`, both truncated, instantiated in two
+  objects of one exe, each ran its own code correctly under Wine.
+- **`operator new` had to move out of `rc_cpp.h`.** It was inline there, so
+  only files that included it used it; with STL objects crossing files one
+  allocator could free another's memory. The map shows libcore's definition
+  taken over the runtime's.
+- **Caps stay; storage goes.** `MAX_CHATS`, `MAX_OPTS` (it spaces menu-ID
+  ranges) and `RC_MAX_PILLS` remain as caps on what the wire can add; the
+  new transfer list has its own cap. Wire and capability limits
+  (`RC_MAX_FRAME`, the sync caps), byte caps on queues, Win32 API buffers
+  (`Buf`/`Path`), `net.cpp` (frozen until libwire) and tooldet (loop bounds
+  and API buffers) were left alone on purpose.
+- **`std::list` earned its place** in the attachment transfer queue (items
+  leave from the middle); as a vector it saved only 512 bytes.
+- **`std::wstring` is not used.** The only wide strings are handed straight
+  to MSHTML, and converting directly into the `BSTR` beats any temporary.
+- **A real race found on the way:** the sync worker read and edited the
+  attachment tables without the lock the UI thread used for them.
+
