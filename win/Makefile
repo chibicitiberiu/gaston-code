@@ -104,6 +104,11 @@ LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
             core/app.cpp core/window.cpp core/heap.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
+# The frame codec (docs/REMOTE.md, step 2). Knows the wire format and no
+# frame types; each protocol's types and lanes live with its exe. Listed
+# BEFORE libcore wherever both are linked, because it calls into libcore.
+WIRE_SRCS = wire/frame.cpp
+LIBWIRE = $(LIBDIR)/libwire.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this
 # turns them into wlink directives. `library` may repeat.
@@ -117,7 +122,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
-OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
+OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
 
 .PHONY: msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
@@ -192,7 +197,8 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 # because frameproto.h claimed for three phases that header values were
 # percent-encoded, and that was true of the parser and false of the builder --
 # nothing ran the two halves against each other.
-FRAMECHECK_OBJS = $(call objs,checks/framecheck.cpp net/frameproto.cpp) $(LIBCORE)
+FRAMECHECK_OBJS = $(call objs,checks/framecheck.cpp net/frameproto.cpp) \
+                  $(LIBWIRE) $(LIBCORE)
 framecheck: $(BUILD)/framecheck.exe
 $(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -281,7 +287,7 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBCORE)
+                sync/syncrpc.cpp) $(LIBWIRE) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -294,7 +300,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBCORE)
+                sync/syncrpc.cpp) $(LIBWIRE) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -418,6 +424,10 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 $(LIBCORE): $(call objs,$(CORE_SRCS))
+	@mkdir -p $(@D)
+	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
+
+$(LIBWIRE): $(call objs,$(WIRE_SRCS))
 	@mkdir -p $(@D)
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
