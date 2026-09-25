@@ -3088,3 +3088,42 @@ Static memory footprint verified via `make -C win check`: committed-at-load is 3
 All 3,190 tests and 16 golden traces pass.
 
 
+
+## R9 step 1 -- the build, libcore, and the container (2026-09-25)
+
+Plan: `docs/REMOTE.md`. Worked in a separate clone so a parallel agent on the
+main checkout was not disturbed.
+
+| # | Item | State |
+|---|---|---|
+| 1a | Objects mirror the source tree, no `VPATH`, compiler header dependencies (`c9d70fa`) | **done** -- all 12 exes disassemble identically to the build before |
+| 1b | Gates own our static libs and fail when blind (`310553d`); `libcore.lib` (`21a112e`); `make check` per exe (`497aa67`) | **done** -- each gate fails on a violation planted in libcore |
+| 1c | `IniFile` (`5e408b8`, `72d1116`), `App`/`Service` (`4d4f69b`) | **done** -- `inifilecheck` 28 cases, `appcheck` 9 traces, under Wine |
+
+Committed at load: 398,820 before, 398,808 after (wlink now pulls only the
+libcore members an exe references). The client does not use `IniFile` or
+`App` yet; that is the client refactor after gremote.
+
+### Decisions made while building
+
+- **No duplicate-name check inside a lib.** The review assumed `wlib` keys
+  members by basename. It keys them by the full source path the compiler
+  recorded; `a/x.o` and `b/x.o` coexist in one lib. Verified with a
+  throwaway lib before dropping the check.
+- **Dependency files are rewritten after each compile.** Watcom's `-ad`
+  writes the source's basename as the first dependency, and `-add=`
+  truncates a `/` path the same way; only a `\` path survives. One `sed`
+  puts the real path back.
+- **A stale map fooled the new coverage check once, correctly.** Rebuilding
+  with an older Makefile left a map listing core objects as `libcore.lib`
+  members; the "owned module never appears in the map" check failed on it.
+  That is the check doing its job, not a false alarm.
+- **Watcom specifics hit on the way:** `huge` is a reserved memory-model
+  keyword and cannot name a variable; `"\x01absent"` parses as the escape
+  `\x01a`, so control characters in literals are written in octal.
+- **`GetPrivateProfileString` does not strip inline comments.** The plan's
+  sample INI had them; `IniFile` rejects the value they leave behind, and
+  the sample now keeps comments on their own lines.
+- **Resources go in `rc_cpp.h` guards** (`WindowGuard`, `Handle`,
+  `UniqueObj`, `UniqueArr`). The first cut of `App` and `IniFile` held raw
+  handles and `new[]`; the user caught it, and it is now a CLAUDE.md rule.

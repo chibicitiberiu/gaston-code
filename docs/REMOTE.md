@@ -173,19 +173,25 @@ private:
 `gremote.ini` sits next to the exe (8.3 names: `GREMOTE.EXE`, `GREMOTE.INI`).
 
 ```ini
+; Comments go on their own line: GetPrivateProfileString does not strip an
+; inline "; ..." and IniFile rejects the value it leaves behind.
 [server]
 bind=0.0.0.0
-port=7401                ; 7890/7897 are the client, 7900+ the test harness
+; 7890/7897 are the client, 7900+ the test harness
+port=7401
 secret=change-me
-allow=192.168.1.0/24     ; peers outside this are closed before AUTH
-heartbeat_timeout_s=30  ; no frame from the client for this long drops it
+; peers outside this are closed before AUTH
+allow=192.168.1.0/24
+; no frame from the client for this long drops it
+heartbeat_timeout_s=30
 
 [exec]
 max_timeout_ms=120000
 max_output_kb=1024
 
 [ui]
-msaa=1                   ; 0 skips oleacc.dll even if present
+; 0 skips oleacc.dll even if present
+msaa=1
 max_tree_nodes=2000
 call_timeout_ms=2000
 
@@ -194,11 +200,11 @@ file=gremote.log
 level=info
 ```
 
-- `libcore` gets a generic reader over `GetPrivateProfileStringA`/`IntA` with
-  typed getters, defaults and bounds, truncation reported through `Buf`. The
-  client's `core/ini.cpp` (`rc_config`) stays until the client's own refactor;
-  the new reader gets a different file name (`core/inifile.cpp`) so the two
-  never collide in the build.
+- `libcore` has `IniFile` (`core/inifile.h`): typed getters with defaults and
+  bounds, strict whole-number parsing, `checkKeys()` so a typo like `prot=`
+  is an error rather than a silent default, and refusal of a bare filename
+  (the profile API would read it from `C:\WINDOWS`). The client's
+  `core/ini.cpp` (`rc_config`) stays until the client's own refactor.
 - **The composition root loads the INI once into per-service config structs**
   (`ServerConfig`, `ExecConfig`, `UiConfig`) and hands each service its struct.
   Services never read the INI.
@@ -463,10 +469,11 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
      when blind; `libcore.lib` built with `wlib` and linked by every exe; `make
      check` per exe. Each gate proven to fire on a violation planted in
      libcore. Committed at load 398,808.
-   - *1c:* move
-   log/str/path/`rc_cpp.h` into libcore; add `inifile` and `App`/`Service`.
-   Relink the client and the check exes. Done when the gates provably still fire
-   on lib code and the client's committed-at-load number has not moved.
+   - *1c, done (`5e408b8`, `72d1116`, `4d4f69b`):* `IniFile` and
+     `App`/`Service` in libcore, with `inifilecheck` (28 cases) and `appcheck`
+     (9 lifecycle traces) run under Wine by `tests/python/guest/`. The client
+     links none of it yet; committed at load still 398,808.
+   - **Step 1 is complete.**
 2. **libwire, extracted from `net.cpp`, not written fresh.** Its shutdown order
    (FIN before join, leak on join timeout, no descriptor reuse) cost many fixes.
    Split `frameproto` into the codec (libwire) and the client's lane table
