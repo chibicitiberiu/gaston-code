@@ -1,11 +1,14 @@
 """App's lifecycle, run as the shipping code under Wine.
 
-`win/core/app.cpp` is the container every service in gremote.exe (and later
-the client) runs under. Its ordering promises are the kind that read right
-and behave otherwise, so `win/checks/appcheck.cpp` records every call into a
+`win/core/app.cpp` runs a fixed sequence of hooks -- initialize, parseArgs,
+initializeServices, startServices, main, stopServices, cleanup -- that a
+derived app fills, holding its services as UniqueObj members it creates and
+takes down itself. Its ordering promises are the kind that read right and
+behave otherwise, so `win/checks/appcheck.cpp` records every call into a
 trace and these assert on the trace, not on the header's description of it.
 
-Letters: i init, s start, x signalStop, j join, d destructor, then the id.
+Tokens: I. initialize, P. parseArgs, C. cleanup, f. preTranslate consumed;
+then i init, s start, x signalStop, j join, d destructor, and the service id.
 """
 
 import conftest
@@ -27,18 +30,22 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 10, sorted(verdicts)
+    assert len(verdicts) == 11, sorted(verdicts)
 
 
 def test_up_in_order_down_in_reverse_signal_before_join(verdicts):
     """Every service is signalled before any is joined, so threads wind down
     in parallel and one slow service does not hold the rest."""
     assert verdicts["normal-order"][1] == \
-        "iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA"
+        "I. P. iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA C."
 
 
-def test_a_failed_init_tears_down_only_what_initialised(verdicts):
-    assert verdicts["init-failure-unwinds"][1] == "iA iB xA jA dC dB dA"
+def test_a_failed_init_stops_what_exists_and_creates_nothing_after(verdicts):
+    """B was created and its init failed; C was never created. Stopping
+    reaches every service that exists, so B must cope with a stop after a
+    failed init."""
+    assert verdicts["init-failure-unwinds"][1] == \
+        "I. P. iA iB xB xA jB jA dB dA C."
 
 
 def test_a_stuck_service_is_leaked_not_deleted(verdicts):
@@ -53,7 +60,11 @@ def test_windows_ending_the_session_stops_services_once(verdicts):
     assert trace.count("xA") == 1 and trace.count("jA") == 1
 
 
-def test_message_filters_run_in_order_and_the_first_consumer_wins(verdicts):
-    """The client's accelerators and IsDialogMessage ride on this: a key
-    the accelerator table took must not also reach the dialog manager."""
-    assert verdicts["filters-in-order-first-consumer-wins"][1] == "f1 f2"
+def test_pretranslate_sees_messages_before_dispatch(verdicts):
+    """The client's accelerators and IsDialogMessage ride on this."""
+    assert verdicts["pretranslate-consumes"][0] == "pass"
+
+
+def test_exit_with_zero_is_not_a_failure(verdicts):
+    """The single-instance check stops the second copy this way."""
+    assert verdicts["exit-with-skips-the-rest"][1] == "I. C."

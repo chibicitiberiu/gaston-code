@@ -1,12 +1,14 @@
 /* Does App run the lifecycle it documents?
  *
- * Drives the real `win/core/app.cpp` with services that record every call
- * into one trace, and prints `verdict<TAB>case<TAB>trace` rows for
- * tests/python/guest/test_guest_app.py. The trace is the detail column, so a
- * failure shows the order that actually happened.
+ * Drives the real `win/core/app.cpp` with a derived app whose hooks and
+ * services record every call into one trace, and prints
+ * `verdict<TAB>case<TAB>trace` rows for tests/python/guest/test_guest_app.py.
+ * The trace is the detail column, so a failure shows the order that actually
+ * happened.
  *
- * Trace letters: i init, s start, x signalStop, j join, d destructor, each
- * followed by the service's id.
+ * Trace tokens: I. initialize, P. parseArgs, C. cleanup, f. preTranslate
+ * consumed the check message; then per service i init, s start,
+ * x signalStop, j join, d destructor, followed by the service's id.
  */
 #include <windows.h>
 #include <process.h>
@@ -17,6 +19,10 @@
 
 /* POD, so no static constructor (make check fails the build on one). */
 static char g_trace[512];
+static HINSTANCE g_instance;
+
+/* Its own block, clear of core/'s WM_APP + 0x100 (tools/check/msgids.py). */
+#define WM_CHECK_FILTERED (WM_APP + 0x200)
 
 static void trace(char what, char id)
 {
@@ -44,7 +50,8 @@ enum
     QUIT_ON_START = 4,
     STUCK_JOIN = 8,
     QUIT_FROM_THREAD = 16,
-    END_SESSION_ON_START = 32
+    END_SESSION_ON_START = 32,
+    POST_FILTERED_ON_START = 64
 };
 
 static unsigned __stdcall quitLater(void *arg)
@@ -65,10 +72,7 @@ public:
         m_name[2] = '\0';
     }
 
-    ~Recorder()
-    {
-        trace('d', m_id);
-    }
+    ~Recorder() { trace('d', m_id); }
 
     const char *name() const { return m_name; }
 
@@ -91,6 +95,11 @@ public:
         }
         if (m_flags & END_SESSION_ON_START)
             PostMessageA(m_app->window(), WM_ENDSESSION, TRUE, 0);
+        if (m_flags & POST_FILTERED_ON_START)
+        {
+            PostMessageA(m_app->window(), WM_CHECK_FILTERED, 0, 0);
+            m_app->quit(0);
+        }
         return !(m_flags & FAIL_START);
     }
 
@@ -112,57 +121,92 @@ private:
     char m_name[3];
 };
 
-/* A message only the filters below care about. Its own block, clear of
- * core/'s WM_APP + 0x100 (tools/check/msgids.py keeps it that way). */
-#define WM_CHECK_FILTERED (WM_APP + 0x200)
-
-class Filter : public MessageFilter
+enum
 {
-public:
-    Filter(char id, bool consume) : m_id(id), m_consume(consume) {}
-
-    bool filter(MSG &msg)
-    {
-        if (msg.message != WM_CHECK_FILTERED)
-            return false;
-        trace('f', m_id);
-        return m_consume;
-    }
-
-private:
-    char m_id;
-    bool m_consume;
+    APP_FAIL_INITIALIZE = 1,
+    APP_EXIT_ZERO = 2,
+    APP_NO_SERVICES = 4
 };
 
-/* Posts the filtered message, then asks to quit behind it. */
-class Poster : public Service
+/* Three services, A B C, created in order with their dependencies (here
+ * just the app) in initializeServices, and taken down by hand. */
+class TestApp : public App
 {
 public:
-    explicit Poster(App *app) : m_app(app) {}
-    const char *name() const { return "poster"; }
-    bool init() { return true; }
-    bool start()
+    TestApp(unsigned a, unsigned b, unsigned c, unsigned appFlags = 0)
+        : App(g_instance), m_flagsA(a), m_flagsB(b), m_flagsC(c),
+          m_appFlags(appFlags)
     {
-        PostMessageA(m_app->window(), WM_CHECK_FILTERED, 0, 0);
-        m_app->quit(0);
+    }
+
+protected:
+    bool initialize()
+    {
+        trace('I', '.');
+        if (m_appFlags & APP_EXIT_ZERO)
+            return exitWith(0);
+        return !(m_appFlags & APP_FAIL_INITIALIZE);
+    }
+
+    bool parseArgs(const char *cmdLine)
+    {
+        (void)cmdLine;
+        trace('P', '.');
         return true;
     }
 
+    bool initializeServices()
+    {
+        if (m_appFlags & APP_NO_SERVICES)
+            return true;
+        return initService(m_a, new Recorder(this, 'A', m_flagsA)) &&
+               initService(m_b, new Recorder(this, 'B', m_flagsB)) &&
+               initService(m_c, new Recorder(this, 'C', m_flagsC));
+    }
+
+    bool startServices()
+    {
+        return (!m_a.valid() || m_a->start()) &&
+               (!m_b.valid() || m_b->start()) &&
+               (!m_c.valid() || m_c->start());
+    }
+
+    bool preTranslate(MSG &msg)
+    {
+        if (msg.message != WM_CHECK_FILTERED)
+            return false;
+        trace('f', '.');
+        return true;
+    }
+
+    void stopServices()
+    {
+        if (m_c.valid()) m_c->signalStop();
+        if (m_b.valid()) m_b->signalStop();
+        if (m_a.valid()) m_a->signalStop();
+        joinOrLeak(m_c, 10);
+        joinOrLeak(m_b, 10);
+        joinOrLeak(m_a, 10);
+    }
+
+    void cleanup()
+    {
+        m_c.reset();
+        m_b.reset();
+        m_a.reset();
+        trace('C', '.');
+    }
+
 private:
-    App *m_app;
+    unsigned m_flagsA, m_flagsB, m_flagsC, m_appFlags;
+    UniqueObj<Recorder> m_a, m_b, m_c;
 };
 
-static HINSTANCE g_instance;
-
-static App *three(unsigned a, unsigned b, unsigned c)
+static int runOnce(TestApp *app)
 {
-    App *app = App::create(g_instance);
-    if (!app)
-        return 0;
-    app->addService(new Recorder(app, 'A', a));
-    app->addService(new Recorder(app, 'B', b));
-    app->addService(new Recorder(app, 'C', c));
-    return app;
+    int code = app->run("");
+    delete app;
+    return code;
 }
 
 int main(void)
@@ -170,96 +214,66 @@ int main(void)
     g_instance = GetModuleHandleA(0);
 
     {
-        App *app = three(0, 0, QUIT_ON_START);
-        int code = app->run();
-        delete app;
+        int code = runOnce(new TestApp(0, 0, QUIT_ON_START));
         say("normal-order", code == 7 && strcmp(g_trace,
-            "iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA") == 0);
+            "I. P. iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA C.") == 0);
     }
     {
-        /* B never initialised, so only A is torn down; C is still owned and
-         * deleted. B's own init must clean up after itself. */
-        App *app = three(0, FAIL_INIT, 0);
-        int code = app->run();
-        delete app;
+        /* B was created but its init failed; C never was. Stop reaches
+         * every service that exists, and B must cope with it. */
+        int code = runOnce(new TestApp(0, FAIL_INIT, 0));
         say("init-failure-unwinds", code == App::RUN_FAILED && strcmp(g_trace,
-            "iA iB xA jA dC dB dA") == 0);
+            "I. P. iA iB xB xA jB jA dB dA C.") == 0);
     }
     {
-        /* All three initialised, so all three are signalled and joined,
-         * including B whose start failed and C which never started. */
-        App *app = three(0, FAIL_START, 0);
-        int code = app->run();
-        delete app;
+        int code = runOnce(new TestApp(0, FAIL_START, 0));
         say("start-failure-unwinds", code == App::RUN_FAILED && strcmp(g_trace,
-            "iA iB iC sA sB xC xB xA jC jB jA dC dB dA") == 0);
+            "I. P. iA iB iC sA sB xC xB xA jC jB jA dC dB dA C.") == 0);
     }
     {
-        /* B's threads did not stop: it is joined, reported, and NOT deleted. */
-        App *app = three(0, STUCK_JOIN, QUIT_ON_START);
-        app->setJoinTimeout(10);
-        app->run();
-        delete app;
+        /* B's threads did not stop: joined, reported, and NOT deleted. */
+        runOnce(new TestApp(0, STUCK_JOIN, QUIT_ON_START));
         say("stuck-join-is-leaked", strcmp(g_trace,
-            "iA iB iC sA sB sC xC xB xA jC jB jA dC dA") == 0);
+            "I. P. iA iB iC sA sB sC xC xB xA jC jB jA dC dA C.") == 0);
     }
     {
-        App *app = three(0, QUIT_FROM_THREAD, 0);
-        int code = app->run();
-        delete app;
+        int code = runOnce(new TestApp(0, QUIT_FROM_THREAD, 0));
         say("quit-from-another-thread", code == 3);
     }
     {
-        /* Windows ending the session stops the services from inside the
+        /* Windows ending the session stops and cleans up from inside the
          * message, once, and the loop then ends. */
-        App *app = three(0, 0, END_SESSION_ON_START);
-        int code = app->run();
-        delete app;
+        int code = runOnce(new TestApp(0, 0, END_SESSION_ON_START));
         say("end-session-stops-once", code == 0 && strcmp(g_trace,
-            "iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA") == 0);
+            "I. P. iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA C.") == 0);
     }
     {
-        App *app = App::create(g_instance);
+        TestApp *app = new TestApp(0, 0, 0, APP_NO_SERVICES);
         app->quit(5);
-        int code = app->run();
-        int again = app->run();
+        int code = app->run("");
+        int again = app->run("");
         delete app;
         say("quit-before-run-and-run-once",
             code == 5 && again == App::RUN_FAILED);
     }
     {
-        App *app = App::create(g_instance);
-        bool nullRefused = !app->addService(0);
-        bool filled = true;
-        for (int i = 0; i < App::MAX_SERVICES; i++)
-            filled = app->addService(new Recorder(app, 'a', 0)) && filled;
-        g_trace[0] = '\0';
-        bool overflowRefused = !app->addService(new Recorder(app, 'Z', 0));
-        bool overflowDeleted = strcmp(g_trace, "dZ") == 0;
-        delete app;
-        say("add-refuses-null-and-full-and-owns-the-reject",
-            nullRefused && filled && overflowRefused && overflowDeleted);
+        /* The single-instance shape: stop early, and it is not a failure. */
+        int code = runOnce(new TestApp(0, 0, 0, APP_EXIT_ZERO));
+        say("exit-with-skips-the-rest", code == 0 &&
+            strcmp(g_trace, "I. C.") == 0);
     }
     {
-        App *app = three(0, 0, 0);
-        delete app;
-        say("never-run-deletes-without-stopping",
-            strcmp(g_trace, "dC dB dA") == 0);
+        int code = runOnce(new TestApp(0, 0, 0, APP_FAIL_INITIALIZE));
+        say("initialize-failure", code == App::RUN_FAILED &&
+            strcmp(g_trace, "I. C.") == 0);
     }
     {
-        /* Filters run in the order added, and the first to consume the
-         * message stops the rest from seeing it. */
-        App *app = App::create(g_instance);
-        Filter one('1', false), two('2', true), three_('3', true);
-        bool added = app->addMessageFilter(&one) &&
-                     app->addMessageFilter(&two) &&
-                     app->addMessageFilter(&three_) &&
-                     !app->addMessageFilter(0);
-        app->addService(new Poster(app));
-        int code = app->run();
-        delete app;
-        say("filters-in-order-first-consumer-wins",
-            added && code == 0 && strcmp(g_trace, "f1 f2") == 0);
+        runOnce(new TestApp(0, 0, POST_FILTERED_ON_START));
+        say("pretranslate-consumes", strstr(g_trace, "f.") != 0);
+    }
+    {
+        delete new TestApp(0, 0, 0);
+        say("never-run-creates-nothing", g_trace[0] == '\0');
     }
     return 0;
 }

@@ -1,10 +1,12 @@
 /* retroclaude.exe -- native Windows 98 client for Claude Code.
  *
- * WinMain is the composition root (docs/REMOTE.md, C4-C5a). Log, the
- * single-instance check, common controls and the config run first, because
- * each can end the process before there is anything to stop. Then it builds
- * the services, hands each its dependencies, and App runs their lifecycle.
- * Everything it hands out lives until App has shut down.
+ * ClientApp is the composition root (docs/REMOTE.md, C4-C5a): App runs the
+ * lifecycle and ClientApp fills in each phase. initialize() does what can
+ * end the process before there is anything to stop -- log, the
+ * single-instance check, common controls, the config. initializeServices()
+ * then creates the services in dependency order, each handed what it needs
+ * through its constructor, and stopServices()/cleanup() take them down in
+ * reverse. WinMain only makes the object and runs it.
  *
  * Build: see Makefile. Target is Win98 SE on a Pentium MMX 200 with 32MB.
  */
@@ -23,11 +25,6 @@
 #include "net/net.h"
 #include "sync/syncrpc.h"
 
-/* POD, so no static constructor runs before WinMain (core/rc_cpp.h). They
- * outlive App, which is deleted before WinMain returns. */
-static ClientConfig g_config;
-static rc_net g_connection;
-static char g_exeDir[MAX_PATH];
 
 static void exeDir(char *out, unsigned n)
 {
@@ -40,17 +37,54 @@ static void exeDir(char *out, unsigned n)
     out[n - 1] = '\0';
 }
 
-int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+/* Owns what the services are handed, and the services themselves. Heap
+ * allocated by WinMain: a file-scope object would construct before WinMain
+ * and the log, and a local would put it all in one stack frame. */
+class ClientApp : public App
+{
+public:
+    ClientApp(HINSTANCE instance, int show);
+
+protected:
+    bool initialize();
+    bool initializeServices();
+    bool startServices();
+    bool preTranslate(MSG &msg);
+    void stopServices();
+    void cleanup();
+
+private:
+    int m_show;
+    char m_exeDir[MAX_PATH];
+    ClientConfig m_config;
+    rc_net m_net;
+    UniqueObj<ConfigStore> m_store;
+    /* Services, in dependency order: OLE before the window that hosts
+     * MSHTML, the window before the connection that posts to it. */
+    UniqueObj<OleService> m_ole;
+    UniqueObj<MainWindow> m_window;
+    UniqueObj<ConnectionService> m_connection;
+};
+
+ClientApp::ClientApp(HINSTANCE instance, int show)
+    : App(instance), m_show(show)
+{
+    /* rc_net and ClientConfig are C structs that used to be zero-filled
+     * statics. */
+    m_exeDir[0] = '\0';
+    memset(&m_config, 0, sizeof m_config);
+    memset(&m_net, 0, sizeof m_net);
+}
+
+bool ClientApp::initialize()
 {
     INITCOMMONCONTROLSEX icc;
-
-    (void)prev; (void)cmd;
 
     /* Log from the very first statement. On this platform "no log file was
      * created" is the primary diagnostic: an NT-only static import kills the
      * process at load, before WinMain, leaving nothing else behind. */
-    exeDir(g_exeDir, sizeof(g_exeDir));
-    rc_log_open(g_exeDir);
+    exeDir(m_exeDir, sizeof(m_exeDir));
+    rc_log_open(m_exeDir);
     rc_log("os version: %08lx", GetVersion());
 
     /* One instance. A second one is not a harmless duplicate: the bridge holds
@@ -84,7 +118,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                 SetForegroundWindow(other);
             }
             CloseHandle(once);
-            return 0;
+            return exitWith(0);
         }
         /* Deliberately never closed: the handle IS the lock, and it is
          * released when the process exits, however it exits. */
@@ -103,18 +137,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     /* A value present but wrong refuses startup, naming the key, rather
      * than connecting somewhere nobody configured (docs/REMOTE.md, C3). */
-    ConfigStore *store = new ConfigStore(g_exeDir);
-    if (!store || !store->load(&g_config)) {
+    m_store.reset(new ConfigStore(m_exeDir));
+    if (!m_store.valid() || !m_store->load(&m_config)) {
         char msg[512];
         rc_strf(msg, sizeof(msg),
                 "retroclaude.ini has a setting that cannot be used:\n\n%s\n\n"
                 "Fix or remove it and start again.\n\n%s",
-                store ? store->error() : "out of memory",
-                store ? store->path() : "");
+                m_store.valid() ? m_store->error() : "out of memory",
+                m_store.valid() ? m_store->path() : "");
         MessageBoxA(0, msg, RC_TITLE, MB_OK | MB_ICONSTOP);
-        delete store;
-        rc_log_close();
-        return 1;
+        return false;
     }
     /* The configured root, which is NOT the same thing as the tree being
      * mirrored. Nothing is mirrored at startup and nothing is mirrored while
@@ -125,8 +157,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
      *
      * This one is still recorded, because it is what HELLO reports and what
      * a conversation's folder gets created under. */
-    rc_syncrpc_set_home(g_config.syncRoot);
-    if (g_config.syncRoot[0]) {
+    rc_syncrpc_set_home(m_config.syncRoot);
+    if (m_config.syncRoot[0]) {
         /* CREATE IT if it is not there, parents and all. A sync root is a
          * place the user named in the INI, not a place they are asserting
          * already exists -- the first run after setting one has no folder
@@ -134,12 +166,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
          * scan returned no_root", which is a sentence nobody should have to
          * decode to find out that a directory needed making. A typo'd drive
          * still fails, and still says so. */
-        if (GetFileAttributesA(g_config.syncRoot) == 0xFFFFFFFF) {
-            if (rc_mkpath(g_config.syncRoot))
-                rc_log("sync: created %s", g_config.syncRoot);
+        if (GetFileAttributesA(m_config.syncRoot) == 0xFFFFFFFF) {
+            if (rc_mkpath(m_config.syncRoot))
+                rc_log("sync: created %s", m_config.syncRoot);
             else
                 rc_log("sync: cannot create %s (%lu); synchronisation will "
-                       "not start", g_config.syncRoot,
+                       "not start", m_config.syncRoot,
                        (unsigned long)GetLastError());
         }
         /* No recovery pass here any more. An interrupted commit is staged
@@ -149,27 +181,59 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
          * right moment (before the first scan of that tree, so it cannot
          * see the file missing and report a deletion nobody made). */
         rc_log("sync: conversations get their folders under %s",
-               g_config.syncRoot);
+               m_config.syncRoot);
     }
+    return true;
+}
 
-    /* Registration order is dependency order: OLE before the window that
-     * hosts MSHTML, the window before the connection that posts to it.
-     * Shutdown runs the other way. addService takes ownership even when it
-     * refuses, so each service is allocated only once the one before it is
-     * in, and nothing is left unowned on a failure. */
-    App *app = App::create(inst);
-    bool built = app && app->addService(new OleService(RC_TITLE));
-    MainWindow *window = built ? new MainWindow(inst, show, app, &g_config, store,
-                                           g_exeDir, &g_connection) : 0;
-    built = built && app->addService(window) &&
-            app->addMessageFilter(window) &&
-            app->addService(new ConnectionService(&g_connection));
-    int code = built ? app->run() : App::RUN_FAILED;
-    if (!built) rc_log("startup: could not build the application");
+bool ClientApp::initializeServices()
+{
+    return initService(m_ole, new OleService(RC_TITLE)) &&
+           initService(m_window, new MainWindow(instance(), m_show, this,
+                                                &m_config, m_store.get(),
+                                                m_exeDir, &m_net)) &&
+           initService(m_connection, new ConnectionService(&m_net));
+}
 
+bool ClientApp::startServices()
+{
+    return m_ole->start() && m_window->start() && m_connection->start();
+}
+
+bool ClientApp::preTranslate(MSG &msg)
+{
+    return m_window.valid() && m_window->filter(msg);
+}
+
+void ClientApp::stopServices()
+{
+    /* Signal all, then join each, in reverse. The connection stops first,
+     * while the window its reader posts frames to still exists; OLE goes
+     * last, after the window has released MSHTML. */
+    if (m_connection.valid()) m_connection->signalStop();
+    if (m_window.valid()) m_window->signalStop();
+    if (m_ole.valid()) m_ole->signalStop();
+    joinOrLeak(m_connection, 5000);
+    joinOrLeak(m_window, 5000);
+    joinOrLeak(m_ole, 5000);
+}
+
+void ClientApp::cleanup()
+{
+    m_connection.reset();
+    m_window.reset();
+    m_ole.reset();
+    m_store.reset();
     rc_log_mem("exiting");
-    delete app;
-    delete store;
     rc_log_close();
+}
+
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
+{
+    (void)prev;
+    UniqueObj<ClientApp> app(new ClientApp(inst, show));
+    if (!app.valid())
+        return 1;
+    int code = app->run(cmd);
     return code == App::RUN_FAILED ? 1 : code;
 }

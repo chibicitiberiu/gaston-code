@@ -27,8 +27,7 @@
  * by it, so it is named once, here. */
 #define RC_MAIN_CLASS "RetroClaudeWnd"
 
-class MainWindow : public Service, public MessageFilter,
-                   public ReconnectListener, public TurnListener,
+class MainWindow : public Service, public ReconnectListener, public TurnListener,
                    public FrameSender
 {
 public:
@@ -40,7 +39,8 @@ public:
     bool start();
     bool join(DWORD timeoutMs);
 
-    /* The loop's own keys, in the order they always ran. True consumes. */
+    /* The loop's own keys, in the order they always ran, for the app's
+     * preTranslate. True consumes. */
     bool filter(MSG &msg);
 
     /* ReconnectListener */
