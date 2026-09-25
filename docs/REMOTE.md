@@ -408,16 +408,18 @@ with Remote("192.168.1.50", secret="...") as r:
   different directories simply cannot collide, and `VPATH` goes away.
 - **Explicit source lists per target**, not pattern discovery. Each lib and exe
   names its sources by path; the object list is derived from it.
-- **Libs are built with `wlib -q -b -n`** into `$(BUILD)/lib/`. `wlib` is used
-  nowhere yet, so step 1 invents the rule. Inside one `.lib` a module is named
-  by its basename, and adding a second module of the same name replaces the
-  first without a word, so a check fails on duplicate basenames **within a
-  lib**. Across libs they are fine.
+- **Libs are built with `wlib -q -b -n`** into `$(BUILD)/lib/`, and a target
+  lists a lib among its inputs like an object. No duplicate-name check is
+  needed: `wlib` names each member by the full source path the compiler
+  recorded, not the object's basename, so `a/x.o` and `b/x.o` coexist
+  (verified; the review assumed otherwise).
 - **Header dependencies from the compiler**, not a wildcard. `HDRS` today is
   every header under a hardcoded directory list, so a new directory's headers
   never trigger rebuilds. `wcc386`/`wpp386 -ad=<file>.d -adt=<obj> -adfs` write
-  a make-style dependency file next to each object (verified on this
-  toolchain 2026-09-25), and the Makefile `-include`s them.
+  a make-style dependency file next to each object, and the Makefile
+  `-include`s them. Watcom writes the source's basename as the first
+  dependency and `-add=` truncates a `/` path the same way, so the recipe
+  rewrites that one token.
 - **The gates key on object paths, not basenames**, now that basenames can
   repeat (`cmovcheck.py` matches basenames against `$(OBJS)` today).
 - **`make check` is parameterised by EXE / MAP / CAP** and runs for both
@@ -453,12 +455,15 @@ in every measurement taken while it is running.
 Each step leaves `retroclaude.exe` building and behaving the same, and ends
 with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 
-1. **The build first, then libcore.** As its own commit, with no source moved:
-   mirrored object tree, no `VPATH`, explicit source lists, real header
-   dependencies, and proof that it changed nothing
-   (same imports, same committed-at-load number, all gates green). Then the
-   `wlib` rule, the in-lib duplicate check, the gate fixes above, `check`
-   parameterised. Then move
+1. **The build first, then libcore.**
+   - *1a, done (`c9d70fa`):* mirrored object tree, no `VPATH`, explicit source
+     lists, compiler header dependencies. All 12 exes disassemble identically
+     to the build before it.
+   - *1b, done (`310553d`, `21a112e`, `497aa67`):* gates own our libs and fail
+     when blind; `libcore.lib` built with `wlib` and linked by every exe; `make
+     check` per exe. Each gate proven to fire on a violation planted in
+     libcore. Committed at load 398,808.
+   - *1c:* move
    log/str/path/`rc_cpp.h` into libcore; add `inifile` and `App`/`Service`.
    Relink the client and the check exes. Done when the gates provably still fire
    on lib code and the client's committed-at-load number has not moved.
