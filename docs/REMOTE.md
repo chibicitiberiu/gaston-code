@@ -494,8 +494,41 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    that order. Each verified on the P200, not just Wine: window trees, focus and
    input are exactly where Wine lies.
 
-After that, moving the client onto `App` and the libs is its own phase with
-its own plan. The Phase 6 agent tools then need only handlers and bridge work.
+### The client is the first consumer (decided 2026-09-25)
+
+The libraries exist to be shared, so the client moves onto them **before**
+gremote is written, not after: every lib is proven in the shipping program
+first. Each C-step is a small commit that leaves the client working.
+
+- **C0. Budget.** Linking `App` and `IniFile` costs about 6 KB committed at
+  load (measured: `App` +2,560, `IniFile` +3,584, both +6,144 over 398,808).
+  `COMMITTED_CAP` goes to 405,000 up front, by decision; trimming later if the
+  P200 shows pressure.
+- **C1. `App` message filters.** The client's loop runs accelerators,
+  `IsDialogMessage` and keyboard shortcuts (PgUp/PgDn, Ctrl+Home/End, Esc,
+  Enter on the chat list) before dispatch. `App::run` gains an ordered list
+  of `MessageFilter`s, each able to consume a message.
+- **C2. `IniFile` writes.** The client saves its INI (`ID_FOLLOW`, the host
+  dialog), so `IniFile` gains typed setters.
+- **C3. `ClientConfig` replaces `rc_config`.** Loaded through `IniFile` with
+  `checkKeys` and bounds; an invalid value refuses startup with a message box
+  (the client is always interactive). `inicheck`'s save/load agreement moves
+  with it.
+- **C4. `WinMain` becomes a composition root.** Log and the single-instance
+  check stay ahead of `App`. Services, in registration order: OLE, the main
+  window (class, window, widgets, filters), the connection (`rc_net`; `join`
+  is `rc_net_stop`). **Closing changes shape:** `WM_CLOSE` asks `App` to quit
+  instead of destroying the window, so shutdown stops the connection while
+  the window it posts to still exists, then destroys the window. Today the
+  network is stopped from inside `WM_DESTROY`, on the UI thread, for up to
+  about 42 s.
+- **C5+. `main.cpp`'s statics become objects**, one module per commit:
+  context-free callbacks (`rc_refresh_fn`, `rc_turn_busy_fn`, ...) gain a
+  context, and the state they close over moves into the window service.
+- Then **libwire** and **libexec** are extracted from `net.cpp`/`exec.cpp`
+  with the client as their first consumer (steps 2-3), and gremote follows.
+
+The Phase 6 agent tools then need only handlers and bridge work.
 
 ## P200 checklist
 
