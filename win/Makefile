@@ -379,12 +379,17 @@ $(OBJ)/%.d: ;
 # one object only.
 $(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
-# The main window's message handler is UI dispatch, not a hot path, and -ot
-# measured 9 KB more object code for it once wnd_proc became
-# MainWindow::handle (55,511 against 45,059 at -os for the same source;
-# the free-function version was 46,568 at -ot). Size, not speed, here. The
-# wider -os question is BACKLOG.md 2.
-$(OBJ)/app/mainwindow.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+# app/ is compiled for SIZE. It is UI code: window procedures, menus,
+# layout, dialogs. The expensive work it triggers happens elsewhere -- in
+# MSHTML, in the disk and network I/O -- so -otexan's speed buys nothing
+# measurable there, and it cost a lot of space: the message handler alone
+# was 9 KB larger at -ot once it became a member function, and each STL
+# container instantiated in app/ (vector<Row>, vector<string>, ...) comes
+# out much bigger. Measured with the chat list and option menus on the STL:
+# 458,249 bytes committed at load at -otexan, 438,793 at -os. core/, net/,
+# rpc/ and sync/ keep -otexan: the codec, the CRC pass and the transfer
+# loops are where speed shows. The whole-client question is BACKLOG.md 2.
+$(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The
