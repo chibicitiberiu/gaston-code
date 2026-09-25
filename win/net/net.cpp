@@ -626,6 +626,28 @@ static int do_connect(rc_net *n)
         else rc_log("net: HELLO header '%s' dropped, array full", (k)); \
     } while (0)
 
+/* A thread would not start: tear down through rc_net_stop, the one path
+ * that joins before it frees and leaks what a live thread still holds.
+ *
+ * Both failure paths used to do their own partial teardown. The reader's
+ * closed the socket BEFORE joining the sender, which was still inside
+ * send() on it, and discarded the join's result -- the two things
+ * rc_net_stop exists to get right (docs/wire-connection-plan.md, invariant
+ * 8). _beginthreadex fails under the same USER/GDI and thread pressure that
+ * makes CreateWindowExA fail, which is not a theoretical condition on this
+ * machine.
+ *
+ * `running` goes to 0 first: nothing was sent yet that the RPC drain could
+ * answer, and without it phase 2 would wait out two seconds for a HELLO no
+ * sender will take. */
+static int start_failed(rc_net *n)
+{
+    n->running = 0;
+    rc_net_stop(n);
+    set_state(n, RC_FAILED);
+    return -1;
+}
+
 int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret, const void *tools, unsigned tools_len)
 {
@@ -876,48 +898,17 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
          * HELLO already queued. Reporting "connected" here would leave the app
          * looking healthy forever. */
         rc_log("net: could not start sender thread");
-        rc_rpc_stop();
-        rc_rpc_join(2000);
-        closesocket(n->sock);
-        n->sock = INVALID_SOCKET;
-        n->running = 0;
-        set_state(n, RC_FAILED);
-        return -1;
+        return start_failed(n);
     }
+    /* CONNECTED before the reader exists, not after: a reader that dies at
+     * once posts FAILED, and posting CONNECTED behind it told the window a
+     * dead link was up. */
+    set_state(n, RC_CONNECTED);
     n->thread = (HANDLE)_beginthreadex(NULL, 0, reader_thread, n, 0, &tid);
     if (!n->thread) {
-        /* THE SAME TEARDOWN AS THE SENDER PATH ABOVE.
-         *
-         * This used to log, set RC_FAILED and return -- leaving a live sender
-         * thread on an open socket, n->running still 1 and the RPC worker
-         * still going. Recovery did save it: WM_RC_STATE arms
-         * TIMER_RECONNECT and Reconnector::tryConnect calls rc_net_stop first, with
-         * n->started already 1 so teardown runs. But that made correctness
-         * depend on every future caller preserving an ordering this file
-         * records as having been broken once already, at the cost of three
-         * bridge restarts. _beginthreadex fails under the same USER/GDI and
-         * thread pressure that makes CreateWindowExA fail, which is not a
-         * theoretical condition on this machine.
-         *
-         * Note the sender is stopped by clearing n->running and closing the
-         * socket: it wakes on outq_wake, sees running == 0 and exits. */
         rc_log("net: could not start reader thread");
-        n->running = 0;
-        rc_rpc_stop();
-        rc_rpc_join(2000);
-        if (n->outq_wake) SetEvent(n->outq_wake);
-        closesocket(n->sock);
-        n->sock = INVALID_SOCKET;
-        if (n->sender) {
-            WaitForSingleObject(n->sender, 2000);
-            CloseHandle(n->sender);
-            n->sender = NULL;
-        }
-        set_state(n, RC_FAILED);
-        return -1;
+        return start_failed(n);
     }
-
-    set_state(n, RC_CONNECTED);
     return 0;
 }
 
