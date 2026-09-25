@@ -37,6 +37,8 @@
 #include "core/str.h"
 #include "core/rc_cpp.h"
 
+#include <string>
+
 typedef struct Host {
     IOleClientSite     site;
     IOleInPlaceSite    place;
@@ -259,8 +261,7 @@ struct rc_html_impl {
     ComPtr<IHTMLElement>    slot_s;     /* the status line (optional) */
     HWND           parent;
     int            ready;
-    char          *queue;       /* appends that arrived before the document */
-    unsigned       queue_len, queue_cap;
+    std::string    queue;       /* appends that arrived before the document */
     char           path[MAX_PATH];
     int            diag;
     int            autoscroll;  /* the user's setting, finally consulted */
@@ -273,7 +274,7 @@ struct rc_html_impl {
     unsigned       doc_len, doc_sum;
 
     explicit rc_html_impl(HWND p)
-        : parent(p), ready(0), queue(0), queue_len(0), queue_cap(0), diag(0),
+        : parent(p), ready(0), diag(0),
           doc_len(0), doc_sum(0),
           /* On unless the user says otherwise -- the same default
            * ConfigStore::load uses. The struct is zero-filled, so without this
@@ -295,7 +296,6 @@ struct rc_html_impl {
             IOleObject_Close(obj.get(), OLECLOSE_NOSAVE);
             IOleObject_SetClientSite(obj.get(), NULL);
         }
-        if (queue) HeapFree(GetProcessHeap(), 0, queue);
         /* obj/web/doc/slot_t/slot_l release themselves here, in reverse
          * declaration order, as the ComPtr members go out of scope. */
     }
@@ -307,7 +307,6 @@ struct rc_html_impl {
 static BSTR to_bstr(const char *s)
 {
     int n;
-    WCHAR *w;
     BSTR b;
 
     /* NULL ON FAILURE, never an empty string.
@@ -320,13 +319,14 @@ static BSTR to_bstr(const char *s)
      * it alone. A NULL BSTR makes those calls fail loudly, which is what the
      * callers' existing error handling is already written for. */
     if (!s) s = "";
+    /* Straight into the BSTR: SysAllocStringLen(NULL, len) gives a buffer
+     * of that many characters plus the terminator, so there is no
+     * temporary to widen into and copy out of. */
     n = MultiByteToWideChar(1252, 0, s, -1, NULL, 0);
     if (n <= 0) return NULL;
-    w = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (unsigned)n * sizeof(WCHAR));
-    if (!w) { rc_log("html: no memory to widen %d bytes", n); return NULL; }
-    MultiByteToWideChar(1252, 0, s, -1, w, n);
-    b = SysAllocString(w);
-    HeapFree(GetProcessHeap(), 0, w);
+    b = SysAllocStringLen(NULL, (UINT)(n - 1));
+    if (!b) { rc_log("html: no memory to widen %d bytes", n); return NULL; }
+    MultiByteToWideChar(1252, 0, s, -1, b, n);
     return b;
 }
 
@@ -381,36 +381,14 @@ static IHTMLElement *find_id(IHTMLDocument2 *doc, const char *id)
 static void queue_add(rc_html_impl *d, const char *frag)
 {
     unsigned n = (unsigned)strlen(frag);
-    unsigned need = d->queue_len + n + 1;
 
-    if (need > RC_HTML_QUEUE_CAP) {
+    if (d->queue.size() + n + 1 > RC_HTML_QUEUE_CAP) {
         rc_log("html: pre-ready queue would exceed %u bytes (have %u, this "
                "fragment %u); dropping it",
-               (unsigned)RC_HTML_QUEUE_CAP, d->queue_len, n);
+               (unsigned)RC_HTML_QUEUE_CAP, (unsigned)d->queue.size(), n);
         return;
     }
-    if (need > d->queue_cap) {
-        unsigned cap = d->queue_cap ? d->queue_cap * 2 : 4096;
-        char *p;
-        while (cap < need) cap *= 2;
-        if (cap > RC_HTML_QUEUE_CAP) cap = RC_HTML_QUEUE_CAP;
-        p = d->queue ? (char *)HeapReAlloc(GetProcessHeap(), 0, d->queue, cap)
-                     : (char *)HeapAlloc(GetProcessHeap(), 0, cap);
-        /* HeapReAlloc failing leaves the original block valid; dropping the
-         * fragment loses a line of transcript, which beats leaking. Now also
-         * logged -- it was silent before, on a platform where the log is the
-         * only diagnostic. */
-        if (!p) {
-            rc_log("html: pre-ready queue realloc to %u bytes failed; "
-                   "dropping this fragment", cap);
-            return;
-        }
-        d->queue = p;
-        d->queue_cap = cap;
-    }
-    memcpy(d->queue + d->queue_len, frag, n);
-    d->queue_len += n;
-    d->queue[d->queue_len] = '\0';
+    d->queue += frag;
 }
 
 rc_html *rc_html::create(HWND parent)
@@ -721,10 +699,13 @@ int rc_html::poll()
     d->ready = 1;
     rc_log("html: document ready");
 
-    if (d->queue_len) {
-        append(d->queue);
-        d->queue_len = 0;
-        d->queue[0] = '\0';
+    if (!d->queue.empty()) {
+        /* Moved out first: append() must not read a buffer this could
+         * touch, and swapping with an empty string gives the memory back --
+         * the queue is only ever needed before the first document. */
+        std::string pending;
+        pending.swap(d->queue);
+        append(pending.c_str());
     }
     return 1;
 }
@@ -1050,8 +1031,7 @@ void rc_html::status(const char *frag)
 
 void rc_html::clear()
 {
-    d->queue_len = 0;
-    if (d->queue) d->queue[0] = '\0';
+    std::string().swap(d->queue);
     if (!d->ready) return;
     Bstr empty(to_bstr(""));
     /* Clearing is the one place a NULL would do the right thing anyway, but
