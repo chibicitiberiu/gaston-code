@@ -30,6 +30,7 @@
 
 #include <windows.h>
 #include "core/rc_cpp.h"
+#include "core/window.h"
 
 class Service
 {
@@ -109,14 +110,29 @@ private:
     App(const App &);
     App &operator=(const App &);
 
-    bool createWindow();
+    /* The hidden window: quit() posts to it, and it receives
+     * WM_ENDSESSION. A friend, because C++98 gives a nested class no access
+     * to its enclosing class's private members. */
+    class HiddenWindow : public Window
+    {
+    public:
+        explicit HiddenWindow(App *app) : m_app(app) {}
+        bool make(HINSTANCE instance);
+
+    protected:
+        LRESULT handle(UINT msg, WPARAM wp, LPARAM lp);
+
+    private:
+        App *m_app;
+    };
+    friend class HiddenWindow;
+
     void shutdown();
-    LRESULT handle(UINT msg, WPARAM wp, LPARAM lp);
-    static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp,
-                                       LPARAM lp);
+    /* True if App handled `msg`, with the result in *result. */
+    bool onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
 
     HINSTANCE m_instance;
-    WindowGuard m_window;
+    HiddenWindow m_window;
     UniqueObj<Service> m_services[MAX_SERVICES];
     bool m_leaked[MAX_SERVICES];
     MessageFilter *m_filters[MAX_FILTERS];

@@ -15,7 +15,7 @@ App *App::create(HINSTANCE instance)
     App *app = new App(instance);
     if (!app)
         return 0;
-    if (!app->createWindow())
+    if (!app->m_window.make(instance))
     {
         delete app;
         return 0;
@@ -25,6 +25,7 @@ App *App::create(HINSTANCE instance)
 
 App::App(HINSTANCE instance)
     : m_instance(instance),
+      m_window(this),
       m_filterCount(0),
       m_count(0),
       m_initialised(0),
@@ -55,37 +56,25 @@ App::~App()
         }
         m_services[i].reset();
     }
-    /* Clear the back-pointer first: DestroyWindow sends messages. The guard
-     * also forgets the handle before destroying it, so windowProc sees no
-     * window and falls through to DefWindowProc. */
-    if (m_window.valid())
-        SetWindowLongA(m_window.get(), GWL_USERDATA, 0);
-    m_window.reset();
+    /* Here, while App is whole: the window's messages still reach
+     * onMessage. Its own destructor would do it after App's members. */
+    m_window.destroy();
 }
 
-bool App::createWindow()
+bool App::HiddenWindow::make(HINSTANCE instance)
 {
-    WNDCLASSA wc;
-    ZeroMemory(&wc, sizeof wc);
-    wc.lpfnWndProc = windowProc;
-    wc.hInstance = m_instance;
-    wc.lpszClassName = WINDOW_CLASS;
     /* A second App in one process (the check exe makes several) finds the
-     * class already there, which is fine. */
-    if (!RegisterClassA(&wc) &&
-        GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-    {
-        rc_log("app: RegisterClass failed, error %lu", GetLastError());
-        return false;
-    }
-    m_window.reset(CreateWindowExA(0, WINDOW_CLASS, "", WS_POPUP, 0, 0, 0, 0,
-                                   0, 0, m_instance, this));
-    if (!m_window.valid())
-    {
-        rc_log("app: CreateWindow failed, error %lu", GetLastError());
-        return false;
-    }
-    return true;
+     * class already there, which registerClass accepts. */
+    return Window::registerClass(instance, WINDOW_CLASS, 0) &&
+           create(0, WINDOW_CLASS, "", WS_POPUP, 0, 0, 0, 0, 0, 0, instance);
+}
+
+LRESULT App::HiddenWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
+{
+    LRESULT result;
+    if (m_app->onMessage(msg, wp, lp, &result))
+        return result;
+    return Window::handle(msg, wp, lp);
 }
 
 bool App::addService(Service *service)
@@ -174,12 +163,12 @@ int App::run()
 
 void App::quit(int exitCode)
 {
-    PostMessageA(m_window.get(), WM_APP_QUIT, (WPARAM)exitCode, 0);
+    PostMessageA(m_window.hwnd(), WM_APP_QUIT, (WPARAM)exitCode, 0);
 }
 
 HWND App::window() const
 {
-    return m_window.get();
+    return m_window.hwnd();
 }
 
 void App::setJoinTimeout(DWORD timeoutMs)
@@ -208,15 +197,18 @@ void App::shutdown()
     }
 }
 
-LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp)
+bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
 {
+    (void)lp;
+    *result = 0;
     switch (msg)
     {
     case WM_APP_QUIT:
         PostQuitMessage((int)wp);
-        return 0;
+        return true;
     case WM_QUERYENDSESSION:
-        return TRUE;
+        *result = TRUE;
+        return true;
     case WM_ENDSESSION:
         /* Windows may end the process as soon as this returns, so the
          * services stop here and not after the loop. */
@@ -226,20 +218,7 @@ LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp)
             shutdown();
             PostQuitMessage(0);
         }
-        return 0;
+        return true;
     }
-    return DefWindowProcA(m_window.get(), msg, wp, lp);
-}
-
-LRESULT CALLBACK App::windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-    if (msg == WM_NCCREATE)
-    {
-        CREATESTRUCTA *cs = (CREATESTRUCTA *)lp;
-        SetWindowLongA(hwnd, GWL_USERDATA, (LONG)cs->lpCreateParams);
-    }
-    App *app = (App *)GetWindowLongA(hwnd, GWL_USERDATA);
-    if (!app || !app->m_window.valid())
-        return DefWindowProcA(hwnd, msg, wp, lp);
-    return app->handle(msg, wp, lp);
+    return false;
 }
