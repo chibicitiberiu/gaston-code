@@ -30,6 +30,7 @@
 #include <windows.h>
 #include "net/net.h"
 #include "net/frameproto.h"
+#include "app/sender.h"
 
 #ifndef __cplusplus
 #error "bar.h is C++; the bar is a class now, see app/htmlview.h"
@@ -48,15 +49,6 @@
  * to know before asking this module to position its own controls. PERMBTN_W
  * (button width) is this module's own business and stays in bar.cpp. */
 #define PERM_H 26
-
-/* Signature of main.c's ui_send: "send something the user just asked for,
- * and say so if it did not go." Reused rather than duplicated, so a
- * PERMREPLY that never reaches the bridge is reported through the same path
- * (and the same seven-line comment) as every other user-initiated send. */
-typedef int (*rc_bar_send_fn)(const char *what, const char *type,
-                               const char *const *keys,
-                               const char *const *vals, int nkv,
-                               const void *body, unsigned body_len);
 
 #define BAR_PERM 1
 #define BAR_HALT 2
@@ -93,13 +85,13 @@ class rc_bar {
 
     HWND    text, allow, always, deny;
     rc_net *net;
-    rc_bar_send_fn send;
+    FrameSender *sender;
     void  (*changed)(void);
 
     rc_bar(const rc_bar &);
     rc_bar &operator=(const rc_bar &);
     rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-           rc_bar_send_fn send_, void (*changed_)(void));
+           FrameSender *send_, void (*changed_)(void));
 
     /* bar_visible in the pre-class code: the highest-priority entry on the
      * stack, or NULL. move(), blocks_send() and show() all derive the SAME
@@ -126,7 +118,7 @@ public:
      *      bar_layout() plus ui_set_busy(g_turn_active) used to do, by hand,
      *      at every call site. */
     static rc_bar *create(HWND parent, HINSTANCE inst, HFONT font,
-                           rc_net *net, rc_bar_send_fn send,
+                           rc_net *net, FrameSender *send,
                            void (*changed)(void));
     ~rc_bar() {}
 

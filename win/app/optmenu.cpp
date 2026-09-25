@@ -12,10 +12,10 @@ static void clear_popup(HMENU m)
         ;
 }
 
-rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
+rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, FrameSender *send_,
                        rc_optmenu_input_fn input_)
     : n_model(0), n_effort(0), n_mode(0), n_cmd(0), n_work(0), effort_ok(0),
-      cur_mode_ix(-1), opts_open(0), owner(owner_), send(send_),
+      cur_mode_ix(-1), opts_open(0), owner(owner_), sender(send_),
       input(input_)
 {
     cur_model[0] = cur_effort[0] = cur_mode[0] = '\0';
@@ -61,7 +61,7 @@ rc_optmenu::rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
 }
 
 rc_optmenu *rc_optmenu::create(HWND owner, HMENU bar,
-                               rc_optmenu_send_fn send,
+                               FrameSender *send,
                                rc_optmenu_input_fn input)
 {
     return new rc_optmenu(owner, bar, send, input);
@@ -254,7 +254,7 @@ void rc_optmenu::cycle_mode()
         int next = (cur_mode_ix < 0) ? 0 : (cur_mode_ix + 1) % n_mode;
         const char *keys[1], *vals[1];
         keys[0] = "mode"; vals[0] = opt_mode[next];
-        send("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
+        sender->sendFrame("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
     }
 }
 
@@ -266,19 +266,19 @@ int rc_optmenu::command(int id)
     if (id >= IDM_MODEL0 && id < IDM_MODEL0 + n_model) {
         const char *keys[1], *vals[1];
         keys[0] = "model"; vals[0] = opt_model[id - IDM_MODEL0];
-        send("The model change", "SETMODEL", keys, vals, 1, NULL, 0);
+        sender->sendFrame("The model change", "SETMODEL", keys, vals, 1, NULL, 0);
         return 1;
     }
     if (id >= IDM_EFFORT0 && id < IDM_EFFORT0 + n_effort) {
         const char *keys[1], *vals[1];
         keys[0] = "effort"; vals[0] = opt_effort[id - IDM_EFFORT0];
-        send("The effort change", "SETEFFORT", keys, vals, 1, NULL, 0);
+        sender->sendFrame("The effort change", "SETEFFORT", keys, vals, 1, NULL, 0);
         return 1;
     }
     if (id >= IDM_MODE0 && id < IDM_MODE0 + n_mode) {
         const char *keys[1], *vals[1];
         keys[0] = "mode"; vals[0] = opt_mode[id - IDM_MODE0];
-        send("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
+        sender->sendFrame("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
         return 1;
     }
     if (id >= IDM_CMD0 && id < IDM_CMD0 + n_cmd) {

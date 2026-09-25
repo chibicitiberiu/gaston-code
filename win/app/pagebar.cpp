@@ -48,7 +48,7 @@ void rc_pagebar::goto_page(const char *which)
      * into silence: the press looks accepted, nothing happens, and there is
      * nothing on screen to explain it." Pressing Next on a link that had just
      * dropped did exactly nothing, with no message and no log line. */
-    if (send) send("that page", "GETPAGE", keys, vals, 1, NULL, 0);
+    if (sender) sender->sendFrame("that page", "GETPAGE", keys, vals, 1, NULL, 0);
     else rc_net_send(net, "GETPAGE", keys, vals, 1, NULL, 0);
 }
 
@@ -92,9 +92,9 @@ void rc_pagebar::goto_n(int n)
 }
 
 rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-                        rc_html *html_, rc_pagebar_send_fn send_)
+                        rc_html *html_, FrameSender *send_)
     : view(1), total(1), is_live(1), loading_page(0), net(net_), html(html_),
-      send(send_), follow_bmp(NULL)
+      sender(send_), follow_bmp(NULL)
 {
     /* Deliberately NO WS_TABSTOP on any of these six.
      *
@@ -179,7 +179,7 @@ rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
 
 rc_pagebar *rc_pagebar::create(HWND parent, HINSTANCE inst, HFONT font,
                                 rc_net *net, rc_html *html,
-                                rc_pagebar_send_fn send)
+                                FrameSender *send)
 {
     return new rc_pagebar(parent, inst, font, net, html, send);
 }

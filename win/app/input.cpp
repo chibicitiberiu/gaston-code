@@ -230,8 +230,8 @@ void rc_input::do_stop(void)
     rc_log("stop requested");
     /* A lost INTERRUPT is a Stop button that does nothing, on a turn that
      * keeps running and keeps costing. */
-    if (send_fn)
-        send_fn("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
+    if (sender)
+        sender->sendFrame("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
 }
 
 /* Enter sends; Shift+Enter inserts a newline. */
@@ -276,7 +276,7 @@ LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
 rc_input *rc_input::create(HWND parent, HINSTANCE inst, HFONT font,
                            rc_net *net_, rc_html *html_, rc_xferstat *xfer_,
                            rc_pillbar *pillbar_,
-                           rc_input_send_fn send, int (*blocked)(void),
+                           FrameSender *send, int (*blocked)(void),
                            void (*sent)(void))
 {
     rc_input *p = new rc_input();
@@ -286,7 +286,7 @@ rc_input *rc_input::create(HWND parent, HINSTANCE inst, HFONT font,
     p->html = html_;
     p->xfer = xfer_;
     p->pillbar = pillbar_;
-    p->send_fn = send;
+    p->sender = send;
     p->blocked_fn = blocked;
     p->sent_fn = sent;
     /* Published BEFORE the subclass below, because SetWindowLongA can deliver

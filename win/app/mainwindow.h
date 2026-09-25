@@ -19,6 +19,7 @@
 #include "net/net.h"
 #include "app/reconnect.h"
 #include "app/turn.h"
+#include "app/sender.h"
 
 #include "app/title.h"
 
@@ -27,7 +28,8 @@
 #define RC_MAIN_CLASS "RetroClaudeWnd"
 
 class MainWindow : public Service, public MessageFilter,
-                   public ReconnectListener, public TurnListener
+                   public ReconnectListener, public TurnListener,
+                   public FrameSender
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -47,6 +49,11 @@ public:
 
     /* TurnListener */
     void setBusy(bool busy);
+
+    /* FrameSender */
+    bool sendFrame(const char *what, const char *type,
+                   const char *const *keys, const char *const *vals,
+                   int nkv, const void *body, unsigned bodyLen);
 
 private:
     MainWindow(const MainWindow &);

@@ -27,6 +27,7 @@
 
 #include <windows.h>
 #include "net/frameproto.h"
+#include "app/sender.h"
 
 #ifndef __cplusplus
 #error "optmenu.h is C++; the menus are a class now, see app/htmlview.h"
@@ -43,14 +44,6 @@
 #define IDM_ATTFILE 1600      /* Attach > File... */
 #define IDM_ATTSHOT 1601      /* Attach > Screenshot */
 #define MAX_OPTS    16
-
-/* Signature of main.c's ui_send: "send something the user just asked for,
- * and say so if it did not go." Reused rather than duplicated, exactly as
- * app/bar.h's rc_bar_send_fn and app/chatlist.h's rc_chats_send_fn do. */
-typedef int (*rc_optmenu_send_fn)(const char *what, const char *type,
-                                   const char *const *keys,
-                                   const char *const *vals, int nkv,
-                                   const void *body, unsigned body_len);
 
 /* "Send this as if it had been typed" -- app/input.h's rc_input::send_text,
  * behind a function pointer so this module does not depend on that class.
@@ -117,12 +110,12 @@ class rc_optmenu {
     int   opts_open;   /* mid-batch, so the next model row appends */
     int   n_work;      /* work rows this batch -- see the cap in frame() */
     HWND  owner;
-    rc_optmenu_send_fn send;
+    FrameSender *sender;
     rc_optmenu_input_fn input;
 
     rc_optmenu(const rc_optmenu &);
     rc_optmenu &operator=(const rc_optmenu &);
-    rc_optmenu(HWND owner_, HMENU bar, rc_optmenu_send_fn send_,
+    rc_optmenu(HWND owner_, HMENU bar, FrameSender *send_,
                rc_optmenu_input_fn input_);
 
 public:
@@ -145,7 +138,7 @@ public:
      * send: main.c's ui_send, for SETMODEL/SETEFFORT/SETMODE.
      * input: compose-and-send, for the Commands menu -- see
      *     rc_optmenu_input_fn above. */
-    static rc_optmenu *create(HWND owner, HMENU bar, rc_optmenu_send_fn send,
+    static rc_optmenu *create(HWND owner, HMENU bar, FrameSender *send,
                               rc_optmenu_input_fn input);
     /* menu_work and menu_attach are NOT appended to the menu bar (they hang
      * off toolbar buttons instead), so DestroyMenu(bar) never reaches them

@@ -120,7 +120,7 @@ void rc_chats::open_selected()
      * looking frozen -- that is main.c's title bar and status pane, not
      * this class's, hence the callback. */
     if (switching) switching();
-    send("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
+    sender->sendFrame("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
 }
 
 /* Open a conversation on a plain click.
@@ -418,10 +418,10 @@ static void check_child(const char *what, HWND h)
 
 rc_chats::rc_chats(HWND parent, HINSTANCE inst, rc_net *net_, HFONT normal,
                     HFONT bold, rc_chats_confirm_fn confirm_,
-                    rc_chats_send_fn send_, void (*switching_)(void),
+                    FrameSender *send_, void (*switching_)(void),
                     void (*switched_)(rc_frame *f))
     : chat_current(-1), chat_count(0), font_normal(normal), font_bold(bold),
-      net(net_), confirm(confirm_), send(send_), switching(switching_),
+      net(net_), confirm(confirm_), sender(send_), switching(switching_),
       switched(switched_)
 {
     chat_group[0] = '\0';
@@ -463,7 +463,7 @@ rc_chats::rc_chats(HWND parent, HINSTANCE inst, rc_net *net_, HFONT normal,
 rc_chats *rc_chats::create(HWND parent, HINSTANCE inst, rc_net *net,
                             HFONT normal, HFONT bold,
                             rc_chats_confirm_fn confirm,
-                            rc_chats_send_fn send, void (*switching)(void),
+                            FrameSender *send, void (*switching)(void),
                             void (*switched)(rc_frame *f))
 {
     return new rc_chats(parent, inst, net, normal, bold, confirm, send,

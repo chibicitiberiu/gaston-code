@@ -21,6 +21,7 @@
 #include <windows.h>
 #include "net/net.h"
 #include "net/frameproto.h"
+#include "app/sender.h"
 
 #ifndef __cplusplus
 #error "chatlist.h is C++; the chat list is a class now, see app/htmlview.h"
@@ -34,16 +35,6 @@
  * with the rest of main.c's own WM_APP offsets; it lives here now, since it
  * is this module's event, not main.c's. */
 #define WM_RC_OPENCHAT (WM_APP + 20)
-
-/* Signature of main.c's ui_send: "send something the user just asked for,
- * and say so if it did not go." Reused rather than duplicated, exactly as
- * app/bar.h's rc_bar_send_fn does, so a SWITCH that never reaches the
- * bridge is reported through the same path as every other user-initiated
- * send. */
-typedef int (*rc_chats_send_fn)(const char *what, const char *type,
-                                 const char *const *keys,
-                                 const char *const *vals, int nkv,
-                                 const void *body, unsigned body_len);
 
 /* "a switch is about to happen, is a turn running, may I?" -- see the
  * `confirm` member comment on rc_chats below. */
@@ -91,7 +82,7 @@ class rc_chats {
      *      from the session just left (see app/bar.h's rc_bar::hide_all)
      *      are none of this class's business. */
     rc_chats_confirm_fn confirm;
-    rc_chats_send_fn send;
+    FrameSender *sender;
     void (*switching)(void);
     void (*switched)(rc_frame *f);
 
@@ -105,7 +96,7 @@ class rc_chats {
     rc_chats &operator=(const rc_chats &);
     rc_chats(HWND parent, HINSTANCE inst, rc_net *net_, HFONT normal,
              HFONT bold, rc_chats_confirm_fn confirm_,
-             rc_chats_send_fn send_, void (*switching_)(void),
+             FrameSender *send_, void (*switching_)(void),
              void (*switched_)(rc_frame *f));
 
     int text_width();
@@ -126,7 +117,7 @@ public:
     static rc_chats *create(HWND parent, HINSTANCE inst, rc_net *net,
                              HFONT normal, HFONT bold,
                              rc_chats_confirm_fn confirm,
-                             rc_chats_send_fn send, void (*switching)(void),
+                             FrameSender *send, void (*switching)(void),
                              void (*switched)(rc_frame *f));
     /* NOT empty, and it was.
      *

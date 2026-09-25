@@ -23,6 +23,7 @@
 #include "net/net.h"
 #include "app/htmlview.h"
 #include "app/xferstat.h"
+#include "app/sender.h"
 
 #ifndef __cplusplus
 #error "input.h is C++; compose and send are a class now, see app/htmlview.h"
@@ -38,14 +39,6 @@
  * button width is this module's own business and stays in input.cpp. */
 #define INPUT_HEIGHT 56
 
-/* Signature of main.c's ui_send: "send something the user just asked for,
- * and say so if it did not go." Reused rather than duplicated, exactly as
- * app/bar.h's rc_bar_send_fn and app/chatlist.h's rc_chats_send_fn do. */
-typedef int (*rc_input_send_fn)(const char *what, const char *type,
-                                 const char *const *keys,
-                                 const char *const *vals, int nkv,
-                                 const void *body, unsigned body_len);
-
 class rc_pillbar;
 
 class rc_input {
@@ -55,7 +48,7 @@ class rc_input {
     rc_html     *html;
     rc_xferstat *xfer;
     rc_pillbar  *pillbar;
-    rc_input_send_fn send_fn;
+    FrameSender *sender;
     int        (*blocked_fn)(void);
     void       (*sent_fn)(void);
 
@@ -75,14 +68,14 @@ class rc_input {
     rc_input(const rc_input &);
     rc_input &operator=(const rc_input &);
     rc_input() : box(0), send_btn(0), stop_btn(0), oldproc(0), net(0),
-                 html(0), xfer(0), pillbar(0), send_fn(0), blocked_fn(0), sent_fn(0) {
+                 html(0), xfer(0), pillbar(0), sender(0), blocked_fn(0), sent_fn(0) {
     }
 
 public:
     static rc_input *create(HWND parent, HINSTANCE inst, HFONT font,
                             rc_net *net, rc_html *html, rc_xferstat *xfer,
                             rc_pillbar *pillbar,
-                            rc_input_send_fn send, int (*blocked)(void),
+                            FrameSender *send, int (*blocked)(void),
                             void (*sent)(void));
     /* Same reason as rc_chats': box_proc dereferences s_instance and the
      * edit control outlives this object during teardown. See chatlist.h. */

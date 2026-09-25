@@ -95,8 +95,8 @@ static int typing_now(void)
 }
 
 rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-               rc_bar_send_fn send_, void (*changed_)(void))
-    : depth(0), net(net_), send(send_), changed(changed_)
+               FrameSender *send_, void (*changed_)(void))
+    : depth(0), net(net_), sender(send_), changed(changed_)
 {
     /* Created hidden and shown with ShowWindow rather than created on
      * demand: the 16-bit USER/GDI heaps on 9x are a fixed 64KB, and churning
@@ -164,7 +164,7 @@ rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
 }
 
 rc_bar *rc_bar::create(HWND parent, HINSTANCE inst, HFONT font, rc_net *net,
-                        rc_bar_send_fn send, void (*changed)(void))
+                        FrameSender *send, void (*changed)(void))
 {
     return new rc_bar(parent, inst, font, net, send, changed);
 }
@@ -463,7 +463,7 @@ void rc_bar::reply(rc_bar_entry *e, const char *action)
      * waiting on a prompt nobody can answer until the bridge's deadline
      * expires and auto-denies -- and the user, who pressed Allow, is told
      * nothing. */
-    send("Your permission answer", "PERMREPLY", keys, vals, 2, NULL, 0);
+    sender->sendFrame("Your permission answer", "PERMREPLY", keys, vals, 2, NULL, 0);
     /* The bar comes down on PERMEND, not here: the bridge owns the state
      * machine, and a reply can lose a race with a deadline or a disconnect. */
 }

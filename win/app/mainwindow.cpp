@@ -248,7 +248,7 @@ static void build_menu(HWND hwnd)
     /* The Model and Effort popups: created and appended to `bar` by
      * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
      * so the menu order is unchanged. */
-    g_optmenu = rc_optmenu::create(hwnd, bar, ui_send, ui_send_text);
+    g_optmenu = rc_optmenu::create(hwnd, bar, g_window, ui_send_text);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
 }
@@ -1033,7 +1033,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * not own -- see the callback comments on rc_chats::create in
      * app/chatlist.h. */
     g_chats = rc_chats::create(hwnd, inst, g_net, g_ui_font, g_ui_font_bold,
-                                chats_confirm, ui_send, chats_switching,
+                                chats_confirm, g_window, chats_switching,
                                 chats_switched);
 
     /* The permission/halt bar: its own controls, created and owned by
@@ -1042,7 +1042,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * for" and bar_changed is the layout + enables refresh the bar needs
      * after any visible change -- see the `send`/`changed` comment on
      * rc_bar::create in app/bar.h. */
-    g_bar = rc_bar::create(hwnd, inst, g_ui_font, g_net, ui_send, bar_changed);
+    g_bar = rc_bar::create(hwnd, inst, g_ui_font, g_net, g_window, bar_changed);
 
     /* The page bar: its own six controls, created and owned by
      * app/pagebar.cpp now (rc_pagebar::create logs its own check_child
@@ -1050,7 +1050,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * and every use inside pagebar.cpp is guarded, same as everywhere else
      * in this file. */
     g_pagebar = rc_pagebar::create(hwnd, inst, g_ui_font, g_net, g_html,
-                                   ui_send);
+                                   g_window);
 
     /* NOW the persisted autoscroll can be applied -- see the long note above
      * the HTML view's creation for why it could not be done there. Both
@@ -1076,7 +1076,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
      * answers to the two policy questions that module does not own -- see
      * the callback comments on rc_input::create in app/input.h. */
     g_inputmod = rc_input::create(hwnd, inst, g_ui_font, g_net, g_html,
-                                  g_xfer, g_pillbar, ui_send,
+                                  g_xfer, g_pillbar, g_window,
                      input_blocked, input_sent);
 
     /* After the option menus, because it borrows their HMENUs and their
@@ -1911,4 +1911,11 @@ void MainWindow::restoreCache()
 void MainWindow::setBusy(bool busy)
 {
     ui_set_busy(busy ? 1 : 0);
+}
+
+bool MainWindow::sendFrame(const char *what, const char *type,
+                           const char *const *keys, const char *const *vals,
+                           int nkv, const void *body, unsigned bodyLen)
+{
+    return ui_send(what, type, keys, vals, nkv, body, bodyLen) != 0;
 }
