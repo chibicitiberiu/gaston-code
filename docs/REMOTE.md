@@ -241,9 +241,15 @@ protocol and must not drift into it.
 
 ### Connection and handshake
 
-- **The reader thread `select()`s on the listener and the client socket**
-  together, with a timeout so it can poll the stop flag. That is Winsock 1.1,
-  needs no accept thread, and means a second connection is always seen.
+- **The heartbeat is the live Connection's reader; the listener has its own
+  loop.** *Changed 2026-09-25 (step 2) from one reader `select()`ing on both.*
+  `Connection` stays generic -- it is also the client's link to the bridge --
+  so its reader `select()`s on its own socket only, with the idle timeout
+  (`Connection::setIdleTimeout`). The listener is served by gremote's accept
+  loop on its own thread: `Listener::accept(out, timeoutMs)` is a timed
+  `select()` + `accept()`, so the loop polls its stop flag between waits and a
+  second connection is always seen. Winsock 1.1 throughout; the cost is one
+  more thread on the guest (to be measured with gremote, step 4).
 - **Heartbeat: 30 seconds.** Any frame from the client resets the timer; with
   nothing else to send, the client sends `PING`. If no frame arrives within
   `heartbeat_timeout_s` (default 30), the server drops the connection
@@ -504,6 +510,15 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    (stays in `net/`). Add `Listener` and the server-side reader. `net.cpp` is
    frozen until the client moves onto libwire, so nothing is fixed twice.
    Extract the Python frame codec.
+   *2b done 2026-09-25 (`docs/wire-connection-plan.md` has the steps and
+   hashes):* `Connection` (`win/wire/connection.{h,cpp}`) is the transport,
+   and `net.cpp` is the client's adapter over it. `Listener`
+   (`win/wire/listener.{h,cpp}`), `Connection::adopt` and the idle timeout
+   are the server half, proved by `wirecheck` over loopback under Wine
+   (`tests/python/guest/test_guest_wire.py`). Verified on the guest with the
+   client. On the way, a pre-existing one-byte heap overrun in the sync
+   scanner was found and fixed; it crashed every build under a SYNCGET flood.
+   **Step 2 is complete.**
 3. **libexec.** Move exec onto `ExecJob` (per-job cancel, id-checked), output
    cap as a parameter, handle inheritance fixed; the client's rpc adapts.
    Add process list, kill, launch.
