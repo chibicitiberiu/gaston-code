@@ -41,7 +41,6 @@ MIN_PROSE = 120
 #: file -> bytes of non-docstring prose it may still carry. MEASURED, not
 #: chosen: this is what was inline when the rule landed. Only ever lower it.
 BUDGET = {
-    "agent/tools.py": 3105,
     "agent/permissions.py": 2492,
     "services/sync.py": 2103,
     "services/workspace.py": 650,

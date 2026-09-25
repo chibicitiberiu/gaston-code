@@ -23,6 +23,8 @@ from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from . import prompts
+
 log = logging.getLogger("bridge.tools")
 
 # The guest clamps this too; a tool argument is a suggestion, not a promise.
@@ -61,41 +63,7 @@ def build(bridge, guest=None) -> dict:
         "exec",
         # This description is the model's only guide to a machine it cannot
         # see, so it states the era rather than assuming it.
-        "Run a command on the connected machine (the old computer the user is "
-        "sitting at), and return its output. By default the command runs "
-        "through the system shell, whichever that machine has. Output is "
-        "captured as the console codepage and capped at 32KB. The user must "
-        "approve every call on their own screen, so prefer one command that "
-        "answers the question over several that explore.\n\n"
-        # NO SHELL SYNTAX HERE, deliberately, and it was here for a while.
-        #
-        # A tool description is unconditional: every machine gets it. The
-        # COMMAND.COM rules that used to sit in this paragraph are wrong on
-        # a 4DOS box, where `&&` works, and wrong on the NT 4 and Windows
-        # 3.1 targets CLAUDE.md's first standing rule says this surface has
-        # to survive. They moved to `toolnotes.py` and are now selected by
-        # what the machine reported having -- which is the cheapest
-        # available proof the design is portable rather than a Win98 special
-        # case, since pointing this at NT 4 changes the text with no bridge
-        # change at all.
-        #
-        # One command per call is NOT a shell fact and stays:
-        "ONE COMMAND PER CALL. Whether commands can be chained, and with "
-        "what, depends on the shell that machine has -- the system prompt "
-        "says which one it is and what it accepts. To run several steps "
-        "regardless of shell, write a script file into the mirrored folder "
-        "and run that; it is also one approval instead of several.\n\n"
-        # The provenance names the machine it was measured on; the RULE is
-        # stated generally, because "a program that prompts reads the
-        # console directly and cannot be fed from here" is a fact about the
-        # transport, not about any one shell.
-        "IMPORTANT: the command must be non-interactive. Anything that stops "
-        "to ask a question -- a delete or a format asking 'Are you sure "
-        "(Y/N)?' -- will HANG until the timeout kills it: that prompt is "
-        "read from the machine's own console and there is no way to answer "
-        "it from here -- NOT by piping one in either, which was measured and "
-        "does not work. Use a form that does not ask: a switch that says "
-        "yes, or a more specific target.",
+        prompts.text("tools.exec.description"),
         # A FULL JSON SCHEMA, not the `{name: Annotated[...]}` shorthand.
         #
         # The shorthand marks EVERY property required -- `"required":
@@ -119,17 +87,14 @@ def build(bridge, guest=None) -> dict:
                         # ships to every machine. What that machine's paths
                         # and shell look like is detected and stated in the
                         # system prompt.
-                        "The command line to run, written for the target "
-                        "machine's own shell and path conventions -- the "
-                        "system prompt says what those are.",
+                        prompts.text("tools.exec.args.command"),
                 },
                 "timeout_ms": {
                     "type": "integer",
                     "description":
-                        f"How long to allow, in milliseconds. Default "
-                        f"{DEFAULT_TIMEOUT_MS}, clamped to {MAX_TIMEOUT_MS}. "
-                        f"The machine is slow; a compile may genuinely need "
-                        f"minutes.",
+                        prompts.text("tools.exec.args.timeout_ms",
+                              default_timeout_ms=DEFAULT_TIMEOUT_MS,
+                              max_timeout_ms=MAX_TIMEOUT_MS),
                 },
                 "shell": {
                     # A NAME, not a boolean, because a machine has as many
@@ -148,20 +113,12 @@ def build(bridge, guest=None) -> dict:
                     # that machine reported.
                     "type": "string",
                     "description":
-                        "Which of the connected machine's shells to run the "
-                        "command through. The system prompt lists the ones "
-                        "it has; omit this to use the first of them. Pass "
-                        "\"none\" to spawn a program directly instead, which "
-                        "gives cleaner quoting but loses built-ins, pipes and "
-                        "redirection.",
+                        prompts.text("tools.exec.args.shell"),
                 },
                 "cwd": {
                     "type": "string",
                     "description":
-                        "Working directory on the connected machine. "
-                        "Optional -- leave it out and the command "
-                        "runs in this conversation's own folder on that "
-                        "machine, which is where your files arrive.",
+                        prompts.text("tools.exec.args.cwd"),
                 },
             },
             "required": ["command"],
@@ -203,13 +160,7 @@ def build(bridge, guest=None) -> dict:
 
     @tool(
         "sync_status",
-        "Report the state of file synchronisation with the connected machine: "
-        "which of your files could not be copied there and why, which are in "
-        "conflict, and which are currently refusing your writes.\n\n"
-        "Read this when a file you wrote does not seem to have arrived, before "
-        "concluding that it did. Writing a file always succeeds here; whether "
-        "it reached the user's machine is a separate question and this is the "
-        "only way to answer it. Read-only and cheap to call.",
+        prompts.text("tools.sync_status.description"),
         {},
     )
     async def machine_sync_status(args: dict) -> dict:
@@ -217,17 +168,7 @@ def build(bridge, guest=None) -> dict:
 
     @tool(
         "sync_resolve",
-        "Resolve one halted synchronisation decision, after the user has "
-        "confirmed they are finished with the file.\n\n"
-        "When you and the user both change the same file, their copy wins and "
-        "yours is moved aside -- and the path then REFUSES your writes, "
-        "mechanically, until this is called. That is deliberate: you cannot "
-        "usefully react to a conflict during the turn in which it happened, "
-        "so the bridge stops you rather than asking you to stop.\n\n"
-        "Do not call this to make an error go away. Call it once you have read "
-        "the preserved copy, merged what you need, and the user has said they "
-        "have finished with the file. The user approves every call on their "
-        "own screen.",
+        prompts.text("tools.sync_resolve.description"),
         {
             "path": Annotated[
                 str,
@@ -236,12 +177,7 @@ def build(bridge, guest=None) -> dict:
             ],
             "action": Annotated[
                 str,
-                "release (default) -- lift the write refusal on this path, "
-                "having merged; accept-revert -- the user really did undo "
-                "your change, so take their version and discard yours; "
-                "accept-tree -- answers a whole-pass refusal, takes no "
-                "path; forget -- stop tracking a path that is gone from both "
-                "sides and should not come back.",
+                prompts.text("tools.sync_resolve.args.action"),
             ],
         },
     )
