@@ -1718,7 +1718,8 @@ confidently is the failure mode that makes an agent dangerous.
 `send_keys(target, keys)` focuses, then synthesises with `keybd_event`.
 
 - **Focus is two calls, not one.** `SetForegroundWindow` works on 9x (there is
-  no NT5 foreground lock), but cross-thread `SetFocus` needs
+  no NT5 foreground lock; **[R -- 2026-09-25] wrong for Win98**, which introduced
+  the lock alongside 2000: see `docs/REMOTE.md`, UI details), but cross-thread `SetFocus` needs
   `AttachThreadInput` first or focus silently never arrives. **[R --
   2026-09-18]** And it needs detaching afterwards: the attach is
   worker-thread-to-target, so leaving it in place makes the RPC worker share

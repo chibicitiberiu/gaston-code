@@ -1,6 +1,7 @@
 # Remote control of the guest: `gremote.exe` and the static libraries
 
-**Status:** planned 2026-09-25. Referenced from `PLAN.md` as R9.
+**Status:** planned 2026-09-25, revised the same day after an architecture
+review and a fact-check against the code. Referenced from `PLAN.md` as R9.
 
 ## Why
 
@@ -26,10 +27,9 @@ We evaluated and rejected:
   crash recovery, not a replacement: it cannot exec.
 
 The decision is our own server exe, built from static libraries that the client
-also links. That gets us three things at once: a test tool that works out of
-band from the agent client, the Phase 6 UI primitives written and proven on real
-hardware before they become agent tools, and a reason and a pattern for
-untangling `win/app/main.cpp` (1976 lines of file statics).
+also links. That gets us a test tool that works out of band from the agent
+client, the Phase 6 UI primitives proven on real hardware before they become
+agent tools, and a pattern for untangling `win/app/main.cpp` later.
 
 ## Shape
 
@@ -44,43 +44,48 @@ untangling `win/app/main.cpp` (1976 lines of file statics).
       with bridge/wire)                                libcore
 ```
 
-Direction is reversed relative to the client: `gremote.exe` listens and the
-Linux side connects. One client at a time.
+`gremote.exe` listens and the Linux side connects: the reverse of the client.
+One live client at a time; a newly authenticated connection replaces the old
+one (see Protocol).
 
 ### The libraries
 
 | Lib | Dir | Contents | Depends on |
 |---|---|---|---|
 | `libcore` | `win/core/` | `rc_cpp.h` (Buf, RAII guards), log, str, path, **new** generic INI reader, **new** `App` / `Service` lifecycle, thread helper over `_beginthreadex` | Win32 only |
-| `libwire` | `win/wire/` | frame grammar (`frameproto` moves here), deflate, `Connection` (socket + reader/sender threads + bounded out queue), `Listener`, lane dispatcher | libcore, miniz |
-| `libexec` | `win/exec/` | `exec.cpp` (moved, unchanged API), **new** process list/kill via Toolhelp32 (resolved with `GetProcAddress`: present on 98, absent on NT4), **new** `launch` (detached, visible) | libcore |
-| `libfs` | `win/fs/` | list/stat/read/write/remove/mkdir/move, chunked read and write, drive and free-space info | libcore |
-| `libui` | `win/ui/` | screenshot (from `app/screenshot.cpp`, plus retro-agent's 8bpp palette fix), window enumeration, control tree, MSAA metadata, mouse and keyboard input | libcore |
+| `libwire` | `win/wire/` | frame codec (split out of `frameproto`), deflate, `Connection` (socket, reader/sender threads, bounded out queue), `Listener`, lane dispatcher. The op-to-lane table is supplied by the exe | libcore, miniz |
+| `libexec` | `win/exec/` | command execution (from `exec.cpp`, made per-job), **new** process list/kill via Toolhelp32 (resolved with `GetProcAddress`: present on 98, absent on NT4), **new** `launch` | libcore |
+| `libfs` | `win/fs/` | list/stat/read/write/remove/mkdir/move, chunked transfer (the sink extracted from `export.cpp`, per `BACKLOG.md` 6), drives and free space | libcore |
+| `libui` | `win/ui/` | screenshot, window enumeration, control tree, MSAA metadata, mouse and keyboard input | libcore |
 
 Rules for the libraries:
 
-- **No lib knows the wire except libwire, and libwire knows no ops.** libexec,
-  libfs and libui expose plain C++ APIs that take a sink for output. Parsing a
-  frame into a call and a result into frames is the exe's job. That is what lets
-  the client and the server share them with different trust models: the client
-  gates `exec` behind the permission bar, the server gates everything behind
-  the shared secret.
+- **No lib knows the wire except libwire, and libwire knows no ops.** Today
+  `frameproto.cpp:42-46` carries the client's lane table (`EXEC`, `EXECKILL`,
+  `ATTGET`, `SYNC*`); that table stays with the client and each exe passes its
+  own to the dispatcher. libexec, libfs and libui expose plain C++ APIs with
+  sinks. Frames to calls and results to frames is the exe's job, which is what
+  lets the client gate `exec` behind the permission bar while the server gates
+  everything behind the secret.
 - **No lib creates windows or owns a message loop.** Where a thread needs a
   message queue (UI input, MSAA), the lib documents it and the exe provides the
   thread.
-- **The guest transforms nothing** still holds. Screenshots leave as DIB rows,
-  trees as flat `key=value` records, directory listings as records. PNG, JSON,
-  pretty tables all happen in Python.
+- **The guest transforms nothing** still holds. Screenshots leave as native-bpp
+  DIB rows plus palette, trees and listings as flat `key=value` records. PNG,
+  JSON and tables happen in Python.
+- **Nothing NT-only, ever**, including in libs that only `gremote.exe` links
+  today. Toolhelp32, `oleacc.dll`, `GetDiskFreeSpaceExA`,
+  `RegisterServiceProcess` are all `GetProcAddress`. Input stays on
+  `keybd_event`/`mouse_event`: `SendInput` exists on 98 but not on 95 or
+  NT4 before SP3.
 - Each lib has a check exe under `win/checks/` that runs under Wine
   (`make wine-smoke`), in the style of `rpccheck`/`netcheck`.
-- Each lib is built with `wlib -q -b -n`; the check exes link the libs instead
-  of repeating `log.o str.o path.o miniz.o` object lists.
 
 ## C++ structure
 
 The dialect stays what `rc_cpp.h` says: C++98 as Open Watcom implements it, no
 exceptions, no RTTI, no STL, trivial templates only, **no file-scope objects
-with non-trivial constructors**. Within that:
+with non-trivial constructors**.
 
 ### Naming and layout
 
@@ -89,18 +94,19 @@ code uses:
 
 - **PascalCase** for classes, structs, enums and typedefs: `App`, `Service`,
   `Connection`, `ServerConfig`. No `rc_` prefix on C++ types; `rc_cpp.h`
-  (`Buf`, `ScopedLock`, `Unique`) already works this way.
+  (`Buf`, `ScopedLock`, `Unique`) already works this way. Checked against the
+  Open Watcom SDK headers: none of the planned names collide.
 - **camelCase** for methods, functions, locals and parameters: `addService`,
   `exeDir`. Members keep the `m_` prefix: `m_listener`.
 - **UPPER_SNAKE** for macros and constants, as today.
 - **Allman braces**, 4-space indent, no tabs.
-- One class per header/source pair where the class is public; file names stay
-  short and lowercase (`connection.cpp`), since they have to survive 8.3 tools.
+- One class per header/source pair where the class is public. File names stay
+  short and lowercase (`connection.cpp`). Includes are always qualified by
+  directory (`"wire/conn.h"`), the rule `rpc/rpc.h` taught us.
 - C translation units (`str.c`, `path.c`) and their `extern "C"` APIs keep
   `rc_snake_case`: that is C's only namespace.
-- Existing client code is renamed when it moves into a lib or is refactored
-  (build step 7), not in a sweep. A mass rename would bury every real change
-  in the diff.
+- Existing client code is renamed when it moves into a lib or is refactored,
+  not in a sweep. A mass rename would bury every real change in the diff.
 
 ### Services and lifecycle
 
@@ -113,18 +119,19 @@ public:
     virtual const char *name() const = 0;
     virtual bool init() = 0;               /* acquire resources; false aborts startup */
     virtual bool start() { return true; }  /* start threads, begin listening */
-    virtual void stop() {}                 /* signal and join; idempotent */
+    virtual void signalStop() {}           /* ask threads to finish; never blocks */
+    virtual bool join(DWORD timeoutMs) { return true; }  /* false: timed out, resources leaked on purpose */
 };
 
 class App
 {
 public:
-    static App *create(const char *exeDir);
+    static App *create(HINSTANCE instance, const char *exeDir);
     ~App();                                /* deletes services in reverse order */
 
     bool addService(Service *service);     /* fixed capacity; registration order = dependency order */
-    int run();                             /* init all, start all, message loop, stop in reverse */
-    void quit(int exitCode);               /* posts WM_QUIT; safe from any thread */
+    int run();                             /* init all, start all, message loop, then shut down */
+    void quit(int exitCode);               /* posts to App's hidden window; safe from any thread */
 
 private:
     App(const App &);
@@ -135,27 +142,31 @@ private:
 
 - **Two-phase construction.** Constructors only store dependencies and cannot
   fail. Anything that can fail (heap, sockets, threads, DLLs) happens in
-  `init()`/`start()`, which return `bool`. This matches the existing
-  `static create()` returning null on OOM (`app/reconnect.cpp:29`).
-- **`App` is the container: it owns the services and their lifecycle.**
-  If `init` fails partway, only the services that were initialised are stopped
-  and deleted, in reverse order. `stop` is idempotent so a partial start is safe.
+  `init()`/`start()`, which return `bool`. `static create()` returns null on
+  OOM, as `app/reconnect.cpp:29` does.
+- **Shutdown is two passes, because one `stop()` cannot express it.**
+  `App` calls `signalStop()` on every started service in reverse order, then
+  `join()` on each in reverse order. A service whose join times out keeps its
+  resources leaked rather than freeing memory a live thread still touches:
+  the same rule `net.cpp:1085-1200` arrived at the hard way. If `init` fails
+  partway, only services that initialised are signalled and joined.
+- **`App` owns a hidden top-level window**, not a bare thread queue:
+  `PostThreadMessage` to a thread without a queue fails silently on 9x, and the
+  window also receives `WM_ENDSESSION` so a Windows shutdown stops us cleanly.
+  Services that need to reach the main thread post to it through `App`.
 - **Dependency injection through constructors, from one composition root.**
-  `win/remote/main.cpp` has a single `buildApp()` function that creates every
-  service, passes each its dependencies by reference or pointer, and registers
-  them in order. No service looks another up by name at runtime. Without RTTI
-  and templates, a type-keyed registry would be a service locator with casts;
-  the composition root is the honest form of DI here, and it keeps the wiring
-  readable in one screen.
-- **Interfaces only at real seams.** Abstract classes where there is a second
-  implementation or a test fake: the frame sink, the socket (so libwire tests
-  run without Winsock), and the handler interface. Everything else is a
-  concrete class. Every virtual call costs a vtable and nothing is gained by
-  making `FileSystem` swappable.
-- **Callbacks take a context.** `sink(void *ctx, ...)` as `exec.h` already does,
-  or a one-method interface. No context-free function pointers (the pattern in
-  `app/reconnect.h` that forces globals).
-- Non-copyable by private undefined copy constructor and assignment, as today.
+  `win/remote/main.cpp` has a single `buildApp()` that creates every service,
+  passes each its dependencies by reference or pointer, and registers them in
+  order. No runtime lookup by name: without RTTI a type-keyed registry would be
+  a service locator with casts.
+- **Interfaces only at real seams**: the frame sink, the socket (so libwire
+  tests run without Winsock), and the op handler. Everything else is concrete.
+- **Callbacks take a context** (`sink(void *ctx, ...)` as `exec.h` does) or are
+  one-method interfaces. No context-free function pointers, the pattern in
+  `app/reconnect.h` that forces globals.
+- **No per-module globals in the libs.** State lives in objects the exe owns.
+  `exec.cpp`'s `g_cancel`/`g_child` become fields of an `ExecJob`.
+- Non-copyable by private undefined copy constructor and assignment.
 
 ### Configuration
 
@@ -164,16 +175,19 @@ private:
 ```ini
 [server]
 bind=0.0.0.0
-port=7900
+port=7401                ; 7890/7897 are the client, 7900+ the test harness
 secret=change-me
 allow=192.168.1.0/24     ; peers outside this are closed before AUTH
+idle_timeout_s=90
 
 [exec]
 max_timeout_ms=120000
+max_output_kb=1024
 
 [ui]
 msaa=1                   ; 0 skips oleacc.dll even if present
 max_tree_nodes=2000
+call_timeout_ms=2000
 
 [log]
 file=gremote.log
@@ -181,14 +195,17 @@ level=info
 ```
 
 - `libcore` gets a generic reader over `GetPrivateProfileStringA`/`IntA` with
-  typed getters, defaults and bounds, and truncation reported through `Buf`.
-  `win/core/ini.cpp`'s `rc_config` stays for the client until the client's own
-  refactor.
+  typed getters, defaults and bounds, truncation reported through `Buf`. The
+  client's `core/ini.cpp` (`rc_config`) stays until the client's own refactor;
+  the new reader gets a different file name (`core/inifile.cpp`) so the two
+  never collide in the build.
 - **The composition root loads the INI once into per-service config structs**
-  (`ServerConfig`, `ExecConfig`, `UiConfig`) and hands each service its
-  struct. Services never read the INI themselves.
-- **Invalid values refuse startup** with a log line and a message box, the
-  same rule as the handshake: never guess. `secret=change-me` counts as invalid.
+  (`ServerConfig`, `ExecConfig`, `UiConfig`) and hands each service its struct.
+  Services never read the INI.
+- **Invalid values refuse startup**, the same rule as the handshake: never
+  guess. `secret=change-me` counts as invalid. The refusal is logged, and shown
+  in a message box only when started interactively: a modal box on an
+  unattended box blocks forever.
 
 ## Protocol
 
@@ -197,46 +214,130 @@ Same frame grammar as the client (`uint32le len | TYPE\n k=v\n ... \n\n body`,
 Separate op namespace and its own version number: this is not the bridge
 protocol and must not drift into it.
 
-- **Handshake.** Client connects and sends `AUTH ver=1 secret=...`. Server
-  replies `HELLO` with `ver`, `os`, `cpu`, `mem_kb`, `mem_free_kb`, `screen`,
-  `bpp`, and one header per capability (`msaa`, `toolhelp`, `deflate`), each a
-  small integer enum as the client does. Wrong secret or version: `ERR`, then
-  `shutdown(SD_SEND)` before `closesocket` (an abrupt RST is reported to crash
-  Win98's Winsock). A second connection while one is live gets `ERR busy` and
-  the same graceful close.
+### Connection and handshake
+
+- **The reader thread `select()`s on the listener and the client socket**
+  together, with a timeout so it can poll the stop flag. That is Winsock 1.1,
+  needs no accept thread, and means a second connection is always seen.
+- **A newly authenticated connection replaces the old one.** A killed Python
+  process or a pulled cable never sends FIN, and TCP keepalive defaults to about
+  two hours; "second connection gets busy" would lock the box out until reboot.
+  Unauthenticated connections never disturb the live one.
+- **Idle timeout** (`idle_timeout_s`): no frame for that long closes the
+  connection. The Python client sends `PING` while idle.
+- **Handshake.** Client sends `AUTH ver=1 secret=...`. Server replies `HELLO`
+  with `ver`, `os`, `cpu`, `mem_kb`, `mem_free_kb`, `acp`, `oemcp` (exec output is
+  OEM, filenames and window text are ANSI; Python decodes, the guest does not),
+  and one header per capability (`msaa`, `toolhelp`, `deflate`), each a small
+  integer enum as the client does. Screen size and bpp are cached at startup,
+  never queried by the reader (see lanes). Wrong secret or version: `ERR`, a 1s
+  delay, then `shutdown(SD_SEND)` before `closesocket` (an abrupt RST is
+  reported to crash Win98's Winsock).
+- **Auth is a plain shared secret plus the `allow` range**, on an isolated LAN,
+  matching the client. Challenge-response needs a hash the guest does not have;
+  revisit only if the box ever leaves the LAN.
+- **Never `SO_REUSEADDR`.** On Windows it lets a second copy share the port and
+  steal connections. If `bind` fails with `WSAEADDRINUSE`, retry for up to 240s
+  (possible TIME_WAIT after a restart) before refusing to start.
+
+### Requests, lanes and cancellation
+
 - **Requests carry `id`.** Responses are `OK id=` or `ERR id= code= msg=`.
-  Streaming ops send `DATA id=` chunks then `END id=`. `CANCEL id=` cancels one
-  request (fixing the client's id-ignoring EXECKILL, `BACKLOG.md` 9).
-- **Lanes**, one worker thread each, one request in flight per lane, `ERR busy`
-  otherwise:
+  Streaming ops send `DATA id=` chunks then `END id=` with a summary.
+- **Every request is tagged with the connection generation.** Output from an
+  older generation is dropped, so a job still finishing for a dead client never
+  lands in the new client's stream (Python restarts ids at 1).
+- **`CANCEL id=` follows `BACKLOG.md` 6** (9P `Tflush`): its ack means the
+  request will never be answered, and the id cannot be reused before the ack.
+  It compares the id under the lock, fixing the id-blind EXECKILL (`BACKLOG.md` 9).
+- **Lanes.** One worker per lane, one request in flight per lane, `ERR busy
+  op= age_ms=` otherwise:
 
-| Lane | Thread | Ops |
-|---|---|---|
-| control | reader, inline | `PING`, `CANCEL`, `SYSINFO`, `QUIT` |
-| job | job worker | `EXEC`, `LAUNCH`, `PS`, `KILL` |
-| fs | fs worker | `LS`, `STAT`, `GET`, `PUT`, `RM`, `MKDIR`, `MV`, `DRIVES` |
-| ui | ui worker (has a message queue, `CoInitialize`d) | `SHOT`, `WINDOWS`, `TREE`, `CLICK`, `DRAG`, `MOVE`, `KEYS`, `TYPE`, `FOCUS`, `CLOSEWIN` |
+| Lane | Thread | Ops | May block on |
+|---|---|---|---|
+| control | reader, inline | `AUTH`, `PING`, `CANCEL`, `SYSINFO`, `PS`, `KILL`, `REBOOT` | nothing: kernel32 and Winsock only |
+| job | job worker | `EXEC`, `LAUNCH` | the child |
+| fs | fs worker | `LS`, `STAT`, `GET`, `PUT`, `RM`, `MKDIR`, `MV`, `DRIVES` | the disk |
+| ui | ui worker (message queue, `CoInitialize`d) | `SHOT`, `WINDOWS`, `TREE`, `CLICK`, `KEYS`, `TYPE`, `FOCUS`, `CLOSEWIN` | USER/GDI, other apps |
 
-So a long `EXEC` never blocks a screenshot, and `CANCEL` always gets through.
+- **The control lane never touches USER or GDI.** On 9x a hung 16-bit app
+  holding Win16Mutex blocks USER/GDI calls from every 32-bit thread; the reader
+  must stay responsive through that. `PS`/`KILL` are here, not on the job lane,
+  because behind a stuck `EXEC` is exactly when you need to kill something.
+- **The reader never waits on the out queue.** Control replies have a reserved
+  slot. Bulk `DATA` blocks only the worker that produced it, and a sink whose
+  connection generation has died fails fast so the job cancels itself instead
+  of hanging in `exec.cpp`'s run loop (`exec.cpp:250-262`), where neither the
+  timeout nor the cancel flag is checked while the sink blocks.
+- **The sender `select()`s for writability with a timeout** before `send`.
+  `SO_SNDTIMEO` is Winsock 2 and not trusted through wsock32 on 98.
+- **Multi-frame requests** (`PUT`): the first frame opens the request; the
+  following `DATA id=` frames route to it by id, not through the lane's busy
+  check; `END id= crc=` closes it.
+
+### Op table
+
+Written per op before its step starts. Step 4 needs the control and job lanes
+settled; fs and ui tables are written at the start of steps 5 and 6.
+
+| Op | Request headers / body | Reply | Errors |
+|---|---|---|---|
+| `AUTH` | `ver`, `secret` | `HELLO` (above) | `bad_secret`, `bad_version`, `not_allowed` |
+| `PING` | none | `OK` | none |
+| `CANCEL` | `id` of target | `OK id=` (target is dead) | `no_such_id` |
+| `SYSINFO` | none | `OK` with `mem_free_kb`, `uptime_ms`. No USER/GDI free-resource numbers: `GetFreeSystemResources` is 16-bit only (`PLAN.md` Toolchain facts) | none |
+| `PS` | none | `DATA` records `pid` (unsigned: 9x pids are obfuscated pointers with the high bit set), `ppid`, `threads`, `exe`; `END count=` | `no_toolhelp` |
+| `KILL` | `pid`, optional `force=1` | `OK` | `denied` (deny list below), `no_such_pid`, `failed` |
+| `REBOOT` | `confirm=yes`, optional `mode=logoff\|reboot\|poweroff` | `OK`, then `ExitWindowsEx` | `unconfirmed` |
+| `EXEC` | `timeout_ms`, `cwd`, optional `shell`; body is the command line | `DATA` output chunks (OEM bytes, untouched), `END exit=, truncated=, timed_out=` | `busy`, `spawn_failed` |
+| `LAUNCH` | `cwd`, `show`; body is the command line | `OK pid=` | `spawn_failed` |
+
+- **`exit` is only meaningful without a shell.** `COMMAND.COM /c` on 9x
+  probably does not pass the child's errorlevel back; verify on the guest, and
+  the Python client documents it either way.
+- **`EXEC` does not inherit handles it should not.** `CreateProcess(..., TRUE, ...)`
+  would hand the listening socket to children (true on NT and Wine, unknown on
+  9x), and a child outliving `gremote` would then hold the port. The listening
+  socket is made non-inheritable or exec inherits only the pipe handles;
+  `LAUNCH` passes `FALSE`.
+- **`KILL` deny list:** `MSGSRV32.EXE`, `KERNEL32.DLL`, `MPREXE.EXE`,
+  `MMTASK.TSK` and our own pid always; `EXPLORER.EXE` only with `force=1`.
+  Killing the first four can hang 9x.
+- **There is no remote `QUIT`.** Stopping `gremote` remotely is `EXEC` of
+  something that kills it, which is deliberate friction.
 
 ### UI details decided now
 
+- **Focus on Win98 is not free.** `PLAN.md` Phase 6 said 9x has no foreground
+  lock; that holds for 95 and NT4, not 98, which introduced it alongside 2000.
+  A background `gremote` calling `SetForegroundWindow` makes the taskbar button
+  flash instead. At startup, try `SPI_SETFOREGROUNDLOCKTIMEOUT` = 0; otherwise
+  attach to the foreground thread, set focus, detach. After `FOCUS`, check
+  `GetForegroundWindow() == target` and return `ERR focus` if not, so `TYPE` never
+  types into the wrong window. On the P200 checklist.
 - **MSAA is loaded, never imported.** `LoadLibrary("oleacc.dll")` +
-  `GetProcAddress("AccessibleObjectFromWindow")`. Win98 is believed to ship
-  it (MSAA 1.x); Win95 and NT4 did not. Verify on the P200. When absent,
-  `TREE` falls back to the plain window tree and `HELLO` says `msaa=0`.
-- **Every cross-process call has a timeout.** Window text through
-  `SendMessageTimeout`, and a per-node deadline on the MSAA walk, because a hung
-  target app otherwise hangs the ui lane. Node cap from the INI; the walk
-  streams records instead of building the tree in memory.
+  `GetProcAddress("AccessibleObjectFromWindow")`. Win98 is believed to ship it
+  (MSAA 1.x); verify on the P200. When absent, `TREE` falls back to the window
+  tree and `HELLO` says `msaa=0`.
+- **Hung targets.** Before touching a window's process, probe it with
+  `SendMessageTimeout(WM_NULL, SMTO_ABORTIFHUNG)`; window text also goes through
+  `SendMessageTimeout`. A per-node deadline alone cannot interrupt a COM call
+  already blocked in an STA, so the ui thread registers an `IMessageFilter`
+  whose `MessagePending` returns `PENDINGMSG_CANCELCALL` past the deadline, with
+  a `SetTimer` so it gets called. Never `IsHungAppWindow` (2000+). The walk
+  streams records under `max_tree_nodes` instead of building a tree.
 - **Tree record fields:** hwnd, parent, class, text, rect, style, visible,
   enabled, and with MSAA: role, name, value, state, default action, location.
-- **Input** from retro-agent's `input.c` (`FORKED.md`: keep the E0 extended
-  scancode table and the `VK_SNAPSHOT` fallback). Click checks the target point
-  is not covered by another window before sending (`PLAN.md` Phase 6).
-- **Screenshot** as DIB strips in `DATA` frames, deflated when negotiated.
-  Whether to add GDI `BI_RLE8` is the open question from `BACKLOG.md` 8; start
-  without it.
+- **Input** from retro-agent's `input.c` goes to `win/ui/`, not the
+  `win/app/input.cpp` that `FORKED.md` once named: that file is the compose box.
+  Keep the E0 extended scancode table and the `VK_SNAPSHOT` fallback. Click
+  checks with `WindowFromPoint` that the target is not covered (`PLAN.md`
+  Phase 6). `DRAG` and `MOVE` are deferred until a test needs them.
+- **Screenshot** as native-bpp DIB rows plus the palette in `DATA` frames: on an
+  8bpp display that is a third of 24bpp and no GDI conversion. Needs retro-agent's
+  palette fix (a fresh memory DC has only the 20 static colours). The current
+  `app/screenshot.cpp` writes to a file handle, so it is rewritten onto a sink,
+  not just moved. `BI_RLE8` stays the open question of `BACKLOG.md` 8.
 
 ## Python client
 
@@ -247,24 +348,66 @@ from gremote import Remote
 
 with Remote("192.168.1.50", secret="...") as r:
     res = r.exec(r"C:\WINDOWS\COMMAND.COM /c mem", timeout=20)
-    print(res.exit_code, res.output)
+    print(res.output_text)                 # decoded with HELLO's oemcp
     r.put("build/win/retroclaude.exe", r"C:\Gaston\retroclaude.exe")
     for p in r.ps(): ...
     r.kill(pid)
-    img = r.screenshot()                  # PIL.Image
+    img = r.screenshot()                   # PIL.Image
     for w in r.windows(): ...
     node = r.tree(hwnd).find(role="push button", name="OK")
-    r.click(node)                         # or r.click(x, y)
+    r.click(node)                          # or r.click(x, y)
     r.type("hello"); r.keys("alt+f4")
 ```
 
 - The frame codec moves out of `bridge/wire/protocol.py` into a dependency-free
-  module that both `bridge` and `gremote` import. Today `protocol.py` pulls in
-  `fold` and `files.caps`; `link.py` pulls in the view layer.
+  module both `bridge` and `gremote` import. Today `protocol.py` pulls in
+  `fold` and `files.caps`, and `link.py` pulls in the view layer.
 - Tests live in `tests/python/remote/`.
-- A `ship()` helper covers the flow `vmship.sh` does for the VM: close the
-  client, upload, relaunch. Your notes on the locked-exe and single-instance
-  traps become code, not memory.
+- A `ship()` helper replaces the `vmship.sh` flow on real hardware: close the
+  client, upload, relaunch. The locked-exe and single-instance traps (a running
+  exe locks its file; a second copy raises the first and exits) become code.
+- `PUT` writes a temp file, checks the CRC from `END`, then deletes the target
+  and renames (`MoveFileExA` is on the deny list). A truncated
+  `retroclaude.exe` is a bricked client.
+
+## Safety of the test box
+
+- **Self-update keeps a way back.** `gremote` copies itself to `%TEMP%`, the copy
+  waits for the old pid to exit, renames `GREMOTE.EXE` to `GREMOTE.OLD`, puts the
+  new one in place, launches it, and waits for it to answer on localhost. If it
+  does not answer (an NT-only import dies at load with no log), the copy
+  restores `GREMOTE.OLD` and launches that.
+- **`REBOOT`** exists for a wedged client. `ExitWindowsEx` needs no privileges
+  on 9x.
+- **Autostart** through the `RunServices` registry key plus
+  `RegisterServiceProcess` (resolved dynamically), so `gremote` runs before
+  logon and survives logoff. Installing it is a one-time manual step.
+- **Out of band, nothing yet.** An in-guest server dies with the guest; a smart
+  plug or PiKVM is the answer to a blue screen, not this plan.
+
+## Build changes
+
+- **Each lib builds into its own object directory**, `$(BUILD)/<lib>/%.o`, and
+  links from a `.lib` made with `wlib -q -b -n`. Today everything shares one
+  `$(BUILD)/%.o` under a flat `VPATH`, which silently takes the first match:
+  `app/input.cpp` against libui input, `screenshot.o` mid-move, `exec.o`.
+  `wlib` is used nowhere yet, so step 1 invents the rule.
+- **A build check fails on duplicate source basenames** across the directories
+  that share an object dir.
+- **`HDRS` and `VPATH` gain the new directories**, or header edits stop
+  triggering rebuilds.
+- **`make check` is parameterised by EXE / MAP / CAP** and runs for both
+  `retroclaude.exe` and `gremote.exe`. Today every step hardcodes
+  `retroclaude.exe`.
+- **The gates must keep seeing code that moves into a lib.**
+  `tools/check/stackframes.py:36` exempts every `.lib:` module and
+  `cmovcheck.py:57-59` only counts basenames in `$(OBJS)`, so as written both
+  would stop checking our own code the moment it moves. They learn that our
+  `lib*.lib(...)` modules are owned, and a check fails if lib objects drop out
+  of coverage.
+- **The client has 180 bytes of headroom**: 398,820 committed at load against a
+  399,000 budget (measured 2026-09-25). Linking from libs must not grow it;
+  step 1 compares the number before and after.
 
 ## Memory budget
 
@@ -273,50 +416,61 @@ in every measurement taken while it is running.
 
 - Five threads (reader, sender, job, fs, ui) with explicit small stack
   reserves in `_beginthreadex`.
-- One 64KB inbound frame buffer, one bounded out queue, the 38KB screenshot
-  strip buffer, exec's 8KB chunk. No per-request heap growth; streaming
-  everywhere.
-- `make check` runs its import audit, CMOV scan, static-constructor check and
-  committed-at-load cap against `gremote.exe` too, with its own cap.
-- The first P200 session measures `gremote.exe` idle and under load, so later
+- One 64KB inbound frame buffer, one bounded out queue, a screenshot strip
+  buffer, exec's 8KB chunk. No per-request heap growth; streaming everywhere.
+  `EXEC_MAX_OUT` (32KB today, `exec.cpp:39`) becomes a parameter, since the
+  remote shell streams rather than buffers.
+- `make check` gives `gremote.exe` its own committed-at-load cap.
+- The first P200 session measures `gremote` idle and under load, so later
   client measurements can subtract it.
 
 ## Build order
 
-Each step leaves `retroclaude.exe` building and behaving the same. Each ends
-with `make check`, the Wine tests, and a guest run.
+Each step leaves `retroclaude.exe` building and behaving the same, and ends
+with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 
-1. **libcore.** Move log/str/path/`rc_cpp.h` into a lib, add the INI reader and
-   `App`/`Service`. Relink the client and the check exes against it. No
-   behaviour change.
-2. **libwire (server side first).** Move `frameproto`, add `Connection`,
-   `Listener`, the lane dispatcher. The client keeps `net.cpp` for now and
-   only its `frameproto` include moves. Extract the Python frame codec.
-3. **libexec.** Move `exec.cpp`; add process list, kill, launch.
+1. **libcore and the build.** Per-lib object dirs, the `wlib` rule, the
+   duplicate-basename check, the gate fixes above, `check` parameterised. Move
+   log/str/path/`rc_cpp.h` into libcore; add `inifile` and `App`/`Service`.
+   Relink the client and the check exes. Done when the gates provably still fire
+   on lib code and the client's committed-at-load number has not moved.
+2. **libwire, extracted from `net.cpp`, not written fresh.** Its shutdown order
+   (FIN before join, leak on join timeout, no descriptor reuse) cost many fixes.
+   Split `frameproto` into the codec (libwire) and the client's lane table
+   (stays in `net/`). Add `Listener` and the server-side reader. `net.cpp` is
+   frozen until the client moves onto libwire, so nothing is fixed twice.
+   Extract the Python frame codec.
+3. **libexec.** Move exec onto `ExecJob` (per-job cancel, id-checked), output
+   cap as a parameter, handle inheritance fixed; the client's rpc adapts.
+   Add process list, kill, launch.
 4. **`gremote.exe` v0 + Python client.** App, config, listener, AUTH/HELLO,
-   control and job lanes. Integration test: pytest starts `gremote.exe` under
-   Wine on localhost and drives it with `gremote`. Ship to the VM, then the
-   P200. **This is the first useful milestone: ssh-equivalent on the real box.**
-5. **libfs** and the fs lane, plus `ship()`.
-6. **libui.** Screenshot, window list, then input, then the control tree, then
-   MSAA. Each verified on the P200, not just Wine: window trees and input are
-   exactly where Wine lies.
-7. **Client refactor.** `retroclaude.exe` gets an `App` composition root.
-   `main.cpp`'s file statics become services; `net.cpp` moves onto `Connection`;
-   rpc onto the lane dispatcher; screenshot attach onto libui. The Phase 6 agent
-   tools then need only bridge-side work plus handlers. This is its own phase
-   and gets its own plan when we reach it.
+   control and job lanes, per the op table. **First prove Wine can host a
+   listening exe that pytest connects to:** every existing Wine test runs the
+   exe as a client, so the reverse direction has no precedent here. Then ship
+   to the VM, then the P200. **First useful milestone: ssh-equivalent on the
+   real box.**
+5. **libfs**, the fs lane, `PUT` with CRC and temp-rename, `ship()`, self-update.
+6. **libui.** Screenshot, window list, focus and input, control tree, MSAA, in
+   that order. Each verified on the P200, not just Wine: window trees, focus and
+   input are exactly where Wine lies.
+
+After that, moving the client onto `App` and the libs is its own phase with
+its own plan. The Phase 6 agent tools then need only handlers and bridge work.
+
+## P200 checklist
+
+Things only the real box can answer, collected so the first session covers them:
+
+- `oleacc.dll` present, and its version.
+- Foreground lock: does `SPI_SETFOREGROUNDLOCKTIMEOUT` = 0 work from a background process.
+- `COMMAND.COM /c` exit codes: is the child's errorlevel returned.
+- Handle inheritance of sockets into children on 98.
+- `bind` after a restart: TIME_WAIT behaviour.
+- `gremote` memory idle and under load, with and without the client running.
+- Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI numbers in `SYSINFO`.
 
 ## Open decisions
 
-- **Updating `gremote.exe` itself.** A running exe cannot be overwritten. Options:
-  `WININIT.INI [rename]` plus a reboot (native to 9x, slow), or a copy of itself
-  run from `%TEMP%` that waits for the old PID to exit, replaces the file and
-  relaunches. Leaning to the second.
-- **Autostart.** A StartUp folder shortcut vs the `Run` registry key.
-- **Auth strength.** A plain shared secret on an isolated LAN matches the
-  client. A challenge-response would keep the secret off the wire for little
-  code; decide before step 4.
 - **Deflate on by default.** Probably off on LAN; screenshots are the only large
   payload.
 - **`BI_RLE8`** for screenshots (`BACKLOG.md` 8).

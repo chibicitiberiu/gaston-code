@@ -14,8 +14,9 @@ forgotten, and before starting late-phase work.
 tools are bare verbs -- `mcp__machine__exec`, not `win98_exec`. Only the guest
 binary is OS-specific; the bridge, the protocol and the tool surface should
 survive being pointed at MS-DOS, Windows 3.1 or NT 4. Where the OS genuinely
-matters it is a runtime branch, not a name (`probe_exec` picks `command.com`
-over `cmd.exe` from `GetVersion()`). `docs/FEASIBILITY.md`'s `win98_*` sketch is
+matters it is a runtime branch, not a name (the bridge picks `command.com` or
+`cmd.exe` per call from the HELLO inventory, `bridge/agent/toolrules.py`
+`shell_command()`). `docs/FEASIBILITY.md`'s `win98_*` sketch is
 superseded.
 
 **A tool earns its place only if `exec` does the job badly.** Every tool costs
