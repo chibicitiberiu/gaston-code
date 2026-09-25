@@ -45,8 +45,8 @@ agent tools, and a pattern for untangling `win/app/main.cpp` later.
 ```
 
 `gremote.exe` listens and the Linux side connects: the reverse of the client.
-One live client at a time; a newly authenticated connection replaces the old
-one (see Protocol).
+One live client at a time. A 30-second heartbeat bounds how long a dead client
+can hold the box (see Protocol).
 
 ### The libraries
 
@@ -178,7 +178,7 @@ bind=0.0.0.0
 port=7401                ; 7890/7897 are the client, 7900+ the test harness
 secret=change-me
 allow=192.168.1.0/24     ; peers outside this are closed before AUTH
-idle_timeout_s=90
+heartbeat_timeout_s=30  ; no frame from the client for this long drops it
 
 [exec]
 max_timeout_ms=120000
@@ -219,12 +219,20 @@ protocol and must not drift into it.
 - **The reader thread `select()`s on the listener and the client socket**
   together, with a timeout so it can poll the stop flag. That is Winsock 1.1,
   needs no accept thread, and means a second connection is always seen.
-- **A newly authenticated connection replaces the old one.** A killed Python
-  process or a pulled cable never sends FIN, and TCP keepalive defaults to about
-  two hours; "second connection gets busy" would lock the box out until reboot.
-  Unauthenticated connections never disturb the live one.
-- **Idle timeout** (`idle_timeout_s`): no frame for that long closes the
-  connection. The Python client sends `PING` while idle.
+- **Heartbeat: 30 seconds.** Any frame from the client resets the timer; with
+  nothing else to send, the client sends `PING`. If no frame arrives within
+  `heartbeat_timeout_s` (default 30), the server drops the connection
+  (`shutdown(SD_SEND)`, then `closesocket`), cancels its in-flight requests, and
+  goes back to accepting. A killed Python process or a pulled cable never sends
+  FIN, and TCP keepalive defaults to about two hours; the heartbeat turns that
+  lockout into at most 30 seconds.
+- **The heartbeat runs on the reader thread**, from the same `select()`
+  timeout. It never depends on a lane being free, so a long `EXEC` or a hung
+  `TREE` cannot starve it and cannot keep a dead client alive either.
+- **One client at a time.** While a client is live, a new connection is
+  accepted, answered `ERR code=busy`, and closed gracefully. It never disturbs
+  the live one. Once the live client is dropped, the next connection is served.
+  A client that reconnects after its own crash may wait up to 30 seconds.
 - **Handshake.** Client sends `AUTH ver=1 secret=...`. Server replies `HELLO`
   with `ver`, `os`, `cpu`, `mem_kb`, `mem_free_kb`, `acp`, `oemcp` (exec output is
   OEM, filenames and window text are ANSI; Python decodes, the guest does not),
@@ -282,8 +290,8 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
 
 | Op | Request headers / body | Reply | Errors |
 |---|---|---|---|
-| `AUTH` | `ver`, `secret` | `HELLO` (above) | `bad_secret`, `bad_version`, `not_allowed` |
-| `PING` | none | `OK` | none |
+| `AUTH` | `ver`, `secret` | `HELLO` (above) | `bad_secret`, `bad_version`, `not_allowed`, `busy` (another client is live) |
+| `PING` | none | `OK`; also serves as the heartbeat | none |
 | `CANCEL` | `id` of target | `OK id=` (target is dead) | `no_such_id` |
 | `SYSINFO` | none | `OK` with `mem_free_kb`, `uptime_ms`. No USER/GDI free-resource numbers: `GetFreeSystemResources` is 16-bit only (`PLAN.md` Toolchain facts) | none |
 | `PS` | none | `DATA` records `pid` (unsigned: 9x pids are obfuscated pointers with the high bit set), `ppid`, `threads`, `exe`; `END count=` | `no_toolhelp` |
@@ -359,6 +367,10 @@ with Remote("192.168.1.50", secret="...") as r:
     r.type("hello"); r.keys("alt+f4")
 ```
 
+- **Heartbeat on the Python side:** a background thread sends `PING` every
+  10 seconds when the socket has been quiet, sharing the send lock with
+  requests. It keeps running while the main thread blocks in a long `exec`, so
+  a slow command never looks like a dead client.
 - The frame codec moves out of `bridge/wire/protocol.py` into a dependency-free
   module both `bridge` and `gremote` import. Today `protocol.py` pulls in
   `fold` and `files.caps`, and `link.py` pulls in the view layer.
@@ -387,15 +399,27 @@ with Remote("192.168.1.50", secret="...") as r:
 
 ## Build changes
 
-- **Each lib builds into its own object directory**, `$(BUILD)/<lib>/%.o`, and
-  links from a `.lib` made with `wlib -q -b -n`. Today everything shares one
-  `$(BUILD)/%.o` under a flat `VPATH`, which silently takes the first match:
-  `app/input.cpp` against libui input, `screenshot.o` mid-move, `exec.o`.
-  `wlib` is used nowhere yet, so step 1 invents the rule.
-- **A build check fails on duplicate source basenames** across the directories
-  that share an object dir.
-- **`HDRS` and `VPATH` gain the new directories**, or header edits stop
-  triggering rebuilds.
+- **Object files mirror the source tree.** `win/app/input.cpp` compiles to
+  `$(BUILD)/obj/app/input.o`, `win/ui/input.cpp` to `$(BUILD)/obj/ui/input.o`.
+  This applies to all code, the client's included, not just the new libs. Today
+  every object shares one `$(BUILD)/%.o` under a flat `VPATH`, which silently
+  takes the first match: `app/input.cpp` against libui input, `screenshot.o`
+  mid-move, `exec.o`. With mirrored paths two files with the same name in
+  different directories simply cannot collide, and `VPATH` goes away.
+- **Explicit source lists per target**, not pattern discovery. Each lib and exe
+  names its sources by path; the object list is derived from it.
+- **Libs are built with `wlib -q -b -n`** into `$(BUILD)/lib/`. `wlib` is used
+  nowhere yet, so step 1 invents the rule. Inside one `.lib` a module is named
+  by its basename, and adding a second module of the same name replaces the
+  first without a word, so a check fails on duplicate basenames **within a
+  lib**. Across libs they are fine.
+- **Header dependencies from the compiler**, not a wildcard. `HDRS` today is
+  every header under a hardcoded directory list, so a new directory's headers
+  never trigger rebuilds. `wcc386`/`wpp386 -ad=<file>.d -adt=<obj> -adfs` write
+  a make-style dependency file next to each object (verified on this
+  toolchain 2026-09-25), and the Makefile `-include`s them.
+- **The gates key on object paths, not basenames**, now that basenames can
+  repeat (`cmovcheck.py` matches basenames against `$(OBJS)` today).
 - **`make check` is parameterised by EXE / MAP / CAP** and runs for both
   `retroclaude.exe` and `gremote.exe`. Today every step hardcodes
   `retroclaude.exe`.
@@ -429,8 +453,12 @@ in every measurement taken while it is running.
 Each step leaves `retroclaude.exe` building and behaving the same, and ends
 with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 
-1. **libcore and the build.** Per-lib object dirs, the `wlib` rule, the
-   duplicate-basename check, the gate fixes above, `check` parameterised. Move
+1. **The build first, then libcore.** As its own commit, with no source moved:
+   mirrored object tree, no `VPATH`, explicit source lists, real header
+   dependencies, and proof that it changed nothing
+   (same imports, same committed-at-load number, all gates green). Then the
+   `wlib` rule, the in-lib duplicate check, the gate fixes above, `check`
+   parameterised. Then move
    log/str/path/`rc_cpp.h` into libcore; add `inifile` and `App`/`Service`.
    Relink the client and the check exes. Done when the gates provably still fire
    on lib code and the client's committed-at-load number has not moved.
