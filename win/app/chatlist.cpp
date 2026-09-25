@@ -252,10 +252,16 @@ void ChatList::onSwitchedFrame(rc_frame *f)
      * instead, so it reorders only once you have actually said something.
      * The selection already shows which conversation is open. */
     {   /* Mark the newly opened conversation in place. Re-fetching the
-         * list would reorder it, which is exactly what we are avoiding. */
+         * list would reorder it, which is exactly what we are avoiding.
+         *
+         * By the id THIS FRAME carries, not m_net->sess: the listener below
+         * is what writes sess, so reading it here got the conversation just
+         * LEFT, and the bold stayed on it until the next turn re-fetched
+         * the list. */
+        const char *opened = rc_frame_get(f, "id");
         m_current = -1;
-        for (unsigned i = 0; i < m_rows.size(); i++) {
-            if (!m_rows[i].header && m_rows[i].id == m_net->sess) {
+        for (unsigned i = 0; opened && i < m_rows.size(); i++) {
+            if (!m_rows[i].header && m_rows[i].id == opened) {
                 m_current = (int)i;
                 break;
             }
