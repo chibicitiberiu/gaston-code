@@ -2047,6 +2047,193 @@ static void probe_events(void)
     }
 }
 
+/* ------------------------------------------------------------ 0.15c */
+/* WinEvents deliver. Can they be BUILT ON?
+ *
+ * Three different questions, and a subscription can pass the first and
+ * fail the others:
+ *
+ *   latency       how long between doing a thing and hearing about it.
+ *                 This is the floor for WaitForText / WaitForControl: a
+ *                 wait cannot be tighter than the notification it rides.
+ *
+ *   granularity   WHICH events exist. A stream that only says "something
+ *                 changed somewhere" is a poll trigger. One that
+ *                 distinguishes a name change from a focus change from a
+ *                 dialog appearing is a queryable feed, and the difference
+ *                 decides whether WaitForText is cheap or a rescan.
+ *
+ *   completeness  do N actions produce N events. A feed that drops one in
+ *                 ten is worse than no feed, because a wait built on it
+ *                 hangs instead of failing, and it hangs rarely, which is
+ *                 the worst failure schedule there is.
+ *
+ * Part A does four known actions on our own window and times each to its
+ * event. Part B counts what a second program's lifetime produces, by type.
+ */
+#define RC_EV_SYS_FOREGROUND   0x0003L
+#define RC_EV_SYS_MENUSTART    0x0004L
+#define RC_EV_SYS_DIALOGSTART  0x0010L
+#define RC_EV_OBJ_CREATE       0x8000L
+#define RC_EV_OBJ_DESTROY      0x8001L
+#define RC_EV_OBJ_SHOW         0x8002L
+#define RC_EV_OBJ_HIDE         0x8003L
+#define RC_EV_OBJ_FOCUS        0x8005L
+#define RC_EV_OBJ_SELECTION    0x8006L
+#define RC_EV_OBJ_STATECHANGE  0x800AL
+#define RC_EV_OBJ_LOCATION     0x800BL
+#define RC_EV_OBJ_NAMECHANGE   0x800CL
+#define RC_EV_OBJ_VALUECHANGE  0x800EL
+
+static const struct { long id; const char *name; } EVNAMES[] = {
+    { RC_EV_SYS_FOREGROUND,  "SYS_FOREGROUND" },
+    { RC_EV_SYS_MENUSTART,   "SYS_MENUSTART" },
+    { RC_EV_SYS_DIALOGSTART, "SYS_DIALOGSTART" },
+    { RC_EV_OBJ_CREATE,      "OBJ_CREATE" },
+    { RC_EV_OBJ_DESTROY,     "OBJ_DESTROY" },
+    { RC_EV_OBJ_SHOW,        "OBJ_SHOW" },
+    { RC_EV_OBJ_HIDE,        "OBJ_HIDE" },
+    { RC_EV_OBJ_FOCUS,       "OBJ_FOCUS" },
+    { RC_EV_OBJ_SELECTION,   "OBJ_SELECTION" },
+    { RC_EV_OBJ_STATECHANGE, "OBJ_STATECHANGE" },
+    { RC_EV_OBJ_LOCATION,    "OBJ_LOCATION" },
+    { RC_EV_OBJ_NAMECHANGE,  "OBJ_NAMECHANGE" },
+    { RC_EV_OBJ_VALUECHANGE, "OBJ_VALUECHANGE" }
+};
+#define EVNAMES_N (sizeof(EVNAMES) / sizeof(EVNAMES[0]))
+
+static int  g_hist[EVNAMES_N];
+static int  g_hist_other;
+static long g_want_ev;
+static HWND g_want_hwnd;
+static int  g_want_got;
+static DWORD g_want_at;
+
+static void CALLBACK lat_proc(RC_HWINEVENTHOOK hook, DWORD ev, HWND h,
+                              LONG obj, LONG child, DWORD tid, DWORD ms)
+{
+    unsigned k;
+    int known = 0;
+    (void)hook; (void)obj; (void)child; (void)tid; (void)ms;
+    for (k = 0; k < EVNAMES_N; k++)
+        if ((long)ev == EVNAMES[k].id) { g_hist[k]++; known = 1; break; }
+    if (!known) g_hist_other++;
+    if (!g_want_got && (long)ev == g_want_ev
+        && (g_want_hwnd == NULL || h == g_want_hwnd)) {
+        g_want_got = 1;
+        g_want_at = GetTickCount();
+    }
+}
+
+/* Pump until the awaited event lands or the budget runs out. Returns the
+ * wait in ms, or -1 for "never arrived", which is the answer that matters:
+ * a missing event is what makes a WaitFor hang. */
+static long await_event(long ev, HWND h, DWORD t0, DWORD budget)
+{
+    DWORD until = GetTickCount() + budget;
+    MSG msg;
+    g_want_ev = ev; g_want_hwnd = h; g_want_got = 0; g_want_at = 0;
+    while (!g_want_got && (long)(GetTickCount() - until) < 0) {
+        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+        Sleep(1);
+    }
+    return g_want_got ? (long)(g_want_at - t0) : -1L;
+}
+
+static void probe_evlat(void)
+{
+    HMODULE u32 = GetModuleHandleA("user32.dll");
+    PFN_SETWINEVENT setwinevent =
+        (PFN_SETWINEVENT)GetProcAddress(u32, "SetWinEventHook");
+    PFN_UNHOOKWINEVENT unhookwinevent =
+        (PFN_UNHOOKWINEVENT)GetProcAddress(u32, "UnhookWinEvent");
+    RC_HWINEVENTHOOK weh;
+    WNDCLASSA wc;
+    HWND w;
+    DWORD t0;
+    long d;
+    unsigned k;
+    int hits, tries;
+
+    head("0.15c  WinEvent latency, granularity and completeness");
+    if (!setwinevent) { say("SetWinEventHook not available"); return; }
+
+    memset(g_hist, 0, sizeof(g_hist));
+    g_hist_other = 0;
+    weh = setwinevent(RC_EVENT_MIN, RC_EV_OBJ_VALUECHANGE, NULL, lat_proc,
+                      0, 0, RC_WINEVENT_OUTOFCONTEXT);
+    if (!weh) { say("hook install failed"); return; }
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)hook_sink_proc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "GastonEvSink";
+    RegisterClassA(&wc);
+
+    /* A -- one action, one event, timed. */
+    t0 = GetTickCount();
+    w = CreateWindowExA(0, "GastonEvSink", "one", WS_OVERLAPPEDWINDOW,
+                        40, 40, 200, 120, NULL, NULL, wc.hInstance, NULL);
+    d = await_event(RC_EV_OBJ_CREATE, w, t0, 2000);
+    say("create  -> OBJ_CREATE     : %ld ms", d);
+
+    t0 = GetTickCount();
+    ShowWindow(w, SW_SHOW);
+    d = await_event(RC_EV_OBJ_SHOW, w, t0, 2000);
+    say("show    -> OBJ_SHOW       : %ld ms", d);
+
+    t0 = GetTickCount();
+    SetWindowTextA(w, "renamed");
+    d = await_event(RC_EV_OBJ_NAMECHANGE, w, t0, 2000);
+    say("settext -> OBJ_NAMECHANGE : %ld ms", d);
+
+    t0 = GetTickCount();
+    DestroyWindow(w);
+    d = await_event(RC_EV_OBJ_DESTROY, NULL, t0, 2000);
+    say("destroy -> OBJ_DESTROY    : %ld ms", d);
+
+    /* Completeness: the same action twenty times. Nineteen of twenty is a
+     * feed you cannot build a wait on. */
+    hits = 0;
+    for (tries = 0; tries < 20; tries++) {
+        HWND t = CreateWindowExA(0, "GastonEvSink", "x", WS_OVERLAPPEDWINDOW,
+                                 0, 0, 50, 50, NULL, NULL, wc.hInstance, NULL);
+        t0 = GetTickCount();
+        if (await_event(RC_EV_OBJ_CREATE, t, t0, 500) >= 0) hits++;
+        DestroyWindow(t);
+        await_event(RC_EV_OBJ_DESTROY, NULL, GetTickCount(), 300);
+    }
+    say("completeness              : %d of 20 creates produced an event",
+        hits);
+
+    /* B -- what does a whole other program look like on this feed. */
+    {
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        memset(g_hist, 0, sizeof(g_hist));
+        g_hist_other = 0;
+        memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+        memset(&pi, 0, sizeof(pi));
+        if (CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE, 0, NULL,
+                           NULL, &si, &pi)) {
+            pump_for(4000);
+            TerminateProcess(pi.hProcess, 0);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            pump_for(1500);
+        }
+        say("-- events during one notepad lifetime --");
+        for (k = 0; k < EVNAMES_N; k++)
+            if (g_hist[k]) say("   %-16s %d", EVNAMES[k].name, g_hist[k]);
+        if (g_hist_other) say("   %-16s %d", "(other ids)", g_hist_other);
+    }
+
+    if (unhookwinevent) unhookwinevent(weh);
+    UnregisterClassA("GastonEvSink", wc.hInstance);
+}
+
 /* ------------------------------------------------------------- 0.16 */
 /* ImageClick: find a small bitmap on screen and click it. The question is
  * not whether it works -- it is a scan, it always works -- but WHERE the
@@ -2238,6 +2425,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "hooks"))    probe_hooks();
     if (!only || !strcmp(only, "imgfind"))  probe_imgfind();
     if (!only || !strcmp(only, "events"))   probe_events();
+    if (!only || !strcmp(only, "evlat"))    probe_evlat();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
