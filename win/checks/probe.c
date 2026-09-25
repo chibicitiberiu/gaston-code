@@ -2900,6 +2900,130 @@ static void probe_msaafast(void)
     say("accessible tree, which includes simple elements with no HWND.");
 }
 
+/* ------------------------------------------------------------ 0.13g */
+/* How much of MSAA can plain Win32 answer, and for what?
+ *
+ * MSAA costs 11.5ms a node because IAccessible is COM and a window in
+ * another process hands back a proxy that marshals every call. That is not
+ * avoidable -- the interface IS COM. What IS avoidable is asking it things
+ * Win32 already knows.
+ *
+ * A Button's style bits ARE its role: BS_PUSHBUTTON, BS_CHECKBOX,
+ * BS_RADIOBUTTON, BS_GROUPBOX. GetWindowLong is a read of memory USER
+ * already has, and the walk does it anyway for `visible` and `enabled`, so
+ * the role costs nothing at all. Checked state is BM_GETCHECK, one window
+ * message. A combo's selection is CB_GETCURSEL and CB_GETLBTEXT.
+ *
+ * So this times a Win32-only enrichment against the same nodes MSAA was
+ * timed on, and reports how many of them it could actually classify --
+ * because a fast answer for a third of the desktop is not a win.
+ */
+static const char *role_from_style(const char *cls, DWORD style)
+{
+    if (!lstrcmpiA(cls, "Button")) {
+        switch (style & 0x0FL) {              /* BS_TYPEMASK, low nibble */
+        case BS_PUSHBUTTON: case BS_DEFPUSHBUTTON: return "pushbutton";
+        case BS_CHECKBOX:   case BS_AUTOCHECKBOX:  return "checkbox";
+        case BS_RADIOBUTTON:
+        case BS_AUTORADIOBUTTON:                   return "radiobutton";
+        case BS_GROUPBOX:                          return "grouping";
+        case BS_3STATE: case BS_AUTO3STATE:        return "checkbox";
+        default:                                   return "pushbutton";
+        }
+    }
+    if (!lstrcmpiA(cls, "Edit"))           return "text";
+    if (!lstrcmpiA(cls, "Static"))         return "statictext";
+    if (!lstrcmpiA(cls, "ListBox"))        return "list";
+    if (!lstrcmpiA(cls, "ComboBox"))       return "combobox";
+    if (!lstrcmpiA(cls, "ScrollBar"))      return "scrollbar";
+    if (!lstrcmpiA(cls, "SysListView32"))  return "list";
+    if (!lstrcmpiA(cls, "SysTreeView32"))  return "outline";
+    if (!lstrcmpiA(cls, "SysTabControl32"))return "pagetablist";
+    if (!lstrcmpiA(cls, "ToolbarWindow32"))return "toolbar";
+    if (!lstrcmpiA(cls, "msctls_statusbar32")) return "statusbar";
+    if (!lstrcmpiA(cls, "msctls_progress32"))  return "progressbar";
+    if (!lstrcmpiA(cls, "msctls_trackbar32"))  return "slider";
+    return 0;                                  /* unknown to us */
+}
+
+static void probe_win32rich(void)
+{
+    DWORD t0, t1;
+    int i, classified, checkable, checked;
+    char cls[64];
+
+    head("0.13g  what Win32 can answer without COM at all");
+
+    g_uiw_n = 0;
+    EnumWindows(collect_top, 0);
+    say("%d visible windows", g_uiw_n);
+
+    classified = checkable = checked = 0;
+    t0 = GetTickCount();
+    for (i = 0; i < g_uiw_n; i++) {
+        DWORD style;
+        const char *role;
+        cls[0] = '\0';
+        GetClassNameA(g_uiw[i], cls, sizeof(cls));
+        style = (DWORD)GetWindowLongA(g_uiw[i], GWL_STYLE);
+        role = role_from_style(cls, style);
+        if (role) classified++;
+        /* The one state MSAA is usually wanted for, by message. */
+        if (role && (!lstrcmpA(role, "checkbox")
+                     || !lstrcmpA(role, "radiobutton"))) {
+            DWORD_PTR res = 0;
+            checkable++;
+            if (SendMessageTimeoutA(g_uiw[i], BM_GETCHECK, 0, 0,
+                                    SMTO_ABORTIFHUNG, 200, &res) && res)
+                checked++;
+        }
+    }
+    t1 = GetTickCount();
+    say("style-derived role : %d of %d classified in %lu ms (%lu us/node)",
+        classified, g_uiw_n, (unsigned long)(t1 - t0),
+        (unsigned long)(t1 - t0) * 1000 / (g_uiw_n ? g_uiw_n : 1));
+    say("BM_GETCHECK        : %d checkable, %d checked", checkable, checked);
+
+    /* The same nodes through MSAA, for the role only, so the comparison is
+     * like for like: one property, same windows, same moment. */
+    {
+        HMODULE acc = LoadLibraryA("oleacc.dll");
+        PFN_AOFW aofw = acc
+            ? (PFN_AOFW)GetProcAddress(acc, "AccessibleObjectFromWindow") : 0;
+        if (aofw) {
+            int got = 0;
+            CoInitialize(NULL);
+            /* warm */
+            for (i = 0; i < g_uiw_n && i < 10; i++) {
+                IAccessible *ia = 0;
+                if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                         (void **)&ia) == S_OK && ia)
+                    ia->lpVtbl->Release(ia);
+            }
+            t0 = GetTickCount();
+            for (i = 0; i < g_uiw_n; i++) {
+                IAccessible *ia = 0;
+                if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                         (void **)&ia) == S_OK && ia) {
+                    VARIANT self, vr;
+                    V_VT(&self) = VT_I4; V_I4(&self) = 0;
+                    V_VT(&vr) = VT_EMPTY;
+                    if (ia->lpVtbl->get_accRole(ia, self, &vr) == S_OK)
+                        got++;
+                    ia->lpVtbl->Release(ia);
+                }
+            }
+            t1 = GetTickCount();
+            say("MSAA role, same set: %d of %d in %lu ms (%lu us/node)",
+                got, g_uiw_n, (unsigned long)(t1 - t0),
+                (unsigned long)(t1 - t0) * 1000 / (g_uiw_n ? g_uiw_n : 1));
+            CoUninitialize();
+        }
+        if (acc) FreeLibrary(acc);
+    }
+    say("unclassified are custom classes, where MSAA is the only source.");
+}
+
 /* ------------------------------------------------------------- 0.16 */
 /* ImageClick: find a small bitmap on screen and click it. The question is
  * not whether it works -- it is a scan, it always works -- but WHERE the
@@ -3085,6 +3209,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "msaa"))     probe_msaa();
     if (!only || !strcmp(only, "msaacost")) probe_msaacost();
     if (!only || !strcmp(only, "msaafast")) probe_msaafast();
+    if (!only || !strcmp(only, "win32rich")) probe_win32rich();
     if (!only || !strcmp(only, "dom"))      probe_dom();
     if (!only || !strcmp(only, "depths"))   probe_depths();
     if (!only || !strcmp(only, "verify"))   probe_verify();
