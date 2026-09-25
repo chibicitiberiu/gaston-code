@@ -88,7 +88,7 @@ MINIZ = third_party/miniz/miniz.c
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
-            core/app.cpp
+            core/app.cpp core/window.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this
@@ -105,7 +105,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
 
-.PHONY: msgids synccheck inicheck inifilecheck appcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -160,6 +160,16 @@ $(BUILD)/inifilecheck.exe: $(INIFILECHECK_OBJS)
 APPCHECK_OBJS = $(call objs,checks/appcheck.cpp) $(LIBCORE)
 appcheck: $(BUILD)/appcheck.exe
 $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# Window and SubclassedWindow (core/window.h): WM_CREATE seeing hwnd(),
+# destroy through the object and from outside, two instances of one class,
+# two subclassed EDITs that do not share state, detach.
+WINDOWCHECK_OBJS = $(call objs,checks/windowcheck.cpp) $(LIBCORE)
+windowcheck: $(BUILD)/windowcheck.exe
+$(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -248,7 +258,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
-all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck cppcheck framecheck \
+all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck \
      netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
