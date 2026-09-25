@@ -15,6 +15,7 @@
 
 #include "net/frameproto.h"
 #include "app/config.h"
+#include "core/app.h"
 #include "core/log.h"
 #include "core/path.h"
 #include "core/str.h"
@@ -83,6 +84,10 @@ static ClientConfig  g_cfg;
 /* Heap, not a file-scope object: ConfigStore has a constructor, and a static
  * one would run before WinMain and so before the log (core/rc_cpp.h). */
 static ConfigStore  *g_store;
+/* The container WinMain builds (docs/REMOTE.md, C4). A plain pointer, for
+ * wnd_proc's WM_CLOSE; the move of this file's statics into the window
+ * service (C5) takes it with them. */
+static App          *g_app;
 static rc_net        g_net;
 static rc_html *g_html;
 static rc_bar  *g_bar;
@@ -1688,15 +1693,22 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_CLOSE:
-        DestroyWindow(hwnd);
+        /* Ask the container to quit rather than destroying the window here.
+         * App then stops the services in reverse order: the connection
+         * first, while this window -- which its reader thread posts frames
+         * to -- still exists, and only then the window itself. The network
+         * used to be stopped from inside WM_DESTROY below. */
+        if (g_app) g_app->quit(0);
+        else DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
+        /* Normally reached from MainWindow::join during App's shutdown, with
+         * the connection already stopped. */
         delete g_reconn;
         g_reconn = NULL;
         delete g_turn;
         g_turn = NULL;
-        rc_net_stop(&g_net);
         delete g_html;
         g_html = NULL;
         delete g_bar;
@@ -1731,16 +1743,245 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
          * not, and a stale HFONT outliving WM_DESTROY is a deleted GDI
          * object that still looks valid to anything that reads it. */
         g_ui_font = NULL;
-        PostQuitMessage(0);
+        /* If anything other than App's shutdown destroyed the window, end
+         * the loop too; during shutdown this is a no-op message. */
+        if (g_app) g_app->quit(0);
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
+/* --- services -------------------------------------------------------------
+ *
+ * WinMain is the composition root (docs/REMOTE.md, C4): it builds these,
+ * hands each its dependencies, and App runs their lifecycle. Log, the
+ * single-instance check, common controls and the config stay ahead of App,
+ * because each can end the process before there is anything to stop.
+ */
+
+/* The OLE apartment MSHTML needs. OleInitialize, not CoInitialize: in-place
+ * activation of an embedded control needs the full OLE apartment. Registered
+ * first, so it is torn down last, after the window has released MSHTML. */
+class OleService : public Service
+{
+public:
+    OleService() : m_up(false) {}
+    const char *name() const { return "ole"; }
+
+    bool init()
+    {
+        if (FAILED(OleInitialize(NULL)))
+        {
+            rc_log("OleInitialize failed");
+            MessageBoxA(NULL, "OLE could not start.", RC_TITLE,
+                        MB_OK | MB_ICONERROR);
+            return false;
+        }
+        m_up = true;
+        return true;
+    }
+
+    bool join(DWORD timeoutMs)
+    {
+        (void)timeoutMs;
+        if (m_up)
+            OleUninitialize();
+        m_up = false;
+        return true;
+    }
+
+private:
+    bool m_up;
+};
+
+/* The main window: class, window, children (WM_CREATE), accelerators, and
+ * the keys the message loop handles before dispatch. Destroying it in join()
+ * runs WM_DESTROY, which deletes the children. */
+class MainWindow : public Service, public MessageFilter
+{
+public:
+    MainWindow(HINSTANCE inst, int show) : m_inst(inst), m_show(show) {}
+    const char *name() const { return "main window"; }
+
+    bool init()
+    {
+        WNDCLASSA wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc   = wnd_proc;
+        wc.hInstance     = m_inst;
+        /* Two sizes, loaded separately and deliberately.
+         *
+         * WNDCLASSA has no hIconSm field -- that is WNDCLASSEX, and this stays
+         * on RegisterClassA. So Windows derives the 16x16 title-bar icon by
+         * shrinking hIcon, and StretchBlt-ing a 32x32 down to 16x16 on a 4bpp
+         * image turns the three dots into grey mush. LoadImageA with an explicit
+         * size picks the 16x16 entry out of the .ico instead, and WM_SETICON
+         * installs it once the window exists.
+         *
+         * SM_CXSMICON rather than a literal 16: it is 16 on this guest, but it
+         * is the metric the shell actually asks for, and asking for the wrong
+         * one is how an icon ends up scaled after all. */
+        wc.hIcon         = (HICON)LoadImageA(m_inst, MAKEINTRESOURCE(IDI_GASTON),
+                                             IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXICON),
+                                             GetSystemMetrics(SM_CYICON),
+                                             LR_DEFAULTCOLOR);
+        if (!wc.hIcon) wc.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+        wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = "RetroClaudeWnd";
+        if (!RegisterClassA(&wc))
+        {
+            rc_log("RegisterClass failed");
+            return false;
+        }
+
+        g_main = CreateWindowExA(0, "RetroClaudeWnd", RC_TITLE,
+            /* WS_CLIPCHILDREN: without it the parent's background erase
+             * paints over its own children, which on a window that is
+             * almost entirely children means flicker at best and erased
+             * controls at worst. */
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
+            NULL, NULL, m_inst, NULL);
+        if (!g_main)
+        {
+            rc_log("CreateWindowEx failed");
+            return false;
+        }
+        {
+            /* Not freed: an icon loaded from a resource is owned by the
+             * module and is released when it unloads. DestroyIcon on one is
+             * documented as unnecessary, and on 9x it is actively wrong. */
+            HICON small_icon = (HICON)LoadImageA(m_inst,
+                                                 MAKEINTRESOURCE(IDI_GASTON),
+                                                 IMAGE_ICON,
+                                                 GetSystemMetrics(SM_CXSMICON),
+                                                 GetSystemMetrics(SM_CYSMICON),
+                                                 LR_DEFAULTCOLOR);
+            if (small_icon)
+                SendMessageA(g_main, WM_SETICON, ICON_SMALL,
+                             (LPARAM)small_icon);
+        }
+        rc_log("main window hwnd=%p", (void *)g_main);
+        log_mem("window created");
+
+        g_accel = LoadAcceleratorsA(m_inst, MAKEINTRESOURCE(IDA_MAIN));
+        if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
+        return true;
+    }
+
+    bool start()
+    {
+        /* build_menu moved into create_children (WM_CREATE) -- see the
+         * comment there; the toolbar has to be able to see the option
+         * menus. */
+        ShowWindow(g_main, m_show);
+        UpdateWindow(g_main);
+        return true;
+    }
+
+    bool join(DWORD timeoutMs)
+    {
+        (void)timeoutMs;
+        if (g_main)
+            DestroyWindow(g_main);
+        g_main = NULL;
+        return true;
+    }
+
+    /* The loop's own keys, in the order they always ran. True consumes. */
+    bool filter(MSG &msg)
+    {
+        /* Accelerators FIRST, and only the keys whose meaning does not depend
+         * on focus -- Ctrl+N, Ctrl+M, F5, Ctrl+PgUp/PgDn. See gaston.rc.
+         *
+         * Ctrl+N used to be hand-rolled right here with no msg.hwnd filter,
+         * which is the same thing an accelerator does; moving it did not
+         * change what it matches, and a draft of this plan claimed otherwise.
+         * What makes it safe is the confirmation in IDM_NEW, not where the
+         * key is translated. */
+        if (g_accel && TranslateAcceleratorA(g_main, g_accel, &msg))
+            return true;
+
+        /* Enter opens the highlighted conversation. Caught here rather than by
+         * subclassing the listbox, because IsDialogMessage would otherwise
+         * route it to the default pushbutton and the keyboard would have no
+         * way to open a chat at all. */
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
+            && g_chats && msg.hwnd == g_chats->hwnd()) {
+            g_chats->open_selected();
+            return true;
+        }
+        /* Scrolling the transcript from the keyboard, and why these CANNOT be
+         * accelerators.
+         *
+         * TranslateAccelerator does not look at msg.hwnd: it translates for
+         * the whole message whatever has focus. PgUp/PgDn/Ctrl+Home/Ctrl+End
+         * are the caret keys of a multiline EDIT, so an accelerator would
+         * steal them from the input box permanently -- you could never move
+         * the caret in a long draft again.
+         *
+         * So they are conditional, and the condition is "taking them costs
+         * the edit control nothing": an empty box has no caret to move. A
+         * non-empty one keeps them, and the page bar's buttons and the
+         * scrollbar are still there for the mouse.
+         *
+         * Ctrl is deliberately not checked for PgUp/PgDn: Ctrl+PgUp/PgDn is
+         * the accelerator above, which moves between SEALED PAGES, and that
+         * is a different axis from scrolling within one. */
+        if (msg.message == WM_KEYDOWN && g_html && g_inputmod
+            && g_inputmod->is_empty()
+            && !(GetKeyState(VK_CONTROL) & 0x8000)) {
+            if (msg.wParam == VK_PRIOR) { g_html->scroll_page(-1); return true; }
+            if (msg.wParam == VK_NEXT)  { g_html->scroll_page(1);  return true; }
+        }
+        if (msg.message == WM_KEYDOWN && g_html && g_inputmod
+            && g_inputmod->is_empty()
+            && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            if (msg.wParam == VK_HOME) { g_html->scroll_top();    return true; }
+            if (msg.wParam == VK_END)  { g_html->scroll_bottom(); return true; }
+        }
+        /* Esc denies a pending permission request (a halt has no "deny" --
+         * see rc_bar::escape). It has to be intercepted before
+         * IsDialogMessageA, which eats VK_ESCAPE and would never let it
+         * reach the bar. */
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
+            && g_bar && g_bar->escape()) {
+            return true;
+        }
+        return IsDialogMessageA(g_main, &msg) != 0;
+    }
+
+private:
+    HINSTANCE m_inst;
+    int m_show;
+};
+
+/* The bridge connection. rc_reconnect starts it from the UI; this service
+ * owns stopping it, which App does before the window it posts to is
+ * destroyed. rc_net_stop bounds and times its own joins (up to about 42 s)
+ * and leaks what did not stop, so join() always reports done. */
+class ConnectionService : public Service
+{
+public:
+    explicit ConnectionService(rc_net *net) : m_net(net) {}
+    const char *name() const { return "connection"; }
+    bool init() { return true; }
+
+    bool join(DWORD timeoutMs)
+    {
+        (void)timeoutMs;
+        rc_net_stop(m_net);
+        return true;
+    }
+
+private:
+    rc_net *m_net;
+};
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
-    WNDCLASSA wc;
-    MSG msg;
     INITCOMMONCONTROLSEX icc;
 
     (void)prev; (void)cmd;
@@ -1852,143 +2093,24 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                g_cfg.syncRoot);
     }
 
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc   = wnd_proc;
-    wc.hInstance     = inst;
-    /* Two sizes, loaded separately and deliberately.
-     *
-     * WNDCLASSA has no hIconSm field -- that is WNDCLASSEX, and this stays
-     * on RegisterClassA. So Windows derives the 16x16 title-bar icon by
-     * shrinking hIcon, and StretchBlt-ing a 32x32 down to 16x16 on a 4bpp
-     * image turns the three dots into grey mush. LoadImageA with an explicit
-     * size picks the 16x16 entry out of the .ico instead, and WM_SETICON
-     * installs it once the window exists.
-     *
-     * SM_CXSMICON rather than a literal 16: it is 16 on this guest, but it
-     * is the metric the shell actually asks for, and asking for the wrong
-     * one is how an icon ends up scaled after all. */
-    wc.hIcon         = (HICON)LoadImageA(inst, MAKEINTRESOURCE(IDI_GASTON),
-                                         IMAGE_ICON,
-                                         GetSystemMetrics(SM_CXICON),
-                                         GetSystemMetrics(SM_CYICON),
-                                         LR_DEFAULTCOLOR);
-    if (!wc.hIcon) wc.hIcon = LoadIconA(NULL, IDI_APPLICATION);
-    wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName = "RetroClaudeWnd";
-    if (!RegisterClassA(&wc)) { rc_log("RegisterClass failed"); return 1; }
-
-    /* OleInitialize, not CoInitialize: in-place activation of an embedded
-     * control needs the full OLE apartment. */
-    if (FAILED(OleInitialize(NULL))) {
-        rc_log("OleInitialize failed");
-        MessageBoxA(NULL, "OLE could not start.", RC_TITLE,
-                    MB_OK | MB_ICONERROR);
-        return 1;
-    }
-
-    g_main = CreateWindowExA(0, "RetroClaudeWnd", RC_TITLE,
-        /* WS_CLIPCHILDREN: without it the parent's background erase paints
-         * over its own children, which on a window that is almost entirely
-         * children means flicker at best and erased controls at worst. */
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-        CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
-        NULL, NULL, inst, NULL);
-    if (!g_main) { rc_log("CreateWindowEx failed"); return 1; }
-    {
-        /* Not freed: an icon loaded from a resource is owned by the module
-         * and is released when it unloads. DestroyIcon on one is documented
-         * as unnecessary, and on 9x it is actively wrong. */
-        HICON small_icon = (HICON)LoadImageA(inst,
-                                             MAKEINTRESOURCE(IDI_GASTON),
-                                             IMAGE_ICON,
-                                             GetSystemMetrics(SM_CXSMICON),
-                                             GetSystemMetrics(SM_CYSMICON),
-                                             LR_DEFAULTCOLOR);
-        if (small_icon)
-            SendMessageA(g_main, WM_SETICON, ICON_SMALL,
-                         (LPARAM)small_icon);
-    }
-    rc_log("main window hwnd=%p", (void *)g_main);
-    log_mem("window created");
-
-
-
-    g_accel = LoadAcceleratorsA(inst, MAKEINTRESOURCE(IDA_MAIN));
-    if (!g_accel) rc_log("accelerators: LoadAccelerators failed");
-
-    /* build_menu moved into create_children (WM_CREATE) -- see the comment
-     * there; the toolbar has to be able to see the option menus. */
-    ShowWindow(g_main, show);
-    UpdateWindow(g_main);
-
-    while (GetMessageA(&msg, NULL, 0, 0) > 0) {
-        /* Accelerators FIRST, and only the keys whose meaning does not depend
-         * on focus -- Ctrl+N, Ctrl+M, F5, Ctrl+PgUp/PgDn. See gaston.rc.
-         *
-         * Ctrl+N used to be hand-rolled right here with no msg.hwnd filter,
-         * which is the same thing an accelerator does; moving it did not
-         * change what it matches, and a draft of this plan claimed otherwise.
-         * What makes it safe is the confirmation in IDM_NEW, not where the
-         * key is translated. */
-        if (g_accel && TranslateAcceleratorA(g_main, g_accel, &msg))
-            continue;
-
-        /* Enter opens the highlighted conversation. Caught here rather than by
-         * subclassing the listbox, because IsDialogMessage would otherwise
-         * route it to the default pushbutton and the keyboard would have no
-         * way to open a chat at all. */
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN
-            && g_chats && msg.hwnd == g_chats->hwnd()) {
-            g_chats->open_selected();
-            continue;
-        }
-        /* Scrolling the transcript from the keyboard, and why these CANNOT be
-         * accelerators.
-         *
-         * TranslateAccelerator does not look at msg.hwnd: it translates for
-         * the whole message whatever has focus. PgUp/PgDn/Ctrl+Home/Ctrl+End
-         * are the caret keys of a multiline EDIT, so an accelerator would
-         * steal them from the input box permanently -- you could never move
-         * the caret in a long draft again.
-         *
-         * So they are conditional, and the condition is "taking them costs
-         * the edit control nothing": an empty box has no caret to move. A
-         * non-empty one keeps them, and the page bar's buttons and the
-         * scrollbar are still there for the mouse.
-         *
-         * Ctrl is deliberately not checked for PgUp/PgDn: Ctrl+PgUp/PgDn is
-         * the accelerator above, which moves between SEALED PAGES, and that
-         * is a different axis from scrolling within one. */
-        if (msg.message == WM_KEYDOWN && g_html && g_inputmod
-            && g_inputmod->is_empty()
-            && !(GetKeyState(VK_CONTROL) & 0x8000)) {
-            if (msg.wParam == VK_PRIOR) { g_html->scroll_page(-1); continue; }
-            if (msg.wParam == VK_NEXT)  { g_html->scroll_page(1);  continue; }
-        }
-        if (msg.message == WM_KEYDOWN && g_html && g_inputmod
-            && g_inputmod->is_empty()
-            && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            if (msg.wParam == VK_HOME) { g_html->scroll_top();    continue; }
-            if (msg.wParam == VK_END)  { g_html->scroll_bottom(); continue; }
-        }
-        /* Esc denies a pending permission request (a halt has no "deny" --
-         * see rc_bar::escape). It has to be intercepted before
-         * IsDialogMessageA, which eats VK_ESCAPE and would never let it
-         * reach the bar. */
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
-            && g_bar && g_bar->escape()) {
-            continue;
-        }
-        if (!IsDialogMessageA(g_main, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-        }
-    }
+    /* Registration order is dependency order: OLE before the window that
+     * hosts MSHTML, the window before the connection that posts to it.
+     * Shutdown runs the other way. addService takes ownership even when it
+     * refuses, so each service is allocated only once the one before it is
+     * in, and nothing is left unowned on a failure. */
+    g_app = App::create(inst);
+    bool built = g_app && g_app->addService(new OleService());
+    MainWindow *window = built ? new MainWindow(inst, show) : 0;
+    built = built && g_app->addService(window) &&
+            g_app->addMessageFilter(window) &&
+            g_app->addService(new ConnectionService(&g_net));
+    int code = built ? g_app->run() : App::RUN_FAILED;
+    if (!built) rc_log("startup: could not build the application");
 
     log_mem("exiting");
-    OleUninitialize();
+    delete g_app;
+    g_app = NULL;
     delete g_store;
     rc_log_close();
-    return (int)msg.wParam;
+    return code == App::RUN_FAILED ? 1 : code;
 }
