@@ -43,7 +43,6 @@ class ConnectionService:
         on_lost: Callable[[Any], None] | None = None,
         ensure_background_tasks: Callable[[Any], None] | None = None,
         spawn: Callable[[Any], None] | None = None,
-        get_hello_timeout: Callable[[], float] | None = None,
     ) -> None:
         self.config = config
         self.create_guest = create_guest
@@ -52,7 +51,6 @@ class ConnectionService:
         self.on_lost = on_lost
         self.ensure_background_tasks = ensure_background_tasks
         self.spawn = spawn
-        self.get_hello_timeout = get_hello_timeout
         self.guest: GuestSession | None = None
         #: Where the halt bar and the agent-notice queue live until a guest
         #: attaches and brings its own. A forward, not storage -- see
@@ -108,10 +106,7 @@ class ConnectionService:
 
         Returns (hello, pipelined).
         """
-        if self.get_hello_timeout is not None:
-            timeout_s = self.get_hello_timeout()
-        else:
-            timeout_s = getattr(self.config, "hello_timeout_s", 10.0)
+        timeout_s = self.config.hello_timeout_s
         try:
             async with asyncio.timeout(timeout_s):
                 while True:

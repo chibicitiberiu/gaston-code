@@ -1009,7 +1009,7 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
     fresh.sync_state = os.path.dirname(p.state)
     assert fresh.synccoord.agent_notices == []
 
-    fresh._seed_agent_notices()
+    fresh.turn_runner.seed_agent_notices()
     assert fresh.synccoord.agent_notices == [
         "SYNC: conflict on x.c -- your copy was kept"], (
         "the notice the old process never got to hand over must be picked "

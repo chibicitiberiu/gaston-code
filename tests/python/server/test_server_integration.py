@@ -19,6 +19,7 @@ from claude_agent_sdk import (PermissionResultAllow, PermissionResultDeny,
                               PermissionUpdate)
 
 from bridge.wire.compress import StreamDecompressor
+from bridge.files import paths
 from bridge.wire.protocol import (Frame, FrameReader, MAX_FRAME, PROTO_VERSION,
                                   ProtocolError, hello)
 from bridge import server as srv
@@ -73,7 +74,7 @@ async def test_bad_caps_rejected(harness):
 
 async def test_hello_timeout_rejected(harness, monkeypatch):
     """Connecting and sending nothing times out and receives ERROR hello_timeout."""
-    monkeypatch.setattr(harness.bridge, "HELLO_TIMEOUT", 0.05)
+    monkeypatch.setattr(harness.bridge.config, "hello_timeout_s", 0.05)
     r, w = await asyncio.open_connection("127.0.0.1", harness.port)
     frames = await harness.recv_until(r, {"ERROR"}, timeout=1.0)
     assert frames[-1].headers["code"] == "hello_timeout"
@@ -2787,6 +2788,6 @@ def test_a_guest_path_is_joined_with_the_separator_the_guest_uses():
     """The one place the bridge spells a guest path. It used to spell it with
     a backslash unconditionally, while `paths.py` kept "/" as the wire
     separator everywhere else on purpose."""
-    assert Bridge._sep_of("C:\\GASTON") == "\\"
-    assert Bridge._sep_of("/srv/gaston") == "/"
-    assert Bridge._sep_of("") == "/"
+    assert paths.sep_of("C:\\GASTON") == "\\"
+    assert paths.sep_of("/srv/gaston") == "/"
+    assert paths.sep_of("") == "/"

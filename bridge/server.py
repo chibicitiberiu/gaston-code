@@ -520,8 +520,6 @@ class GuestSession:
 
 
 class Bridge:
-    HELLO_TIMEOUT: float = 10.0
-    STRAY_SCAN_BUDGET: int = SyncService.STRAY_SCAN_BUDGET
 
     def __init__(
         self,
@@ -561,7 +559,6 @@ class Bridge:
             on_lost=self._on_lost,
             ensure_background_tasks=self._ensure_background_tasks,
             spawn=self._spawn,
-            get_hello_timeout=lambda: getattr(self, "HELLO_TIMEOUT", 10.0),
         )
         if hasattr(self, "_fallback_guest") and self._fallback_guest is not None:
             self.connection.guest = self._fallback_guest
@@ -677,22 +674,13 @@ class Bridge:
         # Frames pipelined behind HELLO in a single read, handed to _pump.
         self._reaper: asyncio.Task | None = None
         self._sweeper: asyncio.Task | None = None
-        #: The guest's own path for the mirror, learned from SYNCEND. Held here
-        #: so the system prompt can NAME the folder rather than say "the sync
-        #: folder" -- an agent told only that its edits reach the user has no
-        #: way to know which of its edits do.
-        self.guest_sync_root: str | None = None
-        #: Consecutive passes refused for a reason that fixes itself. See the
-        #: `transient` branch in run_sync.
-        self._transient_aborts = 0
-        self._last_sync_reports: list[str] = []
-        #: Resolved baseline file per guest root, so the lookup below is not
-        #: repeated on every pass.
-        self._base_paths: dict[str, str] = {}
-        #: Where `self.synccoord` points until a guest exists. Handed to
-        #: the `GuestSession` when it is built, so the object's identity
-        #: survives the handover and anything recorded before the first
-        #: attach is still there afterwards. See the property below.
+        # The mirror root the guest reported, the reports from the last pass,
+        # the resolved baseline path and the transient-abort count all used to
+        # be mirrored here as well as on the GuestSession that owns them. A
+        # second guest could read the first one's, so the mirrors are gone and
+        # `guest.guest_sync_root` / `.last_sync_reports` / `.transient_aborts`
+        # are the only copies. The pre-attach SyncCoordinator moved to
+        # ConnectionService, which owns the guest slot it precedes.
 
     def _ensure_config(self) -> BridgeConfig:
         if not hasattr(self, "config"):
@@ -760,13 +748,6 @@ class Bridge:
         if hasattr(self, "session") and self.session is not None:
             self.session.conv = val
 
-    @property
-    def secret(self) -> str:
-        return self._ensure_config().secret
-
-    @secret.setter
-    def secret(self, val: str) -> None:
-        self._ensure_config().secret = val
 
     @property
     def host(self) -> str:
@@ -864,21 +845,6 @@ class Bridge:
     def perm_grace_s(self, val: float) -> None:
         self._ensure_config().perm_grace_s = val
 
-    @property
-    def _models_cache(self) -> list[dict] | None:
-        return self.options._models_cache
-
-    @_models_cache.setter
-    def _models_cache(self, val: list[dict] | None) -> None:
-        self.options._models_cache = val
-
-    @property
-    def _commands_cache(self) -> list[dict] | None:
-        return self.options._commands_cache
-
-    @_commands_cache.setter
-    def _commands_cache(self, val: list[dict] | None) -> None:
-        self.options._commands_cache = val
 
     @property
     def _guest(self) -> GuestSession | None:
@@ -895,12 +861,6 @@ class Bridge:
         else:
             self._fallback_guest = val
 
-    @property
-    def guest(self) -> GuestSession | None:
-        return self._guest
-
-    async def send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await self.connection.send(guest, frame)
 
     @property
     def synccoord(self) -> SyncCoordinator:
@@ -998,30 +958,9 @@ class Bridge:
     ) -> None:
         await self.connection.on_client(reader, writer)
 
-    @staticmethod
-    def _oem_for(guest: GuestSession) -> str:
-        return ConnectionService.oem_for(guest)
-
-    def _bind_codepages(self, guest: GuestSession) -> None:
-        self.connection.bind_codepages(guest)
-
-    async def _read_hello(
-        self,
-        reader: asyncio.StreamReader,
-        frames: FrameReader,
-        writer: asyncio.StreamWriter,
-    ) -> tuple[Frame | None, list[Frame]]:
-        return await self.connection.read_hello(reader, frames, writer)
-
-    async def _attach(
-        self, hello: Frame, writer: asyncio.StreamWriter
-    ) -> GuestSession | None:
-        return await self.connection.attach(hello, writer)
 
     # --- Claude session ----------------------------------------------------
 
-    def _effective_model(self, guest: GuestSession) -> str:
-        return self.options.effective_model(guest)
 
     # --- the conversation's own folder -------------------------------------
     #
@@ -1049,24 +988,10 @@ class Bridge:
     folder_name = staticmethod(P.folder_name)
     _title_folder = staticmethod(P.title_folder)
 
-    def _stored_work_dir(self, session_id: str) -> str:
-        return self.workspace.stored_work_dir(session_id)
-
-    def _retarget_perms(self, guest: GuestSession) -> None:
-        self.workspace.retarget_perms(guest)
 
     def _mirror_dir(self, guest: GuestSession) -> str:
         return self.workspace.mirror_dir(guest)
 
-    def _work_dir(self, guest: GuestSession) -> str:
-        return self.workspace.work_dir(guest)
-
-    def _validate_attach_target(self, guest: GuestSession, attach: str) -> str | None:
-        return self.attachment.validate_attach_target(guest, attach)
-
-    def _remember_settings(self, guest: GuestSession,
-                           session_id: str = "") -> None:
-        self.options.remember_settings(guest, session_id)
 
     def _restore_settings(self, guest: GuestSession, session_id: str) -> None:
         self.session.restore_settings(guest, session_id)
@@ -1074,30 +999,10 @@ class Bridge:
     async def _ensure_work_dir(self, guest: GuestSession) -> None:
         await self.workspace.ensure_work_dir(guest)
 
-    async def _name_work_dir(self, guest: GuestSession) -> None:
-        await self.workspace.name_work_dir(guest)
-
-    @staticmethod
-    def _sep_of(root: str) -> str:
-        return P.sep_of(root)
-
-    def _guest_path(self, guest: GuestSession, name: str) -> str:
-        return self.workspace.guest_path(guest, name)
-
-    def guest_work_root(self, guest: GuestSession) -> str:
-        return self.workspace.guest_work_root(guest)
-
-    def _sub_of(self, guest: GuestSession) -> str:
-        return self.workspace.sub_of(guest)
-
-    def _effective_effort(self, guest: GuestSession) -> str:
-        return self.options.effective_effort(guest)
 
     def _abandon_pending(self, guest: GuestSession) -> None:
         self.session.abandon_pending(guest)
 
-    async def _resume_pending(self, guest: GuestSession) -> bool:
-        return await self.session.resume_pending(guest)
 
     async def _make_session(self, guest: GuestSession,
                             resume: str | None = None,
@@ -1113,17 +1018,6 @@ class Bridge:
     # are not part of the audit's "Prompts" group (docs/audit/02-bridge-python.md
     # 02.41).
 
-    async def _send_sessions(self, guest: GuestSession) -> None:
-        await self.session.send_sessions(guest)
-
-    async def _reissue_halt(self, guest: GuestSession) -> None:
-        await self.coordinator.reissue_halt(guest)
-
-    async def _reissue_turn(self, guest: GuestSession) -> None:
-        await self.coordinator.reissue_turn(guest)
-
-    async def sync_state_to_guest(self, guest: GuestSession) -> None:
-        await self.coordinator.sync_state_to_guest(guest)
 
     def _spawn(self, coro) -> None:
         """Fire-and-forget, with a reference kept AND the result looked at.
@@ -1158,19 +1052,6 @@ class Bridge:
         if exc is not None:
             log.error("background task failed", exc_info=exc)
 
-    def _coalescer(self, guest: GuestSession, style: str) -> Coalescer:
-        return self.presentation.coalescer(guest, style)
-
-    async def _emit_text(self, guest: GuestSession, text: str,
-                         *, style: str) -> None:
-        await self.presentation.emit_text(guest, text, style=style)
-
-    async def _flush_text(self, guest: GuestSession) -> None:
-        await self.presentation.flush_text(guest)
-
-    async def _write_updates(self, guest: GuestSession,
-                             updates: list) -> None:
-        await self.presentation.write_updates(guest, updates)
 
     async def _write_block(self, guest: GuestSession, html: str,
                            *, stream: bool = True,
@@ -1179,14 +1060,6 @@ class Bridge:
 
     # --- frame pump --------------------------------------------------------
 
-    async def _pump(
-        self,
-        guest: GuestSession,
-        reader: asyncio.StreamReader,
-        frames: FrameReader,
-        early: list,
-    ) -> None:
-        await self.connection.pump(guest, reader, frames, early)
 
     async def _handle(self, guest: GuestSession, f: Frame) -> None:
         await self.connection.handle(guest, f)
@@ -1202,25 +1075,6 @@ class Bridge:
     async def _on_input(self, guest: GuestSession, f: Frame) -> None:
         await self.coordinator.on_input(guest, f)
 
-    async def _on_resume(self, guest: GuestSession, f: Frame) -> None:
-        await self.coordinator.on_resume(guest, f)
-
-    async def _on_syncdirty(self, guest: GuestSession, f: Frame) -> None:
-        # The guest noticed its tree move. It never reconciles anything
-        # itself -- the bridge owns the baseline and decides.
-        self._spawn(self.run_sync("the guest reported a change"))
-
-    async def _on_interrupt(self, guest: GuestSession, f: Frame) -> None:
-        await self.coordinator.on_interrupt(guest, f)
-
-    async def _on_getsessions(self, guest: GuestSession, f: Frame) -> None:
-        await self.session.on_getsessions(guest, f)
-
-    async def _on_switch(self, guest: GuestSession, f: Frame) -> None:
-        await self._switch(guest, f.headers.get("id", ""))
-
-    async def _on_getpage(self, guest: GuestSession, f: Frame) -> None:
-        await self._send_page(guest, f.headers.get("page", ""))
 
     async def _on_stat(self, guest: GuestSession, f: Frame) -> None:
         # The guest measures its own throughput for the progress UI; the
@@ -1241,20 +1095,10 @@ class Bridge:
             guest.link.deflate_bps = def_bps
             log.info("guest reports deflate %.0f B/s", def_bps)
 
-    async def _on_ping(self, guest: GuestSession, f: Frame) -> None:
-        await self._send(guest, pong())
-
-    async def _on_newsession(self, guest: GuestSession, f: Frame) -> None:
-        await self._new_session(guest, f.headers.get("folder", ""))
 
     async def _on_setmodel(self, guest: GuestSession, f: Frame) -> None:
         await self.options.on_setmodel(guest, f)
 
-    async def _on_seteffort(self, guest: GuestSession, f: Frame) -> None:
-        await self.options.on_seteffort(guest, f)
-
-    async def _on_setmode(self, guest: GuestSession, f: Frame) -> None:
-        await self.options.on_setmode(guest, f)
 
     async def _on_rules(self, guest: GuestSession, f: Frame) -> None:
         """What can run without asking, as a transcript block.
@@ -1269,74 +1113,14 @@ class Bridge:
         await self._write_block(guest, perms.rules_view(
             guest.perm_mode, tools, root))
 
-    async def _on_setwork(self, guest: GuestSession, f: Frame) -> None:
-        await self.workspace.on_setwork(guest, f)
 
     async def _on_export(self, guest: GuestSession, f: Frame) -> None:
         await self.session.on_export(guest, f)
 
-    def _conv_title(self, guest: GuestSession) -> str:
-        return self.session.conv_title(guest)
-
-    #: One entry per inbound frame type, built once at class definition
-    #: time -- 02.30: this used to be a 17-branch if/elif mixing one-line
-    #: handlers (PING, STAT) with 25-line ones (RESUME, GETSESSIONS,
-    #: INTERRUPT), and the previous audit pass named it the lowest-risk
-    #: place to start: mechanical, no state of its own. Values are method
-    #: NAMES rather than the bound methods themselves, and resolved with
-    #: `getattr` in `_handle` -- `_sync_frame`/`_exec_out`/`_exec_result`/
-    #: `_perm_reply` are defined later in this class body, so a dict of the
-    #: bare names built here, at THIS point in class-body execution, would
-    #: raise NameError before the class even finishes being defined. Every
-    #: handler takes `(self, guest, f)`, including the six sync reply types
-    #: and the two exec ones, which already had that shape and are reused
-    #: as-is rather than wrapped. `_handle` becomes four lines plus the
-    #: unknown-type fallback; `_perm_reply` (02.41) is now a one-line forward
-    #: onto `guest.perms.reply`, kept as a named entry here rather than
-    #: replaced by the desk directly registering into this dict, since
-    #: nothing else in `_DISPATCH` holds anything but a bound Bridge method
-    #: name. `ExecChannel`/`SyncCoordinator` (02.30's other two extractions)
-    #: are unowned by any pass so far and can register the same way when they
-    #: land.
-    _DISPATCH: dict = {
-        "INPUT": "_on_input",
-        "RESUME": "_on_resume",
-        "SYNCDIRTY": "_on_syncdirty",
-        "SYNCENT": "_sync_frame",
-        "SYNCEND": "_sync_frame",
-        "SYNCPUTACK": "_sync_frame",
-        "SYNCMKDIRACK": "_sync_frame",
-        "SYNCDAT": "_sync_frame",
-        "SYNCDATEND": "_sync_frame",
-        "EXECOUT": "_exec_out",
-        "EXECRESULT": "_exec_result",
-        "PERMREPLY": "_perm_reply",
-        "INTERRUPT": "_on_interrupt",
-        "GETSESSIONS": "_on_getsessions",
-        "SWITCH": "_on_switch",
-        "GETPAGE": "_on_getpage",
-        "STAT": "_on_stat",
-        "PING": "_on_ping",
-        "NEWSESSION": "_on_newsession",
-        "SETMODEL": "_on_setmodel",
-        "SETEFFORT": "_on_seteffort",
-        "SETMODE": "_on_setmode",
-        "EXPORT": "_on_export",
-        "RULES": "_on_rules",
-        "SETWORK": "_on_setwork",
-    }
-
-    def _seed_agent_notices(self) -> None:
-        self.turn_runner.seed_agent_notices()
 
     async def _with_sync_preamble(self, text: str) -> str:
         return await self.turn_runner.with_sync_preamble(text)
 
-    async def _clear_agent_notices(self, delivered: list) -> None:
-        await self.turn_runner.clear_agent_notices(delivered)
-
-    async def _resume_turn(self, guest: GuestSession, answered) -> None:
-        await self.turn_runner.resume_turn(guest, answered)
 
     async def _run_turn(self, guest: GuestSession, text: str,
                         *, echo: bool = True,
@@ -1348,15 +1132,6 @@ class Bridge:
             attach_id=attach_id, attach_name=attach_name,
         )
 
-    async def _run_turn_locked(self, guest: GuestSession, text: str,
-                               *, echo: bool = True,
-                               attach: str | None = None,
-                               attach_id: str | None = None,
-                               attach_name: str | None = None) -> None:
-        await self.turn_runner.run_turn_locked(
-            guest, text, echo=echo, attach=attach,
-            attach_id=attach_id, attach_name=attach_name,
-        )
 
     # --- running commands on the guest -------------------------------------
 
@@ -1371,15 +1146,11 @@ class Bridge:
             command, timeout_ms=timeout_ms, shell=shell, cwd=cwd, guest=guest
         )
 
-    def _kill_exec(self, guest: GuestSession, exec_id: str) -> None:
-        self.guest_exec.kill_exec(guest, exec_id)
 
     async def ensure_sync_flush(self, guest: "GuestSession | None" = None,
                                 why: str = "mcp command") -> dict:
         return await self.sync.ensure_sync_flush(guest, why=why)
 
-    async def _set_status_override(self, guest: "GuestSession", text: str) -> None:
-        await self.sync.set_status_override(guest, text)
 
     async def run_sync(self, why: str, *, wait: bool = False,
                        guest: "GuestSession | None" = None) -> dict:
@@ -1418,13 +1189,6 @@ class Bridge:
                            guest: "GuestSession | None" = None) -> str:
         return await self._ensure_sync().sync_resolve(path, action, guest=guest)
 
-    def _sync_resolve_locked(
-        self, path: str, action: str, guest: "GuestSession | None" = None
-    ) -> str:
-        return self._ensure_sync().sync_resolve_locked(path, action, guest=guest)
-
-    def _baseline_lock(self, guest: "GuestSession | None" = None):
-        return self._ensure_sync().baseline_lock(guest)
 
     async def _release_all_latches(self, only=None) -> int:
         return await self.sync.release_all_latches(only=only)
@@ -1433,14 +1197,10 @@ class Bridge:
                           paths=()) -> None:
         await self.sync.raise_halt(guest, line, paths=paths)
 
-    async def _clear_halt(self, guest: GuestSession) -> None:
-        await self.sync.clear_halt(guest)
 
     async def _reconcile_halt(self, guest: GuestSession, base=None) -> None:
         await self.sync.reconcile_halt(guest, base=base)
 
-    async def _sync_frame(self, guest: GuestSession, f: Frame) -> None:
-        await self.sync.sync_frame(guest, f)
 
     def _fail_syncs(self, guest: GuestSession | None, why: str) -> None:
         self.sync.fail_syncs(guest, why)
@@ -1465,11 +1225,6 @@ class Bridge:
     #: too_long refusal is the only place that number is authoritative.
     EXEC_MAX_CMD = 1024
 
-    async def _exec_out(self, guest: GuestSession, f: Frame) -> None:
-        await self.guest_exec.exec_out(guest, f)
-
-    async def _exec_result(self, guest: GuestSession, f: Frame) -> None:
-        await self.guest_exec.exec_result(guest, f)
 
     def _on_lost(self, guest: GuestSession) -> None:
         self._fail_syncs(guest, "The connected machine disconnected mid-sync.")
@@ -1485,9 +1240,6 @@ class Bridge:
     def _fail_execs(self, guest: GuestSession | None, why: str) -> None:
         self.guest_exec.fail_execs(guest, why)
 
-    async def _perm_reply(self, guest: GuestSession, f: Frame) -> None:
-        """Answer from the guest's prompt bar."""
-        await self.permissions.reply(guest, f)
 
     async def _sweep_sync(self) -> None:
         """The backstop trigger. See run_sync for why it exists.
@@ -1505,7 +1257,7 @@ class Bridge:
                 # running during the next one -- and once R7 gives the bridge
                 # two guests on two codepages, it is the only thing that can
                 # be right.
-                self._bind_codepages(guest)
+                self.connection.bind_codepages(guest)
                 await self.run_sync("the bridge's own sweep")
 
     def _ensure_background_tasks(self, guest: GuestSession) -> None:
@@ -1517,17 +1269,10 @@ class Bridge:
     async def _reap_idle(self) -> None:
         await self.connection.reap_idle()
 
-    async def _models(self, guest: GuestSession) -> list[dict]:
-        return await self.options._models(guest)
-
-    async def _commands(self, guest: GuestSession) -> list[dict]:
-        return await self.options._commands(guest)
 
     async def _send_options(self, guest: GuestSession) -> None:
         await self.options.send_options(guest)
 
-    async def _quiesce_turn(self, guest: GuestSession) -> None:
-        await self.coordinator.quiesce_turn(guest)
 
     async def _set_effort(self, guest: GuestSession, effort: str) -> None:
         await self.coordinator.set_effort(guest, effort)
@@ -1539,26 +1284,10 @@ class Bridge:
     async def _switch(self, guest: GuestSession, session_id: str) -> None:
         await self.coordinator.switch(guest, session_id)
 
-    async def _set_effort_locked(self, guest: GuestSession,
-                                 effort: str) -> None:
-        await self.session.set_effort_locked(guest, effort)
 
     async def _set_mode(self, guest: GuestSession, mode: str) -> None:
         await self.options.set_mode(guest, mode)
 
-    async def _new_session_locked(self, guest: GuestSession,
-                                  folder: str = "") -> None:
-        await self.session.new_session_locked(guest, folder=folder)
-
-    async def _switch_locked(self, guest: GuestSession,
-                             session_id: str) -> None:
-        await self.session.switch_locked(guest, session_id)
-
-    async def _send_page(self, guest: GuestSession, want: str) -> None:
-        await self.presentation.send_page(guest, want)
-
-    def mark_user_turn(self, guest: GuestSession, line: str) -> Any:
-        return self.presentation.mark_user_turn(guest, line)
 
     # --- sending -------------------------------------------------------
     #
@@ -1573,20 +1302,6 @@ class Bridge:
     async def _send_html(self, guest: GuestSession, html: str, mode: str,
                          page_no: int) -> None:
         await guest.link.send_html(guest, html, mode, page_no)
-
-    async def send_html(self, guest: GuestSession, html: str, mode: str,
-                        page_no: int) -> None:
-        await guest.link.send_html(guest, html, mode, page_no)
-
-    async def wire_yield(self, guest: GuestSession) -> None:
-        await guest.link.wire_yield(guest)
-
-    async def _try_send_raw(self, writer: asyncio.StreamWriter,
-                            frame: Frame) -> None:
-        await self.connection.try_send_raw(writer, frame)
-
-
-
 
 
 def _summarise(args: dict) -> str:
