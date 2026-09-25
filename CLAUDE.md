@@ -69,7 +69,7 @@ dependencies passed to the constructor; no registry, no runtime lookup.
 Config comes from the exe's INI via `IniFile`, loaded once into typed
 structs; an invalid value refuses startup. Windows derive from `Window` or
 `SubclassedWindow` (`core/window.h`), never a static proc with a global
-instance. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libui`) know
+instance. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libautomation`) know
 nothing of each other's ops or of the wire, except `libwire`. See
 `docs/REMOTE.md`.
 

@@ -64,7 +64,7 @@ def owns(module: str, ours: set[str]) -> bool:
     `libcore.lib` counts as ours and nothing in `clib3r.lib` does.
 
     By normalised path, not basename: objects mirror the source tree, so
-    `app/input.o` and `ui/input.o` can both exist and a basename match would
+    `app/input.o` and `automation/input.o` can both exist and a basename match would
     credit one with the other's code.
     """
     return os.path.normpath(module) in ours

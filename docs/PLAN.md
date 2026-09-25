@@ -1979,7 +1979,8 @@ displays the token gauge, and commands requiring unsupported UI affordances are 
 A standalone Win98 server for driving the real P200 out of band from the agent
 client: ssh-like exec, files and processes, plus screenshot, window/control tree
 with MSAA, and input, scripted from a Python package. Built from static libs
-(`libcore`, `libwire`, `libexec`, `libfs`, `libui`) that the client also links,
+(`libcore`, `libwire`, `libexec`, `libfs`, `libautomation`) that the client
+also links,
 with an `App` container and INI config. It is also the first step of
 refactoring the client and the source of the Phase 6 primitives. Full plan:
 `docs/REMOTE.md`.
