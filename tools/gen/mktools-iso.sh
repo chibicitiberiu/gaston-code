@@ -100,28 +100,7 @@ fi
 # It rides the CD rather than a host HTTP server on purpose: serving it over
 # the network would expose a local service to every interface to move one
 # 900-byte file, and the CD is already the channel everything else uses.
-cat > "$STAGE/UITEST.HTM" <<'UIT'
-<html><head><title>MSAA DOM probe</title></head>
-<body>
-<h1>Heading One</h1>
-<p>A paragraph of body text that MSAA should expose as a text node.</p>
-<p><a href="http://example.com/one">First link</a> and
-   <a href="http://example.com/two">Second link</a></p>
-<form>
-  <input type="text" name="t1" value="edit contents here"><br>
-  <input type="checkbox" name="c1" checked> Checked box<br>
-  <input type="checkbox" name="c2"> Unchecked box<br>
-  <input type="radio" name="r" checked> Radio on<br>
-  <input type="radio" name="r"> Radio off<br>
-  <select name="s"><option>Alpha</option><option>Beta</option></select><br>
-  <input type="submit" value="Submit Button">
-  <input type="button" value="Disabled Button" disabled>
-</form>
-<table border="1"><tr><th>Col A</th><th>Col B</th></tr>
-<tr><td>Cell 1</td><td>Cell 2</td></tr></table>
-<ul><li>List item one</li><li>List item two</li></ul>
-</body></html>
-UIT
+need "$HERE/tools/gen/w98kit/UITEST.HTM" "UITEST.HTM"
 
 # One command to type blind through QMP send-key, rather than six.
 cat > "$STAGE/SETUP.BAT" <<'BAT'

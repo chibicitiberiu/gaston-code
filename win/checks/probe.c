@@ -985,15 +985,24 @@ static void probe_automation(void)
     /* The foreground lock. REMOTE.md:344 says 98 has one and PLAN.md said
      * it does not; whichever is true, a background gremote that cannot take
      * the foreground makes the taskbar button flash instead of typing. */
+    /* Save and RESTORE. The first version of this set the timeout to 0 and
+     * left it there; it is a registry value, so it survived a reboot and
+     * the original 15000 could never be measured again. A probe that cannot
+     * be run twice is not a measurement, and changing the machine you are
+     * observing is the bug this whole section is about. */
     {
-        DWORD before = 0, after = 0;
+        DWORD before = 0, after = 0, back = 0;
         BOOL rg = SystemParametersInfoA(SPI_GETFOREGROUNDLOCKTIMEOUT, 0,
                                         &before, 0);
         BOOL rs = SystemParametersInfoA(SPI_SETFOREGROUNDLOCKTIMEOUT, 0,
                                         (void *)0, SPIF_SENDCHANGE);
         SystemParametersInfoA(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &after, 0);
-        say("fg lock        : get=%d(%lu) set=%d now=%lu",
-            (int)rg, (unsigned long)before, (int)rs, (unsigned long)after);
+        SystemParametersInfoA(SPI_SETFOREGROUNDLOCKTIMEOUT, 0,
+                              (void *)(UINT_PTR)before, SPIF_SENDCHANGE);
+        SystemParametersInfoA(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &back, 0);
+        say("fg lock        : was=%lu (get=%d) set0=%d -> %lu, restored=%lu",
+            (unsigned long)before, (int)rg, (int)rs,
+            (unsigned long)after, (unsigned long)back);
     }
 
     /* Cross-process window text has to go through SendMessageTimeout, since
@@ -1459,7 +1468,17 @@ static void probe_dom(void)
             VARIANT self;
             V_VT(&self) = VT_I4; V_I4(&self) = 0;
             dom_fields(doc, self, name, sizeof(name), val, sizeof(val), &role);
-            say("document       : role=%ld name=%.28s", role, name);
+            say("document       : role=%ld name=%.40s", role, name);
+            /* Say WHICH document, loudly. The first run of this walked
+             * Explorer's folder view -- also MSHTML, so it produced a
+             * perfectly good-looking tree -- while the page it was supposed
+             * to test had been closed. The result was not wrong, it was
+             * about something else, which is worse. */
+            if (!strstr(name, "UITEST") && !strstr(name, "uitest")) {
+                say("  *** NOT the test page. Open D:\\UITEST.HTM in IE and");
+                say("  *** run this again; what follows is some other");
+                say("  *** document that happened to enumerate first.");
+            }
             g_dom_n = g_dom_shown = 0;
             t0 = GetTickCount();
             dom_walk(doc, 1);
@@ -1498,10 +1517,15 @@ static void probe_depths(void)
     static unsigned char info[sizeof(BITMAPINFOHEADER) + 256 * 4];
     static const int DEPTHS[5] = { 4, 8, 16, 24, 32 };
     BITMAPINFOHEADER *bi = (BITMAPINFOHEADER *)info;
-    const int ROWS = 128;
+    /* 64, not 128. At 32bpp a 128-row strip of a 1280x1024 screen is
+     * 655,360 bytes and overflows `raw`, and the overflow check skips the
+     * rung silently -- so the widest displays, which are exactly the ones
+     * where the size question matters most, would have reported nothing.
+     * 64 rows keeps every rung inside the buffer up to 1600x1200. */
+    const int ROWS = 64;
     HDC screen, mem;
     HBITMAP strip, oldbmp;
-    int w, h, native, k;
+    int w, h, native, k, yi;
 
     head("0.12b  max_bpp ladder: size and cost per rung");
 
@@ -1511,12 +1535,24 @@ static void probe_depths(void)
     h = GetDeviceCaps(screen, VERTRES);
     native = GetDeviceCaps(screen, BITSPIXEL);
     say("screen %dx%d at %dbpp; strip of %d rows", w, h, native, ROWS);
-    say("bpp  BI_RGB bytes   ms  deflate  ms   RLE bytes  ms");
+    /* Level 1 is what the guest would use outbound; level 6 is what the
+     * bridge uses the other way. Both, so the size left on the table by
+     * choosing the fast one is visible rather than assumed. */
+    say("bpp      raw  RGBms   z1 by  z1ms   z6 by  z6ms   RLE by RLEms");
 
     mem = CreateCompatibleDC(screen);
     strip = CreateCompatibleBitmap(screen, w, ROWS);
     oldbmp = (HBITMAP)SelectObject(mem, strip);
-    BitBlt(mem, 0, 0, w, ROWS, screen, 0, h / 3, SRCCOPY);
+
+    /* Four bands down the screen, not one. The first version sampled a
+     * single strip of mostly-flat desktop and concluded deflate beats RLE
+     * by 2.7x, which is a claim about that band and not about screenshots.
+     * Flat colour and dense text compress nothing alike, and a capture
+     * policy is chosen for the worst band, not the best. */
+    for (yi = 0; yi < 4; yi++) {
+    int ytop = (h - ROWS) * yi / 3;
+    BitBlt(mem, 0, 0, w, ROWS, screen, 0, ytop, SRCCOPY);
+    say("-- strip at y=%d --", ytop);
 
     for (k = 0; k < 5; k++) {
         int bpp = DEPTHS[k];
@@ -1524,8 +1560,8 @@ static void probe_depths(void)
         unsigned long want = stride * ROWS;
         DWORD t0, t1;
         int lines;
-        unsigned long rgb_ms = 0, def_ms = 0, rle_ms = 0;
-        mz_ulong clen = sizeof(packed);
+        unsigned long rgb_ms = 0, z1_ms = 0, z6_ms = 0, rle_ms = 0;
+        mz_ulong clen = sizeof(packed), clen6 = sizeof(packed);
         unsigned long rle_bytes = 0;
 
         if (want > sizeof(raw)) { say("%2d   (strip too big)", bpp); continue; }
@@ -1544,7 +1580,12 @@ static void probe_depths(void)
         t0 = GetTickCount();
         if (mz_compress2(packed, &clen, raw, want, 1) != MZ_OK) clen = 0;
         t1 = GetTickCount();
-        def_ms = t1 - t0;
+        z1_ms = t1 - t0;
+
+        t0 = GetTickCount();
+        if (mz_compress2(packed, &clen6, raw, want, 6) != MZ_OK) clen6 = 0;
+        t1 = GetTickCount();
+        z6_ms = t1 - t0;
 
         if (bpp == 4 || bpp == 8) {
             memset(info, 0, sizeof(info));
@@ -1561,16 +1602,134 @@ static void probe_depths(void)
             rle_bytes = (lines == ROWS) ? bi->biSizeImage : 0;
         }
 
-        say("%2d %11lu %5lu %8lu %4lu %10lu %4lu",
-            bpp, want, rgb_ms, (unsigned long)clen, def_ms,
-            rle_bytes, rle_ms);
+        say("%2d %8lu %6lu %7lu %5lu %7lu %5lu %8lu %5lu",
+            bpp, want, rgb_ms, (unsigned long)clen, z1_ms,
+            (unsigned long)clen6, z6_ms, rle_bytes, rle_ms);
     }
+    }   /* strip */
 
     SelectObject(mem, oldbmp);
     DeleteObject(strip);
     DeleteDC(mem);
     ReleaseDC(NULL, screen);
     say("(0 in an RLE column = the format has none at that depth, or refused)");
+}
+
+/* ------------------------------------------------------------ 0.12c */
+/* Does the RLE8 stream actually DECODE, or did the call merely succeed?
+ *
+ * 0.12 checked that GetDIBits returned the row count it was asked for and a
+ * biSizeImage inside the buffer. That is not the same claim at all: a codec
+ * that returned success and garbage passes it, and the whole strip-capture
+ * design rests on the answer. The check was cheap and wrong and this
+ * replaces it.
+ *
+ * The test is byte-level and happens off the machine. Three BMPs of the
+ * SAME strip go to the floppy:
+ *
+ *   S24.BMP   24bpp BI_RGB   -- ground truth, nothing clever in the path
+ *   S8.BMP     8bpp BI_RGB   -- the fallback if RLE is no good
+ *   S8R.BMP    8bpp BI_RLE8  -- the thing under test
+ *
+ * The host opens all three with Pillow and asserts S8 and S8R decode to
+ * IDENTICAL pixels. They are compared after decoding rather than as index
+ * bytes, because GetDIBits picks the colour table per call and the two are
+ * free to differ without either being wrong.
+ */
+static int write_bmp(const char *path, const BITMAPINFOHEADER *bih,
+                     const RGBQUAD *pal, int palcount,
+                     const unsigned char *bits, unsigned long nbits)
+{
+    BITMAPFILEHEADER bfh;
+    FILE *f = fopen(path, "wb");
+    unsigned long off;
+    if (!f) return 0;
+    off = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)
+        + (unsigned long)palcount * sizeof(RGBQUAD);
+    memset(&bfh, 0, sizeof(bfh));
+    bfh.bfType = 0x4D42;                              /* 'BM' */
+    bfh.bfOffBits = off;
+    bfh.bfSize = off + nbits;
+    fwrite(&bfh, sizeof(bfh), 1, f);
+    fwrite(bih, sizeof(BITMAPINFOHEADER), 1, f);
+    if (palcount > 0) fwrite(pal, sizeof(RGBQUAD), palcount, f);
+    fwrite(bits, 1, nbits, f);
+    fclose(f);
+    return 1;
+}
+
+static void probe_verify(void)
+{
+    static unsigned char bits[512 * 1024];
+    static unsigned char info[sizeof(BITMAPINFOHEADER) + 256 * 4];
+    BITMAPINFOHEADER *bi = (BITMAPINFOHEADER *)info;
+    RGBQUAD *pal = (RGBQUAD *)(info + sizeof(BITMAPINFOHEADER));
+    const int ROWS = 64;
+    HDC screen, mem;
+    HBITMAP strip, oldbmp;
+    int w, h, lines;
+    unsigned long stride;
+
+    head("0.12c  does the RLE8 stream decode? (writes BMPs beside the exe)");
+
+    screen = GetDC(NULL);
+    if (!screen) { say("GetDC failed"); return; }
+    w = GetDeviceCaps(screen, HORZRES);
+    h = GetDeviceCaps(screen, VERTRES);
+    say("screen %dx%d at %dbpp, strip %d rows at y=%d",
+        w, h, GetDeviceCaps(screen, BITSPIXEL), ROWS, h / 3);
+
+    mem = CreateCompatibleDC(screen);
+    strip = CreateCompatibleBitmap(screen, w, ROWS);
+    oldbmp = (HBITMAP)SelectObject(mem, strip);
+    BitBlt(mem, 0, 0, w, ROWS, screen, 0, h / 3, SRCCOPY);
+
+    /* Ground truth. */
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = ROWS; bi->biPlanes = 1;
+    bi->biBitCount = 24; bi->biCompression = BI_RGB;
+    stride = (((unsigned long)w * 24 + 31) / 32) * 4;
+    lines = GetDIBits(mem, strip, 0, ROWS, bits, (BITMAPINFO *)info,
+                      DIB_RGB_COLORS);
+    bi->biSizeImage = stride * ROWS;
+    say("S24.BMP  %d lines, %lu bytes, written %d",
+        lines, stride * ROWS,
+        write_bmp("S24.BMP", bi, 0, 0, bits, stride * ROWS));
+
+    /* 8bpp uncompressed, palette and all. */
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = ROWS; bi->biPlanes = 1;
+    bi->biBitCount = 8; bi->biCompression = BI_RGB;
+    stride = (((unsigned long)w * 8 + 31) / 32) * 4;
+    lines = GetDIBits(mem, strip, 0, ROWS, bits, (BITMAPINFO *)info,
+                      DIB_RGB_COLORS);
+    bi->biSizeImage = stride * ROWS;
+    bi->biClrUsed = 256;
+    say("S8.BMP   %d lines, %lu bytes, written %d",
+        lines, stride * ROWS,
+        write_bmp("S8.BMP", bi, pal, 256, bits, stride * ROWS));
+
+    /* The one under test. biSizeImage comes back as the COMPRESSED size,
+     * and that is what the file header must carry. */
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = ROWS; bi->biPlanes = 1;
+    bi->biBitCount = 8; bi->biCompression = BI_RLE8;
+    bi->biSizeImage = sizeof(bits);
+    lines = GetDIBits(mem, strip, 0, ROWS, bits, (BITMAPINFO *)info,
+                      DIB_RGB_COLORS);
+    bi->biClrUsed = 256;
+    say("S8R.BMP  %d lines, %lu bytes, written %d",
+        lines, (unsigned long)bi->biSizeImage,
+        write_bmp("S8R.BMP", bi, pal, 256, bits, bi->biSizeImage));
+
+    SelectObject(mem, oldbmp);
+    DeleteObject(strip);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    say("now decode all three on the host and compare S8 against S8R");
 }
 
 /* -------------------------------------------------------------------- */
@@ -1614,6 +1773,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "msaa"))     probe_msaa();
     if (!only || !strcmp(only, "dom"))      probe_dom();
     if (!only || !strcmp(only, "depths"))   probe_depths();
+    if (!only || !strcmp(only, "verify"))   probe_verify();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
