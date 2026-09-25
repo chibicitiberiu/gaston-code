@@ -306,7 +306,10 @@ $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 # source is renamed (inicheck.c -> inicheck.cpp stopped it with "No rule to
 # make target 'checks/inicheck.c'"). The .d keeps only the headers.
 DEPFLAGS = -ad=$(@:.o=.d) -adt=$@ -adfs
-FIXDEP   = sed -i '1s|: [^ ]*|:|' $(@:.o=.d)
+# ...and dates the .d as its source, never newer than the object: the .d is
+# now a prerequisite, and one written after the object would make every
+# build rebuild everything.
+FIXDEP   = sed -i '1s|: [^ ]*|:|' $(@:.o=.d) && touch -r $< $(@:.o=.d)
 -include $(shell find $(OBJ) -name '*.d' 2>/dev/null)
 
 # A header that a .d still names but that has since been deleted or moved
@@ -332,17 +335,30 @@ FIXDEP   = sed -i '1s|: [^ ]*|:|' $(@:.o=.d)
 # -fr= puts the compiler's per-file error listing in the build tree. Without
 # it Open Watcom drops a .err next to the SOURCE, which is how win/ collected
 # frameproto.err and probe.err.
-$(OBJ)/%.o: %.c
+$(OBJ)/%.o: %.c $(OBJ)/%.d
 	@mkdir -p $(@D)
 	@$(WCC) $(CFLAGS) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
 	@$(FIXDEP)
 
 # The same flags through the C++ compiler. A module migrates by being renamed;
 # nothing else in the tree knows, because every header is extern "C".
-$(OBJ)/%.o: %.cpp
+$(OBJ)/%.o: %.cpp $(OBJ)/%.d
 	@mkdir -p $(@D)
 	@$(WPP) $(CFLAGS) $(CXXONLY) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
 	@$(FIXDEP)
+
+# An object whose .d is MISSING is out of date, not up to date. Without this
+# a lost .d left its object stale for good: no header could ever trigger a
+# rebuild of it. main.o was built against an older mainwindow.h, allocated
+# MainWindow at the old size, and mainwindow.o's new members ran past the
+# end of the block -- the client crashed on start writing an HWND through a
+# pointer made of someone else's heap data. The empty rule makes a missing
+# .d "remade", which makes its object rebuild and write a fresh one.
+# .NOTINTERMEDIATE (GNU make 4.4) because a pattern-made prerequisite is
+# otherwise "intermediate", and a missing intermediate never makes its
+# target out of date -- which is the whole failure this exists to catch.
+$(OBJ)/%.d: ;
+.NOTINTERMEDIATE: $(OBJ)/%.d
 
 # mshtml.h has a bare `typedef enum _BoolValue {...};` with no name for the
 # typedef to bind to -- harmless in C, which is how every other Watcom header
