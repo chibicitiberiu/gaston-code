@@ -1,6 +1,5 @@
 #include <windows.h>
 #include <winsock.h>
-#include <process.h>
 #include <stdio.h>
 #include <string.h>
 #include "core/rc_cpp.h"
@@ -13,7 +12,7 @@
 #include "rpc/rpc.h"
 #include "rpc/exec.h"
 #include "sync/syncrpc.h"
-#include "miniz.h"
+#include "wire/connection.h"
 
 /* Cap on frames posted to the UI thread but not yet freed.
  *
@@ -33,339 +32,94 @@
  * this counter exists to produce. */
 #define RC_MAX_INFLIGHT 64
 
-/* THE CONNECTION'S COMPRESSION STATE, in one place.
- *
- * These were eleven file statics. They are gathered here so the transport can
- * move to wire/connection.cpp with its codec as a member (docs/wire-connection-
- * plan.md, step b); there is still exactly one, `s_codec`, because there is
- * still exactly one connection. A POD with no constructor, so it costs no
- * static initialiser and the same bytes at load as the statics did.
- *
- * Threads. The inflate half is touched only by the READER, inside
- * inflateBody(). The deflate half and the stats are touched under send_lock,
- * by whoever is sending. begin()/finish() run only when neither thread is
- * alive, which is what rc_net_stop's join gates are for.
- *
- * Every member has one caller and is `inline`: Watcom emits an out-of-line
- * copy of a member defined outside its class even after inlining it, which
- * the static functions these replace never cost (+2 KB of code, measured). */
-struct Codec
+static void set_state(rc_net *n, rc_state s)
 {
-    /* One persistent inflate stream for the whole connection.
-     *
-     * The bridge compresses with a persistent deflate stream and Z_SYNC_FLUSH
-     * per frame, which keeps the dictionary warm across frames -- worth 1.27x
-     * over compressing each frame alone. That only works if this side keeps
-     * its state too, so this is deliberately NOT per-frame. Both sides reset
-     * on reconnect, in lockstep. */
-    mz_stream inf;
-    int infReady;
+    n->state = s;
+    if (n->notify) PostMessage(n->notify, WM_RC_STATE, (WPARAM)s, 0);
+}
 
-    /* ONE inflate scratch for the whole connection, not one per frame.
-     *
-     * inflate_body used to HeapAlloc its full output cap for EVERY compressed
-     * frame and never shrink it: f->body_len recorded the real length while
-     * f->_body_alloc held the entire block until the UI thread freed the
-     * frame. With the reader posting up to RC_MAX_INFLIGHT frames before it
-     * blocks, that is a per-frame cost measured in hundreds of KB, multiplied
-     * by however many frames the UI has not drained -- and the UI thread
-     * stalls whenever MSHTML reflows or a folder browser is open. On a 32MB
-     * machine that is the largest transient demand in the program, and when
-     * HeapAlloc finally failed the reader dropped the LINK rather than slowing
-     * down.
-     *
-     * Now: inflate into this one buffer, then allocate exactly the bytes that
-     * came out and copy. Peak concurrent cost becomes one scratch plus the
-     * real sizes.
-     *
-     * Heap rather than BSS so it is not committed at load on a machine where
-     * committed-at-load is audited; lazily allocated per connection and
-     * released with the stream it serves.
-     *
-     * 2x RC_MAX_FRAME, not 4x. The cap exists so a corrupt or hostile frame
-     * cannot expand without limit, and the real bound is far lower:
-     * bridge/wire/link.py caps an UNCOMPRESSED chunk at MAX_FRAME - 1024 =
-     * 64,512 bytes before it compresses, so a legitimate inflated body never
-     * exceeds ~63KB. 2x leaves more than double the largest value the protocol
-     * permits. */
-    char *infScratch;
+/* The client's FrameSink, and the Connection it feeds: one allocation per
+ * connection attempt, owned through rc_net's opaque `conn`. A reconnect makes
+ * a new one; one whose threads would not stop is leaked, never reused. */
+class ClientLink : public FrameSink
+{
+public:
+    explicit ClientLink(rc_net *n) : m_net(n), m_conn(this, true) {}
 
-    /* One persistent deflate stream for the whole connection (guest ->
-     * bridge). */
-    mz_stream def;
-    int defReady;
-    char *defScratch;
+    Connection &conn() { return m_conn; }
 
-    /* Measurement counters for adaptive compression (03.3 / A4). */
-    unsigned long deflateIn;
-    unsigned long deflateOut;
-    unsigned long deflateUs;
-    unsigned long deflateSamples;
-    unsigned long deflateBps;
-    unsigned long linkBps;
-    LARGE_INTEGER perfFreq;
-    int perfInit;
-
-    enum
+    void onFrame(Connection &c, rc_frame *f);
+    void onState(Connection &c, rc_state s)
     {
-        INFLATE_SCRATCH = RC_MAX_FRAME * 2,
-        DEFLATE_SCRATCH = RC_MAX_FRAME + 1024
-    };
-
-    /* A fresh pair of streams and zeroed stats, for a new connection. */
-    void begin();
-    /* Separate, because their gates differ: see rc_net_stop. */
-    void finishInflate();
-    void finishDeflate();
-
-    int inflateBody(rc_frame *f);
-    bool shouldCompress(unsigned bodyLen) const;
-    /* The compressed bytes, in defScratch, or null if deflate failed. */
-    const char *compressBody(const void *body, unsigned bodyLen, unsigned *outLen);
-    void takeSample(unsigned long *bytesIn, unsigned long *us);
+        (void)c;
+        set_state(m_net, s);
+    }
 
 private:
-    void beginInflate();
-    void beginDeflate();
-    unsigned long elapsedSince(const LARGE_INTEGER &t0);
+    rc_net *m_net;
+    Connection m_conn;
 };
 
-Codec s_codec;
-
-inline void Codec::beginInflate()
+static Connection *conn_of(rc_net *n)
 {
-    if (infReady)
-    {
-        mz_inflateEnd(&inf);
-        infReady = 0;
-    }
-    memset(&inf, 0, sizeof(inf));
-    if (mz_inflateInit(&inf) == MZ_OK)
-        infReady = 1;
-    else
-        rc_log("net: mz_inflateInit failed");
-    if (!infScratch)
-    {
-        infScratch = (char *)HeapAlloc(GetProcessHeap(), 0,
-                                       INFLATE_SCRATCH + 1);
-        /* Not fatal here: inflateBody reports the failure per frame, which
-         * is where there is a frame to fail. */
-        if (!infScratch)
-            rc_log("net: no memory for the %u byte inflate scratch",
-                   (unsigned)INFLATE_SCRATCH);
-    }
+    return n->conn ? &((ClientLink *)n->conn)->conn() : NULL;
 }
 
-inline void Codec::beginDeflate()
+/* THE READER THREAD, holding a frame it now owns. */
+void ClientLink::onFrame(Connection &c, rc_frame *frame)
 {
-    if (defReady)
-    {
-        mz_deflateEnd(&def);
-        defReady = 0;
-    }
-    memset(&def, 0, sizeof(def));
-    if (mz_deflateInit(&def, 1) == MZ_OK)
-        defReady = 1;
-    else
-        rc_log("net: mz_deflateInit failed");
-    if (!defScratch)
-    {
-        defScratch = (char *)HeapAlloc(GetProcessHeap(), 0, DEFLATE_SCRATCH);
-        if (!defScratch)
-            rc_log("net: no memory for the %u byte deflate scratch",
-                   (unsigned)DEFLATE_SCRATCH);
-    }
-}
+    rc_net *n = m_net;
+    HeapPtr<rc_frame> f(frame);
 
-inline void Codec::begin()
-{
-    beginInflate();
-    beginDeflate();
-    deflateIn = 0;
-    deflateOut = 0;
-    deflateUs = 0;
-    deflateSamples = 0;
-    deflateBps = 0;
-    linkBps = 0;
-}
-
-inline void Codec::finishInflate()
-{
-    if (infReady)
-    {
-        mz_inflateEnd(&inf);
-        infReady = 0;
-    }
-    if (infScratch)
-    {
-        HeapFree(GetProcessHeap(), 0, infScratch);
-        infScratch = NULL;
-    }
-}
-
-inline void Codec::finishDeflate()
-{
-    if (defReady)
-    {
-        mz_deflateEnd(&def);
-        defReady = 0;
-    }
-    if (defScratch)
-    {
-        HeapFree(GetProcessHeap(), 0, defScratch);
-        defScratch = NULL;
-    }
-}
-
-/* Inflates f->body in place-ish: allocates a new buffer, points body at it,
- * and records it for rc_frame_free. Returns 0 on success. */
-inline int Codec::inflateBody(rc_frame *f)
-{
-    /* Bounded so a malicious or corrupt frame cannot expand without limit.
-     * See the note on infScratch for why this is one shared buffer and why
-     * the bound is 2x rather than 4x. */
-    unsigned cap = INFLATE_SCRATCH;
-
-    if (!infReady)
-    {
-        rc_log("net: deflate frame but no inflater");
-        return -1;
-    }
-    if (f->body_len == 0)
-        return 0;
-    if (!infScratch)
-    {
-        rc_log("net: no inflate scratch");
-        return -1;
+    /* Ask the RPC layer whether this frame is one of its own.
+     *
+     * EXEC goes straight to the RPC worker and never reaches the UI thread.
+     * The type is already parsed here, so routing it now saves a hop and a
+     * copy -- and, more importantly, `inflight` is the wrong instrument for
+     * it: that counter measures UI QUEUE DEPTH for the backpressure gate
+     * below, and holding it for the sixty seconds a command might run would
+     * conflate two unrelated queues and stall display frames behind a
+     * compile. The worker has its own counter.
+     *
+     * The reader loop used to hard-code EXEC, EXECKILL and the SYNC prefix
+     * -- the transport knowing the names of the tools it carries. The
+     * vocabulary lives in rc_rpc_route; this only knows that something else
+     * may want the frame, and that if it is taken it has also been freed. */
+    if (rc_rpc_route(f.get(), c.runningFlag()) == RC_ROUTE_TAKEN) {
+        /* Ownership genuinely transferred: rc_rpc_route has ALREADY freed
+         * the frame by the time it returns RC_ROUTE_TAKEN (rpc.h), whether
+         * by handing it to the worker or by freeing it itself on a refusal
+         * path. release() so this guard does not free it a second time --
+         * that double free is exactly the failure mode net.h's three-way
+         * ownership rule exists to rule out. */
+        f.release();
+        return;
     }
 
-    inf.next_in = (const unsigned char *)f->body;
-    inf.avail_in = f->body_len;
-    inf.next_out = (unsigned char *)infScratch;
-    inf.avail_out = cap;
+    /* Backpressure: if the UI is not keeping up, wait for it rather than
+     * queueing without bound. Yielding here is correct -- the socket's
+     * receive window does the rest. */
+    while (n->inflight >= RC_MAX_INFLIGHT && c.isRunning())
+        Sleep(10);
 
-    int rc = mz_inflate(&inf, MZ_SYNC_FLUSH);
-    if (rc != MZ_OK && rc != MZ_STREAM_END)
-    {
-        rc_log("net: mz_inflate failed: %d", rc);
-        return -1;
+    InterlockedIncrement(&n->inflight);
+    if (!PostMessage(n->notify, WM_RC_FRAME, 0, (LPARAM)f.get())) {
+        /* The post failed, so the UI thread will never see this frame and
+         * will never free it. Freeing it here is the whole reason the
+         * inflight counter exists. The guard still owns `f`, so letting it
+         * go out of scope below does the HeapFree half of that. */
+        InterlockedDecrement(&n->inflight);
+        rc_log("net: PostMessage(hwnd=%p, WM_RC_FRAME) failed: err=%lu "
+               "(inflight=%ld)", (void *)n->notify, GetLastError(),
+               n->inflight);
+        rc_frame_free(f.get());
+    } else {
+        /* Handed to the UI thread, which now owns it (net.h: "a frame
+         * posted with WM_RC_FRAME is owned by the UI thread, which frees
+         * it"). release() so this guard does not free what the UI thread
+         * is about to. */
+        f.release();
     }
-    if (inf.avail_in != 0)
-    {
-        rc_log("net: inflate left %u bytes unconsumed (output cap hit)",
-               inf.avail_in);
-        return -1;
-    }
-
-    /* EXACTLY what came out. This is the allocation the frame carries until
-     * the UI thread frees it, so it is the one that multiplies by the number
-     * of frames in flight. */
-    unsigned got = cap - inf.avail_out;
-    char *out = (char *)HeapAlloc(GetProcessHeap(), 0, got + 1);
-    if (!out)
-    {
-        rc_log("net: no memory for a %u byte inflated body", got);
-        return -1;
-    }
-    memcpy(out, infScratch, got);
-
-    f->_body_alloc = out;
-    f->body_len = got;
-    out[got] = '\0';
-    f->body = out;
-    return 0;
-}
-
-/* Compress while the first few samples are still coming in, then only while
- * the link is slower than half of what deflate manages: on a fast link the
- * CPU time costs more than the bytes it saves. */
-inline bool Codec::shouldCompress(unsigned bodyLen) const
-{
-    if (bodyLen < 64 || !defReady || !defScratch)
-        return false;
-    if (deflateSamples < 5 || deflateBps == 0)
-        return true;
-    return linkBps < deflateBps / 2;
-}
-
-inline unsigned long Codec::elapsedSince(const LARGE_INTEGER &t0)
-{
-    unsigned long us;
-    if (perfFreq.QuadPart > 0)
-    {
-        LARGE_INTEGER t1;
-        QueryPerformanceCounter(&t1);
-        us = (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000ULL) /
-                             perfFreq.QuadPart);
-    }
-    else
-    {
-        us = (GetTickCount() - t0.LowPart) * 1000UL;
-    }
-    return us ? us : 1;
-}
-
-inline const char *Codec::compressBody(const void *body, unsigned bodyLen,
-                               unsigned *outLen)
-{
-    LARGE_INTEGER t0;
-
-    if (!perfInit)
-    {
-        if (!QueryPerformanceFrequency(&perfFreq) || perfFreq.QuadPart <= 0)
-            perfFreq.QuadPart = 0;
-        perfInit = 1;
-    }
-    if (perfFreq.QuadPart > 0)
-        QueryPerformanceCounter(&t0);
-    else
-        t0.LowPart = GetTickCount();
-
-    def.next_in = (const unsigned char *)body;
-    def.avail_in = bodyLen;
-    def.next_out = (unsigned char *)defScratch;
-    def.avail_out = DEFLATE_SCRATCH;
-
-    int rc = mz_deflate(&def, MZ_SYNC_FLUSH);
-    unsigned long us = elapsedSince(t0);
-
-    if (rc != MZ_OK || def.avail_in != 0)
-    {
-        rc_log("net: mz_deflate failed: %d, avail_in=%u", rc, def.avail_in);
-        return NULL;
-    }
-    *outLen = DEFLATE_SCRATCH - def.avail_out;
-    deflateIn += bodyLen;
-    deflateOut += *outLen;
-    deflateUs += us;
-    deflateSamples++;
-    if (deflateUs > 0)
-        deflateBps = (unsigned long)((double)deflateIn * 1000000.0 / deflateUs);
-    return defScratch;
-}
-
-inline void Codec::takeSample(unsigned long *bytesIn, unsigned long *us)
-{
-    if (bytesIn)
-        *bytesIn = deflateIn;
-    if (us)
-        *us = deflateUs;
-    if (deflateUs > 0)
-        deflateBps = (unsigned long)((double)deflateIn * 1000000.0 / deflateUs);
-    deflateIn = 0;
-    deflateUs = 0;
-}
-
-void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us)
-{
-    ScopedLock lock(&n->send_lock);
-    s_codec.takeSample(bytes_in, us);
-}
-
-void rc_net_set_link_bps(rc_net *n, unsigned long bps)
-{
-    ScopedLock lock(&n->send_lock);
-    s_codec.linkBps = bps;
 }
 
 /* The UI thread's half of the three-way ownership rule. See net.h. */
@@ -375,14 +129,17 @@ void rc_net_frame_done(rc_net *n, rc_frame *f)
     InterlockedDecrement(&n->inflight);
 }
 
+/* Live while connected; the last connection's totals after rc_net_stop. */
 unsigned long rc_net_rx_bytes(const rc_net *n)
 {
-    return n->rx_bytes;
+    Connection *c = conn_of((rc_net *)n);
+    return c ? c->rxBytes() : n->rx_bytes;
 }
 
 unsigned long rc_net_tx_bytes(const rc_net *n)
 {
-    return n->tx_bytes;
+    Connection *c = conn_of((rc_net *)n);
+    return c ? c->txBytes() : n->tx_bytes;
 }
 
 long rc_net_inflight(const rc_net *n)
@@ -392,224 +149,25 @@ long rc_net_inflight(const rc_net *n)
 
 unsigned rc_net_outq_bytes(rc_net *n)
 {
-    unsigned b;
-    {
-        ScopedLock lock(&n->send_lock);
-        b = n->outq_bytes;
-    }
-    return b;
+    Connection *c = conn_of(n);
+    return c ? c->outqBytes() : 0;
 }
 
-const char *rc_state_name(rc_state s)
+void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us)
 {
-    switch (s) {
-    case RC_DISCONNECTED: return "disconnected";
-    case RC_CONNECTING:   return "connecting";
-    case RC_CONNECTED:    return "connected";
-    default:              return "failed";
+    Connection *c = conn_of(n);
+    if (c) {
+        c->takeDeflateSample(bytes_in, us);
+        return;
     }
+    if (bytes_in) *bytes_in = 0;
+    if (us) *us = 0;
 }
 
-static void set_state(rc_net *n, rc_state s)
+void rc_net_set_link_bps(rc_net *n, unsigned long bps)
 {
-    n->state = s;
-    if (n->notify) PostMessage(n->notify, WM_RC_STATE, (WPARAM)s, 0);
-}
-
-static unsigned __stdcall sender_thread(void *arg);
-
-static int recv_exact(SOCKET s, char *buf, unsigned len, volatile LONG *running)
-{
-    unsigned got = 0;
-    while (got < len) {
-        int r = recv(s, buf + got, (int)(len - got), 0);
-        if (r == 0) return -1;                    /* peer closed */
-        if (r == SOCKET_ERROR) {
-            if (!*running) return -1;
-            return -1;
-        }
-        got += (unsigned)r;
-    }
-    return 0;
-}
-
-static unsigned reader_thread_body(void *arg)
-{
-    rc_net *n = (rc_net *)arg;
-    unsigned char hdr[4];
-
-    while (n->running) {
-        unsigned len;
-        char *payload;
-
-        if (recv_exact(n->sock, (char *)hdr, 4, &n->running) != 0) break;
-
-        len = (unsigned)hdr[0] | ((unsigned)hdr[1] << 8)
-            | ((unsigned)hdr[2] << 16) | ((unsigned)hdr[3] << 24);
-
-        /* A corrupted length prefix must not be able to allocate the machine
-         * away. Never try to resync a stream whose framing is already lost. */
-        if (len == 0 || len > RC_MAX_FRAME) {
-            rc_log("net: bad frame length %u (cap %u), dropping link",
-                   len, RC_MAX_FRAME);
-            break;
-        }
-
-        payload = (char *)HeapAlloc(GetProcessHeap(), 0, len + 1);
-        if (!payload) { rc_log("net: out of memory for %u byte frame", len); break; }
-
-        if (recv_exact(n->sock, payload, len, &n->running) != 0) {
-            HeapFree(GetProcessHeap(), 0, payload);
-            break;
-        }
-        payload[len] = '\0';
-        n->rx_bytes += len + 4;
-
-        /* Owns just the rc_frame struct, never `payload` -- that passes into
-         * the frame via rc_frame_parse's out->_raw and is freed by
-         * rc_frame_free, not by this guard. Declared here rather than at the
-         * top of the loop because HeapPtr has no default constructor: a
-         * non-copyable guard cannot be assigned into after the fact either,
-         * so it is built with the pointer it owns from the start. */
-        HeapPtr<rc_frame> f((rc_frame *)HeapAlloc(GetProcessHeap(), 0, sizeof(rc_frame)));
-        if (!f.valid()) { HeapFree(GetProcessHeap(), 0, payload); break; }
-
-        if (rc_frame_parse(payload, len, f.get()) != 0) {
-            rc_log("net: malformed frame, dropping link");
-            HeapFree(GetProcessHeap(), 0, payload);
-            break;
-        }
-
-        {
-            const char *enc = rc_frame_get(f.get(), "enc");
-            if (enc && strcmp(enc, "deflate") == 0 && s_codec.inflateBody(f.get()) != 0) {
-                rc_log("net: cannot inflate frame, dropping link");
-                rc_frame_free(f.get());
-                break;
-            }
-        }
-
-        /* EXEC goes straight to the RPC worker and never reaches the UI
-         * thread. The type is already parsed here, so routing it now saves a
-         * hop and a copy -- and, more importantly, `inflight` is the wrong
-         * instrument for it: that counter measures UI QUEUE DEPTH for the
-         * backpressure gate below, and holding it for the sixty seconds a
-         * command might run would conflate two unrelated queues and stall
-         * display frames behind a compile. The worker has its own counter. */
-        /* Ask the RPC layer whether this frame is one of its own.
-         *
-         * This loop used to hard-code EXEC, EXECKILL and the SYNC prefix --
-         * the transport knowing the names of the tools it carries, which made
-         * a genuine net<->rpc cycle and would have put another branch here for
-         * each of the eight tools Phase 6 adds. The vocabulary lives in
-         * rc_rpc_route now; net.c only knows that something else may want the
-         * frame, and that if it is taken it has also been freed. */
-        if (rc_rpc_route(f.get(), &n->running) == RC_ROUTE_TAKEN) {
-            /* Ownership genuinely transferred: rc_rpc_route has ALREADY freed
-             * the frame by the time it returns RC_ROUTE_TAKEN (rpc.h), whether
-             * by handing it to the worker or by freeing it itself on a refusal
-             * path. release() so this guard does not free it a second time --
-             * that double free is exactly the failure mode net.h's three-way
-             * ownership rule exists to rule out. */
-            f.release();
-            continue;
-        }
-
-        /* Backpressure: if the UI is not keeping up, wait for it rather than
-         * queueing without bound. Yielding here is correct -- the socket's
-         * receive window does the rest. */
-        while (n->inflight >= RC_MAX_INFLIGHT && n->running)
-            Sleep(10);
-
-        InterlockedIncrement(&n->inflight);
-        if (!PostMessage(n->notify, WM_RC_FRAME, 0, (LPARAM)f.get())) {
-            /* The post failed, so the UI thread will never see this frame and
-             * will never free it. Freeing it here is the whole reason the
-             * inflight counter exists. The guard still owns `f`, so letting it
-             * go out of scope below does the HeapFree half of that. */
-            InterlockedDecrement(&n->inflight);
-            rc_log("net: PostMessage(hwnd=%p, WM_RC_FRAME) failed: err=%lu "
-                   "(inflight=%ld)", (void *)n->notify, GetLastError(),
-                   n->inflight);
-            rc_frame_free(f.get());
-        } else {
-            /* Handed to the UI thread, which now owns it (net.h: "a frame
-             * posted with WM_RC_FRAME is owned by the UI thread, which frees
-             * it"). release() so this guard does not free what the UI thread
-             * is about to. */
-            f.release();
-        }
-    }
-
-    /* THE LINK IS DEAD, AND SAYING SO IS THIS THREAD'S JOB.
-     *
-     * Leaving `running` at 1 here was the single worst bug in the four-thread
-     * design: Reconnector::tryConnect would call rc_net_start again with the sender and
-     * the RPC worker still alive, which re-initialised a HELD critical
-     * section, zeroed the outbound queue from under the sender, and left two
-     * sender threads calling send() on one socket. Two concurrent sends
-     * interleave, the bridge's framing has no resync, so it drops the link --
-     * which reconnects, adding a third sender. */
-    {
-        int was_running = n->running;
-        n->running = 0;
-        set_state(n, was_running ? RC_FAILED : RC_DISCONNECTED);
-    }
-    rc_log("net: reader thread exiting (rx=%lu tx=%lu)", n->rx_bytes, n->tx_bytes);
-    return 0;
-}
-
-/* Catches std::bad_alloc, which operator new throws (core/heap.cpp): an
- * exception leaving a thread's entry point ends the process with no log. */
-static unsigned __stdcall reader_thread(void *arg)
-{
-    try
-    {
-        return reader_thread_body(arg);
-    }
-    catch (std::bad_alloc &)
-    {
-        rc_out_of_memory("the network reader");
-    }
-    return 0;
-}
-
-static int do_connect(rc_net *n)
-{
-    struct sockaddr_in addr;
-    unsigned long ip;
-    struct hostent *he;
-
-    n->sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (n->sock == INVALID_SOCKET) {
-        rc_log("net: socket() failed: %d", WSAGetLastError());
-        return -1;
-    }
-
-    ip = inet_addr(n->host);
-    if (ip == INADDR_NONE) {
-        he = gethostbyname(n->host);
-        if (!he) {
-            rc_log("net: cannot resolve %s: %d", n->host, WSAGetLastError());
-            closesocket(n->sock); n->sock = INVALID_SOCKET;
-            return -1;
-        }
-        memcpy(&ip, he->h_addr_list[0], 4);
-    }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((u_short)n->port);
-    addr.sin_addr.s_addr = ip;
-
-    if (connect(n->sock, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        rc_log("net: connect to %s:%d failed: %d", n->host, n->port,
-               WSAGetLastError());
-        closesocket(n->sock); n->sock = INVALID_SOCKET;
-        return -1;
-    }
-    rc_log("net: connected to %s:%d", n->host, n->port);
-    return 0;
+    Connection *c = conn_of(n);
+    if (c) c->setLinkBps(bps);
 }
 
 /* The only way to add a HELLO header. Drops rather than overruns, and says so.
@@ -637,12 +195,10 @@ static int do_connect(rc_net *n)
  * makes CreateWindowExA fail, which is not a theoretical condition on this
  * machine.
  *
- * `running` goes to 0 first: nothing was sent yet that the RPC drain could
- * answer, and without it phase 2 would wait out two seconds for a HELLO no
- * sender will take. */
+ * Connection::start has already stopped accepting sends, so rc_net_stop's
+ * drain does not wait out two seconds for a HELLO no sender will take. */
 static int start_failed(rc_net *n)
 {
-    n->running = 0;
     rc_net_stop(n);
     set_state(n, RC_FAILED);
     return -1;
@@ -651,7 +207,6 @@ static int start_failed(rc_net *n)
 int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret, const void *tools, unsigned tools_len)
 {
-    WSADATA wsa;
     char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
     char oemcp[16];
     char osver[96], cpu[64], screen[32];
@@ -668,7 +223,6 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * nothing else. */
     const char *keys[RC_HELLO_MAX]; const char *vals[RC_HELLO_MAX];
     int nkv = 0;
-    unsigned tid;
 
     /* REFUSE, rather than re-initialise objects a surviving thread still
      * holds. rc_net_stop leaks send_lock and both events when a join times
@@ -676,10 +230,12 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * cleared `started`, so this function had no way to know and ran
      * InitializeCriticalSection on a HELD section and overwrote two live
      * event handles, every reconnect after a hung shutdown. Undefined
-     * behaviour on 9x, plus an accumulating handle leak.
+     * behaviour on 9x, plus an accumulating handle leak. A Connection is
+     * single-use now, so that exact fault cannot recur -- but the old
+     * reader, sender or worker is still loose in the process.
      *
-     * There is no safe recovery here: the old reader and sender still point
-     * at this struct. Saying so and stopping is better than a fault with no
+     * There is no safe recovery here: the old threads still point at the
+     * old Connection and at this struct. Saying so and stopping is better than a fault with no
      * explanation. (mem-audit F5) */
     if (n->leaked) {
         rc_log("net: refusing to connect -- a previous shutdown left a thread "
@@ -693,39 +249,35 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     rc_strf(n->host, sizeof(n->host), "%s", host);
     n->port = port;
     rc_strf(n->secret, sizeof(n->secret), "%s", secret);
-    n->sock = INVALID_SOCKET;
     n->inflight = 0;
 
-    InitializeCriticalSection(&n->send_lock);
-    n->outq_head = n->outq_tail = NULL;
-    n->outq_bytes = 0;
-    /* Auto-reset: the sender takes one item per wake and loops until empty. */
-    n->outq_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
-    /* Manual-reset would wake every blocked writer at once; auto-reset wakes
-     * one, which is what "a slot freed up" means. */
-    n->outq_room = CreateEventA(NULL, FALSE, FALSE, NULL);
-    /* Mark it needing teardown HERE, not on success.
-     *
-     * The critical section and both events now exist, and every `return -1`
-     * below leaves them behind. Setting this only on success meant a failed
-     * attempt -- a bridge that is simply down, which is the common case --
-     * left rc_net_stop thinking there was nothing to clean up, so the next
-     * Reconnector::tryConnect re-initialised a LIVE critical section and overwrote both
-     * event handles. That is a fault inside KERNEL32, and it is what three
-     * bridge restarts reproduced. */
-    n->started = 1;
-    set_state(n, RC_CONNECTING);
-
-    if (WSAStartup(MAKEWORD(1, 1), &wsa) != 0) {
-        rc_log("net: WSAStartup failed");
-        set_state(n, RC_FAILED);
-        return -1;
+    /* A start with no stop between leaves the old link running beside the
+     * new one; the reconnect path always stops first, so this is a bug in a
+     * caller, and stopping here is the recovery. */
+    if (n->conn) {
+        rc_log("net: rc_net_start over a live link; stopping it first");
+        rc_net_stop(n);
+        if (n->leaked) {
+            set_state(n, RC_FAILED);
+            return -1;
+        }
     }
 
-    if (do_connect(n) != 0) { set_state(n, RC_FAILED); return -1; }
+    ClientLink *link = new ClientLink(n);
+    n->conn = link;
+    /* Mark it needing teardown HERE, not on success.
+     *
+     * From here every `return -1` leaves something behind -- a lock, two
+     * events, Winsock's reference, a socket. Setting this only on success
+     * meant a failed attempt -- a bridge that is simply down, which is the
+     * common case -- left rc_net_stop thinking there was nothing to clean
+     * up, so the next Reconnector::tryConnect re-initialised a LIVE critical
+     * section and overwrote both event handles. That is a fault inside
+     * KERNEL32, and it is what three bridge restarts reproduced. */
+    n->started = 1;
 
-    s_codec.begin();
-    n->running = 1;
+    /* Reports CONNECTING, and FAILED on the way out of any failure. */
+    if (!link->conn().connect(n->host, n->port)) return -1;
 
     rc_strf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
     rc_strf(maxframe, sizeof(maxframe), "%d", RC_MAX_FRAME);
@@ -883,238 +435,30 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
         return -1;
     }
 
-    /* _beginthreadex, not CreateThread. Open Watcom's multi-threaded CRT
-     * allocates its per-thread block here; a raw CreateThread thread never
-     * gets one and never releases it. It also takes a non-NULL thread-id
-     * slot, which Win95/98 requires -- CreateThread(..., NULL) fails there
-     * with ERROR_INVALID_PARAMETER while NT accepts it. */
     /* Order matters. The worker must exist before the reader can route an
      * EXEC to it, or an early frame is dropped silently and the bridge waits
-     * out its whole budget for a command nobody ran. */
+     * out its whole budget for a command nobody ran. The Connection then
+     * starts its sender, reports CONNECTED, and starts its reader. */
     rc_rpc_start(n);
-    n->sender = (HANDLE)_beginthreadex(NULL, 0, sender_thread, n, 0, &tid);
-    if (!n->sender) {
-        /* Without a sender nothing can put a byte on the wire -- including the
-         * HELLO already queued. Reporting "connected" here would leave the app
-         * looking healthy forever. */
-        rc_log("net: could not start sender thread");
-        return start_failed(n);
-    }
-    /* CONNECTED before the reader exists, not after: a reader that dies at
-     * once posts FAILED, and posting CONNECTED behind it told the window a
-     * dead link was up. */
-    set_state(n, RC_CONNECTED);
-    n->thread = (HANDLE)_beginthreadex(NULL, 0, reader_thread, n, 0, &tid);
-    if (!n->thread) {
-        rc_log("net: could not start reader thread");
-        return start_failed(n);
-    }
+    if (!link->conn().start()) return start_failed(n);
     return 0;
 }
 
 /* ------------------------------------------------------------- sending */
-/* rc_net_send no longer touches the socket. It builds the frame, puts it on a
- * bounded queue and returns; one sender thread owns the wire.
- *
- * The old version held a CRITICAL_SECTION across a blocking send(), which had
- * two failure modes waiting for a second sender to arrive. A 32KB exec result
- * at 40kbit is ~6.5 seconds with the lock held, and the UI thread calls this
- * from do_send, do_stop, chats_switch and the permission bar -- so the message
- * pump stopped. And releasing the lock mid-frame to fix that would interleave
- * two frames on a stream with no resync, which drops the link. */
 
-static void outq_free(rc_outq_item *it)
-{
-    HeapFree(GetProcessHeap(), 0, it);
-}
-
-/* Drop everything queued. Called on shutdown; the socket is already going. */
-static void outq_clear(rc_net *n)
-{
-    rc_outq_item *it;
-    {
-        ScopedLock lock(&n->send_lock);
-        it = n->outq_head;
-        n->outq_head = n->outq_tail = NULL;
-        n->outq_bytes = 0;
-    }
-    while (it) {
-        rc_outq_item *next = it->next;
-        outq_free(it);
-        it = next;
-    }
-    if (n->outq_room) SetEvent(n->outq_room);
-}
-
-static unsigned sender_thread_body(void *arg)
-{
-    rc_net *n = (rc_net *)arg;
-
-    while (n->running) {
-        rc_outq_item *it = NULL;
-
-        {
-            ScopedLock lock(&n->send_lock);
-            if (n->outq_head) {
-                it = n->outq_head;
-                n->outq_head = it->next;
-                if (!n->outq_head) n->outq_tail = NULL;
-                n->outq_bytes -= it->len;
-            }
-        }
-
-        if (!it) {
-            /* Timed wait rather than infinite: `running` going to 0 must be
-             * noticed even if nothing is ever queued again. */
-            WaitForSingleObject(n->outq_wake, 200);
-            continue;
-        }
-        /* A writer may have been waiting for space. */
-        SetEvent(n->outq_room);
-
-        while (it->sent < it->len && n->running) {
-            int w;
-            SOCKET s = n->sock;
-            if (s == INVALID_SOCKET) break;
-            w = send(s, it->data + it->sent, (int)(it->len - it->sent), 0);
-            if (w == SOCKET_ERROR) {
-                rc_log("net: send failed: %d", WSAGetLastError());
-                n->running = 0;
-                break;
-            }
-            it->sent += (unsigned)w;
-            n->tx_bytes += (unsigned long)w;
-        }
-        outq_free(it);
-    }
-    outq_clear(n);
-    return 0;
-}
-
-/* Catches std::bad_alloc, which operator new throws (core/heap.cpp): an
- * exception leaving a thread's entry point ends the process with no log. */
-static unsigned __stdcall sender_thread(void *arg)
-{
-    try
-    {
-        return sender_thread_body(arg);
-    }
-    catch (std::bad_alloc &)
-    {
-        rc_out_of_memory("the network sender");
-    }
-    return 0;
-}
-
-/* The one implementation. `wait_ticks` is how many 100ms slices this caller
- * will spend waiting for the outbound queue to drain before giving up -- see
- * the two wrappers at the end of this function for who uses which. */
+/* `wait_ticks` is how many 100ms slices this caller will spend waiting for
+ * the outbound queue to drain before giving up -- see the two wrappers below
+ * for who uses which. No connection (never started, or stopped) is a dead
+ * link: rpccheck drives the RPC worker over a zeroed rc_net and relies on
+ * exactly that. */
 static int send_frame(rc_net *n, const char *type,
                       const char *const *keys, const char *const *vals, int nkv,
                       const void *body, unsigned body_len, int wait_ticks)
 {
-    /* A SHARED static, serialised by send_lock -- which is what the two
-     * comments that used to sit here denied. One said "there is no shared
-     * build buffer to race over any more" directly above this declaration;
-     * the other said the buffer was "still shared, but only for the memcpy",
-     * which is true and was the opposite of the first.
-     *
-     * It is 66,560 bytes committed at load, the single largest static in the
-     * image. The largest frame actually built is SYNCENT at 63,488 plus
-     * headers, and rc_frame_build refuses anything over RC_MAX_FRAME
-     * (frameproto.c), so the + 1024 of slack is roughly 1020 bytes more than
-     * can ever be used. Left alone deliberately: BACKLOG.md §2 owns the
-     * memory pass, and shrinking a buffer to its measured high-water mark is
-     * exactly the change that wants measuring rather than reasoning. */
-    static char build[RC_MAX_FRAME + 1024];
-    rc_outq_item *it;
-    int total;
-    int waited = 0;
-
-    if (n->sock == INVALID_SOCKET || !n->running) return RC_SEND_DEAD;
-
-    /* The lock covers building INTO the shared buffer and copying OUT of it.
-     * Neither can block, which is the property that matters: the wire write
-     * happens on the sender thread, from the heap block, with this released. */
-    {
-        ScopedLock lock(&n->send_lock);
-
-        /* Backpressure, in bytes. Wait for the sender to drain room before
-         * compressing and allocating `it`. Waiting before mz_deflate ensures
-         * that if the send times out with RC_SEND_FULL, no frame was compressed
-         * into the stream, so the persistent dictionary is never corrupted by
-         * a dropped frame. Furthermore, send_lock is not released after
-         * mz_deflate, preserving strict stream order. */
-        while (n->outq_bytes + body_len + 256 > RC_OUTQ_MAX_BYTES && n->running
-               && waited < wait_ticks) {
-            LeaveCriticalSection(&n->send_lock);
-            WaitForSingleObject(n->outq_room, 100);
-            waited++;
-            EnterCriticalSection(&n->send_lock);
-        }
-        if (!n->running) return RC_SEND_DEAD;
-        if (n->outq_bytes + body_len + 256 > RC_OUTQ_MAX_BYTES) {
-            rc_log("net: send queue full after %dms wait, dropping %s "
-                   "(body=%u bytes, outq_bytes=%u)", waited * 100, type, body_len,
-                   n->outq_bytes);
-            return RC_SEND_FULL;
-        }
-
-        const void *send_body = body;
-        unsigned send_len = body_len;
-        const char *def_keys[RC_HELLO_MAX + 2];
-        const char *def_vals[RC_HELLO_MAX + 2];
-        const char *const *use_keys = keys;
-        const char *const *use_vals = vals;
-        int use_nkv = nkv;
-
-        if (rc_frame_compressible(type) && s_codec.shouldCompress(body_len)) {
-            unsigned def_len;
-            const char *def_body = s_codec.compressBody(body, body_len, &def_len);
-            if (def_body) {
-                send_body = def_body;
-                send_len = def_len;
-
-                if (nkv < (int)(sizeof(def_keys) / sizeof(def_keys[0])) - 1) {
-                    int i;
-                    for (i = 0; i < nkv; ++i) {
-                        def_keys[i] = keys[i];
-                        def_vals[i] = vals[i];
-                    }
-                    def_keys[nkv] = "enc";
-                    def_vals[nkv] = "deflate";
-                    use_keys = def_keys;
-                    use_vals = def_vals;
-                    use_nkv = nkv + 1;
-                }
-            }
-        }
-
-        total = rc_frame_build(build, sizeof(build), type, use_keys, use_vals, use_nkv,
-                               send_body, send_len);
-        if (total < 0) {
-            rc_log("net: frame too large to build (%s, body=%u)", type, send_len);
-            return RC_SEND_DEAD;
-        }
-        it = (rc_outq_item *)HeapAlloc(GetProcessHeap(), 0,
-                                       sizeof(rc_outq_item) + (unsigned)total);
-        if (!it) {
-            rc_log("net: out of memory queueing %s (%d bytes)", type, total);
-            return RC_SEND_DEAD;
-        }
-        memcpy(it->data, build, (unsigned)total);
-        it->len = (unsigned)total;
-        it->sent = 0;
-        it->next = NULL;
-
-        if (n->outq_tail) n->outq_tail->next = it;
-        else              n->outq_head = it;
-        n->outq_tail = it;
-        n->outq_bytes += it->len;
-    }
-
-    SetEvent(n->outq_wake);
-    return RC_SEND_OK;
+    Connection *c = conn_of(n);
+    if (!c) return RC_SEND_DEAD;
+    return c->send(type, keys, vals, nkv, body, body_len, wait_ticks,
+                   rc_frame_compressible(type) != 0);
 }
 
 /* Bulk: the full five-second budget. Manifest rows, SYNCDAT chunks, EXECOUT
@@ -1149,8 +493,7 @@ int rc_net_send_ui(rc_net *n, const char *type, const char *const *keys,
 
 void rc_net_stop(rc_net *n)
 {
-    DWORD rw = WAIT_OBJECT_0, sw = WAIT_OBJECT_0;
-    int   rpcj;
+    int rpcj;
 
     /* Safe to call on a connection that never started, so the reconnect path
      * can call it unconditionally rather than tracking state itself. */
@@ -1159,10 +502,10 @@ void rc_net_stop(rc_net *n)
 
     /* SHUTDOWN IS THREE PHASES, AND THE ORDER IS THE WHOLE POINT (01.51).
      *
-     * `running` used to be cleared right here, before rc_rpc_stop(). But
-     * rc_net_send bails on `!n->running`, so every ack the RPC worker's
-     * shutdown drain tried to send returned -1 -- and rpc.cpp's comment over
-     * that drain says the frames are "answered, not silently dropped -- the
+     * `running` used to be cleared first, before rc_rpc_stop(). But a send
+     * bails on a link that is not running, so every ack the RPC worker's
+     * shutdown drain tried to send failed -- and rpc.cpp's comment over that
+     * drain says the frames are "answered, not silently dropped -- the
      * bridge is holding a future for it". That was false on the only path
      * that reaches it in production. The bridge waited out the whole timeout
      * for an answer the guest had already composed and thrown away.
@@ -1170,163 +513,37 @@ void rc_net_stop(rc_net *n)
      * The mistake was that one flag meant two things: "the link is usable"
      * and "accept new work". They are separated by sequence now.
      *
-     * PHASE 1 -- let the worker finish and ANSWER. `running` is still 1, the
-     * socket is still open and the sender thread is still on the wire, so the
-     * drain's acks can actually leave. rc_rpc_stop kills any child process
-     * first, so this cannot wait on a two-minute exec. The 30s budget is the
-     * same one that used to sit further down; it has moved, not grown. */
+     * PHASE 1 -- let the worker finish and ANSWER. The link still accepts
+     * sends and the sender thread is still on the wire, so the drain's acks
+     * can actually leave. rc_rpc_stop kills any child process first, so this
+     * cannot wait on a two-minute exec. */
     rc_rpc_stop();              /* signals the worker and kills any child */
     rpcj = rc_rpc_join(30000);
     if (!rpcj)
         rc_log("net: RPC worker did not exit");
 
-    /* PHASE 2 -- give those acks time to reach the wire. The sender pops an
-     * item before writing it, so an empty queue means "handed to send()", not
-     * "acknowledged by the peer" -- which is as much as this side can know
-     * anyway, and the shutdown(SD_SEND) below is what actually flushes. A
-     * bounded wait: a link slow enough to need more than two seconds for a
-     * handful of small acks is a link that is already gone. */
-    {
-        int waited = 0;
-        for (;;) {
-            int empty;
-            {
-                ScopedLock lock(&n->send_lock);
-                empty = (n->outq_head == NULL);
-            }
-            if (empty || waited >= 200 || !n->running) break;
-            Sleep(10);
-            waited++;
-        }
-        if (waited >= 200)
-            rc_log("net: outbound queue still had work after 2s of draining");
-    }
+    ClientLink *link = (ClientLink *)n->conn;
+    if (!link) return;
+    Connection &c = link->conn();
 
-    /* PHASE 3 -- now nothing new is accepted and the threads may go. */
-    n->running = 0;
-    /* Wake anything parked on the queue so it can notice `running`. */
-    if (n->outq_wake) SetEvent(n->outq_wake);
-    if (n->outq_room) SetEvent(n->outq_room);
+    /* PHASE 2 -- give those acks time to reach the wire. */
+    c.drain(2000);
 
-    /* FIN NOW, CLOSE LATER -- and the gap between those is finding 01.52.
-     *
-     * `n->sock` is read and written by four threads with no lock: the reader
-     * in recv_exact, the sender in its write loop, the RPC worker through
-     * rc_net_send, and this one. The named hazard is the sender snapshotting
-     * the descriptor, passing the INVALID_SOCKET test, and being preempted
-     * right there while this function closes it. Win9x recycles descriptors
-     * aggressively, so the resumed send() does not fail -- it can land on
-     * whatever socket was opened in the meantime and write a frame into it.
-     *
-     * A lock is the obvious fix and the wrong one: the reader holds the
-     * socket across a BLOCKING recv, so any mutex covering it would be held
-     * for the length of an idle connection and this function would wait
-     * behind it.
-     *
-     * Ordering removes the race instead of guarding it. The descriptor is not
-     * freed until both threads that can touch it have been joined, so there
-     * is no window in which a live thread holds a stale one. Only the FIN
-     * happens here; closesocket moved below the joins.
-     *
-     * The FIN itself stays graceful, and that part is not stylistic: an
-     * abrupt RST is reported to crash Win98's Winsock stack outright, taking
-     * the machine with it. This is client-side discipline because the server
-     * cannot defend itself. The FIN is also what unblocks the reader -- the
-     * bridge sees it, closes, and recv returns 0 -- so it has to be sent
-     * before the join rather than after it, or the join waits out its whole
-     * timeout on an idle link every single time. */
-    if (n->sock != INVALID_SOCKET)
-        shutdown(n->sock, 1 /* SD_SEND */);
-
-    /* Join every thread that can touch send_lock BEFORE deleting it. The old
-     * code waited 2000ms, DISCARDED the result and deleted the section
-     * regardless -- so any exec longer than two seconds meant the worker's
-     * next EnterCriticalSection ran on a destroyed object, which on 9x is a
-     * GPF dialog at exit, every time. */
-    if (n->thread) {
-        rw = WaitForSingleObject(n->thread, 5000);
-        CloseHandle(n->thread);
-        n->thread = NULL;
-    }
-    if (n->sender) {
-        sw = WaitForSingleObject(n->sender, 5000);
-        CloseHandle(n->sender);
-        n->sender = NULL;
-    }
-    /* The worker calls rc_net_send, so it holds send_lock as readily as the
-     * other two. An earlier version computed this join and then left it out of
-     * the condition, which destroyed the section under a live worker -- the
-     * exact GPF-at-exit the rewrite existed to remove. `rpcj` is from PHASE 1
-     * above; the worker was joined BEFORE the socket closed so its drain could
-     * still be answered, but the condition it feeds here is unchanged. */
-    /* NOW the descriptor can go: nothing is left inside send() or recv().
-     * If a thread did not exit, the socket is deliberately LEAKED rather than
-     * closed under it -- the same trade as the critical section below, and
-     * for the same reason. A leaked descriptor at process exit costs nothing;
-     * one freed under a live send() is a frame written into whatever the OS
-     * handed out next. */
-    if (n->sock != INVALID_SOCKET) {
-        if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0) {
-            closesocket(n->sock);
-            n->sock = INVALID_SOCKET;
-        } else {
-            rc_log("net: reader=%lu sender=%lu still running; leaking the "
-                   "socket rather than closing it under them",
-                   (unsigned long)rw, (unsigned long)sw);
-        }
-    }
-
-    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0 && rpcj) {
-        outq_clear(n);
-        DeleteCriticalSection(&n->send_lock);
+    /* PHASE 3 -- nothing new is accepted, the FIN goes out, the threads go,
+     * and only then is anything freed. The worker sends too, so it is one of
+     * the threads release() must know about. */
+    c.signalStop();
+    c.join(5000);
+    n->rx_bytes = c.rxBytes();
+    n->tx_bytes = c.txBytes();
+    if (c.release(rpcj != 0)) {
+        n->conn = NULL;
+        delete link;
     } else {
-        /* A thread is still in there somewhere. Leaking a critical section at
-         * process exit costs nothing; destroying one out from under a live
-         * thread costs the user a crash dialog. */
+        /* A thread is still inside the Connection, so it stays allocated
+         * and `conn` keeps pointing at it: the worker, if it is the one
+         * still running, sends through it. rc_net_start refuses from now
+         * on. */
         n->leaked = 1;
-        rc_log("net: reader=%lu sender=%lu did not exit; not deleting the lock",
-               (unsigned long)rw, (unsigned long)sw);
-    }
-
-    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0 && rpcj) {
-        /* Only once nothing can still be waiting on them. Closing these under
-         * a surviving thread turns its WaitForSingleObject into an instant
-         * WAIT_FAILED, i.e. a hot spin. */
-        if (n->outq_wake) { CloseHandle(n->outq_wake); n->outq_wake = NULL; }
-        if (n->outq_room) { CloseHandle(n->outq_room); n->outq_room = NULL; }
-    }
-    /* GATED, like every release above it -- this line was the one exception.
-     *
-     * finishInflate() frees the 128KB scratch and ends the mz_stream, and
-     * BOTH are touched only by the READER thread, inside inflateBody(). If
-     * the reader's join timed out, that free lands under a live mz_inflate:
-     * exactly the hazard that makes the socket, send_lock and both events
-     * above deliberately leak rather than be released. Only `rw` is relevant
-     * -- the sender and the RPC worker never touch either object.
-     * See docs/mem-audit F3. */
-    if (rw == WAIT_OBJECT_0) {
-        s_codec.finishInflate();
-    } else {
-        rc_log("net: reader did not exit; leaking the inflate scratch rather "
-               "than freeing it under a live mz_inflate");
-    }
-
-    if (rpcj && sw == WAIT_OBJECT_0) {
-        s_codec.finishDeflate();
-    } else {
-        rc_log("net: worker/sender did not exit; leaking the deflate scratch rather "
-               "than freeing it under a live mz_deflate");
-    }
-
-    /* Same argument one step wider. WSACleanup tears Winsock down for the
-     * whole process, and a surviving reader or sender is still inside
-     * recv()/send() on the descriptor this function has just decided to leak
-     * for that very reason. The refcount it leaves behind is reclaimed at
-     * process exit; a socket call into a torn-down stack is not. */
-    if (rw == WAIT_OBJECT_0 && sw == WAIT_OBJECT_0) {
-        WSACleanup();
-    } else {
-        rc_log("net: reader=%lu sender=%lu still running; skipping WSACleanup",
-               (unsigned long)rw, (unsigned long)sw);
     }
 }

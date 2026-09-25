@@ -562,8 +562,8 @@ static unsigned rpc_thread_body(void *arg)
      * never executed, and nothing said so.
      *
      * Fixed in net.cpp, not here: rc_net_stop now stops and JOINS the worker
-     * while the link is still usable, and only then clears running and closes
-     * the socket (finding 01.51). Measured on the real machine rather than
+     * while the link is still usable, and only then stops the Connection and
+     * closes the socket (finding 01.51). Measured on the real machine rather than
      * argued -- 600 queued SYNCGETs, close the app mid-flight: before the
      * change the link dropped with the queue unanswered and zero busy acks
      * on the wire; after it, exactly RPC_SYNCQ_MAX of them arrive just before

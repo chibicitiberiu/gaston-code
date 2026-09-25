@@ -104,10 +104,12 @@ LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
             core/app.cpp core/window.cpp core/heap.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
-# The frame codec (docs/REMOTE.md, step 2). Knows the wire format and no
-# frame types; each protocol's types and lanes live with its exe. Listed
-# BEFORE libcore wherever both are linked, because it calls into libcore.
-WIRE_SRCS = wire/frame.cpp
+# libwire (docs/REMOTE.md, step 2): the frame codec and Connection, the
+# framed TCP link. Knows the wire format and no frame types; each protocol's
+# types and lanes live with its exe. Listed BEFORE libcore wherever both are
+# linked, because it calls into libcore. Connection compresses with miniz,
+# which each exe that links it lists as an object ($(MINIZ)).
+WIRE_SRCS = wire/frame.cpp wire/connection.cpp
 LIBWIRE = $(LIBDIR)/libwire.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this
