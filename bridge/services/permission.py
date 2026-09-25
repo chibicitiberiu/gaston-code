@@ -11,13 +11,14 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..guest import GuestSession
 from ..agent import permissions as perms
 from ..agent.permdesk import PermissionDesk
 from ..agent.session import TOOLS
 from ..wire.protocol import Frame
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.permission")
 

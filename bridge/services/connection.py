@@ -16,6 +16,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable
 
 from .. import handshake
+from ..guest import GuestSession
 from ..agent import profiles, toolrep, toolrules
 from ..view.pages import Paginator
 from ..view.transcript import TranscriptView
@@ -25,7 +26,6 @@ from ..wire.link import GuestLink
 from ..wire.protocol import Frame, FrameReader, ProtocolError, error, pong
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
     from .config import BridgeConfig
 
 log = logging.getLogger("bridge.connection")
@@ -149,7 +149,7 @@ class ConnectionService:
             await self.try_send_raw(writer, error(exc.code, exc.message))
             return None
 
-        if self.guest and self.guest.connected:
+        if self.guest and self.guest.link.connected:
             await self.try_send_raw(
                 writer, error("busy", "another client holds this session")
             )
@@ -169,8 +169,8 @@ class ConnectionService:
 
         is_reconnect = self.guest is not None
         if self.guest is not None:
-            self.guest.zip_out.reset()
-            self.guest.zip_in.reset()
+            self.guest.link.zip_out.reset()
+            self.guest.link.zip_in.reset()
 
         if self.guest is None:
             if self.create_guest:
@@ -190,9 +190,9 @@ class ConnectionService:
             log.error("cannot attach: no GuestSession could be instantiated")
             return None
 
-        guest.writer = writer
-        guest.page_bytes = page_bytes
-        guest.page_blocks = page_blocks
+        guest.link.writer = writer
+        guest.view.page_bytes = page_bytes
+        guest.view.page_blocks = page_blocks
         guest.hello = dict(h)
         guest.caps = caps
         fold.use(caps.acp)
@@ -302,7 +302,7 @@ class ConnectionService:
             guest = self.guest
             if guest is None:
                 continue
-            if not guest.connected:
+            if not guest.link.connected:
                 if (
                     guest.perm_pending is not None
                     and guest.lost_at is not None
@@ -315,7 +315,7 @@ class ConnectionService:
                         "on purpose -- ask again if you still need it.",
                     )
                 continue
-            if guest.exec_pending or guest.sync_active:
+            if guest.exec_pending or guest.sync.active:
                 continue
             idle = time.monotonic() - guest.last_seen
             if idle < idle_timeout_s:
@@ -326,7 +326,7 @@ class ConnectionService:
             guest.perms.deny_all(
                 "idle", "The Windows machine stopped responding."
             )
-            w, guest.writer = guest.writer, None
+            w, guest.link.writer = guest.link.writer, None
             self.mark_lost(guest)
             try:
                 if w is not None:
@@ -369,8 +369,8 @@ class ConnectionService:
             log.exception("unhandled error serving %s", peer)
         finally:
             guest = self.guest
-            if guest and (guest.writer is writer or guest.writer is None):
-                guest.writer = None
+            if guest and (guest.link.writer is writer or guest.link.writer is None):
+                guest.link.writer = None
                 self.mark_lost(guest)
             try:
                 if writer.can_write_eof():

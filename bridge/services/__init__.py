@@ -7,7 +7,7 @@ through constructors, and state scoped to GuestSession flowing through parameter
 from bridge.services.attachment import AttachmentService
 from bridge.services.config import BridgeConfig
 from bridge.services.connection import ConnectionService
-from bridge.services.guest_exec import ExecCall, GuestExecService
+from bridge.services.guest_exec import GuestExecService
 from bridge.services.options import (
     COMMAND_MENU,
     EFFORT_LABEL,
@@ -29,7 +29,6 @@ __all__ = [
     "AttachmentService",
     "BridgeConfig",
     "ConnectionService",
-    "ExecCall",
     "GuestExecService",
     "OptionsService",
     "PermissionService",

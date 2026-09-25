@@ -88,8 +88,8 @@ class Pass:
         # 02.19: this used to be `Pass(bridge, guest, root, state_dir)` --
         # the entire Bridge and the entire GuestSession, of which four
         # things were ever used (bridge._send, bridge.wire_yield,
-        # guest.sync_pending, guest.sync_seq) plus a fifth the audit's count
-        # missed, guest.perm_pending. `transport` is those, wrapped by
+        # guest.sync.pending, guest.sync.seq) plus a fifth the audit's count
+        # missed, guest.perms.pending. `transport` is those, wrapped by
         # bridge/files/synctransport.py's SyncTransport; `caps` is passed
         # explicitly rather than fished out of a guest that might not be one.
         self.transport = transport

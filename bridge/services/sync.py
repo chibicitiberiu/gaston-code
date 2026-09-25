@@ -13,6 +13,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from ..guest import GuestSession
 from ..files import manifest
 from ..files import paths as P
 from ..files.sync import AckResult, Baseline, GetResult, ScanResult
@@ -24,7 +25,6 @@ from ..files import caps as C
 from ..wire.protocol import Frame, halt, haltend, status_frame
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
     from .config import BridgeConfig
 
 log = logging.getLogger("bridge.sync")
@@ -80,7 +80,7 @@ class SyncService:
     ) -> dict:
         """Run sync and block until finished, displaying 'waiting for sync...' status on the guest."""
         g = self._get_guest(guest)
-        if g is None or not g.connected or not self.config.sync_dir:
+        if g is None or not g.link.connected or not self.config.sync_dir:
             return {}
         if not self._mirror_dir(g):
             return {}
@@ -148,7 +148,7 @@ class SyncService:
     def baseline_lock(self, guest: GuestSession | None = None):
         """The lock that serialises writers to base.json."""
         g = self._get_guest(guest)
-        return g.sync_lock if g is not None else contextlib.nullcontext()
+        return g.sync.lock if g is not None else contextlib.nullcontext()
 
     async def raise_halt(
         self, guest: GuestSession, line: str, paths: Any = ()
@@ -259,18 +259,18 @@ class SyncService:
     ) -> dict:
         """One pass, serialised against every other trigger."""
         g = self._get_guest(guest)
-        if g is None or not g.connected or not self.config.sync_dir:
+        if g is None or not g.link.connected or not self.config.sync_dir:
             return {}
         mirror = self._mirror_dir(g)
         if not mirror:
             log.debug("nothing mirrored yet; skipping sync (%s)", why)
             return {}
-        if not wait and g.sync_lock.locked():
+        if not wait and g.sync.lock.locked():
             log.debug("sync already running; coalescing (%s)", why)
             return {}
 
-        async with g.sync_lock:
-            g.sync_active = True
+        async with g.sync.lock:
+            g.sync.active = True
             try:
                 transport = SyncTransport(g)
                 p = Pass(
@@ -345,7 +345,7 @@ class SyncService:
                 )
                 return {"error": str(exc)}
             finally:
-                g.sync_active = False
+                g.sync.active = False
 
     async def sync_resolve(
         self,
@@ -492,7 +492,7 @@ class SyncService:
     async def sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""
         sid = f.headers.get("id", "")
-        entry = guest.sync_pending.get(sid)
+        entry = guest.sync.pending.get(sid)
         if entry is None:
             log.debug("sync frame %s for %s, which nobody awaits", f.type, sid)
             return
@@ -559,12 +559,12 @@ class SyncService:
         """Resolve every in-flight sync transfer, synchronously."""
         if guest is None:
             return
-        for sid, entry in list(guest.sync_pending.items()):
+        for sid, entry in list(guest.sync.pending.items()):
             fut = entry.future
             if not fut.done():
                 fut.set_exception(SyncError(why))
-        guest.sync_pending.clear()
-        guest.sync_active = False
+        guest.sync.pending.clear()
+        guest.sync.active = False
 
     async def sweep_sync(self) -> None:
         """The backstop trigger. See run_sync for why it exists.

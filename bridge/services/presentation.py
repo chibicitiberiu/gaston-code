@@ -9,13 +9,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..guest import GuestSession
 from ..view import html as H
 from ..view.html import APPEND, LIVE
 from ..wire.coalesce import Coalescer
 from ..wire.protocol import error, notice, pageend, pagesealed, pagestart
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.presentation")
 
@@ -28,20 +29,20 @@ class PresentationService:
 
     def coalescer(self, guest: GuestSession, style: str) -> Coalescer:
         """Get or create the stream coalescer for this style (plain prose, thinking)."""
-        c = guest.coalescers.get(style)
+        c = guest.view.coalescers.get(style)
         if c is None:
             if style == "plain":
                 async def sink(text: str) -> None:
-                    await self.write_updates(guest, guest.render.feed(text))
+                    await self.write_updates(guest, guest.view.render.feed(text))
             else:
                 async def sink(text: str, _s=style) -> None:
                     await self.write_block(
                         guest, f'<div class="{_s}">' + H.esc(text) + "</div>"
                     )
             c = Coalescer(sink)
-            c.set_link_speed(guest.link_bps)
+            c.set_link_speed(guest.link.link_bps)
             c.start()
-            guest.coalescers[style] = c
+            guest.view.coalescers[style] = c
         return c
 
     async def emit_text(
@@ -54,9 +55,9 @@ class PresentationService:
 
     async def flush_text(self, guest: GuestSession) -> None:
         """Flush all stream coalescers and flush the renderer."""
-        for c in list(guest.coalescers.values()):
+        for c in list(guest.view.coalescers.values()):
             await c.flush()
-        await self.write_updates(guest, guest.render.flush())
+        await self.write_updates(guest, guest.view.render.flush())
 
     async def write_updates(
         self, guest: GuestSession, updates: list
@@ -67,7 +68,7 @@ class PresentationService:
                 await self.write_block(guest, u.html)
             else:
                 await self.connection.send_html(
-                    guest, u.html, LIVE, guest.pages.live.number
+                    guest, u.html, LIVE, guest.view.pages.live.number
                 )
 
     async def write_block(
@@ -82,10 +83,10 @@ class PresentationService:
         if not html:
             return
 
-        page_no = guest.pages.live.number
-        sealed, chunks = guest.pages.write("html", html)
+        page_no = guest.view.pages.live.number
+        sealed, chunks = guest.view.pages.write("html", html)
 
-        if stream and (guest.view_page is None or guest.view_page == page_no):
+        if stream and (guest.view.view_page is None or guest.view.view_page == page_no):
             on_this_page = "".join(text for pg, text in chunks if pg == page_no)
             if on_this_page:
                 await self.connection.send_html(
@@ -95,7 +96,7 @@ class PresentationService:
         if notify:
             for pg in sealed:
                 await self.connection.send(
-                    guest, pagesealed(pg.number, guest.pages.count)
+                    guest, pagesealed(pg.number, guest.view.pages.count)
                 )
 
     async def on_getpage(self, guest: GuestSession, f: Frame) -> None:
@@ -104,19 +105,19 @@ class PresentationService:
     async def send_page(self, guest: GuestSession, want: str) -> None:
         """Render one page to the guest. LIVE is requested as page=live."""
         if want == "live":
-            number = guest.pages.live.number
-            guest.view_page = None
+            number = guest.view.pages.live.number
+            guest.view.view_page = None
         else:
             try:
                 number = int(want)
             except ValueError:
                 await self.connection.send(guest, error("bad_page", want))
                 return
-            guest.view_page = (
-                None if number == guest.pages.live.number else number
+            guest.view.view_page = (
+                None if number == guest.view.pages.live.number else number
             )
 
-        page = guest.pages.page(number)
+        page = guest.view.pages.page(number)
         if page is None:
             await self.connection.send(guest, error("no_such_page", want))
             return
@@ -125,8 +126,8 @@ class PresentationService:
             guest,
             pagestart(
                 page.number,
-                guest.pages.count,
-                guest.view_page is None,
+                guest.view.pages.count,
+                guest.view.view_page is None,
                 page.continued,
             ),
         )
@@ -137,7 +138,7 @@ class PresentationService:
             await self.connection.wire_yield(guest)
         await self.connection.send(guest, pageend(page.number))
 
-        if guest.view_page is None and not page.runs:
+        if guest.view.view_page is None and not page.runs:
             await self.connection.send(
                 guest,
                 notice(
@@ -151,7 +152,7 @@ class PresentationService:
 
     def mark_user_turn(self, guest: GuestSession, line: str) -> Any:
         """Record a user turn marker in the paginator."""
-        return guest.pages.mark_user_turn(line)
+        return guest.view.pages.mark_user_turn(line)
 
     # Private method aliases for bridge facade
     _coalescer = coalescer

@@ -58,7 +58,7 @@ async def _wait_attached(harness, timeout=5.0):
     deadline = loop.time() + timeout
     while loop.time() < deadline:
         guest = harness.bridge._guest
-        if guest is not None and guest.connected:
+        if guest is not None and guest.link.connected:
             return guest
         await asyncio.sleep(0.02)
     pytest.fail("bridge never attached the fakegui client")

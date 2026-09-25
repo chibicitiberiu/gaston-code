@@ -13,6 +13,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..guest import GuestSession
 from ..agent import machine
 from ..agent import permissions as perms
 from ..agent import sessions as sesslist
@@ -32,7 +33,7 @@ from ..wire.protocol import (
 )
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.session")
 
@@ -119,7 +120,7 @@ class SessionService:
         """
         title = self.conv_title(guest)
         when = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-        doc = H.export_document(title, guest.pages.all_text(),
+        doc = H.export_document(title, guest.view.pages.all_text(),
                                 "Exported from Gaston Code, " + when)
         # CP1252 on the way out, because the file is read on the machine that
         # saved it, by a browser that will be told windows-1252 in the meta
@@ -344,7 +345,7 @@ class SessionService:
         guest.pending_resume = ""
         if not resuming:
             await self._send(guest, switched(guest.claude.session_id or "",
-                                             guest.pages.count))
+                                             guest.view.pages.count))
         return True
 
     async def new_session_locked(
@@ -361,9 +362,9 @@ class SessionService:
         guest.work_guest = ""
         guest.first_prompt = ""
         self.workspace.retarget_perms(guest)
-        await guest.reset_transcript()
+        await guest.view.reset()
         guest.claude = None
-        await self._send(guest, switched("", guest.pages.count))
+        await self._send(guest, switched("", guest.view.pages.count))
         await self.presentation.send_page(guest, "live")
         await self.options.send_options(guest)
 
@@ -405,14 +406,14 @@ class SessionService:
         guest.first_prompt = ""
         self.workspace.retarget_perms(guest)
 
-        await guest.reset_transcript()
+        await guest.view.reset()
 
         for block in self._resolve_sesslist().history_html(session_id):
             await self.presentation.write_block(guest, block, stream=False, notify=False)
-            if guest.pages.live.over_soft_cap():
-                guest.pages.message_boundary()
+            if guest.view.pages.live.over_soft_cap():
+                guest.view.pages.message_boundary()
 
-        await self._send(guest, switched(session_id, guest.pages.count))
+        await self._send(guest, switched(session_id, guest.view.pages.count))
         await self.presentation.send_page(guest, "live")
         await self.options.send_options(guest)
 

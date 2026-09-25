@@ -173,7 +173,7 @@ async def test_attach_handshake_refused(conn_service):
 async def test_attach_busy(conn_service):
     svc = conn_service["service"]
     guest = conn_service["guest"]
-    guest.connected = True
+    guest.link.connected = True
     svc.guest = guest
 
     writer = MagicMock()

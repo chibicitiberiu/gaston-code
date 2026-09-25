@@ -232,7 +232,7 @@ class GuestLink:
         prompt, which made it the wrong primitive for any OTHER bulk sender
         to call -- a page or a future transcript export has no reason to cut
         itself short because the user has a dialog open elsewhere. That
-        policy is sync's own to apply; see syncrun.py's `guest.perm_pending`
+        policy is sync's own to apply; see syncrun.py's `guest.perms.pending`
         checks right after the calls to this.
         """
         if guest is not None:

@@ -4,7 +4,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 
-from bridge.services.guest_exec import ExecCall, GuestExecService
+from bridge.guest import ExecCall
+from bridge.services.guest_exec import GuestExecService
 from bridge.wire.protocol import Frame
 
 
@@ -18,7 +19,7 @@ def mock_conn():
 @pytest.fixture
 def mock_guest():
     guest = MagicMock()
-    guest.connected = True
+    guest.link.connected = True
     guest.exec_lock = asyncio.Lock()
     guest.exec_seq = 0
     guest.exec_pending = {}
@@ -29,7 +30,7 @@ def mock_guest():
 
 @pytest.mark.asyncio
 async def test_run_on_guest_not_connected(mock_conn, mock_guest):
-    mock_guest.connected = False
+    mock_guest.link.connected = False
     svc = GuestExecService(connection=mock_conn)
 
     res = await svc.run_on_guest(

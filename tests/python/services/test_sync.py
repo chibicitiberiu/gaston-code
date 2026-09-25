@@ -34,10 +34,10 @@ def mock_pres():
 @pytest.fixture
 def mock_guest():
     guest = MagicMock()
-    guest.connected = True
+    guest.link.connected = True
     guest.synccoord = SyncCoordinator()
-    guest.sync_pending = {}
-    guest.sync_active = False
+    guest.sync.pending = {}
+    guest.sync.active = False
     guest.work_guest = "C:\\WORK"
     return guest
 
@@ -93,12 +93,12 @@ async def test_fail_syncs(mock_conn, mock_ws, mock_pres, mock_guest):
     fut = asyncio.get_running_loop().create_future()
     entry = MagicMock()
     entry.future = fut
-    mock_guest.sync_pending["s1"] = entry
+    mock_guest.sync.pending["s1"] = entry
 
     svc.fail_syncs(mock_guest, "Link lost")
     assert fut.done()
     assert str(fut.exception()) == "Link lost"
-    assert len(mock_guest.sync_pending) == 0
+    assert len(mock_guest.sync.pending) == 0
 
 
 def test_sync_status_text_disabled(mock_conn, mock_ws, mock_pres):

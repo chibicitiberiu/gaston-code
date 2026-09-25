@@ -12,6 +12,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any, AsyncIterable, Callable
 
+from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import (
     Frame,
@@ -23,7 +24,7 @@ from ..wire.protocol import (
 )
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.turn")
 
@@ -241,7 +242,7 @@ class TurnRunner:
             return
         display_names = self.attachment.parse_display_names(attach, attach_name)
         display_text = self.attachment.format_display_text(text, display_names)
-        anchor = guest.pages.mark_user_turn(display_text)
+        anchor = guest.view.pages.mark_user_turn(display_text)
         if echo:
             await self.presentation.write_block(
                 guest, H.user_turn(display_text), stream=False
@@ -276,18 +277,18 @@ class TurnRunner:
             conv_store = self.conv or getattr(self.connection, "conv", None)
             if conv_store is not None:
                 conv_store.add(guest.claude.session_id)
-        sealed = guest.pages.message_boundary()
+        sealed = guest.view.pages.message_boundary()
         if sealed:
             await self._send(
-                guest, pagesealed(sealed.number, guest.pages.count)
+                guest, pagesealed(sealed.number, guest.view.pages.count)
             )
-        raw, comp = guest.zip_out.stats
+        raw, comp = guest.link.zip_out.stats
         if comp:
             log.info(
                 "deflate so far: %d -> %d bytes (%.2f:1)",
                 raw,
                 comp,
-                guest.zip_out.ratio,
+                guest.link.zip_out.ratio,
             )
         degraded = guest.turn_degraded
         guest.turn_degraded = ""

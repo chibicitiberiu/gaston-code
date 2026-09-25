@@ -266,9 +266,9 @@ async def test_golden_06_page_request_and_seal(harness):
     # Fill several pages directly into transcript
     guest = harness.bridge._guest
     for i in range(600):
-        guest.pages.add("plain", f"line {i:04d} padding padding\n")
+        guest.view.pages.add("plain", f"line {i:04d} padding padding\n")
         if i % 100 == 0:
-            guest.pages.message_boundary()
+            guest.view.pages.message_boundary()
 
     collector = FrameCollector(r, harness)
 

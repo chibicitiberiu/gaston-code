@@ -13,12 +13,13 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any, AsyncIterable
 
+from ..guest import GuestSession
 from ..files import paths as P
 from ..files.synctransport import SyncTransport
 from ..status import SyncStatus
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.attachment")
 

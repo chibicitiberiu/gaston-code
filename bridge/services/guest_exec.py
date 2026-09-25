@@ -12,28 +12,19 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..guest import ExecCall, GuestSession
 from ..agent import toolrules
 from ..status import EXEC_STATUS_PROSE, ExecStatus
 from ..wire import fold
 from ..wire.protocol import MAX_HEADER_VALUE, Frame, _quote, exec_cmd, exec_kill
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.guest_exec")
 
 EXEC_OUT_MAX = 64 * 1024
 EXEC_MAX_CMD = 1024
-
-
-@dataclass
-class ExecCall:
-    """One outstanding EXEC, and what has happened to it so far."""
-
-    future: asyncio.Future
-    out: bytearray = field(default_factory=bytearray)
-    killed: bool = False
-    capped: bool = False
 
 
 class GuestExecService:
@@ -71,7 +62,7 @@ class GuestExecService:
         if guest is not None and self.pre_exec is not None:
             await self.pre_exec(guest, command)
 
-        if guest is None or not guest.connected:
+        if guest is None or not guest.link.connected:
             return {
                 "content": [
                     {
@@ -120,7 +111,7 @@ class GuestExecService:
                 )
 
         async with guest.exec_lock:
-            if not guest.connected:
+            if not guest.link.connected:
                 return {
                     "content": [
                         {

@@ -34,7 +34,7 @@ def mock_sync():
 def mock_guest(mock_ws):
     guest = MagicMock()
     guest.work_dir = mock_ws.work_dir(guest)
-    guest.connected = True
+    guest.link.connected = True
     return guest
 
 

@@ -1,6 +1,7 @@
 """Unit tests for TurnRunner (Layer 7)."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,8 +35,10 @@ class DummyGuest:
     def __init__(self):
         self.turn_lock = asyncio.Lock()
         self.claude = MagicMock()
-        self.pages = DummyPages()
-        self.zip_out = DummyZip()
+        # Composed like the real GuestSession: the view owns the
+        # paginator, the link owns the compressor.
+        self.view = SimpleNamespace(pages=DummyPages())
+        self.link = SimpleNamespace(zip_out=DummyZip())
         self.turn_produced = False
         self.turn_degraded = ""
         self.synccoord = MagicMock()

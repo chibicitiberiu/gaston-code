@@ -29,6 +29,7 @@ import pytest
 
 import bridge.server as srv
 from bridge.wire.protocol import Frame
+from bridge.guest import ExecCall
 
 from harness import harness, _recv   # noqa: F401
 
@@ -99,7 +100,7 @@ async def test_a_switch_waits_for_the_live_turn(harness, monkeypatch):
     guest = harness.bridge._guest
     await _hold_turn(harness, guest, unwind=0.3)
 
-    pages_before = guest.pages
+    pages_before = guest.view.pages
     task = asyncio.create_task(harness.bridge.coordinator.switch(guest, "stored-1"))
     await asyncio.sleep(0.1)
     # The interrupt has gone out and has not landed yet, so the turn still
@@ -107,10 +108,10 @@ async def test_a_switch_waits_for_the_live_turn(harness, monkeypatch):
     # it. Without the lock this assertion fails: `_switch` runs to the end
     # while the turn is still suspended inside `send()`.
     assert guest.turn_lock.locked()
-    assert guest.pages is pages_before
+    assert guest.view.pages is pages_before
 
     await asyncio.wait_for(task, 10)
-    assert guest.pages is not pages_before
+    assert guest.view.pages is not pages_before
     await harness.close(w)
 
 
@@ -179,7 +180,7 @@ async def test_a_refused_model_change_does_not_drop_the_link(harness):
     await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "opus"}))
     await _recv(harness, r, "OPTIONSEND")
-    assert guest.connected, "the connection was torn down"
+    assert guest.link.connected, "the connection was torn down"
     await harness.close(w)
 
 
@@ -294,8 +295,8 @@ async def test_an_ordinary_turn_still_carries_the_preamble(harness):
 
 
 async def test_a_reaped_guest_is_recorded_as_lost(harness):
-    """The reaper nulls `guest.writer` ITSELF before closing the socket, and
-    `_on_client`'s `finally` is keyed on `guest.writer is writer` -- so after
+    """The reaper nulls `guest.link.writer` ITSELF before closing the socket, and
+    `_on_client`'s `finally` is keyed on `guest.link.writer is writer` -- so after
     a reap the whole teardown block was skipped. `lost_at` stayed None, and
     `_reap_idle`'s grace expiry is gated on it, so a prompt raised by the
     still-running turn afterwards waited the full 600 second answer deadline
@@ -317,7 +318,7 @@ async def test_a_reaped_guest_is_recorded_as_lost(harness):
         await asyncio.sleep(0.01)
     else:
         pytest.fail("the reaper never stamped lost_at")
-    assert guest.writer is None
+    assert guest.link.writer is None
 
 
 async def test_an_exec_registered_after_a_reap_is_still_failed(harness):
@@ -330,7 +331,7 @@ async def test_an_exec_registered_after_a_reap_is_still_failed(harness):
     guest = b._guest
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
-    guest.exec_pending["e1"] = srv.ExecCall(future=fut)
+    guest.exec_pending["e1"] = ExecCall(future=fut)
 
     b.connection.mark_lost(guest)
     assert fut.done()
@@ -353,7 +354,7 @@ async def test_abandoning_a_conversation_tells_the_guest_to_stop(harness):
     b = harness.bridge
     guest = b._guest
     loop = asyncio.get_running_loop()
-    guest.exec_pending["e1"] = srv.ExecCall(future=loop.create_future())
+    guest.exec_pending["e1"] = ExecCall(future=loop.create_future())
 
     b.session.abandon_pending(guest)
     kill = await _recv(harness, r, "EXECKILL")

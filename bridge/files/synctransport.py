@@ -3,7 +3,7 @@
 Before this, `Pass` (syncrun.py) was constructed as
 `Pass(self, guest, self.sync_dir, self.sync_state)` -- the entire `Bridge`
 and the entire `GuestSession` -- and used exactly four things off them:
-`bridge._send`, `bridge.wire_yield`, `guest.sync_pending`, `guest.sync_seq`
+`bridge._send`, `bridge.wire_yield`, `guest.sync.pending`, `guest.sync.seq`
 (plus a fifth the audit's four-thing count missed on this reading of the
 tree: `guest.perm_pending`, read once in `run()` to avoid competing with an
 open permission prompt for the wire). The oversized interface produced a
@@ -16,7 +16,7 @@ now doing, so do them together").
 `GuestSyncState` is the audit's "Sync RPC" `GuestSession` group
 (`sync_pending`, `sync_seq`, `sync_lock`, `sync_active`), with the id
 allocator moved onto it from `Pass` (`_next_id` used to live there and reach
-back to mutate `guest.sync_seq` directly -- 02.2's own suggestion).
+back to mutate `guest.sync.seq` directly -- 02.2's own suggestion).
 
 `SyncTransport` is what `Pass` actually needs: one guest connection to send
 sync frames over and register replies against. It owns the four

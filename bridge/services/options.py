@@ -9,12 +9,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import Frame, option, optionsend
 from .config import BridgeConfig
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.options")
 

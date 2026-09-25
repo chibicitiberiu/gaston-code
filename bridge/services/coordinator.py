@@ -13,12 +13,13 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..guest import GuestSession
 from ..status import GuestState
 from ..wire import fold
 from ..wire.protocol import Frame, error, halt, haltend, turn_start
 
 if TYPE_CHECKING:
-    from ..server import GuestSession
+    pass
 
 log = logging.getLogger("bridge.coordinator")
 
@@ -107,7 +108,7 @@ class SessionCoordinator:
 
     async def sync_state_to_guest(self, guest: GuestSession) -> None:
         """Sync guest UI state (permissions, sync halt bar, turn status) after reconnect."""
-        guest.view_page = None
+        guest.view.view_page = None
         if guest.perms:
             await guest.perms.reissue()
         await self.reissue_halt(guest)

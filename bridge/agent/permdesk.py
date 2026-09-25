@@ -6,7 +6,7 @@ SDK calls into (`_can_use_tool`), the queue (`_enqueue_prompt`/
 (`_reissue_prompt`), the two ways a prompt ends without an answer
 (`_finish_prompt` for a timeout or a cancellation, `_perm_reply` for a real
 one), and the denial-on-teardown path (`_resolve_all`). All of it read or
-wrote exactly two fields, `guest.perm_pending` and `guest.perm_queue` -- the
+wrote exactly two fields, `guest.perms.pending` and `guest.perms.queue` -- the
 audit's "Prompts" `GuestSession` group (docs/audit/02-bridge-python.md #2,
 #1.3) -- and nothing else in `Bridge` has a reason to reach into them
 directly any more.
@@ -337,7 +337,7 @@ class PermissionDesk:
         
         # Coalescers must be flushed before the bar is shown, or buffered text
         # arrives out of order behind the prompt.
-        assert not any(c._buf for c in self._guest.coalescers.values())
+        assert not any(c._buf for c in self._guest.view.coalescers.values())
 
         await self._send(permreq(
             prompt.tool_use_id, prompt.tool_name, prompt.allows,

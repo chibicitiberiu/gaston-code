@@ -18,7 +18,7 @@ fields cannot hold a `GuestLink` of its own without a construction-order
 cycle. `_switch`'s own bypass of that rule during history replay is a separate,
 already-investigated question (02.39) and is unaffected by this move: it
 still reaches `.pages` directly, now through `guest.view.pages` rather than
-`guest.pages`, exactly as deliberately as before.
+`guest.view.pages`, exactly as deliberately as before.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class TranscriptView:
 
         `_new_session` and `_switch` each rebuilt this by hand, with their
         own copy of the default page limits -- one of them written as
-        `guest.page_bytes or None or 16384`, where `or None` did nothing at
+        `guest.view.page_bytes or None or 16384`, where `or None` did nothing at
         all (`x or None` is `None` exactly when `x or 16384` would already
         have chosen 16384). docs/audit/02-bridge-python.md 02.17/02.18.
         """

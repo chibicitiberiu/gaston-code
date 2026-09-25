@@ -1428,13 +1428,13 @@ async def test_sync_stands_aside_while_the_user_has_a_prompt_open(
     for name in ("a.txt", "b.txt"):
         open(os.path.join(p.root, name), "wb").write(b"new\n")
 
-    harness.bridge._guest.perm_pending = object()      # a dialog is on screen
+    harness.bridge._guest.perms.pending = object()      # a dialog is on screen
     try:
         task = asyncio.create_task(p.run())
         await fake_scan(harness, reader, writer, {})
         got = await asyncio.wait_for(task, 10)
     finally:
-        harness.bridge._guest.perm_pending = None
+        harness.bridge._guest.perms.pending = None
 
     assert got["pushed"] == 0
     assert any("permission prompt" in r for r in got["reports"])
@@ -1535,12 +1535,12 @@ async def test_continue_waits_for_the_pass_rather_than_racing_it(harness,
     p.base.save(p.state)
 
     # Stand in for a pass in flight: run_sync holds this for its whole body.
-    await guest.sync_lock.acquire()
+    await guest.sync.lock.acquire()
     task = asyncio.create_task(harness.bridge.sync.release_all_latches())
     await asyncio.sleep(0.05)
     assert not task.done(), "the release did not wait for the pass"
 
-    guest.sync_lock.release()
+    guest.sync.lock.release()
     assert await asyncio.wait_for(task, 5) == 1
     assert not harness.bridge.sync.load_baseline().latched
     await harness.close(writer)
@@ -1559,13 +1559,13 @@ async def test_the_agents_resolve_waits_for_the_pass_too(harness, tmp_path):
     p.base.latched["src/main.c"] = "both sides moved"
     p.base.save(p.state)
 
-    await guest.sync_lock.acquire()
+    await guest.sync.lock.acquire()
     task = asyncio.create_task(
         harness.bridge.sync.sync_resolve("src/main.c", "release"))
     await asyncio.sleep(0.05)
     assert not task.done(), "sync_resolve did not wait for the pass"
 
-    guest.sync_lock.release()
+    guest.sync.lock.release()
     assert "Released" in await asyncio.wait_for(task, 5)
     assert not harness.bridge.sync.load_baseline().latched
     await harness.close(writer)

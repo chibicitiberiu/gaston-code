@@ -264,10 +264,10 @@ async def test_pagination_round_trip(harness):
     # persuading a model to emit 600 lines.
     guest = harness.bridge._guest
     for i in range(600):
-        guest.pages.add("plain", f"line {i:04d} padding padding padding\n")
+        guest.view.pages.add("plain", f"line {i:04d} padding padding padding\n")
         if i % 100 == 0:
-            guest.pages.message_boundary()
-    total = guest.pages.count
+            guest.view.pages.message_boundary()
+    total = guest.view.pages.count
     assert total > 2, f"expected several pages, got {total}"
 
     # Ask for page 1 and check it comes back whole.
@@ -291,19 +291,19 @@ async def test_getpage_live_returns_to_following(harness):
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge._guest
     for i in range(400):
-        guest.pages.add("plain", f"line {i}\n")
+        guest.view.pages.add("plain", f"line {i}\n")
         if i % 100 == 0:
-            guest.pages.message_boundary()
+            guest.view.pages.message_boundary()
 
     await harness.send(w, Frame("GETPAGE", {"page": "1"}))
     await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    assert guest.view_page == 1
+    assert guest.view.view_page == 1
 
     await harness.send(w, Frame("GETPAGE", {"page": "live"}))
     frames = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
     starts = [f for f in frames if f.type == "PAGESTART"]
     assert starts[0].headers["live"] == "1"
-    assert guest.view_page is None, "live means follow, not a fixed page"
+    assert guest.view.view_page is None, "live means follow, not a fixed page"
     await harness.close(w)
 
 
@@ -322,9 +322,9 @@ async def test_history_mode_suppresses_live_streaming(harness):
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge._guest
     for i in range(400):
-        guest.pages.add("plain", f"line {i}\n")
+        guest.view.pages.add("plain", f"line {i}\n")
         if i % 100 == 0:
-            guest.pages.message_boundary()
+            guest.view.pages.message_boundary()
 
     await harness.send(w, Frame("GETPAGE", {"page": "1"}))
     await harness.recv_until(r, {"PAGEEND"}, timeout=5)
@@ -354,19 +354,19 @@ async def test_view_page_resets_on_reconnect(harness):
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge._guest
     for i in range(400):
-        guest.pages.add("plain", f"line {i}\n")
+        guest.view.pages.add("plain", f"line {i}\n")
         if i % 100 == 0:
-            guest.pages.message_boundary()
+            guest.view.pages.message_boundary()
 
     await harness.send(w, Frame("GETPAGE", {"page": "1"}))
     await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    assert guest.view_page == 1, "test setup: guest must be paged back"
+    assert guest.view.view_page == 1, "test setup: guest must be paged back"
 
     await harness.close(w)
     r2, w2 = await harness.connect()
     await harness.recv_until(r2, {"READY"})
 
-    assert guest.view_page is None, (
+    assert guest.view.view_page is None, (
         "a reconnect must drop back to LIVE, not keep buffering into a page "
         "nobody -- guest-side -- is still looking at"
     )
@@ -411,7 +411,7 @@ async def test_a_block_split_across_a_page_boundary_is_not_rendered_twice(harnes
     assert sealed and sealed[0].headers["page"] == "1", (
         "test setup: the run must actually split across a seal"
     )
-    assert guest.pages.count == 2, "test setup: expected exactly two pages"
+    assert guest.view.pages.count == 2, "test setup: expected exactly two pages"
 
     live_body = harness.body(frames).decode("cp1252")
     assert "B" not in live_body, (
@@ -1670,7 +1670,7 @@ async def test_cancelled_callback_still_clears_the_bar(harness):
     end = await _recv(harness, reader, "PERMEND")
     assert end.headers["id"] == "toolu_test_1"
     assert end.headers["reason"] == "cancelled"
-    assert harness.bridge._guest.perm_pending is None
+    assert harness.bridge._guest.perms.pending is None
     await harness.close(writer)
 
 
@@ -1691,7 +1691,7 @@ async def test_a_disconnect_mid_sync_fails_the_transfer_not_the_connection(
     guest = harness.bridge._guest
 
     fut = asyncio.get_event_loop().create_future()
-    guest.sync_pending["s1"] = S.Wait(kind="put", future=fut)
+    guest.sync.pending["s1"] = S.Wait(kind="put", future=fut)
 
     await harness.close(writer)
     async with asyncio.timeout(5):
@@ -1702,7 +1702,7 @@ async def test_a_disconnect_mid_sync_fails_the_transfer_not_the_connection(
         "the in-flight sync future must be failed, not left to hang"
     )
     assert "disconnected" in str(fut.exception())
-    assert guest.sync_pending == {}, "the failed entry must be cleared"
+    assert guest.sync.pending == {}, "the failed entry must be cleared"
 
 
 async def test_disconnect_holds_the_prompt_then_denies(harness):
@@ -1725,7 +1725,7 @@ async def test_disconnect_holds_the_prompt_then_denies(harness):
     assert isinstance(result, PermissionResultDeny)
     assert "disconnected" in result.message
     assert "not refused on purpose" in result.message
-    assert harness.bridge._guest.perm_pending is None
+    assert harness.bridge._guest.perms.pending is None
 
 
 async def test_prompt_is_reissued_after_reconnect(harness):
@@ -1887,7 +1887,7 @@ async def test_path_outside_the_working_copy_is_refused_without_asking(harness):
     result = await asyncio.wait_for(task, 5)
     assert isinstance(result, PermissionResultDeny)
     assert "not on the user's machine" in result.message
-    assert harness.bridge._guest.perm_pending is None, "no bar should appear"
+    assert harness.bridge._guest.perms.pending is None, "no bar should appear"
     await harness.close(writer)
 
 
@@ -2323,7 +2323,7 @@ async def test_a_measured_link_speed_reaches_the_codec_choice(harness):
     picks the codec from the measured link speed" -- and the bridge has
     handled STAT since the beginning.
 
-    The guest had never sent one. So guest.link_bps was always None and every
+    The guest had never sent one. So guest.link.link_bps was always None and every
     threshold in compress.py and coalesce.py was inert: identical behaviour
     on a 10Mbit LAN and a modem, which is the exact thing the mechanism
     exists to avoid.
@@ -2333,15 +2333,15 @@ async def test_a_measured_link_speed_reaches_the_codec_choice(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge._guest
-    assert guest.link_bps is None, "nothing has reported a speed yet"
+    assert guest.link.link_bps is None, "nothing has reported a speed yet"
 
     small = b"x" * 200
     await harness.send(writer, Frame("STAT", {"bps": "5000"}))
     await asyncio.sleep(0.05)
-    assert guest.link_bps == 5000.0, "the measurement never reached the bridge"
+    assert guest.link.link_bps == 5000.0, "the measurement never reached the bridge"
 
     # And it actually changes the decision, rather than merely being stored.
-    slow = should_compress(small, guest.link_bps)
+    slow = should_compress(small, guest.link.link_bps)
     fast = should_compress(small, 10_000_000.0)
     assert slow != fast, (
         "link speed is recorded but does not affect the codec choice, which "
@@ -2471,7 +2471,7 @@ async def test_the_warning_is_readable_in_the_transcript_not_just_the_bar(
         {"command": "deltree /y c:\\windows", "cwd": "C:\\"})
     await _recv(harness, reader, "PERMREQ")
 
-    blocks = "".join(harness.bridge._guest.pages.all_text())
+    blocks = "".join(harness.bridge._guest.view.pages.all_text())
     assert "permwarn" in blocks
     assert "writes outside the mirrored folder" in blocks
     task.cancel()
@@ -2536,7 +2536,7 @@ async def test_a_bridge_with_no_mirror_says_so_once_not_on_every_command(
         assert not body.startswith("!")
 
     # Said once, in the transcript, where there is room for it.
-    transcript = "".join(harness.bridge._guest.pages.all_text())
+    transcript = "".join(harness.bridge._guest.view.pages.all_text())
     assert transcript.count("no folder is mirrored") == 1
     await harness.close(writer)
 

@@ -215,7 +215,6 @@ def test_syncput_compression_round_trip():
 async def test_guest_to_bridge_compressed_frame_inflated():
     """Guest-sent compressed EXECOUT frame is inflated by the bridge before dispatch."""
     from bridge.server import Bridge, GuestSession
-    from bridge.agent.identity import GuestIdentity
     from bridge.view.transcript import TranscriptView
 
     bridge = Bridge(secret="secret", host="127.0.0.1", port=0)

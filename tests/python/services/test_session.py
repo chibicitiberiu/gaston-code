@@ -24,9 +24,10 @@ class DummyGuest:
         self.turn_lock = asyncio.Lock()
         self.perms = MagicMock()
         self.exec_pending = {"exec-1": MagicMock()}
-        self.pages = MagicMock()
-        self.pages.count = 2
-        self.pages.all_text.return_value = "Turn 1\nHello World\n"
+        # Composed like the real GuestSession: the view owns the paginator.
+        self.view = MagicMock()
+        self.view.pages.count = 2
+        self.view.pages.all_text.return_value = "Turn 1\nHello World\n"
         self.link = MagicMock()
         self.link.send_export = AsyncMock()
 

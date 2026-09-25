@@ -13,6 +13,7 @@ approving permission prompts and, from Phase 3, feeding tool results to Claude.
 from __future__ import annotations
 
 import datetime as _dt
+import argparse
 import asyncio
 from collections.abc import AsyncIterable
 import contextlib
@@ -40,7 +41,6 @@ from .files import paths as P
 from .agent import permissions as perms
 from .agent import tools as machine_tools
 from .agent.permdesk import PermissionDesk
-from .agent.identity import GuestIdentity
 from .synccoord import SyncCoordinator
 from .wire.protocol import (
                             MAX_HEADER_VALUE,
@@ -93,10 +93,11 @@ from .services.options import (
     MODE_ORDER,
     OptionsService,
 )
+from .guest import GuestSession
 from .status import GuestState
 from .services.workspace import WorkspaceService
 from .services.presentation import PresentationService
-from .services.guest_exec import ExecCall, GuestExecService
+from .services.guest_exec import GuestExecService
 from .services.permission import PermissionService
 from .services.sync import SyncService
 from .services.attachment import AttachmentService
@@ -107,416 +108,6 @@ from .services.coordinator import SessionCoordinator
 log = logging.getLogger("bridge.server")
 
 DEFAULT_PORT = 7890
-
-
-@dataclass
-class GuestSession:
-    """Bridge-side state for one guest, surviving across reconnects."""
-
-    #: Set when the SDK reports something during a turn that means the answer
-    #: cannot be trusted as complete -- a RateLimitEvent today. Read and
-    #: cleared by _run_turn_locked when it sends TURN end.
-    #:
-    #: It exists because the SDK reports ok=True for a rate-limited turn that
-    #: streamed nothing, so the guest's status bar said "done $?" next to a
-    #: transcript notice explaining that the request may not have run. The
-    #: transcript and the status line disagreeing is worse than either being
-    #: wrong on its own, and the bridge is the side that knows.
-    turn_degraded: str = ""
-    #: Did the model actually produce anything this turn -- text or a tool
-    #: call? Set from the SDK's own callbacks, so a notice the BRIDGE wrote
-    #: (the sync preamble, a rate-limit warning) does not count as output.
-    #: Reset when a turn starts. See where turn_end weighs it against
-    #: `turn_degraded`.
-    turn_produced: bool = False
-
-    #: Which machine this is and which conversation is live -- `sess_id`,
-    #: `hello`, `claude`, `model`, `effort` -- the audit's "Identity"
-    #: GuestSession group (02.2), moved onto its own type in
-    #: bridge/agent/identity.py the same way `link: GuestLink` already did
-    #: for the connection. The five names below forward here so nothing
-    #: outside this file had to change shape. docs/audit/02-bridge-python.md
-    #: 02.42.
-    identity: GuestIdentity = field(default_factory=GuestIdentity)
-    #: Everything about writing bytes to this guest -- the socket writer, the
-    #: send lock, the persistent compressor and the measured link speed. See
-    #: bridge/wire/link.py. `writer`/`send_lock`/`zip_out`/`link_bps` below
-    #: forward here so the rest of the bridge did not have to change shape.
-    link: GuestLink = field(default_factory=GuestLink)
-    #: The halt bar's state and the agent's notice queue: the halt id, the
-    #: paths it was raised for, the answered-path set. See
-    #: bridge/synccoord.py.
-    #:
-    #: 02.42 moved the halt trio off this class onto a `SyncCoordinator`;
-    #: 02.43 gave that type the derivation as well as the fields -- and left
-    #: the object itself a field of `Bridge`, which is what audit-2's 02.18
-    #: came back for. One coordinator per BRIDGE means one halt bar and one
-    #: notice queue shared by every client, so the moment R7 lands, agent A
-    #: resolving its own conflict takes the bar down on B's screen and
-    #: drains B's notices into A's next turn. It is one per GUEST here, which
-    #: is what `synccoord.py`'s own docstring says the shape should be.
-    #:
-    #: `Bridge.synccoord` still exists and forwards to the attached guest's,
-    #: exactly as `writer`/`zip_out`/`pages` forward the other way -- the
-    #: single-client shortcut, in one place, for R7 to delete.
-    synccoord: SyncCoordinator = field(default_factory=SyncCoordinator)
-    # C.from_hello(hello), parsed once in _attach() rather than re-parsed at
-    # every site that needs a path rule -- a re-parse cannot raise (already
-    # validated at handshake) but silently re-derives what is already known,
-    # and one prior re-parse site used to fall back to {} when this guest was
-    # merely unset, guessing Win9x defaults instead of reading what the
-    # client actually declared. See docs/audit/02-bridge-python.md #02.22.
-    caps: "C.Caps | None" = None
-
-    #: What that machine has installed, as HELLO's body said and the rules in
-    #: bridge/agent/toolrules.py read it. Set once per CONNECTION, not once
-    #: per session: it comes off HELLO, and every conversation opened on one
-    #: connection sees the same inventory. A guest built before this existed
-    #: sends no body and lands here as [], which is the same thing the prompt
-    #: does with "nothing was detected" -- says nothing at all.
-    tools: "list[Found]" = field(default_factory=list)
-    #: That machine's PATH, as it was at connect. Same lifetime as `tools`.
-    path: "list[str]" = field(default_factory=list)
-
-    #: What this guest is watching and how much of it fits: the paginator,
-    #: the renderer, the per-stream coalescers, which page is on screen, and
-    #: the two page-size limits scaled to this guest's RAM at handshake --
-    #: the audit's "View" GuestSession group (02.2), moved onto its own type
-    #: in bridge/view/transcript.py the same way `link: GuestLink` already
-    #: did for the connection. `pages`/`render`/`coalescers`/`view_page`/
-    #: `page_bytes`/`page_blocks` below forward here so nothing outside this
-    #: file had to change shape.
-    view: TranscriptView = field(default_factory=TranscriptView)
-
-    #: The prompt currently on the guest's screen, the ones queued behind it,
-    #: and the state machine that owns both -- the audit's "Prompts"
-    #: GuestSession group (02.2), moved onto its own type in
-    #: bridge/agent/permdesk.py the same way `link: GuestLink` already did
-    #: for the connection. `perm_pending`/`perm_queue` below forward here so
-    #: nothing outside this file had to change shape. Unlike `link`/`view`/
-    #: `sync`, there is no bare default: a `PermissionDesk` needs its owning
-    #: guest and three of Bridge's own operations, so it is built and
-    #: assigned in `_attach` right after the `GuestSession` itself.
-    #: docs/audit/02-bridge-python.md 02.41.
-    perms: "PermissionDesk | None" = None
-    # When the guest was last heard from, for the idle reaper. A guest that
-    # GPFs leaves no FIN behind, so without this _on_client parks forever and
-    # `connected` stays True -- which rejects every reconnect as "busy".
-    last_seen: float = field(default_factory=time.monotonic)
-    # When the link dropped, or None while connected. A prompt outlives a
-    # brief disconnect so a reconnect can restore the bar.
-    lost_at: float | None = None
-    # In-flight EXEC calls, keyed by our own id. Separate namespace from
-    # tool_use_id so a stray frame cannot cross-resolve against TOOLRESULT.
-    exec_pending: dict[str, ExecCall] = field(default_factory=dict)
-    exec_seq: int = 0
-    # One worker thread on the guest means one command at a time. The model
-    # can request tools in parallel, and an "Always" rule would bypass the
-    # prompt queue that was implicitly serialising them.
-    exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    #: The sync subprotocol's own id namespace, in-flight table, baseline
-    #: lock and running flag -- the audit's "Sync RPC" GuestSession group
-    #: (docs/audit/02-bridge-python.md 02.2), moved onto its own type in
-    #: bridge/files/synctransport.py the same way `link: GuestLink` already
-    #: did for the connection itself. `sync_pending`/`sync_seq`/`sync_lock`/
-    #: `sync_active` below forward here so nothing outside this file had to
-    #: change shape.
-    sync: GuestSyncState = field(default_factory=GuestSyncState)
-    #: One turn at a time, per guest.
-    #:
-    #: `_handle` spawned a task per INPUT with no guard, and the RESUME handler
-    #: spawned a second -- reachable through the DESIGNED conflict flow, not a
-    #: race: the Continue button is not gated on g_turn_active, a halt is
-    #: raised by a sync pass while the agent works, and the agent writing files
-    #: is what moves the tree in the first place.
-    #:
-    #: Two turns on one session is not "two prompt bars". The SDK stream has a
-    #: single consumer, so two iterators get a DISJOINT split of messages: one
-    #: turn can consume the other's ResultMessage and return with its cost
-    #: while the other's text lands in the wrong callbacks. The transcript
-    #: itself is corrupted, and Session._busy is a flag rather than a depth, so
-    #: the first `finally` clears it and Stop stops nothing.
-    turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-    # --- forwarded to self.identity, for the same reason as self.link below -
-
-    @property
-    def sess_id(self) -> str:
-        return self.identity.sess_id
-
-    @sess_id.setter
-    def sess_id(self, v: str) -> None:
-        self.identity.sess_id = v
-
-    @property
-    def hello(self) -> dict:
-        return self.identity.hello
-
-    @hello.setter
-    def hello(self, h: dict) -> None:
-        self.identity.hello = h
-
-    @property
-    def claude(self) -> "Session | None":
-        return self.identity.claude
-
-    @claude.setter
-    def claude(self, s: "Session | None") -> None:
-        self.identity.claude = s
-
-    @property
-    def model(self) -> str:
-        return self.identity.model
-
-    @model.setter
-    def model(self, m: str) -> None:
-        self.identity.model = m
-
-    @property
-    def effort(self) -> str:
-        return self.identity.effort
-
-    @effort.setter
-    def effort(self, e: str) -> None:
-        self.identity.effort = e
-
-    @property
-    def work_dir(self) -> str:
-        return self.identity.work_dir
-
-    @work_dir.setter
-    def work_dir(self, d: str) -> None:
-        self.identity.work_dir = d
-
-    @property
-    def first_prompt(self) -> str:
-        return self.identity.first_prompt
-
-    @first_prompt.setter
-    def first_prompt(self, t: str) -> None:
-        self.identity.first_prompt = t
-
-    @property
-    def work_guest(self) -> str:
-        return self.identity.work_guest
-
-    @work_guest.setter
-    def work_guest(self, d: str) -> None:
-        self.identity.work_guest = d
-
-    @property
-    def pending_resume(self) -> str:
-        return self.identity.pending_resume
-
-    @pending_resume.setter
-    def pending_resume(self, s: str) -> None:
-        self.identity.pending_resume = s
-
-    @property
-    def conv_id(self) -> str:
-        """Which conversation this guest is looking at.
-
-        Either the live client's id, or -- after a switch that has not been
-        spoken in yet -- the id it will resume from. Everything that asks
-        "which conversation" should ask here rather than reaching for
-        `claude.session_id`, which is None for a conversation that is open on
-        screen and simply has no process behind it.
-        """
-        if self.claude and self.claude.session_id:
-            return self.claude.session_id
-        return self.identity.pending_resume
-
-    @property
-    def perm_mode(self) -> str:
-        return self.identity.perm_mode
-
-    @perm_mode.setter
-    def perm_mode(self, m: str) -> None:
-        self.identity.perm_mode = m
-
-    # --- forwarded to self.link, so the rest of the bridge can keep saying
-    # guest.writer / guest.send_lock / guest.zip_out / guest.link_bps rather
-    # than reaching through guest.link for every one of them. ---
-
-    @property
-    def writer(self) -> asyncio.StreamWriter | None:
-        return self.link.writer
-
-    @writer.setter
-    def writer(self, w: asyncio.StreamWriter | None) -> None:
-        self.link.writer = w
-
-    @property
-    def send_lock(self) -> asyncio.Lock:
-        return self.link.send_lock
-
-    @property
-    def zip_out(self) -> StreamCompressor:
-        return self.link.zip_out
-
-    @property
-    def zip_in(self) -> StreamDecompressor:
-        return self.link.zip_in
-
-    @property
-    def link_bps(self) -> float | None:
-        return self.link.link_bps
-
-    @link_bps.setter
-    def link_bps(self, bps: float | None) -> None:
-        self.link.link_bps = bps
-
-    @property
-    def connected(self) -> bool:
-        return self.link.connected
-
-    # --- forwarded to self.sync, for the same reason as self.link above -----
-
-    @property
-    def sync_pending(self) -> dict:
-        return self.sync.pending
-
-    @property
-    def sync_seq(self) -> int:
-        return self.sync.seq
-
-    @property
-    def sync_lock(self) -> asyncio.Lock:
-        return self.sync.lock
-
-    @property
-    def sync_active(self) -> bool:
-        return self.sync.active
-
-    @sync_active.setter
-    def sync_active(self, v: bool) -> None:
-        self.sync.active = v
-
-    # --- forwarded to self.perms, for the same reason as self.link above ----
-
-    @property
-    def perm_pending(self) -> "PendingPrompt | None":
-        return self.perms.pending if self.perms else None
-
-    @perm_pending.setter
-    def perm_pending(self, prompt: "PendingPrompt | None") -> None:
-        self.perms.pending = prompt
-
-    @property
-    def perm_queue(self):
-        return self.perms.queue
-
-    # --- forwarded to self.view, for the same reason as self.link above -----
-
-    @property
-    def pages(self) -> Paginator:
-        return self.view.pages
-
-    @pages.setter
-    def pages(self, p: Paginator) -> None:
-        self.view.pages = p
-
-    @property
-    def render(self) -> HtmlStream:
-        return self.view.render
-
-    @render.setter
-    def render(self, r: HtmlStream) -> None:
-        self.view.render = r
-
-    @property
-    def coalescers(self) -> dict:
-        return self.view.coalescers
-
-    @property
-    def view_page(self) -> int | None:
-        return self.view.view_page
-
-    @view_page.setter
-    def view_page(self, n: int | None) -> None:
-        self.view.view_page = n
-
-    @property
-    def page_bytes(self) -> int:
-        return self.view.page_bytes
-
-    @page_bytes.setter
-    def page_bytes(self, n: int) -> None:
-        self.view.page_bytes = n
-
-    @property
-    def page_blocks(self) -> int:
-        return self.view.page_blocks
-
-    @page_blocks.setter
-    def page_blocks(self, n: int) -> None:
-        self.view.page_blocks = n
-
-    # --- transcript housekeeping --------------------------------------------
-
-    def set_link_speed(self, bps: float | None) -> None:
-        """Propagate a measured (or CLI-default) link speed to every live
-        coalescer, so a conversation already streaming picks it up too, not
-        only ones started after. Was `guest.link_bps = bps; for c in
-        guest.coalescers.values(): c.set_link_speed(bps)` at two call sites.
-
-        Spans two of the audit's groups (Link's `link_bps`, View's
-        `coalescers`) and stays here, on the composition root, rather than on
-        either `GuestLink` or `TranscriptView` -- neither owns both halves of
-        what it does.
-        """
-        self.link_bps = bps
-        for c in self.view.coalescers.values():
-            c.set_link_speed(bps)
-
-    async def reset_transcript(self) -> None:
-        """`TranscriptView.reset()`, kept as a same-named delegation so
-        `_new_session`/`_switch` did not have to change shape (02.2)."""
-        await self.view.reset()
-
-    # --- derived state, for logging and diagnostics -------------------------
-
-    @property
-    def state(self) -> GuestState:
-        """Derived state — a projection over existing fields.
-
-        Priority: DISCONNECTED > HALTED > RUNNING_TURN > IDLE.
-
-        The axes are orthogonal (turn-running, halt-raised, permission-
-        pending and exec-in-flight can all be true simultaneously), so
-        this is an observational projection, not an authoritative gate.
-        """
-        if not self.connected:
-            return GuestState.DISCONNECTED
-        if self.synccoord.halt_id:
-            return GuestState.HALTED
-        if self.turn_lock.locked():
-            return GuestState.RUNNING_TURN
-        return GuestState.IDLE
-
-    @property
-    def state_detail(self) -> str:
-        """Human-readable state detail for log lines.
-
-        Captures the orthogonal axes the single enum cannot represent:
-        which combination of turn/halt/perm/exec is active right now.
-        """
-        parts = []
-        if not self.connected:
-            parts.append("disconnected")
-            if self.lost_at is not None:
-                parts.append(f"lost={time.monotonic() - self.lost_at:.0f}s ago")
-        if self.synccoord.halt_id:
-            parts.append(f"halted={self.synccoord.halt_id}")
-        if self.turn_lock.locked():
-            parts.append("turn-running")
-        if self.perm_pending is not None:
-            parts.append("perm-pending")
-        if self.exec_pending:
-            parts.append(f"exec={len(self.exec_pending)}")
-        if self.sync_active:
-            parts.append("sync-active")
-        return ", ".join(parts) or "idle"
 
 
 class Bridge:
@@ -841,7 +432,7 @@ class Bridge:
         # The sweeper was missed here, so a bridge shut down cleanly left
         # `_sweep_sync` looping every 120s against a guest whose writer was
         # gone and a Claude session already closed. `run_sync` returns early
-        # on `not guest.connected`, so it was noise rather than damage -- but
+        # on `not guest.link.connected`, so it was noise rather than damage -- but
         # in-process (the test suite, and any future embedding) it is a task
         # that outlives its owner, and R7 has to fix it here anyway.
         for name in ("_reaper", "_sweeper"):
@@ -881,7 +472,7 @@ class Bridge:
             guest.sess_id,
             (guest.claude.model if guest.claude else guest.model)
             or "(default)",
-            guest.pages.live.number, guest.pages.count,
+            guest.view.pages.live.number, guest.view.pages.count,
             conv=guest.conv_id))
 
         await self.connection.send(guest, doc(H.document()))
@@ -1059,9 +650,15 @@ def _summarise(args: dict) -> str:
     return ", ".join(f"{k}={str(v)[:40]}" for k, v in list(args.items())[:3])
 
 
-def main() -> None:
-    import argparse
+# --- lifecycle --------------------------------------------------------------
+#
+# Named phases rather than one function, because the order is the design and a
+# flat `main` hides it. Each does one thing and nothing before it needs to have
+# happened except what the signature asks for -- so `load_config` can be called
+# by a test, and `serve` can be called by anything that already has a config.
 
+
+def parse_args(argv: "list[str] | None" = None) -> "argparse.Namespace":
     ap = argparse.ArgumentParser(description="RetroClaude bridge")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use the retro-segment interface, not 0.0.0.0")
@@ -1083,45 +680,82 @@ def main() -> None:
                     help="assume this link speed in bytes/sec (testing: "
                          "5000 simulates dialup and forces the slow-link path)")
     ap.add_argument("-v", "--verbose", action="store_true")
-    args = ap.parse_args()
+    return ap.parse_args(argv)
 
+
+def init_logging(verbose: bool = False) -> None:
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
 
+
+def load_config(args: "argparse.Namespace") -> BridgeConfig:
+    """Command line plus environment, validated, or `SystemExit`.
+
+    The secret is the one thing that is not an argument: a shared secret on a
+    command line is readable by every process on the box.
+    """
     secret = os.environ.get("RETROCLAUDE_SECRET")
     if not secret:
         secret = "dev-secret"
-        log.warning("RETROCLAUDE_SECRET unset; using %r (development only)", secret)
-
+        log.warning("RETROCLAUDE_SECRET unset; using %r (development only)",
+                    secret)
+    config = BridgeConfig(
+        secret=secret,
+        host=args.host,
+        port=args.port,
+        cwd=args.cwd,
+        model=args.model,
+        effort=args.effort,
+        link_bps=args.link_bps,
+        sync_dir=args.sync_dir,
+        sync_state=args.sync_state,
+    )
     try:
-        config = BridgeConfig(
-            secret=secret,
-            host=args.host,
-            port=args.port,
-            cwd=args.cwd,
-            model=args.model,
-            effort=args.effort,
-            link_bps=args.link_bps,
-            sync_dir=args.sync_dir,
-            sync_state=args.sync_state,
-        )
         config.validate()
     except ValueError as exc:
         raise SystemExit(str(exc))
+    return config
 
+
+def prepare_state(config: BridgeConfig) -> None:
+    """Make what the baseline needs before anything can write to it."""
     if config.sync_state:
         os.makedirs(config.sync_state, exist_ok=True)
         log.info("sync: %s <-> guest, baseline in %s",
                  config.sync_dir, config.sync_state)
 
+
+async def serve(config: BridgeConfig) -> None:
+    """Build the services, serve, and shut down -- always in that order.
+
+    THE `finally` IS THE POINT. `close()` cancels the reaper and the sweeper,
+    cancel-gathers everything `_spawn` started, closes the listener and closes
+    the agent session (02.14). Nothing called it: `main` ran `serve_forever`
+    and swallowed KeyboardInterrupt, so on Ctrl+C the guest's SDK session was
+    never closed and the listening socket was never shut down -- the process
+    simply died and the kernel tidied up. The test suite was the only caller,
+    which made a fix that had been carefully reasoned about into one that had
+    never run.
+    """
     bridge = Bridge(config=config)
     try:
-        asyncio.run(bridge.serve_forever())
+        await bridge.serve_forever()
+    finally:
+        await bridge.close()
+
+
+def main(argv: "list[str] | None" = None) -> None:
+    args = parse_args(argv)
+    init_logging(args.verbose)
+    config = load_config(args)
+    prepare_state(config)
+    try:
+        asyncio.run(serve(config))
     except KeyboardInterrupt:
-        pass
+        log.info("interrupted")
 
 
 if __name__ == "__main__":
