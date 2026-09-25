@@ -55,5 +55,18 @@ bytes; twenty bytes once per connection buys the ability to add an option
 without a flag day. The bridge refuses an unknown value rather than guessing
 (`bridge/caps.py`, `win/caps.h`).
 
+**New C++ goes through a container, not file statics.** Services derive from
+`Service` (two-phase: trivial constructor, fallible `init`/`start`, idempotent
+`stop`) and are owned by `App`. Dependencies are passed through constructors
+from one composition root; no runtime lookup by name. Config comes from the
+exe's INI, loaded once into typed per-service structs; an invalid value refuses
+startup. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libui`) know
+nothing of each other's ops or of the wire, except `libwire`. See
+`docs/REMOTE.md`.
+
+**New C++ naming: PascalCase types, camelCase methods, Allman braces.** Members
+keep `m_`; C files and `extern "C"` APIs keep `rc_snake_case`. The client's older
+code is renamed as it is touched, not in a sweep (`docs/REMOTE.md`).
+
 **Do not touch the `retrobridge` libvirt domain** in `qemu:///system` -- it
 belongs to an unrelated project.

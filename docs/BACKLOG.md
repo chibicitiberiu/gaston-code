@@ -52,6 +52,8 @@ software have accumulated on QEMU without running on the LAN's physical Pentium 
 box (`PROGRESS.md:35`). The physical PC is now available and ready to run the validation
 gate.
 
+**Plan (2026-09-25):** drive the box with `gremote.exe`, `docs/REMOTE.md` step 4.
+
 ---
 
 ## 2. Memory optimisation

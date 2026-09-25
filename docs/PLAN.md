@@ -1116,7 +1116,28 @@ that points at corruption instead of at the capability.
 Full handshake refusal vocabulary, all `ERROR` frames sent before a `GuestSession` exists:
 `expected_hello`, `hello_timeout`, `bad_version`, `bad_frame_cap`, `bad_secret`, `busy`
 (another client holds the session), `bad_caps`. `protocol` is the catch-all for a
-`ProtocolError` anywhere in the connection, not just at handshake.
+`ProtocolError` anywhere in the connection, not just at handshake. **Every one of these
+closes the link.**
+
+**In-session `ERROR` codes are a separate vocabulary and none of them close the link:**
+`unknown_type` (a frame type this bridge does not know -- a developer diagnostic, and the
+reason the rule above is "ignore and log, never close"), `corrupt_frame` (an `enc=deflate`
+body that would not inflate), `no_such_page` and `bad_page` (a `GETPAGE` for a page that
+is not there), `bad_session` (a `SWITCH` to an id the registry does not hold),
+`bad_attach` (an attachment path outside the mirrored folder), `turn_busy` (an `INPUT`
+while a turn is already running) and `halted` (an `INPUT` while a sync conflict is
+unresolved).
+
+`turn_busy` is **not** `busy`. Both mean "not now", but the handshake's `busy` means
+another client owns the session and is followed by a close, while `turn_busy` is answered
+on a live link that stays up. One code for both would have left the guest unable to tell
+a refused connection from a refused prompt.
+
+**The guest currently treats all of them as fatal to the turn.** `win/app/main.cpp`'s
+`on_error` ends in `g_turn->abort(); ui_set_busy(0);` whatever the code says, so a
+`bad_page` while a turn is streaming clears the thinking indicator and re-enables Send
+with the turn still running. The abort needs to key on the code; recorded here because
+the fix is on the client and belongs with the client's own round.
 
 **Frame inventory, by direction.** Types only; see the source files above for headers and
 bodies. This is what is actually sent and handled today, not a design intent -- several
@@ -1935,6 +1956,16 @@ A menu of the slash commands that make sense here (`bridge/server.py:4260`
 local CLI provides. `/context` is deliberately excluded because the status bar already
 displays the token gauge, and commands requiring unsupported UI affordances are omitted
 (`bridge/server.py:3868-3887`).
+
+### R9 — `gremote.exe` and the static libraries  *(planned 2026-09-25)*
+
+A standalone Win98 server for driving the real P200 out of band from the agent
+client: ssh-like exec, files and processes, plus screenshot, window/control tree
+with MSAA, and input, scripted from a Python package. Built from static libs
+(`libcore`, `libwire`, `libexec`, `libfs`, `libui`) that the client also links,
+with an `App` container and INI config. It is also the first step of
+refactoring the client and the source of the Phase 6 primitives. Full plan:
+`docs/REMOTE.md`.
 
 ## Repo layout — one repo
 
