@@ -74,6 +74,17 @@ public:
      * normal stop sequence, so call that even after a false. */
     bool connect(const char *host, int port);
 
+    /* The server side: take over a socket Listener::accept produced. Owns
+     * it from the call, closing it on any refusal. Reports CONNECTING, then
+     * FAILED on failure; the stop sequence releases the rest, as after
+     * connect(). */
+    bool adopt(SOCKET accepted);
+
+    /* Drop the link when the peer sends nothing for `ms` (0: never, the
+     * default). Before start(). The server's heartbeat: the peer sends a
+     * frame at least this often (PING when idle). */
+    void setIdleTimeout(DWORD ms) { m_idleMs = ms; }
+
     /* The sender, then CONNECTED, then the reader: a reader that dies at
      * once reports FAILED after CONNECTED, not before it. False: a thread
      * could not start and the link already refuses sends; run the stop
@@ -123,6 +134,8 @@ private:
     void readerLoop();
     void senderLoop();
     int recvExact(char *buf, unsigned len);
+    bool prepare();
+    void goLive();
     void clearQueue();
     void setState(rc_state s);
 
@@ -148,6 +161,7 @@ private:
     volatile LONG m_running;
     unsigned long m_rxBytes;
     unsigned long m_txBytes;
+    DWORD m_idleMs;
     DWORD m_readerJoin;
     DWORD m_senderJoin;
 };

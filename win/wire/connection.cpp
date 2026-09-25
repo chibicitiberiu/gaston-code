@@ -389,6 +389,7 @@ Connection::Connection(FrameSink *sink, bool compress)
       m_running(0),
       m_rxBytes(0),
       m_txBytes(0),
+      m_idleMs(0),
       m_readerJoin(WAIT_OBJECT_0),
       m_senderJoin(WAIT_OBJECT_0)
 {
@@ -425,7 +426,9 @@ void Connection::setState(rc_state s)
 
 /* ------------------------------------------------------------- connect */
 
-bool Connection::connect(const char *host, int port)
+/* What connect() and adopt() share: everything but the socket. Reports
+ * CONNECTING, and FAILED on the way out of a failure. */
+bool Connection::prepare()
 {
     /* One connection per object. A reconnect is a new Connection: the old
      * one's threads may still be inside it (release() said so), and
@@ -474,6 +477,24 @@ bool Connection::connect(const char *host, int port)
     }
     /* Only now: a failed WSAStartup must not be balanced by a WSACleanup. */
     m_wsaUp = true;
+    return true;
+}
+
+/* The socket is live: the codec, and sends are accepted from here. */
+void Connection::goLive()
+{
+    if (m_compress)
+    {
+        m_codec = new Codec;
+        m_codec->begin();
+    }
+    m_running = 1;
+}
+
+bool Connection::connect(const char *host, int port)
+{
+    if (!prepare())
+        return false;
 
     m_sock.reset(socket(AF_INET, SOCK_STREAM, 0));
     if (!m_sock.valid())
@@ -513,13 +534,23 @@ bool Connection::connect(const char *host, int port)
         return false;
     }
     rc_log("net: connected to %s:%d", host, port);
+    goLive();
+    return true;
+}
 
-    if (m_compress)
+bool Connection::adopt(SOCKET accepted)
+{
+    /* Owned from the first line, so every refusal below closes it. */
+    SocketGuard s(accepted);
+    if (!s.valid())
     {
-        m_codec = new Codec;
-        m_codec->begin();
+        rc_log("net: adopt given no socket");
+        return false;
     }
-    m_running = 1;
+    if (!prepare())
+        return false;
+    m_sock.reset(s.release());
+    goLive();
     return true;
 }
 
@@ -560,6 +591,31 @@ int Connection::recvExact(char *buf, unsigned len)
     unsigned got = 0;
     while (got < len)
     {
+        /* THE HEARTBEAT, when there is one. The peer's silence is measured
+         * HERE, on the reader, from the select() in front of every recv --
+         * so it never waits on a lane being free, and a long job on the
+         * other side of this program can neither starve it nor keep a dead
+         * peer alive. A peer that died without a FIN (a killed process, a
+         * pulled cable) would otherwise hold the link until TCP keepalive,
+         * about two hours. */
+        if (m_idleMs)
+        {
+            fd_set ready;
+            FD_ZERO(&ready);
+            FD_SET(m_sock.get(), &ready);
+            struct timeval tv;
+            tv.tv_sec = (long)(m_idleMs / 1000);
+            tv.tv_usec = (long)((m_idleMs % 1000) * 1000);
+            int n = select(0, &ready, NULL, NULL, &tv);
+            if (n == 0)
+            {
+                rc_log("net: nothing from the peer for %lums, dropping link",
+                       (unsigned long)m_idleMs);
+                return -1;
+            }
+            if (n == SOCKET_ERROR)
+                return -1;
+        }
         int r = recv(m_sock.get(), buf + got, (int)(len - got), 0);
         if (r == 0 || r == SOCKET_ERROR)
             return -1;   /* peer closed, or the link failed */
