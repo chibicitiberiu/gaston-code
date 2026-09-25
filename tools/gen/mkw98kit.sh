@@ -17,8 +17,15 @@ STAGE="$HERE/build/w98kit"
 OUT="$HERE/build/gaston-w98-tests.zip"
 
 PROBE="$HERE/build/win/probe.exe"
+DLL="$HERE/build/win/HOOKDLL.DLL"
 if [ ! -f "$PROBE" ]; then
   echo "mkw98kit: $PROBE is missing. Run: make -C win probe" >&2
+  exit 1
+fi
+# The injection test is inert without it, and inert LOOKS like "injection
+# does not work on this machine" -- the exact wrong conclusion.
+if [ ! -f "$DLL" ]; then
+  echo "mkw98kit: $DLL is missing. Run: make -C win hookdll" >&2
   exit 1
 fi
 
@@ -35,12 +42,15 @@ cp "$PROBE"            "$STAGE/PROBE.EXE"
 cp "$SRC/TEST.BAT"     "$STAGE/TEST.BAT"
 cp "$SRC/README.TXT"   "$STAGE/README.TXT"
 cp "$SRC/UITEST.HTM"   "$STAGE/UITEST.HTM"
+cp "$DLL"              "$STAGE/HOOKDLL.DLL"
 
 rm -f "$OUT"
-( cd "$STAGE" && zip -q -X "$OUT" PROBE.EXE TEST.BAT README.TXT UITEST.HTM )
+( cd "$STAGE" && zip -q -X "$OUT" PROBE.EXE HOOKDLL.DLL TEST.BAT README.TXT UITEST.HTM )
 
 echo "built $OUT"
 unzip -l "$OUT" | sed -n '3,$p'
 echo
 echo "--- import audit of the exe that is actually in the zip ---"
 python3 "$HERE/tools/check/imports.py" "$STAGE/PROBE.EXE" || true
+echo "--- and of the DLL, which gets mapped into other people's processes ---"
+python3 "$HERE/tools/check/imports.py" "$STAGE/HOOKDLL.DLL" || true

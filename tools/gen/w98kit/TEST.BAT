@@ -8,10 +8,13 @@ ECHO  This READS the machine and writes its results into this
 ECHO  folder. It installs nothing, starts no service, changes no
 ECHO  setting permanently, and writes no file outside this folder.
 ECHO.
+ECHO  Three steps START NOTEPAD and close it again a few seconds
+ECHO  later. They need a second program to watch. Nothing is typed
+ECHO  into it and nothing is saved.
+ECHO.
 ECHO  Close anything you care about first. One step walks every
 ECHO  VISIBLE window on the desktop and asks it for its name; an
-ECHO  application that has stopped responding can make that step
-ECHO  wait. Explorer and this DOS box are enough.
+ECHO  application that has stopped responding can make that wait.
 ECHO.
 ECHO  On a Pentium-class machine expect several minutes. Some
 ECHO  steps sit still for a while. That is the test, not a hang.
@@ -21,16 +24,22 @@ IF EXIST PROBE.LOG DEL PROBE.LOG
 CLS
 ECHO  PART ONE -- nothing needs to be on screen for these.
 ECHO.
-ECHO  [1/13] platform, CPU and memory
+ECHO  [1/16] platform, CPU and memory
 PROBE.EXE platform
-ECHO  [2/13] threads
+ECHO  [2/16] threads
 PROBE.EXE threads
-ECHO  [3/13] 16-bit EXEC capture
+ECHO  [3/16] 16-bit EXEC capture
 PROBE.EXE exec
-ECHO  [4/13] deflate throughput  -- THE number we cannot fake
+ECHO  [4/16] deflate throughput  -- THE number we cannot fake
 PROBE.EXE deflate
-ECHO  [5/13] hooks and change notification
+ECHO  [5/16] which hook APIs exist
 PROBE.EXE hooks
+ECHO  [6/16] do they deliver, and from whose process   (starts Notepad)
+PROBE.EXE events
+ECHO  [7/16] event latency and completeness            (starts Notepad)
+PROBE.EXE evlat
+ECHO  [8/16] can our DLL get into another process      (starts Notepad)
+PROBE.EXE inject
 CLS
 ECHO ==============================================================
 ECHO   PART TWO needs a busy screen.
@@ -53,21 +62,21 @@ ECHO.
 ECHO  Waiting for you. Press a key once the page is up.
 PAUSE
 CLS
-ECHO  [6/13] screen capture and BI_RLE8
+ECHO  [9/16] screen capture and BI_RLE8
 PROBE.EXE screen
-ECHO  [7/13] depth ladder, four bands, raw vs deflate vs RLE
+ECHO  [10/16] depth ladder, four bands, raw vs deflate vs RLE
 PROBE.EXE depths
-ECHO  [8/13] writing BMPs for off-machine checking
+ECHO  [11/16] writing BMPs for off-machine checking
 PROBE.EXE verify
-ECHO  [9/13] ImageClick, cost of finding a picture on screen
+ECHO  [12/16] ImageClick, cost of finding a picture on screen
 PROBE.EXE imgfind
-ECHO  [10/13] oleacc, foreground lock, window census
+ECHO  [13/16] oleacc, foreground lock, window census
 PROBE.EXE automation
-ECHO  [11/13] cost of a window walk
+ECHO  [14/16] cost of a window walk
 PROBE.EXE uiwalk
-ECHO  [12/13] what MSAA adds
+ECHO  [15/16] what MSAA adds
 PROBE.EXE msaa
-ECHO  [13/13] reading the browser page as a tree
+ECHO  [16/16] reading the browser page as a tree
 PROBE.EXE dom
 CLS
 ECHO ==============================================================

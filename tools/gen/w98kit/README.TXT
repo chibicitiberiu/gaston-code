@@ -45,7 +45,20 @@ SAFETY
   It reads. It writes PROBE.LOG and three BMPs into its own
   folder and nothing else, anywhere.
 
-  Two things are worth knowing:
+  Four things are worth knowing:
+
+  * Three steps START NOTEPAD, watch it for a few seconds, and
+    close it again. They are testing whether this machine will
+    tell one program about another program's windows, which needs
+    a second program to exist. Nothing is typed into it.
+
+  * One step loads HOOKDLL.DLL and asks Windows to map it into
+    other running programs. That is the whole question that step
+    asks -- whether injection is possible here. The DLL counts how
+    many processes it reached and does nothing else; it imports
+    only USER32 and KERNEL32, so it cannot fail to load inside
+    somebody else's program. The hook is removed before the step
+    ends.
 
   * One step walks every VISIBLE window on the desktop and asks
     each one for its name and contents. It asks politely, with a
