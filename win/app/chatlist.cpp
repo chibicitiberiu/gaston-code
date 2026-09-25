@@ -83,9 +83,9 @@ void ChatList::openSelected()
     int sel = (int)SendMessageA(m_list, LB_GETCURSEL, 0, 0);
     const char *keys[1]; const char *vals[1];
 
-    if (sel == LB_ERR || sel < 0 || sel >= m_count) return;
-    if (m_isHeader[sel]) return;              /* a date header, not a chat */
-    if (strcmp(m_ids[sel], m_net->sess) == 0) return;   /* already open */
+    if (sel == LB_ERR || sel < 0 || sel >= (int)m_rows.size()) return;
+    if (m_rows[sel].header) return;           /* a date header, not a chat */
+    if (m_rows[sel].id == m_net->sess) return;   /* already open */
 
     /* Switching closes the live client, which kills a running request. Ask
      * rather than doing it silently -- a click in the list is easy to make by
@@ -99,8 +99,8 @@ void ChatList::openSelected()
         return;
     }
 
-    keys[0] = "id"; vals[0] = m_ids[sel];
-    rc_log("switching to session %s", m_ids[sel]);
+    keys[0] = "id"; vals[0] = m_rows[sel].id.c_str();
+    rc_log("switching to session %s", m_rows[sel].id.c_str());
     /* Loading a conversation means closing the live client, resuming, and
      * replaying its history, which is not instant. Say so rather than
      * looking frozen -- that is main.c's title bar and status pane, not
@@ -153,48 +153,38 @@ void ChatList::onSession(rc_frame *f)
 void ChatList::addRow(const char *id, const char *title, const char *grp,
                       bool current)
 {
-    if (id && m_count < MAX_CHATS) {
+    if (id && m_rows.size() < MAX_CHATS) {
         char label[RC_CHAT_LABEL];
 
         /* A header row whenever the bucket changes. The list arrives
-         * newest first, so these come out in order on their own. */
-        if (grp && *grp && strcmp(grp, m_group) != 0
-            && m_count < MAX_CHATS - 1) {
-            rc_strf(m_group, sizeof(m_group), "%s", grp);
-            m_ids[m_count][0] = '\0';
-            m_isHeader[m_count] = 1;
-            SendMessageA(m_list, LB_ADDSTRING, 0, (LPARAM)m_group);
-            m_count++;
+         * newest first, so these come out in order on their own. Capped at
+         * the label bound: the owner-draw handler reads rows back into a
+         * buffer of that size (see draw()). */
+        if (grp && *grp && m_group != grp && m_rows.size() < MAX_CHATS - 1) {
+            m_group = grp;
+            if (m_group.size() > RC_CHAT_LABEL - 1)
+                m_group.resize(RC_CHAT_LABEL - 1);
+            Row header;
+            header.header = true;
+            m_rows.push_back(header);
+            SendMessageA(m_list, LB_ADDSTRING, 0, (LPARAM)m_group.c_str());
         }
 
         /* No "* " marker any more: the selection highlight already says
          * which conversation is open, and a marker meant every switch had
          * to relabel the whole list. */
         rc_strf(label, sizeof(label), "%s", title ? title : id);
-        /* rc_strcpy, and the bound is sizeof rather than a literal 63.
-         *
-         * `id` is a wire header value and may legitimately be up to 255
-         * bytes. The old `_snprintf(dst, 63, ...)` wrote indices 0..62 of a
-         * 64-byte row and never touched index 63, so termination came from
-         * the row being zero-filled BSS that nothing else wrote -- an
-         * unstated invariant rather than a contract; one memset, or one
-         * widened copy, and strcmp at the two call sites below would have
-         * walked off the end. rc_strcpy does not have that problem: it
-         * always writes a terminator within cap, truncating or not -- which
-         * matters more now than it did, since m_ids is a heap-allocated
-         * member of this class (see core/rc_cpp.h's operator new) and there
-         * is no zero-filled BSS behind it to fall back on. */
-        rc_strcpy(m_ids[m_count],
-                  sizeof(m_ids[m_count]), id);
-        m_isHeader[m_count] = 0;
+        Row row;
+        row.id = id;
+        row.header = false;
+        m_rows.push_back(row);
         /* `current` is the row that gets drawn bold -- measure it that way. */
         fitLabel(label, sizeof(label), textWidth() - CHAT_INDENT, current);
         SendMessageA(m_list, LB_ADDSTRING, 0, (LPARAM)label);
         if (current) {
-            m_current = m_count;
-            SendMessageA(m_list, LB_SETCURSEL, m_count, 0);
+            m_current = (int)m_rows.size() - 1;
+            SendMessageA(m_list, LB_SETCURSEL, m_current, 0);
         }
-        m_count++;
     }
 }
 
@@ -202,15 +192,15 @@ void ChatList::onSessionsEnd(rc_frame *f)
 {
     (void)f;
     endRows();
-    rc_log("chat list: %d sessions", m_count);
+    rc_log("chat list: %u rows", (unsigned)m_rows.size());
 }
 
 void ChatList::beginRows()
 {
     SendMessageA(m_list, WM_SETREDRAW, FALSE, 0);
     SendMessageA(m_list, LB_RESETCONTENT, 0, 0);
-    m_count = 0;
-    m_group[0] = '\0';
+    m_rows.clear();
+    m_group.erase();
     m_current = -1;
 }
 
@@ -219,10 +209,10 @@ void ChatList::abortRows()
 {
     /* The PIXELS are the thing that has to be put right. LB_RESETCONTENT has
      * already run with redraw off, so the listbox is empty while the screen
-     * still shows the old list -- and m_ids[]/m_isHeader[] were being
+     * still shows the old list -- and m_rows was being
      * refilled from a batch that stopped halfway. Turning redraw back on and
      * repainting makes the screen agree with the array again, which is the
-     * whole invariant: openSelected() indexes m_ids[] by the row the user
+     * whole invariant: openSelected() indexes m_rows by the row the user
      * clicked, so a screen showing rows the array no longer has means a click
      * on "Fix the parser" switches to whatever conversation now occupies that
      * index -- tearing down the live session on a confirmation the user gave
@@ -263,12 +253,10 @@ void ChatList::onSwitchedFrame(rc_frame *f)
      * The selection already shows which conversation is open. */
     {   /* Mark the newly opened conversation in place. Re-fetching the
          * list would reorder it, which is exactly what we are avoiding. */
-        int i;
         m_current = -1;
-        for (i = 0; i < m_count; i++) {
-            if (!m_isHeader[i]
-                && strcmp(m_ids[i], m_net->sess) == 0) {
-                m_current = i;
+        for (unsigned i = 0; i < m_rows.size(); i++) {
+            if (!m_rows[i].header && m_rows[i].id == m_net->sess) {
+                m_current = (int)i;
                 break;
             }
         }
@@ -307,8 +295,9 @@ bool ChatList::draw(DRAWITEMSTRUCT *dis)
 
     /* LB_GETTEXT HAS NO SIZE PARAMETER -- it writes as much as the item
      * holds, so the buffer must be at least as large as the largest string
-     * anything adds. The only two are `label[RC_CHAT_LABEL]` and
-     * m_group[40]; sizing `text` FROM the label bound makes that a
+     * anything adds. The only two are `label[RC_CHAT_LABEL]` and the group
+     * header, capped to the same bound in addRow; sizing `text` FROM the
+     * label bound makes that a
      * compile-time fact rather than an invariant nobody states, so widening
      * the label can no longer turn this into a stack overflow with no
      * diagnostic. LB_GETTEXTLEN first would be the belt as well as the
@@ -320,8 +309,7 @@ bool ChatList::draw(DRAWITEMSTRUCT *dis)
     else
         rc_log("chatlist: row %d is longer than %u bytes; not drawing its "
                "text", (int)dis->itemID, (unsigned)sizeof(text));
-    header = ((int)dis->itemID < m_count
-              && m_isHeader[dis->itemID]);
+    header = (dis->itemID < m_rows.size() && m_rows[dis->itemID].header);
     selected = (dis->itemState & ODS_SELECTED) && !header;
     rc = dis->rcItem;
 
@@ -396,11 +384,10 @@ static void check_child(const char *what, HWND h)
 ChatList::ChatList(HWND parent, HINSTANCE inst, rc_net *net, HFONT normal,
                    HFONT bold, FrameSender *sender,
                    ChatListListener *listener)
-    : m_current(-1), m_count(0), m_list(0), m_refresh(0),
+    : m_current(-1), m_list(0), m_refresh(0),
       m_fontNormal(normal), m_fontBold(bold), m_net(net), m_sender(sender),
       m_listener(listener)
 {
-    m_group[0] = '\0';
 
     /* WS_CLIPSIBLINGS: keeps neighbours out of its rectangle.
      *

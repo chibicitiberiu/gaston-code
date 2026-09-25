@@ -24,6 +24,9 @@
 #include "app/sender.h"
 #include "core/window.h"
 
+#include <string>
+#include <vector>
+
 #ifndef __cplusplus
 #error "chatlist.h is C++; the chat list is a class now, see app/htmlview.h"
 #endif
@@ -60,6 +63,8 @@ public:
     virtual void onSwitched(rc_frame *f) = 0;
 };
 
+/* A CAP on rows from the wire, not storage: the rows live in a vector sized
+ * to what the bridge actually sent. Header rows count against it. */
 #define MAX_CHATS 64
 
 /* The longest row label this list ever adds. `text[]` in the owner-draw
@@ -140,15 +145,16 @@ private:
     void onSessionsEnd(rc_frame *f);
     void onSwitchedFrame(rc_frame *f);
 
-    /* Session ids, parallel to the list box. 64 to match rc_net::sess --
-     * openSelected() strcmp's one against the other, so they are one
-     * decision, not two. */
-    char m_ids[MAX_CHATS][64];
-    /* Headers are drawn differently and refuse to be opened. */
-    bool m_isHeader[MAX_CHATS];
-    char m_group[40];       /* last group emitted, to spot changes */
+    /* One per list-box row, in the same order. A header row has no id; it
+     * is drawn differently and refuses to be opened. */
+    struct Row
+    {
+        std::string id;
+        bool header;
+    };
+    std::vector<Row> m_rows;
+    std::string m_group;    /* last group emitted, to spot changes */
     int  m_current;         /* row of the conversation that is open */
-    int  m_count;
 
     ListBox m_listBox;
     HWND m_list;            /* m_listBox's window, for the many SendMessage calls */
