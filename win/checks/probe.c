@@ -2335,6 +2335,158 @@ static void probe_inject(void)
     FreeLibrary(dll);
 }
 
+/* ------------------------------------------------------------ 0.15e */
+/* WaitForControl and WaitForText, built and run rather than designed.
+ *
+ * The design says: subscribe, THEN check, then wait on the feed. Checking
+ * first races -- the thing can appear between the check and the
+ * subscription, and the wait then blocks for its whole timeout on a
+ * condition that is already true. This is that ordering, executed.
+ *
+ * It is event-driven and the probe proves it: `rechecks` counts how many
+ * times the tree was actually looked at. A poll at 50ms over four seconds
+ * would be eighty. A handful means the feed drove it.
+ *
+ * The negative test matters as much as the positive one. A wait for
+ * something that will never exist must come back at its deadline and say
+ * so. A primitive that hangs instead is worse than none, because it hangs
+ * rarely and in production.
+ */
+static int g_dirty;
+
+static void CALLBACK wf_proc(RC_HWINEVENTHOOK hook, DWORD ev, HWND h,
+                             LONG obj, LONG child, DWORD tid, DWORD ms)
+{
+    (void)hook; (void)h; (void)obj; (void)child; (void)tid; (void)ms;
+    switch ((long)ev) {
+    case RC_EV_OBJ_CREATE: case RC_EV_OBJ_DESTROY:
+    case RC_EV_OBJ_SHOW:   case RC_EV_OBJ_HIDE:
+    case RC_EV_OBJ_NAMECHANGE: case RC_EV_OBJ_VALUECHANGE:
+        g_dirty = 1;
+        break;
+    default:
+        break;
+    }
+}
+
+static char g_find_cls[64];
+static char g_find_sub[64];
+static HWND g_found;
+
+/* The whole selector, for a probe: class equals, text contains. Enough to
+ * exercise the wait; the real grammar is in docs/UIAUTOMATION.md. */
+static BOOL CALLBACK find_cb(HWND h, LPARAM lp)
+{
+    char cls[64], txt[128];
+    DWORD_PTR res = 0;
+    (void)lp;
+    if (!IsWindowVisible(h)) return TRUE;
+    cls[0] = '\0';
+    GetClassNameA(h, cls, sizeof(cls));
+    if (g_find_cls[0] && strcmp(cls, g_find_cls)) return TRUE;
+    if (g_find_sub[0]) {
+        txt[0] = '\0';
+        SendMessageTimeoutA(h, WM_GETTEXT, sizeof(txt), (LPARAM)txt,
+                            SMTO_ABORTIFHUNG, 200, &res);
+        if (!strstr(txt, g_find_sub)) return TRUE;
+    }
+    g_found = h;
+    return FALSE;
+}
+
+static HWND match_once(const char *cls, const char *sub)
+{
+    g_find_cls[0] = g_find_sub[0] = '\0';
+    if (cls) rc_strncpy(g_find_cls, sizeof(g_find_cls), cls,
+                        (unsigned)strlen(cls));
+    if (sub) rc_strncpy(g_find_sub, sizeof(g_find_sub), sub,
+                        (unsigned)strlen(sub));
+    g_found = NULL;
+    EnumWindows(find_cb, 0);
+    return g_found;
+}
+
+/* Returns ms waited, or -1 on timeout. `rechecks` comes back so the caller
+ * can see whether the feed or the clock did the work. */
+static long wait_for(const char *cls, const char *sub, int want,
+                     DWORD budget, int *rechecks)
+{
+    DWORD t0 = GetTickCount();
+    DWORD until = t0 + budget;
+    MSG msg;
+    int n = 1;
+    if ((match_once(cls, sub) != NULL) == want) { *rechecks = 1; return 0; }
+    g_dirty = 0;
+    while ((long)(GetTickCount() - until) < 0) {
+        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+        if (g_dirty) {
+            g_dirty = 0;
+            n++;
+            if ((match_once(cls, sub) != NULL) == want) {
+                *rechecks = n;
+                return (long)(GetTickCount() - t0);
+            }
+        }
+        Sleep(1);
+    }
+    *rechecks = n;
+    return -1L;
+}
+
+static void probe_waitfor(void)
+{
+    HMODULE u32 = GetModuleHandleA("user32.dll");
+    PFN_SETWINEVENT setwinevent =
+        (PFN_SETWINEVENT)GetProcAddress(u32, "SetWinEventHook");
+    PFN_UNHOOKWINEVENT unhookwinevent =
+        (PFN_UNHOOKWINEVENT)GetProcAddress(u32, "UnhookWinEvent");
+    RC_HWINEVENTHOOK weh;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    long d;
+    int n;
+
+    head("0.15e  WaitForControl / WaitForText, actually run");
+    if (!setwinevent) { say("SetWinEventHook not available"); return; }
+
+    /* Subscribe FIRST. Everything below depends on this line being above
+     * the CreateProcess, not below it. */
+    weh = setwinevent(RC_EVENT_MIN, RC_EV_OBJ_VALUECHANGE, NULL, wf_proc,
+                      0, 0, RC_WINEVENT_OUTOFCONTEXT);
+    if (!weh) { say("hook install failed"); return; }
+
+    memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE, 0, NULL,
+                        NULL, &si, &pi)) {
+        say("could not start notepad");
+        if (unhookwinevent) unhookwinevent(weh);
+        return;
+    }
+
+    d = wait_for("Notepad", NULL, 1, 8000, &n);
+    say("WaitForControl(.Notepad)      : %ld ms, %d rechecks", d, n);
+
+    d = wait_for("Notepad", "Notepad", 1, 4000, &n);
+    say("WaitForText(.Notepad,'Notepad'): %ld ms, %d rechecks", d, n);
+
+    /* The one that must fail, and fail on time. */
+    d = wait_for("NoSuchClassAtAll", NULL, 1, 1500, &n);
+    say("WaitForControl(absent), 1500ms: %ld ms, %d rechecks  (-1 = timed out)",
+        d, n);
+
+    TerminateProcess(pi.hProcess, 0);
+    d = wait_for("Notepad", NULL, 0, 6000, &n);
+    say("WaitForGone(.Notepad)         : %ld ms, %d rechecks", d, n);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+
+    if (unhookwinevent) unhookwinevent(weh);
+    say("(rechecks well under a poll count means the feed drove the wait)");
+}
+
 /* ------------------------------------------------------------- 0.16 */
 /* ImageClick: find a small bitmap on screen and click it. The question is
  * not whether it works -- it is a scan, it always works -- but WHERE the
@@ -2528,6 +2680,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "events"))   probe_events();
     if (!only || !strcmp(only, "evlat"))    probe_evlat();
     if (!only || !strcmp(only, "inject"))   probe_inject();
+    if (!only || !strcmp(only, "waitfor"))  probe_waitfor();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");

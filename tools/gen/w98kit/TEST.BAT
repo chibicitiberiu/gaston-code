@@ -24,21 +24,23 @@ IF EXIST PROBE.LOG DEL PROBE.LOG
 CLS
 ECHO  PART ONE -- nothing needs to be on screen for these.
 ECHO.
-ECHO  [1/16] platform, CPU and memory
+ECHO  [1/17] platform, CPU and memory
 PROBE.EXE platform
-ECHO  [2/16] threads
+ECHO  [2/17] threads
 PROBE.EXE threads
-ECHO  [3/16] 16-bit EXEC capture
+ECHO  [3/17] 16-bit EXEC capture
 PROBE.EXE exec
-ECHO  [4/16] deflate throughput  -- THE number we cannot fake
+ECHO  [4/17] deflate throughput  -- THE number we cannot fake
 PROBE.EXE deflate
-ECHO  [5/16] which hook APIs exist
+ECHO  [5/17] which hook APIs exist
 PROBE.EXE hooks
-ECHO  [6/16] do they deliver, and from whose process   (starts Notepad)
+ECHO  [6/17] do they deliver, and whose process (Notepad)
 PROBE.EXE events
-ECHO  [7/16] event latency and completeness            (starts Notepad)
+ECHO  [7/17] event latency and completeness    (Notepad)
 PROBE.EXE evlat
-ECHO  [8/16] can our DLL get into another process      (starts Notepad)
+ECHO  [8/17] WaitForControl / WaitForText      (Notepad)
+PROBE.EXE waitfor
+ECHO  [9/17] can our DLL get into a process    (Notepad)
 PROBE.EXE inject
 CLS
 ECHO ==============================================================
@@ -62,22 +64,23 @@ ECHO.
 ECHO  Waiting for you. Press a key once the page is up.
 PAUSE
 CLS
-ECHO  [9/16] screen capture and BI_RLE8
+ECHO  [10/17] screen capture and BI_RLE8
 PROBE.EXE screen
-ECHO  [10/16] depth ladder, four bands, raw vs deflate vs RLE
+ECHO  [11/17] depth ladder, raw vs deflate vs RLE
 PROBE.EXE depths
-ECHO  [11/16] writing BMPs for off-machine checking
+ECHO  [12/17] writing BMPs for off-machine checking
 PROBE.EXE verify
-ECHO  [12/16] ImageClick, cost of finding a picture on screen
+ECHO  [13/17] ImageClick, cost of a template scan
 PROBE.EXE imgfind
-ECHO  [13/16] oleacc, foreground lock, window census
+ECHO  [14/17] oleacc, foreground lock, window census
 PROBE.EXE automation
-ECHO  [14/16] cost of a window walk
+ECHO  [15/17] cost of a window walk
 PROBE.EXE uiwalk
-ECHO  [15/16] what MSAA adds
+ECHO  [16/17] what MSAA adds
 PROBE.EXE msaa
-ECHO  [16/16] reading the browser page as a tree
+ECHO  [17/17] reading the browser page as a tree
 PROBE.EXE dom
+CLS
 CLS
 ECHO ==============================================================
 ECHO   Done. Please send back, from this folder:
