@@ -2255,11 +2255,27 @@ static void probe_evlat(void)
  * not marshal, and seeing an app go idle -- because both need exactly this:
  * our code in their address space and a way to report back.
  */
+/* Must match win/checks/hookdll.c exactly. Two declarations of one shared
+ * layout is a hazard, and the alternative -- a header both include -- means
+ * the DLL picks up whatever else that header drags in, on a file that gets
+ * mapped into other people's processes. Kept in step by hand, deliberately. */
+#define RC_TEXTN   48
+#define RC_TEXTLEN 56
 typedef struct {
-    long  calls;
-    long  attaches;
-    long  pids_n;
-    DWORD pids[16];
+    DWORD pid;
+    long  x, y;
+    char  text[RC_TEXTLEN];
+} RcDraw;
+typedef struct {
+    long   calls;
+    long   attaches;
+    long   pids_n;
+    DWORD  pids[16];
+    DWORD  patch_pid;
+    long   patched;
+    long   draws;
+    long   ring_next;
+    RcDraw ring[RC_TEXTN];
 } RcHookShm;
 
 static void probe_inject(void)
@@ -2276,12 +2292,26 @@ static void probe_inject(void)
 
     head("0.15d  can we get our code into another process?");
 
+    /* The mapping MUST exist and name its target before the DLL loads,
+     * because the DLL decides whether to patch in its DllMain and that runs
+     * inside LoadLibrary below. Naming only ourselves is what keeps every
+     * other injected process's import table untouched. */
+    map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                             0, sizeof(RcHookShm), "GastonHookShm");
+    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+              : NULL;
+    if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
+    shm->patch_pid = GetCurrentProcessId();
+    say("patch target set to this process only (pid %lu)",
+        (unsigned long)shm->patch_pid);
+
     /* The CD first, then wherever we are. On the kit both sit together. */
     dll = LoadLibraryA("HOOKDLL.DLL");
     if (!dll) dll = LoadLibraryA("D:\\HOOKDLL.DLL");
     if (!dll) {
         say("HOOKDLL.DLL not found (%lu) -- cannot test injection",
             GetLastError());
+        UnmapViewOfFile(shm); CloseHandle(map);
         return;
     }
     /* Decorated, because a hook proc is __stdcall and Open Watcom exports
@@ -2290,16 +2320,26 @@ static void probe_inject(void)
     proc = (HOOKPROC)GetProcAddress(dll, "rc_hook_proc");
     if (!proc) proc = (HOOKPROC)GetProcAddress(dll, "_rc_hook_proc@12");
     say("HOOKDLL.DLL loaded, proc %s", proc ? "found" : "MISSING");
-    if (!proc) { FreeLibrary(dll); return; }
+    if (!proc) { FreeLibrary(dll); UnmapViewOfFile(shm);
+                 CloseHandle(map); return; }
 
-    map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                             0, sizeof(RcHookShm), "GastonHookShm");
-    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
-              : NULL;
-    if (!shm) { say("shared mapping failed (%lu)", GetLastError());
-                FreeLibrary(dll); return; }
-    say("shared mapping ok; attaches so far %ld (this process)",
-        shm->attaches);
+    /* Draw something ourselves, through our OWN patched import table, so
+     * the mechanism is tested separately from whether any other program
+     * happens to paint its own text. LoadLibrary above already ran the
+     * patch in this process; if this string comes back out of the ring,
+     * the interception works and anything missing afterwards is about
+     * WHERE the target draws, not about whether we can see a draw. */
+    {
+        HDC dc = CreateCompatibleDC(NULL);
+        HBITMAP bm = CreateCompatibleBitmap(GetDC(NULL), 200, 40);
+        HGDIOBJ old = SelectObject(dc, bm);
+        TextOutA(dc, 7, 9, "GASTON-SELFTEST", 15);
+        SelectObject(dc, old);
+        DeleteObject(bm);
+        DeleteDC(dc);
+    }
+
+    say("attaches so far %ld (this process)", shm->attaches);
 
     h = SetWindowsHookExA(WH_CBT, proc, dll, 0);
     say("WH_CBT with a DLL       : %s", h ? "installed" : "refused");
@@ -2329,6 +2369,26 @@ static void probe_inject(void)
         say("   -> INJECTION WORKS. Our code ran inside another program.");
     else
         say("   -> no injection: only this process ever mapped the DLL.");
+
+    /* The GDI half. This is the text an owner-drawn control paints and
+     * answers no message about, so anything here is text no other tier in
+     * the ladder could have got. */
+    say("IAT patch took in %ld process(es); %ld text draws seen",
+        shm->patched, shm->draws);
+    if (shm->draws > 0) {
+        long shown = 0;
+        for (i = 0; i < RC_TEXTN && shown < 12; i++) {
+            RcDraw *d = &shm->ring[i];
+            if (!d->text[0]) continue;
+            shown++;
+            say("   pid %lu @%ld,%ld  \"%.40s\"",
+                (unsigned long)d->pid, d->x, d->y, d->text);
+        }
+        say("   -> GDI text capture works; that is text no message gives.");
+    } else if (shm->patched > 0) {
+        say("   -> patched but nothing drew. The target may paint through");
+        say("      a DLL of its own rather than its own import table.");
+    }
 
     UnmapViewOfFile(shm);
     CloseHandle(map);
