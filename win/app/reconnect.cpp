@@ -7,7 +7,7 @@
 #include "core/log.h"
 #include "core/str.h"
 
-rc_reconnect::rc_reconnect(HWND hwnd, rc_net *net, const rc_config *cfg,
+rc_reconnect::rc_reconnect(HWND hwnd, rc_net *net, const ClientConfig *cfg,
                            const char *exe_dir, rc_html *html,
                            rc_refresh_fn refresh, rc_restore_fn restore)
     : m_hwnd(hwnd), m_net(net), m_cfg(cfg), m_exe_dir(exe_dir),
@@ -26,7 +26,7 @@ rc_reconnect::~rc_reconnect()
     }
 }
 
-rc_reconnect *rc_reconnect::create(HWND hwnd, rc_net *net, const rc_config *cfg,
+rc_reconnect *rc_reconnect::create(HWND hwnd, rc_net *net, const ClientConfig *cfg,
                                    const char *exe_dir, rc_html *html,
                                    rc_refresh_fn refresh, rc_restore_fn restore)
 {
@@ -69,7 +69,7 @@ void rc_reconnect::try_connect()
      * without a restart. The scan itself suppresses critical-error dialogs,
      * which matters because we are on the thread that pumps messages. */
     tools = rc_tooldet_cached(m_exe_dir, &tools_len);
-    if (rc_net_start(m_net, m_hwnd, m_cfg->host, m_cfg->port, m_cfg->secret,
+    if (rc_net_start(m_net, m_hwnd, m_cfg->host, (int)m_cfg->port, m_cfg->secret,
                      tools, tools_len) != 0) {
         /* Say it ONCE per outage, not once per retry.
          *
@@ -81,7 +81,7 @@ void rc_reconnect::try_connect()
          * is the right place for something that changes every few seconds. */
         if (!m_retry_noted) {
             char msg[160];
-            rc_strf(msg, sizeof(msg), "Cannot reach %s:%d - retrying",
+            rc_strf(msg, sizeof(msg), "Cannot reach %s:%ld - retrying",
                     m_cfg->host, m_cfg->port);
             /* Escaped now. The host comes from the INI, so this was
              * unescaped user-supplied text going into the document. */

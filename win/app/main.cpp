@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include "net/frameproto.h"
-#include "core/ini.h"
+#include "app/config.h"
 #include "core/log.h"
 #include "core/path.h"
 #include "core/str.h"
@@ -79,7 +79,10 @@
  * is declared in app/input.h the same way; the button width is input.cpp's
  * own business. */
 
-static rc_config     g_cfg;
+static ClientConfig  g_cfg;
+/* Heap, not a file-scope object: ConfigStore has a constructor, and a static
+ * one would run before WinMain and so before the log (core/rc_cpp.h). */
+static ConfigStore  *g_store;
 static rc_net        g_net;
 static rc_html *g_html;
 static rc_bar  *g_bar;
@@ -210,7 +213,7 @@ static void exe_dir(char *out, unsigned n)
 static void status_refresh(void)
 {
     if (g_status)
-        g_status->refresh(g_net.state, g_cfg.host, g_cfg.port, g_xfer,
+        g_status->refresh(g_net.state, g_cfg.host, (int)g_cfg.port, g_xfer,
                           g_turn ? g_turn->active() : 0,
                           g_turn ? g_turn->start_ms() : 0,
                           g_turn ? (int)g_turn->state() : (int)TURN_IDLE,
@@ -1009,7 +1012,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
          * when the document finishes loading. */
         if (g_cfg.host[0]) {
             char line[160];
-            rc_strf(line, sizeof(line), "Connecting to %s:%d...",
+            rc_strf(line, sizeof(line), "Connecting to %s:%ld...",
                     g_cfg.host, g_cfg.port);
             g_html->notice(line);
         } else {
@@ -1413,9 +1416,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * else follows from reading it back, so the button and the
              * setting cannot disagree about which is true. */
             if (g_pagebar) {
-                g_cfg.autoscroll = g_pagebar->follow_on();
+                g_cfg.autoscroll = g_pagebar->follow_on() != 0;
                 if (g_html) g_html->set_autoscroll(g_cfg.autoscroll);
-                if (!rc_config_save(&g_cfg, g_exe_dir) && g_html)
+                if (!g_store->save(g_cfg) && g_html)
                     g_html->error("That setting could not be saved to "
                                   "retroclaude.ini and will not survive a "
                                   "restart. The drive may be full or "
@@ -1623,7 +1626,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_HOST:
             if (rc_hostdlg_run(hwnd, g_inst, &g_cfg)) {
                 char line[192];
-                if (!rc_config_save(&g_cfg, g_exe_dir) && g_html)
+                if (!g_store->save(g_cfg) && g_html)
                     g_html->error("That setting could not be saved to "
                                   "retroclaude.ini and will not survive a "
                                   "restart. The drive may be full or "
@@ -1644,7 +1647,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                  * document. main.cpp:930's notice already escapes it for
                  * that reason; this is the second, more direct way in. */
                 if (g_html) {
-                    rc_strf(line, sizeof(line), "Now connecting to %s:%d.",
+                    rc_strf(line, sizeof(line), "Now connecting to %s:%ld.",
                             g_cfg.host, g_cfg.port);
                     g_html->notice(line);   /* notice() escapes */
                 }
@@ -1659,7 +1662,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                       "A native Windows 98 client for Claude Code.\n"
                       "Built with Open Watcom; the transcript is MSHTML.\n\n"
                       "Not affiliated with Anthropic.\n\n"
-                      "Bridge: %s:%d (%s)",
+                      "Bridge: %s:%ld (%s)",
                       g_cfg.host, g_cfg.port, rc_state_name(g_net.state));
             msg[sizeof(msg) - 1] = '\0';
             MessageBoxA(hwnd, msg, "About " RC_TITLE,
@@ -1798,7 +1801,21 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     icc.dwICC = ICC_BAR_CLASSES | ICC_PROGRESS_CLASS;
     InitCommonControlsEx(&icc);
 
-    rc_config_load(&g_cfg, g_exe_dir);
+    /* A value present but wrong refuses startup, naming the key, rather
+     * than connecting somewhere nobody configured (docs/REMOTE.md, C3). */
+    g_store = new ConfigStore(g_exe_dir);
+    if (!g_store || !g_store->load(&g_cfg)) {
+        char msg[512];
+        rc_strf(msg, sizeof(msg),
+                "retroclaude.ini has a setting that cannot be used:\n\n%s\n\n"
+                "Fix or remove it and start again.\n\n%s",
+                g_store ? g_store->error() : "out of memory",
+                g_store ? g_store->path() : "");
+        MessageBoxA(0, msg, RC_TITLE, MB_OK | MB_ICONSTOP);
+        delete g_store;
+        rc_log_close();
+        return 1;
+    }
     /* The configured root, which is NOT the same thing as the tree being
      * mirrored. Nothing is mirrored at startup and nothing is mirrored while
      * a chat is only being talked to: sharing begins when a conversation
@@ -1808,8 +1825,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
      *
      * This one is still recorded, because it is what HELLO reports and what
      * a conversation's folder gets created under. */
-    rc_syncrpc_set_home(g_cfg.sync_root);
-    if (g_cfg.sync_root[0]) {
+    rc_syncrpc_set_home(g_cfg.syncRoot);
+    if (g_cfg.syncRoot[0]) {
         /* CREATE IT if it is not there, parents and all. A sync root is a
          * place the user named in the INI, not a place they are asserting
          * already exists -- the first run after setting one has no folder
@@ -1817,12 +1834,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
          * scan returned no_root", which is a sentence nobody should have to
          * decode to find out that a directory needed making. A typo'd drive
          * still fails, and still says so. */
-        if (GetFileAttributesA(g_cfg.sync_root) == 0xFFFFFFFF) {
-            if (rc_mkpath(g_cfg.sync_root))
-                rc_log("sync: created %s", g_cfg.sync_root);
+        if (GetFileAttributesA(g_cfg.syncRoot) == 0xFFFFFFFF) {
+            if (rc_mkpath(g_cfg.syncRoot))
+                rc_log("sync: created %s", g_cfg.syncRoot);
             else
                 rc_log("sync: cannot create %s (%lu); synchronisation will "
-                       "not start", g_cfg.sync_root,
+                       "not start", g_cfg.syncRoot,
                        (unsigned long)GetLastError());
         }
         /* No recovery pass here any more. An interrupted commit is staged
@@ -1832,7 +1849,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
          * right moment (before the first scan of that tree, so it cannot
          * see the file missing and report a deletion nobody made). */
         rc_log("sync: conversations get their folders under %s",
-               g_cfg.sync_root);
+               g_cfg.syncRoot);
     }
 
     memset(&wc, 0, sizeof(wc));
@@ -1971,6 +1988,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     log_mem("exiting");
     OleUninitialize();
+    delete g_store;
     rc_log_close();
     return (int)msg.wParam;
 }

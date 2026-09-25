@@ -87,7 +87,7 @@ void add_item(Tmpl &t, DWORD style, short x, short y, short cx, short cy,
 #define CLS_STATIC 0x0082
 
 struct DlgState {
-    rc_config *cfg;
+    ClientConfig *cfg;
     int        changed;
 };
 
@@ -101,10 +101,10 @@ INT_PTR CALLBACK proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         st = (DlgState *)lp;
         SetWindowLongA(dlg, DWL_USER, (LONG)st);
         SetDlgItemTextA(dlg, ID_HOST_EDIT, st->cfg->host);
-        rc_strf(port, sizeof(port), "%d", st->cfg->port);
+        rc_strf(port, sizeof(port), "%ld", st->cfg->port);
         SetDlgItemTextA(dlg, ID_PORT_EDIT, port);
         /* Cap what can be typed at what the struct can hold, rather than
-         * truncating on the way out. rc_config::host is char[64]. */
+         * truncating on the way out. ClientConfig::host is char[64]. */
         SendDlgItemMessageA(dlg, ID_HOST_EDIT, EM_LIMITTEXT,
                             (WPARAM)(sizeof(st->cfg->host) - 1), 0);
         SendDlgItemMessageA(dlg, ID_PORT_EDIT, EM_LIMITTEXT, 5, 0);
@@ -160,7 +160,7 @@ INT_PTR CALLBACK proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
 }  /* namespace */
 
-int rc_hostdlg_run(HWND parent, HINSTANCE inst, rc_config *cfg)
+int rc_hostdlg_run(HWND parent, HINSTANCE inst, ClientConfig *cfg)
 {
     Tmpl t;
     DlgState st;
@@ -207,7 +207,7 @@ int rc_hostdlg_run(HWND parent, HINSTANCE inst, rc_config *cfg)
         }
         if (!r) return 0;
     }
-    rc_log("hostdlg: host=%s port=%d changed=%d",
+    rc_log("hostdlg: host=%s port=%ld changed=%d",
            cfg->host, cfg->port, st.changed);
     return st.changed;
 }

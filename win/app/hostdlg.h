@@ -18,7 +18,7 @@
 #endif
 
 #include <windows.h>
-#include "core/ini.h"
+#include "app/config.h"
 
 /* Show the dialog. Non-zero if the user pressed OK AND changed something, in
  * which case `cfg` holds the new values and the caller is expected to save
@@ -29,6 +29,6 @@
  * opened the dialog and pressed OK without typing would be a needless
  * interruption of whatever the agent was doing.
  */
-int rc_hostdlg_run(HWND parent, HINSTANCE inst, rc_config *cfg);
+int rc_hostdlg_run(HWND parent, HINSTANCE inst, ClientConfig *cfg);
 
 #endif

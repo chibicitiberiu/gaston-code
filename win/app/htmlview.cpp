@@ -276,7 +276,7 @@ struct rc_html_impl {
         : parent(p), ready(0), queue(0), queue_len(0), queue_cap(0), diag(0),
           doc_len(0), doc_sum(0),
           /* On unless the user says otherwise -- the same default
-           * rc_config_load uses. The struct is zero-filled, so without this
+           * ConfigStore::load uses. The struct is zero-filled, so without this
            * the setting would be off by accident on the very first run. */
           autoscroll(1)
     {

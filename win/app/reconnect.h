@@ -7,7 +7,7 @@
 #define RC_RECONNECT_H
 
 #include <windows.h>
-#include "core/ini.h"
+#include "app/config.h"
 #include "net/net.h"
 #include "app/htmlview.h"
 
@@ -25,7 +25,7 @@ typedef void (*rc_restore_fn)(void);
 class rc_reconnect {
     HWND             m_hwnd;
     rc_net          *m_net;
-    const rc_config *m_cfg;
+    const ClientConfig *m_cfg;
     const char      *m_exe_dir;
     rc_html         *m_html;
     rc_refresh_fn    m_refresh;
@@ -35,12 +35,12 @@ class rc_reconnect {
 
     rc_reconnect(const rc_reconnect &);
     rc_reconnect &operator=(const rc_reconnect &);
-    rc_reconnect(HWND hwnd, rc_net *net, const rc_config *cfg,
+    rc_reconnect(HWND hwnd, rc_net *net, const ClientConfig *cfg,
                  const char *exe_dir, rc_html *html,
                  rc_refresh_fn refresh, rc_restore_fn restore);
 
 public:
-    static rc_reconnect *create(HWND hwnd, rc_net *net, const rc_config *cfg,
+    static rc_reconnect *create(HWND hwnd, rc_net *net, const ClientConfig *cfg,
                                 const char *exe_dir, rc_html *html,
                                 rc_refresh_fn refresh, rc_restore_fn restore);
     ~rc_reconnect();

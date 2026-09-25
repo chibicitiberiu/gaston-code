@@ -81,7 +81,7 @@ MINIZ = third_party/miniz/miniz.c
 # the full source path the compiler recorded (`/.../win/core/str.c`), not the
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
-CORE_SRCS = core/log.cpp core/ini.cpp core/str.c core/path.c core/inifile.cpp \
+CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
             core/app.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 
@@ -94,6 +94,7 @@ CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
+       app/config.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
@@ -129,7 +130,7 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = $(call objs,checks/inicheck.c) $(LIBCORE)
+INICHECK_OBJS = $(call objs,checks/inicheck.cpp app/config.cpp) $(LIBCORE)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
