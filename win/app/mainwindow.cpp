@@ -132,7 +132,7 @@ static int      g_announce_connected;
 static HWND          g_main;
 static rc_statusbar *g_status;
 static Reconnector *g_reconn;
-static rc_turn      *g_turn;
+static Turn         *g_turn;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
  * and text all moved
@@ -208,7 +208,7 @@ static void status_refresh(void)
     if (g_status)
         g_status->refresh(g_net->state, g_cfg->host, (int)g_cfg->port, g_xfer,
                           g_turn ? g_turn->active() : 0,
-                          g_turn ? g_turn->start_ms() : 0,
+                          g_turn ? g_turn->startMs() : 0,
                           g_turn ? (int)g_turn->state() : (int)TURN_IDLE,
                           g_bar && g_bar->active(), g_html);
 }
@@ -326,7 +326,7 @@ static void pillbar_detached(void)
 
 static void input_sent(void)
 {
-    if (g_turn) g_turn->note_input();
+    if (g_turn) g_turn->noteInput();
     status_refresh();
     ui_set_busy(1);
     if (g_main) layout(g_main);
@@ -476,22 +476,22 @@ static void on_ready(rc_frame *f)
 
 static void on_doc(rc_frame *f)
 {
-    if (g_turn) g_turn->on_doc(f);
+    if (g_turn) g_turn->onDoc(f);
 }
 
 static void on_text(rc_frame *f)
 {
-    if (g_turn) g_turn->on_text(f);
+    if (g_turn) g_turn->onText(f);
 }
 
 static void on_tool(rc_frame *f)
 {
-    if (g_turn) g_turn->on_tool(f);
+    if (g_turn) g_turn->onTool(f);
 }
 
 static void on_turn(rc_frame *f)
 {
-    if (g_turn) g_turn->on_turn(f);
+    if (g_turn) g_turn->onTurn(f);
 }
 
 /* OPTION, OPTIONSEND -- both owned by app/optmenu.cpp now; see
@@ -662,7 +662,7 @@ static void cache_restore(void)
 static void on_pagebar(rc_frame *f)
 {
     if (strcmp(f->type, "PAGESTART") == 0) {
-        if (g_turn) g_turn->turn_done();
+        if (g_turn) g_turn->turnDone();
         /* Cache the page the bridge is about to send. Only a page it says is
          * complete is kept -- see app/cache.h -- so this opens a temporary
          * file that PAGEEND renames and anything else throws away. */
@@ -1120,8 +1120,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     g_reconn = Reconnector::create(hwnd, g_net, g_cfg, g_exe_dir, g_html,
                                    g_window);
-    g_turn = rc_turn::create(hwnd, g_html, g_status, g_cache, g_chats,
-                             ui_set_busy, status_refresh);
+    g_turn = Turn::create(hwnd, g_html, g_status, g_cache, g_chats, g_window);
 }
 
 /* -------------------------------------------------------------- main proc */
@@ -1907,4 +1906,9 @@ void MainWindow::refreshStatus()
 void MainWindow::restoreCache()
 {
     cache_restore();
+}
+
+void MainWindow::setBusy(bool busy)
+{
+    ui_set_busy(busy ? 1 : 0);
 }

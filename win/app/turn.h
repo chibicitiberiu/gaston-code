@@ -18,52 +18,58 @@
 #error "turn.h is C++"
 #endif
 
-#ifndef RC_TITLE
-#define RC_TITLE "Gaston Code"
-#endif
+#include "app/title.h"
 
-typedef void (*rc_turn_busy_fn)(int busy);
-typedef void (*rc_turn_refresh_fn)(void);
-
-class rc_turn {
-    HWND                m_hwnd;
-    rc_html            *m_html;
-    rc_statusbar       *m_status;
-    rc_cache           *m_cache;
-    rc_chats           *m_chats;
-    rc_turn_busy_fn     m_busy_fn;
-    rc_turn_refresh_fn  m_refresh_fn;
-
-    rc_turn_state       m_state;
-    int                 m_active;
-    DWORD               m_start_ms;
-
-    rc_turn(const rc_turn &);
-    rc_turn &operator=(const rc_turn &);
-    rc_turn(HWND hwnd, rc_html *html, rc_statusbar *status,
-            rc_cache *cache, rc_chats *chats,
-            rc_turn_busy_fn busy_fn, rc_turn_refresh_fn refresh_fn);
-
+/* What a turn asks of whoever owns the input. One method, where a bare
+ * function pointer used to be: it had no context, so it could only reach
+ * the compose box and the Stop button through globals. */
+class TurnListener
+{
 public:
-    static rc_turn *create(HWND hwnd, rc_html *html, rc_statusbar *status,
-                           rc_cache *cache, rc_chats *chats,
-                           rc_turn_busy_fn busy_fn, rc_turn_refresh_fn refresh_fn);
-    ~rc_turn() {}
+    virtual ~TurnListener() {}
+    /* A turn started (true) or ended (false): enable Stop, disable Send. */
+    virtual void setBusy(bool busy) = 0;
+};
 
-    int active() const { return m_active; }
+class Turn
+{
+public:
+    static Turn *create(HWND hwnd, rc_html *html, rc_statusbar *status,
+                        rc_cache *cache, rc_chats *chats,
+                        TurnListener *listener);
+    ~Turn() {}
+
+    bool active() const { return m_active; }
     rc_turn_state state() const { return m_state; }
-    DWORD start_ms() const { return m_start_ms; }
+    DWORD startMs() const { return m_startMs; }
 
-    void note_input();
-    void think_show();
-    void turn_receiving();
-    void turn_done();
+    void noteInput();
+    void thinkShow();
+    void turnReceiving();
+    void turnDone();
     void abort();
 
-    void on_turn(rc_frame *f);
-    void on_doc(rc_frame *f);
-    void on_text(rc_frame *f);
-    void on_tool(rc_frame *f);
+    void onTurn(rc_frame *f);
+    void onDoc(rc_frame *f);
+    void onText(rc_frame *f);
+    void onTool(rc_frame *f);
+
+private:
+    Turn(HWND hwnd, rc_html *html, rc_statusbar *status, rc_cache *cache,
+         rc_chats *chats, TurnListener *listener);
+    Turn(const Turn &);
+    Turn &operator=(const Turn &);
+
+    HWND m_hwnd;
+    rc_html *m_html;
+    rc_statusbar *m_status;
+    rc_cache *m_cache;
+    rc_chats *m_chats;
+    TurnListener *m_listener;
+
+    rc_turn_state m_state;
+    bool m_active;
+    DWORD m_startMs;
 };
 
 #endif /* RC_TURN_H */

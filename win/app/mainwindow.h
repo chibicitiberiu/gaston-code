@@ -18,18 +18,16 @@
 #include "app/config.h"
 #include "net/net.h"
 #include "app/reconnect.h"
+#include "app/turn.h"
 
-/* Not "Claude Code": that is Anthropic's product name and this is a
- * third-party client for it. Gaston is a French given name of roughly the
- * right vintage for the machine it runs on. */
-#define RC_TITLE "Gaston Code"
+#include "app/title.h"
 
 /* The window class. WinMain's single-instance check finds the running copy
  * by it, so it is named once, here. */
 #define RC_MAIN_CLASS "RetroClaudeWnd"
 
 class MainWindow : public Service, public MessageFilter,
-                   public ReconnectListener
+                   public ReconnectListener, public TurnListener
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -46,6 +44,9 @@ public:
     /* ReconnectListener */
     void refreshStatus();
     void restoreCache();
+
+    /* TurnListener */
+    void setBusy(bool busy);
 
 private:
     MainWindow(const MainWindow &);

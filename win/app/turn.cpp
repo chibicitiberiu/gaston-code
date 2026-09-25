@@ -9,24 +9,21 @@
 #include "core/log.h"
 #include "core/str.h"
 
-rc_turn::rc_turn(HWND hwnd, rc_html *html, rc_statusbar *status,
-                 rc_cache *cache, rc_chats *chats,
-                 rc_turn_busy_fn busy_fn, rc_turn_refresh_fn refresh_fn)
+Turn::Turn(HWND hwnd, rc_html *html, rc_statusbar *status,
+           rc_cache *cache, rc_chats *chats, TurnListener *listener)
     : m_hwnd(hwnd), m_html(html), m_status(status),
-      m_cache(cache), m_chats(chats),
-      m_busy_fn(busy_fn), m_refresh_fn(refresh_fn),
-      m_state(TURN_IDLE), m_active(0), m_start_ms(0)
+      m_cache(cache), m_chats(chats), m_listener(listener),
+      m_state(TURN_IDLE), m_active(false), m_startMs(0)
 {
 }
 
-rc_turn *rc_turn::create(HWND hwnd, rc_html *html, rc_statusbar *status,
-                         rc_cache *cache, rc_chats *chats,
-                         rc_turn_busy_fn busy_fn, rc_turn_refresh_fn refresh_fn)
+Turn *Turn::create(HWND hwnd, rc_html *html, rc_statusbar *status,
+                   rc_cache *cache, rc_chats *chats, TurnListener *listener)
 {
-    return new rc_turn(hwnd, html, status, cache, chats, busy_fn, refresh_fn);
+    return new Turn(hwnd, html, status, cache, chats, listener);
 }
 
-void rc_turn::think_show()
+void Turn::thinkShow()
 {
     if (m_state != TURN_IDLE) return;
     m_state = TURN_THINKING;
@@ -37,14 +34,14 @@ void rc_turn::think_show()
     if (m_html) m_html->settle_pending();
 }
 
-void rc_turn::turn_receiving()
+void Turn::turnReceiving()
 {
     if (m_state == TURN_STREAMING) return;
     m_state = TURN_STREAMING;
     SetWindowTextA(m_hwnd, RC_TITLE "  -  receiving...");
 }
 
-void rc_turn::turn_done()
+void Turn::turnDone()
 {
     m_state = TURN_IDLE;
     if (m_status) m_status->clear_override();
@@ -55,36 +52,36 @@ void rc_turn::turn_done()
     if (m_html) m_html->status("");
 }
 
-void rc_turn::note_input()
+void Turn::noteInput()
 {
-    m_active = 1;
-    m_start_ms = GetTickCount();
-    think_show();
-    if (m_busy_fn) m_busy_fn(1);
+    m_active = true;
+    m_startMs = GetTickCount();
+    thinkShow();
+    if (m_listener) m_listener->setBusy(true);
 }
 
-void rc_turn::abort()
+void Turn::abort()
 {
-    m_active = 0;
-    m_start_ms = 0;
-    turn_done();
-    if (m_busy_fn) m_busy_fn(0);
+    m_active = false;
+    m_startMs = 0;
+    turnDone();
+    if (m_listener) m_listener->setBusy(false);
 }
 
-void rc_turn::on_turn(rc_frame *f)
+void Turn::onTurn(rc_frame *f)
 {
     const char *v;
     const char *state = rc_frame_get(f, "state");
     if (state && strcmp(state, "start") == 0) {
-        m_active = 1;
-        if (m_busy_fn) m_busy_fn(1);
-        m_start_ms = GetTickCount();
+        m_active = true;
+        if (m_listener) m_listener->setBusy(true);
+        m_startMs = GetTickCount();
         if (m_status) m_status->set_pane(2, " Claude is thinking...");
-        think_show();
+        thinkShow();
     } else {
-        turn_done();
-        m_active = 0;
-        if (m_busy_fn) m_busy_fn(0);
+        turnDone();
+        m_active = false;
+        if (m_listener) m_listener->setBusy(false);
         /* Now, and only now, re-fetch the list. Sending a message is what
          * makes a conversation the most recent one, so this is where the
          * reordering belongs -- not on merely opening one. */
@@ -139,8 +136,8 @@ void rc_turn::on_turn(rc_frame *f)
              * so the moment a turn ended you lost how long it took -- and
              * "that took 90 seconds" is the more useful of the two when you
              * are deciding whether to ask for something smaller next time. */
-            unsigned long secs = m_start_ms
-                ? (unsigned long)((GetTickCount() - m_start_ms) / 1000)
+            unsigned long secs = m_startMs
+                ? (unsigned long)((GetTickCount() - m_startMs) / 1000)
                 : 0;
             {
                 /* Absent means "leave the gauge alone", not zero. The bridge
@@ -160,17 +157,17 @@ void rc_turn::on_turn(rc_frame *f)
     }
 }
 
-void rc_turn::on_doc(rc_frame *f)
+void Turn::onDoc(rc_frame *f)
 {
     if (m_html) m_html->set_document(f->body);
     SendMessageA(m_hwnd, WM_SIZE, 0, 0);
     SetTimer(m_hwnd, TIMER_HTMLPOLL, 100, NULL);
 }
 
-void rc_turn::on_text(rc_frame *f)
+void Turn::onText(rc_frame *f)
 {
     const char *mode = rc_frame_get(f, "mode");
-    turn_receiving();
+    turnReceiving();
     if (mode && strcmp(mode, "live") == 0) {
         if (m_html) m_html->live(f->body);
     } else {
@@ -182,8 +179,8 @@ void rc_turn::on_text(rc_frame *f)
     }
 }
 
-void rc_turn::on_tool(rc_frame *f)
+void Turn::onTool(rc_frame *f)
 {
     (void)f;
-    turn_receiving();
+    turnReceiving();
 }
