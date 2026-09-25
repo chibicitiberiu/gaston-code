@@ -386,6 +386,22 @@ reference** under Phase 3.3 for the frame's actual headers. The rest of this par
 still holds: no markdown parser in C, and the bridge decides everything about how a block
 looks before it ever reaches the wire.
 
+**[R -- 2026-09-25: half of "how a block looks" is misfiled; this records where the
+seam is.]** "The bridge decides everything about how a block looks" fuses two jobs.
+*Structure* -- markdown to blocks, escaping, pagination -- is a transform: it needs
+lookahead and a parser, and it belongs here for every reason this section gives.
+*Decoration* -- `STYLESHEET` (`bridge/view/html.py:448`), inlined by `document()`
+(`:622-630`) and sent once per connect from `server.py:341` -- is one client's
+appearance, written to IE5's constraints, shipped from the far side of the wire. That
+contradicts the standing rule that the bridge and the protocol should survive being
+pointed at MS-DOS, Windows 3.1 or NT 4: a DOS client cannot use a byte of that
+stylesheet, and a more capable client cannot restyle without the bridge's consent. The
+class *vocabulary* is already a shared contract (`win/app/htmlview.h:61-76`, pinned by
+`tests/python/meta/test_guest_css.py`) and the guest already composes markup against it
+(`win/app/statusbar.cpp:146`), so what is shared and what is owned are currently the
+wrong way round. Deferred rather than built -- `BACKLOG.md` §13, where export is the
+awkward constraint.
+
 Markdown needs lookahead, so the bridge buffers to a safe boundary (newline, or ~200 chars
 of unambiguous text). Streaming granularity becomes one line — which is also what a P2
 repaint budget wants.
@@ -1963,7 +1979,8 @@ displays the token gauge, and commands requiring unsupported UI affordances are 
 A standalone Win98 server for driving the real P200 out of band from the agent
 client: ssh-like exec, files and processes, plus screenshot, window/control tree
 with MSAA, and input, scripted from a Python package. Built from static libs
-(`libcore`, `libwire`, `libexec`, `libfs`, `libui`) that the client also links,
+(`libcore`, `libwire`, `libexec`, `libfs`, `libautomation`) that the client
+also links,
 with an `App` container and INI config. It is also the first step of
 refactoring the client and the source of the Phase 6 primitives. Full plan:
 `docs/REMOTE.md`.

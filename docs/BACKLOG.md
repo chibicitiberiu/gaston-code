@@ -1252,3 +1252,75 @@ holds it); then build rootless execution, `init_sync_root`, the embedded
 endpoint, and the stdio supervisor, in that order. The updater stub is
 independent of all of it and can land whenever the guest reflash loop becomes
 the bottleneck.
+
+---
+
+## 13. Decoration ships from the bridge, so only one client can ever look right
+
+**Status:** deferred by decision, 2026-09-25. The seam is named; nothing moved.
+
+This is not a challenge to **the guest transforms nothing** (`CLAUDE.md`). That rule
+is right and it stays. The problem is that "how a block looks" turns out to be two
+jobs that were never separated, and only one of them is a transform.
+
+- **Structure** -- markdown to blocks, escaping, pagination, the encoding fold. Needs
+  lookahead and a real parser (`PLAN.md`, "The bridge owns markdown"). Writing it in
+  C++ would cost image bytes and heap on the one resource the project is tightest on.
+  It belongs on the bridge and is not in question.
+- **Decoration** -- `STYLESHEET` (`bridge/view/html.py:448`), inlined into the skeleton
+  by `document()` (`:622-630`) and sent once per connect from `server.py:341`. This is
+  one client's appearance, written to IE5's constraints, and it ships from the far side
+  of the wire.
+
+**Why it matters.** The standing rule is that the bridge, the protocol and the tool
+surface should survive being pointed at MS-DOS, Windows 3.1 or NT 4. A DOS client with
+no MSHTML cannot use a single byte of that stylesheet. A more capable client -- one
+with a real layout engine, or a different screen -- cannot restyle its own transcript
+without a bridge change. The bridge is currently the authority on something it has no
+business knowing.
+
+**The seam already exists, and the guest already declared its half.**
+`win/app/htmlview.h:53-76` defines `RC_SLOT_DONE`/`LIVE`/`STATUS` and `RC_CSS_STATUS`,
+`NOTICE`, `ERROR`, `USER`, `PENDING`, `PERMDONE`. Those *names* are a cross-language
+contract, pinned by `tests/python/meta/test_guest_css.py`, and the guest already
+composes its own markup against them -- `win/app/statusbar.cpp:146` writes
+`<div class="status">` itself, on the guest, today. So the vocabulary is shared and the
+appearance is owned by the bridge, which is exactly backwards.
+
+`htmlview.h:55-58` makes the argument by accident. The status slot is optional *because*
+"the bridge's DOC is authoritative and may be an older build than this guest" -- an
+appearance that ships from the bridge means a guest cannot fix how the guest looks by
+rebuilding the guest.
+
+### What it would take to close
+
+1. **Move `STYLESHEET` to the guest as a resource**, and let the bridge send the
+   skeleton with no `<style>` block. The class vocabulary becomes a declared contract
+   rather than an implicit one -- per **client rules are declared at handshake, never
+   assumed**, that means a `HELLO` capability saying which vocabulary version this
+   client understands, and the bridge refusing an unknown value rather than guessing.
+2. **Decide what export does.** This is the awkward one.
+   `bridge/view/html.py:633-657` builds a standalone file with `STYLESHEET + EXPORT_CSS`
+   inline, on the bridge (`bridge/services/session.py:116`), and its docstring gives a
+   real reason: an export that looks different from what was on screen invites the
+   question of which one is right. If the bridge no longer holds the stylesheet it
+   cannot inline it. The options are that the guest renders its own export, that the
+   export links a `.css` file written beside it (there is precedent -- IE5 has no
+   `data:` URIs, so inline images are already real files beside `view.htm`; see the
+   MSHTML constraint in `PLAN.md`), or that export keeps a deliberate bridge-side copy
+   and accepts the drift.
+3. **Regenerate the frame goldens.** `tests/python/server/test_frame_goldens.py` pins
+   the DOC frame, which carries the stylesheet.
+4. **The class-name guard is already fit for this.**
+   `tests/python/meta/test_guest_css.py` matches
+   `#define\s+(RC_CSS_\w+)\s+"([^"]+)"` and asserts it found as many as the header
+   defines, so a class with a space in it (`RC_CSS_PENDING "you pending"`) is caught
+   and a partial match fails loudly. It is the right shape to carry a real contract.
+
+**Free and separable:** the shipped `STYLESHEET` is 8445 bytes, of which **4919 are
+CSS comments**. Stripping them leaves every rule byte-identical. `doc()`
+(`bridge/wire/protocol.py:171`) builds a plain `Frame` with no `enc` header, so unlike
+`TEXT` and export data this one is **never compressed** -- those 4919 bytes go on the
+wire verbatim, once per connect and again on every reconnect. On a 5 KB/s link that is
+close to a full second of the time between plugging in and seeing a transcript. It
+needs the DOC goldens regenerated and it depends on none of the above.

@@ -29,7 +29,7 @@ system and to reshaping the response path onto our frame grammar.
 | Upstream file | Lines | Destination | Planned changes |
 |---|---:|---|---|
 | `agent/src/exec.c` | 361 | — | **Not forked.** Rewritten from `probe.c:run_capture()` into `win/rpc/exec.cpp` to eliminate six defects (including `taskkill` and `HeapReAlloc` leaks). |
-| `agent/src/input.c` | 490 | `win/ui/input.cpp` (R9; `win/app/input.cpp` is the compose box) | Near-verbatim. `UICLICK`/`UIDRAG`/`UIKEY`/`WINLIST` are pure syscalls. Keep the E0-extended-scancode table and the `VK_SNAPSHOT`-returns-0 fallback to scancode `0x37`. |
+| `agent/src/input.c` | 490 | `win/automation/input.cpp` (R9; `win/app/input.cpp` is the compose box) | Near-verbatim. `UICLICK`/`UIDRAG`/`UIKEY`/`WINLIST` are pure syscalls. Keep the E0-extended-scancode table and the `VK_SNAPSHOT`-returns-0 fallback to scancode `0x37`. |
 | `agent/src/screen.c` | 467 | — | **Not forked.** Replaced by ~60 lines under "the guest transforms nothing". The only part worth lifting is `screen_palette_for_capture()`: on an 8bpp display a fresh memory DC carries only the 20 static system colours, so `GetDIBits` needs the live hardware palette selected in or it returns colour-index noise. |
 | `agent/src/handlers.c` | 514 | `win/rpc/rpc.cpp` | Dispatch table pruned to PING / EXEC / EXECW / DOWNLOAD (~130 lines). |
 | `agent/src/main.c` | 1381 | — | **Not forked.** Listener, `select()` multiplex, discovery, service and watchdog scaffolding, all deleted by the single-binary / single-connection design. |

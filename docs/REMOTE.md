@@ -38,10 +38,10 @@ agent tools, and a pattern for untangling `win/app/main.cpp` later.
   ------------------------------          -----------------------------------
   test script / REPL                      gremote.exe  (win/remote/)
       |                                       composition root + handlers
-  gremote  (Python package)                   |     |      |      |
-      blocking socket client  <--- TCP --->  libwire libexec libfs libui
-      frame codec (shared                     \______|______|______/
-      with bridge/wire)                                libcore
+  gremote  (Python package)                     |       |      |         |
+      blocking socket client  <--- TCP --->  libwire libexec libfs libautomation
+      frame codec (shared                     \_____|_______|_____|____________/
+      with bridge/wire)                                    libcore
 ```
 
 `gremote.exe` listens and the Linux side connects: the reverse of the client.
@@ -56,14 +56,22 @@ can hold the box (see Protocol).
 | `libwire` | `win/wire/` | frame codec (split out of `frameproto`), deflate, `Connection` (socket, reader/sender threads, bounded out queue), `Listener`, lane dispatcher. The op-to-lane table is supplied by the exe | libcore, miniz |
 | `libexec` | `win/exec/` | command execution (from `exec.cpp`, made per-job), **new** process list/kill via Toolhelp32 (resolved with `GetProcAddress`: present on 98, absent on NT4), **new** `launch` | libcore |
 | `libfs` | `win/fs/` | list/stat/read/write/remove/mkdir/move, chunked transfer (the sink extracted from `export.cpp`, per `BACKLOG.md` 6), drives and free space | libcore |
-| `libui` | `win/ui/` | screenshot, window enumeration, control tree, MSAA metadata, mouse and keyboard input | libcore |
+| `libautomation` | `win/automation/` | screenshot, window enumeration, control tree, MSAA metadata, mouse and keyboard input | libcore |
+
+`libautomation` is deliberately **not** called `libui` (renamed 2026-09-25). It
+drives *other* programs' windows -- screenshot, window list, control tree, MSAA,
+synthetic input -- and has nothing to do with the chat client's own interface,
+which stays in `win/app/` and is not a library. `libui` read as "the client's UI"
+to everyone who met it cold, and it is also the name of an unrelated third-party
+toolkit already listed in `FEASIBILITY.md`'s survey. The directory follows the
+library name, so it is `win/automation/`.
 
 Rules for the libraries:
 
 - **No lib knows the wire except libwire, and libwire knows no ops.** Today
   `frameproto.cpp:42-46` carries the client's lane table (`EXEC`, `EXECKILL`,
   `ATTGET`, `SYNC*`); that table stays with the client and each exe passes its
-  own to the dispatcher. libexec, libfs and libui expose plain C++ APIs with
+  own to the dispatcher. libexec, libfs and libautomation expose plain C++ APIs with
   sinks. Frames to calls and results to frames is the exe's job, which is what
   lets the client gate `exec` behind the permission bar while the server gates
   everything behind the secret.
@@ -367,7 +375,7 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
   streams records under `max_tree_nodes` instead of building a tree.
 - **Tree record fields:** hwnd, parent, class, text, rect, style, visible,
   enabled, and with MSAA: role, name, value, state, default action, location.
-- **Input** from retro-agent's `input.c` goes to `win/ui/`, not the
+- **Input** from retro-agent's `input.c` goes to `win/automation/`, not the
   `win/app/input.cpp` that `FORKED.md` once named: that file is the compose box.
   Keep the E0 extended scancode table and the `VK_SNAPSHOT` fallback. Click
   checks with `WindowFromPoint` that the target is not covered (`PLAN.md`
@@ -431,10 +439,11 @@ with Remote("192.168.1.50", secret="...") as r:
 ## Build changes
 
 - **Object files mirror the source tree.** `win/app/input.cpp` compiles to
-  `$(BUILD)/obj/app/input.o`, `win/ui/input.cpp` to `$(BUILD)/obj/ui/input.o`.
-  This applies to all code, the client's included, not just the new libs. Today
+  `$(BUILD)/obj/app/input.o`, `win/automation/input.cpp` to
+  `$(BUILD)/obj/automation/input.o`. This applies to all code, the client's
+  included, not just the new libs. Today
   every object shares one `$(BUILD)/%.o` under a flat `VPATH`, which silently
-  takes the first match: `app/input.cpp` against libui input, `screenshot.o`
+  takes the first match: `app/input.cpp` against libautomation input, `screenshot.o`
   mid-move, `exec.o`. With mirrored paths two files with the same name in
   different directories simply cannot collide, and `VPATH` goes away.
 - **Explicit source lists per target**, not pattern discovery. Each lib and exe
@@ -529,9 +538,9 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    to the VM, then the P200. **First useful milestone: ssh-equivalent on the
    real box.**
 5. **libfs**, the fs lane, `PUT` with CRC and temp-rename, `ship()`, self-update.
-6. **libui.** Screenshot, window list, focus and input, control tree, MSAA, in
-   that order. Each verified on the P200, not just Wine: window trees, focus and
-   input are exactly where Wine lies.
+6. **libautomation.** Screenshot, window list, focus and input, control tree,
+   MSAA, in that order. Each verified on the P200, not just Wine: window trees,
+   focus and input are exactly where Wine lies.
 
 ### The client is the first consumer (decided 2026-09-25)
 
