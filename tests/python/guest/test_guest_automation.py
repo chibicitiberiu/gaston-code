@@ -149,6 +149,10 @@ def test_the_capture_is_a_bmp_a_decoder_accepts(tmp_path):
     assert out.returncode == 0, conftest.guest_says(out)
 
     w, h, bpp, written = (int(x) for x in out.stdout.split())
+    #: Only the depths a BMP can carry. Anything else is a file nothing
+    #: opens, and the clamp is the only thing standing between a screen in
+    #: an unusual mode and exactly that.
+    assert bpp in (4, 8, 16, 24, 32), bpp
     path = tmp_path / out_name
     assert path.exists(), f"{EXE_NAME} --shot wrote nothing"
     assert path.stat().st_size == written, (path.stat().st_size, written)
