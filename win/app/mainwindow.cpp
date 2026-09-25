@@ -96,7 +96,7 @@ static rc_html *g_html;
 static rc_bar  *g_bar;
 static ChatList *g_chats;
 static rc_xferstat *g_xfer;
-static rc_input    *g_inputmod;
+static ComposeBox  *g_inputmod;
 static rc_pillbar  *g_pillbar;
 static rc_toolbar  *g_toolbar;
 /* The export sink. One instance, created in create_children and destroyed
@@ -299,9 +299,9 @@ static void ui_refresh_enables(void)
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
     int active = g_turn && g_turn->active();
-    if (g_inputmod) g_inputmod->enable_send((active || (g_bar && g_bar->blocks_send()))
+    if (g_inputmod) g_inputmod->enableSend((active || (g_bar && g_bar->blocks_send()))
                           ? 0 : 1);
-    if (g_inputmod) g_inputmod->enable_stop(active);
+    if (g_inputmod) g_inputmod->enableStop(active);
 }
 
 static void ui_set_busy(int busy)
@@ -411,7 +411,7 @@ static int ui_send(const char *what, const char *type,
  *
  * A thin forward to compose-and-send rather than a second sender, because a
  * slash command IS a prompt -- the CLI reads it out of the message text and
- * there is no frame for one. Going through rc_input is what gives it the
+ * there is no frame for one. Going through ComposeBox is what gives it the
  * local echo, the mid-turn refusal and the busy state. Created after the
  * menus (create_children runs at WM_CREATE, build_menu at its top), so this
  * can be called before g_inputmod exists only if a frame arrives first,
@@ -419,7 +419,7 @@ static int ui_send(const char *what, const char *type,
 static int ui_send_text(const char *text, int compose)
 {
     if (!g_inputmod) return 0;
-    return compose ? g_inputmod->compose(text) : g_inputmod->send_text(text);
+    return compose ? g_inputmod->compose(text) : g_inputmod->sendText(text);
 }
 
 /* ------------------------------------------------------------ frame render */
@@ -1069,14 +1069,13 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     g_pillbar = rc_pillbar::create(hwnd, inst, g_ui_font, pillbar_detached);
 
     /* The input box and Send/Stop: created and owned by app/input.cpp now
-     * (rc_input::create logs its own check_child failures and subclasses the
+     * (ComposeBox::create logs its own check_child failures and subclasses the
      * input box itself). ui_send is main.c's "send something the user just
      * asked for", for INTERRUPT; input_blocked/input_sent are this file's
      * answers to the two policy questions that module does not own -- see
-     * the callback comments on rc_input::create in app/input.h. */
-    g_inputmod = rc_input::create(hwnd, inst, g_ui_font, g_net, g_html,
-                                  g_xfer, g_pillbar, g_window,
-                     input_blocked, input_sent);
+     * the callback comments on ComposeBox::create in app/input.h. */
+    g_inputmod = ComposeBox::create(hwnd, inst, g_ui_font, g_net, g_html,
+                                    g_xfer, g_pillbar, g_window, g_window);
 
     /* After the option menus, because it borrows their HMENUs and their
      * current labels rather than keeping its own copy. */
@@ -1101,7 +1100,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
      * inside ChatList::create/rc_bar::create/rc_pagebar::create/
-     * rc_input::create above. */
+     * ComposeBox::create above. */
 
     /* Accept file drops from Explorer onto the window and the input box */
     {
@@ -1112,8 +1111,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
             : NULL;
         if (accept) {
             accept(hwnd, TRUE);
-            if (g_inputmod && g_inputmod->get_box())
-                accept(g_inputmod->get_box(), TRUE);
+            if (g_inputmod && g_inputmod->box())
+                accept(g_inputmod->box(), TRUE);
         }
     }
 
@@ -1424,7 +1423,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * the shortcut would be unreachable exactly when you are using
              * the app. Guard the destructive act, not the key. "The person at
              * the keyboard never loses a byte." */
-            if (g_inputmod && !g_inputmod->is_empty()
+            if (g_inputmod && !g_inputmod->isEmpty()
                 && MessageBoxA(hwnd,
                                "You have a message you have not sent.\n\n"
                                "Starting a new session will discard it. "
@@ -1875,13 +1874,13 @@ bool MainWindow::filter(MSG &msg)
      * the accelerator above, which moves between SEALED PAGES, and that
      * is a different axis from scrolling within one. */
     if (msg.message == WM_KEYDOWN && g_html && g_inputmod
-        && g_inputmod->is_empty()
+        && g_inputmod->isEmpty()
         && !(GetKeyState(VK_CONTROL) & 0x8000)) {
         if (msg.wParam == VK_PRIOR) { g_html->scroll_page(-1); return true; }
         if (msg.wParam == VK_NEXT)  { g_html->scroll_page(1);  return true; }
     }
     if (msg.message == WM_KEYDOWN && g_html && g_inputmod
-        && g_inputmod->is_empty()
+        && g_inputmod->isEmpty()
         && (GetKeyState(VK_CONTROL) & 0x8000)) {
         if (msg.wParam == VK_HOME) { g_html->scroll_top();    return true; }
         if (msg.wParam == VK_END)  { g_html->scroll_bottom(); return true; }
@@ -1932,4 +1931,14 @@ void MainWindow::onSwitching()
 void MainWindow::onSwitched(rc_frame *f)
 {
     chats_switched(f);
+}
+
+bool MainWindow::isSendBlocked()
+{
+    return input_blocked() != 0;
+}
+
+void MainWindow::onSent()
+{
+    input_sent();
 }

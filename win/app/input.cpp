@@ -18,17 +18,10 @@
  * PGBTN_W and app/bar.cpp's PERMBTN_W. */
 #define BUTTON_WIDTH 64
 
-/* The single instance the static WNDPROC trampoline reaches through. A plain
- * pointer and nothing more, so it has no constructor -- a file-scope object
- * with one would run before WinMain and fail the static-ctor gate. */
-rc_input *rc_input::s_instance;
-
-rc_input::~rc_input()
+ComposeBox::ComposeBox()
+    : m_edit(this), m_box(0), m_sendButton(0), m_stopButton(0), m_net(0),
+      m_html(0), m_xfer(0), m_pillbar(0), m_sender(0), m_listener(0)
 {
-    if (box && oldproc)
-        SetWindowLongA(box, GWL_WNDPROC, (LONG)oldproc);
-    oldproc = NULL;
-    if (s_instance == this) s_instance = NULL;
 }
 
 /* CreateWindowExA can fail, and on this platform that was never a
@@ -58,20 +51,20 @@ static void check_child(const char *what, HWND h)
  * blank line renders one line taller here than it does in the paginator-
  * sealed copy shown after paging back. Recorded as audit finding 01.29;
  * left as found rather than fixed here. */
-void rc_input::echo_user_block(const char *text)
+void ComposeBox::echoUserBlock(const char *text)
 {
     /* Was twenty lines of escaping and heap juggling here, with a buffer that
      * silently cut the echo at 4095 bytes while the full text went to the
      * model. The view owns its markup now, and sizes from the input. */
-    if (html) html->user(text);
+    if (m_html) m_html->user(text);
 }
 
-void rc_input::do_send(void)
+void ComposeBox::doSend()
 {
     char *buf;
     int n;
 
-    if (blocked_fn && blocked_fn()) return;
+    if (m_listener && m_listener->isSendBlocked()) return;
 
     /* Refuse rather than truncate. GetWindowTextA copies what fits and says
      * nothing, so a pasted log longer than the buffer was silently cut and the
@@ -79,9 +72,9 @@ void rc_input::do_send(void)
      * losing bytes on the one path where they are the author. EM_LIMITTEXT
      * below normally stops it arriving at all; this is the check that makes
      * that a guarantee rather than a hope. */
-    if (GetWindowTextLengthA(box) >= RC_INPUT_MAX) {
-        if (html)
-            html->error(
+    if (GetWindowTextLengthA(m_box) >= RC_INPUT_MAX) {
+        if (m_html)
+            m_html->error(
                       "That message is too long to send (the limit is about "
                       "4000 characters). Nothing was sent -- shorten it, or "
                       "put the long part in a file under the mirrored folder.");
@@ -101,12 +94,12 @@ void rc_input::do_send(void)
      * on the heap for the identical reason; same fix here. */
     buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_INPUT_MAX);
     if (!buf) {
-        if (html) html->error("Out of memory. Nothing was sent.");
+        if (m_html) m_html->error("Out of memory. Nothing was sent.");
         return;
     }
 
-    n = GetWindowTextA(box, buf, RC_INPUT_MAX);
-    if (n <= 0 && (!pillbar || !pillbar->active())) {
+    n = GetWindowTextA(m_box, buf, RC_INPUT_MAX);
+    if (n <= 0 && (!m_pillbar || !m_pillbar->active())) {
         HeapFree(GetProcessHeap(), 0, buf);
         return;
     }
@@ -116,25 +109,25 @@ void rc_input::do_send(void)
      * into `sent` with ui_set_busy(1) -- both are synchronous UI refreshes
      * with no dependency on one another or on the box's text, so the reorder
      * is not observable. */
-    if (send_text(buf)) SetWindowTextA(box, "");
+    if (sendText(buf)) SetWindowTextA(m_box, "");
     HeapFree(GetProcessHeap(), 0, buf);
-    SetFocus(box);
+    SetFocus(m_box);
 }
 
-int rc_input::send_text(const char *text)
+bool ComposeBox::sendText(const char *text)
 {
     unsigned n;
 
-    if ((!text || !*text) && (!pillbar || !pillbar->active())) return 0;
+    if ((!text || !*text) && (!m_pillbar || !m_pillbar->active())) return false;
     /* The same refusal the Send button gets, not a second opinion about it:
      * a menu entry that sends a prompt mid-turn would be the one path around
      * the check that stops two turns overlapping. */
-    if (blocked_fn && blocked_fn()) return 0;
+    if (m_listener && m_listener->isSendBlocked()) return false;
 
     n = text ? (unsigned)strlen(text) : 0;
     if (n >= RC_INPUT_MAX) {
-        if (html) html->error("That message is too long to send.");
-        return 0;
+        if (m_html) m_html->error("That message is too long to send.");
+        return false;
     }
 
     const char *keys[4];
@@ -146,7 +139,7 @@ int rc_input::send_text(const char *text)
     char *ext_names = NULL;
     char *echo_pills = NULL;
 
-    if (pillbar && pillbar->active()) {
+    if (m_pillbar && m_pillbar->active()) {
         att_work = (char *)HeapAlloc(GetProcessHeap(), 0, 1024 * 3 + 256);
         if (att_work) {
             ws_buf = att_work;
@@ -154,12 +147,12 @@ int rc_input::send_text(const char *text)
             ext_names = ext_ids + 256;
             echo_pills = ext_names + 1024;
 
-            if (pillbar->get_workspace_attachments(ws_buf, 1024)) {
+            if (m_pillbar->get_workspace_attachments(ws_buf, 1024)) {
                 keys[nkv] = "attach";
                 vals[nkv] = ws_buf;
                 nkv++;
             }
-            if (pillbar->get_external_attachments(ext_ids, 256, ext_names, 1024)) {
+            if (m_pillbar->get_external_attachments(ext_ids, 256, ext_names, 1024)) {
                 keys[nkv] = "attach_id";
                 vals[nkv] = ext_ids;
                 nkv++;
@@ -167,7 +160,7 @@ int rc_input::send_text(const char *text)
                 vals[nkv] = ext_names;
                 nkv++;
             }
-            pillbar->get_echo_string(echo_pills, 1024);
+            m_pillbar->get_echo_string(echo_pills, 1024);
         }
     }
 
@@ -181,72 +174,72 @@ int rc_input::send_text(const char *text)
             } else {
                 rc_strf(echo_buf, n + echo_len + 64, "%s", echo_pills);
             }
-            echo_user_block(echo_buf);
+            echoUserBlock(echo_buf);
             HeapFree(GetProcessHeap(), 0, echo_buf);
         } else {
-            echo_user_block(text ? text : "");
+            echoUserBlock(text ? text : "");
         }
     } else {
-        echo_user_block(text ? text : "");
+        echoUserBlock(text ? text : "");
     }
 
-    if (xfer) xfer->note_tx_start((unsigned long)n);
-    int sent = (rc_net_send(net, "INPUT", keys, vals, nkv, text ? text : "", n) == 0);
+    if (m_xfer) m_xfer->note_tx_start((unsigned long)n);
+    int sent = (rc_net_send(m_net, "INPUT", keys, vals, nkv, text ? text : "", n) == 0);
     if (att_work) {
         HeapFree(GetProcessHeap(), 0, att_work);
     }
     if (sent) {
-        if (pillbar && pillbar->active()) {
-            pillbar->on_send();
+        if (m_pillbar && m_pillbar->active()) {
+            m_pillbar->on_send();
         }
-        if (xfer) xfer->note_tx_done((unsigned long)n);
-        if (sent_fn) sent_fn();
-        return 1;
+        if (m_xfer) m_xfer->note_tx_done((unsigned long)n);
+        if (m_listener) m_listener->onSent();
+        return true;
     }
-    if (html) html->error("Not connected.");
-    return 0;
+    if (m_html) m_html->error("Not connected.");
+    return false;
 }
 
-int rc_input::compose(const char *text)
+bool ComposeBox::compose(const char *text)
 {
-    if (!box || !text) return 0;
-    if (GetWindowTextLengthA(box) > 0) {
-        if (html)
-            html->error("There is already a message in the box. Send it or "
+    if (!m_box || !text) return false;
+    if (GetWindowTextLengthA(m_box) > 0) {
+        if (m_html)
+            m_html->error("There is already a message in the box. Send it or "
                         "clear it first, then pick the command again.");
-        SetFocus(box);
-        return 0;
+        SetFocus(m_box);
+        return false;
     }
-    SetWindowTextA(box, text);
+    SetWindowTextA(m_box, text);
     /* Caret to the end, so typing continues the line rather than landing in
      * front of the command -- EM_SETSEL with both ends past the text. */
-    SendMessageA(box, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-    SetFocus(box);
-    return 1;
+    SendMessageA(m_box, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SetFocus(m_box);
+    return true;
 }
 
-void rc_input::do_stop(void)
+void ComposeBox::doStop()
 {
     rc_log("stop requested");
     /* A lost INTERRUPT is a Stop button that does nothing, on a turn that
      * keeps running and keeps costing. */
-    if (sender)
-        sender->sendFrame("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
+    if (m_sender)
+        m_sender->sendFrame("Stop", "INTERRUPT", NULL, NULL, 0, NULL, 0);
 }
 
 /* Enter sends; Shift+Enter inserts a newline. */
-LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+LRESULT ComposeBox::EditBox::handle(UINT m, WPARAM w, LPARAM l)
 {
-    if (s_instance && m == WM_KEYDOWN && w == VK_RETURN
+    if (m == WM_KEYDOWN && w == VK_RETURN
         && !(GetKeyState(VK_SHIFT) & 0x8000)) {
-        s_instance->do_send();
+        m_owner->doSend();
         return 0;
     }
     if (m == WM_CHAR && w == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
         return 0;   /* swallow the beep */
 
     if (m == WM_DROPFILES) {
-        SendMessageA(GetParent(h), WM_DROPFILES, w, l);
+        SendMessageA(GetParent(hwnd()), WM_DROPFILES, w, l);
         return 0;
     }
 
@@ -263,112 +256,106 @@ LRESULT CALLBACK rc_input::box_proc(HWND h, UINT m, WPARAM w, LPARAM l)
      * the work, the second swallows the beep the control would otherwise make
      * for a character it does not want. */
     if (m == WM_KEYDOWN && w == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-        SendMessageA(h, EM_SETSEL, 0, (LPARAM)-1);
+        SendMessageA(hwnd(), EM_SETSEL, 0, (LPARAM)-1);
         return 0;
     }
     if (m == WM_CHAR && w == 1)         /* Ctrl+A arrives as SOH */
         return 0;
-    if (!s_instance || !s_instance->oldproc)
-        return DefWindowProcA(h, m, w, l);
-    return CallWindowProc(s_instance->oldproc, h, m, w, l);
+    return previous(m, w, l);
 }
 
-rc_input *rc_input::create(HWND parent, HINSTANCE inst, HFONT font,
-                           rc_net *net_, rc_html *html_, rc_xferstat *xfer_,
-                           rc_pillbar *pillbar_,
-                           FrameSender *send, int (*blocked)(void),
-                           void (*sent)(void))
+ComposeBox *ComposeBox::create(HWND parent, HINSTANCE inst, HFONT font,
+                               rc_net *m_net, rc_html *m_html, rc_xferstat *m_xfer,
+                               rc_pillbar *m_pillbar, FrameSender *m_sender,
+                               ComposeListener *listener)
 {
-    rc_input *p = new rc_input();
+    ComposeBox *p = new ComposeBox();
     if (!p) return 0;
 
-    p->net = net_;
-    p->html = html_;
-    p->xfer = xfer_;
-    p->pillbar = pillbar_;
-    p->sender = send;
-    p->blocked_fn = blocked;
-    p->sent_fn = sent;
-    /* Published BEFORE the subclass below, because SetWindowLongA can deliver
-     * a message to box_proc the moment it returns and the trampoline has
-     * nothing else to reach through. */
-    s_instance = p;
+    p->m_net = m_net;
+    p->m_html = m_html;
+    p->m_xfer = m_xfer;
+    p->m_pillbar = m_pillbar;
+    p->m_sender = m_sender;
+    p->m_listener = listener;
 
-    p->box = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+    HWND edit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
         ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
         0, 0, 0, 0, parent, (HMENU)ID_INPUT, inst, NULL);
-    check_child("input", p->box);
+    check_child("input", edit);
+    /* Owned and subclassed from here. */
+    if (edit && !p->m_edit.attach(edit))
+        DestroyWindow(edit);
+    p->m_box = p->m_edit.hwnd();
     /* Stop an over-long message being composed at all, which is the only
      * feedback that arrives at the moment the user does it rather than at
      * send time. The default for a multiline EDIT is 32KB, well past what
      * do_send can carry. */
-    SendMessageA(p->box, EM_LIMITTEXT, (WPARAM)(RC_INPUT_MAX - 1), 0);
+    SendMessageA(p->m_box, EM_LIMITTEXT, (WPARAM)(RC_INPUT_MAX - 1), 0);
 
-    p->send_btn = CreateWindowExA(0, "BUTTON", "&Send",
+    p->m_sendButton = CreateWindowExA(0, "BUTTON", "&Send",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_SEND, inst, NULL);
-    check_child("send", p->send_btn);
+    check_child("send", p->m_sendButton);
 
-    p->stop_btn = CreateWindowExA(0, "BUTTON", "S&top",
+    p->m_stopButton = CreateWindowExA(0, "BUTTON", "S&top",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_STOP, inst, NULL);
-    check_child("stop", p->stop_btn);
-    EnableWindow(p->stop_btn, FALSE);
+    check_child("stop", p->m_stopButton);
+    EnableWindow(p->m_stopButton, FALSE);
 
-    SendMessageA(p->box,      WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(p->send_btn, WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(p->stop_btn, WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(p->m_box,      WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(p->m_sendButton, WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(p->m_stopButton, WM_SETFONT, (WPARAM)font, TRUE);
 
-    p->oldproc = (WNDPROC)SetWindowLongA(p->box, GWL_WNDPROC,
-                                         (LONG)box_proc);
     return p;
 }
 
-void rc_input::move(int cx, int y, int cw, int win_w)
+void ComposeBox::move(int cx, int y, int cw, int winW)
 {
     /* The "4" here is main.c's GUTTER, which this module cannot see by name
      * (it is a plain #define in main.cpp, not exported by any header) --
      * same value, spelled out, exactly as bar.cpp's move and pagebar.cpp's
      * already do for the same constant. */
-    MoveWindow(box, cx, y, cw - 4 - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
-    MoveWindow(send_btn, win_w - 4 - BUTTON_WIDTH, y, BUTTON_WIDTH, 24, TRUE);
-    MoveWindow(stop_btn, win_w - 4 - BUTTON_WIDTH, y + 28, BUTTON_WIDTH, 24, TRUE);
+    MoveWindow(m_box, cx, y, cw - 4 - BUTTON_WIDTH, INPUT_HEIGHT, TRUE);
+    MoveWindow(m_sendButton, winW - 4 - BUTTON_WIDTH, y, BUTTON_WIDTH, 24, TRUE);
+    MoveWindow(m_stopButton, winW - 4 - BUTTON_WIDTH, y + 28, BUTTON_WIDTH, 24, TRUE);
 }
 
-int rc_input::command(int id)
+bool ComposeBox::command(int id)
 {
     switch (id) {
-    case ID_SEND: do_send(); return 1;
-    case ID_STOP: do_stop(); return 1;
+    case ID_SEND: doSend(); return true;
+    case ID_STOP: doStop(); return true;
     }
-    return 0;
+    return false;
 }
 
-void rc_input::enable_send(int enable)
+void ComposeBox::enableSend(bool enable)
 {
-    EnableWindow(send_btn, enable ? TRUE : FALSE);
+    EnableWindow(m_sendButton, enable ? TRUE : FALSE);
 }
 
-void rc_input::enable_stop(int enable)
+void ComposeBox::enableStop(bool enable)
 {
-    EnableWindow(stop_btn, enable ? TRUE : FALSE);
+    EnableWindow(m_stopButton, enable ? TRUE : FALSE);
 }
 
-void rc_input::focus(void)
+void ComposeBox::focus()
 {
-    SetFocus(box);
+    SetFocus(m_box);
 }
 
-int rc_input::is_empty(void) const
+bool ComposeBox::isEmpty() const
 {
     /* WM_GETTEXTLENGTH rather than reading the text: the answer is a count,
      * the box holds up to RC_INPUT_MAX bytes, and this is called from the
      * message loop on every PgUp. */
-    return SendMessageA(box, WM_GETTEXTLENGTH, 0, 0) == 0;
+    return SendMessageA(m_box, WM_GETTEXTLENGTH, 0, 0) == 0;
 }
 
-int rc_input::has_focus(void) const
+bool ComposeBox::hasFocus() const
 {
-    return GetFocus() == box;
+    return GetFocus() == m_box;
 }

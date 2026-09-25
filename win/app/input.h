@@ -24,6 +24,7 @@
 #include "app/htmlview.h"
 #include "app/xferstat.h"
 #include "app/sender.h"
+#include "core/window.h"
 
 #ifndef __cplusplus
 #error "input.h is C++; compose and send are a class now, see app/htmlview.h"
@@ -41,72 +42,54 @@
 
 class rc_pillbar;
 
-class rc_input {
-    HWND         box, send_btn, stop_btn;
-    WNDPROC      oldproc;
-    rc_net      *net;
-    rc_html     *html;
-    rc_xferstat *xfer;
-    rc_pillbar  *pillbar;
-    FrameSender *sender;
-    int        (*blocked_fn)(void);
-    void       (*sent_fn)(void);
-
-    /* A static trampoline, and a pointer to the single instance for it to
-     * reach through. WNDPROC's signature is fixed by Windows, so a member
-     * function cannot be one -- and there is only ever one compose row, which
-     * is the same singleton assumption the pre-class g_input_oldproc already
-     * made. A plain pointer, so it has no constructor and the static-ctor
-     * gate stays green. */
-    static rc_input *s_instance;
-    static LRESULT CALLBACK box_proc(HWND h, UINT m, WPARAM w, LPARAM l);
-
-    void echo_user_block(const char *text);
-    void do_send(void);
-    void do_stop(void);
-
-    rc_input(const rc_input &);
-    rc_input &operator=(const rc_input &);
-    rc_input() : box(0), send_btn(0), stop_btn(0), oldproc(0), net(0),
-                 html(0), xfer(0), pillbar(0), sender(0), blocked_fn(0), sent_fn(0) {
-    }
-
+/* What the compose box asks of whoever owns the window: whether a send is
+ * allowed right now (a turn running, a permission bar waiting), and to be
+ * told when one went, for the busy state. */
+class ComposeListener
+{
 public:
-    static rc_input *create(HWND parent, HINSTANCE inst, HFONT font,
-                            rc_net *net, rc_html *html, rc_xferstat *xfer,
-                            rc_pillbar *pillbar,
-                            FrameSender *send, int (*blocked)(void),
-                            void (*sent)(void));
-    /* Same reason as rc_chats': box_proc dereferences s_instance and the
-     * edit control outlives this object during teardown. See chatlist.h. */
-    ~rc_input();
+    virtual ~ComposeListener() {}
+    virtual bool isSendBlocked() = 0;
+    virtual void onSent() = 0;
+};
+
+class ComposeBox
+{
+public:
+    static ComposeBox *create(HWND parent, HINSTANCE inst, HFONT font,
+                              rc_net *net, rc_html *html, rc_xferstat *xfer,
+                              rc_pillbar *pillbar, FrameSender *sender,
+                              ComposeListener *listener);
+    /* m_edit's destructor destroys the edit control, which ends the
+     * subclass on the way (WM_NCDESTROY). */
+    ~ComposeBox() {}
 
     /* cx/y: where the input box starts. cw: the transcript column's width,
-     * which bounds the box (Send/Stop sit to its right). win_w: the full
+     * which bounds the box (Send/Stop sit to its right). winW: the full
      * client width, which is what Send/Stop are measured from. */
-    void move(int cx, int y, int cw, int win_w);
+    void move(int cx, int y, int cw, int winW);
 
-    /* WM_COMMAND for ID_SEND/ID_STOP. Non-zero if `id` was one of those,
-     * same contract as the bar's and the page bar's. */
-    int  command(int id);
+    /* WM_COMMAND for ID_SEND/ID_STOP. True if `id` was one of those, same
+     * contract as the bar's and the page bar's. */
+    bool command(int id);
 
-    /* main.cpp still owns WHEN -- ui_refresh_enables calls these rather than
-     * reaching into an HWND this class now keeps private. */
-    void enable_send(int enable);
-    void enable_stop(int enable);
+    /* The main window still owns WHEN -- ui_refresh_enables calls these
+     * rather than reaching into an HWND this class keeps private. */
+    void enableSend(bool enable);
+    void enableStop(bool enable);
 
     /* SetFocus(the box) -- after a send, and to forward WM_SETFOCUS. */
-    void focus(void);
+    void focus();
 
     /* Send `text` as an INPUT, exactly as if it had been typed and Sent:
      * same blocked check, same local echo, same tx accounting, same busy
-     * state. Non-zero if it actually went.
+     * state. True if it actually went.
      *
      * For the Commands menu, which is the first thing that sends a prompt
      * the user did not type. It does NOT touch the input box, so a draft
      * sitting there survives -- the command is a separate message, not an
      * edit to what you were writing. */
-    int  send_text(const char *text);
+    bool sendText(const char *text);
 
     /* Put `text` in the input box, caret at the end, box focused -- for a
      * Commands entry that takes an argument, where the point is to finish
@@ -115,10 +98,10 @@ public:
      * REFUSES rather than overwriting a draft: "the person at the keyboard
      * never loses a byte" applies to a half-written message as much as to a
      * sent one, and a menu that silently ate two paragraphs would be the
-     * worst thing on this toolbar. Non-zero if the box now holds `text`. */
-    int  compose(const char *text);
+     * worst thing on this toolbar. True if the box now holds `text`. */
+    bool compose(const char *text);
 
-    HWND get_box(void) const { return box; }
+    HWND box() const { return m_box; }
 
     /* Is the box empty, and does it have the keyboard?
      *
@@ -128,8 +111,43 @@ public:
      * And Ctrl+N confirms before discarding a draft, which needs to know
      * whether there IS one. The box HWND stays private; these are the two
      * questions anyone outside actually has about it. */
-    int  is_empty(void) const;
-    int  has_focus(void) const;
+    bool isEmpty() const;
+    bool hasFocus() const;
+
+private:
+    /* The edit control, subclassed for Enter-to-send, Ctrl+A and file
+     * drops. A SubclassedWindow, so there is no static trampoline and no
+     * s_instance to reach this object through. */
+    class EditBox : public SubclassedWindow
+    {
+    public:
+        explicit EditBox(ComposeBox *owner) : m_owner(owner) {}
+
+    protected:
+        LRESULT handle(UINT msg, WPARAM wp, LPARAM lp);
+
+    private:
+        ComposeBox *m_owner;
+    };
+    friend class EditBox;
+
+    ComposeBox();
+    ComposeBox(const ComposeBox &);
+    ComposeBox &operator=(const ComposeBox &);
+
+    void echoUserBlock(const char *text);
+    void doSend();
+    void doStop();
+
+    EditBox m_edit;
+    HWND m_box;             /* m_edit's window */
+    HWND m_sendButton, m_stopButton;
+    rc_net *m_net;
+    rc_html *m_html;
+    rc_xferstat *m_xfer;
+    rc_pillbar *m_pillbar;
+    FrameSender *m_sender;
+    ComposeListener *m_listener;
 };
 
 #endif

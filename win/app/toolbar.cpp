@@ -172,7 +172,7 @@ rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
 rc_toolbar::~rc_toolbar()
 {
     /* Both windows are children of the frame and Windows destroys them;
-     * nothing here is subclassed, so unlike rc_chats and rc_input there is
+     * nothing here is subclassed, so unlike ChatList and ComposeBox there is
      * no dangling proc to take down with us. */
 }
 

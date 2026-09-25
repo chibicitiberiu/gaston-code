@@ -45,7 +45,7 @@
 #define IDM_ATTSHOT 1601      /* Attach > Screenshot */
 #define MAX_OPTS    16
 
-/* "Send this as if it had been typed" -- app/input.h's rc_input::send_text,
+/* "Send this as if it had been typed" -- app/input.h's ComposeBox::sendText,
  * behind a function pointer so this module does not depend on that class.
  * A slash command IS a prompt: the CLI reads it out of the message text,
  * there is no command frame, and routing it through compose-and-send is what

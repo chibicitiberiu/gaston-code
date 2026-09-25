@@ -80,7 +80,7 @@ static const rc_bar_desc *bar_desc(int kind)
 /* Is a text control focused right now -- i.e. is somebody mid-sentence?
  *
  * By window CLASS rather than by comparing against the input box's HWND, so
- * this needs no coupling to rc_input and covers the host dialog's fields and
+ * this needs no coupling to ComposeBox and covers the host dialog's fields and
  * any edit added later for free. GetFocus() answers for the calling thread
  * only, which is the right scope: show() runs on the window thread, and a
  * control focused on some other thread is not the one about to receive this
