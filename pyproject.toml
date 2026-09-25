@@ -57,6 +57,9 @@ ignore = [
 # fold.py's table is ABOUT confusable and invisible characters -- flagging
 # them there is flagging the subject matter.
 "bridge/wire/fold.py" = ["RUF001", "RUF002", "RUF003"]
+# ... and its test, which feeds it smart quotes, an NBSP, an en dash and a
+# Cyrillic look-alike on purpose.
+"tests/python/wire/test_fold.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.11"

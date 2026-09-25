@@ -139,7 +139,7 @@ def test_class_matches_the_bridge(name, guest_answers):
 
 @pytest.mark.parametrize("name", sorted(CORPUS))
 def test_crc_matches_the_bridge(name, guest_answers):
-    _type, cls, _size, crc, _n, _r = guest_answers[name]
+    _type, _cls, _size, crc, _n, _r = guest_answers[name]
     data = CORPUS[name]
     expect = zlib.crc32(normalise(data, classify(data)))
     assert crc == expect, (

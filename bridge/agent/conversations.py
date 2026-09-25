@@ -180,8 +180,12 @@ class Conversations:
         """Record that this bridge started the conversation."""
         self._put(session_id, mine=True)
 
-    def __contains__(self, session_id: str) -> bool:
-        return bool((self._map.get(session_id) or {}).get("mine"))
+    def __contains__(self, session_id: str | None) -> bool:
+        # `or ""`, the same normalisation every other lookup here uses:
+        # `r.get("id")` in `filter` below can genuinely be None (a row with
+        # no "id" key), and this has always tolerated that at runtime --
+        # only the annotation was narrower than the behaviour.
+        return bool((self._map.get(session_id or "") or {}).get("mine"))
 
     def filter(self, rows: list[dict]) -> list[dict]:
         """Narrow a listing to conversations this bridge started.

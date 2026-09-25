@@ -30,7 +30,7 @@ import pytest
 HERE = conftest.REPO
 sys.path.insert(0, os.path.join(HERE, "tools", "vm"))
 
-import qmp  # noqa: E402
+import qmp
 
 
 class Model:

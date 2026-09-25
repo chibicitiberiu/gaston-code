@@ -439,7 +439,7 @@ def main() -> int:
 
     a = ap.parse_args()
 
-    conn, peer = probelib.listen_for_guest(a.host, a.port)
+    conn, _peer = probelib.listen_for_guest(a.host, a.port)
 
     g = Guest(conn)
     hello = g.recv("HELLO")

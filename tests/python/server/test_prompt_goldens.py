@@ -123,7 +123,6 @@ async def test_prompt_golden_04_sync_preamble_variations(harness, tmp_path):
     """Scenario 4: System prompt with sync conflict and notice preambles."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    guest = harness.bridge.connection.guest
 
     # 1. Base preamble with conflict notice
     harness.bridge._agent_notices = [

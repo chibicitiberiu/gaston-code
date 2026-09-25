@@ -70,8 +70,9 @@ def _int(headers: dict, name: str, code: str) -> int:
     raw = headers.get(name, "0") or "0"
     try:
         return int(raw)
-    except (TypeError, ValueError):
-        raise Refused(code, f"{name} is not a number: {str(raw)[:40]!r}")
+    except (TypeError, ValueError) as exc:
+        raise Refused(
+            code, f"{name} is not a number: {str(raw)[:40]!r}") from exc
 
 
 def negotiate(headers: dict, secret: str) -> Handshake:

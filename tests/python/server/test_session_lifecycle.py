@@ -212,7 +212,7 @@ async def test_a_bulk_transfer_counts_as_the_guest_being_alive(harness):
     the reaper read that as a dead guest: it denied whatever prompt was on
     screen and closed the writer, and `send_export` then tried to report the
     failure down the socket it had just lost."""
-    r, w = await harness.connect()
+    r, _w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     guest = harness.bridge.connection.guest
     guest.last_seen = 0.0
@@ -306,7 +306,7 @@ async def test_a_reaped_guest_is_recorded_as_lost(harness):
     # not be read until the first full-length sleep had already elapsed.
     b.config.idle_timeout_s = 0.0
     b.config.idle_check_s = 0.01
-    r, w = await harness.connect()
+    r, _w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     guest = b.connection.guest
     guest.last_seen = 0.0
@@ -409,7 +409,7 @@ async def test_close_stops_the_sweeper_and_everything_spawned(harness):
     """`close()` cancelled the reaper and neither the sweeper nor anything
     in `_tasks`, so a bridge shut down cleanly left `_sweep_sync` looping
     every 120 seconds against a guest whose writer was gone."""
-    r, w = await harness.connect()
+    r, _w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
     b.config.sync_dir = b.config.sync_dir or "/tmp"

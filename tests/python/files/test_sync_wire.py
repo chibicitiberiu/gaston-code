@@ -2286,8 +2286,10 @@ def test_paths_gone_from_the_machine_count_towards_it_too():
     deletions -- the other half of the same event, and counting only reverts
     would miss a backup restored onto a tree that had mostly grown. They COUNT,
     but they cannot fire it on their own; see the test below."""
-    decs = _dec(19, S.GONE_ON_GUEST) + [
-        S.Decision("z.c", S.Act.CONFLICT, S.REVERTED_PUSH)]
+    decs = [
+        *_dec(19, S.GONE_ON_GUEST),
+        S.Decision("z.c", S.Act.CONFLICT, S.REVERTED_PUSH),
+    ]
     with pytest.raises(SyncError):
         _revert_pass(_rows(40), decs)
 

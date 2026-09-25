@@ -73,7 +73,7 @@ def test_one_bad_row_does_not_cost_the_good_ones():
         row(typ=b"q", name=b"broken.txt"),
         row(name=b"last.txt"),
     ])
-    rows, display = manifest.parse_rows(body, caps())
+    _rows, display = manifest.parse_rows(body, caps())
     assert sorted(display.values()) == ["first.txt", "last.txt"]
 
 

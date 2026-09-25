@@ -38,14 +38,15 @@ EXEMPT = ("miniz.o", ".lib:", "clib3r")
 
 def symbols(map_path: str) -> list[tuple[int, str]]:
     out, mod = [], "?"
-    for line in open(map_path, errors="replace"):
-        m = re.match(r"Module: (\S+)", line)
-        if m:
-            mod = m.group(1).split("(")[0]
-            continue
-        m = re.match(r"([0-9A-Fa-f]{8})\*?\s+(\S+)", line)
-        if m:
-            out.append((int(m.group(1), 16), f"{mod}:{m.group(2)}"))
+    with open(map_path, errors="replace") as f:
+        for line in f:
+            m = re.match(r"Module: (\S+)", line)
+            if m:
+                mod = m.group(1).split("(")[0]
+                continue
+            m = re.match(r"([0-9A-Fa-f]{8})\*?\s+(\S+)", line)
+            if m:
+                out.append((int(m.group(1), 16), f"{mod}:{m.group(2)}"))
     out.sort()
     return out
 

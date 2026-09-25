@@ -326,4 +326,8 @@ def test_an_empty_page_takes_an_oversized_block_without_sealing_first():
     to go somewhere."""
     p = Paginator(max_bytes=1000, max_blocks=100)
     sealed, chunks = p.write("html", "y" * 1500)
+    # The name of this test is the claim, and it was never checked: the
+    # return was unpacked and the seal half thrown away, so a change that
+    # started sealing here would have gone unnoticed.
+    assert not sealed, "an empty page must not be sealed to make room"
     assert chunks[0][0] == 1

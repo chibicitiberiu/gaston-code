@@ -193,8 +193,9 @@ def test_names_reached_through_bridge_server_are_declared():
     import pathlib
     import re
 
-    import bridge.server as srv
     import conftest
+
+    import bridge.server as srv
 
     root = pathlib.Path(conftest.REPO)
     blob = "\n".join(

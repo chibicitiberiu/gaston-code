@@ -49,7 +49,7 @@ def main() -> int:
                          "transcript if the socket closes")
     a = ap.parse_args()
 
-    conn, peer = probelib.listen_for_guest(a.host, a.port)
+    conn, _peer = probelib.listen_for_guest(a.host, a.port)
 
     r = FrameReader()
     pending: list[Frame] = []

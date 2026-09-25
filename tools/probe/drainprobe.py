@@ -44,7 +44,7 @@ def main() -> int:
                          "it takes real work (8KB chunks)")
     a = ap.parse_args()
 
-    conn, peer = probelib.listen_for_guest(a.host, a.port)
+    conn, _peer = probelib.listen_for_guest(a.host, a.port)
 
     r = FrameReader()
     pend: list[Frame] = []

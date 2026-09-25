@@ -46,7 +46,7 @@ async def test_a_model_chosen_before_the_first_message_is_remembered(harness):
     cleared and before `send()` had produced an id, so it wrote nothing on
     either branch.
     """
-    r, w, guest = await _connected(harness)
+    _r, w, guest = await _connected(harness)
     await harness.bridge.coordinator.new_session(guest, "")
     assert not guest.conv_id, "a fresh chat must not claim an id yet"
 
@@ -70,7 +70,7 @@ async def test_the_effort_fork_carries_its_settings_to_the_new_id(harness):
     chat list -- had no row at all, so the effort the user had just chosen
     was the first thing lost when they switched away and back.
     """
-    r, w, guest = await _connected(harness)
+    _r, w, guest = await _connected(harness)
     await harness.bridge.turn_runner.run_turn(guest, "first")
     before = guest.conv_id
     assert before
@@ -91,7 +91,7 @@ async def test_settings_reach_the_file_on_disk(harness):
     the file, because "the object remembers" and "the next bridge remembers"
     are different claims and only the second one is the complaint.
     """
-    r, w, guest = await _connected(harness)
+    _r, w, guest = await _connected(harness)
     await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "haiku"}))
     await harness.bridge.turn_runner.run_turn(guest, "hello")
@@ -114,7 +114,7 @@ async def test_switching_back_restores_that_chat_s_model(harness):
     with it rather than whatever was last on screen.
     """
     bridge = harness.bridge
-    r, w, guest = await _connected(harness)
+    _r, w, guest = await _connected(harness)
 
     # Conversation A, on opus.
     await bridge.options.on_setmodel(guest, Frame("SETMODEL", {"model": "opus"}))
@@ -150,7 +150,7 @@ async def test_a_chat_with_nothing_saved_keeps_what_is_selected(harness):
     are different, and only the second is written down -- so a conversation
     from before this existed must not be reset to the process defaults.
     """
-    r, w, guest = await _connected(harness)
+    _r, w, guest = await _connected(harness)
     await harness.bridge.options.on_setmodel(guest, Frame("SETMODEL",
                                                    {"model": "opus"}))
     harness.bridge.session.restore_settings(guest, "a-conversation-never-seen")
@@ -161,7 +161,7 @@ async def test_a_chat_with_nothing_saved_keeps_what_is_selected(harness):
 async def test_the_mode_and_effort_travel_with_the_model(harness):
     """All three fields, because `Settings.set` takes the whole trio."""
     bridge = harness.bridge
-    r, w, guest = await _connected(harness)
+    _r, w, guest = await _connected(harness)
 
     await bridge.options.set_mode(guest, "plan")
     await bridge.options.on_setmodel(guest, Frame("SETMODEL", {"model": "opus"}))

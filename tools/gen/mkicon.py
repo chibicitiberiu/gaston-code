@@ -409,7 +409,7 @@ def write_ico(path, images):
     blobs = [encode(c) for c in images]
     out = bytearray(struct.pack("<HHH", 0, 1, len(images)))
     offset = 6 + 16 * len(images)
-    for c, blob in zip(images, blobs):
+    for c, blob in zip(images, blobs, strict=True):
         out += struct.pack("<BBBBHHII", c.w, c.h, 16, 0, 1, 4,
                            len(blob), offset)
         offset += len(blob)

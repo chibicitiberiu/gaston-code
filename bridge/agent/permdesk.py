@@ -395,6 +395,7 @@ class PermissionDesk:
             await self._pump()
             return
 
+        result: PermissionResultAllow | PermissionResultDeny
         if action == "allow":
             result = PermissionResultAllow()
         elif action == "always":

@@ -1,12 +1,12 @@
 """Tests that the bridge stays guest-agnostic for paths and names.
 
-The path rules and naming helpers used to have Win9x limits (like 8.3 limits, 
+The path rules and naming helpers used to have Win9x limits (like 8.3 limits,
 DOS illegal chars) baked directly into their logic as hardcoded strings or numbers.
-This test ensures that the bridge consults declared capabilities rather than 
+This test ensures that the bridge consults declared capabilities rather than
 assuming a constrained filesystem for everyone.
 
-This is the test that would have caught the original defect described in 
-`folder_max`'s docstring -- where a shortnames client asking in writing for 
+This is the test that would have caught the original defect described in
+`folder_max`'s docstring -- where a shortnames client asking in writing for
 restrictive rules was answered with a hardcoded assumption that everyone gets.
 """
 
@@ -42,7 +42,7 @@ def test_naming_and_path_helpers_consult_caps():
 
 def test_no_hardcoded_assumptions_in_code():
     """Negative check: verify that a hardcoded '8' or '[:8]' would fail.
-    
+
     The guard must be able to go red if someone reverts to the old behaviour
     of hardcoding these limits in the server module.
     """

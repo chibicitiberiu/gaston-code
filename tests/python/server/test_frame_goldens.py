@@ -70,7 +70,6 @@ async def test_golden_02_full_turn_with_perm_and_exec(harness):
     await harness.recv_until(r, {"OPTIONSEND"})
 
     claude = harness.bridge.connection.guest.claude
-    orig_send = claude.send
 
     async def turn_with_tool(prompt):
         await claude.start_turn()

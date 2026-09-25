@@ -210,7 +210,8 @@ def _grammar(shell: str) -> Grammar:
         log.error("no guard tables for shell %r; every command will be "
                   "referred to the user", shell)
         return Grammar(name=shell)
-    fs = lambda k: frozenset(x.lower() for x in t.get(k, ()))
+    def fs(k: str) -> frozenset:
+        return frozenset(x.lower() for x in t.get(k, ()))
     return Grammar(
         name=shell,
         separators=_pat(t, "separators"),
@@ -599,6 +600,11 @@ def reason(command: str, *, cwd: str = "", guest_root: str = "",
     root = Root(guard, guest_root)
     cwd_norm = guard.norm(cwd) if cwd else ""
 
+    # `deployment_gap` above already returned unless `guard.g.usable`, which
+    # requires exactly this to be set -- same shell, same cached Grammar, so
+    # what it already checked holds here too. mypy cannot see across the
+    # earlier call, so this narrows what deployment_gap has already proven.
+    assert g.separators is not None
     for raw in g.separators.split(command):
         part = raw.strip()
         if not part:

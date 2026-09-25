@@ -204,7 +204,7 @@ def test_slowsend_reaches_real_backpressure(slowsend_result):
     the one the pre-fix code actually tripped (see the module docstring for
     the measured numbers: three sends in a row, each already over the 64KB
     cap, each blocked ~5s and then queued the frame anyway)."""
-    text, err, rc = slowsend_result
+    text, err, _rc = slowsend_result
     assert "FAIL: nothing ever slowed down" not in text, (text, err)
     assert "FAIL: backpressure happened" not in text, (text, err)
 

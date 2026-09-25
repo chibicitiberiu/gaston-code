@@ -232,10 +232,11 @@ def test_a_long_tool_result_line_is_broken_by_the_bridge():
     body = out[out.index("<pre>") + 5:out.index("</pre>")]
     lines = body.split("\n")
     assert len(lines) > 1, "it must actually break"
-    assert all(len(l) <= H._TOOL_WRAP_COL for l in lines), lines
+    assert all(len(line) <= H._TOOL_WRAP_COL for line in lines), lines
     # Broken at spaces, so it still reads as prose.
-    assert not any(l.startswith(" ") for l in lines), lines
-    assert "".join(l + " " for l in lines).split() == long_line.split()
+    assert not any(line.startswith(" ") for line in lines), lines
+    assert ("".join(line + " " for line in lines).split()
+            == long_line.split())
 
 
 def test_an_unbreakable_run_is_broken_anyway():
@@ -246,7 +247,7 @@ def test_an_unbreakable_run_is_broken_anyway():
     out = H.tool_result("x" * 200)
     body = out[out.index("<pre>") + 5:out.index("</pre>")]
     lines = body.split("\n")
-    assert max(len(l) for l in lines) <= H._TOOL_WRAP_COL
+    assert max(len(line) for line in lines) <= H._TOOL_WRAP_COL
     assert "".join(lines) == "x" * 200, "and no character is lost doing it"
 
 

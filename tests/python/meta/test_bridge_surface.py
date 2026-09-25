@@ -44,7 +44,8 @@ def reaches_for_bridge():
 
 
 def test_no_module_below_the_composition_root_calls_into_it():
-    found = [f"{f}:{l} calls bridge.{a}" for f, l, a in reaches_for_bridge()]
+    found = [f"{f}:{line} calls bridge.{a}"
+             for f, line, a in reaches_for_bridge()]
     assert not found, (
         "These reach the composition root by name. Take the service through "
         "the constructor instead -- Bridge is where services are built, not "

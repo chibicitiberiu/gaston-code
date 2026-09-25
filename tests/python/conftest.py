@@ -154,7 +154,7 @@ def wine_path(p) -> str:
 
 
 def run_guest(name: str, *args, cwd=None, timeout: float = 60,
-              text: bool = False, env: dict = None):
+              text: bool = False, env: dict | None = None):
     """Run a guest check binary under Wine and hand back the CompletedProcess.
 
     `name` is the binary, e.g. "synccheck.exe" -- resolved through `guest_exe`,

@@ -41,6 +41,7 @@ import os
 import shlex
 import sys
 import tempfile
+from typing import IO, TypedDict
 
 from ..wire.compress import (
     LEVEL_UP,
@@ -111,6 +112,21 @@ FAKE_IDENTITY = {
 }
 
 
+class _Export(TypedDict):
+    """One EXPORTSTART..EXPORTEND transfer in flight. See FakeGui._export.
+
+    TypedDict, not a dataclass: `test_fakegui_conformance.py` reaches into
+    `gui._exp["path"]` as a white-box check, so the runtime shape has to stay
+    a plain dict -- this only gives mypy the heterogeneous value types it
+    could not infer across `self._exp = None` in __init__.
+    """
+
+    fh: IO[bytes]
+    path: str
+    got: int
+    total: int
+
+
 class FakeGui:
     def __init__(self, host: str, port: int, secret: str, *, raw: bool = False):
         self.host = host
@@ -142,11 +158,15 @@ class FakeGui:
         self._exec_id: str | None = None
         # The keepalive sweep, mirroring win/rpc/rpc.cpp's rpc_maybe_nudge.
         self._sweep: asyncio.Task | None = None
+        # Fire-and-forget tasks (_handle_rpc per frame, pump() after a
+        # /resume) held so asyncio's weak reference to a running task cannot
+        # collect one mid-flight. See _spawn.
+        self._bg_tasks: set[asyncio.Task] = set()
         # An export in flight: the temp file being written, where it goes,
         # and the two counters EXPORTEND checks. Mirrors the three statics in
         # win/app/export.cpp (tmp/dest/got/total) because that is what
         # conformance means here -- see _export.
-        self._exp = None
+        self._exp: _Export | None = None
         #: Where the last FINISHED export landed, or None. The guest shows
         #: this in a message box; here it is the one piece of the transfer
         #: worth keeping after the temp file is closed, and it is what a
@@ -193,6 +213,33 @@ class FakeGui:
                 await self.writer.wait_closed()
             except Exception:
                 pass
+
+    def _spawn(self, coro) -> None:
+        """Fire-and-forget, with a strong reference kept until it finishes.
+
+        asyncio only holds a weak reference to a running task, so a bare
+        create_task can be garbage-collected mid-flight -- the same defect
+        `Bridge._spawn`/`_done` (bridge/server.py) exists to close, applied
+        here to fakegui's own two fire-and-forget call sites: one
+        `_handle_rpc` per EXEC/SYNC* frame, and `pump()` restarted after a
+        /resume.
+        """
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_done)
+
+    def _bg_done(self, task: asyncio.Task) -> None:
+        """Drop a finished background task and say so if it raised.
+
+        `CancelledError` is not a failure: close() and /resume's own
+        reconnect both cancel these deliberately.
+        """
+        self._bg_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            print(f"{RED}background task failed: {exc!r}{RESET}")
 
     async def send(self, f: Frame) -> None:
         if not self.writer:
@@ -250,7 +297,7 @@ class FakeGui:
                     # either -- net.c's reader routes them to the RPC worker
                     # before the UI thread sees them. Mirror that split here.
                     if f.type in ("EXEC", "EXECKILL") or f.type.startswith("SYNC"):
-                        asyncio.create_task(self._handle_rpc(f))
+                        self._spawn(self._handle_rpc(f))
                     else:
                         self.render(f)
         except ProtocolError as exc:
@@ -460,8 +507,8 @@ class FakeGui:
                 self._exp["fh"].close()
             fh = tempfile.NamedTemporaryFile(
                 prefix="fakegui-export-", suffix=".html", delete=False)
-            self._exp = {"fh": fh, "path": fh.name, "got": 0,
-                         "total": int(f.headers.get("total", "0") or 0)}
+            self._exp = _Export(fh=fh, path=fh.name, got=0,
+                                total=int(f.headers.get("total", "0") or 0))
             print(f"{DIM}[export: {self._exp['total']} bytes incoming]{RESET}")
             return
 
@@ -710,7 +757,7 @@ class FakeGui:
                 print(f"{DIM}reconnecting as sess={self.sess}{RESET}")
                 await self.close()
                 await self.connect(resume=True)
-                asyncio.create_task(self.pump())
+                self._spawn(self.pump())
                 continue
             if line in ("/continue", "/c"):
                 if not await self.answer_halt():

@@ -129,7 +129,7 @@ async def test_non_hello_first_frame_rejected(harness, caplog):
 async def test_an_eof_before_hello_is_not_an_internal_error(harness, caplog):
     """The other two refusal paths had the same fault. A client that opens a
     socket and goes away is ordinary, not a bug in the bridge."""
-    r, w = await asyncio.open_connection("127.0.0.1", harness.port)
+    _r, w = await asyncio.open_connection("127.0.0.1", harness.port)
     w.close()
     await asyncio.sleep(0.3)
     assert "ValueError" not in caplog.text, caplog.text[:400]
@@ -235,7 +235,7 @@ async def test_a_reconnect_resets_the_compressor_and_keeps_the_session(
     """
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"READY"})
-    sess = [f for f in frames if f.type == "READY"][0].headers["sess"]
+    sess = next(f for f in frames if f.type == "READY").headers["sess"]
 
     await harness.send(w, Frame("INPUT", {}, b"first"))
     await harness.recv_until(r, {"TURN"}, timeout=5)
@@ -248,7 +248,7 @@ async def test_a_reconnect_resets_the_compressor_and_keeps_the_session(
     # And comes back. Same session, whether or not it names it.
     r2, w2 = await harness.connect(sess=sess)
     got = await harness.recv_until(r2, {"READY"}, timeout=3)
-    ready = [f for f in got if f.type == "READY"][0]
+    ready = next(f for f in got if f.type == "READY")
     assert ready.headers["sess"] == sess
 
     # The compressor really did restart: a long enough second turn produces
@@ -2136,7 +2136,7 @@ async def test_a_tool_result_reaches_the_guest_as_a_block(harness):
     transforms nothing, and going through _write_block also puts it in the
     paginator, so it survives a reconnect and is still there when paging back.
     """
-    reader, writer = await harness.connect()
+    reader, _writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     guest = harness.bridge.connection.guest
     await harness.bridge.presentation.write_block(
@@ -2250,13 +2250,13 @@ async def test_a_second_client_cannot_clobber_the_first_s_pipelined_frames(
         "per-connection frames are back on the Bridge"
 
     # First client, with an INPUT pipelined behind HELLO in one write.
-    r1, w1 = await asyncio.open_connection("127.0.0.1", harness.port)
+    _r1, w1 = await asyncio.open_connection("127.0.0.1", harness.port)
     blob = hello("s").encode() + Frame("INPUT", {}, b"one").encode()
     w1.write(blob)
     await w1.drain()
 
     # Second client arrives and is refused as a duplicate.
-    r2, w2 = await asyncio.open_connection("127.0.0.1", harness.port)
+    _r2, w2 = await asyncio.open_connection("127.0.0.1", harness.port)
     w2.write(hello("s").encode())
     await w2.drain()
     await asyncio.sleep(0.2)

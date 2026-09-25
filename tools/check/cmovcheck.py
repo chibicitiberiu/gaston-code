@@ -42,14 +42,15 @@ def symbols(map_path: str) -> list[tuple[int, str, str]]:
     """(address, symbol, module) for every symbol in the map, sorted."""
     out: list[tuple[int, str, str]] = []
     module = "?"
-    for line in open(map_path, errors="replace"):
-        m = MOD.match(line)
-        if m:
-            module = m.group(1)
-            continue
-        m = SYM.match(line)
-        if m:
-            out.append((int(m.group(1), 16), m.group(2)[:60], module))
+    with open(map_path, errors="replace") as f:
+        for line in f:
+            m = MOD.match(line)
+            if m:
+                module = m.group(1)
+                continue
+            m = SYM.match(line)
+            if m:
+                out.append((int(m.group(1), 16), m.group(2)[:60], module))
     out.sort(key=lambda r: r[0])
     return out
 

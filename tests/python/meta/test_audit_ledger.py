@@ -143,7 +143,6 @@ def test_audit2_resolved_reports_cover_all_findings():
             # Report not resolved yet
             continue
 
-        prefix = filename.split("-", 1)[0]
         header_ids = set(re.findall(r"^#{2,3}\s+([0-9]{2}\.[0-9]+)\b", text, re.M))
         verdict_ids = {v[1] for v in verdicts}
 

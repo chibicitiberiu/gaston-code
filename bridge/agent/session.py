@@ -16,15 +16,19 @@ screen, so the completed blocks are skipped while streaming.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass
+from typing import get_args
 
 from claude_agent_sdk import (
                               AssistantMessage,
                               ClaudeAgentOptions,
                               ClaudeSDKClient,
                               ConversationResetMessage,
+                              EffortLevel,
+                              PermissionMode,
                               RateLimitEvent,
                               ResultMessage,
                               StreamEvent,
@@ -37,6 +41,43 @@ from claude_agent_sdk import (
                               )
 
 log = logging.getLogger("bridge.session")
+
+#: The SDK's own admissible values (claude_agent_sdk.types), not
+#: services/options.py's EFFORT_ORDER/MODE_ORDER: those are the GUEST
+#: MENU's presentation order, a subset a particular model may support, and
+#: MODE_ORDER in particular never lists "bypassPermissions" or "dontAsk" --
+#: real SDK modes the menu just does not offer. Importing them here would
+#: also cycle: services/options.py -> ..guest -> .agent.session.
+_EFFORT_LEVELS: tuple[EffortLevel, ...] = get_args(EffortLevel)
+_PERMISSION_MODES: tuple[PermissionMode, ...] = get_args(PermissionMode)
+
+
+def _as_effort(effort: str | None) -> EffortLevel | None:
+    """A caller's plain string, narrowed to the SDK's Literal, or None.
+
+    `effort` reaches here untyped -- guest.effort, restored settings, the
+    CLI's own default -- and nothing upstream validates it against the SDK's
+    five known levels the way OptionsService.set_mode does for permission
+    modes. Anything unrecognised is folded into None, same as "": both mean
+    "no preference" to ClaudeAgentOptions.
+    """
+    if effort in _EFFORT_LEVELS:
+        return effort
+    return None
+
+
+def _as_permission_mode(mode: str) -> PermissionMode:
+    """A caller's plain string, narrowed to the SDK's Literal.
+
+    Falls back to "default", the same value ClaudeAgentOptions itself
+    defaults to. OptionsService.set_mode already refuses an unknown mode
+    before guest.perm_mode is ever set to it, so in practice this never
+    trips -- it exists so the boundary in front of the SDK call is a real
+    check rather than an assumption about every caller.
+    """
+    if mode in _PERMISSION_MODES:
+        return mode
+    return "default"
 
 # Hand-maintained: there is no list_models() in the SDK. Checked 2026-09-16.
 # The tool surface this product offers, declared explicitly.
@@ -131,8 +172,10 @@ class Session:
             # on every single start. It was harmless and it was also the kind
             # of warning people learn to read past, which is how a real one
             # gets missed. Empty means "no preference", and the way to say
-            # that to the SDK is to not say anything.
-            effort=effort or None,
+            # that to the SDK is to not say anything -- `_as_effort` folds
+            # any other unrecognised value into the same None, which is also
+            # what the SDK's own Literal type now requires.
+            effort=_as_effort(effort),
             # A preset dict with an "append" extends Claude Code's own prompt.
             # Passing a bare string here would REPLACE it, which would throw
             # away everything that makes Claude Code work.
@@ -150,7 +193,7 @@ class Session:
             # the operator's account. Verified to keep our own in-process
             # server while dropping the claude.ai connectors.
             strict_mcp_config=True,
-            permission_mode=permission_mode,
+            permission_mode=_as_permission_mode(permission_mode),
             can_use_tool=can_use_tool,
             mcp_servers=mcp_servers or {},
             include_partial_messages=streaming,
@@ -186,10 +229,8 @@ class Session:
     async def close(self) -> None:
         if self._pump and not self._pump.done():
             self._pump.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._pump
-            except asyncio.CancelledError:
-                pass
         if self._client:
             try:
                 await self._client.disconnect()
@@ -324,9 +365,10 @@ class Session:
         updated as well so a session rebuilt from these options -- the effort
         fork does exactly that -- does not silently drop back to "default".
         """
+        pm = _as_permission_mode(mode)
         if self._client:
-            await self._client.set_permission_mode(mode)
-        self._opts.permission_mode = mode
+            await self._client.set_permission_mode(pm)
+        self._opts.permission_mode = pm
 
     # --- event pump --------------------------------------------------------
 

@@ -128,7 +128,7 @@ async def test_attach_empty_file_and_ui_tag_cleanup(harness, tmp_path):
     guest.work_dir = workdir
 
     empty_file = os.path.join(workdir, "empty.txt")
-    with open(empty_file, "wb") as f:
+    with open(empty_file, "wb"):
         pass
 
     # Windows client sends [Attached: empty.txt]\r\nWhat is this?
