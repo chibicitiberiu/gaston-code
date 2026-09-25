@@ -55,11 +55,29 @@ COMMITTED_CAP ?= 399000
 # forwarder to ws2_32). comctl32 is for the status bar.
 LIBS   = library wsock32.lib, comctl32.lib, ole32.lib, oleaut32.lib, uuid.lib
 
-OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
-       optmenu.o input.o hostdlg.o toolbar.o export.o cache.o workdir.o workcopy.o workdlg.o tooldet.o \
-       pillbar.o screenshot.o statusbar.o reconnect.o turn.o net.o \
-       frameproto.o log.o ini.o str.o path.o htmlview.o miniz.o exec.o rpc.o \
-       sync.o syncrpc.o)
+# Objects mirror the source tree: app/input.cpp -> $(OBJ)/app/input.o. Every
+# object used to land in one flat $(BUILD)/%.o found through VPATH, which
+# takes the FIRST match and says nothing -- so two sources with the same name
+# in different layers (app/input.cpp, the compose box, and the planned
+# ui/input.cpp, docs/REMOTE.md) would have silently built one of them twice.
+# With mirrored paths that cannot happen, and VPATH is gone.
+#
+# Targets list SOURCES, by path, and the objects are derived. A list of bare
+# object names hid which layer each came from.
+OBJ = $(BUILD)/obj
+objs = $(patsubst %,$(OBJ)/%.o,$(basename $(1)))
+
+MINIZ = third_party/miniz/miniz.c
+
+CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
+       app/pagebar.cpp app/optmenu.cpp app/input.cpp app/hostdlg.cpp \
+       app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
+       app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
+       app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
+       net/net.cpp net/frameproto.cpp core/log.cpp core/ini.cpp core/str.c \
+       core/path.c app/htmlview.cpp $(MINIZ) rpc/exec.cpp rpc/rpc.cpp \
+       sync/sync.cpp sync/syncrpc.cpp
+OBJS = $(call objs,$(CLIENT_SRCS))
 
 .PHONY: synccheck inicheck cppcheck framecheck all clean check run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
@@ -72,7 +90,7 @@ OBJS = $(addprefix $(BUILD)/,main.o bar.o chatlist.o xferstat.o pagebar.o \
 
 # Spike: a minimal MSHTML host in plain C. Answers whether the transcript can
 # move to HTML, which the 512 KB measured cost says is affordable.
-HTMLSPIKE_OBJS = $(BUILD)/htmlspike.o
+HTMLSPIKE_OBJS = $(call objs,checks/htmlspike.c)
 htmlspike: $(BUILD)/htmlspike.exe
 $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 	@$(WLINK) $(LFLAGS) library ole32.lib, oleaut32.lib, uuid.lib \
@@ -82,7 +100,8 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(addprefix $(BUILD)/,synccheck.o sync.o log.o str.o path.o miniz.o)
+SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp core/log.cpp \
+                 core/str.c core/path.c $(MINIZ))
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -92,7 +111,7 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = $(addprefix $(BUILD)/,inicheck.o ini.o log.o str.o)
+INICHECK_OBJS = $(call objs,checks/inicheck.c core/ini.cpp core/log.cpp core/str.c)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -103,7 +122,8 @@ $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 # because frameproto.h claimed for three phases that header values were
 # percent-encoded, and that was true of the parser and false of the builder --
 # nothing ran the two halves against each other.
-FRAMECHECK_OBJS = $(addprefix $(BUILD)/,framecheck.o frameproto.o str.o log.o)
+FRAMECHECK_OBJS = $(call objs,checks/framecheck.cpp net/frameproto.cpp core/str.c \
+                  core/log.cpp)
 framecheck: $(BUILD)/framecheck.exe
 $(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -113,7 +133,7 @@ $(BUILD)/framecheck.exe: $(FRAMECHECK_OBJS)
 # Asserts the C++ guards actually guard: that Buf reports truncation at and
 # past the limit, and that every destructor fires, in order, on every path.
 # Guard code that is wrong is worse than no guard, because it is trusted.
-CPPCHECK_OBJS = $(addprefix $(BUILD)/,cppcheck.o str.o log.o)
+CPPCHECK_OBJS = $(call objs,checks/cppcheck.cpp core/str.c core/log.cpp)
 cppcheck: $(BUILD)/cppcheck.exe
 $(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -124,7 +144,7 @@ $(BUILD)/cppcheck.exe: $(CPPCHECK_OBJS)
 # macros, not retyped), so tests/python/test_guest_caps.py can catch a value
 # being RE-MEANT on one side without the other -- something a range check on
 # the wire integer alone cannot see.
-CAPSCHECK_OBJS = $(addprefix $(BUILD)/,capscheck.o)
+CAPSCHECK_OBJS = $(call objs,checks/capscheck.c)
 capscheck: $(BUILD)/capscheck.exe
 $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -141,22 +161,23 @@ $(BUILD)/capscheck.exe: $(CAPSCHECK_OBJS)
 # guest and for the tests, so the format Python parses is the format that
 # ships. Takes a directory so it can run under Wine against a synthetic tree
 # with its own INI, without the toolchains actually being installed.
-TOOLCHECK_OBJS = $(addprefix $(BUILD)/,toolcheck.o tooldet.o str.o log.o)
+TOOLCHECK_OBJS = $(call objs,checks/toolcheck.cpp app/tooldet.cpp core/str.c \
+                 core/log.cpp)
 toolcheck: $(BUILD)/toolcheck.exe
 $(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(TOOLCHECK_OBJS)}
 	@echo "built $@"
 
-WORKCHECK_OBJS = $(addprefix $(BUILD)/,workcheck.o workcopy.o path.o str.o \
-                 log.o sync.o miniz.o)
+WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp core/path.c \
+                 core/str.c core/log.cpp sync/sync.cpp $(MINIZ))
 workcheck: $(BUILD)/workcheck.exe
 $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  file {$(WORKCHECK_OBJS)}
 	@echo "built $@"
 
-PROBE_OBJS = $(addprefix $(BUILD)/,probe.o str.o miniz.o)
+PROBE_OBJS = $(call objs,checks/probe.c core/str.c $(MINIZ))
 probe: $(BUILD)/probe.exe
 $(BUILD)/probe.exe: $(PROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(PROBE_OBJS)}
@@ -190,8 +211,9 @@ all: $(BUILD)/retroclaude.exe synccheck inicheck cppcheck framecheck \
 # the same code the GUI does, without needing GUI automation.
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
-NETCHECK_OBJS = $(addprefix $(BUILD)/,netcheck.o net.o frameproto.o \
-                log.o str.o path.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
+                core/log.cpp core/str.c core/path.c $(MINIZ) rpc/exec.cpp \
+                rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(NETCHECK_OBJS)}
@@ -202,19 +224,41 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # same worker the GUI runs, not a reimplementation of it. No live bridge
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
-RPCCHECK_OBJS = $(addprefix $(BUILD)/,rpccheck.o net.o frameproto.o \
-                log.o str.o path.o miniz.o exec.o rpc.o sync.o syncrpc.o)
+RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
+                core/log.cpp core/str.c core/path.c $(MINIZ) rpc/exec.cpp \
+                rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ file {$(RPCCHECK_OBJS)}
 	@echo "built $@"
 
-# Every object depends on every header. Coarse, but there are seven of them
-# and the failure it prevents is vicious: adding two fields to rc_transcript
-# did not rebuild main.o, so main.c still allocated the OLD struct while
-# transcript.c wrote the new fields past the end of it, corrupting the next
-# global. The symptom was PostMessage failing on a valid HWND -- nowhere near
-# the change, and it looked exactly like a Win9x message-queue limit.
+# Header dependencies come from the compiler. They used to be "every object
+# depends on every header" over a hardcoded directory list, which was right
+# about the failure it prevented and wrong about how: adding two fields to
+# rc_transcript did not rebuild main.o, so main.c allocated the OLD struct
+# while transcript.c wrote past the end of it, corrupting the next global.
+# The symptom was PostMessage failing on a valid HWND -- nowhere near the
+# change. The wildcard fixed that, but a header in a directory missing from
+# the list silently had no dependents at all.
+#
+# -ad writes a make-style .d beside each object listing exactly the headers it
+# included (Watcom omits its own SDK headers). -adfs keeps '/' separators.
+# An object with no .d yet has never been built, so it is rebuilt anyway.
+#
+# The first dependency Watcom writes is the source's BASENAME (`turn.cpp`, not
+# `app/turn.cpp`), which make cannot find. -add= is meant to override it but
+# truncates a '/' path to its basename too (verified: only a '\' path
+# survives). So FIXDEP rewrites that one token to the real path.
+DEPFLAGS = -ad=$(@:.o=.d) -adt=$@ -adfs
+FIXDEP   = sed -i '1s|: [^ ]*|: $<|' $(@:.o=.d)
+-include $(shell find $(OBJ) -name '*.d' 2>/dev/null)
+
+# A header that a .d still names but that has since been deleted or moved
+# must not stop the build with "No rule to make target". This rule makes it,
+# vacuously, so its dependents rebuild and the compiler reports the real
+# problem if there is one.
+%.h: ;
+
 # Includes are QUALIFIED BY LAYER -- #include "rpc/rpc.h", never "rpc.h" --
 # and that is not decoration.
 #
@@ -229,25 +273,20 @@ $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 # and would then get ours. Qualifying by layer cannot collide in either
 # direction, and it makes a file's dependencies legible at the include site.
 
-# One include path per layer rather than one flat directory, so a header says
-# which layer it belongs to by where it lives. The layering is real and was
-# already there, just invisible: core (log, ini) is a leaf everything uses;
-# net and sync sit above it; rpc routes between them; app is the only thing
-# that reaches into four layers, which is what an entry point does.
-VPATH = app:net:rpc:sync:core:checks
-
-HDRS = $(wildcard app/*.h net/*.h rpc/*.h sync/*.h core/*.h)
-
 # -fr= puts the compiler's per-file error listing in the build tree. Without
 # it Open Watcom drops a .err next to the SOURCE, which is how win/ collected
 # frameproto.err and probe.err.
-$(BUILD)/%.o: %.c $(HDRS) | $(BUILD)
-	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/$*.err $<
+$(OBJ)/%.o: %.c
+	@mkdir -p $(@D)
+	@$(WCC) $(CFLAGS) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
+	@$(FIXDEP)
 
 # The same flags through the C++ compiler. A module migrates by being renamed;
 # nothing else in the tree knows, because every header is extern "C".
-$(BUILD)/%.o: %.cpp $(HDRS) | $(BUILD)
-	@$(WPP) $(CFLAGS) $(CXXONLY) -fo=$@ -fr=$(BUILD)/$*.err $<
+$(OBJ)/%.o: %.cpp
+	@mkdir -p $(@D)
+	@$(WPP) $(CFLAGS) $(CXXONLY) $(DEPFLAGS) -fo=$@ -fr=$(@:.o=.err) $<
+	@$(FIXDEP)
 
 # mshtml.h has a bare `typedef enum _BoolValue {...};` with no name for the
 # typedef to bind to -- harmless in C, which is how every other Watcom header
@@ -255,7 +294,7 @@ $(BUILD)/%.o: %.cpp $(HDRS) | $(BUILD)
 # the shipped header, not our code, and `#pragma warning 146 9` does not
 # silence it in this Watcom build, so it is disabled here instead, for this
 # one object only.
-$(BUILD)/htmlview.o: CFLAGS += -wcd=146 -wcd=602
+$(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The
@@ -276,9 +315,6 @@ $(BUILD)/gaston.res: app/gaston.rc app/resource.h \
                      $(wildcard resources/*.ico) $(wildcard resources/*.bmp) \
                      | $(BUILD)
 	@$(WRC) -q -r -bt=nt -i="$(CURDIR)" -fo=$@ app/gaston.rc
-
-$(BUILD)/miniz.o: third_party/miniz/miniz.c third_party/miniz/miniz.h | $(BUILD)
-	@$(WCC) $(CFLAGS) -fo=$@ -fr=$(BUILD)/miniz.err third_party/miniz/miniz.c
 
 $(BUILD):
 	@mkdir -p $(BUILD)

@@ -26,6 +26,7 @@ rather than merely counted.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -56,8 +57,13 @@ def symbols(map_path: str) -> list[tuple[int, str, str]]:
 
 
 def owns(module: str, ours: set[str]) -> bool:
-    """Is this module something this build compiled?"""
-    return module.rsplit("/", 1)[-1] in ours
+    """Is this module something this build compiled?
+
+    By normalised path, not basename: objects mirror the source tree, so
+    `app/input.o` and `ui/input.o` can both exist and a basename match would
+    credit one with the other's code.
+    """
+    return os.path.normpath(module) in ours
 
 
 def pointer_table(addr: int, raw: str, lo: int, hi: int) -> bool:
@@ -100,7 +106,7 @@ def main(argv: list[str]) -> int:
         print("usage: cmovcheck.py EXE MAP obj.o [obj.o ...]", file=sys.stderr)
         return 2
     exe, map_path, objs = argv[1], argv[2], set(
-        o.rsplit("/", 1)[-1] for o in argv[3:])
+        os.path.normpath(o) for o in argv[3:])
 
     dis = subprocess.run(["objdump", "-d", "-m", "i386", exe],
                          capture_output=True, text=True).stdout
