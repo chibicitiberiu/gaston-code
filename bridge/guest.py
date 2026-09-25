@@ -158,6 +158,19 @@ class GuestSession:
     #: `Bridge.synccoord` still exists and forwards to the attached guest's,
     #: exactly as `writer`/`zip_out`/`pages` forward the other way -- the
     #: single-client shortcut, in one place, for R7 to delete.
+    #: The mirror root as the GUEST spells it, learned from SYNCEND rather
+    #: than assumed. Per guest, not per process: it is a fact about one
+    #: machine, and a second guest reading the first one's was a real leak
+    #: before the mirrors on Bridge were removed.
+    guest_sync_root: str | None = None
+    #: What the last sync pass reported, for `sync_status_text` to repeat
+    #: once. Cleared by the next pass.
+    last_sync_reports: list[str] = field(default_factory=list)
+    #: Consecutive passes refused for a reason that fixes itself. See the
+    #: `transient` branch in `SyncService.run_sync`: `no_root` is the two
+    #: sides mid-handover and resolves within a second, so it is counted
+    #: rather than announced until it stops looking transient.
+    transient_aborts: int = 0
     synccoord: SyncCoordinator = field(default_factory=SyncCoordinator)
     # C.from_hello(hello), parsed once in _attach() rather than re-parsed at
     # every site that needs a path rule -- a re-parse cannot raise (already
@@ -301,7 +314,7 @@ class GuestSession:
         pending and exec-in-flight can all be true simultaneously), so
         this is an observational projection, not an authoritative gate.
         """
-        if not self.connected:
+        if not self.link.connected:
             return GuestState.DISCONNECTED
         if self.synccoord.halt_id:
             return GuestState.HALTED
@@ -317,7 +330,7 @@ class GuestSession:
         which combination of turn/halt/perm/exec is active right now.
         """
         parts = []
-        if not self.connected:
+        if not self.link.connected:
             parts.append("disconnected")
             if self.lost_at is not None:
                 parts.append(f"lost={time.monotonic() - self.lost_at:.0f}s ago")
@@ -329,6 +342,6 @@ class GuestSession:
             parts.append("perm-pending")
         if self.exec_pending:
             parts.append(f"exec={len(self.exec_pending)}")
-        if self.sync_active:
+        if self.sync.active:
             parts.append("sync-active")
         return ", ".join(parts) or "idle"

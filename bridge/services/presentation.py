@@ -28,13 +28,17 @@ class PresentationService:
         """Get or create the stream coalescer for this style (plain prose, thinking)."""
         c = guest.view.coalescers.get(style)
         if c is None:
-            if style == "plain":
-                async def sink(text: str) -> None:
-                    await self.write_updates(guest, guest.view.render.feed(text))
-            else:
-                async def sink(text: str, _s=style) -> None:
+            async def sink(text: str) -> None:
+                # `style` is captured, not defaulted: this closure is built
+                # once per call and `style` does not change under it. It used
+                # to be `_s=style` on a second, differently-shaped `sink`.
+                if style == "plain":
+                    await self.write_updates(
+                        guest, guest.view.render.feed(text))
+                else:
                     await self.write_block(
-                        guest, f'<div class="{_s}">' + H.esc(text) + "</div>"
+                        guest, f'<div class="{style}">' + H.esc(text)
+                        + "</div>"
                     )
             c = Coalescer(sink)
             c.set_link_speed(guest.link.link_bps)

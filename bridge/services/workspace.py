@@ -79,21 +79,22 @@ class WorkspaceService:
 
     def guest_path(self, guest: GuestSession, name: str) -> str:
         r"""`<mirror root><sep><name>`, spelled the way the guest spells it."""
-        root = (guest.hello or {}).get("sync_root") or getattr(
-            guest, "guest_sync_root", None
-        )
-        return P.guest_path(root, name)
+        root = (guest.hello or {}).get("sync_root") or guest.guest_sync_root
+        return P.guest_path(root or "", name)
 
     def guest_work_root(self, guest: GuestSession) -> str:
         r"""Where commands run, spelled the way the guest spells it."""
         if guest.work_guest:
             return guest.work_guest
-        return (guest.hello or {}).get("sync_root") or getattr(
-            guest, "guest_sync_root", None
-        ) or ""
+        return ((guest.hello or {}).get("sync_root")
+                or guest.guest_sync_root or "")
 
     def sub_of(self, guest: GuestSession) -> str:
         """This conversation's folder name relative to the mirror, or \"\"."""
+        # sync_dir is None when sync is switched off, and then nothing is
+        # mirrored, so nothing is a subfolder of it.
+        if not self.config.sync_dir:
+            return ""
         return P.sub_of(guest.work_dir, self.config.sync_dir)
 
     async def ensure_work_dir(self, guest: GuestSession) -> None:

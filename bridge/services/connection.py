@@ -304,8 +304,12 @@ class ConnectionService:
             if guest is None:
                 continue
             if not guest.link.connected:
+                # `perms is not None` is implied by `perm_pending is not
+                # None` -- the property returns None without a desk -- but
+                # saying it is what lets a checker see it too.
                 if (
-                    guest.perm_pending is not None
+                    guest.perms is not None
+                    and guest.perm_pending is not None
                     and guest.lost_at is not None
                     and time.monotonic() - guest.lost_at > perm_grace_s
                 ):
@@ -324,9 +328,10 @@ class ConnectionService:
             log.warning(
                 "guest silent for %.0fs; closing so it can reconnect", idle
             )
-            guest.perms.deny_all(
-                "idle", "The Windows machine stopped responding."
-            )
+            if guest.perms is not None:
+                guest.perms.deny_all(
+                    "idle", "The Windows machine stopped responding."
+                )
             w, guest.link.writer = guest.link.writer, None
             self.mark_lost(guest)
             try:

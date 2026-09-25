@@ -59,12 +59,27 @@ async def test_reissue_delegates(mock_conn, mock_guest):
     mock_guest.perms.reissue.assert_awaited_once()
 
 
-def test_deny_all_delegates(mock_conn, mock_guest):
+def test_deny_all_passes_both_the_reason_and_the_message(mock_conn, mock_guest):
+    """`PermissionDesk.deny_all` takes a reason AND a message the user reads.
+
+    This asserted `assert_called_once_with("idle")` against a MagicMock, which
+    accepts any arity -- so it passed while the service dropped the message
+    and would have raised TypeError against the real desk. mypy found it.
+    """
     svc = PermissionService(connection=mock_conn)
     mock_guest.perms = MagicMock()
 
-    svc.deny_all(mock_guest, "idle")
-    mock_guest.perms.deny_all.assert_called_once_with("idle")
+    svc.deny_all(mock_guest, "idle", "The Windows machine stopped responding.")
+    mock_guest.perms.deny_all.assert_called_once_with(
+        "idle", "The Windows machine stopped responding.")
+
+
+def test_deny_all_is_a_no_op_without_a_desk(mock_conn, mock_guest):
+    """`perms` is `PermissionDesk | None`; the guard is why this relay exists."""
+    svc = PermissionService(connection=mock_conn)
+    mock_guest.perms = None
+    svc.deny_all(mock_guest, "idle", "gone")   # must not raise
+    svc.deny_all(None, "idle", "gone")
 
 
 def test_callback_delegates(mock_conn, mock_guest):

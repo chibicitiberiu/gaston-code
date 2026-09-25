@@ -318,7 +318,7 @@ class SyncService:
                 g.transient_aborts = 0
                 return got
             except SyncError as exc:
-                transient_aborts = getattr(g, "transient_aborts", 0)
+                transient_aborts = g.transient_aborts
                 if getattr(exc, "transient", False):
                     transient_aborts += 1
                     g.transient_aborts = transient_aborts

@@ -87,11 +87,18 @@ class PermissionService:
             await guest.perms.reissue()
 
     def deny_all(
-        self, guest: GuestSession | None, why: str = "disconnected"
+        self, guest: GuestSession | None, reason: str, message: str
     ) -> None:
-        """Resolve every pending and queued prompt as denied."""
+        """Resolve every pending and queued prompt as denied.
+
+        Takes the None-guard that `perms: PermissionDesk | None` needs, so
+        the callers do not each repeat it. It used to drop `message`
+        entirely -- `PermissionDesk.deny_all` has taken two arguments since
+        it was written, and the only caller was a test asserting against a
+        MagicMock, which accepts any arity.
+        """
         if guest is not None and guest.perms is not None:
-            guest.perms.deny_all(why)
+            guest.perms.deny_all(reason, message)
 
     def callback(self, guest: GuestSession) -> Any:
         """Get the can_use_tool callback for the SDK turn."""

@@ -8,9 +8,11 @@ under declared client caps, and packages image/text content blocks for Claude SD
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
+import pathlib
 from collections.abc import AsyncIterable
 from typing import Any
 
@@ -196,8 +198,12 @@ class AttachmentService:
                                 file_size,
                             )
                         else:
-                            with open(target, "rb") as f:
-                                att_bytes = f.read()
+                            # OFF THE LOOP: an attachment is capped at
+                            # 10MB just above, and a cold-cache read of that
+                            # is tens of milliseconds. The stats around it
+                            # stay inline -- see pyproject's ASYNC240 note.
+                            att_bytes = await asyncio.to_thread(
+                                pathlib.Path(target).read_bytes)
                     except OSError as exc:
                         log.warning(
                             "failed to read attachment %s: %s", target, exc
@@ -226,7 +232,8 @@ class AttachmentService:
 
                         from PIL import Image
 
-                        with Image.open(io.BytesIO(att_bytes)) as img:
+                        with Image.open(io.BytesIO(att_bytes)) as opened:
+                            img: Image.Image = opened
                             buf = io.BytesIO()
                             if img.mode not in ("RGB", "RGBA"):
                                 img = img.convert(
@@ -302,7 +309,8 @@ class AttachmentService:
                             if (
                                 content_str is None
                                 and hasattr(guest, "caps")
-                                and getattr(guest.caps, "acp", None)
+                                and guest.caps is not None
+                                and guest.caps.acp
                             ):
                                 try:
                                     content_str = att_bytes.decode(

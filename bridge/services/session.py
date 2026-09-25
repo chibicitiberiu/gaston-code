@@ -8,6 +8,7 @@ session creation with tool bindings and event callbacks (_make_session), deferre
 from __future__ import annotations
 
 import datetime as _dt
+import asyncio
 import logging
 import os
 import sys
@@ -72,7 +73,8 @@ class SessionService:
         self.guest_exec = guest_exec
         self.sync = sync
         self.conv = conv
-        self.spawn = spawn
+        # Defaulted, not Optional -- see SessionCoordinator.__init__.
+        self.spawn: Callable[[Any], Any] = spawn or asyncio.create_task
 
 
     def _resolve_session_cls(self) -> Any:

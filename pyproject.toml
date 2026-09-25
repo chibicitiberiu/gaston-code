@@ -32,12 +32,28 @@ ignore = [
     # runtime cost of a real import here is nil; TC005 (an EMPTY block) stays
     # on, because that one only ever finds leftovers.
     "TC001", "TC003",
+    # Blocking `os.path` stats in async functions. MEASURED on this box:
+    # os.path.isfile is 2.4us, and the same call through asyncio.to_thread is
+    # 531us -- 220x slower. The event loop serves one guest on a link the
+    # project sizes at 5 KB/s; a 2us stat is five orders of magnitude below
+    # the thing it is waiting for, and moving it to a thread would cost more
+    # than it saves. ASYNC230 (opening and READING a file, which can be
+    # megabytes) stays on.
+    "ASYNC240",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Profiles and prompts are data; the fakegui is a harness, not the product.
 "bridge/devtools/*" = ["ASYNC", "SIM"]
-"tests/**" = ["B", "SIM", "ASYNC"]
+"tests/**" = [
+    "B", "SIM", "ASYNC",
+    # `from harness import harness` then `def test_x(harness)` is how pytest
+    # fixtures are shared. The parameter shadows the import by design; ruff
+    # reads it as a redefinition. 258 of them, none a defect.
+    "F811",
+    # conftest-style tests set sys.path before importing the package.
+    "E402",
+]
 # fold.py's table is ABOUT confusable and invisible characters -- flagging
 # them there is flagging the subject matter.
 "bridge/wire/fold.py" = ["RUF001", "RUF002", "RUF003"]

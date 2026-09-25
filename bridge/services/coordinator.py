@@ -9,6 +9,7 @@ _reissue_turn, sync_state_to_guest), and inbound frame routing for turn-affectin
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -44,7 +45,10 @@ class SessionCoordinator:
         self.workspace = workspace
         self.guest_exec = guest_exec
         self.attachment = attachment
-        self.spawn = spawn
+        # Defaulted, not Optional: every caller supplies Bridge._spawn,
+        # and a None here would only ever be a TypeError at the first
+        # turn rather than at construction.
+        self.spawn: Callable[[Any], Any] = spawn or asyncio.create_task
 
 
     def _spawn_coro(self, coro: Any) -> None:
@@ -117,7 +121,12 @@ class SessionCoordinator:
 
     async def on_input(self, guest: GuestSession, f: Frame) -> None:
         """Handle inbound INPUT frame."""
-        state = getattr(guest, "state", None)
+        # `guest.state` directly, NOT getattr with a default. The property
+        # derives from four fields; when one of them was renamed it began
+        # raising AttributeError, `getattr(..., None)` swallowed that, and
+        # every gate below silently stopped firing. A broken projection has
+        # to be an error, not "no state".
+        state = guest.state
         if state == GuestState.RUNNING_TURN:
             log.warning(
                 "rejected INPUT while turn is active (state=%s)",
@@ -166,9 +175,8 @@ class SessionCoordinator:
                         ),
                     )
                     return
-        run_fn = getattr(self.turn_runner, 'run_turn', None)
         self._spawn_coro(
-            run_fn(
+            self.turn_runner.run_turn(
                 guest,
                 text,
                 attach=attach,
@@ -188,8 +196,7 @@ class SessionCoordinator:
         log.info("user pressed Continue on the sync halt")
         await self.connection.send(guest, haltend(hid))
         answered, sc.halt_paths = sc.halt_paths, frozenset()
-        resume_fn = getattr(self.turn_runner, 'resume_turn', None)
-        self._spawn_coro(resume_fn(guest, answered))
+        self._spawn_coro(self.turn_runner.resume_turn(guest, answered))
 
     async def on_interrupt(
         self, guest: GuestSession, f: Frame | None = None
