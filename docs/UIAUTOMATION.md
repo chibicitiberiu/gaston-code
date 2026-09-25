@@ -260,7 +260,24 @@ What that buys, now that WinEvents have taken change detection off the list:
 - **Readiness**, more precisely than `WaitForInputIdle`.
 - **GDI text**, by patching `TextOutA`/`ExtTextOutA` in the target's import
   table — the text as drawn, for owner-drawn controls that answer no
-  message at all.
+  message at all. Built and working: a draw came back as
+  `pid … @7,9 "GASTON-SELFTEST"`.
+
+Two things that cost an Explorer to learn.
+
+**Unpatch on `DLL_PROCESS_DETACH`, always.** A patched import table points
+into this DLL. Remove the hook and the system unmaps us from every process
+it injected us into, and that table now points at nothing. The host does not
+fall over then — it falls over the next time it draws a character, long
+after we are gone, and the crash is filed against it.
+
+**Patching the EXE's import table sees only what the EXE itself draws.**
+Notepad's text is painted by the EDIT control inside USER32 and never passes
+through `NOTEPAD.EXE`'s imports. That is not a gap to close: reaching it
+would mean patching USER32, which on 9x lives in shared memory above 2GB and
+is therefore every process on the machine. Standard controls are already
+readable by message and by MSAA. This tier exists for the ones that are
+not, and it reaches exactly those.
 
 What it costs, against rules that already exist. `REMOTE.md` says no lib
 creates windows or owns a message loop, and an injected DLL is code running
@@ -271,7 +288,10 @@ on the machine. And an import the DLL cannot resolve crashes **them**, not
 us.
 
 So: **opt-in, per-process, for a named target**, never desktop-wide, and
-never in the default `TREE` path. The tree gets what Win32 and MSAA give
+never in the default `TREE` path. Enforced, not merely stated: the shared
+mapping carries a `patch_pid` and the controller sets it before `LoadLibrary`,
+because `DllMain` decides inside that call. The first version patched every
+process the hook reached, which is how Explorer came to be in scope. The tree gets what Win32 and MSAA give
 it; injection is what you reach for when a specific application has been
 established to be opaque.
 
