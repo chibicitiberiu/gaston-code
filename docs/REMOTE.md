@@ -526,6 +526,12 @@ first. Each C-step is a small commit that leaves the client working.
   `9a57456` writes, `67fc263` ClientConfig, `4914752` composition root). C4
   verified on the Win98 guest: start and reconnect, Esc denying a permission
   through the filter, File > Close while connected.
+- *C5a-C5d done 2026-09-25:* `WinMain` split into `app/main.cpp` from the
+  window (`app/mainwindow.cpp`); `OleService`/`ConnectionService` in their
+  own files; `Reconnector` and `Turn` report to listener interfaces;
+  `FrameSender` replaces five copies of the `ui_send` typedef. Verified on
+  the guest: reconnect, busy state, Allow and a full turn, switching chats.
+  Budget 412,000 as headroom for the rest of C5.
 - **C5+. `main.cpp`'s statics become objects**, one module per commit:
   context-free callbacks (`rc_refresh_fn`, `rc_turn_busy_fn`, ...) gain a
   context, and the state they close over moves into the window service.
