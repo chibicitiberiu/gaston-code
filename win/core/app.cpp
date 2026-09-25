@@ -25,6 +25,7 @@ App *App::create(HINSTANCE instance)
 
 App::App(HINSTANCE instance)
     : m_instance(instance),
+      m_filterCount(0),
       m_count(0),
       m_initialised(0),
       m_joinTimeout(DEFAULT_JOIN_MS),
@@ -33,6 +34,8 @@ App::App(HINSTANCE instance)
 {
     for (unsigned i = 0; i < MAX_SERVICES; i++)
         m_leaked[i] = false;
+    for (unsigned i = 0; i < MAX_FILTERS; i++)
+        m_filters[i] = 0;
 }
 
 App::~App()
@@ -104,6 +107,17 @@ bool App::addService(Service *service)
     return true;
 }
 
+bool App::addMessageFilter(MessageFilter *filter)
+{
+    if (!filter || m_filterCount >= MAX_FILTERS)
+    {
+        rc_log("app: cannot add message filter (%s)", filter ? "full" : "null");
+        return false;
+    }
+    m_filters[m_filterCount++] = filter;
+    return true;
+}
+
 int App::run()
 {
     if (m_ran)
@@ -146,6 +160,11 @@ int App::run()
             code = RUN_FAILED;
             break;
         }
+        bool consumed = false;
+        for (unsigned i = 0; i < m_filterCount && !consumed; i++)
+            consumed = m_filters[i]->filter(msg);
+        if (consumed)
+            continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }

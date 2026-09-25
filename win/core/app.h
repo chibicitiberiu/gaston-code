@@ -56,10 +56,25 @@ public:
     virtual bool join(DWORD timeoutMs) { (void)timeoutMs; return true; }
 };
 
+/* A hook in App's message loop, run on every message before it is
+ * translated and dispatched: accelerators, IsDialogMessage, keys a window
+ * handles for its children. Filters run in the order added; the first that
+ * returns true consumes the message and nothing after it sees it.
+ *
+ * Not owned by App. A filter is usually a service that App already owns, so
+ * it lives exactly as long as the loop that calls it. */
+class MessageFilter
+{
+public:
+    virtual ~MessageFilter() {}
+    virtual bool filter(MSG &msg) = 0;
+};
+
 class App
 {
 public:
     enum { MAX_SERVICES = 16 };
+    enum { MAX_FILTERS = 8 };
     enum { RUN_FAILED = -1 };
 
     /* Null if the hidden window cannot be made or the heap is out. */
@@ -70,6 +85,9 @@ public:
      * deleted here and false returned, so a composition root can write
      * `if (!app->addService(new X(...)))` and handle OOM in the same test. */
     bool addService(Service *service);
+
+    /* Not owned; must outlive run(). False if null or full. */
+    bool addMessageFilter(MessageFilter *filter);
 
     /* init all, start all, pump messages until quit(), then shut down.
      * Returns the quit() code, or RUN_FAILED if startup failed or run() was
@@ -101,6 +119,8 @@ private:
     WindowGuard m_window;
     UniqueObj<Service> m_services[MAX_SERVICES];
     bool m_leaked[MAX_SERVICES];
+    MessageFilter *m_filters[MAX_FILTERS];
+    unsigned m_filterCount;
     unsigned m_count;
     unsigned m_initialised;
     DWORD m_joinTimeout;

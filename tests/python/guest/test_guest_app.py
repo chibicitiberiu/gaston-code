@@ -27,7 +27,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 9, sorted(verdicts)
+    assert len(verdicts) == 10, sorted(verdicts)
 
 
 def test_up_in_order_down_in_reverse_signal_before_join(verdicts):
@@ -51,3 +51,9 @@ def test_a_stuck_service_is_leaked_not_deleted(verdicts):
 def test_windows_ending_the_session_stops_services_once(verdicts):
     trace = verdicts["end-session-stops-once"][1]
     assert trace.count("xA") == 1 and trace.count("jA") == 1
+
+
+def test_message_filters_run_in_order_and_the_first_consumer_wins(verdicts):
+    """The client's accelerators and IsDialogMessage ride on this: a key
+    the accelerator table took must not also reach the dialog manager."""
+    assert verdicts["filters-in-order-first-consumer-wins"][1] == "f1 f2"

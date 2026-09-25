@@ -112,6 +112,46 @@ private:
     char m_name[3];
 };
 
+/* A message only the filters below care about. Its own block, clear of
+ * core/'s WM_APP + 0x100 (tools/check/msgids.py keeps it that way). */
+#define WM_CHECK_FILTERED (WM_APP + 0x200)
+
+class Filter : public MessageFilter
+{
+public:
+    Filter(char id, bool consume) : m_id(id), m_consume(consume) {}
+
+    bool filter(MSG &msg)
+    {
+        if (msg.message != WM_CHECK_FILTERED)
+            return false;
+        trace('f', m_id);
+        return m_consume;
+    }
+
+private:
+    char m_id;
+    bool m_consume;
+};
+
+/* Posts the filtered message, then asks to quit behind it. */
+class Poster : public Service
+{
+public:
+    explicit Poster(App *app) : m_app(app) {}
+    const char *name() const { return "poster"; }
+    bool init() { return true; }
+    bool start()
+    {
+        PostMessageA(m_app->window(), WM_CHECK_FILTERED, 0, 0);
+        m_app->quit(0);
+        return true;
+    }
+
+private:
+    App *m_app;
+};
+
 static HINSTANCE g_instance;
 
 static App *three(unsigned a, unsigned b, unsigned c)
@@ -205,6 +245,21 @@ int main(void)
         delete app;
         say("never-run-deletes-without-stopping",
             strcmp(g_trace, "dC dB dA") == 0);
+    }
+    {
+        /* Filters run in the order added, and the first to consume the
+         * message stops the rest from seeing it. */
+        App *app = App::create(g_instance);
+        Filter one('1', false), two('2', true), three_('3', true);
+        bool added = app->addMessageFilter(&one) &&
+                     app->addMessageFilter(&two) &&
+                     app->addMessageFilter(&three_) &&
+                     !app->addMessageFilter(0);
+        app->addService(new Poster(app));
+        int code = app->run();
+        delete app;
+        say("filters-in-order-first-consumer-wins",
+            added && code == 0 && strcmp(g_trace, "f1 f2") == 0);
     }
     return 0;
 }
