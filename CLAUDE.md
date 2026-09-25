@@ -56,12 +56,17 @@ bytes; twenty bytes once per connection buys the ability to add an option
 without a flag day. The bridge refuses an unknown value rather than guessing
 (`bridge/caps.py`, `win/caps.h`).
 
-**New C++ goes through a container, not file statics.** Services derive from
-`Service` (two-phase: trivial constructor, fallible `init`/`start`, idempotent
-`stop`) and are owned by `App`. Dependencies are passed through constructors
-from one composition root; no runtime lookup by name. Config comes from the
-exe's INI, loaded once into typed per-service structs; an invalid value refuses
-startup. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libui`) know
+**New C++ runs under App's lifecycle, not file statics.** An exe derives
+from `App` (`core/app.h`) and fills its hooks: `initialize`, `parseArgs`,
+`initializeServices`, `startServices`, `preTranslate`, `stopServices`,
+`cleanup`. Services derive from `Service` (trivial constructor, fallible
+`init`/`start`, `signalStop` then `join`) and are `UniqueObj<>` members of the
+derived app, created in `initializeServices()` in dependency order with their
+dependencies passed to the constructor; no registry, no runtime lookup.
+Config comes from the exe's INI via `IniFile`, loaded once into typed
+structs; an invalid value refuses startup. Windows derive from `Window` or
+`SubclassedWindow` (`core/window.h`), never a static proc with a global
+instance. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libui`) know
 nothing of each other's ops or of the wire, except `libwire`. See
 `docs/REMOTE.md`.
 

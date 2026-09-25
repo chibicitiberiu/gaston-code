@@ -96,7 +96,7 @@ code uses:
   `Connection`, `ServerConfig`. No `rc_` prefix on C++ types; `rc_cpp.h`
   (`Buf`, `ScopedLock`, `Unique`) already works this way. Checked against the
   Open Watcom SDK headers: none of the planned names collide.
-- **camelCase** for methods, functions, locals and parameters: `addService`,
+- **camelCase** for methods, functions, locals and parameters: `initService`,
   `exeDir`. Members keep the `m_` prefix: `m_listener`.
 - **UPPER_SNAKE** for macros and constants, as today.
 - **Allman braces**, 4-space indent, no tabs.
@@ -110,55 +110,74 @@ code uses:
 
 ### Services and lifecycle
 
+*Revised 2026-09-25: App was first a registry (`addService`, a fixed array,
+message filters). It is now a lifecycle a derived class fills, which reads
+better for a dozen services.*
+
 ```cpp
 /* core/app.h */
-class Service
+class Service                  /* the shape every service shares */
 {
 public:
-    virtual ~Service() {}
     virtual const char *name() const = 0;
-    virtual bool init() = 0;               /* acquire resources; false aborts startup */
-    virtual bool start() { return true; }  /* start threads, begin listening */
-    virtual void signalStop() {}           /* ask threads to finish; never blocks */
-    virtual bool join(DWORD timeoutMs) { return true; }  /* false: timed out, resources leaked on purpose */
+    virtual bool init() = 0;              /* acquire; false aborts startup */
+    virtual bool start() { return true; } /* threads, listening */
+    virtual void signalStop() {}          /* never blocks; idempotent */
+    virtual bool join(DWORD timeoutMs);   /* false: threads still running */
 };
 
 class App
 {
 public:
-    static App *create(HINSTANCE instance, const char *exeDir);
-    ~App();                                /* deletes services in reverse order */
+    int run(const char *cmdLine);         /* the fixed sequence below */
+    void quit(int exitCode);              /* any thread */
+    HWND window() const;
 
-    bool addService(Service *service);     /* fixed capacity; registration order = dependency order */
-    int run();                             /* init all, start all, message loop, then shut down */
-    void quit(int exitCode);               /* posts to App's hidden window; safe from any thread */
+protected:
+    virtual bool initialize();            /* log, single instance, config */
+    virtual bool parseArgs(const char *cmdLine);
+    virtual bool initializeServices() = 0;
+    virtual bool startServices();
+    virtual bool preTranslate(MSG &msg);  /* accelerators, IsDialogMessage */
+    virtual int main();                   /* the message loop */
+    virtual void stopServices();
+    virtual void cleanup();
+    bool exitWith(int exitCode);          /* stop early, not as a failure */
+};
 
-private:
-    App(const App &);
-    App &operator=(const App &);
+class ClientApp : public App              /* app/main.cpp */
+{
+    ClientConfig m_config;                /* what services are handed */
+    UniqueObj<OleService> m_ole;          /* services, in dependency order */
+    UniqueObj<MainWindow> m_window;
+    UniqueObj<ConnectionService> m_connection;
     ...
 };
 ```
 
+- **The derived app is the composition root.** It holds its services as
+  `UniqueObj<>` members and creates them in `initializeServices()`, in
+  dependency order, handing each its dependencies through its constructor.
+  By then the config is loaded, so they are real values, not references to
+  be filled in later. `stopServices()` and `cleanup()` take them down by
+  hand, in reverse. No registry and no runtime lookup.
 - **Two-phase construction.** Constructors only store dependencies and cannot
-  fail. Anything that can fail (heap, sockets, threads, DLLs) happens in
-  `init()`/`start()`, which return `bool`. `static create()` returns null on
-  OOM, as `app/reconnect.cpp:29` does.
-- **Shutdown is two passes, because one `stop()` cannot express it.**
-  `App` calls `signalStop()` on every started service in reverse order, then
-  `join()` on each in reverse order. A service whose join times out keeps its
-  resources leaked rather than freeing memory a live thread still touches:
-  the same rule `net.cpp:1085-1200` arrived at the hard way. If `init` fails
-  partway, only services that initialised are signalled and joined.
-- **`App` owns a hidden top-level window**, not a bare thread queue:
-  `PostThreadMessage` to a thread without a queue fails silently on 9x, and the
-  window also receives `WM_ENDSESSION` so a Windows shutdown stops us cleanly.
-  Services that need to reach the main thread post to it through `App`.
-- **Dependency injection through constructors, from one composition root.**
-  `win/remote/main.cpp` has a single `buildApp()` that creates every service,
-  passes each its dependencies by reference or pointer, and registers them in
-  order. No runtime lookup by name: without RTTI a type-keyed registry would be
-  a service locator with casts.
+  fail. Anything that can fail happens in `init()`/`start()`.
+  `initService(slot, new X(...))` creates, inits and logs a failure by name.
+- **Shutdown is two passes**: `signalStop()` on every service, then `join()`
+  on each, so threads wind down in parallel. `joinOrLeak()` releases a service
+  whose threads did not stop instead of letting `cleanup()` delete it under
+  them: the rule `net.cpp:1085-1200` arrived at the hard way.
+- **A failed step still shuts down.** `main()` is skipped, `stopServices()`
+  and `cleanup()` run, and both cope with a partial start: an empty
+  `UniqueObj`, a service whose `init()` failed.
+- **`App` owns a hidden top-level window** (a `Window`, `core/window.h`), not
+  a bare thread queue: `PostThreadMessage` to a thread without a queue fails
+  silently on 9x, and the window receives `WM_ENDSESSION`, on which App stops
+  the services and cleans up before Windows ends the process.
+- **The app object lives on the heap**, made by `WinMain`: a file-scope object
+  would construct before `WinMain` and the log, and a local would put every
+  member in one stack frame.
 - **Interfaces only at real seams**: the frame sink, the socket (so libwire
   tests run without Winsock), and the op handler. Everything else is concrete.
 - **Callbacks take a context** (`sink(void *ctx, ...)` as `exec.h` does) or are
@@ -504,7 +523,8 @@ first. Each C-step is a small commit that leaves the client working.
   load (measured: `App` +2,560, `IniFile` +3,584, both +6,144 over 398,808).
   `COMMITTED_CAP` goes to 405,000 up front, by decision; trimming later if the
   P200 shows pressure.
-- **C1. `App` message filters.** The client's loop runs accelerators,
+- **C1. `App` message filters** *(superseded by `preTranslate` when App
+  became a lifecycle)*. The client's loop runs accelerators,
   `IsDialogMessage` and keyboard shortcuts (PgUp/PgDn, Ctrl+Home/End, Esc,
   Enter on the chat list) before dispatch. `App::run` gains an ordered list
   of `MessageFilter`s, each able to consume a message.
