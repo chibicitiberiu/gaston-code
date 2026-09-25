@@ -287,7 +287,7 @@ async def test_on_input_rejected_when_running_turn(coordinator_deps):
     assert connection.send.call_count == 1
     err = connection.send.call_args[0][1]
     assert err.type == "ERROR"
-    assert err.headers["code"] == "busy"
+    assert err.headers["code"] == "turn_busy"
     assert len(coordinator_deps["spawn_calls"]) == 0
 
 

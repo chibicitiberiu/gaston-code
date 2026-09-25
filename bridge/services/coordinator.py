@@ -127,7 +127,11 @@ class SessionCoordinator:
                 "rejected INPUT while turn is active (state=%s)",
                 getattr(guest, "state_detail", "turn-running"),
             )
-            await self._send(guest, error("busy", "A prompt is already running."))
+            # NOT `busy`: that code is the handshake's "another client holds
+            # this session", which closes the link. This one keeps it, and a
+            # guest that cannot tell them apart would report the wrong thing.
+            await self._send(
+                guest, error("turn_busy", "A prompt is already running."))
             return
         if state == GuestState.HALTED:
             log.warning(
