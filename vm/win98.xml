@@ -13,15 +13,22 @@ developing on a roomier one would quietly hide the moment it stops fitting.</des
   <vcpu placement='static'>1</vcpu>
   <os>
     <type arch='i686' machine='pc-i440fx-9.2'>hvm</type>
-    <!-- Hard disk only, and there is no floppy device at all any more.
+    <!-- BOOT ORDER IS HARD DISK, AND NOTHING MAY CHANGE THAT.
          The boot floppy ran exactly once, to `sys c:` and launch Setup. Any
          later boot that reaches it re-runs Setup over the installed system:
          that has now happened twice, the second time because `virsh define`
          of this file silently restored the floppy and the fd-first boot
          order under a running installation. Ejecting the media is not
-         enough, because a live-only eject is undone by the next restart. The
-         device is gone. If a future task needs a floppy, add it for that
-         task and take it out again. -->
+         enough, because a live-only eject is undone by the next restart.
+
+         A floppy DEVICE is back (2026-09-25, see fda below) because there
+         was no other way to get a file off the guest. What is not back, and
+         must not come back, is `<boot dev='fd'/>`. The damage came from the
+         boot order plus a bootable Win98 Setup disk; fda now carries a blank
+         FAT12 data image, so even a stray fd boot would stop at "not a
+         system disk" rather than reinstalling the OS. Keep it that way: if
+         a bootable image ever needs to go in that drive, take the drive out
+         again afterwards. -->
     <boot dev='hd'/>
     <bootmenu enable='no'/>
   </os>
@@ -72,6 +79,31 @@ developing on a roomier one would quietly hide the moment it stops fitting.</des
       <readonly/>
     </disk>
 
+    <!-- The way files come BACK from the guest. The CD is read-only and
+         there is no other writable removable medium Win98 handles without
+         drivers: Zip needs Iomega's unless it is ATAPI (and QEMU has no Zip
+         device), and 98 SE has no generic USB mass-storage driver.
+
+         The guest writes to A:, the host reads it with mtools and never
+         needs to mount anything:
+             mdir  -i vm/xfer.img ::
+             mcopy -i vm/xfer.img ::/PROBE.LOG .
+         Create it with `mkfs.msdos -C vm/xfer.img 1440`; it is gitignored by
+         `vm/*.img`. Floppy hotplug is refused outright by libvirt, so
+         changing this needs a full stop and start, not a restart.
+
+         BLANK AND NON-BOOTABLE, deliberately; see the boot-order comment
+         above for what happens otherwise.
+
+         (No "- -" without a space anywhere in a comment in this file. XML
+         forbids it outright, libvirt enforces that, and it is why `virsh
+         define` of this file failed silently for anyone who tried.) -->
+    <disk type='file' device='floppy'>
+      <driver name='qemu' type='raw'/>
+      <source file='/home/tibi/Dev/RetroAI/vm/xfer.img'/>
+      <target dev='fda' bus='fdc'/>
+    </disk>
+
     <controller type='ide' index='0'/>
     <!-- ISA NE2000, not the PCI pcnet, and the reason is in DETLOG.TXT:
          this guest has no PCI bus at all. Win98's detection logs
@@ -100,11 +132,32 @@ developing on a roomier one would quietly hide the moment it stops fitting.</des
     </interface>
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
+    <!-- The way results come back LIVE. A run redirected to COM1,
+             D:\PROBE.EXE <section> > COM1
+         appends to vm/serial.log on the host as it happens, which a
+         `tail -f` picks up. That replaces reading an 80x25 DOS box through
+         screenshots, which loses whatever scrolled off and gets occluded by
+         whatever the shell paints over it.
+
+         It must be the SHELL's redirection. A Win32 program cannot open this
+         port: fopen("COM1","w") fails because "w" is CREATE_ALWAYS and a
+         character device cannot be created, and CreateFile with
+         OPEN_EXISTING fails too, because Win98 binds no driver to it. DOS
+         device redirection reaches the hardware without the Windows COM
+         driver, so `> COM1` works from the very prompt that cannot open it.
+
+         type='file' is one-way, guest to host, which is what keeps Win98's
+         PnP from deciding there is a serial mouse on the other end.
+         append='on' so a stop/start does not discard the last run. -->
+    <serial type='file'>
+      <source path='/home/tibi/Dev/RetroAI/vm/serial.log' append='on'/>
+      <target type='isa-serial' port='0'/>
+    </serial>
     <!-- SPICE, not VNC. virt-manager's VNC widget does not take the pointer
          cleanly against a PS/2 mouse: you get two cursors moving at different
          speeds and clicks only register while the outer one is over the
          window. SPICE's client-side pointer handling does not have that
-         problem, and the guest cannot tell the difference -- it is still a
+         problem, and the guest cannot tell the difference; it is still a
          PS/2 mouse and a Cirrus card either side of it.
 
          The live domain was switched by hand on 2026-09-19; this file is what
