@@ -22,6 +22,7 @@
 #include "app/sender.h"
 #include "app/chatlist.h"
 #include "app/input.h"
+#include "app/bar.h"
 
 #include "app/title.h"
 
@@ -31,7 +32,7 @@
 
 class MainWindow : public Service, public ReconnectListener, public TurnListener,
                    public FrameSender, public ChatListListener,
-                   public ComposeListener
+                   public ComposeListener, public PermissionBarListener
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -61,6 +62,9 @@ public:
     /* ComposeListener */
     bool isSendBlocked();
     void onSent();
+
+    /* PermissionBarListener */
+    void onBarChanged();
 
     /* FrameSender */
     bool sendFrame(const char *what, const char *type,

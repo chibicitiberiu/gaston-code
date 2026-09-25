@@ -49,14 +49,14 @@
 
 typedef struct {
     int         kind;
-    int         priority;   /* lower wins the bar; see rc_bar::visible */
+    int         priority;   /* lower wins the bar; see PermissionBar::visible */
     const char *primary;    /* the SAME button, relabelled per kind */
     const char *secondary;  /* NULL = this kind never offers it */
     const char *tertiary;
     int         blocks_send;
 } rc_bar_desc;
 
-/* Halt has no Deny and offers Always to nobody -- see rc_bar::show's
+/* Halt has no Deny and offers Always to nobody -- see PermissionBar::show's
  * ShowWindow calls, which read secondary/tertiary straight out of this table
  * instead of branching on kind. Perm wins the bar over halt (priority 0 < 1):
  * it has a deadline, and a halt does not. */
@@ -94,9 +94,11 @@ static int typing_now(void)
     return _stricmp(cls, "EDIT") == 0;
 }
 
-rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-               FrameSender *send_, void (*changed_)(void))
-    : depth(0), net(net_), sender(send_), changed(changed_)
+PermissionBar::PermissionBar(HWND parent, HINSTANCE inst, HFONT font,
+                             rc_net *net, FrameSender *sender,
+                             PermissionBarListener *listener)
+    : m_depth(0), m_text(0), m_allow(0), m_always(0), m_deny(0), m_net(net),
+      m_sender(sender), m_listener(listener)
 {
     /* Created hidden and shown with ShowWindow rather than created on
      * demand: the 16-bit USER/GDI heaps on 9x are a fixed 64KB, and churning
@@ -112,7 +114,7 @@ rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
      * the operators that turn one command into two. The bar's whole job is
      * that what is shown is what is approved. chatlist.cpp already passes
      * DT_NOPREFIX for the same reason. */
-    text = CreateWindowExA(0, "STATIC", "",
+    m_text = CreateWindowExA(0, "STATIC", "",
         WS_CHILD | SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS | SS_NOPREFIX,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_TEXT, inst, NULL);
     /* WS_TABSTOP on all three, and mnemonics. These were mouse-only, which
@@ -144,39 +146,40 @@ rc_bar::rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
      * `primary` into this button with SetWindowTextA on every push -- a table
      * entry without one would silently undo the caption set here. relabel()
      * is different: it writes into the STATIC, not into these buttons. */
-    allow = CreateWindowExA(0, "BUTTON", "A&llow",
+    m_allow = CreateWindowExA(0, "BUTTON", "A&llow",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALLOW, inst, NULL);
-    always = CreateWindowExA(0, "BUTTON", "Al&ways",
+    m_always = CreateWindowExA(0, "BUTTON", "Al&ways",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALWAYS, inst, NULL);
-    deny = CreateWindowExA(0, "BUTTON", "De&ny",
+    m_deny = CreateWindowExA(0, "BUTTON", "De&ny",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_DENY, inst, NULL);
-    if (!text || !allow || !always || !deny)
+    if (!m_text || !m_allow || !m_always || !m_deny)
         rc_log("bar: a control failed to create (GetLastError=%lu)",
                (unsigned long)GetLastError());
 
-    SendMessageA(text,   WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(allow,  WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(always, WM_SETFONT, (WPARAM)font, TRUE);
-    SendMessageA(deny,   WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(m_text,   WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(m_allow,  WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(m_always, WM_SETFONT, (WPARAM)font, TRUE);
+    SendMessageA(m_deny,   WM_SETFONT, (WPARAM)font, TRUE);
 }
 
-rc_bar *rc_bar::create(HWND parent, HINSTANCE inst, HFONT font, rc_net *net,
-                        FrameSender *send, void (*changed)(void))
+PermissionBar *PermissionBar::create(HWND parent, HINSTANCE inst, HFONT font,
+                                     rc_net *net, FrameSender *sender,
+                                     PermissionBarListener *listener)
 {
-    return new rc_bar(parent, inst, font, net, send, changed);
+    return new PermissionBar(parent, inst, font, net, sender, listener);
 }
 
-rc_bar_entry *rc_bar::visible()
+BarEntry *PermissionBar::visible()
 {
     int i, besti = -1, bestp = 0x7fffffff;
-    for (i = 0; i < depth; i++) {
-        int p = bar_desc(stack[i].kind)->priority;
+    for (i = 0; i < m_depth; i++) {
+        int p = bar_desc(m_stack[i].kind)->priority;
         if (p < bestp) { bestp = p; besti = i; }
     }
-    return besti >= 0 ? &stack[besti] : NULL;
+    return besti >= 0 ? &m_stack[besti] : NULL;
 }
 
 /* Right-to-left: the buttons are fixed width and the label takes whatever is
@@ -186,17 +189,17 @@ rc_bar_entry *rc_bar::visible()
  * A halt has only Continue, and the hidden buttons must not be given screen
  * space -- MoveWindow on a hidden control costs nothing, but leaving the gap
  * would put Continue in the middle of the bar with a hole beside it. */
-void rc_bar::move(int cx, int y, int right_edge)
+void PermissionBar::move(int cx, int y, int rightEdge)
 {
-    rc_bar_entry *e = visible();
+    BarEntry *e = visible();
     const rc_bar_desc *d;
-    int bx = right_edge - PERMBTN_W;
+    int bx = rightEdge - PERMBTN_W;
 
     if (!e) return;
     d = bar_desc(e->kind);
 
     if (d->tertiary) {
-        MoveWindow(deny, bx, y, PERMBTN_W, PERM_H - 4, TRUE);
+        MoveWindow(m_deny, bx, y, PERMBTN_W, PERM_H - 4, TRUE);
         bx -= PERMBTN_W + 2;
     }
     /* Reserves the button's width only when Always will actually be shown
@@ -206,33 +209,33 @@ void rc_bar::move(int cx, int y, int right_edge)
      * A minor behaviour change, not one of this pass's named findings: it
      * gives the label a few more pixels when there is nothing to reserve
      * for, which only helps 04.6's "the text is too narrow" complaint. */
-    if (d->secondary && e->allows_always) {
-        MoveWindow(always, bx, y, PERMBTN_W, PERM_H - 4, TRUE);
+    if (d->secondary && e->allowsAlways) {
+        MoveWindow(m_always, bx, y, PERMBTN_W, PERM_H - 4, TRUE);
         bx -= PERMBTN_W + 2;
     }
-    MoveWindow(allow, bx, y, PERMBTN_W, PERM_H - 4, TRUE);
+    MoveWindow(m_allow, bx, y, PERMBTN_W, PERM_H - 4, TRUE);
     /* The "4" here is main.c's GUTTER, which this module cannot see by name
      * (it is a plain #define in main.cpp, not exported by any header) --
      * same value, spelled out. */
-    MoveWindow(text, cx, y + 4, bx - cx - 4, PERM_H - 6, TRUE);
+    MoveWindow(m_text, cx, y + 4, bx - cx - 4, PERM_H - 6, TRUE);
 }
 
-int rc_bar::active() const
+bool PermissionBar::active() const
 {
-    return depth > 0;
+    return m_depth > 0;
 }
 
-int rc_bar::blocks_send()
+bool PermissionBar::blocksSend()
 {
-    rc_bar_entry *e = visible();
+    BarEntry *e = visible();
     return e && bar_desc(e->kind)->blocks_send;
 }
 
-rc_bar_entry *rc_bar::find_entry(int kind)
+BarEntry *PermissionBar::findEntry(int kind)
 {
     int i;
-    for (i = 0; i < depth; i++)
-        if (stack[i].kind == kind) return &stack[i];
+    for (i = 0; i < m_depth; i++)
+        if (m_stack[i].kind == kind) return &m_stack[i];
     return NULL;
 }
 
@@ -240,9 +243,9 @@ rc_bar_entry *rc_bar::find_entry(int kind)
  * (or takes them all down if nothing is). Called only from push() and pop()
  * -- a visibility or label change, not PERMWAIT's queue-depth ticks, which
  * only ever touch the text (see relabel). */
-void rc_bar::show()
+void PermissionBar::show()
 {
-    rc_bar_entry *e = visible();
+    BarEntry *e = visible();
 
     if (!e) {
         /* The keyboard is handed back by bar_changed() in main.cpp, which
@@ -253,32 +256,32 @@ void rc_bar::show()
          * typing and the characters went nowhere until they clicked the input
          * box. Win32 does not reassign focus when the focused window is
          * hidden. */
-        ShowWindow(text,   SW_HIDE);
-        ShowWindow(allow,  SW_HIDE);
-        ShowWindow(always, SW_HIDE);
-        ShowWindow(deny,   SW_HIDE);
+        ShowWindow(m_text,   SW_HIDE);
+        ShowWindow(m_allow,  SW_HIDE);
+        ShowWindow(m_always, SW_HIDE);
+        ShowWindow(m_deny,   SW_HIDE);
     } else {
         const rc_bar_desc *d = bar_desc(e->kind);
         char buf[256];
 
         if (e->waiting > 0)
             rc_strf(buf, sizeof(buf), "%s  (+%d waiting)",
-                      e->base_text, e->waiting);
+                      e->baseText, e->waiting);
         else
-            rc_strf(buf, sizeof(buf), "%s", e->base_text);
-        SetWindowTextA(text, buf);
+            rc_strf(buf, sizeof(buf), "%s", e->baseText);
+        SetWindowTextA(m_text, buf);
         /* The SAME button, relabelled per kind -- see the desc table. */
-        SetWindowTextA(allow, d->primary);
-        ShowWindow(text,  SW_SHOW);
-        ShowWindow(allow, SW_SHOW);
+        SetWindowTextA(m_allow, d->primary);
+        ShowWindow(m_text,  SW_SHOW);
+        ShowWindow(m_allow, SW_SHOW);
         /* "Always" is offered only when the bridge says a rule can be
          * expressed AND this kind's descriptor allows it at all. For a
          * machine tool it never can -- MCP rules cannot carry specifiers, so
          * the only rule available is the whole tool, and pressing it once
          * would hand over the machine for the rest of the session. */
-        ShowWindow(always, (d->secondary && e->allows_always)
+        ShowWindow(m_always, (d->secondary && e->allowsAlways)
                             ? SW_SHOW : SW_HIDE);
-        ShowWindow(deny, d->tertiary ? SW_SHOW : SW_HIDE);
+        ShowWindow(m_deny, d->tertiary ? SW_SHOW : SW_HIDE);
         /* NOT WHILE THE USER IS TYPING.
          *
          * This was an unconditional SetFocus(allow), and push() runs straight
@@ -301,23 +304,23 @@ void rc_bar::show()
          * bar deserves it. When it does not take focus the bar is still fully
          * reachable: the buttons carry A/L/D mnemonics and WS_TABSTOP, and
          * main.cpp's loop runs IsDialogMessageA, so Alt+A/Alt+L/Alt+D work. */
-        if (!typing_now()) SetFocus(allow);
+        if (!typing_now()) SetFocus(m_allow);
     }
-    if (changed) changed();
+    if (m_listener) m_listener->onBarChanged();
 }
 
 /* PERMWAIT alone: relabel in place without touching visibility, layout or
  * Send's enabled state. Keeping this separate from show() is what stops a
  * queue-depth tick from stealing focus off the input box every time one
  * arrives. */
-void rc_bar::relabel(rc_bar_entry *e)
+void PermissionBar::relabel(BarEntry *e)
 {
     char buf[256];
     if (e->waiting > 0)
-        rc_strf(buf, sizeof(buf), "%s  (+%d waiting)", e->base_text, e->waiting);
+        rc_strf(buf, sizeof(buf), "%s  (+%d waiting)", e->baseText, e->waiting);
     else
-        rc_strf(buf, sizeof(buf), "%s", e->base_text);
-    SetWindowTextA(text, buf);
+        rc_strf(buf, sizeof(buf), "%s", e->baseText);
+    SetWindowTextA(m_text, buf);
 }
 
 /* Push a request onto the stack, or refresh it in place if the same kind and
@@ -333,15 +336,15 @@ void rc_bar::relabel(rc_bar_entry *e)
  * Refusing the new one keeps the invariant that whatever IS on screen stays
  * answerable; at worst the refused request goes unanswered until its own
  * deadline, rather than both of them going unanswered forever. */
-void rc_bar::push(int kind, const char *id, const char *text_, int allows_always)
+void PermissionBar::push(int kind, const char *id, const char *prompt, int allowsAlways)
 {
-    rc_bar_entry *e = find_entry(kind);
+    BarEntry *e = findEntry(kind);
 
     if (e) {
         if (strcmp(e->id, id) == 0) {
-            rc_strf(e->base_text, sizeof(e->base_text), "%s", text_);
+            rc_strf(e->baseText, sizeof(e->baseText), "%s", prompt);
             e->waiting = 0;
-            e->allows_always = allows_always;
+            e->allowsAlways = allowsAlways;
             show();
             return;
         }
@@ -349,17 +352,17 @@ void rc_bar::push(int kind, const char *id, const char *text_, int allows_always
                "new id \"%s\" (see audit finding 01.13)", kind, e->id, id);
         return;
     }
-    if (depth >= BAR_STACK_MAX) {
+    if (m_depth >= BAR_STACK_MAX) {
         rc_log("bar: stack full (%d), dropping kind %d id \"%s\"",
                BAR_STACK_MAX, kind, id);
         return;
     }
-    e = &stack[depth++];
+    e = &m_stack[m_depth++];
     e->kind = kind;
     rc_strcpy(e->id, sizeof(e->id), id);
-    rc_strf(e->base_text, sizeof(e->base_text), "%s", text_);
+    rc_strf(e->baseText, sizeof(e->baseText), "%s", prompt);
     e->waiting = 0;
-    e->allows_always = allows_always;
+    e->allowsAlways = allowsAlways;
     show();
 }
 
@@ -376,20 +379,20 @@ void rc_bar::push(int kind, const char *id, const char *text_, int allows_always
  * re-deriving visible() handles both "it was on screen" and "it was waiting
  * behind something else" the same way, because there was never a second
  * place recording which one that was. */
-void rc_bar::pop(int kind, const char *id)
+void PermissionBar::pop(int kind, const char *id)
 {
     int i;
-    for (i = 0; i < depth; i++) {
-        if (stack[i].kind == kind && strcmp(stack[i].id, id) == 0) {
-            for (; i < depth - 1; i++) stack[i] = stack[i + 1];
-            depth--;
+    for (i = 0; i < m_depth; i++) {
+        if (m_stack[i].kind == kind && strcmp(m_stack[i].id, id) == 0) {
+            for (; i < m_depth - 1; i++) m_stack[i] = m_stack[i + 1];
+            m_depth--;
             show();
             return;
         }
     }
 }
 
-int rc_bar::frame(rc_frame *f)
+bool PermissionBar::frame(rc_frame *f)
 {
     if (strcmp(f->type, "PERMREQ") == 0 || strcmp(f->type, "PERMSTATE") == 0) {
         /* PERMSTATE is the same request re-issued after a reconnect. The
@@ -399,7 +402,7 @@ int rc_bar::frame(rc_frame *f)
         const char *allows = rc_frame_get(f, "allows");
         push(BAR_PERM, id ? id : "", f->body ? f->body : "",
              allows && *allows == '1');
-        return 1;
+        return true;
     }
     if (strcmp(f->type, "HALT") == 0) {
         /* The bridge has stopped the agent and wants the user to decide when
@@ -414,46 +417,46 @@ int rc_bar::frame(rc_frame *f)
         const char *txt = f->body && *f->body
                           ? f->body : "Stopped: a conflicting edit was found";
         push(BAR_HALT, id ? id : "", txt, 0);
-        return 1;
+        return true;
     }
     if (strcmp(f->type, "PERMWAIT") == 0) {
         /* Only the queue depth changed; the request is the same one. */
         const char *id = rc_frame_get(f, "id");
         const char *n = rc_frame_get(f, "waiting");
-        rc_bar_entry *e = find_entry(BAR_PERM);
+        BarEntry *e = findEntry(BAR_PERM);
         if (e && id && strcmp(id, e->id) == 0 && n) {
             rc_log("perm: %s more request(s) queued", n);
             e->waiting = atoi(n);
             if (e->waiting < 0) e->waiting = 0;
             relabel(e);
         }
-        return 1;
+        return true;
     }
     if (strcmp(f->type, "PERMEND") == 0) {
         const char *id = rc_frame_get(f, "id");
-        rc_bar_entry *e = id ? find_entry(BAR_PERM) : NULL;
+        BarEntry *e = id ? findEntry(BAR_PERM) : NULL;
         if (e && strcmp(id, e->id) == 0)
             pop(BAR_PERM, id);
         else if (id)
             rc_log("perm: PERMEND for %s, not the one on screen", id);
-        return 1;
+        return true;
     }
     if (strcmp(f->type, "HALTEND") == 0) {
         /* Keyed on the id for the same reason PERMEND is: the bridge can
          * resolve a halt on its own -- the agent called sync_resolve, or the
          * session was rebuilt -- while the bar is still up. */
         const char *id = rc_frame_get(f, "id");
-        rc_bar_entry *e = id ? find_entry(BAR_HALT) : NULL;
+        BarEntry *e = id ? findEntry(BAR_HALT) : NULL;
         if (e && strcmp(id, e->id) == 0)
             pop(BAR_HALT, id);
-        return 1;
+        return true;
     }
-    return 0;
+    return false;
 }
 
 /* The reply keys/vals shape this used to build inline; both call sites below
  * (Allow/Always/Deny) need exactly this. */
-void rc_bar::reply(rc_bar_entry *e, const char *action)
+void PermissionBar::reply(BarEntry *e, const char *action)
 {
     const char *keys[2];
     const char *vals[2];
@@ -463,20 +466,20 @@ void rc_bar::reply(rc_bar_entry *e, const char *action)
      * waiting on a prompt nobody can answer until the bridge's deadline
      * expires and auto-denies -- and the user, who pressed Allow, is told
      * nothing. */
-    sender->sendFrame("Your permission answer", "PERMREPLY", keys, vals, 2, NULL, 0);
+    m_sender->sendFrame("Your permission answer", "PERMREPLY", keys, vals, 2, NULL, 0);
     /* The bar comes down on PERMEND, not here: the bridge owns the state
      * machine, and a reply can lose a race with a deadline or a disconnect. */
 }
 
-int rc_bar::command(int id)
+bool PermissionBar::command(int id)
 {
-    rc_bar_entry *e;
+    BarEntry *e;
 
     if (id != ID_PERM_ALLOW && id != ID_PERM_ALWAYS && id != ID_PERM_DENY)
-        return 0;
+        return false;
 
     e = visible();
-    if (!e) return 1;   /* buttons are hidden when nothing is visible */
+    if (!e) return true;   /* buttons are hidden when nothing is visible */
 
     if (e->kind == BAR_HALT) {
         /* One button, two meanings -- Allow and Continue share the same
@@ -498,30 +501,30 @@ int rc_bar::command(int id)
              * failure is reported on the bar's own text instead -- an
              * asymmetry carried over unchanged from before this file
              * existed, not something this pass introduced. */
-            if (rc_net_send(net, "RESUME", k, v, 1, NULL, 0) < 0)
-                SetWindowTextA(text,
+            if (rc_net_send(m_net, "RESUME", k, v, 1, NULL, 0) < 0)
+                SetWindowTextA(m_text,
                                "Not sent -- no link. Press Continue again.");
         }
-        return 1;
+        return true;
     }
 
     if (id == ID_PERM_ALLOW)       reply(e, "allow");
     else if (id == ID_PERM_ALWAYS) reply(e, "always");
     else                            reply(e, "deny");
-    return 1;
+    return true;
 }
 
-int rc_bar::escape()
+bool PermissionBar::escape()
 {
-    rc_bar_entry *e = visible();
-    if (!e || e->kind != BAR_PERM) return 0;
+    BarEntry *e = visible();
+    if (!e || e->kind != BAR_PERM) return false;
     reply(e, "deny");
-    return 1;
+    return true;
 }
 
-void rc_bar::hide_all()
+void PermissionBar::hideAll()
 {
-    if (!depth) return;
-    depth = 0;
+    if (!m_depth) return;
+    m_depth = 0;
     show();
 }

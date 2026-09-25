@@ -93,7 +93,7 @@ static App          *g_app;
 static MainWindow   *g_window;
 static rc_net       *g_net;
 static rc_html *g_html;
-static rc_bar  *g_bar;
+static PermissionBar *g_bar;
 static ChatList *g_chats;
 static rc_xferstat *g_xfer;
 static ComposeBox  *g_inputmod;
@@ -299,7 +299,7 @@ static void ui_refresh_enables(void)
      * the bridge answers an interrupted prompt with PERMEND reason=cancelled,
      * which clears the bar. */
     int active = g_turn && g_turn->active();
-    if (g_inputmod) g_inputmod->enableSend((active || (g_bar && g_bar->blocks_send()))
+    if (g_inputmod) g_inputmod->enableSend((active || (g_bar && g_bar->blocksSend()))
                           ? 0 : 1);
     if (g_inputmod) g_inputmod->enableStop(active);
 }
@@ -316,7 +316,7 @@ static void ui_set_busy(int busy)
  * gone out. */
 static int input_blocked(void)
 {
-    return (g_turn && g_turn->active()) || (g_bar && g_bar->blocks_send());
+    return (g_turn && g_turn->active()) || (g_bar && g_bar->blocksSend());
 }
 
 static void pillbar_detached(void)
@@ -537,7 +537,7 @@ static void chats_switched(rc_frame *f)
      * rebuilds the session -- the bridge denies anything pending as
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
      * that no longer exists, on a conversation the user has left. */
-    if (g_bar) g_bar->hide_all();
+    if (g_bar) g_bar->hideAll();
     /* The page total is app/pagebar.cpp's state now -- see app/pagebar.h's
      * rc_pagebar::note_total. No button refresh here, matching what this
      * call site always did. */
@@ -693,7 +693,7 @@ static void on_anchor(rc_frame *f)
 }
 
 /* PERMREQ, PERMSTATE, PERMWAIT, PERMEND, HALT, HALTEND -- all six owned by
- * app/bar.cpp now; see rc_bar::frame's own comments there for what each one
+ * app/bar.cpp now; see PermissionBar::frame's own comments there for what each one
  * does. One handler serves all six rows in the table below. */
 static void on_bar(rc_frame *f)
 {
@@ -1036,12 +1036,13 @@ static void create_children(HWND hwnd, HINSTANCE inst)
                                g_window, g_window);
 
     /* The permission/halt bar: its own controls, created and owned by
-     * app/bar.cpp now (rc_bar::create logs its own check_child-equivalent
+     * app/bar.cpp now (PermissionBar::create logs its own check_child-equivalent
      * failures). ui_send is main.c's "send something the user just asked
      * for" and bar_changed is the layout + enables refresh the bar needs
      * after any visible change -- see the `send`/`changed` comment on
-     * rc_bar::create in app/bar.h. */
-    g_bar = rc_bar::create(hwnd, inst, g_ui_font, g_net, g_window, bar_changed);
+     * PermissionBar::create in app/bar.h. */
+    g_bar = PermissionBar::create(hwnd, inst, g_ui_font, g_net, g_window,
+                                  g_window);
 
     /* The page bar: its own six controls, created and owned by
      * app/pagebar.cpp now (rc_pagebar::create logs its own check_child
@@ -1099,7 +1100,7 @@ static void create_children(HWND hwnd, HINSTANCE inst)
 
     /* The chat list, the bar, the page bar and the input row all got their
      * font (and, for the page bar and Stop, their initial enabled state)
-     * inside ChatList::create/rc_bar::create/rc_pagebar::create/
+     * inside ChatList::create/PermissionBar::create/rc_pagebar::create/
      * ComposeBox::create above. */
 
     /* Accept file drops from Explorer onto the window and the input box */
@@ -1291,7 +1292,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
              * reattach: _reissue_prompt re-sends PERMSTATE and _reissue_halt
              * re-sends HALT, so whatever is genuinely still outstanding comes
              * back, and whatever is not, does not. */
-            if (g_bar) g_bar->hide_all();
+            if (g_bar) g_bar->hideAll();
             /* And abandon a SYNCPUT the drop caught mid-stream. The RPC
              * worker thread survives a reconnect (rc_rpc_start's
              * if (g_thread) return 0), so its state survives with it; a PUT
@@ -1886,7 +1887,7 @@ bool MainWindow::filter(MSG &msg)
         if (msg.wParam == VK_END)  { g_html->scroll_bottom(); return true; }
     }
     /* Esc denies a pending permission request (a halt has no "deny" --
-     * see rc_bar::escape). It has to be intercepted before
+     * see PermissionBar::escape). It has to be intercepted before
      * IsDialogMessageA, which eats VK_ESCAPE and would never let it
      * reach the bar. */
     if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE
@@ -1941,4 +1942,9 @@ bool MainWindow::isSendBlocked()
 void MainWindow::onSent()
 {
     input_sent();
+}
+
+void MainWindow::onBarChanged()
+{
+    bar_changed();
 }

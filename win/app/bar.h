@@ -56,9 +56,9 @@
 
 /* One pending request. `waiting` is PERM-only (PERMWAIT's queue depth);
  * `allows_always` is PERM-only (whether the bridge said a rule can be
- * expressed for this tool -- see the ShowWindow comment in rc_bar::show
+ * expressed for this tool -- see the ShowWindow comment in PermissionBar::show
  * in bar.cpp). Both are simply unused, and harmless, on a HALT entry. */
-struct rc_bar_entry {
+struct BarEntry {
     int  kind;
     char id[80];
     /* The request's own text, kept separately from what is on screen so a
@@ -68,9 +68,9 @@ struct rc_bar_entry {
      * redisplay when it resurfaces -- replaces main.c's single g_halt_text,
      * which existed only because there was exactly one thing that could be
      * remembered at a time. */
-    char base_text[224];
+    char baseText[224];
     int  waiting;
-    int  allows_always;
+    int  allowsAlways;
 };
 
 /* Perm plus halt today, with one spare slot for Phase 6's third kind. Every
@@ -79,91 +79,96 @@ struct rc_bar_entry {
  * exists to prevent, one level up. */
 #define BAR_STACK_MAX 3
 
-class rc_bar {
-    rc_bar_entry stack[BAR_STACK_MAX];
-    int          depth;
+/* What the bar asks of whoever owns the window: it changed (shown, hidden,
+ * or relabelled by a push or pop), so the window re-runs its layout -- the
+ * HTML view has no HWND to resize, so the whole layout must be redone -- and
+ * recomputes whether Send is enabled. This is what bar_layout() plus
+ * ui_set_busy(g_turn_active) used to do by hand at every call site. */
+class PermissionBarListener
+{
+public:
+    virtual ~PermissionBarListener() {}
+    virtual void onBarChanged() = 0;
+};
 
-    HWND    text, allow, always, deny;
-    rc_net *net;
-    FrameSender *sender;
-    void  (*changed)(void);
-
-    rc_bar(const rc_bar &);
-    rc_bar &operator=(const rc_bar &);
-    rc_bar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
-           FrameSender *send_, void (*changed_)(void));
-
-    /* bar_visible in the pre-class code: the highest-priority entry on the
-     * stack, or NULL. move(), blocks_send() and show() all derive the SAME
-     * visible entry from the SAME stack rather than reading a cached "which
-     * one is showing" flag, which is what let the old g_bar_mode and
-     * g_halt_id disagree with each other. */
-    rc_bar_entry *visible();
-    rc_bar_entry *find_entry(int kind);
-    void show();
-    void relabel(rc_bar_entry *e);
-    void push(int kind, const char *id, const char *text, int allows_always);
-    void pop(int kind, const char *id);
-    void reply(rc_bar_entry *e, const char *action);
-
+/* The bar above the compose box that asks the user something: a permission
+ * request (Allow / Always / Deny) or a halt (Continue). */
+class PermissionBar
+{
 public:
     /* net: the one raw rc_net_send this module makes itself (RESUME, on the
      *      Continue button) -- see the comment on that call in bar.cpp for
-     *      why it does NOT go through `send` below.
-     * send: main.c's ui_send, for PERMREPLY.
-     * changed: called after any visible change to the bar (shown, hidden, or
-     *      relabelled by a new push/pop) -- the caller re-runs layout() (the
-     *      HTML view has no HWND to resize, so the whole window layout must
-     *      be redone) and recomputes Send's enabled state. This is what
-     *      bar_layout() plus ui_set_busy(g_turn_active) used to do, by hand,
-     *      at every call site. */
-    static rc_bar *create(HWND parent, HINSTANCE inst, HFONT font,
-                           rc_net *net, FrameSender *send,
-                           void (*changed)(void));
-    ~rc_bar() {}
+     *      why it does NOT go through `sender`.
+     * sender: for PERMREPLY. */
+    static PermissionBar *create(HWND parent, HINSTANCE inst, HFONT font,
+                                 rc_net *net, FrameSender *sender,
+                                 PermissionBarListener *listener);
+    ~PermissionBar() {}
 
     /* Positions this bar's own controls. cx is the left edge (where the
-     * label starts), y is the top of the bar's row, right_edge is the
+     * label starts), y is the top of the bar's row, rightEdge is the
      * rightmost x the buttons may use (i.e. window width minus the outer
      * gutter). Only called when active() is true. */
-    void move(int cx, int y, int right_edge);
+    void move(int cx, int y, int rightEdge);
 
-    /* Whether the bar currently occupies a row -- layout() uses this exactly
-     * where it used to read g_bar_mode directly, to shrink the transcript. */
-    int active() const;
+    /* Whether the bar currently occupies a row -- the layout uses this to
+     * shrink the transcript. */
+    bool active() const;
 
-    /* Whether the bar should hold Send disabled right now. Replaces reading
-     * g_perm_pending from ui_set_busy/do_send directly: true iff a
+    /* Whether the bar should hold Send disabled right now: true iff a
      * permission request is the entry currently on screen (a halt alone does
      * not block Send -- Stop is the escape hatch for a wedged CLI, and
      * blocking Send too would leave no way to exercise the cancellation path
      * at all). */
-    int blocks_send();
+    bool blocksSend();
 
     /* The six frame types this module owns: PERMREQ, PERMSTATE, PERMWAIT,
-     * PERMEND, HALT, HALTEND. Returns non-zero if `f->type` was one of
-     * those, so a caller building a dispatch table can use this as a single
-     * row's handler (see audit finding 01.12) without needing to know the
-     * six strings. */
-    int frame(rc_frame *f);
+     * PERMEND, HALT, HALTEND. True if `f->type` was one of those, so a
+     * caller building a dispatch table can use this as a single row's
+     * handler (see audit finding 01.12) without knowing the six strings. */
+    bool frame(rc_frame *f);
 
-    /* WM_COMMAND for ID_PERM_ALLOW/ALWAYS/DENY. Returns non-zero if `id` was
-     * one of those (whether or not there was anything to do, e.g. no bar
-     * visible). */
-    int command(int id);
+    /* WM_COMMAND for ID_PERM_ALLOW/ALWAYS/DENY. True if `id` was one of
+     * those (whether or not there was anything to do). */
+    bool command(int id);
 
     /* Esc denies whatever permission request is on screen -- but only a
-     * permission request; a halt has no "deny", only Continue. Returns
-     * non-zero if it consumed the key (there was a permission request to
-     * deny). */
-    int escape();
+     * permission request; a halt has no "deny", only Continue. True if it
+     * consumed the key. */
+    bool escape();
 
     /* Takes every pending request down at once, regardless of kind -- used
      * for disconnect and session-switch, where the bridge has already given
      * up on (or rebuilt past) whatever was outstanding. Distinct from the
      * per-kind removal that PERMEND/HALTEND do through frame(): those remove
      * exactly the one entry that was answered, this empties the stack. */
-    void hide_all();
+    void hideAll();
+
+private:
+    PermissionBar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net,
+                  FrameSender *sender, PermissionBarListener *listener);
+    PermissionBar(const PermissionBar &);
+    PermissionBar &operator=(const PermissionBar &);
+
+    /* The highest-priority entry on the stack, or NULL. move(), blocksSend()
+     * and show() all derive the SAME visible entry from the SAME stack
+     * rather than reading a cached "which one is showing" flag, which is
+     * what let the old g_bar_mode and g_halt_id disagree with each other. */
+    BarEntry *visible();
+    BarEntry *findEntry(int kind);
+    void show();
+    void relabel(BarEntry *e);
+    void push(int kind, const char *id, const char *prompt, int allowsAlways);
+    void pop(int kind, const char *id);
+    void reply(BarEntry *e, const char *action);
+
+    BarEntry m_stack[BAR_STACK_MAX];
+    int m_depth;
+
+    HWND m_text, m_allow, m_always, m_deny;
+    rc_net *m_net;
+    FrameSender *m_sender;
+    PermissionBarListener *m_listener;
 };
 
 #endif
