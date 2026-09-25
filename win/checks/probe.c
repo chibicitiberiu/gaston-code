@@ -2717,8 +2717,16 @@ static void probe_msaacost(void)
  *                      so this measures what we get for free.
  *
  *   C  IEnumVARIANT::Next explicitly, asking for every child of a node in
- *                      ONE marshalled call. This is the technique the
- *                      documentation actually names.
+ *                      ONE marshalled call. The technique the documentation
+ *                      names -- and, measured on the P200, NOT the fastest:
+ *                      2555 us/node against AccessibleChildren's 2078. The
+ *                      emulator said the opposite (2196 against 3630),
+ *                      which is how a plausible optimisation gets adopted
+ *                      on the strength of the wrong machine.
+ *
+ * The win is not the enumerator. It is walking from ONE root instead of
+ * calling AccessibleObjectFromWindow per window: 8500 us/node to 2078, a
+ * little over 4x, and oleacc's own helper already does the batching.
  *
  * Same desktop, same property fetched, so the difference is the traversal
  * and nothing else.
@@ -2898,6 +2906,8 @@ static void probe_msaafast(void)
     FreeLibrary(acc);
     say("node counts differ on purpose: A sees windows, B and C see the");
     say("accessible tree, which includes simple elements with no HWND.");
+    say("On the P200: B beat C. Prefer AccessibleChildren; the saving is");
+    say("the single root, not the enumerator.");
 }
 
 /* ------------------------------------------------------------ 0.13g */

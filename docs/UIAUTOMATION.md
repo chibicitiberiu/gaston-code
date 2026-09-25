@@ -107,6 +107,32 @@ for the candidate nodes only, not the whole tree.
 
 ## Enrichment without wrecking the machine
 
+Measured on the P200, and the ordering is not what the emulator said.
+
+| traversal | us/node |
+|---|---|
+| `AccessibleObjectFromWindow` per HWND | 8500 |
+| one root + `AccessibleChildren` | **2078** |
+| one root + `IEnumVARIANT::Next` | 2555 |
+
+**Walk from one root.** That is the 4x, and it is the single
+`AccessibleObjectFromWindow` that buys it, not the batching call underneath
+-- oleacc's own helper beat an explicit enumerator here, where the emulator
+had said the reverse. It also returns more: 228 nodes against 48 windows,
+because the accessible tree holds simple elements that have no HWND, which
+is where list and menu items live.
+
+**Ask Win32 first.** A control's class and style bits are free, and for a
+Button the style IS the role. With a dialog on screen that classified 46 of
+82 windows at 731 us/node against MSAA's 3048 for the same set. The
+unclassified remainder is custom classes, which is exactly where MSAA earns
+its cost.
+
+**Treat a single measurement as noise.** MSAA came out at 18.3, 8.5, 5.7 and
+3.0 us/node across four runs on the same machine, depending on what was on
+screen. Ratios measured inside one run are the only comparable thing.
+
+
 MSAA costs roughly as much as everything else in a walk put together, and
 returned a name for well under half the nodes on a plain Win32 desktop. So:
 
