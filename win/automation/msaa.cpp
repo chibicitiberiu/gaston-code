@@ -89,7 +89,7 @@ static void normaliseRole(char *s)
     *w = '\0';
 }
 
-bool MsaaSource::enrich(HWND h, Enrichment &out)
+bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
 {
     memset(&out, 0, sizeof(out));
     if (!m_aofw || !h || !IsWindow(h))
@@ -107,7 +107,8 @@ bool MsaaSource::enrich(HWND h, Enrichment &out)
     V_I4(&self) = 0;                    /* CHILDID_SELF */
 
     BSTR b = 0;
-    if (acc->get_accName(self, &b) == S_OK && b)
+    if ((want & Selector::WANT_NAME) && acc->get_accName(self, &b) == S_OK
+        && b)
     {
         bstrToNarrow(b, out.name, sizeof(out.name));
         SysFreeString(b);
@@ -115,7 +116,8 @@ bool MsaaSource::enrich(HWND h, Enrichment &out)
         if (out.name[0])
             m_named++;
     }
-    if (acc->get_accValue(self, &b) == S_OK && b)
+    if ((want & Selector::WANT_VALUE) && acc->get_accValue(self, &b) == S_OK
+        && b)
     {
         bstrToNarrow(b, out.value, sizeof(out.value));
         SysFreeString(b);
@@ -124,7 +126,8 @@ bool MsaaSource::enrich(HWND h, Enrichment &out)
 
     VARIANT vrole;
     V_VT(&vrole) = VT_EMPTY;
-    if (acc->get_accRole(self, &vrole) == S_OK
+    if ((want & Selector::WANT_ROLE)
+        && acc->get_accRole(self, &vrole) == S_OK
         && V_VT(&vrole) == VT_I4)
     {
         long role = V_I4(&vrole);

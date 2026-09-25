@@ -28,9 +28,15 @@
 
 #include "automation/tree.h"
 
-#define RC_SEL_STEPS 8
-#define RC_SEL_ATTRS 4
-#define RC_SEL_VAL   64
+/* Sized so a Selector fits comfortably in a stack frame. At 8 steps, 4
+ * attributes and 64-byte values the object was ~3KB, and two of them in one
+ * function is most of the 4096 bytes a frame may use before it steps over
+ * Win98's guard page and faults. Four steps is more than the measured tree
+ * is deep (4 to 6, and a selector rarely names every level); three
+ * attributes per step and 48-byte values have never been close to binding. */
+#define RC_SEL_STEPS 4
+#define RC_SEL_ATTRS 3
+#define RC_SEL_VAL   48
 
 enum AttrOp
 {
@@ -93,15 +99,19 @@ public:
      * what a walk uses to decide whether a node is worth enriching. */
     bool matchesLeaf(const Node &n, const Enrichment *e) const;
 
-    /* Does this node's path satisfy the whole chain? `path` is the node's
-     * child-index path and `ancestry` the classes along it, supplied by the
-     * caller because the walker streams and does not keep parents. */
-    bool needsEnrichment() const { return m_needsMsaa; }
+    bool needsEnrichment() const { return m_needsMsaa != 0; }
+
+    /* WHICH MSAA fields, not merely whether. Each one is a separate COM
+     * call into another process; fetching all three when the selector asks
+     * about one is three times the work, and on a 200MHz machine that is
+     * the difference between usable and not. */
+    enum { WANT_NAME = 1, WANT_ROLE = 2, WANT_VALUE = 4 };
+    int wanted() const { return m_needsMsaa; }
 
 private:
     SelStep m_steps[RC_SEL_STEPS];
     int     m_stepN;
-    bool    m_needsMsaa;
+    int     m_needsMsaa;   /* WANT_* bits */
 
     Selector(const Selector &);
     Selector &operator=(const Selector &);

@@ -220,8 +220,8 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 AUTOCHECK_OBJS = $(call objs,checks/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
 autocheck: $(BUILD)/autocheck.exe
 $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
-	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
-	  $(LINKIN)
+	@$(WLINK) system nt option quiet, osversion=4.0, \
+	  map=$(BUILD)/autocheck.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@"
 
 # The only DLL this project builds, and it exists to answer one question:
@@ -523,7 +523,22 @@ PYTHON ?= python3
 #
 # check-<exe> is deliberately not .PHONY: a phony target skips implicit rule
 # search, and the gates live in the check-% pattern rule below.
-check: check-sources check-retroclaude
+# autocheck joins because the stack-frame gate would have caught a 64KB
+# local in it and never got the chance -- that crashed the real machine with
+# an invalid page fault while passing every gate here and every test under
+# Wine, where the stack is committed up front and there is no guard page to
+# jump over. A check exe that links libautomation is exactly the thing that
+# needs auditing, since what it links is what ships.
+#
+# Its committed-at-load budget is generous on purpose. That number is a
+# claim about the shipping client's footprint on a 32MB guest; a test
+# program is not competing for that memory and never runs beside the client.
+# It is set rather than omitted because the gate compares against whatever
+# it is given, and 0 means "must be empty", not "not applicable".
+check: check-sources check-retroclaude check-autocheck
+
+check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
+check-autocheck: CHECK_CAP   = 200000
 
 check-retroclaude: CHECK_OWNED = $(OBJS)
 check-retroclaude: CHECK_CAP   = $(COMMITTED_CAP)

@@ -2536,6 +2536,167 @@ static void probe_waitfor(void)
     say("(rechecks well under a poll count means the feed drove the wait)");
 }
 
+/* ------------------------------------------------------------ 0.13e */
+/* WHERE does MSAA's second per control go?
+ *
+ * Reported from the P200: roughly a second per control, which is unusable
+ * and far worse than the emulator's ~12ms. Two candidate causes need
+ * separating before anything is changed, because the fixes are opposite:
+ *
+ *   object creation   AccessibleObjectFromWindow does a WM_GETOBJECT round
+ *                     trip into the target and, for a window that does not
+ *                     answer, oleacc falls back to a proxy -- possibly
+ *                     after waiting out a timeout. If this is the cost,
+ *                     fetching fewer properties changes nothing and the
+ *                     answer is to create ONE object per parent and
+ *                     enumerate with AccessibleChildren.
+ *
+ *   property fetch    three COM calls per node (name, value, role), each
+ *                     marshalled if the proxy lives in another apartment.
+ *                     If this is the cost, the answer is to fetch only what
+ *                     the caller asked for, which is a small change.
+ *
+ * So each phase is timed separately against the SAME nodes, and each is
+ * repeated so a 55ms tick cannot hide a difference. Ten nodes, not the
+ * whole desktop: at a second each the whole desktop would be minutes.
+ */
+static void probe_msaacost(void)
+{
+    HMODULE acc;
+    PFN_AOFW aofw;
+    PFN_ACHILDREN achildren;
+    int i, n;
+    DWORD t0, t1;
+    const int LIMIT = 10;
+
+    head("0.13e  where MSAA's time actually goes");
+
+    acc = LoadLibraryA("oleacc.dll");
+    aofw = acc ? (PFN_AOFW)GetProcAddress(acc, "AccessibleObjectFromWindow")
+               : 0;
+    achildren = acc ? (PFN_ACHILDREN)GetProcAddress(acc, "AccessibleChildren")
+                    : 0;
+    if (!aofw) { say("oleacc unavailable"); if (acc) FreeLibrary(acc); return; }
+
+    g_uiw_n = 0;
+    EnumWindows(collect_top, 0);
+    n = g_uiw_n < LIMIT ? g_uiw_n : LIMIT;
+    say("timing the first %d visible windows of %d", n, g_uiw_n);
+
+    CoInitialize(NULL);
+
+    /* WARM UP FIRST, and discard it. The first version timed A first and
+     * got 19ms/node for create-only against 5ms/node for create-plus-role,
+     * which cannot be true -- the second does strictly more work. A was
+     * paying oleacc's one-time setup for every phase that followed. The
+     * same warm/cold trap the window walk hit, and the same fix. */
+    for (i = 0; i < n; i++) {
+        IAccessible *ia = 0;
+        if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&ia) == S_OK && ia)
+            ia->lpVtbl->Release(ia);
+    }
+
+    /* A -- create and release only. No properties asked for at all. */
+    t0 = GetTickCount();
+    for (i = 0; i < n; i++) {
+        IAccessible *ia = 0;
+        if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&ia) == S_OK && ia)
+            ia->lpVtbl->Release(ia);
+    }
+    t1 = GetTickCount();
+    say("A create+release only : %lu ms total, %lu ms/node",
+        (unsigned long)(t1 - t0), (unsigned long)(t1 - t0) / (n ? n : 1));
+
+    /* B -- the same, but OBJID_WINDOW. If the frame object is much cheaper
+     * than the client one, the cost is in what oleacc builds, not in the
+     * message. */
+    t0 = GetTickCount();
+    for (i = 0; i < n; i++) {
+        IAccessible *ia = 0;
+        if (aofw(g_uiw[i], OBJID_WINDOW, &RC_IID_IAccessible,
+                 (void **)&ia) == S_OK && ia)
+            ia->lpVtbl->Release(ia);
+    }
+    t1 = GetTickCount();
+    say("B create, OBJID_WINDOW: %lu ms total, %lu ms/node",
+        (unsigned long)(t1 - t0), (unsigned long)(t1 - t0) / (n ? n : 1));
+
+    /* C, D, E -- one property each, on top of a create. The difference
+     * between each and A is what that one property costs. */
+    {
+        struct { const char *name; int which; } props[3];
+        int k;
+        props[0].name = "+ role  "; props[0].which = 0;
+        props[1].name = "+ name  "; props[1].which = 1;
+        props[2].name = "+ value "; props[2].which = 2;
+        for (k = 0; k < 3; k++) {
+            t0 = GetTickCount();
+            for (i = 0; i < n; i++) {
+                IAccessible *ia = 0;
+                VARIANT self;
+                if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                         (void **)&ia) != S_OK || !ia)
+                    continue;
+                V_VT(&self) = VT_I4; V_I4(&self) = 0;
+                if (props[k].which == 0) {
+                    VARIANT vr;
+                    V_VT(&vr) = VT_EMPTY;
+                    ia->lpVtbl->get_accRole(ia, self, &vr);
+                } else if (props[k].which == 1) {
+                    BSTR b = 0;
+                    if (ia->lpVtbl->get_accName(ia, self, &b) == S_OK && b)
+                        SysFreeString(b);
+                } else {
+                    BSTR b = 0;
+                    if (ia->lpVtbl->get_accValue(ia, self, &b) == S_OK && b)
+                        SysFreeString(b);
+                }
+                ia->lpVtbl->Release(ia);
+            }
+            t1 = GetTickCount();
+            say("%s          : %lu ms total, %lu ms/node", props[k].name,
+                (unsigned long)(t1 - t0),
+                (unsigned long)(t1 - t0) / (n ? n : 1));
+        }
+    }
+
+    /* F -- one object for the PARENT, then AccessibleChildren. If A is the
+     * cost, this is the fix: one WM_GETOBJECT instead of one per node. */
+    if (achildren) {
+        IAccessible *parent = 0;
+        t0 = GetTickCount();
+        if (aofw(GetDesktopWindow(), OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&parent) == S_OK && parent) {
+            long kids = 0, got = 0;
+            parent->lpVtbl->get_accChildCount(parent, &kids);
+            if (kids > 0) {
+                VARIANT *v = (VARIANT *)HeapAlloc(GetProcessHeap(), 0,
+                                                  sizeof(VARIANT) * kids);
+                if (v) {
+                    achildren(parent, 0, kids, v, &got);
+                    HeapFree(GetProcessHeap(), 0, v);
+                }
+            }
+            t1 = GetTickCount();
+            say("F one parent + children: %lu ms for %ld children (%lu ms each)",
+                (unsigned long)(t1 - t0), got,
+                (unsigned long)(t1 - t0) / (got ? got : 1));
+            parent->lpVtbl->Release(parent);
+        } else {
+            t1 = GetTickCount();
+            say("F one parent + children: desktop has no accessible object");
+        }
+    }
+
+    CoUninitialize();
+    FreeLibrary(acc);
+    say("(warm: a discarded pass runs before any of these)");
+    say("A high, properties near zero -> create ONE object per parent.");
+    say("A low, a property high       -> fetch only what was asked for.");
+}
+
 /* ------------------------------------------------------------- 0.16 */
 /* ImageClick: find a small bitmap on screen and click it. The question is
  * not whether it works -- it is a scan, it always works -- but WHERE the
@@ -2719,6 +2880,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "automation")) probe_automation();
     if (!only || !strcmp(only, "uiwalk"))   probe_uiwalk();
     if (!only || !strcmp(only, "msaa"))     probe_msaa();
+    if (!only || !strcmp(only, "msaacost")) probe_msaacost();
     if (!only || !strcmp(only, "dom"))      probe_dom();
     if (!only || !strcmp(only, "depths"))   probe_depths();
     if (!only || !strcmp(only, "verify"))   probe_verify();

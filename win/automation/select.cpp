@@ -6,7 +6,7 @@
 Selector::Selector()
 {
     m_stepN = 0;
-    m_needsMsaa = false;
+    m_needsMsaa = 0;
     memset(m_steps, 0, sizeof(m_steps));
 }
 
@@ -59,7 +59,7 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
     bool pendingDirect = false;
 
     m_stepN = 0;
-    m_needsMsaa = false;
+    m_needsMsaa = 0;
     memset(m_steps, 0, sizeof(m_steps));
     if (err && errCap)
         err[0] = '\0';
@@ -142,11 +142,11 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
                 }
                 if (!strcmp(key, "text"))       t.which = ATTR_TEXT;
                 else if (!strcmp(key, "name"))  { t.which = ATTR_NAME;
-                                                  m_needsMsaa = true; }
+                                                  m_needsMsaa |= WANT_NAME; }
                 else if (!strcmp(key, "role"))  { t.which = ATTR_ROLE;
-                                                  m_needsMsaa = true; }
+                                                  m_needsMsaa |= WANT_ROLE; }
                 else if (!strcmp(key, "value")) { t.which = ATTR_VALUE;
-                                                  m_needsMsaa = true; }
+                                                  m_needsMsaa |= WANT_VALUE; }
                 else
                 {
                     rc_strf(err, errCap,

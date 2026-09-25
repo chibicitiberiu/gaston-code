@@ -36,10 +36,16 @@ public:
      * rather than pretending the fields are empty. */
     bool available() const { return m_aofw != 0; }
 
-    /* Fill `out` for one window. Returns false if this window has no
-     * accessible object, which is ordinary and not an error. Never blocks
-     * longer than the COM call itself -- the caller owns the deadline. */
-    bool enrich(HWND h, Enrichment &out);
+    /* Fill `out` for one window, fetching ONLY the fields in `want`
+     * (Selector::WANT_*). Each field is a separate COM call into another
+     * process, so asking for three when the selector needs one is three
+     * times the work -- measured at a few ms each on the emulator and
+     * reported at about a second per control on a 200MHz machine, which is
+     * where that multiplier stops being academic.
+     *
+     * Returns false if this window has no accessible object, which is
+     * ordinary and not an error. The caller owns the deadline. */
+    bool enrich(HWND h, int want, Enrichment &out);
 
     int  objectsMade() const { return m_made; }
     int  namesFound() const  { return m_named; }

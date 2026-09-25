@@ -29,19 +29,25 @@ static void say(const char *name, bool pass, const char *detail)
         g_fails++;
 }
 
+/* Not static, and not a style choice. As statics called once each, the
+ * compiler inlined all six into main and their locals summed to a 9632-byte
+ * frame -- over the 4096 the stack-frame gate allows, because a frame that
+ * large is written past the guard page and Win98 never grows the stack.
+ * External linkage keeps them as separate frames. */
+
 /* --- the grammar ---------------------------------------------------- */
 
 static void checkParses(const char *name, const char *sel, bool want)
 {
-    Selector s;
-    char err[128];
+    static Selector s;
+    static char err[128];
     bool ok = s.parse(sel, err, sizeof(err));
-    char detail[256];
+    static char detail[256];
     rc_strf(detail, sizeof(detail), "%s -> %s", sel, ok ? "ok" : err);
     say(name, ok == want, detail);
 }
 
-static void grammar(void)
+void grammar(void)
 {
     checkParses("parse-class",        "Notepad", true);
     checkParses("parse-ctrlid",       "#1001", true);
@@ -70,8 +76,8 @@ static void grammar(void)
     /* A selector that names only MSAA attributes must say so, or the
      * caller will never enrich and it will never match. */
     {
-        Selector a, b;
-        char err[128];
+        static Selector a, b;
+        static char err[128];
         a.parse("[role=pushbutton]", err, sizeof(err));
         b.parse("Edit[text=\"x\"]", err, sizeof(err));
         say("msaa-flagged-when-needed", a.needsEnrichment(), "[role=...]");
@@ -99,8 +105,8 @@ static Node makeNode(const char *cls, const char *text, int ctrlId,
 static void checkMatch(const char *name, const char *sel, const Node &n,
                        const Enrichment *e, bool want)
 {
-    Selector s;
-    char err[128];
+    static Selector s;
+    static char err[128];
     if (!s.parse(sel, err, sizeof(err)))
     {
         say(name, false, err);
@@ -110,10 +116,10 @@ static void checkMatch(const char *name, const char *sel, const Node &n,
     say(name, got == want, sel);
 }
 
-static void matching(void)
+void matching(void)
 {
-    Node edit = makeNode("Edit", "Untitled - Notepad", 1001, true, true, false);
-    Node hidden = makeNode("Edit", "Untitled - Notepad", 1001, false, true,
+    static Node edit; edit = makeNode("Edit", "Untitled - Notepad", 1001, true, true, false);
+    static Node hidden; hidden = makeNode("Edit", "Untitled - Notepad", 1001, false, true,
                            false);
 
     checkMatch("match-class",       "Edit", edit, NULL, true);
@@ -135,7 +141,7 @@ static void matching(void)
      * it, and the selector would match nothing, ever. */
     checkMatch("msaa-unknown-passes", "[role=pushbutton]", edit, NULL, true);
     {
-        Enrichment e;
+        static Enrichment e;
         memset(&e, 0, sizeof(e));
         rc_strncpy(e.role, sizeof(e.role), "pushbutton", 10);
         checkMatch("msaa-known-matches", "[role=pushbutton]", edit, &e, true);
@@ -174,7 +180,7 @@ static LRESULT CALLBACK sinkProc(HWND h, UINT m, WPARAM w, LPARAM l)
     return DefWindowProcA(h, m, w, l);
 }
 
-static void walking(void)
+void walking(void)
 {
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
@@ -187,7 +193,7 @@ static void walking(void)
                                0, 0, 80, 80, NULL, NULL, wc.hInstance, NULL);
     HWND kid = CreateWindowExA(0, "GastonAutoCheck", "child", WS_CHILD,
                                0, 0, 20, 20, top, NULL, wc.hInstance, NULL);
-    char detail[128];
+    static char detail[128];
 
     {
         /* Rooted at our own window so the result does not depend on what
@@ -277,7 +283,7 @@ static void walking(void)
  * the refusals are the part that can hurt somebody. Delivery needs the
  * guest.
  */
-static void inputRefusals(void)
+void inputRefusals(void)
 {
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
@@ -290,7 +296,7 @@ static void inputRefusals(void)
     HWND kid = CreateWindowExA(0, "GastonInputCheck", "kid", WS_CHILD,
                                0, 0, 10, 10, mine, NULL, wc.hInstance, NULL);
     Input in;
-    char detail[128];
+    static char detail[128];
 
     /* Our OWN window, by process. The HWND comparison this replaces missed
      * a child control, which is a different HWND on the same thread. */
@@ -330,13 +336,30 @@ static void inputRefusals(void)
 
 /* --- MSAA and capture ------------------------------------------------ */
 
+/* The buffer is on the HEAP, and this is the bug that crashed the P200.
+ *
+ * It was a 64KB member, and this class is a LOCAL in capture(), so the
+ * frame was 64KB. Win98 grows a stack one page at a time by faulting on a
+ * guard page; a frame that large is written past the guard page in one go,
+ * the stack never grows, and the write faults. The crash landed on the SEH
+ * prologue -- `pop dword ptr [eax]` with EAX 200KB above ESP -- which is
+ * the first thing that touches the new frame, not the buffer itself.
+ *
+ * It ran green under Wine and on the emulator because a Linux stack is
+ * committed up front. Only the real machine has the guard page that makes
+ * this a rule, and BACKLOG.md section 9 already carried the postmortem for
+ * the same class of fault in sync.cpp: every job buffer heap-allocates. */
 class CollectSink : public ByteSink
 {
 public:
-    CollectSink() : m_n(0) {}
+    CollectSink()
+        : m_buf((unsigned char *)HeapAlloc(GetProcessHeap(), 0, CAP)),
+          m_n(0) {}
+    ~CollectSink() { if (m_buf) HeapFree(GetProcessHeap(), 0, m_buf); }
+    bool ready() const { return m_buf != 0; }
     virtual bool write(const void *d, unsigned len)
     {
-        if (m_n + len <= sizeof(m_buf))
+        if (m_buf && m_n + len <= CAP)
             memcpy(m_buf + m_n, d, len);
         m_n += len;
         return true;
@@ -344,8 +367,9 @@ public:
     unsigned count() const { return m_n; }
     const unsigned char *bytes() const { return m_buf; }
 private:
-    unsigned char m_buf[64 * 1024];
-    unsigned      m_n;
+    enum { CAP = 64 * 1024 };
+    unsigned char *m_buf;
+    unsigned       m_n;
 };
 
 class RefusingSink : public ByteSink
@@ -358,10 +382,10 @@ private:
     int m_calls;
 };
 
-static void enrichment(void)
+void enrichment(void)
 {
     MsaaSource msaa;
-    char detail[160];
+    static char detail[160];
 
     rc_strf(detail, sizeof(detail), "oleacc %s",
             msaa.available() ? "loaded" : "absent");
@@ -385,7 +409,9 @@ static void enrichment(void)
                              0, 0, 60, 60, NULL, NULL, wc.hInstance, NULL);
 
     Enrichment e;
-    bool got = msaa.enrich(w, e);
+    int all = Selector::WANT_NAME | Selector::WANT_ROLE
+            | Selector::WANT_VALUE;
+    bool got = msaa.enrich(w, all, e);
     rc_strf(detail, sizeof(detail), "role='%s' name='%s'", e.role, e.name);
     say("msaa-enriches-a-window", got, detail);
 
@@ -398,15 +424,27 @@ static void enrichment(void)
             clean = false;
     say("msaa-role-is-selector-shaped", clean, e.role);
 
-    say("msaa-refuses-dead-window", !msaa.enrich(NULL, e), "NULL hwnd");
+    /* The change that makes this affordable: ask for one field, make one
+     * call. A selector that tests [role=...] must not pay for name and
+     * value as well. */
+    {
+        static Enrichment one;
+        msaa.enrich(w, Selector::WANT_ROLE, one);
+        say("msaa-fetches-only-what-was-asked",
+            one.role[0] != 0 && one.name[0] == 0 && one.value[0] == 0,
+            one.role);
+    }
+
+    say("msaa-refuses-dead-window", !msaa.enrich(NULL, all, e),
+        "NULL hwnd");
 
     DestroyWindow(w);
     UnregisterClassA("GastonMsaaCheck", wc.hInstance);
 }
 
-static void capture(void)
+void capture(void)
 {
-    char detail[160];
+    static char detail[160];
     {
         ShotOptions o;
         o.maxBpp = 8;
