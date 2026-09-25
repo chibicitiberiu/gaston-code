@@ -9,7 +9,14 @@
 #include "core/log.h"
 #include <string.h>
 
+#include <list>
+#include <string>
+#include <vector>
+
 static const char BAR_CLASS[] = "GastonAttachmentBar";
+
+/* Cap on attachments sent and not yet fetched by the bridge. */
+static const unsigned RC_MAX_TRANSFERS = 4 * RC_MAX_PILLS;
 
 static void check_child(const char *what, HWND h)
 {
@@ -36,11 +43,8 @@ static void format_size(DWORD bytes, char *out, size_t cap)
 AttachmentBar::AttachmentBar(HWND parent, HINSTANCE inst, HFONT font,
                              AttachmentBarListener *listener)
     : m_parent(parent), m_font(font), m_listener(listener),
-      m_count(0), m_uiActive(0), m_pressedIdx(-1), m_pressedState(0),
-      m_transferringCount(0)
+      m_uiActive(0), m_pressedIdx(-1), m_pressedState(0)
 {
-    memset(m_pills, 0, sizeof(m_pills));
-    memset(m_transferring, 0, sizeof(m_transferring));
     InitializeCriticalSection(&m_lock);
 
     WNDCLASSA wc;
@@ -104,12 +108,20 @@ LRESULT AttachmentBar::handle(UINT msg, WPARAM wp, LPARAM lp)
     return Window::handle(msg, wp, lp);
 }
 
+/* "name (size)", the text a pill shows and is measured by. */
+static std::string pillLabel(const PillItem &pill)
+{
+    char size[32];
+    format_size(pill.size, size, sizeof(size));
+    return pill.name + " (" + size + ")";
+}
+
 void AttachmentBar::paint(HDC hdc)
 {
     HFONT old_font = m_font ? (HFONT)SelectObject(hdc, m_font) : NULL;
     SetBkMode(hdc, TRANSPARENT);
 
-    for (int i = 0; i < m_count; i++) {
+    for (unsigned i = 0; i < m_pills.size(); i++) {
         RECT rc_lbl = m_pills[i].rcLabel;
         RECT rc_cls = m_pills[i].rcClose;
 
@@ -117,31 +129,21 @@ void AttachmentBar::paint(HDC hdc)
         FillRect(hdc, &rc_lbl, (HBRUSH)(COLOR_BTNFACE + 1));
         DrawEdge(hdc, &rc_lbl, EDGE_RAISED, BF_RECT);
 
-        char sz_str[32];
-        char text[MAX_PATH + 64];
-        format_size(m_pills[i].size, sz_str, sizeof(sz_str));
-        rc_strf(text, sizeof(text), "%s (%s)", m_pills[i].name, sz_str);
-
+        std::string text = pillLabel(m_pills[i]);
         RECT rc_txt = rc_lbl;
         rc_txt.left += 6;
         rc_txt.right -= 6;
         SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
-        DrawTextA(hdc, text, (int)strlen(text), &rc_txt,
+        DrawTextA(hdc, text.c_str(), (int)text.size(), &rc_txt,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
         /* 2. Right Box: Close button with 3D raised border (sunken when pressed) */
         FillRect(hdc, &rc_cls, (HBRUSH)(COLOR_BTNFACE + 1));
-        int is_pressed = (m_pressedIdx == i && m_pressedState);
-        if (is_pressed) {
-            DrawEdge(hdc, &rc_cls, EDGE_SUNKEN, BF_RECT);
-        } else {
-            DrawEdge(hdc, &rc_cls, EDGE_RAISED, BF_RECT);
-        }
-
+        bool pressed = m_pressedIdx == (int)i && m_pressedState;
+        DrawEdge(hdc, &rc_cls, pressed ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
         RECT rc_x = rc_cls;
-        if (is_pressed) {
+        if (pressed)
             OffsetRect(&rc_x, 1, 1);
-        }
         DrawTextA(hdc, "x", 1, &rc_x, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
@@ -151,9 +153,9 @@ void AttachmentBar::paint(HDC hdc)
 void AttachmentBar::onLButtonDown(int x, int y)
 {
     POINT pt = { x, y };
-    for (int i = 0; i < m_count; i++) {
+    for (unsigned i = 0; i < m_pills.size(); i++) {
         if (PtInRect(&m_pills[i].rcClose, pt)) {
-            m_pressedIdx = i;
+            m_pressedIdx = (int)i;
             m_pressedState = 1;
             SetCapture(hwnd());
             InvalidateRect(hwnd(), &m_pills[i].rcClose, TRUE);
@@ -164,7 +166,7 @@ void AttachmentBar::onLButtonDown(int x, int y)
 
 void AttachmentBar::onMouseMove(int x, int y)
 {
-    if (m_pressedIdx >= 0 && m_pressedIdx < m_count) {
+    if (m_pressedIdx >= 0 && m_pressedIdx < (int)m_pills.size()) {
         POINT pt = { x, y };
         int in_btn = PtInRect(&m_pills[m_pressedIdx].rcClose, pt);
         if (in_btn != m_pressedState) {
@@ -184,7 +186,8 @@ void AttachmentBar::onLButtonUp(int x, int y)
         ReleaseCapture();
 
         POINT pt = { x, y };
-        if (state && idx < m_count && PtInRect(&m_pills[idx].rcClose, pt)) {
+        if (state && idx < (int)m_pills.size() &&
+            PtInRect(&m_pills[idx].rcClose, pt)) {
             removePill(idx);
         } else {
             InvalidateRect(hwnd(), NULL, TRUE);
@@ -194,7 +197,7 @@ void AttachmentBar::onLButtonUp(int x, int y)
 
 void AttachmentBar::updateLayout(int width)
 {
-    if (m_count <= 0) return;
+    if (m_pills.empty()) return;
 
     HDC hdc = GetDC(valid() ? hwnd() : m_parent);
     HFONT old_font = m_font ? (HFONT)SelectObject(hdc, m_font) : NULL;
@@ -205,14 +208,11 @@ void AttachmentBar::updateLayout(int width)
     int close_w = 16;
     int max_x = width - 4;
 
-    for (int i = 0; i < m_count; i++) {
-        char sz_str[32];
-        char text[MAX_PATH + 64];
-        format_size(m_pills[i].size, sz_str, sizeof(sz_str));
-        rc_strf(text, sizeof(text), "%s (%s)", m_pills[i].name, sz_str);
-
+    for (unsigned i = 0; i < m_pills.size(); i++) {
+        std::string text = pillLabel(m_pills[i]);
         SIZE sz = { 0, 0 };
-        GetTextExtentPoint32A(hdc, text, (int)strlen(text), &sz);
+        GetTextExtentPoint32A(hdc, text.c_str(), (int)text.size(), &sz);
+
         int lbl_w = sz.cx + 14; /* 7px left + 7px right padding */
         if (lbl_w < 36) lbl_w = 36;
 
@@ -258,265 +258,209 @@ bool AttachmentBar::command(int id)
     return false;
 }
 
-int AttachmentBar::removePill(int idx)
+/* Deletes a staged temp file (a screenshot) that is being dropped. */
+static void dropTemp(const PillItem &pill)
 {
-    ScopedLock lock(&m_lock);
-    if (idx < 0 || idx >= m_count) return 0;
+    if (pill.isTemp && !pill.path.empty())
+        DeleteFileA(pill.path.c_str());
+}
 
-    if (m_pills[idx].isTemp && m_pills[idx].path[0]) {
-        DeleteFileA(m_pills[idx].path);
-    }
-
-    for (int i = idx; i < m_count - 1; i++) {
-        m_pills[i] = m_pills[i + 1];
-    }
-    memset(&m_pills[m_count - 1], 0, sizeof(PillItem));
-
-    m_count--;
-    if (m_count == 0) {
-        m_uiActive = 0;
-    }
-
+/* Called with the pills changed: lays the row out again and repaints. */
+void AttachmentBar::relayout()
+{
     if (valid()) {
         RECT rc;
         GetClientRect(hwnd(), &rc);
         updateLayout(rc.right - rc.left);
         InvalidateRect(hwnd(), NULL, TRUE);
     }
+}
 
+int AttachmentBar::removePill(int idx)
+{
+    {
+        ScopedLock lock(&m_lock);
+        if (idx < 0 || idx >= (int)m_pills.size()) return 0;
+        dropTemp(m_pills[idx]);
+        m_pills.erase(m_pills.begin() + idx);
+        if (m_pills.empty())
+            m_uiActive = 0;
+    }
+    relayout();
     if (m_listener) m_listener->onAttachmentsChanged();
     return 1;
 }
 
 int AttachmentBar::stageWorkspace(const char *relPath, DWORD sizeBytes)
 {
-    ScopedLock lock(&m_lock);
-    for (int i = 0; i < m_count; i++) {
-        if (!m_pills[i].isExternal && strcmp(m_pills[i].path, relPath) == 0) {
-            return 1;
+    {
+        ScopedLock lock(&m_lock);
+        std::string path = relPath ? relPath : "";
+        for (unsigned i = 0; i < m_pills.size(); i++) {
+            if (!m_pills[i].isExternal && m_pills[i].path == path)
+                return 1;
         }
-    }
-    if (m_count >= RC_MAX_PILLS) return 0;
+        if (m_pills.size() >= RC_MAX_PILLS) return 0;
 
-    int idx = m_count++;
-    m_uiActive = 1;
-    m_pills[idx].id[0] = '\0';
-    rc_strf(m_pills[idx].name, sizeof(m_pills[idx].name), "%s", relPath ? relPath : "");
-    rc_strf(m_pills[idx].path, sizeof(m_pills[idx].path), "%s", relPath ? relPath : "");
-    m_pills[idx].size = sizeBytes;
-    m_pills[idx].isExternal = 0;
-    m_pills[idx].isTemp = 0;
-
-    if (valid()) {
-        RECT rc;
-        GetClientRect(hwnd(), &rc);
-        updateLayout(rc.right - rc.left);
-        InvalidateRect(hwnd(), NULL, TRUE);
+        PillItem pill;
+        pill.name = path;
+        pill.path = path;
+        pill.size = sizeBytes;
+        pill.isExternal = 0;
+        pill.isTemp = 0;
+        m_pills.push_back(pill);
+        m_uiActive = 1;
     }
+    relayout();
     return 1;
 }
 
-int AttachmentBar::stageExternal(const char *id, const char *absPath, const char *displayName,
-                               DWORD sizeBytes, int isTemp)
+int AttachmentBar::stageExternal(const char *id, const char *absPath,
+                                 const char *displayName, DWORD sizeBytes,
+                                 int isTemp)
 {
-    ScopedLock lock(&m_lock);
-    if (!isTemp) {
-        for (int i = 0; i < m_count; i++) {
-            if (m_pills[i].isExternal && strcmp(m_pills[i].path, absPath) == 0) {
-                return 1;
+    {
+        ScopedLock lock(&m_lock);
+        std::string path = absPath ? absPath : "";
+        if (!isTemp) {
+            for (unsigned i = 0; i < m_pills.size(); i++) {
+                if (m_pills[i].isExternal && m_pills[i].path == path)
+                    return 1;
             }
         }
-    }
-    if (m_count >= RC_MAX_PILLS) return 0;
+        if (m_pills.size() >= RC_MAX_PILLS) return 0;
 
-    int idx = m_count++;
-    m_uiActive = 1;
-    rc_strf(m_pills[idx].id, sizeof(m_pills[idx].id), "%s", id ? id : "");
-    rc_strf(m_pills[idx].name, sizeof(m_pills[idx].name), "%s", displayName ? displayName : absPath);
-    rc_strf(m_pills[idx].path, sizeof(m_pills[idx].path), "%s", absPath ? absPath : "");
-    m_pills[idx].size = sizeBytes;
-    m_pills[idx].isExternal = 1;
-    m_pills[idx].isTemp = isTemp;
-
-    if (valid()) {
-        RECT rc;
-        GetClientRect(hwnd(), &rc);
-        updateLayout(rc.right - rc.left);
-        InvalidateRect(hwnd(), NULL, TRUE);
+        PillItem pill;
+        pill.id = id ? id : "";
+        pill.name = displayName ? displayName : path;
+        pill.path = path;
+        pill.size = sizeBytes;
+        pill.isExternal = 1;
+        pill.isTemp = isTemp;
+        m_pills.push_back(pill);
+        m_uiActive = 1;
     }
+    relayout();
     return 1;
 }
 
 void AttachmentBar::onSend()
 {
-    ScopedLock lock(&m_lock);
-    for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].isExternal) {
-            if (m_transferringCount < RC_MAX_PILLS) {
-                m_transferring[m_transferringCount++] = m_pills[i];
+    {
+        ScopedLock lock(&m_lock);
+        /* External files are fetched by the bridge after the send (ATTGET),
+         * so they move to the transfer queue; workspace files are already
+         * on its side. */
+        for (unsigned i = 0; i < m_pills.size(); i++) {
+            if (!m_pills[i].isExternal) continue;
+            /* Bounded: a bridge that never fetches must not grow this
+             * without limit. The oldest goes first; its temp file with it. */
+            if (m_transferring.size() >= RC_MAX_TRANSFERS) {
+                dropTemp(m_transferring.front());
+                m_transferring.pop_front();
             }
+            m_transferring.push_back(m_pills[i]);
         }
+        m_pills.clear();
+        m_uiActive = 0;
+        m_pressedIdx = -1;
+        m_pressedState = 0;
     }
-    memset(m_pills, 0, sizeof(m_pills));
-    m_count = 0;
-    m_uiActive = 0;
-    m_pressedIdx = -1;
-    m_pressedState = 0;
-    if (valid()) {
+    if (valid())
         ShowWindow(hwnd(), SW_HIDE);
-    }
     if (m_listener) m_listener->onAttachmentsChanged();
 }
 
 void AttachmentBar::clear()
 {
-    ScopedLock lock(&m_lock);
-    for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].isTemp && m_pills[i].path[0]) {
-            DeleteFileA(m_pills[i].path);
-        }
+    {
+        ScopedLock lock(&m_lock);
+        for (unsigned i = 0; i < m_pills.size(); i++)
+            dropTemp(m_pills[i]);
+        m_pills.clear();
+        m_uiActive = 0;
+        m_pressedIdx = -1;
+        m_pressedState = 0;
+        for (std::list<PillItem>::iterator it = m_transferring.begin();
+             it != m_transferring.end(); ++it)
+            dropTemp(*it);
+        m_transferring.clear();
     }
-    memset(m_pills, 0, sizeof(m_pills));
-    m_count = 0;
-    m_uiActive = 0;
-    m_pressedIdx = -1;
-    m_pressedState = 0;
-
-    for (int i = 0; i < m_transferringCount; i++) {
-        if (m_transferring[i].isTemp && m_transferring[i].path[0]) {
-            DeleteFileA(m_transferring[i].path);
-        }
-    }
-    m_transferringCount = 0;
-
-    if (valid()) {
+    if (valid())
         ShowWindow(hwnd(), SW_HIDE);
-    }
     if (m_listener) m_listener->onAttachmentsChanged();
 }
 
-int AttachmentBar::getWorkspaceAttachments(char *out, size_t cap) const
+std::string AttachmentBar::workspaceAttachments() const
 {
-    if (!out || cap == 0) return 0;
-    out[0] = '\0';
-    int found = 0;
-    size_t used = 0;
-    for (int i = 0; i < m_count; i++) {
-        if (!m_pills[i].isExternal) {
-            if (found > 0) {
-                if (used + 1 < cap) {
-                    out[used++] = '|';
-                    out[used] = '\0';
-                }
-            }
-            size_t plen = strlen(m_pills[i].path);
-            if (used + plen < cap) {
-                memcpy(out + used, m_pills[i].path, plen);
-                used += plen;
-                out[used] = '\0';
-            }
-            found++;
-        }
+    std::string out;
+    for (unsigned i = 0; i < m_pills.size(); i++) {
+        if (m_pills[i].isExternal) continue;
+        if (!out.empty()) out += '|';
+        out += m_pills[i].path;
     }
-    return found;
+    return out;
 }
 
-int AttachmentBar::getExternalAttachments(char *outIds, size_t capIds,
-                                         char *outNames, size_t capNames) const
+void AttachmentBar::externalAttachments(std::string *ids,
+                                        std::string *names) const
 {
-    if (!outIds || capIds == 0 || !outNames || capNames == 0) return 0;
-    outIds[0] = '\0';
-    outNames[0] = '\0';
-    int found = 0;
-    size_t used_ids = 0;
-    size_t used_names = 0;
-    for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].isExternal) {
-            if (found > 0) {
-                if (used_ids + 1 < capIds) {
-                    outIds[used_ids++] = '|';
-                    outIds[used_ids] = '\0';
-                }
-                if (used_names + 1 < capNames) {
-                    outNames[used_names++] = '|';
-                    outNames[used_names] = '\0';
-                }
-            }
-            size_t id_len = strlen(m_pills[i].id);
-            if (used_ids + id_len < capIds) {
-                memcpy(outIds + used_ids, m_pills[i].id, id_len);
-                used_ids += id_len;
-                outIds[used_ids] = '\0';
-            }
-            size_t name_len = strlen(m_pills[i].name);
-            if (used_names + name_len < capNames) {
-                memcpy(outNames + used_names, m_pills[i].name, name_len);
-                used_names += name_len;
-                outNames[used_names] = '\0';
-            }
-            found++;
+    ids->erase();
+    names->erase();
+    bool first = true;
+    for (unsigned i = 0; i < m_pills.size(); i++) {
+        if (!m_pills[i].isExternal) continue;
+        if (!first) {
+            *ids += '|';
+            *names += '|';
         }
+        *ids += m_pills[i].id;
+        *names += m_pills[i].name;
+        first = false;
     }
-    return found;
 }
 
-int AttachmentBar::getEchoString(char *out, size_t cap) const
+std::string AttachmentBar::echoString() const
 {
-    if (!out || cap == 0) return 0;
-    out[0] = '\0';
-    if (m_count == 0) return 0;
-    rc_strf(out, cap, "[Attached: ");
-    size_t used = strlen(out);
-    for (int i = 0; i < m_count; i++) {
-        if (i > 0 && used + 2 < cap) {
-            memcpy(out + used, ", ", 2);
-            used += 2;
-            out[used] = '\0';
-        }
-        size_t nlen = strlen(m_pills[i].name);
-        if (used + nlen < cap) {
-            memcpy(out + used, m_pills[i].name, nlen);
-            used += nlen;
-            out[used] = '\0';
-        }
+    if (m_pills.empty()) return std::string();
+    std::string out = "[Attached: ";
+    for (unsigned i = 0; i < m_pills.size(); i++) {
+        if (i > 0) out += ", ";
+        out += m_pills[i].name;
     }
-    if (used + 1 < cap) {
-        out[used++] = ']';
-        out[used] = '\0';
-    }
-    return (int)used;
+    out += ']';
+    return out;
 }
 
-int AttachmentBar::lookupTransferring(const char *attId, char *outPath, size_t cap)
+/* WORKER THREAD. Both tables are shared with the UI thread, so the lookup
+ * holds the lock -- it did not, before the tables were containers. */
+int AttachmentBar::lookupTransferring(const char *attId, char *outPath,
+                                      size_t cap)
 {
     if (!attId || !*attId || !outPath || cap == 0) return 0;
-    for (int i = 0; i < m_transferringCount; i++) {
-        if (strcmp(m_transferring[i].id, attId) == 0) {
-            rc_strf(outPath, cap, "%s", m_transferring[i].path);
-            return 1;
-        }
+    ScopedLock lock(&m_lock);
+    for (std::list<PillItem>::iterator it = m_transferring.begin();
+         it != m_transferring.end(); ++it) {
+        if (it->id == attId)
+            return rc_strcpy(outPath, cap, it->path.c_str()) ? 1 : 0;
     }
-    for (int i = 0; i < m_count; i++) {
-        if (m_pills[i].isExternal && strcmp(m_pills[i].id, attId) == 0) {
-            rc_strf(outPath, cap, "%s", m_pills[i].path);
-            return 1;
-        }
+    for (unsigned i = 0; i < m_pills.size(); i++) {
+        if (m_pills[i].isExternal && m_pills[i].id == attId)
+            return rc_strcpy(outPath, cap, m_pills[i].path.c_str()) ? 1 : 0;
     }
     return 0;
 }
 
+/* WORKER THREAD, under the lock for the same reason. */
 void AttachmentBar::finishTransfer(const char *attId)
 {
     if (!attId) return;
-    for (int i = 0; i < m_transferringCount; i++) {
-        if (strcmp(m_transferring[i].id, attId) == 0) {
-            if (m_transferring[i].isTemp && m_transferring[i].path[0]) {
-                DeleteFileA(m_transferring[i].path);
-            }
-            for (int j = i; j < m_transferringCount - 1; j++) {
-                m_transferring[j] = m_transferring[j + 1];
-            }
-            m_transferringCount--;
+    ScopedLock lock(&m_lock);
+    for (std::list<PillItem>::iterator it = m_transferring.begin();
+         it != m_transferring.end(); ++it) {
+        if (it->id == attId) {
+            dropTemp(*it);
+            m_transferring.erase(it);
             break;
         }
     }

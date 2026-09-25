@@ -13,6 +13,10 @@
 #include "core/rc_cpp.h"
 #include "core/window.h"
 
+#include <list>
+#include <string>
+#include <vector>
+
 #ifndef __cplusplus
 #error "pillbar.h is C++; the pill bar is a class now"
 #endif
@@ -24,16 +28,21 @@
 #define PILL_H 22
 
 struct PillItem {
-    char  id[16];           /* e.g. "att_1", or empty if workspace file */
-    char  name[MAX_PATH];   /* Display name: "WIN.INI", "src/main.c" */
-    char  path[MAX_PATH];   /* Full guest path or relative workspace path */
+    std::string id;         /* e.g. "att_1", or empty if workspace file */
+    std::string name;       /* Display name: "WIN.INI", "src/main.c" */
+    std::string path;       /* Full guest path or relative workspace path */
     DWORD size;             /* File size in bytes */
     int   isExternal;       /* 1 if outside workspace (needs ATTGET) */
     int   isTemp;           /* 1 if temp file (e.g. screenshot BMP) */
     RECT  rcLabel;          /* Rect within the bar for the label box */
     RECT  rcClose;          /* Rect within the bar for the close button */
-};
 
+    PillItem() : size(0), isExternal(0), isTemp(0)
+    {
+        SetRectEmpty(&rcLabel);
+        SetRectEmpty(&rcClose);
+    }
+};
 /* Told whenever the set of staged attachments changes (one detached, all
  * sent or cleared), so the owner can re-run its layout: the bar's row comes
  * and goes with its contents. */
@@ -54,8 +63,8 @@ public:
     void move(int cx, int y, int cw);
     bool command(int id);      /* Retained for backward-compat routing */
 
-    bool active() const { return m_uiActive && (m_count > 0); }
-    int  count() const  { return m_count; }
+    bool active() const { return m_uiActive && !m_pills.empty(); }
+    int  count() const  { return (int)m_pills.size(); }
 
     int  stageWorkspace(const char *relPath, DWORD sizeBytes = 0);
     int  stageExternal(const char *id, const char *absPath,
@@ -64,10 +73,13 @@ public:
     void onSend();
     void clear();
 
-    int getWorkspaceAttachments(char *out, size_t cap) const;
-    int getExternalAttachments(char *outIds, size_t capIds,
-                               char *outNames, size_t capNames) const;
-    int getEchoString(char *out, size_t cap) const;
+    /* The staged workspace files' paths, '|'-separated, for INPUT. */
+    std::string workspaceAttachments() const;
+    /* The staged external files' ids and display names, each '|'-separated
+     * in the same order, for INPUT. */
+    void externalAttachments(std::string *ids, std::string *names) const;
+    /* "[Attached: a, b]" for the local echo; empty if nothing is staged. */
+    std::string echoString() const;
 
     /* For the sync worker thread, which reaches this object through
      * rc_syncrpc_set_attachment_hooks with it as the context. Both take the
@@ -86,6 +98,7 @@ private:
     AttachmentBar &operator=(const AttachmentBar &);
 
     void updateLayout(int width);
+    void relayout();
     int  removePill(int idx);
     int  lookupTransferring(const char *attId, char *outPath, size_t cap);
     void finishTransfer(const char *attId);
@@ -99,8 +112,9 @@ private:
     HFONT m_font;
     AttachmentBarListener *m_listener;
 
-    PillItem m_pills[RC_MAX_PILLS];
-    int m_count;
+    /* Staged pills. RC_MAX_PILLS is a cap on how many can be staged -- the
+     * row has room for about that many -- not storage. */
+    std::vector<PillItem> m_pills;
     int m_uiActive;
 
     int m_pressedIdx;
@@ -108,8 +122,7 @@ private:
 
     /* Background transfer queue for attachments in flight after send,
      * shared with the sync worker thread under m_lock. */
-    PillItem m_transferring[RC_MAX_PILLS];
-    int m_transferringCount;
+    std::list<PillItem> m_transferring;
     CRITICAL_SECTION m_lock;
 };
 

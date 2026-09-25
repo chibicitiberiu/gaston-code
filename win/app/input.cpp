@@ -2,6 +2,8 @@
 #include <string.h>
 
 #include "app/input.h"
+
+#include <string>
 #include "app/pillbar.h"
 #include "core/log.h"
 #include "core/str.h"
@@ -133,61 +135,40 @@ bool ComposeBox::sendText(const char *text)
     const char *keys[4];
     const char *vals[4];
     int nkv = 0;
-    char *att_work = NULL;
-    char *ws_buf = NULL;
-    char *ext_ids = NULL;
-    char *ext_names = NULL;
-    char *echo_pills = NULL;
+    std::string workspace, extIds, extNames, echo;
 
     if (m_pillbar && m_pillbar->active()) {
-        att_work = (char *)HeapAlloc(GetProcessHeap(), 0, 1024 * 3 + 256);
-        if (att_work) {
-            ws_buf = att_work;
-            ext_ids = ws_buf + 1024;
-            ext_names = ext_ids + 256;
-            echo_pills = ext_names + 1024;
-
-            if (m_pillbar->getWorkspaceAttachments(ws_buf, 1024)) {
-                keys[nkv] = "attach";
-                vals[nkv] = ws_buf;
-                nkv++;
-            }
-            if (m_pillbar->getExternalAttachments(ext_ids, 256, ext_names, 1024)) {
-                keys[nkv] = "attach_id";
-                vals[nkv] = ext_ids;
-                nkv++;
-                keys[nkv] = "attach_name";
-                vals[nkv] = ext_names;
-                nkv++;
-            }
-            m_pillbar->getEchoString(echo_pills, 1024);
+        workspace = m_pillbar->workspaceAttachments();
+        if (!workspace.empty()) {
+            keys[nkv] = "attach";
+            vals[nkv] = workspace.c_str();
+            nkv++;
         }
+        m_pillbar->externalAttachments(&extIds, &extNames);
+        if (!extIds.empty()) {
+            keys[nkv] = "attach_id";
+            vals[nkv] = extIds.c_str();
+            nkv++;
+            keys[nkv] = "attach_name";
+            vals[nkv] = extNames.c_str();
+            nkv++;
+        }
+        echo = m_pillbar->echoString();
     }
 
     /* Echoed BEFORE the send attempt, matching bridge transcript. */
-    if (echo_pills && echo_pills[0]) {
-        size_t echo_len = strlen(echo_pills);
-        char *echo_buf = (char *)HeapAlloc(GetProcessHeap(), 0, n + echo_len + 64);
-        if (echo_buf) {
-            if (n > 0) {
-                rc_strf(echo_buf, n + echo_len + 64, "%s\r\n%s", echo_pills, text);
-            } else {
-                rc_strf(echo_buf, n + echo_len + 64, "%s", echo_pills);
-            }
-            echoUserBlock(echo_buf);
-            HeapFree(GetProcessHeap(), 0, echo_buf);
-        } else {
-            echoUserBlock(text ? text : "");
+    if (!echo.empty()) {
+        if (n > 0) {
+            echo += "\r\n";
+            echo += text;
         }
+        echoUserBlock(echo.c_str());
     } else {
         echoUserBlock(text ? text : "");
     }
 
     if (m_xfer) m_xfer->note_tx_start((unsigned long)n);
     int sent = (rc_net_send(m_net, "INPUT", keys, vals, nkv, text ? text : "", n) == 0);
-    if (att_work) {
-        HeapFree(GetProcessHeap(), 0, att_work);
-    }
     if (sent) {
         if (m_pillbar && m_pillbar->active()) {
             m_pillbar->onSend();
