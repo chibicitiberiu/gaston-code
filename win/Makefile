@@ -68,8 +68,11 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # again. 412,000 -> 450,000 when exceptions went on for the STL (by
 # decision, 2026-09-25): the switch measured 434,648 before any container
 # is used, and the headroom is for the modules that move onto
-# vector/string. Raise it only with a measured reason.
-COMMITTED_CAP ?= 450000
+# vector/string. 450,000 -> 470,000 as the modules move over (chat list,
+# option menus, attachment bar measured 451,081 with app/ at -os): each
+# container type instantiates its own code, roughly 5-10 KB per module.
+# Raise it only with a measured reason.
+COMMITTED_CAP ?= 470000
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
