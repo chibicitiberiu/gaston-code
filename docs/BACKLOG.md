@@ -83,6 +83,16 @@ it as "nothing ran away" rather than a precise delta.
   is probably not worth touching.
 - `make check` reports committed-at-load size per section, so a regression is
   visible without guessing. Use it.
+- **The compiler flags are the biggest lever found so far** (measured
+  2026-09-25). The whole client is built with `-otexan` (favour speed, inline
+  expansion, functions padded to 16 bytes). The same client built with `-os`
+  commits **366,552** bytes at load against **398,808**: 32 KB less, more than
+  the whole "free after a turn" figure. For libcore's `App` + `IniFile`, `-os`
+  cut their cost from +6,656 to +4,608. Not applied, because it trades speed
+  on a P200. Most of our code is event-driven UI (rendering is MSHTML's), so
+  the likely shape is `-os` by default with `-ot` kept for measured hot
+  modules -- miniz, the sync scanner's CRC pass, the frame codec -- and a
+  timed sync scan and long transcript page on the guest before and after.
 
 **One correction worth keeping.** The "28 KB free after a turn" figure quoted
 throughout the Phase 3 planning is `dwAvailPhys`, which **excludes the disk
