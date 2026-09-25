@@ -1,0 +1,574 @@
+# First run on the real machine -- Pentium 200 MMX, Win98 SE 4.10.2222 A,
+# 32284 KB total / 200 KB free, 800x600 at 24bpp, AutoPatcher applied.
+# Produced by tools/gen/mkw98kit.sh's TEST.BAT, 2026-09-26.
+#
+# Step 18 (AUTOCHK.EXE) is absent because it crashed: a 64KB stack local
+# stepped over the guard page. Fixed in 2e46555; the gate that finds it now
+# runs against that binary.
+#
+# Four conclusions taken from the emulator were WRONG and are corrected by
+# this file: the SendMessageTimeout budget barely matters here (75ms at
+# 2000 against 53ms at 200, not 6.7x), hook overhead is unmeasurable,
+# deflate does NOT simply beat RLE once time counts, and a template scan is
+# 1ms rather than something to push to the bridge.
+
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.7  platform / W-suffix imports ===
+PASS: the image loaded, so GetCommandLineW and GetModuleFileNameW
+      resolved against this kernel32.
+GetVersion      : C0000A04  (4.10)
+family          : Win9x
+build           : 4.10.2222  ' A '
+physical memory : 32284 KB total, 200 KB free
+page file       : 786800 KB free
+free resources  : system 82%, GDI 88%, USER 82%
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.11  threads, with a message loop ===
+CreateThread(lpThreadId=NULL) : REJECTED, err=87  (Win9x)
+   -> always pass a real thread-id pointer. This silently
+      disabled every helper thread in retro-agent for years.
+CreateThread(&tid)            : accepted
+message sink window           : created
+_beginthreadex threads started: 3 of 3
+ticks (threads + PostMessage)  : 265
+PASS: threads and a message loop coexist
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.9  16-bit EXEC capture (can reshape Phase 3) ===
+shell for this OS: command.com  (16-bit!)
+The assertion is 'output non-empty AND correct', not 'did not hang'.
+
+  echo through the shell
+    cmd      : command.com /c echo RETROCLAUDE_MARKER
+    bytes    : 20 in 145ms
+    first    : RETROCLAUDE_MARKER
+    RESULT   : PASS -- non-empty and correct
+
+  ver
+    cmd      : command.com /c ver
+    bytes    : 36 in 42ms
+    first    : 
+    RESULT   : PASS -- non-empty and correct
+
+  dir
+    cmd      : command.com /c dir c:\ /w
+    bytes    : 367 in 111ms
+    first    : 
+    RESULT   : PASS -- non-empty and correct
+
+  pipe through FIND (known-bad 16-bit tool)
+    cmd      : command.com /c echo hello | find "hello"
+    bytes    : 8 in 93ms
+    first    : hello 
+    RESULT   : PASS -- non-empty and correct
+
+  If these are empty, the fallback is claudewin9x's: redirect to a
+  temp file and read it back. Budget that rewrite for Phase 3.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.5c  deflate throughput on this CPU ===
+sample         : 262064 bytes of mixed prose and code
+level 1 deflate: 262064 -> 1599 (163.89:1) in 94ms  = 2787 KB/s
+level 6 deflate: 262064 -> 1287 (203.62:1) in 96ms  = 2729 KB/s
+inflate        : 1599 -> 262064 in 29ms = 9036 KB/s  (rc=0)
+round trip     : PASS
+
+  At ~750 KB/s LAN, compression is worth it only if the deflate
+  rate above comfortably exceeds it. At ~5 KB/s dialup it always is.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.15  can we be told, instead of asking? ===
+user32!SetWinEventHook  : PRESENT
+user32!UnhookWinEvent   : PRESENT
+user32!NotifyWinEvent   : PRESENT
+WaitForInputIdle        : PRESENT (user32=y kernel32=n)
+user32!SetWindowsHookExA: PRESENT
+2000 sends, no hook    : 55 ms
+2000 sends, hooked     : 41 ms, 2000 hook calls
+WH_CBT local          : OK, 2 calls for one create+destroy
+WH_CBT global, no DLL : handle returned -- but see 0.15b, it
+                        delivers NOTHING. Needs a real DLL.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.15b  do those hooks deliver, and from whose process? ===
+SetWinEventHook install : OK
+WH_CBT system-wide      : installed
+notepad started         : yes
+WinEvents  : 52 total, 42 about another process's window
+WH_CBT     : 0 total, 0 about another process's window
+   -> WinEvents cross the process boundary. Change detection
+      can be a subscription, not a poll, with no DLL at all.
+   -> the system-wide hook installed but only ever saw us,
+      so a real injected DLL would be needed for that route.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.15c  WinEvent latency, granularity and completeness ===
+create  -> OBJ_CREATE     : 23 ms
+show    -> OBJ_SHOW       : 26 ms
+settext -> OBJ_NAMECHANGE : 0 ms
+destroy -> OBJ_DESTROY    : 16 ms
+completeness              : 20 of 20 creates produced an event
+-- events during one notepad lifetime --
+   SYS_FOREGROUND   3
+   OBJ_CREATE       4
+   OBJ_DESTROY      3
+   OBJ_SHOW         4
+   OBJ_HIDE         4
+   OBJ_FOCUS        7
+   OBJ_SELECTION    1
+   OBJ_STATECHANGE  2
+   OBJ_LOCATION     2
+   OBJ_NAMECHANGE   5
+   OBJ_VALUECHANGE  3
+   (other ids)      2
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.15e  WaitForControl / WaitForText, actually run ===
+WaitForControl(.Notepad)      : 0 ms, 1 rechecks
+WaitForText(.Notepad,'Notepad'): 0 ms, 1 rechecks
+WaitForControl(absent), 1500ms: -1 ms, 2 rechecks  (-1 = timed out)
+WaitForGone(.Notepad)         : -1 ms, 4 rechecks
+(rechecks well under a poll count means the feed drove the wait)
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.15d  can we get our code into another process? ===
+patch target set to this process only (pid 4294663429)
+HOOKDLL.DLL loaded, proc found
+attaches so far 1 (this process)
+WH_CBT with a DLL       : installed
+notepad started         : yes
+attaches (processes that mapped the DLL) : 3
+hook calls, all processes                : 9
+distinct processes that ran the proc     : 2
+   pid 4294668813
+   pid 4294811453
+   -> INJECTION WORKS. Our code ran inside another program.
+IAT patch took in 1 process(es); 1 text draws seen
+   pid 4294663429 @7,9  "GASTON-SELFTEST"
+   -> GDI text capture works; that is text no message gives.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.10  screen capture / BI_RLE8 ===
+display        : 800x600 at 24 bpp
+BitBlt full    : 186ms
+GetDIBits 24bpp: 600 lines in 65ms, 1440000 bytes
+GetDIBits 8bpp : 600 lines in 85ms, 480000 bytes
+GetDIBits RLE8 : PASS -- 600 lines, 122552 bytes in 119ms
+   -> GDI does the screenshot compression for us.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.12b  max_bpp ladder: size and cost per rung ===
+screen 800x600 at 24bpp; strip of 64 rows
+bpp      raw  RGBms   z1 by  z1ms   z6 by  z6ms   RLE by RLEms
+-- strip at y=0 --
+ 4    25600     39    4221    57    3392    43     8836    15
+ 8    51200      8    6967    29    5272    55    14658    15
+16   102400      2   11106    55    8144    85        0     0
+24   153600      1   13985    81    9704   129        0     0
+32   204800      0   22772   109   15524   181        0     0
+-- strip at y=178 --
+ 4    25600     23    3603    16    2681    39     8812    16
+ 8    51200      8    5321    30    3823    52    12546    13
+16   102400      4    8114    50    5709    80        0     0
+24   153600      0    9839    75    6450   110        0     0
+32   204800      0   16368    99    9453   140        0     0
+-- strip at y=357 --
+ 4    25600     26    2105    17    1648    18     4884    15
+ 8    51200      4    3383    25    2639    35     7838    10
+16   102400      1    5436    45    4093    60        0     0
+24   153600      0    6525    64    4568    85        0     0
+32   204800      3    9686    80    6690   115        0     0
+-- strip at y=536 --
+ 4    25600     25    8967    25    8212    90    18128    19
+ 8    51200      7   16542    45   14690   140    34814    16
+16   102400      4   26841    75   22556   250        0     0
+24   153600      0   31338   109   24800   403        0     0
+32   204800      1   51139   160   37759   581        0     0
+(0 in an RLE column = the format has none at that depth, or refused)
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.12c  does the RLE8 stream decode? (writes BMPs beside the exe) ===
+screen 800x600 at 24bpp, strip 64 rows at y=200
+S24.BMP  64 lines, 153600 bytes, written 1
+S8.BMP   64 lines, 51200 bytes, written 1
+S8R.BMP  64 lines, 14022 bytes, written 1
+now decode all three on the host and compare S8 against S8R
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.16  ImageClick: what a template scan costs on this machine ===
+screen 800x600; searching 800x600 (480000 bytes), template 32x32
+template from (736,64), 48 distinct values
+naive     : 11 ms, found at (736,64)
+filtered  : 1 ms, found at (736,64), 348 first-byte hits
+   (a correct run finds it at or before (736,64))
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.12  RLE8 for a scanline range / 0.13  oleacc / UI details ===
+display        : 800x600 at 24 bpp
+0.12a range    : PASS -- 16 lines, 2540 bytes
+0.12b blt+whole: PASS -- 16 lines, 3048 bytes
+8bpp BI_RGB    : 16 lines (the fallback if 0.12 fails)
+palette        : DC table 255 non-black of 256, screen reports 256
+0.13 oleacc    : loaded, AccessibleObjectFromWindow found
+     walk      : OK, childCount=7 on Shell_TrayWnd
+fg lock        : was=15000 (get=1) set0=1 -> 0, restored=15000
+SendMsgTimeout : WM_NULL ret=1 (0 = timed out or hung)
+window census  : 125 top-level, 241 nodes total, depth 6
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.13b  what a TREE walk costs, one column at a time ===
+A enum only    : 103 nodes, 1 ms/walk
+B + class      : 0 ms/walk
+C + text 2000ms: 75 ms total, 0 timed out
+D + text 200ms : 53 ms total, 0 timed out
+E + msaa       : 1886 ms total, 103 objects, 24 named
+   (55ms tick: A and B are over 20 repeats and divided)
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.13c  what MSAA actually adds over the window tree ===
+-- OBJID_WINDOW (frame) --
+tooltips_clas|PROBE         |PROBE         |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s140000
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Shell_TrayWnd|-             |-             |-         |-      |r9 s20000
+Button       |-             |Start         |-         |-      |r9 s0
+TrayNotifyWnd|-             |-             |-         |-      |r9 s0
+TrayClockWCla|2:16 AM       |2:16 AM       |-         |-      |r9 s0
+ReBarWindow32|-             |-             |-         |-      |r9 s0
+MSTaskSwWClas|-             |-             |-         |-      |r9 s0
+SysTabControl|-             |Tray          |-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s0
+tty          |PROBE         |PROBE         |-         |-      |r9 s160004
+ttyGrab      |-             |-             |-         |-      |r9 s100000
+ToolbarWindow|-             |-             |-         |-      |r9 s100000
+ComboBox     |Auto         |-             |-         |-      |r9 s100000
+IEFrame      |MSAA DOM probe|MSAA DOM probe|-         |-      |r9 s160000
+WorkerA      |-             |-             |-         |-      |r9 s0
+ReBarWindow32|-             |-             |-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s8000
+ComboBoxEx32 |C:\temp\UITEST|C:\temp\UITEST|-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s0
+ComboBox     |-             |Address       |-         |-      |r9 s0
+Edit         |C:\temp\UITEST|-             |-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s0
+WorkerA      |-             |-             |-         |-      |r9 s0
+ToolbarWindow|-             |Application   |-         |-      |r9 s0
+msctls_status|Done          |-             |-         |-      |r9 s0
+Shell DocObje|-             |-             |-         |-      |r9 s0
+Internet Expl|-             |file://C:\temp|-         |-      |r10 s100000
+Internet Expl|t²          |-             |-         |-      |r9 s0
+Afx:400000:b:|MSAA DOM probe|MSAA DOM probe|-         |-      |r9 s160000
+Afx:400000:30|-             |-             |-         |-      |r9 s0
+Edit         |edit contents |-             |-         |-      |r9 s0
+Button       |-             |-             |-         |-      |r9 s0
+Button       |-             |-             |-         |-      |r9 s0
+Button       |-             |-             |-         |-      |r9 s0
+Button       |-             |-             |-         |-      |r9 s0
+ComboBox     |€GÒ           |-             |-         |-      |r9 s0
+Button       |Submit Button |Submit Button |-         |-      |r9 s0
+Button       |Disabled Butto|Disabled Butto|-         |-      |r9 s0
+Afx:400000:80|-             |-             |-         |-      |r9 s0
+Afx:400000:80|-             |-             |-         |-      |r9 s0
+Afx:400000:0:|-             |-             |-         |-      |r9 s0
+AfxWnd42     |NSAnimation   |NSAnimation   |-         |-      |r9 s0
+Afx:400000:0:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s8000
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:80|-             |-             |-         |-      |r9 s0
+#32770       |-             |-             |-         |-      |r9 s0
+ComboBox     |file:///C|/tem|-             |-         |-      |r9 s0
+Edit         |file:///C|/tem|-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:80|-             |-             |-         |-      |r9 s0
+Static       |Location:     |Location:     |-         |-      |r9 s0
+Afx:400000:80|-             |-             |-         |-      |r9 s0
+Afx:400000:0:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+Afx:400000:8:|-             |-             |-         |-      |r9 s0
+msctls_status|Document: Done|-             |-         |-      |r9 s0
+CabinetWClass|temp          |temp          |-         |-      |r9 s160000
+WorkerA      |-             |-             |-         |-      |r9 s0
+ReBarWindow32|-             |-             |-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s8000
+ComboBoxEx32 |C:\temp       |C:\temp       |-         |-      |r9 s0
+ComboBox     |-             |Address       |-         |-      |r9 s0
+Edit         |C:\temp       |-             |-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s0
+WorkerA      |-             |-             |-         |-      |r9 s0
+ToolbarWindow|-             |Application   |-         |-      |r9 s0
+msctls_status|1 object(s) se|-             |-         |-      |r9 s0
+SHELLDLL_DefV|-             |-             |-         |-      |r9 s0
+Internet Expl|-             |file://C:\WIND|-         |-      |r10 s100000
+ATL Shell Emb|-             |-             |-         |-      |r9 s0
+SysListView32|-             |-             |-         |-      |r9 s0
+Notepad      |Readme - Notep|Readme - Notep|-         |-      |r9 s160000
+Edit         |GASTON CODE --|-             |-         |-      |r9 s0
+tty          |MS-DOS Prompt |MS-DOS Prompt |-         |-      |r9 s160000
+ttyGrab      |-             |-             |-         |-      |r9 s0
+ToolbarWindow|-             |-             |-         |-      |r9 s0
+ComboBox     |Auto         |-             |-         |-      |r9 s0
+Progman      |Program Manage|Program Manage|-         |-      |r9 s0
+SHELLDLL_DefV|-             |-             |-         |-      |r9 s0
+SysListView32|-             |Desktop       |-         |-      |r9 s0
+-- OBJID_WINDOW (frame): 103 nodes, 103 objs, 103 rows --
+-- OBJID_CLIENT (the control) --
+tooltips_clas|PROBE         |PROBE         |-         |-      |r13 s8000
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Shell_TrayWnd|-             |-             |-         |-      |r10 s0
+Button       |-             |Start         |-         |Press  |r43 s0
+TrayNotifyWnd|-             |-             |-         |-      |r10 s0
+TrayClockWCla|2:17 AM       |2:17 AM       |-         |-      |r10 s0
+ReBarWindow32|-             |-             |-         |-      |r10 s0
+MSTaskSwWClas|-             |-             |-         |-      |r10 s0
+SysTabControl|-             |Tray          |-         |-      |r60 s0
+ToolbarWindow|-             |-             |-         |-      |r22 s0
+tty          |PROBE         |PROBE         |-         |-      |r10 s100004
+ttyGrab      |-             |-             |-         |-      |r10 s100000
+ToolbarWindow|-             |-             |-         |-      |r10 s100000
+ComboBox     |Auto         |-             |Auto     |-      |r46 s100000
+IEFrame      |MSAA DOM probe|MSAA DOM probe|-         |-      |r10 s0
+WorkerA      |-             |-             |-         |-      |r10 s0
+ReBarWindow32|-             |-             |-         |-      |r10 s0
+ToolbarWindow|-             |-             |-         |-      |r22 s0
+ComboBoxEx32 |C:\temp\UITEST|C:\temp\UITEST|-         |-      |r10 s0
+ToolbarWindow|-             |-             |-         |-      |r22 s0
+ComboBox     |-             |Address       |C:\temp\UI|-      |r46 s0
+Edit         |C:\temp\UITEST|-             |C:\temp\UI|-      |r42 s0
+ToolbarWindow|-             |-             |-         |-      |r22 s0
+WorkerA      |-             |-             |-         |-      |r10 s0
+ToolbarWindow|-             |Application   |-         |Close  |r2 s100000
+msctls_status|Done          |-             |-         |-      |r23 s0
+Shell DocObje|-             |-             |-         |-      |r10 s0
+Internet Expl|-             |file://C:\temp|-         |-      |r10 s100000
+Internet Expl|t²          |-             |Alpha     |-      |r46 s0
+Afx:400000:b:|MSAA DOM probe|MSAA DOM probe|-         |-      |r10 s0
+Afx:400000:30|-             |-             |-         |-      |r10 s0
+Edit         |edit contents |-             |edit conte|-      |r42 s0
+Button       |-             |-             |-         |Uncheck|r44 s10
+Button       |-             |-             |-         |Check  |r44 s0
+Button       |-             |-             |-         |Check  |r45 s10
+Button       |-             |-             |-         |Check  |r45 s0
+ComboBox     |€GÒ           |-             |€GÒ       |-      |r46 s0
+Button       |Submit Button |Submit Button |-         |Press  |r43 s0
+Button       |Disabled Butto|Disabled Butto|-         |Press  |r43 s0
+Afx:400000:80|-             |-             |-         |-      |r10 s0
+Afx:400000:80|-             |-             |-         |-      |r10 s0
+Afx:400000:0:|-             |-             |-         |-      |r10 s0
+AfxWnd42     |NSAnimation   |NSAnimation   |-         |-      |r10 s0
+Afx:400000:0:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:80|-             |-             |-         |-      |r10 s0
+#32770       |-             |-             |-         |-      |r18 s0
+ComboBox     |file:///C|/tem|-             |file:///C||-      |r46 s0
+Edit         |file:///C|/tem|-             |file:///C||-      |r42 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:80|-             |-             |-         |-      |r10 s0
+Static       |Location:     |Location:     |-         |-      |r41 s40
+Afx:400000:80|-             |-             |-         |-      |r10 s0
+Afx:400000:0:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+Afx:400000:8:|-             |-             |-         |-      |r10 s0
+msctls_status|Document: Done|-             |-         |-      |r23 s0
+CabinetWClass|temp          |temp          |-         |-      |r10 s0
+WorkerA      |-             |-             |-         |-      |r10 s0
+ReBarWindow32|-             |-             |-         |-      |r10 s0
+ToolbarWindow|-             |-             |-         |-      |r22 s0
+ComboBoxEx32 |C:\temp       |C:\temp       |-         |-      |r10 s0
+ComboBox     |-             |Address       |C:\temp   |-      |r46 s0
+Edit         |C:\temp       |-             |C:\temp   |-      |r42 s0
+ToolbarWindow|-             |-             |-         |-      |r22 s0
+WorkerA      |-             |-             |-         |-      |r10 s0
+ToolbarWindow|-             |Application   |-         |Close  |r2 s100000
+msctls_status|1 object(s) se|-             |-         |-      |r23 s0
+SHELLDLL_DefV|-             |-             |-         |-      |r10 s0
+Internet Expl|-             |file://C:\WIND|-         |-      |r10 s100000
+ATL Shell Emb|-             |-             |-         |-      |r10 s0
+SysListView32|-             |-             |-         |-      |r33 s0
+Notepad      |Readme - Notep|Readme - Notep|-         |-      |r10 s0
+Edit         |GASTON CODE --|-             |GASTON COD|-      |r42 s0
+tty          |MS-DOS Prompt |MS-DOS Prompt |-         |-      |r10 s0
+ttyGrab      |-             |-             |-         |-      |r10 s0
+ToolbarWindow|-             |-             |-         |-      |r10 s0
+ComboBox     |Auto         |-             |Auto     |-      |r46 s0
+Progman      |Program Manage|Program Manage|-         |-      |r10 s0
+SHELLDLL_DefV|-             |-             |-         |-      |r10 s0
+SysListView32|-             |Desktop       |-         |-      |r33 s0
+-- OBJID_CLIENT (the control): 103 nodes, 103 objs, 103 rows --
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+serial out: COM1 open
+built Sep 26 2026 00:27:54
+
+=== 0.13d  is a web page a control tree, or just pixels? ===
+GetRoleTextA found
+document       : role=10 name=file://C:\temp\UITEST.HTM
+ pane        |MSAA DOM probe - UITEST   |file://C:\temp\UITEST.
+  editable tex|Heading One               |
+  editable tex|A paragraph of body text t|
+  link        |First link                |http://example.com/one
+   editable tex|First link                |http://example.com/one
+  editable tex| and                      |
+  link        |Second link               |http://example.com/two
+   editable tex|Second link               |http://example.com/two
+  editable tex|-                         |edit contents here
+  check box   |-                         |
+  editable tex| Checked box              |
+  check box   |-                         |
+  editable tex| Unchecked box            |
+  radio button|-                         |
+  editable tex| Radio on                 |
+  radio button|-                         |
+  editable tex| Radio off                |
+  combo box   |-                         |Alpha
+   text        |-                         |Alpha
+   push button |Open                      |
+   window      |-                         |
+    menu bar    |System                    |
+    title bar   |-                         |
+     push button |IME                       |
+     push button |Minimize                  |
+     push button |Maximize                  |
+     push button |Context help              |
+     push button |Close                     |
+    menu bar    |Application               |
+    list        |-                         |
+     list item   |Alpha                     |
+     list item   |Beta                      |
+    scroll bar  |Vertical                  |0
+     push button |Line up                   |
+     push button |Page up                   |
+     indicator   |Position                  |
+     push button |Page down                 |
+     push button |Line down                 |
+    scroll bar  |Horizontal                |0
+     push button |Column left               |
+     push button |Page left                 |
+     indicator   |Position                  |
+     push button |Page right                |
+     push button |Column right              |
+    grip        |Size box                  |
+  push button |Submit Button             |
+  editable tex|                          |
+  push button |Disabled Button           |
+  editable tex|                          |
+  table       |-                         |
+   cell        |-                         |
+    editable tex|Col A                     |
+   cell        |-                         |
+    editable tex|Col B                     |
+   cell        |-                         |
+    editable tex|Cell 1                    |
+   cell        |-                         |
+    editable tex|Cell 2                    |
+  editable tex|List item one             |
+  editable tex|List item two             |
+DOM nodes 60 in 22334 ms (showing first 60)
+
+=== done -- results also in PROBE.LOG ===
