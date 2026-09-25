@@ -282,12 +282,14 @@ $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 # included (Watcom omits its own SDK headers). -adfs keeps '/' separators.
 # An object with no .d yet has never been built, so it is rebuilt anyway.
 #
-# The first dependency Watcom writes is the source's BASENAME (`turn.cpp`, not
-# `app/turn.cpp`), which make cannot find. -add= is meant to override it but
-# truncates a '/' path to its basename too (verified: only a '\' path
-# survives). So FIXDEP rewrites that one token to the real path.
+# The first dependency Watcom writes is the source itself, as a BASENAME
+# (`turn.cpp`, not `app/turn.cpp`), which make cannot find; -add= truncates a
+# '/' path the same way. FIXDEP deletes that token: the pattern rule already
+# names the source, and a .d that names it too breaks the build the day the
+# source is renamed (inicheck.c -> inicheck.cpp stopped it with "No rule to
+# make target 'checks/inicheck.c'"). The .d keeps only the headers.
 DEPFLAGS = -ad=$(@:.o=.d) -adt=$@ -adfs
-FIXDEP   = sed -i '1s|: [^ ]*|: $<|' $(@:.o=.d)
+FIXDEP   = sed -i '1s|: [^ ]*|:|' $(@:.o=.d)
 -include $(shell find $(OBJ) -name '*.d' 2>/dev/null)
 
 # A header that a .d still names but that has since been deleted or moved
