@@ -51,8 +51,12 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # Memory budget ceiling: fail if committed memory exceeds baseline.
 # 399,000 -> 405,000 on 2026-09-25, by decision, for the client moving onto
 # libcore's App and IniFile (docs/REMOTE.md C0): measured +6,144 over
-# 398,808 with both linked. Raise it again only with a measured reason.
-COMMITTED_CAP ?= 405000
+# 398,808 with both linked. 405,000 -> 408,000 the same day: the estimate
+# left out ClientConfig, the message filters and the three services in
+# main.cpp; C4 measured 407,528. The memory pass (BACKLOG.md 2, -os alone
+# is -32 KB) comes after the refactor, by decision. Raise it again only
+# with a measured reason.
+COMMITTED_CAP ?= 408000
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
