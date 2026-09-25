@@ -4,9 +4,9 @@
  * it. The composition root registers it after the main window, so App stops
  * it first, while the window its reader thread posts to still exists.
  * rc_net_stop bounds and times its own joins (up to about 42 s) and leaks
- * what did not stop, so join() always reports done.
- *
- * Moves into libwire when net.cpp does (docs/REMOTE.md, step 2).
+ * what did not stop; join() passes on its answer, so App reports a thread
+ * that would not stop instead of hearing "done". The transport itself is
+ * libwire's Connection; this is the client's adapter over it (net.cpp).
  */
 #ifndef RC_CONNSERVICE_H
 #define RC_CONNSERVICE_H

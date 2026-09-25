@@ -491,13 +491,13 @@ int rc_net_send_ui(rc_net *n, const char *type, const char *const *keys,
                       RC_SEND_WAIT_UI);
 }
 
-void rc_net_stop(rc_net *n)
+int rc_net_stop(rc_net *n)
 {
     int rpcj;
 
     /* Safe to call on a connection that never started, so the reconnect path
      * can call it unconditionally rather than tracking state itself. */
-    if (!n->started) return;
+    if (!n->started) return !n->leaked;
     n->started = 0;
 
     /* SHUTDOWN IS THREE PHASES, AND THE ORDER IS THE WHOLE POINT (01.51).
@@ -523,7 +523,7 @@ void rc_net_stop(rc_net *n)
         rc_log("net: RPC worker did not exit");
 
     ClientLink *link = (ClientLink *)n->conn;
-    if (!link) return;
+    if (!link) return rpcj != 0;
     Connection &c = link->conn();
 
     /* PHASE 2 -- give those acks time to reach the wire. */
@@ -539,11 +539,13 @@ void rc_net_stop(rc_net *n)
     if (c.release(rpcj != 0)) {
         n->conn = NULL;
         delete link;
+        return 1;
     } else {
         /* A thread is still inside the Connection, so it stays allocated
          * and `conn` keeps pointing at it: the worker, if it is the one
          * still running, sends through it. rc_net_start refuses from now
          * on. */
         n->leaked = 1;
+        return 0;
     }
 }

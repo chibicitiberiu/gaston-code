@@ -89,7 +89,10 @@ typedef struct {
  * to say", which is what every client built before this sent. */
 int  rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                  const char *secret, const void *tools, unsigned tools_len);
-void rc_net_stop(rc_net *n);
+/* 1 if everything stopped and was freed (or there was nothing to stop); 0
+ * if a thread would not stop, its Connection was left alive and `leaked` is
+ * now set. */
+int  rc_net_stop(rc_net *n);
 int  rc_net_send(rc_net *n, const char *type,
                  const char *const *keys, const char *const *vals, int nkv,
                  const void *body, unsigned body_len);

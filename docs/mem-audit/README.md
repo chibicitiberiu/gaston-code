@@ -4,6 +4,11 @@ An audit of `win/` — where resources are managed by hand, where a scope
 object would do it better, and what that would cost on this toolchain.
 Requested 2026-09-21. **No code was changed.**
 
+> Line numbers are as of 2026-09-21. Since then the transport has moved from
+> `win/net/net.cpp` to `win/wire/connection.cpp` (R9 step 2, 2026-09-25);
+> `03-threads.md` names symbols instead. The 66 KB static build buffer in
+> `send_frame` is per connection and on the heap now.
+
 ## The short version
 
 The guest is in better shape than the question implies. There is no leak
