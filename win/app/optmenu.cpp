@@ -14,12 +14,9 @@ static void clear_popup(HMENU m)
 
 OptionMenus::OptionMenus(HWND owner, HMENU bar, FrameSender *sender,
                          OptionMenusListener *listener)
-    : m_modelCount(0), m_effortCount(0), m_modeCount(0), m_commandCount(0),
-      m_workCount(0), m_effortOk(0), m_curModeIx(-1), m_optsOpen(0),
+    : m_workCount(0), m_effortOk(0), m_curModeIx(-1), m_optsOpen(0),
       m_owner(owner), m_sender(sender), m_listener(listener)
 {
-    m_curModel[0] = m_curEffort[0] = m_curMode[0] = '\0';
-    m_curWork[0] = m_curWorkShort[0] = '\0';
     /* All three menus are built from what the bridge sends, so the lists can
      * change without rebuilding this binary -- which matters most for Mode,
      * where WHICH modes are offered is a safety decision made beside the
@@ -70,11 +67,18 @@ OptionMenus *OptionMenus::create(HWND owner, HMENU bar, FrameSender *sender,
 void OptionMenus::reset()
 {
     m_optsOpen = 0;
-    m_modelCount = m_effortCount = m_modeCount = m_commandCount = m_workCount = 0;
+    m_models.clear();
+    m_efforts.clear();
+    m_modes.clear();
+    m_commands.clear();
+    m_workCount = 0;
     m_effortOk = 0;
     m_curModeIx = -1;
-    m_curModel[0] = m_curEffort[0] = m_curMode[0] = '\0';
-    m_curWork[0] = m_curWorkShort[0] = '\0';
+    m_curModel.erase();
+    m_curEffort.erase();
+    m_curMode.erase();
+    m_curWork.erase();
+    m_curWorkShort.erase();
     clear_popup(m_modelMenu);
     clear_popup(m_effortMenu);
     clear_popup(m_modeMenu);
@@ -123,18 +127,21 @@ bool OptionMenus::frame(rc_frame *f)
             clear_popup(m_modeMenu);
             clear_popup(m_commandMenu);
             clear_popup(m_workMenu);
-            m_curWork[0] = m_curWorkShort[0] = '\0';
-            m_modelCount = 0;
-            m_effortCount = 0;
-            m_modeCount = 0;
-            m_commandCount = 0;
+            m_curWork.erase();
+            m_curWorkShort.erase();
+            m_models.clear();
+            m_efforts.clear();
+            m_modes.clear();
+            m_commands.clear();
             m_workCount = 0;
             m_effortOk = 0;
             m_curModeIx = -1;
-            m_curModel[0] = m_curEffort[0] = m_curMode[0] = '\0';
+            m_curModel.erase();
+            m_curEffort.erase();
+            m_curMode.erase();
         }
         if (kind && id && label) {
-            if (strcmp(kind, "model") == 0 && m_modelCount < MAX_OPTS) {
+            if (strcmp(kind, "model") == 0 && m_models.size() < MAX_OPTS) {
                 /* The MENU says "Haiku -- Haiku 4.5 . Fastest for quick
                  * answers"; cur_model, which is what the toolbar button
                  * shows, stays "Haiku". Four display names alone do not tell
@@ -146,13 +153,12 @@ bool OptionMenus::frame(rc_frame *f)
                     rc_strf(item, sizeof(item), "%s -- %s", label, desc);
                 else
                     rc_strf(item, sizeof(item), "%s", label);
-                rc_strf(m_models[m_modelCount], sizeof(m_models[m_modelCount]), "%s", id);
-                if (on) rc_strf(m_curModel, sizeof(m_curModel), "%s", label);
+                if (on) m_curModel = label;
                 AppendMenuA(m_modelMenu,
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
-                            IDM_MODEL0 + m_modelCount, item);
-                m_modelCount++;
-            } else if (strcmp(kind, "effort") == 0 && m_effortCount < MAX_OPTS) {
+                            IDM_MODEL0 + m_models.size(), item);
+                m_models.push_back(id);
+            } else if (strcmp(kind, "effort") == 0 && m_efforts.size() < MAX_OPTS) {
                 /* A model with no effort levels gets one greyed entry saying
                  * so, rather than a menu offering five settings it does not
                  * have. */
@@ -160,21 +166,19 @@ bool OptionMenus::frame(rc_frame *f)
                 UINT flags = MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED);
                 if (dis && *dis == '1') flags |= MF_GRAYED;
                 else m_effortOk = 1;
-                rc_strf(m_efforts[m_effortCount], sizeof(m_efforts[m_effortCount]), "%s", id);
-                if (on) rc_strf(m_curEffort, sizeof(m_curEffort), "%s", label);
+                if (on) m_curEffort = label;
                 AppendMenuA(m_effortMenu, flags,
-                            IDM_EFFORT0 + m_effortCount, label);
-                m_effortCount++;
-            } else if (strcmp(kind, "mode") == 0 && m_modeCount < MAX_OPTS) {
-                rc_strf(m_modes[m_modeCount], sizeof(m_modes[m_modeCount]), "%s", id);
+                            IDM_EFFORT0 + m_efforts.size(), label);
+                m_efforts.push_back(id);
+            } else if (strcmp(kind, "mode") == 0 && m_modes.size() < MAX_OPTS) {
                 if (on) {
-                    rc_strf(m_curMode, sizeof(m_curMode), "%s", label);
-                    m_curModeIx = m_modeCount;
+                    m_curMode = label;
+                    m_curModeIx = (int)m_modes.size();
                 }
                 AppendMenuA(m_modeMenu,
                             MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED),
-                            IDM_MODE0 + m_modeCount, label);
-                m_modeCount++;
+                            IDM_MODE0 + m_modes.size(), label);
+                m_modes.push_back(id);
             } else if (strcmp(kind, "work") == 0 && m_workCount < MAX_OPTS) {
                 /* COUNTED, like model/effort/mode/command, and for the same
                  * reason: today's bridge sends exactly one work row, so this
@@ -196,15 +200,15 @@ bool OptionMenus::frame(rc_frame *f)
                  * mirrored into -- see the note on cur_work in optmenu.h.
                  * Clearing it leaves the menu saying the folder is not set,
                  * which is true of every folder this machine can address. */
-                if (!rc_strf(m_curWork, sizeof(m_curWork), "%s", id)) {
+                if (strlen(id) >= MAX_PATH) {
                     rc_log("optmenu: work path is %u bytes, too long for this "
                            "machine -- refusing it rather than using a "
                            "truncated one", (unsigned)strlen(id));
-                    m_curWork[0] = '\0';
+                    m_curWork.erase();
+                } else {
+                    m_curWork = id;
                 }
-                if (!rc_strf(m_curWorkShort, sizeof(m_curWorkShort), "%s",
-                             label && *label ? label : "<unset>"))
-                    rc_strf(m_curWorkShort, sizeof(m_curWorkShort), "<unset>");
+                m_curWorkShort = label && *label ? label : "<unset>";
                 /* The path again, greyed, at the top of the menu.
                  *
                  * The BUTTON carries it too, and on a 640px screen a long
@@ -214,23 +218,25 @@ bool OptionMenus::frame(rc_frame *f)
                  * is always readable. Greyed because it is information, not
                  * a command. */
                 AppendMenuA(m_workMenu, MF_STRING | MF_GRAYED, 0,
-                            m_curWork[0] ? m_curWork
+                            !m_curWork.empty() ? m_curWork.c_str()
                                         : "Not set until this conversation "
                                           "has been used");
                 AppendMenuA(m_workMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuA(m_workMenu, m_curWork[0] ? MF_STRING : MF_GRAYED,
+                AppendMenuA(m_workMenu, !m_curWork.empty() ? MF_STRING : MF_GRAYED,
                             IDM_WORKOPEN, "&Open work directory");
                 AppendMenuA(m_workMenu, MF_STRING, IDM_WORKSET,
                             "Change &work directory...");
-            } else if (strcmp(kind, "command") == 0 && m_commandCount < MAX_OPTS) {
+            } else if (strcmp(kind, "command") == 0 && m_commands.size() < MAX_OPTS) {
                 /* No tick: a command is something you do, not a setting you
                  * are in. The label carries the argument hint and the id is
                  * the bare command -- see bridge/wire/protocol.py option(). */
                 const char *hint = rc_frame_get(f, "hint");
-                rc_strf(m_commands[m_commandCount], sizeof(m_commands[m_commandCount]), "%s", id);
-                m_commandTakesArg[m_commandCount] = (char)((hint && *hint == '1') ? 1 : 0);
-                AppendMenuA(m_commandMenu, MF_STRING, IDM_CMD0 + m_commandCount, label);
-                m_commandCount++;
+                Command command;
+                command.id = id;
+                command.takesArg = hint && *hint == '1';
+                AppendMenuA(m_commandMenu, MF_STRING,
+                            IDM_CMD0 + m_commands.size(), label);
+                m_commands.push_back(command);
             }
         }
         return true;
@@ -245,14 +251,14 @@ bool OptionMenus::frame(rc_frame *f)
 
 void OptionMenus::cycleMode()
 {
-    if (m_modeCount <= 0) return;
+    if (m_modes.empty()) return;
     {
         /* From the ticked one, or from the first when nothing is ticked --
          * which is what a disconnected guest looks like after a reconnect
          * that has not sent options yet. */
-        int next = (m_curModeIx < 0) ? 0 : (m_curModeIx + 1) % m_modeCount;
+        int next = (m_curModeIx < 0) ? 0 : (m_curModeIx + 1) % (int)m_modes.size();
         const char *keys[1], *vals[1];
-        keys[0] = "mode"; vals[0] = m_modes[next];
+        keys[0] = "mode"; vals[0] = m_modes[next].c_str();
         m_sender->sendFrame("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
     }
 }
@@ -262,25 +268,25 @@ bool OptionMenus::command(int id)
     /* Model and effort are numbered ranges rather than fixed ids, because
      * the two lists are sent by the bridge and are not known when this is
      * compiled. */
-    if (id >= IDM_MODEL0 && id < IDM_MODEL0 + m_modelCount) {
+    if (id >= IDM_MODEL0 && id < IDM_MODEL0 + (int)m_models.size()) {
         const char *keys[1], *vals[1];
-        keys[0] = "model"; vals[0] = m_models[id - IDM_MODEL0];
+        keys[0] = "model"; vals[0] = m_models[id - IDM_MODEL0].c_str();
         m_sender->sendFrame("The model change", "SETMODEL", keys, vals, 1, NULL, 0);
         return true;
     }
-    if (id >= IDM_EFFORT0 && id < IDM_EFFORT0 + m_effortCount) {
+    if (id >= IDM_EFFORT0 && id < IDM_EFFORT0 + (int)m_efforts.size()) {
         const char *keys[1], *vals[1];
-        keys[0] = "effort"; vals[0] = m_efforts[id - IDM_EFFORT0];
+        keys[0] = "effort"; vals[0] = m_efforts[id - IDM_EFFORT0].c_str();
         m_sender->sendFrame("The effort change", "SETEFFORT", keys, vals, 1, NULL, 0);
         return true;
     }
-    if (id >= IDM_MODE0 && id < IDM_MODE0 + m_modeCount) {
+    if (id >= IDM_MODE0 && id < IDM_MODE0 + (int)m_modes.size()) {
         const char *keys[1], *vals[1];
-        keys[0] = "mode"; vals[0] = m_modes[id - IDM_MODE0];
+        keys[0] = "mode"; vals[0] = m_modes[id - IDM_MODE0].c_str();
         m_sender->sendFrame("The permission mode change", "SETMODE", keys, vals, 1, NULL, 0);
         return true;
     }
-    if (id >= IDM_CMD0 && id < IDM_CMD0 + m_commandCount) {
+    if (id >= IDM_CMD0 && id < IDM_CMD0 + (int)m_commands.size()) {
         /* Sent as a message, because that is what it is -- the CLI reads a
          * slash command out of the prompt text and there is no frame for
          * one. Going through compose-and-send rather than raw is what makes
@@ -288,15 +294,14 @@ bool OptionMenus::command(int id)
         {
             int i = id - IDM_CMD0;
             if (m_listener) {
-                if (m_commandTakesArg[i]) {
+                if (m_commands[i].takesArg) {
                     /* Takes an argument, so it goes in the box with a
                      * trailing space -- the menu said it wanted one and this
                      * is where you type it. */
-                    char line[80];
-                    rc_strf(line, sizeof(line), "%s ", m_commands[i]);
-                    m_listener->submitCommand(line, true);
+                    std::string line = m_commands[i].id + " ";
+                    m_listener->submitCommand(line.c_str(), true);
                 } else {
-                    m_listener->submitCommand(m_commands[i], false);
+                    m_listener->submitCommand(m_commands[i].id.c_str(), false);
                 }
             }
         }

@@ -29,6 +29,9 @@
 #include "net/frameproto.h"
 #include "app/sender.h"
 
+#include <string>
+#include <vector>
+
 #ifndef __cplusplus
 #error "optmenu.h is C++; the menus are a class now, see app/htmlview.h"
 #endif
@@ -43,6 +46,8 @@
 #define IDM_WORKSET 1599      /* "Change work directory..." */
 #define IDM_ATTFILE 1600      /* Attach > File... */
 #define IDM_ATTSHOT 1601      /* Attach > Screenshot */
+/* A cap per menu, not storage: it spaces the IDM_*0 ranges above, so a
+ * batch longer than this is cut rather than colliding with the next range. */
 #define MAX_OPTS    16
 
 /* "Send this as if it had been typed" -- for the Commands menu, which sends
@@ -60,47 +65,48 @@ public:
 class OptionMenus {
     HMENU m_modelMenu, m_effortMenu, m_modeMenu, m_commandMenu, m_workMenu;
     HMENU m_attachMenu;
-    char  m_models[MAX_OPTS][64];
-    char  m_efforts[MAX_OPTS][64];
+    std::vector<std::string> m_models;
+    std::vector<std::string> m_efforts;
     /* Permission mode: Manual / Accept edits / Plan. The list is the
      * BRIDGE'S, not a table here, for the same reason the model list is --
      * `auto` and `bypassPermissions` are withheld for measured reasons that
      * belong beside the measurement (bridge/server.py, MODE_ORDER), not in
      * a menu builder on a 32MB machine. */
-    char  m_modes[MAX_OPTS][64];
+    std::vector<std::string> m_modes;
     /* Slash commands. Not an option -- nothing is ticked and there is no
      * current value -- but the same bridge-driven menu with the same id
      * arithmetic and the same WM_COMMAND routing, so it lives here rather
      * than as a fourth copy of that machinery somewhere else. WHICH commands
      * appear is the bridge's decision (bridge/server.py, COMMAND_MENU): five
      * of the fifty-three the CLI offers. */
-    char  m_commands[MAX_OPTS][64];
-    /* Does this one take an argument? The bridge says so with a `hint`
-     * header, which is the same fact the label's "<optional custom
-     * summarization instructions>" shows -- one source, so the label and the
-     * behaviour cannot disagree. */
-    char  m_commandTakesArg[MAX_OPTS];
-    int   m_modelCount, m_effortCount, m_modeCount, m_commandCount;
+    struct Command
+    {
+        std::string id;
+        /* Does this one take an argument? The bridge says so with a `hint`
+         * header, which is the same fact the label's "<optional custom
+         * summarization instructions>" shows -- one source, so the label and the
+         * behaviour cannot disagree. */
+        bool takesArg;
+    };
+    std::vector<Command> m_commands;
     /* The LABELS of the checked entries, which is what the toolbar shows.
      * The label is the bridge's displayName ("Haiku"), not the resolved id
      * ("claude-haiku-4-5-20251001") -- _send_options resolves aliases on
      * purpose, and the resolved form is 20+ characters, which does not fit
      * a toolbar button on a 640px screen. */
-    char  m_curModel[64], m_curEffort[64], m_curMode[64];
+    std::string m_curModel, m_curEffort, m_curMode;
     /* Where this conversation's files land, as the guest spells it: the full
      * path for the menu, the short form the button wears. The bridge sends
      * both because a 640px screen has no room for the long one on a button.
      *
-     * MAX_PATH, not 128. The guest declares maxpath=260 at handshake, so the
-     * bridge is entitled to send a 260-byte path and does -- it echoes back
-     * whatever the user picked through SHBrowseForFolder. At 128 the path was
-     * silently cut, and the cut prefix was then handed to rc_workdir_apply,
-     * which rc_mkpath's it parents and all and re-points the sync root: the
+     * Never truncated. When this was a 128-byte buffer a longer path was
+     * silently cut, and the cut prefix was handed to rc_workdir_apply, which
+     * rc_mkpath's it parents and all and re-points the sync root: the
      * conversation's files were mirrored into a folder the user never named
      * while the one they did name read as empty, which the bridge sees as a
-     * mass deletion. `cur_work_short` is a label for a 640px button and stays
-     * small, but it is checked too rather than trusted to be short. */
-    char  m_curWork[MAX_PATH], m_curWorkShort[128];
+     * mass deletion. A path at or over MAX_PATH -- what the guest declares
+     * at handshake -- is REFUSED in frame(), not stored. */
+    std::string m_curWork, m_curWorkShort;
     /* Non-zero once the batch has offered at least one effort level that is
      * not greyed out. Haiku has none, and the bridge says so with a single
      * disabled row -- a toolbar button reading "(effort)" forever is worse
@@ -174,11 +180,11 @@ public:
     HMENU commandMenu() const    { return m_commandMenu; }
     HMENU workMenu() const   { return m_workMenu; }
     HMENU attachMenu() const { return m_attachMenu; }
-    const char *workLabel() const { return m_curWorkShort; }
-    const char *workPath() const  { return m_curWork; }
-    const char *modelLabel() const  { return m_curModel; }
-    const char *effortLabel() const { return m_curEffort; }
-    const char *modeLabel() const   { return m_curMode; }
+    const char *workLabel() const { return m_curWorkShort.c_str(); }
+    const char *workPath() const  { return m_curWork.c_str(); }
+    const char *modelLabel() const  { return m_curModel.c_str(); }
+    const char *effortLabel() const { return m_curEffort.c_str(); }
+    const char *modeLabel() const   { return m_curMode.c_str(); }
     bool hasEffort() const { return m_effortOk != 0; }
 
     /* Advance to the next permission mode and tell the bridge, for the
