@@ -173,19 +173,25 @@ private:
 `gremote.ini` sits next to the exe (8.3 names: `GREMOTE.EXE`, `GREMOTE.INI`).
 
 ```ini
+; Comments go on their own line: GetPrivateProfileString does not strip an
+; inline "; ..." and IniFile rejects the value it leaves behind.
 [server]
 bind=0.0.0.0
-port=7401                ; 7890/7897 are the client, 7900+ the test harness
+; 7890/7897 are the client, 7900+ the test harness
+port=7401
 secret=change-me
-allow=192.168.1.0/24     ; peers outside this are closed before AUTH
-heartbeat_timeout_s=30  ; no frame from the client for this long drops it
+; peers outside this are closed before AUTH
+allow=192.168.1.0/24
+; no frame from the client for this long drops it
+heartbeat_timeout_s=30
 
 [exec]
 max_timeout_ms=120000
 max_output_kb=1024
 
 [ui]
-msaa=1                   ; 0 skips oleacc.dll even if present
+; 0 skips oleacc.dll even if present
+msaa=1
 max_tree_nodes=2000
 call_timeout_ms=2000
 
@@ -194,11 +200,11 @@ file=gremote.log
 level=info
 ```
 
-- `libcore` gets a generic reader over `GetPrivateProfileStringA`/`IntA` with
-  typed getters, defaults and bounds, truncation reported through `Buf`. The
-  client's `core/ini.cpp` (`rc_config`) stays until the client's own refactor;
-  the new reader gets a different file name (`core/inifile.cpp`) so the two
-  never collide in the build.
+- `libcore` has `IniFile` (`core/inifile.h`): typed getters with defaults and
+  bounds, strict whole-number parsing, `checkKeys()` so a typo like `prot=`
+  is an error rather than a silent default, and refusal of a bare filename
+  (the profile API would read it from `C:\WINDOWS`). The client's
+  `core/ini.cpp` (`rc_config`) stays until the client's own refactor.
 - **The composition root loads the INI once into per-service config structs**
   (`ServerConfig`, `ExecConfig`, `UiConfig`) and hands each service its struct.
   Services never read the INI.
@@ -408,16 +414,18 @@ with Remote("192.168.1.50", secret="...") as r:
   different directories simply cannot collide, and `VPATH` goes away.
 - **Explicit source lists per target**, not pattern discovery. Each lib and exe
   names its sources by path; the object list is derived from it.
-- **Libs are built with `wlib -q -b -n`** into `$(BUILD)/lib/`. `wlib` is used
-  nowhere yet, so step 1 invents the rule. Inside one `.lib` a module is named
-  by its basename, and adding a second module of the same name replaces the
-  first without a word, so a check fails on duplicate basenames **within a
-  lib**. Across libs they are fine.
+- **Libs are built with `wlib -q -b -n`** into `$(BUILD)/lib/`, and a target
+  lists a lib among its inputs like an object. No duplicate-name check is
+  needed: `wlib` names each member by the full source path the compiler
+  recorded, not the object's basename, so `a/x.o` and `b/x.o` coexist
+  (verified; the review assumed otherwise).
 - **Header dependencies from the compiler**, not a wildcard. `HDRS` today is
   every header under a hardcoded directory list, so a new directory's headers
   never trigger rebuilds. `wcc386`/`wpp386 -ad=<file>.d -adt=<obj> -adfs` write
-  a make-style dependency file next to each object (verified on this
-  toolchain 2026-09-25), and the Makefile `-include`s them.
+  a make-style dependency file next to each object, and the Makefile
+  `-include`s them. Watcom writes the source's basename as the first
+  dependency and `-add=` truncates a `/` path the same way, so the recipe
+  rewrites that one token.
 - **The gates key on object paths, not basenames**, now that basenames can
   repeat (`cmovcheck.py` matches basenames against `$(OBJS)` today).
 - **`make check` is parameterised by EXE / MAP / CAP** and runs for both
@@ -453,15 +461,19 @@ in every measurement taken while it is running.
 Each step leaves `retroclaude.exe` building and behaving the same, and ends
 with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 
-1. **The build first, then libcore.** As its own commit, with no source moved:
-   mirrored object tree, no `VPATH`, explicit source lists, real header
-   dependencies, and proof that it changed nothing
-   (same imports, same committed-at-load number, all gates green). Then the
-   `wlib` rule, the in-lib duplicate check, the gate fixes above, `check`
-   parameterised. Then move
-   log/str/path/`rc_cpp.h` into libcore; add `inifile` and `App`/`Service`.
-   Relink the client and the check exes. Done when the gates provably still fire
-   on lib code and the client's committed-at-load number has not moved.
+1. **The build first, then libcore.**
+   - *1a, done (`c9d70fa`):* mirrored object tree, no `VPATH`, explicit source
+     lists, compiler header dependencies. All 12 exes disassemble identically
+     to the build before it.
+   - *1b, done (`310553d`, `21a112e`, `497aa67`):* gates own our libs and fail
+     when blind; `libcore.lib` built with `wlib` and linked by every exe; `make
+     check` per exe. Each gate proven to fire on a violation planted in
+     libcore. Committed at load 398,808.
+   - *1c, done (`5e408b8`, `72d1116`, `4d4f69b`):* `IniFile` and
+     `App`/`Service` in libcore, with `inifilecheck` (28 cases) and `appcheck`
+     (9 lifecycle traces) run under Wine by `tests/python/guest/`. The client
+     links none of it yet; committed at load still 398,808.
+   - **Step 1 is complete.**
 2. **libwire, extracted from `net.cpp`, not written fresh.** Its shutdown order
    (FIN before join, leak on join timeout, no descriptor reuse) cost many fixes.
    Split `frameproto` into the codec (libwire) and the client's lane table

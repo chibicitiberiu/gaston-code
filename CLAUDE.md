@@ -69,5 +69,13 @@ nothing of each other's ops or of the wire, except `libwire`. See
 keep `m_`; C files and `extern "C"` APIs keep `rc_snake_case`. The client's older
 code is renamed as it is touched, not in a sweep (`docs/REMOTE.md`).
 
+**Every resource lives in a guard from `win/core/rc_cpp.h`.** No raw `HWND`,
+`HANDLE`, `HMODULE`, GDI object or `new`/`new[]` held across a return: use
+`WindowGuard`, `Handle`, `FindHandle`, `Dll`, `GdiObj`, `MemoryDC`, `File`,
+`MenuGuard`, `UniqueObj<>`, `UniqueArr<>`, `HeapPtr<>`, `WindowDC`,
+`Selected`, `ScopedLock`. Check that file before writing a paired
+acquire/release. If no guard fits, add one there (a `Unique<>` policy is
+three statics), not a local cleanup path in the caller.
+
 **Do not touch the `retrobridge` libvirt domain** in `qemu:///system` -- it
 belongs to an unrelated project.

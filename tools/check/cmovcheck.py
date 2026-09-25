@@ -26,6 +26,7 @@ rather than merely counted.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -56,8 +57,17 @@ def symbols(map_path: str) -> list[tuple[int, str, str]]:
 
 
 def owns(module: str, ours: set[str]) -> bool:
-    """Is this module something this build compiled?"""
-    return module.rsplit("/", 1)[-1] in ours
+    """Is this module something this build compiled?
+
+    `ours` holds our objects and our own static libraries; a lib member's
+    module is the lib's path (MOD stops at the `(member)`), so every member of
+    `libcore.lib` counts as ours and nothing in `clib3r.lib` does.
+
+    By normalised path, not basename: objects mirror the source tree, so
+    `app/input.o` and `ui/input.o` can both exist and a basename match would
+    credit one with the other's code.
+    """
+    return os.path.normpath(module) in ours
 
 
 def pointer_table(addr: int, raw: str, lo: int, hi: int) -> bool:
@@ -97,10 +107,10 @@ def pointer_table(addr: int, raw: str, lo: int, hi: int) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 4:
-        print("usage: cmovcheck.py EXE MAP obj.o [obj.o ...]", file=sys.stderr)
+        print("usage: cmovcheck.py EXE MAP owned.o|owned.lib ...", file=sys.stderr)
         return 2
     exe, map_path, objs = argv[1], argv[2], set(
-        o.rsplit("/", 1)[-1] for o in argv[3:])
+        os.path.normpath(o) for o in argv[3:])
 
     dis = subprocess.run(["objdump", "-d", "-m", "i386", exe],
                          capture_output=True, text=True).stdout
@@ -108,6 +118,17 @@ def main(argv: list[str]) -> int:
     if not syms:
         print("   FAIL: no symbols in %s; cannot tell code from data"
               % map_path)
+        return 1
+
+    # A gate that owns nothing passes everything. If a path handed in here
+    # never shows up as a map module -- a lib renamed, the map's path format
+    # changed, code moved into a lib the Makefile forgot to pass -- say so
+    # rather than report "none in our own code" about code it never saw.
+    seen = {os.path.normpath(r[2]) for r in syms}
+    blind = sorted(o for o in objs if o not in seen)
+    if blind:
+        for o in blind:
+            print("   FAIL: owned module never appears in the map: %s" % o)
         return 1
 
     # The span the image's own symbols occupy, which is what a pointer in a
