@@ -42,6 +42,9 @@ def main() -> int:
     ap.add_argument("--path", default="big.bin",
                     help="a file in the sync root big enough that answering "
                          "it takes real work (8KB chunks)")
+    ap.add_argument("--work", default="",
+                    help="the folder to arm as the sync root; default is "
+                         "the sync_root the guest reports in HELLO")
     a = ap.parse_args()
 
     conn, _peer = probelib.listen_for_guest(a.host, a.port)
@@ -72,6 +75,17 @@ def main() -> int:
         return 2
     print(f"guest says mem_kb={hello.headers.get('mem_kb')} "
           f"root={hello.headers.get('sync_root')}")
+    # The work directory arms the guest's sync root. Without it every
+    # SYNCGET is answered at once with no_root, nothing ever queues, and the
+    # drain has nothing to answer -- a pass that tests nothing. The guest
+    # takes it from an OPTION batch since per-conversation work folders, so
+    # say it the way the bridge does (bridge/services/options.py).
+    work = a.work or hello.headers.get("sync_root") or ""
+    if not work:
+        print("guest reported no sync_root and --work was not given")
+        return 2
+    conn.sendall(Frame("OPTION", {"kind": "work", "id": work,
+                                  "label": work, "current": "1"}).encode())
     conn.sendall(Frame("OPTIONSEND", {}).encode())
 
     # SYNCGET's body is the bare encoded path. Only SYNCPUT length-prefixes
