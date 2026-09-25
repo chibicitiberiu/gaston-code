@@ -127,7 +127,7 @@ from bridge.agent import tools as machine_tools
 
 
 def _descriptions() -> dict:
-    srv = machine_tools.build(None, None)["machine"]["instance"]
+    srv = machine_tools.build(None, None, None, None)["machine"]["instance"]
     listed = asyncio.run(srv._request_handlers["tools/list"].handler(None, None))
     return {t.name: (t.description or "") for t in listed.tools}
 

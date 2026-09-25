@@ -39,18 +39,20 @@ def _text(body: str, *, error: bool = False) -> dict:
     return out
 
 
-def build(host, guest=None) -> dict:
-    """Create the `machine` server bound to one HOST and ONE GUEST.
+def build(guest_exec, sync, workspace, guest=None) -> dict:
+    """Create the `machine` server bound to THREE SERVICES and ONE GUEST.
 
-    `host` supplies the three services the tools act through -- `guest_exec`,
-    `sync` and `workspace`. It used to be the Bridge itself, which worked only
-    because the Bridge forwarded everything; when the services stopped being
-    reached through it, this closure was left calling methods the object it
-    had been handed did not have, and the only symptom was the model telling
-    the user it could not reach their machine.
+    Named one by one rather than reached through something that has them. It
+    was the Bridge first, which worked only because the Bridge forwarded
+    everything; when the services stopped being reached through it, this
+    closure was left calling methods the object it had been handed did not
+    have, and the only symptom was the model telling the user it could not
+    reach their machine. Passing a `host` that owns all three was the same
+    mistake one step smaller -- a dependency on three things, declared as a
+    dependency on whatever holds them.
 
     The guest matters. These closures used to capture only the Bridge and let
-    each tool resolve `bridge._guest` when it ran -- so the tool addressed
+    each tool resolve `bridge.connection.guest` when it ran -- so the tool addressed
     "whichever machine is attached right now" rather than the machine whose
     conversation this is. With one client those are the same thing. With two
     they are not, and the failure is the worst shape available: the command
@@ -167,14 +169,14 @@ def build(host, guest=None) -> dict:
             # a value the bridge has never been told and cannot derive, which is
             # also why bridge/agent/cmdguard.py has to answer ASK for every
             # relative path when it is unset.
-            cwd = (args or {}).get("cwd") or host.workspace.guest_work_root(guest)
+            cwd = (args or {}).get("cwd") or workspace.guest_work_root(guest)
 
             # LOGGED HERE, because this is the outermost frame on our side of
             # the MCP boundary. Above it the SDK turns an exception into a tool
             # result the MODEL reads, and nothing reaches the bridge's own log --
             # so a bug in this path is visible only as the model reporting "a
             # connection problem" on a 640x480 screen. Same shape as 02.13.
-            return await host.guest_exec.run_on_guest(
+            return await guest_exec.run_on_guest(
                 command, timeout_ms=timeout_ms, shell=shell, cwd=cwd,
                 guest=guest)
 
@@ -189,7 +191,7 @@ def build(host, guest=None) -> dict:
         {},
     )
     async def machine_sync_status(args: dict) -> dict:
-        return _text(host.sync.sync_status_text(guest))
+        return _text(sync.sync_status_text(guest))
 
     @tool(
         "sync_resolve",
@@ -217,7 +219,7 @@ def build(host, guest=None) -> dict:
         # that was correctly formed.
         if not path and action != "accept-tree":
             return _text("No path was given.", error=True)
-        return _text(await host.sync.sync_resolve(path, action, guest))
+        return _text(await sync.sync_resolve(path, action, guest))
 
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,

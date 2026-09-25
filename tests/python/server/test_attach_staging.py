@@ -33,12 +33,12 @@ async def test_attach_id_attget_streaming(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     # Send INPUT with attach_id
@@ -77,12 +77,12 @@ async def test_attach_bmp_converted_to_png(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     bmp_bytes = make_test_bmp(width=8, height=8, color=(0, 255, 0))
@@ -125,12 +125,12 @@ async def test_attach_pcx_converted_to_png(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     pcx_file = os.path.join(workdir, "art.pcx")
@@ -162,12 +162,12 @@ async def test_attach_text_cp1252_encoding(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     # Text containing CP1252 accented characters (not valid UTF-8 alone)
@@ -198,12 +198,12 @@ async def test_attach_binary_file_reference(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     exe_bytes = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00"
@@ -236,12 +236,12 @@ async def test_attach_multiple_files(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     # Workspace file
@@ -286,12 +286,12 @@ async def test_attach_multiple_images(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     # Workspace PCX image

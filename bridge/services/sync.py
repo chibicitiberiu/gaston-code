@@ -63,8 +63,6 @@ class SyncService:
             self.connection, "_guest", None
         )
 
-    def _mirror_dir(self, guest: GuestSession | None) -> str:
-        return self.workspace.mirror_dir(guest)
 
     async def set_status_override(
         self, guest: GuestSession, text: str
@@ -82,7 +80,7 @@ class SyncService:
         g = self._get_guest(guest)
         if g is None or not g.link.connected or not self.config.sync_dir:
             return {}
-        if not self._mirror_dir(g):
+        if not self.workspace.mirror_dir(g):
             return {}
 
         await self.set_status_override(g, "waiting for sync...")
@@ -261,7 +259,7 @@ class SyncService:
         g = self._get_guest(guest)
         if g is None or not g.link.connected or not self.config.sync_dir:
             return {}
-        mirror = self._mirror_dir(g)
+        mirror = self.workspace.mirror_dir(g)
         if not mirror:
             log.debug("nothing mirrored yet; skipping sync (%s)", why)
             return {}
@@ -598,7 +596,7 @@ class SyncService:
         g = self._get_guest(guest)
         cwd = self.config.cwd or os.getcwd()
         mirror_dir = (
-            self._mirror_dir(g) if g else ""
+            self.workspace.mirror_dir(g) if g else ""
         ) or self.config.sync_dir
         if not mirror_dir or os.path.realpath(cwd) == os.path.realpath(
             mirror_dir
@@ -649,7 +647,7 @@ class SyncService:
                 "there is no tool that would copy it."
             )
         g = self._get_guest(guest)
-        mirror = self._mirror_dir(g) if g is not None else ""
+        mirror = self.workspace.mirror_dir(g) if g is not None else ""
         if not mirror:
             return (
                 "This conversation does not have a folder on the user's "

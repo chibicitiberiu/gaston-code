@@ -134,17 +134,17 @@ def test_sync_status_explains_the_rules_to_the_agent(tmp_path, monkeypatch):
     state.mkdir()
 
     b = Bridge("s", host="127.0.0.1", port=0)
-    b.sync_dir = str(root)
-    b.sync_state = str(state)
+    b.config.sync_dir = str(root)
+    b.config.sync_state = str(state)
     # A conversation with a folder: without one nothing is mirrored and the
     # status is a sentence saying so rather than a report about a tree.
     from bridge.server import GuestSession, TranscriptView, Paginator
-    b._guest = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
-    b._guest.work_dir = str(root)
-    b._guest.work_guest = "C:\\WORK"
-    b._guest.guest_sync_root = "C:\\WORK"
-    b._guest.last_sync_reports = []
-    b.cwd = str(tmp_path)
+    b.connection.guest = GuestSession(view=TranscriptView(pages=Paginator(4096, 90)))
+    b.connection.guest.work_dir = str(root)
+    b.connection.guest.work_guest = "C:\\WORK"
+    b.connection.guest.guest_sync_root = "C:\\WORK"
+    b.connection.guest.last_sync_reports = []
+    b.config.cwd = str(tmp_path)
     text = b.sync.sync_status_text()
     assert "2 in force" in text
     assert ".gitattributes" in text

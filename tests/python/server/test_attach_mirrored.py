@@ -19,8 +19,8 @@ TINY_PNG = base64.b64decode(
 async def test_attach_traversal_rejected(harness, tmp_path):
     """Path traversal outside work directory must be rejected with bad_attach ERROR."""
     b = harness.bridge
-    b.cwd = str(tmp_path / "work")
-    os.makedirs(b.cwd, exist_ok=True)
+    b.config.cwd = str(tmp_path / "work")
+    os.makedirs(b.config.cwd, exist_ok=True)
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
@@ -56,12 +56,12 @@ async def test_attach_symlink_escape_rejected(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     outside = tmp_path / "secret.txt"
@@ -87,12 +87,12 @@ async def test_attach_text_file(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     test_file = os.path.join(workdir, "notes.txt")
@@ -119,12 +119,12 @@ async def test_attach_empty_file_and_ui_tag_cleanup(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     empty_file = os.path.join(workdir, "empty.txt")
@@ -153,12 +153,12 @@ async def test_attach_binary_file(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     bin_file = os.path.join(workdir, "data.bin")
@@ -184,12 +184,12 @@ async def test_attach_subdirectory_and_backslash(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     subdir = os.path.join(workdir, "sub", "dir")
@@ -219,12 +219,12 @@ async def test_attach_image_multimodal(harness, tmp_path):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     img_path = os.path.join(workdir, "diagram.png")
@@ -264,12 +264,12 @@ async def test_attach_image_too_large_fallback(harness, tmp_path, monkeypatch):
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
     b = harness.bridge
-    b.cwd = workdir
+    b.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
 
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.work_dir = workdir
 
     img_path = os.path.join(workdir, "huge.png")

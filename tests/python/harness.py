@@ -436,5 +436,5 @@ async def _connect_and_ask(harness, **ctx_kw):
     """Connect a guest, raise one prompt, and return (reader, writer, task)."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = harness.bridge._guest.claude.ask(**ctx_kw)
+    task = harness.bridge.connection.guest.claude.ask(**ctx_kw)
     return reader, writer, task

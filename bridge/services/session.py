@@ -77,11 +77,6 @@ class SessionService:
         self.conv = conv
         self.spawn = spawn
 
-    def _spawn(self, coro: Any) -> None:
-        self.spawn(coro)
-
-    async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await self.connection.send(guest, frame)
 
     def _resolve_session_cls(self) -> Any:
         mod = sys.modules.get("bridge.server")
@@ -140,12 +135,12 @@ class SessionService:
         conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
         listing = self._resolve_sesslist().listing()
         rows = conv_store.filter(listing) if conv_store is not None else listing
-        await self._send(guest, sessions_start(len(rows)))
+        await self.connection.send(guest, sessions_start(len(rows)))
         for i, r in enumerate(rows):
-            await self._send(guest, session_row(
+            await self.connection.send(guest, session_row(
                 i, r["id"], r["title"], r["cwd"], r.get("group", ""),
                 bool(guest.conv_id and guest.conv_id == r["id"])))
-        await self._send(guest, sessions_end())
+        await self.connection.send(guest, sessions_end())
 
     async def on_getsessions(self, guest: GuestSession, f: Frame) -> None:
         await self.send_sessions(guest)
@@ -173,8 +168,6 @@ class SessionService:
             guest.perm_mode = mode
         log.info("restored settings for %s: %s", session_id, saved)
 
-    def remember_settings(self, guest: GuestSession, session_id: str = "") -> None:
-        self.options.remember_settings(guest, session_id)
 
     def abandon_pending(self, guest: GuestSession) -> None:
         """Orphan everything the conversation being left behind still owes.
@@ -245,7 +238,7 @@ class SessionService:
                         "account is over its rate limit. Nothing ran -- try "
                         "again shortly."))
             elif subtype == "conversation_reset":
-                self.remember_settings(
+                self.options.remember_settings(
                     guest, str(data.get("new_conversation_id") or ""))
                 await self.presentation.write_block(guest, H.notice("Conversation reset."))
             elif subtype == "sdk_event":
@@ -268,8 +261,8 @@ class SessionService:
                         conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
                         if conv_store is not None:
                             conv_store.set_folder(sid, name, guest.work_guest)
-                    self.remember_settings(guest, sid)
-                    self._spawn(self.send_sessions(guest))
+                    self.options.remember_settings(guest, sid)
+                    self.spawn(self.send_sessions(guest))
 
         work_dir = (
             self.workspace.work_dir(guest)
@@ -302,7 +295,8 @@ class SessionService:
             resume=resume,
             fork=fork,
             can_use_tool=can_use_tool_cb,
-            mcp_servers=machine_tools.build(self, guest),
+            mcp_servers=machine_tools.build(
+                self.guest_exec, self.sync, self.workspace, guest),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -344,7 +338,7 @@ class SessionService:
             return False
         guest.pending_resume = ""
         if not resuming:
-            await self._send(guest, switched(guest.claude.session_id or "",
+            await self.connection.send(guest, switched(guest.claude.session_id or "",
                                              guest.view.pages.count))
         return True
 
@@ -364,7 +358,7 @@ class SessionService:
         self.workspace.retarget_perms(guest)
         await guest.view.reset()
         guest.claude = None
-        await self._send(guest, switched("", guest.view.pages.count))
+        await self.connection.send(guest, switched("", guest.view.pages.count))
         await self.presentation.send_page(guest, "live")
         await self.options.send_options(guest)
 
@@ -374,11 +368,11 @@ class SessionService:
         """Close the live client and reopen on a stored session."""
         assert guest.turn_lock.locked()
         if not session_id:
-            await self._send(guest, error("bad_session", "no id"))
+            await self.connection.send(guest, error("bad_session", "no id"))
             return
 
         log.info("switching to session %s", session_id)
-        await self._send(guest, notice("switching", "Loading conversation..."))
+        await self.connection.send(guest, notice("switching", "Loading conversation..."))
 
         self.abandon_pending(guest)
         if guest.claude:
@@ -413,7 +407,7 @@ class SessionService:
             if guest.view.pages.live.over_soft_cap():
                 guest.view.pages.message_boundary()
 
-        await self._send(guest, switched(session_id, guest.view.pages.count))
+        await self.connection.send(guest, switched(session_id, guest.view.pages.count))
         await self.presentation.send_page(guest, "live")
         await self.options.send_options(guest)
 
@@ -426,7 +420,7 @@ class SessionService:
 
         if not guest.claude:
             guest.effort = effort
-            self.remember_settings(guest)
+            self.options.remember_settings(guest)
             log.info("effort -> %s (no client yet)", effort or "(default)")
             await self.presentation.write_block(guest, H.notice(
                 "Effort set to " + label + "."))
@@ -436,7 +430,7 @@ class SessionService:
         old = guest.claude.session_id
         self.abandon_pending(guest)
         guest.effort = effort
-        self.remember_settings(guest)
+        self.options.remember_settings(guest)
         log.info("effort -> %s (forking %s)", effort or "(default)", old)
         await self.presentation.write_block(guest, H.notice(
             "Effort set to " + label
@@ -467,4 +461,3 @@ class SessionService:
     _conv_title = conv_title
     _abandon_pending = abandon_pending
     _restore_settings = restore_settings
-    _remember_settings = remember_settings

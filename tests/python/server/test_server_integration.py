@@ -262,7 +262,7 @@ async def test_pagination_round_trip(harness):
 
     # Fill several pages directly -- faster and more deterministic than
     # persuading a model to emit 600 lines.
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     for i in range(600):
         guest.view.pages.add("plain", f"line {i:04d} padding padding padding\n")
         if i % 100 == 0:
@@ -289,7 +289,7 @@ async def test_pagination_round_trip(harness):
 async def test_getpage_live_returns_to_following(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     for i in range(400):
         guest.view.pages.add("plain", f"line {i}\n")
         if i % 100 == 0:
@@ -320,7 +320,7 @@ async def test_history_mode_suppresses_live_streaming(harness):
     """While reading an old page, new text must NOT be injected into it."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     for i in range(400):
         guest.view.pages.add("plain", f"line {i}\n")
         if i % 100 == 0:
@@ -352,7 +352,7 @@ async def test_view_page_resets_on_reconnect(harness):
     regardless."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     for i in range(400):
         guest.view.pages.add("plain", f"line {i}\n")
         if i % 100 == 0:
@@ -395,7 +395,7 @@ async def test_a_block_split_across_a_page_boundary_is_not_rendered_twice(harnes
     """
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     # hard_bytes is 2x the default page_bytes (16384) with no mem_kb header,
     # so this run must split: 32000 'A's, a newline the splitter should
@@ -487,7 +487,7 @@ async def test_model_menu_ticks_the_cli_default_not_a_generic_default(
     menu is actually used. Starting the bridge with --model set (self.model)
     therefore ran the session on that model while the menu ticked whatever
     the "default" alias resolves to instead."""
-    harness.bridge.model = "haiku"
+    harness.bridge.config.model = "haiku"
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"OPTIONSEND"})
     models = [f for f in frames if f.type == "OPTION"
@@ -505,8 +505,8 @@ async def test_effort_menu_ticks_the_cli_default(harness):
     """Same bug as above, for --effort (02.23): the Effort menu used to read
     guest.effort alone and show nothing ticked when only the CLI default was
     set."""
-    harness.bridge.model = "opus"
-    harness.bridge.effort = "low"
+    harness.bridge.config.model = "opus"
+    harness.bridge.config.effort = "low"
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"OPTIONSEND"})
     efforts = [f for f in frames if f.type == "OPTION"
@@ -533,9 +533,9 @@ async def test_talking_to_a_chat_shares_no_files_at_all(harness, tmp_path):
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    g = b._guest
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    g = b.connection.guest
 
     await harness.send(w, Frame("INPUT", {}, b"just a question"))
     await harness.recv_until(r, {"TURN"}, 10.0)
@@ -545,7 +545,7 @@ async def test_talking_to_a_chat_shares_no_files_at_all(harness, tmp_path):
     assert b.workspace.mirror_dir(g) == "", "no mirror without a committed folder"
     assert b.sync.current_guest_root() == ""
     assert await b.sync.run_sync("test") == {}, "no pass without a mirror"
-    assert os.listdir(b.sync_dir) == [], "and no folder littered on disk"
+    assert os.listdir(b.config.sync_dir) == [], "and no folder littered on disk"
     await harness.close(w)
 
 
@@ -557,9 +557,9 @@ async def test_the_first_tool_call_commits_the_folder(harness, tmp_path):
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    g = b._guest
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    g = b.connection.guest
 
     await harness.send(w, Frame("INPUT", {}, b"List files in C:"))
     await harness.recv_until(r, {"TURN"}, 10.0)
@@ -567,7 +567,7 @@ async def test_the_first_tool_call_commits_the_folder(harness, tmp_path):
 
     await g.claude.use_tool()
 
-    assert g.work_dir == os.path.join(b.sync_dir, "LISTFILE")
+    assert g.work_dir == os.path.join(b.config.sync_dir, "LISTFILE")
     assert os.path.isdir(g.work_dir), "created, not merely named"
     assert g.work_guest == "C:\\Gaston\\LISTFILE"
     assert b.workspace.mirror_dir(g) == g.work_dir, "and sharing is on now"
@@ -584,9 +584,9 @@ async def test_the_folder_is_named_from_the_title_when_there_is_no_message(
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    g = b._guest
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    g = b.connection.guest
 
     orig = srv.sesslist.listing
     srv.sesslist.listing = lambda cwd=None, limit=50: [
@@ -611,12 +611,12 @@ async def test_two_conversations_do_not_share_a_folder(harness, tmp_path):
     taking the first one's folder would put two conversations' work in one
     place with no way to tell them apart afterwards."""
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(os.path.join(b.sync_dir, "LISTFILE"), exist_ok=True)
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(os.path.join(b.config.sync_dir, "LISTFILE"), exist_ok=True)
 
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = b._guest
+    g = b.connection.guest
     await harness.send(w, Frame("INPUT", {}, b"List files again"))
     await harness.recv_until(r, {"TURN"}, 10.0)
     await g.claude.use_tool()
@@ -646,7 +646,7 @@ async def test_a_blank_folder_means_the_shared_one(harness):
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("NEWSESSION", {"folder": "  "}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-    assert harness.bridge._guest.work_dir == ""
+    assert harness.bridge.connection.guest.work_dir == ""
     await harness.close(w)
 
 
@@ -664,17 +664,17 @@ async def test_a_new_chat_is_not_asked_for_a_folder_at_all(harness, tmp_path):
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
 
     await harness.send(w, Frame("NEWSESSION", {}))
     frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
 
-    g = b._guest
+    g = b.connection.guest
     assert g.work_dir == "", "a new chat has no folder until its first tool"
     assert g.work_guest == ""
     assert b.workspace.mirror_dir(g) == "", "and mirrors nothing until then"
-    assert os.listdir(b.sync_dir) == [], "nothing created on the way past"
+    assert os.listdir(b.config.sync_dir) == [], "nothing created on the way past"
 
     row = [f.headers for f in frames if f.type == "OPTION"
            and f.headers.get("kind") == "work"][-1]
@@ -691,11 +691,11 @@ async def test_a_restored_chat_comes_back_in_its_own_folder(
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(os.path.join(b.sync_dir, "NOTES"), exist_ok=True)
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(os.path.join(b.config.sync_dir, "NOTES"), exist_ok=True)
 
     rows = [{"id": "stored-1", "title": "t", "cwd": os.path.join(
-                b.sync_dir, "NOTES"), "modified": "", "group": ""},
+                b.config.sync_dir, "NOTES"), "modified": "", "group": ""},
             {"id": "stored-2", "title": "t", "cwd": "/somewhere/else",
              "modified": "", "group": ""}]
     orig = srv.sesslist.listing
@@ -703,10 +703,10 @@ async def test_a_restored_chat_comes_back_in_its_own_folder(
     try:
         await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
                          sid="stored-1")
-        assert b._guest.work_dir == os.path.join(b.sync_dir, "NOTES")
+        assert b.connection.guest.work_dir == os.path.join(b.config.sync_dir, "NOTES")
         await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
                          sid="stored-2")
-        assert b._guest.work_dir == "", (
+        assert b.connection.guest.work_dir == "", (
             "a conversation started outside the mirror must not point this "
             "bridge's agent at a directory the rest of the system knows "
             "nothing about"
@@ -733,9 +733,9 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    g = b._guest
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    g = b.connection.guest
     # AFTER the turn below, not here: a session that has not run one has no
     # id yet, exactly as the SDK has none to give.
     await g.claude.start_turn()
@@ -743,7 +743,7 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
 
     orig = srv.sesslist.listing
     srv.sesslist.listing = lambda cwd=None, limit=50: [
-        {"id": sid, "title": "Sky color", "cwd": b.sync_dir,
+        {"id": sid, "title": "Sky color", "cwd": b.config.sync_dir,
          "modified": "", "group": ""}]
     try:
         await harness.send(w, Frame("INPUT", {}, b"Sky color"))
@@ -759,7 +759,7 @@ async def test_a_reopened_conversation_keeps_its_folder(harness, tmp_path):
         srv.sesslist.listing = orig
 
     assert g.work_guest == "C:\\Gaston\\SKYCOLOR"
-    assert g.work_dir == os.path.join(b.sync_dir, "SKYCOLOR")
+    assert g.work_dir == os.path.join(b.config.sync_dir, "SKYCOLOR")
     await harness.close(w)
 
 
@@ -772,9 +772,9 @@ async def test_setwork_points_the_conversation_at_the_folder_chosen(
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    g = b._guest
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    g = b.connection.guest
     # A work directory belongs to a conversation, and SETWORK refuses when
     # there is not one yet. The id lands with the first turn's `init`.
     await g.claude.start_turn()
@@ -804,17 +804,17 @@ async def test_setwork_tells_the_agent_the_directory_moved(harness, tmp_path):
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    await b._guest.claude.start_turn()      # SETWORK needs a conversation
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    await b.connection.guest.claude.start_turn()      # SETWORK needs a conversation
 
     await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
 
-    said = "\n".join(b.synccoord.agent_notices)
+    said = "\n".join(b.connection.synccoord.agent_notices)
     assert "THE WORK DIRECTORY HAS CHANGED" in said
     assert "D:\\Projects\\Retro" in said, "it has to name the guest's path"
-    assert os.path.join(b.sync_dir, "RETRO") in said, "and this side's"
+    assert os.path.join(b.config.sync_dir, "RETRO") in said, "and this side's"
     assert "stays on this proxy" in said
     # Not asked for, so not asked of it.
     assert "Gaston-Incoming" not in said
@@ -831,17 +831,17 @@ async def test_choosing_assistant_merge_actually_asks_the_assistant(
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    await b._guest.claude.start_turn()      # SETWORK needs a conversation
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    await b.connection.guest.claude.start_turn()      # SETWORK needs a conversation
 
     await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro",
                                             "staged": "merge"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
 
-    said = "\n".join(b.synccoord.agent_notices)
+    said = "\n".join(b.connection.synccoord.agent_notices)
     assert "asked YOU to merge" in said
-    assert os.path.join(b.sync_dir, "RETRO", "Gaston-Incoming") in said
+    assert os.path.join(b.config.sync_dir, "RETRO", "Gaston-Incoming") in said
     assert "ask before" in said, "it must not pick a side on its own"
     await harness.close(w)
 
@@ -851,19 +851,19 @@ async def test_setwork_before_conversation_starts_sets_work_for_initial_message(
 ):
     """Setting a work directory before the conversation starts is allowed and applies to the initial message."""
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
 
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = b._guest
+    g = b.connection.guest
     assert not g.conv_id
 
     await harness.send(w, Frame("SETWORK", {"path": "D:\\Projects\\Retro"}))
     frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
 
     assert g.work_guest == "D:\\Projects\\Retro"
-    assert g.work_dir == os.path.join(b.sync_dir, "RETRO")
+    assert g.work_dir == os.path.join(b.config.sync_dir, "RETRO")
     assert os.path.isdir(g.work_dir), "folder created on bridge side"
 
     row = [f.headers for f in frames if f.type == "OPTION"
@@ -886,14 +886,14 @@ async def test_setwork_before_conversation_starts_sets_work_for_initial_message(
 async def test_mcp_exec_flushes_sync_and_sends_status_frame(harness, tmp_path):
     """Calling run_on_guest flushes sync, blocks until done, and wraps it in STATUS frames."""
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    b.sync_state = str(tmp_path / "state")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    os.makedirs(b.sync_state, exist_ok=True)
+    b.config.sync_dir = str(tmp_path / "mirror")
+    b.config.sync_state = str(tmp_path / "state")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    os.makedirs(b.config.sync_state, exist_ok=True)
 
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = b._guest
+    g = b.connection.guest
 
     # Set work directory and create a local file
     await harness.send(w, Frame("SETWORK", {"path": "C:\\Gaston\\WORK"}))
@@ -953,14 +953,14 @@ async def test_a_new_work_directory_gets_its_own_baseline(harness, tmp_path):
     """
     import json as _json
     b = harness.bridge
-    b.sync_state = str(tmp_path / "state")
-    os.makedirs(b.sync_state, exist_ok=True)
-    legacy = os.path.join(b.sync_state, "base.json")
+    b.config.sync_state = str(tmp_path / "state")
+    os.makedirs(b.config.sync_state, exist_ok=True)
+    legacy = os.path.join(b.config.sync_state, "base.json")
     with open(legacy, "w") as fh:
         _json.dump({"guest_root": "C:\\WORK"}, fh)
 
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
     r, w = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await harness.recv_until(r, {"OPTIONSEND"})
 
@@ -968,7 +968,7 @@ async def test_a_new_work_directory_gets_its_own_baseline(harness, tmp_path):
     # baseline on and the legacy file is what an unasked question returns.
     assert b.sync.base_path() == legacy
 
-    await b._guest.claude.start_turn()      # SETWORK needs a conversation
+    await b.connection.guest.claude.start_turn()      # SETWORK needs a conversation
     await harness.send(w, Frame("SETWORK", {"path": "C:\\WORK"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     assert b.sync.base_path() == legacy, "its own root keeps the legacy file"
@@ -1135,7 +1135,7 @@ async def test_ready_names_the_conversation_not_just_the_connection(harness):
     SWITCHED said where pages belonged, and a reconnect does not send one."""
     r, w = await harness.connect()
     frames = await harness.recv_until(r, {"READY"})
-    g = harness.bridge._guest
+    g = harness.bridge.connection.guest
 
     # THE FIRST CONNECT HAS NO CONVERSATION TO NAME, and that is not a
     # defect: `_attach` builds a client eagerly, but the SDK does not assign
@@ -1169,7 +1169,7 @@ async def test_switching_a_chat_starts_no_process(harness, monkeypatch):
     paid a process start per click."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = harness.bridge._guest
+    g = harness.bridge.connection.guest
     first = g.claude
     assert first is not None, "the first connect builds one eagerly"
 
@@ -1184,7 +1184,7 @@ async def test_switching_a_chat_starts_no_process(harness, monkeypatch):
 async def test_the_first_message_is_what_resumes_it(harness, monkeypatch):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = harness.bridge._guest
+    g = harness.bridge.connection.guest
     await _switch_to(harness, monkeypatch, r, w, "stored-1")
 
     await harness.send(w, Frame("INPUT", {}, b"carry on"))
@@ -1216,7 +1216,7 @@ async def test_choosing_a_model_with_no_client_is_not_a_no_op(
     nothing said why."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = harness.bridge._guest
+    g = harness.bridge.connection.guest
     await _switch_to(harness, monkeypatch, r, w, "stored-1")
 
     await harness.send(w, Frame("SETMODEL", {"model": "haiku"}))
@@ -1241,7 +1241,7 @@ async def test_a_switch_denies_what_the_old_conversation_left_pending(
     reader, writer, task = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
     await _switch_to(harness, monkeypatch, reader, writer, "stored-1")
-    perms = harness.bridge._guest.perms
+    perms = harness.bridge.connection.guest.perms
     assert perms.pending is None and not perms.queue, (
         "the prompt belonged to the conversation that was left"
     )
@@ -1299,7 +1299,7 @@ async def test_setmode_changes_the_live_session_and_the_menu(harness):
               and f.headers.get("kind") == "mode"
               and f.headers.get("current") == "1"]
     assert ticked == ["acceptEdits"]
-    assert harness.bridge._guest.claude.permission_mode == "acceptEdits"
+    assert harness.bridge.connection.guest.claude.permission_mode == "acceptEdits"
     await harness.close(w)
 
 
@@ -1312,7 +1312,7 @@ async def test_setmode_refuses_a_mode_that_is_not_on_the_menu(harness):
     await harness.send(w, Frame("SETMODE", {"mode": "bypassPermissions"}))
     await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
     await harness.recv_until(r, {"OPTIONSEND"})
-    assert harness.bridge._guest.perm_mode == "acceptEdits", (
+    assert harness.bridge.connection.guest.perm_mode == "acceptEdits", (
         "the refused mode must not have been applied, and must not have "
         "swallowed the valid one that followed"
     )
@@ -1330,12 +1330,12 @@ async def test_the_chosen_mode_survives_a_rebuilt_session(harness):
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("NEWSESSION", {}))
     await harness.recv_until(r, {"OPTIONSEND"})
-    assert harness.bridge._guest.claude is None, "New chat spawns nothing"
-    assert harness.bridge._guest.perm_mode == "plan"
+    assert harness.bridge.connection.guest.claude is None, "New chat spawns nothing"
+    assert harness.bridge.connection.guest.perm_mode == "plan"
 
     await harness.send(w, Frame("INPUT", {}, b"hello"))
     await harness.recv_until(r, {"TURN"}, 10.0)
-    assert harness.bridge._guest.claude.permission_mode == "plan", (
+    assert harness.bridge.connection.guest.claude.permission_mode == "plan", (
         "the session the first message builds must start in the mode the "
         "user chose, not back in Manual"
     )
@@ -1359,7 +1359,7 @@ async def test_a_conversation_gets_its_own_settings_back(harness, tmp_path,
     # Speak, so there is a conversation to attach settings to.
     await harness.send(w, Frame("INPUT", {}, b"hello"))
     await harness.recv_until(r, {"TURN"}, 10.0)
-    first = b._guest.conv_id
+    first = b.connection.guest.conv_id
     assert first
 
     await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
@@ -1381,15 +1381,15 @@ async def test_a_conversation_gets_its_own_settings_back(harness, tmp_path,
                          sid="other")
         await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
         await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-        assert b._guest.perm_mode == "acceptEdits"
+        assert b.connection.guest.perm_mode == "acceptEdits"
 
         # ...and back. The first conversation's own choices return.
         await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w, sid=first)
     finally:
         srv.sesslist.listing = orig
 
-    assert b._guest.perm_mode == "plan", "its own mode, not the other chat's"
-    assert b._guest.model == "haiku"
+    assert b.connection.guest.perm_mode == "plan", "its own mode, not the other chat's"
+    assert b.connection.guest.model == "haiku"
     await harness.close(w)
 
 
@@ -1419,7 +1419,7 @@ async def test_a_conversation_with_nothing_saved_is_left_alone(
                          sid="ancient")
     finally:
         srv.sesslist.listing = orig
-    assert b._guest.perm_mode == "plan"
+    assert b.connection.guest.perm_mode == "plan"
     await harness.close(w)
 
 
@@ -1437,7 +1437,7 @@ async def test_settings_chosen_before_the_first_message_are_saved(
 
     await harness.send(w, Frame("NEWSESSION", {}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-    assert b._guest.claude is None
+    assert b.connection.guest.claude is None
     await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     assert len(b.conv) == 0, "nowhere to write it yet, and it must not"
@@ -1445,8 +1445,8 @@ async def test_settings_chosen_before_the_first_message_are_saved(
     await harness.send(w, Frame("INPUT", {}, b"hello"))
     await harness.recv_until(r, {"TURN"}, 10.0)
 
-    conv = b._guest.conv_id
-    assert b._guest.claude.permission_mode == "plan", "applied"
+    conv = b.connection.guest.conv_id
+    assert b.connection.guest.claude.permission_mode == "plan", "applied"
     assert b.conv.settings(conv)["mode"] == "plan", "and written down"
     await harness.close(w)
 
@@ -1467,7 +1467,7 @@ async def test_settings_chosen_before_the_first_message_are_not_refused(
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("NEWSESSION", {}))
     await harness.recv_until(r, {"OPTIONSEND"})
-    g = harness.bridge._guest
+    g = harness.bridge.connection.guest
     assert g.claude is None
 
     await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
@@ -1541,7 +1541,7 @@ async def test_a_silent_command_says_so_rather_than_looking_like_nothing(
     command that failed. Measured on the guest before this existed."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    harness.bridge._guest.claude.silent = True
+    harness.bridge.connection.guest.claude.silent = True
     await harness.send(w, Frame("INPUT", {}, b"/recap"))
     frames = []
     # Twice: TURN arrives at the start of a turn as well as at its end, and
@@ -1644,7 +1644,7 @@ async def test_always_is_suppressed_for_machine_tools(harness):
     button off it would light it up."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = harness.bridge._guest.claude.ask(tool_name="mcp__machine__exec")
+    task = harness.bridge.connection.guest.claude.ask(tool_name="mcp__machine__exec")
     f = await _recv(harness, reader, "PERMREQ")
     assert f.headers["tool"] == "mcp__machine__exec"
     assert f.headers["allows"] == "0", "Always must not be offered"
@@ -1670,7 +1670,7 @@ async def test_cancelled_callback_still_clears_the_bar(harness):
     end = await _recv(harness, reader, "PERMEND")
     assert end.headers["id"] == "toolu_test_1"
     assert end.headers["reason"] == "cancelled"
-    assert harness.bridge._guest.perms.pending is None
+    assert harness.bridge.connection.guest.perms.pending is None
     await harness.close(writer)
 
 
@@ -1688,7 +1688,7 @@ async def test_a_disconnect_mid_sync_fails_the_transfer_not_the_connection(
 
     reader, writer = await harness.connect()
     await harness.recv_until(reader, {"READY"})
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     fut = asyncio.get_event_loop().create_future()
     guest.sync.pending["s1"] = S.Wait(kind="put", future=fut)
@@ -1714,8 +1714,8 @@ async def test_disconnect_holds_the_prompt_then_denies(harness):
     held for a grace period and then denied with a message that says what
     actually happened, rather than claiming a decision nobody made.
     """
-    harness.bridge.perm_grace_s = 0.2
-    harness.bridge.idle_check_s = 0.05
+    harness.bridge.config.perm_grace_s = 0.2
+    harness.bridge.config.idle_check_s = 0.05
 
     reader, writer, task = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
@@ -1725,7 +1725,7 @@ async def test_disconnect_holds_the_prompt_then_denies(harness):
     assert isinstance(result, PermissionResultDeny)
     assert "disconnected" in result.message
     assert "not refused on purpose" in result.message
-    assert harness.bridge._guest.perms.pending is None
+    assert harness.bridge.connection.guest.perms.pending is None
 
 
 async def test_prompt_is_reissued_after_reconnect(harness):
@@ -1733,7 +1733,7 @@ async def test_prompt_is_reissued_after_reconnect(harness):
     replay any more -- docs/BACKLOG.md #5). Without an explicit re-issue the
     guest would reconnect with no bar while the bridge still holds a live
     future, and the turn hangs until the answer deadline."""
-    harness.bridge.perm_grace_s = 30.0      # comfortably inside the grace
+    harness.bridge.config.perm_grace_s = 30.0      # comfortably inside the grace
 
     reader, writer, task = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
@@ -1757,7 +1757,7 @@ async def test_second_request_queues_behind_the_first(harness):
     reader, writer, task1 = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
 
-    task2 = harness.bridge._guest.claude.ask(tool_use_id="toolu_test_2")
+    task2 = harness.bridge.connection.guest.claude.ask(tool_use_id="toolu_test_2")
     wait = await _recv(harness, reader, "PERMWAIT")
     assert wait.headers["waiting"] == "1"
 
@@ -1808,7 +1808,7 @@ async def test_send_reports_whether_the_frame_actually_went(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     ok = await harness.bridge.connection.send(guest, srv.notice("k", "an ordinary notice"))
     assert ok is True
@@ -1838,8 +1838,8 @@ async def test_idle_guest_is_reaped_so_it_can_reconnect(harness):
     forever with `connected` still True -- and every reconnect is then refused
     as "busy", permanently. The machine crashing is the expected case here.
     """
-    harness.bridge.idle_timeout_s = 0.2
-    harness.bridge.idle_check_s = 0.05
+    harness.bridge.config.idle_timeout_s = 0.2
+    harness.bridge.config.idle_check_s = 0.05
 
     reader, writer, task = await _connect_and_ask(harness)
     await _recv(harness, reader, "PERMREQ")
@@ -1882,22 +1882,22 @@ async def test_path_outside_the_working_copy_is_refused_without_asking(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = harness.bridge._guest.claude.ask(
+    task = harness.bridge.connection.guest.claude.ask(
         tool_name="Read", args={"file_path": "/etc/hostname"})
     result = await asyncio.wait_for(task, 5)
     assert isinstance(result, PermissionResultDeny)
     assert "not on the user's machine" in result.message
-    assert harness.bridge._guest.perms.pending is None, "no bar should appear"
+    assert harness.bridge.connection.guest.perms.pending is None, "no bar should appear"
     await harness.close(writer)
 
 
 async def test_path_inside_the_working_copy_still_asks(harness):
     """The guard must not swallow legitimate staging work."""
     import os as _os
-    inside = _os.path.join(harness.bridge.cwd or _os.getcwd(), "staged.txt")
+    inside = _os.path.join(harness.bridge.config.cwd or _os.getcwd(), "staged.txt")
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = harness.bridge._guest.claude.ask(
+    task = harness.bridge.connection.guest.claude.ask(
         tool_name="Write", args={"file_path": inside, "content": "x"})
     f = await _recv(harness, reader, "PERMREQ")
     assert f.headers["tool"] == "Write"
@@ -1928,7 +1928,7 @@ async def test_cancelling_a_turn_tells_the_guest_to_kill_the_command(harness):
     kill = await _recv(harness, reader, "EXECKILL")
     assert kill.headers["id"] == exec_id
     # And the slot is free, so the next call is not answered "busy".
-    assert not harness.bridge._guest.exec_pending
+    assert not harness.bridge.connection.guest.exec_pending
     await harness.close(writer)
 
 
@@ -2126,7 +2126,7 @@ async def test_a_tool_result_reaches_the_guest_as_a_block(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     await harness.bridge.presentation.write_block(
         guest, srv.H.tool_result("total 4\ndrwxr-xr-x  work\n"))
 
@@ -2212,7 +2212,7 @@ async def test_a_keepalive_keeps_an_idle_guest_alive(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     guest.last_seen = time.monotonic() - 10_000
     await harness.send(writer, Frame("PING", {}))
@@ -2250,7 +2250,7 @@ async def test_a_second_client_cannot_clobber_the_first_s_pipelined_frames(
     await asyncio.sleep(0.2)
 
     # The first client's turn still ran, with ITS text.
-    assert harness.bridge._guest is not None
+    assert harness.bridge.connection.guest is not None
     await harness.close(w1, w2)
 
 
@@ -2273,7 +2273,7 @@ async def test_the_chat_list_follows_a_forked_conversation(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     before = guest.sess_id
 
     await guest.claude.on_system("init", {"session_id": "forked-1234"})
@@ -2303,7 +2303,7 @@ async def test_an_oversized_block_is_truncated_not_split_mid_element(harness):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     huge = '<div class="tool">' + ("x" * 90_000) + "</div>"
     await harness.bridge.connection.send_html(guest, huge, srv.APPEND, 1)
@@ -2332,7 +2332,7 @@ async def test_a_measured_link_speed_reaches_the_codec_choice(harness):
 
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     assert guest.link.link_bps is None, "nothing has reported a speed yet"
 
     small = b"x" * 200
@@ -2430,9 +2430,9 @@ async def test_a_command_reaching_outside_the_mirror_is_announced(harness):
     # measured against the tree actually being mirrored for this chat, which
     # is narrower -- measuring against the parent would call a write into a
     # sibling conversation's folder "inside the mirror".
-    harness.bridge._guest.work_guest = "C:\\WORK"
+    harness.bridge.connection.guest.work_guest = "C:\\WORK"
 
-    task = harness.bridge._guest.claude.ask(
+    task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
         {"command": "deltree /y c:\\windows", "cwd": "C:\\"})
     frame = await _recv(harness, reader, "PERMREQ")
@@ -2464,14 +2464,14 @@ async def test_the_warning_is_readable_in_the_transcript_not_just_the_bar(
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge._guest.work_guest = "C:\\WORK"
+    harness.bridge.connection.guest.work_guest = "C:\\WORK"
 
-    task = harness.bridge._guest.claude.ask(
+    task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
         {"command": "deltree /y c:\\windows", "cwd": "C:\\"})
     await _recv(harness, reader, "PERMREQ")
 
-    blocks = "".join(harness.bridge._guest.view.pages.all_text())
+    blocks = "".join(harness.bridge.connection.guest.view.pages.all_text())
     assert "permwarn" in blocks
     assert "writes outside the mirrored folder" in blocks
     task.cancel()
@@ -2485,9 +2485,9 @@ async def test_a_device_inside_the_mirror_is_not_called_outside_it(harness):
     is a guard people stop reading; this module says so itself."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge._guest.work_guest = "C:\\WORK"
+    harness.bridge.connection.guest.work_guest = "C:\\WORK"
 
-    task = harness.bridge._guest.claude.ask(
+    task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
         {"command": "copy x c:\\work\\con", "cwd": "C:\\WORK"})
     frame = await _recv(harness, reader, "PERMREQ")
@@ -2518,11 +2518,11 @@ async def test_a_bridge_with_no_mirror_says_so_once_not_on_every_command(
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    assert not harness.bridge._guest.work_guest
+    assert not harness.bridge.connection.guest.work_guest
 
     bodies = []
     for cmd in ("dir c:\\", "vol c:"):
-        task = harness.bridge._guest.claude.ask(
+        task = harness.bridge.connection.guest.claude.ask(
             "mcp__machine__exec", {"command": cmd, "cwd": "C:\\"})
         frame = await _recv(harness, reader, "PERMREQ")
         bodies.append(frame.body.decode("cp1252"))
@@ -2536,7 +2536,7 @@ async def test_a_bridge_with_no_mirror_says_so_once_not_on_every_command(
         assert not body.startswith("!")
 
     # Said once, in the transcript, where there is room for it.
-    transcript = "".join(harness.bridge._guest.view.pages.all_text())
+    transcript = "".join(harness.bridge.connection.guest.view.pages.all_text())
     assert transcript.count("no folder is mirrored") == 1
     await harness.close(writer)
 
@@ -2545,9 +2545,9 @@ async def test_a_contained_command_gets_no_added_reassurance(harness):
     """The bar must read exactly as it does today for an ordinary command."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge._guest.work_guest = "C:\\WORK"
+    harness.bridge.connection.guest.work_guest = "C:\\WORK"
 
-    task = harness.bridge._guest.claude.ask(
+    task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
         {"command": "dir c:\\work", "cwd": "C:\\WORK"})
     frame = await _recv(harness, reader, "PERMREQ")
@@ -2573,9 +2573,9 @@ async def test_asking_permission_is_early_enough_to_commit_the_folder(
     reader, writer = await harness.connect(hdrs={"sync_root": "C:\\Gaston"})
     await _recv(harness, reader, "OPTIONSEND")
     b = harness.bridge
-    b.sync_dir = str(tmp_path / "mirror")
-    os.makedirs(b.sync_dir, exist_ok=True)
-    g = b._guest
+    b.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(b.config.sync_dir, exist_ok=True)
+    g = b.connection.guest
     g.first_prompt = "Sky color"
     assert g.work_guest == ""
 
@@ -2600,8 +2600,8 @@ async def test_turn_end_carries_context_fullness(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
 
-    await harness.bridge._guest.claude.send("hello")
-    await harness.bridge.turn_runner.run_turn(harness.bridge._guest, "hello")
+    await harness.bridge.connection.guest.claude.send("hello")
+    await harness.bridge.turn_runner.run_turn(harness.bridge.connection.guest, "hello")
     frame = await _recv(harness, reader, "TURN")
     while frame.headers.get("state") != "end":
         frame = await _recv(harness, reader, "TURN")
@@ -2615,9 +2615,9 @@ async def test_an_unavailable_context_reading_is_absent_not_zero(harness):
     0 would claim an empty context, which is the opposite of unknown."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge._guest.claude.context_pct = None
+    harness.bridge.connection.guest.claude.context_pct = None
 
-    await harness.bridge.turn_runner.run_turn(harness.bridge._guest, "hello")
+    await harness.bridge.turn_runner.run_turn(harness.bridge.connection.guest, "hello")
     frame = await _recv(harness, reader, "TURN")
     while frame.headers.get("state") != "end":
         frame = await _recv(harness, reader, "TURN")
@@ -2667,7 +2667,7 @@ async def test_a_hello_carrying_an_inventory_still_connects(harness):
 async def test_the_inventory_reaches_the_guest(harness):
     r, w = await harness.connect(tools=ROWS)
     await harness.recv_until(r, {"READY"})
-    got = {f.name: f.path for f in harness.bridge._guest.tools}
+    got = {f.name: f.path for f in harness.bridge.connection.guest.tools}
     assert got == {"command.com": "C:\\WINDOWS\\COMMAND.COM",
                    "watcom": "C:\\WATCOM"}
     await harness.close(w)
@@ -2681,7 +2681,7 @@ async def test_the_inventory_is_in_the_prompt_the_session_was_built_with(
     outside."""
     r, w = await harness.connect(tools=ROWS)
     await harness.recv_until(r, {"READY"})
-    prompt = harness.bridge._guest.claude.system_prompt["append"]
+    prompt = harness.bridge.connection.guest.claude.system_prompt["append"]
     assert "What is installed on that machine" in prompt
     assert "-l=nt_win" in prompt
     await harness.close(w)
@@ -2692,8 +2692,8 @@ async def test_a_client_that_sends_no_body_connects_exactly_as_before(harness):
     feature is dark, and dark must mean unchanged rather than degraded."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-    assert harness.bridge._guest.tools == []
-    prompt = harness.bridge._guest.claude.system_prompt["append"]
+    assert harness.bridge.connection.guest.tools == []
+    prompt = harness.bridge.connection.guest.claude.system_prompt["append"]
     assert "What is installed on that machine" not in prompt
     await harness.close(w)
 
@@ -2705,14 +2705,14 @@ async def test_a_malformed_body_does_not_cost_the_user_their_machine(harness):
     r, w = await harness.connect(tools=b"\xff\xfe garbage not rows at all\n")
     frames = await harness.recv_until(r, {"READY"})
     assert [f for f in frames if f.type == "READY"], [f.type for f in frames]
-    assert harness.bridge._guest.tools == []
+    assert harness.bridge.connection.guest.tools == []
     await harness.close(w)
 
 
 async def test_one_bad_row_does_not_lose_the_good_ones(harness):
     r, w = await harness.connect(tools=b"watcom file 999 C:\\W\n" + ROWS)
     await harness.recv_until(r, {"READY"})
-    assert [f.name for f in harness.bridge._guest.tools] == [
+    assert [f.name for f in harness.bridge.connection.guest.tools] == [
         "command.com", "watcom"]
     await harness.close(w)
 
@@ -2723,7 +2723,7 @@ async def test_the_inventory_survives_a_reconnect_that_resends_it(harness):
     await harness.close(w)
     r2, w2 = await harness.connect(tools=ROWS)
     await harness.recv_until(r2, {"READY"})
-    assert len(harness.bridge._guest.tools) == 2
+    assert len(harness.bridge.connection.guest.tools) == 2
     await harness.close(w2)
 
 
@@ -2736,7 +2736,7 @@ async def test_reconnecting_from_an_older_client_clears_the_inventory(harness):
     await harness.close(w)
     r2, w2 = await harness.connect()
     await harness.recv_until(r2, {"READY"})
-    assert harness.bridge._guest.tools == []
+    assert harness.bridge.connection.guest.tools == []
     await harness.close(w2)
 
 

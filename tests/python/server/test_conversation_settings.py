@@ -28,7 +28,7 @@ from harness import harness, _recv   # noqa: F401
 async def _connected(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    return r, w, harness.bridge._guest
+    return r, w, harness.bridge.connection.guest
 
 
 def _saved(harness, session_id):

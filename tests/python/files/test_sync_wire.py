@@ -95,7 +95,7 @@ def a_pass(harness, tmp_path, root=None):
     # guest yet -- SyncTransport tolerates that (nothing dereferences it
     # until a transport method is actually awaited) the same way the old
     # `getattr(guest, "caps", None) or C.Caps()` tolerated a None guest.
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     caps = guest.caps if guest is not None else None
     return Pass(SyncTransport(guest), caps, root, state)
 
@@ -1005,12 +1005,12 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
     # that ran the pass above -- nothing in memory survives a restart. Its
     # SyncCoordinator is built fresh right alongside it, the same way.
     fresh = Bridge("s", host="127.0.0.1", port=0)
-    fresh.sync_dir = p.root
-    fresh.sync_state = os.path.dirname(p.state)
-    assert fresh.synccoord.agent_notices == []
+    fresh.config.sync_dir = p.root
+    fresh.config.sync_state = os.path.dirname(p.state)
+    assert fresh.connection.synccoord.agent_notices == []
 
     fresh.turn_runner.seed_agent_notices()
-    assert fresh.synccoord.agent_notices == [
+    assert fresh.connection.synccoord.agent_notices == [
         "SYNC: conflict on x.c -- your copy was kept"], (
         "the notice the old process never got to hand over must be picked "
         "up from disk, not lost with the process that wrote it"
@@ -1018,7 +1018,7 @@ async def test_a_bridge_restart_does_not_lose_the_agents_copy_of_a_notice(
 
     out = await fresh.turn_runner.with_sync_preamble("carry on")
     assert "x.c" in out
-    assert fresh.synccoord.agent_notices == []
+    assert fresh.connection.synccoord.agent_notices == []
     # And the durable half actually cleared, not just the in-memory cache --
     # or the NEXT restart would hand the same notice over a third time.
     assert Baseline.load(p.state).pending_notice_agent == []
@@ -1057,8 +1057,8 @@ async def test_a_conflict_puts_a_continue_bar_on_the_users_screen(
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     p = a_pass(harness, tmp_path)
-    harness.bridge.sync_dir = p.root
-    harness.bridge.sync_state = os.path.dirname(p.state)
+    harness.bridge.config.sync_dir = p.root
+    harness.bridge.config.sync_state = os.path.dirname(p.state)
     _commit(harness, p.root)
     open(os.path.join(p.root, "a.txt"), "wb").write(b"agent version\n")
     p.base.rows["a.txt"] = Entry(type=Type.FILE, crc=111, display="a.txt")
@@ -1075,7 +1075,7 @@ async def test_a_conflict_puts_a_continue_bar_on_the_users_screen(
     # The bar's label is clipped at roughly seventy characters on a 640x480
     # screen, and a line that runs past that loses its end silently.
     assert len(halt.body) <= 70, halt.body
-    assert harness.bridge.synccoord.halt_id == halt.headers["id"]
+    assert harness.bridge.connection.synccoord.halt_id == halt.headers["id"]
     await harness.close(writer)
 
 
@@ -1088,8 +1088,8 @@ async def test_continue_starts_the_agent_with_an_instruction_not_an_echo(
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
-    harness.bridge.synccoord.halt_id = "h123"
+    guest = harness.bridge.connection.guest
+    harness.bridge.connection.synccoord.halt_id = "h123"
 
     sent = []
     guest.claude = _FakeClaude(sent)
@@ -1100,7 +1100,7 @@ async def test_continue_starts_the_agent_with_an_instruction_not_an_echo(
         await asyncio.sleep(0.05)
 
     assert sent and "Resolve the sync conflict" in sent[0]
-    assert harness.bridge.synccoord.halt_id == "", (
+    assert harness.bridge.connection.synccoord.halt_id == "", (
         "the halt must clear when it is answered")
     await harness.close(writer)
 
@@ -1111,15 +1111,15 @@ async def test_a_stale_resume_is_ignored(harness, tmp_path):
     asked for."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
-    harness.bridge.synccoord.halt_id = "h999"
+    guest = harness.bridge.connection.guest
+    harness.bridge.connection.synccoord.halt_id = "h999"
 
     sent = []
     guest.claude = _FakeClaude(sent)
     await harness.send(writer, Frame("RESUME", {"id": "h123"}))
     await asyncio.sleep(0.3)
     assert not sent
-    assert harness.bridge.synccoord.halt_id == "h999"
+    assert harness.bridge.connection.synccoord.halt_id == "h999"
     await harness.close(writer)
 
 
@@ -1359,7 +1359,7 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
     # 02.19: Pass sends over its own SyncTransport now, which reaches
     # guest.link.send directly rather than through Bridge._send -- so this
     # counts at the link, the layer Pass actually calls.
-    real_send = harness.bridge._guest.link.send
+    real_send = harness.bridge.connection.guest.link.send
 
     async def counting_send(guest, frame, **kw):
         nonlocal sent
@@ -1367,7 +1367,7 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
             sent += 1
         return await real_send(guest, frame, **kw)
 
-    harness.bridge._guest.link.send = counting_send
+    harness.bridge.connection.guest.link.send = counting_send
 
     seen = []
     watching = True
@@ -1401,7 +1401,7 @@ async def test_a_big_push_does_not_starve_everything_else(harness, tmp_path):
         await asyncio.wait_for(side, 5)
     finally:
         watching = False
-        harness.bridge._guest.link.send = real_send
+        harness.bridge.connection.guest.link.send = real_send
 
     assert sent > 2, "the test needs a multi-chunk push to mean anything"
     assert ran_after is not None and ran_after <= 1, (
@@ -1428,13 +1428,13 @@ async def test_sync_stands_aside_while_the_user_has_a_prompt_open(
     for name in ("a.txt", "b.txt"):
         open(os.path.join(p.root, name), "wb").write(b"new\n")
 
-    harness.bridge._guest.perms.pending = object()      # a dialog is on screen
+    harness.bridge.connection.guest.perms.pending = object()      # a dialog is on screen
     try:
         task = asyncio.create_task(p.run())
         await fake_scan(harness, reader, writer, {})
         got = await asyncio.wait_for(task, 10)
     finally:
-        harness.bridge._guest.perms.pending = None
+        harness.bridge.connection.guest.perms.pending = None
 
     assert got["pushed"] == 0
     assert any("permission prompt" in r for r in got["reports"])
@@ -1526,11 +1526,11 @@ async def test_continue_waits_for_the_pass_rather_than_racing_it(harness,
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     p = a_pass(harness, tmp_path)
-    harness.bridge.sync_dir = p.root
-    harness.bridge.sync_state = os.path.dirname(p.state)
+    harness.bridge.config.sync_dir = p.root
+    harness.bridge.config.sync_state = os.path.dirname(p.state)
     p.base.latched["src/main.c"] = "both sides moved"
     p.base.save(p.state)
 
@@ -1551,11 +1551,11 @@ async def test_the_agents_resolve_waits_for_the_pass_too(harness, tmp_path):
     it the likelier of the two to be lost."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     p = a_pass(harness, tmp_path)
-    harness.bridge.sync_dir = p.root
-    harness.bridge.sync_state = os.path.dirname(p.state)
+    harness.bridge.config.sync_dir = p.root
+    harness.bridge.config.sync_state = os.path.dirname(p.state)
     p.base.latched["src/main.c"] = "both sides moved"
     p.base.save(p.state)
 
@@ -1591,9 +1591,9 @@ async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
     await _recv(harness, reader, "OPTIONSEND")
     root = str(tmp_path / "tree")
     os.makedirs(os.path.join(root, "notes"))
-    harness.bridge.sync_dir = root
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    harness.bridge.config.sync_dir = root
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
     _commit(harness, root)
 
     task = asyncio.create_task(harness.bridge.sync.run_sync("test"))
@@ -1604,7 +1604,7 @@ async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
 
     # Answer it, the way the user does.
     await harness.send(writer,
-                       Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
+                       Frame("RESUME", {"id": harness.bridge.connection.synccoord.halt_id}))
     await asyncio.sleep(0.1)
 
     # Same unresolvable conflict, next pass. No second bar.
@@ -1613,7 +1613,7 @@ async def test_a_standing_conflict_does_not_re_raise_the_halt(harness,
     second = await asyncio.wait_for(task, 10)
     assert second["conflicts"] == 1, "it is still a conflict, and still true"
     assert second["new_conflicts"] == 0, "but it is not news, so no new bar"
-    assert not harness.bridge.synccoord.halt_id, (
+    assert not harness.bridge.connection.synccoord.halt_id, (
         "the bar went back up on a standing conflict")
     await harness.close(writer)
 
@@ -1630,11 +1630,11 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     p = a_pass(harness, tmp_path)
-    harness.bridge.sync_dir = p.root
-    harness.bridge.sync_state = os.path.dirname(p.state)
-    state = os.path.join(harness.bridge.sync_state, "base.json")
+    harness.bridge.config.sync_dir = p.root
+    harness.bridge.config.sync_state = os.path.dirname(p.state)
+    state = os.path.join(harness.bridge.config.sync_state, "base.json")
 
     base = harness.bridge.sync.load_baseline()
     base.latched["seen.c"] = "both sides moved"
@@ -1651,7 +1651,7 @@ async def test_continue_does_not_answer_for_a_conflict_never_shown(harness,
                                      paths=["unseen.c"])
 
     await harness.send(writer,
-                       Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
+                       Frame("RESUME", {"id": harness.bridge.connection.synccoord.halt_id}))
     await asyncio.sleep(0.15)
 
     left = harness.bridge.sync.load_baseline().latched
@@ -1672,12 +1672,12 @@ async def test_continue_is_acknowledged_rather_than_assumed(harness, tmp_path):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+    guest = harness.bridge.connection.guest
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     await harness.bridge.sync.raise_halt(guest, "Stopped: 1 conflicting edit.")
     halt = await _recv(harness, reader, "HALT")
@@ -1685,7 +1685,7 @@ async def test_continue_is_acknowledged_rather_than_assumed(harness, tmp_path):
     await harness.send(writer, Frame("RESUME", {"id": halt.headers["id"]}))
     end = await _recv(harness, reader, "HALTEND")
     assert end.headers["id"] == halt.headers["id"]
-    assert not harness.bridge.synccoord.halt_id
+    assert not harness.bridge.connection.synccoord.halt_id
     await harness.close(writer)
 
 
@@ -1702,7 +1702,7 @@ async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     await harness.bridge.sync.raise_halt(guest, "Stopped: 1 conflicting edit.")
     halt = await _recv(harness, reader, "HALT")
     await harness.close(writer)
@@ -1718,7 +1718,7 @@ async def test_a_halt_survives_a_reconnect(harness, tmp_path):
     # And it is answerable, which is the whole point.
     await harness.send(writer2, Frame("RESUME", {"id": again.headers["id"]}))
     await _recv(harness, reader2, "HALTEND")
-    assert not harness.bridge.synccoord.halt_id
+    assert not harness.bridge.connection.synccoord.halt_id
     await harness.close(writer2)
 
 
@@ -1737,19 +1737,19 @@ async def test_a_bridge_restart_with_latched_paths_raises_the_bar(
     the agent noticing on its own via sync_status.
 
     Here the connecting guest IS the first one this Bridge object has ever
-    seen -- `harness.bridge.synccoord` has never had a chance to observe
+    seen -- `harness.bridge.connection.synccoord` has never had a chance to observe
     this pass's `base.latched`, the same as a freshly constructed one would
     not have -- which is exactly what "a fresh process" looks like from
     _attach's side.
     """
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
     base = Baseline()
     base.latched = {"a.txt": "conflicting edit"}
-    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
-    assert harness.bridge._guest is None, "test setup: no prior connection"
+    base.save(os.path.join(harness.bridge.config.sync_state, "base.json"))
+    assert harness.bridge.connection.guest is None, "test setup: no prior connection"
 
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
@@ -1759,7 +1759,7 @@ async def test_a_bridge_restart_with_latched_paths_raises_the_bar(
         "no HALT arrived at all -- the restart left a latched path with no "
         f"bar (got {halt.type} instead, after recv_until's timeout)")
     assert halt.headers["id"]
-    assert harness.bridge.synccoord.halt_id == halt.headers["id"]
+    assert harness.bridge.connection.synccoord.halt_id == halt.headers["id"]
     await harness.close(writer)
 
 
@@ -1768,19 +1768,19 @@ async def test_reconcile_halt_clears_a_bar_nothing_is_latched_for(
     """The other direction: a bar up with base.latched already empty (the
     agent released the last path through some route that did not itself
     clear synccoord.halt_id) must come down, not stay stuck."""
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
-    harness.bridge.synccoord.halt_id = "h-stuck"
+    guest = harness.bridge.connection.guest
+    harness.bridge.connection.synccoord.halt_id = "h-stuck"
 
     await harness.bridge.sync.reconcile_halt(guest)
-    assert harness.bridge.synccoord.halt_id == "", (
+    assert harness.bridge.connection.synccoord.halt_id == "", (
         "a bar with nothing latched must come down")
     await harness.close(writer)
 
@@ -1798,14 +1798,14 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    _commit(harness, harness.bridge.sync_dir)
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.config.sync_dir)
     base = Baseline()
     base.tree_id = "VOL-ORIGINAL"
-    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+    base.save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     task = asyncio.create_task(harness.bridge.sync.run_sync("test"))
     await fake_scan(harness, reader, writer, {}, tree_id="VOL-OTHER")
@@ -1821,7 +1821,7 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     assert b"stopped" in body.lower(), body[:200]
     # And the agent, which would otherwise keep reporting files as delivered.
     assert any("SYNC HAS STOPPED" in n
-               for n in harness.bridge.synccoord.agent_notices)
+               for n in harness.bridge.connection.synccoord.agent_notices)
     assert harness.bridge.sync.load_baseline().aborted
 
     # sync_status leads with it, because it makes everything else stale.
@@ -1829,11 +1829,11 @@ async def test_a_refused_pass_is_announced_once_not_never(harness, tmp_path):
     assert "SYNCHRONISATION IS STOPPED" in status
 
     # Second pass, same refusal: silent.
-    harness.bridge.synccoord.agent_notices.clear()
+    harness.bridge.connection.synccoord.agent_notices.clear()
     task = asyncio.create_task(harness.bridge.sync.run_sync("test"))
     await fake_scan(harness, reader, writer, {}, tree_id="VOL-OTHER")
     await asyncio.wait_for(task, 10)
-    assert not harness.bridge.synccoord.agent_notices, (
+    assert not harness.bridge.connection.synccoord.agent_notices, (
         "announced the same abort twice")
     await harness.close(writer)
 
@@ -1850,11 +1850,11 @@ async def test_a_handover_is_not_announced_as_a_failure(harness, tmp_path):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    _commit(harness, harness.bridge.sync_dir)
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.config.sync_dir)
 
     task = asyncio.create_task(harness.bridge.sync.run_sync("test"))
     await fake_scan(harness, reader, writer, {}, status="no_root")
@@ -1862,7 +1862,7 @@ async def test_a_handover_is_not_announced_as_a_failure(harness, tmp_path):
 
     assert "retry" in got, got
     assert "error" not in got
-    assert not harness.bridge.synccoord.agent_notices, (
+    assert not harness.bridge.connection.synccoord.agent_notices, (
         "the agent must not be told synchronisation has stopped for a "
         "handover that fixes itself")
     assert not harness.bridge.sync.load_baseline().aborted
@@ -1874,11 +1874,11 @@ async def test_a_handover_that_never_ends_is_announced(harness, tmp_path):
     the user has to hear about it while they still remember choosing it."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    _commit(harness, harness.bridge.sync_dir)
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.config.sync_dir)
 
     for _ in range(harness.bridge.TRANSIENT_ABORT_GRACE + 1):
         task = asyncio.create_task(harness.bridge.sync.run_sync("test"))
@@ -1887,7 +1887,7 @@ async def test_a_handover_that_never_ends_is_announced(harness, tmp_path):
 
     assert "error" in got, got
     assert any("SYNC HAS STOPPED" in n
-               for n in harness.bridge.synccoord.agent_notices)
+               for n in harness.bridge.connection.synccoord.agent_notices)
     await harness.close(writer)
 
 
@@ -1896,14 +1896,14 @@ async def test_recovery_is_announced_too(harness, tmp_path):
     user believing it is still down."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    _commit(harness, harness.bridge.sync_dir)
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    _commit(harness, harness.bridge.config.sync_dir)
     base = Baseline()
     base.aborted = "something stopped it earlier"
-    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+    base.save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     task = asyncio.create_task(harness.bridge.sync.run_sync("test"))
     await fake_scan(harness, reader, writer, {})
@@ -1985,7 +1985,7 @@ async def test_two_turns_never_run_at_once(harness, tmp_path):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     live = asyncio.Event()
     order = []
@@ -2023,14 +2023,14 @@ async def test_continue_unlatches_only_once_the_wire_is_free(harness, tmp_path):
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    guest = harness.bridge.connection.guest
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
     base = Baseline()
     base.latched["src/main.c"] = "both sides moved"
-    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
+    base.save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     await harness.bridge.sync.raise_halt(guest, "Stopped: 1 conflicting edit.",
                                      paths=["src/main.c"])
@@ -2050,7 +2050,7 @@ async def test_continue_unlatches_only_once_the_wire_is_free(harness, tmp_path):
     await asyncio.sleep(0.05)
 
     await harness.send(writer,
-                       Frame("RESUME", {"id": harness.bridge.synccoord.halt_id}))
+                       Frame("RESUME", {"id": harness.bridge.connection.synccoord.halt_id}))
     await _recv(harness, reader, "HALTEND")
     await asyncio.sleep(0.1)
 
@@ -2074,17 +2074,17 @@ async def test_a_reconnecting_guest_reconciles(harness, tmp_path):
     in win/rpc.c, and a machine edited while it was disconnected reconciled
     only when its watcher next happened to fire.
     """
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
 
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     # A folder this conversation has committed to, because that is what makes
     # there be a tree to reconcile at all. A chat that never called a tool
     # mirrors nothing, and attaching one correctly does nothing.
-    _commit(harness, harness.bridge.sync_dir)
+    _commit(harness, harness.bridge.config.sync_dir)
     await harness.close(writer)
 
     reader, writer = await harness.connect()
@@ -2100,18 +2100,18 @@ async def test_a_reconnecting_guest_reconciles(harness, tmp_path):
 async def test_the_bridge_has_its_own_sweep(harness, tmp_path):
     """The backstop: if the guest's watcher thread dies, or a guest is built
     without one, nothing on this side would ever have noticed."""
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    harness.bridge.sync_sweep_s = 0.05
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    harness.bridge.config.sync_sweep_s = 0.05
 
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     # No attach pass to answer: a fresh conversation has committed to no
     # folder, so nothing is mirrored and attaching has nothing to reconcile.
     # The sweep is the only pass here, which is what this is about.
-    _commit(harness, harness.bridge.sync_dir)
+    _commit(harness, harness.bridge.config.sync_dir)
 
     req = await _recv(harness, reader, "SYNCSCAN")    # the sweep one
     assert req.type == "SYNCSCAN", "the bridge never swept on its own"
@@ -2204,19 +2204,19 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
     """
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    guest = harness.bridge._guest
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+    guest = harness.bridge.connection.guest
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     said = []
     for reason in ("machine A is not machine B", "machine B is not machine A",
                    "machine A is not machine B", "machine B is not machine A"):
-        harness.bridge.synccoord.agent_notices.clear()
+        harness.bridge.connection.synccoord.agent_notices.clear()
         await harness.bridge.sync.report_abort(guest, reason)
-        said.append(bool(harness.bridge.synccoord.agent_notices))
+        said.append(bool(harness.bridge.connection.synccoord.agent_notices))
 
     assert said == [True, True, False, False], (
         f"each distinct reason once, then silence -- got {said}")
@@ -2225,10 +2225,10 @@ async def test_two_alternating_abort_reasons_are_each_said_once(harness,
     base = harness.bridge.sync.load_baseline()
     base.announced = []
     base.aborted = ""
-    base.save(os.path.join(harness.bridge.sync_state, "base.json"))
-    harness.bridge.synccoord.agent_notices.clear()
+    base.save(os.path.join(harness.bridge.config.sync_state, "base.json"))
+    harness.bridge.connection.synccoord.agent_notices.clear()
     await harness.bridge.sync.report_abort(guest, "machine A is not machine B")
-    assert harness.bridge.synccoord.agent_notices, (
+    assert harness.bridge.connection.synccoord.agent_notices, (
         "recovery did not reset the slate")
     await harness.close(writer)
 
@@ -2247,8 +2247,8 @@ def _commit(harness, local_root, guest_root="C:\\WORK"):
     production the first TOOL CALL does this; a sync test has no tool, so it
     says the same thing directly.
     """
-    harness.bridge._guest.work_dir = local_root
-    harness.bridge._guest.work_guest = guest_root
+    harness.bridge.connection.guest.work_dir = local_root
+    harness.bridge.connection.guest.work_guest = guest_root
 
 
 def _revert_pass(rows, decisions, accept_tree=False):

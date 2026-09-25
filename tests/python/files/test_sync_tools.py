@@ -41,17 +41,17 @@ def b(tmp_path):
     bridge = Bridge("s", host="127.0.0.1", port=0)
     cwd = tmp_path / "work"
     (cwd / "machine").mkdir(parents=True)
-    bridge.cwd = str(cwd)
-    bridge.sync_dir = str(cwd / "machine")
-    bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(bridge.sync_state, exist_ok=True)
+    bridge.config.cwd = str(cwd)
+    bridge.config.sync_dir = str(cwd / "machine")
+    bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(bridge.config.sync_state, exist_ok=True)
     # A conversation that has COMMITTED to a folder, because that is what
     # makes there be a mirror to report on at all. Nothing is mirrored until
     # a chat's first tool call, and `sync_status` says exactly that while
     # there is not -- see test_status_says_so_before_a_folder_exists.
-    bridge._guest = _committed_guest(bridge.sync_dir, "C:\\WORK")
-    bridge._guest.guest_sync_root = "C:\\WORK"
-    Baseline().save(os.path.join(bridge.sync_state, "base.json"))
+    bridge.connection.guest = _committed_guest(bridge.config.sync_dir, "C:\\WORK")
+    bridge.connection.guest.guest_sync_root = "C:\\WORK"
+    Baseline().save(os.path.join(bridge.config.sync_state, "base.json"))
     return bridge
 
 
@@ -60,7 +60,7 @@ def test_status_says_so_before_a_folder_exists(b):
     the baseline named an older tree concluded synchronisation was broken and
     refused to write the file it had been asked for. Nothing being mirrored
     yet is the normal state of a conversation, and it has to read that way."""
-    b._guest = _committed_guest("", "")
+    b.connection.guest = _committed_guest("", "")
     out = b.sync.sync_status_text()
     assert "does not have a folder on the user's machine yet" in out
     assert "not a fault" in out
@@ -80,8 +80,8 @@ def test_sync_state_defaults_to_none_like_sync_dir(tmp_path):
     the process's cwd instead of failing loudly. sync_dir already uses None
     as its sentinel for "sync is off"; sync_state must match it."""
     bridge = Bridge("s", host="127.0.0.1", port=0)
-    assert bridge.sync_dir is None
-    assert bridge.sync_state is None
+    assert bridge.config.sync_dir is None
+    assert bridge.config.sync_state is None
 
 
 def test_stray_scan_is_bounded_and_says_so(b, monkeypatch):
@@ -92,7 +92,7 @@ def test_stray_scan_is_bounded_and_says_so(b, monkeypatch):
     rather than silently look exhaustive."""
     monkeypatch.setattr(type(b.sync), "STRAY_SCAN_BUDGET", 3)
     for i in range(6):
-        open(os.path.join(b.cwd, f"stray{i}.txt"), "w").write("x")
+        open(os.path.join(b.config.cwd, f"stray{i}.txt"), "w").write("x")
 
     stray, truncated = b.sync.edits_outside_the_mirror()
     assert truncated
@@ -103,7 +103,7 @@ def test_stray_scan_is_bounded_and_says_so(b, monkeypatch):
 
 
 def test_stray_scan_under_budget_is_not_flagged_truncated(b):
-    open(os.path.join(b.cwd, "stray.txt"), "w").write("x")
+    open(os.path.join(b.config.cwd, "stray.txt"), "w").write("x")
     stray, truncated = b.sync.edits_outside_the_mirror()
     assert stray == ["stray.txt"]
     assert not truncated
@@ -112,7 +112,7 @@ def test_stray_scan_under_budget_is_not_flagged_truncated(b):
 
 def test_status_names_both_ends(b):
     out = b.sync.sync_status_text()
-    assert b.sync_dir in out
+    assert b.config.sync_dir in out
     assert "C:\\WORK" in out
 
 
@@ -123,7 +123,7 @@ def test_status_is_quiet_when_there_is_nothing_to_say(b):
 def test_status_reports_a_withheld_path_and_how_to_clear_it(b):
     base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
-    base.save(os.path.join(b.sync_state, "base.json"))
+    base.save(os.path.join(b.config.sync_state, "base.json"))
 
     out = b.sync.sync_status_text()
     assert "REFUSING YOUR WRITES" in out
@@ -134,7 +134,7 @@ def test_status_reports_a_withheld_path_and_how_to_clear_it(b):
 def test_status_repeats_the_last_passs_skips(b):
     """A skipped name never reaches the user however many times it is written,
     and after the first pass nothing says so."""
-    b._guest.last_sync_reports = ["skipped aux.c: reserved device name"]
+    b.connection.guest.last_sync_reports = ["skipped aux.c: reserved device name"]
     out = b.sync.sync_status_text()
     assert "aux.c" in out
     assert "NEVER" in out
@@ -143,8 +143,8 @@ def test_status_repeats_the_last_passs_skips(b):
 def test_status_lists_edits_that_missed_the_mirror(b):
     """The quietest way to achieve nothing: the agent is confined to cwd, the
     mirror is a directory inside it, and everything else stays here."""
-    open(os.path.join(b.cwd, "notes.md"), "wb").write(b"lost work\n")
-    open(os.path.join(b.sync_dir, "real.c"), "wb").write(b"int x;\n")
+    open(os.path.join(b.config.cwd, "notes.md"), "wb").write(b"lost work\n")
+    open(os.path.join(b.config.sync_dir, "real.c"), "wb").write(b"int x;\n")
 
     out = b.sync.sync_status_text()
     assert "OUTSIDE THE MIRRORED FOLDER" in out
@@ -153,7 +153,7 @@ def test_status_lists_edits_that_missed_the_mirror(b):
 
 
 async def test_resolve_release_lifts_the_refusal(b):
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(path)
@@ -172,7 +172,7 @@ async def test_resolve_release_is_honest_when_there_was_no_latch(b):
 
 
 async def test_resolve_matches_case_insensitively_like_the_guest_does(b):
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.save(path)
@@ -181,7 +181,7 @@ async def test_resolve_matches_case_insensitively_like_the_guest_does(b):
 
 
 async def test_resolve_forget_drops_a_tombstone(b):
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.tombs["gone.c"] = Tomb(cls="t", crc=7)
     base.save(path)
@@ -202,7 +202,7 @@ async def test_resolve_accept_revert_drops_the_prev_that_blocked_the_pull(b):
     undid the change, so this is the escape hatch -- and dropping `prev` is
     the whole mechanism: with no record of what the push replaced, the guest
     just differs from the ancestor and the ordinary row pulls it."""
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.prev["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=11)
     base.latched["src/main.c"] = "the guest reverted a push"
@@ -219,7 +219,7 @@ async def test_resolve_accept_revert_says_the_old_content_is_not_kept(b):
     """The agent's version is discarded by this action and nothing stages it.
     Saying so is the difference between the agent re-applying its change and
     the agent believing the bridge kept a copy it can ask for."""
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.prev["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=11)
     base.save(path)
@@ -238,7 +238,7 @@ async def test_resolve_refuses_an_unknown_action_instead_of_forgetting(b):
     only guard was in tools.py -- a different file. An unrecognised action
     reaching the bridge dropped the row, which is the DESTRUCTIVE half of the
     pair and the wrong way round for a default."""
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.tombs["gone.c"] = Tomb(cls="t", crc=7)
     base.save(path)
@@ -251,7 +251,7 @@ async def test_resolve_refuses_an_unknown_action_instead_of_forgetting(b):
 async def test_resolve_survives_a_baseline_it_cannot_read(b):
     """Refuse, never treat an unreadable baseline as an empty one -- that
     would make every file new on both sides."""
-    open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
+    open(os.path.join(b.config.sync_state, "base.json"), "w").write("{ not json")
     out = await b.sync.sync_resolve("a.c", "release")
     assert "could not be read" in out
     assert "nothing changed" in out
@@ -269,7 +269,7 @@ async def test_no_preamble_when_there_is_nothing_to_say(b):
 
 
 async def test_a_pending_notice_rides_in_on_the_next_turn(b):
-    b.synccoord.agent_notices = ["SYNC CONFLICT src/main.c -- both sides moved."]
+    b.connection.synccoord.agent_notices = ["SYNC CONFLICT src/main.c -- both sides moved."]
     out = await b.turn_runner.with_sync_preamble("carry on with the parser")
 
     assert "src/main.c" in out
@@ -283,7 +283,7 @@ async def test_the_preamble_says_writing_again_is_not_an_option(b):
     """The agent's natural move on being told about a conflict is to rewrite
     the file. It cannot -- the path refuses pushes -- and the preamble has to
     say so, or it will try, succeed locally, and report success."""
-    b.synccoord.agent_notices = ["SYNC CONFLICT a.c"]
+    b.connection.synccoord.agent_notices = ["SYNC CONFLICT a.c"]
     out = await b.turn_runner.with_sync_preamble("go on")
     assert "REFUSES your writes" in out
     assert "sync_resolve" in out
@@ -291,7 +291,7 @@ async def test_the_preamble_says_writing_again_is_not_an_option(b):
 
 
 async def test_a_notice_is_not_repeated_on_every_turn(b):
-    b.synccoord.agent_notices = ["SYNC CONFLICT a.c"]
+    b.connection.synccoord.agent_notices = ["SYNC CONFLICT a.c"]
     first = await b.turn_runner.with_sync_preamble("one")
     second = await b.turn_runner.with_sync_preamble("two")
     assert "a.c" in first
@@ -300,7 +300,7 @@ async def test_a_notice_is_not_repeated_on_every_turn(b):
 
 async def test_the_preamble_is_skipped_when_sync_is_off(tmp_path):
     bridge = Bridge("s", host="127.0.0.1", port=0)
-    bridge.synccoord.agent_notices = ["stale"]
+    bridge.connection.synccoord.agent_notices = ["stale"]
     assert await bridge.turn_runner.with_sync_preamble("hello") == "hello"
 
 
@@ -312,7 +312,7 @@ async def test_continue_lifts_every_withheld_path(b):
     no bar up to say so, and the agent silently unable to write to files nobody
     has mentioned.
     """
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.latched["src/main.c"] = "both sides moved"
     base.latched["src/util.c"] = "both sides moved"
@@ -329,7 +329,7 @@ async def test_releasing_when_nothing_is_withheld_is_harmless(b):
 async def test_releasing_survives_an_unreadable_baseline(b):
     """Refuse to act, never treat it as empty -- and never raise into the
     RESUME handler, which would leave the user pressing a dead button."""
-    open(os.path.join(b.sync_state, "base.json"), "w").write("{ not json")
+    open(os.path.join(b.config.sync_state, "base.json"), "w").write("{ not json")
     assert await b.sync.release_all_latches() == 0
 
 
@@ -345,7 +345,7 @@ async def test_resolve_accept_tree_changes_no_rows(b):
     """All it does is let the next pass past the check. If it edited the
     baseline it would be deciding the outcome instead of permitting it, and
     the per-path rows are what should decide."""
-    path = os.path.join(b.sync_state, "base.json")
+    path = os.path.join(b.config.sync_state, "base.json")
     base = b.sync.load_baseline()
     base.rows["src/main.c"] = Entry(type=Type.FILE, cls="t", crc=3)
     base.save(path)

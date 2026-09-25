@@ -165,7 +165,8 @@ def _build_tools(monkeypatch, bridge, guest="guest-1"):
         return {"type": "sdk", "name": name, "instance": object()}
 
     monkeypatch.setattr(T, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
-    result = T.build(bridge, guest=guest)
+    result = T.build(bridge.guest_exec, bridge.sync, bridge.workspace,
+                     guest=guest)
     _build_tools.last_defs = captured["defs"]
     return result, captured["by_name"]
 

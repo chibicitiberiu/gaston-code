@@ -97,7 +97,7 @@ async def test_a_switch_waits_for_the_live_turn(harness, monkeypatch):
                         lambda sid_, limit=2000: [])
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     await _hold_turn(harness, guest, unwind=0.3)
 
     pages_before = guest.view.pages
@@ -124,7 +124,7 @@ async def test_a_switch_interrupts_rather_than_waiting_out_the_model(
                         lambda sid_, limit=2000: [])
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     session = guest.claude
     await _hold_turn(harness, guest)
 
@@ -141,7 +141,7 @@ async def test_a_turn_that_lost_its_session_still_ends(harness):
     stayed disabled until the link was re-established."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     session = guest.claude
 
     real_send = session.send
@@ -171,7 +171,7 @@ async def test_a_refused_model_change_does_not_drop_the_link(harness):
     """
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
 
     async def refuse(_m):
         raise RuntimeError("Could not change the model")
@@ -190,7 +190,7 @@ async def test_a_refused_model_is_not_remembered(harness):
     next session built -- and the menu re-ticked it."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     before = guest.model
 
     async def refuse(_m):
@@ -215,7 +215,7 @@ async def test_a_bulk_transfer_counts_as_the_guest_being_alive(harness):
     failure down the socket it had just lost."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.last_seen = 0.0
     await guest.link.wire_yield(guest)
     assert guest.last_seen > 0.0
@@ -229,7 +229,7 @@ async def test_a_single_frame_is_not_evidence_of_life(harness):
     is advancing."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.last_seen = 0.0
     await harness.bridge.connection.send(guest, Frame("PONG", {}))
     assert guest.last_seen == 0.0
@@ -250,9 +250,9 @@ async def test_a_slash_command_is_not_buried_under_the_sync_preamble(
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
-    b.sync_dir = b.sync_dir or "/tmp"
-    b.synccoord.agent_notices = ["SYNC CONFLICT notes.txt"]
-    guest = b._guest
+    b.config.sync_dir = b.config.sync_dir or "/tmp"
+    b.connection.synccoord.agent_notices = ["SYNC CONFLICT notes.txt"]
+    guest = b.connection.guest
     sent = []
     real_send = guest.claude.send
 
@@ -265,7 +265,7 @@ async def test_a_slash_command_is_not_buried_under_the_sync_preamble(
     assert sent and sent[0] == "/compact"
     # And the notice is HELD, not dropped -- it rides in on the next
     # ordinary turn.
-    assert b.synccoord.agent_notices == ["SYNC CONFLICT notes.txt"]
+    assert b.connection.synccoord.agent_notices == ["SYNC CONFLICT notes.txt"]
     await harness.close(w)
 
 
@@ -274,9 +274,9 @@ async def test_an_ordinary_turn_still_carries_the_preamble(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
-    b.sync_dir = b.sync_dir or "/tmp"
-    b.synccoord.agent_notices = ["SYNC CONFLICT notes.txt"]
-    guest = b._guest
+    b.config.sync_dir = b.config.sync_dir or "/tmp"
+    b.connection.synccoord.agent_notices = ["SYNC CONFLICT notes.txt"]
+    guest = b.connection.guest
     sent = []
     real_send = guest.claude.send
 
@@ -305,11 +305,11 @@ async def test_a_reaped_guest_is_recorded_as_lost(harness):
     # BEFORE connecting: `_reap_idle` sleeps at the top of its loop, and the
     # reaper is created inside _on_client, so a value set afterwards would
     # not be read until the first full-length sleep had already elapsed.
-    b.idle_timeout_s = 0.0
-    b.idle_check_s = 0.01
+    b.config.idle_timeout_s = 0.0
+    b.config.idle_check_s = 0.01
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = b._guest
+    guest = b.connection.guest
     guest.last_seen = 0.0
 
     for _ in range(300):
@@ -328,7 +328,7 @@ async def test_an_exec_registered_after_a_reap_is_still_failed(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
-    guest = b._guest
+    guest = b.connection.guest
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
     guest.exec_pending["e1"] = ExecCall(future=fut)
@@ -352,7 +352,7 @@ async def test_abandoning_a_conversation_tells_the_guest_to_stop(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
-    guest = b._guest
+    guest = b.connection.guest
     loop = asyncio.get_running_loop()
     guest.exec_pending["e1"] = ExecCall(future=loop.create_future())
 
@@ -413,7 +413,7 @@ async def test_close_stops_the_sweeper_and_everything_spawned(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
-    b.sync_dir = b.sync_dir or "/tmp"
+    b.config.sync_dir = b.config.sync_dir or "/tmp"
     if b._sweeper is None:
         b._sweeper = asyncio.create_task(b.sync.sweep_sync())
     sweeper = b._sweeper
@@ -440,7 +440,7 @@ async def test_the_sync_coordinator_belongs_to_the_guest(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
     b = harness.bridge
-    assert b.synccoord is b._guest.synccoord
+    assert b.connection.synccoord is b.connection.guest.synccoord
     await harness.close(w)
 
 
@@ -450,12 +450,12 @@ async def test_a_coordinator_used_before_any_guest_survives_the_attach(
     """The handover keeps the object's identity, so a notice recorded before
     the first client connected is still queued after it does."""
     b = harness.bridge
-    b._guest = None
-    b.synccoord.agent_notices.append("recorded before anyone connected")
+    b.connection.guest = None
+    b.connection.synccoord.agent_notices.append("recorded before anyone connected")
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    assert "recorded before anyone connected" in b.synccoord.agent_notices
-    assert b.synccoord is b._guest.synccoord
+    assert "recorded before anyone connected" in b.connection.synccoord.agent_notices
+    assert b.connection.synccoord is b.connection.guest.synccoord
     await harness.close(w)
 
 
@@ -467,8 +467,8 @@ async def test_the_baseline_is_addressed_by_the_guest_it_is_asked_about(
     undid it. With two clients, agent A's release would land in whichever
     baseline `self._guest.work_guest` happened to name."""
     b = harness.bridge
-    b.sync_dir = str(tmp_path)
-    b.sync_state = str(tmp_path)
+    b.config.sync_dir = str(tmp_path)
+    b.config.sync_state = str(tmp_path)
     # ONE BASELINE PER ROOT, and the legacy base.json belongs to whichever
     # root already recorded itself in it -- so a second root gets a file of
     # its own. Without that file there is nothing for two roots to disagree
@@ -477,7 +477,7 @@ async def test_the_baseline_is_addressed_by_the_guest_it_is_asked_about(
         json.dumps({"guest_root": "C:\\ATTACHED"}), encoding="utf-8")
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    attached = b._guest
+    attached = b.connection.guest
     attached.work_guest = "C:\\ATTACHED"
 
     other = srv.GuestSession()
@@ -499,7 +499,7 @@ async def test_an_unknown_shell_is_refused_by_name(harness):
     for, which is not a smaller version of what was asked."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.tools = [srv.Found("command.com", "shell",
                              r"C:\WINDOWS\COMMAND.COM", True)]
 
@@ -519,7 +519,7 @@ async def test_the_named_shell_becomes_the_invocation_prefix(harness):
     asked to use it."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     guest.tools = [srv.Found("command.com", "shell",
                              r"C:\WINDOWS\COMMAND.COM", True)]
 
@@ -536,7 +536,7 @@ async def test_the_named_shell_becomes_the_invocation_prefix(harness):
 async def test_none_means_spawn_the_program_directly(harness):
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    harness.bridge._guest.tools = [
+    harness.bridge.connection.guest.tools = [
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
@@ -557,7 +557,7 @@ async def test_naming_nothing_uses_the_first_shell_the_machine_reported(
     shell profile turn the guard off (02.5)."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    harness.bridge._guest.tools = [
+    harness.bridge.connection.guest.tools = [
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
@@ -575,7 +575,7 @@ async def test_a_machine_that_reported_no_shell_runs_directly(harness):
     thing left that is not a guess."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    assert not harness.bridge._guest.tools
+    assert not harness.bridge.connection.guest.tools
 
     task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
         "dir", timeout_ms=5000, shell="", cwd="C:\\WORK"))
@@ -593,8 +593,8 @@ async def test_the_guard_judges_by_the_shell_the_call_named(harness):
     wrong, which this module's own docstring says is worse than none."""
     r, w = await harness.connect()
     await _recv(harness, r, "OPTIONSEND")
-    desk = harness.bridge._guest.perms
-    harness.bridge._guest.tools = [
+    desk = harness.bridge.connection.guest.perms
+    harness.bridge.connection.guest.tools = [
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
     assert desk._shell({"shell": "zzsh"}) == "zzsh"

@@ -70,7 +70,7 @@ async def test_golden_02_full_turn_with_perm_and_exec(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
 
-    claude = harness.bridge._guest.claude
+    claude = harness.bridge.connection.guest.claude
     orig_send = claude.send
 
     async def turn_with_tool(prompt):
@@ -89,7 +89,7 @@ async def test_golden_02_full_turn_with_perm_and_exec(harness):
                 timeout_ms=5000,
                 shell="",
                 cwd="",
-                guest=harness.bridge._guest,
+                guest=harness.bridge.connection.guest,
             )
             if claude.on_text:
                 await claude.on_text(f"Output: {res['content'][0]['text']}\n")
@@ -139,17 +139,17 @@ async def test_golden_03_sync_conflict_halt_and_resume(harness, tmp_path):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
 
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     collector = FrameCollector(r, harness)
 
     # 1. Raise HALT
     await harness.bridge.sync.raise_halt(
-        harness.bridge._guest, "Stopped: 1 conflicting edit."
+        harness.bridge.connection.guest, "Stopped: 1 conflicting edit."
     )
     await collector.recv_until({"HALT"})
     halt = next(f for f in collector.frames if f.type == "HALT")
@@ -171,11 +171,11 @@ async def test_golden_04_reconnect_mid_turn(harness):
     """Scenario 4: A reconnect mid-turn (_reissue_turn)."""
     r1, w1 = await harness.connect()
     await harness.recv_until(r1, {"OPTIONSEND"})
-    sess_id = harness.bridge._guest.sess_id
+    sess_id = harness.bridge.connection.guest.sess_id
 
     turn_barrier = asyncio.Event()
 
-    claude = harness.bridge._guest.claude
+    claude = harness.bridge.connection.guest.claude
 
     async def slow_send(prompt):
         claude.busy = True
@@ -228,16 +228,16 @@ async def test_golden_05_reconnect_while_halted(harness, tmp_path):
     """Scenario 5: A reconnect while halted (_reissue_halt)."""
     r1, w1 = await harness.connect()
     await harness.recv_until(r1, {"OPTIONSEND"})
-    sess_id = harness.bridge._guest.sess_id
+    sess_id = harness.bridge.connection.guest.sess_id
 
-    harness.bridge.sync_dir = str(tmp_path / "tree")
-    harness.bridge.sync_state = str(tmp_path / "state")
-    os.makedirs(harness.bridge.sync_dir, exist_ok=True)
-    os.makedirs(harness.bridge.sync_state, exist_ok=True)
-    Baseline().save(os.path.join(harness.bridge.sync_state, "base.json"))
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
+    harness.bridge.config.sync_state = str(tmp_path / "state")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    os.makedirs(harness.bridge.config.sync_state, exist_ok=True)
+    Baseline().save(os.path.join(harness.bridge.config.sync_state, "base.json"))
 
     await harness.bridge.sync.raise_halt(
-        harness.bridge._guest, "Stopped: 1 conflicting edit."
+        harness.bridge.connection.guest, "Stopped: 1 conflicting edit."
     )
     await harness.recv_until(r1, {"HALT"})
 
@@ -264,7 +264,7 @@ async def test_golden_06_page_request_and_seal(harness):
     await harness.recv_until(r, {"OPTIONSEND"})
 
     # Fill several pages directly into transcript
-    guest = harness.bridge._guest
+    guest = harness.bridge.connection.guest
     for i in range(600):
         guest.view.pages.add("plain", f"line {i:04d} padding padding\n")
         if i % 100 == 0:
@@ -311,7 +311,7 @@ async def test_golden_08_attachment_staged_and_sent(harness, tmp_path):
     """Scenario 8: An attachment staged and sent (ATTGET path included)."""
     workdir = str(tmp_path / "work")
     os.makedirs(workdir, exist_ok=True)
-    harness.bridge.cwd = workdir
+    harness.bridge.config.cwd = workdir
 
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
@@ -388,8 +388,8 @@ async def test_golden_09_duplicate_client_rejected(harness):
 
 async def test_golden_10_ghost_guest_reaped_and_reconnected(harness):
     """Scenario 10: A ghost guest reaped on idle timeout, then reconnecting without being refused as busy."""
-    harness.bridge.idle_timeout_s = 0.2
-    harness.bridge.idle_check_s = 0.05
+    harness.bridge.config.idle_timeout_s = 0.2
+    harness.bridge.config.idle_check_s = 0.05
 
     r1, w1 = await harness.connect()
     await harness.recv_until(r1, {"OPTIONSEND"})
@@ -417,7 +417,7 @@ async def test_golden_11_turn_error_and_coalescer_flush(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
 
-    claude = harness.bridge._guest.claude
+    claude = harness.bridge.connection.guest.claude
 
     async def failing_send(prompt):
         await claude.start_turn()
@@ -455,10 +455,10 @@ async def test_golden_12_disconnect_mid_turn_and_resume_cleanly(harness):
     """Scenario 12: A disconnect mid-turn, then reconnect (turn reissued and completed cleanly)."""
     r1, w1 = await harness.connect()
     await harness.recv_until(r1, {"OPTIONSEND"})
-    sess_id = harness.bridge._guest.sess_id
+    sess_id = harness.bridge.connection.guest.sess_id
 
     turn_gate = asyncio.Event()
-    claude = harness.bridge._guest.claude
+    claude = harness.bridge.connection.guest.claude
 
     async def gated_send(prompt):
         await claude.start_turn()

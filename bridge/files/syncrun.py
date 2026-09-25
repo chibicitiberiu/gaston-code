@@ -257,7 +257,7 @@ class Pass:
             self.root, ignore=ignore, attrs=attrs, caps=self.caps,
             guest_root=self.guest_root, cache=cache,
             report=self.reports.append,
-            first_report=lambda key, reason: self.first_report(
+            first_report=lambda key, reason: self.reporter.first_report(
                 key, reason, None, None))
 
     # --- applying ----------------------------------------------------------
@@ -509,14 +509,14 @@ class Pass:
                 # so equality proves nothing. Honouring the override here would
                 # compare a normalised checksum against a raw one forever.
                 out[key] = row
-                if self.first_report(key, "attrs:v1-client", None, None):
+                if self.reporter.first_report(key, "attrs:v1-client", None, None):
                     self.reports.append(
                         f"{row.display or key}: the attributes ask for "
                         f"{want!r} but this client sends a v1 manifest, which "
                         f"carries only its own checksum. Left as {row.cls!r}.")
             else:
                 out[key] = row.as_class(want)
-            if refused and self.first_report(
+            if refused and self.reporter.first_report(
                     key, f"attrs-guest:{refused}", None, None):
                 self.reports.append(f"{row.display or key}: {refused}")
         return out
@@ -531,8 +531,6 @@ class Pass:
     # shape, the same pattern `scan_bridge` above already follows for
     # `scanner.scan_bridge_tree`.
 
-    def first_report(self, key: str, reason: str, g, b) -> bool:
-        return self.reporter.first_report(key, reason, g, b)
 
     def note(self, text: str) -> None:
         self.reporter.note(text)
@@ -540,8 +538,6 @@ class Pass:
     def notices_delivered(self, texts: list) -> None:
         self.reporter.notices_delivered(texts)
 
-    def agent_notices_delivered(self, texts: list) -> None:
-        self.reporter.agent_notices_delivered(texts)
 
     def keep_ancestor(self, rel: str, data: bytes) -> None:
         """Retain the agreed content as history, not just its checksum.
@@ -774,7 +770,7 @@ class Pass:
                 # written and could not deliver produced silence. Through
                 # first_report, so a name the machine can never open is
                 # announced once rather than every thirty seconds.
-                if dec.reason is S.UNREADABLE and self.first_report(
+                if dec.reason is S.UNREADABLE and self.reporter.first_report(
                         dec.key, dec.reason, g, b):
                     self.note(f"SYNC: {dec.key} -- {dec.reason}")
             elif dec.act is S.Act.REPORT:
@@ -787,7 +783,7 @@ class Pass:
                 # unresolvable thing forever trains it to ignore the channel
                 # that also carries conflicts. The fingerprint includes the
                 # content, so the user EDITING that file is news again.
-                if self.first_report(dec.key, dec.reason, g, b):
+                if self.reporter.first_report(dec.key, dec.reason, g, b):
                     self.note(f"SYNC: {dec.key} -- {dec.reason}")
             elif dec.act is S.Act.CONFLICT:
                 done["conflicts"] += 1
@@ -825,7 +821,7 @@ class Pass:
                 # divergences had, wearing a type change as a disguise.
                 if not applicable:
                     standing.add(dec.key)
-                    if not self.first_report(dec.key, dec.reason, g, b):
+                    if not self.reporter.first_report(dec.key, dec.reason, g, b):
                         done["latched"] += 1
                         continue
 

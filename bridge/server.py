@@ -291,135 +291,30 @@ class Bridge:
             self.session.conv = val
 
 
-    @property
-    def host(self) -> str:
-        return self.config.host
-
-    @host.setter
-    def host(self, val: str) -> None:
-        self.config.host = val
-
-    @property
-    def port(self) -> int:
-        return self.config.port
-
-    @port.setter
-    def port(self, val: int) -> None:
-        self.config.port = val
-
-    @property
-    def cwd(self) -> str | None:
-        return self.config.cwd
-
-    @cwd.setter
-    def cwd(self, val: str | None) -> None:
-        self.config.cwd = val
-
-    @property
-    def model(self) -> str | None:
-        return self.config.model
-
-    @model.setter
-    def model(self, val: str | None) -> None:
-        self.config.model = val
-
-    @property
-    def effort(self) -> str | None:
-        return self.config.effort
-
-    @effort.setter
-    def effort(self, val: str | None) -> None:
-        self.config.effort = val
-
-    @property
-    def link_bps(self) -> float | None:
-        return self.config.link_bps
-
-    @link_bps.setter
-    def link_bps(self, val: float | None) -> None:
-        self.config.link_bps = val
-
-    @property
-    def sync_dir(self) -> str | None:
-        return self.config.sync_dir
-
-    @sync_dir.setter
-    def sync_dir(self, val: str | None) -> None:
-        self.config.sync_dir = val
-
-    @property
-    def sync_state(self) -> str | None:
-        return self.config.sync_state
-
-    @sync_state.setter
-    def sync_state(self, val: str | None) -> None:
-        self.config.sync_state = val
-
-    @property
-    def sync_sweep_s(self) -> float:
-        return self.config.sync_sweep_s
-
-    @sync_sweep_s.setter
-    def sync_sweep_s(self, val: float) -> None:
-        self.config.sync_sweep_s = val
-
-    @property
-    def idle_timeout_s(self) -> float:
-        return self.config.idle_timeout_s
-
-    @idle_timeout_s.setter
-    def idle_timeout_s(self, val: float) -> None:
-        self.config.idle_timeout_s = val
-
-    @property
-    def idle_check_s(self) -> float:
-        return self.config.idle_check_s
-
-    @idle_check_s.setter
-    def idle_check_s(self, val: float) -> None:
-        self.config.idle_check_s = val
-
-    @property
-    def perm_grace_s(self) -> float:
-        return self.config.perm_grace_s
-
-    @perm_grace_s.setter
-    def perm_grace_s(self, val: float) -> None:
-        self.config.perm_grace_s = val
-
-
-    @property
-    def _guest(self) -> GuestSession | None:
-        return self.connection.guest
-
-    @_guest.setter
-    def _guest(self, val: GuestSession | None) -> None:
-        self.connection.guest = val
-
-
-    @property
-    def synccoord(self) -> SyncCoordinator:
-        """The attached guest's coordinator. 02.18.
-
-        A FORWARD, not storage. The halt bar and the agent notice queue are
-        per-machine state and now live on `GuestSession`; this keeps the
-        thirty-odd `self.synccoord` call sites -- and every test that reads
-        `bridge.synccoord` -- reading as they did, the same way
-        `GuestSession.writer` forwards to `link.writer` so that "nothing
-        outside this file had to change shape".
-
-        It is also precisely the single-client assumption, named and in one
-        place: R7 deletes this property and makes each caller say which guest
-        it means. Several already can -- `sync_status_text`, `sync_resolve`
-        and `_reconcile_halt` all take a guest today.
-        """
-        return self.connection.synccoord
-
     # --- lifecycle ---------------------------------------------------------
+
+    #: Config that used to be reachable as `bridge.<name>` through a property
+    #: pair. Removing those turned `bridge.sync_dir = x` from a write into a
+    #: silent no-op: the attribute lands on the Bridge, `config` keeps its old
+    #: value, and nothing says so. Two tests found two of them; this finds the
+    #: rest at the moment of the mistake.
+    _CONFIG_FIELDS = frozenset((
+        "cwd", "effort", "host", "idle_check_s", "idle_timeout_s", "link_bps",
+        "model", "perm_grace_s", "port", "sync_dir", "sync_state",
+        "sync_sweep_s", "secret", "hello_timeout_s",
+    ))
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in self._CONFIG_FIELDS:
+            raise AttributeError(
+                f"{name!r} is configuration, not state on the Bridge: set "
+                f"`bridge.config.{name}` instead. Assigning it here would "
+                f"shadow the config silently and nothing would read it.")
+        object.__setattr__(self, name, value)
 
     async def serve_forever(self) -> None:
         self._server = await asyncio.start_server(
-            self.connection.on_client, self.host, self.port
+            self.connection.on_client, self.config.host, self.config.port
         )
         addr = ", ".join(str(s.getsockname()) for s in self._server.sockets or [])
         log.info("listening on %s", addr)
@@ -451,8 +346,8 @@ class Bridge:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        if self._guest and self._guest.claude:
-            await self._guest.claude.close()
+        if self.connection.guest and self.connection.guest.claude:
+            await self.connection.guest.claude.close()
 
     # --- connection --------------------------------------------------------
 
@@ -461,7 +356,7 @@ class Bridge:
             view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
             synccoord=self.connection._preattach_synccoord,
         )
-        self.permissions.attach(g, cwd=self.cwd)
+        self.permissions.attach(g, cwd=self.config.cwd)
         return g
 
     async def _post_attach(self, guest: GuestSession, is_reconnect: bool) -> None:
@@ -482,7 +377,7 @@ class Bridge:
         await self.coordinator.sync_state_to_guest(guest)
         await self.sync.reconcile_halt(guest)
 
-        if self.sync_dir:
+        if self.config.sync_dir:
             self.turn_runner.seed_agent_notices()
             self._spawn(self.sync.run_sync("the machine reconnected"))
 
@@ -624,7 +519,7 @@ class Bridge:
     def _ensure_background_tasks(self, guest: GuestSession) -> None:
         if self._reaper is None:
             self._reaper = asyncio.create_task(self.connection.reap_idle())
-        if self._sweeper is None and self.sync_dir:
+        if self._sweeper is None and self.config.sync_dir:
             self._sweeper = asyncio.create_task(self.sync.sweep_sync())
 
 

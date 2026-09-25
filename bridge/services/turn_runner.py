@@ -77,8 +77,6 @@ class TurnRunner:
         self.session = session
         self.conv = conv
 
-    async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await self.connection.send(guest, frame)
 
     def seed_agent_notices(self, guest: GuestSession | None = None) -> None:
         """Fold whatever the baseline still owes the agent into memory."""
@@ -247,12 +245,12 @@ class TurnRunner:
             await self.presentation.write_block(
                 guest, H.user_turn(display_text), stream=False
             )
-        await self._send(
+        await self.connection.send(
             guest, anchor_frame(anchor.page, anchor.offset, anchor.preview)
         )
         guest.turn_produced = False
         guest.turn_degraded = ""
-        await self._send(guest, turn_start())
+        await self.connection.send(guest, turn_start())
         was_command = text.lstrip().startswith("/")
         if not was_command:
             text = await self.with_sync_preamble(text, guest=guest)
@@ -270,7 +268,7 @@ class TurnRunner:
         except Exception as exc:
             log.exception("turn failed")
             await self.presentation.flush_text(guest)
-            await self._send(guest, turn_error(str(exc)))
+            await self.connection.send(guest, turn_error(str(exc)))
             return
         await self.presentation.flush_text(guest)
         if guest.claude:
@@ -279,7 +277,7 @@ class TurnRunner:
                 conv_store.add(guest.claude.session_id)
         sealed = guest.view.pages.message_boundary()
         if sealed:
-            await self._send(
+            await self.connection.send(
                 guest, pagesealed(sealed.number, guest.view.pages.count)
             )
         raw, comp = guest.link.zip_out.stats
@@ -304,7 +302,7 @@ class TurnRunner:
                 ),
             )
         ctx_pct = await guest.claude.context_usage() if guest.claude else None
-        await self._send(
+        await self.connection.send(
             guest,
             turn_end(
                 ok, subtype, turn.cost_usd, turn.duration_ms, ctx_pct

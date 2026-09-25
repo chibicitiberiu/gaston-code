@@ -49,8 +49,6 @@ class SessionCoordinator:
         self.attachment = attachment
         self.spawn = spawn
 
-    async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        return await self.connection.send(guest, frame)
 
     def _spawn_coro(self, coro: Any) -> None:
         self.spawn(coro)
@@ -94,7 +92,7 @@ class SessionCoordinator:
         if not sc or not sc.halt_id:
             return
         log.info("re-issuing halt %s after reconnect", sc.halt_id)
-        await self._send(guest, halt(sc.halt_id, sc.halt_text))
+        await self.connection.send(guest, halt(sc.halt_id, sc.halt_text))
 
     async def reissue_turn(self, guest: GuestSession) -> None:
         """After a reconnect, restore the busy UI if a turn is still running."""
@@ -104,7 +102,7 @@ class SessionCoordinator:
         log.info("re-issuing turn state after reconnect")
         guest.turn_produced = False
         guest.turn_degraded = ""
-        await self._send(guest, turn_start())
+        await self.connection.send(guest, turn_start())
 
     async def sync_state_to_guest(self, guest: GuestSession) -> None:
         """Sync guest UI state (permissions, sync halt bar, turn status) after reconnect."""
@@ -131,7 +129,7 @@ class SessionCoordinator:
             # NOT `busy`: that code is the handshake's "another client holds
             # this session", which closes the link. This one keeps it, and a
             # guest that cannot tell them apart would report the wrong thing.
-            await self._send(
+            await self.connection.send(
                 guest, error("turn_busy", "A prompt is already running."))
             return
         if state == GuestState.HALTED:
@@ -139,7 +137,7 @@ class SessionCoordinator:
                 "rejected INPUT while session is halted (state=%s)",
                 getattr(guest, "state_detail", "halted"),
             )
-            await self._send(
+            await self.connection.send(
                 guest, error("halted", "Session is halted awaiting resolution.")
             )
             return
@@ -163,7 +161,7 @@ class SessionCoordinator:
                 target = self.attachment.validate_attach_target(guest, part)
                 if not target:
                     log.warning("rejected unsafe attachment path: %s", part)
-                    await self._send(
+                    await self.connection.send(
                         guest,
                         error(
                             "bad_attach",
@@ -193,7 +191,7 @@ class SessionCoordinator:
             return
         hid, sc.halt_id = sc.halt_id, ""
         log.info("user pressed Continue on the sync halt")
-        await self._send(guest, haltend(hid))
+        await self.connection.send(guest, haltend(hid))
         answered, sc.halt_paths = sc.halt_paths, frozenset()
         resume_fn = getattr(self.turn_runner, "resume_turn", None) or getattr(
             self.connection, "_resume_turn", None
