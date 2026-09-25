@@ -115,3 +115,19 @@ void rc_log_close(void)
      * g_ready stays 1 for the same reason -- clearing it would make every
      * later rc_log skip the lock and race the ones already inside it. */
 }
+
+void rc_log_mem(const char *when)
+{
+    MEMORYSTATUS ms;
+
+    memset(&ms, 0, sizeof(ms));
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatus(&ms);
+    rc_log("mem [%s]: %luK free of %luK phys, %luK free of %luK page, load %lu%%",
+           when,
+           (unsigned long)(ms.dwAvailPhys / 1024),
+           (unsigned long)(ms.dwTotalPhys / 1024),
+           (unsigned long)(ms.dwAvailPageFile / 1024),
+           (unsigned long)(ms.dwTotalPageFile / 1024),
+           (unsigned long)ms.dwMemoryLoad);
+}

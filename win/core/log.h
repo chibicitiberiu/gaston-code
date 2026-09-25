@@ -16,6 +16,8 @@ extern "C" {
 int  rc_log_open(const char *exe_dir);
 void rc_log(const char *fmt, ...);
 void rc_log_close(void);
+/* One line of GlobalMemoryStatus, tagged with `when`. */
+void rc_log_mem(const char *when);
 
 #ifdef __cplusplus
 }
