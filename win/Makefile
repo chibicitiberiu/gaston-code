@@ -352,6 +352,13 @@ $(OBJ)/%.o: %.cpp
 # one object only.
 $(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
+# The main window's message handler is UI dispatch, not a hot path, and -ot
+# measured 9 KB more object code for it once wnd_proc became
+# MainWindow::handle (55,511 against 45,059 at -os for the same source;
+# the free-function version was 46,568 at -ot). Size, not speed, here. The
+# wider -os question is BACKLOG.md 2.
+$(OBJ)/app/mainwindow.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The
 # other order (link first, then `wrc file.res file.exe` to inject) also works
