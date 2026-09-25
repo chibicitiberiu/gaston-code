@@ -95,7 +95,7 @@ CLIENT_SRCS = app/main.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBCORE)
 
-.PHONY: synccheck inicheck inifilecheck appcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: msgids synccheck inicheck inifilecheck appcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -238,7 +238,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
-all: $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck cppcheck framecheck \
+all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck cppcheck framecheck \
      netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
@@ -359,7 +359,14 @@ $(LIBCORE): $(call objs,$(CORE_SRCS))
 
 # The map is not a debugging nicety: `make check` needs symbol names to gate on
 # stack frame sizes, and objdump cannot read Watcom's OMF objects.
-$(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res
+# Private window messages must not share a number (tools/check/msgids.py).
+# Part of the BUILD, not only `make check`: a clash compiles cleanly and
+# misroutes messages at runtime, so it is a build error. Order-only, so it
+# runs before every link of the client without forcing one.
+msgids:
+	@$(PYTHON) $(TOP)/tools/check/msgids.py $(CURDIR)
+
+$(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res | msgids
 	@$(WLINK) $(LFLAGS), resource=$(BUILD)/gaston.res, \
 	  map=$(BUILD)/retroclaude.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
