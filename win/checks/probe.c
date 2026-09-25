@@ -1462,6 +1462,104 @@ static void probe_dom(void)
     FreeLibrary(acc);
 }
 
+/* ------------------------------------------------------------- 0.12b */
+/* The `max_bpp` ladder: what each rung costs and what it buys.
+ *
+ * The capture depth is `min(screen_bpp, max_bpp)`, so one knob covers both
+ * "a picture for a person to look at" and "just enough to drive the UI".
+ * It also picks the codec, because BMP only has a compressed form at 4 and
+ * 8 bits -- BI_RLE4 and BI_RLE8 -- and GDI produces those itself. At 16 and
+ * above there is no RLE in the format and deflate is the only option.
+ *
+ * Both are measured here for every rung, against the SAME strip, so the
+ * lossless-deflate and lossy-RLE answers are comparable. Deflate runs at
+ * level 1, which is what the guest would use outbound.
+ *
+ * A strip rather than a full frame: capture streams in strips anyway, and a
+ * 32bpp full screen is 1.9MB of static buffer this program should not have.
+ */
+static void probe_depths(void)
+{
+    static unsigned char raw[512 * 1024];
+    static unsigned char packed[512 * 1024];
+    static unsigned char info[sizeof(BITMAPINFOHEADER) + 256 * 4];
+    static const int DEPTHS[5] = { 4, 8, 16, 24, 32 };
+    BITMAPINFOHEADER *bi = (BITMAPINFOHEADER *)info;
+    const int ROWS = 128;
+    HDC screen, mem;
+    HBITMAP strip, oldbmp;
+    int w, h, native, k;
+
+    head("0.12b  max_bpp ladder: size and cost per rung");
+
+    screen = GetDC(NULL);
+    if (!screen) { say("GetDC failed"); return; }
+    w = GetDeviceCaps(screen, HORZRES);
+    h = GetDeviceCaps(screen, VERTRES);
+    native = GetDeviceCaps(screen, BITSPIXEL);
+    say("screen %dx%d at %dbpp; strip of %d rows", w, h, native, ROWS);
+    say("bpp  BI_RGB bytes   ms  deflate  ms   RLE bytes  ms");
+
+    mem = CreateCompatibleDC(screen);
+    strip = CreateCompatibleBitmap(screen, w, ROWS);
+    oldbmp = (HBITMAP)SelectObject(mem, strip);
+    BitBlt(mem, 0, 0, w, ROWS, screen, 0, h / 3, SRCCOPY);
+
+    for (k = 0; k < 5; k++) {
+        int bpp = DEPTHS[k];
+        unsigned long stride = (((unsigned long)w * bpp + 31) / 32) * 4;
+        unsigned long want = stride * ROWS;
+        DWORD t0, t1;
+        int lines;
+        unsigned long rgb_ms = 0, def_ms = 0, rle_ms = 0;
+        mz_ulong clen = sizeof(packed);
+        unsigned long rle_bytes = 0;
+
+        if (want > sizeof(raw)) { say("%2d   (strip too big)", bpp); continue; }
+
+        memset(info, 0, sizeof(info));
+        bi->biSize = sizeof(BITMAPINFOHEADER);
+        bi->biWidth = w; bi->biHeight = ROWS; bi->biPlanes = 1;
+        bi->biBitCount = (WORD)bpp; bi->biCompression = BI_RGB;
+        t0 = GetTickCount();
+        lines = GetDIBits(mem, strip, 0, ROWS, raw, (BITMAPINFO *)info,
+                          DIB_RGB_COLORS);
+        t1 = GetTickCount();
+        rgb_ms = t1 - t0;
+        if (lines != ROWS) { say("%2d   FAILED (%d lines)", bpp, lines); continue; }
+
+        t0 = GetTickCount();
+        if (mz_compress2(packed, &clen, raw, want, 1) != MZ_OK) clen = 0;
+        t1 = GetTickCount();
+        def_ms = t1 - t0;
+
+        if (bpp == 4 || bpp == 8) {
+            memset(info, 0, sizeof(info));
+            bi->biSize = sizeof(BITMAPINFOHEADER);
+            bi->biWidth = w; bi->biHeight = ROWS; bi->biPlanes = 1;
+            bi->biBitCount = (WORD)bpp;
+            bi->biCompression = (bpp == 8) ? BI_RLE8 : BI_RLE4;
+            bi->biSizeImage = sizeof(packed);
+            t0 = GetTickCount();
+            lines = GetDIBits(mem, strip, 0, ROWS, packed,
+                              (BITMAPINFO *)info, DIB_RGB_COLORS);
+            t1 = GetTickCount();
+            rle_ms = t1 - t0;
+            rle_bytes = (lines == ROWS) ? bi->biSizeImage : 0;
+        }
+
+        say("%2d %11lu %5lu %8lu %4lu %10lu %4lu",
+            bpp, want, rgb_ms, (unsigned long)clen, def_ms,
+            rle_bytes, rle_ms);
+    }
+
+    SelectObject(mem, oldbmp);
+    DeleteObject(strip);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    say("(0 in an RLE column = the format has none at that depth, or refused)");
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -1485,6 +1583,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "uiwalk"))   probe_uiwalk();
     if (!only || !strcmp(only, "msaa"))     probe_msaa();
     if (!only || !strcmp(only, "dom"))      probe_dom();
+    if (!only || !strcmp(only, "depths"))   probe_depths();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
