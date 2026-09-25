@@ -22,7 +22,7 @@
 /* GUARDED, because it is written on the UI thread and read on the RPC worker.
  *
  * rc_syncrpc_set_root runs from on_optmenu -> rc_workdir_apply on an
- * OPTIONSEND naming a different folder, and from try_connect on every
+ * OPTIONSEND naming a different folder, and from Reconnector::tryConnect on every
  * reconnect attempt -- both on the window thread. do_scan, do_put, do_putend,
  * do_mkdir and do_get all read it on the worker. An rc_strf into g_root
  * interleaved with the worker's rc_sync_join produces a path spliced from the
@@ -39,7 +39,7 @@ static int              g_root_lock_ready = 0;
 
 /* Idempotent, and the check-then-act is safe because of a real ordering
  * guarantee rather than by luck: the FIRST call is rc_syncrpc_set_home from
- * WinMain (app/main.cpp), long before try_connect creates any thread. The
+ * WinMain (app/main.cpp), long before Reconnector::tryConnect creates any thread. The
  * later callers -- rc_syncrpc_set_root from the UI thread, root_snapshot
  * from the RPC worker -- therefore always find g_root_lock_ready already 1.
  *

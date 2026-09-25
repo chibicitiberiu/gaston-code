@@ -88,6 +88,9 @@
 static ClientConfig *g_cfg;
 static ConfigStore  *g_store;
 static App          *g_app;
+/* The one MainWindow, for the modules WM_CREATE hands it to as their
+ * listener. Set by the constructor; goes when the statics become members. */
+static MainWindow   *g_window;
 static rc_net       *g_net;
 static rc_html *g_html;
 static rc_bar  *g_bar;
@@ -128,7 +131,7 @@ static rc_pagebar *g_pagebar;
 static int      g_announce_connected;
 static HWND          g_main;
 static rc_statusbar *g_status;
-static rc_reconnect *g_reconn;
+static Reconnector *g_reconn;
 static rc_turn      *g_turn;
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
@@ -444,7 +447,7 @@ static void on_ready(rc_frame *f)
      * app/pagebar.h's rc_pagebar::note_ready. */
     if (g_pagebar) g_pagebar->note_ready(f);
     if (g_chats) g_chats->request();
-    if (g_reconn) g_reconn->on_connected();
+    if (g_reconn) g_reconn->onConnected();
     v = rc_frame_get(f, "model");
     rc_log("ready: sess=%s model=%s", g_net->sess, v ? v : "?");
     /* A reconnect gets a fresh transcript from the bridge, so whatever was
@@ -1115,8 +1118,8 @@ static void create_children(HWND hwnd, HINSTANCE inst)
         }
     }
 
-    g_reconn = rc_reconnect::create(hwnd, g_net, g_cfg, g_exe_dir, g_html,
-                                    status_refresh, cache_restore);
+    g_reconn = Reconnector::create(hwnd, g_net, g_cfg, g_exe_dir, g_html,
+                                   g_window);
     g_turn = rc_turn::create(hwnd, g_html, g_status, g_cache, g_chats,
                              ui_set_busy, status_refresh);
 }
@@ -1208,7 +1211,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_RC_CONNECT:
-        if (g_reconn) g_reconn->try_connect();
+        if (g_reconn) g_reconn->tryConnect();
         return 0;
 
     case WM_SIZE:
@@ -1260,7 +1263,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_TIMER:
-        if (g_reconn && g_reconn->handle_timer(wp)) return 0;
+        if (g_reconn && g_reconn->handleTimer(wp)) return 0;
         return 0;
 
     case WM_RC_FRAME: {
@@ -1626,7 +1629,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                             g_cfg->host, g_cfg->port);
                     g_html->notice(line);   /* notice() escapes */
                 }
-                if (g_reconn) g_reconn->try_connect();
+                if (g_reconn) g_reconn->tryConnect();
             }
             return 0;
 
@@ -1729,6 +1732,7 @@ MainWindow::MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
 {
     /* Transitional: the statics this file still runs on are pointed at what
      * WinMain owns. C5 moves them into members one module at a time. */
+    g_window = this;
     g_inst = inst;
     g_app = app;
     g_cfg = cfg;
@@ -1893,4 +1897,14 @@ bool MainWindow::filter(MSG &msg)
         return true;
     }
     return IsDialogMessageA(g_main, &msg) != 0;
+}
+
+void MainWindow::refreshStatus()
+{
+    status_refresh();
+}
+
+void MainWindow::restoreCache()
+{
+    cache_restore();
 }

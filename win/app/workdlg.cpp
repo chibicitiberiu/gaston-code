@@ -137,7 +137,7 @@ void head(Tmpl &t, WORD count, short cx, short cy, const char *title)
  * WM_TIMER. So draining the queue here dispatched straight back into the main
  * window's WndProc in the middle of a synchronous, recursive directory walk:
  *
- *   - TIMER_RECONNECT fired -> try_connect -> rc_workdir_apply("") -> sharing
+ *   - TIMER_RECONNECT fired -> Reconnector::tryConnect -> rc_workdir_apply("") -> sharing
  *     switched off underneath the running copy, the socket torn down and
  *     rebuilt. The copy then finished, SETWORK went out on the new socket and
  *     was lost, wait_for_sync watched a counter that would never move, and the

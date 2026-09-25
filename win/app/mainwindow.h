@@ -17,6 +17,7 @@
 #include "core/app.h"
 #include "app/config.h"
 #include "net/net.h"
+#include "app/reconnect.h"
 
 /* Not "Claude Code": that is Anthropic's product name and this is a
  * third-party client for it. Gaston is a French given name of roughly the
@@ -27,7 +28,8 @@
  * by it, so it is named once, here. */
 #define RC_MAIN_CLASS "RetroClaudeWnd"
 
-class MainWindow : public Service, public MessageFilter
+class MainWindow : public Service, public MessageFilter,
+                   public ReconnectListener
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
@@ -40,6 +42,10 @@ public:
 
     /* The loop's own keys, in the order they always ran. True consumes. */
     bool filter(MSG &msg);
+
+    /* ReconnectListener */
+    void refreshStatus();
+    void restoreCache();
 
 private:
     MainWindow(const MainWindow &);

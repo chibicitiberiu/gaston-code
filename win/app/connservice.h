@@ -1,6 +1,6 @@
 /* The bridge connection, as a service.
  *
- * rc_reconnect starts the connection from the UI; this service owns stopping
+ * Reconnector starts the connection from the UI; this service owns stopping
  * it. The composition root registers it after the main window, so App stops
  * it first, while the window its reader thread posts to still exists.
  * rc_net_stop bounds and times its own joins (up to about 42 s) and leaks

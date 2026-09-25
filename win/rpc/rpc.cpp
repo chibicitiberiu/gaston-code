@@ -620,7 +620,7 @@ int rc_rpc_start(rc_net *net)
      *
      * If rc_rpc_join times out it returns 0 leaving g_thread non-NULL and
      * g_running 0 -- rc_net_stop logs "RPC worker did not exit" and carries
-     * on. The next try_connect then took the early return below BEFORE
+     * on. The next Reconnector::tryConnect then took the early return below BEFORE
      * setting g_running, so the surviving worker stayed adopted with
      * g_running still 0, and rc_rpc_submit's `if (!g_thread || !g_running)`
      * dropped every frame it was handed.

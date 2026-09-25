@@ -1,4 +1,4 @@
-/* reconnect.h -- Reconnection backoff, retry timers, and connection attempts.
+/* reconnect.h -- Reconnector: backoff, retry timers, and connection attempts.
  *
  * Coordinates TIMER_RECONNECT, TIMER_STATUS, and TIMER_HTMLPOLL.
  * Manages exponential backoff (1s -> 15s) and single outage notice logging.
@@ -19,37 +19,50 @@
 #define TIMER_STATUS    2
 #define TIMER_HTMLPOLL  3
 
-typedef void (*rc_refresh_fn)(void);
-typedef void (*rc_restore_fn)(void);
-
-class rc_reconnect {
-    HWND             m_hwnd;
-    rc_net          *m_net;
-    const ClientConfig *m_cfg;
-    const char      *m_exe_dir;
-    rc_html         *m_html;
-    rc_refresh_fn    m_refresh;
-    rc_restore_fn    m_restore;
-    int              m_backoff_ms;
-    int              m_retry_noted;
-
-    rc_reconnect(const rc_reconnect &);
-    rc_reconnect &operator=(const rc_reconnect &);
-    rc_reconnect(HWND hwnd, rc_net *net, const ClientConfig *cfg,
-                 const char *exe_dir, rc_html *html,
-                 rc_refresh_fn refresh, rc_restore_fn restore);
-
+/* What the reconnector asks of whoever owns the window. An interface, not
+ * two bare function pointers: those had no context, so they could only
+ * reach state through globals. */
+class ReconnectListener
+{
 public:
-    static rc_reconnect *create(HWND hwnd, rc_net *net, const ClientConfig *cfg,
-                                const char *exe_dir, rc_html *html,
-                                rc_refresh_fn refresh, rc_restore_fn restore);
-    ~rc_reconnect();
+    virtual ~ReconnectListener() {}
 
-    void try_connect();
-    void on_connected();
+    /* Repaint the status bar from the connection state. */
+    virtual void refreshStatus() = 0;
+    /* Show the cached transcript while the bridge is unreachable. */
+    virtual void restoreCache() = 0;
+};
+
+class Reconnector
+{
+public:
+    static Reconnector *create(HWND hwnd, rc_net *net, const ClientConfig *cfg,
+                               const char *exeDir, rc_html *html,
+                               ReconnectListener *listener);
+    ~Reconnector();
+
+    void tryConnect();
+    void onConnected();
     void schedule();
     void reset();
-    int  handle_timer(WPARAM wp);
+    /* True if `timerId` was one of the three this class owns. */
+    bool handleTimer(WPARAM timerId);
+
+private:
+    Reconnector(HWND hwnd, rc_net *net, const ClientConfig *cfg,
+                const char *exeDir, rc_html *html,
+                ReconnectListener *listener);
+    Reconnector(const Reconnector &);
+    Reconnector &operator=(const Reconnector &);
+
+    HWND m_hwnd;
+    rc_net *m_net;
+    const ClientConfig *m_cfg;
+    const char *m_exeDir;
+    rc_html *m_html;
+    ReconnectListener *m_listener;
+    int m_backoffMs;
+    bool m_retryNoted;
 };
 
 #endif /* RC_RECONNECT_H */

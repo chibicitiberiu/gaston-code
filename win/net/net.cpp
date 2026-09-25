@@ -379,7 +379,7 @@ static unsigned __stdcall reader_thread(void *arg)
     /* THE LINK IS DEAD, AND SAYING SO IS THIS THREAD'S JOB.
      *
      * Leaving `running` at 1 here was the single worst bug in the four-thread
-     * design: try_connect would call rc_net_start again with the sender and
+     * design: Reconnector::tryConnect would call rc_net_start again with the sender and
      * the RPC worker still alive, which re-initialised a HELD critical
      * section, zeroed the outbound queue from under the sender, and left two
      * sender threads calling send() on one socket. Two concurrent sends
@@ -508,7 +508,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * below leaves them behind. Setting this only on success meant a failed
      * attempt -- a bridge that is simply down, which is the common case --
      * left rc_net_stop thinking there was nothing to clean up, so the next
-     * try_connect re-initialised a LIVE critical section and overwrote both
+     * Reconnector::tryConnect re-initialised a LIVE critical section and overwrote both
      * event handles. That is a fault inside KERNEL32, and it is what three
      * bridge restarts reproduced. */
     n->started = 1;
@@ -718,7 +718,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
          * This used to log, set RC_FAILED and return -- leaving a live sender
          * thread on an open socket, n->running still 1 and the RPC worker
          * still going. Recovery did save it: WM_RC_STATE arms
-         * TIMER_RECONNECT and try_connect calls rc_net_stop first, with
+         * TIMER_RECONNECT and Reconnector::tryConnect calls rc_net_stop first, with
          * n->started already 1 so teardown runs. But that made correctness
          * depend on every future caller preserving an ordering this file
          * records as having been broken once already, at the cost of three
