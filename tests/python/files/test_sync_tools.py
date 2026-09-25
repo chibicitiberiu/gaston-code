@@ -45,12 +45,12 @@ def b(tmp_path):
     bridge.sync_dir = str(cwd / "machine")
     bridge.sync_state = str(tmp_path / "state")
     os.makedirs(bridge.sync_state, exist_ok=True)
-    bridge.guest_sync_root = "C:\\WORK"
     # A conversation that has COMMITTED to a folder, because that is what
     # makes there be a mirror to report on at all. Nothing is mirrored until
     # a chat's first tool call, and `sync_status` says exactly that while
     # there is not -- see test_status_says_so_before_a_folder_exists.
     bridge._guest = _committed_guest(bridge.sync_dir, "C:\\WORK")
+    bridge._guest.guest_sync_root = "C:\\WORK"
     Baseline().save(os.path.join(bridge.sync_state, "base.json"))
     return bridge
 
@@ -90,7 +90,7 @@ def test_stray_scan_is_bounded_and_says_so(b, monkeypatch):
     tells the model the tool is "free to call". Cost has to be bounded
     regardless of how large cwd has grown, and a truncated scan must say so
     rather than silently look exhaustive."""
-    monkeypatch.setattr(type(b), "STRAY_SCAN_BUDGET", 3)
+    monkeypatch.setattr(type(b.sync), "STRAY_SCAN_BUDGET", 3)
     for i in range(6):
         open(os.path.join(b.cwd, f"stray{i}.txt"), "w").write("x")
 
@@ -134,7 +134,7 @@ def test_status_reports_a_withheld_path_and_how_to_clear_it(b):
 def test_status_repeats_the_last_passs_skips(b):
     """A skipped name never reaches the user however many times it is written,
     and after the first pass nothing says so."""
-    b._last_sync_reports = ["skipped aux.c: reserved device name"]
+    b._guest.last_sync_reports = ["skipped aux.c: reserved device name"]
     out = b.sync_status_text()
     assert "aux.c" in out
     assert "NEVER" in out

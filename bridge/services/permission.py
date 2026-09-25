@@ -11,7 +11,9 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..agent import permissions as perms
 from ..agent.permdesk import PermissionDesk
+from ..agent.session import TOOLS
 from ..wire.protocol import Frame
 
 if TYPE_CHECKING:
@@ -61,6 +63,19 @@ class PermissionService:
         return guest.perms
 
     create_desk = attach
+
+    async def on_rules(self, guest: GuestSession, f: Frame) -> None:
+        """What can run without asking, as a transcript block.
+
+        A block rather than a dialog: it is prose with a table in it, the
+        guest already renders both, and a dialog on a 640x480 screen would
+        need scrolling it does not have. It also belongs in the transcript --
+        the answer depends on the mode, and the mode changes.
+        """
+        tools = list(TOOLS) + ["mcp__machine__exec"]
+        root = (guest.hello or {}).get("sync_root", "") or ""
+        await self.presentation.write_block(
+            guest, perms.rules_view(guest.perm_mode, tools, root))
 
     async def reply(self, guest: GuestSession, f: Frame) -> None:
         """Answer from the guest's prompt bar."""

@@ -908,7 +908,7 @@ async def test_mcp_exec_flushes_sync_and_sends_status_frame(harness, tmp_path):
         sync_calls.append((why, wait))
         return {"reports": [], "notices": []}
 
-    b.run_sync = tracking_run_sync
+    b.sync.run_sync = tracking_run_sync
 
     # Launch run_on_guest in background
     task = asyncio.create_task(

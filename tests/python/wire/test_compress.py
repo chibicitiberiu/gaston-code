@@ -226,7 +226,7 @@ async def test_guest_to_bridge_compressed_frame_inflated():
     async def mock_on_execout(g, f):
         received_output.append(f.body)
 
-    bridge._exec_out = mock_on_execout
+    bridge._dispatch["EXECOUT"] = mock_on_execout
 
     # Guest compresses outbound with zip_out
     guest_compressor = StreamCompressor(level=1)

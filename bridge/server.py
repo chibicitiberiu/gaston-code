@@ -565,9 +565,9 @@ class Bridge:
         )
         if hasattr(self, "_fallback_guest") and self._fallback_guest is not None:
             self.connection.guest = self._fallback_guest
-        self.presentation = PresentationService(connection=self)
+        self.presentation = PresentationService(connection=self.connection)
         self.options = OptionsService(
-            connection=self,
+            connection=self.connection,
             conv=self.conv,
             config=self.config,
             write_block=self.presentation.write_block,
@@ -581,30 +581,30 @@ class Bridge:
             spawn_sync=lambda reason: self._spawn(self.run_sync(reason)),
         )
         self.guest_exec = GuestExecService(
-            connection=self,
+            connection=self.connection,
             spawn=self._spawn,
             pre_exec=self._pre_exec,
         )
         self.permissions = PermissionService(
-            connection=self,
+            connection=self.connection,
             presentation=self.presentation,
             workspace=self.workspace,
             spawn=self._spawn,
         )
         self.sync = SyncService(
             config=self.config,
-            connection=self,
+            connection=self.connection,
             workspace=self.workspace,
             presentation=self.presentation,
             spawn=self._spawn,
         )
         self.attachment = AttachmentService(
-            connection=self,
+            connection=self.connection,
             workspace=self.workspace,
             sync=self.sync,
         )
         self.session = SessionService(
-            connection=self,
+            connection=self.connection,
             presentation=self.presentation,
             workspace=self.workspace,
             options=self.options,
@@ -614,7 +614,7 @@ class Bridge:
         )
         self.turn_runner = TurnRunner(
             config=self.config,
-            connection=self,
+            connection=self.connection,
             presentation=self.presentation,
             attachment=self.attachment,
             sync=self.sync,
@@ -626,15 +626,48 @@ class Bridge:
             conv=self.conv,
         )
         self.coordinator = SessionCoordinator(
-            connection=self,
+            connection=self.connection,
             turn_runner=self.turn_runner,
             sync=self.sync,
             permission=self.permissions,
             session=self.session,
             workspace=self.workspace,
             guest_exec=self.guest_exec,
+            attachment=self.attachment,
             spawn=self._spawn,
         )
+
+        # Frame type -> the service method that answers it. Bound callables,
+        # not method names resolved by getattr on this class: the handlers
+        # belong to the services now, and a name-keyed table was the last
+        # thing forcing a forwarder onto Bridge for every frame type.
+        self._dispatch: dict = {
+            "INPUT":        self.coordinator.on_input,
+            "RESUME":       self.coordinator.on_resume,
+            "INTERRUPT":    self.coordinator.on_interrupt,
+            "SWITCH":       self.coordinator.on_switch,
+            "NEWSESSION":   self.coordinator.on_newsession,
+            "SYNCDIRTY":    self.sync.on_syncdirty,
+            "SYNCENT":      self.sync.sync_frame,
+            "SYNCEND":      self.sync.sync_frame,
+            "SYNCPUTACK":   self.sync.sync_frame,
+            "SYNCMKDIRACK": self.sync.sync_frame,
+            "SYNCDAT":      self.sync.sync_frame,
+            "SYNCDATEND":   self.sync.sync_frame,
+            "EXECOUT":      self.guest_exec.exec_out,
+            "EXECRESULT":   self.guest_exec.exec_result,
+            "PERMREPLY":    self.permissions.reply,
+            "GETSESSIONS":  self.session.on_getsessions,
+            "GETPAGE":      self.presentation.on_getpage,
+            "STAT":         self.connection.on_stat,
+            "PING":         self.connection.on_ping,
+            "SETMODEL":     self.options.on_setmodel,
+            "SETEFFORT":    self.options.on_seteffort,
+            "SETMODE":      self.options.on_setmode,
+            "EXPORT":       self.session.on_export,
+            "RULES":        self.permissions.on_rules,
+            "SETWORK":      self.workspace.on_setwork,
+        }
 
         # One guest, one session. See PLAN.md "Multi-session".
         self._server: asyncio.Server | None = None
@@ -660,19 +693,38 @@ class Bridge:
         #: the `GuestSession` when it is built, so the object's identity
         #: survives the handover and anything recorded before the first
         #: attach is still there afterwards. See the property below.
-        self._preattach_synccoord = SyncCoordinator()
 
     def _ensure_config(self) -> BridgeConfig:
         if not hasattr(self, "config"):
             self.config = BridgeConfig(secret="")
         return self.config
 
+    def _ensure_connection(self) -> ConnectionService:
+        """The link service, created on demand.
+
+        Tests build a Bridge with `__new__` and no `__init__`, so every lazy
+        bootstrap below has to be able to stand one up. Services depend on
+        ConnectionService rather than on this composition root, so it is the
+        one that has to exist first.
+        """
+        conn = getattr(self, "connection", None)
+        if conn is None:
+            conn = self.connection = ConnectionService(config=self._ensure_config())
+            # `_guest` parks the session on `_fallback_guest` while there is
+            # no link service to hold it. Hand it over, or a guest assigned
+            # before the first lazy bootstrap is silently lost.
+            fallback = getattr(self, "_fallback_guest", None)
+            if fallback is not None:
+                conn.guest = fallback
+        return conn
+
     def _ensure_sync(self) -> SyncService:
         if not hasattr(self, "sync"):
             cfg = self._ensure_config()
+            conn = self._ensure_connection()
             conv = getattr(self, "conv", None) or Conversations()
             self.conv = conv
-            pres = getattr(self, "presentation", None) or PresentationService(connection=self)
+            pres = getattr(self, "presentation", None) or PresentationService(connection=conn)
             self.presentation = pres
             ws = getattr(self, "workspace", None) or WorkspaceService(
                 config=cfg,
@@ -684,7 +736,7 @@ class Bridge:
             self.workspace = ws
             self.sync = SyncService(
                 config=cfg,
-                connection=self,
+                connection=conn,
                 workspace=ws,
                 presentation=pres,
                 spawn=getattr(self, "_spawn", lambda coro: None),
@@ -866,8 +918,7 @@ class Bridge:
         it means. Several already can -- `sync_status_text`, `sync_resolve`
         and `_reconcile_halt` all take a guest today.
         """
-        g = self._guest
-        return g.synccoord if g is not None else self._preattach_synccoord
+        return self._ensure_connection().synccoord
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -913,7 +964,7 @@ class Bridge:
     def _create_guest(self, page_bytes: int, page_blocks: int) -> GuestSession:
         g = GuestSession(
             view=TranscriptView(pages=Paginator(page_bytes, page_blocks)),
-            synccoord=self._preattach_synccoord,
+            synccoord=self._ensure_connection()._preattach_synccoord,
         )
         self.permissions.attach(g, cwd=self.cwd)
         return g
@@ -1141,12 +1192,12 @@ class Bridge:
         await self.connection.handle(guest, f)
 
     async def _dispatch_frame(self, guest: GuestSession, f: Frame) -> None:
-        name = self._DISPATCH.get(f.type)
-        if name is None:
+        handler = self._dispatch.get(f.type)
+        if handler is None:
             log.warning("unknown frame type from guest: %s", f.type)
             await self._send(guest, error("unknown_type", f.type))
             return
-        await getattr(self, name)(guest, f)
+        await handler(guest, f)
 
     async def _on_input(self, guest: GuestSession, f: Frame) -> None:
         await self.coordinator.on_input(guest, f)

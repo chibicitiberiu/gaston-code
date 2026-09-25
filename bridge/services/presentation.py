@@ -98,6 +98,9 @@ class PresentationService:
                     guest, pagesealed(pg.number, guest.pages.count)
                 )
 
+    async def on_getpage(self, guest: GuestSession, f: Frame) -> None:
+        await self.send_page(guest, f.headers.get("page", ""))
+
     async def send_page(self, guest: GuestSession, want: str) -> None:
         """Render one page to the guest. LIVE is requested as page=live."""
         if want == "live":

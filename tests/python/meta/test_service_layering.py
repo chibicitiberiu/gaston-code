@@ -51,7 +51,10 @@ PARAM_TO_SERVICE = {
 }
 
 INSTANCE_ATTR_ALLOWLIST = {
+    # The connection registry, and the state that exists before a guest
+    # does. R7 turns `guest` into a dict and takes both with it.
     "ConnectionService.guest",
+    "ConnectionService._preattach_synccoord",
 }
 
 

@@ -75,15 +75,10 @@ class SessionService:
         self.spawn = spawn
 
     def _spawn(self, coro: Any) -> None:
-        if self.spawn is not None:
-            self.spawn(coro)
-        elif hasattr(self.connection, "_spawn"):
-            self.connection._spawn(coro)
+        self.spawn(coro)
 
     async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        if hasattr(self.connection, "send"):
-            return await self.connection.send(guest, frame)
-        return await self.connection._send(guest, frame)
+        return await self.connection.send(guest, frame)
 
     def _resolve_session_cls(self) -> Any:
         mod = sys.modules.get("bridge.server")
@@ -194,16 +189,9 @@ class SessionService:
             guest.perms.deny_all(
                 "rebuild", "The conversation changed before this was answered.")
         for exec_id in list(guest.exec_pending):
-            if hasattr(self.guest_exec, "kill_exec"):
-                self.guest_exec.kill_exec(guest, exec_id)
-            elif hasattr(self.connection, "_kill_exec"):
-                self.connection._kill_exec(guest, exec_id)
-        if hasattr(self.guest_exec, "fail_execs"):
-            self.guest_exec.fail_execs(
-                guest, "The conversation changed while this command was running.")
-        elif hasattr(self.connection, "_fail_execs"):
-            self.connection._fail_execs(
-                guest, "The conversation changed while this command was running.")
+            self.guest_exec.kill_exec(guest, exec_id)
+        self.guest_exec.fail_execs(
+            guest, "The conversation changed while this command was running.")
 
     async def make_session(
         self,

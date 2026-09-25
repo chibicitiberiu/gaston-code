@@ -64,13 +64,7 @@ class SyncService:
         )
 
     def _mirror_dir(self, guest: GuestSession | None) -> str:
-        if self.workspace is not None:
-            return self.workspace.mirror_dir(guest)
-        if guest is not None and getattr(guest, "work_dir", None):
-            return guest.work_dir
-        if hasattr(self.connection, "_mirror_dir"):
-            return self.connection._mirror_dir(guest)
-        return ""
+        return self.workspace.mirror_dir(guest)
 
     async def set_status_override(
         self, guest: GuestSession, text: str
@@ -91,10 +85,9 @@ class SyncService:
         if not self._mirror_dir(g):
             return {}
 
-        run_fn = getattr(self.connection, "run_sync", self.run_sync)
         await self.set_status_override(g, "waiting for sync...")
         try:
-            return await run_fn(why, wait=True, guest=g)
+            return await self.run_sync(why, wait=True, guest=g)
         finally:
             await self.set_status_override(g, "")
 
@@ -288,11 +281,7 @@ class SyncService:
                 )
                 got = await p.run()
                 g.guest_sync_root = p.guest_root
-                if hasattr(self.connection, "guest_sync_root"):
-                    self.connection.guest_sync_root = p.guest_root
                 g.last_sync_reports = list(got.get("reports", []))
-                if hasattr(self.connection, "_last_sync_reports"):
-                    self.connection._last_sync_reports = g.last_sync_reports
 
                 log.info(
                     "sync (%s): %s",
@@ -331,16 +320,12 @@ class SyncService:
                 await self.reconcile_halt(g, base=p.base)
                 p.notices_delivered(delivered)
                 setattr(g, "transient_aborts", 0)
-                if hasattr(self.connection, "_transient_aborts"):
-                    self.connection._transient_aborts = 0
                 return got
             except SyncError as exc:
                 transient_aborts = getattr(g, "transient_aborts", 0)
                 if getattr(exc, "transient", False):
                     transient_aborts += 1
                     setattr(g, "transient_aborts", transient_aborts)
-                    if hasattr(self.connection, "_transient_aborts"):
-                        self.connection._transient_aborts = transient_aborts
                     if transient_aborts <= self.TRANSIENT_ABORT_GRACE:
                         log.info(
                             "sync: %s (retrying; %d of %d)",
@@ -494,6 +479,15 @@ class SyncService:
                     left,
                 )
             return n
+
+    async def on_syncdirty(self, guest: GuestSession, f: Frame) -> None:
+        """The guest noticed its tree move.
+
+        It never reconciles anything itself -- the bridge owns the baseline
+        and decides. Spawned rather than awaited so the frame pump is not
+        parked for the length of a pass.
+        """
+        self.spawn(self.run_sync("the guest reported a change"))
 
     async def sync_frame(self, guest: GuestSession, f: Frame) -> None:
         """Route one SYNC* reply to whoever is waiting for it."""
@@ -659,9 +653,7 @@ class SyncService:
                 f"No pass will run until that is fixed; tell the user."
             )
 
-        guest_sync_root = getattr(g, "guest_sync_root", None) or getattr(
-            self.connection, "guest_sync_root", None
-        )
+        guest_sync_root = getattr(g, "guest_sync_root", None)
         work_guest = getattr(g, "work_guest", None)
         out = [
             f"Mirrored: {mirror} here <-> "

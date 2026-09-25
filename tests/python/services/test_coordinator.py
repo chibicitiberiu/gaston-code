@@ -34,10 +34,13 @@ def coordinator_deps():
 
     workspace = MagicMock()
     workspace.ensure_work_dir = AsyncMock()
-    workspace.validate_attach_target = MagicMock(side_effect=lambda g, p: f"/safe/{p}")
 
     guest_exec = MagicMock()
     guest_exec.kill_exec = MagicMock()
+
+    attachment = MagicMock()
+    attachment.validate_attach_target = MagicMock(
+        side_effect=lambda g, p: f"/safe/{p}")
 
     spawn_calls = []
 
@@ -52,6 +55,7 @@ def coordinator_deps():
         session=session,
         workspace=workspace,
         guest_exec=guest_exec,
+        attachment=attachment,
         spawn=mock_spawn,
     )
 
@@ -74,6 +78,7 @@ def coordinator_deps():
         yield {
             "coordinator": coordinator,
             "connection": connection,
+            "attachment": attachment,
             "turn_runner": turn_runner,
             "session": session,
             "workspace": workspace,
@@ -208,7 +213,7 @@ async def test_on_input_valid(coordinator_deps):
 
     assert guest.first_prompt == "hello"
     coordinator_deps["workspace"].ensure_work_dir.assert_called_once_with(guest)
-    coordinator_deps["workspace"].validate_attach_target.assert_called_once_with(guest, "foo.txt")
+    coordinator_deps["attachment"].validate_attach_target.assert_called_once_with(guest, "foo.txt")
     assert len(spawn_calls) == 1
     # Run spawned coro
     await spawn_calls[0]
@@ -220,8 +225,8 @@ async def test_on_input_valid(coordinator_deps):
 async def test_on_input_invalid_attach(coordinator_deps):
     coord = coordinator_deps["coordinator"]
     guest = coordinator_deps["guest"]
-    coordinator_deps["workspace"].validate_attach_target.side_effect = None
-    coordinator_deps["workspace"].validate_attach_target.return_value = None
+    coordinator_deps["attachment"].validate_attach_target.side_effect = None
+    coordinator_deps["attachment"].validate_attach_target.return_value = None
 
     frame = Frame("INPUT", {"attach": "bad/../path"}, b"unsafe")
     await coord.on_input(guest, frame)

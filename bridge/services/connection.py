@@ -20,8 +20,9 @@ from ..agent import profiles, toolrep, toolrules
 from ..view.pages import Paginator
 from ..view.transcript import TranscriptView
 from ..wire import fold
+from ..synccoord import SyncCoordinator
 from ..wire.link import GuestLink
-from ..wire.protocol import Frame, FrameReader, ProtocolError, error
+from ..wire.protocol import Frame, FrameReader, ProtocolError, error, pong
 
 if TYPE_CHECKING:
     from ..server import GuestSession
@@ -53,6 +54,15 @@ class ConnectionService:
         self.spawn = spawn
         self.get_hello_timeout = get_hello_timeout
         self.guest: GuestSession | None = None
+        #: Where the halt bar and the agent-notice queue live until a guest
+        #: attaches and brings its own. A forward, not storage -- see
+        #: `Bridge.synccoord` for the 02.18 reasoning and why R7 deletes it.
+        self._preattach_synccoord = SyncCoordinator()
+
+    @property
+    def synccoord(self) -> SyncCoordinator:
+        g = self.guest
+        return g.synccoord if g is not None else self._preattach_synccoord
 
     @staticmethod
     def oem_for(guest: GuestSession) -> str:
@@ -226,6 +236,37 @@ class ConnectionService:
 
         if self.handle_frame:
             await self.handle_frame(guest, f)
+
+    async def send_html(self, guest: GuestSession, html: str, mode: str,
+                        page_no: int) -> None:
+        await guest.link.send_html(guest, html, mode, page_no)
+
+    async def wire_yield(self, guest: GuestSession) -> None:
+        await guest.link.wire_yield(guest)
+
+    async def on_ping(self, guest: GuestSession, f: Frame) -> None:
+        await self.send(guest, pong())
+
+    async def on_stat(self, guest: GuestSession, f: Frame) -> None:
+        """The guest measures its own throughput for the progress UI.
+
+        The sender uses it to pick a codec. This is what makes one build work
+        on both a 10Mbit LAN and a modem.
+        """
+        try:
+            bps = float(f.headers.get("bps", "0"))
+        except ValueError:
+            bps = 0.0
+        if bps > 0:
+            guest.set_link_speed(bps)
+            log.info("guest reports %.0f B/s", bps)
+        try:
+            def_bps = float(f.headers.get("deflate_bps", "0"))
+        except ValueError:
+            def_bps = 0.0
+        if def_bps > 0:
+            guest.link.deflate_bps = def_bps
+            log.info("guest reports deflate %.0f B/s", def_bps)
 
     async def pump(
         self,

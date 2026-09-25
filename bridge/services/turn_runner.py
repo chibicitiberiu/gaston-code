@@ -77,9 +77,7 @@ class TurnRunner:
         self.conv = conv
 
     async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        if hasattr(self.connection, "send"):
-            return await self.connection.send(guest, frame)
-        return await self.connection._send(guest, frame)
+        return await self.connection.send(guest, frame)
 
     def seed_agent_notices(self, guest: GuestSession | None = None) -> None:
         """Fold whatever the baseline still owes the agent into memory."""

@@ -35,6 +35,7 @@ class SessionCoordinator:
         session: Any,
         workspace: Any = None,
         guest_exec: Any = None,
+        attachment: Any = None,
         spawn: Callable[[Any], None] | None = None,
     ) -> None:
         self.connection = connection
@@ -44,20 +45,14 @@ class SessionCoordinator:
         self.session = session
         self.workspace = workspace
         self.guest_exec = guest_exec
+        self.attachment = attachment
         self.spawn = spawn
 
     async def _send(self, guest: GuestSession, frame: Frame) -> bool:
-        if hasattr(self.connection, "send"):
-            return await self.connection.send(guest, frame)
-        return await self.connection._send(guest, frame)
+        return await self.connection.send(guest, frame)
 
     def _spawn_coro(self, coro: Any) -> None:
-        if self.spawn:
-            self.spawn(coro)
-        elif hasattr(self.connection, "_spawn"):
-            self.connection._spawn(coro)
-        else:
-            asyncio.create_task(coro)
+        self.spawn(coro)
 
     async def quiesce_turn(self, guest: GuestSession) -> None:
         """Stop whatever turn is running, so turn_lock can be had."""
@@ -65,10 +60,7 @@ class SessionCoordinator:
             return
         log.info("interrupting the live turn before the conversation changes")
         for exec_id in list(guest.exec_pending):
-            if self.guest_exec:
-                self.guest_exec.kill_exec(guest, exec_id)
-            elif hasattr(self.connection, "_kill_exec"):
-                self.connection._kill_exec(guest, exec_id)
+            self.guest_exec.kill_exec(guest, exec_id)
         if guest.claude:
             try:
                 await guest.claude.interrupt()
@@ -79,28 +71,19 @@ class SessionCoordinator:
         """Quiesce live turn before switching effort mode under lock."""
         await self.quiesce_turn(guest)
         async with guest.turn_lock:
-            if hasattr(self.session, "set_effort_locked"):
-                await self.session.set_effort_locked(guest, effort)
-            elif hasattr(self.connection, "_set_effort_locked"):
-                await self.connection._set_effort_locked(guest, effort)
+            await self.session.set_effort_locked(guest, effort)
 
     async def new_session(self, guest: GuestSession, folder: str = "") -> None:
         """Quiesce live turn before creating new session under lock."""
         await self.quiesce_turn(guest)
         async with guest.turn_lock:
-            if hasattr(self.session, "new_session_locked"):
-                await self.session.new_session_locked(guest, folder=folder)
-            elif hasattr(self.connection, "_new_session_locked"):
-                await self.connection._new_session_locked(guest, folder=folder)
+            await self.session.new_session_locked(guest, folder=folder)
 
     async def switch(self, guest: GuestSession, session_id: str) -> None:
         """Quiesce live turn before switching conversation under lock."""
         await self.quiesce_turn(guest)
         async with guest.turn_lock:
-            if hasattr(self.session, "switch_locked"):
-                await self.session.switch_locked(guest, session_id)
-            elif hasattr(self.connection, "_switch_locked"):
-                await self.connection._switch_locked(guest, session_id)
+            await self.session.switch_locked(guest, session_id)
 
     async def reissue_halt(self, guest: GuestSession) -> None:
         """After a reconnect, put the Continue bar back."""
@@ -129,6 +112,12 @@ class SessionCoordinator:
             await guest.perms.reissue()
         await self.reissue_halt(guest)
         await self.reissue_turn(guest)
+
+    async def on_switch(self, guest: GuestSession, f: Frame) -> None:
+        await self.switch(guest, f.headers.get("id", ""))
+
+    async def on_newsession(self, guest: GuestSession, f: Frame) -> None:
+        await self.new_session(guest, f.headers.get("folder", ""))
 
     async def on_input(self, guest: GuestSession, f: Frame) -> None:
         """Handle inbound INPUT frame."""
@@ -161,19 +150,12 @@ class SessionCoordinator:
         if not guest.work_guest and not guest.first_prompt:
             guest.first_prompt = text
         if attach:
-            ensure_fn = getattr(self.workspace, "ensure_work_dir", None) or getattr(
-                self.connection, "_ensure_work_dir", None
-            )
-            if ensure_fn:
-                await ensure_fn(guest)
+            await self.workspace.ensure_work_dir(guest)
             for part in attach.split("|"):
                 part = part.strip()
                 if not part:
                     continue
-                validate_fn = getattr(
-                    self.workspace, "validate_attach_target", None
-                ) or getattr(self.connection, "_validate_attach_target", None)
-                target = validate_fn(guest, part) if validate_fn else part
+                target = self.attachment.validate_attach_target(guest, part)
                 if not target:
                     log.warning("rejected unsafe attachment path: %s", part)
                     await self._send(
@@ -218,10 +200,7 @@ class SessionCoordinator:
     ) -> None:
         """Handle inbound INTERRUPT frame (user pressed Stop)."""
         for exec_id in list(guest.exec_pending):
-            if self.guest_exec:
-                self.guest_exec.kill_exec(guest, exec_id)
-            elif hasattr(self.connection, "_kill_exec"):
-                self.connection._kill_exec(guest, exec_id)
+            self.guest_exec.kill_exec(guest, exec_id)
         if guest.claude:
             await guest.claude.interrupt()
 
