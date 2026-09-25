@@ -2697,6 +2697,209 @@ static void probe_msaacost(void)
     say("A low, a property high       -> fetch only what was asked for.");
 }
 
+/* ------------------------------------------------------------ 0.13f */
+/* Three ways to read the same desktop, because the first one is wrong.
+ *
+ * Measured on the P200: 1886ms to enrich 103 nodes, 35 times the cost of
+ * the entire rest of the walk. The reason is in Mozilla's MSAA server notes
+ * and in every AT vendor's experience -- "Fewer calls are much better
+ * because COM Marshaling is slow" -- and a walk that calls
+ * AccessibleObjectFromWindow once per HWND is making the maximum possible
+ * number of cross-process calls.
+ *
+ *   A  per-HWND        AccessibleObjectFromWindow for every window, then
+ *                      one property. What the code does today.
+ *
+ *   B  AccessibleChildren from one root. One object for the desktop, then
+ *                      oleacc's batching helper down the tree. It uses
+ *                      IEnumVARIANT underneath when the server offers it
+ *                      and falls back to get_accChild in a loop when not,
+ *                      so this measures what we get for free.
+ *
+ *   C  IEnumVARIANT::Next explicitly, asking for every child of a node in
+ *                      ONE marshalled call. This is the technique the
+ *                      documentation actually names.
+ *
+ * Same desktop, same property fetched, so the difference is the traversal
+ * and nothing else.
+ */
+static const GUID RC_IID_IEnumVARIANT =
+    { 0x00020404, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+
+static int g_fast_nodes;
+
+/* Shared by B and C: fetch the one property we are timing, so the three
+ * strategies are compared on identical work per node. */
+static void touch_one(IAccessible *acc, VARIANT child)
+{
+    VARIANT vr;
+    V_VT(&vr) = VT_EMPTY;
+    acc->lpVtbl->get_accRole(acc, child, &vr);
+}
+
+static void walk_children(IAccessible *acc, int depth, int useEnum)
+{
+    long kids = 0, got = 0, i;
+    VARIANT *v;
+
+    /* The SAME cap for both traversals, and low enough that both reach
+     * it. The first run capped B at 400 and let C finish at 192, so the
+     * two totals were not comparable and neither were the times. */
+    if (depth > 8 || g_fast_nodes >= 150) return;
+    if (acc->lpVtbl->get_accChildCount(acc, &kids) != S_OK || kids <= 0)
+        return;
+    v = (VARIANT *)HeapAlloc(GetProcessHeap(), 0, sizeof(VARIANT) * kids);
+    if (!v) return;
+
+    if (useEnum) {
+        /* ONE call for every child of this node. */
+        IEnumVARIANT *ev = 0;
+        unsigned long fetched = 0;
+        if (acc->lpVtbl->QueryInterface(acc, &RC_IID_IEnumVARIANT,
+                                        (void **)&ev) == S_OK && ev) {
+            ev->lpVtbl->Reset(ev);
+            ev->lpVtbl->Next(ev, (unsigned long)kids, v, &fetched);
+            ev->lpVtbl->Release(ev);
+            got = (long)fetched;
+        } else {
+            /* No enumerator on this server: fall back rather than report a
+             * speed that came from doing less work. */
+            if (g_achildren) g_achildren(acc, 0, kids, v, &got);
+        }
+    } else {
+        if (g_achildren) g_achildren(acc, 0, kids, v, &got);
+    }
+
+    for (i = 0; i < got; i++) {
+        g_fast_nodes++;
+        if (V_VT(&v[i]) == VT_DISPATCH && V_DISPATCH(&v[i])) {
+            IAccessible *kid = 0;
+            IDispatch *d = V_DISPATCH(&v[i]);
+            if (d->lpVtbl->QueryInterface(d, &RC_IID_IAccessible,
+                                          (void **)&kid) == S_OK && kid) {
+                VARIANT self;
+                V_VT(&self) = VT_I4; V_I4(&self) = 0;
+                touch_one(kid, self);
+                walk_children(kid, depth + 1, useEnum);
+                kid->lpVtbl->Release(kid);
+            }
+            d->lpVtbl->Release(d);
+        } else if (V_VT(&v[i]) == VT_I4) {
+            /* A simple element: the PARENT answers for it, so there is no
+             * object to create at all. This is where the saving lives. */
+            touch_one(acc, v[i]);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, v);
+}
+
+static void probe_msaafast(void)
+{
+    HMODULE acc;
+    PFN_AOFW aofw;
+    DWORD t0, t1;
+    int i, perhwnd;
+
+    head("0.13f  three traversals, same desktop");
+
+    acc = LoadLibraryA("oleacc.dll");
+    aofw = acc ? (PFN_AOFW)GetProcAddress(acc, "AccessibleObjectFromWindow")
+               : 0;
+    g_achildren = acc ? (PFN_ACHILDREN)GetProcAddress(acc,
+                                                      "AccessibleChildren") : 0;
+    if (!aofw || !g_achildren) {
+        say("oleacc unavailable"); if (acc) FreeLibrary(acc); return;
+    }
+    CoInitialize(NULL);
+
+    g_uiw_n = 0;
+    EnumWindows(collect_top, 0);
+    say("desktop has %d visible windows by EnumWindows", g_uiw_n);
+
+    /* Warm, so oleacc's one-time setup is not charged to whichever runs
+     * first -- the mistake 0.13e made and had to be redone for. */
+    for (i = 0; i < g_uiw_n && i < 20; i++) {
+        IAccessible *ia = 0;
+        if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&ia) == S_OK && ia)
+            ia->lpVtbl->Release(ia);
+    }
+
+    /* A -- one AccessibleObjectFromWindow per window, one property each. */
+    perhwnd = 0;
+    t0 = GetTickCount();
+    for (i = 0; i < g_uiw_n; i++) {
+        IAccessible *ia = 0;
+        if (aofw(g_uiw[i], OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&ia) == S_OK && ia) {
+            VARIANT self;
+            V_VT(&self) = VT_I4; V_I4(&self) = 0;
+            touch_one(ia, self);
+            ia->lpVtbl->Release(ia);
+            perhwnd++;
+        }
+    }
+    t1 = GetTickCount();
+    say("A per-HWND        : %d nodes in %lu ms (%lu us/node)", perhwnd,
+        (unsigned long)(t1 - t0),
+        (unsigned long)(t1 - t0) * 1000 / (perhwnd ? perhwnd : 1));
+
+    /* B -- one root, AccessibleChildren down. */
+    {
+        IAccessible *root = 0;
+        g_fast_nodes = 0;
+        t0 = GetTickCount();
+        if (aofw(GetDesktopWindow(), OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&root) == S_OK && root) {
+            walk_children(root, 0, 0);
+            root->lpVtbl->Release(root);
+        }
+        t1 = GetTickCount();
+        say("B AccessibleChildren: %d nodes in %lu ms (%lu us/node)", g_fast_nodes,
+            (unsigned long)(t1 - t0),
+            (unsigned long)(t1 - t0) * 1000 / (g_fast_nodes ? g_fast_nodes : 1));
+    }
+
+    /* C -- one root, IEnumVARIANT::Next down. */
+    {
+        IAccessible *root = 0;
+        g_fast_nodes = 0;
+        t0 = GetTickCount();
+        if (aofw(GetDesktopWindow(), OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&root) == S_OK && root) {
+            walk_children(root, 0, 1);
+            root->lpVtbl->Release(root);
+        }
+        t1 = GetTickCount();
+        say("C IEnumVARIANT::Next: %d nodes in %lu ms (%lu us/node)", g_fast_nodes,
+            (unsigned long)(t1 - t0),
+            (unsigned long)(t1 - t0) * 1000 / (g_fast_nodes ? g_fast_nodes : 1));
+    }
+
+    /* Does the enumerator even exist here? If servers on this machine do
+     * not offer one, B and C are the same code and the batching win has to
+     * come from somewhere else. */
+    {
+        IAccessible *root = 0;
+        if (aofw(GetDesktopWindow(), OBJID_CLIENT, &RC_IID_IAccessible,
+                 (void **)&root) == S_OK && root) {
+            IEnumVARIANT *ev = 0;
+            HRESULT hr = root->lpVtbl->QueryInterface(root,
+                             &RC_IID_IEnumVARIANT, (void **)&ev);
+            say("desktop offers IEnumVARIANT : %s",
+                (hr == S_OK && ev) ? "yes" : "no");
+            if (ev) ev->lpVtbl->Release(ev);
+            root->lpVtbl->Release(root);
+        }
+    }
+
+    CoUninitialize();
+    FreeLibrary(acc);
+    say("node counts differ on purpose: A sees windows, B and C see the");
+    say("accessible tree, which includes simple elements with no HWND.");
+}
+
 /* ------------------------------------------------------------- 0.16 */
 /* ImageClick: find a small bitmap on screen and click it. The question is
  * not whether it works -- it is a scan, it always works -- but WHERE the
@@ -2881,6 +3084,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "uiwalk"))   probe_uiwalk();
     if (!only || !strcmp(only, "msaa"))     probe_msaa();
     if (!only || !strcmp(only, "msaacost")) probe_msaacost();
+    if (!only || !strcmp(only, "msaafast")) probe_msaafast();
     if (!only || !strcmp(only, "dom"))      probe_dom();
     if (!only || !strcmp(only, "depths"))   probe_depths();
     if (!only || !strcmp(only, "verify"))   probe_verify();
