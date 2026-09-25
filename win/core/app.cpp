@@ -1,8 +1,11 @@
 #include "core/app.h"
 #include "core/log.h"
 
-/* quit()'s message. WM_APP, not WM_USER: this is our own window class. */
-static const UINT WM_APP_QUIT = WM_APP + 1;
+/* quit()'s message. WM_APP, not WM_USER: this is our own window class.
+ * core/ takes WM_APP + 0x100 upward, clear of net.h's WM_APP + 1..2 and the
+ * client's low offsets; it was WM_APP + 1, the same number as WM_RC_FRAME,
+ * until tools/check/msgids.py was written to catch exactly that. */
+static const UINT WM_APP_QUIT = WM_APP + 0x100;
 
 static const char WINDOW_CLASS[] = "GastonAppWindow";
 static const DWORD DEFAULT_JOIN_MS = 5000;
