@@ -11,6 +11,7 @@
  *
  *   probe            run everything
  *   probe threads    run one section
+ *   probe automation Phase 6's gates 0.12 and 0.13 (screen strips, oleacc)
  */
 #include <windows.h>
 #include <process.h>
@@ -19,6 +20,7 @@
 #include <string.h>
 #include "core/str.h"
 #include <objbase.h>
+#include <oleacc.h>
 #include "miniz.h"
 
 static FILE *g_log;
@@ -737,6 +739,257 @@ static void probe_watch(void)
     RemoveDirectoryA("C:\\WATCHTST");
 }
 
+/* ---------------------------------------------------------- 0.12 / 0.13 */
+/* Phase 6's screen-and-input gates. PLAN.md:1197 moved both out of Phase 3
+ * with the screen tier, and neither has an answer yet.
+ *
+ * 0.12 exists because 0.10 answered a smaller question than it looks. It
+ * proved GDI will RLE8 a WHOLE screen -- 307,200 bytes to 27,088 in 14ms,
+ * 11.3:1 -- but a whole screen is exactly what there is no room for:
+ * PROGRESS.md:709 measured 28 KB free after a turn against a 307 KB
+ * full-frame 8bpp DIB. Capture has to go out in strips, so what matters is
+ * whether GetDIBits emits a valid RLE8 stream for a RANGE of scanlines.
+ * PLAN.md:1683 is blunt about why that is not a formality: "RLE8 is
+ * row-oriented so it ought to, but 'ought to' is what 0.9 and 0.10 were
+ * there to replace." Two arms below, because there are two ways to ask:
+ * startScan/numScans against a full-screen bitmap, and a whole small bitmap
+ * that a strip was BitBlt'd into (what app/screenshot.cpp already does).
+ *
+ * 0.13 is oleacc.dll. Absent means TREE falls back to the window tree and
+ * HELLO says msaa=0 -- a whole branch of the design settled by one
+ * LoadLibrary. Never a static import: a missing DLL in the import table
+ * kills the image before main() with no log written.
+ *
+ * The rest are REMOTE.md's "UI details decided now", every one of them
+ * carrying "verify on the P200". The foreground lock matters most: PLAN.md
+ * said 9x has none, and REMOTE.md:344 corrected that to "98 introduced it
+ * alongside 2000". Only the machine can say which is true here.
+ */
+/* All three sit behind `#if WINVER >= 0x0500` in Open Watcom's winuser.h,
+ * and win/Makefile pins WINVER at 0x0400 on purpose (raising it changes
+ * sizeof(NONCLIENTMETRICS)). Whether Win98 HONOURS them is the question;
+ * whether the header admits they exist is not. */
+#ifndef SPI_GETFOREGROUNDLOCKTIMEOUT
+#define SPI_GETFOREGROUNDLOCKTIMEOUT 0x2000
+#define SPI_SETFOREGROUNDLOCKTIMEOUT 0x2001
+#endif
+#ifndef OBJID_WINDOW
+#define OBJID_WINDOW 0x00000000L
+#endif
+
+/* {618736E0-3C3D-11CF-810C-00AA00389B71} -- spelled out rather than linked
+ * from uuid.lib, so a missing IID_IAccessible cannot fail the link on a
+ * toolchain where oleacc's uuid is not in the import library. */
+static const GUID RC_IID_IAccessible =
+    { 0x618736e0, 0x3c3d, 0x11cf,
+      { 0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
+
+typedef HRESULT (WINAPI *PFN_AOFW)(HWND, LONG, REFIID, void **);
+
+static int g_win_top;
+static int g_win_nodes;
+static int g_win_deepest;
+
+static void count_children(HWND parent, int depth)
+{
+    HWND c;
+    if (depth > g_win_deepest) g_win_deepest = depth;
+    for (c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        g_win_nodes++;
+        if (g_win_nodes > 20000) return;      /* a probe, not a walker */
+        count_children(c, depth + 1);
+    }
+}
+
+static BOOL CALLBACK count_top(HWND h, LPARAM lp)
+{
+    (void)lp;
+    g_win_top++;
+    g_win_nodes++;
+    count_children(h, 1);
+    return TRUE;
+}
+
+static void probe_automation(void)
+{
+    /* Probe-only: the shipping strip buffer is ~38 KB on the heap. This one
+     * is static and large so an RLE8 arm that expands instead of shrinking
+     * cannot scribble past it. Do not copy this into win/automation/. */
+    static unsigned char buf[512 * 1024];
+    static unsigned char info[sizeof(BITMAPINFOHEADER) + 256 * 4];
+    BITMAPINFOHEADER *bi = (BITMAPINFOHEADER *)info;
+    HDC screen, mem;
+    HBITMAP full, strip, oldbmp;
+    int w, h, bpp, lines;
+    const int STRIP_H = 16;
+
+    head("0.12  RLE8 for a scanline range / 0.13  oleacc / UI details");
+
+    screen = GetDC(NULL);
+    if (!screen) { say("GetDC(NULL) failed"); return; }
+    w = GetDeviceCaps(screen, HORZRES);
+    h = GetDeviceCaps(screen, VERTRES);
+    bpp = GetDeviceCaps(screen, BITSPIXEL);
+    say("display        : %dx%d at %d bpp", w, h, bpp);
+
+    mem = CreateCompatibleDC(screen);
+    full = CreateCompatibleBitmap(screen, w, h);
+    oldbmp = (HBITMAP)SelectObject(mem, full);
+    BitBlt(mem, 0, 0, w, h, screen, 0, 0, SRCCOPY);
+
+    /* 0.12a -- rows [h/2, h/2+STRIP_H) of the full-screen bitmap, as RLE8.
+     * This is the form that needs no second bitmap at all. */
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = h; bi->biPlanes = 1;
+    bi->biBitCount = 8; bi->biCompression = BI_RLE8;
+    bi->biSizeImage = sizeof(buf);
+    SetLastError(0);
+    lines = GetDIBits(mem, full, h / 2, STRIP_H, buf, (BITMAPINFO *)info,
+                      DIB_RGB_COLORS);
+    if (lines == STRIP_H && bi->biSizeImage > 0
+        && bi->biSizeImage < sizeof(buf)) {
+        say("0.12a range    : PASS -- %d lines, %lu bytes",
+            lines, (unsigned long)bi->biSizeImage);
+    } else {
+        say("0.12a range    : FAIL -- lines=%d size=%lu err=%lu",
+            lines, (unsigned long)bi->biSizeImage, GetLastError());
+        say("   -> strips ship BI_RGB 8bpp; the bridge does the RLE.");
+    }
+
+    /* 0.12b -- BitBlt a strip into its own bitmap, then RLE8 the whole of
+     * it. This is what app/screenshot.cpp:106-140 already does for 24bpp,
+     * so if 0.12a fails and this passes, the port keeps its current shape. */
+    SelectObject(mem, oldbmp);
+    strip = CreateCompatibleBitmap(screen, w, STRIP_H);
+    SelectObject(mem, strip);
+    BitBlt(mem, 0, 0, w, STRIP_H, screen, 0, h / 2, SRCCOPY);
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = STRIP_H; bi->biPlanes = 1;
+    bi->biBitCount = 8; bi->biCompression = BI_RLE8;
+    bi->biSizeImage = sizeof(buf);
+    SetLastError(0);
+    lines = GetDIBits(mem, strip, 0, STRIP_H, buf, (BITMAPINFO *)info,
+                      DIB_RGB_COLORS);
+    if (lines == STRIP_H && bi->biSizeImage > 0
+        && bi->biSizeImage < sizeof(buf)) {
+        say("0.12b blt+whole: PASS -- %d lines, %lu bytes",
+            lines, (unsigned long)bi->biSizeImage);
+    } else {
+        say("0.12b blt+whole: FAIL -- lines=%d size=%lu err=%lu",
+            lines, (unsigned long)bi->biSizeImage, GetLastError());
+    }
+
+    /* The palette claim. FORKED.md:34 says a fresh memory DC carries only
+     * the 20 static system colours, so an 8bpp GetDIBits returns colour-index
+     * noise until the live hardware palette is selected in. That is recorded
+     * as hardware-verified on retro-agent, never here. Count what the colour
+     * table actually comes back with, and what the screen says it has. */
+    memset(info, 0, sizeof(info));
+    bi->biSize = sizeof(BITMAPINFOHEADER);
+    bi->biWidth = w; bi->biHeight = STRIP_H; bi->biPlanes = 1;
+    bi->biBitCount = 8; bi->biCompression = BI_RGB;
+    lines = GetDIBits(mem, strip, 0, STRIP_H, buf, (BITMAPINFO *)info,
+                      DIB_RGB_COLORS);
+    {
+        RGBQUAD *tbl = (RGBQUAD *)(info + sizeof(BITMAPINFOHEADER));
+        int i, nonzero = 0;
+        PALETTEENTRY pal[256];
+        UINT got;
+        for (i = 0; i < 256; i++) {
+            if (tbl[i].rgbRed || tbl[i].rgbGreen || tbl[i].rgbBlue) nonzero++;
+        }
+        got = GetSystemPaletteEntries(screen, 0, 256, pal);
+        say("8bpp BI_RGB    : %d lines (the fallback if 0.12 fails)", lines);
+        say("palette        : DC table %d non-black of 256, screen reports %u",
+            nonzero, got);
+        if (bpp <= 8 && nonzero <= 24) {
+            say("   -> confirms the 20-static-colour trap; select the live "
+                "palette before capture.");
+        }
+    }
+
+    SelectObject(mem, oldbmp);
+    DeleteObject(strip);
+    DeleteObject(full);
+    DeleteDC(mem);
+
+    /* 0.13 -- oleacc, loaded and actually asked a question. */
+    {
+        HMODULE acc = LoadLibraryA("oleacc.dll");
+        if (!acc) {
+            say("0.13 oleacc    : ABSENT (%lu) -> msaa=0, TREE is window-only",
+                GetLastError());
+        } else {
+            PFN_AOFW aofw = (PFN_AOFW)GetProcAddress(
+                acc, "AccessibleObjectFromWindow");
+            say("0.13 oleacc    : loaded, AccessibleObjectFromWindow %s",
+                aofw ? "found" : "MISSING");
+            if (aofw) {
+                HWND target = FindWindowA("Shell_TrayWnd", NULL);
+                if (!target) target = GetDesktopWindow();
+                CoInitialize(NULL);
+                {
+                    IAccessible *ia = NULL;
+                    HRESULT hr = aofw(target, OBJID_WINDOW,
+                                      &RC_IID_IAccessible, (void **)&ia);
+                    if (hr != S_OK || !ia) {
+                        say("     walk      : AccessibleObjectFromWindow "
+                            "hr=0x%08lx", (unsigned long)hr);
+                    } else {
+                        long kids = -1;
+                        ia->lpVtbl->get_accChildCount(ia, &kids);
+                        say("     walk      : OK, childCount=%ld on %s",
+                            kids, target == GetDesktopWindow()
+                                  ? "desktop" : "Shell_TrayWnd");
+                        ia->lpVtbl->Release(ia);
+                    }
+                }
+                CoUninitialize();
+            }
+            FreeLibrary(acc);
+        }
+    }
+
+    /* The foreground lock. REMOTE.md:344 says 98 has one and PLAN.md said
+     * it does not; whichever is true, a background gremote that cannot take
+     * the foreground makes the taskbar button flash instead of typing. */
+    {
+        DWORD before = 0, after = 0;
+        BOOL rg = SystemParametersInfoA(SPI_GETFOREGROUNDLOCKTIMEOUT, 0,
+                                        &before, 0);
+        BOOL rs = SystemParametersInfoA(SPI_SETFOREGROUNDLOCKTIMEOUT, 0,
+                                        (void *)0, SPIF_SENDCHANGE);
+        SystemParametersInfoA(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &after, 0);
+        say("fg lock        : get=%d(%lu) set=%d now=%lu",
+            (int)rg, (unsigned long)before, (int)rs, (unsigned long)after);
+    }
+
+    /* Cross-process window text has to go through SendMessageTimeout, since
+     * IsHungAppWindow is 2000+ and GetWindowText returns only a caption
+     * across a process boundary (PLAN.md:1636). */
+    {
+        HWND t = FindWindowA("Shell_TrayWnd", NULL);
+        DWORD_PTR res = 0;
+        LRESULT ok;
+        if (!t) t = GetDesktopWindow();
+        ok = SendMessageTimeoutA(t, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 1000,
+                                 &res);
+        say("SendMsgTimeout : WM_NULL ret=%ld (0 = timed out or hung)",
+            (long)ok);
+    }
+
+    /* What a real desktop actually holds, so max_tree_nodes=2000 in
+     * REMOTE.md's [ui] section is a measurement and not a guess. */
+    g_win_top = g_win_nodes = g_win_deepest = 0;
+    EnumWindows(count_top, 0);
+    say("window census  : %d top-level, %d nodes total, depth %d",
+        g_win_top, g_win_nodes, g_win_deepest);
+
+    ReleaseDC(NULL, screen);
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -756,6 +1009,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "deflate"))  probe_deflate();
     if (!only || !strcmp(only, "html"))     probe_html();
     if (!only || !strcmp(only, "watch"))    probe_watch();
+    if (!only || !strcmp(only, "automation")) probe_automation();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
