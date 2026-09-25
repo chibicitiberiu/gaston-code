@@ -50,6 +50,28 @@ cp "$SRC/UITEST.HTM"   "$STAGE/UITEST.HTM"
 cp "$DLL"              "$STAGE/HOOKDLL.DLL"
 cp "$AUTO"             "$STAGE/AUTOCHK.EXE"
 
+# Every text file in the kit must be CRLF, and this is checked rather than
+# trusted. COMMAND.COM will not run a .BAT with bare LF line endings, and
+# the failure lands on whoever is sitting at the Windows machine, hours
+# after the zip left here, with nothing to diagnose it from.
+#
+# It has already happened once: an edit read TEST.BAT in TEXT mode, which
+# turns CRLF into LF on the way in, and wrote it back with a plain text
+# write, which puts back the platform's ending -- \n on this side. Nothing
+# looked wrong at any point.
+for f in TEST.BAT README.TXT UITEST.HTM; do
+  python3 - "$STAGE/$f" <<'CRLF' || exit 1
+import sys
+d = open(sys.argv[1], "rb").read()
+crlf, lf = d.count(b"\r\n"), d.count(b"\n")
+if crlf != lf:
+    print(f"mkw98kit: {sys.argv[1]} has {lf - crlf} bare LF line endings;"
+          " COMMAND.COM will not run it", file=sys.stderr)
+    raise SystemExit(1)
+CRLF
+done
+echo "  line endings: CRLF, all text files"
+
 rm -f "$OUT"
 ( cd "$STAGE" && zip -q -X "$OUT" PROBE.EXE AUTOCHK.EXE HOOKDLL.DLL TEST.BAT README.TXT UITEST.HTM )
 
