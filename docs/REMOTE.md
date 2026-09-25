@@ -560,6 +560,13 @@ first. Each C-step is a small commit that leaves the client working.
   worker reaches it through a context), `OptionMenus`, `WorkDirProposer`.
   Verified on the guest: click-to-open, Enter-to-send, Allow, a screenshot
   attachment end to end, a Commands entry, Ctrl+A.
+- *C5f-C5g done 2026-09-25:* `MainWindow` is a `Window` (`wnd_proc` became
+  `handle()`), and all of the main window's file statics and helpers are its
+  members; `g_window`/`g_main` are gone. `mainwindow.o` builds with `-os`
+  (the `-ot` output for `handle()` was 9 KB larger). Committed at load
+  405,976. A stale `main.o` (lost `.d`) crashed the first Wine run; the
+  build now rebuilds any object whose `.d` is missing. Verified on the
+  guest: start, reconnect, a full turn with Allow.
 - **C5+. `main.cpp`'s statics become objects**, one module per commit:
   context-free callbacks (`rc_refresh_fn`, `rc_turn_busy_fn`, ...) gain a
   context, and the state they close over moves into the window service.
