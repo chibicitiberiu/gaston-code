@@ -33,185 +33,339 @@
  * this counter exists to produce. */
 #define RC_MAX_INFLIGHT 64
 
-/* One persistent inflate stream for the whole connection.
+/* THE CONNECTION'S COMPRESSION STATE, in one place.
  *
- * The bridge compresses with a persistent deflate stream and Z_SYNC_FLUSH per
- * frame, which keeps the dictionary warm across frames -- worth 1.27x over
- * compressing each frame alone. That only works if this side keeps its state
- * too, so this is deliberately NOT per-frame. Both sides reset on reconnect,
- * in lockstep. */
-static mz_stream g_inf;
-static int       g_inf_ready = 0;
-
-/* ONE inflate scratch for the whole connection, not one per frame.
+ * These were eleven file statics. They are gathered here so the transport can
+ * move to wire/connection.cpp with its codec as a member (docs/wire-connection-
+ * plan.md, step b); there is still exactly one, `s_codec`, because there is
+ * still exactly one connection. A POD with no constructor, so it costs no
+ * static initialiser and the same bytes at load as the statics did.
  *
- * inflate_body used to HeapAlloc its full output cap for EVERY compressed
- * frame and never shrink it: f->body_len recorded the real length while
- * f->_body_alloc held the entire block until the UI thread freed the frame.
- * With the reader posting up to RC_MAX_INFLIGHT frames before it blocks, that
- * is a per-frame cost measured in hundreds of KB, multiplied by however many
- * frames the UI has not drained -- and the UI thread stalls whenever MSHTML
- * reflows or a folder browser is open. On a 32MB machine that is the largest
- * transient demand in the program, and when HeapAlloc finally failed the
- * reader dropped the LINK rather than slowing down.
+ * Threads. The inflate half is touched only by the READER, inside
+ * inflateBody(). The deflate half and the stats are touched under send_lock,
+ * by whoever is sending. begin()/finish() run only when neither thread is
+ * alive, which is what rc_net_stop's join gates are for.
  *
- * Now: inflate into this one buffer, then allocate exactly the bytes that came
- * out and copy. Peak concurrent cost becomes one scratch plus the real sizes.
- *
- * Heap rather than BSS so it is not committed at load on a machine where
- * committed-at-load is audited; lazily allocated per connection and released
- * with the stream it serves.
- *
- * 2x RC_MAX_FRAME, not 4x. The cap exists so a corrupt or hostile frame cannot
- * expand without limit, and the real bound is far lower: bridge/wire/link.py
- * caps an UNCOMPRESSED chunk at MAX_FRAME - 1024 = 64,512 bytes before it
- * compresses, so a legitimate inflated body never exceeds ~63KB. 2x leaves
- * more than double the largest value the protocol permits. */
-#define RC_INFLATE_SCRATCH (RC_MAX_FRAME * 2)
-static char     *g_inf_scratch = NULL;
-
-static void inflate_begin(void)
+ * Every member has one caller and is `inline`: Watcom emits an out-of-line
+ * copy of a member defined outside its class even after inlining it, which
+ * the static functions these replace never cost (+2 KB of code, measured). */
+struct Codec
 {
-    if (g_inf_ready) { mz_inflateEnd(&g_inf); g_inf_ready = 0; }
-    memset(&g_inf, 0, sizeof(g_inf));
-    if (mz_inflateInit(&g_inf) == MZ_OK) g_inf_ready = 1;
-    else rc_log("net: mz_inflateInit failed");
-    if (!g_inf_scratch) {
-        g_inf_scratch = (char *)HeapAlloc(GetProcessHeap(), 0,
-                                          RC_INFLATE_SCRATCH + 1);
-        /* Not fatal here: inflate_body reports the failure per frame, which
+    /* One persistent inflate stream for the whole connection.
+     *
+     * The bridge compresses with a persistent deflate stream and Z_SYNC_FLUSH
+     * per frame, which keeps the dictionary warm across frames -- worth 1.27x
+     * over compressing each frame alone. That only works if this side keeps
+     * its state too, so this is deliberately NOT per-frame. Both sides reset
+     * on reconnect, in lockstep. */
+    mz_stream inf;
+    int infReady;
+
+    /* ONE inflate scratch for the whole connection, not one per frame.
+     *
+     * inflate_body used to HeapAlloc its full output cap for EVERY compressed
+     * frame and never shrink it: f->body_len recorded the real length while
+     * f->_body_alloc held the entire block until the UI thread freed the
+     * frame. With the reader posting up to RC_MAX_INFLIGHT frames before it
+     * blocks, that is a per-frame cost measured in hundreds of KB, multiplied
+     * by however many frames the UI has not drained -- and the UI thread
+     * stalls whenever MSHTML reflows or a folder browser is open. On a 32MB
+     * machine that is the largest transient demand in the program, and when
+     * HeapAlloc finally failed the reader dropped the LINK rather than slowing
+     * down.
+     *
+     * Now: inflate into this one buffer, then allocate exactly the bytes that
+     * came out and copy. Peak concurrent cost becomes one scratch plus the
+     * real sizes.
+     *
+     * Heap rather than BSS so it is not committed at load on a machine where
+     * committed-at-load is audited; lazily allocated per connection and
+     * released with the stream it serves.
+     *
+     * 2x RC_MAX_FRAME, not 4x. The cap exists so a corrupt or hostile frame
+     * cannot expand without limit, and the real bound is far lower:
+     * bridge/wire/link.py caps an UNCOMPRESSED chunk at MAX_FRAME - 1024 =
+     * 64,512 bytes before it compresses, so a legitimate inflated body never
+     * exceeds ~63KB. 2x leaves more than double the largest value the protocol
+     * permits. */
+    char *infScratch;
+
+    /* One persistent deflate stream for the whole connection (guest ->
+     * bridge). */
+    mz_stream def;
+    int defReady;
+    char *defScratch;
+
+    /* Measurement counters for adaptive compression (03.3 / A4). */
+    unsigned long deflateIn;
+    unsigned long deflateOut;
+    unsigned long deflateUs;
+    unsigned long deflateSamples;
+    unsigned long deflateBps;
+    unsigned long linkBps;
+    LARGE_INTEGER perfFreq;
+    int perfInit;
+
+    enum
+    {
+        INFLATE_SCRATCH = RC_MAX_FRAME * 2,
+        DEFLATE_SCRATCH = RC_MAX_FRAME + 1024
+    };
+
+    /* A fresh pair of streams and zeroed stats, for a new connection. */
+    void begin();
+    /* Separate, because their gates differ: see rc_net_stop. */
+    void finishInflate();
+    void finishDeflate();
+
+    int inflateBody(rc_frame *f);
+    bool shouldCompress(unsigned bodyLen) const;
+    /* The compressed bytes, in defScratch, or null if deflate failed. */
+    const char *compressBody(const void *body, unsigned bodyLen, unsigned *outLen);
+    void takeSample(unsigned long *bytesIn, unsigned long *us);
+
+private:
+    void beginInflate();
+    void beginDeflate();
+    unsigned long elapsedSince(const LARGE_INTEGER &t0);
+};
+
+Codec s_codec;
+
+inline void Codec::beginInflate()
+{
+    if (infReady)
+    {
+        mz_inflateEnd(&inf);
+        infReady = 0;
+    }
+    memset(&inf, 0, sizeof(inf));
+    if (mz_inflateInit(&inf) == MZ_OK)
+        infReady = 1;
+    else
+        rc_log("net: mz_inflateInit failed");
+    if (!infScratch)
+    {
+        infScratch = (char *)HeapAlloc(GetProcessHeap(), 0,
+                                       INFLATE_SCRATCH + 1);
+        /* Not fatal here: inflateBody reports the failure per frame, which
          * is where there is a frame to fail. */
-        if (!g_inf_scratch)
+        if (!infScratch)
             rc_log("net: no memory for the %u byte inflate scratch",
-                   (unsigned)RC_INFLATE_SCRATCH);
+                   (unsigned)INFLATE_SCRATCH);
     }
 }
 
-static void inflate_finish(void)
+inline void Codec::beginDeflate()
 {
-    if (g_inf_ready) { mz_inflateEnd(&g_inf); g_inf_ready = 0; }
-    if (g_inf_scratch) {
-        HeapFree(GetProcessHeap(), 0, g_inf_scratch);
-        g_inf_scratch = NULL;
+    if (defReady)
+    {
+        mz_deflateEnd(&def);
+        defReady = 0;
     }
-}
-
-/* One persistent deflate stream for the whole connection (guest -> bridge). */
-static mz_stream g_def;
-static int       g_def_ready = 0;
-
-#define RC_DEFLATE_SCRATCH (RC_MAX_FRAME + 1024)
-static char     *g_def_scratch = NULL;
-
-static void deflate_begin(void)
-{
-    if (g_def_ready) { mz_deflateEnd(&g_def); g_def_ready = 0; }
-    memset(&g_def, 0, sizeof(g_def));
-    if (mz_deflateInit(&g_def, 1) == MZ_OK) g_def_ready = 1;
-    else rc_log("net: mz_deflateInit failed");
-    if (!g_def_scratch) {
-        g_def_scratch = (char *)HeapAlloc(GetProcessHeap(), 0,
-                                          RC_DEFLATE_SCRATCH);
-        if (!g_def_scratch)
+    memset(&def, 0, sizeof(def));
+    if (mz_deflateInit(&def, 1) == MZ_OK)
+        defReady = 1;
+    else
+        rc_log("net: mz_deflateInit failed");
+    if (!defScratch)
+    {
+        defScratch = (char *)HeapAlloc(GetProcessHeap(), 0, DEFLATE_SCRATCH);
+        if (!defScratch)
             rc_log("net: no memory for the %u byte deflate scratch",
-                   (unsigned)RC_DEFLATE_SCRATCH);
+                   (unsigned)DEFLATE_SCRATCH);
     }
 }
 
-static void deflate_finish(void)
+inline void Codec::begin()
 {
-    if (g_def_ready) { mz_deflateEnd(&g_def); g_def_ready = 0; }
-    if (g_def_scratch) {
-        HeapFree(GetProcessHeap(), 0, g_def_scratch);
-        g_def_scratch = NULL;
+    beginInflate();
+    beginDeflate();
+    deflateIn = 0;
+    deflateOut = 0;
+    deflateUs = 0;
+    deflateSamples = 0;
+    deflateBps = 0;
+    linkBps = 0;
+}
+
+inline void Codec::finishInflate()
+{
+    if (infReady)
+    {
+        mz_inflateEnd(&inf);
+        infReady = 0;
+    }
+    if (infScratch)
+    {
+        HeapFree(GetProcessHeap(), 0, infScratch);
+        infScratch = NULL;
     }
 }
 
-/* Measurement counters for adaptive compression (03.3 / A4) */
-static unsigned long g_deflate_in = 0;
-static unsigned long g_deflate_out = 0;
-static unsigned long g_deflate_us = 0;
-static unsigned long g_deflate_samples = 0;
-static unsigned long g_deflate_bps = 0;
-static unsigned long g_link_bps = 0;
-static LARGE_INTEGER g_perf_freq;
-static int           g_perf_init = 0;
-
-static void perf_init_once(void)
+inline void Codec::finishDeflate()
 {
-    if (!g_perf_init) {
-        if (!QueryPerformanceFrequency(&g_perf_freq) || g_perf_freq.QuadPart <= 0)
-            g_perf_freq.QuadPart = 0;
-        g_perf_init = 1;
+    if (defReady)
+    {
+        mz_deflateEnd(&def);
+        defReady = 0;
     }
-}
-
-void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us)
-{
-    ScopedLock lock(&n->send_lock);
-    if (bytes_in) *bytes_in = g_deflate_in;
-    if (us) *us = g_deflate_us;
-    if (g_deflate_us > 0) {
-        g_deflate_bps = (unsigned long)((double)g_deflate_in * 1000000.0 / g_deflate_us);
+    if (defScratch)
+    {
+        HeapFree(GetProcessHeap(), 0, defScratch);
+        defScratch = NULL;
     }
-    g_deflate_in = 0;
-    g_deflate_us = 0;
-}
-
-void rc_net_set_link_bps(rc_net *n, unsigned long bps)
-{
-    ScopedLock lock(&n->send_lock);
-    g_link_bps = bps;
 }
 
 /* Inflates f->body in place-ish: allocates a new buffer, points body at it,
  * and records it for rc_frame_free. Returns 0 on success. */
-static int inflate_body(rc_frame *f)
+inline int Codec::inflateBody(rc_frame *f)
 {
     /* Bounded so a malicious or corrupt frame cannot expand without limit.
-     * See the note on g_inf_scratch for why this is one shared buffer and
-     * why the bound is 2x rather than 4x. */
-    unsigned cap = RC_INFLATE_SCRATCH;
-    unsigned got;
-    char *out;
-    int rc;
+     * See the note on infScratch for why this is one shared buffer and why
+     * the bound is 2x rather than 4x. */
+    unsigned cap = INFLATE_SCRATCH;
 
-    if (!g_inf_ready) { rc_log("net: deflate frame but no inflater"); return -1; }
-    if (f->body_len == 0) return 0;
-    if (!g_inf_scratch) { rc_log("net: no inflate scratch"); return -1; }
+    if (!infReady)
+    {
+        rc_log("net: deflate frame but no inflater");
+        return -1;
+    }
+    if (f->body_len == 0)
+        return 0;
+    if (!infScratch)
+    {
+        rc_log("net: no inflate scratch");
+        return -1;
+    }
 
-    g_inf.next_in   = (const unsigned char *)f->body;
-    g_inf.avail_in  = f->body_len;
-    g_inf.next_out  = (unsigned char *)g_inf_scratch;
-    g_inf.avail_out = cap;
+    inf.next_in = (const unsigned char *)f->body;
+    inf.avail_in = f->body_len;
+    inf.next_out = (unsigned char *)infScratch;
+    inf.avail_out = cap;
 
-    rc = mz_inflate(&g_inf, MZ_SYNC_FLUSH);
-    if (rc != MZ_OK && rc != MZ_STREAM_END) {
+    int rc = mz_inflate(&inf, MZ_SYNC_FLUSH);
+    if (rc != MZ_OK && rc != MZ_STREAM_END)
+    {
         rc_log("net: mz_inflate failed: %d", rc);
         return -1;
     }
-    if (g_inf.avail_in != 0) {
+    if (inf.avail_in != 0)
+    {
         rc_log("net: inflate left %u bytes unconsumed (output cap hit)",
-               g_inf.avail_in);
+               inf.avail_in);
         return -1;
     }
 
     /* EXACTLY what came out. This is the allocation the frame carries until
      * the UI thread frees it, so it is the one that multiplies by the number
      * of frames in flight. */
-    got = cap - g_inf.avail_out;
-    out = (char *)HeapAlloc(GetProcessHeap(), 0, got + 1);
-    if (!out) {
+    unsigned got = cap - inf.avail_out;
+    char *out = (char *)HeapAlloc(GetProcessHeap(), 0, got + 1);
+    if (!out)
+    {
         rc_log("net: no memory for a %u byte inflated body", got);
         return -1;
     }
-    memcpy(out, g_inf_scratch, got);
+    memcpy(out, infScratch, got);
 
     f->_body_alloc = out;
     f->body_len = got;
     out[got] = '\0';
     f->body = out;
     return 0;
+}
+
+/* Compress while the first few samples are still coming in, then only while
+ * the link is slower than half of what deflate manages: on a fast link the
+ * CPU time costs more than the bytes it saves. */
+inline bool Codec::shouldCompress(unsigned bodyLen) const
+{
+    if (bodyLen < 64 || !defReady || !defScratch)
+        return false;
+    if (deflateSamples < 5 || deflateBps == 0)
+        return true;
+    return linkBps < deflateBps / 2;
+}
+
+inline unsigned long Codec::elapsedSince(const LARGE_INTEGER &t0)
+{
+    unsigned long us;
+    if (perfFreq.QuadPart > 0)
+    {
+        LARGE_INTEGER t1;
+        QueryPerformanceCounter(&t1);
+        us = (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000ULL) /
+                             perfFreq.QuadPart);
+    }
+    else
+    {
+        us = (GetTickCount() - t0.LowPart) * 1000UL;
+    }
+    return us ? us : 1;
+}
+
+inline const char *Codec::compressBody(const void *body, unsigned bodyLen,
+                               unsigned *outLen)
+{
+    LARGE_INTEGER t0;
+
+    if (!perfInit)
+    {
+        if (!QueryPerformanceFrequency(&perfFreq) || perfFreq.QuadPart <= 0)
+            perfFreq.QuadPart = 0;
+        perfInit = 1;
+    }
+    if (perfFreq.QuadPart > 0)
+        QueryPerformanceCounter(&t0);
+    else
+        t0.LowPart = GetTickCount();
+
+    def.next_in = (const unsigned char *)body;
+    def.avail_in = bodyLen;
+    def.next_out = (unsigned char *)defScratch;
+    def.avail_out = DEFLATE_SCRATCH;
+
+    int rc = mz_deflate(&def, MZ_SYNC_FLUSH);
+    unsigned long us = elapsedSince(t0);
+
+    if (rc != MZ_OK || def.avail_in != 0)
+    {
+        rc_log("net: mz_deflate failed: %d, avail_in=%u", rc, def.avail_in);
+        return NULL;
+    }
+    *outLen = DEFLATE_SCRATCH - def.avail_out;
+    deflateIn += bodyLen;
+    deflateOut += *outLen;
+    deflateUs += us;
+    deflateSamples++;
+    if (deflateUs > 0)
+        deflateBps = (unsigned long)((double)deflateIn * 1000000.0 / deflateUs);
+    return defScratch;
+}
+
+inline void Codec::takeSample(unsigned long *bytesIn, unsigned long *us)
+{
+    if (bytesIn)
+        *bytesIn = deflateIn;
+    if (us)
+        *us = deflateUs;
+    if (deflateUs > 0)
+        deflateBps = (unsigned long)((double)deflateIn * 1000000.0 / deflateUs);
+    deflateIn = 0;
+    deflateUs = 0;
+}
+
+void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us)
+{
+    ScopedLock lock(&n->send_lock);
+    s_codec.takeSample(bytes_in, us);
+}
+
+void rc_net_set_link_bps(rc_net *n, unsigned long bps)
+{
+    ScopedLock lock(&n->send_lock);
+    s_codec.linkBps = bps;
 }
 
 /* The UI thread's half of the three-way ownership rule. See net.h. */
@@ -328,7 +482,7 @@ static unsigned reader_thread_body(void *arg)
 
         {
             const char *enc = rc_frame_get(f.get(), "enc");
-            if (enc && strcmp(enc, "deflate") == 0 && inflate_body(f.get()) != 0) {
+            if (enc && strcmp(enc, "deflate") == 0 && s_codec.inflateBody(f.get()) != 0) {
                 rc_log("net: cannot inflate frame, dropping link");
                 rc_frame_free(f.get());
                 break;
@@ -548,14 +702,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
 
     if (do_connect(n) != 0) { set_state(n, RC_FAILED); return -1; }
 
-    inflate_begin();
-    deflate_begin();
-    g_deflate_in = 0;
-    g_deflate_out = 0;
-    g_deflate_us = 0;
-    g_deflate_samples = 0;
-    g_deflate_bps = 0;
-    g_link_bps = 0;
+    s_codec.begin();
     n->running = 1;
 
     rc_strf(ver, sizeof(ver), "%d", RC_PROTO_VERSION);
@@ -930,56 +1077,12 @@ static int send_frame(rc_net *n, const char *type,
         const char *const *use_vals = vals;
         int use_nkv = nkv;
 
-        int is_bulk = rc_frame_compressible(type);
-        int should_compress = 0;
-        if (is_bulk && body_len >= 64 && g_def_ready && g_def_scratch) {
-            if (g_deflate_samples < 5) {
-                should_compress = 1;
-            } else if (g_deflate_bps > 0) {
-                if (g_link_bps < g_deflate_bps / 2) {
-                    should_compress = 1;
-                }
-            } else {
-                should_compress = 1;
-            }
-        }
-
-        if (should_compress) {
-            LARGE_INTEGER t0, t1;
-            unsigned long elapsed_us = 0;
-            int def_rc;
-
-            perf_init_once();
-            if (g_perf_freq.QuadPart > 0) QueryPerformanceCounter(&t0);
-            else t0.LowPart = GetTickCount();
-
-            g_def.next_in   = (const unsigned char *)body;
-            g_def.avail_in  = body_len;
-            g_def.next_out  = (unsigned char *)g_def_scratch;
-            g_def.avail_out = RC_DEFLATE_SCRATCH;
-
-            def_rc = mz_deflate(&g_def, MZ_SYNC_FLUSH);
-
-            if (g_perf_freq.QuadPart > 0) {
-                QueryPerformanceCounter(&t1);
-                elapsed_us = (unsigned long)(((t1.QuadPart - t0.QuadPart) * 1000000ULL) / g_perf_freq.QuadPart);
-            } else {
-                elapsed_us = (GetTickCount() - t0.LowPart) * 1000UL;
-            }
-            if (elapsed_us == 0) elapsed_us = 1;
-
-            if (def_rc == MZ_OK && g_def.avail_in == 0) {
-                unsigned def_out_len = RC_DEFLATE_SCRATCH - g_def.avail_out;
-                g_deflate_in += body_len;
-                g_deflate_out += def_out_len;
-                g_deflate_us += elapsed_us;
-                g_deflate_samples++;
-                if (g_deflate_us > 0) {
-                    g_deflate_bps = (unsigned long)((double)g_deflate_in * 1000000.0 / g_deflate_us);
-                }
-
-                send_body = g_def_scratch;
-                send_len = def_out_len;
+        if (rc_frame_compressible(type) && s_codec.shouldCompress(body_len)) {
+            unsigned def_len;
+            const char *def_body = s_codec.compressBody(body, body_len, &def_len);
+            if (def_body) {
+                send_body = def_body;
+                send_len = def_len;
 
                 if (nkv < (int)(sizeof(def_keys) / sizeof(def_keys[0])) - 1) {
                     int i;
@@ -993,8 +1096,6 @@ static int send_frame(rc_net *n, const char *type,
                     use_vals = def_vals;
                     use_nkv = nkv + 1;
                 }
-            } else {
-                rc_log("net: mz_deflate failed: %d, avail_in=%u", def_rc, g_def.avail_in);
             }
         }
 
@@ -1205,22 +1306,22 @@ void rc_net_stop(rc_net *n)
     }
     /* GATED, like every release above it -- this line was the one exception.
      *
-     * inflate_finish() frees the 128KB scratch and ends the mz_stream, and
-     * BOTH are touched only by the READER thread, inside inflate_body(). If
+     * finishInflate() frees the 128KB scratch and ends the mz_stream, and
+     * BOTH are touched only by the READER thread, inside inflateBody(). If
      * the reader's join timed out, that free lands under a live mz_inflate:
      * exactly the hazard that makes the socket, send_lock and both events
      * above deliberately leak rather than be released. Only `rw` is relevant
      * -- the sender and the RPC worker never touch either object.
      * See docs/mem-audit F3. */
     if (rw == WAIT_OBJECT_0) {
-        inflate_finish();
+        s_codec.finishInflate();
     } else {
         rc_log("net: reader did not exit; leaking the inflate scratch rather "
                "than freeing it under a live mz_inflate");
     }
 
     if (rpcj && sw == WAIT_OBJECT_0) {
-        deflate_finish();
+        s_codec.finishDeflate();
     } else {
         rc_log("net: worker/sender did not exit; leaking the deflate scratch rather "
                "than freeing it under a live mz_deflate");
