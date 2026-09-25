@@ -7,8 +7,8 @@ session creation with tool bindings and event callbacks (_make_session), deferre
 
 from __future__ import annotations
 
-import datetime as _dt
 import asyncio
+import datetime as _dt
 import logging
 import os
 import sys
@@ -32,10 +32,9 @@ from ..wire.protocol import (
     sessions_start,
     switched,
 )
+from .options import EFFORT_LABEL, MODE_ORDER
 
 log = logging.getLogger("bridge.session")
-
-from .options import EFFORT_LABEL, MODE_ORDER
 
 
 def _summarise(args: dict) -> str:

@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import pathlib
 import shutil
 import zlib
+from typing import TypedDict
 
 from ..status import SyncStatus
 from . import attrs as A
@@ -68,6 +70,36 @@ class SyncError(Exception):
     def __init__(self, message: str, *, transient: bool = False) -> None:
         super().__init__(message)
         self.transient = transient
+
+
+class PassResult(TypedDict, total=False):
+    """The bookkeeping `Pass.run()` returns for one reconciliation pass.
+
+    A TypedDict, not a dataclass: `SyncService.run_sync`
+    (bridge/services/sync.py) treats this as an open-ended dict --
+    `.get()` with a per-key default, `.items()` for the log line, and
+    other shapes (`{"retry": ...}`, `{"error": ...}`) for its own abort
+    paths. `total=False` because most keys are only added once the pass
+    reaches that point (e.g. `recovered` only on a recovery). This is
+    what replaces the counters and the later str/list additions sharing
+    one `dict[str, int]` inferred from the literal's first values.
+    """
+
+    pushed: int
+    pulled: int
+    dirs: int
+    conflicts: int
+    reported: int
+    skipped: int
+    latched: int
+    unhandled: int
+    new_conflicts: int
+    recovered: str
+    new_reports: list[str]
+    reports: list[str]
+    notices: list[str]
+    agent_notices: list[str]
+    conflict_paths: list[str]
 
 
 class Pass:
@@ -154,7 +186,7 @@ class Pass:
         #: The tree's `.gitattributes`/`.gastonattributes`, loaded once per
         #: pass. None until `run` loads it, so a caller driving scan_bridge
         #: directly gets content-only classification.
-        self.attrs = None
+        self.attrs: A.Attrs | None = None
         #: Inside the agent's reach so it can read a conflict and its ancestor
         #: without a new permission path -- unlike the baseline itself, which
         #: lives outside cwd because off_limits does not cover Bash.
@@ -291,7 +323,7 @@ class Pass:
     async def push(self, rel: str, expect: S.Entry | None) -> bool:
         """Send one file. Returns True when the baseline may advance."""
         full = os.path.join(self.root, rel)
-        data = open(full, "rb").read()
+        data = pathlib.Path(full).read_bytes()
         if len(data) > MAX_FILE:
             self.reports.append(
                 f"skipped {rel}: {len(data)} bytes exceeds the {MAX_FILE} cap; "
@@ -698,16 +730,17 @@ class Pass:
         #: on the other. They never resolve, so the pruning below must not
         #: forget it announced them or they are announced again every pass.
         standing: set[str] = set()
-        done = {"pushed": 0, "pulled": 0, "dirs": 0, "conflicts": 0,
-                "reported": 0, "skipped": 0, "latched": 0, "unhandled": 0,
-                # Conflicts ANNOUNCED this pass, which is not the same as
-                # conflicts found. A conflict that cannot be applied -- a file
-                # where we hold a directory -- never resolves, so every pass
-                # finds it again; counting those towards the halt put the bar
-                # back up every thirty seconds after the user had answered it.
-                # See run_sync, which raises the halt on this and not on the
-                # total.
-                "new_conflicts": 0}
+        done: PassResult = {
+            "pushed": 0, "pulled": 0, "dirs": 0, "conflicts": 0,
+            "reported": 0, "skipped": 0, "latched": 0, "unhandled": 0,
+            # Conflicts ANNOUNCED this pass, which is not the same as
+            # conflicts found. A conflict that cannot be applied -- a file
+            # where we hold a directory -- never resolves, so every pass
+            # finds it again; counting those towards the halt put the bar
+            # back up every thirty seconds after the user had answered it.
+            # See run_sync, which raises the halt on this and not on the
+            # total.
+            "new_conflicts": 0}
 
         # Which paths this pass is stopping the user for. The halt bar answers
         # these and nothing else -- see SyncCoordinator.halt_paths
@@ -866,6 +899,9 @@ class Pass:
                         f"every other path keeps syncing.")
 
                 if applicable:
+                    # `applicable` is only true when g is not None (see its
+                    # definition above).
+                    assert g is not None
                     if await self.pull(dec.key, g.display or dec.key, b):
                         done["pulled"] += 1
                         self.base.rows[dec.key] = self._pulled[dec.key]
@@ -891,6 +927,9 @@ class Pass:
                     done["latched"] += 1
                     self.reports.append(f"{dec.key}: latched, push withheld")
                     continue
+                # PUSH is only decided when the bridge holds the path (see
+                # sync.py's diff()), so b is never None here.
+                assert b is not None
                 rel = b.display or dec.key
                 if await self.push(rel, g):
                     done["pushed"] += 1
@@ -911,6 +950,9 @@ class Pass:
                 rel = dec.display or (b.display if b else dec.key)
                 if await self.mkdir(rel):
                     done["dirs"] += 1
+                    # MKDIR is only decided for a directory that exists on
+                    # the bridge (see sync.py's diff()), so b is not None.
+                    assert b is not None
                     self.base.rows[dec.key] = b
                 else:
                     failed_dirs.add(dec.key + "/")
@@ -931,7 +973,11 @@ class Pass:
                     except OSError as exc:
                         self.reports.append(f"mkdir {g.display} here: {exc}")
                         continue
-                self.base.rows[dec.key] = g or b
+                # ADOPT is only decided when at least one side has the
+                # entry (see sync.py's diff()), so this is never None.
+                adopted = g if g is not None else b
+                assert adopted is not None
+                self.base.rows[dec.key] = adopted
             elif dec.act is S.Act.TOMBSTONE:
                 old = self.base.rows.pop(dec.key, None)
                 if old is not None:
@@ -947,7 +993,12 @@ class Pass:
                         log.warning("could not remove tombstoned %s: %s", target, exc)
             elif dec.act is S.Act.CLEAR_TOMBSTONE:
                 self.base.tombs.pop(dec.key, None)
-                self.base.rows[dec.key] = g or b
+                # CLEAR_TOMBSTONE is only decided when both sides recreated
+                # the path identically (see sync.py's diff()), so both g
+                # and b are present; `g or b` just picks either.
+                cleared = g if g is not None else b
+                assert cleared is not None
+                self.base.rows[dec.key] = cleared
             else:
                 # An action with no branch used to fall off the end of this
                 # chain and vanish. That is how MKDIR was lost: `src` was never
@@ -993,4 +1044,8 @@ class Pass:
         done["notices"] = list(self.base.pending_notice)
         done["agent_notices"] = list(self.base.pending_notice_agent)
         done["conflict_paths"] = sorted(new_conflict_paths)
-        return done
+        # `dict()`, not `done` bare: the caller (SyncService.run_sync,
+        # bridge/services/sync.py) declares this a plain `dict` and treats
+        # it as an open-ended one -- returning the TypedDict itself would
+        # tie that unrelated file to PassResult's exact shape.
+        return dict(done)

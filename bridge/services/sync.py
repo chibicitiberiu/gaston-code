@@ -501,6 +501,11 @@ class SyncService:
                     entry.kind,
                 )
                 return
+            # Non-None because kind == "scan", checked just above; that is
+            # what the Optional on `Wait` is FOR -- see its docstring, where
+            # a SYNCENT bearing a put's id used to be a KeyError that took
+            # the connection down.
+            assert entry.rows is not None and entry.display is not None
             rows, display = manifest.parse_rows(f.body, guest.caps)
             entry.rows.update(rows)
             entry.display.update(display)
@@ -514,8 +519,8 @@ class SyncService:
                         files=int(f.headers.get("files", "0")),
                         tree_id=f.headers.get("tree_id", ""),
                         root=f.headers.get("root", ""),
-                        rows=entry.rows,
-                        display=entry.display,
+                        rows=entry.rows or {},
+                        display=entry.display or {},
                     )
                 )
 
@@ -537,6 +542,8 @@ class SyncService:
                     entry.kind,
                 )
                 return
+            # Non-None because kind == "get", checked just above.
+            assert entry.data is not None
             entry.data.extend(f.body)
 
         elif f.type == "SYNCDATEND":
@@ -555,7 +562,7 @@ class SyncService:
         """Resolve every in-flight sync transfer, synchronously."""
         if guest is None:
             return
-        for sid, entry in list(guest.sync.pending.items()):
+        for _sid, entry in list(guest.sync.pending.items()):
             fut = entry.future
             if not fut.done():
                 fut.set_exception(SyncError(why))

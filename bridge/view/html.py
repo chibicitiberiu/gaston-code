@@ -217,7 +217,7 @@ def _table(lines: list[str]) -> str:
     without one every row is a body row, which is what a model emitting a
     pipe-delimited list without a header expects.
     """
-    rows = [_cells(l) for l in lines]
+    rows = [_cells(line) for line in lines]
     header = None
     body = rows
     if len(rows) >= 2 and all(_SEP.match(c) for c in rows[1] if c):
@@ -408,7 +408,7 @@ class HtmlStream:
         # Plain "...", not an entity: everything but a fence goes through
         # `inline`, which escapes, so "&hellip;" would appear literally.
         # Inside a fence everything is literal anyway.
-        return ["..."] + keep
+        return ["...", *keep]
 
     def _render(self, *, partial: bool) -> str:
         lines = list(self._lines)
@@ -605,7 +605,7 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .permdone p { margin: 0; color: #606050; }
 """
 
-# Three containers: finished blocks accumulate in #t, #l holds the one block
+# Three containers: finished blocks accumulate in #t, #line holds the one block
 # still being written (replaced wholesale on each update), and #s is the
 # status line that sits under both. Keeping them separate is what lets the
 # guest stream without ever re-parsing what is already there.

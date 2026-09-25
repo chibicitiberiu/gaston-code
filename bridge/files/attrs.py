@@ -198,7 +198,8 @@ def load(root: str) -> Attrs:
 
 def _read(full: str, base: str) -> list:
     try:
-        text = open(full, encoding="utf-8", errors="replace").read()
+        with open(full, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
     except OSError:
         return []
     out = []

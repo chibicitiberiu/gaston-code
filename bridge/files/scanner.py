@@ -144,7 +144,8 @@ def scan_bridge_tree(
                 auto, craw, cnorm, size = hit[2], hit[3], hit[4], hit[5]
             else:
                 try:
-                    data = open(full, "rb").read()
+                    with open(full, "rb") as fh:
+                        data = fh.read()
                 except OSError as exc:
                     rows[key] = S.Entry(type=S.Type.UNREADABLE, display=rel)
                     report(f"unreadable {rel}: {exc}")

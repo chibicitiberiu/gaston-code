@@ -284,7 +284,7 @@ class GuestExecService:
         """Resolve every in-flight EXEC, synchronously."""
         if guest is None:
             return
-        for exec_id, entry in list(guest.exec_pending.items()):
+        for _exec_id, entry in list(guest.exec_pending.items()):
             fut = entry.future
             if not fut.done():
                 fut.set_result(

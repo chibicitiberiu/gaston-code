@@ -10,6 +10,7 @@ and inflation (_pump, _handle), idle reaping (_reap_idle), and disconnect markin
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 import time
@@ -384,9 +385,7 @@ class ConnectionService:
             except Exception:
                 pass
             writer.close()
-            try:
+            with contextlib.suppress(Exception):
                 await writer.wait_closed()
-            except Exception:
-                pass
             log.info("connection to %s closed", peer)
 

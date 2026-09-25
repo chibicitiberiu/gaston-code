@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 import os
 import pathlib
@@ -120,7 +121,11 @@ class AttachmentService:
         if attach_id and attach_name:
             ids = [i.strip() for i in attach_id.split("|") if i.strip()]
             names = [n.strip() for n in attach_name.split("|") if n.strip()]
-            for aid, aname in zip(ids, names):
+            if len(ids) != len(names):
+                log.warning(
+                    "attach_id has %d entries and attach_name %d; using "
+                    "the shorter", len(ids), len(names))
+            for aid, aname in zip(ids, names, strict=False):
                 items.append(
                     {
                         "kind": "external",
@@ -297,32 +302,24 @@ class AttachmentService:
                         content_str: str | None = None
                         if not is_binary:
                             if att_bytes.startswith(b"\xef\xbb\xbf"):
-                                try:
+                                with contextlib.suppress(UnicodeDecodeError):
                                     content_str = att_bytes[3:].decode("utf-8")
-                                except UnicodeDecodeError:
-                                    pass
                             if content_str is None:
-                                try:
+                                with contextlib.suppress(UnicodeDecodeError):
                                     content_str = att_bytes.decode("utf-8")
-                                except UnicodeDecodeError:
-                                    pass
                             if (
                                 content_str is None
                                 and hasattr(guest, "caps")
                                 and guest.caps is not None
                                 and guest.caps.acp
                             ):
-                                try:
+                                with contextlib.suppress(UnicodeDecodeError, LookupError):
                                     content_str = att_bytes.decode(
                                         guest.caps.acp
                                     )
-                                except (UnicodeDecodeError, LookupError):
-                                    pass
                             if content_str is None:
-                                try:
+                                with contextlib.suppress(UnicodeDecodeError):
                                     content_str = att_bytes.decode("cp1252")
-                                except UnicodeDecodeError:
-                                    pass
                         if content_str is not None:
                             text_blocks.append(
                                 f"[{label}: {filename}]\n"
@@ -367,10 +364,13 @@ class AttachmentService:
 
         if image_blocks:
 
-            async def _multimodal_prompt(
-                blocks=list(image_blocks), ptext=prompt_text
-            ):
-                content: list[dict] = list(blocks)
+            # Captured, not defaulted: this generator is consumed later,
+            # so the list has to be the one built here.
+            captured = list(image_blocks)
+            ptext = prompt_text
+
+            async def _multimodal_prompt():
+                content: list[dict] = list(captured)
                 if ptext:
                     content.append({"type": "text", "text": ptext})
                 yield {

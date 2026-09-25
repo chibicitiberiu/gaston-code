@@ -25,12 +25,14 @@ sides last agreed on" instead, which is a content question.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
 import time
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
+from typing import Any
 
 from ..status import SyncStatus
 from . import paths as P
@@ -177,7 +179,10 @@ class Wait:
     """
 
     kind: str                       # "scan" | "put" | "get" | "mkdir"
-    future: object
+    #: Typed, not `object`. It was `object`, so every `fut.set_result(...)`
+    #: and `fut.done()` in the two modules that resolve these was unchecked
+    #: -- a checker could not tell a future from anything else.
+    future: asyncio.Future[Any]
     #: Scans only. None on the others, which is what makes a mismatched
     #: frame detectable rather than a KeyError.
     rows: dict | None = None
@@ -276,7 +281,7 @@ class Baseline:
     acp: str = ""
     generation: int = 0
     #: The USER's copy: cleared when it actually reaches their screen.
-    pending_notice: list = field(default_factory=list)
+    pending_notice: list[str] = field(default_factory=list)
     #: The AGENT's copy: cleared when it is actually handed to the model.
     #: Neither delivery implies the other. Before this the agent's copy lived
     #: only in memory (`the old Bridge-wide agent-notice cache`, now
@@ -285,7 +290,7 @@ class Baseline:
     #: silently lost exactly the news the agent most needed (a conflict that
     #: latched its writes), while the user's copy was already, correctly,
     #: gone. docs/audit/02-bridge-python.md 02.20.
-    pending_notice_agent: list = field(default_factory=list)
+    pending_notice_agent: list[str] = field(default_factory=list)
     latched: dict[str, str] = field(default_factory=dict)
     #: What has already been announced, per path, as a fingerprint of the
     #: situation. A divergence that cannot be resolved -- `aux.c`, a path the
@@ -515,6 +520,10 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
                                     "directory deleted on the bridge, still on "
                                     "the machine"))
             else:
+                # g is falsy here, so the outer `or` above can only have
+                # matched through b -- b.type is Type.DIR, which means b
+                # itself is not None.
+                assert b is not None
                 out.append(Decision(key, Act.MKDIR, "directory only on the bridge",
                                     display=b.display)
                            if a is None else
@@ -539,7 +548,9 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
                     out.append(Decision(key, Act.PUSH,
                                         "edited on the bridge after deletion",
                                         display=b.display))
-            elif g.same_content(b):
+            # By elimination of the three branches above, g and b are both
+            # present here; the `is not None` only narrows the type for mypy.
+            elif g is not None and g.same_content(b):
                 out.append(Decision(key, Act.CLEAR_TOMBSTONE, "recreated identically"))
             else:
                 out.append(Decision(key, Act.CONFLICT, "recreated differently on both"))
@@ -554,7 +565,9 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             elif b and not g:
                 out.append(Decision(key, Act.PUSH, "new on the bridge",
                                     display=b.display))
-            elif g.same_content(b):
+            # By elimination of the three branches above, g and b are both
+            # present here; the `is not None` only narrows the type for mypy.
+            elif g is not None and g.same_content(b):
                 out.append(Decision(key, Act.ADOPT, "same content, no ancestor"))
             else:
                 out.append(Decision(key, Act.CONFLICT,

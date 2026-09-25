@@ -6,6 +6,7 @@ between host mirror and guest paths, and SETWORK frame handling.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from collections.abc import Callable
@@ -238,10 +239,8 @@ class WorkspaceService:
             )
 
         if not guest.conv_id and guest.claude:
-            try:
+            with contextlib.suppress(Exception):
                 await guest.claude.close()
-            except Exception:
-                pass
             guest.claude = None
 
         if guest.conv_id:

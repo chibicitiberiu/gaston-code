@@ -69,7 +69,7 @@ class PermissionService:
         need scrolling it does not have. It also belongs in the transcript --
         the answer depends on the mode, and the mode changes.
         """
-        tools = list(TOOLS) + ["mcp__machine__exec"]
+        tools = [*list(TOOLS), "mcp__machine__exec"]
         root = (guest.hello or {}).get("sync_root", "") or ""
         await self.presentation.write_block(
             guest, perms.rules_view(guest.perm_mode, tools, root))

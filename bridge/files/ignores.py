@@ -187,7 +187,8 @@ def load(root: str, *, extra: tuple[str, ...] = ()) -> Ignores:
             full = os.path.join(dirpath, name)
             sources.append(full)
             try:
-                text = open(full, encoding="utf-8", errors="replace").read()
+                with open(full, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
             except OSError:
                 continue
             for line in text.splitlines():

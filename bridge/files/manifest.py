@@ -62,7 +62,9 @@ def parse_rows(body: bytes, caps) -> tuple[dict, dict]:
                 parts = line.split(b" ", 5)
                 crc_norm = crc_raw = parts[4]
                 plen_and_path = parts[5]
-            typ, cls, size, mtime = parts[0], parts[1], parts[2], parts[3]
+            # size is on the wire but not kept: Entry has no size field --
+            # see Entry.same_content, which deliberately never compares it.
+            typ, cls, _size, mtime = parts[0], parts[1], parts[2], parts[3]
             sp = plen_and_path.index(b" ")
             plen = int(plen_and_path[:sp])
             raw = plen_and_path[sp + 1:sp + 1 + plen]
@@ -89,12 +91,13 @@ def parse_rows(body: bytes, caps) -> tuple[dict, dict]:
             rel = P.wire_decode(raw, acp=caps.acp)
             key = P.canonical(rel, caps=caps)
             auto = cls.decode() if cls != b"-" else P.CLASS_TEXT
+            crc_norm_i, crc_raw_i = int(crc_norm), int(crc_raw)
             entry = Entry(
                 type=Type(typ.decode()),
                 cls=auto,
                 mtime=float(mtime),
-                crc=int(P.crc_for(auto, crc_norm, crc_raw)),
-                crc_norm=int(crc_norm), crc_raw=int(crc_raw),
+                crc=P.crc_for(auto, crc_norm_i, crc_raw_i),
+                crc_norm=crc_norm_i, crc_raw=crc_raw_i,
                 dual=caps.manifest >= 2,
                 display=rel)
         except (ValueError, IndexError, KeyError, UnicodeDecodeError) as exc:

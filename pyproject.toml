@@ -40,6 +40,13 @@ ignore = [
     # than it saves. ASYNC230 (opening and READING a file, which can be
     # megabytes) stays on.
     "ASYNC240",
+    # `class X(str, Enum)` rather than `StrEnum`. Deliberate and repo-wide:
+    # `bridge/status.py` documents that `str()` on a `(str, Enum)` member is
+    # "PromptEndReason.TIMEOUT", not "timeout", which is exactly why every
+    # site that puts one on the wire passes `.value` explicitly. StrEnum
+    # would silently make the bare member work too, and the next header
+    # written without `.value` would be wrong in a way nothing catches.
+    "UP042",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -60,6 +67,13 @@ ignore = [
 # ... and its test, which feeds it smart quotes, an NBSP, an en dash and a
 # Cyrillic look-alike on purpose.
 "tests/python/wire/test_fold.py" = ["RUF001", "RUF002", "RUF003"]
+# The sync pass reads one file per path, capped at MAX_FILE (1MB), and they
+# are files the bridge itself just wrote or scanned, so they are warm.
+# MEASURED: 130us inline against 735us through asyncio.to_thread -- a
+# hundred-file pass is 13ms inline and 74ms threaded. ASYNC230 stays on
+# everywhere else, and what it found there was real: the attachment read is
+# user-chosen, up to 10MB and probably cold, so that one did move off.
+"bridge/files/syncrun.py" = ["ASYNC230"]
 
 [tool.mypy]
 python_version = "3.11"

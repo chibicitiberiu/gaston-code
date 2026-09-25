@@ -126,7 +126,8 @@ def tools_block(found: list, path: list | None = None) -> str:
         rows.append(f"  {f.name:<{width}}  {f.kind:<9}  {f.path}{ver}")
     # The basis goes on its own aligned column so the eye reads down it.
     pad = max(len(r) for r in rows)
-    rows = [f"{r:<{pad}}   {f.basis}" for r, f in zip(rows, found)]
+    rows = [f"{r:<{pad}}   {f.basis}"
+            for r, f in zip(rows, found, strict=True)]
 
     out = [
         "## What is installed on that machine",

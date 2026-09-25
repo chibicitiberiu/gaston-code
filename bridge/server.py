@@ -18,11 +18,11 @@ import logging
 import os
 
 from .agent import permissions as perms
+from .agent import sessions as sesslist
 from .agent.conversations import Conversations
+from .agent.session import Session
 from .agent.toolrules import Found
 from .files import paths as P
-from .agent import sessions as sesslist
-from .agent.session import Session
 from .guest import ExecCall, GuestSession
 from .services.attachment import AttachmentService
 from .services.config import BridgeConfig
@@ -57,10 +57,27 @@ from .wire.protocol import (
 #: surface has always been, and naming them keeps a lint pass from deciding
 #: they are dead.
 __all__ = [
-    "APPEND", "Bridge", "ExecCall", "Found", "Frame", "GuestSession", "H",
-    "MODE_LABEL", "MODE_ORDER", "Paginator", "Session", "TranscriptView",
-    "init_logging", "load_config", "main", "notice", "parse_args",
-    "prepare_state", "serve", "sesslist", "turn_verdict",
+    "APPEND",
+    "MODE_LABEL",
+    "MODE_ORDER",
+    "Bridge",
+    "ExecCall",
+    "Found",
+    "Frame",
+    "GuestSession",
+    "H",
+    "Paginator",
+    "Session",
+    "TranscriptView",
+    "init_logging",
+    "load_config",
+    "main",
+    "notice",
+    "parse_args",
+    "prepare_state",
+    "serve",
+    "sesslist",
+    "turn_verdict",
 ]
 
 #: `Session` and `sesslist` are reached through this module BY NAME rather
@@ -576,7 +593,7 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
     try:
         config.validate()
     except ValueError as exc:
-        raise SystemExit(str(exc))
+        raise SystemExit(str(exc)) from exc
     return config
 
 
