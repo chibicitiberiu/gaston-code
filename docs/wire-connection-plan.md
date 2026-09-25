@@ -71,3 +71,12 @@ Each step ends with `make check`, `make test-fast`, `make wine-smoke` (netcheck/
 ## Not moving in step 2
 
 The RPC worker, exec and syncrpc (step 3, BACKLOG 9); the lane dispatcher (step 4, when gremote gives it a second user); HELLO/sysinfo (shared only when gremote's HELLO needs it); CANCEL (BACKLOG 6) and generations.
+
+## Progress (2026-09-25)
+
+- **a** `51ab54b`, **b** `74318c5`, **e** `8dc9670` (pulled ahead of c), **c** `47c7bb0`. Done and verified on the guest (RCC13/RCC14): three bridge restarts, a host change, an exec turn, drainprobe's 24 busy acks at close with no GPF. `netcheck --slowsend` runs in wine-smoke.
+- Found on the way, both fixed:
+  - Watcom's C++98 `new T()` does not zero a non-POD (CLAUDE.md).
+  - A pre-existing one-byte heap overrun in the sync scanner (`bd4ecfc`, test `synccheck --scanner`), which crashed every build under a SYNCGET flood.
+- drainprobe now arms the sync root and settles before the burst (`f55c5e1`, `a7014b4`). Run it on 7891 with the guest's port switched there if another bridge owns 7890; put it back afterwards.
+- Left: **d** (build buffer per connection), **f** (ConnectionService::join, stale line numbers), **g** (Listener, adopt, idle timeout, wirecheck). None needs the guest until g's final check.
