@@ -20,7 +20,7 @@ static char g_model_text[48];
 static char g_effort_text[32];
 
 rc_toolbar *rc_toolbar::create(HWND parent, HINSTANCE inst, HFONT font,
-                               rc_optmenu *opts_)
+                               OptionMenus *opts_)
 {
     rc_toolbar *p = new rc_toolbar();
     if (!p) return NULL;
@@ -202,10 +202,10 @@ void rc_toolbar::refresh()
 {
     if (!bar || !opts) return;
     {
-        const char *d = opts->mode_label();
-        const char *m = opts->model_label();
-        const char *e = opts->effort_label();
-        const char *w = opts->work_label();
+        const char *d = opts->modeLabel();
+        const char *m = opts->modelLabel();
+        const char *e = opts->effortLabel();
+        const char *w = opts->workLabel();
         TBBUTTONINFOA bi;
 
         /* The fallbacks are three different states, not one.
@@ -229,7 +229,7 @@ void rc_toolbar::refresh()
          * "Effort" says the setting does not apply here, where a greyed
          * button showing a value would claim a value is in force. */
         rc_strf(g_effort_text, sizeof(g_effort_text), "%s",
-                !opts->has_effort() ? "Effort"
+                !opts->hasEffort() ? "Effort"
                                     : ((e && *e) ? e : "default"));
         /* THE WHOLE PATH, which is what was asked for and is the
          * right answer: "where do my files go?" is the question,
@@ -258,7 +258,7 @@ void rc_toolbar::refresh()
          * to show what the next message will run with, and moved every
          * button to its right whenever the model changed. */
         SendMessageA(bar, TB_ENABLEBUTTON, ID_TB_EFFORT,
-                     MAKELONG(opts->has_effort() ? TRUE : FALSE, 0));
+                     MAKELONG(opts->hasEffort() ? TRUE : FALSE, 0));
         SendMessageA(bar, TB_AUTOSIZE, 0, 0);
     }
 }
@@ -269,18 +269,18 @@ int rc_toolbar::pop(int id)
     RECT r;
 
     if (!bar || !opts) return 0;
-    if (id == ID_TB_MODE)        menu = opts->mode_menu();
-    else if (id == ID_TB_MODEL)  menu = opts->model_menu();
-    else if (id == ID_TB_EFFORT) menu = opts->effort_menu();
-    else if (id == ID_TB_WORK)   menu = opts->work_menu();
-    else if (id == ID_TB_ATTACH) menu = opts->attach_menu();
-    else if (id == ID_TB_CMD)    menu = opts->cmd_menu();
+    if (id == ID_TB_MODE)        menu = opts->modeMenu();
+    else if (id == ID_TB_MODEL)  menu = opts->modelMenu();
+    else if (id == ID_TB_EFFORT) menu = opts->effortMenu();
+    else if (id == ID_TB_WORK)   menu = opts->workMenu();
+    else if (id == ID_TB_ATTACH) menu = opts->attachMenu();
+    else if (id == ID_TB_CMD)    menu = opts->commandMenu();
     if (!menu) return 0;
 
     /* Popped directly under the button, the way a dropdown reads. The menu
      * is the SAME HMENU the menu bar uses, so the tick and the list cannot
      * disagree with what the button says, and the WM_COMMAND ids already
-     * route through rc_optmenu::command. */
+     * route through OptionMenus::command. */
     SendMessageA(bar, TB_GETRECT, (WPARAM)id, (LPARAM)&r);
     MapWindowPoints(bar, HWND_DESKTOP, (POINT *)&r, 2);
     TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom,

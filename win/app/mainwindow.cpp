@@ -113,7 +113,7 @@ static int          g_cache_shown;
 /* The accelerator table. Loaded once in WinMain; owned by the module, so it
  * is not destroyed (DestroyAcceleratorTable is for CreateAcceleratorTable). */
 static HACCEL       g_accel;
-static rc_optmenu *g_optmenu;
+static OptionMenus *g_optmenu;
 static rc_pagebar *g_pagebar;
 /* "Connected to bridge." is announced AFTER the page that follows READY, not
  * before it.
@@ -248,7 +248,7 @@ static void build_menu(HWND hwnd)
     /* The Model and Effort popups: created and appended to `bar` by
      * app/optmenu.cpp now -- see app/optmenu.h. Between Configure and Help,
      * so the menu order is unchanged. */
-    g_optmenu = rc_optmenu::create(hwnd, bar, g_window, ui_send_text);
+    g_optmenu = OptionMenus::create(hwnd, bar, g_window, g_window);
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     SetMenu(hwnd, bar);
 }
@@ -407,7 +407,7 @@ static int ui_send(const char *what, const char *type,
     return 0;
 }
 
-/* app/optmenu.h's rc_optmenu_input_fn: "send this as if it had been typed".
+/* app/optmenu.h's OptionMenusListener::submitCommand: "send this as if it had been typed".
  *
  * A thin forward to compose-and-send rather than a second sender, because a
  * slash command IS a prompt -- the CLI reads it out of the message text and
@@ -495,7 +495,7 @@ static void on_turn(rc_frame *f)
 }
 
 /* OPTION, OPTIONSEND -- both owned by app/optmenu.cpp now; see
- * rc_optmenu_frame's own comments there for what each one does. */
+ * OptionMenus::frame's own comments there for what each one does. */
 static void on_optmenu(rc_frame *f)
 {
     if (g_optmenu) g_optmenu->frame(f);
@@ -505,7 +505,7 @@ static void on_optmenu(rc_frame *f)
      * has never existed. Called on every batch because rc_workdir_apply
      * returns without touching anything when the path has not changed. */
     if (g_optmenu && strcmp(f->type, "OPTIONSEND") == 0) {
-        const char *want = g_optmenu->work_path();
+        const char *want = g_optmenu->workPath();
         if (!rc_workdir_apply(want) && want && *want && g_html) {
             char msg[256];
             rc_strf(msg, sizeof(msg),
@@ -1477,7 +1477,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             /* Not guarded on the input box having focus, unlike PgUp/PgDn:
              * this changes a setting rather than taking a key away from
              * something you are in the middle of, and it loses nothing. */
-            if (g_optmenu) g_optmenu->cycle_mode();
+            if (g_optmenu) g_optmenu->cycleMode();
             return 0;
 
         case IDM_EXPORT:
@@ -1956,4 +1956,9 @@ void MainWindow::onBarChanged()
 void MainWindow::onAttachmentsChanged()
 {
     pillbar_detached();
+}
+
+bool MainWindow::submitCommand(const char *text, bool compose)
+{
+    return ui_send_text(text, compose ? 1 : 0) != 0;
 }

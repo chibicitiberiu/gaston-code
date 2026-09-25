@@ -70,7 +70,7 @@
 #include <windows.h>
 #include "net/frameproto.h"
 
-class rc_optmenu;
+class OptionMenus;
 
 /* Its height, which layout() must reserve. 22 for the control plus a
  * gutter; measured against the 640x480 budget, this costs the transcript
@@ -93,7 +93,7 @@ class rc_toolbar {
      * constant: TB_ADDBITMAP appends after comctl32's stock strip and
      * returns the index, and the strip's size is not ours to assume. */
     int  clip_ix;
-    rc_optmenu *opts;
+    OptionMenus *opts;
     HWND owner;
 
     rc_toolbar(const rc_toolbar &);
@@ -104,7 +104,7 @@ public:
     /* `opts_` is borrowed, not owned: the toolbar pops that module's menus
      * rather than building its own, so there is one list and one tick. */
     static rc_toolbar *create(HWND parent, HINSTANCE inst, HFONT font,
-                              rc_optmenu *opts_);
+                              OptionMenus *opts_);
     ~rc_toolbar();
 
     void move(int x, int y, int w);

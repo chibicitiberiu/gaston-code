@@ -12,7 +12,7 @@
  * (audit finding 01.58) -- the bar, the chat list and the page bar are
  * already their own files. This is the one the audit called out as most
  * obviously wanting to be one module: the id-range arithmetic in
- * rc_optmenu::command and the array fill in rc_optmenu::frame have to agree
+ * OptionMenus::command and the array fill in OptionMenus::frame have to agree
  * about MAX_OPTS and the base constants, and used to be 970 lines apart in
  * main.c.
  *
@@ -45,44 +45,48 @@
 #define IDM_ATTSHOT 1601      /* Attach > Screenshot */
 #define MAX_OPTS    16
 
-/* "Send this as if it had been typed" -- app/input.h's ComposeBox::sendText,
- * behind a function pointer so this module does not depend on that class.
- * A slash command IS a prompt: the CLI reads it out of the message text,
- * there is no command frame, and routing it through compose-and-send is what
- * gives it the local echo, the mid-turn refusal and the busy state that a
- * typed message gets. */
-typedef int (*rc_optmenu_input_fn)(const char *text, int compose);
+/* "Send this as if it had been typed" -- for the Commands menu, which sends
+ * a slash command as a prompt (the CLI reads it out of the message text;
+ * there is no frame for one). compose=true puts the text in the input box
+ * instead, for a command that takes an argument. True if it went. */
+class OptionMenusListener
+{
+public:
+    virtual ~OptionMenusListener() {}
+    virtual bool submitCommand(const char *text, bool compose) = 0;
+};
 
-class rc_optmenu {
-    HMENU menu_model, menu_effort, menu_mode, menu_cmd, menu_work;
-    HMENU menu_attach;
-    char  opt_model[MAX_OPTS][64];
-    char  opt_effort[MAX_OPTS][64];
+
+class OptionMenus {
+    HMENU m_modelMenu, m_effortMenu, m_modeMenu, m_commandMenu, m_workMenu;
+    HMENU m_attachMenu;
+    char  m_models[MAX_OPTS][64];
+    char  m_efforts[MAX_OPTS][64];
     /* Permission mode: Manual / Accept edits / Plan. The list is the
      * BRIDGE'S, not a table here, for the same reason the model list is --
      * `auto` and `bypassPermissions` are withheld for measured reasons that
      * belong beside the measurement (bridge/server.py, MODE_ORDER), not in
      * a menu builder on a 32MB machine. */
-    char  opt_mode[MAX_OPTS][64];
+    char  m_modes[MAX_OPTS][64];
     /* Slash commands. Not an option -- nothing is ticked and there is no
      * current value -- but the same bridge-driven menu with the same id
      * arithmetic and the same WM_COMMAND routing, so it lives here rather
      * than as a fourth copy of that machinery somewhere else. WHICH commands
      * appear is the bridge's decision (bridge/server.py, COMMAND_MENU): five
      * of the fifty-three the CLI offers. */
-    char  opt_cmd[MAX_OPTS][64];
+    char  m_commands[MAX_OPTS][64];
     /* Does this one take an argument? The bridge says so with a `hint`
      * header, which is the same fact the label's "<optional custom
      * summarization instructions>" shows -- one source, so the label and the
      * behaviour cannot disagree. */
-    char  cmd_arg[MAX_OPTS];
-    int   n_model, n_effort, n_mode, n_cmd;
+    char  m_commandTakesArg[MAX_OPTS];
+    int   m_modelCount, m_effortCount, m_modeCount, m_commandCount;
     /* The LABELS of the checked entries, which is what the toolbar shows.
      * The label is the bridge's displayName ("Haiku"), not the resolved id
      * ("claude-haiku-4-5-20251001") -- _send_options resolves aliases on
      * purpose, and the resolved form is 20+ characters, which does not fit
      * a toolbar button on a 640px screen. */
-    char  cur_model[64], cur_effort[64], cur_mode[64];
+    char  m_curModel[64], m_curEffort[64], m_curMode[64];
     /* Where this conversation's files land, as the guest spells it: the full
      * path for the menu, the short form the button wears. The bridge sends
      * both because a 640px screen has no room for the long one on a button.
@@ -96,27 +100,27 @@ class rc_optmenu {
      * while the one they did name read as empty, which the bridge sees as a
      * mass deletion. `cur_work_short` is a label for a 640px button and stays
      * small, but it is checked too rather than trusted to be short. */
-    char  cur_work[MAX_PATH], cur_work_short[128];
+    char  m_curWork[MAX_PATH], m_curWorkShort[128];
     /* Non-zero once the batch has offered at least one effort level that is
      * not greyed out. Haiku has none, and the bridge says so with a single
      * disabled row -- a toolbar button reading "(effort)" forever is worse
      * than no button, so the toolbar hides it. */
-    int   effort_ok;
+    int   m_effortOk;
     /* Which mode row is ticked, so one keystroke can advance to the next.
      * An index rather than a search on `cur_mode`, which holds the LABEL --
      * matching a display string back to its id is the sort of thing that
      * works until a label is reworded. -1 when nothing is ticked. */
-    int   cur_mode_ix;
-    int   opts_open;   /* mid-batch, so the next model row appends */
-    int   n_work;      /* work rows this batch -- see the cap in frame() */
-    HWND  owner;
-    FrameSender *sender;
-    rc_optmenu_input_fn input;
+    int   m_curModeIx;
+    int   m_optsOpen;   /* mid-batch, so the next model row appends */
+    int   m_workCount;      /* work rows this batch -- see the cap in frame() */
+    HWND  m_owner;
+    FrameSender *m_sender;
+    OptionMenusListener *m_listener;
 
-    rc_optmenu(const rc_optmenu &);
-    rc_optmenu &operator=(const rc_optmenu &);
-    rc_optmenu(HWND owner_, HMENU bar, FrameSender *send_,
-               rc_optmenu_input_fn input_);
+    OptionMenus(const OptionMenus &);
+    OptionMenus &operator=(const OptionMenus &);
+    OptionMenus(HWND owner, HMENU bar, FrameSender *sender,
+                OptionMenusListener *listener);
 
 public:
     /* Forget a batch that was CUT. Called from the disconnect branch, beside
@@ -126,7 +130,7 @@ public:
      * call when no batch is open -- the menus are rebuilt on reconnect, and
      * leaving stale ones up while disconnected would claim a model is
      * selected on a bridge that is not there. */
-    void reset(void);
+    void reset();
 
     /* Creates the Model and Effort popups (each seeded with one greyed
      * "(not connected)" placeholder, exactly as build_menu used to) and
@@ -135,54 +139,54 @@ public:
      * is unchanged.
      * owner: DrawMenuBar's target -- OPTIONSEND redraws the bar after a
      *     batch.
-     * send: main.c's ui_send, for SETMODEL/SETEFFORT/SETMODE.
-     * input: compose-and-send, for the Commands menu -- see
-     *     rc_optmenu_input_fn above. */
-    static rc_optmenu *create(HWND owner, HMENU bar, FrameSender *send,
-                              rc_optmenu_input_fn input);
+     * sender: for SETMODEL/SETEFFORT/SETMODE.
+     * listener: compose-and-send, for the Commands menu -- see
+     *     OptionMenusListener above. */
+    static OptionMenus *create(HWND owner, HMENU bar, FrameSender *sender,
+                               OptionMenusListener *listener);
     /* menu_work and menu_attach are NOT appended to the menu bar (they hang
      * off toolbar buttons instead), so DestroyMenu(bar) never reaches them
      * and they leaked for the life of the process -- two handles off the
      * fixed 64KB USER heap. The other four ARE on the bar and are destroyed
      * with it; destroying them here too would be a double free. (audit
      * 01.37) */
-    ~rc_optmenu()
+    ~OptionMenus()
     {
-        if (menu_work)   DestroyMenu(menu_work);
-        if (menu_attach) DestroyMenu(menu_attach);
+        if (m_workMenu)   DestroyMenu(m_workMenu);
+        if (m_attachMenu) DestroyMenu(m_attachMenu);
     }
 
     /* OPTION, OPTIONSEND -- the two frame types this module owns. Returns
      * non-zero if `f->type` was one of those. */
-    int frame(rc_frame *f);
+    bool frame(rc_frame *f);
 
     /* WM_COMMAND's default case: the IDM_MODEL0/IDM_EFFORT0 ranges. Returns
      * non-zero if `id` fell in either (whether or not it was actually
      * sent). */
-    int command(int id);
+    bool command(int id);
 
     /* For the toolbar, which pops these same menus rather than building its
      * own. One source of truth for what the lists contain and which entry is
      * ticked; the toolbar is another way to reach them, not another copy. */
-    HMENU model_menu() const  { return menu_model; }
-    HMENU effort_menu() const { return menu_effort; }
-    HMENU mode_menu() const   { return menu_mode; }
-    HMENU cmd_menu() const    { return menu_cmd; }
-    HMENU work_menu() const   { return menu_work; }
-    HMENU attach_menu() const { return menu_attach; }
-    const char *work_label() const { return cur_work_short; }
-    const char *work_path() const  { return cur_work; }
-    const char *model_label() const  { return cur_model; }
-    const char *effort_label() const { return cur_effort; }
-    const char *mode_label() const   { return cur_mode; }
-    int has_effort() const { return effort_ok; }
+    HMENU modelMenu() const  { return m_modelMenu; }
+    HMENU effortMenu() const { return m_effortMenu; }
+    HMENU modeMenu() const   { return m_modeMenu; }
+    HMENU commandMenu() const    { return m_commandMenu; }
+    HMENU workMenu() const   { return m_workMenu; }
+    HMENU attachMenu() const { return m_attachMenu; }
+    const char *workLabel() const { return m_curWorkShort; }
+    const char *workPath() const  { return m_curWork; }
+    const char *modelLabel() const  { return m_curModel; }
+    const char *effortLabel() const { return m_curEffort; }
+    const char *modeLabel() const   { return m_curMode; }
+    bool hasEffort() const { return m_effortOk != 0; }
 
     /* Advance to the next permission mode and tell the bridge, for the
      * keyboard shortcut. Wraps. Does nothing when the list is empty, which
      * is the disconnected case. The menus and the toolbar update when the
      * bridge answers with a fresh batch -- not optimistically here, because
      * a mode this client did not manage to set must not be shown as set. */
-    void cycle_mode();
+    void cycleMode();
 };
 
 #endif
