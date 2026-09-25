@@ -110,6 +110,12 @@ LIBCORE = $(LIBDIR)/libcore.lib
 WIRE_SRCS = wire/frame.cpp
 LIBWIRE = $(LIBDIR)/libwire.lib
 
+# Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
+# libcore only: it knows nothing of the wire, and turning a tree into
+# frames is the exe's job. Listed BEFORE libcore wherever both are linked.
+AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp
+LIBAUTOMATION = $(LIBDIR)/libautomation.lib
+
 # A target's inputs are objects, libraries and (for the client) a .res; this
 # turns them into wlink directives. `library` may repeat.
 LINKIN = file {$(filter %.o,$^)} $(foreach l,$(filter %.lib,$^),library $(l))
@@ -124,7 +130,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
 
-.PHONY: hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -189,6 +195,16 @@ $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
 WINDOWCHECK_OBJS = $(call objs,checks/windowcheck.cpp) $(LIBCORE)
 windowcheck: $(BUILD)/windowcheck.exe
 $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# libautomation's selector grammar and tree walker. Links the library, so
+# what is tested is what would ship. Wine settles the grammar completely
+# (it is string work) and only proves the walk does not crash.
+AUTOCHECK_OBJS = $(call objs,checks/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
+autocheck: $(BUILD)/autocheck.exe
+$(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -291,7 +307,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
-all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck \
+all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck autocheck hookdll \
      netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
@@ -441,6 +457,10 @@ $(LIBCORE): $(call objs,$(CORE_SRCS))
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
 $(LIBWIRE): $(call objs,$(WIRE_SRCS))
+	@mkdir -p $(@D)
+	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
+
+$(LIBAUTOMATION): $(call objs,$(AUTOMATION_SRCS))
 	@mkdir -p $(@D)
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 

@@ -1,0 +1,244 @@
+#include "automation/tree.h"
+#include "core/str.h"
+
+#include <string.h>
+
+WalkOptions::WalkOptions()
+{
+    root = NULL;
+    pid = 0;
+    /* 200ms, and the number is measured rather than picked. The same
+     * 45-node walk took 72ms at a 200ms budget and 485ms at 2000ms WITH
+     * ZERO TIMEOUTS EITHER WAY: on 9x the cost of SendMessageTimeout tracks
+     * the budget handed to it, not how fast the target answers. So pass the
+     * smallest budget that works, and escalate only for a thread that has
+     * actually failed. */
+    callTimeoutMs = 200;
+    deadlineMs = 5000;
+    /* A guard against a cyclic GW_HWNDNEXT chain, not a budget. An idle
+     * desktop measured 44 nodes; the deadline is what bounds a walk. */
+    maxNodes = 4096;
+    visibleOnly = true;
+    wantText = true;
+}
+
+TreeWalker::TreeWalker()
+{
+    m_slowN = 0;
+    m_seen = 0;
+    m_timeouts = 0;
+    m_deferred = 0;
+    m_until = 0;
+    m_hasDeadline = false;
+    memset(m_slowTid, 0, sizeof(m_slowTid));
+    memset(m_slowPid, 0, sizeof(m_slowPid));
+}
+
+bool TreeWalker::isSlowThread(DWORD tid) const
+{
+    for (int i = 0; i < m_slowN; i++)
+        if (m_slowTid[i] == tid)
+            return true;
+    return false;
+}
+
+bool TreeWalker::isSlowProcess(DWORD pid) const
+{
+    for (int i = 0; i < m_slowN; i++)
+        if (m_slowPid[i] == pid)
+            return true;
+    return false;
+}
+
+void TreeWalker::markSlow(DWORD tid, DWORD pid)
+{
+    if (isSlowThread(tid) || m_slowN >= MAX_SLOW)
+        return;
+    m_slowTid[m_slowN] = tid;
+    m_slowPid[m_slowN] = pid;
+    m_slowN++;
+}
+
+bool TreeWalker::outOfTime() const
+{
+    if (!m_hasDeadline)
+        return false;
+    return (long)(GetTickCount() - m_until) >= 0;
+}
+
+void TreeWalker::fill(Node &n, HWND h, const WalkOptions &opt,
+                      const char *parentPath, int index, int depth)
+{
+    memset(&n, 0, sizeof(n));
+    n.hwnd = h;
+    n.parent = GetParent(h);
+    n.depth = depth;
+    n.tid = GetWindowThreadProcessId(h, &n.pid);
+    n.ctrlId = GetDlgCtrlID(h);
+    n.style = (DWORD)GetWindowLongA(h, GWL_STYLE);
+    n.visible = IsWindowVisible(h) ? true : false;
+    n.enabled = IsWindowEnabled(h) ? true : false;
+    n.focused = (GetFocus() == h);
+    GetWindowRect(h, &n.rect);
+    GetClassNameA(h, n.cls, sizeof(n.cls));
+
+    /* "0/3/1" -- survives a repaint, which an HWND does too but a caption
+     * does not. rc_strf rather than sprintf: the unbounded family fails the
+     * build (win/Makefile check-sources). */
+    if (parentPath && parentPath[0])
+        rc_strf(n.path, sizeof(n.path), "%s/%d", parentPath, index);
+    else
+        rc_strf(n.path, sizeof(n.path), "%d", index);
+
+    if (!opt.wantText)
+        return;
+
+    /* A thread that has already refused to answer is not asked again at the
+     * full budget; it is asked at a token one so the record still carries
+     * whatever comes back cheaply. Everything else is asked normally. */
+    DWORD budget = opt.callTimeoutMs;
+    if (isSlowThread(n.tid))
+    {
+        budget = 1;
+        m_deferred++;
+    }
+    else if (isSlowProcess(n.pid))
+    {
+        budget = opt.callTimeoutMs / 4 ? opt.callTimeoutMs / 4 : 1;
+        m_deferred++;
+    }
+
+    DWORD_PTR res = 0;
+    /* SMTO_ABORTIFHUNG so USER can refuse immediately for a thread it has
+     * already flagged. WM_GETTEXT and not GetWindowText: across a process
+     * boundary the latter returns only a caption, while this is marshalled
+     * by USER32 and returns a control's contents. */
+    LRESULT ok = SendMessageTimeoutA(h, WM_GETTEXT, sizeof(n.text),
+                                     (LPARAM)n.text, SMTO_ABORTIFHUNG,
+                                     budget, &res);
+    if (!ok)
+    {
+        n.text[0] = '\0';
+        n.textTimedOut = true;
+        m_timeouts++;
+        markSlow(n.tid, n.pid);
+    }
+}
+
+WalkEnd TreeWalker::descend(HWND parent, const WalkOptions &opt,
+                            NodeSink &sink, const char *parentPath,
+                            int depth)
+{
+    int index = 0;
+    for (HWND c = GetWindow(parent, GW_CHILD); c;
+         c = GetWindow(c, GW_HWNDNEXT))
+    {
+        if (outOfTime())
+            return WALK_DEADLINE;
+        if (m_seen >= opt.maxNodes)
+            return WALK_MAXNODES;
+        if (opt.visibleOnly && !IsWindowVisible(c))
+            continue;
+
+        Node n;
+        fill(n, c, opt, parentPath, index, depth);
+        index++;
+
+        if (opt.pid && n.pid != opt.pid)
+            continue;
+
+        m_seen++;
+        if (!sink.onNode(n))
+            return WALK_STOPPED;
+
+        WalkEnd e = descend(c, opt, sink, n.path, depth + 1);
+        if (e != WALK_COMPLETE)
+            return e;
+    }
+    return WALK_COMPLETE;
+}
+
+/* EnumWindows needs a plain callback, so the walk's state travels as the
+ * LPARAM rather than through a file static -- REMOTE.md forbids per-module
+ * globals in the libs, and two walks at once would share them. */
+struct TopContext
+{
+    TreeWalker        *walker;
+    const WalkOptions *opt;
+    NodeSink          *sink;
+    int                index;
+    WalkEnd            end;
+};
+
+static BOOL CALLBACK onTopLevel(HWND h, LPARAM lp)
+{
+    TopContext *ctx = (TopContext *)lp;
+    return ctx->walker->stepTop(h, *ctx) ? TRUE : FALSE;
+}
+
+bool TreeWalker::stepTop(HWND h, TopContext &ctx)
+{
+    if (outOfTime())
+    {
+        ctx.end = WALK_DEADLINE;
+        return false;
+    }
+    if (m_seen >= ctx.opt->maxNodes)
+    {
+        ctx.end = WALK_MAXNODES;
+        return false;
+    }
+    if (ctx.opt->visibleOnly && !IsWindowVisible(h))
+        return true;
+
+    Node n;
+    fill(n, h, *ctx.opt, "", ctx.index, 0);
+    ctx.index++;
+
+    if (ctx.opt->pid && n.pid != ctx.opt->pid)
+        return true;
+
+    m_seen++;
+    if (!ctx.sink->onNode(n))
+    {
+        ctx.end = WALK_STOPPED;
+        return false;
+    }
+
+    WalkEnd e = descend(h, *ctx.opt, *ctx.sink, n.path, 1);
+    if (e != WALK_COMPLETE)
+    {
+        ctx.end = e;
+        return false;
+    }
+    return true;
+}
+
+WalkEnd TreeWalker::walk(const WalkOptions &opt, NodeSink &sink)
+{
+    m_seen = 0;
+    m_timeouts = 0;
+    m_deferred = 0;
+    m_slowN = 0;
+    m_hasDeadline = opt.deadlineMs != 0;
+    m_until = GetTickCount() + opt.deadlineMs;
+
+    if (opt.root)
+    {
+        Node n;
+        fill(n, opt.root, opt, "", 0, 0);
+        m_seen++;
+        if (!sink.onNode(n))
+            return WALK_STOPPED;
+        return descend(opt.root, opt, sink, n.path, 1);
+    }
+
+    TopContext ctx;
+    ctx.walker = this;
+    ctx.opt = &opt;
+    ctx.sink = &sink;
+    ctx.index = 0;
+    ctx.end = WALK_COMPLETE;
+    EnumWindows(onTopLevel, (LPARAM)&ctx);
+    return ctx.end;
+}
