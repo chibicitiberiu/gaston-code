@@ -124,7 +124,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
 
-.PHONY: msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -190,6 +190,19 @@ WINDOWCHECK_OBJS = $(call objs,checks/windowcheck.cpp) $(LIBCORE)
 windowcheck: $(BUILD)/windowcheck.exe
 $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# The only DLL this project builds, and it exists to answer one question:
+# can we get code mapped into another program on Win98. `system nt_dll`
+# rather than `nt`, and the hook proc is exported by name because
+# SetWindowsHookEx needs a procedure address the system can resolve inside
+# every process it injects into. 8.3 name: it rides the same CD and kit as
+# everything else. See win/checks/hookdll.c for what it measures.
+HOOKDLL_OBJS = $(call objs,checks/hookdll.c)
+hookdll: $(BUILD)/HOOKDLL.DLL
+$(BUILD)/HOOKDLL.DLL: $(HOOKDLL_OBJS)
+	@$(WLINK) system nt_dll option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
 

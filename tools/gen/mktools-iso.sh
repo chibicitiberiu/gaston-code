@@ -51,6 +51,9 @@ want "$HERE/build/win/synccheck.exe" "SYNCCHK.EXE"
 want "$HERE/build/win/capscheck.exe" "CAPSCHK.EXE"
 want "$HERE/build/win/rpccheck.exe"  "RPCCHK.EXE"
 want "$HERE/build/win/framecheck.exe" "FRAMECHK.EXE"
+# The injection test DLL (probe 0.15d). It must be a real file the system
+# can map into other processes, so it rides here like the exes do.
+want "$HERE/build/win/HOOKDLL.DLL" "HOOKDLL.DLL"
 # vm/retrocl.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
 # the Wine-tier default of 127.0.0.1 when it exists.
 cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true

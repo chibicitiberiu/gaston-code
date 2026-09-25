@@ -2234,6 +2234,107 @@ static void probe_evlat(void)
     UnregisterClassA("GastonEvSink", wc.hInstance);
 }
 
+/* ------------------------------------------------------------ 0.15d */
+/* The injection question, asked properly this time.
+ *
+ * 0.15b showed a system-wide hook whose proc lives in an EXE installs and
+ * never fires. The fix the documentation implies is a DLL, because the
+ * code has to run inside each hooked process. This section builds that
+ * case: load HOOKDLL.DLL, install the hook with ITS module handle, start
+ * another program, and read the counters out of the shared mapping the DLL
+ * writes to.
+ *
+ * `attaches` is the number that answers the question. It counts processes
+ * that mapped the DLL. One means only we have it and nothing was injected;
+ * more than one means Win98 put our code inside a program that did not ask
+ * for it, which is both the capability and the reason to be careful with
+ * it.
+ *
+ * If this works it also proves the channel for the OTHER two things a DLL
+ * was wanted for -- reading text out of controls whose messages 9x does
+ * not marshal, and seeing an app go idle -- because both need exactly this:
+ * our code in their address space and a way to report back.
+ */
+typedef struct {
+    long  calls;
+    long  attaches;
+    long  pids_n;
+    DWORD pids[16];
+} RcHookShm;
+
+static void probe_inject(void)
+{
+    HMODULE dll;
+    HOOKPROC proc;
+    HANDLE map;
+    RcHookShm *shm;
+    HHOOK h;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    int started;
+    long i;
+
+    head("0.15d  can we get our code into another process?");
+
+    /* The CD first, then wherever we are. On the kit both sit together. */
+    dll = LoadLibraryA("HOOKDLL.DLL");
+    if (!dll) dll = LoadLibraryA("D:\\HOOKDLL.DLL");
+    if (!dll) {
+        say("HOOKDLL.DLL not found (%lu) -- cannot test injection",
+            GetLastError());
+        return;
+    }
+    /* Decorated, because a hook proc is __stdcall and Open Watcom exports
+     * it as _rc_hook_proc@12. The plain name is tried first so a future
+     * aliased build keeps working. */
+    proc = (HOOKPROC)GetProcAddress(dll, "rc_hook_proc");
+    if (!proc) proc = (HOOKPROC)GetProcAddress(dll, "_rc_hook_proc@12");
+    say("HOOKDLL.DLL loaded, proc %s", proc ? "found" : "MISSING");
+    if (!proc) { FreeLibrary(dll); return; }
+
+    map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                             0, sizeof(RcHookShm), "GastonHookShm");
+    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+              : NULL;
+    if (!shm) { say("shared mapping failed (%lu)", GetLastError());
+                FreeLibrary(dll); return; }
+    say("shared mapping ok; attaches so far %ld (this process)",
+        shm->attaches);
+
+    h = SetWindowsHookExA(WH_CBT, proc, dll, 0);
+    say("WH_CBT with a DLL       : %s", h ? "installed" : "refused");
+    if (!h) { UnmapViewOfFile(shm); CloseHandle(map); FreeLibrary(dll);
+              return; }
+
+    memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    started = CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE, 0,
+                             NULL, NULL, &si, &pi);
+    say("notepad started         : %s", started ? "yes" : "no");
+    pump_for(5000);
+    if (started) {
+        TerminateProcess(pi.hProcess, 0);
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        pump_for(1000);
+    }
+    UnhookWindowsHookEx(h);
+
+    say("attaches (processes that mapped the DLL) : %ld", shm->attaches);
+    say("hook calls, all processes                : %ld", shm->calls);
+    say("distinct processes that ran the proc     : %ld", shm->pids_n);
+    for (i = 0; i < shm->pids_n && i < 16; i++)
+        say("   pid %lu%s", (unsigned long)shm->pids[i],
+            shm->pids[i] == GetCurrentProcessId() ? "  (this one)" : "");
+    if (shm->attaches > 1)
+        say("   -> INJECTION WORKS. Our code ran inside another program.");
+    else
+        say("   -> no injection: only this process ever mapped the DLL.");
+
+    UnmapViewOfFile(shm);
+    CloseHandle(map);
+    FreeLibrary(dll);
+}
+
 /* ------------------------------------------------------------- 0.16 */
 /* ImageClick: find a small bitmap on screen and click it. The question is
  * not whether it works -- it is a scan, it always works -- but WHERE the
@@ -2426,6 +2527,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "imgfind"))  probe_imgfind();
     if (!only || !strcmp(only, "events"))   probe_events();
     if (!only || !strcmp(only, "evlat"))    probe_evlat();
+    if (!only || !strcmp(only, "inject"))   probe_inject();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");
