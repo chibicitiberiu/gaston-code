@@ -25,6 +25,7 @@ program calls them.
 from __future__ import annotations
 
 import bisect
+import os
 import re
 import subprocess
 import sys
@@ -32,7 +33,10 @@ import sys
 #: One page. A frame at or above this can step over the guard page.
 LIMIT = 4096
 
-#: Modules we do not compile and do not call into with a deep stack.
+#: Modules we do not compile and do not call into with a deep stack. `.lib:`
+#: covers the CRT and SDK import libraries -- but NOT our own static libs,
+#: which main() is told about and checks like any object. Before it was told,
+#: moving code into a lib would have exempted it without a word.
 EXEMPT = ("miniz.o", ".lib:", "clib3r")
 
 
@@ -61,9 +65,23 @@ def frames(exe: str) -> list[tuple[int, int]]:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
-        print("usage: stackframes.py <exe> <map>", file=sys.stderr)
+        print("usage: stackframes.py <exe> <map> [owned.lib ...]",
+              file=sys.stderr)
         return 2
     syms = symbols(argv[2])
+    own_libs = {os.path.normpath(p) for p in argv[3:]}
+    modules = {os.path.normpath(name.split(":", 1)[0]) for _, name in syms}
+    blind = sorted(p for p in own_libs if p not in modules)
+    if blind:
+        for p in blind:
+            print(f"   FAIL  owned lib never appears in the map: {p}")
+        return 1
+
+    def exempt(name: str) -> bool:
+        if os.path.normpath(name.split(":", 1)[0]) in own_libs:
+            return False
+        return any(e in name for e in EXEMPT)
+
     addrs = [a for a, _ in syms]
     bad, noted = [], []
     for addr, size in frames(argv[1]):
@@ -71,7 +89,7 @@ def main(argv: list[str]) -> int:
             continue
         i = bisect.bisect_right(addrs, addr) - 1
         name = syms[i][1] if i >= 0 else "?"
-        (noted if any(e in name for e in EXEMPT) else bad).append((size, name))
+        (noted if exempt(name) else bad).append((size, name))
 
     for size, name in sorted(noted, reverse=True):
         print(f"   note  {size:6d} bytes  {name}  (not reachable from our code)")
