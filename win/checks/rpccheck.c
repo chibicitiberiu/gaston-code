@@ -97,8 +97,7 @@ static rc_frame *make_frame(const char *type, const char *const *keys,
 static void free_frame(rc_frame *f)
 {
     if (!f) return;
-    rc_frame_free(f);
-    HeapFree(GetProcessHeap(), 0, f);
+    rc_frame_delete(f);
 }
 
 /* --- the table itself ----------------------------------------------------- */

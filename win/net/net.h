@@ -173,6 +173,11 @@ void rc_net_frame_done(rc_net *n, rc_frame *f);
  * the bug this guards against is a miscounted decrement rather than a read. */
 long rc_net_inflight(const rc_net *n);
 
+/* Bytes received and sent on this connection so far. Accessors rather
+ * than the fields, so the transport's state can move behind them. */
+unsigned long rc_net_rx_bytes(const rc_net *n);
+unsigned long rc_net_tx_bytes(const rc_net *n);
+
 /* Snapshot of the outbound queue's current byte total, taken under
  * send_lock -- unlike `inflight`, `outq_bytes` is not volatile, so a caller
  * outside net.cpp cannot just read the field and trust it. Exists for the

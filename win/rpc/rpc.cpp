@@ -119,14 +119,12 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
             rc_log("rpc: EXECKILL for %s", kid ? kid : "(no id)");
             rc_exec_cancel();
         }
-        rc_frame_free(f);
-        HeapFree(GetProcessHeap(), 0, f);
+        rc_frame_delete(f);
         return RC_ROUTE_TAKEN;
 
     case RC_LANE_JOB:
         if (rc_rpc_submit(f) != 0) {
-            rc_frame_free(f);
-            HeapFree(GetProcessHeap(), 0, f);
+            rc_frame_delete(f);
         }
         return RC_ROUTE_TAKEN;
 
@@ -146,8 +144,7 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
         while (rc_rpc_syncq_full() && (!running || *running))
             Sleep(10);
         if (rc_rpc_submit(f) != 0) {
-            rc_frame_free(f);
-            HeapFree(GetProcessHeap(), 0, f);
+            rc_frame_delete(f);
         }
         return RC_ROUTE_TAKEN;
 
@@ -208,8 +205,8 @@ static void rpc_maybe_nudge(void)
     {
         static unsigned long last_tx, last_rx;
         static DWORD last_at;
-        unsigned long moved = (g_net->tx_bytes - last_tx)
-                            + (g_net->rx_bytes - last_rx);
+        unsigned long moved = (rc_net_tx_bytes(g_net) - last_tx)
+                            + (rc_net_rx_bytes(g_net) - last_rx);
         DWORD elapsed = last_at ? (now - last_at) : 0;
 
         if (elapsed >= 1000 && moved > 0) {
@@ -233,8 +230,8 @@ static void rpc_maybe_nudge(void)
                 rc_net_send(g_net, "STAT", k, v, n_stat, NULL, 0);
             }
         }
-        last_tx = g_net->tx_bytes;
-        last_rx = g_net->rx_bytes;
+        last_tx = rc_net_tx_bytes(g_net);
+        last_rx = rc_net_rx_bytes(g_net);
         last_at = now;
     }
 
@@ -477,8 +474,7 @@ static void reject_busy(rc_frame *f)
 
 static void drop(rc_frame *f)
 {
-    rc_frame_free(f);
-    HeapFree(GetProcessHeap(), 0, f);
+    rc_frame_delete(f);
 }
 
 static unsigned rpc_thread_body(void *arg)

@@ -18,3 +18,9 @@ rc_lane rc_frame_lane(const char *type)
     return RC_LANE_UI;
 }
 
+int rc_frame_compressible(const char *type)
+{
+    return strcmp(type, "EXECOUT") == 0 ||
+           strcmp(type, "SYNCDAT") == 0 ||
+           strcmp(type, "SYNCENT") == 0;
+}

@@ -159,6 +159,13 @@ void rc_frame_free(rc_frame *f)
     f->body_len = 0;
 }
 
+void rc_frame_delete(rc_frame *f)
+{
+    if (!f) return;
+    rc_frame_free(f);
+    HeapFree(GetProcessHeap(), 0, f);
+}
+
 static int append(char *buf, unsigned bufsz, unsigned *pos, const char *s)
 {
     unsigned n = (unsigned)strlen(s);

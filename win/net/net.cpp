@@ -217,9 +217,18 @@ static int inflate_body(rc_frame *f)
 /* The UI thread's half of the three-way ownership rule. See net.h. */
 void rc_net_frame_done(rc_net *n, rc_frame *f)
 {
-    rc_frame_free(f);
-    HeapFree(GetProcessHeap(), 0, f);
+    rc_frame_delete(f);
     InterlockedDecrement(&n->inflight);
+}
+
+unsigned long rc_net_rx_bytes(const rc_net *n)
+{
+    return n->rx_bytes;
+}
+
+unsigned long rc_net_tx_bytes(const rc_net *n)
+{
+    return n->tx_bytes;
 }
 
 long rc_net_inflight(const rc_net *n)
@@ -921,9 +930,7 @@ static int send_frame(rc_net *n, const char *type,
         const char *const *use_vals = vals;
         int use_nkv = nkv;
 
-        int is_bulk = (strcmp(type, "EXECOUT") == 0 ||
-                       strcmp(type, "SYNCDAT") == 0 ||
-                       strcmp(type, "SYNCENT") == 0);
+        int is_bulk = rc_frame_compressible(type);
         int should_compress = 0;
         if (is_bulk && body_len >= 64 && g_def_ready && g_def_scratch) {
             if (g_deflate_samples < 5) {

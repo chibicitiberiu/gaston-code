@@ -47,6 +47,9 @@ typedef struct {
 const char *rc_frame_get(const rc_frame *f, const char *key);
 int         rc_frame_parse(char *payload, unsigned len, rc_frame *out);
 void        rc_frame_free(rc_frame *f);
+/* rc_frame_free, then the frame struct itself -- for frames that were
+ * HeapAlloc'd whole, which is every frame the reader hands on. */
+void        rc_frame_delete(rc_frame *f);
 
 /* Builds "TYPE\nk=v\n...\n\n" + body into buf. Returns total bytes or -1. */
 int rc_frame_build(char *buf, unsigned bufsz, const char *type,
