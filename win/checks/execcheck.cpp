@@ -34,12 +34,26 @@ class Collect : public OutputSink
 {
 public:
     Collect() : m_calls(0) {}
-    void onOutput(const char *data, unsigned len)
+    bool onOutput(const char *data, unsigned len)
     {
         m_text.append(data, len);
         m_calls++;
+        return true;
     }
     std::string m_text;
+    int m_calls;
+};
+
+/* A reader that goes away after the first chunk, as a dead link does. */
+class Vanish : public OutputSink
+{
+public:
+    Vanish() : m_calls(0) {}
+    bool onOutput(const char *, unsigned)
+    {
+        m_calls++;
+        return false;
+    }
     int m_calls;
 };
 
@@ -141,6 +155,22 @@ static void output()
         say("cap-truncates", ok, detail);
     }
     {
+        /* Through a shell and not: recorded, never judged. */
+        ExecJob a, b;
+        ExecOptions viaShell, direct;
+        viaShell.shell = "cmd.exe /c";
+        ExecResult ra, rb;
+        Collect ca, cb;
+        a.run("echo hi", viaShell, ca, ra);
+        b.run("cmd.exe /c echo hi", direct, cb, rb);
+        rc_strf(detail, sizeof detail, "shell: status=%d via=%d; direct: via=%d",
+                (int)ra.status, ra.viaShell, rb.viaShell);
+        say("via-shell-recorded", ra.status == EXEC_OK && ra.viaShell &&
+                                      !rb.viaShell &&
+                                      ca.m_text.find("hi") != std::string::npos,
+            detail);
+    }
+    {
         ExecJob job;
         ExecOptions opt;
         ExecResult r;
@@ -181,6 +211,21 @@ static void stopping()
                 (unsigned long)r.ms);
         say("timeout", r.status == EXEC_TIMEOUT && r.ms >= 1000 && r.ms < 6000,
             detail);
+    }
+    {
+        /* A reader that is gone stops the command: without this the job
+         * would run to its timeout producing output for no one, and in the
+         * client the worker sat blocked in the sink meanwhile. */
+        ExecJob job;
+        ExecOptions opt;
+        opt.timeoutMs = 20000;
+        ExecResult r;
+        Vanish v;
+        job.run("cmd.exe /c for /l %i in (1,1,50000000) do echo x", opt, v, r);
+        rc_strf(detail, sizeof detail, "status=%d calls=%d ms=%lu",
+                (int)r.status, v.m_calls, (unsigned long)r.ms);
+        say("sink-gone-stops-it", r.status == EXEC_SINK_GONE &&
+                                      v.m_calls == 1 && r.ms < 5000, detail);
     }
     {
         /* A cancel that lands before run() means nothing is spawned: the

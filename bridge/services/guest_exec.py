@@ -249,6 +249,12 @@ class GuestExecService:
         prose = EXEC_STATUS_PROSE.get(status)
         if prose:
             parts.append(prose.format(max_cmd=self.EXEC_MAX_CMD))
+        # Through COMMAND.COM /c on Windows 98 `code` is ALWAYS 0, even for a
+        # program that does not exist (measured: win/checks/execprobe.cpp,
+        # docs/measurements/execprobe-vm-gui-20260926.txt); a program spawned
+        # with no shell reports its real code. So a zero here proves nothing
+        # on that shell, which is why only a non-zero code is ever said.
+        # docs/BACKLOG.md 14.
         if code not in ("", "0") and status == ExecStatus.OK:
             parts.append(f"Exit code {code}.")
         if truncated:

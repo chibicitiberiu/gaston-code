@@ -2,7 +2,8 @@
 
 `win/checks/execcheck.cpp` drives `ExecJob` directly: the refuse-rather-than-
 truncate guard, output reaching the sink, the cap, the exit code, a failed
-spawn, the timeout and both kinds of cancel. What COMMAND.COM does on the
+spawn, the timeout, both kinds of cancel, a reader that goes away and the
+via-shell flag. What COMMAND.COM does on the
 real guest -- REDIR32, the DOS VM, the always-zero exit code -- Wine cannot
 show; `win/checks/execprobe.cpp` measures that on the VM
 (docs/measurements/execprobe-vm-*).
@@ -27,7 +28,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 10, sorted(verdicts)
+    assert len(verdicts) == 12, sorted(verdicts)
 
 
 def test_an_overlong_command_is_refused_not_truncated(verdicts):
@@ -44,3 +45,9 @@ def test_a_cancel_is_reported_as_a_cancel(verdicts):
     at the flag."""
     assert verdicts["cancel-before-run"][0] == "pass"
     assert verdicts["cancel-mid-run"][0] == "pass"
+
+
+def test_a_reader_that_is_gone_stops_the_command(verdicts):
+    """Otherwise the command runs to its timeout producing output for no one,
+    with the worker blocked in the sink the whole time."""
+    assert verdicts["sink-gone-stops-it"][0] == "pass"

@@ -75,6 +75,7 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
                   OutputSink &sink, ExecResult &out)
 {
     out = ExecResult();
+    out.viaShell = opt.shell && *opt.shell;
 
     if (!command || !*command)
         return false;
@@ -213,7 +214,11 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
                 /* Keep DRAINING past the cap. Stopping would leave the child
                  * blocked writing to a pipe nobody empties, and we would sit
                  * until the timeout with a half-finished command. */
-                deliver(chunk.get(), got, opt, sink, out);
+                if (!deliver(chunk.get(), got, opt, sink, out))
+                {
+                    out.status = EXEC_SINK_GONE;
+                    break;
+                }
                 continue;       /* drain hard before waiting again */
             }
         }
@@ -249,7 +254,11 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
                 }
                 if (!ReadFile(rd.get(), chunk.get(), want, &got, NULL) || !got)
                     break;
-                deliver(chunk.get(), got, opt, sink, out);
+                if (!deliver(chunk.get(), got, opt, sink, out))
+                {
+                    out.status = EXEC_SINK_GONE;
+                    break;
+                }
             }
             break;
         }
@@ -262,7 +271,8 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
     if (m_cancel && out.status == EXEC_OK)
         out.status = EXEC_CANCELLED;
 
-    if (out.status == EXEC_TIMEOUT || out.status == EXEC_CANCELLED)
+    if (out.status == EXEC_TIMEOUT || out.status == EXEC_CANCELLED ||
+        out.status == EXEC_SINK_GONE)
         TerminateProcess(process.get(), 1);
 
     GetExitCodeProcess(process.get(), &out.exitCode);
@@ -271,10 +281,12 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
     return true;
 }
 
-/* Hand what fits under the cap to the sink, and count all of it. */
-void ExecJob::deliver(const char *data, DWORD got, const ExecOptions &opt,
+/* Hand what fits under the cap to the sink, and count all of it. False
+ * when the sink says nobody is listening any more. */
+bool ExecJob::deliver(const char *data, DWORD got, const ExecOptions &opt,
                       OutputSink &sink, ExecResult &out)
 {
+    bool listening = true;
     if (out.bytes >= opt.maxOutput)
     {
         out.truncated = true;
@@ -283,9 +295,10 @@ void ExecJob::deliver(const char *data, DWORD got, const ExecOptions &opt,
     {
         DWORD room = opt.maxOutput - out.bytes;
         DWORD use = got > room ? room : got;
-        sink.onOutput(data, use);
+        listening = sink.onOutput(data, use);
         if (use < got)
             out.truncated = true;
     }
     out.bytes += got;
+    return listening;
 }

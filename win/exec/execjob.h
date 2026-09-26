@@ -24,12 +24,16 @@
 #include <windows.h>
 #include "core/rc_cpp.h"
 
-/* Where the output goes. Called on run()'s thread, zero or more times. */
+/* Where the output goes. Called on run()'s thread, zero or more times.
+ * Returning false means nobody will ever read the output again (the
+ * caller's connection is gone): the job stops the command and returns
+ * EXEC_SINK_GONE instead of running to its timeout for no one. A sink that
+ * only lost a chunk returns true and records the hole itself. */
 class OutputSink
 {
 public:
     virtual ~OutputSink() {}
-    virtual void onOutput(const char *data, unsigned len) = 0;
+    virtual bool onOutput(const char *data, unsigned len) = 0;
 };
 
 enum ExecStatus
@@ -38,7 +42,8 @@ enum ExecStatus
     EXEC_TIMEOUT,
     EXEC_SPAWN_FAILED,
     EXEC_CANCELLED,
-    EXEC_TOO_LONG
+    EXEC_TOO_LONG,
+    EXEC_SINK_GONE
 };
 
 struct ExecOptions
@@ -71,10 +76,16 @@ struct ExecResult
     DWORD ms;
     DWORD error;            /* GetLastError when spawning failed */
     bool truncated;         /* output exceeded maxOutput */
+    /* The command ran through ExecOptions::shell. A fact, not a verdict on
+     * exitCode: COMMAND.COM /c on 98 always exits 0 (measured,
+     * docs/measurements/execprobe-vm-gui-20260926.txt), cmd.exe passes the
+     * child's code through, and which shell ran is the caller's knowledge,
+     * never this library's. */
+    bool viaShell;
 
     ExecResult()
         : status(EXEC_SPAWN_FAILED), exitCode(0), bytes(0), ms(0), error(0),
-          truncated(false)
+          truncated(false), viaShell(false)
     {
     }
 };
@@ -101,7 +112,7 @@ private:
     ExecJob &operator=(const ExecJob &);
 
     void setChild(HANDLE h);
-    static void deliver(const char *data, DWORD got, const ExecOptions &opt,
+    static bool deliver(const char *data, DWORD got, const ExecOptions &opt,
                         OutputSink &sink, ExecResult &out);
 
     CRITICAL_SECTION m_lock;

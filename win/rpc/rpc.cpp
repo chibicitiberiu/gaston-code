@@ -373,12 +373,14 @@ static void cancel_running(const char *id)
     g_job->cancel();
 }
 
-static void send_out(exec_ctx *c, const char *data, unsigned len)
+/* RC_SEND_OK, _FULL or _DEAD, as rc_net_send says. */
+static int send_out(exec_ctx *c, const char *data, unsigned len)
 {
     const char *keys[1];
     const char *vals[1];
+    int rc;
 
-    if (!len) return;
+    if (!len) return RC_SEND_OK;
     keys[0] = "id"; vals[0] = c->id;
     /* Straight onto the outbound queue; the sender thread owns the wire, so
      * this does not block on a slow link.
@@ -388,11 +390,13 @@ static void send_out(exec_ctx *c, const char *data, unsigned len)
      * a HOLE in the output that nothing marks -- the model would be handed a
      * plausible-looking but incomplete `dir` listing and have no way to know.
      * Flagging it here makes the EXECRESULT say so. */
-    if (rc_net_send(g_net, "EXECOUT", keys, vals, 1, data, len) != 0) {
+    rc = rc_net_send(g_net, "EXECOUT", keys, vals, 1, data, len);
+    if (rc != RC_SEND_OK) {
         c->lost = 1;
         rc_log("rpc: EXECOUT %s dropped (%u bytes); output is incomplete",
                c->id, len);
     }
+    return rc;
 }
 
 /* EXECOUT for each chunk, on the worker. */
@@ -400,7 +404,13 @@ class ExecOut : public OutputSink
 {
 public:
     explicit ExecOut(exec_ctx *c) : m_ctx(c) {}
-    void onOutput(const char *data, unsigned len) { send_out(m_ctx, data, len); }
+    /* A full queue loses a chunk (marked truncated); a dead link loses the
+     * reader, and the command is stopped rather than left running to its
+     * timeout for no one. */
+    bool onOutput(const char *data, unsigned len)
+    {
+        return send_out(m_ctx, data, len) != RC_SEND_DEAD;
+    }
 
 private:
     exec_ctx *m_ctx;
@@ -509,6 +519,9 @@ static void run_one(rc_frame *f)
     case EXEC_SPAWN_FAILED: status = "spawn_failed"; break;
     case EXEC_CANCELLED:    status = "cancelled";    break;
     case EXEC_TOO_LONG:     status = "too_long";     break;
+    /* Nobody will read this EXECRESULT: the link is gone. The bridge's own
+     * word for a command that was stopped is used anyway. */
+    case EXEC_SINK_GONE:    status = "cancelled";    break;
     case EXEC_OK:           status = "ok";           break;
     default:                   status = "unknown";      break;
     }
