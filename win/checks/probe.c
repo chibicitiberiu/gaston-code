@@ -498,6 +498,18 @@ static void probe_deflate(void)
     src[total] = '\0';
     say("sample         : %u bytes of mixed prose and code", total);
 
+    /* A DISCARDED WARM PASS, and it is not ceremony.
+     *
+     * Timed cold, the FIRST level measured pays for miniz's internal
+     * allocation and every page fault behind it, and the second gets a warm
+     * heap for free. That reported 184ms at level 1 on the XP against 94ms
+     * on the SLOWER P200, with level 6 at "1ms" -- an ordering artifact read
+     * as a measurement, and the same bug the MSAA probe had. */
+    clen = sizeof(comp);
+    mz_compress2(comp, &clen, (const unsigned char *)src, total, 6);
+    clen = sizeof(comp);
+    mz_compress2(comp, &clen, (const unsigned char *)src, total, 1);
+
     for (lvl = 1; lvl <= 6; lvl += 5) {
         clen = sizeof(comp);
         t0 = GetTickCount();
@@ -512,6 +524,8 @@ static void probe_deflate(void)
 
     clen = sizeof(comp);
     mz_compress2(comp, &clen, (const unsigned char *)src, total, 1);
+    dlen = sizeof(dec);
+    mz_uncompress(dec, &dlen, comp, clen);    /* warm, discarded */
     dlen = sizeof(dec);
     t0 = GetTickCount();
     rc = mz_uncompress(dec, &dlen, comp, clen);

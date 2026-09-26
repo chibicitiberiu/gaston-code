@@ -9,6 +9,15 @@
 # processor, so batching can only reduce the NUMBER of crossings and
 # in-process injection is the only thing that removes them.
 #
+# ^ WRONG, and retracted on 2026-09-26. Those are two numbers from two
+#   different runs on two desktops with different window counts, which is
+#   the comparison this very file warns about four paragraphs down. Inside
+#   this file, 0.13b E is 88ms where the P200 was 467ms -- 5.3x -- and
+#   0.13f C is 463us/node where the P200 was 2555. MSAA DOES scale, by
+#   roughly 2 to 5x. See docs/UIAUTOMATION.md, "And this document broke its
+#   own rule". The case for injection stands on LB_GETTEXT and friends not
+#   being marshalled at all, which no clock speed changes.
+#
 # AUTOCHK: 60 of 60, as on the P200.
 #
 # READ THE TIMINGS WITH CARE. GetTickCount ticks at ~55ms and this machine

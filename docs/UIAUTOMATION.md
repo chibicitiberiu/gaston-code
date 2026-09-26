@@ -132,6 +132,42 @@ its cost.
 3.0 us/node across four runs on the same machine, depending on what was on
 screen. Ratios measured inside one run are the only comparable thing.
 
+**And this document broke its own rule.** Corrected 2026-09-26, after a
+review went back to the raw files.
+
+The claim was "MSAA does not get faster on a faster machine" -- 250 ms on
+the P200 against 289 ms on a machine with four times the inflate throughput
+-- and the whole case for in-process injection was hung on it. Those two
+numbers are probe 0.13g on two different runs, on desktops with different
+window counts (82 against 79) and different applications open. That is
+exactly the cross-run ratio the paragraph above forbids.
+
+Every other MSAA pair in the same two files says the opposite:
+
+| probe | P200 | XP 2000+ | ratio |
+|---|---|---|---|
+| 0.13b `E + msaa`, the whole walk | 467 ms / 82 | **88 ms / 79** | **5.3x** |
+| 0.13f A, per-HWND | 8500 us/node | 4460 us/node | 1.9x |
+| 0.13f C, `IEnumVARIANT` | 2555 us/node | 463 us/node | 5.5x |
+| 0.13e A, create + release | 10 ms | 1 ms | ~10x |
+
+0.13b E and 0.13g measure nearly the same thing and disagree by five times.
+Worse, 0.13f A and 0.13g are both per-HWND `AccessibleObjectFromWindow` **on
+the same machine in the same session** and differ by 2.8x. The honest
+reading is that MSAA does scale with the processor, roughly two to five
+times, and that 0.13g on the P200 caught an unusually light desktop.
+
+So **"the boundary, not the processor" is not established**, and nothing
+should be built on it until a probe runs 0.13f and 0.13g back to back in one
+invocation, on a scripted identical set of windows, and reports the ratio
+measured *inside* that run.
+
+What this does NOT weaken is the reason to get inside a process at all:
+`LB_GETTEXT`, `LVM_GETITEMTEXT` and `TVM_GETITEM` are **not marshalled on
+9x at any clock speed**. List, tree and list-view contents are unreachable
+from outside however fast the machine is. That is a capability argument, it
+depends on no timing, and it is the one to lead with.
+
 
 MSAA costs roughly as much as everything else in a walk put together, and
 returned a name for well under half the nodes on a plain Win32 desktop. So:

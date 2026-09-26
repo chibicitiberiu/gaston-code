@@ -691,7 +691,16 @@ was measured and works -- but that is GDI's RLE inside a DIB, a different thing 
 **To close it:** when Phase 6's screenshot capture lands, decide whether the wire codec
 gets an `rle8` value of its own (cheap: GDI already produces `BI_RLE8` bytes, so the guest
 side may be close to free) or whether `deflate` alone is enough for the compressed sizes
-Phase 6 actually measures, and write down which. Note that general guest->bridge
+Phase 6 actually measures, and write down which.
+
+**The measurement is in, and it is not a flat no** (2026-09-26, gate 0.10 and
+the Phase 0 screenshot runs). RLE8 came out **2.8x faster and 2x larger** than
+deflate on the same frame. That is a loss on a LAN, where bandwidth is free and
+the guest's CPU is not, and a win on a modem, where it is the other way round --
+which is exactly the trade the adaptive codec already chooses between for
+`EXECOUT` and friends. So `rle8` is a third value for that chooser, not a
+rejected idea, and the earlier reading of this section as "decided against" is
+wrong. Note that general guest->bridge
 deflate compression (audit-2 03.3, 03.4, 06.7) was implemented in win/net/net.cpp for
 bulk frames (EXECOUT, SYNCDAT, SYNCENT) with adaptive throughput measurement; wire codec
 decisions (deflate vs rle8) for screenshots specifically remain deferred to Phase 6. Until

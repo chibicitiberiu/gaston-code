@@ -1650,6 +1650,15 @@ Reading a list box's *items* from another process needs the
 shared-memory-above-2GB trick. Treat list contents as an MSAA-or-OCR problem,
 not a message problem.
 
+**Updated 2026-09-26.** That conclusion holds only from OUTSIDE the process,
+which is where it was written from. Inside the target address space there is
+no buffer to place: the pointer already belongs to the process being asked,
+so `LB_GETTEXT`, `LVM_GETITEMTEXT` and `TVM_GETITEM` simply work. This is the
+one thing the in-process collector (`docs/UIAUTOMATION.md`, section D) can do
+that no other tier can, and unlike the speed argument it depends on no
+measurement at all. Until that collector lands the paragraph above is still
+the operative answer.
+
 **Identity.** HWNDs are stable within a session and meaningless across one.
 Every node returns its HWND, its child-index path (`0/3/1`), its control id and
 its class. `GetDlgCtrlID` is the most stable handle inside a dialog; the path

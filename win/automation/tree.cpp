@@ -7,12 +7,16 @@ WalkOptions::WalkOptions()
 {
     root = NULL;
     pid = 0;
-    /* 200ms, and the number is measured rather than picked. The same
-     * 45-node walk took 72ms at a 200ms budget and 485ms at 2000ms WITH
-     * ZERO TIMEOUTS EITHER WAY: on 9x the cost of SendMessageTimeout tracks
-     * the budget handed to it, not how fast the target answers. So pass the
-     * smallest budget that works, and escalate only for a thread that has
-     * actually failed. */
+    /* 200ms, and the number is measured rather than picked. The same walk
+     * took longer at a 2000ms budget than at 200 WITH ZERO TIMEOUTS EITHER
+     * WAY: on 9x the cost of SendMessageTimeout tracks the budget handed to
+     * it, not how fast the target answers. So pass the smallest budget that
+     * works, and escalate only for a thread that has actually failed.
+     *
+     * The size of the effect was 6.7x on the emulator (72ms against 485) and
+     * **1.4x on real hardware** -- the P200 measured 42ms at a 200ms budget
+     * and 99ms at 2000. The direction is the same on both and the emulator's
+     * multiplier is not; quoting it was overstating the case. */
     callTimeoutMs = 200;
     deadlineMs = 5000;
     /* A guard against a cyclic GW_HWNDNEXT chain, not a budget. An idle
