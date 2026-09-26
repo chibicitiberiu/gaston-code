@@ -409,9 +409,9 @@ static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
     const char *waitFor = rc_frame_get(f, "wait_for");
-    const char *k[5];
-    const char *v[5];
-    char nodes[16], enr[16], drop[16], deep[16];
+    const char *k[6];
+    const char *v[6];
+    char nodes[16], enr[16], drop[16], deep[16], self[16];
     WalkOptions o;
     int nkv = 0;
 
@@ -491,11 +491,15 @@ static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
     rc_strf(enr, sizeof(enr), "%d", sink.enriched);
     rc_strf(drop, sizeof(drop), "%d", sink.dropped);
     rc_strf(deep, sizeof(deep), "%d", ctx->walker.tooDeep());
+    rc_strf(self, sizeof(self), "%d", ctx->walker.selfSkipped());
     k[nkv] = "nodes";    v[nkv++] = nodes;
     k[nkv] = "walk";     v[nkv++] = walk_end_name(end);
     k[nkv] = "enriched"; v[nkv++] = enr;
     k[nkv] = "dropped";  v[nkv++] = drop;
     k[nkv] = "too_deep"; v[nkv++] = deep;
+    /* Our own windows are never walked, and the bridge has to be able to
+     * SAY that rather than hand back a list they are merely absent from. */
+    k[nkv] = "self";     v[nkv++] = self;
     ui_end(net, id, "ok", k, v, nkv);
 }
 

@@ -47,6 +47,10 @@ def _depth(n: UiNode) -> int:
 def render_tree(nodes: list[UiNode], headers: dict) -> str:
     """One line per control, indented by depth."""
     if not nodes:
+        if int(headers.get("self", "0") or 0):
+            return (prompts.text("tools.ui.view.self_hidden",
+                                 n=headers["self"])
+                    + "\n" + prompts.text("tools.ui.view.empty"))
         return prompts.text("tools.ui.view.empty")
 
     out: list[str] = []
@@ -62,6 +66,12 @@ def render_tree(nodes: list[UiNode], headers: dict) -> str:
     if int(headers.get("too_deep", "0") or 0):
         out.append(prompts.text("tools.ui.view.too_deep",
                                 n=headers["too_deep"]))
+    # Not a defect and not a limit: a rule. It is said anyway, because the
+    # absence of a window an agent was asked about reads as "not open", and
+    # the agent then hunts for it instead of answering.
+    if int(headers.get("self", "0") or 0):
+        out.append(prompts.text("tools.ui.view.self_hidden",
+                                n=headers["self"]))
 
     for n in nodes:
         bits: list[str] = []
