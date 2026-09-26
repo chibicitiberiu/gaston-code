@@ -1579,3 +1579,67 @@ What it needs:
 
 Related: the mode and the model are separate dropdowns whose valid
 combinations are not independent, and nothing in the client knows that.
+
+---
+
+## 19. UI automation should be opt-in, and say when it is driving
+
+**Status:** deferred 2026-09-27, asked for by the user after §16 landed. Not
+started. Two things that belong together.
+
+Screen control is not like the other tools. It moves the mouse, types, and
+since §16 it also **takes the foreground away from whoever is at the machine**
+-- 9x offers no way to raise a window without activating it
+(`docs/measurements/focus-vm-20260927.txt`). A capability like that should be
+chosen, and visible while it acts.
+
+### The standalone FOCUS op
+
+`REMOTE.md:308` specifies it and nothing implements it. Everything needed is
+already there: `Input::focus()` does restore-if-iconic, `SetForegroundWindow`
+and an `AttachThreadInput` fallback, and `resolve_target` turns a selector
+into an HWND. What is missing is a `UIFOCUS` row in `RC_LANE_TABLE`
+(`win/net/frameproto.cpp`) and a handler beside the other four in
+`win/ui/uirpc.cpp`.
+
+`click` and `keys` do not need it -- both raise what they must already. It is
+for raising a window WITHOUT acting on it, the obvious case being `shot` of a
+window that is behind something.
+
+**Undecided:** whether the bridge surface is a fifth tool or a parameter.
+A fifth tool costs context on every request and `PLAN.md` §3.1's exec test
+exists to stop exactly that; a `focus=` parameter on `shot` covers the main
+case and reads oddly on `ui`.
+
+### The setting, and the indicator
+
+- **Setting:** `[ui] automation` in `retroclaude.ini`, through `ClientConfig`
+  (`win/app/config.h`, which today holds host, port, secret, syncRoot,
+  autoscroll).
+- **Declared at handshake, not assumed** -- the standing rule. A HELLO header
+  (`bridge/caps.py`, `win/caps.h`), and the bridge registers `ui`, `click`,
+  `keys`, `shot` (and `focus`) **only when the client says yes**, so a client
+  with it off costs nothing in context.
+- **The guest gates too.** All five ops refuse with a clear status when the
+  setting is off, whatever the bridge believes. The HELLO header is an
+  optimisation; the refusal is the control.
+- **Turning it off should be immediate** -- the guest starts refusing at once.
+  Turning it ON needs a reconnect before the tools are advertised. That
+  asymmetry is deliberate: the safe direction should never wait.
+- **Indicator:** `win/app/statusbar.h` has four panes and a `set_override`
+  already; `win/app/bar.h` is the pattern for something loud and transient
+  (it is how the permission bar works).
+
+**Open decisions, deliberately not taken here:**
+
+1. Indicator style: a quiet status pane whenever enabled, a loud bar only
+   while an op runs, or both. The argument for the bar is that during a click
+   or a keystroke sequence the agent is competing with the person for the
+   keyboard and has just stolen the foreground.
+2. What a missing key means. **Off** matches "optional, enabled in settings"
+   and stops screen control arriving in an upgrade; **on** preserves today's
+   behaviour and does not break existing scripts, including the other
+   session's.
+
+Both are cheap to change and expensive to get wrong in opposite directions, so
+they are the user's call, not a default picked here.
