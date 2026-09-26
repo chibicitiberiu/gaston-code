@@ -26,7 +26,8 @@ log = logging.getLogger("bridge.turn")
 
 
 def turn_verdict(
-    ok: bool, degraded: str, produced: bool, subtype: str
+    ok: bool, degraded: str, produced: bool, subtype: str,
+    stopped: bool = False,
 ) -> tuple[bool, str]:
     """What the status bar should say when a turn ends.
 
@@ -36,9 +37,16 @@ def turn_verdict(
     degraded but STILL ANSWERED is reported as success: the user can see the
     answer, and telling them it failed is worse than saying nothing.
 
+    A turn the user STOPPED is neither: it ends not-ok with subtype
+    `stopped`, whatever the SDK called it (`error_during_execution` when a
+    tool call was cut short), so the guest can say "stopped" rather than
+    report a failure the user asked for.
+
     Returns (ok, subtype). `subtype` is the raw string for the TURN frame;
     the guest maps it to a localized line.
     """
+    if stopped:
+        return False, "stopped"
     if degraded and not produced:
         return False, degraded
     return ok, subtype
@@ -233,6 +241,7 @@ class TurnRunner:
         )
         guest.turn_produced = False
         guest.turn_degraded = ""
+        guest.turn_stopped = False
         await self.connection.send(guest, turn_start())
         was_command = text.lstrip().startswith("/")
         if not was_command:
@@ -273,8 +282,9 @@ class TurnRunner:
             )
         degraded = guest.turn_degraded
         guest.turn_degraded = ""
+        stopped, guest.turn_stopped = guest.turn_stopped, False
         ok, subtype = turn_verdict(
-            turn.ok, degraded, guest.turn_produced, turn.subtype
+            turn.ok, degraded, guest.turn_produced, turn.subtype, stopped
         )
         if ok and was_command and not guest.turn_produced:
             await self.presentation.write_block(

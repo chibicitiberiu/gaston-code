@@ -70,6 +70,12 @@ class GuestSession:
     #: (the sync preamble, a rate-limit warning) does not count as output.
     #: Reset when a turn starts.
     turn_produced: bool = False
+    #: The user pressed Stop during this turn. The SDK then ends the turn
+    #: with `error_during_execution`, which the guest rendered as "The
+    #: request did not complete ... it may not have run at all" -- wrong on
+    #: both counts after a deliberate Stop, since things ran and the user
+    #: asked for it to end. Set by on_interrupt, reset when a turn starts.
+    turn_stopped: bool = False
 
     #: A stable per-connection handle. Set once, here, and never overwritten:
     #: nothing reads it but READY's header and logging, so a stale value is

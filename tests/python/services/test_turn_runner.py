@@ -129,3 +129,13 @@ async def test_run_turn_locked_error(turn_deps):
     # Check that error frame was sent
     sent_frames = [call[0][1] for call in conn.send.call_args_list]
     assert any(f.type == "TURN" and f.headers.get("state") == "error" for f in sent_frames)
+
+
+def test_a_stopped_turn_says_stopped_whatever_the_sdk_called_it():
+    """Stop during a tool call ends the SDK turn as error_during_execution;
+    the guest used to render that as a failure that may not have run."""
+    assert turn_verdict(False, "", True, "error_during_execution", True) == (
+        False, "stopped")
+    assert turn_verdict(True, "", True, "success", True) == (False, "stopped")
+    assert turn_verdict(False, "", True, "error_during_execution") == (
+        False, "error_during_execution")

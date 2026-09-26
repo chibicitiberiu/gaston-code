@@ -103,6 +103,7 @@ class SessionCoordinator:
         log.info("re-issuing turn state after reconnect")
         guest.turn_produced = False
         guest.turn_degraded = ""
+        guest.turn_stopped = False
         await self.connection.send(guest, turn_start())
 
     async def sync_state_to_guest(self, guest: GuestSession) -> None:
@@ -202,6 +203,7 @@ class SessionCoordinator:
         self, guest: GuestSession, f: Frame | None = None
     ) -> None:
         """Handle inbound INTERRUPT frame (user pressed Stop)."""
+        guest.turn_stopped = True
         for exec_id in list(guest.exec_pending):
             self.guest_exec.kill_exec(guest, exec_id)
         if guest.claude:

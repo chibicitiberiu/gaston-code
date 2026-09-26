@@ -124,6 +124,14 @@ void Turn::onTurn(rc_frame *f)
              * answer than a cost line for a turn that produced nothing. */
             const char *why = rc_frame_get(f, "subtype");
             char line[256];
+            if (why && strcmp(why, "stopped") == 0) {
+                /* The user pressed Stop. Not a failure, and "it may not
+                 * have run at all" would be false: it ran until they
+                 * stopped it. A notice, not an error. */
+                if (m_html) m_html->notice("Stopped.");
+                if (m_status) m_status->set_pane(2, " stopped");
+                return;
+            }
             rc_strf(line, sizeof(line),
                     "The request did not complete%s%s. Nothing was returned "
                     "-- it may not have run at all.",
