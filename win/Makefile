@@ -136,7 +136,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
 
-.PHONY: autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -219,6 +219,14 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 # libautomation's selector grammar and tree walker. Links the library, so
 # what is tested is what would ship. Wine settles the grammar completely
 # (it is string work) and only proves the walk does not crash.
+UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp) \
+               $(LIBAUTOMATION) $(LIBCORE)
+uicheck: $(BUILD)/uicheck.exe
+$(BUILD)/uicheck.exe: $(UICHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0, \
+	  map=$(BUILD)/uicheck.map $(LIBS) name $@ $(LINKIN)
+	@echo "built $@"
+
 AUTOCHECK_OBJS = $(call objs,checks/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
 autocheck: $(BUILD)/autocheck.exe
 $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
