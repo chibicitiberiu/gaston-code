@@ -1,0 +1,101 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--redir2
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 5ms, 15 processes
+self	pid=fffcd361
+proc	pid=ffcf5975 ppid=7ea72b49 threads=11 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffff8eed ppid=ffcf5975 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffff985d ppid=ffff8eed threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffe33a1 ppid=ffff985d threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffff1f1 ppid=ffff8eed threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffe476d ppid=fffff1f1 threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe5e85 ppid=fffff1f1 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffef72d ppid=fffff1f1 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffed50d ppid=fffd2acd threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffed655 ppid=fffed50d threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffd9ee9 ppid=fffd2acd threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffd83f1 ppid=fffd9ee9 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffccb8d ppid=fffd2acd threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffcf4d5 ppid=fffccb8d threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffcd361 ppid=fffcf16d threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+redir-stub-quick-1	kind=3 spawned pid=fffe42e9 cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-stub-quick-1	while-running new=1 WINOA386.MOD(t1,ppfffe42e9)
+redir-stub-quick-1	exited=1 code=0 piped=839 file=52
+redir-stub-quick-1	left-after-normal-end new=0 
+redir-stub-quick-1	mem-kb before=5632 after=5592
+redir-stub-dosloop-1	kind=3 spawned pid=fffe42e9 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-stub-dosloop-1	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfffe42e9)
+redir-stub-dosloop-1	spawned-gone=0 tick 6 -> 27 33 39 -> STILL TICKING
+redir-stub-dosloop-1	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfffe42e9)
+redir-stub-dosloop-1	mem-kb before=5596 after=4976
+redir-stub-w32loop-1	kind=3 spawned pid=fffcd885 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-stub-w32loop-1	while-running new=3 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfffcd885) EXECPRB.EXE(t1,ppfffb4581)
+redir-stub-w32loop-1	spawned-gone=0 tick 9 -> 9 9 9 -> stopped
+redir-stub-w32loop-1	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfffcd885)
+redir-stub-w32loop-1	mem-kb before=4968 after=4304
+redir-stub-dosdirect-loop-1	kind=3 spawned pid=fffbe2f9 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+redir-stub-dosdirect-loop-1	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfffbe2f9)
+redir-stub-dosdirect-loop-1	spawned-gone=0 tick 0 -> 0 0 0 -> n/a
+redir-stub-dosdirect-loop-1	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfffbe2f9)
+redir-stub-dosdirect-loop-1	mem-kb before=4304 after=3728
+redir-stubc-quick-1	kind=4 spawned pid=fffbc38d cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-stubc-quick-1	while-running new=1 WINOA386.MOD(t1,ppfffbc38d)
+redir-stubc-quick-1	exited=1 code=0 piped=1894 file=52
+redir-stubc-quick-1	left-after-normal-end new=0 
+redir-stubc-quick-1	mem-kb before=3728 after=3680
+redir-stubc-dosloop-1	kind=4 spawned pid=fffbc38d cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-stubc-dosloop-1	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfffbc38d)
+redir-stubc-dosloop-1	spawned-gone=0 tick 18 -> 66 75 90 -> STILL TICKING
+redir-stubc-dosloop-1	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfffbc38d)
+redir-stubc-dosloop-1	mem-kb before=3692 after=3052
+redir-stubc-w32loop-1	kind=4 spawned pid=fffa8681 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-stubc-w32loop-1	while-running new=3 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfffa8681) EXECPRB.EXE(t1,ppfff934d9)
+redir-stubc-w32loop-1	spawned-gone=0 tick 9 -> 9 9 9 -> stopped
+redir-stubc-w32loop-1	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfffa8681)
+redir-stubc-w32loop-1	mem-kb before=3052 after=2376
+redir-stubc-dosdirect-loop-1	kind=4 spawned pid=fff9379d cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+redir-stubc-dosdirect-loop-1	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfff9379d)
+redir-stubc-dosdirect-loop-1	spawned-gone=0 tick 0 -> 0 0 0 -> n/a
+redir-stubc-dosdirect-loop-1	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfff9379d)
+redir-stubc-dosdirect-loop-1	mem-kb before=2376 after=2380
+redir-stub-quick-2	kind=3 spawned pid=fff911bd cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-stub-quick-2	while-running new=1 WINOA386.MOD(t1,ppfff911bd)
+redir-stub-quick-2	exited=1 code=0 piped=1705 file=52
+redir-stub-quick-2	left-after-normal-end new=0 
+redir-stub-quick-2	mem-kb before=2380 after=2352
+redir-stub-dosloop-2	kind=3 spawned pid=fff911bd cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-stub-dosloop-2	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfff911bd)
+redir-stub-dosloop-2	spawned-gone=0 tick 27 -> 90 108 126 -> STILL TICKING
+redir-stub-dosloop-2	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfff911bd)
+redir-stub-dosloop-2	mem-kb before=2360 after=1732
+redir-stub-w32loop-2	kind=3 spawned pid=fffbe2f9 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-stub-w32loop-2	while-running new=3 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfffbe2f9) EXECPRB.EXE(t1,ppfff82f7d)
+redir-stub-w32loop-2	spawned-gone=0 tick 6 -> 6 6 6 -> stopped
+redir-stub-w32loop-2	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfffbe2f9)
+redir-stub-w32loop-2	mem-kb before=1732 after=1068
+redir-stub-dosdirect-loop-2	kind=3 spawned pid=fff82ac1 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+redir-stub-dosdirect-loop-2	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfff82ac1)
+redir-stub-dosdirect-loop-2	spawned-gone=0 tick 0 -> 0 0 0 -> n/a
+redir-stub-dosdirect-loop-2	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfff82ac1)
+redir-stub-dosdirect-loop-2	mem-kb before=1068 after=1040
+redir-stubc-quick-2	kind=4 spawned pid=fff9b4e5 cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-stubc-quick-2	while-running new=1 WINOA386.MOD(t1,ppfff9b4e5)
+redir-stubc-quick-2	exited=1 code=0 piped=1907 file=52
+redir-stubc-quick-2	left-after-normal-end new=0 
+redir-stubc-quick-2	mem-kb before=1040 after=1008
+redir-stubc-dosloop-2	kind=4 spawned pid=fff9b4e5 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-stubc-dosloop-2	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfff9b4e5)
+redir-stubc-dosloop-2	spawned-gone=0 tick 33 -> 117 141 168 -> STILL TICKING
+redir-stubc-dosloop-2	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfff9b4e5)
+redir-stubc-dosloop-2	mem-kb before=1016 after=400
+redir-stubc-w32loop-2	kind=4 spawned pid=fff93745 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-stubc-w32loop-2	while-running new=3 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfff93745) EXECPRB.EXE(t1,ppfff8cc75)
+redir-stubc-w32loop-2	spawned-gone=0 tick 3 -> 3 3 3 -> stopped
+redir-stubc-w32loop-2	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfff93745)
+redir-stubc-w32loop-2	mem-kb before=400 after=392
+redir-stubc-dosdirect-loop-2	kind=4 spawned pid=fff8cfe9 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+redir-stubc-dosdirect-loop-2	while-running new=2 EXECPRB.EXE(t2,ppfffcd361) WINOA386.MOD(t1,ppfff8cfe9)
+redir-stubc-dosdirect-loop-2	spawned-gone=0 tick 0 -> 0 0 0 -> n/a
+redir-stubc-dosdirect-loop-2	left-after-stop new=2 EXECPRB.EXE(t1,ppfffcd361) WINOA386.MOD(t1,ppfff8cfe9)
+redir-stubc-dosdirect-loop-2	mem-kb before=388 after=596
+done	ok

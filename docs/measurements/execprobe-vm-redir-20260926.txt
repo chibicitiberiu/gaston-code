@@ -1,0 +1,80 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--redir
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 17ms, 9 processes
+self	pid=fffd2acd
+proc	pid=ffcf5975 ppid=7ea72b49 threads=4 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffff8eed ppid=ffcf5975 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffff985d ppid=ffff8eed threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffe33a1 ppid=ffff985d threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffff1f1 ppid=ffff8eed threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffe476d ppid=fffff1f1 threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe5e85 ppid=fffff1f1 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffef72d ppid=fffff1f1 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffd2acd ppid=fffef02d threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+redir-pipe-quick	kind=0 spawned pid=fffed6ad cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-pipe-quick	while-running new=1 WINOA386.MOD(t1,ppfffed6ad)
+redir-pipe-quick	exited=1 code=0 piped=1101 file=-1
+redir-pipe-quick	left-after-normal-end new=0 
+redir-pipe-quick	mem-kb before=7208 after=7136
+redir-pipe-dosloop	kind=0 spawned pid=fffed50d cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-pipe-dosloop	while-running new=2 REDIR32.EXE(t3,ppfffd2acd) WINOA386.MOD(t1,ppfffed50d)
+redir-pipe-dosloop	spawned-gone=0 tick 12 -> 33 39 45 -> STILL TICKING
+redir-pipe-dosloop	left-after-stop new=2 REDIR32.EXE(t1,ppfffd2acd) WINOA386.MOD(t1,ppfffed50d)
+redir-pipe-dosloop	mem-kb before=7128 after=6756
+redir-pipe-w32loop	kind=0 spawned pid=fffd9ee9 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-pipe-w32loop	while-running new=3 REDIR32.EXE(t3,ppfffd2acd) WINOA386.MOD(t1,ppfffd9ee9) EXECPRB.EXE(t1,ppfffd83f1)
+redir-pipe-w32loop	spawned-gone=0 tick 9 -> 9 9 9 -> stopped
+redir-pipe-w32loop	left-after-stop new=2 REDIR32.EXE(t1,ppfffd2acd) WINOA386.MOD(t1,ppfffd9ee9)
+redir-pipe-w32loop	mem-kb before=6756 after=6360
+redir-pipe-dosdirect-quick	kind=0 spawned pid=fffc35dd cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,1
+redir-pipe-dosdirect-quick	while-running new=1 WINOA386.MOD(t1,ppfffd2acd)
+redir-pipe-dosdirect-quick	exited=0 code=259 piped=0 file=-1
+redir-pipe-dosdirect-quick	left-after-normal-end new=0 
+redir-pipe-dosdirect-quick	mem-kb before=6360 after=6336
+redir-pipe-dosdirect-loop	kind=0 spawned pid=fffc35dd cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+redir-pipe-dosdirect-loop	while-running new=1 WINOA386.MOD(t1,ppfffd2acd)
+redir-pipe-dosdirect-loop	spawned-gone=1 tick 0 -> 0 0 0 -> n/a
+redir-pipe-dosdirect-loop	left-after-stop new=0 
+redir-pipe-dosdirect-loop	mem-kb before=6336 after=6304
+redir-file-quick	kind=1 spawned pid=fffc1abd cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-file-quick	while-running new=1 WINOA386.MOD(t1,ppfffc1abd)
+redir-file-quick	exited=1 code=0 piped=0 file=1907
+redir-file-quick	left-after-normal-end new=0 
+redir-file-quick	mem-kb before=6304 after=6248
+redir-file-dosloop	kind=1 spawned pid=fffc34e9 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-file-dosloop	while-running new=2 REDIR32.EXE(t3,ppfffd2acd) WINOA386.MOD(t1,ppfffc34e9)
+redir-file-dosloop	spawned-gone=0 tick 24 -> 63 75 87 -> STILL TICKING
+redir-file-dosloop	left-after-stop new=2 REDIR32.EXE(t1,ppfffd2acd) WINOA386.MOD(t1,ppfffc34e9)
+redir-file-dosloop	mem-kb before=6252 after=5900
+redir-file-w32loop	kind=1 spawned pid=fffccb8d cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-file-w32loop	while-running new=3 REDIR32.EXE(t3,ppfffd2acd) WINOA386.MOD(t1,ppfffccb8d) EXECPRB.EXE(t1,ppfffcf4d5)
+redir-file-w32loop	spawned-gone=0 tick 9 -> 9 9 9 -> stopped
+redir-file-w32loop	left-after-stop new=2 REDIR32.EXE(t1,ppfffd2acd) WINOA386.MOD(t1,ppfffccb8d)
+redir-file-w32loop	mem-kb before=5900 after=5504
+redir-file-dosdirect-quick	kind=1 spawned pid=fffb2fc5 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,1
+redir-file-dosdirect-quick	while-running new=1 WINOA386.MOD(t1,ppfffd2acd)
+redir-file-dosdirect-quick	exited=0 code=259 piped=0 file=0
+redir-file-dosdirect-quick	left-after-normal-end new=0 
+redir-file-dosdirect-quick	mem-kb before=5496 after=5476
+redir-file-dosdirect-loop	kind=1 spawned pid=fffb2fa5 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+redir-file-dosdirect-loop	while-running new=1 WINOA386.MOD(t1,ppfffd2acd)
+redir-file-dosdirect-loop	spawned-gone=1 tick 0 -> 0 0 0 -> n/a
+redir-file-dosdirect-loop	left-after-stop new=0 
+redir-file-dosdirect-loop	mem-kb before=5476 after=5456
+redir-cmdline-quick	kind=2 spawned pid=fffb3351 cmd=C:\WINDOWS\COMMAND.COM /c dir C:\EP
+redir-cmdline-quick	while-running new=0 
+redir-cmdline-quick	exited=1 code=0 piped=0 file=0
+redir-cmdline-quick	left-after-normal-end new=0 
+redir-cmdline-quick	mem-kb before=5456 after=5452
+redir-cmdline-dosloop	kind=2 spawned pid=fffb3351 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+redir-cmdline-dosloop	while-running new=0 
+redir-cmdline-dosloop	spawned-gone=1 tick 18 -> 30 42 54 -> STILL TICKING
+redir-cmdline-dosloop	left-after-stop new=0 
+redir-cmdline-dosloop	mem-kb before=5452 after=5452
+redir-cmdline-w32loop	kind=2 spawned pid=fffb3351 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+redir-cmdline-w32loop	while-running new=0 
+redir-cmdline-w32loop	spawned-gone=1 tick -1 -> -1 -1 -1 -> stopped
+redir-cmdline-w32loop	left-after-stop new=0 
+redir-cmdline-w32loop	mem-kb before=5452 after=5452
+done	ok

@@ -33,7 +33,9 @@
  *
  * Modes: no argument relaunches detached (like a GUI parent) running
  * everything; --detach MODE relaunches detached running MODE; --run all,
- * --kills only 2 and 3, --stops only 8 (also runnable as --detach --stops),
+ * --kills only 2 and 3, --stops only 8, --redir only 9, --redir2 its stub
+ * variants, --gentle stop orders that spare the VM (each also runnable as
+ * --detach MODE),
  * --list only the process list, in place.
  * Child modes, run by the probe itself: --sleep N, --tick FILE N, --exit N.
  * Writes EXECPRB.TXT beside itself.
@@ -1124,10 +1126,421 @@ static void runStops(const std::vector<Proc> &base, const char *bat,
             }
 }
 
+/* ---- 9. --redir: can output be captured without REDIR32? ----
+ *
+ * A piped COMMAND.COM job always gets REDIR32.EXE, which no stop can end
+ * (--stops). A DOS program spawned directly left nothing. So: is it the
+ * PIPE that brings REDIR32, or any std handle? Three ways to capture, each
+ * on a quick command (does output arrive, does a normal end leave
+ * anything?) and on a looping one (after a stop, does anything remain?):
+ *   0 pipes        -- what exec does today
+ *   1 file handle  -- an inheritable temp file as stdout/stderr, NUL as
+ *                     stdin, STARTF_USESTDHANDLES
+ *   2 no handles   -- " > file" on the command line, bInherit FALSE; the
+ *                     shell does the redirection inside the VM */
+
+static bool spawnRedir(int kind, const char *cmdline, const char *outPath,
+                       Child &c)
+{
+    if (kind == 0)
+        return spawnLikeExec(cmdline, c);
+    if (kind == 3 || kind == 4)
+    {
+        char stub[1200];
+        rc_strf(stub, sizeof stub, "%s %s %s", g_self,
+                kind == 3 ? "--stub" : "--stubc", cmdline);
+        return spawnLikeExec(stub, c);
+    }
+    char cmd[1200];
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    DeleteFileA(outPath);
+    BOOL ok;
+    if (kind == 1)
+    {
+        SECURITY_ATTRIBUTES sa;
+        memset(&sa, 0, sizeof sa);
+        sa.nLength = sizeof sa;
+        sa.bInheritHandle = TRUE;
+        Handle out(CreateFileA(outPath, GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               CREATE_ALWAYS, 0, NULL));
+        Handle in(CreateFileA("NUL", GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                              OPEN_EXISTING, 0, NULL));
+        if (!out.valid() || !in.valid())
+            return false;
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdOutput = out.get();
+        si.hStdError = out.get();
+        si.hStdInput = in.get();
+        rc_strf(cmd, sizeof cmd, "%s", cmdline);
+        ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL, g_dir, &si,
+                            &c.pi);
+    }
+    else
+    {
+        rc_strf(cmd, sizeof cmd, "%s > %s", cmdline, outPath);
+        ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, g_dir, &si,
+                            &c.pi);
+    }
+    if (!ok)
+        return false;
+    g_spawned.push_back(c.pi.dwProcessId);
+    return true;
+}
+
+static const char *nameOf(const char *path)
+{
+    const char *n = strrchr(path, '\\');
+    return n ? n + 1 : path;
+}
+
+/* Everything new since `pre`, as "NAME xN" counts, into one row. */
+static int reportNew(const char *key, const char *what,
+                     const std::vector<Proc> &pre)
+{
+    std::vector<Proc> now;
+    snapshot(now);
+    char line[400];
+    line[0] = 0;
+    int n = 0;
+    for (unsigned i = 0; i < now.size(); i++)
+    {
+        if (had(pre, now[i].pid) || now[i].pid == GetCurrentProcessId())
+            continue;
+        char one[80];
+        rc_strf(one, sizeof one, "%s%s(t%lu,pp%08lx)", n ? " " : "",
+                nameOf(now[i].exe), now[i].threads, now[i].ppid);
+        size_t used = strlen(line);
+        rc_strcpy(line + used, (unsigned)(sizeof line - used), one);
+        n++;
+    }
+    row(key, "%s new=%d %s", what, n, line);
+    return n;
+}
+
+/* Stop the tree under `root` deepest first, and `root` too unless it is
+ * REDIR32 -- what ExecJob's stop does. */
+static void stopTree(Child &c)
+{
+    std::vector<Proc> now;
+    snapshot(now);
+    std::vector<DWORD> order;
+    order.push_back(c.pi.dwProcessId);
+    for (unsigned k = 0; k < order.size(); k++)
+        for (unsigned i = 0; i < now.size(); i++)
+            if (now[i].ppid == order[k] && !inList(order, now[i].pid))
+                order.push_back(now[i].pid);
+    const char *rootName = "";
+    for (unsigned i = 0; i < now.size(); i++)
+        if (now[i].pid == c.pi.dwProcessId)
+            rootName = nameOf(now[i].exe);
+    for (unsigned k = order.size(); k-- > 1;)
+    {
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, order[k]);
+        if (h)
+        {
+            TerminateProcess(h, 1);
+            CloseHandle(h);
+        }
+    }
+    if (lstrcmpiA(rootName, "REDIR32.EXE") != 0)
+        TerminateProcess(c.pi.hProcess, 1);
+}
+
+static void redirCase(const char *key, int kind, const char *cmdline,
+                      bool loops, const char *tick)
+{
+    std::vector<Proc> pre;
+    snapshot(pre);
+    MEMORYSTATUS ms;
+    ms.dwLength = sizeof ms;
+    GlobalMemoryStatus(&ms);
+    DWORD memBefore = ms.dwAvailPhys / 1024;
+    char outPath[MAX_PATH];
+    rc_strf(outPath, sizeof outPath, "%s\\REDIROUT.TXT", g_dir);
+    if (tick[0])
+        DeleteFileA(tick);
+    Child c;
+    if (!spawnRedir(kind, cmdline, outPath, c))
+    {
+        row(key, "spawn failed %lu", GetLastError());
+        return;
+    }
+    row(key, "kind=%d spawned pid=%08lx cmd=%s", kind, c.pi.dwProcessId,
+        cmdline);
+    DWORD piped = 0;
+    if (!loops)
+    {
+        /* Count what a pipe delivers, as exec would read it. */
+        DWORD t0 = GetTickCount();
+        bool done = false;
+        char buf[512];
+        while (GetTickCount() - t0 < 15000)
+        {
+            DWORD avail = 0, got = 0;
+            if (c.out.valid() &&
+                PeekNamedPipe(c.out.get(), NULL, 0, NULL, &avail, NULL) &&
+                avail &&
+                ReadFile(c.out.get(), buf, avail < sizeof buf ? avail
+                                                              : sizeof buf,
+                         &got, NULL))
+            {
+                piped += got;
+                continue;
+            }
+            if (WaitForSingleObject(c.pi.hProcess, 100) == WAIT_OBJECT_0)
+            {
+                done = true;
+                break;
+            }
+        }
+        reportNew(key, "while-running", pre);
+        DWORD code = 0;
+        GetExitCodeProcess(c.pi.hProcess, &code);
+        Sleep(1500);
+        DWORD fsz = fileSize(outPath);
+        row(key, "exited=%d code=%lu piped=%lu file=%ld", done, code, piped,
+            (long)fsz);
+        if (!done)
+            stopTree(c);
+        Sleep(1500);
+        reportNew(key, "left-after-normal-end", pre);
+    }
+    else
+    {
+        Sleep(3000);
+        reportNew(key, "while-running", pre);
+        DWORD before = tick[0] ? fileSize(tick) : 0;
+        stopTree(c);
+        c.out.reset();
+        DWORD w = WaitForSingleObject(c.pi.hProcess, 5000);
+        DWORD sizes[3];
+        for (int i = 0; i < 3; i++)
+        {
+            Sleep(2000);
+            sizes[i] = tick[0] ? fileSize(tick) : 0;
+        }
+        row(key, "spawned-gone=%d tick %ld -> %ld %ld %ld -> %s",
+            w == WAIT_OBJECT_0, (long)before, (long)sizes[0],
+            (long)sizes[1], (long)sizes[2],
+            !tick[0] ? "n/a" : sizes[2] != sizes[0] ? "STILL TICKING"
+                                                    : "stopped");
+        Sleep(2000);
+        reportNew(key, "left-after-stop", pre);
+    }
+    GlobalMemoryStatus(&ms);
+    row(key, "mem-kb before=%lu after=%lu", memBefore, ms.dwAvailPhys / 1024);
+    closeChild(c);
+    DeleteFileA(outPath);
+    if (tick[0])
+        DeleteFileA(tick);
+}
+
+static void runRedir(const char *bat, const char *tickDos)
+{
+    char winDir[MAX_PATH], choice[MAX_PATH], tick32[MAX_PATH];
+    GetWindowsDirectoryA(winDir, sizeof winDir);
+    rc_strf(choice, sizeof choice, "%s\\COMMAND\\CHOICE.COM", winDir);
+    rc_strf(tick32, sizeof tick32, "%s\\TICK32.TXT", g_dir);
+    char quick[512], dosLoop[512], w32Loop[512], dQuick[512], dLoop[512];
+    rc_strf(quick, sizeof quick, "%s /c dir %s", g_shell, g_dir);
+    rc_strf(dosLoop, sizeof dosLoop, "%s /c %s", g_shell, bat);
+    rc_strf(w32Loop, sizeof w32Loop, "%s /c %s --tick %s 30", g_shell, g_self,
+            tick32);
+    rc_strf(dQuick, sizeof dQuick, "%s /c:y /t:y,1", choice);
+    rc_strf(dLoop, sizeof dLoop, "%s /c:y /t:y,60", choice);
+    static const char *kinds[3] = { "pipe", "file", "cmdline" };
+    for (int k = 0; k < 3; k++)
+    {
+        char key[64];
+        rc_strf(key, sizeof key, "redir-%s-quick", kinds[k]);
+        redirCase(key, k, quick, false, "");
+        rc_strf(key, sizeof key, "redir-%s-dosloop", kinds[k]);
+        redirCase(key, k, dosLoop, true, tickDos);
+        rc_strf(key, sizeof key, "redir-%s-w32loop", kinds[k]);
+        redirCase(key, k, w32Loop, true, tick32);
+        if (k == 2)
+            continue;           /* no shell to read a "> file" */
+        rc_strf(key, sizeof key, "redir-%s-dosdirect-quick", kinds[k]);
+        redirCase(key, k, dQuick, false, "");
+        rc_strf(key, sizeof key, "redir-%s-dosdirect-loop", kinds[k]);
+        redirCase(key, k, dLoop, true, "");
+    }
+}
+
+/* --redir2: the same cases through a console stub (kinds 3 and 4). */
+static void runRedir2(const char *bat, const char *tickDos)
+{
+    char winDir[MAX_PATH], choice[MAX_PATH], tick32[MAX_PATH];
+    GetWindowsDirectoryA(winDir, sizeof winDir);
+    rc_strf(choice, sizeof choice, "%s\\COMMAND\\CHOICE.COM", winDir);
+    rc_strf(tick32, sizeof tick32, "%s\\TICK32.TXT", g_dir);
+    char quick[512], dosLoop[512], w32Loop[512], dLoop[512];
+    rc_strf(quick, sizeof quick, "%s /c dir %s", g_shell, g_dir);
+    rc_strf(dosLoop, sizeof dosLoop, "%s /c %s", g_shell, bat);
+    rc_strf(w32Loop, sizeof w32Loop, "%s /c %s --tick %s 30", g_shell, g_self,
+            tick32);
+    rc_strf(dLoop, sizeof dLoop, "%s /c:y /t:y,60", choice);
+    static const char *kinds[2] = { "stub", "stubc" };
+    for (int r = 0; r < 2; r++)
+        for (int k = 0; k < 2; k++)
+        {
+            char key[64];
+            rc_strf(key, sizeof key, "redir-%s-quick-%d", kinds[k], r + 1);
+            redirCase(key, k + 3, quick, false, "");
+            rc_strf(key, sizeof key, "redir-%s-dosloop-%d", kinds[k], r + 1);
+            redirCase(key, k + 3, dosLoop, true, tickDos);
+            rc_strf(key, sizeof key, "redir-%s-w32loop-%d", kinds[k], r + 1);
+            redirCase(key, k + 3, w32Loop, true, tick32);
+            rc_strf(key, sizeof key, "redir-%s-dosdirect-loop-%d", kinds[k],
+                    r + 1);
+            redirCase(key, k + 3, dLoop, true, "");
+        }
+}
+
+/* --gentle: stop orders that never TerminateProcess the DOS VM first.
+ * Every run so far says a VM killed that way is left half-dead, and every
+ * process waiting on it (REDIR32, or a stub) can then never exit. So:
+ *   w32only   -- kill only Win32 processes BELOW the VM, then wait up to 10s
+ *                for the job (REDIR32 and the VM) to end by itself
+ *   pipesfirst-- close our pipe ends, wait 2s, then kill the VM, then wait */
+static void gentleCase(const char *key, const char *cmdline, const char *tick,
+                       bool pipesFirst)
+{
+    std::vector<Proc> pre;
+    snapshot(pre);
+    MEMORYSTATUS ms;
+    ms.dwLength = sizeof ms;
+    GlobalMemoryStatus(&ms);
+    DWORD memBefore = ms.dwAvailPhys / 1024;
+    DeleteFileA(tick);
+    Child c;
+    if (!spawnLikeExec(cmdline, c))
+    {
+        row(key, "spawn failed %lu", GetLastError());
+        return;
+    }
+    Sleep(3000);
+    reportNew(key, "while-running", pre);
+    std::vector<Proc> now;
+    snapshot(now);
+    std::vector<DWORD> tree;
+    tree.push_back(c.pi.dwProcessId);
+    for (unsigned k = 0; k < tree.size(); k++)
+        for (unsigned i = 0; i < now.size(); i++)
+            if (now[i].ppid == tree[k] && !inList(tree, now[i].pid))
+                tree.push_back(now[i].pid);
+    int killed = 0;
+    if (pipesFirst)
+    {
+        c.out.reset();
+        Sleep(2000);
+    }
+    for (unsigned k = tree.size(); k-- > 1;)
+    {
+        const char *exe = "";
+        for (unsigned i = 0; i < now.size(); i++)
+            if (now[i].pid == tree[k])
+                exe = now[i].exe;
+        bool vm = lstrcmpiA(nameOf(exe), "WINOA386.MOD") == 0;
+        if (!pipesFirst && vm)
+            continue;           /* w32only: never the VM */
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, tree[k]);
+        if (h)
+        {
+            TerminateProcess(h, 1);
+            CloseHandle(h);
+            killed++;
+            row(key, "killed %s", nameOf(exe));
+        }
+    }
+    if (!pipesFirst)
+        c.out.reset();
+    DWORD t0 = GetTickCount();
+    DWORD w = WaitForSingleObject(c.pi.hProcess, 10000);
+    DWORD sizes[3];
+    for (int i = 0; i < 3; i++)
+    {
+        Sleep(2000);
+        sizes[i] = fileSize(tick);
+    }
+    row(key, "killed=%d spawned-gone=%d after %lums tick %ld %ld %ld -> %s",
+        killed, w == WAIT_OBJECT_0, GetTickCount() - t0, (long)sizes[0],
+        (long)sizes[1], (long)sizes[2],
+        sizes[2] != sizes[0] ? "STILL TICKING" : "stopped");
+    Sleep(2000);
+    reportNew(key, "left-after-stop", pre);
+    GlobalMemoryStatus(&ms);
+    row(key, "mem-kb before=%lu after=%lu", memBefore, ms.dwAvailPhys / 1024);
+    closeChild(c);
+    DeleteFileA(tick);
+}
+
+static void runGentle(const char *bat, const char *tickDos)
+{
+    char tick32[MAX_PATH], w32Loop[512], dosLoop[512];
+    rc_strf(tick32, sizeof tick32, "%s\\TICK32.TXT", g_dir);
+    rc_strf(w32Loop, sizeof w32Loop, "%s /c %s --tick %s 30", g_shell, g_self,
+            tick32);
+    rc_strf(dosLoop, sizeof dosLoop, "%s /c %s", g_shell, bat);
+    for (int r = 1; r <= 2; r++)
+    {
+        char key[64];
+        rc_strf(key, sizeof key, "gentle-w32only-w32loop-%d", r);
+        gentleCase(key, w32Loop, tick32, false);
+    }
+    gentleCase("gentle-w32only-dosloop-1", dosLoop, tickDos, false);
+    gentleCase("gentle-pipesfirst-w32loop-1", w32Loop, tick32, true);
+    gentleCase("gentle-pipesfirst-dosloop-1", dosLoop, tickDos, true);
+}
+
 /* ---- child modes ---- */
+
+/* --stub CMD / --stubc CMD: a Win32 CONSOLE process between a GUI parent
+ * and a DOS job. KB150956's advice for redirecting DOS programs on 9x.
+ * --stub hands the job our std handles explicitly; --stubc lets it inherit
+ * the console. Exits with the job's code. */
+static int stubMode(bool explicitHandles)
+{
+    const char *line = GetCommandLineA();
+    const char *tag = explicitHandles ? "--stub " : "--stubc ";
+    const char *at = strstr(line, tag);
+    if (!at)
+        return 250;
+    char cmd[1024];
+    rc_strf(cmd, sizeof cmd, "%s", at + strlen(tag));
+    STARTUPINFOA si;
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    if (explicitHandles)
+    {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    }
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+        return 251;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)code;
+}
 
 static int childMode(int argc, char **argv)
 {
+    if (argc >= 3 && strcmp(argv[1], "--stub") == 0)
+        return stubMode(true);
+    if (argc >= 3 && strcmp(argv[1], "--stubc") == 0)
+        return stubMode(false);
     if (argc >= 3 && strcmp(argv[1], "--sleep") == 0)
     {
         Sleep((DWORD)atoi(argv[2]) * 1000);
@@ -1165,7 +1578,10 @@ int main(int argc, char **argv)
                                 strcmp(argv[1], "--list") == 0 ||
                                 strcmp(argv[1], "--kills") == 0 ||
                                 strcmp(argv[1], "--vmfirst") == 0 ||
-                                strcmp(argv[1], "--stops") == 0);
+                                strcmp(argv[1], "--stops") == 0 ||
+                                strcmp(argv[1], "--redir") == 0 ||
+                                strcmp(argv[1], "--redir2") == 0 ||
+                                strcmp(argv[1], "--gentle") == 0);
     const char *mode = argc > 1 ? argv[1] : "--run";
     if (argc > 1 && !inPlace && strcmp(argv[1], "--detach") != 0)
         return childMode(argc, argv);
@@ -1223,7 +1639,11 @@ int main(int argc, char **argv)
     bool killsOnly = strcmp(mode, "--kills") == 0;
     bool vmFirst = strcmp(mode, "--vmfirst") == 0;
     bool stopsMode = strcmp(mode, "--stops") == 0;
-    if (!killsOnly && !vmFirst && !stopsMode)
+    bool redirMode = strcmp(mode, "--redir") == 0;
+    bool redir2Mode = strcmp(mode, "--redir2") == 0;
+    bool gentleMode = strcmp(mode, "--gentle") == 0;
+    if (!killsOnly && !vmFirst && !stopsMode && !redirMode && !redir2Mode &&
+        !gentleMode)
         win16(base);
 
     char cmd[1024], tick[MAX_PATH], bat[MAX_PATH];
@@ -1242,6 +1662,30 @@ int main(int argc, char **argv)
         }
     }
     rc_strf(cmd, sizeof cmd, "%s /c %s", g_shell, bat);
+    if (gentleMode)
+    {
+        runGentle(bat, tick);
+        DeleteFileA(bat);
+        row("done", "ok");
+        fclose(g_out);
+        return 0;
+    }
+    if (redir2Mode)
+    {
+        runRedir2(bat, tick);
+        DeleteFileA(bat);
+        row("done", "ok");
+        fclose(g_out);
+        return 0;
+    }
+    if (redirMode)
+    {
+        runRedir(bat, tick);
+        DeleteFileA(bat);
+        row("done", "ok");
+        fclose(g_out);
+        return 0;
+    }
     if (stopsMode)
     {
         runStops(base, bat, tick);

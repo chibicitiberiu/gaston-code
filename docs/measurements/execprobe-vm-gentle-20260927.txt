@@ -1,0 +1,40 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--gentle
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 10ms, 9 processes
+self	pid=fffeddb9
+proc	pid=ffcf5581 ppid=7ea727bd threads=4 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffff8219 ppid=ffcf5581 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffff94a9 ppid=ffff8219 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffff025 ppid=ffff94a9 threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffffd0d ppid=ffff8219 threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffe4b9d ppid=fffffd0d threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe532d ppid=fffffd0d threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffe4f01 ppid=fffffd0d threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffeddb9 ppid=fffe4cf5 threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+gentle-w32only-w32loop-1	while-running new=3 REDIR32.EXE(t3,ppfffeddb9) WINOA386.MOD(t1,ppfffe4479) EXECPRB.EXE(t1,ppfffed285)
+gentle-w32only-w32loop-1	killed EXECPRB.EXE
+gentle-w32only-w32loop-1	killed=1 spawned-gone=1 after 6106ms tick 9 9 9 -> stopped
+gentle-w32only-w32loop-1	left-after-stop new=0 
+gentle-w32only-w32loop-1	mem-kb before=7160 after=7072
+gentle-w32only-w32loop-2	while-running new=3 REDIR32.EXE(t3,ppfffeddb9) WINOA386.MOD(t1,ppfffef891) EXECPRB.EXE(t1,ppfffed21d)
+gentle-w32only-w32loop-2	killed EXECPRB.EXE
+gentle-w32only-w32loop-2	killed=1 spawned-gone=1 after 6079ms tick 9 9 9 -> stopped
+gentle-w32only-w32loop-2	left-after-stop new=0 
+gentle-w32only-w32loop-2	mem-kb before=7072 after=7044
+gentle-w32only-dosloop-1	while-running new=2 REDIR32.EXE(t3,ppfffeddb9) WINOA386.MOD(t1,ppfffef891)
+gentle-w32only-dosloop-1	killed=0 spawned-gone=0 after 16021ms tick 48 54 60 -> STILL TICKING
+gentle-w32only-dosloop-1	left-after-stop new=2 REDIR32.EXE(t3,ppfffeddb9) WINOA386.MOD(t1,ppfffef891)
+gentle-w32only-dosloop-1	mem-kb before=7048 after=6656
+gentle-pipesfirst-w32loop-1	while-running new=3 REDIR32.EXE(t3,ppfffeddb9) WINOA386.MOD(t1,ppfffd55ad) EXECPRB.EXE(t1,ppfffc4635)
+gentle-pipesfirst-w32loop-1	killed EXECPRB.EXE
+gentle-pipesfirst-w32loop-1	killed WINOA386.MOD
+gentle-pipesfirst-w32loop-1	killed=2 spawned-gone=0 after 16007ms tick 15 15 15 -> stopped
+gentle-pipesfirst-w32loop-1	left-after-stop new=2 REDIR32.EXE(t1,ppfffeddb9) WINOA386.MOD(t1,ppfffd55ad)
+gentle-pipesfirst-w32loop-1	mem-kb before=6660 after=6272
+gentle-pipesfirst-dosloop-1	while-running new=2 REDIR32.EXE(t3,ppfffeddb9) WINOA386.MOD(t1,ppfffff2cd)
+gentle-pipesfirst-dosloop-1	killed WINOA386.MOD
+gentle-pipesfirst-dosloop-1	killed=1 spawned-gone=0 after 16065ms tick 102 114 126 -> STILL TICKING
+gentle-pipesfirst-dosloop-1	left-after-stop new=2 REDIR32.EXE(t1,ppfffeddb9) WINOA386.MOD(t1,ppfffff2cd)
+gentle-pipesfirst-dosloop-1	mem-kb before=6276 after=5888
+done	ok
