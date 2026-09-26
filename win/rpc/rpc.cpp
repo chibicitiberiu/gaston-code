@@ -69,6 +69,7 @@ static rc_frame        *g_queued;       /* at most one, guarded by g_lock */
  * cancel through it. One job per EXEC, so a cancel can never outlive the
  * command it was meant for inside the job itself. */
 static ExecJob         *g_job;
+static char             g_job_id[64];   /* g_job's EXEC id, guarded by g_lock */
 static rc_net          *g_net;
 
 /* SYNC* frames get their own FIFO, and that is not a refinement -- it is the
@@ -96,7 +97,8 @@ typedef struct {
 } exec_ctx;
 
 static int  is_sync(const rc_frame *f);
-static void cancel_job(void);
+static void cancel_job(const char *id);
+static void cancel_running(const char *id);
 
 /* Everything the RPC layer answers to. See rpc.h for why this is here and not
  * in net.c's reader loop.
@@ -121,11 +123,12 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
          * frame would not be looked at until that command finished.
          * ExecJob::cancel is built to be called from another thread. */
         if (strcmp(f->type, "EXECKILL") == 0) {
+            /* The id is required and compared: a late EXECKILL for a command
+             * that already finished used to kill whatever had started since
+             * (BACKLOG 9, audit 01.41). The bridge always sends one. */
             const char *kid = rc_frame_get(f, "id");
-            /* rc_frame_get returns NULL for an absent header, and nothing
-             * requires EXECKILL to carry an id. */
-            rc_log("rpc: EXECKILL for %s", kid ? kid : "(no id)");
-            cancel_job();
+            if (kid) cancel_job(kid);
+            else rc_log("rpc: EXECKILL with no id -- ignored");
         }
         rc_frame_delete(f);
         return RC_ROUTE_TAKEN;
@@ -322,12 +325,52 @@ static void rpc_watch_sync(void)
     rpc_watch_start();
 }
 
-/* Cancel whatever command is running. Reader thread (EXECKILL) and the stop
- * path; the job does its own locking against the worker. */
-static void cancel_job(void)
+/* Cancel `id`: out of the job slot if it has not started, through its job
+ * if it is running, and nothing otherwise. NULL cancels whatever runs (the
+ * stop path only; an EXECKILL without an id is refused before this).
+ * Reader thread and the stop path. Compared under g_lock, which the worker
+ * takes to register and unregister the job, so a kill for a command that
+ * has just finished can never reach the next one. */
+static void cancel_job(const char *id)
 {
-    ScopedLockIf lock(&g_lock, g_ready);
-    if (g_job) g_job->cancel();
+    rc_frame *unrun = NULL;
+    {
+        ScopedLockIf lock(&g_lock, g_ready);
+        /* Still in the job slot: take it out, so it never runs, and answer
+         * it here -- the bridge is waiting for an EXECRESULT. */
+        if (id && g_queued) {
+            const char *qid = rc_frame_get(g_queued, "id");
+            if (qid && strcmp(qid, id) == 0) {
+                unrun = g_queued;
+                g_queued = NULL;
+            }
+        }
+        if (!unrun) cancel_running(id);
+    }
+    if (unrun) {
+        const char *k[2]; const char *v[2];
+        k[0] = "id";     v[0] = id;
+        k[1] = "status"; v[1] = "cancelled";
+        rc_net_send(g_net, "EXECRESULT", k, v, 2, NULL, 0);
+        rc_log("rpc: exec %s cancelled before it ran", id);
+        rc_frame_delete(unrun);
+    }
+}
+
+/* Under g_lock. */
+static void cancel_running(const char *id)
+{
+    if (!g_job) {
+        if (id) rc_log("rpc: EXECKILL for %s, nothing running -- ignored", id);
+        return;
+    }
+    if (id && strcmp(id, g_job_id) != 0) {
+        rc_log("rpc: EXECKILL for %s, but %s is running -- ignored", id,
+               g_job_id);
+        return;
+    }
+    rc_log("rpc: cancelling exec %s", g_job_id);
+    g_job->cancel();
 }
 
 static void send_out(exec_ctx *c, const char *data, unsigned len)
@@ -429,7 +472,11 @@ static void run_one(rc_frame *f)
     int registered = 0;
     {
         ScopedLock lock(&g_lock);
-        if (g_running) { g_job = job.get(); registered = 1; }
+        if (g_running) {
+            g_job = job.get();
+            rc_strf(g_job_id, sizeof(g_job_id), "%s", ctx.id);
+            registered = 1;
+        }
     }
     if (!registered) {
         const char *k[2]; const char *v[2];
@@ -454,6 +501,7 @@ static void run_one(rc_frame *f)
     {
         ScopedLock lock(&g_lock);
         g_job = NULL;
+        g_job_id[0] = '\0';
     }
 
     switch (r.status) {
@@ -863,7 +911,7 @@ void rc_rpc_stop(void)
         ScopedLockIf lock(&g_lock, g_ready);
         g_running = 0;
     }
-    cancel_job();               /* kill a child that could outlive us */
+    cancel_job(NULL);           /* kill a child that could outlive us */
     if (g_wake) SetEvent(g_wake);
 }
 

@@ -728,15 +728,14 @@ never fires on the RPC worker, whose thread differs from the UI thread even
 when the target is Gaston's own input box. The detach-after-attach
 requirement was missing there too.
 
-**Cancellation is per-process, not per-job.** 01.41: `rc_exec_cancel` sets
-one `g_cancel` and terminates one `g_child` (`win/rpc/exec.cpp:47-83`), so a
-screenshot job and an `exec` could never be cancelled independently once
-Phase 6 adds jobs that are not `exec`. Separately, `EXECKILL` on the reader
-thread (`win/rpc/rpc.cpp:106-113`) logs the kill id and then discards it,
-calling `rc_exec_cancel()` unconditionally -- an `EXECKILL` for a command
-that already finished kills whatever started since. `rc_exec_arm()` narrows
-the race but does not close it. Not urgent while `exec` is the only job;
-becomes urgent the day a second job type exists.
+**Cancellation is per-process, not per-job.** *Closed 2026-09-26 by
+libexec (`docs/libexec-plan.md` steps 1-2).* 01.41 found one `g_cancel` and
+one `g_child` in `exec.cpp`, and an `EXECKILL` that discarded its id, so a
+kill for a command that had already finished killed whatever started
+since. Now each EXEC runs in its own `ExecJob` (`win/exec/execjob.h`), and
+`rpc.cpp`'s `cancel_job` compares the id under `g_lock`: a stale or id-less
+`EXECKILL` is logged and ignored, and one for an EXEC still in the job slot
+takes it out so it never runs. `rpccheck` proves all three.
 
 **`list_windows` has no scope argument or node cap planned.** 04.27:
 PLAN.md's own argument -- a control tree costs ~200 tokens against a

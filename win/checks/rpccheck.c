@@ -124,6 +124,9 @@ static void lane_table_cases(void)
  * child inherits this process's current directory (ExecJob: a NULL cwd passes
  * NULL to CreateProcessA, which means "inherit"), so the path is relative. */
 #define MARKER_FILE "rpccheck_marker.txt"
+/* What x2, cancelled while still queued, would write if it ever ran. */
+#define QUEUED_MARKER "rpccheck_queued.txt"
+static int g_x2_checked;
 
 static DWORD marker_size(void)
 {
@@ -202,6 +205,53 @@ static void immediate_survives_busy_job(void)
     Sleep(800);
     size_a = marker_size();
 
+    /* BACKLOG 9: EXECKILL used to discard its id and kill whatever ran, so a
+     * late kill for a finished command killed the next one. A kill naming
+     * another id, and one naming none, must leave x1 running. */
+    {
+        const char *sk[1]; const char *sv[1];
+        rc_frame *stale, *bare;
+        DWORD before, after;
+        sk[0] = "id"; sv[0] = "x0";
+        stale = make_frame("EXECKILL", sk, sv, 1, "");
+        bare = make_frame("EXECKILL", NULL, NULL, 0, "");
+        if (stale) rc_rpc_route(stale, &g_always_running);
+        if (bare)  rc_rpc_route(bare, &g_always_running);
+        before = marker_size();
+        Sleep(600);
+        after = marker_size();
+        {
+            int ok = stale && bare && after > before;
+            if (!ok) g_failures++;
+            printf("%s	a stale or id-less EXECKILL leaves the running job alone"
+                   "	marker %lu -> %lu\n", ok ? "pass" : "FAIL",
+                   (unsigned long)before, (unsigned long)after);
+        }
+    }
+
+    /* An EXECKILL for an EXEC still waiting in the job slot takes it out:
+     * it must never run. x2 would create its own marker. */
+    {
+        const char *qk[3]; const char *qv[3];
+        const char *kk[1]; const char *kv[1];
+        rc_frame *queued, *qkill;
+        int submitted = 0;
+        DeleteFileA(QUEUED_MARKER);
+        qk[0] = "id";         qv[0] = "x2";
+        qk[1] = "timeout_ms"; qv[1] = "5000";
+        qk[2] = "shell";      qv[2] = "";
+        queued = make_frame("EXEC", qk, qv, 3,
+                            "cmd.exe /c echo ran>" QUEUED_MARKER);
+        if (queued) {
+            submitted = rc_rpc_submit(queued) == 0;
+            if (!submitted) free_frame(queued);
+        }
+        kk[0] = "id"; kv[0] = "x2";
+        qkill = make_frame("EXECKILL", kk, kv, 1, "");
+        if (qkill) rc_rpc_route(qkill, &g_always_running);
+        g_x2_checked = submitted;
+    }
+
     /* THE PROPERTY: EXECKILL must be answered in a handful of milliseconds,
      * not wait out any part of x1's run. A wrongly-routed IMMEDIATE frame --
      * one sent through rc_rpc_submit as if it were a JOB -- would not block
@@ -258,10 +308,26 @@ static void immediate_survives_busy_job(void)
 
     /* Cleanup, not part of the property: shuts the worker down so the process
      * can exit. rc_rpc_stop() also cancels the running job, which is why the
-     * marker samples above are taken before this line, not after it. */
+     * marker samples above are taken before this line, not after it.
+     *
+     * The wait first gives the worker, now free, time to pick up x2 if the
+     * queued-EXECKILL case failed to take it out of the slot. */
+    Sleep(1500);
     rc_rpc_stop();
     rc_rpc_join(5000);
     DeleteFileA(MARKER_FILE);
+
+    /* x1 is dead and the worker has drained; had x2 stayed queued it would
+     * have run by now and left its marker. */
+    {
+        int ran = GetFileAttributesA(QUEUED_MARKER) != 0xFFFFFFFF;
+        int ok = g_x2_checked && !ran;
+        if (!ok) g_failures++;
+        printf("%s	an EXECKILL for a queued EXEC means it never runs"
+               "	submitted=%d ran=%d\n", ok ? "pass" : "FAIL", g_x2_checked,
+               ran);
+        DeleteFileA(QUEUED_MARKER);
+    }
 }
 
 /* --- 03.15: an out-of-range EXEC timeout is clamped AND SAYS SO ----------- */
