@@ -1370,6 +1370,15 @@ client as `stopLeaked`. Nothing found from user mode ends a DOS program in
 its VM cleanly; it would take VMM's own VM termination (a VxD). A DOS
 program that ends by itself leaks nothing.
 
+**Open risk, one sighting:** the guest wedged in ring 0 as a Toolhelp32
+snapshot was taken (`EXECPRB --list`) on a box holding 3 of these zombies
+(`docs/measurements/wedge-vm-20260927.txt`). Against it: the same `--list`
+ran cleanly many times on boxes holding 3, 20 and 22 of them
+(`execkill-vm-*`, `execprobe-vm-stops-*`). It matters because
+`stopJobTree` snapshots too, on the client's worker, and its last resort is
+what creates the zombies. If it recurs, the cheap guard is to skip the
+snapshot while a leaked job is known to exist and fall back to the NT path.
+
 ## 15. The injection gates leave the guest in an unknown state
 
 **What happened.** On 2026-09-26 a session ran gates 0.15d (system-wide
