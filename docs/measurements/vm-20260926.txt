@@ -1,0 +1,120 @@
+# QEMU/KVM Windows 98 SE guest (retroclaude-win98), 32MB. 2026-09-26.
+#
+# The VM is not a P200 and its timings are not 9x hardware numbers. What it
+# IS good for is every question where Wine gives a different answer from
+# Windows, and there turned out to be six of those -- two of which were
+# wrong design decisions that would have shipped.
+#
+# Everything below is the guest, not Wine.
+
+=== autocheck + uicheck: 158 of 158 ===
+
+127 automation cases and 31 wire-record cases, no failures.
+
+Five cases that REPORT rather than assert under Wine, because Wine's oleacc
+returns the generic client object for every window class. On the guest they
+assert, and they pass:
+
+  msaa-button-proxy-present   Button reports role 'checkbox'
+                              -- the Win32 class proxies are there
+  msaa-state-sees-the-tick    '' -> 'checked'   (BM_GETCHECK via MSAA)
+  msaa-reports-default-action action='uncheck'
+  msaa-batches-children       25 nodes, depth 2, 4 enumerator batches,
+                              0 helper batches -- IEnumVARIANT is the path
+                              this oleacc takes
+
+And two where Wine is simply wrong about the platform:
+
+  watch-can-skip-our-own-process   0 kept, 0 dropped by our own filter.
+      Win98 honours WINEVENT_SKIPOWNPROCESS at the system level; Wine
+      accepts the flag and delivers the events anyway, which is why the
+      filter is also implemented in the callback.
+
+  wait-for-gone-sees-a-destruction  1029ms, 2 scans, events 2 -> 3.
+      Win98 DOES emit EVENT_OBJECT_DESTROY. Wine never does, and the wait
+      backstop is what covered that; here the backstop reports "not
+      exercised" because the feed answered.
+
+=== the hung-thread tiers, on the guest ===
+
+  one thread, four wedged windows, 200ms budget : 275 ms   (naive 800)
+  two wedged threads, 600ms budget              : 777 ms   (naive 1200)
+
+777 is one full budget plus one quarter, which is the middle tier doing
+what it claims. Under Wine the same two cases were 205 and 754.
+
+One assertion had to change, and only the guest could have shown it:
+`deferredNodes()` counts windows ASKED at a reduced budget, and one of
+those can still ANSWER. Under Wine every deferred window also timed out, so
+`deferred == timeouts - 1` held by accident. The guest walked three,
+deferred two, and only two timed out. The invariant is about who pays, not
+who refuses: `deferred == walked - 1`.
+
+=== 0.15f  targeted injection -- THE PLAN WAS WRONG ===
+
+  WH_CALLWNDPROC     installed; +0 calls, +0 distinct pids
+  WH_GETMESSAGE      installed; +23 calls, +1 distinct pids
+  WH_CBT             installed; +0 calls, +0 distinct pids
+  WH_CALLWNDPROCRET  installed; +0 calls, +0 distinct pids
+
+  -> TARGETED INJECTION WORKS: our code ran in the target and in no
+     other process.
+
+The plan specified WH_CALLWNDPROC and asserted it maps into one process.
+It installs and never fires. So do WH_CBT and WH_CALLWNDPROCRET aimed at a
+thread. Only WH_GETMESSAGE delivers -- and it fires inside GetMessage, so
+the controller must POST as well as send.
+
+Built on the documented choice, the whole in-process tier would have been
+silently dead, and it would have looked like a bug in the collector.
+
+=== 0.15g  which text call each module actually makes ===
+
+  (this exe)     TextOutA
+  MSHTML.DLL     TextOutW ExtTextOutW ExtTextOutA DrawTextW DrawTextA
+  COMCTL32.DLL   ExtTextOutW ExtTextOutA DrawTextExA
+  USER32.DLL     no text entry point imported by name
+  COMDLG32.DLL   DrawTextA ExtTextOutA TextOutA
+  SHELL32.DLL    ExtTextOutA
+  RICHED32.DLL   TextOutA ExtTextOutA
+
+MSHTML is the module D4 exists for and it imports DrawTextW and DrawTextA.
+DrawText* is USER32, not GDI32, and was not patched at all. A web page and
+a dialog would each have been captured in part and reported as the text on
+screen -- worse than capturing nothing, because it looks like an answer.
+
+Under Wine this same gate said COMCTL32 imports only the W forms of
+TextOut/ExtTextOut and that MSHTML imports nothing by name. Both halves of
+that are wrong about Windows. Eight entry points are patched now.
+
+=== 0.15d  re-run with the generation word ===
+
+  generation 33779831, counters zeroed
+  patch target set to this process only (pid 4294771637, PR3.EXE)
+  attaches 3, calls 9, distinct pids 2   (neither of them us)
+  -> INJECTION WORKS. Our code ran inside another program.
+  IAT patch took in 1 process; 1 text draw seen
+     NOTE: the patch target is this process, so these are OUR draws.
+
+Clean evidence this time. The counters are zeroed per run, so the numbers
+are this run's; and the GDI half says out loud that it captured its own
+output, which is what the previous version of this gate did not.
+
+=== the client itself ===
+
+  05:45:39 === retroclaude starting ===
+  05:45:41 desktop: worker up (msaa=1, feed=1)
+  05:45:43 net: connected to 10.0.2.2:7890
+  05:45:43 ready: sess=... model=haiku
+  05:45:44 html: first append ok, 2197 bytes
+  05:46:13 desktop: worker down
+  05:46:13 === retroclaude exiting ===
+
+The new ui worker starts on the real guest with MSAA and the event feed
+both live, and stops FIRST on the way out, before the connection -- which
+is the order it is registered in. Memory after the chat list loaded: 136K
+free of 32288K.
+
+Not done here: one agent turn through the new `ui` and `click` tools. The
+bridge on the host has been running since the previous day and predates
+them.
