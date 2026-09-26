@@ -1,0 +1,64 @@
+# Read a dialog and click a named button, through the bridge, by an agent.
+# The last line of the Phase 6 plan's Verification section.
+#
+# Guest: RCU.EXE (431,616 bytes, built 2026-09-27 01:08) on the restarted VM.
+# Bridge: bridge.server on 127.0.0.1:7893. Model: see the note at the bottom.
+
+## The target
+
+Notepad's Find dialog, with "work" typed into Find what so that BOTH buttons
+were live -- an agent that clicks the only enabled button has not chosen
+anything. Dragged to the top of the screen; see "What got in the way".
+
+## What the agent did
+
+  input: "There is a Find dialog on the screen near the top. Read it with the
+          ui tool, then use the click tool to press its Cancel button. Do not
+          press Find Next. Tell me the selector you clicked."
+
+  01:21:11  permission allow for mcp__machine__ui     (scope=foreground)
+  01:21:34  permission allow for mcp__machine__click  (target=Button[text="Cancel"])
+
+The tree it got back, in part, as the client rendered it:
+
+  radiobutton  "&Down"        263,87  53x20   sel=Button[text=...
+  pushbutton   "&Find Next"   329,33  75x23   sel=Button[te...
+  pushbutton   "Cancel"       329,62  75x23   sel=Button[text=...
+  Notepad      "Untitled - Notepad"  4,0  600x411
+    text       "unsaved"
+
+Its words: "I found the Find dialog. Clicking its Cancel button now."
+Then: "I clicked Button[text=\"Cancel\"] in the Find dialog."
+
+## Result
+
+The Find dialog is gone and Notepad still holds "unsaved work". That rules out
+the two wrong answers: Find Next would have searched and LEFT THE DIALOG OPEN,
+and anything that closed Notepad would have lost the text. Cancel is the only
+button whose effect is the screen that was captured afterwards.
+
+## What got in the way, and why it is worth writing down
+
+The dialog first used was Notepad's "save changes?" prompt, which Windows
+centres ON THE SCREEN. The client's own window also covers the centre of an
+800x600 screen. clickAt refuses when WindowFromPoint at the target is not the
+target (input.cpp), so the moment the client came forward -- which is exactly
+what clicking Allow on its permission bar does -- the button underneath became
+unclickable, and the agent is told "occluded: bring the window forward first"
+with no tool that can bring a window forward. FOCUS is specified in
+REMOTE.md:308 and is not implemented.
+
+The refusal is right. The hole is that an agent cannot get out of it. Filed as
+BACKLOG 16.
+
+Worked around here by dragging the Find dialog above the client's top edge,
+which is not something an agent could have done for itself.
+
+## Note on the model and the permission mode
+
+Setting the client's permission mode to Auto failed on Haiku: the bridge
+logged "Cannot set permission mode to auto: auto mode unavailable for this
+model" (bridge/agent/session.py set_permission_mode). Switched to Sonnet; the
+permission bar still asked for every call, so both approvals above were given
+by hand at the bar. The model is therefore incidental to this result -- what
+is being tested is ui and click, not the model.

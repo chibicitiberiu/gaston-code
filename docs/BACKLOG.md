@@ -1413,3 +1413,41 @@ machine survived it is not finished, however green its own output is.
 Until this is closed, treat `inproc` and the injection gates as
 **attended-only**: run them when somebody can watch the guest, and not as
 part of an unattended sweep.
+
+## 16. An agent can be told a control is occluded and have no way to fix it
+
+**Status:** found 2026-09-27 doing the Phase 6 end-to-end check
+(`docs/measurements/e2e-ui-vm-20260927.txt`). Open.
+
+`Input::clickAt` refuses when `WindowFromPoint` at the target is not the
+target (`win/automation/input.cpp:121`), and that refusal is right: clicking
+anyway presses whatever is on top. The bridge tells the model
+"occluded ... Bring the window forward first"
+(`bridge/prompts/tools.toml`).
+
+There is no tool that brings a window forward. `FOCUS` is in the op table at
+`REMOTE.md:308` and was never implemented; the client's UI lane handles the
+four `UI*` types only (`win/ui/uirpc.cpp`). So the advice names an action the
+agent cannot take.
+
+It is not a corner case. The client's own window covers the middle of an
+800x600 screen, Windows centres many dialogs there, and the client comes to
+the front every time somebody presses Allow on its permission bar. During the
+check this made the target unclickable as a direct consequence of approving
+the tool call that was going to click it. It was worked around by dragging the
+dialog out from under the client, by hand, from the host.
+
+What it would take:
+
+- a `FOCUS` op that does `SetForegroundWindow` on a resolved target, with the
+  `SPI_SETFOREGROUNDLOCKTIMEOUT` question on the P200 checklist
+  (`REMOTE.md:664`) answered first -- a background process may not be able to
+  do it at all on 98;
+- or `click` growing a `raise=1` parameter that brings the target's root
+  forward, re-checks occlusion, and only then clicks. This keeps it one round
+  trip, which on a 200MHz machine behind a socket is the thing that matters;
+- and either way, saying in the refusal which window is on top, so a model
+  can tell "your own window" from "a dialog you have not noticed".
+
+Until then an agent driving a desktop can read anything and click only what
+happens to be on top.
