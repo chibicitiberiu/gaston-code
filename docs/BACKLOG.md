@@ -1499,8 +1499,9 @@ our own window from a dialog it had not read.
 `tools/probe/execkill.py`, and an end-to-end run with a Haiku agent,
 `docs/measurements/e2e-vm-20260927.txt`). Each line says where it is owned.
 
-- **No way to bring a window to the front.** Found by the ui work: an agent
-  is told a control is occluded and has no tool to raise its window. §16.
+- **No way to bring a window to the front.** *Fixed 2026-09-27, same day:*
+  `click` now raises a covered window and re-checks before refusing, and the
+  refusal names what is on top. Measured on Win98 SE. §16.
 - **A DOS program that has to be stopped still leaks one REDIR32** (~150KB
   until reboot), and its stop costs the client's worker ~10s (the 8s grace,
   then the VM kill): a 3s timeout on `choice` answered after 13s. A Win32
