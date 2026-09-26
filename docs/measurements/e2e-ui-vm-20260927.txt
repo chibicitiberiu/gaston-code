@@ -62,3 +62,21 @@ model" (bridge/agent/session.py set_permission_mode). Switched to Sonnet; the
 permission bar still asked for every call, so both approvals above were given
 by hand at the bar. The model is therefore incidental to this result -- what
 is being tested is ui and click, not the model.
+
+## The self= line, checked on the guest (01:31)
+
+The fix for the hidden-window loop has three links -- the walker counts, the
+client puts `self=` on UIEND, the bridge renders a line -- and only the first
+two were tested (autocheck under Wine, six host tests). The third was built
+and never watched.
+
+Asked the agent for a desktop tree and to quote what it got, verbatim:
+
+  ! 1 window(s) of this program itself are not listed and ...
+  Shell_TrayWnd   -2,572  804x30   sel=Shell_TrayWnd
+    pushbutton     2,576   54x22   sel=Button
+    TrayNotifyWnd  778,576 20x23   sel=TrayNotifyWnd
+
+self=1, which is the client's own main window, and the line is at the TOP of
+the listing with the other warnings. Guest to wire to bridge to model, on the
+VM. The chain is closed.
