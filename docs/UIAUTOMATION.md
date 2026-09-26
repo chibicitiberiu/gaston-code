@@ -350,3 +350,41 @@ Every millisecond above is from the emulator. The kit in
 - whether a template scan is tolerable on the guest after all
 - whether the foreground lock and injection behave the same on hardware as
   under TCG
+
+## The tool surface
+
+Decided with the user on 2026-09-26, before any of it was built, because the
+shape of the MCP tools decides what the guest has to put on the wire.
+
+Four tools go into the existing `machine` server beside `exec`,
+`sync_status` and `sync_resolve`:
+
+```
+ui     scope=desktop|foreground|pid|<selector>, max_nodes, text, wait_for, timeout
+click  target=<selector>, button, double, settle
+keys   target=<selector>, text
+shot   rect, scale
+```
+
+**A control is addressed by a selector the bridge computed, never by a
+handle.** Each node record carries a `sel=` field: the minimal selector that
+resolves to that one control and nothing else. The model copies it verbatim
+into `click`. An HWND is meaningless across a session and 9x reuses them, so
+letting one out means a stale reference can click whatever inherited that
+handle -- silently, and on somebody's real desktop. With a selector a stale
+reference is a clean "not found". Computing it on the bridge keeps the rule
+that the guest transforms nothing.
+
+**The waits are parameters, not a fifth tool.** `WaitForControl`, `Text`,
+`Gone` and `Idle` exist in the library (`win/automation/wait.h`), but the
+agent reaches them through `click(target, settle=true)` and
+`ui(wait_for=..., timeout=...)`. The loop an agent actually runs is "do a
+thing, then look", and folding the wait into both ends of it turns three
+round trips into one. On a 200MHz guest behind a socket, a round trip is the
+expensive part.
+
+**`shot` returns the image.** That is what it is for, and the tree is what
+keeps it from being needed: a 640x480 frame costs more tokens than a whole
+control tree and says less about it. The system prompt steers to `ui` first,
+so `shot` is what you reach for when the tree came back empty -- a
+custom-drawn control, a game, an installer that is one big window.
