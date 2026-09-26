@@ -450,7 +450,9 @@ def exec_kill(exec_id: str) -> Frame:
 def ui_tree(ui_id: str, *, scope: str = "desktop", pid: int = 0,
             max_nodes: int = 400, text: bool = True, msaa: bool = False,
             hidden: bool = False, wait_for: str = "", wait_ms: int = 5000,
-            settle_ms: int = 0, timeout_ms: int = 8000) -> Frame:
+            settle_ms: int = 0, timeout_ms: int = 8000,
+            inproc: bool = False, target: str = "",
+            items: bool = True) -> Frame:
     """Read the control tree.
 
     `wait_for` and `settle_ms` are parameters rather than a separate op on
@@ -473,6 +475,15 @@ def ui_tree(ui_id: str, *, scope: str = "desktop", pid: int = 0,
         h["wait_ms"] = str(wait_ms)
     if settle_ms:
         h["settle_ms"] = str(settle_ms)
+    if inproc:
+        # Opt-in, and it does NOT fall back: the two tiers give different
+        # answers and only one of them can read a list box, so a caller
+        # that asked for this and quietly got the other would conclude a
+        # list is empty. The guest says which tier answered.
+        h["inproc"] = "1"
+        h["items"] = "1" if items else "0"
+        if target:
+            h["target"] = truncate_header_value(target)
     return Frame("UITREE", h)
 
 

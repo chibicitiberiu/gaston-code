@@ -162,3 +162,61 @@ async def test_ids_are_their_own_namespace():
     svc.fail_calls(g, "done")
     with pytest.raises(UiError):
         await task
+
+
+async def test_the_in_process_tier_is_opt_in():
+    """Off unless asked. It puts our code inside a program that did not ask
+    for it, so the default has to be the tier that does not."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.tree(g))
+    await reply(svc, g, Frame("UIEND", {"status": "ok", "nodes": "0"}))
+    await task
+    assert "inproc" not in svc.connection.sent[0].headers
+
+
+async def test_asking_for_it_says_so_on_the_wire():
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.tree(g, inproc=True, target="Notepad"))
+    await reply(svc, g, Frame("UIEND", {"status": "ok", "nodes": "0",
+                                        "tier": "inproc"}))
+    _, headers = await task
+    sent = svc.connection.sent[0].headers
+    assert sent["inproc"] == "1"
+    assert sent["target"] == "Notepad"
+    assert sent["items"] == "1"
+    #: The guest says which tier answered, so the caller never has to guess.
+    assert headers["tier"] == "inproc"
+
+
+async def test_a_refusal_does_not_become_a_quiet_fallback():
+    """The two tiers give different answers and only one of them can read a
+    list box. A caller that asked for the in-process one and silently got
+    the other would conclude a list is empty."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.tree(g, inproc=True))
+    await reply(svc, g, Frame("UIEND", {"status": "denied",
+                                        "detail": "EXPLORER.EXE is on the "
+                                                  "deny list"}))
+    with pytest.raises(UiError) as got:
+        await task
+    assert got.value.status == "denied"
+    assert "deny list" in got.value.detail
+
+
+async def test_list_rows_come_back_as_their_own_records():
+    """The whole reason the tier exists: LB_GETTEXT takes a pointer and
+    nothing marshals it across a process boundary on 9x."""
+    g, svc = guest_and_service()
+    body = (b"w 0 - 0 0 0 0 100 100 3 13 0 0 0 0 0 0 SysListView32\n"
+            b"a 0/i0 0 0 0 0 0 0 0 1 0 12 8 12 0 0 0 "
+            b"AUTOEXEC.BATlistitemAUTOEXEC.BAT\n")
+    task = asyncio.create_task(svc.tree(g, inproc=True))
+    await reply(svc, g,
+                Frame("UIENT", {"n": "2"}, body),
+                Frame("UIEND", {"status": "ok", "nodes": "2", "items": "1",
+                                "tier": "inproc"}))
+    nodes, headers = await task
+    assert [n.src for n in nodes] == ["w", "a"]
+    assert nodes[1].role == "listitem"
+    assert nodes[1].name == "AUTOEXEC.BAT"
+    assert headers["items"] == "1"

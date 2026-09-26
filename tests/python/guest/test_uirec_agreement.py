@@ -37,7 +37,7 @@ def test_every_case_passes(verdicts):
 def test_every_case_ran(verdicts):
     #: A hard count, so a case that stops being emitted fails rather than
     #: vanishing. Raise it deliberately when cases are added.
-    assert len(verdicts) == 9, sorted(verdicts)
+    assert len(verdicts) == 26, sorted(verdicts)
 
 
 @pytest.fixture(scope="module")

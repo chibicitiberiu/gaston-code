@@ -270,6 +270,12 @@ def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
                 "settle_ms": {
                     "type": "integer",
                     "description": prompts.text("tools.ui.args.settle_ms")},
+                "inproc": {
+                    "type": "boolean",
+                    "description": prompts.text("tools.ui.args.inproc")},
+                "target": {
+                    "type": "string",
+                    "description": prompts.text("tools.ui.args.target")},
             },
             "required": [],
         },
@@ -294,6 +300,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
                 wait_for=str(a.get("wait_for") or ""),
                 wait_ms=max(100, min(int(a.get("wait_ms") or 5000), 60000)),
                 settle_ms=max(0, min(int(a.get("settle_ms") or 0), 5000)),
+                inproc=bool(a.get("inproc")),
+                target=str(a.get("target") or ""),
             )
             return _text(render_tree(nodes, headers))
         except UiError as exc:

@@ -134,7 +134,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp \
-       ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp
+       ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libcore: both of the first two call
 # into libcore, and wlink resolves in the order the libraries are named.
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
@@ -222,7 +222,7 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 # libautomation's selector grammar and tree walker. Links the library, so
 # what is tested is what would ship. Wine settles the grammar completely
 # (it is string work) and only proves the walk does not crash.
-UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp) \
+UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp ui/inject.cpp) \
                $(LIBAUTOMATION) $(LIBCORE)
 uicheck: $(BUILD)/uicheck.exe
 $(BUILD)/uicheck.exe: $(UICHECK_OBJS)
@@ -242,8 +242,8 @@ $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
 # rather than `nt`, and the hook proc is exported by name because
 # SetWindowsHookEx needs a procedure address the system can resolve inside
 # every process it injects into. 8.3 name: it rides the same CD and kit as
-# everything else. See win/checks/hookdll.c for what it measures.
-HOOKDLL_OBJS = $(call objs,checks/hookdll.c)
+# everything else. See win/inproc/hookdll.c for what it measures.
+HOOKDLL_OBJS = $(call objs,inproc/hookdll.c inproc/collect.c)
 hookdll: $(BUILD)/HOOKDLL.DLL
 $(BUILD)/HOOKDLL.DLL: $(HOOKDLL_OBJS)
 	@$(WLINK) system nt_dll option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -344,7 +344,7 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp) \
+                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
@@ -358,7 +358,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp) \
+                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)

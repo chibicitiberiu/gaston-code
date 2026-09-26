@@ -3,6 +3,7 @@
 #include "ui/uirec.h"
 #include "automation/resolve.h"
 #include "automation/shot.h"
+#include "ui/inject.h"
 #include "core/log.h"
 #include "core/rc_cpp.h"
 #include "core/str.h"
@@ -254,6 +255,157 @@ static const char *walk_end_name(WalkEnd e)
     return "unknown";
 }
 
+/* Defined below, beside the other target-resolving code: CLICK and KEYS
+ * use it too, and the in-process tier still needs the out-of-process walk
+ * to know which window to go to. */
+static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
+                           const char *id, const WalkOptions &o);
+
+/* The in-process tier, behind the same op.
+ *
+ * Opt-in per request and never the default: this puts our code inside a
+ * program that did not ask for it. It also REFUSES rather than falling back
+ * silently, and the distinction matters -- the two tiers give different
+ * answers and only one of them can read a list box, so a caller has to be
+ * able to tell which one it got. `status=` says so either way.
+ */
+static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
+                           const char *id, const WalkOptions &o)
+{
+    const char *target = rc_frame_get(f, "target");
+    const char *k[6];
+    const char *v[6];
+    char nodes[16], items[16], ms[16];
+    int nkv = 0;
+
+    if (!ctx->injector.open())
+    {
+        k[0] = "detail"; v[0] = ctx->injector.lastError();
+        ui_end(net, id, "inproc_unavailable", k, v, 1);
+        return;
+    }
+
+    /* A window of the target, found the ordinary way. The in-process tier
+     * still needs the out-of-process one to know where to go. */
+    HWND win = NULL;
+    if (target && target[0])
+    {
+        win = resolve_target(net, ctx, f, id, o);
+        if (!win)
+            return;             /* already answered */
+    }
+    else
+    {
+        win = GetForegroundWindow();
+        if (!win)
+        {
+            ui_end(net, id, "no_window", NULL, NULL, 0);
+            return;
+        }
+    }
+
+    InjectResult r = ctx->injector.collect(
+        win, NULL, header_flag(f, "items", true),
+        (DWORD)header_num(f, "timeout_ms", 3000, 200, 20000));
+
+    if (r != INJECT_OK && r != INJECT_TRUNCATED)
+    {
+        static const char *const NAMES[] = {
+            "ok", "denied", "no_dll", "no_window", "hook_refused",
+            "no_reply", "truncated", "failed"
+        };
+        k[0] = "detail"; v[0] = ctx->injector.lastError();
+        ui_end(net, id, NAMES[(int)r], k, v, 1);
+        return;
+    }
+
+    const RcInShm *shm = ctx->injector.shm();
+    TreeSink sink(net, id, ctx, false);
+    if (!sink.ready())
+    {
+        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        return;
+    }
+
+    /* The collector works in HWNDs and the wire works in paths, so the
+     * path is built here from the parent chain it reported. A node whose
+     * parent is not in the response is a root of this walk. */
+    for (long i = 0; i < shm->nodeN; i++)
+    {
+        const RcInNode &n = shm->nodes[i];
+        char path[RC_PATH_MAX];
+        char parent[RC_PATH_MAX];
+        long j, index = 0;
+
+        /* Index among the siblings we actually have. Not the child index
+         * the OS would give: we are describing the tree we collected. */
+        for (j = 0; j < i; j++)
+            if (shm->nodes[j].parent == n.parent)
+                index++;
+
+        parent[0] = '\0';
+        for (j = 0; j < shm->nodeN; j++)
+            if (shm->nodes[j].hwnd == n.parent)
+            {
+                rc_strf(parent, sizeof(parent), "%ld", j);
+                break;
+            }
+        if (parent[0])
+            rc_strf(path, sizeof(path), "%s/%ld", parent, index);
+        else
+        {
+            rc_strf(path, sizeof(path), "%ld", i);
+            rc_strncpy(parent, sizeof(parent), "-", 1);
+        }
+
+        unsigned w = rc_uirec_inproc(sink.buf + sink.len, TreeSink::CAP - sink.len,
+                                     n, path, parent);
+        if (!w)
+        {
+            sink.flush();
+            w = rc_uirec_inproc(sink.buf + sink.len,
+                                TreeSink::CAP - sink.len, n, path, parent);
+        }
+        if (w) { sink.len += w; sink.batch++; sink.total++; }
+        else   { sink.dropped++; }
+
+        /* The rows. THE reason this tier exists: LB_GETTEXT and friends
+         * take a pointer and nothing marshals it across a process boundary
+         * on 9x, at any clock speed. */
+        for (long it = 0; it < n.itemN; it++)
+        {
+            long idx = n.itemFirst + it;
+            char ipath[RC_PATH_MAX];
+            if (idx < 0 || idx >= shm->itemN)
+                break;
+            rc_strf(ipath, sizeof(ipath), "%s/i%ld", path, it);
+            w = rc_uirec_item(sink.buf + sink.len, TreeSink::CAP - sink.len,
+                              shm->items[idx].text, ipath, path, it);
+            if (!w)
+            {
+                sink.flush();
+                w = rc_uirec_item(sink.buf + sink.len,
+                                  TreeSink::CAP - sink.len,
+                                  shm->items[idx].text, ipath, path, it);
+            }
+            if (w) { sink.len += w; sink.batch++; sink.total++; }
+            else   { sink.dropped++; }
+        }
+    }
+    sink.flush();
+
+    rc_strf(nodes, sizeof(nodes), "%d", sink.total);
+    rc_strf(items, sizeof(items), "%ld", shm->itemN);
+    rc_strf(ms, sizeof(ms), "%ld", shm->elapsedMs);
+    k[nkv] = "nodes";  v[nkv++] = nodes;
+    k[nkv] = "items";  v[nkv++] = items;
+    k[nkv] = "tier";   v[nkv++] = "inproc";
+    k[nkv] = "walk";   v[nkv++] = (r == INJECT_TRUNCATED) ? "maxnodes"
+                                                          : "complete";
+    k[nkv] = "took_ms"; v[nkv++] = ms;
+    ui_end(net, id, "ok", k, v, nkv);
+}
+
 static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
@@ -270,6 +422,15 @@ static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
         return;
     }
     base_options(o, ctx, f);
+
+    /* Opt-in, off by default, and it does not fall back. A caller that
+     * asked for the in-process answer and quietly got the out-of-process
+     * one would conclude a list box is empty. */
+    if (header_flag(f, "inproc", false))
+    {
+        do_tree_inproc(net, ctx, f, id, o);
+        return;
+    }
 
     TreeSink sink(net, id, ctx, header_flag(f, "msaa", false));
     if (!sink.ready())

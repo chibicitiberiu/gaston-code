@@ -20,6 +20,7 @@
 #include "automation/wait.h"
 #include "automation/input.h"
 #include "automation/calldeadline.h"
+#include "ui/inject.h"
 
 class UiContext
 {
@@ -31,6 +32,10 @@ public:
     UiWatch      watch;
     Input        input;
     CallDeadline deadline;
+    /* Opened lazily and only when a request asks for it: mapping the
+     * section is harmless, but a section that exists and names a target is
+     * what any resident copy of the DLL acts on. */
+    Injector     injector;
 
     /* Our own pid, resolved once. Every walk excludes it: the walker sends
      * WM_GETTEXT, and reaching our own windows from in here is reentrancy we

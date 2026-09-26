@@ -584,3 +584,60 @@ before the first two:
   9x number.
 - **One end-to-end turn**: ask the agent to read a dialog and click a named
   button on the guest, through the bridge.
+
+
+## The in-process tier, as built
+
+Section D. Opt-in per request, off by default, and it does **not** fall back
+quietly -- `status=` always says which tier answered, because the two give
+different answers and only one of them can read a list box. A caller that
+asked for the in-process one and silently got the other would conclude a
+list is empty.
+
+| | file |
+|---|---|
+| the backchannel layout, shared by all three sides | `win/inproc/shm.h` |
+| the collector that runs inside the target | `win/inproc/collect.c` |
+| the DLL: hook, IAT patch, request service | `win/inproc/hookdll.c` |
+| the controller: deny list, targeted hook, teardown | `win/ui/inject.*` |
+| reachable as `ui(inproc=true)` | `bridge/agent/tools.py` |
+
+**Why it exists, in one line that depends on no measurement.**
+`LB_GETTEXT`, `LVM_GETITEMTEXT` and `TVM_GETITEM` take a pointer, and on 9x
+nothing marshals it across a process boundary at any clock speed. NT's
+answer is `VirtualAllocEx` in the target, which 9x does not have. Inside the
+target there is nothing to place. List, tree and list-view contents are
+unreachable from outside and ordinary from in here.
+
+The *timing* argument that was once also made for this tier is retracted --
+see "And this document broke its own rule". It was never needed.
+
+**What keeps it from being a liability:**
+
+- **One thread**, via `WH_CALLWNDPROC` aimed at the target's own. Not the
+  system-wide `WH_CBT` of gate 0.15d, which reaches every process that sees
+  a CBT event -- that is how Explorer came to be in scope and how Explorer
+  came to die.
+- **A deny list with no force escape.** `REMOTE.md:344` lets `KILL` take
+  Explorer with `force=1`; there is deliberately no equivalent here, because
+  a bad kill is immediate and visible where a bad injection shows up later
+  and belongs to the host.
+- **Pid and basename.** A 9x pid is an obfuscated pointer into the process
+  database and it is reused, so a target that exits can hand its pid to
+  something else. A process we cannot name is refused: if we cannot say what
+  it is, we cannot say it is not the shell.
+- **Never resident.** The hook goes in, the request is served, the hook
+  comes out, and the section stops naming anybody -- all inside one call.
+- **Nothing on the collector's path allocates**, uses the CRT, uses COM, or
+  blocks without a timeout. It runs on a thread borrowed from somebody
+  else's message dispatch, and while it runs their program is not painting.
+- **`LB_GETTEXT` is asked its length first.** It writes the item and takes
+  no capacity, so the only defence against a long row is refusing it. Getting
+  that wrong is a stack overwrite inside another program.
+
+**Still not run on hardware.** Everything above builds, passes the import,
+CMOV, static-constructor and stack-frame gates, and has 26 checks under
+Wine -- but Wine cannot answer the question that matters. Gate 0.15f asks
+it: does a thread-targeted hook reach one process and no other? Until that
+comes back from the real machines, `inproc` should be treated as written
+rather than working, and `0.15d` re-run after a reboot alongside it.

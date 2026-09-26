@@ -147,3 +147,65 @@ unsigned rc_uirec_acc(char *out, unsigned cap, const AccNode &n,
     return emit(out, cap, RC_SRC_ACC, path, parent, 0L, n.childId, r, flags,
                 t);
 }
+
+unsigned rc_uirec_inproc(char *out, unsigned cap, const RcInNode &n,
+                         const char *path, const char *parent)
+{
+    Tail t;
+    RECT r;
+    unsigned flags = 0;
+    char state[RC_ENRICH_VAL];
+    const char *role;
+
+    r.left = n.left; r.top = n.top; r.right = n.right; r.bottom = n.bottom;
+
+    /* The state MSAA would have charged a cross-process call for, taken
+     * from BM_GETCHECK -- which is a message, and from in there a direct
+     * one. This is the tier paying for itself. */
+    state[0] = '\0';
+    if (n.checked == 1)
+        rc_strncpy(state, sizeof(state), "checked", 7);
+    else if (n.checked == 2)
+        rc_strncpy(state, sizeof(state), "mixed", 5);
+
+    role = roleFromClassAndStyle(n.cls, n.style);
+
+    put(t, 0, n.cls,  RC_IN_CLASS);
+    put(t, 1, n.text, RC_IN_TEXT);
+    put(t, 2, role ? role : "", RC_ROLE_MAX);
+    put(t, 3, "", 1);
+    put(t, 4, "", 1);
+    put(t, 5, state, RC_ENRICH_VAL);
+    put(t, 6, "", 1);
+
+    /* Visible and enabled come from the style bits the collector copied,
+     * not from a second call: it was inside the process and had them. */
+    if (n.style & WS_VISIBLE)  flags |= RC_NF_VISIBLE;
+    if (!(n.style & WS_DISABLED)) flags |= RC_NF_ENABLED;
+
+    return emit(out, cap, RC_SRC_WINDOW, path, parent, n.ctrlId, 0L, r,
+                flags, t);
+}
+
+unsigned rc_uirec_item(char *out, unsigned cap, const char *text,
+                       const char *path, const char *parent, long index)
+{
+    Tail t;
+    RECT r;
+    r.left = r.top = r.right = r.bottom = 0;
+
+    put(t, 0, "", 1);
+    put(t, 1, text, RC_IN_ITEMLEN);
+    put(t, 2, "listitem", 8);
+    put(t, 3, text, RC_IN_ITEMLEN);
+    put(t, 4, "", 1);
+    put(t, 5, "", 1);
+    put(t, 6, "", 1);
+
+    /* src=acc, because that is exactly what it is: a thing with content and
+     * no window of its own. The grammar cannot name one yet, which the
+     * bridge says rather than inventing a selector that would not
+     * resolve. */
+    return emit(out, cap, RC_SRC_ACC, path, parent, 0L, index, r,
+                RC_NF_VISIBLE, t);
+}

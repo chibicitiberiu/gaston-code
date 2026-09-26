@@ -29,6 +29,7 @@
 #include "automation/tree.h"
 #include "automation/select.h"
 #include "automation/msaa.h"
+#include "inproc/shm.h"
 
 /* Which kind of thing this record describes. A window is not the only one:
  * a list item, a menu entry and every element of a web page have no HWND,
@@ -54,5 +55,18 @@ unsigned rc_uirec_window(char *out, unsigned cap, const Node &n,
  * window has a control id and no class at all. */
 unsigned rc_uirec_acc(char *out, unsigned cap, const AccNode &n,
                       const char *path, const char *parent);
+
+/* A window as the IN-PROCESS collector saw it. Same record, same reader --
+ * the only difference the bridge sees is that `text` is a control's real
+ * contents rather than whatever crossed a process boundary, and that a list
+ * has its rows. */
+unsigned rc_uirec_inproc(char *out, unsigned cap, const RcInNode &n,
+                         const char *path, const char *parent);
+
+/* One row of a list, tree or list view. These do not exist out of process
+ * on 9x at any clock speed: LB_GETTEXT and friends take a pointer and
+ * nothing marshals it. */
+unsigned rc_uirec_item(char *out, unsigned cap, const char *text,
+                       const char *path, const char *parent, long index);
 
 #endif

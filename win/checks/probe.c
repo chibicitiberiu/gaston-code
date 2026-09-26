@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/str.h"
+#include "inproc/shm.h"
 /* Open Watcom's two OLE headers disagree about VARIANT unless this is set.
  * oaidl.h:130 picks the NAMED layout (n1.n2.n3) on `__STDC__`, but
  * oleauto.h:125's V_VT/V_I4 accessors only check NONAMELESSUNION, so they
@@ -2365,39 +2366,8 @@ static void probe_evlat(void)
  * layout is a hazard, and the alternative -- a header both include -- means
  * the DLL picks up whatever else that header drags in, on a file that gets
  * mapped into other people's processes. Kept in step by hand, deliberately. */
-#define RC_TEXTN   48
-#define RC_TEXTLEN 56
-typedef struct {
-    DWORD pid;
-    long  x, y;
-    char  text[RC_TEXTLEN];
-} RcDraw;
-/* MUST match win/checks/hookdll.c exactly, including the header. The name
- * carries the version for the reason given there: CreateFileMapping
- * against an existing name returns the existing object and ignores the
- * size, so two layouts under one name read each other's fields at the
- * wrong offsets -- and one of those fields decides whose import table gets
- * rewritten. */
-#define RC_SHM_NAME  "GastonHookShm2"
-#define RC_SHM_MAGIC 0x47484B32UL
-#define RC_SHM_VER   2
-
-typedef struct {
-    DWORD  magic;
-    DWORD  version;
-    DWORD  cb;
-    DWORD  generation;
-    char   patch_exe[32];
-    long   calls;
-    long   attaches;
-    long   pids_n;
-    DWORD  pids[16];
-    DWORD  patch_pid;
-    long   patched;
-    long   draws;
-    long   ring_next;
-    RcDraw ring[RC_TEXTN];
-} RcHookShm;
+/* The layout comes from the header the DLL uses. There used to be a copy
+ * of it here, which is exactly the drift inproc/shm.h exists to stop. */
 
 /* ------------------------------------------------------------ 0.15f */
 /* TARGETED injection: one thread, one process, mapped nowhere else.
@@ -2471,7 +2441,7 @@ static void probe_targeted(void)
     HMODULE dll;
     HOOKPROC proc;
     HANDLE map;
-    RcHookShm *shm;
+    RcInShm *shm;
     HHOOK h;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -2490,14 +2460,14 @@ static void probe_targeted(void)
         may_inject("explorer.exe"));
 
     map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                             0, sizeof(RcHookShm), RC_SHM_NAME);
-    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+                             0, sizeof(RcInShm), RC_SHM_NAME);
+    shm = map ? (RcInShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
               : NULL;
     if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
 
     shm->magic = RC_SHM_MAGIC;
     shm->version = RC_SHM_VER;
-    shm->cb = sizeof(RcHookShm);
+    shm->cb = sizeof(RcInShm);
     shm->generation = GetTickCount() | 1;
     shm->calls = 0;
     shm->attaches = 0;
@@ -2600,7 +2570,7 @@ static void probe_inject(void)
     HMODULE dll;
     HOOKPROC proc;
     HANDLE map;
-    RcHookShm *shm;
+    RcInShm *shm;
     HHOOK h;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -2614,8 +2584,8 @@ static void probe_inject(void)
      * inside LoadLibrary below. Naming only ourselves is what keeps every
      * other injected process's import table untouched. */
     map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                             0, sizeof(RcHookShm), RC_SHM_NAME);
-    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+                             0, sizeof(RcInShm), RC_SHM_NAME);
+    shm = map ? (RcInShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
               : NULL;
     if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
 
@@ -2626,7 +2596,7 @@ static void probe_inject(void)
      * be satisfied entirely by residue from a run that injected nothing. */
     shm->magic = RC_SHM_MAGIC;
     shm->version = RC_SHM_VER;
-    shm->cb = sizeof(RcHookShm);
+    shm->cb = sizeof(RcInShm);
     shm->generation = GetTickCount() | 1;
     shm->calls = 0;
     shm->attaches = 0;

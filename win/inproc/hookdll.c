@@ -30,85 +30,35 @@
  * theirs -- and on a machine somebody is using.
  */
 #include <windows.h>
+#include "inproc/shm.h"
 
-/* The version is IN THE NAME, and that is the whole point of it.
- *
- * CreateFileMapping against an existing name ignores the size you pass and
- * hands back the existing object. So a controller with a new layout would
- * silently get an OLD, smaller section that an old injected DLL -- still
- * mapped into a long-lived process, because Explorer does not restart --
- * is writing the old layout into. Both sides then read each other's fields
- * at the wrong offsets, and one of them is deciding whose import table to
- * rewrite. Changing the name is what makes that impossible instead of
- * something to remember. Bump it whenever RcHookShm changes. */
-#define RC_SHM_NAME  "GastonHookShm2"
-#define RC_SHM_MAGIC 0x47484B32UL   /* 'GHK2' */
-#define RC_SHM_VER   2
-#define RC_MAXPIDS  16
-#define RC_TEXTN    48
-#define RC_TEXTLEN  56
+/* The layout, the name and the version all live in inproc/shm.h, which the
+ * controller and the probe include too. There used to be a second copy of
+ * the struct in probe.c, which is a layout that can drift while both sides
+ * still compile. */
+static HANDLE   g_map;
+static RcInShm *g_shm;
+static HANDLE   g_req;    /* the controller has asked */
+static HANDLE   g_done;   /* the collector has answered */
 
-/* One captured draw. Bounded and tiny on purpose: this structure is mapped
- * into every process the hook reaches, so its size is paid per process on
- * a machine with 28 KB measured free after a turn. A ring, so a chatty
- * application overwrites its own old entries instead of growing. */
-typedef struct {
-    DWORD pid;
-    long  x, y;
-    char  text[RC_TEXTLEN];
-} RcDraw;
-
-typedef struct {
-    /* First three fields, first for a reason: they are what tells a reader
-     * that the rest of the struct means what it thinks it means. The
-     * bridge's HELLO does the same thing and refuses an unknown value
-     * rather than guessing. */
-    DWORD  magic;
-    DWORD  version;
-    DWORD  cb;             /* sizeof(RcHookShm) as the writer knew it */
-    /* Stamped by the controller each run. Counters below are zeroed with
-     * it, so "3 attaches" means three THIS RUN -- the previous version
-     * never zeroed anything and no injected copy ever unmapped the
-     * section, so the number was cumulative across every run since boot
-     * and a verdict of "injection works" could be satisfied by residue
-     * from a run that injected nothing. */
-    DWORD  generation;
-    /* The basename the controller expects `patch_pid` to be, upper case.
-     * A pid is not enough on its own: on 9x it is an obfuscated pointer
-     * into the process database and it IS reused, so a target that exits
-     * can hand its pid to something else before we let go. */
-    char   patch_exe[32];
-    long   calls;
-    long   attaches;
-    long   pids_n;
-    DWORD  pids[RC_MAXPIDS];
-    /* Which process may have its import table rewritten. Zero means none,
-     * and none is the default. The first version patched every process the
-     * hook reached, which included Explorer, and Explorer died -- see
-     * unpatch_text_calls for why it died AFTER we let go. Opt-in, one named
-     * process at a time, set by the controller BEFORE the DLL is loaded. */
-    DWORD  patch_pid;
-    long   patched;        /* processes where the IAT patch took */
-    long   draws;          /* total text draws seen, ever */
-    long   ring_next;      /* next slot to write, wraps */
-    RcDraw ring[RC_TEXTN];
-} RcHookShm;
-
-static HANDLE     g_map;
-static RcHookShm *g_shm;
+/* collect.c, linked into this DLL. Declared rather than included so this
+ * file stays the one that knows about hooks and that one stays the one
+ * that knows about controls. */
+void rc_inproc_collect(RcInShm *shm);
+static void (*g_collect)(RcInShm *) = rc_inproc_collect;
 
 /* CreateFileMapping against INVALID_HANDLE_VALUE is the pagefile-backed,
  * name-addressed form: the first caller makes it, every later one in any
  * process opens the same object. No file on disk, nothing to clean up. */
 static void shm_attach(void)
 {
-    RcHookShm *v;
+    RcInShm *v;
     if (g_shm) return;
     g_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                               0, sizeof(RcHookShm), RC_SHM_NAME);
+                               0, sizeof(RcInShm), RC_SHM_NAME);
     if (!g_map)
         return;
-    v = (RcHookShm *)MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    v = (RcInShm *)MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     if (!v)
         return;
     /* REFUSE rather than guess, the rule caps.py already follows for
@@ -121,13 +71,21 @@ static void shm_attach(void)
      * it is here because "should be unreachable" is exactly the check
      * worth keeping when the cost of being wrong is somebody's shell. */
     if (v->magic != RC_SHM_MAGIC || v->version != RC_SHM_VER
-        || v->cb != sizeof(RcHookShm)) {
+        || v->cb != sizeof(RcInShm)) {
         UnmapViewOfFile(v);
         CloseHandle(g_map);
         g_map = NULL;
         return;
     }
     g_shm = v;
+
+    /* Opened, never created, by the DLL side: the controller owns them, so
+     * a DLL that finds them missing has been loaded into a run that is not
+     * listening and simply does not signal. */
+    if (!g_req)
+        g_req = OpenEventA(EVENT_ALL_ACCESS, FALSE, RC_SHM_REQ_EVENT);
+    if (!g_done)
+        g_done = OpenEventA(EVENT_ALL_ACCESS, FALSE, RC_SHM_DONE_EVENT);
 }
 
 /* The controller's side of the same thing: stamp the header and zero the
@@ -142,15 +100,15 @@ void rc_hook_shm_begin(void)
     if (!g_shm) {
         if (g_map) return;
         g_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                                   0, sizeof(RcHookShm), RC_SHM_NAME);
+                                   0, sizeof(RcInShm), RC_SHM_NAME);
         if (!g_map) return;
-        g_shm = (RcHookShm *)MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS,
+        g_shm = (RcInShm *)MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS,
                                            0, 0, 0);
         if (!g_shm) return;
     }
     g_shm->magic = RC_SHM_MAGIC;
     g_shm->version = RC_SHM_VER;
-    g_shm->cb = sizeof(RcHookShm);
+    g_shm->cb = sizeof(RcInShm);
     g_shm->generation = GetTickCount() | 1;
     g_shm->calls = 0;
     g_shm->attaches = 0;
@@ -495,6 +453,45 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
     return TRUE;
 }
 
+/* Serve one request, if one is waiting for us.
+ *
+ * Called from the hook proc, which means it runs on the TARGET's thread
+ * inside their message dispatch -- so it must be brief, must never block
+ * without a timeout, and must do nothing at all in the common case where
+ * there is no request. The common case is the first four lines.
+ *
+ * Only the named process serves. Every other process the hook reaches
+ * reads the request, sees that it is not for them, and does nothing --
+ * which is also why `seq` is checked before `op`: two processes must not
+ * both answer. */
+static void serve_request(void)
+{
+    if (!g_shm || !g_collect)
+        return;
+    if (g_shm->op == RC_OP_NONE || g_shm->ackSeq == g_shm->seq)
+        return;
+    if (!is_the_named_target())
+        return;
+
+    if (g_shm->op == RC_OP_PING) {
+        g_shm->nodeN = 0;
+        g_shm->itemN = 0;
+        g_shm->elapsedMs = 0;
+        g_shm->result = RC_RES_OK;
+    } else if (g_shm->op == RC_OP_COLLECT) {
+        g_collect(g_shm);
+    } else {
+        g_shm->result = RC_RES_REFUSED;
+    }
+
+    /* ackSeq LAST, after the result and the counts are in place. The
+     * controller waits on the event but also polls this, and a reader that
+     * saw the ack before the data would read the previous answer. */
+    g_shm->ackSeq = g_shm->seq;
+    if (g_done)
+        SetEvent(g_done);
+}
+
 __declspec(dllexport) LRESULT CALLBACK rc_hook_proc(int code, WPARAM wp,
                                                     LPARAM lp)
 {
@@ -512,6 +509,10 @@ __declspec(dllexport) LRESULT CALLBACK rc_hook_proc(int code, WPARAM wp,
             if (i == g_shm->pids_n && g_shm->pids_n < RC_MAXPIDS)
                 g_shm->pids[g_shm->pids_n++] = pid;
         }
+        /* The hook is how a request reaches this process at all: it is the
+         * only code of ours that runs on the target's own thread. Cheap in
+         * the common case -- four comparisons and out. */
+        serve_request();
     }
     /* Pass it on. A hook that swallows CBT notifications in every process
      * on the machine would be a memorable way to break a desktop. */
