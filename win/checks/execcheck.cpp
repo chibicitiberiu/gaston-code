@@ -18,6 +18,7 @@
 #include "core/log.h"
 #include "core/str.h"
 #include "exec/execjob.h"
+#include "exec/process.h"
 
 static int g_failures;
 
@@ -263,12 +264,115 @@ static void stopping()
     }
 }
 
+/* Finds one pid in a listing, and remembers what it said about it. */
+class FindPid : public ProcessSink
+{
+public:
+    explicit FindPid(DWORD pid) : m_pid(pid), m_seen(0), m_found(false)
+    {
+        m_exe[0] = 0;
+    }
+    bool onProcess(const ProcessInfo &p)
+    {
+        m_seen++;
+        if (p.pid == m_pid)
+        {
+            m_found = true;
+            rc_strcpy(m_exe, sizeof m_exe, p.exe);
+        }
+        return true;
+    }
+    DWORD m_pid;
+    int m_seen;
+    bool m_found;
+    char m_exe[MAX_PATH];
+};
+
+static void processes()
+{
+    char detail[160];
+    Processes ps;
+    bool up = ps.init();
+    say("toolhelp-resolves", up && ps.available(), up ? "" : "not found");
+    if (!up)
+        return;
+    {
+        FindPid f(GetCurrentProcessId());
+        bool ok = ps.list(f);
+        rc_strf(detail, sizeof detail, "seen=%d self=%s", f.m_seen,
+                f.m_found ? f.m_exe : "missing");
+        say("list-finds-self", ok && f.m_found && f.m_seen > 1, detail);
+    }
+    {
+        KillStatus k = ps.kill(GetCurrentProcessId(), true, 0);
+        rc_strf(detail, sizeof detail, "status=%d", (int)k);
+        say("kill-self-denied-even-forced", k == KILL_DENIED, detail);
+    }
+    {
+        KillStatus k = ps.kill(0x7ffffff0, false, 0);
+        rc_strf(detail, sizeof detail, "status=%d", (int)k);
+        say("kill-no-such-pid", k == KILL_NO_SUCH_PID, detail);
+    }
+    {
+        static char big[2048];
+        memset(big, 'z', sizeof big - 1);
+        big[sizeof big - 1] = 0;
+        DWORD pid, err;
+        bool started = Processes::launch(big, NULL, SW_HIDE, pid, err);
+        rc_strf(detail, sizeof detail, "started=%d err=%lu", started,
+                (unsigned long)err);
+        say("launch-overlong-refused", !started && pid == 0, detail);
+    }
+    {
+        /* A tree: cmd.exe running cmd.exe running a loop. The inner one is
+         * a descendant, the kill ends it within the wait, and the outer one
+         * follows. Hidden, never inheriting anything of ours. */
+        DWORD outer = 0, err = 0;
+        bool started = Processes::launch(
+            "cmd.exe /c cmd.exe /c for /l %i in (1,1,50000000) do rem", NULL,
+            SW_HIDE, outer, err);
+        std::vector<DWORD> kids;
+        for (int i = 0; started && i < 30 && kids.empty(); i++)
+        {
+            Sleep(100);
+            ps.descendants(outer, kids);
+        }
+        rc_strf(detail, sizeof detail, "started=%d outer=%08lx kids=%u",
+                started, (unsigned long)outer, (unsigned)kids.size());
+        say("launch-and-descendants", started && kids.size() >= 1, detail);
+
+        KillStatus inner = kids.empty() ? KILL_NO_SUCH_PID
+                                        : ps.kill(kids[0], false, 3000);
+        KillStatus top = started ? ps.kill(outer, false, 3000)
+                                 : KILL_NO_SUCH_PID;
+        rc_strf(detail, sizeof detail, "inner=%d outer=%d", (int)inner,
+                (int)top);
+        /* The outer cmd.exe may already have exited once its child died. */
+        say("kill-waits-for-the-end", inner == KILL_OK &&
+                                          (top == KILL_OK ||
+                                           top == KILL_NO_SUCH_PID), detail);
+    }
+    {
+        char self[MAX_PATH], rundll[MAX_PATH], win[MAX_PATH];
+        GetModuleFileNameA(NULL, self, sizeof self);
+        GetWindowsDirectoryA(win, sizeof win);
+        rc_strf(rundll, sizeof rundll, "%s\\RUNDLL.EXE", win);
+        bool selfIs = Processes::isWin16Exe(self);
+        bool rundllIs = Processes::isWin16Exe(rundll);
+        rc_strf(detail, sizeof detail, "self=%d %s=%d", selfIs, rundll,
+                rundllIs);
+        /* Wine's prefix ships a 16-bit RUNDLL.EXE, as 98 does. */
+        say("win16-detected-from-the-header", !selfIs && rundllIs, detail);
+    }
+}
+
 int main(void)
 {
     rc_log_open(".");
     tooLong();
     output();
     stopping();
+    processes();
     rc_log_close();
     return g_failures ? 1 : 0;
 }

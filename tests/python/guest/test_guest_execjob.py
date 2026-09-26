@@ -28,7 +28,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 12, sorted(verdicts)
+    assert len(verdicts) == 20, sorted(verdicts)
 
 
 def test_an_overlong_command_is_refused_not_truncated(verdicts):
@@ -51,3 +51,14 @@ def test_a_reader_that_is_gone_stops_the_command(verdicts):
     """Otherwise the command runs to its timeout producing output for no one,
     with the worker blocked in the sink the whole time."""
     assert verdicts["sink-gone-stops-it"][0] == "pass"
+
+
+def test_processes_list_kill_and_launch(verdicts):
+    """Toolhelp32 resolved at runtime, the listing, the deny list refusing
+    this process even when forced, a launched tree's descendants, and a
+    kill that waits for the end rather than trusting TerminateProcess."""
+    for case in ("toolhelp-resolves", "list-finds-self",
+                 "kill-self-denied-even-forced", "kill-no-such-pid",
+                 "launch-overlong-refused", "launch-and-descendants",
+                 "kill-waits-for-the-end", "win16-detected-from-the-header"):
+        assert verdicts[case][0] == "pass", (case, verdicts[case])

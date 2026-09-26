@@ -116,7 +116,7 @@ LIBWIRE = $(LIBDIR)/libwire.lib
 # and managing processes. libcore only; it knows nothing of the wire, and
 # mapping requests to jobs is the exe's job. Listed BEFORE libcore wherever
 # both are linked.
-EXEC_SRCS = exec/execjob.cpp
+EXEC_SRCS = exec/execjob.cpp exec/process.cpp
 LIBEXEC = $(LIBDIR)/libexec.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
