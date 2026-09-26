@@ -104,6 +104,20 @@ Optional selector for the control to type into; it is focused first. Leave empty
 settle = '''
 After typing, wait for the screen to stop changing for this many milliseconds.'''
 
+[focus]
+description = '''
+Bring a window to the front.
+
+You rarely need this: `click` and `keys` already bring a window forward when they have to. Use it when pressing something would be wrong -- most often before `shot`, when the window you want to photograph is behind another one.
+
+It makes the window active, which takes the keyboard away from whoever is sitting at the machine. There is no way to raise a window quietly on this system.'''
+
+[focus.args]
+target = '''
+Selector for a control in the window to raise. The window that contains it comes forward; you do not have to name the window itself.'''
+settle = '''
+After raising it, wait for the screen to stop changing for this many milliseconds.'''
+
 [shot]
 description = '''
 Take a picture of the machine's screen.
@@ -193,5 +207,7 @@ bad_scope = '''
 Unknown scope {scope}; use desktop, foreground or pid.'''
 clicked = '''
 Clicked {target}.'''
+focused = '''
+Brought the window containing {target} to the front.'''
 typed = '''
 Typed {n} characters into {where}.'''

@@ -86,3 +86,32 @@ def test_occluded_survives_a_guest_that_does_not_send_on_top():
 def test_occluded_says_the_raise_was_already_tried():
     out = _ui_explain(UiError("occluded", "", {"on_top": "Shell_TrayWnd"}))
     assert "brought to the front" in out
+
+
+# --- the FOCUS op ------------------------------------------------------
+
+from bridge.wire import protocol as P
+
+
+def test_ui_focus_frame_shape():
+    f = P.ui_focus("u7", 'Notepad > Edit', settle=250, timeout_ms=9000)
+    assert f.type == "UIFOCUS"
+    assert f.headers["id"] == "u7"
+    assert f.headers["target"] == "Notepad > Edit"
+    assert f.headers["timeout_ms"] == "9000"
+    assert f.headers["settle"] == "250"
+
+
+def test_ui_focus_omits_settle_when_zero():
+    """A header that is always present is a header the guest must parse."""
+    f = P.ui_focus("u8", "Notepad")
+    assert "settle" not in f.headers
+
+
+def test_focus_tells_the_model_it_takes_the_keyboard():
+    """It activates the window; on 9x nothing else works across processes.
+    A model choosing between focus and click should know that is the cost."""
+    from bridge.agent import prompts
+    d = prompts.text("tools.focus.description")
+    assert "active" in d
+    assert "click" in d          # and that click usually makes it unnecessary

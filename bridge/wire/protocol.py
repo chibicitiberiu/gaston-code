@@ -503,6 +503,24 @@ def ui_click(ui_id: str, target: str, *, double: bool = False,
     return Frame("UICLICK", h)
 
 
+def ui_focus(ui_id: str, target: str, *, settle: int = 0,
+             timeout_ms: int = 8000) -> Frame:
+    """Bring a window to the front without acting on it.
+
+    `click` and `keys` raise what they need already, so this is for the case
+    where pressing something would be wrong -- most often a screenshot of a
+    window that is behind another one.
+
+    On 9x it activates the target: nothing else works across a process
+    boundary, so there is no quiet variant to offer.
+    """
+    h = {"id": ui_id, "target": truncate_header_value(target),
+         "timeout_ms": str(timeout_ms)}
+    if settle:
+        h["settle"] = str(settle)
+    return Frame("UIFOCUS", h)
+
+
 def ui_keys(ui_id: str, text: str, *, target: str = "", settle: int = 0,
             timeout_ms: int = 8000) -> Frame:
     """Type into a control, or into whatever has focus when `target` is

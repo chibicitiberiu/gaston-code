@@ -349,6 +349,7 @@ handlers behind the shorter names in the lane table above.
 | `UICLICK` | `target=` selector, optional `double=1`, optional `settle=` | `UIEND` | `no_target`, `bad_selector`, `ambiguous` (with `detail=` carrying the **count**), `not_found`, `truncated`, `refused_self`, `no_window`, `not_foreground`, `occluded`, `failed` |
 | `UIKEYS` | optional `target=` selector, optional `settle=`; **body is the text** | `UIEND` | `no_text`, plus every `UICLICK` error |
 | `UISHOT` | `x`, `y`, `w`, `h` (a width and a height, not a right and a bottom), `bpp` | `UIDAT` chunks of a native-bpp DIB; `UIEND w=, h=, bpp=, bytes=` | `no_memory`, `failed` (`detail=` says which) |
+| `UIFOCUS` | `target=` selector, optional `settle=` | `UIEND` | every `UICLICK` error except `occluded` |
 
 - **Every request ends in exactly one `UIEND`**, including the ones refused
   before they run and the ones still queued when the worker stops. Silence
@@ -398,6 +399,13 @@ handlers behind the shorter names in the lane table above.
   a zombie; Win16 kill safety is untested.
 - **There is no remote `QUIT`.** Stopping `gremote` remotely is `EXEC` of
   something that kills it, which is deliberate friction.
+
+`UIFOCUS` raises the window containing `target` and does nothing else.
+`UICLICK` and `UIKEYS` already raise what they need, so it exists for the case
+where pressing something would be wrong -- a `UISHOT` of a window that is
+behind another. It cannot be quiet: on 9x a window cannot be raised across a
+process boundary without being activated, measured in
+`docs/measurements/focus-vm-20260927.txt`.
 
 ### UI details decided now
 

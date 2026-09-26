@@ -401,6 +401,41 @@ def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
             raise
 
     @tool(
+        "focus",
+        prompts.text("tools.focus.description"),
+        {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": prompts.text("tools.focus.args.target")},
+                "settle": {
+                    "type": "integer",
+                    "description": prompts.text("tools.focus.args.settle")},
+            },
+            "required": ["target"],
+        },
+    )
+    async def machine_focus(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            target = str(a.get("target") or "").strip()
+            if not target:
+                return _text(prompts.text("tools.ui.refused.no_target"),
+                             error=True)
+            await ui.focus(guest, target,
+                           settle=max(0, min(int(a.get("settle") or 0), 5000)))
+            return _text(prompts.text("tools.ui.view.focused", target=target))
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__focus failed: %r", args)
+            raise
+
+    @tool(
         "shot",
         prompts.text("tools.shot.description"),
         {
@@ -450,7 +485,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,
                                           machine_ui, machine_click,
-                                          machine_keys, machine_shot])
+                                          machine_keys, machine_shot,
+                                          machine_focus])
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

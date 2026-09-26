@@ -12,7 +12,8 @@ const rc_lane_row RC_LANE_TABLE[] = {
     { "UITREE",   RC_LANE_DESKTOP },
     { "UICLICK",  RC_LANE_DESKTOP },
     { "UIKEYS",   RC_LANE_DESKTOP },
-    { "UISHOT",   RC_LANE_DESKTOP }
+    { "UISHOT",   RC_LANE_DESKTOP },
+    { "UIFOCUS",  RC_LANE_DESKTOP }
 };
 const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
 

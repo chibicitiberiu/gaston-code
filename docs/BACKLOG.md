@@ -1593,23 +1593,20 @@ since §16 it also **takes the foreground away from whoever is at the machine**
 (`docs/measurements/focus-vm-20260927.txt`). A capability like that should be
 chosen, and visible while it acts.
 
-### The standalone FOCUS op
+### The standalone FOCUS op -- done 2026-09-27
 
-`REMOTE.md:308` specifies it and nothing implements it. Everything needed is
-already there: `Input::focus()` does restore-if-iconic, `SetForegroundWindow`
-and an `AttachThreadInput` fallback, and `resolve_target` turns a selector
-into an HWND. What is missing is a `UIFOCUS` row in `RC_LANE_TABLE`
-(`win/net/frameproto.cpp`) and a handler beside the other four in
-`win/ui/uirpc.cpp`.
+`UIFOCUS` is in the lane table and handled beside the other four ops, and the
+bridge exposes it as a fifth tool, `focus`.
 
-`click` and `keys` do not need it -- both raise what they must already. It is
-for raising a window WITHOUT acting on it, the obvious case being `shot` of a
-window that is behind something.
+A fifth tool rather than a parameter, and the exec test is why it passes:
+`exec` cannot raise a window at all, and neither can any other tool without a
+side effect -- `click` raises the window by PRESSING something in it, which is
+exactly what a caller who wants to photograph a window does not want. A
+`focus=` parameter on `shot` would have covered that one case and left "put
+this in front of the person" unreachable.
 
-**Undecided:** whether the bridge surface is a fifth tool or a parameter.
-A fifth tool costs context on every request and `PLAN.md` §3.1's exec test
-exists to stop exactly that; a `focus=` parameter on `shot` covers the main
-case and reads oddly on `ui`.
+Its description says it activates the target and takes the keyboard, because
+on 9x there is no quiet way to raise a window across a process boundary.
 
 ### The setting, and the indicator
 

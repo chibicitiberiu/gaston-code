@@ -123,6 +123,14 @@ class UiService:
             "click", timeout_ms + settle * 4)
         return headers
 
+    async def focus(self, guest: GuestSession, target: str, *,
+                    settle: int = 0, timeout_ms: int = 8000) -> dict:
+        headers, _ = await self._call(
+            guest, P.ui_focus("", target, settle=settle,
+                              timeout_ms=timeout_ms),
+            "focus", timeout_ms + settle * 4)
+        return headers
+
     async def keys(self, guest: GuestSession, text: str, *, target: str = "",
                    settle: int = 0, timeout_ms: int = 8000) -> dict:
         headers, _ = await self._call(

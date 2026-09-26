@@ -627,6 +627,42 @@ static void do_click(rc_net *net, UiContext *ctx, rc_frame *f)
     ui_end(net, id, input_result_name(r), NULL, NULL, 0);
 }
 
+/* ---- FOCUS ----------------------------------------------------------- */
+
+/* Raise a window WITHOUT acting on it. click and keys already raise what they
+ * need (BACKLOG 16), so this is for the case where pressing something would
+ * be wrong: a screenshot of a window that is behind another, or getting a
+ * window in front of the person at the machine.
+ *
+ * On 9x this necessarily ACTIVATES the target -- BringWindowToTop and
+ * SetWindowPos(HWND_TOP, SWP_NOACTIVATE) are both ignored across a process
+ * boundary (docs/measurements/focus-vm-20260927.txt). There is no quiet
+ * version of this op to offer.
+ */
+static void do_focus(rc_net *net, UiContext *ctx, rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    WalkOptions o;
+    HWND target;
+    InputResult r;
+
+    if (!id)
+    {
+        rc_log("UIFOCUS: no id -- dropped");
+        return;
+    }
+    base_options(o, ctx, f);
+    target = resolve_target(net, ctx, f, id, o);
+    if (!target)
+        return;                 /* already answered */
+
+    r = ctx->input.focus(target);
+    if (r == INPUT_OK)
+        settle_after(ctx, f);
+
+    ui_end(net, id, input_result_name(r), NULL, NULL, 0);
+}
+
 static void do_keys(rc_net *net, UiContext *ctx, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
@@ -824,5 +860,6 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
     else if (strcmp(f->type, "UICLICK") == 0) do_click(net, ctx, f);
     else if (strcmp(f->type, "UIKEYS")  == 0) do_keys(net, ctx, f);
     else if (strcmp(f->type, "UISHOT")  == 0) do_shot(net, ctx, f);
+    else if (strcmp(f->type, "UIFOCUS") == 0) do_focus(net, ctx, f);
     else rc_log("desktop: unhandled frame %s", f->type);
 }
