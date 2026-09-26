@@ -1534,3 +1534,40 @@ our own window from a dialog it had not read.
 - **One guest wedge, cause unknown**, measured in ring-0 VMM code; the
   Toolhelp trigger first suspected was withdrawn. §14's open risk,
   `docs/measurements/wedge-vm-20260927.txt`.
+
+---
+
+## 18. A refused permission-mode change leaves the client showing the wrong mode
+
+**Status:** found 2026-09-27 while setting up the BACKLOG 16 end-to-end check.
+Open. Small, and it cost an hour.
+
+Picking **Auto** in the client's Mode menu with Haiku selected fails in the
+bridge:
+
+    ERROR bridge.options: permission mode change failed
+    ...
+    Exception: Cannot set permission mode to auto: auto mode unavailable
+               for this model
+
+`bridge/agent/session.py` `set_permission_mode` raises, `bridge/options.py`
+logs it with a traceback, **and nothing reaches the guest**. The client goes on
+showing `Auto` in the toolbar with a tick beside it in the menu, while the
+session is still in `Manual` and asks for every single tool call.
+
+So the machine says one thing and does another, and the only place the truth
+is written is a host-side log the person at the Win98 box is not reading. I
+spent a while assuming Auto was applied and that the permission bar appearing
+was a second bug.
+
+What it needs:
+
+- the refusal sent to the client, so the menu snaps back to the mode that is
+  actually in force and the transcript says why ("Haiku cannot run in Auto");
+- ideally the menu not offering a mode the current model cannot enter, since
+  the model is chosen right next to it in the same toolbar;
+- and the bridge log downgraded from a traceback to one line, because this is
+  a refusal, not a crash.
+
+Related: the mode and the model are separate dropdowns whose valid
+combinations are not independent, and nothing in the client knows that.
