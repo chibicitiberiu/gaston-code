@@ -1,0 +1,66 @@
+# The guest wedge of 2026-09-27, observed from outside with the VM still in it.
+#
+# BACKLOG 15 says the injection gates leave the guest in an unknown state and
+# asks for a reproduction. This is not that gate -- no injection ran here --
+# but it is the first time a wedge was MEASURED rather than found afterwards,
+# so the symptoms are written down while they were still on the screen.
+
+## State before
+
+The libexec session had finished on the VM (its e2e run, e2e-vm-20260927.txt)
+and handed it over. On the guest: RCX.EXE (its client) open and still pointed
+at 10.0.2.2:7891, a bridge that had been stopped; an MS-DOS Prompt sitting at
+C:\EP; and 3 REDIR32.EXE zombies left by the exec probes -- half-dead DOS VMs
+that BACKLOG 14 records as unkillable from user mode.
+
+## What I ran
+
+Through the DOS box, over QMP keystrokes:
+
+  DIR C:\RETRO\*.EXE > C:\D.TXT     -- ran, fetched over COM1, correct
+  C:\EP\EXECPRB.EXE --list          -- ran; its redirect never got typed
+  (everything after this)           -- no effect on the guest at all
+
+EXECPRB --list enumerates processes with Toolhelp32. The wedge begins at that
+command, on a machine that already held 3 half-dead DOS VMs. That is a
+correlation and a plausible mechanism, not a proven cause: I ran it once and
+the box has been restarted since.
+
+## Symptoms
+
+- The DOS box does not take keystrokes. Its cursor has stopped blinking:
+  two screenshots 2.5s apart with no input differ by 0 pixels.
+- Explorer does not answer. A click on the Start button and a Ctrl+Esc both
+  leave the Start menu closed (tools/vm/dos.py start_menu_open).
+- Clicking the client's taskbar button repaints 183 pixels -- the mouse
+  cursor moving, and nothing else. No activation, no z-order change.
+- The mouse cursor itself still moves and draws.
+
+So: the display is being scanned out and the pointer still tracks, while no
+window in the system processes a message.
+
+## Where the CPU is
+
+24 samples of EIP, 0.35s apart, via `info registers`:
+
+     4 c000a881      2 c000a882      1 c000a85f      1 c0053b7a
+     4 c00036ff      2 c0003621      1 c000a6f9      1 c00036d0
+     3 c000a700      1 c000a6e7      1 c0003643
+     3 c000a4d8
+
+CPL=0 and HLT=0 in every sample. 0xC0000000 is Win9x's ring-0 VMM. Two tight
+clusters, ~c00036xx and c000a4d8-c000a882, and NOT ONE sample in user space.
+The emulator burns a full core throughout, but this VM runs hot when idle too,
+so the saturation on its own proves nothing; the address distribution is the
+evidence.
+
+A ring-0 spin with no user-mode execution and no HLT is a VMM that never
+returns to scheduling anything. It is the shape BACKLOG 14 predicts for a
+DOS VM that was terminated and left half-dead: nothing in user mode can end
+it, and here nothing in user mode runs at all.
+
+## Recovery
+
+`virsh destroy` then `start` (no ACPI, so a shutdown does nothing). The disk
+was copied to a timestamped file first -- destroy is a power cut and the
+guest is FAT32.
