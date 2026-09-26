@@ -481,7 +481,7 @@ static void probe_deflate(void)
         "The bridge owns markdown, so the wire carries pre-styled runs.\r\n"
         "if (len > RC_MAX_FRAME) return -1;  /* 64KB, not 32MB */\r\n";
     mz_ulong clen, dlen;
-    unsigned i, slen, total = 0;
+    unsigned slen, total = 0;
     DWORD t0, t1;
     int rc, lvl;
 
@@ -1420,16 +1420,95 @@ static void dom_walk(IAccessible *acc, int depth)
     HeapFree(GetProcessHeap(), 0, v);
 }
 
-static BOOL CALLBACK find_ie(HWND h, LPARAM lp)
+/* Find the DOCUMENT by its MSAA role, never by a browser's window class.
+ *
+ * The old version looked for "Internet Explorer_Server", which is IE by
+ * construction -- and Win98 had Netscape 4, Netscape 6/Mozilla and Opera as
+ * well, each with its own internals. ROLE_SYSTEM_DOCUMENT is 15 on all of
+ * them, in every language, and a browser that answers nothing here is not a
+ * failure: it is the boundary between this tier and GDI capture, which is
+ * worth knowing before a policy depends on it.
+ *
+ * Every document found is reported with the class that carried it, because
+ * that list is the actual result of this gate.
+ */
+#define RC_ROLE_DOCUMENT 15L
+#define FIND_DOCS_MAX    8
+#define FIND_DEPTH_MAX   16
+
+static PFN_AOFW g_find_aofw;
+
+struct FoundDoc {
+    HWND  hwnd;
+    char  cls[64];
+    DWORD pid;
+    long  role;
+};
+
+static struct FoundDoc g_docs[FIND_DOCS_MAX];
+static int   g_docs_n;
+static int   g_docs_asked;
+
+/* The role of a window's client object, or -1. */
+static long role_of(HWND h)
 {
-    char cls[64];
-    HWND *out = (HWND *)lp;
-    GetClassNameA(h, cls, sizeof(cls));
-    if (!strcmp(cls, "Internet Explorer_Server")) { *out = h; return FALSE; }
-    { HWND c;
-      for (c = GetWindow(h, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
-          if (!find_ie(c, lp)) return FALSE;
-      } }
+    IAccessible *a = 0;
+    long role = -1;
+    if (!g_find_aofw)
+        return -1;
+    g_docs_asked++;
+    if (g_find_aofw(h, OBJID_CLIENT, &RC_IID_IAccessible, (void **)&a) == S_OK
+        && a) {
+        VARIANT self, v;
+        V_VT(&self) = VT_I4; V_I4(&self) = 0;
+        V_VT(&v) = VT_EMPTY;
+        if (a->lpVtbl->get_accRole(a, self, &v) == S_OK && V_VT(&v) == VT_I4)
+            role = V_I4(&v);
+        VariantClear(&v);
+        a->lpVtbl->Release(a);
+    }
+    return role;
+}
+
+/* Depth-capped, unlike the version this replaces: it recursed GW_CHILD with
+ * no bound at all, and a cyclic sibling chain would have run until the
+ * stack gave out. */
+static void find_docs(HWND parent, int depth)
+{
+    HWND c;
+    if (depth > FIND_DEPTH_MAX || g_docs_n >= FIND_DOCS_MAX)
+        return;
+    for (c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        long role;
+        if (g_docs_n >= FIND_DOCS_MAX)
+            return;
+        if (!IsWindowVisible(c))
+            continue;
+        role = role_of(c);
+        if (role == RC_ROLE_DOCUMENT) {
+            struct FoundDoc *d = &g_docs[g_docs_n++];
+            d->hwnd = c;
+            /* Cleared first. GetClassNameA leaves the buffer untouched on
+             * failure and the old code strcmp'd whatever was on the stack. */
+            d->cls[0] = '\0';
+            GetClassNameA(c, d->cls, sizeof(d->cls));
+            d->pid = 0;
+            GetWindowThreadProcessId(c, &d->pid);
+            d->role = role;
+            continue;       /* do not descend INTO a document */
+        }
+        find_docs(c, depth + 1);
+    }
+}
+
+static BOOL CALLBACK find_docs_top(HWND h, LPARAM lp)
+{
+    (void)lp;
+    if (g_docs_n >= FIND_DOCS_MAX)
+        return FALSE;
+    if (!IsWindowVisible(h))
+        return TRUE;
+    find_docs(h, 1);
     return TRUE;
 }
 
@@ -1454,14 +1533,38 @@ static void probe_dom(void)
     }
     say("GetRoleTextA %s", g_roletext ? "found" : "MISSING");
 
-    EnumWindows(find_ie, (LPARAM)&ie);
-    if (!ie) {
-        say("no 'Internet Explorer_Server' window -- open a page first");
+    /* CoInitialize BEFORE the search: role_of makes COM calls too, and the
+     * search is now most of this gate's work. */
+    CoInitialize(NULL);
+
+    g_find_aofw = aofw;
+    g_docs_n = g_docs_asked = 0;
+    t0 = GetTickCount();
+    EnumWindows(find_docs_top, 0);
+    t1 = GetTickCount();
+    say("document search: %d found, %d windows asked, %lu ms",
+        g_docs_n, g_docs_asked, (unsigned long)(t1 - t0));
+    if (!g_docs_n) {
+        say("no window reports ROLE_SYSTEM_DOCUMENT -- open a page first.");
+        say("  If a browser IS open and showing a page, that is the RESULT:");
+        say("  this browser exposes no MSAA document and belongs to the GDI");
+        say("  capture tier, not this one. Say which browser in the log.");
+        CoUninitialize();
         FreeLibrary(acc);
         return;
     }
+    /* THE ANSWER OF THIS GATE. One line per document, with the class that
+     * carried it -- that list is what tells us whether the cross-browser
+     * claim holds, and it must never become a class we then hard-code. */
+    {
+        int di;
+        for (di = 0; di < g_docs_n; di++)
+            say("  document %d   : class=%s hwnd=%p pid=%lu", di,
+                g_docs[di].cls, (void *)g_docs[di].hwnd,
+                (unsigned long)g_docs[di].pid);
+    }
+    ie = g_docs[0].hwnd;
 
-    CoInitialize(NULL);
     {
         IAccessible *doc = 0;
         if (aofw(ie, OBJID_CLIENT, &RC_IID_IAccessible, (void **)&doc) == S_OK
