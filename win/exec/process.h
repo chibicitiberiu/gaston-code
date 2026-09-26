@@ -81,6 +81,18 @@ public:
      * task holding the Win16Mutex does to the rest of the box is untested. */
     KillStatus kill(DWORD pid, bool force, DWORD waitMs);
 
+    /* ExecJob's stop, and nothing else's: end `root` (whose handle is
+     * `rootProcess`) and everything below it, WITHOUT the deny list -- the
+     * tree is ours, and on 98 it holds a 16-bit DOS VM that kill() would
+     * refuse. Descendants go deepest first; `root` is terminated unless it
+     * is REDIR32.EXE, which TerminateProcess cannot end and only turns into
+     * a zombie (measured). True if `root` is gone within `waitMs`.
+     *
+     * PROVISIONAL (docs/libexec-plan.md step 0b): the best order measured so
+     * far. On 98 a piped COMMAND.COM job still leaves REDIR32 behind; the
+     * caller reports that, and execprobe --stops is looking for better. */
+    bool stopJobTree(DWORD root, HANDLE rootProcess, DWORD waitMs);
+
     /* Start `command` detached from us: no handles inherited, both of its
      * handles closed, `show` as ShowWindow takes it (measured honoured for
      * DOS and Win32 console programs alike). False if it did not start or

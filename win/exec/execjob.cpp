@@ -30,6 +30,7 @@
  */
 
 #include "exec/execjob.h"
+#include "exec/process.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,20 +38,17 @@
 #include "core/str.h"
 
 #define EXEC_CHUNK   8192
+/* How long a stopped job's own process gets to go before it is reported
+ * leaked. On the worker thread, so bounded and short. */
+#define EXEC_STOP_WAIT_MS 2000
 /* Long enough for any real command line; anything longer is rejected, never
  * silently shortened. COMMAND.COM itself gives up well before this. */
 #define EXEC_MAX_CMD 1024
 
 ExecJob::ExecJob()
-    : m_cancel(0),
-      m_child(NULL)
+    : m_cancel(0)
 {
-    InitializeCriticalSection(&m_lock);
-}
-
-ExecJob::~ExecJob()
-{
-    DeleteCriticalSection(&m_lock);
+    m_wake.reset(CreateEventA(NULL, TRUE, FALSE, NULL));
 }
 
 /* Sticky: set before run() starts, it stops run() from spawning at all, so
@@ -59,15 +57,31 @@ ExecJob::~ExecJob()
 void ExecJob::cancel()
 {
     m_cancel = 1;
-    ScopedLock lock(&m_lock);
-    if (m_child)
-        TerminateProcess(m_child, 1);
+    if (m_wake.valid())
+        SetEvent(m_wake.get());
 }
 
-void ExecJob::setChild(HANDLE h)
+/* Timeout, cancel or a reader gone: end the whole tree, on this thread.
+ *
+ * TerminateProcess on the pid CreateProcess returned is what this used to
+ * be, and on 98 it does nothing for a piped COMMAND.COM job: that pid is
+ * REDIR32.EXE, the call returns TRUE, the command runs on and REDIR32 stays
+ * as a zombie (docs/BACKLOG.md 14, measured). Processes::stopJobTree kills
+ * the tree below it instead. Without Toolhelp (NT 4) there is no tree to
+ * walk, and TerminateProcess on the shell is what NT honours. */
+void ExecJob::stop(const PROCESS_INFORMATION &pi, ExecResult &out)
 {
-    ScopedLock lock(&m_lock);
-    m_child = h;
+    Processes ps;
+    bool gone;
+    if (ps.init())
+        gone = ps.stopJobTree(pi.dwProcessId, pi.hProcess, EXEC_STOP_WAIT_MS);
+    else
+    {
+        TerminateProcess(pi.hProcess, 1);
+        gone = WaitForSingleObject(pi.hProcess, EXEC_STOP_WAIT_MS) ==
+               WAIT_OBJECT_0;
+    }
+    out.stopLeaked = !gone;
 }
 
 /* The shell is spliced, never chosen: see ExecOptions::shell. */
@@ -188,8 +202,11 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
     Handle thread(pi.hThread);
     wr.reset();                 /* so ReadFile ends when the child exits */
     inRd.reset();
-    setChild(process.get());
     out.status = EXEC_OK;
+    HANDLE waits[2];
+    waits[0] = process.get();
+    waits[1] = m_wake.get();
+    DWORD nwaits = m_wake.valid() ? 2 : 1;
 
     for (;;)
     {
@@ -223,7 +240,11 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
             }
         }
 
-        if (WaitForSingleObject(process.get(), 100) == WAIT_OBJECT_0)
+        /* The process ending, or cancel() waking us: whichever first. */
+        DWORD w = WaitForMultipleObjects(nwaits, waits, FALSE, 100);
+        if (w == WAIT_OBJECT_0 + 1)
+            continue;           /* the flag is read at the top */
+        if (w == WAIT_OBJECT_0)
         {
             /* Drain what is still in the pipe after exit -- but BOUNDED.
              *
@@ -264,20 +285,22 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
         }
     }
 
-    /* A cancel kills the child from another thread, so the loop above can
-     * see the process EXIT before it sees the flag, and would call a killed
-     * command a finished one. The flag is the truth. (Found by execcheck's
-     * cancel-mid-run: an EXECKILL could come back as status=ok.) */
+    /* A command that finished just as a cancel landed is still reported
+     * as cancelled: the caller asked for it to stop and must not be told
+     * it completed. (execcheck's cancel-mid-run found the reverse once,
+     * when the kill came from the other thread and the exit won the race.) */
     if (m_cancel && out.status == EXEC_OK)
         out.status = EXEC_CANCELLED;
 
     if (out.status == EXEC_TIMEOUT || out.status == EXEC_CANCELLED ||
         out.status == EXEC_SINK_GONE)
-        TerminateProcess(process.get(), 1);
+    {
+        rd.reset();             /* nobody reads it any more */
+        stop(pi, out);
+    }
 
     GetExitCodeProcess(process.get(), &out.exitCode);
     out.ms = GetTickCount() - start;
-    setChild(NULL);
     return true;
 }
 

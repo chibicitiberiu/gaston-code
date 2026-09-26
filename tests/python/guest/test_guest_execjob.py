@@ -28,7 +28,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 20, sorted(verdicts)
+    assert len(verdicts) == 21, sorted(verdicts)
 
 
 def test_an_overlong_command_is_refused_not_truncated(verdicts):
@@ -62,3 +62,9 @@ def test_processes_list_kill_and_launch(verdicts):
                  "launch-overlong-refused", "launch-and-descendants",
                  "kill-waits-for-the-end", "win16-detected-from-the-header"):
         assert verdicts[case][0] == "pass", (case, verdicts[case])
+
+
+def test_a_stop_reaches_the_whole_tree(verdicts):
+    """Killing only the process run() spawned left a grandchild running on
+    Wine and NT, and on Win98 killed nothing at all (the pid is REDIR32)."""
+    assert verdicts["stop-reaches-the-grandchild"][0] == "pass"

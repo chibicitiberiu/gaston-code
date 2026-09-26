@@ -546,6 +546,9 @@ static void run_one(rc_frame *f)
     keys[nkv] = "truncated"; vals[nkv++] = trunc;
     rc_net_send(g_net, "EXECRESULT", keys, vals, nkv, NULL, 0);
 
+    if (r.stopLeaked)
+        rc_log("rpc: exec %s was stopped but its process is still there; "
+               "on Win98 that is a REDIR32 zombie (BACKLOG 14)", ctx.id);
     rc_log("rpc: exec %s done status=%s code=%lu bytes=%lu in %lums",
            ctx.id, status, (unsigned long)r.exitCode,
            (unsigned long)r.bytes, (unsigned long)r.ms);

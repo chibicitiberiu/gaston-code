@@ -1329,8 +1329,13 @@ needs the DOC goldens regenerated and it depends on none of the above.
 ## 14. Stopping an exec leaks a process on Win98
 
 **Status:** found 2026-09-26 by `win/checks/execprobe.cpp` on the VM
-(`docs/measurements/execprobe-vm-*-20260926.txt`). Being closed in libexec,
-`docs/libexec-plan.md` steps 0b and 5.
+(`docs/measurements/execprobe-vm-*-20260926.txt`). **Narrowed, not closed**
+(libexec step 5): a stop no longer calls TerminateProcess on REDIR32; it
+kills the tree below it (`Processes::stopJobTree`), which ends a Win32
+program at once and a DOS one within ~30s, and the client logs the REDIR32
+that is still left (`ExecResult::stopLeaked`). Closing it waits on
+`execprobe --stops` running on the VM (plan step 0b), which is not yet
+done -- and neither is any guest run of the new stop path.
 
 On 98 a piped `COMMAND.COM /c` spawn is three processes: the pid
 `CreateProcess` returns is `REDIR32.EXE`, its child is the DOS VM

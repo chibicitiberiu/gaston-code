@@ -183,6 +183,38 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
     return KILL_PENDING;
 }
 
+bool Processes::stopJobTree(DWORD root, HANDLE rootProcess, DWORD waitMs)
+{
+    const char *rootName = "";
+    std::vector<ProcessInfo> all;
+    std::vector<DWORD> below;
+    if (m_snap && snapshot(all, false))
+    {
+        for (unsigned i = 0; i < all.size(); i++)
+            if (all[i].pid == root)
+                rootName = baseName(all[i].exe);
+        descendants(root, below);
+    }
+    /* Deepest first: breadth-first order reversed. On 98 that is the
+     * program, then the DOS VM (WINOA386.MOD), whose death takes a Win32
+     * program with it at once and a DOS one within about 30s. */
+    for (unsigned i = below.size(); i-- > 0;)
+    {
+        Handle h(OpenProcess(PROCESS_TERMINATE, FALSE, below[i]));
+        if (h.valid())
+            TerminateProcess(h.get(), 1);
+    }
+    bool redir = lstrcmpiA(rootName, "REDIR32.EXE") == 0;
+    if (!redir)
+        TerminateProcess(rootProcess, 1);
+    if (WaitForSingleObject(rootProcess, waitMs) == WAIT_OBJECT_0)
+        return true;
+    rc_log("process: job %08lx (%s) still there %lums after its tree was "
+           "stopped, %u below it", root, rootName[0] ? rootName : "?", waitMs,
+           (unsigned)below.size());
+    return false;
+}
+
 bool Processes::launch(const char *command, const char *cwd, int show,
                        DWORD &pid, DWORD &error)
 {

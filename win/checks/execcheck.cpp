@@ -184,6 +184,16 @@ static void output()
     }
 }
 
+static DWORD fileSize(const char *path)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(path, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    FindClose(h);
+    return fd.nFileSizeLow;
+}
+
 struct Canceller
 {
     ExecJob *job;
@@ -212,6 +222,29 @@ static void stopping()
                 (unsigned long)r.ms);
         say("timeout", r.status == EXEC_TIMEOUT && r.ms >= 1000 && r.ms < 6000,
             detail);
+    }
+    {
+        /* The stop reaches the whole tree. The loop runs in a SECOND
+         * cmd.exe, a grandchild; killing only the one run() spawned -- all
+         * this did before -- leaves it appending to the marker forever. */
+        DeleteFileA("execcheck_tree.txt");
+        ExecJob job;
+        ExecOptions opt;
+        opt.timeoutMs = 1500;
+        ExecResult r;
+        Collect c;
+        job.run("cmd.exe /c cmd.exe /c for /l %i in (1,1,50000000) do "
+                "echo t>>execcheck_tree.txt", opt, c, r);
+        DWORD a = fileSize("execcheck_tree.txt");
+        Sleep(800);
+        DWORD b = fileSize("execcheck_tree.txt");
+        rc_strf(detail, sizeof detail, "status=%d marker %lu -> %lu leaked=%d",
+                (int)r.status, (unsigned long)a, (unsigned long)b,
+                r.stopLeaked);
+        say("stop-reaches-the-grandchild", r.status == EXEC_TIMEOUT && a > 0 &&
+                                               a == b && !r.stopLeaked,
+            detail);
+        DeleteFileA("execcheck_tree.txt");
     }
     {
         /* A reader that is gone stops the command: without this the job

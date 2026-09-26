@@ -82,10 +82,15 @@ struct ExecResult
      * child's code through, and which shell ran is the caller's knowledge,
      * never this library's. */
     bool viaShell;
+    /* The command was stopped (timeout, cancel, reader gone) and the process
+     * run() started was still there afterwards. On 98 that is REDIR32.EXE,
+     * which nothing short of a reboot removes (docs/BACKLOG.md 14); the
+     * caller logs it. */
+    bool stopLeaked;
 
     ExecResult()
         : status(EXEC_SPAWN_FAILED), exitCode(0), bytes(0), ms(0), error(0),
-          truncated(false), viaShell(false)
+          truncated(false), viaShell(false), stopLeaked(false)
     {
     }
 };
@@ -94,7 +99,6 @@ class ExecJob
 {
 public:
     ExecJob();
-    ~ExecJob();
 
     /* Run `command` to completion, timeout or cancel. False when nothing
      * was spawned (empty, too long, spawn failed); `out` says which. */
@@ -102,7 +106,9 @@ public:
              ExecResult &out);
 
     /* Any thread, any time, idempotent. A cancel before run() means run()
-     * spawns nothing. */
+     * spawns nothing. It only SIGNALS: the stop -- a Toolhelp walk and a
+     * bounded wait -- runs on run()'s thread, never on the caller's, which
+     * in the client is the reader. */
     void cancel();
 
     bool cancelled() const { return m_cancel != 0; }
@@ -111,13 +117,13 @@ private:
     ExecJob(const ExecJob &);
     ExecJob &operator=(const ExecJob &);
 
-    void setChild(HANDLE h);
     static bool deliver(const char *data, DWORD got, const ExecOptions &opt,
                         OutputSink &sink, ExecResult &out);
 
-    CRITICAL_SECTION m_lock;
+    void stop(const PROCESS_INFORMATION &pi, ExecResult &out);
+
     volatile LONG m_cancel;
-    HANDLE m_child;         /* guarded by m_lock */
+    Handle m_wake;          /* set by cancel(), waited on by run() */
 };
 
 #endif
