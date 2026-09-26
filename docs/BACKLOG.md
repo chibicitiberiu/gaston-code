@@ -1532,10 +1532,17 @@ our own window from a dialog it had not read.
   them yet; 98 has no tasklist or taskkill, so an agent cannot see or end a
   hung program at all. PLAN.md already calls `list_processes` the strongest
   case; it lands with gremote (REMOTE.md step 4) or as client ops.
-- **No exec check runs on the guest.** `execcheck`'s command cases need
-  cmd.exe, so on 98 they only prove spawn failure; the guest's exec coverage
-  is `execkill.py` against a client plus the e2e run, both manual. A
-  COMMAND.COM variant of those cases is missing.
+- **No exec check runs on the guest.** *Fixed 2026-09-27:* `execcheck` now
+  runs its own exe in child modes, directly or through COMSPEC, and has a
+  `--detached-to FILE` mode for the guest (a console parent would hide
+  REDIR32). First guest run on a clean box: 22/23, the grandchild stop with
+  `leaked=0` and no REDIR32 afterwards; the one failure was the test's own.
+- **Killing a console program on 98 leaves its console's DOS VM
+  half-dead.** Found by that run: a Win32 console program's console is a
+  WINOA386.MOD listed as its child, and TerminateProcess on the program
+  strands it (1 thread, like REDIR32), degrading later runs. Matters for
+  the KILL tool: kill the program's Win32 descendants and let a console
+  program end, or say that the VM stays.
 - **Stop read as a failure.** *Fixed 2026-09-27:* the bridge ends a stopped
   turn as `stopped` and the client shows "Stopped." instead of "did not
   complete... may not have run at all".
