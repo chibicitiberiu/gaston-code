@@ -48,6 +48,10 @@ def test_lane_table_matches_the_codes_actual_behaviour(verdicts):
     behind a JOB (STREAM), and anything else is the UI thread's."""
     assert verdicts["lane(EXEC) == JOB"][0] == "pass"
     assert verdicts["lane(EXECKILL) == IMMEDIATE"][0] == "pass"
+    # Process list and kill answer on the reader, like EXECKILL: a hung
+    # program is found and ended while an EXEC is stuck in the job slot.
+    assert verdicts["lane(PSLIST) == IMMEDIATE"][0] == "pass"
+    assert verdicts["lane(PSKILL) == IMMEDIATE"][0] == "pass"
     for t in ("SYNCSCAN", "SYNCPUT", "SYNCPUTEND", "SYNCMKDIR", "SYNCGET"):
         assert verdicts["lane(%s) == STREAM" % t][0] == "pass"
     for t in ("TEXT", "READY", "TURN", "BOGUS"):

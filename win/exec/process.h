@@ -65,8 +65,11 @@ public:
     bool init();
     bool available() const { return m_snap != 0; }
 
-    /* Streams one ProcessInfo per process. False if no snapshot. */
-    bool list(ProcessSink &sink);
+    /* Streams one ProcessInfo per process. False if no snapshot.
+     * `readKinds` false skips opening every exe for its header (`win16`
+     * stays false): the client lists on its READER thread, which must
+     * never wait on the disk. */
+    bool list(ProcessSink &sink, bool readKinds = true);
 
     /* Every process below `root`, by parent pid, root excluded. The order is
      * breadth-first: children before grandchildren. */

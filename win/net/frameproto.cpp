@@ -4,6 +4,13 @@
 const rc_lane_row RC_LANE_TABLE[] = {
     { "EXEC",     RC_LANE_JOB },
     { "EXECKILL", RC_LANE_IMMEDIATE },
+    /* Processes: answered on the reader, because behind a stuck EXEC is
+     * exactly when an agent needs to see and end a program. A Toolhelp
+     * snapshot is kernel32 alone, and a kill waits at most 250ms. (No
+     * semicolon in here: the frame-contract test reads this table up to
+     * the first one.) */
+    { "PSLIST",   RC_LANE_IMMEDIATE },
+    { "PSKILL",   RC_LANE_IMMEDIATE },
     { "ATTGET",   RC_LANE_STREAM },
     /* Phase 6. Listed one by one rather than matched on a "UI" prefix: the
      * SYNC* wildcard below exists because that family was already a dozen

@@ -124,6 +124,8 @@ static void lane_table_cases(void)
     /* Everything else is the UI thread's, including a type nobody has heard
      * of -- an unrecognised frame must never fall into a worker lane and be
      * silently eaten before render_frame's own "unhandled" branch sees it. */
+    check_lane("PSLIST", RC_LANE_IMMEDIATE);
+    check_lane("PSKILL", RC_LANE_IMMEDIATE);
     check_lane("TEXT",   RC_LANE_UI);
     check_lane("READY",  RC_LANE_UI);
     check_lane("TURN",   RC_LANE_UI);

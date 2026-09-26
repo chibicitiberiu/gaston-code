@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include "rpc/rpc.h"
 #include "exec/execjob.h"
+#include "rpc/procrpc.h"
 #include "ui/uirpc.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
@@ -131,6 +132,10 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
             if (kid) cancel_job(kid);
             else rc_log("rpc: EXECKILL with no id -- ignored");
         }
+        else if (strcmp(f->type, "PSLIST") == 0)
+            rc_procrpc_list(g_net, f);
+        else if (strcmp(f->type, "PSKILL") == 0)
+            rc_procrpc_kill(g_net, f);
         rc_frame_delete(f);
         return RC_ROUTE_TAKEN;
 

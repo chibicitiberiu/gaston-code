@@ -43,7 +43,7 @@ static void fill(ProcessInfo &p, const PROCESSENTRY32 &pe, bool withKind)
     p.win16 = withKind && Processes::isWin16Exe(p.exe);
 }
 
-bool Processes::list(ProcessSink &sink)
+bool Processes::list(ProcessSink &sink, bool readKinds)
 {
     if (!m_snap)
         return false;
@@ -56,7 +56,7 @@ bool Processes::list(ProcessSink &sink)
     for (BOOL ok = m_first(h.get(), &pe); ok; ok = m_next(h.get(), &pe))
     {
         ProcessInfo p;
-        fill(p, pe, true);
+        fill(p, pe, readKinds);
         if (!sink.onProcess(p))
             break;
         pe.dwSize = sizeof pe;

@@ -199,6 +199,10 @@ class GuestSession:
     ui_seq: int = 0
     #: One desktop worker on the guest means one request at a time.
     ui_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: Process list/kill, `p`-prefixed ids. Answered on the guest's reader
+    #: thread, so no lock: nothing on that side queues them.
+    proc_pending: dict[str, asyncio.Future] = field(default_factory=dict)
+    proc_seq: int = 0
     #: The sync subprotocol's own id namespace, in-flight table, baseline
     #: lock and running flag.
     sync: GuestSyncState = field(default_factory=GuestSyncState)

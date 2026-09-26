@@ -36,6 +36,7 @@ from .services.options import (
 )
 from .services.permission import PermissionService
 from .services.presentation import PresentationService
+from .services.proc import ProcService
 from .services.session import SessionService
 from .services.sync import SyncService
 from .services.turn_runner import TurnRunner, turn_verdict
@@ -155,6 +156,7 @@ class Bridge:
             pre_exec=self._pre_exec,
         )
         self.ui = UiService(connection=self.connection)
+        self.proc = ProcService(connection=self.connection)
         self.permissions = PermissionService(
             connection=self.connection,
             presentation=self.presentation,
@@ -181,6 +183,7 @@ class Bridge:
             guest_exec=self.guest_exec,
             sync=self.sync,
             ui=self.ui,
+            proc=self.proc,
             conv=self.conv,
             spawn=self._spawn,
         )
@@ -231,6 +234,8 @@ class Bridge:
             "UIENT":        self.ui.ui_frame,
             "UIDAT":        self.ui.ui_frame,
             "UIEND":        self.ui.ui_frame,
+            "PSRESULT":     self.proc.proc_frame,
+            "PSKILLRESULT": self.proc.proc_frame,
             "PERMREPLY":    self.permissions.reply,
             "GETSESSIONS":  self.session.on_getsessions,
             "GETPAGE":      self.presentation.on_getpage,
@@ -462,6 +467,7 @@ class Bridge:
             guest,
             "The connected machine disconnected while this was running.",
         )
+        self.proc.fail_calls(guest)
 
 
     def _ensure_background_tasks(self, guest: GuestSession) -> None:

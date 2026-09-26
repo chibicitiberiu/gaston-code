@@ -24,6 +24,7 @@ from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from ..services.proc import ProcError
 from ..services.ui import UiError
 from ..wire.uiview import render_tree, to_png
 from . import prompts
@@ -60,7 +61,8 @@ def _text(body: str, *, error: bool = False) -> dict:
     return out
 
 
-def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
+def build(guest_exec, sync, workspace, guest=None, ui=None,
+          proc=None) -> dict:
     """Create the `machine` server bound to THREE SERVICES and ONE GUEST.
 
     Named one by one rather than reached through something that has them. It
@@ -481,12 +483,85 @@ def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
             log.exception("mcp__machine__shot failed: %r", args)
             raise
 
+    def _proc_refused(status: str, pid: str = "") -> str:
+        try:
+            return prompts.text(f"tools.ps.refused.{status}", pid=pid)
+        except KeyError:
+            return prompts.text("tools.ps.refused.unknown", status=status,
+                                pid=pid)
+
+    @tool(
+        "ps",
+        prompts.text("tools.ps.description"),
+        {"type": "object", "properties": {}, "required": []},
+    )
+    async def machine_ps(args: dict) -> dict:
+        try:
+            if proc is None or guest is None:
+                return _text(prompts.text("tools.ps.refused.unavailable"),
+                             error=True)
+            try:
+                rows, truncated = await proc.list(guest)
+            except ProcError as exc:
+                return _text(_proc_refused(exc.status), error=True)
+            lines = [f"{'pid':<8} {'parent':<8} {'thr':>3}  program"]
+            lines += [f"{p.pid:<8} {p.ppid:<8} {p.threads:>3}  {p.exe}"
+                      for p in rows]
+            body = "\n".join(lines)
+            if truncated:
+                body += "\n" + prompts.text("tools.ps.view.truncated")
+            return _text(body)
+        except Exception:
+            log.exception("mcp__machine__ps failed: %r", args)
+            raise
+
+    @tool(
+        "kill",
+        prompts.text("tools.kill.description"),
+        {
+            "type": "object",
+            "properties": {
+                "pid": {"type": "string",
+                        "description": prompts.text("tools.kill.args.pid")},
+                "force": {"type": "boolean",
+                          "description": prompts.text("tools.kill.args.force")},
+            },
+            "required": ["pid"],
+        },
+    )
+    async def machine_kill(args: dict) -> dict:
+        try:
+            if proc is None or guest is None:
+                return _text(prompts.text("tools.ps.refused.unavailable"),
+                             error=True)
+            a = args or {}
+            pid = str(a.get("pid") or "").strip().lower()
+            if pid.startswith("0x"):
+                pid = pid[2:]
+            if not pid or any(c not in "0123456789abcdef" for c in pid):
+                return _text(prompts.text("tools.ps.refused.bad_pid", pid=pid),
+                             error=True)
+            try:
+                status = await proc.kill(guest, pid,
+                                         force=bool(a.get("force")))
+            except ProcError as exc:
+                status = exc.status
+            if status == "ok":
+                return _text(prompts.text("tools.kill.view.ok", pid=pid))
+            if status == "pending":
+                return _text(prompts.text("tools.kill.view.pending", pid=pid))
+            return _text(_proc_refused(status, pid), error=True)
+        except Exception:
+            log.exception("mcp__machine__kill failed: %r", args)
+            raise
+
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,
                                           machine_ui, machine_click,
                                           machine_keys, machine_shot,
-                                          machine_focus])
+                                          machine_focus, machine_ps,
+                                          machine_kill])
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

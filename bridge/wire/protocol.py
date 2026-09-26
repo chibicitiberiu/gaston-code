@@ -555,6 +555,25 @@ def ui_shot(ui_id: str, *, x: int = 0, y: int = 0, w: int = 0, h: int = 0,
                             "w": str(w), "h": str(h), "bpp": str(bpp)})
 
 
+# --- processes ------------------------------------------------------------
+
+
+def ps_list(ps_id: str) -> Frame:
+    """Every process on the machine. Answered on the guest's reader thread,
+    so it works while an EXEC is stuck -- which is when it is needed."""
+    return Frame("PSLIST", {"id": ps_id})
+
+
+def ps_kill(ps_id: str, pid: str, *, force: bool = False) -> Frame:
+    """End one process. `pid` is the hex id `ps_list` reported; `force`
+    lifts the guest's softer refusals (Explorer, 16-bit programs), never
+    its hard ones (the system's own processes)."""
+    h = {"id": ps_id, "pid": pid}
+    if force:
+        h["force"] = "1"
+    return Frame("PSKILL", h)
+
+
 # --- model / effort menus ---------------------------------------------
 
 

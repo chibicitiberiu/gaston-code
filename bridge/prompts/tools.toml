@@ -219,3 +219,52 @@ focused = '''
 Brought the window containing {target} to the front.'''
 typed = '''
 Typed {n} characters into {where}.'''
+
+
+[ps]
+description = '''
+List the programs running on the connected machine: process id (hex), parent id, thread count and program path. Use it to find a program that has hung, or to see what a command left running. It works while a command is still running, so you can look for what is stuck. Nothing is changed.'''
+
+[ps.view]
+truncated = '''
+(The list was cut short; it had more processes than one reply carries.)'''
+
+# A refusal or failure from `ps` or `kill`, in words. {pid} is the id asked
+# about, {status} the guest's own word for an unknown one.
+[ps.refused]
+unavailable = '''
+Processes cannot be listed or ended: this conversation is not attached to a machine that answers for them.'''
+no_toolhelp = '''
+That machine cannot list or end processes (it has no process-snapshot API -- Windows NT 4 is like this). Use `exec` to run the machine's own tools instead, if it has any.'''
+no_memory = '''
+The machine had no memory to build the list. Try again in a moment.'''
+bad_pid = '''
+"{pid}" is not a process id. Use the hex id exactly as `ps` shows it.'''
+no_such_pid = '''
+There is no process {pid}. It has ended, or the id is wrong -- run `ps` again; ids change.'''
+denied = '''
+Refused: process {pid} is protected. The machine's own system processes are never ended; Explorer and 16-bit programs are refused unless you pass `force` -- and only do that if the user asked for it, since ending them can leave the machine unusable until it restarts.'''
+failed = '''
+The machine refused to end process {pid}.'''
+timeout = '''
+The machine did not answer in time. It may be busy; try again.'''
+disconnected = '''
+The machine disconnected before it answered.'''
+unknown = '''
+The machine answered "{status}" for process {pid}, which this bridge does not recognise.'''
+
+[kill]
+description = '''
+End one program on the connected machine, by the hex process id `ps` shows. For a program that has hung or that a command left running. The user approves every call. Some processes are protected and refused.'''
+
+[kill.args]
+pid = '''
+The process id, in hex, exactly as `ps` shows it.'''
+force = '''
+Also end Explorer or a 16-bit program, which are refused otherwise. Only when the user has asked for it.'''
+
+[kill.view]
+ok = '''
+Process {pid} has ended.'''
+pending = '''
+Process {pid} was told to end and is still there after a moment. Some programs take a while; run `ps` again to see whether it has gone. On Windows 98 a DOS program's session can take up to half a minute, and some parts of it never go until the machine restarts.'''
