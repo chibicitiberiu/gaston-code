@@ -668,7 +668,7 @@ void hungWindows(void)
         DWORD ms = GetTickCount() - t0;
 
         rc_strf(detail, sizeof(detail),
-                "%d nodes, %lu timed out, %lu deferred, %lu ms "
+                "%d walked, %lu timed out, %lu deferred, %lu ms "
                 "(full=600, +quarter=750, two full=1200)",
                 sink.count(), (unsigned long)tw.textTimeouts(),
                 (unsigned long)tw.deferredNodes(), (unsigned long)ms);
@@ -676,10 +676,19 @@ void hungWindows(void)
         /* Exactly one window in the whole walk pays full price, whichever
          * the z-order puts first. Not "two nodes": a thread gets windows it
          * did not ask for -- Wine gives each one an IME window, and 9x has
-         * its own -- so the assertion is the ratio and not the count. */
+         * its own -- so the assertion is against the number of windows
+         * WALKED, not a fixed count.
+         *
+         * And not against the timeout count either, which is what this
+         * asserted first and what real Win98 disproved: `deferred` counts
+         * windows ASKED at a reduced budget, and one of those can still
+         * answer. Wine never showed it because there every deferred window
+         * also timed out; the guest walked three, deferred two, and only
+         * two timed out. The invariant is about who pays, not who
+         * refuses. */
         say("hung-only-one-window-pays-full-price",
-            tw.textTimeouts() >= 2
-            && tw.deferredNodes() == tw.textTimeouts() - 1, detail);
+            sink.count() >= 2 && tw.deferredNodes() == sink.count() - 1,
+            detail);
 
         say("hung-second-thread-pays-a-quarter",
             ms >= 650 && ms < 1050, detail);

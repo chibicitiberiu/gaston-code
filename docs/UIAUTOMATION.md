@@ -635,9 +635,27 @@ see "And this document broke its own rule". It was never needed.
   no capacity, so the only defence against a long row is refusing it. Getting
   that wrong is a stack overwrite inside another program.
 
-**Still not run on hardware.** Everything above builds, passes the import,
-CMOV, static-constructor and stack-frame gates, and has 26 checks under
-Wine -- but Wine cannot answer the question that matters. Gate 0.15f asks
-it: does a thread-targeted hook reach one process and no other? Until that
-comes back from the real machines, `inproc` should be treated as written
-rather than working, and `0.15d` re-run after a reboot alongside it.
+**Run on the guest, 2026-09-26, and it corrected the design twice.**
+
+`WH_CALLWNDPROC` -- the hook the plan specified -- **installs and never
+fires**. Zero calls, zero processes. So do `WH_CBT` and `WH_CALLWNDPROCRET`
+when aimed at a thread. `WH_GETMESSAGE` delivered 23 calls into exactly one
+process: the target, and no other. Gate 0.15f asked the question and the
+documented answer was wrong; had this been built on it, the whole
+in-process tier would have been silently dead, and it would have looked
+like a bug in the collector.
+
+It also fires inside `GetMessage`, so the controller posts as well as
+sends -- a sent message alone never wakes it.
+
+And the GDI patch list was twice too narrow. Under Wine, COMCTL32 imports
+only the W forms of `TextOut`/`ExtTextOut`; on the guest, `MSHTML.DLL`
+imports `DrawTextW` and `DrawTextA`, `COMCTL32` imports `DrawTextExA` and
+`COMDLG32` imports `DrawTextA` -- and `DrawText*` is USER32, not GDI32, so
+it was not in the patch at all. A web page and a dialog would each have
+been captured in part and reported as the text on screen, which is worse
+than capturing nothing because it looks like an answer. Eight entry points
+are patched now.
+
+What is still owed: `0.15d` re-run after a reboot with the generation word,
+and one end-to-end turn through the bridge.

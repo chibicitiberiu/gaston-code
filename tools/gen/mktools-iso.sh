@@ -51,6 +51,14 @@ want "$HERE/build/win/synccheck.exe" "SYNCCHK.EXE"
 want "$HERE/build/win/capscheck.exe" "CAPSCHK.EXE"
 want "$HERE/build/win/rpccheck.exe"  "RPCCHK.EXE"
 want "$HERE/build/win/framecheck.exe" "FRAMECHK.EXE"
+# The automation library's own checks, and the wire record's. These carry
+# everything Phase 6 added, and three of their answers are known to differ
+# under Wine: its oleacc has no Win32 class proxies, it never emits
+# EVENT_OBJECT_DESTROY for a hidden popup, and it honours
+# WINEVENT_SKIPOWNPROCESS in name only. So these two are exactly the
+# binaries whose Wine result proves the code and not the platform.
+want "$HERE/build/win/autocheck.exe" "AUTOCHK.EXE"
+want "$HERE/build/win/uicheck.exe" "UICHECK.EXE"
 # The injection test DLL (probe 0.15d). It must be a real file the system
 # can map into other processes, so it rides here like the exes do.
 want "$HERE/build/win/HOOKDLL.DLL" "HOOKDLL.DLL"

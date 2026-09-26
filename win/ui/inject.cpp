@@ -267,10 +267,20 @@ InjectResult Injector::collect(HWND anyWindowOfTarget, HWND root,
     m_shm->op = RC_OP_COLLECT;
     ResetEvent(m_done);
 
-    /* ONE THREAD. Not the system-wide WH_CBT that 0.15d used: that reaches
-     * every process that sees a CBT event, which is how Explorer came to be
-     * in scope and how Explorer came to die. */
-    hook = SetWindowsHookExA(WH_CALLWNDPROC, proc, dll, tid);
+    /* WH_GETMESSAGE, and that is a measured choice rather than the obvious
+     * one.
+     *
+     * The plan specified WH_CALLWNDPROC. Gate 0.15f, run on a real Win98,
+     * says it INSTALLS AND NEVER FIRES -- zero calls, zero processes --
+     * and so do WH_CBT and WH_CALLWNDPROCRET when aimed at a thread.
+     * WH_GETMESSAGE delivered 23 calls into exactly one process, the
+     * target, and no other. Had this been built on the documented choice
+     * the whole in-process tier would have been silently dead.
+     *
+     * One THREAD either way. Not the system-wide form 0.15d used: that
+     * reaches every process that sees the event, which is how Explorer
+     * came to be in scope and how Explorer came to die. */
+    hook = SetWindowsHookExA(WH_GETMESSAGE, proc, dll, tid);
     if (!hook)
     {
         rc_strf(m_err, sizeof(m_err), "the system refused the hook (%lu)",
@@ -279,14 +289,18 @@ InjectResult Injector::collect(HWND anyWindowOfTarget, HWND root,
     }
     else
     {
-        /* Give the thread something to dispatch, or the hook has no
-         * occasion to fire and our code never loads. SendMessageTimeout,
-         * never SendMessage: a wedged target must not take us with it. */
+        /* Give the thread something to RETRIEVE, not merely something to
+         * dispatch: WH_GETMESSAGE fires inside GetMessage, so a posted
+         * message is what wakes it and a sent one is not enough. Both, so
+         * a target that is idle in GetMessage and one that is busy in a
+         * SendMessage both get poked. SendMessageTimeout and never
+         * SendMessage: a wedged target must not take us with it. */
         DWORD until = GetTickCount() + (deadlineMs ? deadlineMs : 2000) + 1000;
         DWORD_PTR res = 0;
         out = INJECT_NO_REPLY;
         while ((long)(GetTickCount() - until) < 0)
         {
+            PostMessageA(anyWindowOfTarget, WM_NULL, 0, 0);
             SendMessageTimeoutA(anyWindowOfTarget, WM_NULL, 0, 0,
                                 SMTO_ABORTIFHUNG, 100, &res);
             if (WaitForSingleObject(m_done, 50) == WAIT_OBJECT_0)

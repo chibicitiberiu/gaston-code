@@ -2650,21 +2650,50 @@ static void probe_targeted(void)
     if (!tid) {
         say("notepad never showed a window; cannot aim a hook");
     } else {
+        /* WHICH hook type, measured rather than assumed.
+         *
+         * The plan named WH_CALLWNDPROC and asserted it maps into one
+         * process. On this Win98 it installs and never fires -- so the
+         * question is not "does D1 work" but "which of these delivers",
+         * and the only way to know is to try each and count. Every one is
+         * aimed at ONE THREAD; none of them is the system-wide form that
+         * put Explorer in scope. */
+        static const struct { int id; const char *name; } HOOKS[] = {
+            { WH_CALLWNDPROC,    "WH_CALLWNDPROC"    },
+            { WH_GETMESSAGE,     "WH_GETMESSAGE"     },
+            { WH_CBT,            "WH_CBT"            },
+            { WH_CALLWNDPROCRET, "WH_CALLWNDPROCRET" }
+        };
+        unsigned hk;
         say("target thread %lu", (unsigned long)tid);
-        h = SetWindowsHookExA(WH_CALLWNDPROC, proc, dll, tid);
-        say("WH_CALLWNDPROC on that thread : %s", h ? "installed" : "refused");
-        if (h) {
-            /* Make the thread dispatch something, or the hook has no
-             * occasion to fire. SendMessageTimeout and not SendMessage:
-             * this must not be able to wedge the probe. */
-            DWORD_PTR res = 0;
-            for (i = 0; i < 20; i++) {
-                SendMessageTimeoutA(g_want_win, WM_NULL, 0, 0,
-                                    SMTO_ABORTIFHUNG, 200, &res);
-                Sleep(50);
+        for (hk = 0; hk < sizeof(HOOKS) / sizeof(HOOKS[0]); hk++) {
+            long before = shm->calls;
+            long pidsBefore = shm->pids_n;
+            h = SetWindowsHookExA(HOOKS[hk].id, proc, dll, tid);
+            if (!h) {
+                say("  %-18s refused (%lu)", HOOKS[hk].name,
+                    (unsigned long)GetLastError());
+                continue;
             }
-            Sleep(500);
+            /* Give the thread something to do: a sent message for the
+             * CALLWNDPROC family, and a posted one so GETMESSAGE has
+             * something to retrieve. SendMessageTimeout, never
+             * SendMessage -- this must not be able to wedge the probe. */
+            {
+                DWORD_PTR res = 0;
+                for (i = 0; i < 20; i++) {
+                    SendMessageTimeoutA(g_want_win, WM_NULL, 0, 0,
+                                        SMTO_ABORTIFHUNG, 200, &res);
+                    PostMessageA(g_want_win, WM_NULL, 0, 0);
+                    Sleep(50);
+                }
+            }
+            Sleep(300);
             UnhookWindowsHookEx(h);
+            Sleep(200);
+            say("  %-18s installed; +%ld calls, +%ld distinct pids",
+                HOOKS[hk].name, shm->calls - before,
+                shm->pids_n - pidsBefore);
         }
     }
 

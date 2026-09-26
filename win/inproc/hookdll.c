@@ -161,6 +161,30 @@ static PFN_EXTTEXTOUTA g_real_exttextout;
 static PFN_TEXTOUTW    g_real_textoutw;
 static PFN_EXTTEXTOUTW g_real_exttextoutw;
 
+/* AND DrawText, which is USER32 and not GDI32.
+ *
+ * Gate 0.15g, run on a real Win98 rather than under Wine: MSHTML.DLL
+ * imports DrawTextW and DrawTextA, COMCTL32 imports DrawTextExA, and
+ * COMDLG32 imports DrawTextA. MSHTML is the module D4 exists for and a
+ * dialog is mostly common controls, so leaving these out would have meant
+ * capturing part of a web page and part of a dialog and calling it the
+ * text on screen -- which is worse than capturing nothing, because it
+ * looks like an answer.
+ *
+ * `n` may be -1 here, meaning the string is NUL-terminated. The position
+ * is the rectangle's top-left, which is where the first line starts for
+ * every alignment that is not centred or right -- approximate, and the
+ * alternative is not recording it at all. */
+typedef int (WINAPI *PFN_DRAWTEXTA)(HDC, LPCSTR, int, LPRECT, UINT);
+typedef int (WINAPI *PFN_DRAWTEXTW)(HDC, LPCWSTR, int, LPRECT, UINT);
+typedef int (WINAPI *PFN_DRAWTEXTEXA)(HDC, LPSTR, int, LPRECT, UINT, void *);
+typedef int (WINAPI *PFN_DRAWTEXTEXW)(HDC, LPWSTR, int, LPRECT, UINT, void *);
+
+static PFN_DRAWTEXTA   g_real_drawtext;
+static PFN_DRAWTEXTW   g_real_drawtextw;
+static PFN_DRAWTEXTEXA g_real_drawtextexa;
+static PFN_DRAWTEXTEXW g_real_drawtextexw;
+
 static void record(int x, int y, LPCSTR s, int n)
 {
     RcDraw *d;
@@ -223,6 +247,58 @@ static BOOL WINAPI my_exttextoutw(HDC dc, int x, int y, UINT opt,
     record_w(x, y, s, (int)n);
     return g_real_exttextoutw
         ? g_real_exttextoutw(dc, x, y, opt, r, s, n, dx) : FALSE;
+}
+
+/* A count of -1 means "until the NUL", and the caller's buffer is theirs.
+ * Bounded either way: we copy at most what the ring slot holds. */
+static int draw_len(const char *s, int n)
+{
+    int i;
+    if (n >= 0)
+        return n;
+    for (i = 0; i < RC_TEXTLEN * 2 && s[i]; i++)
+        ;
+    return i;
+}
+
+static int draw_lenw(LPCWSTR w, int n)
+{
+    int i;
+    if (n >= 0)
+        return n;
+    for (i = 0; i < RC_TEXTLEN * 2 && w[i]; i++)
+        ;
+    return i;
+}
+
+static int WINAPI my_drawtext(HDC dc, LPCSTR s, int n, LPRECT r, UINT f)
+{
+    if (r && s)
+        record(r->left, r->top, s, draw_len(s, n));
+    return g_real_drawtext ? g_real_drawtext(dc, s, n, r, f) : 0;
+}
+
+static int WINAPI my_drawtextw(HDC dc, LPCWSTR s, int n, LPRECT r, UINT f)
+{
+    if (r && s)
+        record_w(r->left, r->top, s, draw_lenw(s, n));
+    return g_real_drawtextw ? g_real_drawtextw(dc, s, n, r, f) : 0;
+}
+
+static int WINAPI my_drawtextexa(HDC dc, LPSTR s, int n, LPRECT r, UINT f,
+                                 void *p)
+{
+    if (r && s)
+        record(r->left, r->top, s, draw_len(s, n));
+    return g_real_drawtextexa ? g_real_drawtextexa(dc, s, n, r, f, p) : 0;
+}
+
+static int WINAPI my_drawtextexw(HDC dc, LPWSTR s, int n, LPRECT r, UINT f,
+                                 void *p)
+{
+    if (r && s)
+        record_w(r->left, r->top, s, draw_lenw(s, n));
+    return g_real_drawtextexw ? g_real_drawtextexw(dc, s, n, r, f, p) : 0;
 }
 
 static BOOL WINAPI my_textout(HDC dc, int x, int y, LPCSTR s, int n)
@@ -324,14 +400,14 @@ typedef struct {
 static RcPatch g_patches[RC_PATCH_MAX];
 static int     g_patch_n;
 
-static void patch_one(HMODULE mod, const char *fn, void *replacement,
-                      void **realOut)
+static void patch_one(HMODULE mod, const char *from, const char *fn,
+                      void *replacement, void **realOut)
 {
     void *orig = NULL;
     DWORD *slot;
     if (g_patch_n >= RC_PATCH_MAX)
         return;
-    slot = patch_import(mod, "GDI32.DLL", fn, replacement, &orig);
+    slot = patch_import(mod, from, fn, replacement, &orig);
     if (!slot || !orig || orig == replacement)
         return;
     g_patches[g_patch_n].slot = slot;
@@ -377,6 +453,7 @@ static void patch_text_calls(void)
     PFN_MOD32 next = k32
         ? (PFN_MOD32)GetProcAddress(k32, "Module32Next") : 0;
     void *a = NULL, *b = NULL, *c = NULL, *d = NULL;
+    void *e = NULL, *g = NULL, *i2 = NULL, *j = NULL;
     HMODULE self = NULL;
 
     /* Never ourselves: patching our own imports would route our own
@@ -392,12 +469,22 @@ static void patch_text_calls(void)
             for (ok = first(h, &me); ok; ok = next(h, &me)) {
                 if (me.hModule == self)
                     continue;
-                patch_one(me.hModule, "TextOutA", (void *)my_textout, &a);
-                patch_one(me.hModule, "ExtTextOutA", (void *)my_exttextout,
-                          &b);
-                patch_one(me.hModule, "TextOutW", (void *)my_textoutw, &c);
-                patch_one(me.hModule, "ExtTextOutW",
+                patch_one(me.hModule, "GDI32.DLL", "TextOutA",
+                          (void *)my_textout, &a);
+                patch_one(me.hModule, "GDI32.DLL", "ExtTextOutA",
+                          (void *)my_exttextout, &b);
+                patch_one(me.hModule, "GDI32.DLL", "TextOutW",
+                          (void *)my_textoutw, &c);
+                patch_one(me.hModule, "GDI32.DLL", "ExtTextOutW",
                           (void *)my_exttextoutw, &d);
+                patch_one(me.hModule, "USER32.DLL", "DrawTextA",
+                          (void *)my_drawtext, &e);
+                patch_one(me.hModule, "USER32.DLL", "DrawTextW",
+                          (void *)my_drawtextw, &g);
+                patch_one(me.hModule, "USER32.DLL", "DrawTextExA",
+                          (void *)my_drawtextexa, &i2);
+                patch_one(me.hModule, "USER32.DLL", "DrawTextExW",
+                          (void *)my_drawtextexw, &j);
             }
             CloseHandle(h);
         }
@@ -407,16 +494,26 @@ static void patch_text_calls(void)
      * this did before and is better than nothing. */
     if (!g_patch_n) {
         HMODULE host = GetModuleHandleA(NULL);
-        patch_one(host, "TextOutA", (void *)my_textout, &a);
-        patch_one(host, "ExtTextOutA", (void *)my_exttextout, &b);
-        patch_one(host, "TextOutW", (void *)my_textoutw, &c);
-        patch_one(host, "ExtTextOutW", (void *)my_exttextoutw, &d);
+        patch_one(host, "GDI32.DLL", "TextOutA", (void *)my_textout, &a);
+        patch_one(host, "GDI32.DLL", "ExtTextOutA", (void *)my_exttextout, &b);
+        patch_one(host, "GDI32.DLL", "TextOutW", (void *)my_textoutw, &c);
+        patch_one(host, "GDI32.DLL", "ExtTextOutW", (void *)my_exttextoutw, &d);
+        patch_one(host, "USER32.DLL", "DrawTextA", (void *)my_drawtext, &e);
+        patch_one(host, "USER32.DLL", "DrawTextW", (void *)my_drawtextw, &g);
+        patch_one(host, "USER32.DLL", "DrawTextExA",
+                  (void *)my_drawtextexa, &i2);
+        patch_one(host, "USER32.DLL", "DrawTextExW",
+                  (void *)my_drawtextexw, &j);
     }
 
     if (a) g_real_textout = (PFN_TEXTOUTA)a;
     if (b) g_real_exttextout = (PFN_EXTTEXTOUTA)b;
     if (c) g_real_textoutw = (PFN_TEXTOUTW)c;
     if (d) g_real_exttextoutw = (PFN_EXTTEXTOUTW)d;
+    if (e) g_real_drawtext = (PFN_DRAWTEXTA)e;
+    if (g) g_real_drawtextw = (PFN_DRAWTEXTW)g;
+    if (i2) g_real_drawtextexa = (PFN_DRAWTEXTEXA)i2;
+    if (j) g_real_drawtextexw = (PFN_DRAWTEXTEXW)j;
     /* Only once both pass-throughs are known. Between the first patched
      * slot and this assignment, a draw would find g_real_* NULL and the
      * character would simply not appear on somebody's screen. */
