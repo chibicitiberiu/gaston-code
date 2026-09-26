@@ -116,7 +116,8 @@ LIBWIRE = $(LIBDIR)/libwire.lib
 # libcore only: it knows nothing of the wire, and turning a tree into
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
 AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp \
-                  automation/resolve.cpp \
+                  automation/resolve.cpp automation/watch.cpp \
+                  automation/wait.cpp \
                   automation/input.cpp automation/msaa.cpp \
                   automation/shot.cpp
 LIBAUTOMATION = $(LIBDIR)/libautomation.lib

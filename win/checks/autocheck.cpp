@@ -12,6 +12,8 @@
 #include "automation/tree.h"
 #include "automation/select.h"
 #include "automation/resolve.h"
+#include "automation/watch.h"
+#include "automation/wait.h"
 #include "automation/input.h"
 #include "automation/msaa.h"
 #include "automation/shot.h"
@@ -30,11 +32,15 @@ static void say(const char *name, bool pass, const char *detail)
         g_fails++;
 }
 
-/* Not static, and not a style choice. As statics called once each, the
- * compiler inlined all six into main and their locals summed to a 9632-byte
- * frame -- over the 4096 the stack-frame gate allows, because a frame that
- * large is written past the guard page and Win98 never grows the stack.
- * External linkage keeps them as separate frames. */
+/* Not static, and CALLED THROUGH A TABLE at the bottom of the file. Neither
+ * is a style choice.
+ *
+ * As statics called once each, the compiler inlined all six into main and
+ * their locals summed to a 9632-byte frame -- over the 4096 a frame may use
+ * before it is written past Win98's guard page, which never grows the stack
+ * and faults instead. External linkage fixed that, and then stopped being
+ * enough at nine sections: Watcom inlined them anyway and the gate caught
+ * main at 4708 bytes. A call through a pointer cannot be inlined at all. */
 
 /* --- the grammar ---------------------------------------------------- */
 
@@ -695,6 +701,308 @@ void hungWindows(void)
     UnregisterClassA("GastonWedge", wc.hInstance);
 }
 
+/* --- the feed and the waits ------------------------------------------
+ *
+ * A window that appears LATER, from a thread that is not this one, so the
+ * waits have something real to wait for. Hidden rather than shown: a check
+ * that flashes a window across somebody's desktop is a check nobody runs,
+ * and EVENT_OBJECT_CREATE fires on creation whether or not WS_VISIBLE is
+ * set.
+ *
+ * The helper thread stays alive and PUMPS until it is released, and both
+ * halves of that matter. A thread's windows are destroyed WITH the thread,
+ * so one that creates a window and returns leaves nothing to find -- which
+ * is exactly how these three cases failed the first time they ran. And a
+ * thread that does not pump cannot answer WM_GETTEXT, so every scan would
+ * pay a timeout for text the wait needs.
+ */
+
+struct Appear
+{
+    HANDLE    go;         /* create it now */
+    HANDLE    kill;       /* destroy it now */
+    HANDLE    quit;       /* and go away */
+    HANDLE    made;       /* signalled once the window exists */
+    HINSTANCE inst;
+    DWORD     delayMs;
+    HWND      hwnd;
+};
+
+static DWORD WINAPI appearThread(LPVOID p)
+{
+    Appear *a = (Appear *)p;
+    WaitForSingleObject(a->go, 20000);
+    Sleep(a->delayMs);
+    a->hwnd = CreateWindowExA(0, "GastonLater", "late arrival", WS_POPUP,
+                              0, 0, 30, 30, NULL, NULL, a->inst, NULL);
+    SetEvent(a->made);
+
+    for (;;)
+    {
+        HANDLE h[2];
+        h[0] = a->kill;
+        h[1] = a->quit;
+        DWORD r = MsgWaitForMultipleObjects(2, h, FALSE, 20000, QS_ALLINPUT);
+        if (r == WAIT_OBJECT_0)
+        {
+            if (a->hwnd)
+                DestroyWindow(a->hwnd);
+            a->hwnd = NULL;
+            ResetEvent(a->kill);
+            continue;
+        }
+        if (r == WAIT_OBJECT_0 + 1 || r == WAIT_TIMEOUT)
+            break;
+        MSG m;
+        while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&m);
+            DispatchMessageA(&m);
+        }
+    }
+
+    if (a->hwnd)
+        DestroyWindow(a->hwnd);
+    a->hwnd = NULL;
+    return 0;
+}
+
+static HANDLE startAppear(Appear &a, HINSTANCE inst, DWORD delayMs)
+{
+    memset(&a, 0, sizeof(a));
+    a.go = CreateEventA(NULL, TRUE, FALSE, NULL);
+    a.kill = CreateEventA(NULL, TRUE, FALSE, NULL);
+    a.quit = CreateEventA(NULL, TRUE, FALSE, NULL);
+    a.made = CreateEventA(NULL, TRUE, FALSE, NULL);
+    a.inst = inst;
+    a.delayMs = delayMs;
+    DWORD tid = 0;
+    return CreateThread(NULL, 0, appearThread, &a, 0, &tid);
+}
+
+static void stopAppear(Appear &a, HANDLE th)
+{
+    SetEvent(a.quit);
+    if (th)
+    {
+        WaitForSingleObject(th, 5000);
+        CloseHandle(th);
+    }
+    CloseHandle(a.go);
+    CloseHandle(a.kill);
+    CloseHandle(a.quit);
+    CloseHandle(a.made);
+}
+
+static void skipFeedCases(void)
+{
+    say("watch-delivers-a-creation", true, "skipped: no feed here");
+    say("watch-bumps-the-structure-sequence", true, "skipped: no feed");
+    say("watch-drains-oldest-first", true, "skipped: no feed");
+    say("wait-finds-a-window-that-appears-later", true, "skipped: no feed");
+    say("wait-rides-the-feed-not-the-clock", true, "skipped: no feed");
+    say("wait-already-true-costs-one-scan", true, "skipped: no feed");
+    say("wait-for-text-separates-absent-from-silent", true,
+        "skipped: no feed");
+    say("wait-for-gone-sees-a-destruction", true, "skipped: no feed");
+    say("wait-times-out-and-says-so", true, "skipped: no feed");
+    say("wait-for-idle-settles", true, "skipped: no feed");
+    say("watch-stops-cleanly", true, "skipped: no feed");
+}
+
+void watching(void)
+{
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)sinkProc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "GastonLater";
+    RegisterClassA(&wc);
+    static char detail[224];
+
+    UiWatch watch;
+    say("watch-resolves-setwineventhook", true,
+        watch.available() ? "SetWinEventHook present"
+                          : "absent -- the waits fall back to polling");
+
+    /* Classification is pure arithmetic and worth asserting whether or not
+     * the feed runs here. A LOCATIONCHANGE misfiled as structure would make
+     * every wait rescan the tree for the whole of a window drag, which is a
+     * poll that polls harder than a poll. */
+    say("watch-classifies-create-as-structure",
+        UiWatch::classify(0x8000) == UI_STRUCTURE, "EVENT_OBJECT_CREATE");
+    say("watch-classifies-namechange-as-content",
+        UiWatch::classify(0x800C) == UI_CONTENT, "EVENT_OBJECT_NAMECHANGE");
+    say("watch-classifies-focus",
+        UiWatch::classify(0x8005) == UI_FOCUS, "EVENT_OBJECT_FOCUS");
+    say("watch-keeps-locationchange-out-of-structure",
+        UiWatch::classify(0x800B) == UI_LOCATION,
+        "EVENT_OBJECT_LOCATIONCHANGE -- fires all through a drag");
+
+    bool started = watch.start(0, 0);
+    rc_strf(detail, sizeof(detail), "start=%d running=%d", (int)started,
+            (int)watch.running());
+    say("watch-installs", started == watch.available(), detail);
+
+    if (!watch.running())
+    {
+        skipFeedCases();
+        UnregisterClassA("GastonLater", wc.hInstance);
+        return;
+    }
+
+    TreeWalker walker;
+    UiWaiter waiter(watch, walker, NULL);
+    static Selector sel;
+    static char err[128];
+    static WaitReport rep;
+
+    WalkOptions o;
+    o.visibleOnly = false;          /* deliberately never shown */
+    o.pid = GetCurrentProcessId();
+    o.callTimeoutMs = 200;
+    o.deadlineMs = 4000;
+
+    static Appear a;
+    HANDLE th = startAppear(a, wc.hInstance, 600);
+
+    {
+        /* The claim of WINEVENT_OUTOFCONTEXT: a window created on another
+         * thread reaches this one, with no DLL anywhere. */
+        unsigned before = watch.structureSeq();
+        sel.parse("GastonLater", err, sizeof(err));
+        SetEvent(a.go);
+
+        /* The one that matters. `rechecks` is the evidence: a 150 ms poll
+         * over a 600 ms delay is four or five scans, and one scan is most of
+         * a second on a P200. */
+        waiter.forControl(sel, o, 6000, rep);
+        rc_strf(detail, sizeof(detail),
+                "end=%d after %lu ms, %d scans, polled=%d, %d events",
+                (int)rep.end, (unsigned long)rep.ms, rep.rechecks,
+                (int)rep.polled, watch.events());
+        say("wait-finds-a-window-that-appears-later",
+            rep.end == UIWAIT_SETTLED && rep.haveNode, detail);
+
+        /* It arrived close to when it happened, and cost almost nothing to
+         * find out. */
+        say("wait-rides-the-feed-not-the-clock",
+            rep.ms >= 500 && rep.ms < 2000 && rep.rechecks <= 8, detail);
+
+        say("watch-delivers-a-creation", watch.events() > 0, detail);
+        rc_strf(detail, sizeof(detail), "structure seq %u -> %u, %d dropped",
+                before, watch.structureSeq(), watch.dropped());
+        say("watch-bumps-the-structure-sequence",
+            watch.structureSeq() > before, detail);
+    }
+
+    {
+        /* Oldest first. A caller reading "the dialog opened, then the OK
+         * button appeared" backwards draws the opposite conclusion. */
+        static UiEvent evs[RC_WATCH_RING];
+        int n = watch.drain(evs, RC_WATCH_RING);
+        bool ordered = true;
+        for (int i = 1; i < n; i++)
+            if ((long)(evs[i].at - evs[i - 1].at) < 0)
+                ordered = false;
+        int after = watch.drain(evs, RC_WATCH_RING);
+        rc_strf(detail, sizeof(detail), "%d drained, %d left after", n, after);
+        say("watch-drains-oldest-first", n > 0 && ordered && after == 0,
+            detail);
+    }
+
+    {
+        /* Already true is the common case and has to be free. */
+        waiter.forControl(sel, o, 5000, rep);
+        rc_strf(detail, sizeof(detail), "end=%d, %d scans, %lu ms",
+                (int)rep.end, rep.rechecks, (unsigned long)rep.ms);
+        say("wait-already-true-costs-one-scan",
+            rep.end == UIWAIT_ALREADY && rep.rechecks == 1, detail);
+    }
+
+    {
+        /* forText is not [text*=...] folded into the selector, and this is
+         * why: on a miss the report says whether the control was ever there
+         * at all. "No such window" and "that window never said that" are
+         * different bugs with different next moves. */
+        waiter.forText(sel, "late", o, 1500, rep);
+        bool sawIt = (rep.end == UIWAIT_ALREADY || rep.end == UIWAIT_SETTLED);
+        static WaitReport miss;
+        waiter.forText(sel, "never printed this", o, 900, miss);
+        rc_strf(detail, sizeof(detail),
+                "match end=%d; miss end=%d everMatched=%d",
+                (int)rep.end, (int)miss.end, (int)miss.everMatched);
+        say("wait-for-text-separates-absent-from-silent",
+            sawIt && miss.end == UIWAIT_TIMEOUT && miss.everMatched, detail);
+    }
+
+    {
+        /* And gone again. The window belongs to the thread that made it, so
+         * that thread destroys it -- on a signal from here, which is
+         * deterministic where a sleep is not. */
+        int evBefore = watch.events();
+        SetEvent(a.kill);
+        waiter.forGone(sel, o, 4000, rep);
+        int evAfter = watch.events();
+        rc_strf(detail, sizeof(detail),
+                "end=%d after %lu ms, %d scans, events %d -> %d, hwnd=%p",
+                (int)rep.end, (unsigned long)rep.ms, rep.rechecks,
+                evBefore, evAfter, (void *)a.hwnd);
+        say("wait-for-gone-sees-a-destruction",
+            (rep.end == UIWAIT_SETTLED || rep.end == UIWAIT_ALREADY)
+            && !rep.haveNode, detail);
+
+        /* And it settled WITHOUT being told. Wine emits CREATE for this
+         * window and never emits DESTROY, so the only thing that ended this
+         * wait was the backstop rescan -- which is the whole reason there is
+         * one. A feed that drops one event in ten does not make a wait fail,
+         * it makes it hang, rarely, which is the worst failure schedule
+         * there is. Win98 may well send the event; then this row says so by
+         * showing the count move. */
+        if (evAfter == evBefore)
+            say("wait-backstop-covers-a-missing-event",
+                rep.end == UIWAIT_SETTLED
+                && rep.ms < RC_WAIT_BACKSTOP_MS * 3, detail);
+        else
+            say("wait-backstop-covers-a-missing-event", true,
+                "not exercised: the feed reported the destruction");
+    }
+
+    {
+        /* Something that will never exist must come back at its deadline and
+         * SAY so. A primitive that hangs instead is worse than none, because
+         * it hangs rarely, which is the worst failure schedule there is. */
+        static Selector nope;
+        nope.parse("GastonNeverExists", err, sizeof(err));
+        DWORD t0 = GetTickCount();
+        waiter.forControl(nope, o, 700, rep);
+        DWORD ms = GetTickCount() - t0;
+        rc_strf(detail, sizeof(detail),
+                "end=%d after %lu ms (budget 700), %d scans, everMatched=%d",
+                (int)rep.end, (unsigned long)ms, rep.rechecks,
+                (int)rep.everMatched);
+        say("wait-times-out-and-says-so",
+            rep.end == UIWAIT_TIMEOUT && !rep.everMatched
+            && ms >= 650 && ms < 2500, detail);
+    }
+
+    {
+        /* Idle is the feed alone: it must cost ZERO tree scans. */
+        waiter.forIdle(250, 4000, rep);
+        rc_strf(detail, sizeof(detail), "end=%d after %lu ms, %d scans",
+                (int)rep.end, (unsigned long)rep.ms, rep.rechecks);
+        say("wait-for-idle-settles",
+            rep.end == UIWAIT_SETTLED && rep.rechecks == 0
+            && rep.ms >= 250, detail);
+    }
+
+    stopAppear(a, th);
+    watch.stop();
+    say("watch-stops-cleanly", !watch.running(), "hooks removed");
+
+    UnregisterClassA("GastonLater", wc.hInstance);
+}
+
 /* --- input refusals -------------------------------------------------
  *
  * Only the refusals are testable without a second machine looking on, and
@@ -1046,6 +1354,14 @@ static int writeShot(const char *path)
     return 0;
 }
 
+typedef void (*Section)(void);
+
+static const Section SECTIONS[] =
+{
+    grammar, matching, walking, resolving, hungWindows, watching,
+    inputRefusals, enrichment, capture
+};
+
 int main(int argc, char **argv)
 {
     /* A mode, not a case: it writes a file for the Python side to open, and
@@ -1054,14 +1370,8 @@ int main(int argc, char **argv)
         return writeShot(argv[2]);
 
     (void)argc; (void)argv;
-    grammar();
-    matching();
-    walking();
-    resolving();
-    hungWindows();
-    inputRefusals();
-    enrichment();
-    capture();
+    for (unsigned i = 0; i < sizeof(SECTIONS) / sizeof(SECTIONS[0]); i++)
+        SECTIONS[i]();
     /* Zero regardless: the verdict rows are the result, and the exit status
      * is reserved for setup failure, as in the other checks. */
     return 0;
