@@ -666,8 +666,13 @@ Things only the real box can answer, collected so the first session covers them:
 
 - `oleacc.dll` present, and its version.
 - Foreground lock: does `SPI_SETFOREGROUNDLOCKTIMEOUT` = 0 work from a background process.
-- `COMMAND.COM /c` exit codes: is the child's errorlevel returned.
-- Handle inheritance of sockets into children on 98.
+- `COMMAND.COM /c` exit codes: is the child's errorlevel returned. *Answered
+  on the VM (2026-09-26, `docs/measurements/execprobe-vm-gui-20260926.txt`):
+  no, always 0, even for a program that does not exist; a direct spawn
+  returns the real code. The P200 only needs to confirm.*
+- Handle inheritance of sockets into children on 98. *Answered on the VM
+  (same file): a listening socket is not kept alive by an inheriting child;
+  closing it in the parent frees the port. Wine and NT differ.*
 - `bind` after a restart: TIME_WAIT behaviour.
 - `gremote` memory idle and under load, with and without the client running.
 - Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI numbers in `SYSINFO`.

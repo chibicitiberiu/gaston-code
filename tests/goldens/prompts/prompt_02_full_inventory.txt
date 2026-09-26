@@ -171,6 +171,7 @@ measured on this machine, mostly by an agent getting it wrong first:
   * A running .exe is locked: "Permission denied" from the linker, "Access
     denied" from `del`, and `attrib` shows nothing wrong. Ask the user to
     close it.
+  * Exit code: always 0. Judge by the output.
 
 Open Watcom 1.9 at C:\WATCOM -- measured on this machine, not inferred:
 
