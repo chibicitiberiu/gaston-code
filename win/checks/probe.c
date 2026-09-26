@@ -2399,6 +2399,202 @@ typedef struct {
     RcDraw ring[RC_TEXTN];
 } RcHookShm;
 
+/* ------------------------------------------------------------ 0.15f */
+/* TARGETED injection: one thread, one process, mapped nowhere else.
+ *
+ * 0.15d proved a SYSTEM-WIDE WH_CBT hook, which is how Explorer came to be
+ * in scope and how Explorer came to die. The plan's D1 switches to
+ * SetWindowsHookEx(WH_CALLWNDPROC, proc, dll, targetThreadId) and asserts
+ * as a fact that this maps into one process and nowhere else. Nobody has
+ * run that. It is a gate, not an assumption.
+ *
+ * Two things this has to show, and the second is the one that matters:
+ *
+ *   the DLL's proc runs inside the target -- otherwise there is no tier D
+ *   at all;
+ *
+ *   and it runs NOWHERE ELSE. `pids_n` counting exactly the target (plus
+ *   possibly ourselves) is the evidence. Anything more and the "targeted"
+ *   claim is false, whatever the API documentation says.
+ */
+
+/* Never these, and there is no force escape here -- unlike KILL, where
+ * REMOTE.md:344 allows Explorer with force=1. Killing the first four hangs
+ * 9x; injecting into them is worse, because the damage shows up later and
+ * belongs to them. Explorer is on the list because we have actually killed
+ * it. */
+static const char *const RC_NO_INJECT[] = {
+    "EXPLORER.EXE", "MSGSRV32.EXE", "KERNEL32.DLL", "MPREXE.EXE",
+    "MMTASK.TSK", "SYSTRAY.EXE", "RUNDLL32.EXE"
+};
+
+static void upper_base(const char *path, char *out, unsigned cap)
+{
+    const char *base = path;
+    unsigned i;
+    for (i = 0; path[i]; i++)
+        if (path[i] == '\\' || path[i] == '/' || path[i] == ':')
+            base = &path[i + 1];
+    for (i = 0; i + 1 < cap && base[i]; i++) {
+        char c = base[i];
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    out[i] = '\0';
+}
+
+static int may_inject(const char *exe)
+{
+    unsigned i;
+    char up[64];
+    upper_base(exe, up, sizeof(up));
+    for (i = 0; i < sizeof(RC_NO_INJECT) / sizeof(RC_NO_INJECT[0]); i++)
+        if (!strcmp(up, RC_NO_INJECT[i]))
+            return 0;
+    return 1;
+}
+
+static DWORD g_want_pid;
+static HWND  g_want_win;
+
+static BOOL CALLBACK find_by_pid(HWND h, LPARAM lp)
+{
+    DWORD pid = 0;
+    (void)lp;
+    if (!IsWindowVisible(h)) return TRUE;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid == g_want_pid) { g_want_win = h; return FALSE; }
+    return TRUE;
+}
+
+static void probe_targeted(void)
+{
+    HMODULE dll;
+    HOOKPROC proc;
+    HANDLE map;
+    RcHookShm *shm;
+    HHOOK h;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD tid = 0, pid = 0;
+    long i;
+    int mine = 0, theirs = 0, other = 0;
+
+    head("0.15f  can injection be aimed at ONE process?");
+
+    say("deny list (no force escape): EXPLORER.EXE MSGSRV32.EXE "
+        "KERNEL32.DLL MPREXE.EXE MMTASK.TSK SYSTRAY.EXE RUNDLL32.EXE");
+    say("  may_inject(notepad.exe)  = %d", may_inject("notepad.exe"));
+    say("  may_inject(C:\\WINDOWS\\EXPLORER.EXE) = %d",
+        may_inject("C:\\WINDOWS\\EXPLORER.EXE"));
+    say("  may_inject(explorer.exe) = %d  (case must not matter)",
+        may_inject("explorer.exe"));
+
+    map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                             0, sizeof(RcHookShm), RC_SHM_NAME);
+    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+              : NULL;
+    if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
+
+    shm->magic = RC_SHM_MAGIC;
+    shm->version = RC_SHM_VER;
+    shm->cb = sizeof(RcHookShm);
+    shm->generation = GetTickCount() | 1;
+    shm->calls = 0;
+    shm->attaches = 0;
+    shm->pids_n = 0;
+    shm->patched = 0;
+    shm->draws = 0;
+    shm->ring_next = 0;
+    /* No patch target at all for this gate: the question is whether the
+     * code ARRIVES, and rewriting an import table is a separate risk that
+     * does not need to be taken to answer it. */
+    shm->patch_pid = 0;
+    shm->patch_exe[0] = '\0';
+
+    dll = LoadLibraryA("HOOKDLL.DLL");
+    if (!dll) dll = LoadLibraryA(".\\HOOKDLL.DLL");
+    if (!dll) { say("HOOKDLL.DLL not found (%lu)", GetLastError());
+                UnmapViewOfFile(shm); CloseHandle(map); return; }
+    proc = (HOOKPROC)GetProcAddress(dll, "rc_hook_proc");
+    if (!proc) proc = (HOOKPROC)GetProcAddress(dll, "_rc_hook_proc@12");
+    if (!proc) { say("rc_hook_proc not exported"); FreeLibrary(dll);
+                 UnmapViewOfFile(shm); CloseHandle(map); return; }
+
+    memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE, 0, NULL,
+                        NULL, &si, &pi)) {
+        say("could not start notepad (%lu)", GetLastError());
+        FreeLibrary(dll); UnmapViewOfFile(shm); CloseHandle(map); return;
+    }
+    pid = pi.dwProcessId;
+    say("notepad pid %lu", (unsigned long)pid);
+
+    /* Its window, and therefore its thread. A hook is aimed at a THREAD;
+     * there is no process-wide form. */
+    for (i = 0; i < 60 && !tid; i++) {
+        Sleep(100);
+        g_want_pid = pid; g_want_win = NULL;
+        EnumWindows(find_by_pid, 0);
+        if (g_want_win) tid = GetWindowThreadProcessId(g_want_win, NULL);
+    }
+    if (!tid) {
+        say("notepad never showed a window; cannot aim a hook");
+    } else {
+        say("target thread %lu", (unsigned long)tid);
+        h = SetWindowsHookExA(WH_CALLWNDPROC, proc, dll, tid);
+        say("WH_CALLWNDPROC on that thread : %s", h ? "installed" : "refused");
+        if (h) {
+            /* Make the thread dispatch something, or the hook has no
+             * occasion to fire. SendMessageTimeout and not SendMessage:
+             * this must not be able to wedge the probe. */
+            DWORD_PTR res = 0;
+            for (i = 0; i < 20; i++) {
+                SendMessageTimeoutA(g_want_win, WM_NULL, 0, 0,
+                                    SMTO_ABORTIFHUNG, 200, &res);
+                Sleep(50);
+            }
+            Sleep(500);
+            UnhookWindowsHookEx(h);
+        }
+    }
+
+    Sleep(300);
+    if (pi.hProcess) {
+        TerminateProcess(pi.hProcess, 0);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+
+    for (i = 0; i < shm->pids_n && i < 16; i++) {
+        if (shm->pids[i] == GetCurrentProcessId()) mine++;
+        else if (shm->pids[i] == pid) theirs++;
+        else { other++; say("   UNEXPECTED pid %lu ran our code",
+                            (unsigned long)shm->pids[i]); }
+    }
+    say("attaches %ld, calls %ld, distinct pids %ld "
+        "(us %d, target %d, other %d)",
+        shm->attaches, shm->calls, shm->pids_n, mine, theirs, other);
+
+    if (theirs && !other)
+        say("   -> TARGETED INJECTION WORKS: our code ran in the target and "
+            "in no other process.");
+    else if (theirs && other)
+        say("   -> it reached the target AND %d other process(es). The "
+            "'one process' claim is FALSE; D1 needs rethinking.", other);
+    else
+        say("   -> our code never ran in the target. D depends on this; "
+            "without it the whole in-process tier is unavailable.");
+
+    /* Every process that mapped us has now unmapped: the hook is gone. If
+     * a later run sees attaches climbing without a hook installed, an old
+     * copy is still resident somewhere and the section is being written by
+     * something we do not control. */
+    FreeLibrary(dll);
+    UnmapViewOfFile(shm);
+    CloseHandle(map);
+}
+
 static void probe_inject(void)
 {
     HMODULE dll;
@@ -3407,6 +3603,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "events"))   probe_events();
     if (!only || !strcmp(only, "evlat"))    probe_evlat();
     if (!only || !strcmp(only, "inject"))   probe_inject();
+    if (!only || !strcmp(only, "targeted")) probe_targeted();
     if (!only || !strcmp(only, "waitfor"))  probe_waitfor();
 
     say("");
