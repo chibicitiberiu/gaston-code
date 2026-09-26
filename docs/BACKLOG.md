@@ -1335,47 +1335,40 @@ needs the DOC goldens regenerated and it depends on none of the above.
 
 ---
 
-## 14. Stopping an exec leaks a process on Win98
+## 14. Stopping an exec leaked a process on Win98 -- fixed except for DOS programs
 
-**Status:** found 2026-09-26 by `win/checks/execprobe.cpp` on the VM
-(`docs/measurements/execprobe-vm-*-20260926.txt`). **Narrowed, and the rest
-measured as unavoidable for now** (libexec step 5, verified on the VM,
-`docs/measurements/execkill-vm-20260926.txt`): a stop kills the tree below
-REDIR32 (`Processes::stopJobTree`) and the command really stops -- the DOS
-VM and the program go -- but REDIR32 itself stays, one per stopped piped
-COMMAND.COM job, and the client logs each (`ExecResult::stopLeaked`).
+**Status:** found and fixed 2026-09-26/27, measured on the VM throughout
+(`docs/measurements/execprobe-vm-*`, `execkill-vm-*`).
 
-`execprobe --stops` tried everything else on the VM
-(`execprobe-vm-stops-20260926.txt`): closing our pipe ends,
-GenerateConsoleCtrlEvent (it resolves on 98 and returns 0 for every call),
-Ctrl+C posted to the VM's hidden tty window, WM_CLOSE to that window with
-its confirmation answered, and killing the VM then waiting 15s. None ends
-REDIR32. Killing the VM is the best of them (the program stops within 2s),
-and a program spawned directly, with no shell, leaves nothing at all.
-**Each zombie costs about 150KB**: free memory fell from 6.6MB to 3.6MB
-over 20 of them. Left: only a reboot clears them, so a session that times
-out a lot of shell commands slowly starves a 32MB box. Ideas not yet
-tried: capture a shell command's output through a temp file instead of a
-pipe (no REDIR32 at all, if the direct-spawn result carries over), or
-reuse one long-lived COMMAND.COM.
+On 98 a COMMAND.COM job given std handles is, once it starts a program,
+REDIR32.EXE (the pid CreateProcess returned) -> the DOS VM (WINOA386.MOD)
+-> the program. The old stop called TerminateProcess on that pid: TRUE, and
+nothing -- the command ran on and REDIR32 stayed, ~150KB until reboot.
+Every exec timeout and EXECKILL leaked one.
 
-On 98 a piped `COMMAND.COM /c` spawn is three processes: the pid
-`CreateProcess` returns is `REDIR32.EXE`, its child is the DOS VM
-(`WINOA386.MOD`), and a Win32 program the command runs is the VM's child.
-`rc_exec_cancel` and the timeout path called `TerminateProcess` on that pid.
-It returns TRUE and nothing happens: the command keeps running, and
-`REDIR32` stays behind with one thread, orphaned, more than ten minutes later
-and presumably until reboot. **Every exec timeout and every EXECKILL leaks
-one on the guest today.** A command that ends by itself leaks nothing.
+What the probes found (`execprobe --stops`, `--redir`, `--redir2`, `--gentle`):
+- A normal end never leaks, whatever carries the output.
+- REDIR32 comes with ANY std handle (a file handle as much as a pipe); a
+  console stub in between (KB150956's pattern) only moves the zombie into
+  the stub, at ~600KB a stop.
+- The real cause: TerminateProcess on the DOS VM leaves it half-dead, and
+  whatever waits on it -- REDIR32, or a stub -- can then never exit or be
+  killed. Pipes closed, GenerateConsoleCtrlEvent (returns 0 on 98), Ctrl+C
+  or WM_CLOSE to the VM's window: none ends it either.
+- Killing only the Win32 programs below the VM lets the job END ITSELF in
+  about 6s, and nothing is left. Twice in the probe; in the client, a
+  Win32 program under the shell now stops in 0.3s (EXECKILL) and 3.4s
+  (timeout) with no leak.
 
-Killing the VM instead stops a Win32 grandchild at once and a DOS program
-after about 30 seconds, but still leaves `REDIR32` (and in one of two runs
-the VM) as zombies. What a zombie costs in memory is not measured yet; step
-0b of the plan measures it and looks for a clean stop.
+**The fix** (`Processes::stopJobTree`): the Win32 side of the tree first,
+then an 8s grace for the job to end itself; only a job still running after
+that -- a DOS program inside the VM -- gets the VM killed.
 
-Found alongside, for the exec tool's description: through `COMMAND.COM /c`
-the exit code is **always 0**, even for a program that does not exist. The
-client sends it as `code=` in `EXECRESULT` unchanged.
+**Left:** that last case still costs one REDIR32 and the VM (a DOS program
+that has to be stopped: a hung `choice`, an interactive tool), logged by the
+client as `stopLeaked`. Nothing found from user mode ends a DOS program in
+its VM cleanly; it would take VMM's own VM termination (a VxD). A DOS
+program that ends by itself leaks nothing.
 
 ## 15. The injection gates leave the guest in an unknown state
 

@@ -183,35 +183,96 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
     return KILL_PENDING;
 }
 
-bool Processes::stopJobTree(DWORD root, HANDLE rootProcess, DWORD waitMs)
+/* The DOS side of a job on 98: the VM, the redirector, or a 16-bit/DOS
+ * image. Terminating any of these leaves the VM half-dead and whatever
+ * waits on it stuck for good (measured, execprobe --stops/--redir). A name
+ * whose header cannot be read -- NT and Wine list bare names -- counts as
+ * Win32, which is what it is there. */
+static bool isDosSide(const char *exe)
 {
-    const char *rootName = "";
+    const char *name = baseName(exe);
+    if (lstrcmpiA(name, "WINOA386.MOD") == 0 ||
+        lstrcmpiA(name, "REDIR32.EXE") == 0)
+        return true;
+    Handle f(CreateFileA(exe, GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                         OPEN_EXISTING, 0, NULL));
+    if (!f.valid())
+        return false;
+    unsigned char mz[64];
+    DWORD got = 0;
+    if (!ReadFile(f.get(), mz, sizeof mz, &got, NULL) || got < 2)
+        return false;
+    if (mz[0] != 'M' || mz[1] != 'Z')
+        return true;                        /* a .COM image */
+    if (got < sizeof mz)
+        return true;
+    DWORD off = mz[0x3c] | (mz[0x3d] << 8) | ((DWORD)mz[0x3e] << 16) |
+                ((DWORD)mz[0x3f] << 24);
+    unsigned char sig[2];
+    if (SetFilePointer(f.get(), (LONG)off, NULL, FILE_BEGIN) == 0xFFFFFFFF ||
+        !ReadFile(f.get(), sig, 2, &got, NULL) || got != 2)
+        return true;
+    return !(sig[0] == 'P' && sig[1] == 'E');
+}
+
+static void terminate(DWORD pid)
+{
+    Handle h(OpenProcess(PROCESS_TERMINATE, FALSE, pid));
+    if (h.valid())
+        TerminateProcess(h.get(), 1);
+}
+
+bool Processes::stopJobTree(DWORD root, HANDLE rootProcess, DWORD graceMs,
+                            DWORD finalMs)
+{
     std::vector<ProcessInfo> all;
     std::vector<DWORD> below;
+    const char *rootExe = "";
     if (m_snap && snapshot(all, false))
     {
         for (unsigned i = 0; i < all.size(); i++)
             if (all[i].pid == root)
-                rootName = baseName(all[i].exe);
+                rootExe = all[i].exe;
         descendants(root, below);
     }
-    /* Deepest first: breadth-first order reversed. On 98 that is the
-     * program, then the DOS VM (WINOA386.MOD), whose death takes a Win32
-     * program with it at once and a DOS one within about 30s. */
+
+    /* 1. The Win32 side, deepest first. On 98 the job then ends BY ITSELF
+     *    once its program is gone -- COMMAND.COM finishes, the VM exits,
+     *    REDIR32 exits -- and nothing is left (execprobe --gentle, twice). */
+    int spared = 0;
     for (unsigned i = below.size(); i-- > 0;)
     {
-        Handle h(OpenProcess(PROCESS_TERMINATE, FALSE, below[i]));
-        if (h.valid())
-            TerminateProcess(h.get(), 1);
+        const char *exe = "";
+        for (unsigned j = 0; j < all.size(); j++)
+            if (all[j].pid == below[i])
+                exe = all[j].exe;
+        if (isDosSide(exe))
+            spared++;
+        else
+            terminate(below[i]);
     }
-    bool redir = lstrcmpiA(rootName, "REDIR32.EXE") == 0;
-    if (!redir)
+    if (!rootExe[0] || !isDosSide(rootExe))
         TerminateProcess(rootProcess, 1);
-    if (WaitForSingleObject(rootProcess, waitMs) == WAIT_OBJECT_0)
+    if (WaitForSingleObject(rootProcess, graceMs) == WAIT_OBJECT_0)
         return true;
-    rc_log("process: job %08lx (%s) still there %lums after its tree was "
-           "stopped, %u below it", root, rootName[0] ? rootName : "?", waitMs,
-           (unsigned)below.size());
+
+    /* 2. Still running: a DOS program inside the VM, which nothing gentle
+     *    ends. The last resort kills the VM; the command stops, and on 98
+     *    the REDIR32 waiting on it becomes a zombie until reboot. */
+    rc_log("process: job %08lx (%s) still running %lums after its Win32 "
+           "side was stopped; killing the DOS side (%d)", root,
+           rootExe[0] ? baseName(rootExe) : "?", graceMs, spared);
+    if (m_snap)
+        descendants(root, below);
+    for (unsigned i = below.size(); i-- > 0;)
+        terminate(below[i]);
+    if (!rootExe[0] || lstrcmpiA(baseName(rootExe), "REDIR32.EXE") != 0)
+        TerminateProcess(rootProcess, 1);
+    if (WaitForSingleObject(rootProcess, finalMs) == WAIT_OBJECT_0)
+        return true;
+    rc_log("process: job %08lx (%s) still there %lums after that",
+           root, rootExe[0] ? baseName(rootExe) : "?", finalMs);
     return false;
 }
 

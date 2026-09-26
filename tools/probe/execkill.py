@@ -12,6 +12,9 @@ on the real machine, so this stands in for the bridge and runs:
   3. a long command, then an EXECKILL for ANOTHER id, then one with none
      (both must be ignored), then the real one     -> cancelled
   4. an EXEC queued behind a busy one, then killed -> cancelled, never ran
+  5. a Win32 program under the shell, timed out and killed: on 98 the stop
+     kills only the Win32 side and the job ends itself, so the log shows no
+     leak for these two (the DOS program in 2 and 3 still costs one each)
 
     python3 -u tools/probe/execkill.py --port 7891
 
@@ -150,7 +153,7 @@ def main() -> int:
     link.send(Frame("EXECKILL", {"id": "x3"}))
     r = link.result("x3", 20)
     took = time.time() - t
-    verdict("kill-cancels", r.get("status") == "cancelled" and took < 10,
+    verdict("kill-cancels", r.get("status") == "cancelled" and took < 15,
             f"status={r.get('status')} after {took:.1f}s")
 
     # 4. a queued EXEC killed before it runs
@@ -170,6 +173,26 @@ def main() -> int:
     r6 = link.result("x6", 30)
     verdict("queued-kill-never-ran", r6.get("status") == "ok" and
             b"X5-RAN" not in r6["out"], f"out={r6['out'][:40]!r}")
+
+    # 5. a Win32 program under the shell: stopped by timeout and by EXECKILL.
+    #    The stop kills only the Win32 side and lets the job end itself, so
+    #    on 98 neither should leave a REDIR32 (execprobe --gentle).
+    link.send(exec_frame("x7", r"C:\EP\EXECPRB.EXE --tick C:\EP\T7.TXT 60",
+                         3000, SHELL))
+    t = time.time()
+    r = link.result("x7", 30)
+    took = time.time() - t
+    verdict("win32-timeout-reported", r.get("status") == "timeout" and took < 15,
+            f"status={r.get('status')} after {took:.1f}s")
+    link.send(exec_frame("x8", r"C:\EP\EXECPRB.EXE --tick C:\EP\T8.TXT 60",
+                         60000, SHELL))
+    time.sleep(3)
+    t = time.time()
+    link.send(Frame("EXECKILL", {"id": "x8"}))
+    r = link.result("x8", 30)
+    took = time.time() - t
+    verdict("win32-kill-cancels", r.get("status") == "cancelled" and took < 15,
+            f"status={r.get('status')} after {took:.1f}s")
 
     bad = [n for n, ok in verdicts if not ok]
     print(f"\n{len(verdicts) - len(bad)}/{len(verdicts)} passed"

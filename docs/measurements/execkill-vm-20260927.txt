@@ -1,0 +1,42 @@
+# tools/probe/execkill.py (9 steps) against RCX.EXE with the Win32-first stop, on the VM, 2026-09-27
+
+waiting for the guest on 0.0.0.0:7891 ...
+guest connected from ('127.0.0.1', 49610)
+guest: Windows 4.10 build 2222  A  mem_kb=32288 acp=1252 oemcp=437
+[      1ms] -> EXEC id=x1 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'ver'
+[   1968ms] <- EXECRESULT id=x1 status=ok code=0 truncated=0
+pass	shell-command-runs	status=ok out=b'\r\nWindows 98 [Version 4.10.2222]\r\n\r\n'
+[   1968ms] -> EXEC id=x2 timeout_ms=3000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\WINDOWS\\COMMAND\\CHOICE.COM /c:y /t:y,60'
+[  15035ms] <- EXECRESULT id=x2 status=timeout code=4294967295 truncated=0
+pass	timeout-reported	status=timeout after 13.1s
+[  15035ms] -> EXEC id=x3 timeout_ms=60000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\WINDOWS\\COMMAND\\CHOICE.COM /c:y /t:y,60'
+[  18035ms] -> EXECKILL id=x999
+[  18035ms] -> EXECKILL 
+pass	stale-kills-ignored	got (no result) within 4s
+[  22039ms] -> EXECKILL id=x3
+[  32102ms] <- EXECRESULT id=x3 status=cancelled code=4294967295 truncated=0
+FAIL	kill-cancels	status=cancelled after 10.1s
+[  32102ms] -> EXEC id=x4 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\WINDOWS\\COMMAND\\CHOICE.COM /c:y /t:y,8'
+[  33603ms] -> EXEC id=x5 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'echo ran > C:\\EP\\X5RAN.TXT'
+[  34103ms] -> EXECKILL id=x5
+[  34103ms] <- EXECOUT
+[  34115ms] <- EXECRESULT id=x5 status=cancelled
+pass	queued-kill-answers-cancelled	status=cancelled
+[  41685ms] <- EXECRESULT id=x4 status=ok code=0 truncated=0
+pass	the-busy-one-still-finishes	status=ok
+[  41685ms] -> EXEC id=x6 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'if exist C:\\EP\\X5RAN.TXT echo X5-RAN'
+[  43290ms] <- EXECRESULT id=x6 status=ok code=0 truncated=0
+pass	queued-kill-never-ran	out=b''
+[  43290ms] -> EXEC id=x7 timeout_ms=3000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\EP\\EXECPRB.EXE --tick C:\\EP\\T7.TXT 60'
+[  46733ms] <- EXECRESULT id=x7 status=timeout code=0 truncated=0
+pass	win32-timeout-reported	status=timeout after 3.4s
+[  46733ms] -> EXEC id=x8 timeout_ms=60000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\EP\\EXECPRB.EXE --tick C:\\EP\\T8.TXT 60'
+[  49733ms] -> EXECKILL id=x8
+[  50017ms] <- EXECRESULT id=x8 status=cancelled code=0 truncated=0
+pass	win32-kill-cancels	status=cancelled after 0.3s
+
+8/9 passed; FAILED: kill-cancels
+Now close the client and run C:\EP\EXECPRB.EXE --list on the guest.
+
+# kill-cancels failed only on the script's old <10s threshold: a DOS program now gets the 8s grace first (10.1s). Threshold is 15s now.
+# x7/x8 (Win32 program under the shell): no leak logged. x2/x3 (DOS CHOICE): the last resort, one REDIR32 each, logged.

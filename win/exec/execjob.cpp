@@ -38,9 +38,11 @@
 #include "core/str.h"
 
 #define EXEC_CHUNK   8192
-/* How long a stopped job's own process gets to go before it is reported
- * leaked. On the worker thread, so bounded and short. */
-#define EXEC_STOP_WAIT_MS 2000
+/* A stopped job's grace to end itself once its Win32 side is gone, and the
+ * wait after the last resort. On the worker thread, so bounded: the
+ * measured clean end took about 6s on the VM. */
+#define EXEC_STOP_GRACE_MS 8000
+#define EXEC_STOP_WAIT_MS  2000
 /* Long enough for any real command line; anything longer is rejected, never
  * silently shortened. COMMAND.COM itself gives up well before this. */
 #define EXEC_MAX_CMD 1024
@@ -66,15 +68,18 @@ void ExecJob::cancel()
  * TerminateProcess on the pid CreateProcess returned is what this used to
  * be, and on 98 it does nothing for a piped COMMAND.COM job: that pid is
  * REDIR32.EXE, the call returns TRUE, the command runs on and REDIR32 stays
- * as a zombie (docs/BACKLOG.md 14, measured). Processes::stopJobTree kills
- * the tree below it instead. Without Toolhelp (NT 4) there is no tree to
- * walk, and TerminateProcess on the shell is what NT honours. */
+ * as a zombie (docs/BACKLOG.md 14, measured). Processes::stopJobTree stops
+ * the Win32 side of the tree and lets the job end itself, which leaves
+ * nothing; only a DOS program that will not end costs the VM and a zombie.
+ * Without Toolhelp (NT 4) there is no tree to walk, and TerminateProcess on
+ * the shell is what NT honours. */
 void ExecJob::stop(const PROCESS_INFORMATION &pi, ExecResult &out)
 {
     Processes ps;
     bool gone;
     if (ps.init())
-        gone = ps.stopJobTree(pi.dwProcessId, pi.hProcess, EXEC_STOP_WAIT_MS);
+        gone = ps.stopJobTree(pi.dwProcessId, pi.hProcess,
+                              EXEC_STOP_GRACE_MS, EXEC_STOP_WAIT_MS);
     else
     {
         TerminateProcess(pi.hProcess, 1);
@@ -295,8 +300,11 @@ bool ExecJob::run(const char *command, const ExecOptions &opt,
     if (out.status == EXEC_TIMEOUT || out.status == EXEC_CANCELLED ||
         out.status == EXEC_SINK_GONE)
     {
-        rd.reset();             /* nobody reads it any more */
+        /* The pipe stays open through the stop: the clean end measured on
+         * the VM had the Win32 side killed with it still open, and a job
+         * ending itself may still have its last lines to write. */
         stop(pi, out);
+        rd.reset();
     }
 
     GetExitCodeProcess(process.get(), &out.exitCode);

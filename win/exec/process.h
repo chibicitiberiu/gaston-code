@@ -83,17 +83,17 @@ public:
 
     /* ExecJob's stop, and nothing else's: end `root` (whose handle is
      * `rootProcess`) and everything below it, WITHOUT the deny list -- the
-     * tree is ours, and on 98 it holds a 16-bit DOS VM that kill() would
-     * refuse. Descendants go deepest first; `root` is terminated unless it
-     * is REDIR32.EXE, which TerminateProcess cannot end and only turns into
-     * a zombie (measured). True if `root` is gone within `waitMs`.
+     * tree is ours. True if `root` is gone in the end.
      *
-     * Measured on the VM (execprobe --stops): nothing ends REDIR32 --
-     * pipes closed, GenerateConsoleCtrlEvent, Ctrl+C or WM_CLOSE to the
-     * VM's window -- and killing the VM is what stops the command fastest.
-     * So on 98 a stopped piped COMMAND.COM job leaves one REDIR32 (~150KB)
-     * until reboot; the caller reports it (docs/BACKLOG.md 14). */
-    bool stopJobTree(DWORD root, HANDLE rootProcess, DWORD waitMs);
+     * Measured on the VM (execprobe --stops, --redir, --gentle): on 98 a
+     * TerminateProcess on the DOS VM leaves it half-dead, and REDIR32 (or
+     * any process waiting on it) can then never exit -- ~150KB until
+     * reboot. But killing only the Win32 programs in the tree lets the job
+     * END ITSELF within seconds, leaving nothing. So: the Win32 side first
+     * and a wait of `graceMs`; only a job still running after that (a DOS
+     * program in the VM) gets the VM killed, then `finalMs`. */
+    bool stopJobTree(DWORD root, HANDLE rootProcess, DWORD graceMs,
+                     DWORD finalMs);
 
     /* Start `command` detached from us: no handles inherited, both of its
      * handles closed, `show` as ShowWindow takes it (measured honoured for

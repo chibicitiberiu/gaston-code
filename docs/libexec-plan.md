@@ -210,5 +210,11 @@ and SystemInfo case passes on real 98 (Toolhelp, deny list, NE detection,
 real memory and codepages); its exec cases need cmd.exe and so only run
 under Wine.
 
-Open: BACKLOG 14's remaining REDIR32 (ideas there). The guest holds 22
-REDIR32 zombies from this testing until its next restart.
+Then the leak itself (2026-09-27, `execprobe --redir`, `--redir2`, `--gentle`,
+`docs/measurements/`): a TerminateProcess on the DOS VM is what makes the
+zombie, and killing only the Win32 side of the tree lets the job end
+itself with nothing left. `stopJobTree` now does that first, with an 8s
+grace, and kills the VM only for a DOS program that will not end. On the
+VM the client stops a Win32 program under the shell cleanly (0.3s on
+EXECKILL, 3.4s on a 3s timeout); a DOS program still costs one REDIR32,
+logged (`execkill-vm-20260927.txt`). BACKLOG 14 has the rest.

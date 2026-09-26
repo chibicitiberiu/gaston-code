@@ -584,8 +584,9 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    the pid exec held was `REDIR32.EXE`, which TerminateProcess cannot end
    (`BACKLOG.md` 14) -- so a stop now ends the whole tree. Verified on the
    VM: the client passes the stub-bridge run (`tools/probe/execkill.py`),
-   and `execprobe --stops` found nothing better than killing the tree; one
-   REDIR32 per stopped shell job remains, ~150KB each, and is logged.
+   and a stop now kills only the Win32 side and lets the job end itself,
+   which leaves nothing; only a DOS program that must be stopped still
+   costs one REDIR32 (~150KB), logged (`BACKLOG.md` 14).
 4. **`gremote.exe` v0 + Python client.** App, config, listener, AUTH/HELLO,
    control and job lanes, per the op table. **First prove Wine can host a
    listening exe that pytest connects to:** every existing Wine test runs the
