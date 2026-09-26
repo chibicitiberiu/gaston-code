@@ -488,3 +488,45 @@ has no way to name an `acc` element yet, so those records are readable and
 not yet clickable. That is a grammar addition (a step that carries a child
 id) and it can happen without touching the record format, which is the whole
 point of doing this in this order.
+
+## Where this runs in the client, and what can block it
+
+Settled 2026-09-26. Two rules, both of which the first draft of the plan got
+wrong.
+
+**A dedicated ui worker, never the paint thread.** `REMOTE.md` already says
+so ("ui worker (message queue, `CoInitialize`d)") and the plan quietly
+reinterpreted it as the main window thread because that thread happens to
+have both. It also has the transcript view: an in-place-active MSHTML
+control, `OleInitialize`d for it. Three things go wrong there and only there.
+
+A walk sends `WM_GETTEXT` to every window it finds, and a same-thread
+`SendMessage` is a direct call — so walking our own process from inside an
+RPC handler re-enters MSHTML during dispatch. `WalkOptions::excludePid` now
+exists for exactly this, and the client passes its own pid.
+
+`UiWatch::settle()` dispatches the whole thread queue, which on the main
+thread re-enters window procs and can re-enter the RPC handler with the next
+inbound frame while a ui op is still in flight. On its own thread it
+dispatches only its own queue, which holds nothing but the event feed.
+
+And a wait is seconds long by design. The main thread is the client's
+repaint.
+
+So the ui work is a `Service` under `App`'s lifecycle per the project's
+standing rules — `init`, `start`, `signalStop`, `join`, created in
+`initializeServices()` — owning one thread that creates a message queue,
+calls `CoInitialize`, and does nothing else.
+
+**A deadline that can actually interrupt MSAA.** Every budget in the library
+so far bounds `SendMessageTimeout`, which was already bounded. The call that
+is not is the marshalled `IAccessible` property: `get_accName` against a
+process wedged in its own STA blocks with no timeout parameter to give it.
+`REMOTE.md:372` names the only mechanism that works — an `IMessageFilter` on
+the ui thread whose `MessagePending` returns `PENDINGMSG_CANCELCALL` past the
+deadline, with a `SetTimer` so it is called at all. Never `IsHungAppWindow`,
+which is 2000+.
+
+This is the gap `A5` does *not* cover. A5 wedges a thread and proves the
+window walk survives it, which is worth having; the walk was never the
+unbounded part.
