@@ -120,6 +120,12 @@ public:
     int deferredNodes() const { return m_deferred; }
     /* Subtrees refused for depth. Non-zero means the tree is INCOMPLETE. */
     int tooDeep() const { return m_tooDeep; }
+    /* Windows left out because they are excludePid's. The caller has to be
+     * able to SAY so: a tree that silently omits the one window the agent
+     * was asked about reads as "it is not open", and the agent then hunts
+     * for it forever. Measured on the VM 2026-09-27 -- a real agent looped
+     * tree, shot, tree until a human stopped it. */
+    int selfSkipped() const { return m_selfSkipped; }
 
     /* Public only so EnumWindows' free-function callback can reach it. */
     bool stepTop(HWND h, TopContext &ctx);
@@ -140,6 +146,7 @@ private:
     int   m_timeouts;
     int   m_deferred;
     int   m_tooDeep;
+    int   m_selfSkipped;
     HWND  m_focus;          /* resolved once per walk, see tree.cpp */
     DWORD m_until;
     bool  m_hasDeadline;

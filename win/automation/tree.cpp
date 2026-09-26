@@ -95,6 +95,7 @@ TreeWalker::TreeWalker()
     m_timeouts = 0;
     m_deferred = 0;
     m_tooDeep = 0;
+    m_selfSkipped = 0;
     m_until = 0;
     m_hasDeadline = false;
     m_focus = NULL;
@@ -264,7 +265,10 @@ WalkEnd TreeWalker::descend(HWND parent, const WalkOptions &opt,
         if (opt.pid && !inProcess(c, opt.pid))
             continue;
         if (opt.excludePid && inProcess(c, opt.excludePid))
+        {
+            m_selfSkipped++;
             continue;
+        }
 
         Node n;
         fill(n, c, opt, parentPath, index, depth);
@@ -321,7 +325,10 @@ bool TreeWalker::stepTop(HWND h, TopContext &ctx)
     if (ctx.opt->pid && !inProcess(h, ctx.opt->pid))
         return true;
     if (ctx.opt->excludePid && inProcess(h, ctx.opt->excludePid))
+    {
+        m_selfSkipped++;
         return true;
+    }
 
     Node n;
     fill(n, h, *ctx.opt, "", ctx.index, 0);
@@ -349,6 +356,7 @@ WalkEnd TreeWalker::walk(const WalkOptions &opt, NodeSink &sink)
     m_timeouts = 0;
     m_deferred = 0;
     m_tooDeep = 0;
+    m_selfSkipped = 0;
     m_slowN = 0;
     m_hasDeadline = opt.deadlineMs != 0;
     m_until = GetTickCount() + opt.deadlineMs;
@@ -356,6 +364,17 @@ WalkEnd TreeWalker::walk(const WalkOptions &opt, NodeSink &sink)
 
     if (opt.root)
     {
+        /* excludePid is a RULE, not a filter, so it holds for an explicit
+         * root too. It used to be applied only while enumerating, which
+         * meant `root = our own window` walked it happily -- the one caller
+         * that mattered remembered to check first (uirpc's base_options),
+         * and the walker let every other caller forget. Its children are in
+         * the same process, so there is nothing below to descend into. */
+        if (opt.excludePid && inProcess(opt.root, opt.excludePid))
+        {
+            m_selfSkipped++;
+            return WALK_COMPLETE;
+        }
         Node n;
         fill(n, opt.root, opt, "", 0, 0);
         m_seen++;

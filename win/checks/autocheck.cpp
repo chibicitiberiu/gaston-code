@@ -250,6 +250,38 @@ void walking(void)
     }
 
     {
+        /* Excluding our own process must be COUNTED, not just done. The
+         * count is the only thing that lets the bridge say "your own window
+         * is not here on purpose"; without it an agent asked to read the
+         * client's own window gets a list it is absent from and hunts for
+         * it until someone stops the loop (the VM run of 2026-09-27). */
+        WalkOptions o;
+        o.root = top;
+        o.visibleOnly = false;
+        o.excludePid = GetCurrentProcessId();
+        CountingSink sink;
+        TreeWalker w;
+        w.walk(o, sink);
+        rc_strf(detail, sizeof(detail), "%d nodes, %d skipped",
+                sink.count(), w.selfSkipped());
+        say("walk-counts-what-it-excludes",
+            sink.count() == 0 && w.selfSkipped() > 0, detail);
+    }
+
+    {
+        /* And it is zero when nothing was excluded, so a caller can tell
+         * "none hidden" from "the field is not filled in". */
+        WalkOptions o;
+        o.root = top;
+        o.visibleOnly = false;
+        CountingSink sink;
+        TreeWalker w;
+        w.walk(o, sink);
+        rc_strf(detail, sizeof(detail), "%d skipped", w.selfSkipped());
+        say("walk-skips-none-when-not-asked", w.selfSkipped() == 0, detail);
+    }
+
+    {
         /* A sink that stops must stop the walk, not merely be ignored. */
         WalkOptions o;
         o.root = top;
