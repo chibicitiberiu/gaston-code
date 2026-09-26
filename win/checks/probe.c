@@ -2372,7 +2372,22 @@ typedef struct {
     long  x, y;
     char  text[RC_TEXTLEN];
 } RcDraw;
+/* MUST match win/checks/hookdll.c exactly, including the header. The name
+ * carries the version for the reason given there: CreateFileMapping
+ * against an existing name returns the existing object and ignores the
+ * size, so two layouts under one name read each other's fields at the
+ * wrong offsets -- and one of those fields decides whose import table gets
+ * rewritten. */
+#define RC_SHM_NAME  "GastonHookShm2"
+#define RC_SHM_MAGIC 0x47484B32UL
+#define RC_SHM_VER   2
+
 typedef struct {
+    DWORD  magic;
+    DWORD  version;
+    DWORD  cb;
+    DWORD  generation;
+    char   patch_exe[32];
     long   calls;
     long   attaches;
     long   pids_n;
@@ -2403,13 +2418,47 @@ static void probe_inject(void)
      * inside LoadLibrary below. Naming only ourselves is what keeps every
      * other injected process's import table untouched. */
     map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                             0, sizeof(RcHookShm), "GastonHookShm");
+                             0, sizeof(RcHookShm), RC_SHM_NAME);
     shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
               : NULL;
     if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
+
+    /* STAMP AND ZERO, and this is the correction that makes this gate mean
+     * anything. Nothing zeroed these before and no injected copy ever
+     * unmaps the section, so `attaches` was cumulative across every run
+     * since boot -- and the verdict below tested `attaches > 1`. It could
+     * be satisfied entirely by residue from a run that injected nothing. */
+    shm->magic = RC_SHM_MAGIC;
+    shm->version = RC_SHM_VER;
+    shm->cb = sizeof(RcHookShm);
+    shm->generation = GetTickCount() | 1;
+    shm->calls = 0;
+    shm->attaches = 0;
+    shm->pids_n = 0;
+    shm->patched = 0;
+    shm->draws = 0;
+    shm->ring_next = 0;
+    say("generation %lu, counters zeroed", (unsigned long)shm->generation);
+
+    /* Pid AND name. A 9x pid is an obfuscated pointer into the process
+     * database and it is reused, so a target that exits can hand its pid
+     * to something else before we let go of it. */
     shm->patch_pid = GetCurrentProcessId();
-    say("patch target set to this process only (pid %lu)",
-        (unsigned long)shm->patch_pid);
+    {
+        char path[MAX_PATH];
+        const char *base = path;
+        int bi;
+        path[0] = '\0';
+        GetModuleFileNameA(NULL, path, sizeof(path));
+        for (bi = 0; path[bi]; bi++)
+            if (path[bi] == '\\' || path[bi] == '/' || path[bi] == ':')
+                base = &path[bi + 1];
+        for (bi = 0; bi < 31 && base[bi]; bi++)
+            shm->patch_exe[bi] = base[bi];
+        shm->patch_exe[bi] = '\0';
+    }
+    say("patch target set to this process only (pid %lu, %s)",
+        (unsigned long)shm->patch_pid, shm->patch_exe);
 
     /* The CD first, then wherever we are. On the kit both sit together. */
     dll = LoadLibraryA("HOOKDLL.DLL");
@@ -2471,16 +2520,29 @@ static void probe_inject(void)
     for (i = 0; i < shm->pids_n && i < 16; i++)
         say("   pid %lu%s", (unsigned long)shm->pids[i],
             shm->pids[i] == GetCurrentProcessId() ? "  (this one)" : "");
-    if (shm->attaches > 1)
+    /* pids_n, not attaches. `attaches` counts DllMain calls and our own is
+     * one of them; the question is whether a process that is not this one
+     * ran our code, and only the distinct-pid count answers that without
+     * being satisfiable by our own activity. */
+    if (shm->pids_n > 1)
         say("   -> INJECTION WORKS. Our code ran inside another program.");
+    else if (shm->attaches > 1)
+        say("   -> the DLL was MAPPED elsewhere but its proc never ran "
+            "there. Mapping is not execution; do not read this as yes.");
     else
         say("   -> no injection: only this process ever mapped the DLL.");
 
     /* The GDI half. This is the text an owner-drawn control paints and
      * answers no message about, so anything here is text no other tier in
      * the ladder could have got. */
+    /* SAY WHOSE. The patch target above is this very process, so every
+     * draw below was painted by the probe and captured by the probe --
+     * which proves the mechanism and proves nothing about a foreign
+     * process. Reading this as "GDI capture works" was the mistake. */
     say("IAT patch took in %ld process(es); %ld text draws seen",
         shm->patched, shm->draws);
+    say("   NOTE: the patch target is this process, so these are OUR draws.");
+    say("   Capturing a foreign process's text is untested -- see D4.");
     if (shm->draws > 0) {
         long shown = 0;
         for (i = 0; i < RC_TEXTN && shown < 12; i++) {

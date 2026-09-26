@@ -31,7 +31,19 @@
  */
 #include <windows.h>
 
-#define RC_SHM_NAME "GastonHookShm"
+/* The version is IN THE NAME, and that is the whole point of it.
+ *
+ * CreateFileMapping against an existing name ignores the size you pass and
+ * hands back the existing object. So a controller with a new layout would
+ * silently get an OLD, smaller section that an old injected DLL -- still
+ * mapped into a long-lived process, because Explorer does not restart --
+ * is writing the old layout into. Both sides then read each other's fields
+ * at the wrong offsets, and one of them is deciding whose import table to
+ * rewrite. Changing the name is what makes that impossible instead of
+ * something to remember. Bump it whenever RcHookShm changes. */
+#define RC_SHM_NAME  "GastonHookShm2"
+#define RC_SHM_MAGIC 0x47484B32UL   /* 'GHK2' */
+#define RC_SHM_VER   2
 #define RC_MAXPIDS  16
 #define RC_TEXTN    48
 #define RC_TEXTLEN  56
@@ -47,6 +59,25 @@ typedef struct {
 } RcDraw;
 
 typedef struct {
+    /* First three fields, first for a reason: they are what tells a reader
+     * that the rest of the struct means what it thinks it means. The
+     * bridge's HELLO does the same thing and refuses an unknown value
+     * rather than guessing. */
+    DWORD  magic;
+    DWORD  version;
+    DWORD  cb;             /* sizeof(RcHookShm) as the writer knew it */
+    /* Stamped by the controller each run. Counters below are zeroed with
+     * it, so "3 attaches" means three THIS RUN -- the previous version
+     * never zeroed anything and no injected copy ever unmapped the
+     * section, so the number was cumulative across every run since boot
+     * and a verdict of "injection works" could be satisfied by residue
+     * from a run that injected nothing. */
+    DWORD  generation;
+    /* The basename the controller expects `patch_pid` to be, upper case.
+     * A pid is not enough on its own: on 9x it is an obfuscated pointer
+     * into the process database and it IS reused, so a target that exits
+     * can hand its pid to something else before we let go. */
+    char   patch_exe[32];
     long   calls;
     long   attaches;
     long   pids_n;
@@ -71,12 +102,62 @@ static RcHookShm *g_shm;
  * process opens the same object. No file on disk, nothing to clean up. */
 static void shm_attach(void)
 {
+    RcHookShm *v;
     if (g_shm) return;
     g_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
                                0, sizeof(RcHookShm), RC_SHM_NAME);
-    if (g_map)
+    if (!g_map)
+        return;
+    v = (RcHookShm *)MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    if (!v)
+        return;
+    /* REFUSE rather than guess, the rule caps.py already follows for
+     * HELLO. A section we do not recognise is one somebody else is
+     * writing, and the field we would read out of it decides whose import
+     * table gets rewritten. The controller stamps these; a DLL that finds
+     * them unset was loaded into a run that has not started yet.
+     *
+     * The name carries the version too, so this should be unreachable --
+     * it is here because "should be unreachable" is exactly the check
+     * worth keeping when the cost of being wrong is somebody's shell. */
+    if (v->magic != RC_SHM_MAGIC || v->version != RC_SHM_VER
+        || v->cb != sizeof(RcHookShm)) {
+        UnmapViewOfFile(v);
+        CloseHandle(g_map);
+        g_map = NULL;
+        return;
+    }
+    g_shm = v;
+}
+
+/* The controller's side of the same thing: stamp the header and zero the
+ * counters, so a run measures ITSELF.
+ *
+ * Nothing ever zeroed these and no injected copy ever unmaps the section,
+ * so `attaches` was cumulative across every run since boot -- and the
+ * verdict "INJECTION WORKS" tested `attaches > 1`. It could be satisfied
+ * by residue from a run that injected nothing. */
+void rc_hook_shm_begin(void)
+{
+    if (!g_shm) {
+        if (g_map) return;
+        g_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                                   0, sizeof(RcHookShm), RC_SHM_NAME);
+        if (!g_map) return;
         g_shm = (RcHookShm *)MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS,
                                            0, 0, 0);
+        if (!g_shm) return;
+    }
+    g_shm->magic = RC_SHM_MAGIC;
+    g_shm->version = RC_SHM_VER;
+    g_shm->cb = sizeof(RcHookShm);
+    g_shm->generation = GetTickCount() | 1;
+    g_shm->calls = 0;
+    g_shm->attaches = 0;
+    g_shm->pids_n = 0;
+    g_shm->patched = 0;
+    g_shm->draws = 0;
+    g_shm->ring_next = 0;
 }
 
 /* ---- GDI text capture by import-table patch -------------------------
@@ -124,10 +205,15 @@ static void record(int x, int y, LPCSTR s, int n)
     d->x = x; d->y = y;
     if (n > RC_TEXTLEN - 1) n = RC_TEXTLEN - 1;
     for (i = 0; i < n; i++) {
-        char c = s[i];
         /* Control bytes would wreck a line-based log on the other side,
          * and a NUL mid-string would truncate the record silently. */
-        d->text[i] = (c >= 32 || c == 0) ? c : '.';
+        /* UNSIGNED. With a signed char every byte from 0x80 up is
+         * negative and was mapped to '.', which destroys exactly the
+         * accented and box-drawing characters a Win98 application draws --
+         * and REMOTE.md is careful elsewhere that guest bytes cross
+         * untouched for the bridge to decode with HELLO's codepage. */
+        unsigned char c = (unsigned char)s[i];
+        d->text[i] = (c >= 32) ? (char)c : '.';
     }
     d->text[n] = '\0';
     g_shm->ring_next = (slot + 1) % RC_TEXTN;
@@ -192,6 +278,14 @@ static DWORD *patch_import(HMODULE mod, const char *dll, const char *fn,
             {
                 DWORD prot = 0;
                 if (old_out) *old_out = (void *)now[i].u1.Function;
+                /* ALREADY OURS. Without this, D4's per-module loop
+                 * patches module 2 and reads back `my_textout` as the
+                 * "original", so the next character drawn recurses into
+                 * itself forever -- inside somebody else's WM_PAINT. That
+                 * is a hang of their application, not a crash we could
+                 * even find. */
+                if (now[i].u1.Function == (DWORD)replacement)
+                    return NULL;
                 if (!VirtualProtect(&now[i], sizeof(now[i]),
                                     PAGE_READWRITE, &prot))
                     return NULL;
@@ -204,28 +298,119 @@ static DWORD *patch_import(HMODULE mod, const char *dll, const char *fn,
     return NULL;
 }
 
-/* The slots we rewrote, so they can be put back. */
-static DWORD *g_slot_textout;
-static DWORD *g_slot_exttextout;
+/* Every slot we rewrote, per module, so every one can be put back.
+ *
+ * A single pair of pointers was enough while only the EXE was patched. It
+ * is not enough for what this is for: Notepad's text is drawn by the EDIT
+ * control inside USER32 and a web page by MSHTML.DLL, so patching the
+ * executable's imports misses precisely the content wanted. Patching N
+ * modules with one slot restores one of them and leaves the other N-1
+ * pointing into a DLL that has been unmapped -- which is the Explorer
+ * crash again, multiplied.
+ */
+#define RC_PATCH_MAX 32
+
+typedef struct {
+    DWORD *slot;
+    void  *original;
+} RcPatch;
+
+static RcPatch g_patches[RC_PATCH_MAX];
+static int     g_patch_n;
+
+static void patch_one(HMODULE mod, const char *fn, void *replacement,
+                      void **realOut)
+{
+    void *orig = NULL;
+    DWORD *slot;
+    if (g_patch_n >= RC_PATCH_MAX)
+        return;
+    slot = patch_import(mod, "GDI32.DLL", fn, replacement, &orig);
+    if (!slot || !orig || orig == replacement)
+        return;
+    g_patches[g_patch_n].slot = slot;
+    g_patches[g_patch_n].original = orig;
+    g_patch_n++;
+    /* Every module imports the same GDI32 entry point, so the first real
+     * one we see is the real one for all of them. Never overwritten, or a
+     * later module's thunk could become the "original" we call through. */
+    if (!*realOut)
+        *realOut = orig;
+}
+
+/* Module enumeration, resolved rather than imported. TOOLHELP32 is in
+ * KERNEL32 on 9x; a static import of something absent kills the image at
+ * load, and this image is mapped into programs that did not ask for it. */
+#ifndef TH32CS_SNAPMODULE
+#define TH32CS_SNAPMODULE 0x00000008
+#endif
+
+typedef struct {
+    DWORD dwSize;
+    DWORD th32ModuleID;
+    DWORD th32ProcessID;
+    DWORD GlblcntUsage;
+    DWORD ProccntUsage;
+    BYTE *modBaseAddr;
+    DWORD modBaseSize;
+    HMODULE hModule;
+    char szModule[256];
+    char szExePath[MAX_PATH];
+} RC_MODULEENTRY32;
+
+typedef HANDLE (WINAPI *PFN_SNAP)(DWORD, DWORD);
+typedef BOOL (WINAPI *PFN_MOD32)(HANDLE, RC_MODULEENTRY32 *);
 
 static void patch_text_calls(void)
 {
-    /* NULL means "the module that started this process" -- the EXE. Its
-     * own painting is what we want; a standard control paints from inside
-     * USER32 and never touches the application's import table at all,
-     * which is why this sees owner-drawn text and nothing else. */
-    HMODULE host = GetModuleHandleA(NULL);
+    HMODULE k32 = GetModuleHandleA("kernel32.dll");
+    PFN_SNAP snap = k32
+        ? (PFN_SNAP)GetProcAddress(k32, "CreateToolhelp32Snapshot") : 0;
+    PFN_MOD32 first = k32
+        ? (PFN_MOD32)GetProcAddress(k32, "Module32First") : 0;
+    PFN_MOD32 next = k32
+        ? (PFN_MOD32)GetProcAddress(k32, "Module32Next") : 0;
     void *a = NULL, *b = NULL;
-    g_slot_textout = patch_import(host, "GDI32.DLL", "TextOutA",
-                                  (void *)my_textout, &a);
-    g_slot_exttextout = patch_import(host, "GDI32.DLL", "ExtTextOutA",
-                                     (void *)my_exttextout, &b);
-    if (g_slot_textout)    g_real_textout = (PFN_TEXTOUTA)a;
-    if (g_slot_exttextout) g_real_exttextout = (PFN_EXTTEXTOUTA)b;
-    if ((g_slot_textout || g_slot_exttextout) && g_shm) g_shm->patched++;
+    HMODULE self = NULL;
+
+    /* Never ourselves: patching our own imports would route our own
+     * pass-through call straight back into the hook. */
+    self = GetModuleHandleA("hookdll.dll");
+
+    if (snap && first && next) {
+        HANDLE h = snap(TH32CS_SNAPMODULE, GetCurrentProcessId());
+        if (h != INVALID_HANDLE_VALUE) {
+            RC_MODULEENTRY32 me;
+            BOOL ok;
+            me.dwSize = sizeof(me);
+            for (ok = first(h, &me); ok; ok = next(h, &me)) {
+                if (me.hModule == self)
+                    continue;
+                patch_one(me.hModule, "TextOutA", (void *)my_textout, &a);
+                patch_one(me.hModule, "ExtTextOutA", (void *)my_exttextout,
+                          &b);
+            }
+            CloseHandle(h);
+        }
+    }
+
+    /* No toolhelp, or it gave nothing: the executable alone, which is what
+     * this did before and is better than nothing. */
+    if (!g_patch_n) {
+        HMODULE host = GetModuleHandleA(NULL);
+        patch_one(host, "TextOutA", (void *)my_textout, &a);
+        patch_one(host, "ExtTextOutA", (void *)my_exttextout, &b);
+    }
+
+    if (a) g_real_textout = (PFN_TEXTOUTA)a;
+    if (b) g_real_exttextout = (PFN_EXTTEXTOUTA)b;
+    /* Only once both pass-throughs are known. Between the first patched
+     * slot and this assignment, a draw would find g_real_* NULL and the
+     * character would simply not appear on somebody's screen. */
+    if (g_patch_n && g_shm) g_shm->patched++;
 }
 
-/* PUT IT BACK, and this is not tidiness.
+/* PUT THEM ALL BACK, and this is not tidiness.
  *
  * A patched import table points at code inside THIS DLL. When the hook is
  * removed the system unmaps us from every process it had injected us into,
@@ -233,26 +418,62 @@ static void patch_text_calls(void)
  * not crash then; it crashes the next time it draws a character, long
  * after we are gone, and the crash belongs to it. That is exactly what
  * happened to Explorer on 2026-09-26.
+ *
+ * In reverse, so a module patched twice -- which the guard above should
+ * prevent and which this does not rely on -- unwinds to where it started.
  */
 static void unpatch_text_calls(void)
 {
     DWORD prot = 0;
-    if (g_slot_textout && g_real_textout) {
-        if (VirtualProtect(g_slot_textout, sizeof(DWORD), PAGE_READWRITE,
-                           &prot)) {
-            *g_slot_textout = (DWORD)g_real_textout;
-            VirtualProtect(g_slot_textout, sizeof(DWORD), prot, &prot);
+    while (g_patch_n > 0) {
+        RcPatch *p = &g_patches[--g_patch_n];
+        if (!p->slot || !p->original)
+            continue;
+        if (VirtualProtect(p->slot, sizeof(DWORD), PAGE_READWRITE, &prot)) {
+            *p->slot = (DWORD)p->original;
+            VirtualProtect(p->slot, sizeof(DWORD), prot, &prot);
         }
-        g_slot_textout = NULL;
+        p->slot = NULL;
+        p->original = NULL;
     }
-    if (g_slot_exttextout && g_real_exttextout) {
-        if (VirtualProtect(g_slot_exttextout, sizeof(DWORD), PAGE_READWRITE,
-                           &prot)) {
-            *g_slot_exttextout = (DWORD)g_real_exttextout;
-            VirtualProtect(g_slot_exttextout, sizeof(DWORD), prot, &prot);
-        }
-        g_slot_exttextout = NULL;
+}
+
+/* Is this process the one the controller named?
+ *
+ * The pid alone is not enough. On 9x a pid is an obfuscated pointer into
+ * the process database and it IS reused: the controller sets patch_pid for
+ * Notepad, Notepad exits, the next process to start can be handed the same
+ * slot, and the deny list never sees it. So the basename has to agree too.
+ */
+static int is_the_named_target(void)
+{
+    char path[MAX_PATH];
+    const char *base;
+    int i;
+
+    if (!g_shm || !g_shm->patch_pid)
+        return 0;
+    if (g_shm->patch_pid != GetCurrentProcessId())
+        return 0;
+    if (!g_shm->patch_exe[0])
+        return 0;       /* unnamed is not a licence; it is a refusal */
+
+    path[0] = '\0';
+    if (!GetModuleFileNameA(NULL, path, sizeof(path)))
+        return 0;
+    base = path;
+    for (i = 0; path[i]; i++)
+        if (path[i] == '\\' || path[i] == '/' || path[i] == ':')
+            base = &path[i + 1];
+
+    for (i = 0; i < 31; i++) {
+        char a = base[i], b = g_shm->patch_exe[i];
+        if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+        if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+        if (a != b) return 0;
+        if (!a) return 1;
     }
+    return 1;
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
@@ -266,8 +487,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
         if (g_shm) g_shm->attaches++;
         /* Only the one process the controller named, and only if it named
          * one. Everything else gets the hook and keeps its import table. */
-        if (g_shm && g_shm->patch_pid
-            && g_shm->patch_pid == GetCurrentProcessId())
+        if (is_the_named_target())
             patch_text_calls();
     } else if (reason == DLL_PROCESS_DETACH) {
         unpatch_text_calls();
