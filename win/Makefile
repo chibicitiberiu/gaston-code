@@ -134,7 +134,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
 
-.PHONY: autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: execprobe autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -189,6 +189,16 @@ $(BUILD)/inifilecheck.exe: $(INIFILECHECK_OBJS)
 APPCHECK_OBJS = $(call objs,checks/appcheck.cpp) $(LIBCORE)
 appcheck: $(BUILD)/appcheck.exe
 $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# Not a check: measures on the guest what libexec's design depends on --
+# Toolhelp, whether a grandchild outlives its killed shell, exit codes through
+# COMMAND.COM, socket inheritance, launch's show value. Read back over COM1.
+EXECPROBE_OBJS = $(call objs,checks/execprobe.cpp) $(LIBCORE)
+execprobe: $(BUILD)/execprobe.exe
+$(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -323,7 +333,7 @@ retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
 all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
-     netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+     netcheck rpccheck probe execprobe htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.

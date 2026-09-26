@@ -1,0 +1,119 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--run
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 9ms, 9 processes
+self	pid=fffd8541
+proc	pid=ffcf6da9 ppid=7ea71f95 threads=4 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffffba31 ppid=ffcf6da9 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffffac81 ppid=ffffba31 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffe04e1 ppid=ffffac81 threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffe7109 ppid=ffffcc15 threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe67d1 ppid=ffffcc15 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffd4ef9 ppid=ffffcc15 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=ffffcbdd ppid=ffffba31 threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffd8541 ppid=fffd6b15 threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+win16-running	pid=ffffba31 exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+win16-running	pid=fffd4ef9 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+win16-disk	kind=M C:\WINDOWS\DOSREP.EXE
+win16-disk	kind=N C:\WINDOWS\NETDDE.EXE
+win16-disk	kind=M C:\WINDOWS\SMARTDRV.EXE
+win16-disk	kind=N C:\WINDOWS\CONTROL.EXE
+win16-disk	kind=N C:\WINDOWS\DEFRAG.EXE
+win16-disk	kind=N C:\WINDOWS\DRVSPACE.EXE
+win16-disk	kind=M C:\WINDOWS\EMM386.EXE
+win16-disk	kind=N C:\WINDOWS\PROGMAN.EXE
+win16-disk	kind=N C:\WINDOWS\RUNDLL.EXE
+win16-disk	kind=N C:\WINDOWS\SCANDSKW.EXE
+win16-disk	kind=N C:\WINDOWS\WINFILE.EXE
+win16-disk	kind=N C:\WINDOWS\WINHELP.EXE
+win16-disk	kind=M C:\WINDOWS\WININIT.EXE
+win16-disk	kind=N C:\WINDOWS\WINVER.EXE
+win16-disk	kind=M C:\WINDOWS\SETVER.EXE
+win16-disk	kind=M C:\WINDOWS\NET.EXE
+win16-disk	kind=M C:\WINDOWS\PROTMAN.EXE
+win16-disk	kind=N C:\WINDOWS\WINPOPUP.EXE
+win16-disk	kind=M C:\WINDOWS\NBTSTAT.EXE
+win16-disk	scanned=70
+dos-kill	shell pid=fffd01d1 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+dos-kill	shell exited early, code=0
+dos-kill	pid=fffd86a1 ppid=fffd01d1(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+dos-kill	new=1
+dos-kill	terminate=1 shell-gone=1 tick-before=-1
+dos-kill	tick after 2s/4s/6s: -1 -1 -1 -> stopped
+dos-kill	new=0
+w32-kill	shell pid=fffe5499 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+w32-kill	pid=fffe5499 ppid=fffd8541 threads=3 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffd03b5 ppid=fffe5499(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+w32-kill	pid=fffd86a1 ppid=fffd03b5 threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+w32-kill	new=3
+w32-kill	terminate=1 shell-gone=0 tick-before=12
+w32-kill	tick after 2s/4s/6s: 27 33 39 -> GRANDCHILD STILL RUNNING
+w32-kill	pid=fffe5499 ppid=fffd8541 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffd03b5 ppid=fffe5499(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+w32-kill	pid=fffd86a1 ppid=fffd03b5 threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+w32-kill	new=3
+w32-kill	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+w32-kill	swept pid=fffd03b5 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD open=1 kill=1
+w32-kill	swept pid=fffd86a1 exe=C:\EP\EXECPRB.EXE open=0 kill=0
+exit-direct	exited=1 code=7 cmd=C:\EP\EXECPRB.EXE --exit 7
+exit-shell-w32	exited=1 code=0 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --exit 7
+exit-shell-dos	exited=1 code=0 cmd=C:\WINDOWS\COMMAND.COM /c choice /c:abc /t:b,1 /n
+exit-shell-missing	exited=1 code=0 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\NOSUCH.EXE
+exit-shell-plain	exited=1 code=0 cmd=C:\WINDOWS\COMMAND.COM /c exit
+sock-exec-direct	port=1035 duplicatehandle-on-socket=1 err=0
+sock-exec-direct	after parent close, child alive: connect=0 rebind=1
+sock-exec-direct	after child exit: connect=0 rebind=1
+sock-exec-shell	port=1038 duplicatehandle-on-socket=1 err=0
+sock-exec-shell	after parent close, child alive: connect=0 rebind=1
+sock-exec-shell	after child exit: connect=0 rebind=1
+sock-noinherit	port=1041 duplicatehandle-on-socket=1 err=0
+sock-noinherit	after parent close, child alive: connect=0 rebind=1
+sock-noinherit	after child exit: connect=0 rebind=1
+launch-dos-hide	show=0 pid=fffd87e1 cmd=C:\WINDOWS\COMMAND.COM /c choice /c:y /t:y,4 /n
+launch-dos-hide	hwnd=00000534 pid=fffd87e1 visible=0 iconic=0 class=ComboLBox title=
+launch-dos-hide	hwnd=0000052c pid=fffd87e1 visible=0 iconic=0 class=tooltips_class title=
+launch-dos-hide	hwnd=00000520 pid=fffd87e1 visible=0 iconic=0 class=tty title=MS-DOS Prompt - CHOICE
+launch-dos-hide	new-windows=3
+launch-dos-hide	process-exited=1
+launch-dos-hide	windows left after exit:
+launch-dos-hide	new-windows=0
+launch-dos-hide	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+launch-dos-hide	swept pid=fffd03b5 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD open=1 kill=1
+launch-dos-min	show=7 pid=fffd87e1 cmd=C:\WINDOWS\COMMAND.COM /c choice /c:y /t:y,4 /n
+launch-dos-min	hwnd=0000054c pid=fffd87e1 visible=0 iconic=0 class=ComboLBox title=
+launch-dos-min	hwnd=00000544 pid=fffd87e1 visible=0 iconic=0 class=tooltips_class title=
+launch-dos-min	hwnd=00000538 pid=fffd87e1 visible=1 iconic=1 class=tty title=MS-DOS Prompt - CHOICE
+launch-dos-min	new-windows=3
+launch-dos-min	process-exited=1
+launch-dos-min	windows left after exit:
+launch-dos-min	new-windows=0
+launch-dos-min	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+launch-dos-normal	show=1 pid=fffe5645 cmd=C:\WINDOWS\COMMAND.COM /c choice /c:y /t:y,4 /n
+launch-dos-normal	hwnd=0000055c pid=fffe5645 visible=0 iconic=0 class=tooltips_class title=
+launch-dos-normal	hwnd=00000550 pid=fffe5645 visible=1 iconic=0 class=tty title=MS-DOS Prompt - CHOICE
+launch-dos-normal	hwnd=00000564 pid=fffe5645 visible=0 iconic=0 class=ComboLBox title=
+launch-dos-normal	new-windows=3
+launch-dos-normal	process-exited=1
+launch-dos-normal	windows left after exit:
+launch-dos-normal	new-windows=0
+launch-dos-normal	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+launch-w32-hide	show=0 pid=fffd03b5 cmd=C:\EP\EXECPRB.EXE --sleep 4
+launch-w32-hide	hwnd=0000057c pid=fffd88bd visible=0 iconic=0 class=ComboLBox title=
+launch-w32-hide	hwnd=00000574 pid=fffd88bd visible=0 iconic=0 class=tooltips_class title=
+launch-w32-hide	hwnd=00000568 pid=fffd88bd visible=0 iconic=0 class=tty title=
+launch-w32-hide	new-windows=3
+launch-w32-hide	process-exited=1
+launch-w32-hide	windows left after exit:
+launch-w32-hide	new-windows=0
+launch-w32-hide	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+launch-w32-normal	show=1 pid=fffd88bd cmd=C:\EP\EXECPRB.EXE --sleep 4
+launch-w32-normal	hwnd=0000058c pid=fffd03b5 visible=0 iconic=0 class=tooltips_class title=
+launch-w32-normal	hwnd=00000580 pid=fffd88bd visible=1 iconic=0 class=tty title=EXECPRB
+launch-w32-normal	hwnd=00000594 pid=fffd03b5 visible=0 iconic=0 class=ComboLBox title=
+launch-w32-normal	new-windows=3
+launch-w32-normal	process-exited=1
+launch-w32-normal	windows left after exit:
+launch-w32-normal	new-windows=0
+launch-w32-normal	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffe5499 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+done	ok

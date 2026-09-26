@@ -1,0 +1,43 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--vmfirst
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 5ms, 12 processes
+self	pid=fffd6ed5
+proc	pid=ffcf6da9 ppid=7ea71f95 threads=7 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffffba31 ppid=ffcf6da9 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffffac81 ppid=ffffba31 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffe04e1 ppid=ffffac81 threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffe7109 ppid=ffffcc15 threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe67d1 ppid=ffffcc15 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffd4ef9 ppid=ffffcc15 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=ffffcbdd ppid=ffffba31 threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffe5499 ppid=fffd8541 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffd423d ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffbe139 ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffd6ed5 ppid=fffdbe9d threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+vmfirst-dos	spawned pid=fffa46a1 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+vmfirst-dos	pid=fffa46a1 ppid=fffd6ed5 threads=3 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+vmfirst-dos	pid=fffaa3e5 ppid=fffa46a1(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+vmfirst-dos	new=2
+vmfirst-dos	vm=fffaa3e5 tick-before=12
+vmfirst-dos	vm kill=1 vm-gone=0 after 10002ms; spawned-gone=0 after 20028ms code=4294967295
+vmfirst-dos	tick 2s/4s/6s: 78 84 90 -> GRANDCHILD STILL RUNNING
+vmfirst-dos	pid=fffa46a1 ppid=fffd6ed5 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+vmfirst-dos	pid=fffaa3e5 ppid=fffa46a1(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+vmfirst-dos	new=2
+vmfirst-w32	spawned pid=fffd54cd cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+vmfirst-w32	pid=fffa46a1 ppid=fffd6ed5 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+vmfirst-w32	pid=fffaa3e5 ppid=fffa46a1 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+vmfirst-w32	pid=fffd54cd ppid=fffd6ed5 threads=3 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+vmfirst-w32	pid=fffd55a5 ppid=fffd54cd(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+vmfirst-w32	pid=fff924c5 ppid=fffd55a5 threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+vmfirst-w32	new=5
+vmfirst-w32	vm=fffd55a5 tick-before=12
+vmfirst-w32	vm kill=1 vm-gone=0 after 10004ms; spawned-gone=0 after 20004ms code=4294967295
+vmfirst-w32	tick 2s/4s/6s: 12 12 12 -> stopped
+vmfirst-w32	pid=fffa46a1 ppid=fffd6ed5 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+vmfirst-w32	pid=fffaa3e5 ppid=fffa46a1 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+vmfirst-w32	pid=fffd54cd ppid=fffd6ed5 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+vmfirst-w32	pid=fffd55a5 ppid=fffd54cd(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+vmfirst-w32	new=4
+done	ok

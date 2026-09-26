@@ -1,0 +1,56 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--kills
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 5ms, 10 processes
+self	pid=fffd6d81
+proc	pid=ffcf6da9 ppid=7ea71f95 threads=5 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffffba31 ppid=ffcf6da9 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffffac81 ppid=ffffba31 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffe04e1 ppid=ffffac81 threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffe7109 ppid=ffffcc15 threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe67d1 ppid=ffffcc15 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffd4ef9 ppid=ffffcc15 threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=ffffcbdd ppid=ffffba31 threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffe5499 ppid=fffd8541 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+proc	pid=fffd6d81 ppid=fffd6add threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+dos-kill	shell pid=fffd423d cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+dos-kill	pid=fffd423d ppid=fffd6d81 threads=3 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+dos-kill	pid=fffc77f1 ppid=fffd423d(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+dos-kill	new=2
+dos-kill	terminate=1 shell-gone=0 tick-before=12
+dos-kill	tick after 2s/4s/6s: 30 36 42 -> GRANDCHILD STILL RUNNING
+dos-kill	pid=fffd423d ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+dos-kill	pid=fffc77f1 ppid=fffd423d(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+dos-kill	new=2
+dos-kill	vm pid=fffc77f1 open=1 kill=1 gone=0
+dos-kill	after vm kill, tick 2s/4s/6s: 57 63 69 -> GRANDCHILD STILL RUNNING
+dos-kill	pid=fffd423d ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+dos-kill	pid=fffc77f1 ppid=fffd423d(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+dos-kill	new=2
+dos-kill	swept pid=fffd423d exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+dos-kill	swept pid=fffc77f1 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD open=1 kill=1
+w32-kill	shell pid=fffbe139 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+w32-kill	pid=fffd423d ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffbe139 ppid=fffd6d81 threads=3 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffdbe9d ppid=fffbe139(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+w32-kill	pid=fffa7291 ppid=fffdbe9d threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+w32-kill	new=4
+w32-kill	terminate=1 shell-gone=0 tick-before=12
+w32-kill	tick after 2s/4s/6s: 27 33 39 -> GRANDCHILD STILL RUNNING
+w32-kill	pid=fffd423d ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffbe139 ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffdbe9d ppid=fffbe139(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+w32-kill	pid=fffa7291 ppid=fffdbe9d threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+w32-kill	new=4
+w32-kill	vm pid=fffdbe9d open=1 kill=1 gone=0
+w32-kill	after vm kill, tick 2s/4s/6s: 39 39 39 -> stopped
+w32-kill	pid=fffd423d ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffbe139 ppid=fffd6d81 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+w32-kill	pid=fffdbe9d ppid=fffbe139(shell) threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+w32-kill	new=3
+w32-kill	swept pid=fffd423d exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+w32-kill	swept pid=fffbe139 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+w32-kill	swept pid=fffdbe9d exe=C:\WINDOWS\SYSTEM\WINOA386.MOD open=1 kill=1
+final	swept pid=fffd423d exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffbe139 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+done	ok

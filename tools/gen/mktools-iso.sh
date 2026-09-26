@@ -36,6 +36,7 @@ want() {                                # skip, but out loud
 # surface long filenames, and a truncated name is a confusing failure.
 want "$HERE/build/win/probe.exe" "PROBE.EXE"
 want "$HERE/build/win/htmlspike.exe" "HTMLSPK.EXE"
+want "$HERE/build/win/execprobe.exe" "EXECPRB.EXE"
 need "$HERE/build/win/retroclaude.exe" "RETROCL.EXE"
 want "$HERE/build/win/netcheck.exe" "NETCHECK.EXE"
 # The collision-mode check. It runs green under Wine and that proves the

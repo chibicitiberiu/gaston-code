@@ -1324,3 +1324,29 @@ CSS comments**. Stripping them leaves every rule byte-identical. `doc()`
 wire verbatim, once per connect and again on every reconnect. On a 5 KB/s link that is
 close to a full second of the time between plugging in and seeing a transcript. It
 needs the DOC goldens regenerated and it depends on none of the above.
+
+---
+
+## 14. Stopping an exec leaks a process on Win98
+
+**Status:** found 2026-09-26 by `win/checks/execprobe.cpp` on the VM
+(`docs/measurements/execprobe-vm-*-20260926.txt`). Being closed in libexec,
+`docs/libexec-plan.md` steps 0b and 5.
+
+On 98 a piped `COMMAND.COM /c` spawn is three processes: the pid
+`CreateProcess` returns is `REDIR32.EXE`, its child is the DOS VM
+(`WINOA386.MOD`), and a Win32 program the command runs is the VM's child.
+`rc_exec_cancel` and the timeout path call `TerminateProcess` on that pid.
+It returns TRUE and nothing happens: the command keeps running, and
+`REDIR32` stays behind with one thread, orphaned, more than ten minutes later
+and presumably until reboot. **Every exec timeout and every EXECKILL leaks
+one on the guest today.** A command that ends by itself leaks nothing.
+
+Killing the VM instead stops a Win32 grandchild at once and a DOS program
+after about 30 seconds, but still leaves `REDIR32` (and in one of two runs
+the VM) as zombies. What a zombie costs in memory is not measured yet; step
+0b of the plan measures it and looks for a clean stop.
+
+Found alongside, for the exec tool's description: through `COMMAND.COM /c`
+the exit code is **always 0**, even for a program that does not exist. The
+client sends it as `code=` in `EXECRESULT` unchanged.
