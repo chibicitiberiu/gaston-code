@@ -1,0 +1,33 @@
+# End to end on the VM, 2026-09-27: bridge.server --model haiku on :7891, RCX.EXE (libexec + Win32-first stop) on the guest
+# Prompts typed into the client; every tool call allowed from its permission bar.
+
+00:33:05 INFO    bridge.coordinator: input: Three steps on my machine please. 1: run ver. 2: run C:\EP\EXECPRB.EXE --tick C:\EP\E2E.TXT 60 with a 5 second timeout, 
+00:33:09 INFO    bridge.permdesk: guard is not deciding anything here: no folder is mirrored from this machine, so nothing a command changes on it can be restored
+00:36:43 INFO    bridge.permdesk: permission allow for mcp__machine__exec (toolu_01WQGJfDtnaqUkXieKxTx6E2)
+00:36:43 INFO    bridge.guest_exec: exec x1: ver
+00:36:43 INFO    bridge.guest_exec: exec x1 finished: status=spawn_failed code=0 bytes=0
+00:37:03 INFO    bridge.permdesk: permission allow for mcp__machine__exec (toolu_013g2QjA8Hc1aM7coU8Lcx8P)
+00:37:03 INFO    bridge.guest_exec: exec x2: C:\EP\EXECPRB.EXE --tick C:\EP\E2E.TXT 60
+00:37:08 INFO    bridge.guest_exec: exec x2 finished: status=timeout code=1 bytes=0
+00:37:26 INFO    bridge.permdesk: permission allow for mcp__machine__shot (toolu_01SUDLn2dnJP7Sr6FN8XZUnf)
+00:41:36 INFO    bridge.coordinator: input: Four steps please, one at a time. 1: run ver. 2: run C:\EP\EXECPRB.EXE --tick C:\EP\E2F.TXT 60 through command.com with 
+00:41:58 INFO    bridge.permdesk: permission allow for mcp__machine__exec (toolu_01GP3KqPT3Rq57T6tecpdmsr)
+00:41:58 INFO    bridge.guest_exec: exec x3: ver
+00:42:00 INFO    bridge.guest_exec: exec x3 finished: status=ok code=0 bytes=36
+00:42:19 INFO    bridge.permdesk: permission allow for mcp__machine__exec (toolu_0198JyCFe55Nv1xeqQVjr7xo)
+00:42:19 INFO    bridge.guest_exec: exec x4: C:\EP\EXECPRB.EXE --tick C:\EP\E2F.TXT 60
+00:42:23 INFO    bridge.guest_exec: exec x4 finished: status=timeout code=0 bytes=0
+00:42:42 INFO    bridge.permdesk: permission allow for mcp__machine__exec (toolu_01De67Tt2s9SATH7BZJAn6jS)
+00:42:42 INFO    bridge.guest_exec: exec x5: C:\EP\EXECPRB.EXE --tick C:\EP\E2G.TXT 120
+00:42:48 INFO    bridge.guest_exec: asking the guest to kill exec x5
+00:42:49 DEBUG   bridge.guest_exec: EXECRESULT for x5, which nobody is waiting for (usually a kill that has already been handled)
+00:43:16 INFO    bridge.coordinator: input: Thanks. Now show me the control tree of the Gaston Code window, briefly.
+00:43:43 INFO    bridge.permdesk: permission allow for mcp__machine__ui (toolu_01D8MZ7FiUHCGtRTT6CzT3A6)
+00:44:21 INFO    bridge.permdesk: permission allow for mcp__machine__ui (toolu_01Eoj7wtWxso8UFwBqZiMfyu)
+00:45:09 INFO    bridge.permdesk: permission allow for mcp__machine__shot (toolu_01WBYi6j7F6RfEYQHLJ3dWAk)
+00:45:59 INFO    bridge.permdesk: permission deny for mcp__machine__ui (toolu_01FnqKhFhBjVChXiVDbGWqCX)
+
+# Round 1: exec x1 'ver' failed to spawn -- a test-setup fault: RCX ran from C:\EP without tools_detect.ini, so no shell was reported. Copied in; round 2 ran it through command.com.
+# x2/x4: a Win32 program timed out at 5s/4s (x4 through command.com). x5: the client's Stop -> EXECKILL -> cancelled 1s later.
+# shot: the agent described the screen from the image. ui: trees returned (14 controls); Gaston Code's own window is left out by design (refused_self).
+# EXECPRB --list after: REDIR32.EXE=3, the same 3 as before the run (from the probes) -- the agent's timeout and Stop left nothing.

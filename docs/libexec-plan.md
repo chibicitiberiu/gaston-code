@@ -218,3 +218,10 @@ grace, and kills the VM only for a DOS program that will not end. On the
 VM the client stops a Win32 program under the shell cleanly (0.3s on
 EXECKILL, 3.4s on a 3s timeout); a DOS program still costs one REDIR32,
 logged (`execkill-vm-20260927.txt`). BACKLOG 14 has the rest.
+
+End to end on the VM (2026-09-27, `docs/measurements/e2e-vm-20260927.txt`):
+the real bridge with a Haiku agent, prompts typed into the client. The agent
+ran `ver` through command.com, a Win32 program that timed out (4s and 5s),
+one cancelled by the client's Stop button (EXECKILL, cancelled 1s later), a
+screenshot it described correctly, and control trees. Afterwards the guest
+held no new REDIR32.
