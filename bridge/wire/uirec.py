@@ -138,7 +138,7 @@ def parse_records(body: bytes, acp: str = "") -> list[UiNode]:
                 flags=int(tok[9]),
             )
             at = start
-            for field, ln in zip(_STR_FIELDS, lens):
+            for field, ln in zip(_STR_FIELDS, lens, strict=True):
                 setattr(node, field, fold.decode(body[at:at + ln], acp))
                 at += ln
             if body[at:at + 1] != b"\n":

@@ -113,9 +113,7 @@ def _step_matches(step: str, n: UiNode) -> bool:
         return False
     if text is not None and (n.text or n.name) != text:
         return False
-    if role is not None and n.role != role:
-        return False
-    return True
+    return not (role is not None and n.role != role)
 
 
 def _chain_matches(steps: list[str], n: UiNode, by_path: dict[str, UiNode]) -> bool:

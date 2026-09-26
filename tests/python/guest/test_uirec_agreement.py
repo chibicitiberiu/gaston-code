@@ -11,12 +11,14 @@ A window's text comes back through `WM_GETTEXT` and can contain anything
 somebody typed into an Edit control, newlines included, so the record that
 matters most here is the multi-line one.
 """
+import pathlib
+import sys
+
 import conftest
 import pytest
 
-import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
-from bridge.wire import uirec  # noqa: E402
+from bridge.wire import uirec
 
 EXE_NAME = "uicheck.exe"
 pytestmark = conftest.needs_guest

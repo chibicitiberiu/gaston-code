@@ -339,6 +339,46 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
 | `EXEC` | `timeout_ms`, `cwd`, optional `shell`; body is the command line | `DATA` output chunks (OEM bytes, untouched), `END exit=, truncated=, timed_out=` | `busy`, `spawn_failed` |
 | `LAUNCH` | `cwd`, `show`; body is the command line | `OK pid=` | `spawn_failed` |
 
+The ui lane, **as built in the client** (`win/ui/`). These are the frame
+types the shipping client answers today; `gremote` will reuse the same
+handlers behind the shorter names in the lane table above.
+
+| Op | Request headers / body | Reply | Errors |
+|---|---|---|---|
+| `UITREE` | `scope=desktop\|foreground\|pid`, `pid`, `max_nodes`, `text`, `msaa`, `hidden`, `call_ms`, `timeout_ms`, optional `wait_for=` + `wait_ms`, optional `settle_ms` | `UIENT` records (see below) with `n=` per frame; `UIEND nodes=, walk=complete\|deadline\|maxnodes\|stopped, enriched=, dropped=, too_deep=` | `bad_selector`, `not_found` (a `wait_for` that never came true), `no_memory`, `busy` |
+| `UICLICK` | `target=` selector, optional `double=1`, optional `settle=` | `UIEND` | `no_target`, `bad_selector`, `ambiguous` (with `detail=` carrying the **count**), `not_found`, `truncated`, `refused_self`, `no_window`, `not_foreground`, `occluded`, `failed` |
+| `UIKEYS` | optional `target=` selector, optional `settle=`; **body is the text** | `UIEND` | `no_text`, plus every `UICLICK` error |
+| `UISHOT` | `x`, `y`, `w`, `h` (a width and a height, not a right and a bottom), `bpp` | `UIDAT` chunks of a native-bpp DIB; `UIEND w=, h=, bpp=, bytes=` | `no_memory`, `failed` (`detail=` says which) |
+
+- **Every request ends in exactly one `UIEND`**, including the ones refused
+  before they run and the ones still queued when the worker stops. Silence
+  costs the bridge its whole timeout and tells it nothing, which is the same
+  duty `reject_busy` has on the job lane.
+- **`UIENT` records are length-prefixed, not `key=value` lines.** A window's
+  text comes back through `WM_GETTEXT` and can contain anything somebody
+  typed into an Edit control, newlines included; a line format yields three
+  plausible records where there was one control. The encoding is in
+  `win/ui/uirec.h` and the parser in `bridge/wire/uirec.py`, pinned against
+  each other by `tests/python/guest/test_uirec_agreement.py`.
+- **No handle crosses the wire.** A record carries `src`, `path`, `parent`,
+  `ctrl` and `child` — never an `hwnd`. One is meaningless across a session
+  and 9x reuses them, so a handle sent back later can click whatever
+  inherited it. The bridge computes a `sel=` selector per record and the
+  agent addresses controls with that; a stale selector is a clean
+  `not_found`.
+- **`ambiguous` is an answer, not a failure to try.** It carries the count,
+  because the count is what tells the caller whether the `:nth(n)` it is
+  about to write exists. Clicking the first of four buttons called OK is the
+  outcome this lane exists to refuse.
+- **The waits are headers, not ops.** `wait_for`/`settle_ms` on `UITREE` and
+  `settle` on `UICLICK`/`UIKEYS`. The loop an agent runs is "do a thing, then
+  look", and folding the wait into both ends turns three round trips into
+  one — behind a socket to a 200MHz machine the round trip is the expensive
+  part.
+- **One worker, one request.** The desktop worker services its queue
+  serially, so "one in flight per lane" holds without a separate gate; a
+  caller more than four requests ahead gets `busy`.
+
 - **`exit` is only meaningful without a shell.** `COMMAND.COM /c` on 9x
   probably does not pass the child's errorlevel back; verify on the guest, and
   the Python client documents it either way.

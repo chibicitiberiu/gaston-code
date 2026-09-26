@@ -5,11 +5,13 @@ guest, so if the selector is wrong the agent clicks the wrong control. An
 ambiguous one is merely refused by the guest; a *confidently wrong* one is
 the failure the whole design is shaped around.
 """
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3]))
 
-from bridge.wire.uirec import UiNode, NF_VISIBLE, NF_ENABLED  # noqa: E402
-from bridge.wire import uisel  # noqa: E402
+from bridge.wire import uisel
+from bridge.wire.uirec import NF_ENABLED, NF_VISIBLE, UiNode
 
 
 def n(path, cls, text="", ctrl=0, parent=None, role="", src="w"):

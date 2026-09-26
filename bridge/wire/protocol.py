@@ -440,6 +440,92 @@ def exec_kill(exec_id: str) -> Frame:
     return Frame("EXECKILL", {"id": exec_id})
 
 
+# --- driving the desktop -------------------------------------------------
+#
+# One constructor per frame type, as above. The guest answers every one of
+# these with exactly one UIEND, so a caller that gets nothing has lost the
+# connection rather than been ignored.
+
+
+def ui_tree(ui_id: str, *, scope: str = "desktop", pid: int = 0,
+            max_nodes: int = 400, text: bool = True, msaa: bool = False,
+            hidden: bool = False, wait_for: str = "", wait_ms: int = 5000,
+            settle_ms: int = 0, timeout_ms: int = 8000) -> Frame:
+    """Read the control tree.
+
+    `wait_for` and `settle_ms` are parameters rather than a separate op on
+    purpose: the loop an agent runs is "do a thing, then look", and folding
+    the wait into the look turns two round trips into one. Behind a socket
+    to a 200MHz machine the round trip is the expensive part.
+
+    `msaa` defaults OFF. Each MSAA field is a marshalled call into another
+    process and a tree is hundreds of nodes; the walk already derives a role
+    from class and style for free, which covered over half the desktop on
+    both measured machines.
+    """
+    h = {"id": ui_id, "scope": scope, "max_nodes": str(max_nodes),
+         "text": "1" if text else "0", "msaa": "1" if msaa else "0",
+         "hidden": "1" if hidden else "0", "timeout_ms": str(timeout_ms)}
+    if pid:
+        h["pid"] = str(pid)
+    if wait_for:
+        h["wait_for"] = truncate_header_value(wait_for)
+        h["wait_ms"] = str(wait_ms)
+    if settle_ms:
+        h["settle_ms"] = str(settle_ms)
+    return Frame("UITREE", h)
+
+
+def ui_click(ui_id: str, target: str, *, double: bool = False,
+             settle: int = 0, timeout_ms: int = 8000) -> Frame:
+    """Click one control, named by a selector the bridge computed.
+
+    Never a handle: an HWND is meaningless across a session and 9x reuses
+    them, so one sent back later can click whatever inherited it.
+    """
+    h = {"id": ui_id, "target": truncate_header_value(target),
+         "timeout_ms": str(timeout_ms)}
+    if double:
+        h["double"] = "1"
+    if settle:
+        h["settle"] = str(settle)
+    return Frame("UICLICK", h)
+
+
+def ui_keys(ui_id: str, text: str, *, target: str = "", settle: int = 0,
+            timeout_ms: int = 8000) -> Frame:
+    """Type into a control, or into whatever has focus when `target` is
+    empty -- which after a click is the thing that just took it.
+
+    The text is the BODY for the same reason a command line is: a header
+    value is truncated at 255 bytes and truncated silently, and half a
+    typed command is still typed.
+
+    `encode_exact`, not `fold.encode`: folding is the display
+    transliterator and would rewrite what gets typed into somebody's
+    machine. It raises on a character CP1252 cannot carry, and the caller
+    refuses rather than approximating.
+    """
+    h = {"id": ui_id, "timeout_ms": str(timeout_ms)}
+    if target:
+        h["target"] = truncate_header_value(target)
+    if settle:
+        h["settle"] = str(settle)
+    return Frame("UIKEYS", h, fold.encode_exact(text))
+
+
+def ui_shot(ui_id: str, *, x: int = 0, y: int = 0, w: int = 0, h: int = 0,
+            bpp: int = 8) -> Frame:
+    """Capture the screen, or a rectangle of it.
+
+    A width and a height, not a right and a bottom: the guest adds the
+    origin, so a caller says "100 wide" and is not asked to do the
+    arithmetic.
+    """
+    return Frame("UISHOT", {"id": ui_id, "x": str(x), "y": str(y),
+                            "w": str(w), "h": str(h), "bpp": str(bpp)})
+
+
 # --- model / effort menus ---------------------------------------------
 
 

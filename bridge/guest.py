@@ -38,6 +38,22 @@ class ExecCall:
 
 
 @dataclass
+class UiCall:
+    """One outstanding desktop request.
+
+    `records` accumulates UIENT bodies and `data` accumulates UIDAT ones --
+    a tree and a screenshot come back through the same id namespace and the
+    same END frame, and the guest never sends both for one request.
+    """
+
+    future: asyncio.Future
+    kind: str = "tree"
+    records: bytearray = field(default_factory=bytearray)
+    data: bytearray = field(default_factory=bytearray)
+    capped: bool = False
+
+
+@dataclass
 class GuestSession:
     """Bridge-side state for one guest, surviving across reconnects."""
 
@@ -165,6 +181,14 @@ class GuestSession:
     #: can request tools in parallel, and an "Always" rule bypasses the
     #: prompt queue that was implicitly serialising them.
     exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: The desktop subprotocol, with its own id namespace: the guest checks
+    #: the prefix (`win/rpc/rpc.cpp`'s id_matches_family), so a UI reply can
+    #: never cross-resolve against an exec or a sync call. exec is `x`,
+    #: sync is `s`, this is `u`.
+    ui_pending: dict[str, UiCall] = field(default_factory=dict)
+    ui_seq: int = 0
+    #: One desktop worker on the guest means one request at a time.
+    ui_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     #: The sync subprotocol's own id namespace, in-flight table, baseline
     #: lock and running flag.
     sync: GuestSyncState = field(default_factory=GuestSyncState)
