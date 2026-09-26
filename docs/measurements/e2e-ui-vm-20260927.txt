@@ -80,3 +80,35 @@ Asked the agent for a desktop tree and to quote what it got, verbatim:
 self=1, which is the client's own main window, and the line is at the TOP of
 the listing with the other warnings. Guest to wire to bridge to model, on the
 VM. The chain is closed.
+
+## The same scenario again, after the BACKLOG 16 fix (01:56)
+
+The run above had to be set up around the bug: the dialog was dragged out from
+under the client by hand, from the host, because a covered control could not be
+clicked. This run reproduces the ORIGINAL failure deliberately and leaves it in
+place.
+
+Setup: Notepad with unsaved text, Alt+F4, so Windows puts the save prompt at
+the CENTRE of the screen. Then the client is raised over it by clicking its
+taskbar button, until the dialog is not visible at all -- the pixel where the
+Yes button was reads as the client's face colour. That is the state that
+defeated the first attempt, and it is the state a person creates every time
+they press Allow.
+
+  01:56:08  permission allow for mcp__machine__ui     (scope=desktop hidden=True)
+  01:56:42  permission allow for mcp__machine__click  (target=Button[text="&No"])
+
+The tree found the dialog behind the client:
+
+  dialog       "Notepad"  270,245  266x126   sel=[class="#32770"]
+    pushbutton "&Yes"     284,33
+
+The agent: "The dialog asks to save changes; 'No' discards without saving."
+The guest: ANSWERED Click -- Clicked Button[text="&No"].
+
+Afterwards Notepad is gone from the taskbar. "No" discards and closes; "Yes"
+would have opened a Save As dialog and "Cancel" would have left Notepad
+running, so the taskbar alone distinguishes all three.
+
+No window was moved, raised or closed from the host during the turn. The click
+raised the dialog itself.
