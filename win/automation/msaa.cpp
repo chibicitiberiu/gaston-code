@@ -89,6 +89,57 @@ static void normaliseRole(char *s)
     *w = '\0';
 }
 
+/* Our own spellings, not GetStateTextA's.
+ *
+ * GetStateTextA returns a human phrase in the SYSTEM's language, so on a
+ * German Win98 `[state*="checked"]` would silently never match. A selector
+ * is a grammar and a grammar does not move with the locale. The bit numbers
+ * are fixed by MSAA and are the same everywhere.
+ *
+ * Ordered by what a caller actually asks about, because a list longer than
+ * the field is truncated at a name boundary and the ones at the front are
+ * the ones worth keeping. */
+struct StateName { long bit; const char *name; };
+
+static const StateName kStates[] =
+{
+    { 0x00000010L, "checked"     },
+    { 0x00000020L, "mixed"       },
+    { 0x00000008L, "pressed"     },
+    { 0x00000002L, "selected"    },
+    { 0x00000001L, "unavailable" },   /* MSAA's word for disabled */
+    { 0x00000200L, "expanded"    },
+    { 0x00000400L, "collapsed"   },
+    { 0x00000040L, "readonly"    },
+    { 0x00000004L, "focused"     },
+    { 0x00100000L, "focusable"   },
+    { 0x00008000L, "invisible"   },
+    { 0x00010000L, "offscreen"   }
+};
+
+static void stateToText(long bits, char *out, unsigned cap)
+{
+    unsigned n = 0;
+    out[0] = '\0';
+    for (unsigned i = 0; i < sizeof(kStates) / sizeof(kStates[0]); i++)
+    {
+        if (!(bits & kStates[i].bit))
+            continue;
+        unsigned len = (unsigned)strlen(kStates[i].name);
+        unsigned need = len + (n ? 1 : 0);
+        /* Whole names only. A list cut mid-word would make
+         * [state*="checked"] match "checke" -- or worse, not match a control
+         * that genuinely is checked. */
+        if (n + need + 1 > cap)
+            break;
+        if (n)
+            out[n++] = ',';
+        memcpy(out + n, kStates[i].name, len);
+        n += len;
+    }
+    out[n] = '\0';
+}
+
 bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
 {
     memset(&out, 0, sizeof(out));
@@ -151,6 +202,29 @@ bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
             while (n > 0) *w++ = digits[--n];
             *w = '\0';
         }
+    }
+
+    if (want & Selector::WANT_ACTION)
+    {
+        b = 0;
+        if (acc->get_accDefaultAction(self, &b) == S_OK && b)
+        {
+            bstrToNarrow(b, out.action, sizeof(out.action));
+            SysFreeString(b);
+            b = 0;
+            /* The same fold as the role, for the same reason: it arrives as
+             * "Switch To" and a selector is written [action=switchto]. */
+            normaliseRole(out.action);
+        }
+    }
+
+    VARIANT vstate;
+    V_VT(&vstate) = VT_EMPTY;
+    if ((want & Selector::WANT_STATE)
+        && acc->get_accState(self, &vstate) == S_OK
+        && V_VT(&vstate) == VT_I4)
+    {
+        stateToText(V_I4(&vstate), out.state, sizeof(out.state));
     }
 
     acc->Release();

@@ -60,6 +60,8 @@ void grammar(void)
     checkParses("parse-attr-contains","[text*=\"tit\"]", true);
     checkParses("parse-pseudo",       "Edit:visible:enabled", true);
     checkParses("parse-nth",          "Button:nth(2)", true);
+    checkParses("parse-attr-action",  "[action=press]", true);
+    checkParses("parse-attr-state",   "[state*=\"checked\"]", true);
     checkParses("parse-combined",     "Notepad > Edit[text^=\"a\"]:visible",
                 true);
 
@@ -73,6 +75,10 @@ void grammar(void)
     checkParses("reject-bad-pseudo",   "Edit:sparkly", false);
     checkParses("reject-nth-zero",     "Edit:nth(0)", false);
     checkParses("reject-nonnumeric-id","#abc", false);
+    /* :nth counts what the WHOLE selector matched, so anywhere but the last
+     * step it is meaningless -- and accepting it there would have returned a
+     * confidently wrong control. */
+    checkParses("reject-nth-not-last", "Notepad:nth(2) Edit", false);
 
     /* A selector that names only MSAA attributes must say so, or the
      * caller will never enrich and it will never match. */
@@ -84,6 +90,14 @@ void grammar(void)
         say("msaa-flagged-when-needed", a.needsEnrichment(), "[role=...]");
         say("msaa-not-flagged-otherwise", !b.needsEnrichment(),
             "class + text only");
+
+        /* One bit per field, because each field is a separate call across
+         * the process boundary and the boundary is the whole cost. */
+        static Selector c;
+        c.parse("Button[state*=\"checked\"][action=press]", err, sizeof(err));
+        say("msaa-wants-only-named-fields",
+            c.wanted() == (Selector::WANT_STATE | Selector::WANT_ACTION),
+            "[state][action] asks for neither name nor role");
     }
 }
 
@@ -621,7 +635,8 @@ void enrichment(void)
 
     Enrichment e;
     int all = Selector::WANT_NAME | Selector::WANT_ROLE
-            | Selector::WANT_VALUE;
+            | Selector::WANT_VALUE | Selector::WANT_ACTION
+            | Selector::WANT_STATE;
     bool got = msaa.enrich(w, all, e);
     rc_strf(detail, sizeof(detail), "role='%s' name='%s'", e.role, e.name);
     say("msaa-enriches-a-window", got, detail);
@@ -642,8 +657,67 @@ void enrichment(void)
         static Enrichment one;
         msaa.enrich(w, Selector::WANT_ROLE, one);
         say("msaa-fetches-only-what-was-asked",
-            one.role[0] != 0 && one.name[0] == 0 && one.value[0] == 0,
+            one.role[0] != 0 && one.name[0] == 0 && one.value[0] == 0
+            && one.action[0] == 0 && one.state[0] == 0,
             one.role);
+    }
+
+    /* State is the field nothing else can supply. A checkbox's tick is not
+     * in the window text, and BM_GETCHECK is not marshalled across a process
+     * boundary on 9x -- out of process, MSAA is the only answer.
+     *
+     * Whether it CAN answer depends on the oleacc underneath. Win98's ships
+     * the Win32 class proxies, so a Button reports role "checkbutton" with a
+     * state and a default action. Wine's returns the generic client object
+     * for every class -- role "client", no state bits, no action -- so these
+     * two rows report and do not assert there. That is the Wine boundary
+     * this project keeps naming: it proves the code, never the platform. */
+    {
+        HWND chk = CreateWindowExA(0, "Button", "tick",
+                                   WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                   0, 0, 20, 20, w, NULL, wc.hInstance, NULL);
+        static Enrichment probe;
+        msaa.enrich(chk, Selector::WANT_ROLE, probe);
+        bool proxied = probe.role[0] && strcmp(probe.role, "client") != 0;
+        rc_strf(detail, sizeof(detail), "Button reports role '%s' -- %s",
+                probe.role,
+                proxied ? "class proxies present"
+                        : "generic client object only");
+        say("msaa-button-proxy-present", true, detail);
+
+        static Enrichment before, after;
+        msaa.enrich(chk, Selector::WANT_STATE, before);
+        SendMessageA(chk, BM_SETCHECK, BST_CHECKED, 0);
+        msaa.enrich(chk, Selector::WANT_STATE, after);
+        rc_strf(detail, sizeof(detail), "'%s' -> '%s'", before.state,
+                after.state);
+        if (proxied)
+            say("msaa-state-sees-the-tick",
+                strstr(before.state, "checked") == NULL
+                && strstr(after.state, "checked") != NULL, detail);
+        else
+            say("msaa-state-sees-the-tick", true,
+                "reported, not asserted: no class proxy here");
+
+        /* Shape is ours either way -- our own spellings and not
+         * GetStateTextA's, which returns a phrase in the system's language,
+         * and a grammar does not move with the locale. */
+        bool clean2 = true;
+        for (const char *q = after.state; *q; q++)
+            if (*q == ' ' || (*q >= 'A' && *q <= 'Z'))
+                clean2 = false;
+        say("msaa-state-is-selector-shaped", clean2, after.state);
+
+        static Enrichment act;
+        msaa.enrich(chk, Selector::WANT_ACTION, act);
+        rc_strf(detail, sizeof(detail), "action='%s'", act.action);
+        if (proxied)
+            say("msaa-reports-default-action", act.action[0] != 0, detail);
+        else
+            say("msaa-reports-default-action", true,
+                "reported, not asserted: no class proxy here");
+
+        DestroyWindow(chk);
     }
 
     say("msaa-refuses-dead-window", !msaa.enrich(NULL, all, e),

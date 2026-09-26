@@ -14,6 +14,8 @@
  *   [text^="Untitled"]     ^= prefix, $= suffix, *= contains, = exact
  *   [name="Save"]          MSAA name      ) resolved by the caller, which
  *   [role=pushbutton]      MSAA role      ) enriches only candidates
+ *   [action=press]         MSAA default action, lowercased and unspaced
+ *   [state*="checked"]     MSAA state, a comma-joined list -- see msaa.cpp
  *   :visible :enabled :focused
  *   :nth(2)                among the matches so far, 1-based
  *
@@ -38,6 +40,13 @@
 #define RC_SEL_ATTRS 3
 #define RC_SEL_VAL   48
 
+/* An enrichment field is wider than a selector VALUE because `state` is a
+ * list rather than a word: "unavailable,checked,focusable" is already 30
+ * characters and a selector reaches into it with [state*="checked"], which
+ * fits in RC_SEL_VAL several times over. This does not enlarge SelStep, and
+ * SelStep is what the guard-page budget is spent on. */
+#define RC_ENRICH_VAL 64
+
 enum AttrOp
 {
     ATTR_EXACT = 0,   /* =  */
@@ -51,7 +60,9 @@ enum AttrWhich
     ATTR_TEXT = 0,
     ATTR_NAME,        /* MSAA */
     ATTR_ROLE,        /* MSAA */
-    ATTR_VALUE        /* MSAA */
+    ATTR_VALUE,       /* MSAA */
+    ATTR_ACTION,      /* MSAA */
+    ATTR_STATE        /* MSAA */
 };
 
 struct AttrTest
@@ -79,9 +90,17 @@ struct SelStep
  * the whole tree. */
 struct Enrichment
 {
-    char name[RC_SEL_VAL];
-    char role[RC_SEL_VAL];
-    char value[RC_SEL_VAL];
+    char name[RC_ENRICH_VAL];
+    char role[RC_ENRICH_VAL];
+    char value[RC_ENRICH_VAL];
+    /* What activating this control would do -- "press", "check", "open".
+     * The only machine-readable answer to "is this thing clickable", and
+     * the field REMOTE.md's tree record has always promised. */
+    char action[RC_ENRICH_VAL];
+    /* Comma-joined, most useful first: "checked,focusable". The only source
+     * for a checkbox's tick, which no message reaches across a process
+     * boundary on 9x. */
+    char state[RC_ENRICH_VAL];
 };
 
 class Selector
@@ -119,7 +138,8 @@ public:
      * call into another process; fetching all three when the selector asks
      * about one is three times the work, and on a 200MHz machine that is
      * the difference between usable and not. */
-    enum { WANT_NAME = 1, WANT_ROLE = 2, WANT_VALUE = 4 };
+    enum { WANT_NAME = 1, WANT_ROLE = 2, WANT_VALUE = 4,
+           WANT_ACTION = 8, WANT_STATE = 16 };
     int wanted() const { return m_needsMsaa; }
 
 private:

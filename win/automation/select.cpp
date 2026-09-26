@@ -147,11 +147,14 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
                                                   m_needsMsaa |= WANT_ROLE; }
                 else if (!strcmp(key, "value")) { t.which = ATTR_VALUE;
                                                   m_needsMsaa |= WANT_VALUE; }
+                else if (!strcmp(key, "action")){ t.which = ATTR_ACTION;
+                                                  m_needsMsaa |= WANT_ACTION; }
+                else if (!strcmp(key, "state")) { t.which = ATTR_STATE;
+                                                  m_needsMsaa |= WANT_STATE; }
                 else
                 {
-                    rc_strf(err, errCap,
-                            "unknown attribute '%s' (text, name, role, value)",
-                            key);
+                    rc_strf(err, errCap, "unknown attribute '%s' "
+                            "(text, name, role, value, action, state)", key);
                     return false;
                 }
 
@@ -307,6 +310,8 @@ bool Selector::stepNeedsEnrichment(int i, const Node &n) const
         {
         case ATTR_NAME:
         case ATTR_VALUE:
+        case ATTR_ACTION:
+        case ATTR_STATE:
             return true;
         case ATTR_ROLE:
             if (!n.role[0])
@@ -357,6 +362,8 @@ bool Selector::matchesStep(int i, const Node &n, const Enrichment *e) const
             have = e->role;
             break;
         case ATTR_VALUE: if (!e) return true; have = e->value; break;
+        case ATTR_ACTION:if (!e) return true; have = e->action; break;
+        case ATTR_STATE: if (!e) return true; have = e->state;  break;
         }
         if (!testOne(have, t))
             return false;
