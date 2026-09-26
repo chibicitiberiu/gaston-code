@@ -1,0 +1,916 @@
+os	platform=1 4.10.2222  A 
+paths	self=C:\EP\EXECPRB.EXE shell=C:\WINDOWS\COMMAND.COM mode=--stops
+toolhelp	snap=1 first=1 next=1
+snap-cost	20 snapshots in 10ms, 9 processes
+self	pid=fffd2a53
+proc	pid=ffcf59df ppid=7ea72be3 threads=4 kind=P exe=C:\WINDOWS\SYSTEM\KERNEL32.DLL
+proc	pid=ffff8e47 ppid=ffcf59df threads=1 kind=N exe=C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+proc	pid=ffff98f7 ppid=ffff8e47 threads=1 kind=P exe=C:\WINDOWS\SYSTEM\MPREXE.EXE
+proc	pid=fffe330b ppid=ffff98f7 threads=2 kind=P exe=C:\WINDOWS\SYSTEM\MSTASK.EXE
+proc	pid=fffff03f ppid=ffff8e47 threads=4 kind=P exe=C:\WINDOWS\EXPLORER.EXE
+proc	pid=fffe47d3 ppid=fffff03f threads=1 kind=P exe=C:\WINDOWS\TASKMON.EXE
+proc	pid=fffe5f43 ppid=fffff03f threads=1 kind=P exe=C:\WINDOWS\SYSTEM\SYSTRAY.EXE
+proc	pid=fffe4153 ppid=fffff03f threads=1 kind=N exe=C:\WINDOWS\SYSTEM\WINOA386.MOD
+proc	pid=fffd2a53 ppid=fffe9773 threads=1 kind=P exe=C:\EP\EXECPRB.EXE
+stop-pipes-dos-1	spawned pid=fffed6b3 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-pipes-dos-1	closed our pipe ends (stdin write end already closed)
+stop-pipes-dos-1	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-pipes-dos-1	spawned-exited=0 code=259
+stop-pipes-dos-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-pipes-dos-1	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-dos-1	surviving=2
+stop-pipes-dos-1	mem-kb before=6600 after-spawn=6292 10s-after-action=6132
+stop-pipes-dos-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-1	cleaned pid=fffd766b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-dos-1	cleanup left-redir=1 killed=1
+stop-pipes-w32-1	spawned pid=fffd72d7 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-pipes-w32-1	closed our pipe ends (stdin write end already closed)
+stop-pipes-w32-1	tick 2s/4s/6s: 12 15 21 -> STILL TICKING
+stop-pipes-w32-1	spawned-exited=0 code=259
+stop-pipes-w32-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-1	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-w32-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-pipes-w32-1	surviving pid=fffdedc7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-w32-1	surviving pid=fffdf7ab exe=C:\EP\EXECPRB.EXE threads=1
+stop-pipes-w32-1	surviving=5
+stop-pipes-w32-1	mem-kb before=6156 after-spawn=5884 10s-after-action=5396
+stop-pipes-w32-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-1	cleaned pid=fffd766b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-w32-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-1	cleaned pid=fffdedc7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-w32-1	cleaned pid=fffdf7ab exe=C:\EP\EXECPRB.EXE kill=1
+stop-pipes-w32-1	cleanup left-redir=2 killed=3
+stop-pipes-w32direct-1	spawned pid=fffd4cd7 cmd=C:\EP\EXECPRB.EXE --tick C:\EP\TICK32D.TXT 30
+stop-pipes-w32direct-1	closed our pipe ends (stdin write end already closed)
+stop-pipes-w32direct-1	tick 2s/4s/6s: 9 15 21 -> STILL TICKING
+stop-pipes-w32direct-1	spawned-exited=0 code=259
+stop-pipes-w32direct-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32direct-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32direct-1	surviving pid=fffdedc7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-w32direct-1	surviving pid=fffd4cd7 exe=C:\EP\EXECPRB.EXE threads=1
+stop-pipes-w32direct-1	surviving pid=fffed137 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-w32direct-1	surviving=5
+stop-pipes-w32direct-1	mem-kb before=6028 after-spawn=5980 10s-after-action=5524
+stop-pipes-w32direct-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32direct-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32direct-1	cleaned pid=fffdedc7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-w32direct-1	cleaned pid=fffd4cd7 exe=C:\EP\EXECPRB.EXE kill=1
+stop-pipes-w32direct-1	cleaned pid=fffed137 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-w32direct-1	cleanup left-redir=2 killed=3
+stop-pipes-dosdirect-1	spawned pid=fffd4cd7 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,30
+stop-pipes-dosdirect-1	closed our pipe ends (stdin write end already closed)
+stop-pipes-dosdirect-1	tick n/a (job has no tick file)
+stop-pipes-dosdirect-1	spawned-exited=0 code=259
+stop-pipes-dosdirect-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dosdirect-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dosdirect-1	surviving pid=fffd4cd7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-dosdirect-1	surviving=3
+stop-pipes-dosdirect-1	mem-kb before=6148 after-spawn=6256 10s-after-action=6072
+stop-pipes-dosdirect-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dosdirect-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dosdirect-1	cleaned pid=fffd4cd7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-dosdirect-1	cleanup left-redir=2 killed=1
+stop-ctrlbreak-dos-1	spawned pid=fffed0e7 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-ctrlbreak-dos-1	generateconsolectrlevent-resolved=1
+stop-ctrlbreak-dos-1	pgrp=pid(fffed0e7) break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-dos-1	pgrp=0 break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-dos-1	tick 2s/4s/6s: 15 21 27 -> STILL TICKING
+stop-ctrlbreak-dos-1	spawned-exited=0 code=259
+stop-ctrlbreak-dos-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ctrlbreak-dos-1	surviving pid=fffdca4b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-dos-1	surviving=4
+stop-ctrlbreak-dos-1	mem-kb before=6280 after-spawn=6004 10s-after-action=5852
+stop-ctrlbreak-dos-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-1	cleaned pid=fffdca4b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-dos-1	cleanup left-redir=3 killed=1
+stop-ctrlbreak-w32-1	spawned pid=fffcba37 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-ctrlbreak-w32-1	generateconsolectrlevent-resolved=1
+stop-ctrlbreak-w32-1	pgrp=pid(fffcba37) break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-w32-1	pgrp=0 break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-w32-1	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ctrlbreak-w32-1	spawned-exited=0 code=259
+stop-ctrlbreak-w32-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-1	surviving pid=fffdca4b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-w32-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ctrlbreak-w32-1	surviving pid=fffcdbbf exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-w32-1	surviving pid=fffb2d63 exe=C:\EP\EXECPRB.EXE threads=1
+stop-ctrlbreak-w32-1	surviving=7
+stop-ctrlbreak-w32-1	mem-kb before=5876 after-spawn=5604 10s-after-action=5112
+stop-ctrlbreak-w32-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-1	cleaned pid=fffdca4b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-w32-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-1	cleaned pid=fffcdbbf exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-w32-1	cleaned pid=fffb2d63 exe=C:\EP\EXECPRB.EXE kill=1
+stop-ctrlbreak-w32-1	cleanup left-redir=4 killed=3
+stop-ctrlbreak-w32direct-1	spawned pid=fffdca4b cmd=C:\EP\EXECPRB.EXE --tick C:\EP\TICK32D.TXT 30
+stop-ctrlbreak-w32direct-1	generateconsolectrlevent-resolved=1
+stop-ctrlbreak-w32direct-1	pgrp=pid(fffdca4b) break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-w32direct-1	pgrp=0 break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-w32direct-1	tick 2s/4s/6s: 9 15 21 -> STILL TICKING
+stop-ctrlbreak-w32direct-1	spawned-exited=0 code=259
+stop-ctrlbreak-w32direct-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32direct-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32direct-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32direct-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32direct-1	surviving pid=fffcdbbf exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-w32direct-1	surviving pid=fffdca4b exe=C:\EP\EXECPRB.EXE threads=1
+stop-ctrlbreak-w32direct-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-w32direct-1	surviving=7
+stop-ctrlbreak-w32direct-1	mem-kb before=5748 after-spawn=5700 10s-after-action=5252
+stop-ctrlbreak-w32direct-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32direct-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32direct-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32direct-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32direct-1	cleaned pid=fffcdbbf exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-w32direct-1	cleaned pid=fffdca4b exe=C:\EP\EXECPRB.EXE kill=1
+stop-ctrlbreak-w32direct-1	cleaned pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-w32direct-1	cleanup left-redir=4 killed=3
+stop-ctrlbreak-dosdirect-1	spawned pid=fffdca4b cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,30
+stop-ctrlbreak-dosdirect-1	generateconsolectrlevent-resolved=1
+stop-ctrlbreak-dosdirect-1	pgrp=pid(fffdca4b) break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-dosdirect-1	pgrp=0 break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-dosdirect-1	tick n/a (job has no tick file)
+stop-ctrlbreak-dosdirect-1	spawned-exited=0 code=259
+stop-ctrlbreak-dosdirect-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dosdirect-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dosdirect-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dosdirect-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dosdirect-1	surviving pid=fffdca4b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-dosdirect-1	surviving=5
+stop-ctrlbreak-dosdirect-1	mem-kb before=6020 after-spawn=5988 10s-after-action=5812
+stop-ctrlbreak-dosdirect-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dosdirect-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dosdirect-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dosdirect-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dosdirect-1	cleaned pid=fffdca4b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-dosdirect-1	cleanup left-redir=4 killed=1
+stop-ttyclose-dos-1	spawned pid=fffdfac3 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-ttyclose-dos-1	tty hwnd=0000028c
+stop-ttyclose-dos-1	confirm hwnd=000002a4 pid=fffd766b class=#32770 title=C:\WINDOWS\COMMAND.COM
+stop-ttyclose-dos-1	clicked button=&Yes on hwnd=000002a4
+stop-ttyclose-dos-1	new-windows=1 clicked=1
+stop-ttyclose-dos-1	tick 2s/4s/6s: 15 18 24 -> STILL TICKING
+stop-ttyclose-dos-1	spawned-exited=0 code=4294967295
+stop-ttyclose-dos-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-1	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttyclose-dos-1	surviving=6
+stop-ttyclose-dos-1	mem-kb before=6012 after-spawn=5732 10s-after-action=5536
+stop-ttyclose-dos-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-1	cleaned pid=fffd766b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttyclose-dos-1	cleanup left-redir=5 killed=1
+stop-ttyclose-w32-1	spawned pid=fffd4b9f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-ttyclose-w32-1	tty hwnd=000002b8
+stop-ttyclose-w32-1	confirm hwnd=000002d0 pid=fffa3b47 class=#32770 title=EXECPRB
+stop-ttyclose-w32-1	clicked button=&Yes on hwnd=000002d0
+stop-ttyclose-w32-1	new-windows=1 clicked=1
+stop-ttyclose-w32-1	tick 2s/4s/6s: 12 12 12 -> stopped
+stop-ttyclose-w32-1	spawned-exited=0 code=4294967295
+stop-ttyclose-w32-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-1	surviving pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttyclose-w32-1	surviving=7
+stop-ttyclose-w32-1	mem-kb before=5824 after-spawn=5564 10s-after-action=5424
+stop-ttyclose-w32-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-1	cleaned pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttyclose-w32-1	cleanup left-redir=6 killed=1
+stop-ttyclose-w32direct-1	spawned pid=fffcd2cf cmd=C:\EP\EXECPRB.EXE --tick C:\EP\TICK32D.TXT 30
+stop-ttyclose-w32direct-1	tty hwnd=000002e4
+stop-ttyclose-w32direct-1	confirm hwnd=000002fc pid=fffa3113 class=#32770 title=EXECPRB
+stop-ttyclose-w32direct-1	clicked button=&Yes on hwnd=000002fc
+stop-ttyclose-w32direct-1	new-windows=1 clicked=1
+stop-ttyclose-w32direct-1	tick 2s/4s/6s: 12 12 12 -> stopped
+stop-ttyclose-w32direct-1	spawned-exited=1 code=4294967295
+stop-ttyclose-w32direct-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32direct-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32direct-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32direct-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32direct-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32direct-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32direct-1	surviving=6
+stop-ttyclose-w32direct-1	mem-kb before=5720 after-spawn=5644 10s-after-action=5688
+stop-ttyclose-w32direct-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32direct-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32direct-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32direct-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32direct-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32direct-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32direct-1	cleanup left-redir=6 killed=0
+stop-ttyclose-dosdirect-1	spawned pid=fffa3327 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,30
+stop-ttyclose-dosdirect-1	tty hwnd=00000310
+stop-ttyclose-dosdirect-1	confirm hwnd=00000328 pid=fffa3327 class=#32770 title=CHOICE
+stop-ttyclose-dosdirect-1	clicked button=&Yes on hwnd=00000328
+stop-ttyclose-dosdirect-1	new-windows=1 clicked=1
+stop-ttyclose-dosdirect-1	tick n/a (job has no tick file)
+stop-ttyclose-dosdirect-1	spawned-exited=1 code=65413
+stop-ttyclose-dosdirect-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dosdirect-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dosdirect-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dosdirect-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dosdirect-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dosdirect-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dosdirect-1	surviving=6
+stop-ttyclose-dosdirect-1	mem-kb before=5704 after-spawn=5660 10s-after-action=5684
+stop-ttyclose-dosdirect-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dosdirect-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dosdirect-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dosdirect-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dosdirect-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dosdirect-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dosdirect-1	cleanup left-redir=6 killed=0
+stop-ttykeys-dos-1	spawned pid=fffa320f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-ttykeys-dos-1	tty hwnd=0000033c sending ctrl+c
+stop-ttykeys-dos-1	tick 2s/4s/6s: 15 21 27 -> STILL TICKING
+stop-ttykeys-dos-1	spawned-exited=0 code=259
+stop-ttykeys-dos-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ttykeys-dos-1	surviving pid=fffaed03 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-dos-1	surviving=8
+stop-ttykeys-dos-1	mem-kb before=5688 after-spawn=5428 10s-after-action=5268
+stop-ttykeys-dos-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-1	cleaned pid=fffaed03 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-dos-1	cleanup left-redir=7 killed=1
+stop-ttykeys-w32-1	spawned pid=fffa3a2f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-ttykeys-w32-1	tty hwnd=00000354 sending ctrl+c
+stop-ttykeys-w32-1	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ttykeys-w32-1	spawned-exited=0 code=259
+stop-ttykeys-w32-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-1	surviving pid=fffaed03 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-w32-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ttykeys-w32-1	surviving pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-w32-1	surviving pid=fff96e97 exe=C:\EP\EXECPRB.EXE threads=1
+stop-ttykeys-w32-1	surviving=11
+stop-ttykeys-w32-1	mem-kb before=5300 after-spawn=5036 10s-after-action=4544
+stop-ttykeys-w32-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	cleaned pid=fffaed03 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-w32-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-1	cleaned pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-w32-1	cleaned pid=fff96e97 exe=C:\EP\EXECPRB.EXE kill=1
+stop-ttykeys-w32-1	cleanup left-redir=8 killed=3
+stop-ttykeys-w32direct-1	spawned pid=fffafb73 cmd=C:\EP\EXECPRB.EXE --tick C:\EP\TICK32D.TXT 30
+stop-ttykeys-w32direct-1	tty hwnd=0000036c sending ctrl+c
+stop-ttykeys-w32direct-1	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ttykeys-w32direct-1	spawned-exited=0 code=259
+stop-ttykeys-w32direct-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffafb73 exe=C:\EP\EXECPRB.EXE threads=1
+stop-ttykeys-w32direct-1	surviving pid=fffaed03 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-w32direct-1	surviving=11
+stop-ttykeys-w32direct-1	mem-kb before=4912 after-spawn=5120 10s-after-action=4684
+stop-ttykeys-w32direct-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32direct-1	cleaned pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-w32direct-1	cleaned pid=fffafb73 exe=C:\EP\EXECPRB.EXE kill=1
+stop-ttykeys-w32direct-1	cleaned pid=fffaed03 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-w32direct-1	cleanup left-redir=8 killed=3
+stop-ttykeys-dosdirect-1	spawned pid=fffa3b47 cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,30
+stop-ttykeys-dosdirect-1	tty hwnd=00000384 sending ctrl+c
+stop-ttykeys-dosdirect-1	tick n/a (job has no tick file)
+stop-ttykeys-dosdirect-1	spawned-exited=0 code=259
+stop-ttykeys-dosdirect-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dosdirect-1	surviving pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-dosdirect-1	surviving=9
+stop-ttykeys-dosdirect-1	mem-kb before=5456 after-spawn=5420 10s-after-action=5232
+stop-ttykeys-dosdirect-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dosdirect-1	cleaned pid=fffa3b47 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-dosdirect-1	cleanup left-redir=8 killed=1
+stop-vmthenwait-dos-1	spawned pid=fff91b73 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-vmthenwait-dos-1	vm pid=fff9048b kill=1 vm-gone=0
+stop-vmthenwait-dos-1	spawned-gone-after-vmkill=0 after 15028ms
+stop-vmthenwait-dos-1	tick 2s/4s/6s: 69 69 69 -> stopped
+stop-vmthenwait-dos-1	spawned-exited=0 code=4294967295
+stop-vmthenwait-dos-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-1	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-vmthenwait-dos-1	surviving=10
+stop-vmthenwait-dos-1	mem-kb before=5440 after-spawn=5184 10s-after-action=5052
+stop-vmthenwait-dos-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-1	cleaned pid=fff9048b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-vmthenwait-dos-1	cleanup left-redir=9 killed=1
+stop-vmthenwait-w32-1	spawned pid=fff9048b cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-vmthenwait-w32-1	vm pid=fffae32f kill=1 vm-gone=0
+stop-vmthenwait-w32-1	spawned-gone-after-vmkill=0 after 15021ms
+stop-vmthenwait-w32-1	tick 2s/4s/6s: 6 6 6 -> stopped
+stop-vmthenwait-w32-1	spawned-exited=0 code=4294967295
+stop-vmthenwait-w32-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-1	surviving pid=fffae32f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-vmthenwait-w32-1	surviving=11
+stop-vmthenwait-w32-1	mem-kb before=5348 after-spawn=5064 10s-after-action=4924
+stop-vmthenwait-w32-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-1	cleaned pid=fffae32f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-vmthenwait-w32-1	cleanup left-redir=10 killed=1
+stop-vmthenwait-w32direct-1	spawned pid=fffd766b cmd=C:\EP\EXECPRB.EXE --tick C:\EP\TICK32D.TXT 30
+stop-vmthenwait-w32direct-1	vm pid=fffae32f kill=1 vm-gone=1
+stop-vmthenwait-w32direct-1	spawned-gone-after-vmkill=1 after 0ms
+stop-vmthenwait-w32direct-1	tick 2s/4s/6s: 6 6 6 -> stopped
+stop-vmthenwait-w32direct-1	spawned-exited=1 code=4294967295
+stop-vmthenwait-w32direct-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32direct-1	surviving=10
+stop-vmthenwait-w32direct-1	mem-kb before=5224 after-spawn=5180 10s-after-action=5192
+stop-vmthenwait-w32direct-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32direct-1	cleanup left-redir=10 killed=0
+stop-vmthenwait-dosdirect-1	spawned pid=fffae32f cmd=C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,30
+stop-vmthenwait-dosdirect-1	vm pid=fffae32f kill=1 vm-gone=1
+stop-vmthenwait-dosdirect-1	spawned-gone-after-vmkill=1 after 0ms
+stop-vmthenwait-dosdirect-1	tick n/a (job has no tick file)
+stop-vmthenwait-dosdirect-1	spawned-exited=1 code=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dosdirect-1	surviving=10
+stop-vmthenwait-dosdirect-1	mem-kb before=5204 after-spawn=5168 10s-after-action=5176
+stop-vmthenwait-dosdirect-1	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dosdirect-1	cleanup left-redir=10 killed=0
+stop-pipes-dos-2	spawned pid=fffae31f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-pipes-dos-2	closed our pipe ends (stdin write end already closed)
+stop-pipes-dos-2	tick 2s/4s/6s: 15 21 27 -> STILL TICKING
+stop-pipes-dos-2	spawned-exited=0 code=259
+stop-pipes-dos-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-dos-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-pipes-dos-2	surviving pid=ffc7249b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-dos-2	surviving=12
+stop-pipes-dos-2	mem-kb before=5188 after-spawn=4920 10s-after-action=4760
+stop-pipes-dos-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-dos-2	cleaned pid=ffc7249b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-dos-2	cleanup left-redir=11 killed=1
+stop-pipes-w32-2	spawned pid=fff8738f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-pipes-w32-2	closed our pipe ends (stdin write end already closed)
+stop-pipes-w32-2	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-pipes-w32-2	spawned-exited=0 code=259
+stop-pipes-w32-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-pipes-w32-2	surviving pid=ffc7249b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-w32-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-pipes-w32-2	surviving pid=fff87ca7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-pipes-w32-2	surviving pid=ffc7a603 exe=C:\EP\EXECPRB.EXE threads=1
+stop-pipes-w32-2	surviving=15
+stop-pipes-w32-2	mem-kb before=4792 after-spawn=4524 10s-after-action=4024
+stop-pipes-w32-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	cleaned pid=ffc7249b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-w32-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-pipes-w32-2	cleaned pid=fff87ca7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-pipes-w32-2	cleaned pid=ffc7a603 exe=C:\EP\EXECPRB.EXE kill=1
+stop-pipes-w32-2	cleanup left-redir=12 killed=3
+stop-ctrlbreak-dos-2	spawned pid=ffc7321f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-ctrlbreak-dos-2	generateconsolectrlevent-resolved=1
+stop-ctrlbreak-dos-2	pgrp=pid(ffc7321f) break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-dos-2	pgrp=0 break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-dos-2	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ctrlbreak-dos-2	spawned-exited=0 code=259
+stop-ctrlbreak-dos-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-dos-2	surviving pid=fff87ca7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-dos-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ctrlbreak-dos-2	surviving pid=ffc7396b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-dos-2	surviving=15
+stop-ctrlbreak-dos-2	mem-kb before=4672 after-spawn=4404 10s-after-action=4244
+stop-ctrlbreak-dos-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	cleaned pid=fff87ca7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-dos-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-dos-2	cleaned pid=ffc7396b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-dos-2	cleanup left-redir=13 killed=2
+stop-ctrlbreak-w32-2	spawned pid=fffd766b cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-ctrlbreak-w32-2	generateconsolectrlevent-resolved=1
+stop-ctrlbreak-w32-2	pgrp=pid(fffd766b) break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-w32-2	pgrp=0 break=0 err=0 ctrlc=0 err=0
+stop-ctrlbreak-w32-2	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ctrlbreak-w32-2	spawned-exited=0 code=259
+stop-ctrlbreak-w32-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ctrlbreak-w32-2	surviving pid=ffc7396b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-w32-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ctrlbreak-w32-2	surviving pid=ffc751b3 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ctrlbreak-w32-2	surviving pid=ffc67e07 exe=C:\EP\EXECPRB.EXE threads=1
+stop-ctrlbreak-w32-2	surviving=17
+stop-ctrlbreak-w32-2	mem-kb before=4560 after-spawn=4304 10s-after-action=3808
+stop-ctrlbreak-w32-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	cleaned pid=ffc7396b exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-w32-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ctrlbreak-w32-2	cleaned pid=ffc751b3 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ctrlbreak-w32-2	cleaned pid=ffc67e07 exe=C:\EP\EXECPRB.EXE kill=1
+stop-ctrlbreak-w32-2	cleanup left-redir=14 killed=3
+stop-ttyclose-dos-2	spawned pid=ffc7ce4f cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-ttyclose-dos-2	tty hwnd=0000045c
+stop-ttyclose-dos-2	confirm hwnd=00000474 pid=ffc661b3 class=#32770 title=C:\WINDOWS\COMMAND.COM
+stop-ttyclose-dos-2	clicked button=&Yes on hwnd=00000474
+stop-ttyclose-dos-2	new-windows=1 clicked=1
+stop-ttyclose-dos-2	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ttyclose-dos-2	spawned-exited=0 code=4294967295
+stop-ttyclose-dos-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=ffc751b3 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttyclose-dos-2	surviving pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-dos-2	surviving pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttyclose-dos-2	surviving=17
+stop-ttyclose-dos-2	mem-kb before=4460 after-spawn=4200 10s-after-action=4060
+stop-ttyclose-dos-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	cleaned pid=ffc751b3 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttyclose-dos-2	left zombie pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-dos-2	cleaned pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttyclose-dos-2	cleanup left-redir=15 killed=2
+stop-ttyclose-w32-2	spawned pid=ffc661b3 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-ttyclose-w32-2	tty hwnd=00000488
+stop-ttyclose-w32-2	confirm hwnd=000004a0 pid=ffc66a2f class=#32770 title=EXECPRB
+stop-ttyclose-w32-2	clicked button=&Yes on hwnd=000004a0
+stop-ttyclose-w32-2	new-windows=1 clicked=1
+stop-ttyclose-w32-2	tick 2s/4s/6s: 12 12 12 -> stopped
+stop-ttyclose-w32-2	spawned-exited=0 code=4294967295
+stop-ttyclose-w32-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttyclose-w32-2	surviving pid=ffc66a2f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttyclose-w32-2	surviving=17
+stop-ttyclose-w32-2	mem-kb before=4636 after-spawn=4372 10s-after-action=4236
+stop-ttyclose-w32-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	left zombie pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttyclose-w32-2	cleaned pid=ffc66a2f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttyclose-w32-2	cleanup left-redir=16 killed=1
+stop-ttykeys-dos-2	spawned pid=ffc525db cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-ttykeys-dos-2	tty hwnd=000004b4 sending ctrl+c
+stop-ttykeys-dos-2	tick 2s/4s/6s: 12 18 24 -> STILL TICKING
+stop-ttykeys-dos-2	spawned-exited=0 code=259
+stop-ttykeys-dos-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-dos-2	surviving pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ttykeys-dos-2	surviving pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-dos-2	surviving=18
+stop-ttykeys-dos-2	mem-kb before=4528 after-spawn=4264 10s-after-action=4096
+stop-ttykeys-dos-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	left zombie pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-dos-2	cleaned pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-dos-2	cleanup left-redir=17 killed=1
+stop-ttykeys-w32-2	spawned pid=ffc68dc7 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-ttykeys-w32-2	tty hwnd=000004cc sending ctrl+c
+stop-ttykeys-w32-2	tick 2s/4s/6s: 12 15 21 -> STILL TICKING
+stop-ttykeys-w32-2	spawned-exited=0 code=259
+stop-ttykeys-w32-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-ttykeys-w32-2	surviving pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-w32-2	surviving pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=3
+stop-ttykeys-w32-2	surviving pid=ffc68f1f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-ttykeys-w32-2	surviving pid=ffc5ce0f exe=C:\EP\EXECPRB.EXE threads=1
+stop-ttykeys-w32-2	surviving=21
+stop-ttykeys-w32-2	mem-kb before=4128 after-spawn=3852 10s-after-action=3356
+stop-ttykeys-w32-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	left zombie pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	cleaned pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-w32-2	left zombie pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-ttykeys-w32-2	cleaned pid=ffc68f1f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-ttykeys-w32-2	cleaned pid=ffc5ce0f exe=C:\EP\EXECPRB.EXE kill=1
+stop-ttykeys-w32-2	cleanup left-redir=18 killed=3
+stop-vmthenwait-dos-2	spawned pid=ffc559eb cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EPLOOP.BAT
+stop-vmthenwait-dos-2	vm pid=ffc669a7 kill=1 vm-gone=0
+stop-vmthenwait-dos-2	spawned-gone-after-vmkill=0 after 15083ms
+stop-vmthenwait-dos-2	tick 2s/4s/6s: 66 66 66 -> stopped
+stop-vmthenwait-dos-2	spawned-exited=0 code=4294967295
+stop-vmthenwait-dos-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc68f1f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc559eb exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-dos-2	surviving pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-vmthenwait-dos-2	surviving=21
+stop-vmthenwait-dos-2	mem-kb before=3724 after-spawn=3748 10s-after-action=3608
+stop-vmthenwait-dos-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	left zombie pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	cleaned pid=ffc68f1f exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-vmthenwait-dos-2	left zombie pid=ffc559eb exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-dos-2	cleaned pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-vmthenwait-dos-2	cleanup left-redir=19 killed=2
+stop-vmthenwait-w32-2	spawned pid=ffc669a7 cmd=C:\WINDOWS\COMMAND.COM /c C:\EP\EXECPRB.EXE --tick C:\EP\TICK32.TXT 30
+stop-vmthenwait-w32-2	vm pid=ffc541fb kill=1 vm-gone=0
+stop-vmthenwait-w32-2	spawned-gone-after-vmkill=0 after 15075ms
+stop-vmthenwait-w32-2	tick 2s/4s/6s: 6 6 6 -> stopped
+stop-vmthenwait-w32-2	spawned-exited=0 code=4294967295
+stop-vmthenwait-w32-2	surviving pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc559eb exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE threads=1
+stop-vmthenwait-w32-2	surviving pid=ffc541fb exe=C:\WINDOWS\SYSTEM\WINOA386.MOD threads=1
+stop-vmthenwait-w32-2	surviving=21
+stop-vmthenwait-w32-2	mem-kb before=4188 after-spawn=3924 10s-after-action=3784
+stop-vmthenwait-w32-2	left zombie pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc559eb exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	left zombie pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE
+stop-vmthenwait-w32-2	cleaned pid=ffc541fb exe=C:\WINDOWS\SYSTEM\WINOA386.MOD kill=1
+stop-vmthenwait-w32-2	cleanup left-redir=20 killed=1
+final	swept pid=fffed6b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffd72d7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffed0e7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffcba37 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffdfac3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffd4b9f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffa320f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffa3a2f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fff91b73 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fff9048b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffae31f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fff8738f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc7321f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=fffd766b exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc7ce4f exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc661b3 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc525db exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc68dc7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc559eb exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc669a7 exe=C:\WINDOWS\SYSTEM\REDIR32.EXE open=1 kill=1
+final	swept pid=ffc541fb exe=C:\WINDOWS\SYSTEM\WINOA386.MOD open=1 kill=1
+done	ok

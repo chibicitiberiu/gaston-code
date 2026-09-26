@@ -88,9 +88,11 @@ public:
      * is REDIR32.EXE, which TerminateProcess cannot end and only turns into
      * a zombie (measured). True if `root` is gone within `waitMs`.
      *
-     * PROVISIONAL (docs/libexec-plan.md step 0b): the best order measured so
-     * far. On 98 a piped COMMAND.COM job still leaves REDIR32 behind; the
-     * caller reports that, and execprobe --stops is looking for better. */
+     * Measured on the VM (execprobe --stops): nothing ends REDIR32 --
+     * pipes closed, GenerateConsoleCtrlEvent, Ctrl+C or WM_CLOSE to the
+     * VM's window -- and killing the VM is what stops the command fastest.
+     * So on 98 a stopped piped COMMAND.COM job leaves one REDIR32 (~150KB)
+     * until reboot; the caller reports it (docs/BACKLOG.md 14). */
     bool stopJobTree(DWORD root, HANDLE rootProcess, DWORD waitMs);
 
     /* Start `command` detached from us: no handles inherited, both of its

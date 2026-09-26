@@ -1,0 +1,52 @@
+# tools/probe/execkill.py against RCX.EXE (libexec client, merged build) on the VM, 2026-09-26
+# after execprobe --stops (20 REDIR32 zombies already present)
+
+waiting for the guest on 0.0.0.0:7891 ...
+guest connected from ('127.0.0.1', 55892)
+guest: Windows 4.10 build 2222  A  mem_kb=32288 acp=1252 oemcp=437
+[      1ms] -> EXEC id=x1 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'ver'
+[    586ms] <- EXECRESULT id=x1 status=ok code=0 truncated=0
+pass	shell-command-runs	status=ok out=b'\r\nWindows 98 [Version 4.10.2222]\r\n\r\n'
+[    586ms] -> EXEC id=x2 timeout_ms=3000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\WINDOWS\\COMMAND\\CHOICE.COM /c:y /t:y,60'
+[   5703ms] <- EXECRESULT id=x2 status=timeout code=4294967295 truncated=0
+pass	timeout-reported	status=timeout after 5.1s
+[   5703ms] -> EXEC id=x3 timeout_ms=60000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\WINDOWS\\COMMAND\\CHOICE.COM /c:y /t:y,60'
+[   8703ms] -> EXECKILL id=x999
+[   8703ms] -> EXECKILL 
+pass	stale-kills-ignored	got (no result) within 4s
+[  12708ms] -> EXECKILL id=x3
+[  14744ms] <- EXECRESULT id=x3 status=cancelled code=4294967295 truncated=0
+pass	kill-cancels	status=cancelled after 2.0s
+[  14744ms] -> EXEC id=x4 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'C:\\WINDOWS\\COMMAND\\CHOICE.COM /c:y /t:y,8'
+[  16245ms] -> EXEC id=x5 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'echo ran > C:\\EP\\X5RAN.TXT'
+[  16745ms] -> EXECKILL id=x5
+[  16773ms] <- EXECRESULT id=x5 status=cancelled
+pass	queued-kill-answers-cancelled	status=cancelled
+[  24638ms] <- EXECRESULT id=x4 status=ok code=0 truncated=0
+pass	the-busy-one-still-finishes	status=ok
+[  24639ms] -> EXEC id=x6 timeout_ms=20000 shell=C:\WINDOWS\COMMAND.COM /c b'if exist C:\\EP\\X5RAN.TXT echo X5-RAN'
+[  26031ms] <- EXECRESULT id=x6 status=ok code=0 truncated=0
+pass	queued-kill-never-ran	out=b''
+
+7/7 passed
+Now close the client and run C:\EP\EXECPRB.EXE --list on the guest.
+
+# client log (C:\EP\retroclaude.log), exec lines
+20:28:07.600 rpc: exec x1 (20000ms): ver
+20:28:08.200 rpc: exec x1 done status=ok code=0 bytes=36 in 567ms
+20:28:08.200 rpc: exec x2 (3000ms): C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+20:28:13.250 process: job ffc32d77 (REDIR32.EXE) still there 2000ms after its tree was stopped, 1 below it
+20:28:13.310 rpc: exec x2 was stopped but its process is still there; on Win98 that is a REDIR32 zombie (BACKLOG 14)
+20:28:13.310 rpc: exec x2 done status=timeout code=4294967295 bytes=4 in 5103ms
+20:28:13.310 rpc: exec x3 (60000ms): C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,60
+20:28:20.340 rpc: cancelling exec x3
+20:28:22.320 process: job ffc32217 (REDIR32.EXE) still there 2000ms after its tree was stopped, 1 below it
+20:28:22.370 rpc: exec x3 was stopped but its process is still there; on Win98 that is a REDIR32 zombie (BACKLOG 14)
+20:28:22.370 rpc: exec x3 done status=cancelled code=4294967295 bytes=4 in 9030ms
+20:28:22.370 rpc: exec x4 (20000ms): C:\WINDOWS\COMMAND\CHOICE.COM /c:y /t:y,8
+20:28:24.290 rpc: exec x5 cancelled before it ran
+20:28:32.150 rpc: exec x4 done status=ok code=0 bytes=7 in 9803ms
+20:28:32.150 rpc: exec x6 (20000ms): if exist C:\EP\X5RAN.TXT echo X5-RAN
+20:28:33.580 rpc: exec x6 done status=ok code=0 bytes=0 in 1381ms
+
+# EXECPRB --list afterwards: REDIR32.EXE=22 (20 probe + x2 + x3), WINOA386.MOD=3 (the DOS prompt's + 2 probe zombies)

@@ -175,13 +175,14 @@ unchanged.
 
 ## Progress
 
-All in code and tested locally (Wine) on 2026-09-26. **Nothing here has run
-on the guest yet**: the user asked for local testing only.
+All in code on 2026-09-26, tested under Wine, then **on the VM** after
+merging origin/master (the guest had to be restarted first; it had hung).
 
 - 0 `78bf95c`: probe, measurements, BACKLOG 14, this file.
-- 0b `a146cf1`: `execprobe --stops` written and smoke-run under Wine. **Not
-  run on the VM.** Reboot the guest before (5 REDIR32 and 2 WINOA386 zombies
-  from the first probe are still there) and after.
+- 0b `a146cf1`: `execprobe --stops`, run on the VM
+  (`docs/measurements/execprobe-vm-stops-20260926.txt`): no strategy ends
+  REDIR32; killing the VM is the best (program gone within 2s); a direct
+  spawn leaves nothing; each zombie costs ~150KB. So step 5's order stands.
 - 1 `c176f44`: `ExecJob`; one job per EXEC. execcheck found a cancel
   reported as `ok` (the killed child's exit beat the flag); fixed.
 - 2 `65261a8`: EXECKILL id-checked under `g_lock`; a kill for a queued EXEC
@@ -199,8 +200,15 @@ on the guest yet**: the user asked for local testing only.
 Committed at load: 387,417 before, 394,601 after (the static 8KB chunk
 went; `Processes` and its vector code came in).
 
-Still to do on the guest, in order: reboot; `execprobe --detach --stops`,
-and pick the stop from its results; `execcheck`; the client's exec turn,
-timeout on a DOS loop, EXECKILL mid-run and a stale EXECKILL, then
-`execprobe --list` shows no new REDIR32 or WINOA386 (or, if 0b finds no
-clean stop, exactly one REDIR32 per stop, as logged).
+On the VM (`docs/measurements/execkill-vm-20260926.txt`): the client, driven
+by `tools/probe/execkill.py` as a stub bridge, passed 7/7 -- a shell command,
+a timeout, a stale and an id-less EXECKILL ignored, the real one cancelling
+in 2s, a queued EXEC killed before it ran and never running. Its log names
+the one REDIR32 each stop leaves, and the process list afterwards holds
+exactly those two and no DOS VM. `execcheck` on the guest: every Processes
+and SystemInfo case passes on real 98 (Toolhelp, deny list, NE detection,
+real memory and codepages); its exec cases need cmd.exe and so only run
+under Wine.
+
+Open: BACKLOG 14's remaining REDIR32 (ideas there). The guest holds 22
+REDIR32 zombies from this testing until its next restart.

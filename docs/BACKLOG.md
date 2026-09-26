@@ -1338,13 +1338,26 @@ needs the DOC goldens regenerated and it depends on none of the above.
 ## 14. Stopping an exec leaks a process on Win98
 
 **Status:** found 2026-09-26 by `win/checks/execprobe.cpp` on the VM
-(`docs/measurements/execprobe-vm-*-20260926.txt`). **Narrowed, not closed**
-(libexec step 5): a stop no longer calls TerminateProcess on REDIR32; it
-kills the tree below it (`Processes::stopJobTree`), which ends a Win32
-program at once and a DOS one within ~30s, and the client logs the REDIR32
-that is still left (`ExecResult::stopLeaked`). Closing it waits on
-`execprobe --stops` running on the VM (plan step 0b), which is not yet
-done -- and neither is any guest run of the new stop path.
+(`docs/measurements/execprobe-vm-*-20260926.txt`). **Narrowed, and the rest
+measured as unavoidable for now** (libexec step 5, verified on the VM,
+`docs/measurements/execkill-vm-20260926.txt`): a stop kills the tree below
+REDIR32 (`Processes::stopJobTree`) and the command really stops -- the DOS
+VM and the program go -- but REDIR32 itself stays, one per stopped piped
+COMMAND.COM job, and the client logs each (`ExecResult::stopLeaked`).
+
+`execprobe --stops` tried everything else on the VM
+(`execprobe-vm-stops-20260926.txt`): closing our pipe ends,
+GenerateConsoleCtrlEvent (it resolves on 98 and returns 0 for every call),
+Ctrl+C posted to the VM's hidden tty window, WM_CLOSE to that window with
+its confirmation answered, and killing the VM then waiting 15s. None ends
+REDIR32. Killing the VM is the best of them (the program stops within 2s),
+and a program spawned directly, with no shell, leaves nothing at all.
+**Each zombie costs about 150KB**: free memory fell from 6.6MB to 3.6MB
+over 20 of them. Left: only a reboot clears them, so a session that times
+out a lot of shell commands slowly starves a 32MB box. Ideas not yet
+tried: capture a shell command's output through a temp file instead of a
+pipe (no REDIR32 at all, if the direct-spawn result carries over), or
+reuse one long-lived COMMAND.COM.
 
 On 98 a piped `COMMAND.COM /c` spawn is three processes: the pid
 `CreateProcess` returns is `REDIR32.EXE`, its child is the DOS VM
