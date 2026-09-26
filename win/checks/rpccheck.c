@@ -22,7 +22,6 @@
 #include "net/frameproto.h"
 #include "net/net.h"
 #include "rpc/rpc.h"
-#include "rpc/exec.h"
 #include "core/log.h"
 #include "sync/sync.h"
 #include "sync/syncrpc.h"
@@ -121,8 +120,8 @@ static void lane_table_cases(void)
 /* The slow JOB's marker: a file it appends one line to on every pass of its
  * loop. A byte count read from disk is an observable that does not go
  * through rc_net_send, so it is not confused by rc_rpc_stop's own call to
- * rc_exec_cancel() -- see the note below on why that confusion matters. The
- * child inherits this process's current directory (exec.c: a NULL cwd passes
+ * the job cancel -- see the note below on why that confusion matters. The
+ * child inherits this process's current directory (ExecJob: a NULL cwd passes
  * NULL to CreateProcessA, which means "inherit"), so the path is relative. */
 #define MARKER_FILE "rpccheck_marker.txt"
 
@@ -176,7 +175,7 @@ static void immediate_survives_busy_job(void)
      * faking anything.
      *
      * It used to be `shell=0` against a flag, and exec.c picked the shell
-     * itself from GetVersion(). It picks nothing now -- see rc_exec_run. */
+     * itself from GetVersion(). It picks nothing now -- see ExecOptions. */
     xkeys[0] = "id";         xvals[0] = "x1";
     xkeys[1] = "timeout_ms"; xvals[1] = "8000";
     xkeys[2] = "shell";      xvals[2] = "";
@@ -232,7 +231,7 @@ static void immediate_survives_busy_job(void)
 
     /* THE PROOF that EXECKILL, not the eventual rc_rpc_stop() below, is what
      * ended x1: sample the marker twice, 600ms apart, well after the ~100ms
-     * poll granularity exec.c's run loop checks g_cancel at, and well before
+     * poll granularity ExecJob::run checks its cancel flag at, and well before
      * x1's own 8000ms timeout could explain a stop on its own. If EXECKILL
      * actually reached the child, both samples are taken after it is already
      * dead, so the file has stopped growing and size_b == size_c. If EXECKILL
@@ -258,7 +257,7 @@ static void immediate_survives_busy_job(void)
     }
 
     /* Cleanup, not part of the property: shuts the worker down so the process
-     * can exit. rc_rpc_stop() also calls rc_exec_cancel(), which is why the
+     * can exit. rc_rpc_stop() also cancels the running job, which is why the
      * marker samples above are taken before this line, not after it. */
     rc_rpc_stop();
     rc_rpc_join(5000);
@@ -301,65 +300,6 @@ static int log_contains(const char *needle)
  * less time than asked. Without the fix in run_one() (rpc.c), nothing in the
  * log distinguishes a clamped request from an ordinary one -- this would find
  * no such line and fail. */
-/* The "refuse rather than truncate" guard in rc_exec_run, driven for real.
- *
- * The guard read `if (n < 0 || n >= (int)sizeof(cmd))` -- _snprintf's
- * length-or-negative contract -- while rc_strf returns 1 for "it fit" and 0
- * for "it was truncated". Neither value can satisfy either half, so the guard
- * NEVER fired: RC_EXEC_TOO_LONG was unreachable and a command over 1024 bytes
- * was cut at byte 1023 and handed to the shell. `del c:\temp\*.tmp` cut short
- * becomes `del c:\temp\*`, which is the example this file's own header uses
- * for why the guard exists.
- *
- * The bridge applies no length cap of its own, so this is the only guard in
- * the system. Testing the OUTCOME rather than the shape of the expression is
- * the point: a rewrite that reintroduces the wrong contract fails here.
- *
- * Nothing is ever spawned -- the refusal returns before CreateProcessA. The
- * short command is not run either; it is checked for the ABSENCE of
- * RC_EXEC_TOO_LONG, so this stays a pure-logic test with no child process.
- * (audit 01.3) */
-static void exec_refuses_an_overlong_command(void)
-{
-    static char big[4096];
-    rc_exec_result r;
-    int rc, ok;
-
-    memset(big, 'x', sizeof(big) - 1);
-    big[sizeof(big) - 1] = '\0';
-
-    memset(&r, 0, sizeof(r));
-    rc = rc_exec_run(big, NULL, NULL, 1000, NULL, NULL, &r);
-    ok = (rc != 0 && r.status == RC_EXEC_TOO_LONG);
-    if (!ok) g_failures++;
-    printf("%s\ta %u-byte command is refused as too_long\tgot rc=%d status=%d\n",
-           ok ? "pass" : "FAIL", (unsigned)strlen(big), rc, (int)r.status);
-
-    /* And the shell form, which prepends the bridge's invocation prefix and
-     * so crosses the limit at a LOWER input length -- the branch a fix could
-     * easily miss. The prefix is now a caller argument rather than something
-     * this file picks, so the test states it. */
-    memset(big, 'y', 1100);
-    big[1100] = '\0';
-    memset(&r, 0, sizeof(r));
-    rc = rc_exec_run(big, NULL, "C:\\WINDOWS\\COMMAND.COM /c", 1000,
-                     NULL, NULL, &r);
-    ok = (rc != 0 && r.status == RC_EXEC_TOO_LONG);
-    if (!ok) g_failures++;
-    printf("%s\ta 1100-byte shell command is refused as too_long\tgot rc=%d status=%d\n",
-           ok ? "pass" : "FAIL", rc, (int)r.status);
-
-    /* A command that FITS must not be refused. Without this the test passes
-     * for a guard that refuses everything. */
-    memset(&r, 0, sizeof(r));
-    r.status = RC_EXEC_TOO_LONG;
-    rc_exec_run("", NULL, NULL, 1000, NULL, NULL, &r);
-    ok = (r.status != RC_EXEC_TOO_LONG);
-    if (!ok) g_failures++;
-    printf("%s\ta short command is not refused as too_long\tgot status=%d\n",
-           ok ? "pass" : "FAIL", (int)r.status);
-}
-
 static void exec_timeout_clamp_is_logged(void)
 {
     const char *xkeys[3]; const char *xvals[3];
@@ -715,7 +655,6 @@ int main(int argc, char **argv)
 
     lane_table_cases();
     immediate_survives_busy_job();
-    exec_refuses_an_overlong_command();
     exec_timeout_clamp_is_logged();
 
     rc_log_close();

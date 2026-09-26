@@ -112,6 +112,13 @@ LIBCORE = $(LIBDIR)/libcore.lib
 WIRE_SRCS = wire/frame.cpp wire/connection.cpp wire/listener.cpp
 LIBWIRE = $(LIBDIR)/libwire.lib
 
+# libexec (docs/REMOTE.md step 3, docs/libexec-plan.md): running commands
+# and managing processes. libcore only; it knows nothing of the wire, and
+# mapping requests to jobs is the exe's job. Listed BEFORE libcore wherever
+# both are linked.
+EXEC_SRCS = exec/execjob.cpp
+LIBEXEC = $(LIBDIR)/libexec.lib
+
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
 # libcore only: it knows nothing of the wire, and turning a tree into
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
@@ -130,11 +137,11 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
-       net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
+       net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
        rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
-OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
+OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 
-.PHONY: execprobe autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: execcheck execprobe autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -199,6 +206,15 @@ $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
 EXECPROBE_OBJS = $(call objs,checks/execprobe.cpp) $(LIBCORE)
 execprobe: $(BUILD)/execprobe.exe
 $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# libexec under Wine: the refuse-rather-than-truncate guard, output, the cap,
+# timeout and cancel, driven through ExecJob for real.
+EXECCHECK_OBJS = $(call objs,checks/execcheck.cpp) $(LIBEXEC) $(LIBCORE)
+execcheck: $(BUILD)/execcheck.exe
+$(BUILD)/execcheck.exe: $(EXECCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -333,15 +349,15 @@ retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
 all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
-     netcheck rpccheck probe execprobe htmlspike capscheck workcheck toolcheck
+     netcheck rpccheck probe execprobe execcheck htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
-                $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBWIRE) $(LIBCORE)
+                $(MINIZ) rpc/rpc.cpp sync/sync.cpp \
+                sync/syncrpc.cpp) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -353,8 +369,8 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
-                $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBWIRE) $(LIBCORE)
+                $(MINIZ) rpc/rpc.cpp sync/sync.cpp \
+                sync/syncrpc.cpp) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -482,6 +498,10 @@ $(LIBCORE): $(call objs,$(CORE_SRCS))
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
 $(LIBWIRE): $(call objs,$(WIRE_SRCS))
+	@mkdir -p $(@D)
+	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
+
+$(LIBEXEC): $(call objs,$(EXEC_SRCS))
 	@mkdir -p $(@D)
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 

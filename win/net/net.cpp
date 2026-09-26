@@ -10,7 +10,6 @@
 #include "core/log.h"
 #include "core/str.h"
 #include "rpc/rpc.h"
-#include "rpc/exec.h"
 #include "sync/syncrpc.h"
 #include "wire/connection.h"
 

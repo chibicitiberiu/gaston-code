@@ -18,7 +18,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "rpc/rpc.h"
-#include "rpc/exec.h"
+#include "exec/execjob.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 #include <new>
@@ -36,6 +36,8 @@
 #define RPC_EXEC_TIMEOUT_FLOOR_MS      1000
 #define RPC_EXEC_TIMEOUT_DEFAULT_MS   20000
 #define RPC_EXEC_TIMEOUT_CEIL_MS     120000
+/* Output handed to the bridge per command; the rest is drained and counted. */
+#define RPC_EXEC_MAX_OUT       (32u * 1024u)
 
 static HANDLE           g_thread;
 /* The directory watcher, resolved dynamically. NULL is a supported outcome --
@@ -62,6 +64,11 @@ static CRITICAL_SECTION g_lock;
 static int              g_ready;
 static volatile LONG    g_running;
 static rc_frame        *g_queued;       /* at most one, guarded by g_lock */
+/* The command running now, or NULL. Guarded by g_lock: the worker sets and
+ * clears it around ExecJob::run, the reader (EXECKILL) and rc_rpc_stop
+ * cancel through it. One job per EXEC, so a cancel can never outlive the
+ * command it was meant for inside the job itself. */
+static ExecJob         *g_job;
 static rc_net          *g_net;
 
 /* SYNC* frames get their own FIFO, and that is not a refinement -- it is the
@@ -89,6 +96,7 @@ typedef struct {
 } exec_ctx;
 
 static int  is_sync(const rc_frame *f);
+static void cancel_job(void);
 
 /* Everything the RPC layer answers to. See rpc.h for why this is here and not
  * in net.c's reader loop.
@@ -111,13 +119,13 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
          * queued. Queueing it behind the worker would be useless: the worker
          * is busy running the very command this is meant to stop, so the
          * frame would not be looked at until that command finished.
-         * rc_exec_cancel is built to be called from another thread. */
+         * ExecJob::cancel is built to be called from another thread. */
         if (strcmp(f->type, "EXECKILL") == 0) {
             const char *kid = rc_frame_get(f, "id");
             /* rc_frame_get returns NULL for an absent header, and nothing
              * requires EXECKILL to carry an id. */
             rc_log("rpc: EXECKILL for %s", kid ? kid : "(no id)");
-            rc_exec_cancel();
+            cancel_job();
         }
         rc_frame_delete(f);
         return RC_ROUTE_TAKEN;
@@ -314,9 +322,16 @@ static void rpc_watch_sync(void)
     rpc_watch_start();
 }
 
-static void send_out(void *ctx, const char *data, unsigned len)
+/* Cancel whatever command is running. Reader thread (EXECKILL) and the stop
+ * path; the job does its own locking against the worker. */
+static void cancel_job(void)
 {
-    exec_ctx *c = (exec_ctx *)ctx;
+    ScopedLockIf lock(&g_lock, g_ready);
+    if (g_job) g_job->cancel();
+}
+
+static void send_out(exec_ctx *c, const char *data, unsigned len)
+{
     const char *keys[1];
     const char *vals[1];
 
@@ -337,6 +352,17 @@ static void send_out(void *ctx, const char *data, unsigned len)
     }
 }
 
+/* EXECOUT for each chunk, on the worker. */
+class ExecOut : public OutputSink
+{
+public:
+    explicit ExecOut(exec_ctx *c) : m_ctx(c) {}
+    void onOutput(const char *data, unsigned len) { send_out(m_ctx, data, len); }
+
+private:
+    exec_ctx *m_ctx;
+};
+
 static void run_one(rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
@@ -348,7 +374,8 @@ static void run_one(rc_frame *f)
     char code[16], bytes[16], trunc[4];
     const char *status = "ok";
     exec_ctx ctx;
-    rc_exec_result r;
+    ExecResult r;
+    ExecOptions opt;
     DWORD timeout_ms;
     int nkv = 0;
 
@@ -395,10 +422,16 @@ static void run_one(rc_frame *f)
     rc_log("rpc: exec %s (%lums): %.120s", ctx.id,
            (unsigned long)timeout_ms, f->body ? f->body : "");
 
-    /* Arm first, then re-check: a cancel landing after the arm is caught by
-     * the run loop, and one landing before it is caught here. */
-    rc_exec_arm();
-    if (!g_running) {
+    /* Registered under the lock that rc_rpc_stop clears g_running under, so a
+     * stop either sees this job and cancels it, or is seen here and nothing
+     * spawns. A job cancelled before run() never spawns at all. */
+    UniqueObj<ExecJob> job(new ExecJob());
+    int registered = 0;
+    {
+        ScopedLock lock(&g_lock);
+        if (g_running) { g_job = job.get(); registered = 1; }
+    }
+    if (!registered) {
         const char *k[2]; const char *v[2];
         k[0] = "id";     v[0] = ctx.id;
         k[1] = "status"; v[1] = "cancelled";
@@ -407,24 +440,32 @@ static void run_one(rc_frame *f)
         return;
     }
 
-    memset(&r, 0, sizeof(r));
     /* Straight through. `sh` is the bridge's invocation prefix for whichever
      * shell the model picked from the list this machine reported, or empty
-     * to spawn the program directly -- this used to be read as a flag and
-     * the shell chosen locally. See rc_exec_run. */
-    rc_exec_run(f->body ? f->body : "", cwd, sh,
-                timeout_ms, send_out, &ctx, &r);
+     * to spawn the program directly. See ExecOptions::shell. */
+    opt.shell = sh;
+    opt.cwd = cwd;
+    opt.timeoutMs = timeout_ms;
+    opt.maxOutput = RPC_EXEC_MAX_OUT;
+    {
+        ExecOut out(&ctx);
+        job->run(f->body ? f->body : "", opt, out, r);
+    }
+    {
+        ScopedLock lock(&g_lock);
+        g_job = NULL;
+    }
 
     switch (r.status) {
-    case RC_EXEC_TIMEOUT:      status = "timeout";      break;
-    case RC_EXEC_SPAWN_FAILED: status = "spawn_failed"; break;
-    case RC_EXEC_CANCELLED:    status = "cancelled";    break;
-    case RC_EXEC_TOO_LONG:     status = "too_long";     break;
-    case RC_EXEC_OK:           status = "ok";           break;
+    case EXEC_TIMEOUT:      status = "timeout";      break;
+    case EXEC_SPAWN_FAILED: status = "spawn_failed"; break;
+    case EXEC_CANCELLED:    status = "cancelled";    break;
+    case EXEC_TOO_LONG:     status = "too_long";     break;
+    case EXEC_OK:           status = "ok";           break;
     default:                   status = "unknown";      break;
     }
 
-    rc_strf(code, sizeof(code), "%lu", (unsigned long)r.code);
+    rc_strf(code, sizeof(code), "%lu", (unsigned long)r.exitCode);
     rc_strf(bytes, sizeof(bytes), "%lu", (unsigned long)r.bytes);
     /* Output lost on the wire is reported the same way as output past the
      * cap: either way the model must not treat what arrived as complete. */
@@ -445,7 +486,7 @@ static void run_one(rc_frame *f)
     rc_net_send(g_net, "EXECRESULT", keys, vals, nkv, NULL, 0);
 
     rc_log("rpc: exec %s done status=%s code=%lu bytes=%lu in %lums",
-           ctx.id, status, (unsigned long)r.code,
+           ctx.id, status, (unsigned long)r.exitCode,
            (unsigned long)r.bytes, (unsigned long)r.ms);
 }
 
@@ -649,7 +690,6 @@ int rc_rpc_start(rc_net *net)
         InitializeCriticalSection(&g_lock);
         g_ready = 1;
     }
-    rc_exec_init();
     if (!g_wake) g_wake = CreateEventA(NULL, FALSE, FALSE, NULL);
     /* g_running is set above, before the early return -- see the note there. */
     /* BEFORE _beginthreadex: this writes g_watch and the three GetProcAddress
@@ -819,8 +859,11 @@ int rc_rpc_submit(rc_frame *f)
 
 void rc_rpc_stop(void)
 {
-    g_running = 0;
-    rc_exec_cancel();           /* kill a child that could outlive us */
+    {
+        ScopedLockIf lock(&g_lock, g_ready);
+        g_running = 0;
+    }
+    cancel_job();               /* kill a child that could outlive us */
     if (g_wake) SetEvent(g_wake);
 }
 
