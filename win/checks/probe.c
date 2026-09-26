@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/str.h"
+#include "inproc/shm.h"
 /* Open Watcom's two OLE headers disagree about VARIANT unless this is set.
  * oaidl.h:130 picks the NAMED layout (n1.n2.n3) on `__STDC__`, but
  * oleauto.h:125's V_VT/V_I4 accessors only check NONAMELESSUNION, so they
@@ -481,7 +482,7 @@ static void probe_deflate(void)
         "The bridge owns markdown, so the wire carries pre-styled runs.\r\n"
         "if (len > RC_MAX_FRAME) return -1;  /* 64KB, not 32MB */\r\n";
     mz_ulong clen, dlen;
-    unsigned i, slen, total = 0;
+    unsigned slen, total = 0;
     DWORD t0, t1;
     int rc, lvl;
 
@@ -498,6 +499,18 @@ static void probe_deflate(void)
     src[total] = '\0';
     say("sample         : %u bytes of mixed prose and code", total);
 
+    /* A DISCARDED WARM PASS, and it is not ceremony.
+     *
+     * Timed cold, the FIRST level measured pays for miniz's internal
+     * allocation and every page fault behind it, and the second gets a warm
+     * heap for free. That reported 184ms at level 1 on the XP against 94ms
+     * on the SLOWER P200, with level 6 at "1ms" -- an ordering artifact read
+     * as a measurement, and the same bug the MSAA probe had. */
+    clen = sizeof(comp);
+    mz_compress2(comp, &clen, (const unsigned char *)src, total, 6);
+    clen = sizeof(comp);
+    mz_compress2(comp, &clen, (const unsigned char *)src, total, 1);
+
     for (lvl = 1; lvl <= 6; lvl += 5) {
         clen = sizeof(comp);
         t0 = GetTickCount();
@@ -512,6 +525,8 @@ static void probe_deflate(void)
 
     clen = sizeof(comp);
     mz_compress2(comp, &clen, (const unsigned char *)src, total, 1);
+    dlen = sizeof(dec);
+    mz_uncompress(dec, &dlen, comp, clen);    /* warm, discarded */
     dlen = sizeof(dec);
     t0 = GetTickCount();
     rc = mz_uncompress(dec, &dlen, comp, clen);
@@ -1406,16 +1421,95 @@ static void dom_walk(IAccessible *acc, int depth)
     HeapFree(GetProcessHeap(), 0, v);
 }
 
-static BOOL CALLBACK find_ie(HWND h, LPARAM lp)
+/* Find the DOCUMENT by its MSAA role, never by a browser's window class.
+ *
+ * The old version looked for "Internet Explorer_Server", which is IE by
+ * construction -- and Win98 had Netscape 4, Netscape 6/Mozilla and Opera as
+ * well, each with its own internals. ROLE_SYSTEM_DOCUMENT is 15 on all of
+ * them, in every language, and a browser that answers nothing here is not a
+ * failure: it is the boundary between this tier and GDI capture, which is
+ * worth knowing before a policy depends on it.
+ *
+ * Every document found is reported with the class that carried it, because
+ * that list is the actual result of this gate.
+ */
+#define RC_ROLE_DOCUMENT 15L
+#define FIND_DOCS_MAX    8
+#define FIND_DEPTH_MAX   16
+
+static PFN_AOFW g_find_aofw;
+
+struct FoundDoc {
+    HWND  hwnd;
+    char  cls[64];
+    DWORD pid;
+    long  role;
+};
+
+static struct FoundDoc g_docs[FIND_DOCS_MAX];
+static int   g_docs_n;
+static int   g_docs_asked;
+
+/* The role of a window's client object, or -1. */
+static long role_of(HWND h)
 {
-    char cls[64];
-    HWND *out = (HWND *)lp;
-    GetClassNameA(h, cls, sizeof(cls));
-    if (!strcmp(cls, "Internet Explorer_Server")) { *out = h; return FALSE; }
-    { HWND c;
-      for (c = GetWindow(h, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
-          if (!find_ie(c, lp)) return FALSE;
-      } }
+    IAccessible *a = 0;
+    long role = -1;
+    if (!g_find_aofw)
+        return -1;
+    g_docs_asked++;
+    if (g_find_aofw(h, OBJID_CLIENT, &RC_IID_IAccessible, (void **)&a) == S_OK
+        && a) {
+        VARIANT self, v;
+        V_VT(&self) = VT_I4; V_I4(&self) = 0;
+        V_VT(&v) = VT_EMPTY;
+        if (a->lpVtbl->get_accRole(a, self, &v) == S_OK && V_VT(&v) == VT_I4)
+            role = V_I4(&v);
+        VariantClear(&v);
+        a->lpVtbl->Release(a);
+    }
+    return role;
+}
+
+/* Depth-capped, unlike the version this replaces: it recursed GW_CHILD with
+ * no bound at all, and a cyclic sibling chain would have run until the
+ * stack gave out. */
+static void find_docs(HWND parent, int depth)
+{
+    HWND c;
+    if (depth > FIND_DEPTH_MAX || g_docs_n >= FIND_DOCS_MAX)
+        return;
+    for (c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        long role;
+        if (g_docs_n >= FIND_DOCS_MAX)
+            return;
+        if (!IsWindowVisible(c))
+            continue;
+        role = role_of(c);
+        if (role == RC_ROLE_DOCUMENT) {
+            struct FoundDoc *d = &g_docs[g_docs_n++];
+            d->hwnd = c;
+            /* Cleared first. GetClassNameA leaves the buffer untouched on
+             * failure and the old code strcmp'd whatever was on the stack. */
+            d->cls[0] = '\0';
+            GetClassNameA(c, d->cls, sizeof(d->cls));
+            d->pid = 0;
+            GetWindowThreadProcessId(c, &d->pid);
+            d->role = role;
+            continue;       /* do not descend INTO a document */
+        }
+        find_docs(c, depth + 1);
+    }
+}
+
+static BOOL CALLBACK find_docs_top(HWND h, LPARAM lp)
+{
+    (void)lp;
+    if (g_docs_n >= FIND_DOCS_MAX)
+        return FALSE;
+    if (!IsWindowVisible(h))
+        return TRUE;
+    find_docs(h, 1);
     return TRUE;
 }
 
@@ -1440,14 +1534,38 @@ static void probe_dom(void)
     }
     say("GetRoleTextA %s", g_roletext ? "found" : "MISSING");
 
-    EnumWindows(find_ie, (LPARAM)&ie);
-    if (!ie) {
-        say("no 'Internet Explorer_Server' window -- open a page first");
+    /* CoInitialize BEFORE the search: role_of makes COM calls too, and the
+     * search is now most of this gate's work. */
+    CoInitialize(NULL);
+
+    g_find_aofw = aofw;
+    g_docs_n = g_docs_asked = 0;
+    t0 = GetTickCount();
+    EnumWindows(find_docs_top, 0);
+    t1 = GetTickCount();
+    say("document search: %d found, %d windows asked, %lu ms",
+        g_docs_n, g_docs_asked, (unsigned long)(t1 - t0));
+    if (!g_docs_n) {
+        say("no window reports ROLE_SYSTEM_DOCUMENT -- open a page first.");
+        say("  If a browser IS open and showing a page, that is the RESULT:");
+        say("  this browser exposes no MSAA document and belongs to the GDI");
+        say("  capture tier, not this one. Say which browser in the log.");
+        CoUninitialize();
         FreeLibrary(acc);
         return;
     }
+    /* THE ANSWER OF THIS GATE. One line per document, with the class that
+     * carried it -- that list is what tells us whether the cross-browser
+     * claim holds, and it must never become a class we then hard-code. */
+    {
+        int di;
+        for (di = 0; di < g_docs_n; di++)
+            say("  document %d   : class=%s hwnd=%p pid=%lu", di,
+                g_docs[di].cls, (void *)g_docs[di].hwnd,
+                (unsigned long)g_docs[di].pid);
+    }
+    ie = g_docs[0].hwnd;
 
-    CoInitialize(NULL);
     {
         IAccessible *doc = 0;
         if (aofw(ie, OBJID_CLIENT, &RC_IID_IAccessible, (void **)&doc) == S_OK
@@ -2248,31 +2366,379 @@ static void probe_evlat(void)
  * layout is a hazard, and the alternative -- a header both include -- means
  * the DLL picks up whatever else that header drags in, on a file that gets
  * mapped into other people's processes. Kept in step by hand, deliberately. */
-#define RC_TEXTN   48
-#define RC_TEXTLEN 56
-typedef struct {
-    DWORD pid;
-    long  x, y;
-    char  text[RC_TEXTLEN];
-} RcDraw;
-typedef struct {
-    long   calls;
-    long   attaches;
-    long   pids_n;
-    DWORD  pids[16];
-    DWORD  patch_pid;
-    long   patched;
-    long   draws;
-    long   ring_next;
-    RcDraw ring[RC_TEXTN];
-} RcHookShm;
+/* The layout comes from the header the DLL uses. There used to be a copy
+ * of it here, which is exactly the drift inproc/shm.h exists to stop. */
+
+/* ------------------------------------------------------------ 0.15f */
+/* TARGETED injection: one thread, one process, mapped nowhere else.
+ *
+ * 0.15d proved a SYSTEM-WIDE WH_CBT hook, which is how Explorer came to be
+ * in scope and how Explorer came to die. The plan's D1 switches to
+ * SetWindowsHookEx(WH_CALLWNDPROC, proc, dll, targetThreadId) and asserts
+ * as a fact that this maps into one process and nowhere else. Nobody has
+ * run that. It is a gate, not an assumption.
+ *
+ * Two things this has to show, and the second is the one that matters:
+ *
+ *   the DLL's proc runs inside the target -- otherwise there is no tier D
+ *   at all;
+ *
+ *   and it runs NOWHERE ELSE. `pids_n` counting exactly the target (plus
+ *   possibly ourselves) is the evidence. Anything more and the "targeted"
+ *   claim is false, whatever the API documentation says.
+ */
+
+/* Never these, and there is no force escape here -- unlike KILL, where
+ * REMOTE.md:344 allows Explorer with force=1. Killing the first four hangs
+ * 9x; injecting into them is worse, because the damage shows up later and
+ * belongs to them. Explorer is on the list because we have actually killed
+ * it. */
+static const char *const RC_NO_INJECT[] = {
+    "EXPLORER.EXE", "MSGSRV32.EXE", "KERNEL32.DLL", "MPREXE.EXE",
+    "MMTASK.TSK", "SYSTRAY.EXE", "RUNDLL32.EXE"
+};
+
+static void upper_base(const char *path, char *out, unsigned cap)
+{
+    const char *base = path;
+    unsigned i;
+    for (i = 0; path[i]; i++)
+        if (path[i] == '\\' || path[i] == '/' || path[i] == ':')
+            base = &path[i + 1];
+    for (i = 0; i + 1 < cap && base[i]; i++) {
+        char c = base[i];
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    out[i] = '\0';
+}
+
+static int may_inject(const char *exe)
+{
+    unsigned i;
+    char up[64];
+    upper_base(exe, up, sizeof(up));
+    for (i = 0; i < sizeof(RC_NO_INJECT) / sizeof(RC_NO_INJECT[0]); i++)
+        if (!strcmp(up, RC_NO_INJECT[i]))
+            return 0;
+    return 1;
+}
+
+static DWORD g_want_pid;
+static HWND  g_want_win;
+
+static BOOL CALLBACK find_by_pid(HWND h, LPARAM lp)
+{
+    DWORD pid = 0;
+    (void)lp;
+    if (!IsWindowVisible(h)) return TRUE;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid == g_want_pid) { g_want_win = h; return FALSE; }
+    return TRUE;
+}
+
+/* ------------------------------------------------------------ 0.15g */
+/* WHICH text call does the thing we care about actually make?
+ *
+ * D4 patches TextOutA and ExtTextOutA in every loaded module, and its
+ * stated purpose is MSHTML -- a web page is drawn there, not by the
+ * browser's executable. If MSHTML draws through ExtTextOutW, or through
+ * DrawTextA, or by ordinal, then D4 captures nothing from the one target it
+ * exists for, and it would have been built before anybody looked.
+ *
+ * Reading an import table is free and needs no injection, so this is the
+ * cheapest question in the whole section. It is asked here rather than
+ * assumed there.
+ */
+static const char *const RC_GDI_TEXT_FNS[] = {
+    "TextOutA", "TextOutW", "ExtTextOutA", "ExtTextOutW",
+    "TabbedTextOutA", "PolyTextOutA"
+};
+static const char *const RC_USER_TEXT_FNS[] = {
+    "DrawTextA", "DrawTextW", "DrawTextExA", "DrawTextExW"
+};
+
+/* Open Watcom's headers do not carry it at this WINVER. It is the top bit
+ * of the thunk word, which is how "imported by ordinal, not by name" is
+ * encoded -- hookdll.c defines it for the same reason. */
+#ifndef IMAGE_ORDINAL_FLAG
+#define IMAGE_ORDINAL_FLAG 0x80000000
+#endif
+
+/* Bounded append. lstrcatA is unbounded and the source audit refuses it,
+ * correctly: `found` is a fixed buffer and the names come from a PE header
+ * that a corrupt or hostile module controls. */
+static void append_fn(char *dst, unsigned cap, const char *what)
+{
+    unsigned n = 0, i;
+    while (n + 1 < cap && dst[n]) n++;
+    if (n && n + 1 < cap) dst[n++] = ' ';
+    for (i = 0; n + 1 < cap && what[i]; i++) dst[n++] = what[i];
+    dst[n] = '\0';
+}
+
+/* Read-only twin of hookdll's patch_import: says what a module imports
+ * without touching a byte of it. */
+static void report_imports(const char *modName, HMODULE mod)
+{
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)mod;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *imp;
+    DWORD rva;
+    char found[256];
+    unsigned fn;
+    int any = 0;
+
+    found[0] = '\0';
+    if (!mod || dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        say("  %-14s not loaded", modName);
+        return;
+    }
+    nt = (IMAGE_NT_HEADERS *)((char *)mod + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        say("  %-14s not a PE", modName);
+        return;
+    }
+    rva = nt->OptionalHeader
+            .DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) { say("  %-14s imports nothing", modName); return; }
+
+    for (imp = (IMAGE_IMPORT_DESCRIPTOR *)((char *)mod + rva);
+         imp->Name; imp++) {
+        const char *dll = (const char *)mod + imp->Name;
+        IMAGE_THUNK_DATA *names;
+        int isGdi = lstrcmpiA(dll, "GDI32.DLL") == 0;
+        int isUser = lstrcmpiA(dll, "USER32.DLL") == 0;
+        if (!isGdi && !isUser)
+            continue;
+        /* OriginalFirstThunk is the by-name table. Without it there are no
+         * names to match and the patch could not find its target either --
+         * which is itself the answer, so it is reported. */
+        if (!imp->OriginalFirstThunk) {
+            say("  %-14s imports %s with no name table (bound or ordinal)",
+                modName, dll);
+            continue;
+        }
+        names = (IMAGE_THUNK_DATA *)((char *)mod + imp->OriginalFirstThunk);
+        for (; names->u1.AddressOfData; names++) {
+            IMAGE_IMPORT_BY_NAME *byname;
+            const char *have;
+            if (names->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+                continue;
+            byname = (IMAGE_IMPORT_BY_NAME *)
+                     ((char *)mod + names->u1.AddressOfData);
+            have = (const char *)byname->Name;
+            if (isGdi) {
+                for (fn = 0; fn < sizeof(RC_GDI_TEXT_FNS)
+                             / sizeof(RC_GDI_TEXT_FNS[0]); fn++)
+                    if (!strcmp(have, RC_GDI_TEXT_FNS[fn])) {
+                        append_fn(found, sizeof(found), have);
+                        any = 1;
+                    }
+            } else {
+                for (fn = 0; fn < sizeof(RC_USER_TEXT_FNS)
+                             / sizeof(RC_USER_TEXT_FNS[0]); fn++)
+                    if (!strcmp(have, RC_USER_TEXT_FNS[fn])) {
+                        append_fn(found, sizeof(found), have);
+                        any = 1;
+                    }
+        }
+        }
+    }
+    if (any) say("  %-14s %s", modName, found);
+    else     say("  %-14s no text entry point imported by name", modName);
+}
+
+static void probe_gditext(void)
+{
+    static const char *const MODS[] = {
+        "MSHTML.DLL", "COMCTL32.DLL", "USER32.DLL", "COMDLG32.DLL",
+        "SHELL32.DLL", "RICHED32.DLL"
+    };
+    unsigned i;
+
+    head("0.15g  which text call does each drawing module actually make?");
+    say("D4 patches TextOutA and ExtTextOutA. If the module that draws a web");
+    say("page imports something else, D4 captures nothing from the one target");
+    say("it exists for. Reading an import table needs no injection.");
+    say("");
+
+    report_imports("(this exe)", GetModuleHandleA(NULL));
+    for (i = 0; i < sizeof(MODS) / sizeof(MODS[0]); i++) {
+        HMODULE m = GetModuleHandleA(MODS[i]);
+        int loadedHere = 0;
+        if (!m) { m = LoadLibraryA(MODS[i]); loadedHere = m != NULL; }
+        report_imports(MODS[i], m);
+        if (loadedHere) FreeLibrary(m);
+    }
+    say("");
+    say("  A module listing ExtTextOutW or DrawTextA and NOT the A forms is");
+    say("  a module D4 would miss. Widen the patch list, do not assume.");
+}
+
+static void probe_targeted(void)
+{
+    HMODULE dll;
+    HOOKPROC proc;
+    HANDLE map;
+    RcInShm *shm;
+    HHOOK h;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD tid = 0, pid = 0;
+    long i;
+    int mine = 0, theirs = 0, other = 0;
+
+    head("0.15f  can injection be aimed at ONE process?");
+
+    say("deny list (no force escape): EXPLORER.EXE MSGSRV32.EXE "
+        "KERNEL32.DLL MPREXE.EXE MMTASK.TSK SYSTRAY.EXE RUNDLL32.EXE");
+    say("  may_inject(notepad.exe)  = %d", may_inject("notepad.exe"));
+    say("  may_inject(C:\\WINDOWS\\EXPLORER.EXE) = %d",
+        may_inject("C:\\WINDOWS\\EXPLORER.EXE"));
+    say("  may_inject(explorer.exe) = %d  (case must not matter)",
+        may_inject("explorer.exe"));
+
+    map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                             0, sizeof(RcInShm), RC_SHM_NAME);
+    shm = map ? (RcInShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+              : NULL;
+    if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
+
+    shm->magic = RC_SHM_MAGIC;
+    shm->version = RC_SHM_VER;
+    shm->cb = sizeof(RcInShm);
+    shm->generation = GetTickCount() | 1;
+    shm->calls = 0;
+    shm->attaches = 0;
+    shm->pids_n = 0;
+    shm->patched = 0;
+    shm->draws = 0;
+    shm->ring_next = 0;
+    /* No patch target at all for this gate: the question is whether the
+     * code ARRIVES, and rewriting an import table is a separate risk that
+     * does not need to be taken to answer it. */
+    shm->patch_pid = 0;
+    shm->patch_exe[0] = '\0';
+
+    dll = LoadLibraryA("HOOKDLL.DLL");
+    if (!dll) dll = LoadLibraryA(".\\HOOKDLL.DLL");
+    if (!dll) { say("HOOKDLL.DLL not found (%lu)", GetLastError());
+                UnmapViewOfFile(shm); CloseHandle(map); return; }
+    proc = (HOOKPROC)GetProcAddress(dll, "rc_hook_proc");
+    if (!proc) proc = (HOOKPROC)GetProcAddress(dll, "_rc_hook_proc@12");
+    if (!proc) { say("rc_hook_proc not exported"); FreeLibrary(dll);
+                 UnmapViewOfFile(shm); CloseHandle(map); return; }
+
+    memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessA(NULL, "notepad.exe", NULL, NULL, FALSE, 0, NULL,
+                        NULL, &si, &pi)) {
+        say("could not start notepad (%lu)", GetLastError());
+        FreeLibrary(dll); UnmapViewOfFile(shm); CloseHandle(map); return;
+    }
+    pid = pi.dwProcessId;
+    say("notepad pid %lu", (unsigned long)pid);
+
+    /* Its window, and therefore its thread. A hook is aimed at a THREAD;
+     * there is no process-wide form. */
+    for (i = 0; i < 60 && !tid; i++) {
+        Sleep(100);
+        g_want_pid = pid; g_want_win = NULL;
+        EnumWindows(find_by_pid, 0);
+        if (g_want_win) tid = GetWindowThreadProcessId(g_want_win, NULL);
+    }
+    if (!tid) {
+        say("notepad never showed a window; cannot aim a hook");
+    } else {
+        /* WHICH hook type, measured rather than assumed.
+         *
+         * The plan named WH_CALLWNDPROC and asserted it maps into one
+         * process. On this Win98 it installs and never fires -- so the
+         * question is not "does D1 work" but "which of these delivers",
+         * and the only way to know is to try each and count. Every one is
+         * aimed at ONE THREAD; none of them is the system-wide form that
+         * put Explorer in scope. */
+        static const struct { int id; const char *name; } HOOKS[] = {
+            { WH_CALLWNDPROC,    "WH_CALLWNDPROC"    },
+            { WH_GETMESSAGE,     "WH_GETMESSAGE"     },
+            { WH_CBT,            "WH_CBT"            },
+            { WH_CALLWNDPROCRET, "WH_CALLWNDPROCRET" }
+        };
+        unsigned hk;
+        say("target thread %lu", (unsigned long)tid);
+        for (hk = 0; hk < sizeof(HOOKS) / sizeof(HOOKS[0]); hk++) {
+            long before = shm->calls;
+            long pidsBefore = shm->pids_n;
+            h = SetWindowsHookExA(HOOKS[hk].id, proc, dll, tid);
+            if (!h) {
+                say("  %-18s refused (%lu)", HOOKS[hk].name,
+                    (unsigned long)GetLastError());
+                continue;
+            }
+            /* Give the thread something to do: a sent message for the
+             * CALLWNDPROC family, and a posted one so GETMESSAGE has
+             * something to retrieve. SendMessageTimeout, never
+             * SendMessage -- this must not be able to wedge the probe. */
+            {
+                DWORD_PTR res = 0;
+                for (i = 0; i < 20; i++) {
+                    SendMessageTimeoutA(g_want_win, WM_NULL, 0, 0,
+                                        SMTO_ABORTIFHUNG, 200, &res);
+                    PostMessageA(g_want_win, WM_NULL, 0, 0);
+                    Sleep(50);
+                }
+            }
+            Sleep(300);
+            UnhookWindowsHookEx(h);
+            Sleep(200);
+            say("  %-18s installed; +%ld calls, +%ld distinct pids",
+                HOOKS[hk].name, shm->calls - before,
+                shm->pids_n - pidsBefore);
+        }
+    }
+
+    Sleep(300);
+    if (pi.hProcess) {
+        TerminateProcess(pi.hProcess, 0);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+
+    for (i = 0; i < shm->pids_n && i < 16; i++) {
+        if (shm->pids[i] == GetCurrentProcessId()) mine++;
+        else if (shm->pids[i] == pid) theirs++;
+        else { other++; say("   UNEXPECTED pid %lu ran our code",
+                            (unsigned long)shm->pids[i]); }
+    }
+    say("attaches %ld, calls %ld, distinct pids %ld "
+        "(us %d, target %d, other %d)",
+        shm->attaches, shm->calls, shm->pids_n, mine, theirs, other);
+
+    if (theirs && !other)
+        say("   -> TARGETED INJECTION WORKS: our code ran in the target and "
+            "in no other process.");
+    else if (theirs && other)
+        say("   -> it reached the target AND %d other process(es). The "
+            "'one process' claim is FALSE; D1 needs rethinking.", other);
+    else
+        say("   -> our code never ran in the target. D depends on this; "
+            "without it the whole in-process tier is unavailable.");
+
+    /* Every process that mapped us has now unmapped: the hook is gone. If
+     * a later run sees attaches climbing without a hook installed, an old
+     * copy is still resident somewhere and the section is being written by
+     * something we do not control. */
+    FreeLibrary(dll);
+    UnmapViewOfFile(shm);
+    CloseHandle(map);
+}
 
 static void probe_inject(void)
 {
     HMODULE dll;
     HOOKPROC proc;
     HANDLE map;
-    RcHookShm *shm;
+    RcInShm *shm;
     HHOOK h;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -2286,13 +2752,47 @@ static void probe_inject(void)
      * inside LoadLibrary below. Naming only ourselves is what keeps every
      * other injected process's import table untouched. */
     map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-                             0, sizeof(RcHookShm), "GastonHookShm");
-    shm = map ? (RcHookShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
+                             0, sizeof(RcInShm), RC_SHM_NAME);
+    shm = map ? (RcInShm *)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0)
               : NULL;
     if (!shm) { say("shared mapping failed (%lu)", GetLastError()); return; }
+
+    /* STAMP AND ZERO, and this is the correction that makes this gate mean
+     * anything. Nothing zeroed these before and no injected copy ever
+     * unmaps the section, so `attaches` was cumulative across every run
+     * since boot -- and the verdict below tested `attaches > 1`. It could
+     * be satisfied entirely by residue from a run that injected nothing. */
+    shm->magic = RC_SHM_MAGIC;
+    shm->version = RC_SHM_VER;
+    shm->cb = sizeof(RcInShm);
+    shm->generation = GetTickCount() | 1;
+    shm->calls = 0;
+    shm->attaches = 0;
+    shm->pids_n = 0;
+    shm->patched = 0;
+    shm->draws = 0;
+    shm->ring_next = 0;
+    say("generation %lu, counters zeroed", (unsigned long)shm->generation);
+
+    /* Pid AND name. A 9x pid is an obfuscated pointer into the process
+     * database and it is reused, so a target that exits can hand its pid
+     * to something else before we let go of it. */
     shm->patch_pid = GetCurrentProcessId();
-    say("patch target set to this process only (pid %lu)",
-        (unsigned long)shm->patch_pid);
+    {
+        char path[MAX_PATH];
+        const char *base = path;
+        int bi;
+        path[0] = '\0';
+        GetModuleFileNameA(NULL, path, sizeof(path));
+        for (bi = 0; path[bi]; bi++)
+            if (path[bi] == '\\' || path[bi] == '/' || path[bi] == ':')
+                base = &path[bi + 1];
+        for (bi = 0; bi < 31 && base[bi]; bi++)
+            shm->patch_exe[bi] = base[bi];
+        shm->patch_exe[bi] = '\0';
+    }
+    say("patch target set to this process only (pid %lu, %s)",
+        (unsigned long)shm->patch_pid, shm->patch_exe);
 
     /* The CD first, then wherever we are. On the kit both sit together. */
     dll = LoadLibraryA("HOOKDLL.DLL");
@@ -2354,16 +2854,29 @@ static void probe_inject(void)
     for (i = 0; i < shm->pids_n && i < 16; i++)
         say("   pid %lu%s", (unsigned long)shm->pids[i],
             shm->pids[i] == GetCurrentProcessId() ? "  (this one)" : "");
-    if (shm->attaches > 1)
+    /* pids_n, not attaches. `attaches` counts DllMain calls and our own is
+     * one of them; the question is whether a process that is not this one
+     * ran our code, and only the distinct-pid count answers that without
+     * being satisfiable by our own activity. */
+    if (shm->pids_n > 1)
         say("   -> INJECTION WORKS. Our code ran inside another program.");
+    else if (shm->attaches > 1)
+        say("   -> the DLL was MAPPED elsewhere but its proc never ran "
+            "there. Mapping is not execution; do not read this as yes.");
     else
         say("   -> no injection: only this process ever mapped the DLL.");
 
     /* The GDI half. This is the text an owner-drawn control paints and
      * answers no message about, so anything here is text no other tier in
      * the ladder could have got. */
+    /* SAY WHOSE. The patch target above is this very process, so every
+     * draw below was painted by the probe and captured by the probe --
+     * which proves the mechanism and proves nothing about a foreign
+     * process. Reading this as "GDI capture works" was the mistake. */
     say("IAT patch took in %ld process(es); %ld text draws seen",
         shm->patched, shm->draws);
+    say("   NOTE: the patch target is this process, so these are OUR draws.");
+    say("   Capturing a foreign process's text is untested -- see D4.");
     if (shm->draws > 0) {
         long shown = 0;
         for (i = 0; i < RC_TEXTN && shown < 12; i++) {
@@ -3228,6 +3741,8 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "events"))   probe_events();
     if (!only || !strcmp(only, "evlat"))    probe_evlat();
     if (!only || !strcmp(only, "inject"))   probe_inject();
+    if (!only || !strcmp(only, "targeted")) probe_targeted();
+    if (!only || !strcmp(only, "gditext"))  probe_gditext();
     if (!only || !strcmp(only, "waitfor"))  probe_waitfor();
 
     say("");

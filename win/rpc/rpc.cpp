@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include "rpc/rpc.h"
 #include "exec/execjob.h"
+#include "ui/uirpc.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 #include <new>
@@ -155,6 +156,17 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
         while (rc_rpc_syncq_full() && (!running || *running))
             Sleep(10);
         if (rc_rpc_submit(f) != 0) {
+            rc_frame_delete(f);
+        }
+        return RC_ROUTE_TAKEN;
+
+    case RC_LANE_DESKTOP:
+        /* Straight onto the desktop worker's message queue -- it owns one,
+         * which is the point of it, so it needs no FIFO of its own here.
+         * A refusal is ANSWERED rather than dropped: a request with no
+         * UIEND costs the bridge its whole timeout and tells it nothing. */
+        if (rc_uirpc_post(f) != 0) {
+            rc_uirpc_refuse(g_net, f, "busy");
             rc_frame_delete(f);
         }
         return RC_ROUTE_TAKEN;

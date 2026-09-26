@@ -18,11 +18,14 @@ someone's computer for the rest of the session.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from ..services.ui import UiError
+from ..wire.uiview import render_tree, to_png
 from . import prompts
 
 log = logging.getLogger("bridge.tools")
@@ -32,6 +35,18 @@ DEFAULT_TIMEOUT_MS = 20_000
 MAX_TIMEOUT_MS = 120_000
 
 
+def _ui_explain(exc: UiError) -> str:
+    """A guest status, as something the model can act on.
+
+    Every one of these says what to do next, which is why they live in
+    tools.toml with the rest of the prose the agent reads."""
+    try:
+        base = prompts.text(f"tools.ui.refused.{exc.status}")
+    except KeyError:
+        base = prompts.text("tools.ui.refused.unknown", status=exc.status)
+    return f"{base} ({exc.detail})" if exc.detail else base
+
+
 def _text(body: str, *, error: bool = False) -> dict:
     out: dict = {"content": [{"type": "text", "text": body}]}
     if error:
@@ -39,7 +54,7 @@ def _text(body: str, *, error: bool = False) -> dict:
     return out
 
 
-def build(guest_exec, sync, workspace, guest=None) -> dict:
+def build(guest_exec, sync, workspace, guest=None, ui=None) -> dict:
     """Create the `machine` server bound to THREE SERVICES and ONE GUEST.
 
     Named one by one rather than reached through something that has them. It
@@ -216,9 +231,220 @@ def build(guest_exec, sync, workspace, guest=None) -> dict:
             return _text("No path was given.", error=True)
         return _text(await sync.sync_resolve(path, action, guest))
 
+    # --- driving the screen -------------------------------------------
+    #
+    # Four tools and not eight. The waits are PARAMETERS on `ui` and
+    # `click` rather than a tool of their own: the loop an agent runs is
+    # "do a thing, then look", and folding the wait into both ends of it
+    # turns three round trips into one. Behind a socket to a 200MHz machine
+    # the round trip is the expensive part. See docs/UIAUTOMATION.md.
+
+    def _ui_ready() -> str:
+        if ui is None or guest is None:
+            return prompts.text("tools.ui.view.cannot_drive")
+        return ""
+
+    @tool(
+        "ui",
+        prompts.text("tools.ui.description"),
+        {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string",
+                          "description": prompts.text("tools.ui.args.scope")},
+                "pid": {"type": "integer",
+                        "description": prompts.text("tools.ui.args.pid")},
+                "max_nodes": {
+                    "type": "integer",
+                    "description": prompts.text("tools.ui.args.max_nodes")},
+                "msaa": {"type": "boolean",
+                         "description": prompts.text("tools.ui.args.msaa")},
+                "hidden": {"type": "boolean",
+                           "description": prompts.text("tools.ui.args.hidden")},
+                "wait_for": {
+                    "type": "string",
+                    "description": prompts.text("tools.ui.args.wait_for")},
+                "wait_ms": {
+                    "type": "integer",
+                    "description": prompts.text("tools.ui.args.wait_ms")},
+                "settle_ms": {
+                    "type": "integer",
+                    "description": prompts.text("tools.ui.args.settle_ms")},
+                "inproc": {
+                    "type": "boolean",
+                    "description": prompts.text("tools.ui.args.inproc")},
+                "target": {
+                    "type": "string",
+                    "description": prompts.text("tools.ui.args.target")},
+            },
+            "required": [],
+        },
+    )
+    async def machine_ui(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            scope = str(a.get("scope") or "desktop").strip().lower()
+            if scope not in ("desktop", "foreground", "pid"):
+                return _text(prompts.text("tools.ui.view.bad_scope",
+                                          scope=repr(scope)), error=True)
+            nodes, headers = await ui.tree(
+                guest,
+                scope=scope,
+                pid=int(a.get("pid") or 0),
+                max_nodes=max(1, min(int(a.get("max_nodes") or 400), 4000)),
+                msaa=bool(a.get("msaa")),
+                hidden=bool(a.get("hidden")),
+                wait_for=str(a.get("wait_for") or ""),
+                wait_ms=max(100, min(int(a.get("wait_ms") or 5000), 60000)),
+                settle_ms=max(0, min(int(a.get("settle_ms") or 0), 5000)),
+                inproc=bool(a.get("inproc")),
+                target=str(a.get("target") or ""),
+            )
+            return _text(render_tree(nodes, headers))
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__ui failed: %r", args)
+            raise
+
+    @tool(
+        "click",
+        prompts.text("tools.click.description"),
+        {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": prompts.text("tools.click.args.target")},
+                "double": {
+                    "type": "boolean",
+                    "description": prompts.text("tools.click.args.double")},
+                "settle": {
+                    "type": "integer",
+                    "description": prompts.text("tools.click.args.settle")},
+            },
+            "required": ["target"],
+        },
+    )
+    async def machine_click(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            target = str(a.get("target") or "").strip()
+            if not target:
+                return _text(prompts.text("tools.ui.refused.no_target"),
+                             error=True)
+            await ui.click(guest, target, double=bool(a.get("double")),
+                           settle=max(0, min(int(a.get("settle") or 0), 5000)))
+            return _text(prompts.text("tools.ui.view.clicked",
+                                      target=target))
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__click failed: %r", args)
+            raise
+
+    @tool(
+        "keys",
+        prompts.text("tools.keys.description"),
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string",
+                         "description": prompts.text("tools.keys.args.text")},
+                "target": {
+                    "type": "string",
+                    "description": prompts.text("tools.keys.args.target")},
+                "settle": {
+                    "type": "integer",
+                    "description": prompts.text("tools.keys.args.settle")},
+            },
+            "required": ["text"],
+        },
+    )
+    async def machine_keys(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            text = str(a.get("text") or "")
+            if not text:
+                return _text(prompts.text("tools.ui.refused.no_text"),
+                             error=True)
+            await ui.keys(guest, text, target=str(a.get("target") or ""),
+                          settle=max(0, min(int(a.get("settle") or 0), 5000)))
+            where = a.get("target") or "the focused control"
+            return _text(prompts.text("tools.ui.view.typed",
+                                      n=len(text), where=where))
+        except UnicodeEncodeError:
+            # fold.encode_exact refuses rather than approximating. Typing an
+            # approximation of what was asked for is how the wrong thing
+            # ends up in somebody's file.
+            return _text(prompts.text("tools.ui.view.bad_character"),
+                         error=True)
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__keys failed: %r", args)
+            raise
+
+    @tool(
+        "shot",
+        prompts.text("tools.shot.description"),
+        {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.x")},
+                "y": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.y")},
+                "w": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.w")},
+                "h": {"type": "integer",
+                      "description": prompts.text("tools.shot.args.h")},
+            },
+            "required": [],
+        },
+    )
+    async def machine_shot(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            bmp, headers = await ui.shot(
+                guest,
+                x=max(0, int(a.get("x") or 0)), y=max(0, int(a.get("y") or 0)),
+                w=max(0, int(a.get("w") or 0)), h=max(0, int(a.get("h") or 0)))
+            png = to_png(bmp)
+            if png is None:
+                return _text(
+                    prompts.text("tools.ui.view.no_image",
+                                 w=headers.get("w"), h=headers.get("h"),
+                                 bpp=headers.get("bpp"), size=len(bmp)),
+                    error=True)
+            return {"content": [{
+                "type": "image",
+                "data": base64.b64encode(png).decode("ascii"),
+                "mimeType": "image/png",
+            }]}
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__shot failed: %r", args)
+            raise
+
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
-                                          machine_sync_resolve])
+                                          machine_sync_resolve,
+                                          machine_ui, machine_click,
+                                          machine_keys, machine_shot])
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

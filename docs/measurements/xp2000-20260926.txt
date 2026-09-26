@@ -1,0 +1,134 @@
+# AMD Athlon XP 2000+, 256MB, Win98 SE 4.10.2222 A. 2026-09-26.
+# The same binary and the same steps as p200-run2, with Display Properties
+# open for the last two, so the two files compare directly.
+#
+# THE ANSWER, and it is the one that costs work: MSAA DOES NOT GET FASTER
+# ON A FASTER MACHINE. Role over ~80 windows took 250ms on the P200 and
+# 289ms here, while inflate went from 9036 to 37437 KB/s -- about 4x the
+# CPU for no improvement at all. The cost is the process boundary, not the
+# processor, so batching can only reduce the NUMBER of crossings and
+# in-process injection is the only thing that removes them.
+#
+# ^ WRONG, and retracted on 2026-09-26. Those are two numbers from two
+#   different runs on two desktops with different window counts, which is
+#   the comparison this very file warns about four paragraphs down. Inside
+#   this file, 0.13b E is 88ms where the P200 was 467ms -- 5.3x -- and
+#   0.13f C is 463us/node where the P200 was 2555. MSAA DOES scale, by
+#   roughly 2 to 5x. See docs/UIAUTOMATION.md, "And this document broke its
+#   own rule". The case for injection stands on LB_GETTEXT and friends not
+#   being marshalled at all, which no clock speed changes.
+#
+# AUTOCHK: 60 of 60, as on the P200.
+#
+# READ THE TIMINGS WITH CARE. GetTickCount ticks at ~55ms and this machine
+# puts most of these operations under that: "2 ms" for 79 nodes and the
+# level-6 deflate's "1ms / 262064 KB/s" are resolution artifacts, not
+# measurements. The numbers safely above the tick are MSAA role (289ms),
+# the three traversals (223 / 830 / 113ms) and inflate.
+#
+# The two machines also DISAGREE about AccessibleChildren versus
+# IEnumVARIANT -- B beat C on the P200, C beat B by 7x here. The P200 has
+# AutoPatcher applied and this one may not, so the oleacc implementations
+# are not necessarily the same. Try the enumerator, fall back to the
+# helper; do not hard-code either.
+
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.7  platform / W-suffix imports ===
+PASS: the image loaded, so GetCommandLineW and GetModuleFileNameW
+      resolved against this kernel32.
+GetVersion      : C0000A04  (4.10)
+family          : Win9x
+build           : 4.10.2222  ' A '
+physical memory : 261588 KB total, 100208 KB free
+page file       : 1745440 KB free
+free resources  : system 74%, GDI 86%, USER 74%
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.5c  deflate throughput on this CPU ===
+sample         : 262064 bytes of mixed prose and code
+level 1 deflate: 262064 -> 1599 (163.89:1) in 184ms  = 1424 KB/s
+level 6 deflate: 262064 -> 1287 (203.62:1) in 1ms  = 262064 KB/s
+inflate        : 1599 -> 262064 in 7ms = 37437 KB/s  (rc=0)
+round trip     : PASS
+
+  At ~750 KB/s LAN, compression is worth it only if the deflate
+  rate above comfortably exceeds it. At ~5 KB/s dialup it always is.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.13e  where MSAA's time actually goes ===
+timing the first 10 visible windows of 50
+A create+release only : 1 ms total, 0 ms/node
+B create, OBJID_WINDOW: 2 ms total, 0 ms/node
++ role            : 2 ms total, 0 ms/node
++ name            : 4 ms total, 0 ms/node
++ value           : 2 ms total, 0 ms/node
+F one parent + children: 13 ms for 92 children (0 ms each)
+(warm: a discarded pass runs before any of these)
+A high, properties near zero -> create ONE object per parent.
+A low, a property high       -> fetch only what was asked for.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.13f  three traversals, same desktop ===
+desktop has 50 visible windows by EnumWindows
+A per-HWND        : 50 nodes in 223 ms (4460 us/node)
+B AccessibleChildren: 251 nodes in 830 ms (3306 us/node)
+C IEnumVARIANT::Next: 244 nodes in 113 ms (463 us/node)
+desktop offers IEnumVARIANT : yes
+node counts differ on purpose: A sees windows, B and C see the
+accessible tree, which includes simple elements with no HWND.
+On the P200: B beat C. Prefer AccessibleChildren; the saving is
+the single root, not the enumerator.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.15e  WaitForControl / WaitForText, actually run ===
+WaitForControl(.Notepad)      : 15 ms, 4 rechecks
+WaitForText(.Notepad,'Notepad'): 0 ms, 1 rechecks
+WaitForControl(absent), 1500ms: -1 ms, 2 rechecks  (-1 = timed out)
+WaitForGone(.Notepad)         : 2 ms, 2 rechecks
+(rechecks well under a poll count means the feed drove the wait)
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.13g  what Win32 can answer without COM at all ===
+79 visible windows
+style-derived role : 43 of 79 classified in 2 ms (25 us/node)
+BM_GETCHECK        : 4 checkable, 2 checked
+MSAA role, same set: 79 of 79 in 289 ms (3658 us/node)
+unclassified are custom classes, where MSAA is the only source.
+
+=== done -- results also in PROBE.LOG ===
+RetroClaude Phase 0 probe
+results are appended to PROBE.LOG beside this exe
+built Sep 26 2026 02:51:14
+
+=== 0.13b  what a TREE walk costs, one column at a time ===
+A enum only    : 79 nodes, 0 ms/walk
+B + class      : 8 ms/walk
+C + text 2000ms: 5 ms total, 0 timed out
+D + text 200ms : 5 ms total, 0 timed out
+E + msaa       : 88 ms total, 79 objects, 53 named
+   (55ms tick: A and B are over 20 repeats and divided)
+
+=== done -- results also in PROBE.LOG ===

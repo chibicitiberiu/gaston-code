@@ -123,6 +123,8 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 # libcore only: it knows nothing of the wire, and turning a tree into
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
 AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp \
+                  automation/resolve.cpp automation/watch.cpp \
+                  automation/wait.cpp automation/calldeadline.cpp \
                   automation/input.cpp automation/msaa.cpp \
                   automation/shot.cpp
 LIBAUTOMATION = $(LIBDIR)/libautomation.lib
@@ -138,10 +140,13 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
-       rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
-OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
+       rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp \
+       ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
+# libautomation before libwire before libexec before libcore: the first three
+# call into libcore, and wlink resolves in the order the libraries are named.
+OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 
-.PHONY: execcheck execprobe autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: execcheck execprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -243,6 +248,14 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 # libautomation's selector grammar and tree walker. Links the library, so
 # what is tested is what would ship. Wine settles the grammar completely
 # (it is string work) and only proves the walk does not crash.
+UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp ui/inject.cpp) \
+               $(LIBAUTOMATION) $(LIBCORE)
+uicheck: $(BUILD)/uicheck.exe
+$(BUILD)/uicheck.exe: $(UICHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0, \
+	  map=$(BUILD)/uicheck.map $(LIBS) name $@ $(LINKIN)
+	@echo "built $@"
+
 AUTOCHECK_OBJS = $(call objs,checks/autocheck.cpp) $(LIBAUTOMATION) $(LIBCORE)
 autocheck: $(BUILD)/autocheck.exe
 $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
@@ -255,8 +268,8 @@ $(BUILD)/autocheck.exe: $(AUTOCHECK_OBJS)
 # rather than `nt`, and the hook proc is exported by name because
 # SetWindowsHookEx needs a procedure address the system can resolve inside
 # every process it injects into. 8.3 name: it rides the same CD and kit as
-# everything else. See win/checks/hookdll.c for what it measures.
-HOOKDLL_OBJS = $(call objs,checks/hookdll.c)
+# everything else. See win/inproc/hookdll.c for what it measures.
+HOOKDLL_OBJS = $(call objs,inproc/hookdll.c inproc/collect.c)
 hookdll: $(BUILD)/HOOKDLL.DLL
 $(BUILD)/HOOKDLL.DLL: $(HOOKDLL_OBJS)
 	@$(WLINK) system nt_dll option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -357,7 +370,8 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
+                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp) \
+                $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -370,7 +384,8 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
+                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp) \
+                $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)

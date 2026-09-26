@@ -39,6 +39,7 @@ from .services.presentation import PresentationService
 from .services.session import SessionService
 from .services.sync import SyncService
 from .services.turn_runner import TurnRunner, turn_verdict
+from .services.ui import UiService
 from .services.workspace import WorkspaceService
 from .view import html as H
 from .view.html import APPEND
@@ -153,6 +154,7 @@ class Bridge:
             spawn=self._spawn,
             pre_exec=self._pre_exec,
         )
+        self.ui = UiService(connection=self.connection)
         self.permissions = PermissionService(
             connection=self.connection,
             presentation=self.presentation,
@@ -178,6 +180,7 @@ class Bridge:
             options=self.options,
             guest_exec=self.guest_exec,
             sync=self.sync,
+            ui=self.ui,
             conv=self.conv,
             spawn=self._spawn,
         )
@@ -225,6 +228,9 @@ class Bridge:
             "SYNCDATEND":   self.sync.sync_frame,
             "EXECOUT":      self.guest_exec.exec_out,
             "EXECRESULT":   self.guest_exec.exec_result,
+            "UIENT":        self.ui.ui_frame,
+            "UIDAT":        self.ui.ui_frame,
+            "UIEND":        self.ui.ui_frame,
             "PERMREPLY":    self.permissions.reply,
             "GETSESSIONS":  self.session.on_getsessions,
             "GETPAGE":      self.presentation.on_getpage,
@@ -451,6 +457,10 @@ class Bridge:
             guest,
             "The connected machine disconnected while this command was "
             "running. It may or may not have completed.",
+        )
+        self.ui.fail_calls(
+            guest,
+            "The connected machine disconnected while this was running.",
         )
 
 

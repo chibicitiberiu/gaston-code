@@ -42,6 +42,7 @@ static const char *lane_name(rc_lane l)
     case RC_LANE_JOB:       return "JOB";
     case RC_LANE_STREAM:    return "STREAM";
     case RC_LANE_IMMEDIATE: return "IMMEDIATE";
+    case RC_LANE_DESKTOP:   return "DESKTOP";
     default:                return "?";
     }
 }
@@ -108,6 +109,18 @@ static void lane_table_cases(void)
     check_lane("SYNCPUTEND", RC_LANE_STREAM);
     check_lane("SYNCMKDIR",  RC_LANE_STREAM);
     check_lane("SYNCGET",    RC_LANE_STREAM);
+    /* Phase 6. Named one by one in the table rather than matched on a "UI"
+     * prefix, so this is four assertions and not one. */
+    check_lane("UITREE",     RC_LANE_DESKTOP);
+    check_lane("UICLICK",    RC_LANE_DESKTOP);
+    check_lane("UIKEYS",     RC_LANE_DESKTOP);
+    check_lane("UISHOT",     RC_LANE_DESKTOP);
+    /* And the rule that makes the desktop lane safe to add: the reply types
+     * the GUEST sends must never be routed back INTO it. A prefix rule
+     * would have claimed all three. */
+    check_lane("UIENT",      RC_LANE_UI);
+    check_lane("UIDAT",      RC_LANE_UI);
+    check_lane("UIEND",      RC_LANE_UI);
     /* Everything else is the UI thread's, including a type nobody has heard
      * of -- an unrecognised frame must never fall into a worker lane and be
      * silently eaten before render_frame's own "unhandled" branch sees it. */

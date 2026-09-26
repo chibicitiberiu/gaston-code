@@ -42,3 +42,154 @@ Do not call this to make an error go away. Call it once you have read the preser
 [sync_resolve.args]
 action = '''
 release (default) -- lift the write refusal on this path, having merged; accept-revert -- the user really did undo your change, so take their version and discard yours; accept-tree -- answers a whole-pass refusal, takes no path; forget -- stop tracking a path that is gone from both sides and should not come back.'''
+
+[ui]
+description = '''
+Read the controls on the machine's screen: windows, buttons, text boxes, menus, and what they say. Returns one line per control with a `sel=` selector you pass to `click` and `keys`.
+
+Prefer this over `shot`. It is far cheaper, it is exact, and it gives you something you can click; a picture gives you neither a name nor a guarantee. Reach for `shot` when this comes back with almost nothing, which means the program draws itself rather than using controls.
+
+Start with `scope="foreground"` -- the window the person is looking at -- and widen to `desktop` only when you need to find something else.'''
+
+[ui.args]
+scope = '''
+`foreground` for the active window and its controls, `desktop` for everything on screen, or `pid` with a process id. Default `desktop`.'''
+pid = '''
+With `scope="pid"`, the process to read. From the process list.'''
+max_nodes = '''
+Stop after this many controls. Default 400. A busy desktop is around 80; a file list can be thousands, and reading all of them is slow and rarely what you wanted.'''
+msaa = '''
+Also ask the accessibility layer for each control's name, state and default action. OFF by default and worth leaving off: it is a separate call into another program per control and costs roughly as much as everything else put together. Turn it on when you need to know whether a checkbox is ticked, or when a control has no text of its own.'''
+hidden = '''
+Include windows that are not on screen. Off by default, and not merely for speed: asking about a hidden window can bring it to life -- the Start menu once ended up painted on screen with nothing owning it.'''
+wait_for = '''
+A selector to wait for before reading. Use this instead of reading, finding nothing, and reading again: the machine is slow and a dialog may take a second to appear. Waits on the change feed rather than polling, so it costs almost nothing.'''
+wait_ms = '''
+How long `wait_for` may wait, in milliseconds. Default 5000.'''
+settle_ms = '''
+Wait for the screen to stop changing for this many milliseconds before reading. Useful right after a click, while a window is still being drawn. Costs nothing -- it watches rather than looks.'''
+inproc = '''
+Read the window from INSIDE the program that owns it. The only way to get the contents of a list box, a tree or a file list: those are unreachable from outside on this machine, at any speed. Costs more and is refused for the shell and the system processes, so ask for it when you need a list's rows and not otherwise. It never falls back quietly -- if it is refused you are told, because the ordinary answer would be missing exactly what you asked for.'''
+target = '''
+With `inproc`, a selector for a window belonging to the program to read. Defaults to whatever is in front.'''
+items = '''
+With `inproc`, read the rows of lists and trees. On by default, since it is the reason to use it.'''
+
+
+[click]
+description = '''
+Click one control on the machine, named by the `sel=` value that `ui` reported for it.
+
+If more than one control matches, nothing is clicked and you are told how many -- pick one deliberately by adding `:nth(2)` to the selector rather than hoping. The click is a real mouse click at the control's position, and it is refused if something else is covering it.'''
+
+[click.args]
+target = '''
+The selector, copied from the `sel=` field of the control you want. For example `[class="#32770"] > Button[text="OK"]`.'''
+double = '''
+Double-click instead of single. For opening an icon in a list.'''
+settle = '''
+After clicking, wait for the screen to stop changing for this many milliseconds. Saves a round trip when the click opens a dialog you are about to read.'''
+
+[keys]
+description = '''
+Type text on the machine, into a named control or into whatever has focus.
+
+This is real typing, one key at a time, so it goes wherever the keyboard would. After clicking a text box, call this with no target.'''
+
+[keys.args]
+text = '''
+The text to type. Plain characters plus Tab, Enter, Escape and the arrow keys.'''
+target = '''
+Optional selector for the control to type into; it is focused first. Leave empty to type into whatever has focus.'''
+settle = '''
+After typing, wait for the screen to stop changing for this many milliseconds.'''
+
+[shot]
+description = '''
+Take a picture of the machine's screen.
+
+Use it when `ui` comes back with nothing useful -- a program that draws its own interface, a game, an installer that is one big window -- or when you need to see what something looks like rather than what it is called. For finding and clicking a control, `ui` is cheaper and exact.'''
+
+[shot.args]
+x = '''
+Left edge of the area to capture. Default 0.'''
+y = '''
+Top edge. Default 0.'''
+w = '''
+Width of the area, from `x`. Default 0, meaning the whole screen.'''
+h = '''
+Height of the area, from `y`. Default 0, meaning the whole screen.'''
+
+# What a refusal from the machine means, in words rather than a status code.
+# The model reads these and has to know what to do next, so every one says
+# that. Keyed by the status the guest sends in its UIEND.
+[ui.refused]
+ambiguous = '''
+More than one control matches that selector, so nothing was done. Add :nth(n) to pick one deliberately -- the count is above.'''
+not_found = '''
+Nothing on screen matches that selector. Read the screen again: it may have changed, or the window may not be open.'''
+truncated = '''
+The screen could not be read all the way through in the time allowed, so this answer may be incomplete. Narrow the scope, or try again.'''
+bad_selector = '''
+That selector does not parse.'''
+no_target = '''
+No control was named.'''
+refused_self = '''
+That control belongs to this program's own window, which it will not click or type into.'''
+occluded = '''
+Something else is on top of that control, so the click was refused rather than delivered to whatever is there. Bring the window forward first.'''
+not_foreground = '''
+The window would not come to the front, so nothing was typed -- it would have gone somewhere else.'''
+no_window = '''
+That window is gone.'''
+no_text = '''
+No text was given.'''
+no_memory = '''
+The machine ran out of memory doing that.'''
+busy = '''
+The machine is already doing something on screen. Try again.'''
+stopping = '''
+The machine is shutting down.'''
+timeout = '''
+The machine did not answer in time.'''
+disconnected = '''
+The machine disconnected.'''
+inproc_unavailable = '''
+The in-process reader could not be set up on this machine.'''
+denied = '''
+That program may not be read from the inside -- it is the shell or a system process, and there is no override. Read it from the outside instead, without `inproc`.'''
+no_dll = '''
+The in-process reader is not installed on that machine.'''
+hook_refused = '''
+The machine would not let us into that program.'''
+no_reply = '''
+We got into that program and it never answered. Read it from the outside instead, without `inproc`.'''
+unknown = '''
+The machine refused: {status}.'''
+
+# Lines the model reads in a tree listing. The warnings come FIRST in the
+# output, because a short list read as a complete one is how an agent
+# concludes a control is not there.
+[ui.view]
+empty = '''
+Nothing on screen answered. Either no windows match, or this program draws itself rather than using controls -- try `shot`.'''
+incomplete = '''
+! The screen could not be read all the way through in the time allowed. This list is incomplete.'''
+at_limit = '''
+! Stopped at the {n}-control limit. Narrow the scope or raise max_nodes.'''
+dropped = '''
+! {n} control(s) would not fit and were left out.'''
+too_deep = '''
+! {n} nested control(s) were deeper than the walk follows.'''
+no_image = '''
+Captured {w}x{h} at {bpp}bpp, {size} bytes, but this bridge cannot convert it to an image.'''
+bad_character = '''
+That text contains a character this machine's character set cannot represent, so nothing was typed.'''
+cannot_drive = '''
+This machine cannot be driven from here.'''
+bad_scope = '''
+Unknown scope {scope}; use desktop, foreground or pid.'''
+clicked = '''
+Clicked {target}.'''
+typed = '''
+Typed {n} characters into {where}.'''
