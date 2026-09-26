@@ -1370,6 +1370,14 @@ client as `stopLeaked`. Nothing found from user mode ends a DOS program in
 its VM cleanly; it would take VMM's own VM termination (a VxD). A DOS
 program that ends by itself leaks nothing.
 
+**Accepted as-is, by decision 2026-09-27.** Research found no existing
+helper: Emacs gives up on killing DOS subprocesses on 95, Python's
+`w9xpopen` is the console stub that only moves the zombie, and Tcl avoids
+the problem by never running one against a live pipe. The only real
+mechanism is VMM's `Close_VM`/`Nuke_VM`, callable from a VxD alone. If
+forced DOS stops turn out common, the next step is a time-boxed dynamically
+loaded VxD prototype (joncampbell123/doslib has Win9x VMM headers).
+
 **Open risk, one sighting:** the guest wedged in ring 0 as a Toolhelp32
 snapshot was taken (`EXECPRB --list`) on a box holding 3 of these zombies
 (`docs/measurements/wedge-vm-20260927.txt`). Against it: the same `--list`
