@@ -372,3 +372,11 @@ def test_the_block_sits_above_the_hardware_section():
     "how do I do this"; the hardware notes answer "do it sparingly"."""
     out = system_prompt(HELLO, "/w", tools=[SHELL, WATCOM])
     assert out.index("What is installed") < out.index("Keep the old machine")
+
+
+def test_a_machine_with_no_shell_is_told_so():
+    """Without it every command was spawned bare in silence and `ver` failed
+    to start with nothing saying why (BACKLOG 17)."""
+    out = tools_block([WATCOM])
+    assert "reported no shell" in out
+    assert "reported no shell" not in tools_block([SHELL, WATCOM])

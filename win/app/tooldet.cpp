@@ -107,12 +107,20 @@ void do_section(scan *s, const char *ini, const char *name)
     }
 }
 
-void do_ini(scan *s, const char *ini)
+void do_ini(scan *s, const char *ini, bool required)
 {
     const char *p;
     int n = 0;
 
-    if (GetFileAttributesA(ini) == 0xFFFFFFFF) return;
+    if (GetFileAttributesA(ini) == 0xFFFFFFFF) {
+        /* The shipped one is logged: without it the bridge hears of no
+         * shell and runs every command bare -- a client copied without its
+         * INI (BACKLOG 17). The user's own is optional. */
+        if (required)
+            rc_log("tooldet: %s not found; no tool, and no shell, will be "
+                   "reported", ini);
+        return;
+    }
     if (!read_sections(ini, g_sections, sizeof(g_sections))) return;
 
     for (p = g_sections; *p && !s->stop; p += strlen(p) + 1) {
@@ -175,9 +183,9 @@ int rc_tooldet_run(const char *exe_dir, rc_tooldet_sink sink, void *ctx)
      * in `tools.ini` is read after the shipped one, so the bridge sees the
      * user's answer last and can prefer it. */
     if (rc_strf(ini, sizeof(ini), "%s\\tools_detect.ini", exe_dir))
-        do_ini(&s, ini);
+        do_ini(&s, ini, true);
     if (rc_strf(ini, sizeof(ini), "%s\\tools.ini", exe_dir))
-        do_ini(&s, ini);
+        do_ini(&s, ini, false);
 
     SetErrorMode(old);
     rc_log("tooldet: %d fact(s)", s.emitted);

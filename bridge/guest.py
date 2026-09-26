@@ -35,6 +35,10 @@ class ExecCall:
     out: bytearray = field(default_factory=bytearray)
     killed: bool = False
     capped: bool = False
+    #: Spawned with no shell because the machine reported none (not because
+    #: the agent asked for `shell: "none"`). A built-in like `ver` then fails
+    #: to start with nothing saying why -- BACKLOG 17.
+    no_shell: bool = False
 
 
 @dataclass

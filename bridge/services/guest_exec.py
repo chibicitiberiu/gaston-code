@@ -11,7 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
-from ..agent import toolrules
+from ..agent import prompts, toolrules
 from ..guest import ExecCall, GuestSession
 from ..status import EXEC_STATUS_PROSE, ExecStatus
 from ..wire import fold
@@ -73,6 +73,7 @@ class GuestExecService:
             }
 
         prefix = ""
+        no_shell = False
         want = (shell or "").strip()
         if want.lower() != "none":
             usable = toolrules.usable_shells(guest.tools)
@@ -105,6 +106,8 @@ class GuestExecService:
                 prefix = (
                     toolrules.shell_command(guest.tools, usable[0].name) or ""
                 )
+            else:
+                no_shell = True
 
         async with guest.exec_lock:
             if not guest.link.connected:
@@ -123,7 +126,7 @@ class GuestExecService:
             guest.exec_seq += 1
             exec_id = f"x{guest.exec_seq}"
             fut = asyncio.get_running_loop().create_future()
-            guest.exec_pending[exec_id] = ExecCall(future=fut)
+            guest.exec_pending[exec_id] = ExecCall(future=fut, no_shell=no_shell)
 
             for label, value in (("command", command), ("cwd", cwd)):
                 bad = fold.unrepresentable(value)
@@ -249,6 +252,8 @@ class GuestExecService:
         prose = EXEC_STATUS_PROSE.get(status)
         if prose:
             parts.append(prose.format(max_cmd=self.EXEC_MAX_CMD))
+        if entry.no_shell and status == ExecStatus.SPAWN_FAILED:
+            parts.append(prompts.text("tools.exec.notes.no_shell").strip())
         # Through COMMAND.COM /c on Windows 98 `code` is ALWAYS 0, even for a
         # program that does not exist (measured: win/checks/execprobe.cpp,
         # docs/measurements/execprobe-vm-gui-20260926.txt); a program spawned

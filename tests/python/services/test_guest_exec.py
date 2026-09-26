@@ -129,3 +129,29 @@ async def test_fail_execs(mock_conn, mock_guest):
     assert res.get("isError") is True
     assert "Connection lost" in res["content"][0]["text"]
     assert len(mock_guest.exec_pending) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_bare_spawn_failure_says_there_was_no_shell(mock_conn, mock_guest):
+    """No shell reported and none named: `ver` is spawned as a program and
+    fails, and the result has to say why (BACKLOG 17)."""
+    svc = GuestExecService(connection=mock_conn)
+    mock_guest.tools = []
+
+    async def simulate_guest():
+        while not mock_guest.exec_pending:
+            await asyncio.sleep(0.005)
+        exec_id = next(iter(mock_guest.exec_pending.keys()))
+        assert mock_guest.exec_pending[exec_id].no_shell
+        await svc.exec_result(
+            mock_guest,
+            Frame("EXECRESULT", {"id": exec_id, "status": "spawn_failed"}),
+        )
+
+    task = asyncio.create_task(
+        svc.run_on_guest("ver", timeout_ms=5000, shell="", cwd="",
+                         guest=mock_guest))
+    sim = asyncio.create_task(simulate_guest())
+    res = await task
+    await sim
+    assert "reported no shell" in res["content"][0]["text"]

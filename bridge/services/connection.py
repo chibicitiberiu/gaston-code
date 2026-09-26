@@ -211,6 +211,10 @@ class ConnectionService:
                 "machine has: %s",
                 ", ".join(f"{f.name} ({f.path})" for f in guest.tools),
             )
+        if not toolrules.usable_shells(guest.tools):
+            log.warning(
+                "machine reported no shell: every exec will be spawned bare "
+                "(a client run without its tools_detect.ini does this)")
 
         guest.set_link_speed(self.config.link_bps)
 

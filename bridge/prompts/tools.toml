@@ -25,6 +25,14 @@ Which of the connected machine's shells to run the command through. The system p
 cwd = '''
 Working directory on the connected machine. Optional -- leave it out and the command runs in this conversation's own folder on that machine, which is where your files arrive.'''
 
+# Added to a result, not the tool description: read only when they apply.
+[exec.notes]
+# A command that failed to start when the machine reported no shell, so it
+# was spawned as a program: `ver` fails with nothing saying why otherwise
+# (BACKLOG 17).
+no_shell = '''
+The machine reported no shell, so this ran as a program directly: shell built-ins (dir, ver, copy) and redirection cannot work. Name a program by its path.'''
+
 [sync_status]
 description = '''
 Report the state of file synchronisation with the connected machine: which of your files could not be copied there and why, which are in conflict, and which are currently refusing your writes.

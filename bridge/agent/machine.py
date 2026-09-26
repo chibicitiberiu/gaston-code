@@ -160,6 +160,16 @@ def tools_block(found: list, path: list | None = None) -> str:
             "gives cleaner quoting and loses every built-in and all",
             "redirection.",
         ]
+    else:
+        # Said, because the alternative is silent: with no shell every
+        # command is spawned bare, and `ver` fails to start with nothing
+        # saying why (BACKLOG 17).
+        out += [
+            "",
+            "That machine reported no shell, so `exec` starts programs",
+            "directly: shell built-ins (`dir`, `ver`, `copy`) and redirection",
+            "will not work. Name a program by its path.",
+        ]
 
     # THE PATH, STATED, because `Bad command or file name` names the PROGRAM
     # and not the environment -- three separate sessions read that as "the
@@ -167,7 +177,7 @@ def tools_block(found: list, path: list | None = None) -> str:
     # what the inventory above exists to prevent.
     #
     # PRINTED FROM DETECTION, never asserted: `exec` inherits the client's
-    # environment (CreateProcessA with lpEnvironment=NULL, win/rpc/exec.cpp),
+    # environment (CreateProcessA with lpEnvironment=NULL, win/exec/execjob.cpp),
     # so this PATH can change between two sessions on the same machine (e.g.
     # installing a toolchain that edits AUTOEXEC.BAT). A measurement has a
     # shelf life; printing the live value has none.
