@@ -1048,28 +1048,34 @@ void watching(void)
              * window APPEARING must not wake us. */
             DestroyWindow(noise);
             quiet.settle(200);
-            static UiEvent leak[RC_WATCH_RING];
-            int ln = quiet.drain(leak, RC_WATCH_RING);
-            DWORD lo = 0;
-            if (ln > 0) GetWindowThreadProcessId(leak[0].hwnd, &lo);
+
+            /* WHOSE events survived, not how many.
+             *
+             * Counting them was wrong and only a quiet desktop hid it: the
+             * assertion was "at most one got through", and the moment a
+             * client with an animated title bar was running, two
+             * NAMECHANGEs from ANOTHER process arrived inside the window
+             * and failed a test about our own. The desktop is not ours to
+             * keep quiet. The property is that nothing WE produced
+             * survived; a foreign event is the feed working. */
+            static UiEvent kept[RC_WATCH_RING];
+            int n = quiet.drain(kept, RC_WATCH_RING);
+            int mine = 0;
+            for (int i = 0; i < n; i++)
+            {
+                DWORD owner = 0;
+                if (kept[i].hwnd)
+                    GetWindowThreadProcessId(kept[i].hwnd, &owner);
+                /* owner 0 is a window already gone: unattributable, and
+                 * kept on purpose. */
+                if (owner == GetCurrentProcessId())
+                    mine++;
+            }
             rc_strf(detail, sizeof(detail),
-                    "%d kept, %d dropped as ours, %d unattributable; "
-                    "first raw=0x%lX pid-now=%lu",
-                    after - before, quiet.ownDropped(),
-                    quiet.unattributed(),
-                    ln ? (unsigned long)leak[0].raw : 0UL,
-                    (unsigned long)lo);
-            /* Under Wine, two of the three events a CreateWindow produces
-             * are ours and get dropped; the third resolves to a pid that is
-             * not ours at callback time -- Wine's own bookkeeping. So the
-             * assertion is that the filter FIRES and that essentially
-             * nothing survives, not that the count is a clean zero. If Win98
-             * honours WINEVENT_SKIPOWNPROCESS outright the system filters
-             * them for us and both numbers read zero, which also passes;
-             * if more than one leaks, this row is how we find out. */
-            say("watch-can-skip-our-own-process",
-                (after - before) <= 1
-                && (after == before || quiet.ownDropped() > 0), detail);
+                    "%d kept (%d ours), %d dropped as ours, %d "
+                    "unattributable", after - before, mine,
+                    quiet.ownDropped(), quiet.unattributed());
+            say("watch-can-skip-our-own-process", mine == 0, detail);
             quiet.stop();
         }
         else

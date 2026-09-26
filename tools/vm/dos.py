@@ -89,6 +89,110 @@ def find_caption(im):
     return None if best is None else (best[1], best[2])
 
 
+def start_menu_open(im=None) -> bool:
+    """Is the Start menu up?
+
+    It is, sometimes, and for a while nothing here could tell. The menu puts
+    its dark blue "Windows 98" sidebar down the left edge where the desktop
+    teal was: teal is (0,120,120) and the sidebar runs (0,0,120) to
+    (0,0,248).
+
+    A COLUMN, not a pixel. The first version sampled (10,150) alone, which
+    is inside the sidebar when the menu is at the top of the screen and
+    teal when it is at the bottom -- and it has been seen in both places on
+    this guest. So it reported "no menu" with the menu plainly open, which
+    is the one answer a guard like this must never give.
+
+    Worth having on its own terms. With the menu open the DOS box is not
+    focused, so `focus` clicks MORE taskbar positions -- each one now landing
+    on a menu that is covering them -- and whatever `run` types next goes to
+    the shell. A command typed at the desktop is mostly harmless and a
+    command typed at a focused Start button is not: Enter opens the menu
+    again, and Enter on a highlighted item runs it.
+    """
+    if im is None:
+        im = shot()
+    h = im.size[1]
+    band = 0
+    for y in range(0, h - 20, 2):
+        r, g, b = im.getpixel((10, y))[:3]
+        if r < 40 and g < 40 and b > 80:
+            band += 2
+    #: The sidebar is about 330px tall. Half of that is a comfortable
+    #: threshold and well clear of anything else that is blue at x=10.
+    return band >= 150
+
+
+def dismiss_start_menu() -> bool:
+    """Escape out of it. True if the screen is clear afterwards."""
+    for _ in range(3):
+        if not start_menu_open():
+            return True
+        subprocess.run(["python3", f"{HERE}/qmp.py", "key", "esc"],
+                       check=True, capture_output=True)
+        time.sleep(0.8)
+    return not start_menu_open()
+
+
+def find_console(im):
+    """The centre of the DOS box's black client area, or None.
+
+    Clicking here is how `focus` raises the window in the ordinary case, and
+    it is a great deal safer than the taskbar: this point is INSIDE the
+    window being looked for, so the worst a stale screenshot can do is click
+    the desktop. The taskbar route has the Start button and the quick-launch
+    icons fifteen pixels away from where it starts (measured on this guest,
+    2026-09-26) and no way to tell what it hit.
+
+    A console is the only large solid-black region on a Win98 desktop: the
+    wallpaper is teal, the client's transcript is white, and an icon's black
+    pixels are a few at a time.
+    """
+    w, h = im.size
+    best = None
+    for y in range(40, h - 30, 6):
+        run = start = 0
+        for x in range(0, w, 4):
+            p = im.getpixel((x, y))
+            if p[0] < 40 and p[1] < 40 and p[2] < 40:
+                if not run:
+                    start = x
+                run += 4
+            else:
+                if run >= 200 and (best is None or run > best[0]):
+                    best = (run, start + run // 2, y)
+                run = 0
+        if run >= 200 and (best is None or run > best[0]):
+            best = (run, start + run // 2, y)
+    return None if best is None else (best[1], best[2])
+
+
+def taskbar_first_button(im):
+    """x of the first TASK button, found rather than assumed.
+
+    This used to be the literal 170, with a comment saying it was "past the
+    Start button and the quick-launch icons". Measured on this guest the
+    Start button ends at 58, quick launch at 143 and the first task button
+    begins at 155 -- so 170 had fifteen pixels of margin, and quick launch
+    grows by about 25 pixels with every icon somebody drags onto it. A
+    fourth icon puts 170 ON one, and a single click there LAUNCHES it. A
+    localised Start button ("Demarrer") moves everything right again.
+
+    Buttons are raised, so their left edge is a white 3D highlight on the
+    taskbar row. Take the third such edge: Start, quick launch, then tasks.
+    """
+    w, h = im.size
+    y = h - 20
+    edges = []
+    for x in range(0, min(w, 500)):
+        if im.getpixel((x, y))[:3] == (248, 248, 248):
+            if not edges or x - edges[-1] > 6:
+                edges.append(x)
+    if len(edges) >= 3:
+        return edges[2] + 14
+    return None
+
+
 def dos_focused() -> bool:
     """Is the MS-DOS Prompt the window holding the keyboard?
 
@@ -117,16 +221,40 @@ def _click(x: int, y: int) -> None:
 def focus(tries: int = 2) -> None:
     """Bring the MS-DOS Prompt forward, or refuse to type at all.
 
-    Alt-tab first, because it is one keystroke and usually right. Then the
-    TASKBAR, because alt-tab is not addressing: a discrete alt+tab toggles
-    between the two most recently used windows, so with three open -- the
-    client, an Explorer window and this -- it oscillates between the other
-    two forever and this function used to spend six rounds proving it.
+    Three routes, cheapest and safest first.
 
-    The taskbar buttons are walked left to right and each is checked. x
-    starts past the Start button and the quick-launch icons; clicking one of
-    those would open a menu over the very thing being looked for.
+    THE WINDOW ITSELF. Clicking the console's own black client area raises
+    and focuses it, and the point is inside the thing being looked for -- so
+    a stale screenshot costs a click on the desktop rather than a click on
+    something that acts. This is new, and it is the route that should
+    normally run; the two below are what to do when the window is minimised
+    or completely covered.
+
+    ALT-TAB, one keystroke and usually right, but not addressing: a discrete
+    alt+tab toggles between the two most recently used windows, so with
+    three open it oscillates between the other two forever. Observed doing
+    exactly that, six times in a row.
+
+    THE TASKBAR, last, because it is the only route that clicks something
+    that is not the target. Its starting x is now measured rather than the
+    literal 170 it was, which had fifteen pixels of clearance from the
+    quick-launch icons -- and quick launch grows about 25 pixels per icon.
+
+    And at every step: if the Start menu is open, close it. It should never
+    be, and when it is, every later click lands on a menu covering the
+    taskbar and every later keystroke goes to the shell.
     """
+    dismiss_start_menu()
+
+    im = shot()
+    spot = find_console(im)
+    if spot is not None:
+        _click(*spot)
+        time.sleep(0.8)
+        dismiss_start_menu()
+        if dos_focused():
+            return
+
     for _ in range(tries):
         if dos_focused():
             return
@@ -137,9 +265,21 @@ def focus(tries: int = 2) -> None:
     im = shot()
     w, h = im.size
     row = h - 13
-    for x in range(170, w - 110, 55):
+    #: Never left of this, whatever the measurement says. The Start button
+    #: and the quick-launch icons live there and both ACT on a single click.
+    first = taskbar_first_button(im) or 170
+    for x in range(max(first, 160), w - 110, 55):
         _click(x, row)
         time.sleep(1.0)
+        if start_menu_open():
+            # A click that opened the Start menu did not hit a task button,
+            # so the geometry is not what was measured. Back out and say so
+            # rather than clicking further along a row that is now covered.
+            dismiss_start_menu()
+            raise SystemExit(
+                f"clicking the taskbar at x={x} opened the Start menu, so "
+                f"the button positions are not what they were measured to "
+                f"be. Refusing to click further along a covered taskbar.")
         if dos_focused():
             return
 
@@ -168,7 +308,19 @@ def install_client(name: str) -> str:
     193KB on a 1.7GB disk is not a consideration.
     """
     run("CLS")
-    run(f"COPY D:\\RETROCL.EXE C:\\RETRO\\{name}", settle=5.0)
+    #: DELETE FIRST, and this is not tidiness either.
+    #:
+    #: COPY onto a name that exists asks "Overwrite (Yes/No/All)?" and then
+    #: WAITS, one keystroke at a time. Every command typed afterwards is
+    #: swallowed by that prompt -- and the first of them to contain a y, n
+    #: or a answers it, so the copy silently happens or silently does not
+    #: while the commands that were supposed to run never do. That is how a
+    #: `targeted` gate appeared to run and the log that was read back was
+    #: the previous one's. Seen twice in one session.
+    #:
+    #: A name that does not exist cannot prompt.
+    run(f"IF EXIST C:\\RETRO\\{name} DEL C:\\RETRO\\{name}", settle=2.0)
+    run(f"COPY D:\\RETROCL.EXE C:\\RETRO\\{name}", settle=6.0)
     return f"C:\\RETRO\\{name}"
 
 
@@ -184,6 +336,13 @@ def run(cmd: str, settle: float = 3.0) -> None:
     focus()
     subprocess.run(["python3", f"{HERE}/qmp.py", "type", cmd],
                    check=True, capture_output=True)
+    if start_menu_open():
+        dismiss_start_menu()
+        raise SystemExit(
+            f"the Start menu opened while typing {cmd!r}; the keystrokes "
+            f"went to the shell and NOT pressing Enter -- on a focused "
+            f"Start button that would open it again, and on a highlighted "
+            f"item it would run it")
     if not dos_focused():
         raise SystemExit(
             f"focus moved away while typing {cmd!r}; NOT pressing Enter -- "
