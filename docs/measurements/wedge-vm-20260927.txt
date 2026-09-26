@@ -59,6 +59,30 @@ returns to scheduling anything. It is the shape BACKLOG 14 predicts for a
 DOS VM that was terminated and left half-dead: nothing in user mode can end
 it, and here nothing in user mode runs at all.
 
+## Against the trigger, added after the fact
+
+The libexec session ran the same `EXECPRB --list` many times on boxes holding
+3, 20 and 22 of these zombies and never reproduced a hang. That is a lot more
+evidence than my one sighting, and it should be read as the stronger claim.
+
+Re-reading my own console screenshot, there was evidence against the trigger
+at the time and I did not weigh it. The two commands visible above the frozen
+prompt are:
+
+  C:\EP>C:\EP\EXECPRB.EXE --list
+  C:\EP>TYPE C:\EP\EXECPRB.TXT > COM1
+
+Neither is what I typed. I sent `EXECPRB --list > C:\PS.TXT` and then a fetch
+of `C:\PS.TXT`; what arrived lost the redirect and named a different file. So
+keystrokes were ALREADY being dropped or merged before the box stopped
+answering, and the second command reached a prompt afterwards. The wedge
+cannot be pinned to `--list` completing, and "the wedge begins at that
+command" overstated what the screen showed.
+
+What is still solid is the state itself: ring-0 VMM, no user-mode execution,
+never halted, input dead and the pointer still drawn. What triggered it is
+open. Recorded as a risk, not a cause, in BACKLOG 14.
+
 ## Recovery
 
 `virsh destroy` then `start` (no ACPI, so a shutdown does nothing). The disk
