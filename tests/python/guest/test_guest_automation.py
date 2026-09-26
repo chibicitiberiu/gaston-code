@@ -27,7 +27,7 @@ def test_every_case_passes(verdicts):
 def test_every_case_ran(verdicts):
     #: A hard count, so a case that stops being emitted fails instead of
     #: vanishing. Raise it deliberately when cases are added.
-    assert len(verdicts) == 116, sorted(verdicts)
+    assert len(verdicts) == 123, sorted(verdicts)
 
 
 def test_the_grammar_refuses_what_it_should(verdicts):

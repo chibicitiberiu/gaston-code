@@ -117,7 +117,7 @@ LIBWIRE = $(LIBDIR)/libwire.lib
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
 AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp \
                   automation/resolve.cpp automation/watch.cpp \
-                  automation/wait.cpp \
+                  automation/wait.cpp automation/calldeadline.cpp \
                   automation/input.cpp automation/msaa.cpp \
                   automation/shot.cpp
 LIBAUTOMATION = $(LIBDIR)/libautomation.lib

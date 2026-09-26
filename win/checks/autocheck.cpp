@@ -16,6 +16,7 @@
 #include "automation/wait.h"
 #include "automation/input.h"
 #include "automation/msaa.h"
+#include "automation/calldeadline.h"
 #include "automation/shot.h"
 #include "core/rc_cpp.h"
 #include "core/str.h"
@@ -1281,6 +1282,74 @@ void enrichment(void)
 
     say("msaa-refuses-dead-window", !msaa.enrich(NULL, all, e),
         "NULL hwnd");
+
+    /* The deadline that can interrupt a call already in flight. Everything
+     * else in this library bounds SendMessageTimeout, which takes a timeout
+     * and was never the unbounded part. */
+    {
+        static CallDeadline dl;
+        bool put = dl.install();
+        rc_strf(detail, sizeof(detail), "CoRegisterMessageFilter %s",
+                put ? "accepted" : "refused");
+        say("deadline-installs-a-message-filter", put, detail);
+
+        if (put)
+        {
+            say("deadline-idle-is-not-expired", !dl.armed() && !dl.expired(),
+                "disarmed");
+
+            dl.arm(2000);
+            bool armedNotYet = dl.armed() && !dl.expired();
+            /* The EARLIEST wins. An inner budget may shorten an outer one;
+             * one that quietly reset the clock is how an outer deadline
+             * stops meaning anything. */
+            dl.arm(60);
+            Sleep(200);
+            bool shortened = dl.expired();
+            rc_strf(detail, sizeof(detail),
+                    "armed 2000 then 60, expired after 200ms: %d",
+                    (int)shortened);
+            say("deadline-arms", armedNotYet, detail);
+            say("deadline-nested-arm-takes-the-earliest", shortened, detail);
+
+            /* Past the deadline MSAA does not even start: a call begun here
+             * gets cancelled anyway, after a round trip we already know we
+             * cannot afford. */
+            msaa.setDeadline(&dl);
+            static Enrichment late;
+            bool refused = !msaa.enrich(w, Selector::WANT_NAME, late);
+            rc_strf(detail, sizeof(detail), "%d abandoned, %d cancelled",
+                    msaa.abandoned(), dl.cancels());
+            say("deadline-stops-msaa-starting-a-doomed-call", refused,
+                detail);
+
+            dl.disarm();
+            msaa.setDeadline(0);
+            say("deadline-disarms", !dl.armed() && !dl.expired(), "disarmed");
+
+            /* Nothing on this desktop was wedged, so nothing should have
+             * been cancelled mid-flight. A non-zero count here is the
+             * interesting case and the guest run is where it may show up. */
+            rc_strf(detail, sizeof(detail), "%d calls cancelled in flight",
+                    dl.cancels());
+            say("deadline-cancels-nothing-on-a-healthy-desktop",
+                dl.cancels() == 0, detail);
+
+            dl.remove();
+        }
+        else
+        {
+            say("deadline-idle-is-not-expired", true, "skipped: no filter");
+            say("deadline-arms", true, "skipped: no filter");
+            say("deadline-nested-arm-takes-the-earliest", true,
+                "skipped: no filter");
+            say("deadline-stops-msaa-starting-a-doomed-call", true,
+                "skipped: no filter");
+            say("deadline-disarms", true, "skipped: no filter");
+            say("deadline-cancels-nothing-on-a-healthy-desktop", true,
+                "skipped: no filter");
+        }
+    }
 
     /* The batched tier. A document is a single HWND, so the WINDOW walk
      * sees one node and stops -- this is the only tree a web page has. */

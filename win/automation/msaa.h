@@ -31,6 +31,7 @@
  * gets the define and the includes in the right order; nothing else has to
  * care. */
 struct IAccessible;
+class CallDeadline;
 
 /* One accessible object, for the tier that is not made of windows.
  *
@@ -131,6 +132,18 @@ public:
      * what it cannot do, per level, and both counters are reported. */
     AccEnd enumerateFrom(HWND root, const AccWalkOptions &opt, AccSink &sink);
 
+    /* The deadline that can interrupt a call already in flight. Without one,
+     * every method here is bounded only by the goodwill of the process being
+     * asked: a marshalled property against a wedged apartment takes no
+     * timeout argument and blocks. Optional, because `autocheck` and any
+     * caller on a thread it does not own can decline it -- a message filter
+     * is per apartment, so installing one is the owner's decision. */
+    void setDeadline(CallDeadline *d) { m_deadline = d; }
+
+    /* Calls abandoned because the deadline passed. Zero on a healthy
+     * desktop; non-zero is a wedged process and worth reporting upward. */
+    int  abandoned() const { return m_abandoned; }
+
     int  objectsMade() const { return m_made; }
     int  namesFound() const  { return m_named; }
     int  enumeratorLevels() const { return m_byEnum; }
@@ -144,6 +157,9 @@ private:
                    const AccWalkOptions &opt, AccSink &sink);
     void   fillAcc(IAccessible *acc, long childId, int depth,
                    const AccWalkOptions &opt, AccNode &out);
+
+    CallDeadline *m_deadline;
+    int     m_abandoned;
 
     void   *m_children;    /* AccessibleChildren */
     bool    m_comReady;

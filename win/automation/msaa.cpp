@@ -12,6 +12,7 @@
 #include <oleacc.h>
 
 #include "automation/msaa.h"
+#include "automation/calldeadline.h"
 
 #include <string.h>
 
@@ -59,6 +60,8 @@ MsaaSource::MsaaSource()
     m_until = 0;
     m_hasDeadline = false;
     m_accSeen = 0;
+    m_deadline = 0;
+    m_abandoned = 0;
     if (m_aofw)
     {
         /* Apartment-threaded, and the caller's thread is expected to have a
@@ -161,6 +164,14 @@ bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
     memset(&out, 0, sizeof(out));
     if (!m_aofw || !h || !IsWindow(h))
         return false;
+    /* Past the deadline, do not start. A call begun here would be cancelled
+     * by the filter anyway, after a round trip we already know we cannot
+     * afford. */
+    if (m_deadline && m_deadline->expired())
+    {
+        m_abandoned++;
+        return false;
+    }
 
     IAccessible *acc = 0;
     PFN_AOFW aofw = (PFN_AOFW)m_aofw;
@@ -462,6 +473,12 @@ AccEnd MsaaSource::enumerateFrom(HWND root, const AccWalkOptions &opt,
     if (!m_aofw || !root || !IsWindow(root))
         return ACC_NO_OBJECT;
 
+    /* One arm for the whole enumeration rather than one per node: the
+     * filter's job is to stop a single call blocking forever, and the
+     * walk's own deadline check between nodes does the rest. */
+    if (m_deadline && opt.deadlineMs)
+        m_deadline->arm(opt.deadlineMs);
+
     IAccessible *acc = 0;
     PFN_AOFW aofw = (PFN_AOFW)m_aofw;
     if (aofw(root, OBJID_CLIENT, RC_IID_IAccessible, (void **)&acc) != S_OK
@@ -471,5 +488,7 @@ AccEnd MsaaSource::enumerateFrom(HWND root, const AccWalkOptions &opt,
 
     AccEnd end = walkAcc(acc, 0, 0, opt, sink);
     acc->Release();
+    if (m_deadline && opt.deadlineMs)
+        m_deadline->disarm();
     return end;
 }
