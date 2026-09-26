@@ -66,6 +66,15 @@ vm/*.partial.*
 # that is what they are for -- but the log is scratch, not source.
 /retroclaude.log
 *.log
+# And the SHOUTED form. gitignore is case-sensitive on Linux, so `*.log`
+# never matched PROBE.LOG -- which is the 8.3 name the guest binaries write
+# and the name it lands under when one is run from the repo root under
+# Wine. It was swept into a commit by a `git add -A` before anybody noticed.
+*.LOG
+
+# Claude Code transcript dumps. Large, and they are a record of a
+# conversation rather than of this project.
+/????-??-??-*-local-command-*.txt
 
 # rpccheck.c's busy-JOB marker. Deleted at both ends of the run it takes part
 # in; this is only for the crash that skips the second delete.
