@@ -1333,3 +1333,47 @@ CSS comments**. Stripping them leaves every rule byte-identical. `doc()`
 wire verbatim, once per connect and again on every reconnect. On a 5 KB/s link that is
 close to a full second of the time between plugging in and seeing a transcript. It
 needs the DOC goldens regenerated and it depends on none of the above.
+
+## 10. The injection gates leave the guest in an unknown state
+
+**What happened.** On 2026-09-26 a session ran gates 0.15d (system-wide
+`WH_CBT` injection), 0.15f (thread-targeted injection, four hook types) and
+0.15g, plus the full `autocheck` battery, which installs system-wide
+`SetWinEventHook` hooks. Every gate returned and the battery passed 158 of
+158. Some hours later the guest was found spinning at a full vCPU,
+processing no keyboard input at all, and holding no connection. The screen
+was untouched from the last command.
+
+**What is NOT established.** That the gates caused it. Nothing was captured
+between the last good interaction and the discovery, the hooks are all
+removed on the paths that were taken, and a Win98 guest is capable of
+wedging without help. The suspect is obvious and the evidence is absent,
+which is the honest summary.
+
+**Why it matters anyway.** These gates are the only thing in this project
+that puts our code inside programs that did not ask for it, and the one
+that has already killed Explorer once. A gate that cannot say whether the
+machine survived it is not finished, however green its own output is.
+
+**To close it:**
+
+- A **health check after the battery**, not just during it: the kit's
+  `TEST.BAT` should end by proving the guest still answers — a keystroke
+  that changes the screen, a window that still takes focus, and a write
+  that lands. A run that ends with 158 passes and a wedged machine should
+  report a failure, and today it reports a pass.
+- **Run the injection gates last and separately.** They are in the middle of
+  `TEST.BAT` now, so everything after them is measured on a machine they may
+  have damaged.
+- **A known-good rollback in the loop.** There are libvirt snapshots, but a
+  live internal snapshot is refused because the raw floppy `fda` cannot take
+  one. Either detach the floppy for the duration or script a
+  copy of `vm/win98.qcow2` before a run that injects.
+- **Find out whether it reproduces.** Boot clean, run only 0.15d and 0.15f,
+  and leave the machine alone for an hour. If it wedges, that is the answer
+  and section D needs rethinking before D2 is built on it. If it does not,
+  the battery is the place to look next.
+
+Until this is closed, treat `inproc` and the injection gates as
+**attended-only**: run them when somebody can watch the guest, and not as
+part of an unattended sweep.
