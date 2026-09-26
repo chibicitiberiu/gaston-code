@@ -12,10 +12,29 @@
  *   6. Which running processes and C:\WINDOWS exes are 16-bit (NE).
  *   7. Does CreateProcess' show value reach a DOS box, and does the window
  *      outlive its process?
+ *   8. --stops (docs/libexec-plan.md step 0b): probes for a CLEAN stop of a
+ *      piped COMMAND.COM /c spawn, since TerminateProcess on the returned
+ *      pid (REDIR32 on 98) does nothing and TerminateProcess on the DOS VM
+ *      (WINOA386.MOD) still leaves REDIR32 a zombie (docs/BACKLOG.md #14).
+ *      Five strategies (close our pipes; GenerateConsoleCtrlEvent; WM_CLOSE
+ *      to the hidden "tty" window, with its confirmation dialog if any;
+ *      Ctrl+C keystrokes to that window; kill the VM and just wait) each run
+ *      twice on a DOS batch loop and a Win32 child spawned through the
+ *      shell, and once each on a Win32 child and a DOS program (CHOICE.COM)
+ *      spawned directly with no shell. 30 cases; each spends about 10s
+ *      watching whether ticking stops, whether the spawned pid exits, and
+ *      GlobalMemoryStatus, so the run is expected to take roughly 5-7
+ *      minutes (vmthenwait's up-to-15s wait is the main variable).
+ *      Every strategy that fails leaves a REDIR32 zombie on purpose, and
+ *      nothing but a reboot removes one: reboot the guest before (to start
+ *      clean) and after. The run stops itself below 3MB free or at 20
+ *      zombies. Run it DETACHED: GenerateConsoleCtrlEvent to group 0 from a
+ *      DOS prompt would reach that prompt.
  *
  * Modes: no argument relaunches detached (like a GUI parent) running
  * everything; --detach MODE relaunches detached running MODE; --run all,
- * --kills only 2 and 3, --list only the process list, in place.
+ * --kills only 2 and 3, --stops only 8 (also runnable as --detach --stops),
+ * --list only the process list, in place.
  * Child modes, run by the probe itself: --sleep N, --tick FILE N, --exit N.
  * Writes EXECPRB.TXT beside itself.
  */
@@ -699,6 +718,412 @@ static void launch(const char *key, const char *cmdline, WORD show,
     sweep(key, base);
 }
 
+/* ---- 8. probe for a clean stop (docs/libexec-plan.md step 0b) ---- */
+
+/* The family's hidden DOS-box window, if any -- class "tty", owned by a pid
+ * in `fam`. There is at most one per job; the first match is enough. */
+static bool findTtyWindow(const std::vector<DWORD> &fam, HWND &out)
+{
+    WinList all;
+    EnumWindows(collect, (LPARAM)&all);
+    for (unsigned i = 0; i < all.v.size(); i++)
+    {
+        HWND h = all.v[i];
+        char cls[32];
+        cls[0] = 0;
+        GetClassNameA(h, cls, sizeof cls);
+        if (lstrcmpiA(cls, "tty") != 0)
+            continue;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (inList(fam, pid))
+        {
+            out = h;
+            return true;
+        }
+    }
+    return false;
+}
+
+static BOOL CALLBACK findButton(HWND h, LPARAM lp)
+{
+    char cls[32];
+    cls[0] = 0;
+    GetClassNameA(h, cls, sizeof cls);
+    if (lstrcmpiA(cls, "Button") != 0)
+        return TRUE;
+    char txt[64];
+    txt[0] = 0;
+    GetWindowTextA(h, txt, sizeof txt);
+    const char *t = txt;
+    if (t[0] == '&')
+        t++;
+    if (t[0] == 'Y' || t[0] == 'y' || _strnicmp(txt, "OK", 2) == 0)
+    {
+        *(HWND *)lp = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* a. Close our end of the pipes (spawnLikeExec already closed the stdin
+ * write end); the generic wait in runCase does the rest. */
+static void stratPipes(const char *key, Child &c)
+{
+    c.out.reset();
+    row(key, "closed our pipe ends (stdin write end already closed)");
+}
+
+/* b. GenerateConsoleCtrlEvent, resolved at runtime (9x may not export it),
+ * against the spawned pid and against process group 0. */
+static void stratCtrlBreak(const char *key, Child &c)
+{
+    typedef BOOL (WINAPI *GenFn)(DWORD, DWORD);
+    HMODULE k = GetModuleHandleA("KERNEL32.DLL");
+    GenFn gen = (GenFn)GetProcAddress(k, "GenerateConsoleCtrlEvent");
+    row(key, "generateconsolectrlevent-resolved=%d", gen != NULL);
+    if (!gen)
+        return;
+    BOOL b1 = gen(CTRL_BREAK_EVENT, c.pi.dwProcessId);
+    DWORD e1 = b1 ? 0 : GetLastError();
+    BOOL c1 = gen(CTRL_C_EVENT, c.pi.dwProcessId);
+    DWORD ec1 = c1 ? 0 : GetLastError();
+    row(key, "pgrp=pid(%08lx) break=%d err=%lu ctrlc=%d err=%lu",
+        c.pi.dwProcessId, b1, e1, c1, ec1);
+    BOOL b0 = gen(CTRL_BREAK_EVENT, 0);
+    DWORD e0 = b0 ? 0 : GetLastError();
+    BOOL c0 = gen(CTRL_C_EVENT, 0);
+    DWORD ec0 = c0 ? 0 : GetLastError();
+    row(key, "pgrp=0 break=%d err=%lu ctrlc=%d err=%lu", b0, e0, c0, ec0);
+}
+
+/* c. WM_CLOSE to the family's tty window, then look for a confirmation
+ * dialog and press its Yes/OK button. Only windows belonging to our family,
+ * or appearing within the 2s wait with pid 0 or in family, are touched --
+ * the VM is shared with other agents. */
+static void stratTtyClose(const char *key, const std::vector<DWORD> &fam)
+{
+    HWND tty;
+    if (!findTtyWindow(fam, tty))
+    {
+        row(key, "no tty window");
+        return;
+    }
+    row(key, "tty hwnd=%08lx", (DWORD)tty);
+    WinList before;
+    EnumWindows(collect, (LPARAM)&before);
+    PostMessageA(tty, WM_CLOSE, 0, 0);
+    Sleep(2000);
+    WinList after;
+    EnumWindows(collect, (LPARAM)&after);
+    int newCount = 0, clicked = 0;
+    for (unsigned i = 0; i < after.v.size(); i++)
+    {
+        HWND h = after.v[i];
+        if (hadWin(before, h))
+            continue;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (!inList(fam, pid) && pid != 0)
+            continue;
+        newCount++;
+        char cls[32], title[128];
+        cls[0] = title[0] = 0;
+        GetClassNameA(h, cls, sizeof cls);
+        GetWindowTextA(h, title, sizeof title);
+        row(key, "confirm hwnd=%08lx pid=%08lx class=%s title=%s", (DWORD)h,
+            pid, cls, title);
+        HWND btn = NULL;
+        EnumChildWindows(h, findButton, (LPARAM)&btn);
+        if (btn)
+        {
+            char btxt[64];
+            btxt[0] = 0;
+            GetWindowTextA(btn, btxt, sizeof btxt);
+            SendMessageA(btn, BM_CLICK, 0, 0);
+            row(key, "clicked button=%s on hwnd=%08lx", btxt, (DWORD)h);
+            clicked++;
+        }
+    }
+    row(key, "new-windows=%d clicked=%d", newCount, clicked);
+}
+
+/* d. Ctrl+C keystrokes posted to the family's tty window. */
+static void stratTtyKeys(const char *key, const std::vector<DWORD> &fam)
+{
+    HWND tty;
+    if (!findTtyWindow(fam, tty))
+    {
+        row(key, "no tty window");
+        return;
+    }
+    row(key, "tty hwnd=%08lx sending ctrl+c", (DWORD)tty);
+    PostMessageA(tty, WM_KEYDOWN, VK_CONTROL, 0);
+    PostMessageA(tty, WM_CHAR, 3, 0);
+    PostMessageA(tty, WM_KEYUP, VK_CONTROL, 0);
+}
+
+/* e. Kill the DOS VM and just wait for the spawned pid (REDIR32) to leave
+ * by itself, up to 15s. Returns whether it did. */
+static bool stratVmThenWait(const char *key, Child &c,
+                            const std::vector<DWORD> &fam,
+                            const std::vector<Proc> &now)
+{
+    DWORD vm = 0;
+    for (unsigned i = 0; i < now.size(); i++)
+    {
+        const Proc &p = now[i];
+        const char *name = strrchr(p.exe, '\\');
+        name = name ? name + 1 : p.exe;
+        if (inList(fam, p.pid) && lstrcmpiA(name, "WINOA386.MOD") == 0)
+            vm = p.pid;
+    }
+    if (!vm)
+    {
+        row(key, "no vm");
+        c.out.reset();
+        return false;
+    }
+    HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, vm);
+    BOOL ok = h ? TerminateProcess(h, 1) : FALSE;
+    DWORD gone = h ? WaitForSingleObject(h, 5000) : WAIT_FAILED;
+    if (h)
+        CloseHandle(h);
+    row(key, "vm pid=%08lx kill=%d vm-gone=%d", vm, ok, gone == WAIT_OBJECT_0);
+    c.out.reset();
+    DWORD t0 = GetTickCount();
+    bool spawnedGone = waitChild(c, 15000);
+    row(key, "spawned-gone-after-vmkill=%d after %lums", spawnedGone,
+        GetTickCount() - t0);
+    return spawnedGone;
+}
+
+/* Kills whatever of our family is left except REDIR32, which a
+ * TerminateProcess never actually stops (docs/BACKLOG.md #14) -- leaving it
+ * is the point of this probe, not a bug, so it is recorded, not swept. */
+static void cleanupStops(const char *key, const std::vector<Proc> &base)
+{
+    std::vector<Proc> now;
+    snapshot(now);
+    std::vector<DWORD> fam;
+    family(now, fam);
+    int left = 0, killed = 0;
+    for (unsigned i = 0; i < now.size(); i++)
+    {
+        const Proc &p = now[i];
+        if (had(base, p.pid) || p.pid == GetCurrentProcessId() ||
+            !inList(fam, p.pid))
+            continue;
+        const char *name = strrchr(p.exe, '\\');
+        name = name ? name + 1 : p.exe;
+        if (lstrcmpiA(name, "REDIR32.EXE") == 0)
+        {
+            row(key, "left zombie pid=%08lx exe=%s", p.pid, p.exe);
+            left++;
+            continue;
+        }
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, p.pid);
+        BOOL ok = h ? TerminateProcess(h, 1) : FALSE;
+        if (h)
+            CloseHandle(h);
+        row(key, "cleaned pid=%08lx exe=%s kill=%d", p.pid, p.exe, ok);
+        killed++;
+    }
+    row(key, "cleanup left-redir=%d killed=%d", left, killed);
+}
+
+/* One case: spawn `cmdline` (its ticking observed through `tick`, or no tick
+ * file if `tick[0]==0`), apply `strategy` (0=pipes 1=ctrlbreak 2=ttyclose
+ * 3=ttykeys 4=vmthenwait), then watch for about 10s. */
+static void runCase(const char *key, const char *cmdline, const char *tick,
+                    const std::vector<Proc> &base, int strategy)
+{
+    MEMORYSTATUS ms;
+    ms.dwLength = sizeof ms;
+    GlobalMemoryStatus(&ms);
+    DWORD memBefore = ms.dwAvailPhys / 1024;
+
+    if (tick[0])
+        DeleteFileA(tick);
+    Child c;
+    if (!spawnLikeExec(cmdline, c))
+    {
+        row(key, "spawn failed %lu", GetLastError());
+        return;
+    }
+    row(key, "spawned pid=%08lx cmd=%s", c.pi.dwProcessId, cmdline);
+
+    GlobalMemoryStatus(&ms);
+    DWORD memAfterSpawn = ms.dwAvailPhys / 1024;
+
+    Sleep(1500);   /* let the batch loop or --tick child get going */
+
+    std::vector<Proc> now;
+    snapshot(now);
+    std::vector<DWORD> fam;
+    family(now, fam);
+
+    DWORD t0 = GetTickCount();
+    bool spawnedGone = false;
+    switch (strategy)
+    {
+    case 0: stratPipes(key, c); break;
+    case 1: stratCtrlBreak(key, c); break;
+    case 2: stratTtyClose(key, fam); break;
+    case 3: stratTtyKeys(key, fam); break;
+    case 4: spawnedGone = stratVmThenWait(key, c, fam, now); break;
+    }
+
+    DWORD sizes[3];
+    for (int i = 0; i < 3; i++)
+    {
+        DWORD target = (DWORD)(i + 1) * 2000;
+        DWORD elapsed = GetTickCount() - t0;
+        if (elapsed < target)
+        {
+            if (!spawnedGone)
+                spawnedGone = waitChild(c, target - elapsed);
+            else
+                Sleep(target - elapsed);
+        }
+        sizes[i] = tick[0] ? fileSize(tick) : 0xFFFFFFFF;
+    }
+    if (tick[0])
+        row(key, "tick 2s/4s/6s: %ld %ld %ld -> %s", (long)sizes[0],
+            (long)sizes[1], (long)sizes[2],
+            sizes[2] != sizes[0] ? "STILL TICKING" : "stopped");
+    else
+        row(key, "tick n/a (job has no tick file)");
+
+    DWORD code = 0;
+    GetExitCodeProcess(c.pi.hProcess, &code);
+    row(key, "spawned-exited=%d code=%lu", spawnedGone, code);
+
+    snapshot(now);
+    family(now, fam);
+    int n = 0;
+    for (unsigned i = 0; i < now.size(); i++)
+    {
+        const Proc &p = now[i];
+        if (!inList(fam, p.pid))
+            continue;
+        row(key, "surviving pid=%08lx exe=%s threads=%lu", p.pid, p.exe,
+            p.threads);
+        n++;
+    }
+    row(key, "surviving=%d", n);
+
+    DWORD elapsed = GetTickCount() - t0;
+    if (elapsed < 10000)
+    {
+        if (!spawnedGone)
+            spawnedGone = waitChild(c, 10000 - elapsed);
+        else
+            Sleep(10000 - elapsed);
+    }
+    GlobalMemoryStatus(&ms);
+    DWORD memLater = ms.dwAvailPhys / 1024;
+    row(key, "mem-kb before=%lu after-spawn=%lu 10s-after-action=%lu",
+        memBefore, memAfterSpawn, memLater);
+
+    cleanupStops(key, base);
+    closeChild(c);
+    if (tick[0])
+        DeleteFileA(tick);
+    Sleep(500);
+}
+
+/* Every failed case leaves a REDIR32 zombie by design, and the box has 32MB
+ * and other users. Stop before the zombies or the memory they hold become
+ * the experiment. */
+static bool roomForAnother(const char *key)
+{
+    MEMORYSTATUS ms;
+    ms.dwLength = sizeof ms;
+    GlobalMemoryStatus(&ms);
+    DWORD freeKb = ms.dwAvailPhys / 1024;
+    std::vector<Proc> now;
+    snapshot(now);
+    int zombies = 0;
+    for (unsigned i = 0; i < now.size(); i++)
+    {
+        const char *name = strrchr(now[i].exe, '\\');
+        name = name ? name + 1 : now[i].exe;
+        if (now[i].ppid == GetCurrentProcessId() &&
+            lstrcmpiA(name, "REDIR32.EXE") == 0)
+            zombies++;
+    }
+    if (freeKb < 3072 || zombies >= 20)
+    {
+        row(key, "NOT RUN, and the rest stopped: free=%luKB zombies=%d",
+            freeKb, zombies);
+        return false;
+    }
+    return true;
+}
+
+struct StopJob
+{
+    const char *tag;
+    char cmd[1024];
+    char tick[MAX_PATH];
+    int reps;
+};
+
+static void runStops(const std::vector<Proc> &base, const char *bat,
+                     const char *tickDos)
+{
+    char tick32[MAX_PATH], tick32d[MAX_PATH];
+    char winDir[MAX_PATH], choicePath[MAX_PATH];
+    rc_strf(tick32, sizeof tick32, "%s\\TICK32.TXT", g_dir);
+    rc_strf(tick32d, sizeof tick32d, "%s\\TICK32D.TXT", g_dir);
+    GetWindowsDirectoryA(winDir, sizeof winDir);
+    rc_strf(choicePath, sizeof choicePath, "%s\\COMMAND\\CHOICE.COM", winDir);
+
+    StopJob jobs[4];
+    jobs[0].tag = "dos";
+    rc_strf(jobs[0].cmd, sizeof jobs[0].cmd, "%s /c %s", g_shell, bat);
+    rc_strcpy(jobs[0].tick, sizeof jobs[0].tick, tickDos);
+    jobs[0].reps = 2;
+
+    jobs[1].tag = "w32";
+    rc_strf(jobs[1].cmd, sizeof jobs[1].cmd, "%s /c %s --tick %s 30", g_shell,
+            g_self, tick32);
+    rc_strcpy(jobs[1].tick, sizeof jobs[1].tick, tick32);
+    jobs[1].reps = 2;
+
+    jobs[2].tag = "w32direct";
+    rc_strf(jobs[2].cmd, sizeof jobs[2].cmd, "%s --tick %s 30", g_self,
+            tick32d);
+    rc_strcpy(jobs[2].tick, sizeof jobs[2].tick, tick32d);
+    jobs[2].reps = 1;
+
+    jobs[3].tag = "dosdirect";
+    rc_strf(jobs[3].cmd, sizeof jobs[3].cmd, "%s /c:y /t:y,30", choicePath);
+    jobs[3].tick[0] = 0;
+    jobs[3].reps = 1;
+
+    static const char *stratNames[5] =
+        { "pipes", "ctrlbreak", "ttyclose", "ttykeys", "vmthenwait" };
+
+    /* Repetition outermost: every strategy gets its first try on every job
+     * before anything is repeated, so the guard below cannot starve a
+     * strategy of its only run. */
+    for (int r = 0; r < 2; r++)
+        for (int s = 0; s < 5; s++)
+            for (int j = 0; j < 4; j++)
+            {
+                if (r >= jobs[j].reps)
+                    continue;
+                char key[64];
+                rc_strf(key, sizeof key, "stop-%s-%s-%d", stratNames[s],
+                        jobs[j].tag, r + 1);
+                if (!roomForAnother(key))
+                    return;
+                runCase(key, jobs[j].cmd, jobs[j].tick, base, s);
+            }
+}
+
 /* ---- child modes ---- */
 
 static int childMode(int argc, char **argv)
@@ -739,7 +1164,8 @@ int main(int argc, char **argv)
                                 strcmp(argv[1], "--console") == 0 ||
                                 strcmp(argv[1], "--list") == 0 ||
                                 strcmp(argv[1], "--kills") == 0 ||
-                                strcmp(argv[1], "--vmfirst") == 0);
+                                strcmp(argv[1], "--vmfirst") == 0 ||
+                                strcmp(argv[1], "--stops") == 0);
     const char *mode = argc > 1 ? argv[1] : "--run";
     if (argc > 1 && !inPlace && strcmp(argv[1], "--detach") != 0)
         return childMode(argc, argv);
@@ -796,7 +1222,8 @@ int main(int argc, char **argv)
     }
     bool killsOnly = strcmp(mode, "--kills") == 0;
     bool vmFirst = strcmp(mode, "--vmfirst") == 0;
-    if (!killsOnly && !vmFirst)
+    bool stopsMode = strcmp(mode, "--stops") == 0;
+    if (!killsOnly && !vmFirst && !stopsMode)
         win16(base);
 
     char cmd[1024], tick[MAX_PATH], bat[MAX_PATH];
@@ -815,6 +1242,15 @@ int main(int argc, char **argv)
         }
     }
     rc_strf(cmd, sizeof cmd, "%s /c %s", g_shell, bat);
+    if (stopsMode)
+    {
+        runStops(base, bat, tick);
+        DeleteFileA(bat);
+        sweep("final", base);
+        row("done", "ok");
+        fclose(g_out);
+        return 0;
+    }
     if (vmFirst)
     {
         killVmFirst("vmfirst-dos", cmd, tick, base);
