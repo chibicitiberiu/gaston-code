@@ -245,7 +245,7 @@ static void fill_node(RcInShm *shm, RcInNode *n, HWND h, long depth, DWORD ms)
 static void walk(RcInShm *shm, HWND parent, long depth, DWORD until, DWORD ms)
 {
     HWND c;
-    if (depth > 16)
+    if (depth > RC_IN_DEPTH_MAX)
         return;
     for (c = GetWindow(parent, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
         if (shm->nodeN >= RC_IN_NODES) {

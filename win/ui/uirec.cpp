@@ -72,6 +72,36 @@ static void put(Tail &t, int i, const char *s, unsigned cap)
     t.n[i] = n;
 }
 
+void rc_path_reset(RcPathBuilder &b)
+{
+    memset(&b, 0, sizeof(b));
+}
+
+void rc_path_next(RcPathBuilder &b, long depth, char *path, char *parent)
+{
+    if (depth < 0)
+        depth = 0;
+    if (depth > RC_IN_DEPTH_MAX)
+        depth = RC_IN_DEPTH_MAX;
+
+    if (depth == 0)
+    {
+        rc_strf(path, RC_PATH_MAX, "%ld", b.kids[0]++);
+        parent[0] = '-';
+        parent[1] = '\0';
+    }
+    else
+    {
+        rc_strncpy(parent, RC_PATH_MAX, b.at[depth - 1],
+                   (unsigned)strlen(b.at[depth - 1]));
+        rc_strf(path, RC_PATH_MAX, "%s/%ld", parent, b.kids[depth]++);
+    }
+    rc_strncpy(b.at[depth], RC_PATH_MAX, path, (unsigned)strlen(path));
+    /* A new node at this depth opens a new subtree, so its children start
+     * counting from zero again. */
+    b.kids[depth + 1] = 0;
+}
+
 unsigned rc_uirec_window(char *out, unsigned cap, const Node &n,
                          const Enrichment *e)
 {

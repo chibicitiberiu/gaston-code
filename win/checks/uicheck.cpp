@@ -245,6 +245,87 @@ static void inprocRecords(void)
     }
 }
 
+/* Paths out of a depth-first stream.
+ *
+ * The bridge walks `parent` up the chain to build a selector, so if these
+ * do not nest the ancestry is quietly lost -- no error, just worse answers
+ * and a selector that cannot tell two OK buttons apart. That is exactly
+ * what the first in-process reader did, which is why this is a test and
+ * not a careful read.
+ */
+static void paths(void)
+{
+    static RcPathBuilder b;
+    static char detail[200];
+    char p[6][RC_PATH_MAX];
+    char q[6][RC_PATH_MAX];
+    /* A dialog with two group boxes, each holding a control: the shape
+     * where a flat scheme looks right for one level and wrong for two. */
+    static const long DEPTHS[6] = { 0, 1, 2, 1, 2, 2 };
+    int i;
+
+    rc_path_reset(b);
+    for (i = 0; i < 6; i++)
+        rc_path_next(b, DEPTHS[i], p[i], q[i]);
+
+    rc_strf(detail, sizeof(detail), "%s %s %s %s %s %s",
+            p[0], p[1], p[2], p[3], p[4], p[5]);
+    say("path-nests-past-the-first-level",
+        !strcmp(p[0], "0") && !strcmp(p[1], "0/0") && !strcmp(p[2], "0/0/0")
+        && !strcmp(p[3], "0/1") && !strcmp(p[4], "0/1/0")
+        && !strcmp(p[5], "0/1/1"), detail);
+
+    rc_strf(detail, sizeof(detail), "%s %s %s %s %s %s",
+            q[0], q[1], q[2], q[3], q[4], q[5]);
+    say("path-parent-is-the-parents-path",
+        !strcmp(q[0], "-") && !strcmp(q[1], "0") && !strcmp(q[2], "0/0")
+        && !strcmp(q[3], "0") && !strcmp(q[4], "0/1")
+        && !strcmp(q[5], "0/1"), detail);
+
+    /* Every parent must be a path that was actually issued, or the bridge
+     * looks it up and finds nothing. */
+    {
+        bool linked = true;
+        int j, k;
+        for (j = 1; j < 6; j++)
+        {
+            bool found = false;
+            for (k = 0; k < j; k++)
+                if (!strcmp(q[j], p[k]))
+                    found = true;
+            if (!found)
+                linked = false;
+        }
+        say("path-every-parent-was-issued", linked,
+            "the bridge walks these up; a dangling one loses the ancestry");
+    }
+
+    {
+        /* A second root restarts, and does not inherit the first's
+         * children. */
+        static const long TWO[4] = { 0, 1, 0, 1 };
+        char r[4][RC_PATH_MAX], t[4][RC_PATH_MAX];
+        rc_path_reset(b);
+        for (i = 0; i < 4; i++)
+            rc_path_next(b, TWO[i], r[i], t[i]);
+        rc_strf(detail, sizeof(detail), "%s %s %s %s", r[0], r[1], r[2],
+                r[3]);
+        say("path-a-second-root-starts-over",
+            !strcmp(r[0], "0") && !strcmp(r[1], "0/0")
+            && !strcmp(r[2], "1") && !strcmp(r[3], "1/0"), detail);
+    }
+
+    {
+        /* Deeper than the cap is clamped, not overflowed. */
+        char r[RC_PATH_MAX], t[RC_PATH_MAX];
+        rc_path_reset(b);
+        for (i = 0; i <= RC_IN_DEPTH_MAX + 4; i++)
+            rc_path_next(b, (long)i, r, t);
+        say("path-clamps-past-the-depth-cap",
+            strlen(r) < RC_PATH_MAX && r[0] != '\0', r);
+    }
+}
+
 int main(int argc, char **argv)
 {
     static char buf[4096];
@@ -361,5 +442,6 @@ int main(int argc, char **argv)
 
     injection();
     inprocRecords();
+    paths();
     return 0;
 }

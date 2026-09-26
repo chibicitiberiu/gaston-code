@@ -47,6 +47,29 @@
 #define RC_NF_FOCUSED   0x04u
 #define RC_NF_TIMEDOUT  0x08u
 
+/* Child-index paths out of a depth-first stream of nodes.
+ *
+ * The bridge walks `parent` up the chain to build a selector, so the paths
+ * have to NEST. A first version of the in-process reader keyed the parent
+ * on the node's array index, which is not a path: a grandchild came out as
+ * "3/0" while node 3's own path was "1/2", the chain broke at the second
+ * level, and every selector silently lost its ancestry -- no error, just
+ * worse answers.
+ *
+ * Big enough to want the heap: seventeen 64-byte paths is most of the 4096
+ * a stack frame may use before Win98's guard page. */
+struct RcPathBuilder
+{
+    char at[RC_IN_DEPTH_MAX + 1][RC_PATH_MAX];
+    long kids[RC_IN_DEPTH_MAX + 2];
+};
+
+void rc_path_reset(RcPathBuilder &b);
+
+/* The next node at `depth`, given that nodes arrive depth-first. Fills
+ * `path` and `parent`, both at least RC_PATH_MAX. A root's parent is "-". */
+void rc_path_next(RcPathBuilder &b, long depth, char *path, char *parent);
+
 /* Bytes written, or 0 if it does not fit. Never a partial record. */
 unsigned rc_uirec_window(char *out, unsigned cap, const Node &n,
                          const Enrichment *e);

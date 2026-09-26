@@ -328,35 +328,34 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
     }
 
     /* The collector works in HWNDs and the wire works in paths, so the
-     * path is built here from the parent chain it reported. A node whose
-     * parent is not in the response is a root of this walk. */
+     * path is built here -- and it has to NEST, because the bridge walks
+     * `parent` up the chain to build a selector. A first version keyed the
+     * parent on the node's array index, which is not a path: a grandchild
+     * came out as "3/0" while node 3's own path was "1/2", so the chain
+     * broke at the second level and every selector silently lost its
+     * ancestry.
+     *
+     * The collector emits depth-first, exactly as `tree.cpp` does, so the
+     * same trick works: a stack indexed by depth holds the path of the
+     * node currently open at each level. On the HEAP, because seventeen
+     * 64-byte paths on the stack is most of the 4096 a frame may use
+     * before it steps over Win98's guard page. */
+    HeapPtr<RcPathBuilder> ps((RcPathBuilder *)HeapAlloc(
+        GetProcessHeap(), 0, sizeof(RcPathBuilder)));
+    if (!ps.valid())
+    {
+        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        return;
+    }
+    rc_path_reset(*ps.get());
+
     for (long i = 0; i < shm->nodeN; i++)
     {
         const RcInNode &n = shm->nodes[i];
         char path[RC_PATH_MAX];
         char parent[RC_PATH_MAX];
-        long j, index = 0;
 
-        /* Index among the siblings we actually have. Not the child index
-         * the OS would give: we are describing the tree we collected. */
-        for (j = 0; j < i; j++)
-            if (shm->nodes[j].parent == n.parent)
-                index++;
-
-        parent[0] = '\0';
-        for (j = 0; j < shm->nodeN; j++)
-            if (shm->nodes[j].hwnd == n.parent)
-            {
-                rc_strf(parent, sizeof(parent), "%ld", j);
-                break;
-            }
-        if (parent[0])
-            rc_strf(path, sizeof(path), "%s/%ld", parent, index);
-        else
-        {
-            rc_strf(path, sizeof(path), "%ld", i);
-            rc_strncpy(parent, sizeof(parent), "-", 1);
-        }
+        rc_path_next(*ps.get(), n.depth, path, parent);
 
         unsigned w = rc_uirec_inproc(sink.buf + sink.len, TreeSink::CAP - sink.len,
                                      n, path, parent);

@@ -56,6 +56,10 @@
 #define RC_IN_CLASS    32
 #define RC_IN_ITEMS    64      /* list/tree rows per response */
 #define RC_IN_ITEMLEN  64
+/* The collector's own recursion cap, and the depth the controller has to be
+ * able to build a path for. A Win32 control tree that is 16 deep does not
+ * exist; the measured ones are 4 to 6. */
+#define RC_IN_DEPTH_MAX 16
 
 #define RC_TEXTN       48      /* GDI draw ring */
 #define RC_TEXTLEN     56
