@@ -145,9 +145,21 @@ void rc_hook_shm_begin(void)
 typedef BOOL (WINAPI *PFN_TEXTOUTA)(HDC, int, int, LPCSTR, int);
 typedef BOOL (WINAPI *PFN_EXTTEXTOUTA)(HDC, int, int, UINT, CONST RECT *,
                                        LPCSTR, UINT, CONST INT *);
+typedef BOOL (WINAPI *PFN_TEXTOUTW)(HDC, int, int, LPCWSTR, int);
+typedef BOOL (WINAPI *PFN_EXTTEXTOUTW)(HDC, int, int, UINT, CONST RECT *,
+                                       LPCWSTR, UINT, CONST INT *);
 
 static PFN_TEXTOUTA    g_real_textout;
 static PFN_EXTTEXTOUTA g_real_exttextout;
+/* THE W FORMS ARE NOT OPTIONAL, and assuming they were is what gate 0.15g
+ * was written to check. It reports COMCTL32 importing ExtTextOutW and
+ * TextOutW and NEITHER of the A forms -- so a patch that covered only A
+ * would have captured nothing from the common controls, which is most of
+ * what a dialog is made of. 9x implements the W entry points as thin
+ * wrappers, but what a module IMPORTS is what its thunk points at, and the
+ * thunk is what we rewrite. */
+static PFN_TEXTOUTW    g_real_textoutw;
+static PFN_EXTTEXTOUTW g_real_exttextoutw;
 
 static void record(int x, int y, LPCSTR s, int n)
 {
@@ -175,6 +187,42 @@ static void record(int x, int y, LPCSTR s, int n)
     }
     d->text[n] = '\0';
     g_shm->ring_next = (slot + 1) % RC_TEXTN;
+}
+
+/* A wide run, narrowed into a bounded stack buffer before it is recorded.
+ *
+ * WideCharToMultiByte and not a hand-rolled fold: this runs inside somebody
+ * else's paint and the codepage is theirs, not ours. Bounded because the
+ * caller's `n` is a character count and nothing stops it being enormous. */
+static void record_w(int x, int y, LPCWSTR w, int n)
+{
+    char narrow[RC_TEXTLEN * 2];
+    int got;
+    if (!w || n <= 0)
+        return;
+    if (n > (int)sizeof(narrow) - 1)
+        n = (int)sizeof(narrow) - 1;
+    got = WideCharToMultiByte(CP_ACP, 0, w, n, narrow,
+                              (int)sizeof(narrow) - 1, NULL, NULL);
+    if (got <= 0)
+        return;
+    narrow[got] = '\0';
+    record(x, y, narrow, got);
+}
+
+static BOOL WINAPI my_textoutw(HDC dc, int x, int y, LPCWSTR s, int n)
+{
+    record_w(x, y, s, n);
+    return g_real_textoutw ? g_real_textoutw(dc, x, y, s, n) : FALSE;
+}
+
+static BOOL WINAPI my_exttextoutw(HDC dc, int x, int y, UINT opt,
+                                  CONST RECT *r, LPCWSTR s, UINT n,
+                                  CONST INT *dx)
+{
+    record_w(x, y, s, (int)n);
+    return g_real_exttextoutw
+        ? g_real_exttextoutw(dc, x, y, opt, r, s, n, dx) : FALSE;
 }
 
 static BOOL WINAPI my_textout(HDC dc, int x, int y, LPCSTR s, int n)
@@ -328,7 +376,7 @@ static void patch_text_calls(void)
         ? (PFN_MOD32)GetProcAddress(k32, "Module32First") : 0;
     PFN_MOD32 next = k32
         ? (PFN_MOD32)GetProcAddress(k32, "Module32Next") : 0;
-    void *a = NULL, *b = NULL;
+    void *a = NULL, *b = NULL, *c = NULL, *d = NULL;
     HMODULE self = NULL;
 
     /* Never ourselves: patching our own imports would route our own
@@ -347,6 +395,9 @@ static void patch_text_calls(void)
                 patch_one(me.hModule, "TextOutA", (void *)my_textout, &a);
                 patch_one(me.hModule, "ExtTextOutA", (void *)my_exttextout,
                           &b);
+                patch_one(me.hModule, "TextOutW", (void *)my_textoutw, &c);
+                patch_one(me.hModule, "ExtTextOutW",
+                          (void *)my_exttextoutw, &d);
             }
             CloseHandle(h);
         }
@@ -358,10 +409,14 @@ static void patch_text_calls(void)
         HMODULE host = GetModuleHandleA(NULL);
         patch_one(host, "TextOutA", (void *)my_textout, &a);
         patch_one(host, "ExtTextOutA", (void *)my_exttextout, &b);
+        patch_one(host, "TextOutW", (void *)my_textoutw, &c);
+        patch_one(host, "ExtTextOutW", (void *)my_exttextoutw, &d);
     }
 
     if (a) g_real_textout = (PFN_TEXTOUTA)a;
     if (b) g_real_exttextout = (PFN_EXTTEXTOUTA)b;
+    if (c) g_real_textoutw = (PFN_TEXTOUTW)c;
+    if (d) g_real_exttextoutw = (PFN_EXTTEXTOUTW)d;
     /* Only once both pass-throughs are known. Between the first patched
      * slot and this assignment, a draw would find g_real_* NULL and the
      * character would simply not appear on somebody's screen. */

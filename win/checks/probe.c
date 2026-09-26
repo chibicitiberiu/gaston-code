@@ -2436,6 +2436,145 @@ static BOOL CALLBACK find_by_pid(HWND h, LPARAM lp)
     return TRUE;
 }
 
+/* ------------------------------------------------------------ 0.15g */
+/* WHICH text call does the thing we care about actually make?
+ *
+ * D4 patches TextOutA and ExtTextOutA in every loaded module, and its
+ * stated purpose is MSHTML -- a web page is drawn there, not by the
+ * browser's executable. If MSHTML draws through ExtTextOutW, or through
+ * DrawTextA, or by ordinal, then D4 captures nothing from the one target it
+ * exists for, and it would have been built before anybody looked.
+ *
+ * Reading an import table is free and needs no injection, so this is the
+ * cheapest question in the whole section. It is asked here rather than
+ * assumed there.
+ */
+static const char *const RC_GDI_TEXT_FNS[] = {
+    "TextOutA", "TextOutW", "ExtTextOutA", "ExtTextOutW",
+    "TabbedTextOutA", "PolyTextOutA"
+};
+static const char *const RC_USER_TEXT_FNS[] = {
+    "DrawTextA", "DrawTextW", "DrawTextExA", "DrawTextExW"
+};
+
+/* Open Watcom's headers do not carry it at this WINVER. It is the top bit
+ * of the thunk word, which is how "imported by ordinal, not by name" is
+ * encoded -- hookdll.c defines it for the same reason. */
+#ifndef IMAGE_ORDINAL_FLAG
+#define IMAGE_ORDINAL_FLAG 0x80000000
+#endif
+
+/* Bounded append. lstrcatA is unbounded and the source audit refuses it,
+ * correctly: `found` is a fixed buffer and the names come from a PE header
+ * that a corrupt or hostile module controls. */
+static void append_fn(char *dst, unsigned cap, const char *what)
+{
+    unsigned n = 0, i;
+    while (n + 1 < cap && dst[n]) n++;
+    if (n && n + 1 < cap) dst[n++] = ' ';
+    for (i = 0; n + 1 < cap && what[i]; i++) dst[n++] = what[i];
+    dst[n] = '\0';
+}
+
+/* Read-only twin of hookdll's patch_import: says what a module imports
+ * without touching a byte of it. */
+static void report_imports(const char *modName, HMODULE mod)
+{
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)mod;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_IMPORT_DESCRIPTOR *imp;
+    DWORD rva;
+    char found[256];
+    unsigned fn;
+    int any = 0;
+
+    found[0] = '\0';
+    if (!mod || dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        say("  %-14s not loaded", modName);
+        return;
+    }
+    nt = (IMAGE_NT_HEADERS *)((char *)mod + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        say("  %-14s not a PE", modName);
+        return;
+    }
+    rva = nt->OptionalHeader
+            .DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!rva) { say("  %-14s imports nothing", modName); return; }
+
+    for (imp = (IMAGE_IMPORT_DESCRIPTOR *)((char *)mod + rva);
+         imp->Name; imp++) {
+        const char *dll = (const char *)mod + imp->Name;
+        IMAGE_THUNK_DATA *names;
+        int isGdi = lstrcmpiA(dll, "GDI32.DLL") == 0;
+        int isUser = lstrcmpiA(dll, "USER32.DLL") == 0;
+        if (!isGdi && !isUser)
+            continue;
+        /* OriginalFirstThunk is the by-name table. Without it there are no
+         * names to match and the patch could not find its target either --
+         * which is itself the answer, so it is reported. */
+        if (!imp->OriginalFirstThunk) {
+            say("  %-14s imports %s with no name table (bound or ordinal)",
+                modName, dll);
+            continue;
+        }
+        names = (IMAGE_THUNK_DATA *)((char *)mod + imp->OriginalFirstThunk);
+        for (; names->u1.AddressOfData; names++) {
+            IMAGE_IMPORT_BY_NAME *byname;
+            const char *have;
+            if (names->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+                continue;
+            byname = (IMAGE_IMPORT_BY_NAME *)
+                     ((char *)mod + names->u1.AddressOfData);
+            have = (const char *)byname->Name;
+            if (isGdi) {
+                for (fn = 0; fn < sizeof(RC_GDI_TEXT_FNS)
+                             / sizeof(RC_GDI_TEXT_FNS[0]); fn++)
+                    if (!strcmp(have, RC_GDI_TEXT_FNS[fn])) {
+                        append_fn(found, sizeof(found), have);
+                        any = 1;
+                    }
+            } else {
+                for (fn = 0; fn < sizeof(RC_USER_TEXT_FNS)
+                             / sizeof(RC_USER_TEXT_FNS[0]); fn++)
+                    if (!strcmp(have, RC_USER_TEXT_FNS[fn])) {
+                        append_fn(found, sizeof(found), have);
+                        any = 1;
+                    }
+        }
+        }
+    }
+    if (any) say("  %-14s %s", modName, found);
+    else     say("  %-14s no text entry point imported by name", modName);
+}
+
+static void probe_gditext(void)
+{
+    static const char *const MODS[] = {
+        "MSHTML.DLL", "COMCTL32.DLL", "USER32.DLL", "COMDLG32.DLL",
+        "SHELL32.DLL", "RICHED32.DLL"
+    };
+    unsigned i;
+
+    head("0.15g  which text call does each drawing module actually make?");
+    say("D4 patches TextOutA and ExtTextOutA. If the module that draws a web");
+    say("page imports something else, D4 captures nothing from the one target");
+    say("it exists for. Reading an import table needs no injection.");
+    say("");
+
+    report_imports("(this exe)", GetModuleHandleA(NULL));
+    for (i = 0; i < sizeof(MODS) / sizeof(MODS[0]); i++) {
+        HMODULE m = GetModuleHandleA(MODS[i]);
+        int loadedHere = 0;
+        if (!m) { m = LoadLibraryA(MODS[i]); loadedHere = m != NULL; }
+        report_imports(MODS[i], m);
+        if (loadedHere) FreeLibrary(m);
+    }
+    say("");
+    say("  A module listing ExtTextOutW or DrawTextA and NOT the A forms is");
+    say("  a module D4 would miss. Widen the patch list, do not assume.");
+}
+
 static void probe_targeted(void)
 {
     HMODULE dll;
@@ -3574,6 +3713,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "evlat"))    probe_evlat();
     if (!only || !strcmp(only, "inject"))   probe_inject();
     if (!only || !strcmp(only, "targeted")) probe_targeted();
+    if (!only || !strcmp(only, "gditext"))  probe_gditext();
     if (!only || !strcmp(only, "waitfor"))  probe_waitfor();
 
     say("");

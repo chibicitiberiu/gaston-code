@@ -31,24 +31,26 @@ REM PROBE.LOG, and the screen is not what gets sent back. If the folder is
 REM not writable -- run from the CD, or from a floppy -- every step still
 REM runs, still looks right, and leaves nothing behind. Stop here instead.
 IF NOT EXIST PROBE.LOG GOTO NOLOG
-ECHO  [2/19] threads
+ECHO  [2/20] threads
 PROBE.EXE threads
-ECHO  [3/19] 16-bit EXEC capture
+ECHO  [3/20] 16-bit EXEC capture
 PROBE.EXE exec
-ECHO  [4/19] deflate throughput  -- THE number we cannot fake
+ECHO  [4/20] deflate throughput  -- THE number we cannot fake
 PROBE.EXE deflate
-ECHO  [5/19] which hook APIs exist
+ECHO  [5/20] which hook APIs exist
 PROBE.EXE hooks
-ECHO  [6/19] do they deliver, and whose process (Notepad)
+ECHO  [6/20] do they deliver, and whose process (Notepad)
 PROBE.EXE events
-ECHO  [7/19] event latency and completeness    (Notepad)
+ECHO  [7/20] event latency and completeness    (Notepad)
 PROBE.EXE evlat
-ECHO  [8/19] WaitForControl / WaitForText      (Notepad)
+ECHO  [8/20] WaitForControl / WaitForText      (Notepad)
 PROBE.EXE waitfor
-ECHO  [9/19] can our DLL get into a process    (Notepad)
+ECHO  [9/20] can our DLL get into a process    (Notepad)
 PROBE.EXE inject
-ECHO  [10/19] can that be aimed at ONE process (Notepad)
+ECHO  [10/20] can that be aimed at ONE process (Notepad)
 PROBE.EXE targeted
+ECHO  [11/20] which text call each drawing module makes
+PROBE.EXE gditext
 CLS
 ECHO ==============================================================
 ECHO   PART TWO needs a busy screen.
@@ -71,23 +73,23 @@ ECHO.
 ECHO  Waiting for you. Press a key once the page is up.
 PAUSE
 CLS
-ECHO  [11/19] screen capture and BI_RLE8
+ECHO  [12/20] screen capture and BI_RLE8
 PROBE.EXE screen
-ECHO  [12/19] depth ladder, raw vs deflate vs RLE
+ECHO  [13/20] depth ladder, raw vs deflate vs RLE
 PROBE.EXE depths
-ECHO  [13/19] writing BMPs for off-machine checking
+ECHO  [14/20] writing BMPs for off-machine checking
 PROBE.EXE verify
-ECHO  [14/19] ImageClick, cost of a template scan
+ECHO  [15/20] ImageClick, cost of a template scan
 PROBE.EXE imgfind
-ECHO  [15/19] oleacc, foreground lock, window census
+ECHO  [16/20] oleacc, foreground lock, window census
 PROBE.EXE automation
-ECHO  [16/19] cost of a window walk
+ECHO  [17/20] cost of a window walk
 PROBE.EXE uiwalk
-ECHO  [17/19] what MSAA adds
+ECHO  [18/20] what MSAA adds
 PROBE.EXE msaa
-ECHO  [18/19] reading the browser page as a tree
+ECHO  [19/20] reading the browser page as a tree
 PROBE.EXE dom
-ECHO  [19/19] the automation library itself
+ECHO  [20/20] the automation library itself
 AUTOCHK.EXE > AUTOCHK.TXT
 CLS
 CLS
