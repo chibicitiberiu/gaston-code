@@ -18,7 +18,7 @@ We evaluated and rejected:
   Screen and input only, no exec, flaky file transfer on 98, and a polling
   server competing for the 32MB we are trying to measure.
 - **Telnet/rexec daemons** (PC Telnetd, GoodTech, REXECD/95). command.com only,
-  no UI, and `win/rpc/exec.cpp` already solves output capture better.
+  no UI, and `win/exec/execjob.cpp` (once `win/rpc/exec.cpp`) already solves output capture better.
 - **retro-agent as-is.** Covers most of the surface, but its protocol and code
   are not ours; we already took ideas from it (`FORKED.md`), and its `input.c`
   is still the planned source for input code.
@@ -54,7 +54,7 @@ can hold the box (see Protocol).
 |---|---|---|---|
 | `libcore` | `win/core/` | `rc_cpp.h` (Buf, RAII guards), log, str, path, **new** generic INI reader, **new** `App` / `Service` lifecycle, thread helper over `_beginthreadex` | Win32 only |
 | `libwire` | `win/wire/` | frame codec (split out of `frameproto`), deflate, `Connection` (socket, reader/sender threads, bounded out queue), `Listener`, lane dispatcher. The op-to-lane table is supplied by the exe | libcore, miniz |
-| `libexec` | `win/exec/` | command execution (from `exec.cpp`, made per-job), **new** process list/kill via Toolhelp32 (resolved with `GetProcAddress`: present on 98, absent on NT4), **new** `launch` | libcore |
+| `libexec` | `win/exec/` | `ExecJob` (command execution, from `exec.cpp`, per-job), `Processes` (list/kill/launch via Toolhelp32, resolved with `GetProcAddress`: present on 98, absent on NT4), `readSystemInfo`, `requestReboot`. `docs/libexec-plan.md` | libcore |
 | `libfs` | `win/fs/` | list/stat/read/write/remove/mkdir/move, chunked transfer (the sink extracted from `export.cpp`, per `BACKLOG.md` 6), drives and free space | libcore |
 | `libautomation` | `win/automation/` | screenshot, window enumeration, control tree, MSAA metadata, mouse and keyboard input | libcore |
 
@@ -188,11 +188,11 @@ class ClientApp : public App              /* app/main.cpp */
   member in one stack frame.
 - **Interfaces only at real seams**: the frame sink, the socket (so libwire
   tests run without Winsock), and the op handler. Everything else is concrete.
-- **Callbacks take a context** (`sink(void *ctx, ...)` as `exec.h` does) or are
+- **Callbacks take a context** (`sink(void *ctx, ...)`) or are
   one-method interfaces. No context-free function pointers, the pattern in
   `app/reconnect.h` that forces globals.
 - **No per-module globals in the libs.** State lives in objects the exe owns.
-  `exec.cpp`'s `g_cancel`/`g_child` become fields of an `ExecJob`.
+  `exec.cpp`'s `g_cancel`/`g_child` became fields of an `ExecJob` (done).
 - Non-copyable by private undefined copy constructor and assignment.
 
 ### Configuration
@@ -314,8 +314,8 @@ protocol and must not drift into it.
 - **The reader never waits on the out queue.** Control replies have a reserved
   slot. Bulk `DATA` blocks only the worker that produced it, and a sink whose
   connection generation has died fails fast so the job cancels itself instead
-  of hanging in `exec.cpp`'s run loop (`exec.cpp:250-262`), where neither the
-  timeout nor the cancel flag is checked while the sink blocks.
+  of hanging in `ExecJob::run` while the sink blocks: an `OutputSink` that
+  returns false ends the job with `EXEC_SINK_GONE` (libexec, step 3).
 - **The sender `select()`s for writability with a timeout** before `send`.
   `SO_SNDTIMEO` is Winsock 2 and not trusted through wsock32 on 98.
 - **Multi-frame requests** (`PUT`): the first frame opens the request; the
@@ -334,22 +334,28 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
 | `CANCEL` | `id` of target | `OK id=` (target is dead) | `no_such_id` |
 | `SYSINFO` | none | `OK` with `mem_free_kb`, `uptime_ms`. No USER/GDI free-resource numbers: `GetFreeSystemResources` is 16-bit only (`PLAN.md` Toolchain facts) | none |
 | `PS` | none | `DATA` records `pid` (unsigned: 9x pids are obfuscated pointers with the high bit set), `ppid`, `threads`, `exe`; `END count=` | `no_toolhelp` |
-| `KILL` | `pid`, optional `force=1` | `OK` | `denied` (deny list below), `no_such_pid`, `failed` |
+| `KILL` | `pid`, optional `force=1` | `OK` | `pending` (TerminateProcess said yes and the process is still there; on 98 that is not the same thing), `denied` (deny list below), `no_such_pid`, `failed` |
 | `REBOOT` | `confirm=yes`, optional `mode=logoff\|reboot\|poweroff` | `OK`, then `ExitWindowsEx` | `unconfirmed` |
 | `EXEC` | `timeout_ms`, `cwd`, optional `shell`; body is the command line | `DATA` output chunks (OEM bytes, untouched), `END exit=, truncated=, timed_out=` | `busy`, `spawn_failed` |
 | `LAUNCH` | `cwd`, `show`; body is the command line | `OK pid=` | `spawn_failed` |
 
-- **`exit` is only meaningful without a shell.** `COMMAND.COM /c` on 9x
-  probably does not pass the child's errorlevel back; verify on the guest, and
-  the Python client documents it either way.
+- **`exit` is only meaningful without a shell.** Measured on the VM
+  (`docs/measurements/execprobe-vm-gui-20260926.txt`): `COMMAND.COM /c` on 98
+  exits 0 whatever happens, even for a program that does not exist; a program
+  spawned directly returns its real code. `ExecResult::viaShell` records which,
+  and the Python client documents it.
 - **`EXEC` does not inherit handles it should not.** `CreateProcess(..., TRUE, ...)`
-  would hand the listening socket to children (true on NT and Wine, unknown on
-  9x), and a child outliving `gremote` would then hold the port. The listening
-  socket is made non-inheritable or exec inherits only the pipe handles;
-  `LAUNCH` passes `FALSE`.
-- **`KILL` deny list:** `MSGSRV32.EXE`, `KERNEL32.DLL`, `MPREXE.EXE`,
-  `MMTASK.TSK` and our own pid always; `EXPLORER.EXE` only with `force=1`.
-  Killing the first four can hang 9x.
+  hands every inheritable handle to the child. Measured: on 98 a socket is
+  **not** kept alive that way (the listener dies on the parent's
+  `closesocket` while an inheriting child runs), but on NT and Wine it is,
+  and a child outliving `gremote` would hold the port. So gremote makes its
+  listening socket non-inheritable with `DuplicateHandle(..., FALSE, ...)`,
+  which works on a SOCKET on 98 too; `LAUNCH` passes `FALSE`.
+- **`KILL` deny list** (`Processes::kill`): `MSGSRV32.EXE`, `KERNEL32.DLL`,
+  `MPREXE.EXE`, `MMTASK.TSK`, `REDIR32.EXE` and our own pid always;
+  `EXPLORER.EXE` and any 16-bit (NE) process only with `force=1`. Killing the
+  first four can hang 9x; `REDIR32` cannot be killed at all, only turned into
+  a zombie; Win16 kill safety is untested.
 - **There is no remote `QUIT`.** Stopping `gremote` remotely is `EXEC` of
   something that kills it, which is deliberate friction.
 
@@ -484,8 +490,8 @@ in every measurement taken while it is running.
   reserves in `_beginthreadex`.
 - One 64KB inbound frame buffer, one bounded out queue, a screenshot strip
   buffer, exec's 8KB chunk. No per-request heap growth; streaming everywhere.
-  `EXEC_MAX_OUT` (32KB today, `exec.cpp:39`) becomes a parameter, since the
-  remote shell streams rather than buffers.
+  The output cap is a parameter (`ExecOptions::maxOutput`; the client passes
+  32KB), since the remote shell streams rather than buffers.
 - `make check` gives `gremote.exe` its own committed-at-load cap.
 - The first P200 session measures `gremote` idle and under load, so later
   client measurements can subtract it.
@@ -531,6 +537,14 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 3. **libexec.** Move exec onto `ExecJob` (per-job cancel, id-checked), output
    cap as a parameter, handle inheritance fixed; the client's rpc adapts.
    Add process list, kill, launch.
+   *Done in code 2026-09-26 (`docs/libexec-plan.md` has the steps and
+   hashes):* `ExecJob`, `Processes`, `readSystemInfo`/`requestReboot` in
+   `win/exec/`, the client on them, EXECKILL id-checked. A probe on the VM
+   first (`win/checks/execprobe.cpp`) found that a stop never worked on 98 --
+   the pid exec held was `REDIR32.EXE`, which TerminateProcess cannot end
+   (`BACKLOG.md` 14) -- so a stop now ends the whole tree. **Not yet run on
+   the guest**, and the stop path is provisional until `execprobe --stops`
+   runs there (plan step 0b).
 4. **`gremote.exe` v0 + Python client.** App, config, listener, AUTH/HELLO,
    control and job lanes, per the op table. **First prove Wine can host a
    listening exe that pytest connects to:** every existing Wine test runs the

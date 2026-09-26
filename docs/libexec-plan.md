@@ -175,4 +175,32 @@ unchanged.
 
 ## Progress
 
-- 0: probe, measurements, BACKLOG §14, this file.
+All in code and tested locally (Wine) on 2026-09-26. **Nothing here has run
+on the guest yet**: the user asked for local testing only.
+
+- 0 `78bf95c`: probe, measurements, BACKLOG 14, this file.
+- 0b `a146cf1`: `execprobe --stops` written and smoke-run under Wine. **Not
+  run on the VM.** Reboot the guest before (5 REDIR32 and 2 WINOA386 zombies
+  from the first probe are still there) and after.
+- 1 `c176f44`: `ExecJob`; one job per EXEC. execcheck found a cancel
+  reported as `ok` (the killed child's exit beat the flag); fixed.
+- 2 `65261a8`: EXECKILL id-checked under `g_lock`; a kill for a queued EXEC
+  takes it out of the slot. BACKLOG 9's exec part closed.
+- 3 `07f62e4`: `OutputSink` returning false ends the job (`EXEC_SINK_GONE`),
+  only for a dead link; `viaShell`.
+- 4 `f6273e6`: `Processes`: list, descendants, kill (`KILL_PENDING`, deny
+  list), launch, `isWin16Exe`.
+- 5 `24f6493`: `cancel()` only signals; `stopJobTree` on the job's thread,
+  never TerminateProcess on REDIR32, `stopLeaked` logged. Provisional until
+  0b's results. BACKLOG 14 narrowed, not closed.
+- 6 `5288800`: `readSystemInfo`, `requestReboot`; HELLO reads the numbers.
+- 7: docs (this entry).
+
+Committed at load: 387,417 before, 394,601 after (the static 8KB chunk
+went; `Processes` and its vector code came in).
+
+Still to do on the guest, in order: reboot; `execprobe --detach --stops`,
+and pick the stop from its results; `execcheck`; the client's exec turn,
+timeout on a DOS loop, EXECKILL mid-run and a stale EXECKILL, then
+`execprobe --list` shows no new REDIR32 or WINOA386 (or, if 0b finds no
+clean stop, exactly one REDIR32 per stop, as logged).

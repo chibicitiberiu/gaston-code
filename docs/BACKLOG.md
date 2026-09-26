@@ -650,7 +650,7 @@ points -- the guest's single-instance mutex
 (`"RetroClaudeSingleInstance"`) and `FindWindowA("RetroClaudeWnd")`
 forbidding a second window (`win/app/main.cpp:1822-1824`), and every
 worker-side module being a hard singleton (`g_net` in `rpc.cpp:56`,
-`g_cancel`/`g_child` in `exec.cpp:47-49`, `g_root`/`g_put` in
+`g_cancel`/`g_child` in `exec.cpp` (gone since libexec: per-job now), `g_root`/`g_put` in
 `syncrpc.cpp:18,153`) -- only matter if R7 means multiple *windows on one
 guest*. PLAN.md's R7 text says "the bridge should take multiple **clients**"
 and describes `self._guests: dict[client_id, GuestSession]`, which reads as
@@ -1216,9 +1216,9 @@ exit, swaps, relaunches, and the client reconnects on its own backoff.
   error and a backoff).
 - Leave `RETROCL.INI` out of the rollback: it is read from the exe's own
   directory and `win/core/ini.cpp` defaults anything missing.
-- Still uncovered: a page fault leaves an orphaned child, because
-  `rc_exec_cancel()` runs only on the graceful path (`rc_net_stop` ->
-  `rc_rpc_stop`, `win/rpc/rpc.cpp:808`). Survivable on a dev box; worth knowing.
+- Still uncovered: a page fault leaves an orphaned child, because the running
+  `ExecJob` is cancelled only on the graceful path (`rc_net_stop` ->
+  `rc_rpc_stop`). Survivable on a dev box; worth knowing.
 
 ### What already works, which makes this cheaper than it looks
 
@@ -1340,7 +1340,7 @@ done -- and neither is any guest run of the new stop path.
 On 98 a piped `COMMAND.COM /c` spawn is three processes: the pid
 `CreateProcess` returns is `REDIR32.EXE`, its child is the DOS VM
 (`WINOA386.MOD`), and a Win32 program the command runs is the VM's child.
-`rc_exec_cancel` and the timeout path call `TerminateProcess` on that pid.
+`rc_exec_cancel` and the timeout path called `TerminateProcess` on that pid.
 It returns TRUE and nothing happens: the command keeps running, and
 `REDIR32` stays behind with one thread, orphaned, more than ten minutes later
 and presumably until reboot. **Every exec timeout and every EXECKILL leaks

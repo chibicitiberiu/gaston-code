@@ -2,7 +2,7 @@
  *
  * 03.52: this file and sync.cpp both used to define functions under the bare
  * `rc_sync_` prefix -- unlike every other module, which gets its own segment
- * (rc_net_, rc_rpc_, rc_html_, rc_exec_, rc_frame_) -- so "which file is
+ * (rc_net_, rc_rpc_, rc_html_, rc_frame_) -- so "which file is
  * rc_sync_X in" was not answerable from the name alone. sync.h/sync.cpp keep
  * `rc_sync_` (the larger file: scanning, checksums, the manifest row format,
  * the module's actual name); the three functions declared here, which are

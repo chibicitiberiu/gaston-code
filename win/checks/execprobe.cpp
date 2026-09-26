@@ -222,7 +222,7 @@ static void sweep(const char *key, const std::vector<Proc> &base)
 static char g_dir[MAX_PATH];
 static char g_shell[MAX_PATH];
 
-/* As exec.cpp does it: one inheritable pipe for stdout+stderr, a stdin whose
+/* As ExecJob does it: one inheritable pipe for stdout+stderr, a stdin whose
  * write end is closed, the read end made non-inheritable, SW_HIDE. */
 struct Child
 {

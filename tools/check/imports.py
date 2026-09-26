@@ -67,7 +67,7 @@ NT_ONLY = {
     # Named in our own comments as deliberately avoided:
     "MoveFileExA":        "win/sync/sync.cpp -- wants it for an atomic commit",
     "MoveFileExW":        "NT-only",
-    "SetHandleInformation": "win/rpc/exec.cpp documents avoiding it",
+    "SetHandleInformation": "win/exec/execjob.cpp documents avoiding it",
     "GetDiskFreeSpaceExA":  "win/app/workcopy.cpp documents avoiding it",
     "GetDiskFreeSpaceExW":  "NT-only",
     # The usual neighbours a well-meaning edit reaches for:
