@@ -1377,7 +1377,7 @@ Found alongside, for the exec tool's description: through `COMMAND.COM /c`
 the exit code is **always 0**, even for a program that does not exist. The
 client sends it as `code=` in `EXECRESULT` unchanged.
 
-## 10. The injection gates leave the guest in an unknown state
+## 15. The injection gates leave the guest in an unknown state
 
 **What happened.** On 2026-09-26 a session ran gates 0.15d (system-wide
 `WH_CBT` injection), 0.15f (thread-targeted injection, four hook types) and
