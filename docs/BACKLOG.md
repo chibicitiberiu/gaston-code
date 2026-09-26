@@ -1634,6 +1634,26 @@ on 9x there is no quiet way to raise a window across a process boundary.
   already; `win/app/bar.h` is the pattern for something loud and transient
   (it is how the permission bar works).
 
+### Known and accepted: manual approval makes the foreground flap
+
+Observed in real use 2026-09-27, and accepted for now rather than treated as a
+defect. With the permission mode on Manual, every approved screen op moves the
+foreground twice:
+
+1. the bar appears on the client, and pressing **Allow** raises the CLIENT,
+   which is a click on the client's window like any other;
+2. the op then runs and raises the TARGET, because since §16 that is what
+   `click` does when the control is covered -- and after step 1 it usually is.
+
+So the window under the pointer changes twice per approval, and anything the
+person types in between lands wherever the foreground happens to be. It is
+awkward rather than wrong, and it is worse for a sequence of ops than for one.
+
+It is recorded here because it bears on the two open decisions below rather
+than standing alone: a quiet status pane is harder to justify when the screen
+is visibly flapping, and it is an argument for the feature being off unless
+someone has chosen it.
+
 **Open decisions, deliberately not taken here:**
 
 1. Indicator style: a quiet status pane whenever enabled, a loud bar only
