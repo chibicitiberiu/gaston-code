@@ -99,7 +99,21 @@ public:
      * what a walk uses to decide whether a node is worth enriching. */
     bool matchesLeaf(const Node &n, const Enrichment *e) const;
 
+    /* The same test against any step, which `Resolver` needs to walk an
+     * ancestor chain. `matchesLeaf` is this with i = stepCount() - 1. */
+    bool matchesStep(int i, const Node &n, const Enrichment *e) const;
+
+    /* Does this selector name any MSAA attribute at all? What a caller asks
+     * before building an `MsaaSource`. */
     bool needsEnrichment() const { return m_needsMsaa != 0; }
+
+    /* Does testing step `i` against THIS node need MSAA? Not the same
+     * question, and the difference is the whole point of `Node::role`: a
+     * standard control carries a role derived from its class and style, so
+     * `[role=checkbox]` on a real checkbox is answered for free and must not
+     * drag a cross-process call in behind it. Only a class the walk did not
+     * recognise falls through. */
+    bool stepNeedsEnrichment(int i, const Node &n) const;
 
     /* WHICH MSAA fields, not merely whether. Each one is a separate COM
      * call into another process; fetching all three when the selector asks

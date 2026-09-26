@@ -22,6 +22,56 @@ WalkOptions::WalkOptions()
     wantText = true;
 }
 
+/* Names match MSAA's, lowercased and unspaced, so a selector written
+ * `[role=pushbutton]` matches whether the role came from here or from
+ * oleacc's GetRoleTextA. The two must not drift: msaa.cpp normalises "push
+ * button" to exactly this spelling. */
+const char *roleFromClassAndStyle(const char *cls, DWORD style)
+{
+    if (!cls || !cls[0])
+        return 0;
+
+    if (!lstrcmpiA(cls, "Button"))
+    {
+        /* BS_TYPEMASK is the low nibble. A Button's style is the only place
+         * the difference between a push button, a checkbox and a radio
+         * button lives -- the class name says "Button" for all three. */
+        switch (style & 0x0FL)
+        {
+        case BS_PUSHBUTTON:
+        case BS_DEFPUSHBUTTON:      return "pushbutton";
+        case BS_CHECKBOX:
+        case BS_AUTOCHECKBOX:
+        case BS_3STATE:
+        case BS_AUTO3STATE:         return "checkbox";
+        case BS_RADIOBUTTON:
+        case BS_AUTORADIOBUTTON:    return "radiobutton";
+        case BS_GROUPBOX:           return "grouping";
+        default:                    return "pushbutton";
+        }
+    }
+
+    if (!lstrcmpiA(cls, "Edit"))                return "text";
+    if (!lstrcmpiA(cls, "Static"))              return "statictext";
+    if (!lstrcmpiA(cls, "ListBox"))             return "list";
+    if (!lstrcmpiA(cls, "ComboBox"))            return "combobox";
+    if (!lstrcmpiA(cls, "ScrollBar"))           return "scrollbar";
+    if (!lstrcmpiA(cls, "SysListView32"))       return "list";
+    if (!lstrcmpiA(cls, "SysTreeView32"))       return "outline";
+    if (!lstrcmpiA(cls, "SysTabControl32"))     return "pagetablist";
+    if (!lstrcmpiA(cls, "ToolbarWindow32"))     return "toolbar";
+    if (!lstrcmpiA(cls, "msctls_statusbar32"))  return "statusbar";
+    if (!lstrcmpiA(cls, "msctls_progress32"))   return "progressbar";
+    if (!lstrcmpiA(cls, "msctls_trackbar32"))   return "slider";
+    if (!lstrcmpiA(cls, "msctls_updown32"))     return "spinbutton";
+    if (!lstrcmpiA(cls, "SysHeader32"))         return "list";
+    if (!lstrcmpiA(cls, "#32770"))              return "dialog";
+
+    /* Unknown. NOT a guess: an empty role is what tells a caller this is
+     * the residue MSAA is for. */
+    return 0;
+}
+
 TreeWalker::TreeWalker()
 {
     m_slowN = 0;
@@ -81,6 +131,13 @@ void TreeWalker::fill(Node &n, HWND h, const WalkOptions &opt,
     n.focused = (GetFocus() == h);
     GetWindowRect(h, &n.rect);
     GetClassNameA(h, n.cls, sizeof(n.cls));
+
+    /* Free: both inputs are already read above. */
+    {
+        const char *r = roleFromClassAndStyle(n.cls, n.style);
+        if (r)
+            rc_strncpy(n.role, sizeof(n.role), r, (unsigned)strlen(r));
+    }
 
     /* "0/3/1" -- survives a repaint, which an HWND does too but a caption
      * does not. rc_strf rather than sprintf: the unbounded family fails the

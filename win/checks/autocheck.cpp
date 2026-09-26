@@ -11,6 +11,7 @@
  */
 #include "automation/tree.h"
 #include "automation/select.h"
+#include "automation/resolve.h"
 #include "automation/input.h"
 #include "automation/msaa.h"
 #include "automation/shot.h"
@@ -275,6 +276,216 @@ void walking(void)
     DestroyWindow(kid);
     DestroyWindow(top);
     UnregisterClassA("GastonAutoCheck", wc.hInstance);
+}
+
+/* --- resolving ------------------------------------------------------
+ *
+ * The join between a parsed selector and a walk. Everything here is pure
+ * tree shape and string work, so Wine settles it completely -- these are
+ * the cases that were parsed and then silently ignored before `Resolver`
+ * existed: `>` versus descendant, `:nth`, and refusing to guess when more
+ * than one control answers to the same name.
+ */
+
+struct ResolveWant
+{
+    ResolveOutcome outcome;
+    int            count;      /* -1: do not care */
+    const char    *text;       /* NULL: do not care */
+    int            enriched;   /* -1: do not care */
+};
+
+static HWND checkResolve(const char *name, HWND root, const char *sel,
+                         MsaaSource *msaa, const ResolveWant &want)
+{
+    static Selector s;
+    static char err[128];
+    static char detail[256];
+
+    if (!s.parse(sel, err, sizeof(err)))
+    {
+        say(name, false, err);
+        return NULL;
+    }
+
+    WalkOptions o;
+    o.root = root;
+    o.visibleOnly = false;
+    o.wantText = true;
+
+    Resolver r(s, msaa);
+    TreeWalker w;
+    ResolveOutcome got = r.resolve(o, w);
+    const Node *m = r.match();
+
+    bool ok = (got == want.outcome);
+    if (ok && want.count >= 0)
+        ok = (r.matchCount() == want.count);
+    if (ok && want.text)
+        ok = (m != 0 && strcmp(m->text, want.text) == 0);
+    if (ok && want.enriched >= 0)
+        ok = (r.enriched() == want.enriched);
+
+    rc_strf(detail, sizeof(detail),
+            "%s -> outcome=%d count=%d text=\"%s\" enriched=%d",
+            sel, (int)got, r.matchCount(), m ? m->text : "", r.enriched());
+    say(name, ok, detail);
+    return m ? m->hwnd : NULL;
+}
+
+void resolving(void)
+{
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)sinkProc;
+    wc.hInstance = GetModuleHandleA(NULL);
+
+    wc.lpszClassName = "GRTop";  RegisterClassA(&wc);
+    wc.lpszClassName = "GRMid";  RegisterClassA(&wc);
+    wc.lpszClassName = "GRLeaf"; RegisterClassA(&wc);
+
+    /* top
+     *  +- mid1 -- leaf "alpha"
+     *  +- mid2 -- leaf "beta"
+     *  +- leaf "gamma"          <- the only DIRECT GRLeaf child of top
+     *  +- Button (BS_AUTOCHECKBOX)
+     *
+     * Three GRLeaf nodes so ambiguity has something to count, at two
+     * different depths so `>` and descendant give different answers. */
+    HWND top = CreateWindowExA(0, "GRTop", "top", WS_POPUP,
+                               0, 0, 80, 80, NULL, NULL, wc.hInstance, NULL);
+    HWND mid1 = CreateWindowExA(0, "GRMid", "mid1", WS_CHILD,
+                                0, 0, 20, 20, top, NULL, wc.hInstance, NULL);
+    HWND mid2 = CreateWindowExA(0, "GRMid", "mid2", WS_CHILD,
+                                0, 0, 20, 20, top, NULL, wc.hInstance, NULL);
+    HWND leaf1 = CreateWindowExA(0, "GRLeaf", "alpha", WS_CHILD,
+                                 0, 0, 10, 10, mid1, NULL, wc.hInstance, NULL);
+    HWND leaf2 = CreateWindowExA(0, "GRLeaf", "beta", WS_CHILD,
+                                 0, 0, 10, 10, mid2, NULL, wc.hInstance, NULL);
+    HWND leaf3 = CreateWindowExA(0, "GRLeaf", "gamma", WS_CHILD,
+                                 0, 0, 10, 10, top, NULL, wc.hInstance, NULL);
+    HWND chk = CreateWindowExA(0, "Button", "tick", WS_CHILD | BS_AUTOCHECKBOX,
+                               0, 0, 10, 10, top, NULL, wc.hInstance, NULL);
+    static ResolveWant want;
+
+    /* One match is an answer. */
+    want.outcome = RESOLVE_OK; want.count = 1; want.text = "gamma";
+    want.enriched = 0;
+    checkResolve("resolve-single", top, "GRTop > GRLeaf", NULL, want);
+
+    /* The same selector without the '>' reaches all three, which is the
+     * proof that directChild is read and not merely parsed. */
+    want.outcome = RESOLVE_AMBIGUOUS; want.count = 3; want.text = NULL;
+    want.enriched = 0;
+    checkResolve("resolve-descendant-reaches-deeper", top, "GRTop GRLeaf",
+                 NULL, want);
+
+    /* A grandchild is NOT a direct child. Before Resolver this matched. */
+    want.outcome = RESOLVE_NONE; want.count = 0; want.text = NULL;
+    want.enriched = -1;
+    checkResolve("resolve-direct-child-excludes-grandchild", top,
+                 "GRTop > GRLeaf[text=\"alpha\"]", NULL, want);
+
+    /* ...and the descendant form of the same thing does match it, so the
+     * miss above is the combinator and not a broken text test. */
+    want.outcome = RESOLVE_OK; want.count = 1; want.text = "alpha";
+    want.enriched = 0;
+    checkResolve("resolve-descendant-finds-grandchild", top,
+                 "GRTop GRLeaf[text=\"alpha\"]", NULL, want);
+
+    /* A three-step chain, every level named. */
+    want.outcome = RESOLVE_OK; want.count = 1; want.text = "beta";
+    want.enriched = 0;
+    checkResolve("resolve-three-step-chain", top,
+                 "GRTop > GRMid > GRLeaf[text=\"beta\"]", NULL, want);
+
+    /* An ancestor that is not there. */
+    want.outcome = RESOLVE_NONE; want.count = 0; want.text = NULL;
+    want.enriched = -1;
+    checkResolve("resolve-missing-ancestor", top, "GRLeaf GRLeaf", NULL, want);
+    checkResolve("resolve-missing-class", top, "GRNope", NULL, want);
+
+    /* Ambiguity is an ERROR with an EXACT count, not a first match. The
+     * count is what the caller needs to know whether the :nth(n) it is
+     * about to write exists at all. */
+    want.outcome = RESOLVE_AMBIGUOUS; want.count = 3; want.text = NULL;
+    want.enriched = -1;
+    checkResolve("resolve-ambiguous-counts-all", top, "GRLeaf", NULL, want);
+
+    /* :nth resolves that ambiguity deliberately, and runs out where the
+     * matches do. */
+    want.outcome = RESOLVE_OK; want.count = 1; want.text = NULL;
+    want.enriched = -1;
+    HWND n1 = checkResolve("resolve-nth-first", top, "GRLeaf:nth(1)", NULL,
+                           want);
+    want.count = 2;
+    HWND n2 = checkResolve("resolve-nth-second", top, "GRLeaf:nth(2)", NULL,
+                           want);
+    want.count = 3;
+    HWND n3 = checkResolve("resolve-nth-third", top, "GRLeaf:nth(3)", NULL,
+                           want);
+    want.outcome = RESOLVE_NONE; want.count = 3;
+    checkResolve("resolve-nth-past-the-end", top, "GRLeaf:nth(4)", NULL, want);
+
+    {
+        /* Ordinals must address DIFFERENT nodes. Which one is first depends
+         * on sibling z-order, so the assertion is distinctness and not a
+         * particular caption. */
+        static char detail[128];
+        bool distinct = n1 && n2 && n3 && n1 != n2 && n2 != n3 && n1 != n3;
+        rc_strf(detail, sizeof(detail), "%p %p %p", (void *)n1, (void *)n2,
+                (void *)n3);
+        say("resolve-nth-picks-distinct-nodes", distinct, detail);
+    }
+
+    /* A truncated walk is not an absence. Saying so is the difference
+     * between a caller retrying and a caller concluding the control is
+     * gone. */
+    {
+        static Selector s;
+        static char err[128];
+        static char detail[128];
+        s.parse("GRNope", err, sizeof(err));
+        WalkOptions o;
+        o.root = top;
+        o.visibleOnly = false;
+        o.maxNodes = 2;
+        Resolver r(s, NULL);
+        TreeWalker w;
+        ResolveOutcome got = r.resolve(o, w);
+        rc_strf(detail, sizeof(detail), "outcome=%d end=%d", (int)got,
+                (int)r.walkEnd());
+        say("resolve-reports-truncation", got == RESOLVE_TRUNCATED, detail);
+    }
+
+    /* The free role. A Button's style IS its role, so [role=checkbox] on a
+     * real checkbox must resolve with ZERO cross-process calls -- that is
+     * the 46-of-82 controls that never reach MSAA. */
+    want.outcome = RESOLVE_OK; want.count = 1; want.text = NULL;
+    want.enriched = 0;
+    checkResolve("resolve-role-from-style-is-free", top,
+                 "GRTop > Button[role=checkbox]", NULL, want);
+    want.outcome = RESOLVE_NONE; want.count = 0; want.enriched = 0;
+    checkResolve("resolve-role-from-style-rejects", top,
+                 "GRTop > Button[role=pushbutton]", NULL, want);
+
+    /* An unrecognised class has no free role, and with no MSAA to ask the
+     * node is REFUSED rather than guessed at. Answering "probably" here is
+     * how a caller ends up clicking the wrong control. */
+    want.outcome = RESOLVE_NONE; want.count = 0; want.enriched = -1;
+    checkResolve("resolve-refuses-msaa-attr-without-source", top,
+                 "GRLeaf[role=pushbutton]", NULL, want);
+
+    DestroyWindow(chk);
+    DestroyWindow(leaf3);
+    DestroyWindow(leaf2);
+    DestroyWindow(leaf1);
+    DestroyWindow(mid2);
+    DestroyWindow(mid1);
+    DestroyWindow(top);
+    UnregisterClassA("GRLeaf", wc.hInstance);
+    UnregisterClassA("GRMid", wc.hInstance);
+    UnregisterClassA("GRTop", wc.hInstance);
 }
 
 /* --- input refusals -------------------------------------------------
@@ -579,6 +790,7 @@ int main(int argc, char **argv)
     grammar();
     matching();
     walking();
+    resolving();
     inputRefusals();
     enrichment();
     capture();

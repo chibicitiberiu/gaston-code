@@ -257,6 +257,17 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
         rc_strf(err, errCap, "nothing to match");
         return false;
     }
+    /* :nth counts the nodes the whole selector matched, so it only means
+     * anything on the final step. Accepting it elsewhere and ignoring it
+     * would return a confidently wrong control, which is the one outcome
+     * this grammar exists to rule out. */
+    for (int i = 0; i < m_stepN - 1; i++)
+        if (m_steps[i].nth)
+        {
+            rc_strf(err, errCap, ":nth belongs on the last step, not step %d",
+                    i + 1);
+            return false;
+        }
     return true;
 }
 
@@ -282,7 +293,37 @@ bool Selector::matchesLeaf(const Node &n, const Enrichment *e) const
 {
     if (m_stepN == 0)
         return false;
-    const SelStep &s = m_steps[m_stepN - 1];
+    return matchesStep(m_stepN - 1, n, e);
+}
+
+bool Selector::stepNeedsEnrichment(int i, const Node &n) const
+{
+    if (i < 0 || i >= m_stepN)
+        return false;
+    const SelStep &s = m_steps[i];
+    for (int k = 0; k < s.attrN; k++)
+    {
+        switch (s.attrs[k].which)
+        {
+        case ATTR_NAME:
+        case ATTR_VALUE:
+            return true;
+        case ATTR_ROLE:
+            if (!n.role[0])
+                return true;
+            break;
+        case ATTR_TEXT:
+            break;
+        }
+    }
+    return false;
+}
+
+bool Selector::matchesStep(int i, const Node &n, const Enrichment *e) const
+{
+    if (i < 0 || i >= m_stepN)
+        return false;
+    const SelStep &s = m_steps[i];
 
     if (s.cls[0] && strcmp(n.cls, s.cls))
         return false;
@@ -306,7 +347,15 @@ bool Selector::matchesLeaf(const Node &n, const Enrichment *e) const
          * this node yet. That is "unknown", not "no": saying false here
          * would quietly drop every candidate before it could be enriched. */
         case ATTR_NAME:  if (!e) return true; have = e->name;  break;
-        case ATTR_ROLE:  if (!e) return true; have = e->role;  break;
+        /* The walk already derived a role from class and style for every
+         * standard control, at no cost. MSAA is consulted only for the
+         * classes that produced nothing -- which is the whole point of
+         * carrying `Node::role`. */
+        case ATTR_ROLE:
+            if (n.role[0]) { have = n.role; break; }
+            if (!e) return true;
+            have = e->role;
+            break;
         case ATTR_VALUE: if (!e) return true; have = e->value; break;
         }
         if (!testOne(have, t))
