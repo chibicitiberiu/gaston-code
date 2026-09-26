@@ -68,6 +68,7 @@ void grammar(void)
     checkParses("parse-pseudo",       "Edit:visible:enabled", true);
     checkParses("parse-nth",          "Button:nth(2)", true);
     checkParses("parse-attr-action",  "[action=press]", true);
+    checkParses("parse-attr-class",   "[class=\"#32770\"]", true);
     checkParses("parse-attr-state",   "[state*=\"checked\"]", true);
     checkParses("parse-combined",     "Notepad > Edit[text^=\"a\"]:visible",
                 true);
@@ -145,6 +146,19 @@ void matching(void)
                            false);
 
     checkMatch("match-class",       "Edit", edit, NULL, true);
+    /* A dialog's class is literally "#32770", and written bare that parses
+     * as a control id -- so the one class an agent most needs to name was
+     * the one the grammar could not express. */
+    {
+        static Node dlg;
+        dlg = makeNode("#32770", "Save As", 0, true, true, false);
+        checkMatch("match-class-attribute", "[class=\"#32770\"]", dlg, NULL,
+                   true);
+        checkMatch("match-class-attribute-rejects", "[class=\"#32770\"]",
+                   edit, NULL, false);
+        checkMatch("match-hash-is-a-ctrl-id-not-a-class", "#32770", dlg,
+                   NULL, false);
+    }
     checkMatch("match-wrong-class", "Button", edit, NULL, false);
     checkMatch("match-ctrlid",      "#1001", edit, NULL, true);
     checkMatch("match-wrong-ctrlid","#42", edit, NULL, false);

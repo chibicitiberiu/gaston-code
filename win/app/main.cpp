@@ -16,6 +16,7 @@
 
 #include "app/config.h"
 #include "app/connservice.h"
+#include "ui/uiservice.h"
 #include "app/mainwindow.h"
 #include "app/oleservice.h"
 #include "core/app.h"
@@ -64,6 +65,10 @@ private:
     UniqueObj<OleService> m_ole;
     UniqueObj<MainWindow> m_window;
     UniqueObj<ConnectionService> m_connection;
+    /* Last, because it depends on nothing but the net, and stopped FIRST:
+     * it drives other people's applications and should let go of them
+     * before anything else starts tearing down. */
+    UniqueObj<UiService> m_ui;
 };
 
 ClientApp::ClientApp(HINSTANCE instance, int show)
@@ -192,12 +197,14 @@ bool ClientApp::initializeServices()
            initService(m_window, new MainWindow(instance(), m_show, this,
                                                 &m_config, m_store.get(),
                                                 m_exeDir, &m_net)) &&
-           initService(m_connection, new ConnectionService(&m_net));
+           initService(m_connection, new ConnectionService(&m_net)) &&
+           initService(m_ui, new UiService(&m_net));
 }
 
 bool ClientApp::startServices()
 {
-    return m_ole->start() && m_window->start() && m_connection->start();
+    return m_ole->start() && m_window->start() && m_connection->start() &&
+           m_ui->start();
 }
 
 bool ClientApp::preTranslate(MSG &msg)
@@ -210,9 +217,11 @@ void ClientApp::stopServices()
     /* Signal all, then join each, in reverse. The connection stops first,
      * while the window its reader posts frames to still exists; OLE goes
      * last, after the window has released MSHTML. */
+    if (m_ui.valid()) m_ui->signalStop();
     if (m_connection.valid()) m_connection->signalStop();
     if (m_window.valid()) m_window->signalStop();
     if (m_ole.valid()) m_ole->signalStop();
+    joinOrLeak(m_ui, 5000);
     joinOrLeak(m_connection, 5000);
     joinOrLeak(m_window, 5000);
     joinOrLeak(m_ole, 5000);
@@ -220,6 +229,7 @@ void ClientApp::stopServices()
 
 void ClientApp::cleanup()
 {
+    m_ui.reset();
     m_connection.reset();
     m_window.reset();
     m_ole.reset();

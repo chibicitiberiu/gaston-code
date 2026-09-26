@@ -141,6 +141,7 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
                     return false;
                 }
                 if (!strcmp(key, "text"))       t.which = ATTR_TEXT;
+                else if (!strcmp(key, "class")) t.which = ATTR_CLASS;
                 else if (!strcmp(key, "name"))  { t.which = ATTR_NAME;
                                                   m_needsMsaa |= WANT_NAME; }
                 else if (!strcmp(key, "role"))  { t.which = ATTR_ROLE;
@@ -153,8 +154,8 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
                                                   m_needsMsaa |= WANT_STATE; }
                 else
                 {
-                    rc_strf(err, errCap, "unknown attribute '%s' "
-                            "(text, name, role, value, action, state)", key);
+                    rc_strf(err, errCap, "unknown attribute '%s' (text, "
+                            "class, name, role, value, action, state)", key);
                     return false;
                 }
 
@@ -318,6 +319,7 @@ bool Selector::stepNeedsEnrichment(int i, const Node &n) const
                 return true;
             break;
         case ATTR_TEXT:
+        case ATTR_CLASS:
             break;
         }
     }
@@ -348,6 +350,9 @@ bool Selector::matchesStep(int i, const Node &n, const Enrichment *e) const
         switch (t.which)
         {
         case ATTR_TEXT:  have = n.text; break;
+        /* Free, like the bare class name it exists beside: the walk read it
+         * with GetClassName before any of this. */
+        case ATTR_CLASS: have = n.cls;  break;
         /* No enrichment supplied means the caller has not paid for MSAA on
          * this node yet. That is "unknown", not "no": saying false here
          * would quietly drop every candidate before it could be enriched. */

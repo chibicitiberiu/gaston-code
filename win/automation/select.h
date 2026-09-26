@@ -8,6 +8,11 @@
  * for which CSS is far better represented in anything to do with UI.
  *
  *   Notepad                class name
+ *   [class="#32770"]       ...when the class is not a bare identifier. A
+ *                          Win32 dialog's class IS "#32770", and written
+ *                          bare that is a control id, not a class -- so
+ *                          without this the one class an agent most needs
+ *                          to name is the one it cannot.
  *   #1001                  control id (GetDlgCtrlID)
  *   Notepad > Edit         direct child
  *   Notepad Edit           any descendant
@@ -58,6 +63,7 @@ enum AttrOp
 enum AttrWhich
 {
     ATTR_TEXT = 0,
+    ATTR_CLASS,       /* free: the walk already read it */
     ATTR_NAME,        /* MSAA */
     ATTR_ROLE,        /* MSAA */
     ATTR_VALUE,       /* MSAA */

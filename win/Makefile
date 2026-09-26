@@ -133,8 +133,11 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) rpc/exec.cpp \
-       rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp
-OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBWIRE) $(LIBCORE)
+       rpc/rpc.cpp sync/sync.cpp sync/syncrpc.cpp \
+       ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp
+# libautomation before libwire before libcore: both of the first two call
+# into libcore, and wlink resolves in the order the libraries are named.
+OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 
 .PHONY: uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
@@ -341,7 +344,8 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBWIRE) $(LIBCORE)
+                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp) \
+                $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -354,7 +358,8 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/exec.cpp rpc/rpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp) $(LIBWIRE) $(LIBCORE)
+                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp) \
+                $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)

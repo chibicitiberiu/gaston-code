@@ -62,7 +62,15 @@ typedef enum {
     RC_LANE_UI = 0,
     RC_LANE_JOB,
     RC_LANE_STREAM,
-    RC_LANE_IMMEDIATE
+    RC_LANE_IMMEDIATE,
+    /* The DESKTOP, not our own window -- RC_LANE_UI above is the client's
+     * message loop and this is the worker that drives other applications.
+     * They are deliberately not the same thread: a tree walk sends
+     * WM_GETTEXT, a same-thread SendMessage is a direct call, and reaching
+     * our own in-place-active HTML control from inside an RPC handler is
+     * reentrancy. A wait is seconds long by design, and RC_LANE_UI is the
+     * thread that repaints. See docs/UIAUTOMATION.md. */
+    RC_LANE_DESKTOP
 } rc_lane;
 
 typedef struct {
