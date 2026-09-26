@@ -1460,3 +1460,46 @@ What it would take:
 
 Until then an agent driving a desktop can read anything and click only what
 happens to be on top.
+
+---
+
+## 17. Gaps found testing exec on the guest
+
+**Status:** recorded 2026-09-27 from the libexec work on the VM (probes,
+`tools/probe/execkill.py`, and an end-to-end run with a Haiku agent,
+`docs/measurements/e2e-vm-20260927.txt`). Each line says where it is owned.
+
+- **No way to bring a window to the front.** Found by the ui work: an agent
+  is told a control is occluded and has no tool to raise its window. §16.
+- **A DOS program that has to be stopped still leaks one REDIR32** (~150KB
+  until reboot), and its stop costs the client's worker ~10s (the 8s grace,
+  then the VM kill): a 3s timeout on `choice` answered after 13s. A Win32
+  program under the shell stops cleanly in under 4s. §14.
+- **Exit codes through COMMAND.COM are always 0.** The agent is now told so
+  (the `command.com` profile note); the wire still carries `code=0`, and
+  libexec's `ExecResult::viaShell` is not yet sent anywhere.
+- **An interactive DOS prompt hangs to the timeout.** COMMAND.COM reads
+  "Are you sure (Y/N)?" from CON, not stdin, so no input arrangement answers
+  it (measured before libexec; the exec tool description says so). Unfixed.
+- **A client that reports no shells runs every command bare, silently.**
+  Seen when the client ran from a folder without `tools_detect.ini`: HELLO
+  listed no shells, the bridge logged only a PATH-separator warning, and the
+  agent's `ver` came back `spawn_failed` with nothing saying why. The bridge
+  should tell the agent (and log) that no shell was reported; the client
+  should log a missing `tools_detect.ini`.
+- **Processes, system info and reboot have no agent tool.** libexec has
+  `Processes` (list, kill with the deny list, launch), `readSystemInfo` and
+  `requestReboot`, proven on real 98, but no client op or machine tool uses
+  them yet; 98 has no tasklist or taskkill, so an agent cannot see or end a
+  hung program at all. PLAN.md already calls `list_processes` the strongest
+  case; it lands with gremote (REMOTE.md step 4) or as client ops.
+- **No exec check runs on the guest.** `execcheck`'s command cases need
+  cmd.exe, so on 98 they only prove spawn failure; the guest's exec coverage
+  is `execkill.py` against a client plus the e2e run, both manual. A
+  COMMAND.COM variant of those cases is missing.
+- **Stop read as a failure.** *Fixed 2026-09-27:* the bridge ends a stopped
+  turn as `stopped` and the client shows "Stopped." instead of "did not
+  complete... may not have run at all".
+- **One guest wedge, cause unknown**, measured in ring-0 VMM code; the
+  Toolhelp trigger first suspected was withdrawn. §14's open risk,
+  `docs/measurements/wedge-vm-20260927.txt`.
