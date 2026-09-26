@@ -1,0 +1,61 @@
+# Can a BACKGROUND process raise another process's window on Windows 98?
+#
+# BACKLOG 16's fix rests entirely on the answer, and it is the one question
+# Wine cannot be asked: under Wine the foreground rules are the host window
+# manager's, so a "yes" there means nothing. REMOTE.md:664 has carried
+# SPI_SETFOREGROUNDLOCKTIMEOUT as an open P200 question since before libexec.
+#
+# Machine: rb-win98 (the RetroBridge test client), Windows 98 SE 4.10.2222,
+# 128MB, 640x480. NOT the P200 -- an emulated CPU, but real Win98 USER32,
+# which is the part being measured. Snapshot pre-focus-probe-20260927 taken
+# first; disk copied to rb-win98.qcow2.bak-20260927-013535.
+#
+# Probe: win/checks/focusprobe.cpp. Two Notepads, the second covering the
+# first; the probe is a third process with no foreground window, trying to
+# raise the first. That is the client's situation exactly.
+
+## Results (run 2 and run 3, identical)
+
+  setup: we are background        yes   fg, target and us are three pids
+  setup: target is behind         yes
+  SetForegroundWindow             yes
+    ... and on top at centre      yes
+  BringWindowToTop                NO    z-order only
+  SetWindowPos HWND_TOP           NO    no activate
+  after LOCKTIMEOUT=0             yes   SPI returned 1
+  with AttachThreadInput          yes   attach ok
+    ... and on top at centre      yes
+  z-order only, then click-check  NO    BringWindowToTop + SetWindowPos
+  activate, then click-check      yes   SetForegroundWindow
+
+## What it says
+
+**A background process CAN raise another process's window, by activating it.**
+`SetForegroundWindow` works, and the window ends up on top at its own centre,
+which is the test `Input::clickAt` actually applies.
+
+**Z-order without activation does not work across a process boundary.**
+`BringWindowToTop` and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` both returned
+with the target still behind. This was the surprise: the cheap route, the one
+that does not steal focus from whoever is at the keyboard, is the one 9x
+ignores. Activation is not an optimisation here, it is the only road.
+
+Neither `SPI_SETFOREGROUNDLOCKTIMEOUT = 0` nor `AttachThreadInput` was needed
+-- both work, and both are redundant while the plain call succeeds. `focus()`
+already keeps the AttachThreadInput fallback for the case where it does not.
+
+## The shipped code, same run
+
+  Input::clickWindow, covered     yes   behind first yes, result 0
+    ... target now on top         yes
+
+`result 0` is INPUT_OK. Before this change the same call returned
+INPUT_OCCLUDED and the model was told to bring the window forward, which
+nothing could do.
+
+## Caveat
+
+An emulator, not the P200. The CPU is emulated and the timing is not
+trustworthy, but nothing here is a timing measurement -- USER32's foreground
+rules are Windows' own code running in the guest. The P200 should still
+confirm it, and REMOTE.md:664 stays open until it does.

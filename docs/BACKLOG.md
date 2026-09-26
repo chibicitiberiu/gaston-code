@@ -1426,7 +1426,9 @@ part of an unattended sweep.
 ## 16. An agent can be told a control is occluded and have no way to fix it
 
 **Status:** found 2026-09-27 doing the Phase 6 end-to-end check
-(`docs/measurements/e2e-ui-vm-20260927.txt`). Open.
+(`docs/measurements/e2e-ui-vm-20260927.txt`); **fixed the same day**, measured
+on Win98 SE (`docs/measurements/focus-vm-20260927.txt`). The residue is at the
+bottom.
 
 `Input::clickAt` refuses when `WindowFromPoint` at the target is not the
 target (`win/automation/input.cpp:121`), and that refusal is right: clicking
@@ -1458,8 +1460,36 @@ What it would take:
 - and either way, saying in the refusal which window is on top, so a model
   can tell "your own window" from "a dialog you have not noticed".
 
-Until then an agent driving a desktop can read anything and click only what
-happens to be on top.
+### What was done
+
+`Input::clickAt` now raises the target and looks again before refusing, and
+only refuses if the raise did not clear the point. The library already had
+`Input::focus()` -- restore if iconic, `SetForegroundWindow`, an
+`AttachThreadInput` fallback, verify -- so the gap was never that the client
+could not raise a window. It was that `clickAt` never asked it to, and the
+refusal advised the caller to do it instead.
+
+Raising happens only when the point is covered. An uncovered window is
+activated by the click itself, and a foreground change nobody needed is one
+taken from whoever is at the keyboard.
+
+`focusprobe` settled how, and the answer was not the obvious one:
+`BringWindowToTop` and `SetWindowPos(HWND_TOP, SWP_NOACTIVATE)` are both
+IGNORED across a process boundary on 9x. The cheap, focus-preserving route
+does not work; activation is the only one that does.
+
+The refusal that remains now names what is on top (`on_top=` on UIEND, from
+`Input::blocker()`), because "something is on top" left a model unable to tell
+our own window from a dialog it had not read.
+
+### Residue
+
+- There is still no standalone `FOCUS` op (`REMOTE.md:308`). Nothing needs one
+  today: `click` raises what it must and `keys` already goes through
+  `focus()`. Add it when a caller wants to raise a window WITHOUT clicking it.
+- Measured on an emulator, not the P200. `REMOTE.md:664`'s
+  `SPI_SETFOREGROUNDLOCKTIMEOUT` question stays open until the real machine
+  agrees; if it disagrees, the fallback is already in `focus()`.
 
 ---
 

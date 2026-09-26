@@ -40,8 +40,14 @@ def _ui_explain(exc: UiError) -> str:
 
     Every one of these says what to do next, which is why they live in
     tools.toml with the rest of the prose the agent reads."""
+    fields = dict(exc.headers)
+    fields.setdefault("status", exc.status)
+    #: A guest older than the on_top header still has to get the sentence,
+    #: not the "unknown status" fallback that a missing placeholder would
+    #: otherwise produce.
+    fields.setdefault("on_top", "another window")
     try:
-        base = prompts.text(f"tools.ui.refused.{exc.status}")
+        base = prompts.text(f"tools.ui.refused.{exc.status}", **fields)
     except KeyError:
         base = prompts.text("tools.ui.refused.unknown", status=exc.status)
     return f"{base} ({exc.detail})" if exc.detail else base

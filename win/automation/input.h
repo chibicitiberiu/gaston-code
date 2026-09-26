@@ -27,6 +27,10 @@ enum InputResult
 class Input
 {
 public:
+    /* How long to keep looking after raising a covered window, and how
+     * often. The raise returns before the z-order has settled. */
+    enum { RAISE_SETTLE_MS = 600, RAISE_STEP_MS = 50 };
+
     Input();
 
     /* Try to make the foreground lock stop flashing a taskbar button
@@ -51,10 +55,24 @@ public:
      * INPUT_NOT_FOREGROUND rather than typing somewhere unintended. */
     InputResult focus(HWND target);
 
+private:
+    void noteBlocker(HWND under);
+    char m_blocker[128];
+
+public:
+
     /* Click at a screen point. After moving, WindowFromPoint must be the
-     * window that was asked for, or something is on top of it and the
-     * click is refused rather than delivered to whatever is there. */
+     * window that was asked for; if something is on top, the window is
+     * RAISED and the point re-checked, and only then is the click refused.
+     * Raising is what a person's click would have done anyway, and without
+     * it the refusal named an action nothing implemented (BACKLOG 16). */
     InputResult clickAt(HWND expect, int x, int y);
+
+    /* After INPUT_OCCLUDED, the class and title of whatever is on top --
+     * empty at any other time. Naming it is the difference between a model
+     * retrying blindly and a model knowing it is looking at our own window
+     * or a dialog it has not read yet. */
+    const char *blocker() const { return m_blocker; }
 
     /* The centre of `target`'s rect, then clickAt. One execution path, not
      * two: a control reference resolves to a point and then performs the

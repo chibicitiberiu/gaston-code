@@ -59,3 +59,30 @@ def test_the_line_tells_the_model_to_stop_looking():
     out = render_tree([], {"nodes": "0", "self": "1"})
     assert "never will be" in out
     assert "Do not go looking for it." in out
+
+
+# --- refusals that have to stay actionable -----------------------------
+
+from bridge.agent.tools import _ui_explain
+from bridge.services.ui import UiError
+
+
+def test_occluded_names_what_is_on_top():
+    """The point of BACKLOG 16: "something is on top" is not actionable."""
+    out = _ui_explain(UiError("occluded", "", {"on_top": 'Notepad "Untitled"'}))
+    assert 'Notepad "Untitled"' in out
+    # And it must not still be telling the model to do the thing click now
+    # does for itself.
+    assert "Bring the window forward first" not in out
+
+
+def test_occluded_survives_a_guest_that_does_not_send_on_top():
+    """An older client sends no on_top; the sentence still has to render."""
+    out = _ui_explain(UiError("occluded", "", {}))
+    assert "another window" in out
+    assert "refused" in out or "nothing was clicked" in out
+
+
+def test_occluded_says_the_raise_was_already_tried():
+    out = _ui_explain(UiError("occluded", "", {"on_top": "Shell_TrayWnd"}))
+    assert "brought to the front" in out

@@ -1,5 +1,7 @@
 #include "automation/input.h"
 
+#include "core/str.h"
+
 #include <string.h>
 
 /* Behind WINVER >= 0x0500 in the headers, and the build pins 0x0400. Whether
@@ -32,6 +34,7 @@ static HWND rootOf(HWND h)
 
 Input::Input()
 {
+    m_blocker[0] = 0;
     /* Resolved, never imported. It is absent on 95 and on NT4 before SP3,
      * and a static import of something absent kills the image at load,
      * before WinMain, with nothing to debug. */
@@ -101,8 +104,31 @@ InputResult Input::focus(HWND target)
     return INPUT_OK;
 }
 
+/* Who is on top, in words the caller can pass on. A refusal that says only
+ * "something is on top" leaves a model guessing between its own window, a
+ * dialog it has not noticed and the screensaver. */
+void Input::noteBlocker(HWND under)
+{
+    HWND top = rootOf(under);
+    char cls[48];
+    char title[64];
+
+    m_blocker[0] = 0;
+    if (!top || !IsWindow(top))
+        return;
+    cls[0] = 0;
+    title[0] = 0;
+    GetClassNameA(top, cls, sizeof(cls));
+    GetWindowTextA(top, title, sizeof(title));
+    if (title[0])
+        rc_strf(m_blocker, sizeof(m_blocker), "%s \"%s\"", cls, title);
+    else
+        rc_strf(m_blocker, sizeof(m_blocker), "%s", cls);
+}
+
 InputResult Input::clickAt(HWND expect, int x, int y)
 {
+    m_blocker[0] = 0;
     if (expect && !IsWindow(expect))
         return INPUT_NO_WINDOW;
     if (expect && isOurs(expect))
@@ -120,7 +146,49 @@ InputResult Input::clickAt(HWND expect, int x, int y)
         p.x = x; p.y = y;
         HWND under = WindowFromPoint(p);
         if (under != expect && rootOf(under) != rootOf(expect))
-            return INPUT_OCCLUDED;
+        {
+            /* Covered. Raise it and look again, because a person clicking
+             * this control would have raised the window by clicking it --
+             * refusing here told the caller to "bring the window forward
+             * first" and there was nothing that could (BACKLOG 16).
+             *
+             * Only when covered, not on every click: an uncovered window is
+             * activated by the click itself, and a foreground change nobody
+             * needed is a foreground change taken from whoever is at the
+             * keyboard.
+             *
+             * Measured on Win98 SE (docs/measurements/focus-vm-20260927.txt):
+             * SetForegroundWindow from a background process DOES work and
+             * puts the window on top, while BringWindowToTop and
+             * SetWindowPos(HWND_TOP, SWP_NOACTIVATE) are both ignored
+             * across a process boundary. Activation is the only route, so
+             * this goes through focus() rather than a cheaper z-order call.
+             */
+            InputResult raised = focus(expect);
+            if (raised != INPUT_OK)
+                return INPUT_OCCLUDED;
+
+            /* The z-order settles after the call returns, so look again for
+             * a bounded while rather than once. */
+            int waited;
+            for (waited = 0; waited < RAISE_SETTLE_MS; waited += RAISE_STEP_MS)
+            {
+                under = WindowFromPoint(p);
+                if (under == expect || rootOf(under) == rootOf(expect))
+                    break;
+                Sleep(RAISE_STEP_MS);
+            }
+
+            /* Raising can move the window, so the point we measured may no
+             * longer be over the control even though nothing covers it. */
+            SetCursorPos(x, y);
+            under = WindowFromPoint(p);
+            if (under != expect && rootOf(under) != rootOf(expect))
+            {
+                noteBlocker(under);
+                return INPUT_OCCLUDED;
+            }
+        }
     }
 
     mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);

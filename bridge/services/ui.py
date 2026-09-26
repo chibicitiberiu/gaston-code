@@ -38,10 +38,15 @@ BUDGET_SLACK_S = 20.0
 class UiError(Exception):
     """A request the guest refused, carrying its status verbatim."""
 
-    def __init__(self, status: str, detail: str = ""):
+    def __init__(self, status: str, detail: str = "",
+                 headers: dict | None = None):
         super().__init__(f"{status}: {detail}" if detail else status)
         self.status = status
         self.detail = detail
+        #: The rest of the UIEND. A refusal often carries the one fact that
+        #: makes it actionable -- `on_top` for occluded says which window is
+        #: in the way -- and dropping it left the advice generic.
+        self.headers = headers or {}
 
 
 class UiService:
@@ -79,7 +84,8 @@ class UiService:
 
         status = headers.get("status", "")
         if status != "ok":
-            raise UiError(status or "no_status", headers.get("detail", ""))
+            raise UiError(status or "no_status", headers.get("detail", ""),
+                          headers)
         return headers, call
 
     async def tree(self, guest: GuestSession, *, scope: str = "desktop",

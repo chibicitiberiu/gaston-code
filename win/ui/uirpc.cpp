@@ -612,6 +612,18 @@ static void do_click(rc_net *net, UiContext *ctx, rc_frame *f)
     if (r == INPUT_OK)
         settle_after(ctx, f);
 
+    /* A click is refused only after the window has been raised and looked at
+     * again, so "occluded" now means something that a raise did not fix.
+     * Saying WHICH window is the only way the caller can tell our own window
+     * from a dialog it has not read yet. */
+    if (r == INPUT_OCCLUDED && ctx->input.blocker()[0])
+    {
+        const char *k[1];
+        const char *v[1];
+        k[0] = "on_top"; v[0] = ctx->input.blocker();
+        ui_end(net, id, input_result_name(r), k, v, 1);
+        return;
+    }
     ui_end(net, id, input_result_name(r), NULL, NULL, 0);
 }
 

@@ -146,7 +146,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
 # call into libcore, and wlink resolves in the order the libraries are named.
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
 
-.PHONY: execcheck execprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -211,6 +211,17 @@ $(BUILD)/appcheck.exe: $(APPCHECK_OBJS)
 EXECPROBE_OBJS = $(call objs,checks/execprobe.cpp) $(LIBCORE)
 execprobe: $(BUILD)/execprobe.exe
 $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# Not a check either: answers the one question BACKLOG 16's fix rests on --
+# whether a BACKGROUND process can raise another process's window on 9x.
+# Wine cannot answer it, because Wine's foreground rules are the host window
+# manager's. Prints to the console; the box it runs on has no serial port.
+FOCUSPROBE_OBJS = $(call objs,checks/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
+focusprobe: $(BUILD)/focusprobe.exe
+$(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -362,7 +373,7 @@ retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
 all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
-     netcheck rpccheck probe execprobe execcheck uicheck htmlspike capscheck workcheck toolcheck
+     netcheck rpccheck probe execprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
