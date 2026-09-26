@@ -109,6 +109,13 @@ void TreeWalker::markSlow(DWORD tid, DWORD pid)
     m_slowN++;
 }
 
+bool TreeWalker::inProcess(HWND h, DWORD pid)
+{
+    DWORD owner = 0;
+    GetWindowThreadProcessId(h, &owner);
+    return owner == pid;
+}
+
 bool TreeWalker::outOfTime() const
 {
     if (!m_hasDeadline)
@@ -196,13 +203,16 @@ WalkEnd TreeWalker::descend(HWND parent, const WalkOptions &opt,
             return WALK_MAXNODES;
         if (opt.visibleOnly && !IsWindowVisible(c))
             continue;
+        /* Before fill, not after. fill() sends WM_GETTEXT, and sending it to
+         * a window we are about to discard costs a cross-process round trip
+         * per foreign window -- and a full timeout for every one of them
+         * that happens to be wedged. */
+        if (opt.pid && !inProcess(c, opt.pid))
+            continue;
 
         Node n;
         fill(n, c, opt, parentPath, index, depth);
         index++;
-
-        if (opt.pid && n.pid != opt.pid)
-            continue;
 
         m_seen++;
         if (!sink.onNode(n))
@@ -247,13 +257,12 @@ bool TreeWalker::stepTop(HWND h, TopContext &ctx)
     }
     if (ctx.opt->visibleOnly && !IsWindowVisible(h))
         return true;
+    if (ctx.opt->pid && !inProcess(h, ctx.opt->pid))
+        return true;
 
     Node n;
     fill(n, h, *ctx.opt, "", ctx.index, 0);
     ctx.index++;
-
-    if (ctx.opt->pid && n.pid != ctx.opt->pid)
-        return true;
 
     m_seen++;
     if (!ctx.sink->onNode(n))

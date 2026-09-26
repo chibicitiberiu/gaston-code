@@ -133,6 +133,7 @@ private:
     DWORD m_until;
     bool  m_hasDeadline;
 
+    static bool inProcess(HWND h, DWORD pid);
     bool  isSlowThread(DWORD tid) const;
     bool  isSlowProcess(DWORD pid) const;
     void  markSlow(DWORD tid, DWORD pid);

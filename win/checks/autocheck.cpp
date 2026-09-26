@@ -502,6 +502,199 @@ void resolving(void)
     UnregisterClassA("GRTop", wc.hInstance);
 }
 
+/* --- the hung window ------------------------------------------------
+ *
+ * The branch that had never executed. Every walk on both real machines
+ * reported `0 timed out`, so the three-tier deferral -- the machinery for a
+ * 16-bit app holding Win16Mutex and blocking USER and GDI for every thread
+ * in the system -- was entirely untested. Hangs are common on 9x, and this
+ * is the one path where being wrong freezes the client's UI thread rather
+ * than returning a wrong answer.
+ *
+ * No real hung application is needed: a thread that owns windows and never
+ * pumps its queue is a hung thread by definition. Every SendMessageTimeout
+ * to its windows has to run out the clock.
+ */
+
+struct Wedge
+{
+    HANDLE    ready;
+    HANDLE    release;
+    HINSTANCE inst;
+    HWND      top;
+    int       kids;
+};
+
+static DWORD WINAPI wedgeThread(LPVOID p)
+{
+    Wedge *w = (Wedge *)p;
+    w->top = CreateWindowExA(0, "GastonWedge", "wedged", WS_POPUP,
+                             0, 0, 40, 40, NULL, NULL, w->inst, NULL);
+    for (int i = 0; i < w->kids; i++)
+        CreateWindowExA(0, "GastonWedge", "kid", WS_CHILD, 0, 0, 10, 10,
+                        w->top, NULL, w->inst, NULL);
+    SetEvent(w->ready);
+    /* And now it never pumps. A window's messages are dispatched by the
+     * thread that owns it, so from here on every one of these windows is
+     * unreachable and each ask must cost exactly its budget. */
+    WaitForSingleObject(w->release, INFINITE);
+    DestroyWindow(w->top);      /* takes the children with it */
+    return 0;
+}
+
+static HANDLE startWedge(Wedge &w, HINSTANCE inst, int kids)
+{
+    memset(&w, 0, sizeof(w));
+    w.ready = CreateEventA(NULL, TRUE, FALSE, NULL);
+    w.release = CreateEventA(NULL, TRUE, FALSE, NULL);
+    w.inst = inst;
+    w.kids = kids;
+    DWORD tid = 0;
+    HANDLE h = CreateThread(NULL, 0, wedgeThread, &w, 0, &tid);
+    if (h)
+        WaitForSingleObject(w.ready, 5000);
+    return h;
+}
+
+static void stopWedge(Wedge &w, HANDLE h)
+{
+    SetEvent(w.release);
+    if (h)
+    {
+        WaitForSingleObject(h, 5000);
+        CloseHandle(h);
+    }
+    CloseHandle(w.ready);
+    CloseHandle(w.release);
+}
+
+void hungWindows(void)
+{
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)sinkProc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "GastonWedge";
+    RegisterClassA(&wc);
+    static char detail[192];
+
+    {
+        /* One wedged thread, four wedged windows, a 200 ms budget. Asking
+         * each of them separately is 800 ms; keying the refusal on the
+         * THREAD makes it one. */
+        static Wedge w;
+        HANDLE th = startWedge(w, wc.hInstance, 3);
+
+        WalkOptions o;
+        o.root = w.top;
+        o.visibleOnly = false;
+        o.callTimeoutMs = 200;
+        o.deadlineMs = 10000;
+        CountingSink sink;
+        TreeWalker tw;
+        DWORD t0 = GetTickCount();
+        WalkEnd e = tw.walk(o, sink);
+        DWORD ms = GetTickCount() - t0;
+
+        rc_strf(detail, sizeof(detail),
+                "%d nodes, end=%d, %lu timed out, %lu deferred, %lu ms",
+                sink.count(), (int)e, (unsigned long)tw.textTimeouts(),
+                (unsigned long)tw.deferredNodes(), (unsigned long)ms);
+
+        /* It finishes at all. A walk that blocks here blocks the client's
+         * repaint, which is the failure this whole design is shaped around. */
+        say("hung-walk-completes", e == WALK_COMPLETE && sink.count() == 4,
+            detail);
+
+        /* Every window on the thread refuses... */
+        say("hung-every-window-times-out", tw.textTimeouts() == 4, detail);
+
+        /* ...but only the FIRST one pays for the discovery. */
+        say("hung-defers-the-rest-of-the-thread", tw.deferredNodes() == 3,
+            detail);
+
+        /* The point of keying on thread rather than window, in wall clock:
+         * four full budgets would be 800 ms. */
+        say("hung-costs-one-budget-not-four", ms < 500, detail);
+
+        stopWedge(w, th);
+    }
+
+    {
+        /* Two wedged threads in one process. The middle tier: a thread that
+         * has not itself failed, in a process that has, is asked at a
+         * QUARTER of the budget -- not the full one (a 16-bit app holding
+         * Win16Mutex takes the whole process down with it) and not the
+         * token 1 ms (it may well be fine).
+         *
+         * 600 ms so the tiers are far enough apart to tell apart on a
+         * loaded machine: one full budget plus one quarter is ~750 ms, where
+         * two full budgets would be 1200 and two token asks would be ~600. */
+        static Wedge a, b;
+        HANDLE ta = startWedge(a, wc.hInstance, 0);
+        HANDLE tb = startWedge(b, wc.hInstance, 0);
+
+        WalkOptions o;
+        o.root = NULL;                      /* every top-level window ... */
+        o.pid = GetCurrentProcessId();      /* ... that is ours */
+        o.visibleOnly = false;
+        o.callTimeoutMs = 600;
+        o.deadlineMs = 10000;
+        CountingSink sink;
+        TreeWalker tw;
+        DWORD t0 = GetTickCount();
+        tw.walk(o, sink);
+        DWORD ms = GetTickCount() - t0;
+
+        rc_strf(detail, sizeof(detail),
+                "%d nodes, %lu timed out, %lu deferred, %lu ms "
+                "(full=600, +quarter=750, two full=1200)",
+                sink.count(), (unsigned long)tw.textTimeouts(),
+                (unsigned long)tw.deferredNodes(), (unsigned long)ms);
+
+        /* Exactly one window in the whole walk pays full price, whichever
+         * the z-order puts first. Not "two nodes": a thread gets windows it
+         * did not ask for -- Wine gives each one an IME window, and 9x has
+         * its own -- so the assertion is the ratio and not the count. */
+        say("hung-only-one-window-pays-full-price",
+            tw.textTimeouts() >= 2
+            && tw.deferredNodes() == tw.textTimeouts() - 1, detail);
+
+        say("hung-second-thread-pays-a-quarter",
+            ms >= 650 && ms < 1050, detail);
+
+        stopWedge(a, ta);
+        stopWedge(b, tb);
+    }
+
+    {
+        /* A deadline shorter than the budget: the walk must give up and SAY
+         * it gave up, with the nodes it did get. Returning WALK_COMPLETE
+         * here would tell a caller the control it wants is not there. */
+        static Wedge w;
+        HANDLE th = startWedge(w, wc.hInstance, 3);
+
+        WalkOptions o;
+        o.root = w.top;
+        o.visibleOnly = false;
+        o.callTimeoutMs = 300;
+        o.deadlineMs = 100;
+        CountingSink sink;
+        TreeWalker tw;
+        WalkEnd e = tw.walk(o, sink);
+
+        rc_strf(detail, sizeof(detail), "end=%d after %d of 4 nodes",
+                (int)e, sink.count());
+        say("hung-deadline-truncates-and-says-so",
+            e == WALK_DEADLINE && sink.count() >= 1 && sink.count() < 4,
+            detail);
+
+        stopWedge(w, th);
+    }
+
+    UnregisterClassA("GastonWedge", wc.hInstance);
+}
+
 /* --- input refusals -------------------------------------------------
  *
  * Only the refusals are testable without a second machine looking on, and
@@ -865,6 +1058,7 @@ int main(int argc, char **argv)
     matching();
     walking();
     resolving();
+    hungWindows();
     inputRefusals();
     enrichment();
     capture();
