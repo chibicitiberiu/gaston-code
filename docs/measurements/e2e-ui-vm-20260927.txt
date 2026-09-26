@@ -112,3 +112,29 @@ running, so the taskbar alone distinguishes all three.
 
 No window was moved, raised or closed from the host during the turn. The click
 raised the dialog itself.
+
+## UIFOCUS on the guest (02:14)
+
+The op, exercised by an agent on RCW.EXE (433,152 bytes, built 02:09).
+
+Setup: Notepad holding the text "behind the client", then the client raised
+over it so Notepad is behind.
+
+  input: "The Notepad window is behind this one. Bring it to the front using
+          the focus tool. Do not click anything inside it and do not type
+          into it."
+
+  02:13:57  permission allow for mcp__machine__ui     (scope=desktop)
+  02:14:42  permission allow for mcp__machine__focus  (target=Notepad Edit)
+
+It read the tree first for a selector, then said "I'll bring the Notepad
+window forward using its text control as the target" -- which is the op's
+contract: you name a CONTROL and the window containing it comes forward, so a
+caller never has to find the top-level window separately.
+
+Afterwards Notepad is in front with an active title bar and a depressed
+taskbar button, and its text still reads "behind the client" exactly. Nothing
+was pressed and nothing was typed, which is the whole point of having this
+op rather than reaching for `click`.
+
+Agent: "Notepad is now in front. I didn't click or type anything inside it."
