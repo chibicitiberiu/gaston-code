@@ -530,3 +530,57 @@ which is 2000+.
 This is the gap `A5` does *not* cover. A5 wedges a thread and proves the
 window walk survives it, which is worth having; the walk was never the
 unbounded part.
+
+
+## What is built, and what the guest still has to answer
+
+As of 2026-09-26.
+
+**Built and green** (`make -C win check`, `make test`, 126 autocheck cases
+under Wine):
+
+| | where |
+|---|---|
+| selector grammar, resolver, ancestry, `:nth`, ambiguity | `automation/select.*`, `automation/resolve.*` |
+| role from class and style, free | `automation/tree.cpp` |
+| MSAA enrichment, batched accessible walk | `automation/msaa.*` |
+| event feed, four waits with a backstop | `automation/watch.*`, `automation/wait.*` |
+| a deadline that interrupts a call in flight | `automation/calldeadline.*` |
+| the desktop worker, its lane and its four ops | `win/ui/`, `net/frameproto.cpp` |
+| the record, and the parser it agrees with | `win/ui/uirec.*`, `bridge/wire/uirec.py` |
+| `ui`, `click`, `keys`, `shot` | `bridge/agent/tools.py` |
+
+**Wine settles the grammar and nothing else.** It proves the C logic, the
+data structures and the cross-language agreements. It does not prove the
+platform, and three of its answers are known to differ: its oleacc returns
+the generic client object for every window class, so state, default action
+and the Win32 class proxies report rather than assert; it emits
+`EVENT_OBJECT_CREATE` and never `EVENT_OBJECT_DESTROY` for a hidden popup,
+which is what the wait backstop exists for; and it honours
+`WINEVENT_SKIPOWNPROCESS` in name only.
+
+**Still owed by the real machines**, and section D should not be scheduled
+before the first two:
+
+- **0.15d, re-run after a reboot.** Both halves of it are unsound as
+  evidence today. The GDI patch was applied by the probe to the probe's own
+  pid, so nothing has ever been captured from a foreign process; and the
+  injection verdict read a counter nothing zeroed, in a section no injected
+  copy unmaps, so it was cumulative since boot. Both are fixed in the probe;
+  neither has been re-run.
+- **0.15f, which has never run at all.** D1 asserts that
+  `WH_CALLWNDPROC` aimed at one thread maps into one process and nowhere
+  else. That is the assumption everything after it rests on.
+- **The MSAA scaling question**, per "And this document broke its own rule"
+  above: 0.13f and 0.13g back to back in one invocation, on a scripted
+  identical set of windows, reporting the ratio measured *inside* that run.
+- **Which browsers answer.** 0.13d now finds the document by MSAA role and
+  prints the class that carried it. Run it against every browser on the
+  machines; a browser that answers nothing is not a failure, it is the
+  boundary between this tier and GDI capture.
+- **The hung-thread tiers on hardware.** Measured under Wine at 205ms for
+  four wedged windows against a naive 800, and 754ms for the two-thread
+  case against a naive 1200. Both are the right shape; neither is a
+  9x number.
+- **One end-to-end turn**: ask the agent to read a dialog and click a named
+  button on the guest, through the bridge.
