@@ -37,6 +37,17 @@ from .options import EFFORT_LABEL, MODE_ORDER
 log = logging.getLogger("bridge.session")
 
 
+def shows_tool_result(is_err: bool, stopped: bool) -> bool:
+    """Does the user see this tool result?
+
+    Not the error a Stop cuts a tool call short with: that body is the SDK's
+    note to the MODEL ("The user doesn't want to proceed with this tool
+    use ... STOP what you are doing"), and on the guest it rendered as a red
+    error block right above the turn's own "Stopped." -- the user reading an
+    instruction meant for the assistant, about an action they took."""
+    return not (is_err and stopped)
+
+
 def _summarise(args: dict) -> str:
     """One readable line for the tool-activity pane.
 
@@ -224,6 +235,8 @@ class SessionService:
         async def on_tool_result(tool_id: str, body: str, is_err: bool) -> None:
             # A finished block, like every other thing the user reads.
             await self.presentation.flush_text(guest)
+            if not shows_tool_result(is_err, guest.turn_stopped):
+                return
             await self.presentation.write_block(guest, H.tool_result(body, error=is_err))
 
         async def on_system(subtype: str, data: dict) -> None:

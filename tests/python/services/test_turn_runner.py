@@ -139,3 +139,11 @@ def test_a_stopped_turn_says_stopped_whatever_the_sdk_called_it():
     assert turn_verdict(True, "", True, "success", True) == (False, "stopped")
     assert turn_verdict(False, "", True, "error_during_execution") == (
         False, "error_during_execution")
+
+
+def test_the_sdks_stop_message_to_the_model_is_not_shown_to_the_user():
+    from bridge.services.session import shows_tool_result
+    assert shows_tool_result(False, False)
+    assert shows_tool_result(True, False)      # a real tool error: shown
+    assert shows_tool_result(False, True)      # output before the Stop: shown
+    assert not shows_tool_result(True, True)   # the SDK's STOP note: hidden
