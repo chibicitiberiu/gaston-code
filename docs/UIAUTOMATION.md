@@ -424,3 +424,67 @@ keeps it from being needed: a 640x480 frame costs more tokens than a whole
 control tree and says less about it. The system prompt steers to `ui` first,
 so `shot` is what you reach for when the tree came back empty -- a
 custom-drawn control, a game, an installer that is one big window.
+
+
+## The node record, and why it has three identity fields
+
+Settled 2026-09-26, before the first byte went on the wire, because a record
+format is the one thing that cannot be changed quietly later.
+
+There are **three kinds of thing** this library can find, and only the first
+is a window:
+
+| `src` | what it is | has | found by |
+|---|---|---|---|
+| `win` | a real HWND | class, ctrl id, style, text | the window walk |
+| `acc` | an accessible element with no window of its own | role, name, value, a parent and a child id | `MsaaSource::enumerateFrom` |
+| `gdi` | a text run somebody painted | the string and where it landed | the in-process GDI capture, section D |
+
+A list box's items, a menu's entries and every element of a web page are
+`acc`. Probe 0.13f counted 228 accessible nodes against 48 windows on one
+desktop and 251 against 50 on another — **that surplus is most of what an
+agent wants to click**, and it has no HWND at all. A tree of a web page is
+entirely `acc`: the page is one window.
+
+So the record carries all three identities and says which one is real:
+
+```
+src     win                  win | acc | gdi
+path    0/3/1                child-index path from the root of this walk
+hwnd    0x00A34C             src=win only; absent otherwise
+child   7                    src=acc only; the id its parent answers for
+parent  0/3
+class   Button               src=win only
+role    pushbutton           either tier; win derives it from class+style free
+name    OK                   MSAA
+text    OK                   WM_GETTEXT
+rect    12,40,300,60
+state   focusable
+action  press
+sel     #32770[text="Save As"] > Button[text="OK"]
+```
+
+**`sel` is computed by the bridge, and it is the only thing a caller may
+address a control with.** Not `hwnd`: an HWND is meaningless across a session
+and 9x reuses them, so a handle that escapes can click whatever inherited it
+— silently, on somebody's real desktop. Not `path` either: it survives a
+repaint and not a reorder. A stale `sel` is a clean "not found".
+
+Computing it on the bridge keeps the rule that the guest transforms nothing,
+and it is the right place for the other reason too: the bridge has the whole
+tree in hand and can tell whether `Button[text="OK"]` is unique or needs a
+parent step in front of it. The guest, streaming one record at a time, cannot.
+
+**Why this is written before section B and not during it.** `src` and `child`
+cost nothing today — every record is `src=win` until the in-process collector
+lands — and adding them later would mean re-cutting the wire format, the op
+table, the bridge's tree assembler, the `sel` computation and every selector
+an agent has already learned, all at once. The fields go in now so that the
+tier that needs them is a new value in an existing field rather than a flag
+day.
+
+What is **not** settled, and is deliberately left open: the selector grammar
+has no way to name an `acc` element yet, so those records are readable and
+not yet clickable. That is a grammar addition (a step that carries a child
+id) and it can happen without touching the record format, which is the whole
+point of doing this in this order.
