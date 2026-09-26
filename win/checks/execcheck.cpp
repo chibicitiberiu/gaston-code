@@ -19,6 +19,7 @@
 #include "core/str.h"
 #include "exec/execjob.h"
 #include "exec/process.h"
+#include "exec/system.h"
 
 static int g_failures;
 
@@ -399,6 +400,29 @@ static void processes()
     }
 }
 
+static void system()
+{
+    char detail[160];
+    SystemInfo si;
+    readSystemInfo(si);
+    rc_strf(detail, sizeof detail,
+            "mem=%lu free=%lu os=%lu.%lu.%lu cpu=%u/%u x%lu acp=%u oemcp=%u",
+            (unsigned long)si.memKb, (unsigned long)si.memFreeKb,
+            (unsigned long)si.osMajor, (unsigned long)si.osMinor,
+            (unsigned long)si.osBuild, si.cpuFamily, si.cpuModel,
+            (unsigned long)si.cpuCount, si.acp, si.oemcp);
+    say("sysinfo-is-the-machine", si.memKb > 0 && si.memFreeKb <= si.memKb &&
+                                      si.osKnown && si.osMajor >= 4 &&
+                                      si.cpuCount >= 1 &&
+                                      si.acp == GetACP() &&
+                                      si.oemcp == GetOEMCP(),
+        detail);
+    /* The one reboot case safe to run: a mode that does not exist is
+     * refused before ExitWindowsEx is ever called. */
+    say("reboot-refuses-an-unknown-mode",
+        !requestReboot((RebootMode)99, false), "");
+}
+
 int main(void)
 {
     rc_log_open(".");
@@ -406,6 +430,7 @@ int main(void)
     output();
     stopping();
     processes();
+    system();
     rc_log_close();
     return g_failures ? 1 : 0;
 }

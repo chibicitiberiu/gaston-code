@@ -7,6 +7,7 @@
 #include "net/caps.h"
 #include <new>
 #include "core/heap.h"
+#include "exec/system.h"
 #include "core/log.h"
 #include "core/str.h"
 #include "rpc/rpc.h"
@@ -312,39 +313,29 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
         if (rc_syncrpc_home_copy(sroot, sizeof(sroot))) HDR("sync_root", sroot);
     }
 
+    /* The raw numbers come from libexec; the header text is ours, and must
+     * stay byte-for-byte what the bridge parses. */
+    SystemInfo sys;
+    readSystemInfo(sys);
     {
-        MEMORYSTATUS ms;
-        OSVERSIONINFOA os;
-        SYSTEM_INFO si;
         DWORD spc = 0, bps = 0, freec = 0, totalc = 0;
 
-        memset(&ms, 0, sizeof(ms));
-        ms.dwLength = sizeof(ms);
-        GlobalMemoryStatus(&ms);
-        rc_strf(memkb, sizeof(memkb), "%lu",
-                  (unsigned long)(ms.dwTotalPhys / 1024));
+        rc_strf(memkb, sizeof(memkb), "%lu", (unsigned long)sys.memKb);
         HDR("mem_kb", memkb);
-        rc_strf(memfree, sizeof(memfree), "%lu",
-                  (unsigned long)(ms.dwAvailPhys / 1024));
+        rc_strf(memfree, sizeof(memfree), "%lu", (unsigned long)sys.memFreeKb);
         HDR("mem_free_kb", memfree);
 
-        memset(&os, 0, sizeof(os));
-        os.dwOSVersionInfoSize = sizeof(os);
-        if (GetVersionExA(&os)) {
+        if (sys.osKnown) {
             rc_strf(osver, sizeof(osver), "Windows %lu.%lu build %lu %s",
-                      (unsigned long)os.dwMajorVersion,
-                      (unsigned long)os.dwMinorVersion,
-                      (unsigned long)(os.dwBuildNumber & 0xFFFF),
-                      os.szCSDVersion);
+                      (unsigned long)sys.osMajor,
+                      (unsigned long)sys.osMinor,
+                      (unsigned long)sys.osBuild,
+                      sys.osExtra);
             HDR("os", osver);
         }
 
-        memset(&si, 0, sizeof(si));
-        GetSystemInfo(&si);
         rc_strf(cpu, sizeof(cpu), "x86 family %u model %u, %lu cpu",
-                  (unsigned)si.wProcessorLevel,
-                  (unsigned)(si.wProcessorRevision >> 8),
-                  (unsigned long)si.dwNumberOfProcessors);
+                  sys.cpuFamily, sys.cpuModel, (unsigned long)sys.cpuCount);
         HDR("cpu", cpu);
 
         /* The SCREEN dc: GetDC(NULL) pairs with ReleaseDC(NULL, dc), which
@@ -389,7 +380,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * ACP and not OEM: VFAT long names are stored in the ANSI codepage, and
      * the scanner keys on long names only (never cAlternateFileName). The
      * console codepage is a different question with a different answer. */
-    rc_strf(acp, sizeof(acp), "%u", (unsigned)GetACP());
+    rc_strf(acp, sizeof(acp), "%u", sys.acp);
     HDR("acp", acp);
 
     /* ...and the OEM one, which is the "different question" above, now
@@ -402,7 +393,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      *
      * GetOEMCP sits beside GetACP in KERNEL32 from Win95 onward, so it
      * survives the import audit the same way. */
-    rc_strf(oemcp, sizeof(oemcp), "%u", (unsigned)GetOEMCP());
+    rc_strf(oemcp, sizeof(oemcp), "%u", sys.oemcp);
     HDR("oemcp", oemcp);
 
     /* The rest of what this machine is. Every one a literal from caps.h, so a

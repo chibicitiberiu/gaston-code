@@ -28,7 +28,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 21, sorted(verdicts)
+    assert len(verdicts) == 23, sorted(verdicts)
 
 
 def test_an_overlong_command_is_refused_not_truncated(verdicts):
