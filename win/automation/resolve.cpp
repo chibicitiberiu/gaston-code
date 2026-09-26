@@ -18,6 +18,7 @@ Resolver::Resolver(const Selector &sel, MsaaSource *msaa)
     m_enriched = 0;
     m_nth = 0;
     m_found = false;
+    m_tooDeep = 0;
     m_end = WALK_COMPLETE;
 }
 
@@ -143,8 +144,19 @@ bool Resolver::onNode(const Node &n)
     int d = n.depth;
     if (d < 0)
         d = 0;
+
+    /* Past the chain, REFUSE rather than clamp.
+     *
+     * Clamping wrote every node at depth 11 and deeper into the same slot,
+     * so the "ancestor" a descendant selector tested against could be an
+     * unrelated node that happened to come past a moment earlier -- a
+     * confidently WRONG match, not the miss this was documented as. A node
+     * whose ancestry we did not keep is a node we cannot judge. */
     if (d > RC_CHAIN_MAX - 1)
-        d = RC_CHAIN_MAX - 1;
+    {
+        m_tooDeep++;
+        return true;
+    }
     st->chain[d] = n;
     m_chainN = d + 1;
 
@@ -201,6 +213,7 @@ ResolveOutcome Resolver::resolve(const WalkOptions &opt, TreeWalker &walker)
     m_cacheN = 0;
     m_enriched = 0;
     m_found = false;
+    m_tooDeep = 0;
 
     int last = m_sel.stepCount() - 1;
     if (last < 0)
@@ -225,7 +238,10 @@ ResolveOutcome Resolver::resolve(const WalkOptions &opt, TreeWalker &walker)
     /* Otherwise, if the walk was cut short then "nothing" is not an answer,
      * it is the absence of one. Saying which is the difference between a
      * caller retrying and a caller concluding the control is gone. */
-    if (m_end == WALK_DEADLINE || m_end == WALK_MAXNODES)
+    /* Nodes skipped for depth are the same kind of not-knowing as a walk
+     * that ran out of clock: we did not look everywhere, so "not there" is
+     * not something we are entitled to say. */
+    if (m_end == WALK_DEADLINE || m_end == WALK_MAXNODES || m_tooDeep > 0)
         return RESOLVE_TRUNCATED;
     return RESOLVE_NONE;
 }

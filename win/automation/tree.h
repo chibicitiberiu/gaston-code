@@ -80,6 +80,13 @@ struct WalkOptions
     DWORD callTimeoutMs;    /* per WM_GETTEXT; SMALL -- see tree.cpp */
     DWORD deadlineMs;       /* the whole walk. 0: no deadline */
     int   maxNodes;         /* cyclic-chain guard, not a budget */
+    int   maxDepth;         /* bounds the RECURSION; see tree.cpp */
+    /* Windows belonging to this process are skipped. The client walking the
+     * desktop passes its own pid: TreeWalker sends WM_GETTEXT, a same-thread
+     * SendMessage is a direct call, and reaching our own in-place-active
+     * HTML control from inside an RPC handler is reentrancy we can simply
+     * decline. */
+    DWORD excludePid;
     bool  visibleOnly;
     bool  wantText;
 
@@ -111,6 +118,8 @@ public:
     int nodesSeen() const   { return m_seen; }
     int textTimeouts() const { return m_timeouts; }
     int deferredNodes() const { return m_deferred; }
+    /* Subtrees refused for depth. Non-zero means the tree is INCOMPLETE. */
+    int tooDeep() const { return m_tooDeep; }
 
     /* Public only so EnumWindows' free-function callback can reach it. */
     bool stepTop(HWND h, TopContext &ctx);
@@ -130,6 +139,8 @@ private:
     int   m_seen;
     int   m_timeouts;
     int   m_deferred;
+    int   m_tooDeep;
+    HWND  m_focus;          /* resolved once per walk, see tree.cpp */
     DWORD m_until;
     bool  m_hasDeadline;
 

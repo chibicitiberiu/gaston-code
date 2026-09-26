@@ -32,6 +32,15 @@ static const GUID RC_IID_IAccessible =
  * win/checks/probe.c does the same work in C and therefore looks different. */
 typedef HRESULT (WINAPI *PFN_AOFW)(HWND, LONG, REFIID, void **);
 typedef UINT (WINAPI *PFN_ROLETEXT)(DWORD, LPSTR, UINT);
+typedef HRESULT (WINAPI *PFN_ACCCHILDREN)(IAccessible *, LONG, LONG,
+                                          VARIANT *, LONG *);
+
+/* {00020404-0000-0000-C000-000000000046}, spelled out for the same reason
+ * as IAccessible's: a toolchain whose uuid.lib is missing one must not fail
+ * the link over it. */
+static const GUID RC_IID_IEnumVARIANT =
+    { 0x00020404, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
 
 MsaaSource::MsaaSource()
 {
@@ -40,9 +49,16 @@ MsaaSource::MsaaSource()
         ? (void *)GetProcAddress(m_oleacc, "AccessibleObjectFromWindow") : 0;
     m_roleText = m_oleacc
         ? (void *)GetProcAddress(m_oleacc, "GetRoleTextA") : 0;
+    m_children = m_oleacc
+        ? (void *)GetProcAddress(m_oleacc, "AccessibleChildren") : 0;
     m_comReady = false;
     m_made = 0;
     m_named = 0;
+    m_byEnum = 0;
+    m_byHelper = 0;
+    m_until = 0;
+    m_hasDeadline = false;
+    m_accSeen = 0;
     if (m_aofw)
     {
         /* Apartment-threaded, and the caller's thread is expected to have a
@@ -177,6 +193,10 @@ bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
 
     VARIANT vrole;
     V_VT(&vrole) = VT_EMPTY;
+    /* Cleared unconditionally at the end of the block: a custom control may
+     * answer with a VT_BSTR role string rather than a number, and the
+     * VT_I4 guard would then skip past an allocation nobody frees -- once
+     * per candidate, in the tier that runs on every resolve. */
     if ((want & Selector::WANT_ROLE)
         && acc->get_accRole(self, &vrole) == S_OK
         && V_VT(&vrole) == VT_I4)
@@ -204,6 +224,8 @@ bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
         }
     }
 
+    VariantClear(&vrole);
+
     if (want & Selector::WANT_ACTION)
     {
         b = 0;
@@ -229,4 +251,225 @@ bool MsaaSource::enrich(HWND h, int want, Enrichment &out)
 
     acc->Release();
     return true;
+}
+
+/* ---- the accessible tree ------------------------------------------- */
+
+AccWalkOptions::AccWalkOptions()
+{
+    /* Name and role only. Each extra field is another marshalled call per
+     * node, and a document has hundreds of nodes -- the difference between
+     * two fields and four is the difference between a page that reads in a
+     * second and one that does not read at all. */
+    want = Selector::WANT_NAME | Selector::WANT_ROLE;
+    /* A page, not a desktop. Past this the caller is told it was truncated
+     * rather than handed a partial tree that looks complete. */
+    maxNodes = 512;
+    maxDepth = 16;
+    deadlineMs = 8000;
+}
+
+/* How many children to ask for in one go.
+ *
+ * The batch IS the optimisation. Per-child AccessibleObjectFromWindow was
+ * measured at 8500 us a node because each one is a WM_GETOBJECT round trip;
+ * sixteen children in one Next is one crossing. Sixteen rather than more
+ * because the VARIANT array is a stack local and the frame has 4096 bytes
+ * before it steps over Win98's guard page. */
+enum { ACC_BATCH = 16 };
+
+void MsaaSource::fillAcc(IAccessible *acc, long childId, int depth,
+                         const AccWalkOptions &opt, AccNode &out)
+{
+    memset(&out, 0, sizeof(out));
+    out.depth = depth;
+    out.childId = childId;
+    out.roleId = -1;
+
+    VARIANT self;
+    V_VT(&self) = VT_I4;
+    V_I4(&self) = childId;
+
+    VARIANT vrole;
+    V_VT(&vrole) = VT_EMPTY;
+    if (acc->get_accRole(self, &vrole) == S_OK && V_VT(&vrole) == VT_I4)
+    {
+        out.roleId = V_I4(&vrole);
+        if ((opt.want & Selector::WANT_ROLE) && m_roleText)
+        {
+            PFN_ROLETEXT rt = (PFN_ROLETEXT)m_roleText;
+            rt((DWORD)out.roleId, out.role, sizeof(out.role));
+            normaliseRole(out.role);
+        }
+    }
+    VariantClear(&vrole);
+
+    BSTR b = 0;
+    if ((opt.want & Selector::WANT_NAME)
+        && acc->get_accName(self, &b) == S_OK && b)
+    {
+        bstrToNarrow(b, out.name, sizeof(out.name));
+        SysFreeString(b);
+        b = 0;
+        if (out.name[0])
+            m_named++;
+    }
+    if ((opt.want & Selector::WANT_VALUE)
+        && acc->get_accValue(self, &b) == S_OK && b)
+    {
+        bstrToNarrow(b, out.value, sizeof(out.value));
+        SysFreeString(b);
+        b = 0;
+    }
+    if (opt.want & Selector::WANT_STATE)
+    {
+        VARIANT vstate;
+        V_VT(&vstate) = VT_EMPTY;
+        if (acc->get_accState(self, &vstate) == S_OK
+            && V_VT(&vstate) == VT_I4)
+            stateToText(V_I4(&vstate), out.state, sizeof(out.state));
+        VariantClear(&vstate);
+    }
+
+    /* Always. A node with no coordinates cannot be clicked, and clicking is
+     * what this tier is for -- a link's text tells the agent it is there,
+     * the rectangle is what lets it press it. */
+    long x = 0, y = 0, w = 0, h = 0;
+    if (acc->accLocation(&x, &y, &w, &h, self) == S_OK && (w || h))
+    {
+        out.rect.left = x;
+        out.rect.top = y;
+        out.rect.right = x + w;
+        out.rect.bottom = y + h;
+        out.hasRect = true;
+    }
+}
+
+AccEnd MsaaSource::walkAcc(IAccessible *acc, long childId, int depth,
+                           const AccWalkOptions &opt, AccSink &sink)
+{
+    if (m_hasDeadline && (long)(GetTickCount() - m_until) >= 0)
+        return ACC_DEADLINE;
+    if (m_accSeen >= opt.maxNodes)
+        return ACC_MAXNODES;
+
+    {
+        AccNode n;
+        fillAcc(acc, childId, depth, opt, n);
+        m_accSeen++;
+        if (!sink.onAcc(n))
+            return ACC_STOPPED;
+    }
+
+    /* A simple element has no children of its own -- it is not an object,
+     * it is an id its parent answers for. Asking it for children asks the
+     * PARENT again and walks forever. */
+    if (childId != 0)
+        return ACC_COMPLETE;
+
+    if (depth >= opt.maxDepth)
+        return ACC_MAXDEPTH;
+
+    long total = 0;
+    if (acc->get_accChildCount(&total) != S_OK || total <= 0)
+        return ACC_COMPLETE;
+
+    /* The enumerator first, the helper behind it. Not a preference: the two
+     * machines disagreed about which is faster and agreed that both work,
+     * so what matters is that a missing or broken one is caught rather than
+     * hard-coded around. */
+    IEnumVARIANT *en = 0;
+    if (acc->QueryInterface(RC_IID_IEnumVARIANT, (void **)&en) != S_OK)
+        en = 0;
+
+    PFN_ACCCHILDREN kids = (PFN_ACCCHILDREN)m_children;
+    long taken = 0;
+    AccEnd end = ACC_COMPLETE;
+
+    while (taken < total && end == ACC_COMPLETE)
+    {
+        VARIANT batch[ACC_BATCH];
+        unsigned long got = 0;
+        bool viaEnum = false;
+
+        for (int i = 0; i < ACC_BATCH; i++)
+            V_VT(&batch[i]) = VT_EMPTY;
+
+        if (en && en->Next(ACC_BATCH, batch, &got) >= S_OK && got > 0)
+        {
+            viaEnum = true;
+            m_byEnum++;
+        }
+        else if (kids)
+        {
+            LONG n = 0;
+            long want = total - taken;
+            if (want > ACC_BATCH)
+                want = ACC_BATCH;
+            if (kids(acc, taken, want, batch, &n) < S_OK || n <= 0)
+                break;
+            got = (unsigned long)n;
+            m_byHelper++;
+        }
+        else
+        {
+            break;      /* neither route exists; nothing more to say */
+        }
+
+        for (unsigned long i = 0; i < got && end == ACC_COMPLETE; i++)
+        {
+            if (V_VT(&batch[i]) == VT_DISPATCH && V_DISPATCH(&batch[i]))
+            {
+                IAccessible *kid = 0;
+                if (V_DISPATCH(&batch[i])->QueryInterface(
+                        RC_IID_IAccessible, (void **)&kid) == S_OK && kid)
+                {
+                    m_made++;
+                    end = walkAcc(kid, 0, depth + 1, opt, sink);
+                    kid->Release();
+                }
+            }
+            else if (V_VT(&batch[i]) == VT_I4)
+            {
+                end = walkAcc(acc, V_I4(&batch[i]), depth + 1, opt, sink);
+            }
+        }
+
+        for (unsigned long i = 0; i < got; i++)
+            VariantClear(&batch[i]);
+
+        taken += (long)got;
+        /* A batcher that keeps returning fewer than it promised would spin
+         * here forever on a count that does not shrink. */
+        if (!viaEnum && got == 0)
+            break;
+    }
+
+    if (en)
+        en->Release();
+    return end;
+}
+
+AccEnd MsaaSource::enumerateFrom(HWND root, const AccWalkOptions &opt,
+                                 AccSink &sink)
+{
+    m_byEnum = 0;
+    m_byHelper = 0;
+    m_accSeen = 0;
+    m_hasDeadline = opt.deadlineMs != 0;
+    m_until = GetTickCount() + opt.deadlineMs;
+
+    if (!m_aofw || !root || !IsWindow(root))
+        return ACC_NO_OBJECT;
+
+    IAccessible *acc = 0;
+    PFN_AOFW aofw = (PFN_AOFW)m_aofw;
+    if (aofw(root, OBJID_CLIENT, RC_IID_IAccessible, (void **)&acc) != S_OK
+        || !acc)
+        return ACC_NO_OBJECT;
+    m_made++;
+
+    AccEnd end = walkAcc(acc, 0, 0, opt, sink);
+    acc->Release();
+    return end;
 }

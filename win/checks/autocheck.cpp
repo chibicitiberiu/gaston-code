@@ -807,6 +807,8 @@ static void skipFeedCases(void)
     say("wait-for-gone-sees-a-destruction", true, "skipped: no feed");
     say("wait-times-out-and-says-so", true, "skipped: no feed");
     say("wait-for-idle-settles", true, "skipped: no feed");
+    say("wait-backstop-covers-a-missing-event", true, "skipped: no feed");
+    say("watch-can-skip-our-own-process", true, "skipped: no feed");
     say("watch-stops-cleanly", true, "skipped: no feed");
 }
 
@@ -839,7 +841,10 @@ void watching(void)
         UiWatch::classify(0x800B) == UI_LOCATION,
         "EVENT_OBJECT_LOCATIONCHANGE -- fires all through a drag");
 
-    bool started = watch.start(0, 0);
+    /* false: everything these cases create is in THIS process, and the
+     * default keeps our own events out precisely so a client does not wake
+     * on its own repaints. */
+    bool started = watch.start(0, 0, false);
     rc_strf(detail, sizeof(detail), "start=%d running=%d", (int)started,
             (int)watch.running());
     say("watch-installs", started == watch.available(), detail);
@@ -996,8 +1001,61 @@ void watching(void)
             && rep.ms >= 250, detail);
     }
 
+    {
+        /* And the default the other way round. A watch that skips our own
+         * process must hear NOTHING from it, or a client watching the
+         * desktop wakes on its own repaint, rescans, repaints, and wakes
+         * itself again. */
+        watch.stop();
+        UiWatch quiet;
+        if (quiet.start(0, 0, true))
+        {
+            int before = quiet.events();
+            HWND noise = CreateWindowExA(0, "GastonLater", "ours", WS_POPUP,
+                                         0, 0, 20, 20, NULL, NULL,
+                                         wc.hInstance, NULL);
+            quiet.settle(400);
+            int after = quiet.events();
+            /* Destroyed AFTER the measurement. A destroy arrives once the
+             * window is already gone, so its owner cannot be looked up and
+             * the filter lets it through by design -- that is one stray
+             * rescan, where dropping a real destruction is a wait that
+             * hangs. The loop this guards is the other direction: our own
+             * window APPEARING must not wake us. */
+            DestroyWindow(noise);
+            quiet.settle(200);
+            static UiEvent leak[RC_WATCH_RING];
+            int ln = quiet.drain(leak, RC_WATCH_RING);
+            DWORD lo = 0;
+            if (ln > 0) GetWindowThreadProcessId(leak[0].hwnd, &lo);
+            rc_strf(detail, sizeof(detail),
+                    "%d kept, %d dropped as ours, %d unattributable; "
+                    "first raw=0x%lX pid-now=%lu",
+                    after - before, quiet.ownDropped(),
+                    quiet.unattributed(),
+                    ln ? (unsigned long)leak[0].raw : 0UL,
+                    (unsigned long)lo);
+            /* Under Wine, two of the three events a CreateWindow produces
+             * are ours and get dropped; the third resolves to a pid that is
+             * not ours at callback time -- Wine's own bookkeeping. So the
+             * assertion is that the filter FIRES and that essentially
+             * nothing survives, not that the count is a clean zero. If Win98
+             * honours WINEVENT_SKIPOWNPROCESS outright the system filters
+             * them for us and both numbers read zero, which also passes;
+             * if more than one leaks, this row is how we find out. */
+            say("watch-can-skip-our-own-process",
+                (after - before) <= 1
+                && (after == before || quiet.ownDropped() > 0), detail);
+            quiet.stop();
+        }
+        else
+        {
+            say("watch-can-skip-our-own-process", true,
+                "skipped: SKIPOWNPROCESS refused here");
+        }
+    }
+
     stopAppear(a, th);
-    watch.stop();
     say("watch-stops-cleanly", !watch.running(), "hooks removed");
 
     UnregisterClassA("GastonLater", wc.hInstance);
@@ -1223,6 +1281,102 @@ void enrichment(void)
 
     say("msaa-refuses-dead-window", !msaa.enrich(NULL, all, e),
         "NULL hwnd");
+
+    /* The batched tier. A document is a single HWND, so the WINDOW walk
+     * sees one node and stops -- this is the only tree a web page has. */
+    {
+        class AccCount : public AccSink
+        {
+        public:
+            AccCount() : m_n(0), m_deepest(0), m_rects(0), m_doc(false) {}
+            virtual bool onAcc(const AccNode &n)
+            {
+                m_n++;
+                if (n.depth > m_deepest) m_deepest = n.depth;
+                if (n.hasRect) m_rects++;
+                if (n.roleId == RC_ROLE_DOCUMENT) m_doc = true;
+                return true;
+            }
+            int  count() const { return m_n; }
+            int  deepest() const { return m_deepest; }
+            int  rects() const { return m_rects; }
+            bool sawDocument() const { return m_doc; }
+        private:
+            int m_n, m_deepest, m_rects;
+            bool m_doc;
+        };
+
+        /* Real children, so the BATCHING has something to batch. Without
+         * them the walk is one node and the whole point of the tier goes
+         * untested. */
+        HWND kid[3];
+        for (int i = 0; i < 3; i++)
+            kid[i] = CreateWindowExA(0, "Button", "kid",
+                                     WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                     0, (long)(i * 22), 60, 20, w, NULL,
+                                     wc.hInstance, NULL);
+
+        AccWalkOptions ao;
+        AccCount counter;
+        AccEnd ae = msaa.enumerateFrom(w, ao, counter);
+        int batches = msaa.enumeratorLevels() + msaa.helperLevels();
+        rc_strf(detail, sizeof(detail),
+                "end=%d, %d nodes, depth %d, %d with a rect, "
+                "%d enum batches / %d helper batches",
+                (int)ae, counter.count(), counter.deepest(), counter.rects(),
+                msaa.enumeratorLevels(), msaa.helperLevels());
+        /* The root object itself always arrives, children or not. */
+        say("msaa-enumerates-from-a-window",
+            ae == ACC_COMPLETE && counter.count() >= 1, detail);
+
+        /* A rectangle is not a nicety here: a link's text says it exists,
+         * the rectangle is what lets an agent press it. */
+        say("msaa-enumeration-carries-rectangles", counter.rects() >= 1,
+            detail);
+
+        /* Three real children must arrive in ONE batch, not three round
+         * trips. Wine's oleacc reports no accessible children for any class
+         * -- the same missing Win32 proxies as the state and action rows --
+         * so there this reports instead of asserting, and the guest run is
+         * what settles it. Which batcher won is a per-machine fact either
+         * way: the P200 preferred AccessibleChildren and the XP preferred
+         * the enumerator by seven times. */
+        if (counter.count() > 1)
+            say("msaa-batches-children",
+                batches >= 1 && batches <= counter.count() / 2 + 1, detail);
+        else
+            say("msaa-batches-children", true,
+                "reported, not asserted: no accessible children here");
+
+        for (int i = 0; i < 3; i++)
+            if (kid[i]) DestroyWindow(kid[i]);
+
+        say("msaa-refuses-a-dead-window-for-enumeration",
+            msaa.enumerateFrom(NULL, ao, counter) == ACC_NO_OBJECT,
+            "NULL hwnd");
+    }
+
+    {
+        /* A sink that stops must stop the walk, and a node cap must cap it.
+         * Unbounded recursion through somebody else's accessibility tree is
+         * exactly the allocation this project refuses to make. */
+        class StopAt : public AccSink
+        {
+        public:
+            StopAt() : m_n(0) {}
+            virtual bool onAcc(const AccNode &) { m_n++; return false; }
+            int count() const { return m_n; }
+        private:
+            int m_n;
+        };
+        AccWalkOptions ao;
+        StopAt s1;
+        AccEnd ae = msaa.enumerateFrom(w, ao, s1);
+        rc_strf(detail, sizeof(detail), "end=%d after %d node(s)", (int)ae,
+                s1.count());
+        say("msaa-enumeration-stops-when-sink-says",
+            ae == ACC_STOPPED && s1.count() == 1, detail);
+    }
 
     DestroyWindow(w);
     UnregisterClassA("GastonMsaaCheck", wc.hInstance);

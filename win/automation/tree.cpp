@@ -18,6 +18,12 @@ WalkOptions::WalkOptions()
     /* A guard against a cyclic GW_HWNDNEXT chain, not a budget. An idle
      * desktop measured 44 nodes; the deadline is what bounds a walk. */
     maxNodes = 4096;
+    /* The measured tree is 4 to 6 deep. This bounds the RECURSION, which
+     * maxNodes does not: descend() puts a 324-byte Node on the stack at
+     * every level, and the frame gate caps one frame, not a thousand of
+     * them. Deeper than this is counted and reported, never followed. */
+    maxDepth = 24;
+    excludePid = 0;
     visibleOnly = true;
     wantText = true;
 }
@@ -47,7 +53,13 @@ const char *roleFromClassAndStyle(const char *cls, DWORD style)
         case BS_RADIOBUTTON:
         case BS_AUTORADIOBUTTON:    return "radiobutton";
         case BS_GROUPBOX:           return "grouping";
-        default:                    return "pushbutton";
+        /* BS_OWNERDRAW, BS_USERBUTTON, BS_PUSHBOX and the unused values
+         * fall through to nothing on purpose. An owner-draw button is drawn
+         * by its application and could be anything at all -- it is exactly
+         * the residue the MSAA tier exists for, and calling it a push
+         * button here is a confident wrong answer that stops MSAA ever
+         * being asked. */
+        default:                    return 0;
         }
     }
 
@@ -78,8 +90,10 @@ TreeWalker::TreeWalker()
     m_seen = 0;
     m_timeouts = 0;
     m_deferred = 0;
+    m_tooDeep = 0;
     m_until = 0;
     m_hasDeadline = false;
+    m_focus = NULL;
     memset(m_slowTid, 0, sizeof(m_slowTid));
     memset(m_slowPid, 0, sizeof(m_slowPid));
 }
@@ -109,6 +123,42 @@ void TreeWalker::markSlow(DWORD tid, DWORD pid)
     m_slowN++;
 }
 
+/* The focused control, once per walk, and NOT GetFocus() per node.
+ *
+ * GetFocus reports the focus of the CALLING THREAD's input queue. For every
+ * window outside our own thread it returns NULL, so `:focused` -- parsed,
+ * documented and in the node record -- could never once be true on a real
+ * desktop. The bug was invisible in testing because the only coverage was a
+ * synthetic node asserting a negative.
+ *
+ * On 9x the way to read another thread's focus is to join its input queue.
+ * GetGUIThreadInfo would do it without that and is NT 5.0+, so it is out.
+ * The attach is done ONCE for the foreground thread rather than per node,
+ * and undone immediately: it is documented as unreliable on 9x (the import
+ * audit warns about it by name), and briefly sharing an input queue with
+ * the foreground application is not something to do eighty times a walk.
+ *
+ * If the attach is refused, the honest answer is the foreground window
+ * itself and nothing inside it -- a top-level answer rather than a wrong
+ * one. */
+static HWND focusedWindow()
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg)
+        return NULL;
+
+    DWORD me = GetCurrentThreadId();
+    DWORD other = GetWindowThreadProcessId(fg, NULL);
+    if (other == me)
+        return GetFocus();
+
+    if (!AttachThreadInput(me, other, TRUE))
+        return fg;
+    HWND f = GetFocus();
+    AttachThreadInput(me, other, FALSE);
+    return f ? f : fg;
+}
+
 bool TreeWalker::inProcess(HWND h, DWORD pid)
 {
     DWORD owner = 0;
@@ -135,7 +185,7 @@ void TreeWalker::fill(Node &n, HWND h, const WalkOptions &opt,
     n.style = (DWORD)GetWindowLongA(h, GWL_STYLE);
     n.visible = IsWindowVisible(h) ? true : false;
     n.enabled = IsWindowEnabled(h) ? true : false;
-    n.focused = (GetFocus() == h);
+    n.focused = (m_focus != NULL && m_focus == h);
     GetWindowRect(h, &n.rect);
     GetClassNameA(h, n.cls, sizeof(n.cls));
 
@@ -209,6 +259,8 @@ WalkEnd TreeWalker::descend(HWND parent, const WalkOptions &opt,
          * that happens to be wedged. */
         if (opt.pid && !inProcess(c, opt.pid))
             continue;
+        if (opt.excludePid && inProcess(c, opt.excludePid))
+            continue;
 
         Node n;
         fill(n, c, opt, parentPath, index, depth);
@@ -218,6 +270,11 @@ WalkEnd TreeWalker::descend(HWND parent, const WalkOptions &opt,
         if (!sink.onNode(n))
             return WALK_STOPPED;
 
+        if (depth + 1 > opt.maxDepth)
+        {
+            m_tooDeep++;
+            continue;
+        }
         WalkEnd e = descend(c, opt, sink, n.path, depth + 1);
         if (e != WALK_COMPLETE)
             return e;
@@ -259,6 +316,8 @@ bool TreeWalker::stepTop(HWND h, TopContext &ctx)
         return true;
     if (ctx.opt->pid && !inProcess(h, ctx.opt->pid))
         return true;
+    if (ctx.opt->excludePid && inProcess(h, ctx.opt->excludePid))
+        return true;
 
     Node n;
     fill(n, h, *ctx.opt, "", ctx.index, 0);
@@ -285,9 +344,11 @@ WalkEnd TreeWalker::walk(const WalkOptions &opt, NodeSink &sink)
     m_seen = 0;
     m_timeouts = 0;
     m_deferred = 0;
+    m_tooDeep = 0;
     m_slowN = 0;
     m_hasDeadline = opt.deadlineMs != 0;
     m_until = GetTickCount() + opt.deadlineMs;
+    m_focus = focusedWindow();
 
     if (opt.root)
     {

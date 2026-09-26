@@ -65,17 +65,22 @@ struct WatchSlot
 
 static WatchSlot g_slots[RC_WATCH_SLOTS];
 
-static void slotAdd(RC_HWINEVENTHOOK h, UiWatch *w)
+/* False when the table is full, and the caller then UNHOOKS rather than
+ * carrying on. A hook with no slot still fires, finds no owner, and drops
+ * every event it was installed for -- silently, which is the failure this
+ * whole file is trying not to have. */
+static bool slotAdd(RC_HWINEVENTHOOK h, UiWatch *w)
 {
     if (!h)
-        return;
+        return false;
     for (int i = 0; i < RC_WATCH_SLOTS; i++)
         if (!g_slots[i].hook)
         {
             g_slots[i].hook = h;
             g_slots[i].owner = w;
-            return;
+            return true;
         }
+    return false;
 }
 
 static void slotDropAll(UiWatch *w)
@@ -125,6 +130,10 @@ UiWatch::UiWatch()
     m_contentSeq = 0;
     m_focusSeq = 0;
     m_anySeq = 0;
+    m_skipOwn = false;
+    m_selfPid = GetCurrentProcessId();
+    m_ownDropped = 0;
+    m_unattributed = 0;
 }
 
 UiWatch::~UiWatch()
@@ -176,7 +185,7 @@ UiChange UiWatch::classify(DWORD ev)
     }
 }
 
-bool UiWatch::start(DWORD pid, DWORD tid)
+bool UiWatch::start(DWORD pid, DWORD tid, bool skipOwnProcess)
 {
     if (!m_set)
         return false;
@@ -184,21 +193,50 @@ bool UiWatch::start(DWORD pid, DWORD tid)
         return true;
 
     PFN_SETWINEVENT set = (PFN_SETWINEVENT)m_set;
+    /* Our own repaints are events too. Left in, the client watching the
+     * desktop wakes on its own window, rescans, repaints, and wakes itself
+     * again -- forIdle never settles and forControl's "nothing was
+     * delivered, so nothing changed" fast path is defeated by the very scan
+     * it was meant to avoid. */
+    DWORD flags = RC_WINEVENT_OUTOFCONTEXT;
+    if (skipOwnProcess)
+        flags |= RC_WINEVENT_SKIPOWNPROCESS;
+    /* The flag AND a check in the callback. Wine accepts the flag and
+     * delivers our own events anyway, and a filter that works on three
+     * machines out of four is not a filter -- the failure it lets through
+     * is an event loop feeding itself. The check costs one
+     * GetWindowThreadProcessId per event, which is local. */
+    m_skipOwn = skipOwnProcess;
+    m_selfPid = GetCurrentProcessId();
 
     /* Two hooks and not one over 0x0001..0x800F. The gap between the system
      * range and the object range is a thousand event numbers we would be
      * asked about for nothing, and the system filters more cheaply than we
      * can. */
     m_sys = set(RC_EV_SYS_MIN, RC_EV_SYS_MAX, NULL, watchProc, pid, tid,
-                RC_WINEVENT_OUTOFCONTEXT);
-    slotAdd(m_sys, this);
-    m_obj = set(RC_EV_OBJ_CREATE, RC_EV_OBJ_MAX, NULL, watchProc, pid, tid,
-                RC_WINEVENT_OUTOFCONTEXT);
-    slotAdd(m_obj, this);
-
-    if (!running())
+                flags);
+    if (!slotAdd(m_sys, this))
     {
-        slotDropAll(this);
+        PFN_UNHOOKWINEVENT unset = (PFN_UNHOOKWINEVENT)m_unset;
+        if (m_sys) unset(m_sys);
+        m_sys = 0;
+    }
+    m_obj = set(RC_EV_OBJ_CREATE, RC_EV_OBJ_MAX, NULL, watchProc, pid, tid,
+                flags);
+    if (!slotAdd(m_obj, this))
+    {
+        PFN_UNHOOKWINEVENT unset = (PFN_UNHOOKWINEVENT)m_unset;
+        if (m_obj) unset(m_obj);
+        m_obj = 0;
+    }
+
+    /* BOTH or neither. One hook installed is worse than none: running()
+     * would be true and a whole class of events -- every name and value
+     * change, say -- would be silently absent, so a wait would hang rather
+     * than fail. */
+    if (!m_sys || !m_obj)
+    {
+        stop();
         return false;
     }
     return true;
@@ -219,6 +257,23 @@ void UiWatch::stop()
 
 void UiWatch::onEvent(DWORD ev, HWND h, long obj, long child, DWORD tid)
 {
+    if (m_skipOwn && h)
+    {
+        DWORD owner = 0;
+        GetWindowThreadProcessId(h, &owner);
+        /* owner == 0 means the window is already gone -- a DESTROY that
+         * arrived after the fact. It cannot be attributed to anyone, so it
+         * is let through: an unattributable event costs one extra rescan,
+         * where dropping a real destruction costs a wait that hangs. */
+        if (owner == m_selfPid)
+        {
+            m_ownDropped++;
+            return;     /* not counted, not sequenced, not rung */
+        }
+        if (owner == 0)
+            m_unattributed++;
+    }
+
     UiChange kind = classify(ev);
 
     m_events++;
@@ -259,21 +314,40 @@ int UiWatch::drain(UiEvent *out, int cap)
     return n;
 }
 
+/* True when WM_QUIT came out of the queue.
+ *
+ * PM_REMOVE takes WM_QUIT like anything else and DispatchMessage drops it on
+ * the floor, so a settle() that simply pumped would EAT the application's
+ * shutdown: close the client while a wait is running and it does not exit.
+ * It goes back where it came from and the wait gives up immediately -- a
+ * wait is never more important than quitting. */
+bool UiWatch::drainQueue()
+{
+    MSG msg;
+    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
+    {
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage((int)msg.wParam);
+            return true;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
+    return false;
+}
+
 DWORD UiWatch::settle(DWORD ms)
 {
     DWORD t0 = GetTickCount();
     DWORD until = t0 + ms;
-    MSG msg;
 
     /* Drain first. The event we are about to block for may already be
      * sitting in the queue, and blocking on an empty wait for something
      * that has already happened is how a "subscribe then check" ordering
      * gets undone at the last step. */
-    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
-    {
-        TranslateMessage(&msg);
-        DispatchMessageA(&msg);
-    }
+    if (drainQueue())
+        return GetTickCount() - t0;
 
     long left = (long)(until - GetTickCount());
     if (left > 0)
@@ -282,11 +356,7 @@ DWORD UiWatch::settle(DWORD ms)
          * anything is posted, so the wait costs nothing while nothing is
          * happening and adds no latency of its own when it does. */
         MsgWaitForMultipleObjects(0, NULL, FALSE, (DWORD)left, QS_ALLINPUT);
-        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
-        {
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-        }
+        drainQueue();
     }
     return GetTickCount() - t0;
 }

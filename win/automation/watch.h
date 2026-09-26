@@ -74,7 +74,11 @@ public:
     /* `pid` and `tid` are filters, 0 for "anything". Both hooks are
      * installed on the CALLING thread and that thread must be the one that
      * pumps -- OUTOFCONTEXT delivery has no other route. */
-    bool start(DWORD pid, DWORD tid);
+    /* `skipOwnProcess` keeps our own repaints out of the feed, which a
+     * client watching the desktop wants: left in, it wakes on its own
+     * window, rescans, repaints, and wakes itself again. Pass false only to
+     * watch our own UI. */
+    bool start(DWORD pid, DWORD tid, bool skipOwnProcess = true);
     void stop();
     bool running() const { return m_sys != 0 || m_obj != 0; }
 
@@ -88,6 +92,11 @@ public:
 
     int events() const  { return m_events; }
     int dropped() const { return m_dropped; }
+    /* Events discarded as our own, and events about a window that had
+     * already gone by the time the callback ran -- those cannot be
+     * attributed to anyone and are kept. */
+    int ownDropped() const   { return m_ownDropped; }
+    int unattributed() const { return m_unattributed; }
 
     /* Copies out up to `cap` events, oldest first, and empties the ring. */
     int drain(UiEvent *out, int cap);
@@ -105,6 +114,8 @@ public:
     void onEvent(DWORD ev, HWND h, long obj, long child, DWORD tid);
 
 private:
+    bool drainQueue();      /* true if WM_QUIT came out; see watch.cpp */
+
     void *m_set;            /* SetWinEventHook */
     void *m_unset;          /* UnhookWinEvent */
     RC_HWINEVENTHOOK m_sys; /* the 0x0001..0x0020 range */
@@ -120,6 +131,11 @@ private:
     unsigned m_contentSeq;
     unsigned m_focusSeq;
     unsigned m_anySeq;
+
+    bool     m_skipOwn;
+    DWORD    m_selfPid;
+    int      m_ownDropped;
+    int      m_unattributed;
 
     UiWatch(const UiWatch &);
     UiWatch &operator=(const UiWatch &);

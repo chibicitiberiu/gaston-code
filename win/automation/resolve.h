@@ -41,9 +41,10 @@ enum ResolveOutcome
     RESOLVE_NO_MEMORY
 };
 
-/* How deep an ancestor chain is tracked. The measured tree is 4 to 6 deep;
- * past this the chain is clamped and a selector needing a deeper ancestor
- * will not match, which is a miss rather than a wrong answer. */
+/* How deep an ancestor chain is tracked. The measured tree is 4 to 6 deep.
+ * Past this a node is REFUSED rather than judged: its ancestry is not in
+ * hand, and the resolve reports RESOLVE_TRUNCATED so "not there" is never
+ * claimed on the strength of a tree we did not finish reading. */
 #define RC_CHAIN_MAX 12
 
 /* Matches kept for the ambiguity message. Enough to tell the caller what it
@@ -104,6 +105,10 @@ public:
     int sampleCount() const     { return m_sampleN; }
     const Node *sample(int i) const;
 
+    /* Nodes skipped because their ancestry was deeper than the chain.
+     * Non-zero means the answer is incomplete, and `resolve` says so. */
+    int tooDeep() const         { return m_tooDeep; }
+
     /* Windows an MSAA property was actually fetched for. The number this
      * library exists to keep small; `autocheck` asserts on it. */
     int enriched() const        { return m_enriched; }
@@ -131,6 +136,7 @@ private:
     int     m_enriched;
     int     m_nth;          /* :nth on the last step, 0 for none */
     bool    m_found;        /* m_st->match holds the answer */
+    int     m_tooDeep;
     WalkEnd m_end;
 
     Resolver(const Resolver &);
