@@ -479,6 +479,16 @@ blocked on sudo, per §5's last bullet) before trusting any number here, then
 build the source primitive with Cancel and a determinate progress bar, then
 cap the upload on both sides and report the cap rather than truncate silently.
 
+**gremote implements the CONTRACT and closes none of the LIST (2026-09-27).**
+`docs/REMOTE.md`'s protocol section says "`CANCEL id=` follows `BACKLOG.md` 6",
+which reads like this entry can be ticked off once `gremote.exe` answers a
+`CANCEL`. It cannot. gremote's lane worker is new code with its own id table;
+it takes the `Tflush` rule above -- the ack means the request will never be
+answered, and the id cannot be reused before the ack -- and shares nothing
+with the four items below. Item (1) is arguably discharged by `win/fs/xfer.h`
+(libfs, step 5a) rather than by a `win/xfer.c` that will now never exist;
+item (2) is specifically the CLIENT's `rpc.cpp`; item (3) is bridge Python.
+
 **To close it, in order:** (1) `win/xfer.c` with the sink/source pair above,
 maybe 150-250 lines given `do_put`/`do_get` are already ~130 combined and
 mostly reusable; (2) `id_matches_family`/`rc_rpc_submit` grow a third queue

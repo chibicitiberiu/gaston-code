@@ -658,6 +658,16 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    exe as a client, so the reverse direction has no precedent here. Then ship
    to the VM, then the P200. **First useful milestone: ssh-equivalent on the
    real box.**
+   *Scoped 2026-09-27 (`docs/gremote-plan.md`):* **the fs lane is built here,
+   not in step 5.** libfs and its handlers landed in 5a, and 5b (`ship()`)
+   waits on nothing but this exe -- so without `PUT` a new `retroclaude.exe`
+   would still travel by CD, which is the thing this step exists to stop. The
+   ui lane still waits for step 6. **Deflate is off in v0**: the only large
+   payload is a screenshot and screenshots are step 6, so `HELLO` says
+   `deflate=0` and `Connection` is constructed without its 192KB of scratch.
+   The VM is reached with QMP `hostfwd_add` rather than a libvirt
+   `<portForward>`, which libvirt accepts only on the `passt` backend --
+   ours is slirp with a hand-configured `ne2k_isa`.
 5. **libfs**, the fs lane, `PUT` with CRC and temp-rename, `ship()`,
    self-update. Split in two: **5a** is the library plus the client moved onto
    it, plus the fs lane in the client and the agent's `get_file`/`put_file`/
@@ -665,6 +675,9 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    which need `GREMOTE.EXE` from step 4 and cannot start before it.
    **Step 5a is complete (2026-09-27)**, verified on the real guest and not
    only under Wine -- `docs/measurements/libfs-vm-20260927.txt`.
+   **5b is built inside step 4** (`docs/gremote-plan.md`), because `ship()`
+   is the first thing anyone wants from gremote and it needs the fs lane that
+   step now carries.
 6. **libautomation.** Screenshot, window list, focus and input, control tree,
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.
@@ -750,6 +763,13 @@ Things only the real box can answer, collected so the first session covers them:
 
 ## Open decisions
 
-- **Deflate on by default.** Probably off on LAN; screenshots are the only large
-  payload.
+- ~~**Deflate on by default.**~~ **Settled 2026-09-27: off.** The only large
+  payload is a screenshot and screenshots are step 6, so v0 constructs
+  `Connection` without compression -- which also leaves out the 192KB of
+  persistent scratch, real on a 32MB box -- and `HELLO` reports `deflate=0`.
+  A compressing peer talking to a non-compressing one drops the link rather
+  than degrading (`wirecheck`'s `refusal()` case), so the Python client must
+  never set `enc=deflate`. Turning it on means importing
+  `bridge/wire/compress.py`, which is stdlib-only and already keeps one
+  persistent stream per direction.
 - **`BI_RLE8`** for screenshots (`BACKLOG.md` 8).
