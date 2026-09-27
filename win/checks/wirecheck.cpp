@@ -337,6 +337,69 @@ static void refusal(Listener &l)
         closeBoth(p.server, p.client, p.clientSink), "");
 }
 
+/* --- the out-queue reserve ------------------------------------------------
+ *
+ * A server whose control lane answers on the reader thread (docs/REMOTE.md)
+ * shares one out queue between a streaming GET and the PONG that keeps the
+ * peer from declaring it dead. Before the reserve, whichever got there first
+ * could take all 64KB.
+ *
+ * Driven WITHOUT starting either end's threads: connect() sets the queue up
+ * and makes the Connection live, start() is what creates the sender that
+ * drains it. So nothing drains, every send is refused or accepted on the
+ * arithmetic alone, and there is no race to lose. waitTicks is 0 throughout,
+ * because a full queue that nobody is draining will not empty.
+ */
+static void reserveCases(Listener &l)
+{
+    static char body[2048];
+    static char detail[96];
+    Recorder sink;
+    Connection c(&sink, false);
+    SocketGuard peer;
+    int bulk = 0, extra = 0;
+    bool controlGotIn = false;
+
+    memset(body, 'x', sizeof body);
+    if (!c.connect("127.0.0.1", l.port()) || !l.accept(peer, 3000))
+    {
+        say("reserve-setup", false, "could not connect or accept");
+        return;
+    }
+
+    /* Fill until a BULK send is refused. It is refused at
+     * RC_OUTQ_MAX_BYTES - RC_OUTQ_RESERVE, not at the top of the queue. */
+    while (bulk < 64 &&
+           c.send("BULK", NULL, NULL, 0, body, sizeof body, 0, false,
+                  RC_OUTQ_RESERVE) == RC_SEND_OK)
+        bulk++;
+    rc_strf(detail, sizeof detail, "%d frames of %u, reserve %u of %u",
+            bulk, (unsigned)sizeof body, (unsigned)RC_OUTQ_RESERVE,
+            (unsigned)RC_OUTQ_MAX_BYTES);
+    say("reserve-refuses-bulk-before-the-queue-is-full", bulk > 0 && bulk < 64,
+        detail);
+
+    /* THE PROPERTY: with bulk shut out, the reply a reader owes still goes. */
+    controlGotIn = c.send("PONG", NULL, NULL, 0, NULL, 0, 0, false, 0)
+                   == RC_SEND_OK;
+    say("the-reserve-is-there-for-the-control-reply", controlGotIn, "");
+
+    /* And the room was real: sends with no reserve keep going until the
+     * whole 64KB is gone, which is also the client's unchanged behaviour --
+     * every caller in win/net passes no reserve at all. */
+    while (extra < 64 &&
+           c.send("BULK", NULL, NULL, 0, body, sizeof body, 0, false, 0)
+               == RC_SEND_OK)
+        extra++;
+    rc_strf(detail, sizeof detail, "%d more frames of %u once the reserve "
+            "was open", extra, (unsigned)sizeof body);
+    say("no-reserve-still-fills-the-whole-queue", extra > 0, detail);
+
+    c.signalStop();
+    bool joined = c.join(3000);
+    say("an-unstarted-connection-stops-clean", c.release(true) && joined, "");
+}
+
 int main(void)
 {
     rc_log_open(".");
@@ -350,6 +413,7 @@ int main(void)
     traffic(l);
     heartbeat(l);
     refusal(l);
+    reserveCases(l);
     l.close();
     rc_log_close();
     return 0;

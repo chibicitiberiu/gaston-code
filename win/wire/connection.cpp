@@ -812,7 +812,8 @@ enum { MAX_SEND_HEADERS = 32 };
 
 int Connection::send(const char *type, const char *const *keys,
                      const char *const *vals, int nkv, const void *body,
-                     unsigned bodyLen, int waitTicks, bool compressible)
+                     unsigned bodyLen, int waitTicks, bool compressible,
+                     unsigned reserveBytes)
 {
     int waited = 0;
 
@@ -833,7 +834,14 @@ int Connection::send(const char *type, const char *const *keys,
          * persistent dictionary is never corrupted by a dropped frame. And
          * the lock is not released after deflating, which keeps the frames
          * in the order their bytes went through the stream. */
-        while (m_queued + bodyLen + 256 > RC_OUTQ_MAX_BYTES && m_running &&
+        /* Clamped, because an unsigned subtraction that wrapped would turn
+         * a reserve into a queue several gigabytes deep. A reserve at or
+         * above the whole budget leaves a budget of zero, which refuses
+         * every bulk frame -- wrong, but visibly and safely wrong. */
+        unsigned budget = reserveBytes < RC_OUTQ_MAX_BYTES
+                              ? RC_OUTQ_MAX_BYTES - reserveBytes : 0;
+
+        while (m_queued + bodyLen + 256 > budget && m_running &&
                waited < waitTicks)
         {
             LeaveCriticalSection(&m_lock);
@@ -843,11 +851,11 @@ int Connection::send(const char *type, const char *const *keys,
         }
         if (!m_running)
             return RC_SEND_DEAD;
-        if (m_queued + bodyLen + 256 > RC_OUTQ_MAX_BYTES)
+        if (m_queued + bodyLen + 256 > budget)
         {
             rc_log("net: send queue full after %dms wait, dropping %s "
-                   "(body=%u bytes, outq_bytes=%u)",
-                   waited * 100, type, bodyLen, m_queued);
+                   "(body=%u bytes, outq_bytes=%u, reserve=%u)",
+                   waited * 100, type, bodyLen, m_queued, reserveBytes);
             return RC_SEND_FULL;
         }
 

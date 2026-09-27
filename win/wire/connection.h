@@ -95,9 +95,16 @@ public:
     /* Queue a frame. `waitTicks` 100ms slices of waiting for room (the
      * caller's budget: RC_SEND_WAIT_UI or _BULK); `compressible` lets the
      * link deflate it when that pays. RC_SEND_OK / _DEAD / _FULL. */
+    /* `reserveBytes` is what this send must leave free in the out queue for
+     * somebody else -- RC_OUTQ_RESERVE from a bulk sender on a server whose
+     * control lane answers on the reader thread, 0 from that control reply
+     * and from everyone in the client, where nothing answers on the reader.
+     * A send that would eat into the reserve waits like a full queue and
+     * then returns RC_SEND_FULL, rather than taking it. */
     int send(const char *type, const char *const *keys,
              const char *const *vals, int nkv, const void *body,
-             unsigned bodyLen, int waitTicks, bool compressible);
+             unsigned bodyLen, int waitTicks, bool compressible,
+             unsigned reserveBytes = 0);
 
     void drain(DWORD timeoutMs);
     void signalStop();

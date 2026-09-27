@@ -33,6 +33,24 @@ const char *rc_state_name(rc_state s);
  * backpressure is not. */
 #define RC_OUTQ_MAX_BYTES (64 * 1024)
 
+/* ...of which this much is held back from bulk senders, so that the replies
+ * a reader owes can always leave.
+ *
+ * The queue above is one flat budget: whoever gets there first may fill all
+ * of it. That is fine for the client, where the bulk sender and the reader
+ * are the same worker and nothing answers on the reader thread. It is not
+ * fine for a server whose CONTROL LANE ANSWERS INLINE ON THE READER
+ * (docs/REMOTE.md) -- a GET streaming a megabyte in 8KB chunks fills the
+ * queue, and the PONG that keeps the peer from declaring us dead then waits
+ * out its budget and fails. The heartbeat would be starved by our own reply
+ * to a request the same peer made.
+ *
+ * So a send names what it must leave behind. Bulk passes this; a control
+ * reply passes 0 and may use the whole queue. 8KB is eight of the small
+ * answers this lane sends, which is more than can be outstanding at once
+ * when only one request is in flight per lane. */
+#define RC_OUTQ_RESERVE (8 * 1024)
+
 /* What a send can answer.
  *
  * RC_SEND_FULL is NOT a dead link and must not be reported as one: the wire

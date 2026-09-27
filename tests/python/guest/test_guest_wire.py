@@ -27,7 +27,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 16, sorted(verdicts)
+    assert len(verdicts) == 20, sorted(verdicts)
 
 
 def test_a_listening_port_is_never_shared(verdicts):
@@ -49,3 +49,32 @@ def test_every_pair_releases_everything(verdicts):
     for case in ("both-stop-clean", "client-hears-the-drop",
                  "heartbeat-pair-stops-clean", "refusing-pair-stops-clean"):
         assert verdicts[case][0] == "pass", (case, verdicts[case])
+
+
+# --- the out-queue reserve -------------------------------------------------
+#
+# gremote's control lane answers on the reader thread (docs/REMOTE.md), so a
+# streaming GET and the PONG that keeps the peer from declaring the server
+# dead share one 64KB queue. Before RC_OUTQ_RESERVE, whichever got there
+# first could take all of it -- the server would have starved its own
+# heartbeat with its own reply.
+
+def test_bulk_is_refused_before_the_queue_is_full(verdicts):
+    """Measured, not asserted as a boolean: the detail says how many frames
+    of what size fitted, against which reserve and which total."""
+    status, detail = verdicts["reserve-refuses-bulk-before-the-queue-is-full"]
+    assert status == "pass", detail
+    assert "reserve 8192 of 65536" in detail, detail
+
+
+def test_the_reserve_is_there_for_the_control_reply(verdicts):
+    """The property the constant exists for: with bulk shut out of the
+    queue, a control reply still goes."""
+    assert verdicts["the-reserve-is-there-for-the-control-reply"][0] == "pass"
+
+
+def test_a_send_with_no_reserve_still_uses_the_whole_queue(verdicts):
+    """Which is every caller in win/net -- the client passes no reserve, so
+    its behaviour is unchanged by the parameter existing."""
+    status, detail = verdicts["no-reserve-still-fills-the-whole-queue"]
+    assert status == "pass", detail

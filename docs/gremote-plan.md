@@ -152,21 +152,22 @@ wine-smoke`.
 |---|---|
 | 0 | This file; REMOTE.md's step list; the BACKLOG 6 note. No code. |
 | 1 | `core/thread.{h,cpp}` with an explicit stack reserve, and `appcheck` cases. Record which existing `_beginthreadex` sites migrate. |
-| 2 | libwire: the reserved-slot parameter on `Connection::send`, and a non-inheritable listening socket. Both with `wirecheck` cases. |
-| 3 | The `win/remote/` skeleton and the whole Makefile wiring. |
-| 4 | The direction proof: the Python spine, the fixture, and a real socket into a Wine-hosted gremote. |
-| 5 | Op table, lanes, `Responder`, generation tagging, `CANCEL`, `remotecheck.exe`. |
-| 6 | Control lane. |
-| 7 | Job lane, and the non-inheritable listener in use. |
-| 8 | Python: the control and job ops. |
-| 9 | fs read-only: `LS`, `STAT`, `DRIVES`. |
-| 10 | `GET`. |
-| 11 | `PUT`, `RM`, `MKDIR`, `MV`. |
-| 12 | Python fs ops. |
-| 13 | `ship()` and self-update -- REMOTE.md step 5b. |
-| 14 | The agreement test: the op table and status vocabulary scraped from `win/remote/` and diffed against `gremote/`. |
-| 15 | VM bring-up: `hostfwd` in `tools/vm/qmp.py`, the three `GREMOTE.*` files on the tools ISO, `SETUP.BAT`. |
-| 16 | The guest run, the measurements, the budget tightened, and the docs. |
+| 2 | `Connection`'s two threads move onto `core/thread.h`. |
+| 3 | libwire: the reserved slot on `Connection::send`, with `wirecheck` cases. The non-inheritable socket waits for the job lane, where a child exists to test it. |
+| 4 | The `win/remote/` skeleton and the whole Makefile wiring. |
+| 5 | The direction proof: the Python spine, the fixture, and a real socket into a Wine-hosted gremote. |
+| 6 | Op table, lanes, `Responder`, generation tagging, `CANCEL`, `remotecheck.exe`. |
+| 7 | Control lane. |
+| 8 | Job lane, and the non-inheritable listener in use. |
+| 9 | Python: the control and job ops. |
+| 10 | fs read-only: `LS`, `STAT`, `DRIVES`. |
+| 11 | `GET`. |
+| 12 | `PUT`, `RM`, `MKDIR`, `MV`. |
+| 13 | Python fs ops. |
+| 14 | `ship()` and self-update -- REMOTE.md step 5b. |
+| 15 | The agreement test: the op table and status vocabulary scraped from `win/remote/` and diffed against `gremote/`. |
+| 16 | VM bring-up: `hostfwd` in `tools/vm/qmp.py`, the three `GREMOTE.*` files on the tools ISO, `SETUP.BAT`. |
+| 17 | The guest run, the measurements, the budget tightened, and the docs. |
 
 ## Traps
 
@@ -186,10 +187,14 @@ wine-smoke`.
 5. A dead client's job must die with it: every request carries the connection
    generation, and a stale `Responder` returns false from `onOutput`, which
    `ExecJob` turns into `EXEC_SINK_GONE`.
-6. The sender thread does not `select()` for writability, so a client that
-   stops reading parks it in `send()`. `signalStop`'s `shutdown(SD_SEND)` is
-   expected to break it out, and `netcheck --slowsend` shows the backpressure
-   is bounded -- verify that rather than assume it, while wirecheck is open.
+6. The sender thread does not `select()` for writability, though REMOTE.md's
+   protocol section says it should, so a client that stops reading parks it
+   in `send()`. **Checked rather than assumed, and it is already covered:**
+   `test_guest_net.py`'s slow-reader scenario points `netcheck --slowsend` at
+   a listener that accepts and never reads, with `SO_RCVBUF` squeezed to 2048
+   so the sender genuinely blocks, and asserts the run reaches its own PASS
+   line and exits 0. `signalStop`'s `shutdown(SD_SEND)` and the bounded joins
+   do break it out. No writability select is added.
 7. No file-scope object with a non-trivial constructor: they run before
    `rc_log_open` and `make check` fails the build on one. `fsrpc.cpp`'s lazy
    placement-new is the precedent.
