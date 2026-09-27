@@ -160,7 +160,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
        $(LIBFS) $(LIBCORE)
 
-.PHONY: fscheck execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: gremote fscheck execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -272,6 +272,31 @@ $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
+
+# gremote.exe (docs/REMOTE.md step 4, docs/gremote-plan.md): the Win98 box
+# driven from Linux, built from the same libraries the client links. It
+# LISTENS, which is the reverse of the client, so libwire's server half
+# (Listener, Connection::adopt, the idle timeout) gets its first real user
+# here -- wirecheck proved it, but with both ends in one process.
+#
+# system nt_win, not nt: a console image opens a console when it starts, and
+# this is meant to come up from RunServices before anyone logs on. It has no
+# window beyond App's hidden one.
+#
+# $(MINIZ) because Connection's Codec references it even with compression
+# off. No $(LIBFS) yet -- an unreferenced library in CHECK_OWNED makes
+# cmovcheck fail with "owned module never appears in the map", so each lib
+# joins the list in the commit that first calls into it.
+REMOTE_SRCS = remote/main.cpp remote/config.cpp remote/allow.cpp \
+              remote/server.cpp
+GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBWIRE) $(LIBEXEC) \
+               $(LIBCORE)
+gremote: $(BUILD)/gremote.exe
+gremote.exe: $(BUILD)/gremote.exe
+$(BUILD)/gremote.exe: $(GREMOTE_OBJS)
+	@$(WLINK) system nt_win option quiet, osversion=4.0, \
+	  map=$(BUILD)/gremote.map $(LIBS) name $@ $(LINKIN)
+	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # Window and SubclassedWindow (core/window.h): WM_CREATE seeing hwnd(),
 # destroy through the object and from outside, two instances of one class,
@@ -399,8 +424,8 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 retroclaude: $(BUILD)/retroclaude.exe
 retroclaude.exe: $(BUILD)/retroclaude.exe
 
-all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
-     netcheck rpccheck probe execprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck
+all: msgids $(BUILD)/retroclaude.exe gremote synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
+     netcheck rpccheck probe execprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.
@@ -542,6 +567,11 @@ $(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 $(OBJ)/sync/manifest.o $(OBJ)/sync/putpath.o $(OBJ)/sync/syncrpc.o \
 $(OBJ)/sync/verify.o $(OBJ)/rpc/fsrpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
+# remote/ is dispatch, refusals, a handshake and config parsing -- the same
+# profile the fs/ and sync/ overrides above were measured for, and none of it
+# is a loop. gremote's own budget is what this protects.
+$(OBJ)/remote/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+
 # core/thread.o: start(), join() and an entry point that catches bad_alloc.
 # Three functions, none of them a loop, and the class exists to SAVE memory
 # -- so it should not cost image to save memory. Measured on the client:
@@ -649,8 +679,14 @@ PYTHON ?= python3
 # program is not competing for that memory and never runs beside the client.
 # It is set rather than omitted because the gate compares against whatever
 # it is given, and 0 means "must be empty", not "not applicable".
-check: check-sources check-retroclaude check-autocheck check-fscheck
+check: check-sources check-retroclaude check-gremote check-autocheck check-fscheck
 
+# gremote's budget is its own. The number is deliberately loose while the
+# lanes are still arriving -- one measured against a skeleton would be raised
+# by every commit after it, which is how a budget stops meaning anything. It
+# is tightened to the measured figure once the last op lands.
+check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
+check-gremote: CHECK_CAP   = 300000
 check-fscheck: CHECK_OWNED = $(FSCHECK_OBJS)
 check-fscheck: CHECK_CAP   = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
