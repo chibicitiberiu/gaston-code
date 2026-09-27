@@ -1,9 +1,6 @@
 #include "wire/connection.h"
 
-#include <process.h>
 #include <string.h>
-#include <new>
-#include "core/heap.h"
 #include "core/log.h"
 #include "miniz.h"
 
@@ -401,7 +398,7 @@ Connection::Connection(FrameSink *sink, bool compress)
  * net for a connect() that failed before any thread existed. */
 Connection::~Connection()
 {
-    if (m_reader.valid() || m_sender.valid())
+    if (m_reader.started() || m_sender.started())
         rc_log("net: a Connection was deleted with a thread handle open");
     m_sock.reset();
     if (m_lockUp)
@@ -554,18 +551,23 @@ bool Connection::adopt(SOCKET accepted)
     return true;
 }
 
-/* _beginthreadex, not CreateThread. Open Watcom's multi-threaded CRT
- * allocates its per-thread block there; a raw CreateThread thread never gets
- * one and never releases it. It also takes a non-NULL thread-id slot, which
- * Win95/98 requires -- CreateThread(..., NULL) fails there with
- * ERROR_INVALID_PARAMETER while NT accepts it. */
+/* Both threads come from core/thread.h, which carries what used to be
+ * repeated here: _beginthreadex rather than CreateThread, a non-NULL
+ * thread-id slot, and the std::bad_alloc catch that keeps an out-of-memory
+ * from ending the process with no log. */
 bool Connection::start()
 {
-    unsigned tid;
+    /* Zero: the image default, 64 KB committed each (measured). A smaller
+     * one is core/thread.h's whole point, but these two are the SHIPPING
+     * CLIENT's network threads and their depth runs through onFrame into
+     * whatever the sink does, which is the app. gremote's own threads choose
+     * a size; these keep what they have had all along until a working-set
+     * measurement on the guest says what is safe. */
+    m_readerBody.attach(this);
+    m_senderBody.attach(this);
 
     /* The sender first: frames queued before start() (a HELLO) wait for it. */
-    m_sender.reset((HANDLE)_beginthreadex(NULL, 0, senderEntry, this, 0, &tid));
-    if (!m_sender.valid())
+    if (!m_sender.start(m_senderBody, "the network sender", 0))
     {
         /* Without a sender nothing can put a byte on the wire. Reporting
          * "connected" here would leave the app looking healthy forever. */
@@ -574,8 +576,7 @@ bool Connection::start()
         return false;
     }
     setState(RC_CONNECTED);
-    m_reader.reset((HANDLE)_beginthreadex(NULL, 0, readerEntry, this, 0, &tid));
-    if (!m_reader.valid())
+    if (!m_reader.start(m_readerBody, "the network reader", 0))
     {
         rc_log("net: could not start reader thread");
         m_running = 0;
@@ -714,19 +715,9 @@ void Connection::readerLoop()
            m_txBytes);
 }
 
-/* Catches std::bad_alloc, which operator new throws (core/heap.cpp): an
- * exception leaving a thread's entry point ends the process with no log. */
-unsigned __stdcall Connection::readerEntry(void *self)
+void Connection::ReaderLoop::run()
 {
-    try
-    {
-        ((Connection *)self)->readerLoop();
-    }
-    catch (std::bad_alloc &)
-    {
-        rc_out_of_memory("the network reader");
-    }
-    return 0;
+    m_conn->readerLoop();
 }
 
 /* -------------------------------------------------------------- sender */
@@ -808,17 +799,9 @@ void Connection::senderLoop()
     clearQueue();
 }
 
-unsigned __stdcall Connection::senderEntry(void *self)
+void Connection::SenderLoop::run()
 {
-    try
-    {
-        ((Connection *)self)->senderLoop();
-    }
-    catch (std::bad_alloc &)
-    {
-        rc_out_of_memory("the network sender");
-    }
-    return 0;
+    m_conn->senderLoop();
 }
 
 /* ---------------------------------------------------------------- send */
@@ -1041,16 +1024,12 @@ void Connection::signalStop()
 
 bool Connection::join(DWORD eachMs)
 {
-    if (m_reader.valid())
-    {
-        m_readerJoin = WaitForSingleObject(m_reader.get(), eachMs);
-        m_reader.reset();
-    }
-    if (m_sender.valid())
-    {
-        m_senderJoin = WaitForSingleObject(m_sender.get(), eachMs);
-        m_sender.reset();
-    }
+    /* Kept as the wait codes the logs below already print, so a join that
+     * timed out reads the same as it always has. */
+    if (m_reader.started())
+        m_readerJoin = m_reader.join(eachMs) ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
+    if (m_sender.started())
+        m_senderJoin = m_sender.join(eachMs) ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
     return m_readerJoin == WAIT_OBJECT_0 && m_senderJoin == WAIT_OBJECT_0;
 }
 

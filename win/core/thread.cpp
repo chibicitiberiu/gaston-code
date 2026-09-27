@@ -42,6 +42,10 @@ bool Thread::join(DWORD timeoutMs)
                (unsigned long)timeoutMs);
         return false;
     }
+    /* Gone, so the handle is worth nothing: closing it here leaves started()
+     * telling the truth for an owner's destructor to check. */
+    m_thread.reset();
+    m_body = 0;
     return true;
 }
 

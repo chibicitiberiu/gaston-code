@@ -82,7 +82,11 @@ public:
     /* True if the thread has ended (or never started, so a service whose
      * start() failed can still be joined). False means it is still running,
      * and the caller must LEAK rather than free what it touches --
-     * joinOrLeak() in core/app.h is that rule. */
+     * joinOrLeak() in core/app.h is that rule.
+     *
+     * A successful join closes the handle, so started() is false afterwards
+     * and joining again is a no-op. That is what lets an owner's destructor
+     * ask "is a thread handle still open here?" and mean it. */
     bool join(DWORD timeoutMs);
 
     /* Stop owning the handle without waiting. For the leak path only. */

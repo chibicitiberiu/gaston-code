@@ -37,6 +37,7 @@
 #include <windows.h>
 #include <winsock.h>
 #include "core/rc_cpp.h"
+#include "core/thread.h"
 #include "wire/frame.h"
 #include "wire/link.h"
 #include "wire/socket.h"
@@ -129,8 +130,32 @@ private:
     enum { BUILD_CAP = RC_MAX_FRAME + 1024 };
     class Codec;
 
-    static unsigned __stdcall readerEntry(void *self);
-    static unsigned __stdcall senderEntry(void *self);
+    /* Two Runnables rather than one with a flag: the type is what says which
+     * loop a Thread is running, and a bool at the call site would not.
+     * C++98 gives a nested class no access to its enclosing class's
+     * privates, hence the friend declarations -- the same shape App uses for
+     * its hidden window. */
+    class ReaderLoop : public Runnable
+    {
+    public:
+        ReaderLoop() : m_conn(0) {}
+        void attach(Connection *c) { m_conn = c; }
+        void run();
+    private:
+        Connection *m_conn;
+    };
+    class SenderLoop : public Runnable
+    {
+    public:
+        SenderLoop() : m_conn(0) {}
+        void attach(Connection *c) { m_conn = c; }
+        void run();
+    private:
+        Connection *m_conn;
+    };
+    friend class ReaderLoop;
+    friend class SenderLoop;
+
     void readerLoop();
     void senderLoop();
     int recvExact(char *buf, unsigned len);
@@ -147,8 +172,10 @@ private:
     bool m_wsaUp;
     bool m_lockUp;
     SocketGuard m_sock;
-    Handle m_reader;
-    Handle m_sender;
+    ReaderLoop m_readerBody;
+    SenderLoop m_senderBody;
+    Thread m_reader;
+    Thread m_sender;
     CRITICAL_SECTION m_lock;    /* guards the queue and the codec, never the wire */
     OutItem *m_head;
     OutItem *m_tail;

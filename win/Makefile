@@ -542,6 +542,14 @@ $(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 $(OBJ)/sync/manifest.o $(OBJ)/sync/putpath.o $(OBJ)/sync/syncrpc.o \
 $(OBJ)/sync/verify.o $(OBJ)/rpc/fsrpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
+# core/thread.o: start(), join() and an entry point that catches bad_alloc.
+# Three functions, none of them a loop, and the class exists to SAVE memory
+# -- so it should not cost image to save memory. Measured on the client:
+# 462617 before the class existed, 465177 with it at -otexan, 464665 at -os.
+# 512 bytes back, and the remaining 2048 is what one implementation of the
+# _beginthreadex rules and the bad_alloc catch costs, paid once.
+$(OBJ)/core/thread.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The
 # other order (link first, then `wrc file.res file.exe` to inject) also works
