@@ -115,24 +115,6 @@ void rc_sync_scanner_feed(rc_sync_scanner *s, const void *buf, unsigned n);
 void rc_sync_scanner_finish(rc_sync_scanner *s, char *cls_out,
                             unsigned long *crc_out);
 
-/* Is `rel` inside `root` and free of escapes? The guest checks too; the bridge
- * checking is not enough when the bridge is what might be wrong. */
-int  rc_sync_contained(const char *rel);
-
-/* `root` + '\' + `rel`, with every '/' in `rel` turned into '\'. Returns 1 if
- * the whole path fit in `cap`, 0 if it was truncated -- a truncated join
- * names a DIFFERENT file, so a caller that ignores the return value stats,
- * opens or renames the wrong thing with no way to find out. The one place
- * this is done, so a join bug is fixed once rather than wherever it was
- * last copied. */
-int  rc_sync_join(char *out, unsigned cap, const char *root, const char *rel);
-
-/* Open a file for writing through a temp; rc_sync_commit renames it into place,
- * having first moved any existing file aside so no instant has no file at all. */
-HANDLE rc_sync_begin_write(const char *root, const char *rel, char *tmp_out,
-                           unsigned tmp_cap);
-int    rc_sync_commit(const char *root, const char *rel, const char *tmp,
-                      unsigned long want_crc, char cls);
 /* Our own working names. The scanner must SKIP both, or an interrupted write
  * leaves a file the next manifest reports as ordinary -- the bridge has never
  * seen it, so it pulls it, and now both sides hold a permanent `.gaston-tmp`
@@ -176,13 +158,6 @@ unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
  * See the implementation for what each refusal protects against. */
 int rc_syncrpc_put_path(const char *body, unsigned body_len,
                         char *out, unsigned cap, unsigned *data_off);
-
-/* Non-zero if `name` is one of ours and must not appear in a manifest. */
-int    rc_sync_is_working_name(const char *name);
-
-/* Recover an interrupted commit: if <p>.gaston-old exists and <p> does not,
- * put it back. Called once at startup, before the first scan. */
-void   rc_sync_recover(const char *root);
 
 #ifdef __cplusplus
 }

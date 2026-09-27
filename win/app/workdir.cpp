@@ -11,7 +11,9 @@
 #include "core/rc_cpp.h"
 #include "rpc/rpc.h"
 #include "sync/sync.h"
+#include "fs/writer.h"
 #include "sync/syncrpc.h"
+#include "sync/worknames.h"
 
 /* What is mirrored right now. "" means file sharing is off, which is a real
  * state rather than an error: a conversation shares nothing until it has
@@ -78,7 +80,7 @@ int rc_workdir_apply(const char *path)
      * otherwise that scan sees a file missing and reports a deletion nobody
      * made. So: recover, then tell the two layers, then let the watcher
      * follow (rc_rpc_set_sync_root wakes the worker, which re-points it). */
-    rc_sync_recover(want);
+    recoverInterrupted(want, syncWorkNames());
     rc_syncrpc_set_root(want);
     rc_rpc_set_sync_root(want);
     rc_strf(g_current, sizeof(g_current), "%s", want);

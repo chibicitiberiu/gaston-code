@@ -152,7 +152,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
-       rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp sync/compat.cpp sync/scanner.cpp sync/verify.cpp \
+       rpc/rpc.cpp rpc/procrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
        sync/syncrpc.cpp \
        ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libexec before libcore: the first three
@@ -181,7 +181,7 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp sync/compat.cpp sync/scanner.cpp sync/verify.cpp \
+SYNCCHECK_OBJS = $(call objs,checks/synccheck.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
                  $(MINIZ)) $(LIBFS) $(LIBCORE)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
@@ -364,8 +364,8 @@ $(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
 	  $(LINKIN)
 	@echo "built $@"
 
-WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp sync/sync.cpp \
-                 sync/compat.cpp sync/scanner.cpp sync/verify.cpp $(MINIZ)) $(LIBFS) $(LIBCORE)
+WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp sync/manifest.cpp \
+                 sync/putpath.cpp sync/scanner.cpp sync/verify.cpp $(MINIZ)) $(LIBFS) $(LIBCORE)
 workcheck: $(BUILD)/workcheck.exe
 $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -407,8 +407,8 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
-                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp \
-                sync/compat.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/manifest.cpp \
+                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
@@ -422,8 +422,8 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
-                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp \
-                sync/compat.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/manifest.cpp \
+                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
@@ -539,7 +539,7 @@ $(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 # the CRC pass is sync/scanner.cpp ALONE, and the rest of the directory is
 # frame handling, refusals and adapters onto libfs. So scanner.cpp keeps the
 # speed and its neighbours stop paying for it.
-$(OBJ)/sync/sync.o $(OBJ)/sync/syncrpc.o $(OBJ)/sync/compat.o \
+$(OBJ)/sync/manifest.o $(OBJ)/sync/putpath.o $(OBJ)/sync/syncrpc.o \
 $(OBJ)/sync/verify.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
@@ -681,7 +681,7 @@ check-%: $(BUILD)/%.exe
 	@#
 	@# The W-suffix grep also aimed at the wrong class. MoveFileExA is ANSI,
 	@# has no W suffix, lives in KERNEL32 and does not exist on 9x --
-	@# win/sync/sync.cpp says in a comment that somebody will want to call it
+	@# win/fs/writer.h says in a comment that somebody will want to call it
 	@# to make the commit atomic. That edit used to pass every gate here and
 	@# then die at load on the guest with no log. See audit 01.29.
 	@$(PYTHON) $(TOP)/tools/check/imports.py $(BUILD)/$*.exe

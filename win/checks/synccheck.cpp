@@ -15,8 +15,13 @@
 #include <string.h>
 #include <io.h>
 #include <fcntl.h>
-#include "sync/sync.h"
+#include "core/rc_cpp.h"
 #include "core/str.h"
+#include "fs/path.h"
+#include "fs/writer.h"
+#include "sync/sync.h"
+#include "sync/verify.h"
+#include "sync/worknames.h"
 
 
 static void emit(void *ctx, const char *rel, const rc_sync_stat *st)
@@ -47,26 +52,24 @@ static void emit(void *ctx, const char *rel, const rc_sync_stat *st)
 static int limits(void)
 {
     static char rel[512];
-    char tmp[MAX_PATH];
     const char *root = "C:\\rc-nonexistent";
     unsigned n;
-    HANDLE h;
 
     for (n = 230; n <= 260; n++) {
+        FileWriter w;
+        bool opened;
         memset(rel, 'd', n);
         rel[n] = '\0';
         SetLastError(0);
-        h = rc_sync_begin_write(root, rel, tmp, sizeof(tmp));
+        opened = w.begin(root, rel, syncWorkNames());
         /* `refused` means we declined on length. Anything else is the open
          * failing for an ordinary reason (the root does not exist), which is
          * the ACCEPTED answer for this test -- we only care where the length
          * rule draws its line. */
         printf("%u\t%s\t%lu\n", (unsigned)(strlen(root) + 1 + n),
-               (h == INVALID_HANDLE_VALUE &&
-                GetLastError() == ERROR_FILENAME_EXCED_RANGE)
+               (!opened && GetLastError() == ERROR_FILENAME_EXCED_RANGE)
                    ? "refused" : "allowed",
-               (unsigned long)strlen(tmp));
-        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+               (unsigned long)strlen(w.tempPath()));
     }
     return 0;
 }
@@ -171,7 +174,7 @@ static int contained(void)
     };
     int i;
     for (i = 0; cases[i]; i++)
-        printf("%s\t%s\n", rc_sync_contained(cases[i]) ? "allow" : "refuse",
+        printf("%s\t%s\n", isContainedRelative(cases[i]) ? "allow" : "refuse",
                cases[i]);
     return 0;
 }
@@ -193,159 +196,175 @@ static void emit_wire(void *ctx, const char *rel, const rc_sync_stat *st)
 }
 
 
-/* Does rc_sync_commit clean up its temp file on EVERY refusal?
+/* Does the commit clean up its temp file on EVERY refusal?
  *
  * It did not. Four of the five failure returns deleted the temp first and
- * the fifth -- the `got.type != 'f'` verification at the top -- did not, so
- * a transfer that could not be re-stat'd right after its own CloseHandle
- * left a fully-written .gaston-tmp in the user's tree. The scanner skips
- * those names, so nothing reported it and nothing removed it until the next
- * rc_sync_recover on start-up. See docs/mem-audit F2.
+ * the fifth -- the verification at the top -- did not, so a transfer that
+ * could not be re-read right after its own close left a fully-written
+ * .gaston-tmp in the user's tree. The scanner skips those names, so nothing
+ * reported it and nothing removed it until the next recovery pass on
+ * start-up. See docs/mem-audit F2.
  *
- * Prints one row per case: case<TAB>rc<TAB>temp-still-there. The Python side
- * asserts the temp is gone wherever it CAN be gone -- which is not every
- * case, and the exceptions are the interesting part:
+ * Driven through commitInto (fs/writer.h) rather than through a FileWriter,
+ * and deliberately: two of these cases have to interfere with the temp file
+ * between the last write and the commit -- deleting it, or holding it open --
+ * and an object that owns its handle cannot be asked to allow that. The
+ * sync layer's own do_putend calls commitInto for the same reason, because
+ * SYNCPUTEND is a separate frame from the writes.
+ *
+ * Prints one row per case: case<TAB>status<TAB>temp-still-there, where
+ * status is CommitStatus. The Python side asserts the temp is gone wherever
+ * it CAN be gone -- which is not every case, and the exceptions are the
+ * interesting part:
  *
  *   crc_mismatch   the ordinary refusal. Deletable, must be gone.
- *   too_long       refused before anything is opened, so there is no temp.
  *   vanished       the temp is removed underneath us, which is the only way
- *                  to reach the `type != 'f'` branch with a deletable file
+ *                  to reach the unverifiable branch with a deletable file
  *                  -- it is already gone, so this case proves the branch is
  *                  REACHABLE and does not fault, not that it deletes.
- *   locked         stat cannot open it, so type is 'u' and the branch is
- *                  taken with the file still present -- and DeleteFileA on
- *                  a file somebody else holds open legitimately fails. The
- *                  temp survives, correctly, and the row says so.
+ *   locked         the verifier cannot open it, so the branch is taken with
+ *                  the file still present -- and DeleteFileA on a file
+ *                  somebody else holds open legitimately fails. The temp
+ *                  survives, correctly, and the row says so.
  *   ok             the success path: temp gone, target in place.
  */
+
+/* The temp beside `rel`, created and filled. Returns false if it could not
+ * be made. Hand-rolled here rather than through FileWriter for the reason in
+ * the comment above. */
+static bool make_temp(const char *root, const char *rel, const char *bytes,
+                      unsigned n, Path &full, Path &tmp)
+{
+    DWORD wrote = 0;
+    full.join(root, rel);
+    tmp.set(full.str());
+    tmp.cat(RC_SYNC_TMP_SUFFIX);
+    if (!full.ok() || !tmp.ok()) return false;
+
+    {
+        Handle h(CreateFileA(tmp.str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, NULL));
+        if (!h.valid()) return false;
+        WriteFile(h.get(), bytes, n, &wrote, NULL);
+    }
+    return true;
+}
+
+/* The checksum of what is actually on disk at `path`, so a case that means to
+ * succeed is not accidentally testing the mismatch branch. */
+static unsigned long crc_of(const char *path)
+{
+    rc_sync_stat st;
+    memset(&st, 0, sizeof(st));
+    rc_sync_stat_file(path, &st);
+    return RC_CRC_FOR(st, RC_CLS_TEXT);
+}
+
 static int commitcases(const char *root)
 {
-    char tmp[MAX_PATH];
-    HANDLE h;
-    DWORD wrote;
-    int rc;
+    WorkNames names = syncWorkNames();
+    Path full, tmp;
+    CommitStatus st;
 
     /* crc_mismatch: a complete temp, committed against a checksum it cannot
      * possibly match. */
-    h = rc_sync_begin_write(root, "cc_crc.txt", tmp, sizeof(tmp));
-    if (h == INVALID_HANDLE_VALUE) { fprintf(stderr, "no_root\n"); return 3; }
-    WriteFile(h, "hello", 5, &wrote, NULL);
-    CloseHandle(h);
-    rc = rc_sync_commit(root, "cc_crc.txt", tmp, 1uL, RC_CLS_TEXT);
-    printf("crc_mismatch\t%d\t%d\n", rc,
-           GetFileAttributesA(tmp) != 0xFFFFFFFF);
+    if (!make_temp(root, "cc_crc.txt", "hello", 5, full, tmp)) {
+        fprintf(stderr, "no_root\n");
+        return 3;
+    }
+    {
+        SyncCrcVerifier v(1uL, RC_CLS_TEXT);
+        st = commitInto(full.str(), tmp.str(), &v, names);
+    }
+    printf("crc_mismatch\t%d\t%d\n", (int)st,
+           GetFileAttributesA(tmp.str()) != 0xFFFFFFFF);
 
     /* vanished: reach the verification branch with nothing at the path. */
-    h = rc_sync_begin_write(root, "cc_gone.txt", tmp, sizeof(tmp));
-    if (h != INVALID_HANDLE_VALUE) {
-        WriteFile(h, "hello", 5, &wrote, NULL);
-        CloseHandle(h);
-        DeleteFileA(tmp);
-        rc = rc_sync_commit(root, "cc_gone.txt", tmp, 0uL, RC_CLS_TEXT);
-        printf("vanished\t%d\t%d\n", rc,
-               GetFileAttributesA(tmp) != 0xFFFFFFFF);
+    if (make_temp(root, "cc_gone.txt", "hello", 5, full, tmp)) {
+        SyncCrcVerifier v(0uL, RC_CLS_TEXT);
+        DeleteFileA(tmp.str());
+        st = commitInto(full.str(), tmp.str(), &v, names);
+        printf("vanished\t%d\t%d\n", (int)st,
+               GetFileAttributesA(tmp.str()) != 0xFFFFFFFF);
     }
 
-    /* locked: held open with no sharing, so rc_sync_stat_file reports 'u'. */
-    h = rc_sync_begin_write(root, "cc_lock.txt", tmp, sizeof(tmp));
-    if (h != INVALID_HANDLE_VALUE) {
-        HANDLE keep;
-        WriteFile(h, "hello", 5, &wrote, NULL);
-        CloseHandle(h);
-        keep = CreateFileA(tmp, GENERIC_READ, 0, NULL, OPEN_EXISTING,
-                           FILE_ATTRIBUTE_NORMAL, NULL);
-        rc = rc_sync_commit(root, "cc_lock.txt", tmp, 0uL, RC_CLS_TEXT);
-        printf("locked\t%d\t%d\n", rc,
-               GetFileAttributesA(tmp) != 0xFFFFFFFF);
-        if (keep != INVALID_HANDLE_VALUE) CloseHandle(keep);
-        DeleteFileA(tmp);
+    /* locked: held open with no sharing, so the verifier reports unreadable
+     * rather than a mismatch -- those are different answers and the type
+     * keeps them apart. */
+    if (make_temp(root, "cc_lock.txt", "hello", 5, full, tmp)) {
+        SyncCrcVerifier v(0uL, RC_CLS_TEXT);
+        Handle keep(CreateFileA(tmp.str(), GENERIC_READ, 0, NULL,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
+        st = commitInto(full.str(), tmp.str(), &v, names);
+        keep.reset(INVALID_HANDLE_VALUE);
+        printf("locked\t%d\t%d\n", (int)st,
+               GetFileAttributesA(tmp.str()) != 0xFFFFFFFF);
+        DeleteFileA(tmp.str());
     }
 
     /* ok: the success path, so a regression in the cleanup cannot pass by
      * deleting everything unconditionally. */
-    h = rc_sync_begin_write(root, "cc_ok.txt", tmp, sizeof(tmp));
-    if (h != INVALID_HANDLE_VALUE) {
-        rc_sync_stat st;
-        char full[MAX_PATH];
-        WriteFile(h, "hello", 5, &wrote, NULL);
-        CloseHandle(h);
-        memset(&st, 0, sizeof(st));
-        rc_sync_stat_file(tmp, &st);
-        rc = rc_sync_commit(root, "cc_ok.txt", tmp,
-                            RC_CRC_FOR(st, RC_CLS_TEXT), RC_CLS_TEXT);
-        rc_sync_join(full, sizeof(full), root, "cc_ok.txt");
-        printf("ok\t%d\t%d\ttarget=%d\n", rc,
-               GetFileAttributesA(tmp) != 0xFFFFFFFF,
-               GetFileAttributesA(full) != 0xFFFFFFFF);
-        DeleteFileA(full);
+    if (make_temp(root, "cc_ok.txt", "hello", 5, full, tmp)) {
+        SyncCrcVerifier v(crc_of(tmp.str()), RC_CLS_TEXT);
+        st = commitInto(full.str(), tmp.str(), &v, names);
+        printf("ok\t%d\t%d\ttarget=%d\n", (int)st,
+               GetFileAttributesA(tmp.str()) != 0xFFFFFFFF,
+               GetFileAttributesA(full.str()) != 0xFFFFFFFF);
+        DeleteFileA(full.str());
     }
 
-    /* readonly_ok: target exists with FILE_ATTRIBUTE_READONLY, commit succeeds,
-     * read-only attribute must be restored on the newly-committed file (05.4). */
-    {
-        char full[MAX_PATH];
-        HANDLE hro;
-        DWORD ro_attr;
-        rc_sync_join(full, sizeof(full), root, "cc_rook.txt");
-        hro = CreateFileA(full, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
-                          FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hro != INVALID_HANDLE_VALUE) {
-            WriteFile(hro, "old", 3, &wrote, NULL);
-            CloseHandle(hro);
-            SetFileAttributesA(full, FILE_ATTRIBUTE_READONLY);
+    /* readonly_ok: the target exists with FILE_ATTRIBUTE_READONLY, the commit
+     * succeeds, and the attribute must be back on the newly committed file
+     * afterwards (05.4). */
+    if (make_temp(root, "cc_rook.txt", "new", 3, full, tmp)) {
+        DWORD ro;
+        DWORD wrote = 0;
+        {
+            Handle hro(CreateFileA(full.str(), GENERIC_WRITE, 0, NULL,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                   NULL));
+            if (hro.valid()) WriteFile(hro.get(), "old", 3, &wrote, NULL);
         }
-        h = rc_sync_begin_write(root, "cc_rook.txt", tmp, sizeof(tmp));
-        if (h != INVALID_HANDLE_VALUE) {
-            rc_sync_stat st;
-            WriteFile(h, "new", 3, &wrote, NULL);
-            CloseHandle(h);
-            memset(&st, 0, sizeof(st));
-            rc_sync_stat_file(tmp, &st);
-            rc = rc_sync_commit(root, "cc_rook.txt", tmp,
-                                RC_CRC_FOR(st, RC_CLS_TEXT), RC_CLS_TEXT);
-            ro_attr = GetFileAttributesA(full);
-            printf("readonly_ok\t%d\t%d\n", rc,
-                   (ro_attr != 0xFFFFFFFF && (ro_attr & FILE_ATTRIBUTE_READONLY)) ? 1 : 0);
-            if (ro_attr != 0xFFFFFFFF)
-                SetFileAttributesA(full, ro_attr & ~FILE_ATTRIBUTE_READONLY);
-            DeleteFileA(full);
+        SetFileAttributesA(full.str(), FILE_ATTRIBUTE_READONLY);
+        {
+            SyncCrcVerifier v(crc_of(tmp.str()), RC_CLS_TEXT);
+            st = commitInto(full.str(), tmp.str(), &v, names);
         }
+        ro = GetFileAttributesA(full.str());
+        printf("readonly_ok\t%d\t%d\n", (int)st,
+               (ro != 0xFFFFFFFF && (ro & FILE_ATTRIBUTE_READONLY)) ? 1 : 0);
+        if (ro != 0xFFFFFFFF)
+            SetFileAttributesA(full.str(), ro & ~FILE_ATTRIBUTE_READONLY);
+        DeleteFileA(full.str());
     }
 
-    /* readonly_fail: target exists with FILE_ATTRIBUTE_READONLY, but is held open
-     * so MoveFileA in commit fails (-3). Read-only attribute MUST be restored
-     * on failure (05.4) -- previously it was left stripped. */
-    {
-        char full[MAX_PATH];
-        HANDLE hro, keep;
-        DWORD ro_attr;
-        rc_sync_join(full, sizeof(full), root, "cc_rofail.txt");
-        hro = CreateFileA(full, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
-                          FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hro != INVALID_HANDLE_VALUE) {
-            WriteFile(hro, "old", 3, &wrote, NULL);
-            CloseHandle(hro);
-            SetFileAttributesA(full, FILE_ATTRIBUTE_READONLY);
+    /* readonly_fail: the same, but the target is held open so the rename
+     * fails. The attribute MUST still be restored -- it used to be left
+     * stripped (05.4). */
+    if (make_temp(root, "cc_rofail.txt", "new", 3, full, tmp)) {
+        DWORD ro;
+        DWORD wrote = 0;
+        {
+            Handle hro(CreateFileA(full.str(), GENERIC_WRITE, 0, NULL,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                   NULL));
+            if (hro.valid()) WriteFile(hro.get(), "old", 3, &wrote, NULL);
         }
-        h = rc_sync_begin_write(root, "cc_rofail.txt", tmp, sizeof(tmp));
-        if (h != INVALID_HANDLE_VALUE) {
-            rc_sync_stat st;
-            WriteFile(h, "new", 3, &wrote, NULL);
-            CloseHandle(h);
-            memset(&st, 0, sizeof(st));
-            rc_sync_stat_file(tmp, &st);
-            keep = CreateFileA(full, GENERIC_READ, 0, NULL, OPEN_EXISTING,
-                               FILE_ATTRIBUTE_NORMAL, NULL);
-            rc = rc_sync_commit(root, "cc_rofail.txt", tmp,
-                                RC_CRC_FOR(st, RC_CLS_TEXT), RC_CLS_TEXT);
-            if (keep != INVALID_HANDLE_VALUE) CloseHandle(keep);
-            ro_attr = GetFileAttributesA(full);
-            printf("readonly_fail\t%d\t%d\n", rc,
-                   (ro_attr != 0xFFFFFFFF && (ro_attr & FILE_ATTRIBUTE_READONLY)) ? 1 : 0);
-            if (ro_attr != 0xFFFFFFFF)
-                SetFileAttributesA(full, ro_attr & ~FILE_ATTRIBUTE_READONLY);
-            DeleteFileA(full);
+        SetFileAttributesA(full.str(), FILE_ATTRIBUTE_READONLY);
+        {
+            SyncCrcVerifier v(crc_of(tmp.str()), RC_CLS_TEXT);
+            Handle keep(CreateFileA(full.str(), GENERIC_READ, 0, NULL,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                    NULL));
+            st = commitInto(full.str(), tmp.str(), &v, names);
         }
+        ro = GetFileAttributesA(full.str());
+        printf("readonly_fail\t%d\t%d\n", (int)st,
+               (ro != 0xFFFFFFFF && (ro & FILE_ATTRIBUTE_READONLY)) ? 1 : 0);
+        if (ro != 0xFFFFFFFF)
+            SetFileAttributesA(full.str(), ro & ~FILE_ATTRIBUTE_READONLY);
+        DeleteFileA(full.str());
+        DeleteFileA(tmp.str());
     }
     return 0;
 }

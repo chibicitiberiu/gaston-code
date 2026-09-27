@@ -597,6 +597,18 @@ def test_the_data_offset_is_where_the_content_starts(guest_putpath):
 # drop the delete from the crc refusal. Driven through synccheck's --commit
 # mode, against the SHIPPING sync.o rather than a reimplementation.
 
+# CommitStatus, from win/fs/writer.h. synccheck prints the enum the library
+# actually returns rather than the ad-hoc -1/-2/-3/-4 the sync layer used to
+# translate it into, so these assertions are about libfs's own vocabulary and
+# not about a mapping that could drift away from it.
+COMMIT_OK = 0
+COMMIT_NOT_OPEN = 1
+COMMIT_UNVERIFIABLE = 2
+COMMIT_VERIFY_FAILED = 3
+COMMIT_NO_ROOM = 4
+COMMIT_RENAME_FAILED = 5
+
+
 @pytest.fixture(scope="module")
 def commit_cases(tmp_path_factory):
     d = tmp_path_factory.mktemp("commit")
@@ -614,7 +626,8 @@ def commit_cases(tmp_path_factory):
 def test_a_refused_commit_takes_its_temp_file_with_it(commit_cases):
     """The ordinary refusal: the bytes arrived but the checksum disagrees."""
     rc, left_behind = commit_cases["crc_mismatch"]
-    assert rc == -2, f"expected crc_mismatch to refuse with -2, got {rc}"
+    assert rc == COMMIT_VERIFY_FAILED, (
+        f"expected a checksum disagreement to be VERIFY_FAILED, got {rc}")
     assert not left_behind, (
         "rc_sync_commit refused the transfer and left its .gaston-tmp in the "
         "tree. The scanner skips that name, so nothing will ever report it "
@@ -629,7 +642,8 @@ def test_the_verification_branch_is_reachable_and_does_not_fault(commit_cases):
     assert the fix -- see the note above this fixture for why.
     """
     rc, left_behind = commit_cases["vanished"]
-    assert rc == -1, f"expected the verification branch to refuse with -1, got {rc}"
+    assert rc == COMMIT_UNVERIFIABLE, (
+        f"expected the verification branch to be UNVERIFIABLE, got {rc}")
     assert not left_behind
 
 
@@ -642,7 +656,11 @@ def test_a_locked_temp_is_refused_and_honestly_left_alone(commit_cases):
     "make cleanup unconditional" change has to argue with a test.
     """
     rc, left_behind = commit_cases["locked"]
-    assert rc == -1, f"expected a locked temp to refuse with -1, got {rc}"
+    # UNVERIFIABLE and not VERIFY_FAILED, and the difference is the point: a
+    # temp nobody can read is transient and worth retrying, a temp whose bytes
+    # are wrong is not. libfs keeps them apart in the type.
+    assert rc == COMMIT_UNVERIFIABLE, (
+        f"expected a locked temp to be UNVERIFIABLE, got {rc}")
     assert left_behind, (
         "the temp was removed while another handle held it open -- either "
         "Wine is not enforcing the share mode, or the cleanup stopped "
@@ -668,7 +686,8 @@ def test_failed_commit_restores_readonly_attribute(commit_cases):
     """05.4: a failed commit (-3) restores FILE_ATTRIBUTE_READONLY on the target
     rather than silently leaving write protection stripped."""
     rc, ro_preserved = commit_cases["readonly_fail"]
-    assert rc == -3, f"expected -3 on locked target, got {rc}"
+    assert rc == COMMIT_RENAME_FAILED, (
+        f"expected RENAME_FAILED on a locked target, got {rc}")
     assert ro_preserved, "read-only attribute was stripped by failed commit"
 
 
