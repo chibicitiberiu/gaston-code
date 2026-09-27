@@ -9,12 +9,17 @@
  * has configured does not come up listening with a secret written in a
  * public document.
  *
- * THE FILENAME IS THE LONG ONE. This joins the exe's directory with the
- * literal "gremote.ini", and on FAT that is not the same file as a
- * GREMOTE.INI written from a DOS prompt: GetPrivateProfileString finds no
- * file, every key reads back empty, and the first thing anyone sees is a
- * complaint about the port. Whatever puts this on the guest writes both
- * names.
+ * THE FILENAME. This joins the exe's directory with the literal
+ * "gremote.ini". That name is 7.3, so it IS an 8.3 name, and FAT ignores
+ * case -- GREMOTE.INI off a CD and gremote.ini are the same file, and
+ * nothing has to write both.
+ *
+ * Worth stating because the sibling case looks identical and is not: the
+ * client's old retroclaude.ini is ELEVEN characters, has no 8.3 spelling,
+ * and an ISO can only carry RETROCL.INI -- a different file, which
+ * GetPrivateProfileString does not find, so every key reads back empty and
+ * the first thing anyone sees is a complaint about the port. The rule is
+ * "longer than 8.3 needs the long name written out", not "ini files do".
  */
 #ifndef RC_REMOTE_CONFIG_H
 #define RC_REMOTE_CONFIG_H

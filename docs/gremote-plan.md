@@ -171,11 +171,14 @@ wine-smoke`.
 
 ## Traps
 
-1. `GREMOTE.INI` is not `gremote.ini`. The loader joins the exe's directory
-   with a literal long name; on FAT an 8.3 file written from DOS is a
-   different file, every key reads back empty, and the first symptom points at
-   the one thing that is not wrong. `SETUP.BAT` copies to the long name, as it
-   already does for `gaston.ini`.
+1. ~~`GREMOTE.INI` is not `gremote.ini`.~~ **Wrong, corrected 2026-09-27.**
+   `gremote.ini` is 7.3, so it IS an 8.3 name, and FAT ignores case: the two
+   are one file and nothing has to write both. The rule this was copied from
+   is real but belongs to a different name -- `retroclaude.ini` is eleven
+   characters, has no 8.3 spelling, and an ISO can only carry `RETROCL.INI`,
+   so every key read back empty and the first symptom pointed at the one
+   thing that was not wrong. What to watch for is a name LONGER than 8.3,
+   which here is `tools_detect.ini` and not this one.
 2. A refusal must not raise a modal on an unattended box. `secret=change-me`
    refuses startup: log and exit, with a message box only behind an explicit
    interactive flag.

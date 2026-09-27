@@ -62,7 +62,7 @@ want "$HERE/build/win/framecheck.exe" "FRAMECHK.EXE"
 # everything else on this CD it is not a check that prints and exits -- it
 # LISTENS, and the host reaches it through QMP hostfwd_add (see
 # tools/vm/qmp.py). It is also the first thing here that needs an ini of its
-# own, which is why SETUP.BAT below copies the long name.
+# own, which SETUP.BAT below copies by name.
 want "$HERE/build/win/gremote.exe" "GREMOTE.EXE"
 # The automation library's own checks, and the wire record's. These carry
 # everything Phase 6 added, and three of their answers are known to differ
@@ -187,22 +187,26 @@ REM detector opens tools_detect.ini beside the exe, and ISO level 1 can only
 REM carry TOOLSDET.INI. TOOLS.INI is the user's and is NEVER shipped -- it is
 REM read second so their additions win, and copying one over it on every
 REM install would throw those away.
-REM And gremote.ini. The client's own ini needs no such line any more -- it
-REM is gaston.ini, which is already 8.3 -- but gremote's is not: the server
-REM joins the exe's directory with the literal long name, and on FAT
-REM GREMOTE.INI is a DIFFERENT FILE. Without this line every key reads back
-REM empty and the first thing anyone sees is a complaint about the port,
-REM which is the one setting that was not wrong.
+REM The INIs below are each named rather than copied by wildcard, because
+REM the CD carries 8.3 names and some of these want a different one on
+REM disk: TOOLSDET.INI becomes tools_detect.ini, which is 13.3 and has no
+REM 8.3 spelling at all.
+REM
+REM gremote.ini is NOT one of those. It is 7.3, a perfectly good 8.3 name,
+REM and FAT ignores case -- so GREMOTE.INI and gremote.ini are one file and
+REM this line could have used either. It is written lowercase to match what
+REM the server opens and for no stronger reason than that. (An earlier
+REM comment here claimed the long name was required; that was the
+REM retroclaude.ini rule, which applied because that name is 11 characters,
+REM and it never applied to this one.)
+REM
 REM /Y on all of these for consistency with the lines above, and not for
 REM any effect it has here: MEASURED on the guest, COMMAND.COM's COPY
 REM overwrites silently in a batch file whatever you pass it, and the
 REM Yes/No/All prompt /Y suppresses appears only when a person types the
-REM line at the prompt. So /Y is for whoever runs these by hand.
-REM
-REM The destination is named in full for the 8.3 mapping -- gremote.ini is
-REM not GREMOTE.INI on FAT -- and NOT because the form affects overwriting.
-REM It does not: a directory destination, a wildcard source and C:\DIR\*.*
-REM all replace an existing file, all measured.
+REM line at the prompt. So /Y is for whoever runs these by hand. The
+REM destination form does not affect overwriting either -- a directory, a
+REM wildcard source and C:\DIR\*.* all replace an existing file, measured.
 IF EXIST D:\GREMOTE.INI COPY /Y D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
 IF EXIST D:\GREMOTE.REG COPY /Y D:\GREMOTE.REG C:\GASTON\GREMOTE.REG > NUL
 IF EXIST D:\TOOLSDET.INI COPY /Y D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL

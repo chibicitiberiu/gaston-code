@@ -260,9 +260,16 @@ In a batch file, or through `COMMAND.COM /c`, it does not ask and overwrites
 silently. So /Y is worth having in SETUP.BAT for whoever runs a line by hand,
 and is inert when the file runs itself.
 
-Naming the destination in full is still right, for the reason it was
-originally introduced and not this one: `gremote.ini` is not `GREMOTE.INI`
-on FAT, and only the named form puts the long name there.
+Naming the destination is still right, but not for that reason either, and
+the second reason I gave was also wrong: `gremote.ini` is 7.3, so it IS an
+8.3 name, FAT ignores case, and `GREMOTE.INI` off the CD is the same file.
+Nothing has to write both.
+
+The rule that does exist belongs to a different name. `retroclaude.ini` is
+ELEVEN characters and has no 8.3 spelling, so an ISO could only carry
+`RETROCL.INI` -- genuinely a different file, which is where the empty keys
+and the misleading port complaint came from in the libfs session. What needs
+naming is anything longer than 8.3, which on this CD is `tools_detect.ini`.
 
 === Still owed by the real machine ===
 
