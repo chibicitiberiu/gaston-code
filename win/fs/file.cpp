@@ -67,10 +67,25 @@ bool movePath(const char *from, const char *to)
 bool makeDirectory(const char *full)
 {
     DWORD attr;
+    DWORD err;
 
-    if (!full || !*full) return false;
+    if (!full || !*full)
+    {
+        SetLastError(ERROR_INVALID_NAME);
+        return false;
+    }
 
-    rc_mkpath(full);
+    if (rc_mkpath(full)) return true;
+
+    /* Captured BEFORE the confirmation below, and restored after it.
+     * GetFileAttributesA sets its own last-error, so asking "well, is it
+     * there anyway?" destroys the reason the caller needs to answer with --
+     * and those reasons are not interchangeable: a missing drive, a path too
+     * long, a full disk and a file already sitting at the name all arrive
+     * here and all mean different things to whoever asked. */
+    err = GetLastError();
     attr = GetFileAttributesA(full);
-    return attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) return true;
+    SetLastError(err);
+    return false;
 }

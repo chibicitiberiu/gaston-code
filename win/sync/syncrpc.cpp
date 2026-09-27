@@ -14,6 +14,7 @@
 
 #include <new>
 
+#include "fs/file.h"
 #include "fs/xfer.h"
 #include "fs/path.h"
 #include "sync/scanner.h"
@@ -589,10 +590,10 @@ static void do_mkdir(rc_net *net, rc_frame *f)
     const char *keys[2];
     const char *vals[2];
     const char *status = "ok";
-    char full[MAX_PATH];
+    Path full;
     char root[MAX_PATH];
 
-    if (!rc_sync_contained(f->body)) status = "bad_path";
+    if (!isContainedRelative(f->body)) status = "bad_path";
     /* rc_sync_contained checks the SHAPE of the relative path and says nothing
      * about its length, and f->body is bounded only by RC_MAX_FRAME -- 64KB,
      * not MAX_PATH. An unchecked join here writes a valid-looking path to a
@@ -606,10 +607,10 @@ static void do_mkdir(rc_net *net, rc_frame *f)
      * mid-join splices a path out of two roots (see the note on g_root). */
     else if (!root_snapshot(root, sizeof(root)))
         status = "no_root";
-    else if (!rc_sync_join(full, sizeof(full), root, f->body))
+    else if (!(full.join(root, f->body), full.ok()))
         status = "too_long";
     else {
-        DWORD was = GetFileAttributesA(full);
+        DWORD was = GetFileAttributesA(full.str());
         if (was != 0xFFFFFFFF)
             status = (was & FILE_ATTRIBUTE_DIRECTORY) ? "exists" : "is_file";
         /* PARENTS AND ALL. The bridge's `order()` puts a directory's own
@@ -619,9 +620,13 @@ static void do_mkdir(rc_net *net, rc_frame *f)
          * lean on the bridge checking its own paths. A missing parent used
          * to fail the whole subtree and set off the bridge's failed_dirs
          * cascade; now it is made. */
-        else if (!rc_mkpath(full)) {
+        else if (!makeDirectory(full.str())) {
+            /* makeDirectory preserves the reason across its own
+             * does-it-exist-anyway check, which is the whole point of
+             * asking it rather than calling rc_mkpath here: these five
+             * outcomes are five different answers to the bridge. */
             DWORD e = GetLastError();
-            DWORD a = GetFileAttributesA(full);
+            DWORD a = GetFileAttributesA(full.str());
             if (e == ERROR_ALREADY_EXISTS)
                 status = (a != 0xFFFFFFFF && (a & FILE_ATTRIBUTE_DIRECTORY))
                          ? "exists" : "is_file";
@@ -637,7 +642,7 @@ static void do_mkdir(rc_net *net, rc_frame *f)
                 status = "no_space";
             else
                 status = "bad_path";
-            rc_log("sync: mkdir %s failed: err=%lu (%s)", full,
+            rc_log("sync: mkdir %s failed: err=%lu (%s)", full.str(),
                    (unsigned long)e, status);
         }
     }
