@@ -330,41 +330,9 @@ int rc_syncrpc_put_path(const char *body, unsigned body_len,
     return RC_PUTPATH_OK;
 }
 
-int rc_sync_contained(const char *rel)
-{
-    const char *p = rel;
-
-    if (!rel || !*rel) return 0;
-    if (rel[0] == '/' || rel[0] == '\\') return 0;
-    if (rel[1] == ':') return 0;                     /* a drive spec */
-
-    /* Reject "..", and "." as a whole component, without resolving anything.
-     * Resolving would mean deciding what a path means; refusing means the
-     * question never arises.
-     *
-     * BOTH separators, and that is the whole of the bug this replaces. The
-     * split was on '/' alone, so `a\..\..\x` contained no '/' at all and was
-     * read as ONE nine-character component -- not "..", not ".", not empty --
-     * and passed. join() then wrote `<root>\a\..\..\x` and handed it to Win32,
-     * which resolves `..` and leaves the sync root entirely. A bridge could
-     * write anywhere the guest's user can.
-     *
-     * The wire format says components are '/'-separated and '\' is on the
-     * illegal-character list precisely so it cannot appear inside one -- but
-     * that is a rule the BRIDGE enforces, and this function exists for the
-     * case where the bridge is the thing that is wrong. It cannot lean on a
-     * guarantee made by the party it is checking. */
-    while (*p) {
-        const char *seg = p;
-        unsigned len = 0;
-        while (*p && *p != '/' && *p != '\\') { p++; len++; }
-        if (len == 2 && seg[0] == '.' && seg[1] == '.') return 0;
-        if (len == 1 && seg[0] == '.') return 0;
-        if (len == 0) return 0;                      /* empty component */
-        if (*p == '/' || *p == '\\') p++;
-    }
-    return 1;
-}
+/* rc_sync_contained and rc_sync_is_working_name now live in libfs
+ * (fs/path.h, isContainedRelative / isWorkingName). sync/compat.cpp keeps the
+ * C names for the two C check programs. */
 
 /* Returns 1 if the whole path fit, 0 if it was truncated.
  *
@@ -425,15 +393,6 @@ unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
     memcpy(out + hn, rel, rn);
     out[hn + rn] = '\n';
     return hn + rn + 1;
-}
-
-int rc_sync_is_working_name(const char *name)
-{
-    unsigned len = (unsigned)strlen(name);
-    if (len <= RC_SYNC_SUFFIX_LEN) return 0;
-    if (strcmp(name + len - RC_SYNC_SUFFIX_LEN, RC_SYNC_TMP_SUFFIX) == 0) return 1;
-    if (strcmp(name + len - RC_SYNC_SUFFIX_LEN, RC_SYNC_OLD_SUFFIX) == 0) return 1;
-    return 0;
 }
 
 static void walk(const char *root, const char *rel, int depth, walk_ctx *w)

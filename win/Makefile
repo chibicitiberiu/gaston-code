@@ -119,6 +119,17 @@ LIBWIRE = $(LIBDIR)/libwire.lib
 EXEC_SRCS = exec/execjob.cpp exec/process.cpp exec/system.cpp
 LIBEXEC = $(LIBDIR)/libexec.lib
 
+# libfs (docs/REMOTE.md step 5a, docs/libfs-plan.md): paths, stat, the walk,
+# the temp/verify/rename write and the chunked transfer primitive. libcore
+# only; it knows nothing of the wire, and turning a listing into frames is the
+# exe's job. Listed BEFORE libcore wherever both are linked.
+#
+# drives.cpp and freespace.cpp are separate translation units on purpose: the
+# client wants free space for one volume and never enumerates drives, so
+# splitting them keeps the enumeration out of retroclaude.exe's image.
+FS_SRCS = fs/path.cpp
+LIBFS = $(LIBDIR)/libfs.lib
+
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
 # libcore only: it knows nothing of the wire, and turning a tree into
 # frames is the exe's job. Listed BEFORE libcore wherever both are linked.
@@ -140,11 +151,13 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
-       rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp sync/syncrpc.cpp \
+       rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp sync/compat.cpp \
+       sync/syncrpc.cpp \
        ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libexec before libcore: the first three
 # call into libcore, and wlink resolves in the order the libraries are named.
-OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
+OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
+       $(LIBFS) $(LIBCORE)
 
 .PHONY: execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
@@ -167,7 +180,8 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp $(MINIZ)) $(LIBCORE)
+SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp sync/compat.cpp \
+                 $(MINIZ)) $(LIBFS) $(LIBCORE)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -338,7 +352,7 @@ $(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
 	@echo "built $@"
 
 WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp sync/sync.cpp \
-                 $(MINIZ)) $(LIBCORE)
+                 sync/compat.cpp $(MINIZ)) $(LIBFS) $(LIBCORE)
 workcheck: $(BUILD)/workcheck.exe
 $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -381,8 +395,9 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp) \
-                $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
+                sync/compat.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                ui/inject.cpp) \
+                $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
 $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -395,8 +410,9 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp \
-                sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp) \
-                $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBCORE)
+                sync/compat.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                ui/inject.cpp) \
+                $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
 $(BUILD)/rpccheck.exe: $(RPCCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ $(LINKIN)
@@ -528,6 +544,10 @@ $(LIBWIRE): $(call objs,$(WIRE_SRCS))
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
 $(LIBEXEC): $(call objs,$(EXEC_SRCS))
+	@mkdir -p $(@D)
+	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
+
+$(LIBFS): $(call objs,$(FS_SRCS))
 	@mkdir -p $(@D)
 	@$(WLIB) -q -b -n $@ $(addprefix +,$^)
 
