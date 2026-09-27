@@ -40,6 +40,11 @@ public:
     bool ok(const char *const *keys = 0, const char *const *vals = 0,
             int n = 0);
     bool err(const char *code, const char *detail = 0);
+    /* A refusal that carries more than a code -- `busy` wants to say which
+     * op is holding the lane and for how long, because that is the
+     * difference between "try again" and "something is stuck". */
+    bool errWith(const char *code, const char *const *keys,
+                 const char *const *vals, int n);
     bool data(const void *body, unsigned len, const char *const *keys = 0,
               const char *const *vals = 0, int n = 0);
     bool end(const char *const *keys = 0, const char *const *vals = 0,

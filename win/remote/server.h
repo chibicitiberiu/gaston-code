@@ -36,6 +36,8 @@
 #include "exec/process.h"
 #include "remote/config.h"
 #include "remote/control.h"
+#include "remote/jobops.h"
+#include "remote/lane.h"
 #include "wire/connection.h"
 #include "wire/listener.h"
 
@@ -44,8 +46,8 @@
 class Session : public FrameSink
 {
 public:
-    Session(const ServerConfig &cfg, unsigned long generation,
-            Processes &procs);
+    Session(const ServerConfig &cfg, const ExecConfig &exec,
+            unsigned long generation, Processes &procs);
 
     /* Adopt the accepted socket and start the threads. */
     bool begin(SOCKET accepted);
@@ -68,6 +70,8 @@ private:
     Session &operator=(const Session &);
 
     void onAuth(rc_frame *f);
+    /* Hand `f` to a lane, or answer busy. Takes ownership either way. */
+    void toLane(LaneWorker &lane, rc_frame *f);
     void sendHello();
     /* `code` goes out as ERR code=<code>, and `fatal` ends the session
      * after it -- with the one-second pause the handshake owes a wrong
@@ -81,6 +85,12 @@ private:
     /* Declared before m_control, which is handed a reference to it. */
     Connection m_conn;
     ControlOps m_control;
+    /* The lane workers are the Session's, not the service's: they hold a
+     * Responder onto this Connection, so they must be stopped and joined
+     * before it is released -- which is exactly what release(othersGone)
+     * means by "others". */
+    JobOps m_jobOps;
+    LaneWorker m_job;
     volatile LONG m_dead;
     bool m_authed;
 };
@@ -88,7 +98,8 @@ private:
 class ServerService : public Service
 {
 public:
-    ServerService(const ServerConfig &cfg, Processes &procs);
+    ServerService(const ServerConfig &cfg, const ExecConfig &exec,
+                  Processes &procs);
 
     const char *name() const { return "server"; }
     bool init();
@@ -116,6 +127,7 @@ private:
     void serve(SocketGuard &s);
 
     const ServerConfig *m_cfg;
+    const ExecConfig *m_exec;
     Processes *m_procs;
     Listener m_listener;
     Accept m_accept;

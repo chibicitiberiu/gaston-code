@@ -62,6 +62,7 @@ private:
     char m_exeDir[MAX_PATH];
     bool m_interactive;
     ServerConfig m_config;
+    ExecConfig m_exec;
     /* Toolhelp, resolved once: HELLO reports whether this machine has it,
      * and the control lane's PS and KILL will want the same object. */
     Processes m_procs;
@@ -126,7 +127,7 @@ bool GremoteApp::parseArgs(const char *cmdLine)
     m_store.reset(new ServerConfigStore(m_exeDir));
     if (!m_store.valid())
         return false;
-    if (!m_store->load(&m_config))
+    if (!m_store->load(&m_config, &m_exec))
     {
         refuse(m_store->error());
         return false;
@@ -139,7 +140,8 @@ bool GremoteApp::parseArgs(const char *cmdLine)
 
 bool GremoteApp::initializeServices()
 {
-    return initService(m_server, new ServerService(m_config, m_procs));
+    return initService(m_server,
+                       new ServerService(m_config, m_exec, m_procs));
 }
 
 bool GremoteApp::startServices()

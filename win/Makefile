@@ -289,7 +289,8 @@ $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 # joins the list in the commit that first calls into it.
 REMOTE_SRCS = remote/main.cpp remote/config.cpp remote/allow.cpp \
               remote/server.cpp remote/optable.cpp remote/reply.cpp \
-              remote/control.cpp
+              remote/control.cpp remote/lane.cpp \
+              remote/jobops.cpp
 GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBWIRE) $(LIBEXEC) \
                $(LIBCORE)
 gremote: $(BUILD)/gremote.exe

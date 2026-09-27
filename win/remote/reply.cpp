@@ -40,20 +40,35 @@ bool Responder::ok(const char *const *keys, const char *const *vals, int n)
     return say("OK", keys, vals, n, 0, 0, false);
 }
 
-bool Responder::err(const char *code, const char *detail)
+bool Responder::errWith(const char *code, const char *const *keys,
+                        const char *const *vals, int n)
 {
-    const char *k[2];
-    const char *v[2];
-    int n = 1;
+    const char *k[MAX_REPLY_HEADERS];
+    const char *v[MAX_REPLY_HEADERS];
+    int total = 1;
+
     k[0] = "code";
     v[0] = code;
-    if (detail && *detail)
+    if (n > MAX_REPLY_HEADERS - 1)
+        n = MAX_REPLY_HEADERS - 1;
+    for (int i = 0; i < n; ++i)
     {
-        k[1] = "detail";
-        v[1] = detail;
-        n = 2;
+        k[total] = keys[i];
+        v[total] = vals[i];
+        total++;
     }
-    return say("ERR", k, v, n, 0, 0, false);
+    return say("ERR", k, v, total, 0, 0, false);
+}
+
+bool Responder::err(const char *code, const char *detail)
+{
+    const char *k[1];
+    const char *v[1];
+    if (!detail || !*detail)
+        return errWith(code, 0, 0, 0);
+    k[0] = "detail";
+    v[0] = detail;
+    return errWith(code, k, v, 1);
 }
 
 /* Compressible is passed as `bulk` too: DATA is the only thing here big

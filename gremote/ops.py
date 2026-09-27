@@ -28,6 +28,30 @@ class Process:
 
 
 @dataclass(frozen=True)
+class ExecResult:
+    """What a command did.
+
+    `exit` is only meaningful when `via_shell` is false. Measured on the VM:
+    COMMAND.COM /c on Windows 98 exits 0 whatever happens, even for a program
+    that does not exist, while a program spawned directly returns its real
+    code. So this reports how it was started and lets the caller decide what
+    the number is worth, rather than pretending.
+    """
+
+    output: bytes
+    exit: int
+    bytes_produced: int
+    truncated: bool
+    timed_out: bool
+    via_shell: bool
+
+    def text(self, encoding: str) -> str:
+        """The output decoded with the machine's OEM codepage, which is what
+        a console child writes -- not the ANSI one its filenames use."""
+        return self.output.decode(encoding, "replace")
+
+
+@dataclass(frozen=True)
 class SysInfo:
     mem_kb: int
     mem_free_kb: int
@@ -77,4 +101,16 @@ def parse_sysinfo(frame: Frame) -> SysInfo:
         mem_kb=int(h.get("mem_kb", "0")),
         mem_free_kb=int(h.get("mem_free_kb", "0")),
         uptime_ms=int(h.get("uptime_ms", "0")),
+    )
+
+
+def parse_exec(end: Frame, chunks: list[Frame]) -> ExecResult:
+    h = end.headers
+    return ExecResult(
+        output=b"".join(c.body for c in chunks),
+        exit=int(h.get("exit", "0")),
+        bytes_produced=int(h.get("bytes", "0")),
+        truncated=h.get("truncated") == "1",
+        timed_out=h.get("timed_out") == "1",
+        via_shell=h.get("via_shell") == "1",
     )

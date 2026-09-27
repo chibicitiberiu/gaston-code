@@ -32,11 +32,11 @@ enum { BAD_SECRET_PAUSE_MS = 1000 };
 
 /* ------------------------------------------------------------- Session */
 
-Session::Session(const ServerConfig &cfg, unsigned long generation,
-                 Processes &procs)
+Session::Session(const ServerConfig &cfg, const ExecConfig &exec,
+                 unsigned long generation, Processes &procs)
     : m_cfg(&cfg), m_procs(&procs), m_generation(generation),
-      m_conn(this, false), m_control(procs, m_conn), m_dead(0),
-      m_authed(false)
+      m_conn(this, false), m_control(procs, m_conn),
+      m_jobOps(exec, m_conn), m_dead(0), m_authed(false)
 {
     /* Deflate off in v0 (docs/gremote-plan.md): the only large payload is a
      * screenshot and the ui lane is step 6, so the 192KB of persistent
@@ -50,6 +50,10 @@ bool Session::begin(SOCKET accepted)
     if (!m_conn.adopt(accepted))
         return false;
     m_conn.setIdleTimeout((DWORD)m_cfg->heartbeatS * 1000);
+    /* 32 KB. Deeper than the accept loop: ExecJob spawns, waits, and on a
+     * stop walks the process tree with Toolhelp. */
+    if (!m_job.start(m_jobOps, "the job lane", 32u * 1024u))
+        return false;
     return m_conn.start();
 }
 
@@ -186,32 +190,63 @@ void Session::onFrame(Connection &c, rc_frame *f)
             if (!m_control.handle(r, f))
                 r.err("unknown_op");
         }
+        else if (row->lane == G_JOB)
+        {
+            toLane(m_job, f);
+            return;             /* the lane owns the frame */
+        }
         else
         {
-            /* The job and fs lanes arrive next. Answered rather than
-             * dropped meanwhile, for the same reason as everything else
-             * here: silence costs the caller its whole budget. */
+            /* The fs lane arrives next. Answered rather than dropped
+             * meanwhile, for the same reason as everything else here. */
             r.err("not_implemented");
         }
     }
     rc_frame_delete(f);
 }
 
+void Session::toLane(LaneWorker &lane, rc_frame *f)
+{
+    const char *busyOp = "";
+    DWORD ageMs = 0;
+
+    if (lane.submit(f, &busyOp, &ageMs))
+        return;                 /* the lane owns it now */
+
+    /* Refused, not queued, and the refusal says what is holding the lane
+     * and for how long -- the difference between "try again in a moment"
+     * and "something is stuck". */
+    {
+        Responder r(m_conn, rc_frame_get(f, "id"));
+        char age[16];
+        const char *keys[2];
+        const char *vals[2];
+        rc_strf(age, sizeof age, "%lu", (unsigned long)ageMs);
+        keys[0] = "op";     vals[0] = busyOp;
+        keys[1] = "age_ms"; vals[1] = age;
+        r.errWith("busy", keys, vals, 2);
+    }
+    rc_frame_delete(f);
+}
+
 bool Session::end()
 {
+    /* The workers first, while sends still work, so their last answers go
+     * out; then the Connection. Releasing it under a live worker would free
+     * a buffer that worker is still sending from. */
+    m_job.signalStop();
+    bool workersGone = m_job.join(5000);
     m_conn.drain(1000);
     m_conn.signalStop();
     bool joined = m_conn.join(3000);
-    /* othersGone: there is no lane worker yet, so nothing outside the
-     * Connection can still be inside send(). The lanes make this a real
-     * question and they will answer it by being stopped first. */
-    return m_conn.release(true) && joined;
+    return m_conn.release(workersGone) && joined;
 }
 
 /* ------------------------------------------------------- ServerService */
 
-ServerService::ServerService(const ServerConfig &cfg, Processes &procs)
-    : m_cfg(&cfg), m_procs(&procs), m_stop(0), m_generation(0)
+ServerService::ServerService(const ServerConfig &cfg, const ExecConfig &exec,
+                             Processes &procs)
+    : m_cfg(&cfg), m_exec(&exec), m_procs(&procs), m_stop(0), m_generation(0)
 {
 }
 
@@ -322,7 +357,8 @@ void ServerService::serve(SocketGuard &s)
     }
 
     m_generation++;
-    m_session.reset(new Session(*m_cfg, m_generation, *m_procs));
+    m_session.reset(new Session(*m_cfg, *m_exec, m_generation,
+                                *m_procs));
     if (!m_session.valid() || !m_session->begin(s.get()))
     {
         rc_log("server: could not take up the connection from %s",

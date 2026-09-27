@@ -37,6 +37,20 @@ struct ServerConfig
     long heartbeatS;        /* 0 disables the drop; see the comment in .cpp */
 };
 
+struct ExecConfig
+{
+    /* The ceiling a caller's timeout_ms is clamped to, and it is CLAMPED
+     * rather than refused: a caller asking for longer than the machine
+     * allows wants the longest it can have, not an error. The clamp is
+     * logged, because an unclamped-looking timeout that fires early is the
+     * kind of thing that gets blamed on the network. */
+    long maxTimeoutMs;
+    /* Bytes handed back before the rest is drained and counted. A remote
+     * shell streams rather than buffers, so this is larger than the client's
+     * 32KB -- that one is sized for a chat window on a 32MB box. */
+    long maxOutputKb;
+};
+
 class ServerConfigStore
 {
 public:
@@ -47,7 +61,7 @@ public:
      * value's business (an unset secret, an unparseable range). A missing
      * file is written with the defaults so there is something to edit --
      * and that file does not start, which is the intent. */
-    bool load(ServerConfig *cfg);
+    bool load(ServerConfig *cfg, ExecConfig *exec);
 
     const char *error() const;
     const char *path() const;

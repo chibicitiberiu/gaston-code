@@ -31,7 +31,15 @@ import time
 from bridge.wire.frame import Frame, FrameReader
 
 from .errors import Disconnected, Refused, Timeout
-from .ops import Process, SysInfo, codepage, parse_processes, parse_sysinfo
+from .ops import (
+    ExecResult,
+    Process,
+    SysInfo,
+    codepage,
+    parse_exec,
+    parse_processes,
+    parse_sysinfo,
+)
 
 #: 7890 and 7897 are the Gaston client's, 7900+ the test harness's.
 DEFAULT_PORT = 7401
@@ -143,6 +151,39 @@ class Remote:
 
     def ping(self) -> None:
         self.request("PING")
+
+    def exec(self, command: str, timeout: float = 20.0,
+             cwd: str = "", shell: str = "") -> ExecResult:
+        """Run a command and wait for it.
+
+        `shell` is the invocation prefix to splice in front, and the machine
+        does not choose it: HELLO says what this box is, and a guest picking
+        for itself would be guessing on behalf of something that knows
+        better. Without one the program is spawned directly, which is also
+        the only way `exit` means anything.
+
+        The local wait is the guest's own timeout plus a margin -- the guest
+        stops the command itself, and a client that gave up first would
+        leave a running child and no way to tell.
+        """
+        headers = {"timeout_ms": str(int(timeout * 1000))}
+        if cwd:
+            headers["cwd"] = cwd
+        if shell:
+            headers["shell"] = shell
+        end, chunks = self.stream("EXEC", headers,
+                                  command.encode(self.acp, "replace"),
+                                  timeout=timeout + 15.0)
+        return parse_exec(end, chunks)
+
+    def launch(self, command: str, cwd: str = "", show: int = 1) -> int:
+        """Start a program and do not wait. Returns its pid."""
+        headers = {"show": str(show)}
+        if cwd:
+            headers["cwd"] = cwd
+        reply = self.request("LAUNCH", headers,
+                             command.encode(self.acp, "replace"))
+        return int(reply.headers.get("pid", "0"), 16)
 
     def sysinfo(self) -> SysInfo:
         return parse_sysinfo(self.request("SYSINFO"))
