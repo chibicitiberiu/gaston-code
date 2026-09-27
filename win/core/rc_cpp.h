@@ -411,10 +411,29 @@ class TempFile {
     TempFile(const TempFile &);
     TempFile &operator=(const TempFile &);
 public:
+    TempFile() : armed(0) { path[0] = '\0'; }
     explicit TempFile(const char *p) : armed(0)
     {
         path[0] = '\0';
         if (p && *p) armed = rc_strcpy(path, sizeof(path), p);
+    }
+
+    /* For an owner that learns the name after it is constructed -- a writer
+     * forms the temp's name inside begin(), not in its own constructor. Arms
+     * only if the name fits, same as the constructor. */
+    int arm(const char *p)
+    {
+        discard();
+        if (p && *p) armed = rc_strcpy(path, sizeof(path), p);
+        return armed;
+    }
+
+    /* Delete it now rather than at end of scope. */
+    void discard()
+    {
+        if (armed) DeleteFileA(path);
+        armed = 0;
+        path[0] = '\0';
     }
     ~TempFile() { if (armed) DeleteFileA(path); }
 

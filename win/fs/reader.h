@@ -45,7 +45,7 @@ public:
      * becomes a tombstone, and the user's later edits are invisible forever. */
     bool open(const char *full);
 
-    bool valid() const { return m_file.valid(); }
+    bool valid() const { return m_file.valid() != 0; }
     DWORD size() const { return m_size; }
 
     /* Last-write time as unix seconds, local. Only ever compared against
