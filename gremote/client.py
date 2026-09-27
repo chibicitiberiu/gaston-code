@@ -32,12 +32,18 @@ from bridge.wire.frame import Frame, FrameReader
 
 from .errors import Disconnected, Refused, Timeout
 from .ops import (
+    Drive,
+    Entry,
     ExecResult,
     Process,
+    Stat,
     SysInfo,
     codepage,
+    parse_drives,
+    parse_entries,
     parse_exec,
     parse_processes,
+    parse_stat,
     parse_sysinfo,
 )
 
@@ -184,6 +190,27 @@ class Remote:
         reply = self.request("LAUNCH", headers,
                              command.encode(self.acp, "replace"))
         return int(reply.headers.get("pid", "0"), 16)
+
+    # --- the disk ----------------------------------------------------------
+
+    def ls(self, path: str, max_entries: int = 0) -> list[Entry]:
+        """One directory, not a walk. `truncated` on the END frame says the
+        listing stopped at the cap rather than at the end -- a short listing
+        that looks complete is indistinguishable from a mass deletion."""
+        headers = {"path": path}
+        if max_entries:
+            headers["max_entries"] = str(max_entries)
+        _, chunks = self.stream("LS", headers)
+        return parse_entries(chunks, self.acp)
+
+    def stat(self, path: str) -> Stat:
+        return parse_stat(self.request("STAT", {"path": path}))
+
+    def drives(self) -> list[Drive]:
+        """What letters exist, and what is behind them. `dir` can list one
+        volume; it cannot say which letters there are or which is a CD."""
+        _, chunks = self.stream("DRIVES")
+        return parse_drives(chunks, self.acp)
 
     def sysinfo(self) -> SysInfo:
         return parse_sysinfo(self.request("SYSINFO"))

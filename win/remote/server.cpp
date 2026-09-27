@@ -36,7 +36,8 @@ Session::Session(const ServerConfig &cfg, const ExecConfig &exec,
                  unsigned long generation, Processes &procs)
     : m_cfg(&cfg), m_procs(&procs), m_generation(generation),
       m_conn(this, false), m_control(procs, m_conn),
-      m_jobOps(exec, m_conn), m_dead(0), m_authed(false)
+      m_jobOps(exec, m_conn), m_fsOps(m_conn), m_dead(0),
+      m_authed(false)
 {
     /* Deflate off in v0 (docs/gremote-plan.md): the only large payload is a
      * screenshot and the ui lane is step 6, so the 192KB of persistent
@@ -53,6 +54,11 @@ bool Session::begin(SOCKET accepted)
     /* 32 KB. Deeper than the accept loop: ExecJob spawns, waits, and on a
      * stop walks the process tree with Toolhelp. */
     if (!m_job.start(m_jobOps, "the job lane", 32u * 1024u))
+        return false;
+    /* 32 KB as well: a directory walk holds a WIN32_FIND_DATA and a Path
+     * per level, and the record buffers are on the heap for exactly this
+     * reason. */
+    if (!m_fs.start(m_fsOps, "the fs lane", 32u * 1024u))
         return false;
     return m_conn.start();
 }
@@ -197,9 +203,8 @@ void Session::onFrame(Connection &c, rc_frame *f)
         }
         else
         {
-            /* The fs lane arrives next. Answered rather than dropped
-             * meanwhile, for the same reason as everything else here. */
-            r.err("not_implemented");
+            toLane(m_fs, f);
+            return;             /* the lane owns the frame */
         }
     }
     rc_frame_delete(f);
@@ -235,7 +240,9 @@ bool Session::end()
      * out; then the Connection. Releasing it under a live worker would free
      * a buffer that worker is still sending from. */
     m_job.signalStop();
+    m_fs.signalStop();
     bool workersGone = m_job.join(5000);
+    workersGone = m_fs.join(5000) && workersGone;
     m_conn.drain(1000);
     m_conn.signalStop();
     bool joined = m_conn.join(3000);

@@ -290,9 +290,9 @@ $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 REMOTE_SRCS = remote/main.cpp remote/config.cpp remote/allow.cpp \
               remote/server.cpp remote/optable.cpp remote/reply.cpp \
               remote/control.cpp remote/lane.cpp \
-              remote/jobops.cpp
+              remote/jobops.cpp remote/fsops.cpp
 GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBWIRE) $(LIBEXEC) \
-               $(LIBCORE)
+               $(LIBFS) $(LIBCORE)
 gremote: $(BUILD)/gremote.exe
 gremote.exe: $(BUILD)/gremote.exe
 $(BUILD)/gremote.exe: $(GREMOTE_OBJS)

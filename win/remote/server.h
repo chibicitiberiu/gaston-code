@@ -36,6 +36,7 @@
 #include "exec/process.h"
 #include "remote/config.h"
 #include "remote/control.h"
+#include "remote/fsops.h"
 #include "remote/jobops.h"
 #include "remote/lane.h"
 #include "wire/connection.h"
@@ -91,6 +92,8 @@ private:
      * means by "others". */
     JobOps m_jobOps;
     LaneWorker m_job;
+    FsOps m_fsOps;
+    LaneWorker m_fs;
     volatile LONG m_dead;
     bool m_authed;
 };

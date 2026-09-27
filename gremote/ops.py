@@ -28,6 +28,50 @@ class Process:
 
 
 @dataclass(frozen=True)
+class Entry:
+    """One row of `LS`. `type` is 'f', 'd', or 'u' for something the
+    machine can see but not address -- which is a different answer from
+    'there is nothing here', and the distinction matters: a caller told
+    'unreadable' about a file that simply is not there retries forever."""
+
+    name: str
+    type: str
+    size: int
+    mtime: int
+    attrs: int
+
+    @property
+    def is_dir(self) -> bool:
+        return self.type == "d"
+
+
+@dataclass(frozen=True)
+class Stat:
+    type: str
+    size: int
+    mtime: int
+    attrs: int
+
+    @property
+    def is_dir(self) -> bool:
+        return self.type == "d"
+
+
+@dataclass(frozen=True)
+class Drive:
+    letter: str
+    type: int
+    #: False for a floppy or CD bay with nothing in it. NOT derivable from
+    #: free bytes: a mounted CD has none by definition, and inferring
+    #: emptiness that way reported every disc as an empty drive.
+    has_media: bool
+    serial: int
+    total_kb: int
+    free_kb: int
+    label: str
+
+
+@dataclass(frozen=True)
 class ExecResult:
     """What a command did.
 
@@ -114,3 +158,47 @@ def parse_exec(end: Frame, chunks: list[Frame]) -> ExecResult:
         timed_out=h.get("timed_out") == "1",
         via_shell=h.get("via_shell") == "1",
     )
+
+
+def parse_entries(chunks: list[Frame], encoding: str) -> list[Entry]:
+    """`type size mtime attrs name`, one per line.
+
+    The name is last because it is the only field that can contain a space.
+    A Windows path cannot contain a newline, which is what makes a line
+    format safe here at all.
+    """
+    out: list[Entry] = []
+    for chunk in chunks:
+        for line in chunk.body.decode(encoding, "replace").splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(" ", 4)
+            if len(parts) != 5:
+                continue
+            kind, size, mtime, attrs, name = parts
+            out.append(Entry(name, kind, int(size), int(mtime),
+                             int(attrs, 16)))
+    return out
+
+
+def parse_stat(frame: Frame) -> Stat:
+    h = frame.headers
+    return Stat(h.get("type", "u"), int(h.get("size", "0")),
+                int(h.get("mtime", "0")), int(h.get("attrs", "0"), 16))
+
+
+def parse_drives(chunks: list[Frame], encoding: str) -> list[Drive]:
+    """`letter type media serial total_kb free_kb label`, label last."""
+    out: list[Drive] = []
+    for chunk in chunks:
+        for line in chunk.body.decode(encoding, "replace").splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(" ", 6)
+            if len(parts) < 6:
+                continue
+            letter, kind, media, serial, total, free = parts[:6]
+            label = parts[6] if len(parts) > 6 else ""
+            out.append(Drive(letter, int(kind), media == "1",
+                             int(serial, 16), int(total), int(free), label))
+    return out
