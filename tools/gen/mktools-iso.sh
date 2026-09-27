@@ -97,6 +97,23 @@ max_output_kb=1024
 INI
 sed -i 's/$/\r/' "$STAGE/GREMOTE.INI"
 cp "$HERE/vm/gremote.ini" "$STAGE/GREMOTE.INI" 2>/dev/null || true
+
+# Autostart. RunServices runs before anyone logs on, which with
+# RegisterServiceProcess (resolved in win/remote/main.cpp) is what makes a
+# box in another room reachable after a reboot rather than after somebody
+# walks over and logs in.
+#
+# A .REG applied with `regedit /s` rather than registry calls in the exe:
+# ADVAPI32 is not on tools/check/imports.py's allow-list, so writing the key
+# from C would fail `make check`. SETUP.BAT is where it is applied, and it is
+# NOT applied automatically -- see the comment there.
+cat > "$STAGE/GREMOTE.REG" <<'REG'
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\RunServices]
+"GastonRemote"="C:\\GASTON\\GREMOTE.EXE"
+REG
+sed -i 's/$/\r/' "$STAGE/GREMOTE.REG"
 # What to look for on the machine. Without this on the CD the detector finds
 # nothing and the feature is inert -- it fails silently, because "no INI" and
 # "nothing installed" produce the same empty report by design.
@@ -177,12 +194,17 @@ REM GREMOTE.INI is a DIFFERENT FILE. Without this line every key reads back
 REM empty and the first thing anyone sees is a complaint about the port,
 REM which is the one setting that was not wrong.
 IF EXIST D:\GREMOTE.INI COPY D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
+IF EXIST D:\GREMOTE.REG COPY D:\GREMOTE.REG C:\GASTON > NUL
 IF EXIST D:\TOOLSDET.INI COPY D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL
 IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\GASTON\view.htm > NUL
 IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\GASTON\spin.gif > NUL
 C:
 CD \GASTON
-ECHO Copied to C:\GASTON.  Run PROBE to start the Phase 0 experiments.
+ECHO Copied to C:\GASTON.
+ECHO.
+ECHO To start GREMOTE at every boot, before anyone logs on:
+ECHO     REGEDIT /S C:\GASTON\GREMOTE.REG
+ECHO Deliberately not automatic: it opens a port on this machine.  Run PROBE to start the Phase 0 experiments.
 BAT
 sed -i 's/$/\r/' "$STAGE/SETUP.BAT"
 

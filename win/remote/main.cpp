@@ -32,6 +32,43 @@
 
 static const char TITLE[] = "Gaston Remote";
 
+/* Stay running when the person logs off.
+ *
+ * On 9x a process started from RunServices runs before anyone logs on, and
+ * would ordinarily be torn down at logoff along with everything else.
+ * RegisterServiceProcess marks it as a service so it survives -- which is
+ * the difference between a test box you can reach after a reboot and one
+ * somebody has to walk over to and log into first.
+ *
+ * Resolved, never imported: it is 9x-only, and a single NT-only static
+ * import kills the image at load before WinMain with no log written. Absent
+ * on NT, where the whole idea does not apply -- so a failure here is logged
+ * and shrugged at rather than fatal.
+ */
+static void stayRunningAfterLogoff()
+{
+    typedef DWORD (WINAPI *RegisterServiceFn)(DWORD, DWORD);
+    enum { RSP_SIMPLE_SERVICE = 1 };
+
+    Dll k32(LoadLibraryA("KERNEL32.DLL"));
+    RegisterServiceFn reg = k32.valid()
+        ? (RegisterServiceFn)GetProcAddress(k32.get(),
+                                            "RegisterServiceProcess")
+        : 0;
+    if (!reg)
+    {
+        rc_log("gremote: no RegisterServiceProcess here; this copy will "
+               "stop when the session ends (NT does it this way)");
+        return;
+    }
+    if (reg(0, RSP_SIMPLE_SERVICE))
+        rc_log("gremote: registered as a service process; it will outlive "
+               "a logoff");
+    else
+        rc_log("gremote: RegisterServiceProcess refused (%lu)",
+               (unsigned long)GetLastError());
+}
+
 static void exeDir(char *out, unsigned n)
 {
     char path[MAX_PATH];
@@ -132,6 +169,7 @@ bool GremoteApp::parseArgs(const char *cmdLine)
         refuse(m_store->error());
         return false;
     }
+    stayRunningAfterLogoff();
     if (!m_procs.init())
         rc_log("gremote: no Toolhelp on this machine; PS and KILL will "
                "refuse (NT 4 does this, 9x does not)");

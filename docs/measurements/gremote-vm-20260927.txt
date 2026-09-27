@@ -166,6 +166,65 @@ the alternative -- bouncing the call to another thread -- would add a thread
 and a message for no observable gain. If ExitWindowsEx ever fails, it
 returns and the reader carries on, which is the case that matters.
 
+=== 9. AUTOSTART -- reachable before anyone logs in ===
+
+The point of the whole exercise, on a box in another room. RunServices runs
+before logon; RegisterServiceProcess (resolved, never imported -- it is
+9x-only) keeps the process alive across a logoff.
+
+Installed with `REGEDIT /S C:\GASTON\GREMOTE.REG`, then a full stop and
+start of the domain, then polled from Linux with NOBODY logging in:
+
+    ANSWERED after 2s
+    HELLO os : Windows 4.10 build 2222 A
+    free     : 14280 KB of 32288 KB
+    processes: 5, EXPLORER running: False
+      ffcf6d89 C:\WINDOWS\SYSTEM\KERNEL32.DLL
+      ffffba11 C:\WINDOWS\SYSTEM\MSGSRV32.EXE
+      ffffaca1 C:\WINDOWS\SYSTEM\MPREXE.EXE
+      fffe04c1 C:\WINDOWS\SYSTEM\MSTASK.EXE
+      fffe395d C:\GASTON\GREMOTE.EXE
+    exec     : Windows 98 [Version 4.10.2222]
+
+EXPLORER absent is the proof that matters: the shell had not started, so
+this is genuinely pre-logon and not a desktop with the wallpaper showing. Its
+own log agrees -- "registered as a service process; it will outlive a
+logoff" -- and it had bound the port within one second of starting, so
+TCP/IP is already up when RunServices runs and the 240s bind retry never
+came into it.
+
+14280 KB free against 6292 KB with the desktop up: a machine with no shell on
+it is a much better place to measure from, which is worth knowing for the
+P200's memory numbers.
+
+The key was REMOVED afterwards. A VM that quietly listens on every boot is
+not a state to leave somebody's machine in; SETUP.BAT prints the one command
+that turns it on and says why it is not automatic.
+
+=== 10. A CD SWAPPED UNDER A RUNNING GUEST GIVES THE RIGHT SIZE AND THE
+        WRONG BYTES ===
+
+Cost about twenty minutes, and it is a sharper version of the trap
+vmship.sh's comment already describes.
+
+The guest had an older tools.iso mounted. vmship.sh ejected and inserted the
+new one, and `DIR D:` immediately showed the new sizes and timestamps -- so
+the directory was fresh. But a `COPY D:\GREMOTE.INI C:\GASTON\gremote.ini`
+made across that swap produced a file of exactly 136 bytes, the right size,
+containing binary garbage. Win98 had cached data blocks from the old disc
+while reading directory entries from the new one.
+
+Nothing complained. The symptom arrived later and pointed somewhere else
+entirely:
+
+    config: C:\GASTON\gremote.ini: [server] port: not a whole number
+
+...which is the same sentence the client's long-name trap produces, about the
+one setting that was not wrong. Re-copying after the swap fixed it.
+`COPY D:\FILE.EXE C:\DIR` also silently kept the OLD file; naming the
+destination file explicitly (`C:\DIR\FILE.EXE`) worked. **After a media
+change, re-copy everything and check a file's CONTENTS, not its size.**
+
 === Still owed by the real machine ===
 
 - gremote's footprint WITH AND WITHOUT the client running. Measuring the
@@ -177,8 +236,12 @@ returns and the reader carries on, which is the case that matters.
 - disk_free_kb above 2GB. C: here is 2042956 KB with 1609128 free, so the
   clamp that libfs removed still cannot be demonstrated on this guest.
 - REBOOT mode=reboot, and REBOOT with force against an open DOS box. Neither
-  was run here: the first ends the session this was measuring from, and the
-  second is the one that can lose somebody's work.
+  was run: the first ends the session doing the measuring, and the second is
+  the one that can lose somebody's work.
+  What WAS settled on the second visit: mode=poweroff hangs at a bare
+  desktop with NOTHING open -- no DOS box anywhere near it -- so the cause is
+  this guest having no APM to power off with, not an application refusing to
+  close. Two separate stalls, and the first visit conflated them.
 - Autostart through RunServices. Not built yet: it needs a shipped .REG,
   because ADVAPI32 is not on tools/check/imports.py's allow-list and writing
   the key from C would fail the import gate.

@@ -278,7 +278,8 @@ direction proof onwards.
 | `7b9a1b3` | the guest run, measured |
 | `912e6bd` | the Gaston rename |
 | `73d7141` | the agreement test, the budget, and the docs |
-| (this) | `CANCEL` on Tflush, and the inherited socket measured |
+| `e1b1563` | `CANCEL` on Tflush, and the inherited socket measured |
+| (this) | autostart, proven pre-logon on the guest |
 
 Sixty-six tests under `tests/python/remote/`, four contract tests under
 `tests/python/meta/`. `make test`: 3623 passed. Committed at load: gaston
@@ -313,13 +314,14 @@ rather than at the desk:
   race has nothing to race yet. A check binary with one job left is four
   hand-kept lists for one test.
 - Autostart moved to a shipped `.REG`. Writing the `RunServices` key from C
-  means ADVAPI32, which is not on the import allow-list.
+  means ADVAPI32, which is not on the import allow-list. Built and proven on
+  the guest: the machine answers two seconds after a cold boot with nobody
+  logged in and no EXPLORER running.
 
 ### Still open
 
 - The P200 itself, and the two things nothing records about it: a configured
   TCP/IP stack, and how `GREMOTE.EXE` gets there the first time.
-- Autostart through `RunServices`, which needs a shipped `.REG`.
 - `REBOOT mode=reboot`, and `REBOOT` with force against an open DOS box.
   Neither was run: the first ends the session doing the measuring, and the
   second is the one that can lose somebody's work.
