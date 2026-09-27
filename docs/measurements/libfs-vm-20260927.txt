@@ -1,0 +1,168 @@
+libfs (R9 step 5a) on the real Win98 guest -- 2026-09-27
+========================================================
+
+Machine: retroclaude-win98 (qemu:///session), Windows 98 SE 4.10.2222 A,
+32MB, 800x600x16, C: FAT32 with ~1.57GB free.
+
+This is the emulator, not the P200. What it settles is the platform half that
+Wine cannot: read-only semantics, a share-deny lock, the drive map, and the
+critical-error handler on an empty removable. Timings are NOT settled here.
+
+
+1. fscheck.exe -- the library, 42 cases
+---------------------------------------
+
+    pass  summary  0 failures
+
+All 42 green on the first run. The two platform observations Wine only
+prints:
+
+    note  file.remove_readonly   removed
+    note  drives.volume_info     at least one volume answered
+
+`removed` is the answer that mattered: a read-only file IS the user's to
+delete when they asked, and DeleteFileA refuses one silently until the
+attribute is cleared. Wine agrees; so does 98.
+
+The drive map, which is the reason this binary is on the CD at all (nothing
+else links fs/drives.o -- the client does not):
+
+    drives.enumerate   A=2+media C=3+media D=5+media
+
+**No dialog appeared.** GetVolumeInformationA on A: with media, and on D:
+(a mounted CD), both answered under SEM_FAILCRITICALERRORS. The screenshot
+after the run shows a clean desktop; the critical-error handler never ran.
+
+    drives.free_bytes  1609728 KB free on C:
+
+
+2. A bug this run found, fixed, and re-ran
+-------------------------------------------
+
+First end-to-end `drives` listing, through the agent:
+
+    A:  removable     1 MB
+    C:  fixed      1572 MB   WIN98
+    D:  CD-ROM        empty   RETROTOOLS
+
+D: is a mounted disc with a label, a serial and a readable filesystem. It
+read as "empty" because the table inferred no-media from zero bytes free --
+and a CD-ROM has zero bytes free by definition, so every disc anyone ever
+inserted would have been described to the agent as an empty drive.
+
+Fixed by having the guest answer the question directly (DriveInfo::hasMedia,
+set from GetVolumeInformationA succeeding). Re-run on the guest:
+
+    drives.enumerate   A=2+media C=3+media D=5+media
+    drives.media_is_not_free_space  pass
+
+
+3. The sync layer, on the rewritten PUT and GET
+------------------------------------------------
+
+A real agent (haiku) through the shipping client, permission mode Manual.
+
+    07:31:57  {'pushed': 1, 'pulled': 0, ...}     SYNCPUT via ChunkSink
+    07:33:15  {'pushed': 0, 'pulled': 1, ...}     SYNCGET via ChunkSource
+
+Sequence: the agent wrote notes.txt in its folder (pushed to the guest,
+13 bytes, verified by TYPE on the guest); the file was then edited ON THE
+GUEST; the next pass pulled that edit back; the agent noticed the change and
+refused to overwrite without being asked; a sync_resolve released it.
+
+**docs/mem-audit F1, the headline claim of the PUT rewrite.** After all of
+that -- a push, a pull, a guest-side edit, a conflict and a resolve --
+`DIR /S C:\FSWORK`:
+
+    Directory of C:\FSWORK\CREATEA2
+    NOTES    TXT            21   notes.txt
+    Total files listed:  1 file(s)  21 bytes
+
+One file. No .gaston-tmp, no .gaston-old, nothing staged and forgotten.
+Before this step, a refusal after do_putend's CloseHandle left a fully
+written .gaston-tmp every time -- and an edit conflict is the ORDINARY way
+to reach that branch, not a corner.
+
+
+4. The three agent tools, end to end
+-------------------------------------
+
+Bridge on 127.0.0.1:7891, model haiku, client C:\FSE2E\RC.EXE, Manual
+permissions. One prompt asking for all three in order.
+
+  get_file  C:\FSE2E\retroclaude.ini  -> the file's text in the transcript,
+            read off the guest, decoded through the guest's codepage.
+
+  drives    -> the table in section 2.
+
+  put_file  C:\FSE2E\AGENT.TXT, content "written by the agent"
+            -> verified ON THE GUEST, not from the agent's report:
+
+                AGENT    TXT            20   AGENT.TXT
+                contents: 'written by the agent'
+
+            and `DIR C:\FSE2E\*.gaston-put` found nothing. The aside=false
+            policy leaves no working file behind outside the mirror, which
+            is the whole reason the flag exists.
+
+The permission bar read "Get File -- C:\FSE2E\retroclaude.ini", "Drives",
+and "Put File -- C:\FSE2E\AGENT.TXT" with `path` above `content`. The plain
+display names are legible at this bar's width; `put_file: C:\...` was not.
+
+
+5. Two things that are NOT libfs regressions
+---------------------------------------------
+
+rpccheck.exe on the guest: 2 of 35 fail.
+
+    FAIL  a stale or id-less EXECKILL leaves the running job alone
+    FAIL  slow JOB was genuinely running   marker grew 0 -> 0
+
+Both cases drive `cmd.exe /c for /l %i in (1,1,50000000) do echo t>>marker`.
+Windows 98 has no cmd.exe and COMMAND.COM has no `for /l`, so the marker
+never grows and both assertions fail structurally. The cases were written
+against Wine; the lines are untouched by step 5a. Everything else in that
+binary passes, including all four new fs lane rows:
+
+    pass  lane(FSGET) == STREAM      pass  lane(FSDAT) == UI
+    pass  lane(FSPUT) == STREAM      pass  lane(FSDATEND) == UI
+    pass  lane(FSPUTEND) == STREAM   pass  lane(FSPUTACK) == UI
+    pass  lane(FSDRIVES) == STREAM
+
+The reply types answering UI is the load-bearing half: FSDAT carries file
+bytes, and a lane rule that claimed it would hand a chunk of somebody's file
+to a handler as though it were a request.
+
+
+6. Size
+--------
+
+Committed at load, retroclaude.exe, across the whole step:
+
+    448,441  before anything (budget 470,000)
+    462,617  after 5a, including the fs lane and its handlers
+
++14,176 for libfs, the fs lane, three new ops and the transfer primitive.
+Two measurements along the way are worth keeping:
+
+  * the refactor first cost 12,288 for EQUIVALENT function, almost all of it
+    "every path is a Path" -- Buf's methods are inline and expand at every
+    call site where the old code called rc_strf once. Moving fs/ and most of
+    sync/ to -os took 7,168 of that back.
+  * the -os move for sync/ is a dividend of the split rather than a
+    concession: the Makefile kept that directory at -otexan for "the codec,
+    the CRC pass and the transfer loops", and after step 5a the CRC pass is
+    sync/scanner.cpp alone.
+
+
+7. Not measured here
+---------------------
+
+  * A manifest pass timed before and after (BACKLOG 4 asks for real hardware
+    before anyone builds a cache; this box is an emulator and its timings
+    have misled this project before).
+  * disk_free_kb above 2GB. C: has 1.57GB free, so the clamp this step
+    removed cannot be demonstrated on this machine.
+  * An FSPUT killed mid-transfer. The successful path leaves nothing; the
+    interrupted one is untested on hardware.
+  * Export as HTML, and a path at the 251-259 character boundary.

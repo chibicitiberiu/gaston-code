@@ -663,6 +663,8 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    it, plus the fs lane in the client and the agent's `get_file`/`put_file`/
    `drives` tools (`docs/libfs-plan.md`). **5b** is `ship()` and self-update,
    which need `GREMOTE.EXE` from step 4 and cannot start before it.
+   **Step 5a is complete (2026-09-27)**, verified on the real guest and not
+   only under Wine -- `docs/measurements/libfs-vm-20260927.txt`.
 6. **libautomation.** Screenshot, window list, focus and input, control tree,
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.

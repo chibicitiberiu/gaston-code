@@ -209,3 +209,44 @@ Wine settles the grammar. The guest settles the rest:
 
 Baseline before any change (2026-09-27): `retroclaude.exe` 435,712 bytes,
 **448,441 committed at load** against a 470,000 budget.
+
+### Done (2026-09-27)
+
+Eighteen commits, `dcc448c`..`07e6a96`. The library, the client onto it,
+`win/sync/sync.cpp` deleted, the fs lane in the client, and the agent's
+`get_file`/`put_file`/`drives`.
+
+Committed at load ended at **462,617** (+14,176), with 7,383 of headroom.
+
+Verified on the real Win98 guest, not only under Wine --
+`docs/measurements/libfs-vm-20260927.txt`:
+
+- `fscheck.exe` 42/42, including the drive map with no critical-error dialog
+  on a removable.
+- A push and a pull through the rewritten `ChunkSink`/`ChunkSource`, then a
+  guest-side edit, a conflict and a resolve -- after which `DIR /S` over the
+  sync root found **one file and no working files at all**. That is
+  `docs/mem-audit` F1, which used to leak a `.gaston-tmp` on every edit
+  conflict.
+- All three agent tools end to end through the shipping client, with
+  `put_file`'s result checked on the guest rather than taken from the
+  agent's report, and no `.gaston-put` left behind.
+
+Found by running it: a mounted CD-ROM was reported to the agent as an empty
+drive, because the table inferred no-media from zero bytes free. Fixed in
+`07e6a96` and re-verified on the guest.
+
+Two `rpccheck` cases fail on the guest and are not ours: they drive
+`cmd.exe /c for /l ...`, which Windows 98 does not have.
+
+### Still open
+
+- **5b**: `ship()` and self-update, which need `GREMOTE.EXE` from step 4.
+- `CANCEL` (BACKLOG 6 item 2), which needs the rpc id-queue class.
+- `_send_html`'s END frame (BACKLOG 6 item 3).
+- The screenshot strips as a `FileWriter` caller -- deferred, because
+  `app/screenshot.cpp` is slated for retirement.
+- A manifest pass timed on real hardware (BACKLOG 4). The VM is an emulator
+  and its timings have misled this project before.
+- `disk_free_kb` above 2GB: this guest has 1.57GB free, so the clamp this
+  step removed cannot be demonstrated on it.
