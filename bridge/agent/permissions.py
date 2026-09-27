@@ -237,8 +237,15 @@ def summary(tool_name: str, ctx, args: dict | None = None) -> str:
     argument.
     """
     display = getattr(ctx, "display_name", None) or tool_name
-    if display.lower() == "exec" and tool_name.startswith("mcp__machine__"):
-        display = "Run on your machine"
+    if tool_name.startswith("mcp__machine__"):
+        # The bar is 640 pixels wide and the person reads it in a second.
+        # `put_file: C:\WINDOWS\SYSTEM.INI` is not a sentence, and this is
+        # the one tool where misreading it costs them a file.
+        plain = {"exec": "Run on your machine",
+                 "put_file": "Write a file on your machine",
+                 "get_file": "Read a file from your machine",
+                 "drives": "List your machine's drives"}
+        display = plain.get(display.lower(), display)
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)
     if not desc and args:
         told = telling_argument(args)
@@ -500,4 +507,8 @@ _TOOL_NOTES = {
     "WebFetch": "fetches a page from the internet",
     "WebSearch": "searches the web",
     "mcp__machine__exec": "RUNS A COMMAND ON YOUR COMPUTER. Always asks.",
+    "mcp__machine__put_file":
+        "WRITES A FILE ANYWHERE ON YOUR COMPUTER, replacing what is there. "
+        "Always asks.",
+    "mcp__machine__get_file": "reads a file from anywhere on your computer",
 }

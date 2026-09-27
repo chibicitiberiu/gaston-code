@@ -40,8 +40,11 @@ edit there reaches you the same way.
 
 Three things follow, and none of them is optional:
 
-- **An edit outside the mirrored folder never leaves this proxy.** It will
-  succeed, and it will achieve nothing. If the user wants a file on their
+- **An edit outside the mirrored folder never leaves this proxy** by itself.
+  It will succeed, and the mirror will not carry it. `put_file` will, to a
+  path you name -- one file at a time, with no baseline behind it, so use it
+  for the occasional file and the mirrored folder for work. If the user wants
+  a file on their
   machine, it has to go in the mirrored folder.
 - **Some names cannot cross**, because Windows will not hold them: `aux.c`,
   `con.txt` and their kind in any directory, names containing `< > : " \ | ?

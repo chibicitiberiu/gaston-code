@@ -49,8 +49,14 @@ def test_prompt_does_not_promise_file_sync_when_there_is_none():
     """
     out = system_prompt(HELLO, "/work")
     assert "/work" in out
-    assert "NOT yet copied" in out
-    assert "there is no tool\nthat transfers them" in out
+    assert "NOT copied to the connected machine on their\nown" in out
+    # And the third correction, for the same reason as the first two: the
+    # prompt used to say "there is no tool that transfers them", which stopped
+    # being true when put_file shipped. Refusing a thing it can do is the same
+    # class of mistake as promising one it cannot -- so what is asserted now
+    # is that BOTH halves are said: the mirror is off, and one file at a time
+    # can still be moved deliberately.
+    assert "put_file" in out
 
 
 def test_prompt_names_the_mirrored_folder_when_sync_is_on():

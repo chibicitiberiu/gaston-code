@@ -13,6 +13,8 @@ Run a command on the connected machine (the old computer the user is sitting at)
 
 To see or end running programs, use the `ps` and `kill` tools, not a command: the machine may have no command for it at all (Windows 98 has no tasklist or taskkill).
 
+To read a file's contents, or to write one, use `get_file` and `put_file` instead: printing a file through the shell mangles anything that is not plain text and caps what comes back.
+
 ONE COMMAND PER CALL. Whether commands can be chained, and with what, depends on the shell that machine has -- the system prompt says which one it is and what it accepts. To run several steps regardless of shell, write a script file into the mirrored folder and run that; it is also one approval instead of several.
 
 IMPORTANT: the command must be non-interactive. Anything that stops to ask a question -- a delete or a format asking 'Are you sure (Y/N)?' -- will HANG until the timeout kills it: that prompt is read from the machine's own console and there is no way to answer it from here -- NOT by piping one in either, which was measured and does not work. Use a form that does not ask: a switch that says yes, or a more specific target.'''
@@ -272,3 +274,99 @@ ok = '''
 Process {pid} has ended.'''
 pending = '''
 Process {pid} was told to end and is still there after a moment. Some programs take a while; run `ps` again to see whether it has gone. On Windows 98 a DOS program's session can take up to half a minute, and some parts of it never go until the machine restarts.'''
+
+# --- files on the connected machine, outside the mirrored folder ------------
+#
+# These three exist because `exec` does those jobs badly, which is the bar in
+# CLAUDE.md. Listing a directory is NOT here: the machine's own shell does
+# that well, and a tool that duplicates it costs context on every request for
+# nothing.
+
+[fs.refused]
+unavailable = '''
+No machine is connected, so there is nothing to read or write.'''
+bad_path = '''
+The machine refused "{path}" as a path it can use.'''
+too_long = '''
+The path "{path}" is longer than this machine's filesystem allows.'''
+missing = '''
+There is nothing at "{path}" on the machine.'''
+is_directory = '''
+"{path}" is a folder, not a file.'''
+locked = '''
+"{path}" could not be read or written just now -- another program on the machine is probably holding it. Worth trying again.'''
+readonly = '''
+"{path}" is write-protected on the machine.'''
+no_parent = '''
+The folder that would hold "{path}" does not exist on the machine.'''
+no_space = '''
+The machine's disk is full.'''
+out_of_order = '''
+The transfer arrived out of order and nothing was written. Try again.'''
+crc_mismatch = '''
+The bytes that arrived do not match the bytes that were sent, so nothing was kept. Try again.'''
+busy = '''
+Another file transfer is already running. Wait for it and try again.'''
+timeout = '''
+The machine did not answer in time. It is slow, and a large file over a slow link can take minutes.'''
+disconnected = '''
+The machine disconnected before the transfer finished.'''
+unknown = '''
+The machine answered "{status}" for "{path}", which this bridge does not recognise.'''
+
+[get_file]
+description = '''
+Read a file from anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into.
+
+Use this rather than printing a file through the shell. The shell mangles anything that is not plain text, caps its output well below the size of a real file, and returns it in the console's own character set. This returns the file.
+
+Text comes back as text. Anything else is saved here, beside your folder, and the reply says where -- so you can open it with your ordinary tools.'''
+
+[get_file.args]
+path = '''
+The full path on the connected machine, written the way that machine writes paths.'''
+max_bytes = '''
+Stop after this many bytes. The machine enforces it while reading, so a huge file costs only what you asked for. There is a ceiling in any case, and the reply says when either one bit.'''
+
+[get_file.view]
+binary = '''
+{path} is {bytes} bytes and is not text. It has been saved here as:
+  {local}'''
+truncated = '''
+
+(Stopped early -- there is more of this file on the machine.)'''
+
+[put_file]
+description = '''
+Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into.
+
+There is no other way to do this. The shell cannot write anything that is not plain short text, and the mirrored folder only reaches one place.
+
+This overwrites whatever is at that path. The user approves every call and sees the destination, so say in your message what you are about to replace and why.'''
+
+[put_file.args]
+path = '''
+The full path on the connected machine, written the way that machine writes paths. Anything already there is replaced.'''
+content = '''
+The text to write. For anything that is not text, write it to a file in your own folder first and pass `from_path` instead.'''
+from_path = '''
+A file in your own folder to send as-is, byte for byte. Use this for anything that is not text. Relative to your folder; nothing outside it can be sent.'''
+
+[put_file.refused]
+one_source = '''
+Pass either `content` or `from_path`, not both and not neither.'''
+from_path = '''
+"{path}" is not a file in your own folder. `from_path` is relative to that folder and cannot reach outside it.'''
+
+[put_file.view]
+wrote = '''
+Wrote {bytes} bytes to {path} on the machine.'''
+
+[drives]
+description = '''
+List the connected machine's drive letters, what kind each one is, and how much room is free.
+
+Read-only and cheap. Worth a call before writing a large file, or when you need to know whether a letter is a hard disk, a CD-ROM or an empty floppy drive -- which the machine's own directory listing does not say.'''
+
+[drives.view]
+no_media = '''empty'''

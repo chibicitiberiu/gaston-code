@@ -186,6 +186,7 @@ class Bridge:
             sync=self.sync,
             ui=self.ui,
             proc=self.proc,
+            guest_fs=self.guest_fs,
             conv=self.conv,
             spawn=self._spawn,
         )

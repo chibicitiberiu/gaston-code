@@ -18,14 +18,19 @@ someone's computer for the rest of the session.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import os
+import pathlib
 from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from ..services.guest_fs import FsError
 from ..services.proc import ProcError
 from ..services.ui import UiError
+from ..wire import fold
 from ..wire.uiview import render_tree, to_png
 from . import prompts
 
@@ -62,7 +67,7 @@ def _text(body: str, *, error: bool = False) -> dict:
 
 
 def build(guest_exec, sync, workspace, guest=None, ui=None,
-          proc=None) -> dict:
+          proc=None, fs=None, workdir: str = "") -> dict:
     """Create the `machine` server bound to THREE SERVICES and ONE GUEST.
 
     Named one by one rather than reached through something that has them. It
@@ -555,13 +560,190 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__kill failed: %r", args)
             raise
 
+    def _fs_refused(status: str, path: str = "") -> str:
+        try:
+            return prompts.text(f"tools.fs.refused.{status}", path=path)
+        except KeyError:
+            return prompts.text("tools.fs.refused.unknown", status=status,
+                                path=path)
+
+    def _acp() -> str:
+        caps = getattr(guest, "caps", None) if guest is not None else None
+        return getattr(caps, "acp", "") or ""
+
+    def _fetched_dir() -> str:
+        """Where a fetched binary lands.
+
+        A SIBLING of the working directory, never inside it. The working
+        directory IS the mirror -- machine.py:71 computes everything relative
+        to it and says so -- so a file written there is reported by the next
+        scan as new and pushed BACK to the guest. Conflict staging already
+        sits one level up for exactly this reason; this follows it.
+        """
+        base = os.path.dirname(workdir.rstrip(os.sep)) if workdir else "."
+        return os.path.join(base, ".gaston", "fetched")
+
+    @tool(
+        "get_file",
+        prompts.text("tools.get_file.description"),
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string",
+                         "description": prompts.text("tools.get_file.args.path")},
+                "max_bytes": {"type": "integer",
+                              "description": prompts.text(
+                                  "tools.get_file.args.max_bytes")},
+            },
+            "required": ["path"],
+        },
+    )
+    async def machine_get_file(args: dict) -> dict:
+        try:
+            if fs is None or guest is None:
+                return _text(prompts.text("tools.fs.refused.unavailable"),
+                             error=True)
+            path = str(args.get("path", "")).strip()
+            if not path:
+                return _text(_fs_refused("bad_path"), error=True)
+            try:
+                got = await fs.get(guest, path,
+                                   max_bytes=int(args.get("max_bytes") or 0))
+            except FsError as exc:
+                return _text(_fs_refused(exc.status, path), error=True)
+
+            note = (prompts.text("tools.get_file.view.truncated")
+                    if got.truncated else "")
+
+            # A NUL anywhere means binary, the same rule the guest's own
+            # classifier uses -- not a sniff window, because a file that is
+            # text for its first 8KB and binary afterwards is binary.
+            if b"\x00" not in got.data:
+                try:
+                    body = fold.decode(got.data, _acp())
+                except Exception:
+                    body = None
+                if body is not None:
+                    return _text(body + note)
+
+            # Binary: the agent cannot hold bytes, so they go to a file and it
+            # is told where. Not into the mirror -- see _fetched_dir.
+            dest_dir = _fetched_dir()
+            await asyncio.to_thread(os.makedirs, dest_dir,
+                                    exist_ok=True)
+            name = os.path.basename(path.replace("\\", "/").rstrip("/")) or "file"
+            dest = os.path.join(dest_dir, name)
+            # Off the loop: a few megabytes onto a real disk is not
+            # instantaneous, and this runs while a turn is live.
+            await asyncio.to_thread(pathlib.Path(dest).write_bytes, got.data)
+            return _text(prompts.text("tools.get_file.view.binary",
+                                      path=path, local=dest,
+                                      bytes=len(got.data)) + note)
+        except Exception:
+            log.exception("mcp__machine__get_file failed: %r", args)
+            raise
+
+    @tool(
+        "put_file",
+        prompts.text("tools.put_file.description"),
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string",
+                         "description": prompts.text("tools.put_file.args.path")},
+                "content": {"type": "string",
+                            "description": prompts.text(
+                                "tools.put_file.args.content")},
+                "from_path": {"type": "string",
+                              "description": prompts.text(
+                                  "tools.put_file.args.from_path")},
+            },
+            "required": ["path"],
+        },
+    )
+    async def machine_put_file(args: dict) -> dict:
+        try:
+            if fs is None or guest is None:
+                return _text(prompts.text("tools.fs.refused.unavailable"),
+                             error=True)
+            path = str(args.get("path", "")).strip()
+            content = args.get("content")
+            from_path = str(args.get("from_path", "") or "").strip()
+            if not path:
+                return _text(_fs_refused("bad_path"), error=True)
+            # Exactly one source. Both is ambiguous and neither is a mistake;
+            # guessing at either is how the wrong bytes reach a real file.
+            if (content is None) == (not from_path):
+                return _text(prompts.text("tools.put_file.refused.one_source"),
+                             error=True)
+
+            if from_path:
+                # from_path reads THIS machine's disk, which is a different
+                # decision from writing anywhere on the guest: that one the
+                # person approves per call, this one they cannot see. Confined
+                # to the conversation's own folder.
+                base = os.path.abspath(workdir or ".")
+                target = os.path.abspath(os.path.join(base, from_path))
+                try:
+                    inside = os.path.commonpath([base, target]) == base
+                except ValueError:
+                    inside = False
+                if not inside or not os.path.isfile(target):
+                    return _text(prompts.text(
+                        "tools.put_file.refused.from_path", path=from_path),
+                        error=True)
+                data = await asyncio.to_thread(pathlib.Path(target).read_bytes)
+            else:
+                data = fold.encode_exact(str(content), _acp())
+
+            try:
+                n = await fs.put(guest, path, data)
+            except FsError as exc:
+                return _text(_fs_refused(exc.status, path), error=True)
+            return _text(prompts.text("tools.put_file.view.wrote",
+                                      path=path, bytes=n))
+        except Exception:
+            log.exception("mcp__machine__put_file failed: %r", args)
+            raise
+
+    @tool(
+        "drives",
+        prompts.text("tools.drives.description"),
+        {"type": "object", "properties": {}, "required": []},
+    )
+    async def machine_drives(args: dict) -> dict:
+        try:
+            if fs is None or guest is None:
+                return _text(prompts.text("tools.fs.refused.unavailable"),
+                             error=True)
+            try:
+                rows = await fs.drives(guest)
+            except FsError as exc:
+                return _text(_fs_refused(exc.status), error=True)
+            kinds = {0: "unknown", 1: "no such drive", 2: "removable",
+                     3: "fixed", 4: "network", 5: "CD-ROM", 6: "RAM disk"}
+            lines = [f"{'drive':<6} {'kind':<12} {'free':>12}  label"]
+            for d in rows:
+                free = (f"{d.free_kb // 1024} MB" if d.free_kb
+                        else prompts.text("tools.drives.view.no_media"))
+                lines.append(f"{d.letter + ':':<6} "
+                             f"{kinds.get(d.type, 'unknown'):<12} "
+                             f"{free:>12}  {d.label}")
+            return _text("\n".join(lines))
+        except Exception:
+            log.exception("mcp__machine__drives failed: %r", args)
+            raise
+
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,
                                           machine_ui, machine_click,
                                           machine_keys, machine_shot,
                                           machine_focus, machine_ps,
-                                          machine_kill])
+                                          machine_kill,
+                                          machine_get_file,
+                                          machine_put_file,
+                                          machine_drives])
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

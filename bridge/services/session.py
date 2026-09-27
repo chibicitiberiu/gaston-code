@@ -77,6 +77,7 @@ class SessionService:
         sync: Any = None,
         ui: Any = None,
         proc: Any = None,
+        guest_fs: Any = None,
     ) -> None:
         self.connection = connection
         self.presentation = presentation
@@ -86,6 +87,7 @@ class SessionService:
         self.sync = sync
         self.ui = ui
         self.proc = proc
+        self.guest_fs = guest_fs
         self.conv = conv
         # Defaulted, not Optional -- see SessionCoordinator.__init__.
         self.spawn: Callable[[Any], Any] = spawn or asyncio.create_task
@@ -312,7 +314,8 @@ class SessionService:
             can_use_tool=can_use_tool_cb,
             mcp_servers=machine_tools.build(
                 self.guest_exec, self.sync, self.workspace, guest,
-                ui=self.ui, proc=self.proc),
+                ui=self.ui, proc=self.proc, fs=self.guest_fs,
+                workdir=work_dir),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,

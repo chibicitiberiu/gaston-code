@@ -41,11 +41,15 @@ one.** Write in the folder the notice names, once it names one.'''
 no_sync = '''
 Your file editing tools operate on the working copy at `{workdir}` on this
 proxy, which exists to stage files for the user's machine. Use them normally
-within it. **These files are NOT yet copied to the connected machine** --
-synchronisation is not switched on for this session, and **there is no tool
-that transfers them**. If a file needs to end up on the user's machine, say so
-plainly and say that moving it is not something you can do. Do not offer to
-transfer it -- an offer you cannot keep is worse than the limitation.'''
+within it. **These files are NOT copied to the connected machine on their
+own** -- synchronisation is not switched on for this session, so nothing here
+moves by itself.
+
+**One file at a time you can still move**, with `put_file`, which writes to a
+path you name on the user's machine and needs no synchronisation. It is the
+right answer for a handful of files and the wrong one for a folder: there is
+no baseline, so nothing notices later edits on either side. Say which file is
+going where, and let the user approve it.'''
 
 # the normal case: a folder exists on both sides
 mirrored = '''
@@ -56,8 +60,11 @@ edit there reaches you the same way.
 
 Three things follow, and none of them is optional:
 
-- **An edit outside the mirrored folder never leaves this proxy.** It will
-  succeed, and it will achieve nothing. If the user wants a file on their
+- **An edit outside the mirrored folder never leaves this proxy** by itself.
+  It will succeed, and the mirror will not carry it. `put_file` will, to a
+  path you name -- one file at a time, with no baseline behind it, so use it
+  for the occasional file and the mirrored folder for work. If the user wants
+  a file on their
   machine, it has to go in the mirrored folder.
 - **Some names cannot cross**, because Windows will not hold them: `aux.c`,
   `con.txt` and their kind in any directory, names containing `< > : " \ | ?
