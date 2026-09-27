@@ -225,3 +225,15 @@ ran `ver` through command.com, a Win32 program that timed out (4s and 5s),
 one cancelled by the client's Stop button (EXECKILL, cancelled 1s later), a
 screenshot it described correctly, and control trees. Afterwards the guest
 held no new REDIR32.
+
+## Done (2026-09-27)
+
+Step 3 is complete. After the plan above: the REDIR32 leak fixed for Win32
+programs (the stop kills the Win32 side and lets the job end itself);
+Stop, exit-code and no-shell reporting fixed in the bridge; `ps` and
+`kill` machine tools on libexec, verified end to end with an agent, with
+`kill` refusing a DOS session unless `force`; `execcheck` runnable on the
+guest, 24/24. Accepted or decided residue: BACKLOG 14 (a forced DOS stop
+leaks one REDIR32; a VxD is the next step if it matters) and BACKLOG 17.
+Next is REMOTE.md step 4, gremote v0 -- which also owns making its
+listening socket non-inheritable (NT only; 98 does not inherit it).

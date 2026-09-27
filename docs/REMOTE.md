@@ -595,6 +595,10 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    and a stop now kills only the Win32 side and lets the job end itself,
    which leaves nothing; only a DOS program that must be stopped still
    costs one REDIR32 (~150KB), logged (`BACKLOG.md` 14).
+   Also landed in this step: the agent's `ps`/`kill` tools on libexec
+   (`kill` refuses a DOS session without `force`), and `execcheck` runs
+   24/24 on the real 98 guest. Gaps left are decided in `BACKLOG.md` 17.
+   **Step 3 is complete (2026-09-27).**
 4. **`gremote.exe` v0 + Python client.** App, config, listener, AUTH/HELLO,
    control and job lanes, per the op table. **First prove Wine can host a
    listening exe that pytest connects to:** every existing Wine test runs the
