@@ -165,3 +165,28 @@ def test_guest_syncrpc_handlers(tmp_path):
     nested_dir = tmp_path / "test_dir" / "nested_sub"
     assert nested_dir.is_dir(), "SYNCMKDIR should have created nested directory hierarchy"
 
+
+def test_attget_always_reports_back_to_the_attachment_bar(tmp_path):
+    """Every ATTGET ends in a `done` callback, including the refusals.
+
+    do_attget had no coverage at all -- rpccheck drove SCAN, PUT, PUTEND,
+    MKDIR and GET and stopped there -- while being ninety lines near-identical
+    to do_get and the most tempting dedup in the file. These cases went in
+    BEFORE that dedup, not after it.
+
+    The property worth pinning is not the transfer, which shares its code with
+    SYNCGET and is covered there. It is the hook pair: `lookup` resolves an
+    opaque token the bridge cannot see behind, and if `done` is not called the
+    attachment bar waits forever. The refusal paths -- a token that resolves
+    to nothing, a file that is gone, a directory -- are exactly where that is
+    easy to miss, and all three are asserted here.
+    """
+    out = conftest.run_guest("rpccheck.exe", "--attget", str(tmp_path),
+                             timeout=60)
+    rows = [line.split("\t") for line in
+            out.stdout.decode("latin-1", "replace").splitlines()
+            if "\t" in line]
+    assert len(rows) == 6, f"expected six attget cases, got {rows}"
+    failed = [r for r in rows if r[0] != "pass"]
+    assert not failed, f"attget failures: {failed}\n{conftest.guest_says(out)}"
+    assert out.returncode == 0

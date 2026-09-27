@@ -803,14 +803,10 @@ static void do_attget(rc_net *net, rc_frame *f)
     const char *att = rc_frame_get(f, "att");
     const char *keys[4];
     const char *vals[4];
-    char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
+    char crcs[16], clss[4];
+    Path full;
     unsigned long crc = 0;
     char cls = 0;
-    HANDLE h;
-    rc_sync_scanner *scan;
-    char *buf;
-    DWORD attr;
-    DWORD size = 0, got = 0, sent = 0;
     const char *status = "ok";
 
     if (!id) {
@@ -818,52 +814,17 @@ static void do_attget(rc_net *net, rc_frame *f)
         return;
     }
 
-    buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
-    if (!buf) {
-        const char *k[2]; const char *v[2];
-        k[0] = "id";     v[0] = id;
-        k[1] = "status"; v[1] = "locked";
-        rc_log("sync: no memory for an attget buffer");
-        rc_net_send(net, "SYNCDATEND", k, v, 2, NULL, 0);
-        return;
-    }
-
-    full[0] = '\0';
-    if (!att || !g_att_lookup || !g_att_lookup(g_att_ctx, att, full, sizeof(full)) || !full[0]) {
+    /* The one thing ATTGET does that SYNCGET does not. The bridge names an
+     * opaque token, never a path: the table of what the person attached lives
+     * on the UI thread, and this hook is the only way through to it. Which is
+     * also why every exit below reports `done` -- the attachment bar is
+     * waiting on that callback and does not time out. */
+    if (!att || !g_att_lookup ||
+        !g_att_lookup(g_att_ctx, att, full.raw(), full.cap()) ||
+        !full.str()[0]) {
         status = "bad_path";
     } else {
-        attr = GetFileAttributesA(full);
-        if (attr == 0xFFFFFFFF)                   status = "missing";
-        else if (attr & FILE_ATTRIBUTE_DIRECTORY) status = "is_directory";
-        else {
-            h = CreateFileA(full, GENERIC_READ,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (h == INVALID_HANDLE_VALUE) status = "locked";
-            else {
-                scan = rc_sync_scanner_begin();
-                if (!scan) {
-                    status = "locked";
-                } else {
-                    size = GetFileSize(h, NULL);
-                    rc_strf(total, sizeof(total), "%lu", (unsigned long)size);
-                    while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
-                        rc_sync_scanner_feed(scan, buf, got);
-                        rc_strf(offs, sizeof(offs), "%lu", (unsigned long)sent);
-                        keys[0] = "id";    vals[0] = id;
-                        keys[1] = "total"; vals[1] = total;
-                        keys[2] = "off";   vals[2] = offs;
-                        if (rc_net_send(net, "SYNCDAT", keys, vals, 3, buf, got) != 0) {
-                            status = "locked";
-                            break;
-                        }
-                        sent += got;
-                    }
-                    rc_sync_scanner_finish(scan, &cls, &crc);
-                }
-                CloseHandle(h);
-            }
-        }
+        status = stream_file(net, id, full.str(), &crc, &cls);
     }
 
     rc_strf(crcs, sizeof(crcs), "%lu", crc);
@@ -875,7 +836,6 @@ static void do_attget(rc_net *net, rc_frame *f)
     keys[3] = "cls";    vals[3] = clss;
     rc_net_send(net, "SYNCDATEND", keys, vals, 4, NULL, 0);
     if (g_att_done && att) g_att_done(g_att_ctx, att);
-    HeapFree(GetProcessHeap(), 0, buf);
 }
 
 void rc_syncrpc_handle(rc_net *net, rc_frame *f)

@@ -368,11 +368,12 @@ def test_sync_status_vocabulary_matches_the_guest():
     MKDIR/GET are routed through it to syncrpc.cpp's handlers, which are
     where every `status=` value in this file actually comes from.
 
-    Extracted with four targeted regexes rather than a C parser: `status =
+    Extracted with five targeted regexes rather than a C parser: `status =
     "..."` / `why = "..."` assignments, `put_fail`'s third argument, the `?
-    "a" : "b"` ternary in do_mkdir (`exists`/`is_file`), and do_scan's
+    "a" : "b"` ternary in do_mkdir (`exists`/`is_file`), do_scan's
     heap-allocation-failure fallback, which sets `v[1]` beside `k[1] =
-    "status"` rather than assigning a variable named `status`. Verified by
+    "status"` rather than assigning a variable named `status`, and a bare
+    `return "token";` from a helper in this file that hands one back. Verified by
     hand against a manual read of the file before this was written.
 
     THIS IS WHY EVERY STATUS LITERAL STAYS IN syncrpc.cpp. libfs (step 5a)
@@ -403,6 +404,14 @@ def test_sync_status_vocabulary_matches_the_guest():
         found.update(m.groups())
     for m in re.finditer(r'k\[1\]\s*=\s*"status";\s*v\[1\]\s*=\s*"([a-z_]+)"',
                          src):
+        found.add(m.group(1))
+    # A helper that RETURNS a status token rather than assigning one. libfs
+    # (step 5a) folded do_get's and do_attget's ninety near-identical lines
+    # into one `stream_file`, whose refusals are returns. Deduping those two
+    # handlers made this test fail on `missing`, `is_directory` and `locked`,
+    # which is the right outcome and the reason the extraction is widened here
+    # rather than the assertion weakened.
+    for m in re.finditer(r'\breturn\s+"([a-z_]+)"\s*;', src):
         found.add(m.group(1))
     assert found, ("extracted nothing from win/sync/syncrpc.cpp -- the "
                    "regexes above no longer match the file's shape")

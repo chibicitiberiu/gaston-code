@@ -713,6 +713,165 @@ static int sync_rpc_cases(const char *root)
     return g_failures ? 1 : 0;
 }
 
+/* --- ATTGET, which had no cases at all ------------------------------------
+ *
+ * do_attget was ninety lines near-identical to do_get and the most tempting
+ * dedup in the file, with nothing at all to catch a mistake in it. What is
+ * observable from here is the hook pair, and that turns out to be the part
+ * worth pinning: the attachment bar is left waiting forever if `done` is not
+ * called, and the refusal paths are exactly where that is easy to get wrong.
+ */
+
+static char g_att_seen[64];      /* the token lookup was handed */
+static int  g_att_lookups;
+static char g_att_answer[MAX_PATH];  /* what lookup hands back; "" refuses */
+static char g_att_done_seen[64];
+static int  g_att_dones;
+
+static int att_lookup(void *ctx, const char *att_id, char *out, size_t cap)
+{
+    (void)ctx;
+    g_att_lookups++;
+    rc_strf(g_att_seen, sizeof(g_att_seen), "%s", att_id ? att_id : "");
+    if (!g_att_answer[0]) return 0;
+    rc_strf(out, (unsigned)cap, "%s", g_att_answer);
+    return 1;
+}
+
+static void att_done(void *ctx, const char *att_id)
+{
+    (void)ctx;
+    g_att_dones++;
+    rc_strf(g_att_done_seen, sizeof(g_att_done_seen), "%s",
+            att_id ? att_id : "");
+}
+
+static void att_reset(const char *answer)
+{
+    g_att_seen[0] = '\0';
+    g_att_done_seen[0] = '\0';
+    g_att_lookups = 0;
+    g_att_dones = 0;
+    rc_strf(g_att_answer, sizeof(g_att_answer), "%s", answer ? answer : "");
+}
+
+static void att_say(const char *name, int pass, const char *detail)
+{
+    if (!pass) g_failures++;
+    printf("%s\t%s\t%s\n", pass ? "pass" : "FAIL", name, detail);
+}
+
+static int attget_cases(const char *root)
+{
+    rc_net net;
+    rc_frame *f;
+    const char *keys[2];
+    const char *vals[2];
+    char file_path[MAX_PATH];
+    char dir_path[MAX_PATH];
+    char detail[256];
+    HANDLE h;
+    DWORD wrote = 0;
+
+    memset(&net, 0, sizeof(net));
+    rc_syncrpc_set_attachment_hooks(att_lookup, att_done, NULL);
+
+    rc_strf(file_path, sizeof(file_path), "%s\\attach.txt", root);
+    h = CreateFileA(file_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "attget: cannot create %s\n", file_path);
+        return 3;
+    }
+    WriteFile(h, "attachment body\n", 16, &wrote, NULL);
+    CloseHandle(h);
+
+    rc_strf(dir_path, sizeof(dir_path), "%s\\attach_dir", root);
+    CreateDirectoryA(dir_path, NULL);
+
+    /* 1. The token reaches the hook unchanged. */
+    att_reset(file_path);
+    keys[0] = "id";  vals[0] = "a1";
+    keys[1] = "att"; vals[1] = "att-7";
+    f = make_frame("ATTGET", keys, vals, 2, "");
+    if (!f) return 3;
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    rc_strf(detail, sizeof(detail), "lookups=%d token=%s", g_att_lookups,
+            g_att_seen);
+    att_say("attget: the att token reaches the lookup hook unchanged",
+            g_att_lookups == 1 && strcmp(g_att_seen, "att-7") == 0, detail);
+
+    /* 2. A refused lookup STILL reports done. The bar is waiting on it. */
+    att_reset("");
+    keys[0] = "id";  vals[0] = "a2";
+    keys[1] = "att"; vals[1] = "att-gone";
+    f = make_frame("ATTGET", keys, vals, 2, "");
+    if (!f) return 3;
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    rc_strf(detail, sizeof(detail), "lookups=%d dones=%d", g_att_lookups,
+            g_att_dones);
+    att_say("attget: a refused lookup still reports done",
+            g_att_lookups == 1 && g_att_dones == 1 &&
+            strcmp(g_att_done_seen, "att-gone") == 0, detail);
+
+    /* 3. A path that is not there. Same rule: done, or the bar hangs. */
+    att_reset("Z:\\no-such-directory\\no-such-file.txt");
+    keys[0] = "id";  vals[0] = "a3";
+    keys[1] = "att"; vals[1] = "att-missing";
+    f = make_frame("ATTGET", keys, vals, 2, "");
+    if (!f) return 3;
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    rc_strf(detail, sizeof(detail), "dones=%d", g_att_dones);
+    att_say("attget: a missing file still reports done", g_att_dones == 1,
+            detail);
+
+    /* 4. A directory. It must not be read as a file, and must still report. */
+    att_reset(dir_path);
+    keys[0] = "id";  vals[0] = "a4";
+    keys[1] = "att"; vals[1] = "att-dir";
+    f = make_frame("ATTGET", keys, vals, 2, "");
+    if (!f) return 3;
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    rc_strf(detail, sizeof(detail), "dones=%d", g_att_dones);
+    att_say("attget: a directory still reports done", g_att_dones == 1,
+            detail);
+
+    /* 5. No att header at all: nothing is looked up, and nothing is claimed
+     *    to have finished -- there is no token to report against. */
+    att_reset(file_path);
+    keys[0] = "id"; vals[0] = "a5";
+    f = make_frame("ATTGET", keys, vals, 1, "");
+    if (!f) return 3;
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    rc_strf(detail, sizeof(detail), "lookups=%d dones=%d", g_att_lookups,
+            g_att_dones);
+    att_say("attget: no att header looks nothing up",
+            g_att_lookups == 0 && g_att_dones == 0, detail);
+
+    /* 6. No id: dropped before anything is touched. The bridge waits out its
+     *    timeout either way, but nothing here should run. */
+    att_reset(file_path);
+    keys[0] = "att"; vals[0] = "att-noid";
+    f = make_frame("ATTGET", keys, vals, 1, "");
+    if (!f) return 3;
+    rc_syncrpc_handle(&net, f);
+    free_frame(f);
+    rc_strf(detail, sizeof(detail), "lookups=%d dones=%d", g_att_lookups,
+            g_att_dones);
+    att_say("attget: a frame with no id touches nothing",
+            g_att_lookups == 0 && g_att_dones == 0, detail);
+
+    rc_syncrpc_set_attachment_hooks(NULL, NULL, NULL);
+    DeleteFileA(file_path);
+    RemoveDirectoryA(dir_path);
+    return g_failures ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     if (rc_log_open(".") != 0) {
@@ -724,6 +883,11 @@ int main(int argc, char **argv)
      * work in, and the SYNCPUT path writes real files. */
     if (argc >= 3 && strcmp(argv[1], "--putend") == 0) {
         int rc = putend_cases(argv[2]);
+        rc_log_close();
+        return rc;
+    }
+    if (argc >= 3 && strcmp(argv[1], "--attget") == 0) {
+        int rc = attget_cases(argv[2]);
         rc_log_close();
         return rc;
     }
