@@ -5,7 +5,9 @@
 #include "app/workcopy.h"
 #include "core/log.h"
 #include "core/path.h"
+#include "core/rc_cpp.h"
 #include "core/str.h"
+#include "fs/drives.h"
 #include "sync/sync.h"
 
 /* --- shared -------------------------------------------------------------- */
@@ -102,16 +104,19 @@ static int inside(const char *outer, const char *inner)
     return 0;
 }
 
-/* `<root>\<rel>` with the walk's '/' turned back into the separator Windows
- * wants. Non-zero if it fit. */
-static int dosjoin(char *out, unsigned cap, const char *root, const char *rel)
-{
-    char *p;
-    if (!rc_strf(out, cap, "%s\\%s", root, rel)) return 0;
-    for (p = out; *p; p++)
-        if (*p == '/') *p = '\\';
-    return 1;
-}
+/* dosjoin is gone: Path::join (core/rc_cpp.h) is "the one place separators
+ * convert", and there was no reason for this file to be the second one.
+ *
+ * It is NOT a pure rename, and the difference is worth stating. dosjoin
+ * flipped every '/' in the joined string INCLUDING the ones in the root;
+ * Path::join starts flipping past the root. For every root this code has ever
+ * been handed -- a DOS path chosen in the work-directory dialog -- the two
+ * agree, because there is no forward slash in the root to flip. They differ
+ * on a root spelled `//box/share`, where dosjoin silently rewrote the
+ * person's own root. Leaving it alone is right: rewriting a root you were
+ * given is how a UNC path stops resolving.
+ */
+
 
 /* The directory `rel` will live in, under `root`, made if it is not there.
  *
@@ -121,60 +126,20 @@ static int dosjoin(char *out, unsigned cap, const char *root, const char *rel)
  * retrying. */
 static int make_parents(const char *root, const char *rel)
 {
-    char full[MAX_PATH];
+    Path full;
     char *cut;
-    if (!dosjoin(full, sizeof(full), root, rel)) return 0;
-    cut = strrchr(full, '\\');
+    if (!(full.join(root, rel), full.ok())) return 0;
+    cut = strrchr(full.raw(), '\\');
     if (!cut) return 1;                 /* directly in the root, which exists */
     *cut = '\0';
-    return rc_mkpath(full);
+    return rc_mkpath(full.str());
 }
 
-/* --- free space ---------------------------------------------------------- */
-
-typedef BOOL (WINAPI *PFN_FREEEX)(LPCSTR, PULARGE_INTEGER, PULARGE_INTEGER,
-                                  PULARGE_INTEGER);
-
-/* Room on the volume `path` sits on, in bytes, or 0 when it cannot be told.
+/* --- free space ---------------------------------------------------------- *
  *
- * GetDiskFreeSpaceExA through GetProcAddress rather than an import: it
- * arrived in Win95 OSR2, so it is on this machine, but the standing rule is
- * that an import which cannot resolve kills the image at load with no log --
- * and a free-space check is not worth the program refusing to start. The
- * older call is the fallback and is only good to 2GB, which is why it is the
- * fallback rather than the answer. */
-static unsigned long free_bytes(const char *path)
-{
-    char root[8];
-    HMODULE k32;
-    PFN_FREEEX ex;
-
-    /* "C:\" -- the volume, not the directory. GetDiskFreeSpace wants a root. */
-    if (!path || !path[0] || path[1] != ':') return 0;
-    root[0] = path[0]; root[1] = ':'; root[2] = '\\'; root[3] = '\0';
-
-    k32 = GetModuleHandleA("kernel32.dll");
-    ex = k32 ? (PFN_FREEEX)GetProcAddress(k32, "GetDiskFreeSpaceExA") : NULL;
-    if (ex) {
-        ULARGE_INTEGER avail, total, freeb;
-        if (ex(root, &avail, &total, &freeb)) {
-            /* The caller's budget is a DWORD of bytes, so saturate rather
-             * than wrap: a 4GB+ free volume must not come back as "nearly
-             * full" because the high word was dropped. */
-            if (avail.HighPart) return 0xFFFFFFFFUL;
-            return avail.LowPart;
-        }
-    }
-    {
-        DWORD spc = 0, bps = 0, freec = 0, totalc = 0;
-        if (GetDiskFreeSpaceA(root, &spc, &bps, &freec, &totalc)) {
-            double b = (double)spc * (double)bps * (double)freec;
-            if (b >= 4294967295.0) return 0xFFFFFFFFUL;
-            return (unsigned long)b;
-        }
-    }
-    return 0;
-}
+ * Gone to libfs (fs/drives.h). The saturating form is the one wanted here:
+ * this caller's budget is genuinely a DWORD of bytes.
+ */
 
 /* --- the survey ---------------------------------------------------------- */
 
@@ -191,7 +156,7 @@ void survey_sink(void *ctx, const char *rel, const rc_sync_stat *st)
     survey_ctx *c = (survey_ctx *)ctx;
     rc_worksurvey *s = c->s;
     unsigned need;
-    char full[MAX_PATH];
+    Path full;
 
     /* An entry we could not read is not a reason to refuse the whole copy --
      * it is one file that will be reported when it fails, the same as a
@@ -232,8 +197,8 @@ void survey_sink(void *ctx, const char *rel, const rc_sync_stat *st)
     s->files++;
     s->bytes += st->size;
 
-    if (dosjoin(full, sizeof(full), c->dst, rel)
-        && GetFileAttributesA(full) != 0xFFFFFFFF) {
+    if ((full.join(c->dst, rel), full.ok())
+        && GetFileAttributesA(full.str()) != 0xFFFFFFFF) {
         if (s->collisions < RC_WORK_SHOWN)
             rc_strcpy(s->shown[s->collisions], sizeof(s->shown[0]), rel);
         s->collisions++;
@@ -323,7 +288,7 @@ int rc_worksurvey_run(const char *src, const char *dst, unsigned maxpath,
     if (n == -2) { out->refusal = RC_WORK_TOOMANY; return 0; }
 
     if (out->refusal == RC_WORK_OK) {
-        unsigned long room = free_bytes(dst);
+        unsigned long room = freeBytesSaturating(dst);
         /* Only when it could be told. A volume whose free space is
          * unreadable is not a volume that is full, and refusing on a failed
          * query would make the feature unavailable rather than safe. */
@@ -405,11 +370,11 @@ struct copy_ctx {
 int stash(copy_ctx *c, const char *folder, const char *rel, const char *from)
 {
     char relstage[MAX_PATH];
-    char aside[MAX_PATH];
+    Path aside;
 
     if (!rc_strf(relstage, sizeof(relstage), "%s\\%s", folder, rel)) return 0;
     if (!make_parents(c->dst, relstage)) return 0;
-    if (!dosjoin(aside, sizeof(aside), c->dst, relstage)) return 0;
+    if (!(aside.join(c->dst, relstage), aside.ok())) return 0;
     /* CopyFile rather than MoveFile: under MERGE `from` is the incoming file
      * and is still wanted where it is, and under REPLACE the target is about
      * to be overwritten in place anyway. Copying leaves the source intact in
@@ -429,7 +394,7 @@ int stash(copy_ctx *c, const char *folder, const char *rel, const char *from)
      *
      * Same shape as the bridge's own conflict staging, which versions
      * mine.1, mine.2 for exactly this reason. */
-    if (CopyFileA(from, aside, TRUE)) return 1;
+    if (CopyFileA(from, aside.str(), TRUE)) return 1;
     if (GetLastError() != ERROR_FILE_EXISTS) return 0;
     {
         char gen[MAX_PATH];
@@ -451,7 +416,7 @@ int stash(copy_ctx *c, const char *folder, const char *rel, const char *from)
 void copy_sink(void *ctx, const char *rel, const rc_sync_stat *st)
 {
     copy_ctx *c = (copy_ctx *)ctx;
-    char from[MAX_PATH], to[MAX_PATH];
+    Path from, to;
     int exists;
 
     if (c->cancelled) return;
@@ -460,8 +425,8 @@ void copy_sink(void *ctx, const char *rel, const rc_sync_stat *st)
         /* The directory itself, parents included -- the walk yields parents
          * first, but leaning on that would make this depend on an ordering
          * it does not control. */
-        if (dosjoin(to, sizeof(to), c->dst, rel))
-            rc_mkpath(to);
+        if ((to.join(c->dst, rel), to.ok()))
+            rc_mkpath(to.str());
         return;
     }
 
@@ -471,13 +436,13 @@ void copy_sink(void *ctx, const char *rel, const rc_sync_stat *st)
         return;
     }
 
-    if (!dosjoin(from, sizeof(from), c->src, rel)
-        || !dosjoin(to, sizeof(to), c->dst, rel)) {
+    if (!(from.join(c->src, rel), from.ok())
+        || !(to.join(c->dst, rel), to.ok())) {
         c->failed++;
         return;
     }
 
-    exists = GetFileAttributesA(to) != 0xFFFFFFFF;
+    exists = GetFileAttributesA(to.str()) != 0xFFFFFFFF;
     if (exists) {
         if (c->mode == RC_WORK_KEEP) return;      /* still in the old folder */
         if (c->mode == RC_WORK_MERGE) {
@@ -486,18 +451,18 @@ void copy_sink(void *ctx, const char *rel, const rc_sync_stat *st)
              * mirror, because a hidden one the sync layer ignores would make
              * this answer do nothing at all. Nothing is destroyed on either
              * side, which is the whole point of it. */
-            if (!stash(c, RC_WORK_INCOMING, rel, from)) c->failed++;
+            if (!stash(c, RC_WORK_INCOMING, rel, from.str())) c->failed++;
             else c->copied++;
             return;
         }
         /* REPLACE: the target's own copy would be destroyed and has nowhere
          * else to exist, so it goes aside first. */
-        if (!stash(c, RC_WORK_REPLACED, rel, to)) { c->failed++; return; }
+        if (!stash(c, RC_WORK_REPLACED, rel, to.str())) { c->failed++; return; }
     }
 
     for (;;) {
         if (!make_parents(c->dst, rel)) { c->failed++; return; }
-        if (CopyFileA(from, to, FALSE)) { c->copied++; return; }
+        if (CopyFileA(from.str(), to.str(), FALSE)) { c->copied++; return; }
         {
             DWORD err = GetLastError();
             int what = c->onerr ? c->onerr(c->user, rel, err) : RC_WORK_SKIP;

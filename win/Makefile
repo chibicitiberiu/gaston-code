@@ -128,7 +128,7 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 # client wants free space for one volume and never enumerates drives, so
 # splitting them keeps the enumeration out of retroclaude.exe's image.
 FS_SRCS = fs/path.cpp fs/file.cpp fs/dir.cpp fs/list.cpp fs/reader.cpp \
-          fs/writer.cpp fs/xfer.cpp
+          fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp
 LIBFS = $(LIBDIR)/libfs.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
@@ -531,7 +531,8 @@ $(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 # -otexan. Measured: xfer at -os and at -otexan came to the same committed
 # total to the byte, so it is here for honesty rather than for the bytes.
 $(OBJ)/fs/path.o $(OBJ)/fs/file.o $(OBJ)/fs/dir.o $(OBJ)/fs/list.o \
-$(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+$(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o $(OBJ)/fs/freespace.o \
+$(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # And the same now applies to most of sync/. The note above says sync/ keeps
 # -otexan for "the codec, the CRC pass and the transfer loops"; after step 5a

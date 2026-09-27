@@ -4,6 +4,7 @@
 #include <string.h>
 #include "core/rc_cpp.h"
 #include "net/net.h"
+#include "fs/drives.h"
 #include "net/caps.h"
 #include <new>
 #include "core/heap.h"
@@ -318,7 +319,6 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     SystemInfo sys;
     readSystemInfo(sys);
     {
-        DWORD spc = 0, bps = 0, freec = 0, totalc = 0;
 
         rc_strf(memkb, sizeof(memkb), "%lu", (unsigned long)sys.memKb);
         HDR("mem_kb", memkb);
@@ -351,13 +351,19 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
             }
         }
 
-        /* GetDiskFreeSpaceEx is NT4+/OSR2 and a static import of it would kill
-         * the image at load on an older 9x. The old call is fine here: the
-         * numbers only have to be roughly right. */
-        if (GetDiskFreeSpaceA("C:\\", &spc, &bps, &freec, &totalc)) {
-            rc_strf(disk, sizeof(disk), "%lu",
-                      (unsigned long)((double)spc * bps * freec / 1024.0));
-            HDR("disk_free_kb", disk);
+        /* Through libfs, which resolves GetDiskFreeSpaceExA with
+         * GetProcAddress and falls back to the old call. The old call ALONE
+         * is not "roughly right" on a modern disk, which is what this used to
+         * say: the OS clamps its cluster counts to about 2GB on anything
+         * larger, so a 20GB volume reported the same figure as a 2GB one and
+         * the agent was told so in its system prompt on every request. */
+        {
+            ULARGE_INTEGER freeb;
+            if (freeBytes64("C:\\", freeb)) {
+                rc_strf(disk, sizeof(disk), "%lu",
+                        (unsigned long)(freeb.QuadPart / 1024ULL));
+                HDR("disk_free_kb", disk);
+            }
         }
     }
     if (n->sess[0]) HDR("sess", n->sess);

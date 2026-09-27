@@ -54,6 +54,11 @@ EXPECTED = {
     "xfer.source_tee",
     "xfer.source_stops",
     "xfer.source_max_bytes",
+    "drives.enumerate",
+    "drives.volume_info",
+    "drives.free_bytes",
+    "drives.saturates",
+    "drives.refuses_nonsense",
     "file.remove_readonly",
     "summary",
 }
@@ -84,4 +89,4 @@ def test_the_platform_half_is_only_noted(rows):
     and this test is where that claim has to be made deliberately.
     """
     noted = {name for name, (verdict, _) in rows.items() if verdict == "note"}
-    assert noted == {"file.remove_readonly"}
+    assert noted == {"file.remove_readonly", "drives.volume_info"}

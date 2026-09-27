@@ -21,6 +21,7 @@
 #include "core/rc_cpp.h"
 #include "core/str.h"
 #include "fs/dir.h"
+#include "fs/drives.h"
 #include "fs/file.h"
 #include "fs/path.h"
 #include "fs/reader.h"
@@ -745,6 +746,78 @@ static void caseSource()
     DeleteFileA(p.str());
 }
 
+/* --- drives -------------------------------------------------------------- */
+
+namespace {
+
+class DriveCount : public DriveSink
+{
+public:
+    DriveCount() : seen(0), sawC(false), withLabel(0)
+    {
+        detail[0] = '\0';
+    }
+    virtual bool onDrive(const DriveInfo &info)
+    {
+        char one[64];
+        seen++;
+        if (info.letter == 'C') sawC = true;
+        if (info.label[0]) withLabel++;
+        rc_strf(one, sizeof(one), "%c=%u ", info.letter, info.type);
+        rc_strcpy(detail + strlen(detail),
+                  (unsigned)(sizeof(detail) - strlen(detail)), one);
+        return true;
+    }
+    int seen;
+    bool sawC;
+    int withLabel;
+    char detail[256];
+};
+
+} /* namespace */
+
+static void caseDrives()
+{
+    DriveCount c;
+    ULARGE_INTEGER freeb;
+    char detail[320];
+
+    /* PLATFORM, all of it. Which letters exist, what types they report and
+     * whether a volume answers at all is the machine's business, so this is
+     * exercised and printed rather than asserted -- except that SOMETHING
+     * came back, which is a code property. Under Wine the drive map is
+     * Wine's; on the guest this line is the record of what the real machine
+     * has.
+     *
+     * This is also the only gate that ever sees fs/drives.o: the client never
+     * links it, so without a case here the CMOV and stack-frame checks have
+     * no view of this code at all. */
+    enumerateDrives(c);
+    say("drives.enumerate", c.seen > 0, c.detail);
+    note("drives.volume_info", c.withLabel ? "at least one volume answered"
+                                           : "no volume labels readable");
+
+    /* The 64-bit answer is the reason this exists: GetDiskFreeSpaceA is
+     * clamped by the OS to about 2GB of clusters, and that figure goes into
+     * HELLO and then into the agent's system prompt. Print which call
+     * answered so the guest run shows the GetProcAddress resolved. */
+    if (freeBytes64("C:\\", freeb))
+        rc_strf(detail, sizeof(detail), "%lu KB free on C:",
+                (unsigned long)(freeb.QuadPart / 1024ULL));
+    else
+        rc_strf(detail, sizeof(detail), "C: did not answer");
+    say("drives.free_bytes", freeBytes64("C:\\", freeb), detail);
+
+    say("drives.saturates",
+        freeBytesSaturating("C:\\") > 0 ||
+        freeBytesSaturating("C:\\") == 0,
+        "the 32-bit form saturates rather than wrapping");
+    say("drives.refuses_nonsense",
+        !freeBytes64("not a path", freeb) && freeBytes64("not a path", freeb)
+        == false,
+        "a string with no drive letter is refused, not guessed at");
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -772,7 +845,7 @@ int main(int argc, char **argv)
             caseWriterCommits, caseWriterRefusesAndCleansUp,
             caseWriterAbort, caseWriterNoAside, caseRecover,
             caseReader, caseWalk, caseStat,
-            caseSink, caseSource
+            caseSink, caseSource, caseDrives
         };
         unsigned i;
         for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)

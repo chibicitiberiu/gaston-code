@@ -2,8 +2,9 @@
  * only. The numbers are raw: turning them into HELLO headers or an op's
  * reply is the exe's job, so a caller's wire format never lives here.
  *
- * Disk space is libfs's and the screen is libautomation's (REMOTE.md), so
- * neither is here.
+ * Disk space is fs/drives.h's and the screen is libautomation's (REMOTE.md),
+ * so neither is here. That was a promise when it was written and is a fact
+ * since step 5a.
  */
 #ifndef RC_EXEC_SYSTEM_H
 #define RC_EXEC_SYSTEM_H
