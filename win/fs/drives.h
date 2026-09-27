@@ -18,8 +18,13 @@ struct DriveInfo
 {
     char  letter;         /* 'A'..'Z' */
     UINT  type;           /* GetDriveType: DRIVE_FIXED, DRIVE_CDROM, ... */
-    char  label[64];      /* empty when there is no media or no label */
+    char  label[64];      /* empty when there is no media OR no label */
     DWORD serial;
+    /* Whether the volume answered at all. NOT derivable from freeBytes: a
+     * CD-ROM that is present and readable has zero bytes free, and reporting
+     * that as "no disk" is how a mounted disc gets described as an empty
+     * drive. (Found on the guest: D: RETROTOOLS, 0 free, reported empty.) */
+    bool  hasMedia;
     ULARGE_INTEGER totalBytes;
     ULARGE_INTEGER freeBytes;
 
@@ -57,6 +62,10 @@ void enumerateDrives(DriveSink &sink);
  * False if neither could answer.
  */
 bool freeBytes64(const char *pathOrRoot, ULARGE_INTEGER &out);
+
+/* The volume's size, same rules. Reported beside the free figure because
+ * "1 MB free" means something different on a floppy and on a 20GB disk. */
+bool totalBytes64(const char *pathOrRoot, ULARGE_INTEGER &out);
 
 /* The same, flattened into a DWORD and SATURATED rather than wrapped, for the
  * one caller whose budget is genuinely 32 bits. A 4GB+ volume must not come

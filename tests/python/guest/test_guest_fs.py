@@ -55,6 +55,7 @@ EXPECTED = {
     "xfer.source_stops",
     "xfer.source_max_bytes",
     "drives.enumerate",
+    "drives.media_is_not_free_space",
     "drives.volume_info",
     "drives.free_bytes",
     "drives.saturates",

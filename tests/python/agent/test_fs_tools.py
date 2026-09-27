@@ -186,14 +186,32 @@ def test_put_file_from_path_sends_a_file_in_the_folder_byte_for_byte(tmp_path):
 def test_drives_names_the_kinds_and_says_when_a_drive_is_empty():
     from bridge.services.guest_fs import Drive
     fs = FakeFs(drives=[
-        Drive(letter="A", type=2, label="", serial="0", free_kb=0),
-        Drive(letter="C", type=3, label="WIN98", serial="1", free_kb=2097152),
+        Drive(letter="A", type=2, label="", serial="0", free_kb=0,
+              has_media=False),
+        Drive(letter="C", type=3, label="WIN98", serial="1",
+              free_kb=2097152, total_kb=4194304, has_media=True),
     ])
     body = _body(_call(_server(fs), "drives", {}))
     assert "removable" in body and "fixed" in body
     assert "empty" in body            # a floppy drive with no disk in it
     assert "2048 MB" in body
     assert "WIN98" in body
+
+
+def test_a_mounted_cd_is_not_an_empty_drive():
+    """Zero bytes free is not the same as no disk, and the first guest run
+    got this wrong: D: had a label, a serial and a readable filesystem, and
+    the table called it empty because a CD-ROM has nothing free by
+    definition. The guest answers the question directly now."""
+    from bridge.services.guest_fs import Drive
+    fs = FakeFs(drives=[
+        Drive(letter="D", type=5, label="RETROTOOLS", serial="9",
+              free_kb=0, total_kb=2482, has_media=True),
+    ])
+    body = _body(_call(_server(fs), "drives", {}))
+    assert "empty" not in body, body
+    assert "RETROTOOLS" in body
+    assert "0 MB" in body
 
 
 def test_every_tool_refuses_clearly_with_no_machine_attached():

@@ -51,6 +51,12 @@ want "$HERE/build/win/toolcheck.exe" "TOOLCHK.EXE"
 want "$HERE/build/win/synccheck.exe" "SYNCCHK.EXE"
 want "$HERE/build/win/capscheck.exe" "CAPSCHK.EXE"
 want "$HERE/build/win/rpccheck.exe"  "RPCCHK.EXE"
+# libfs (step 5a). Its Wine result proves the arithmetic and prints the
+# platform half rather than asserting it -- read-only semantics, a share-deny
+# lock, and which drives the machine actually has -- so the guest run is where
+# those get an answer. It is also the only binary that links fs/drives.o and
+# fs/list.o at all: the client does not.
+want "$HERE/build/win/fscheck.exe"   "FSCHECK.EXE"
 want "$HERE/build/win/framecheck.exe" "FRAMECHK.EXE"
 # The automation library's own checks, and the wire record's. These carry
 # everything Phase 6 added, and three of their answers are known to differ

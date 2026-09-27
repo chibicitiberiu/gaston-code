@@ -753,7 +753,7 @@ namespace {
 class DriveCount : public DriveSink
 {
 public:
-    DriveCount() : seen(0), sawC(false), withLabel(0)
+    DriveCount() : seen(0), sawC(false), withLabel(0), mediaSeen(0)
     {
         detail[0] = '\0';
     }
@@ -763,7 +763,9 @@ public:
         seen++;
         if (info.letter == 'C') sawC = true;
         if (info.label[0]) withLabel++;
-        rc_strf(one, sizeof(one), "%c=%u ", info.letter, info.type);
+        if (info.hasMedia) mediaSeen++;
+        rc_strf(one, sizeof(one), "%c=%u%s ", info.letter, info.type,
+                info.hasMedia ? "+media" : "");
         rc_strcpy(detail + strlen(detail),
                   (unsigned)(sizeof(detail) - strlen(detail)), one);
         return true;
@@ -771,6 +773,7 @@ public:
     int seen;
     bool sawC;
     int withLabel;
+    int mediaSeen;
     char detail[256];
 };
 
@@ -796,6 +799,11 @@ static void caseDrives()
     say("drives.enumerate", c.seen > 0, c.detail);
     note("drives.volume_info", c.withLabel ? "at least one volume answered"
                                            : "no volume labels readable");
+    /* Zero free is not no-media, and the drives listing said otherwise until
+     * a guest run showed a mounted CD reported as an empty drive. */
+    say("drives.media_is_not_free_space", c.mediaSeen >= 1,
+        "a volume that answered is marked as having media whatever its free "
+        "space");
 
     /* The 64-bit answer is the reason this exists: GetDiskFreeSpaceA is
      * clamped by the OS to about 2GB of clusters, and that figure goes into

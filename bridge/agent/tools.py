@@ -722,13 +722,22 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 return _text(_fs_refused(exc.status), error=True)
             kinds = {0: "unknown", 1: "no such drive", 2: "removable",
                      3: "fixed", 4: "network", 5: "CD-ROM", 6: "RAM disk"}
-            lines = [f"{'drive':<6} {'kind':<12} {'free':>12}  label"]
+            lines = [f"{'drive':<6} {'kind':<12} {'free':>10} "
+                     f"{'size':>10}  label"]
             for d in rows:
-                free = (f"{d.free_kb // 1024} MB" if d.free_kb
-                        else prompts.text("tools.drives.view.no_media"))
+                if not d.has_media:
+                    # Reported on the guest's own answer, not inferred from
+                    # zero bytes free. A mounted CD has none and is not an
+                    # empty drive -- which is exactly how D: RETROTOOLS came
+                    # back as "empty" on the first guest run.
+                    free = prompts.text("tools.drives.view.no_media")
+                    size = ""
+                else:
+                    free = f"{d.free_kb // 1024} MB"
+                    size = f"{d.total_kb // 1024} MB" if d.total_kb else ""
                 lines.append(f"{d.letter + ':':<6} "
                              f"{kinds.get(d.type, 'unknown'):<12} "
-                             f"{free:>12}  {d.label}")
+                             f"{free:>10} {size:>10}  {d.label}")
             return _text("\n".join(lines))
         except Exception:
             log.exception("mcp__machine__drives failed: %r", args)

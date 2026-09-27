@@ -328,8 +328,8 @@ public:
 
     virtual bool onDrive(const DriveInfo &info)
     {
-        const char *keys[6];
-        const char *vals[6];
+        const char *keys[8];
+        const char *vals[8];
         char letter[4], type[8], total[24], freeb[24], serial[16];
 
         rc_strf(letter, sizeof(letter), "%c", info.letter);
@@ -343,13 +343,19 @@ public:
         rc_strf(freeb, sizeof(freeb), "%lu",
                 (unsigned long)(info.freeBytes.QuadPart / 1024ULL));
 
-        keys[0] = "id";      vals[0] = m_id;
-        keys[1] = "letter";  vals[1] = letter;
-        keys[2] = "type";    vals[2] = type;
-        keys[3] = "label";   vals[3] = info.label;
-        keys[4] = "serial";  vals[4] = serial;
-        keys[5] = "free_kb"; vals[5] = freeb;
-        if (rc_net_send(m_net, "FSDRIVE", keys, vals, 6, NULL, 0) != 0)
+        keys[0] = "id";       vals[0] = m_id;
+        keys[1] = "letter";   vals[1] = letter;
+        keys[2] = "type";     vals[2] = type;
+        keys[3] = "label";    vals[3] = info.label;
+        keys[4] = "serial";   vals[4] = serial;
+        keys[5] = "free_kb";  vals[5] = freeb;
+        keys[6] = "total_kb"; vals[6] = total;
+        /* Sent separately from the free figure, because they are different
+         * questions: a mounted CD has zero bytes free and is not an empty
+         * drive. Without this the caller has to guess, and it guesses wrong
+         * for every disc. */
+        keys[7] = "media";    vals[7] = info.hasMedia ? "1" : "0";
+        if (rc_net_send(m_net, "FSDRIVE", keys, vals, 8, NULL, 0) != 0)
             return false;
         m_n++;
         return true;

@@ -41,6 +41,10 @@ class Drive:
     label: str
     serial: str
     free_kb: int
+    total_kb: int = 0
+    #: Whether the volume answered. NOT the same as having room: a mounted
+    #: CD-ROM has zero bytes free and is not an empty drive.
+    has_media: bool = False
 
 
 @dataclass
@@ -171,7 +175,9 @@ class GuestFsService:
                 type=int(h.get("type", "0") or 0),
                 label=h.get("label", ""),
                 serial=h.get("serial", ""),
-                free_kb=int(h.get("free_kb", "0") or 0)))
+                free_kb=int(h.get("free_kb", "0") or 0),
+                total_kb=int(h.get("total_kb", "0") or 0),
+                has_media=h.get("media") == "1"))
             return
 
         if not wait.future.done():

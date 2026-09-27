@@ -5,7 +5,7 @@
 #include "core/rc_cpp.h"
 
 DriveInfo::DriveInfo()
-    : letter(0), type(DRIVE_UNKNOWN), serial(0)
+    : letter(0), type(DRIVE_UNKNOWN), serial(0), hasMedia(false)
 {
     label[0] = '\0';
     totalBytes.QuadPart = 0;
@@ -69,12 +69,14 @@ void enumerateDrives(DriveSink &sink)
             {
                 rc_strcpy(info.label, sizeof(info.label), label);
                 info.serial = serial;
+                info.hasMedia = true;
             }
         }
 
         {
-            ULARGE_INTEGER freeb;
+            ULARGE_INTEGER freeb, total;
             if (freeBytes64(root, freeb)) info.freeBytes = freeb;
+            if (totalBytes64(root, total)) info.totalBytes = total;
         }
 
         if (!sink.onDrive(info)) return;
