@@ -6,18 +6,19 @@ pass	exit-code	status=0 code=7
 pass	cap-truncates	got=10 bytes=38 truncated=1
 pass	via-shell-recorded	shell: status=0 via=1; direct: via=0
 pass	spawn-failed	spawned=0 status=2 error=2
-pass	timeout	status=1 ms=1042
-pass	stop-reaches-the-grandchild	status=1 marker 18 -> 18 leaked=0
-pass	sink-gone-stops-it	status=5 calls=1 ms=364
+pass	timeout	status=1 ms=1380
+pass	stop-reaches-the-grandchild	status=1 marker 12 -> 12 leaked=0
+pass	sink-gone-stops-it	status=5 calls=1 ms=456
 pass	cancel-before-run	spawned=0 status=3 in 0ms
-pass	cancel-mid-run	status=3 ms=562
+pass	cancel-mid-run	status=3 ms=548
 pass	toolhelp-resolves	
-pass	list-finds-self	seen=11 self=C:\EP\EXECCHK.EXE
+pass	list-finds-self	seen=12 self=C:\EP\EXECCHK.EXE
 pass	kill-self-denied-even-forced	status=2
-pass	kill-no-such-pid	status=3
+pass	kill-no-such-pid	status=4
 pass	launch-overlong-refused	started=0 err=206
-pass	launch-and-descendants	started=1 outer=fffec983 kids=2 inner=fffc2f87
+pass	launch-and-descendants	started=1 outer=fffe70d3 kids=2 inner=fffb70c7
 pass	kill-waits-for-the-end	inner=0 outer-ended=1
+pass	kill-refuses-a-dos-session	vm=1 kill=3 ended=1
 pass	win16-detected-from-the-header	self=0 C:\WINDOWS\RUNDLL.EXE=1
-pass	sysinfo-is-the-machine	mem=32288 free=6864 os=4.10.2222 cpu=6/5 x1 acp=1252 oemcp=437
+pass	sysinfo-is-the-machine	mem=32288 free=376 os=4.10.2222 cpu=6/5 x1 acp=1252 oemcp=437
 pass	reboot-refuses-an-unknown-mode	

@@ -246,6 +246,8 @@ no_such_pid = '''
 There is no process {pid}. It has ended, or the id is wrong -- run `ps` again; ids change.'''
 denied = '''
 Refused: process {pid} is protected. The machine's own system processes are never ended; Explorer and 16-bit programs are refused unless you pass `force` -- and only do that if the user asked for it, since ending them can leave the machine unusable until it restarts.'''
+dos_session = '''
+Refused: process {pid} runs a DOS session (a console window or a DOS program). On this machine ending it leaves that session stuck in memory until a restart, and a machine carrying stuck sessions has crashed. Let it finish, close it from its own window, or -- only if the user asks for it -- pass `force`.'''
 failed = '''
 The machine refused to end process {pid}.'''
 timeout = '''
@@ -263,7 +265,7 @@ End one program on the connected machine, by the hex process id `ps` shows. For 
 pid = '''
 The process id, in hex, exactly as `ps` shows it.'''
 force = '''
-Also end Explorer or a 16-bit program, which are refused otherwise. Only when the user has asked for it.'''
+Also end Explorer, a 16-bit program, or a program running a DOS session, which are refused otherwise. Only when the user has asked for it.'''
 
 [kill.view]
 ok = '''

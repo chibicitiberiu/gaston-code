@@ -462,6 +462,48 @@ static void processes()
         say("kill-waits-for-the-end", inner == KILL_OK && outerEnded, detail);
     }
     {
+        /* A console program launched with a console of its own. On 98 that
+         * console is a DOS VM below it, and kill() without force must say
+         * dos_session -- killing it strands the VM (BACKLOG 17). It is
+         * never forced here; it ends by itself. Under Wine there is no VM
+         * and the kill goes through as for any program. */
+        DWORD pid = 0, err = 0;
+        char cmd[MAX_PATH + 32];
+        bool started = Processes::launch(self(cmd, sizeof cmd, "--tick NUL 8"),
+                                         NULL, SW_HIDE, pid, err);
+        bool vm = false;
+        for (int i = 0; started && i < 30 && !vm; i++)
+        {
+            Sleep(100);
+            std::vector<DWORD> below;
+            ps.descendants(pid, below);
+            Gather g;
+            ps.list(g);
+            for (unsigned k = 0; k < below.size(); k++)
+                for (unsigned j = 0; j < g.m_all.size(); j++)
+                {
+                    const char *n = strrchr(g.m_all[j].exe, '\\');
+                    n = n ? n + 1 : g.m_all[j].exe;
+                    if (g.m_all[j].pid == below[k] &&
+                        lstrcmpiA(n, "WINOA386.MOD") == 0)
+                        vm = true;
+                }
+        }
+        KillStatus k = started ? ps.kill(pid, false, 3000) : KILL_FAILED;
+        bool ended = true;
+        if (vm)
+        {
+            Handle h(OpenProcess(SYNCHRONIZE, FALSE, pid));
+            ended = !h.valid() ||
+                    WaitForSingleObject(h.get(), 10000) == WAIT_OBJECT_0;
+        }
+        rc_strf(detail, sizeof detail, "vm=%d kill=%d ended=%d", vm, (int)k,
+                ended);
+        say("kill-refuses-a-dos-session",
+            started && (vm ? (k == KILL_DOS_SESSION && ended) : k == KILL_OK),
+            detail);
+    }
+    {
         char self[MAX_PATH], rundll[MAX_PATH], win[MAX_PATH];
         GetModuleFileNameA(NULL, self, sizeof self);
         GetWindowsDirectoryA(win, sizeof win);

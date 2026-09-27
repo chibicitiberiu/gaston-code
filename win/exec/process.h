@@ -51,6 +51,7 @@ enum KillStatus
     KILL_OK = 0,            /* gone within the wait */
     KILL_PENDING,           /* TerminateProcess said yes; still there */
     KILL_DENIED,            /* on the deny list (see kill) */
+    KILL_DOS_SESSION,       /* runs a DOS VM; refused without force */
     KILL_NO_SUCH_PID,
     KILL_FAILED,            /* OpenProcess or TerminateProcess refused */
     KILL_NO_TOOLHELP        /* cannot see names, so cannot apply the list */
@@ -81,7 +82,14 @@ public:
      * MMTASK.TSK (killing them can hang 9x), and REDIR32.EXE (it cannot be
      * killed: the call succeeds and leaves a zombie). Denied unless `force`:
      * EXPLORER.EXE, and any 16-bit process, because what killing a Win16
-     * task holding the Win16Mutex does to the rest of the box is untested. */
+     * task holding the Win16Mutex does to the rest of the box is untested.
+     *
+     * KILL_DOS_SESSION unless `force`: a process with a DOS VM
+     * (WINOA386.MOD) below it -- a console program's console, or a DOS
+     * session it runs. Ending it leaves that VM half-dead until reboot
+     * (measured, docs/BACKLOG.md 17), and a guest carrying such VMs later
+     * blue-screened in VMM (docs/measurements/bsod-vm-20260927.txt).
+     * Decided 2026-09-27: no such kill without force. */
     KillStatus kill(DWORD pid, bool force, DWORD waitMs);
 
     /* ExecJob's stop, and nothing else's: end `root` (whose handle is

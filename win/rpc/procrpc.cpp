@@ -98,6 +98,7 @@ void rc_procrpc_kill(rc_net *net, const rc_frame *f)
             case KILL_OK:          status = "ok";          break;
             case KILL_PENDING:     status = "pending";     break;
             case KILL_DENIED:      status = "denied";      break;
+            case KILL_DOS_SESSION: status = "dos_session"; break;
             case KILL_NO_SUCH_PID: status = "no_such_pid"; break;
             case KILL_NO_TOOLHELP: status = "no_toolhelp"; break;
             default:               status = "failed";      break;

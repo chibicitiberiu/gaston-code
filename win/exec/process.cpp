@@ -163,6 +163,20 @@ KillStatus Processes::kill(DWORD pid, bool force, DWORD waitMs)
         rc_log("process: kill %08lx (%s) refused without force", pid, name);
         return KILL_DENIED;
     }
+    if (!force)
+    {
+        std::vector<DWORD> below;
+        descendants(pid, below);
+        for (unsigned i = 0; i < below.size(); i++)
+            for (unsigned j = 0; j < all.size(); j++)
+                if (all[j].pid == below[i] &&
+                    lstrcmpiA(baseName(all[j].exe), "WINOA386.MOD") == 0)
+                {
+                    rc_log("process: kill %08lx (%s) refused without force: "
+                           "a DOS VM runs below it", pid, name);
+                    return KILL_DOS_SESSION;
+                }
+    }
 
     Handle h(OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid));
     if (!h.valid())

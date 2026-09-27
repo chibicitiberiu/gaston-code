@@ -1536,8 +1536,10 @@ our own window from a dialog it had not read.
   guest carrying stranded VMs later **blue-screened in VMM** releasing a
   kernel object through a stale pointer while running `start notepad`
   (`docs/measurements/bsod-vm-20260927.txt`, one sighting; the same
-  command on a clean box returned in 2s). Open decision: should `kill`
-  refuse a console program without `force`, or warn that its VM stays?
+  command on a clean box returned in 2s). *Decided and done 2026-09-27:*
+  `kill` refuses a process with a DOS VM below it (a console program's
+  console, or a DOS session) unless `force` -- status `dos_session`, its
+  own sentence for the agent. Verified on the VM (execcheck 24/24).
 - **No exec check runs on the guest.** *Fixed 2026-09-27:* `execcheck` now
   runs its own exe in child modes, directly or through COMSPEC, and has a
   `--detached-to FILE` mode for the guest (a console parent would hide
