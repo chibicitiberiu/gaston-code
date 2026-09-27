@@ -160,7 +160,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
        $(LIBFS) $(LIBCORE)
 
-.PHONY: execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: fscheck execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -240,6 +240,18 @@ $(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
+
+# libfs under Wine (docs/libfs-plan.md). Its own check target as well as its
+# own binary: fs/list.o and, later, fs/drives.o are gremote-only and the
+# client never links them, so without a gate here the CMOV and stack-frame
+# checks never see that code at all.
+FSCHECK_OBJS = $(call objs,checks/fscheck.cpp) $(LIBFS) $(LIBCORE)
+fscheck: $(BUILD)/fscheck.exe
+$(BUILD)/fscheck.exe: $(FSCHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0, \
+	  map=$(BUILD)/fscheck.map $(LIBS) name $@ $(LINKIN)
+	@echo "built $@"
+
 
 # libexec under Wine: the refuse-rather-than-truncate guard, output, the cap,
 # timeout and cancel, driven through ExecJob for real.
@@ -627,8 +639,10 @@ PYTHON ?= python3
 # program is not competing for that memory and never runs beside the client.
 # It is set rather than omitted because the gate compares against whatever
 # it is given, and 0 means "must be empty", not "not applicable".
-check: check-sources check-retroclaude check-autocheck
+check: check-sources check-retroclaude check-autocheck check-fscheck
 
+check-fscheck: CHECK_OWNED = $(FSCHECK_OBJS)
+check-fscheck: CHECK_CAP   = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
 check-autocheck: CHECK_CAP   = 200000
 

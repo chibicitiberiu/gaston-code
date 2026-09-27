@@ -216,6 +216,11 @@ FileWriter::FileWriter()
 {
 }
 
+FileWriter::~FileWriter()
+{
+    abort();
+}
+
 bool FileWriter::begin(const char *root, const char *rel,
                        const WorkNames &names)
 {

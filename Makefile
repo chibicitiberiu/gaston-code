@@ -92,7 +92,7 @@ wine-smoke: guest-checks
 # guest_exe's loud failure, which is the good outcome of a bad list.
 guest-checks:
 	@$(MAKE) -C win retroclaude synccheck inicheck inifilecheck appcheck windowcheck wirecheck execcheck uicheck cppcheck rpccheck framecheck netcheck autocheck \
-	                probe capscheck workcheck toolcheck
+	                probe capscheck workcheck toolcheck fscheck
 
 # RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
 # that compile clean and fail on the guest. The transcript moved to MSHTML, so

@@ -77,6 +77,13 @@ class FileWriter
 public:
     FileWriter();
 
+    /* Explicit, and NOT left to the members. They destruct in reverse
+     * DECLARATION order, so TempFile would try to delete the file while
+     * Handle still had it open -- DeleteFileA fails on an open file, and the
+     * temp survives exactly the case this is meant to clean up. abort()
+     * closes first. (fscheck's writer.abort case caught this.) */
+    ~FileWriter();
+
     /* Opens `<root>/<rel>`'s temporary. False if the path is not contained, if
      * a working name would not fit beside it (measured from the inputs, never
      * from the joined string), or if the temp cannot be created; GetLastError
