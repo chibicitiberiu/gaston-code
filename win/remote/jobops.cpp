@@ -17,8 +17,29 @@ enum { EXEC_CHUNK = 8192 };
 enum { EXEC_CMD_MAX = 2048 };
 
 JobOps::JobOps(const ExecConfig &cfg, Connection &conn)
-    : m_cfg(&cfg), m_conn(&conn)
+    : m_cfg(&cfg), m_conn(&conn), m_gate(0), m_running(0)
 {
+    m_runningId[0] = '\0';
+    InitializeCriticalSection(&m_lock);
+}
+
+JobOps::~JobOps()
+{
+    /* Reached only after the lane has joined, so nothing is running. */
+    DeleteCriticalSection(&m_lock);
+}
+
+bool JobOps::cancel(const char *id)
+{
+    ScopedLock lock(&m_lock);
+    if (!m_running || !m_runningId[0] || strcmp(m_runningId, id) != 0)
+        return false;
+    rc_log("job: cancelling %s", id);
+    /* Signals only. The stop -- a Toolhelp walk over the child's tree and a
+     * bounded wait -- happens on run()'s own thread, which is what keeps it
+     * off the reader. */
+    m_running->cancel();
+    return true;
 }
 
 /* Each chunk of the child's output, as it comes. The bytes are the console
@@ -89,8 +110,18 @@ void JobOps::exec(Responder &r, rc_frame *f)
 
     ExecOut sink(r);
     ExecJob job;
-    if (!job.run(command, opt, sink, res) &&
-        res.status == EXEC_SPAWN_FAILED)
+    {
+        ScopedLock lock(&m_lock);
+        m_running = &job;
+        rc_strcpy(m_runningId, sizeof m_runningId, r.id());
+    }
+    bool ok = job.run(command, opt, sink, res);
+    {
+        ScopedLock lock(&m_lock);
+        m_running = 0;
+        m_runningId[0] = '\0';
+    }
+    if (!ok && res.status == EXEC_SPAWN_FAILED)
     {
         char detail[32];
         rc_strf(detail, sizeof detail, "%lu", (unsigned long)res.error);
@@ -162,7 +193,7 @@ void JobOps::launch(Responder &r, rc_frame *f)
 
 void JobOps::handle(rc_frame *f)
 {
-    Responder r(*m_conn, rc_frame_get(f, "id"));
+    Responder r(*m_conn, rc_frame_get(f, "id"), m_gate);
     if (strcmp(f->type, "EXEC") == 0)
         exec(r, f);
     else if (strcmp(f->type, "LAUNCH") == 0)
@@ -174,7 +205,7 @@ void JobOps::handle(rc_frame *f)
 
 void JobOps::abandon(rc_frame *f)
 {
-    Responder r(*m_conn, rc_frame_get(f, "id"));
+    Responder r(*m_conn, rc_frame_get(f, "id"), m_gate);
     r.err("stopping");
     rc_frame_delete(f);
 }

@@ -400,8 +400,123 @@ static void reserveCases(Listener &l)
     say("an-unstarted-connection-stops-clean", c.release(true) && joined, "");
 }
 
-int main(void)
+/* --- the listening socket must not reach a child ---------------------------
+ *
+ * libexec spawns with bInheritHandles = TRUE, because the child needs the
+ * output pipe. Every other inheritable handle goes with it, and a listening
+ * socket among them means a child that outlives the server keeps the port:
+ * the next start cannot bind, and the symptom is a four-minute retry that
+ * looks like a hang.
+ *
+ * Driven end to end rather than by asking the handle about itself.
+ * GetHandleInformation is documented as unsupported for some handle types on
+ * 9x, so a flag that reads back clean would prove nothing about the machine
+ * this ships to. Instead: open a listener, spawn a child that inherits
+ * everything and outlives us, close the listener, and try to bind the port
+ * again. If the child kept it, the bind fails.
+ */
+/* How long until `port` can be bound again, in ms, or -1 if it never was.
+ * A retry rather than one attempt, because without SO_REUSEADDR a port that
+ * was just let go is not instantly free -- which is the whole reason
+ * REMOTE.md has gremote retry its bind for four minutes rather than reach
+ * for that flag. */
+static int rebindWithin(int port, int budgetMs)
 {
+    int waited = 0;
+    for (;;)
+    {
+        Listener probe;
+        if (probe.open("127.0.0.1", port, 4))
+        {
+            probe.close();
+            return waited;
+        }
+        if (waited >= budgetMs)
+            return -1;
+        Sleep(100);
+        waited += 100;
+    }
+}
+
+static void inheritCases()
+{
+    static char cmd[MAX_PATH + 32];
+    static char detail[128];
+    char self[MAX_PATH];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    Listener l;
+    int port, control, held, freed;
+    bool spawned;
+
+    if (!l.open("127.0.0.1", 0, 4))
+    {
+        say("inherit-setup", false, "could not listen");
+        return;
+    }
+    port = l.port();
+
+    /* THE CONTROL, and it earns its place twice over. The first version of
+     * this had no child anywhere near it and still failed -- because the
+     * change being tested had broken close() -- which without a control
+     * would have read as "the child inherited the socket" and sent the fix
+     * after the wrong thing entirely. */
+    l.close();
+    control = rebindWithin(port, 15000);
+    rc_strf(detail, sizeof detail, "%dms after a plain close", control);
+    say("a-closed-listener-frees-its-port", control >= 0, detail);
+    if (control < 0)
+        return;
+
+    if (!l.open("127.0.0.1", port, 4))
+    {
+        say("inherit-setup", false, "could not reopen for the real case");
+        return;
+    }
+
+    GetModuleFileNameA(NULL, self, sizeof self);
+    rc_strf(cmd, sizeof cmd, "\"%s\" --hold", self);
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    memset(&pi, 0, sizeof pi);
+    /* TRUE, deliberately: this is the spawn libexec makes for a child that
+     * needs the output pipe. */
+    spawned = CreateProcessA(NULL, cmd, NULL, NULL, TRUE,
+                             CREATE_NO_WINDOW, NULL, NULL, &si, &pi) != 0;
+    if (!spawned)
+    {
+        say("inherit-spawn", false, "CreateProcess failed");
+        l.close();
+        return;
+    }
+    Handle child(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    /* The server lets go. On this platform the child has it. */
+    l.close();
+    held = rebindWithin(port, 3000);
+    rc_strf(detail, sizeof detail,
+            "held=%d (control rebound in %dms)", held, control);
+    say("an-inheriting-child-holds-the-port", held < 0, detail);
+
+    /* And gives it back when it goes, which is what bounds the hazard and
+     * what the server's bind retry is sized against. */
+    TerminateProcess(child.get(), 0);
+    WaitForSingleObject(child.get(), 3000);
+    freed = rebindWithin(port, 15000);
+    rc_strf(detail, sizeof detail, "%dms after the child ended", freed);
+    say("and-gives-it-back-when-it-goes", freed >= 0, detail);
+}
+
+int main(int argc, char **argv)
+{
+    /* The child half of inheritCases: hold still, holding whatever was
+     * inherited, until it is killed. */
+    if (argc > 1 && strcmp(argv[1], "--hold") == 0)
+    {
+        Sleep(60000);
+        return 0;
+    }
     rc_log_open(".", "wirecheck");
     Listener l;
     if (!l.open("127.0.0.1", 0, 4))
@@ -414,6 +529,7 @@ int main(void)
     heartbeat(l);
     refusal(l);
     reserveCases(l);
+    inheritCases();
     l.close();
     rc_log_close();
     return 0;

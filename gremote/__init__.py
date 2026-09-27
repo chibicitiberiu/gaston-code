@@ -19,11 +19,18 @@ should have to stand up.
 from __future__ import annotations
 
 from .client import DEFAULT_PORT, Remote
-from .errors import Disconnected, Refused, RemoteError, Timeout
+from .errors import (
+    Cancelled,
+    Disconnected,
+    Refused,
+    RemoteError,
+    Timeout,
+)
 from .ship import ShipResult
 
 __all__ = [
     "DEFAULT_PORT",
+    "Cancelled",
     "Disconnected",
     "Refused",
     "Remote",

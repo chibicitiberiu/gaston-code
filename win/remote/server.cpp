@@ -53,6 +53,8 @@ bool Session::begin(SOCKET accepted)
     m_conn.setIdleTimeout((DWORD)m_cfg->heartbeatS * 1000);
     /* 32 KB. Deeper than the accept loop: ExecJob spawns, waits, and on a
      * stop walks the process tree with Toolhelp. */
+    m_jobOps.setGate(&m_job);
+    m_fsOps.setGate(&m_fs);
     if (!m_job.start(m_jobOps, "the job lane", 32u * 1024u))
         return false;
     /* 32 KB as well: a directory walk holds a WIN32_FIND_DATA and a Path
@@ -178,7 +180,16 @@ void Session::onFrame(Connection &c, rc_frame *f)
         Responder r(m_conn, rc_frame_get(f, "id"));
         const GOpRow *row;
 
-        if (strcmp(f->type, "PING") == 0)
+        if (strcmp(f->type, "CANCEL") == 0)
+        {
+            /* The Session's, not the control lane's: it is about the lanes,
+             * and the Session is what owns them. Answered through an
+             * UNGATED Responder -- the frame carries the target's id, and a
+             * gated one would suppress the very ack that says the target is
+             * dead. */
+            doCancel(r, f);
+        }
+        else if (strcmp(f->type, "PING") == 0)
         {
             /* The Session's own, not the control lane's: it is about this
              * connection rather than about the machine, and it is what
@@ -250,6 +261,50 @@ void Session::toLane(LaneWorker &lane, rc_frame *f, bool continues)
         r.errWith("busy", keys, vals, 2);
     }
     rc_frame_delete(f);
+}
+
+/* 9P's Tflush, copied rather than re-derived (docs/BACKLOG.md 6). The ack
+ * means the cancelled request will never be answered, and the caller may
+ * reuse its id the moment the ack arrives: a lane runs one request at a
+ * time, so nothing bearing that id can start until the old work has cleared.
+ *
+ * TWO IDS, not one. REMOTE.md's op table says "`CANCEL` | `id` of target",
+ * which reads fine until you try it: the ack would come back under the
+ * victim's id, land in whatever is waiting for the victim's own reply, and
+ * look exactly like the answer this op exists to promise will never come.
+ * Tflush carries a tag AND an oldtag for that reason. So `CANCEL` gets an id
+ * of its own like every other request, and names its victim in `target=`.
+ * The table is updated to match. */
+void Session::doCancel(Responder &r, rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "target");
+    CancelResult job, fs;
+
+    /* A different code from `no_such_id`, deliberately: "you did not say
+     * what to cancel" and "there is nothing by that name" are different
+     * mistakes, and collapsing them cost an hour of reading the right code
+     * while the wrong branch was firing. */
+    if (!id || !*id)
+    {
+        r.err("no_target");
+        return;
+    }
+    job = m_job.cancel(id);
+    fs = m_fs.cancel(id);
+    if (job == CANCEL_NO_SUCH_ID && fs == CANCEL_NO_SUCH_ID)
+    {
+        /* Nothing by that name. NOT an error worth hiding: a cancel that
+         * lost the race against a reply is the ordinary case, and 9P says
+         * to ack it anyway -- but the caller asked about a specific id and
+         * deserves to know it was already gone. */
+        rc_log("cancel: nothing on either lane is called %s", id);
+        r.err("no_such_id");
+        return;
+    }
+    rc_log("cancel: %s was %s", id,
+           (job == CANCEL_DROPPED || fs == CANCEL_DROPPED) ? "still queued"
+                                                           : "running");
+    r.ok();
 }
 
 bool Session::end()

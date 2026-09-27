@@ -31,7 +31,7 @@ import zlib
 
 from bridge.wire.frame import Frame, FrameReader
 
-from .errors import Disconnected, Refused, Timeout
+from .errors import Cancelled, Disconnected, Refused, Timeout
 from .ops import (
     Drive,
     Entry,
@@ -67,11 +67,12 @@ _TERMINAL = frozenset({"OK", "ERR", "END"})
 class _Call:
     """One outstanding request, waited on by the thread that made it."""
 
-    __slots__ = ("chunks", "done", "reply")
+    __slots__ = ("cancelled", "chunks", "done", "reply")
 
     def __init__(self) -> None:
         self.chunks: list[Frame] = []
         self.reply: Frame | None = None
+        self.cancelled = False
         self.done = threading.Event()
 
 
@@ -196,8 +197,44 @@ class Remote:
     def ping(self) -> None:
         self.request("PING")
 
+    def cancel(self, ident: str, timeout: float = 10.0) -> bool:
+        """Stop a request, and be promised you will never hear about it.
+
+        9P's Tflush, which the guest copies rather than re-derives: the ack
+        means the cancelled request will NEVER be answered, and its id is
+        free to reuse the moment the ack arrives. Returns False if the
+        machine had nothing by that name, which is the ordinary outcome of a
+        cancel that lost the race against a reply rather than an error.
+
+        `ident` is the id a call is running under -- `stream()` and
+        `request()` take an `on_id` callback that hands it over the moment
+        it exists, which is the only way to have it while the call is still
+        in flight.
+
+        The thread waiting on the cancelled request is woken with
+        `Cancelled`, because nothing else is coming for it.
+
+        The ack says the request will never be ANSWERED. It does not say the
+        machine is idle: a cancelled EXEC is still walking the child's
+        process tree and stopping it, so the next request on that lane can
+        still be told `busy` for a moment afterwards. Those are different
+        promises and only the first one is Tflush's.
+        """
+        try:
+            self.request("CANCEL", {"target": ident}, timeout=timeout)
+        except Refused as e:
+            if e.code == "no_such_id":
+                return False
+            raise
+        with self._calls_lock:
+            call = self._calls.pop(ident, None)
+        if call is not None and not call.done.is_set():
+            call.cancelled = True
+            self._finish(call, None)
+        return True
+
     def exec(self, command: str, timeout: float = 20.0,
-             cwd: str = "", shell: str = "") -> ExecResult:
+             cwd: str = "", shell: str = "", on_id=None) -> ExecResult:
         """Run a command and wait for it.
 
         `shell` is the invocation prefix to splice in front, and the machine
@@ -217,7 +254,7 @@ class Remote:
             headers["shell"] = shell
         end, chunks = self.stream("EXEC", headers,
                                   command.encode(self.acp, "replace"),
-                                  timeout=timeout + 15.0)
+                                  timeout=timeout + 15.0, on_id=on_id)
         return parse_exec(end, chunks)
 
     def launch(self, command: str, cwd: str = "", show: int = 1) -> int:
@@ -241,8 +278,8 @@ class Remote:
         _, chunks = self.stream("LS", headers)
         return parse_entries(chunks, self.acp)
 
-    def get(self, path: str, max_bytes: int = 0,
-            timeout: float = 120.0) -> FileBytes:
+    def get(self, path: str, max_bytes: int = 0, timeout: float = 120.0,
+            on_id=None) -> FileBytes:
         """Read a file off the machine, byte for byte.
 
         `max_bytes` is honoured BY THE GUEST. A cap applied here would still
@@ -254,7 +291,8 @@ class Remote:
         headers = {"path": path}
         if max_bytes:
             headers["max_bytes"] = str(max_bytes)
-        end, chunks = self.stream("GET", headers, timeout=timeout)
+        end, chunks = self.stream("GET", headers, timeout=timeout,
+                                  on_id=on_id)
         return parse_get(end, chunks)
 
     def put(self, path: str, data: bytes, chunk: int = 8192,
@@ -370,19 +408,20 @@ class Remote:
         self.request("REBOOT", {"confirm": "yes", "mode": mode})
 
     def request(self, op: str, headers: dict[str, str] | None = None,
-                body: bytes = b"", timeout: float | None = None) -> Frame:
+                body: bytes = b"", timeout: float | None = None,
+                on_id=None) -> Frame:
         """Send one request and return its terminal frame.
 
         Raises Refused on `ERR`, so a caller that only wants the happy path
         does not have to check. The chunks of a streaming op are on the
         returned call via `stream()` rather than here.
         """
-        reply, _ = self.stream(op, headers, body, timeout)
+        reply, _ = self.stream(op, headers, body, timeout, on_id)
         return reply
 
     def stream(self, op: str, headers: dict[str, str] | None = None,
-               body: bytes = b"",
-               timeout: float | None = None) -> tuple[Frame, list[Frame]]:
+               body: bytes = b"", timeout: float | None = None,
+               on_id=None) -> tuple[Frame, list[Frame]]:
         """As `request`, and also the `DATA` frames that arrived before the
         terminal one."""
         call = _Call()
@@ -396,6 +435,11 @@ class Remote:
             sent["id"] = ident
             self._calls[ident] = call
         try:
+            if on_id is not None:
+                # Before the send, so a cancel racing the reply still has an
+                # id to name. The guest answers `no_such_id` if it is too
+                # early, which is a truthful answer and not a failure.
+                on_id(ident)
             self._send(Frame(op, sent, body))
             reply = self._wait(call, timeout or self.request_timeout, op)
         finally:
@@ -423,6 +467,9 @@ class Remote:
     def _wait(self, call: _Call, timeout: float, op: str) -> Frame:
         if not call.done.wait(timeout):
             raise Timeout(f"no answer to {op} in {timeout:g}s")
+        if call.cancelled:
+            raise Cancelled(f"{op} was cancelled; the machine will not "
+                            f"answer it")
         if call.reply is None:
             raise Disconnected(self._failure or f"the link went away during {op}")
         return call.reply

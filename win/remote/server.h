@@ -36,6 +36,7 @@
 #include "exec/process.h"
 #include "remote/config.h"
 #include "remote/control.h"
+#include "remote/reply.h"
 #include "remote/fsops.h"
 #include "remote/jobops.h"
 #include "remote/lane.h"
@@ -73,6 +74,7 @@ private:
     void onAuth(rc_frame *f);
     /* Hand `f` to a lane, or answer busy. Takes ownership either way. */
     void toLane(LaneWorker &lane, rc_frame *f, bool continues);
+    void doCancel(Responder &r, rc_frame *f);
     void sendHello();
     /* `code` goes out as ERR code=<code>, and `fatal` ends the session
      * after it -- with the one-second pause the handshake owes a wrong

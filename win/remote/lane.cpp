@@ -1,5 +1,6 @@
 #include "remote/lane.h"
 
+#include <string.h>
 #include "core/log.h"
 #include "core/str.h"
 
@@ -78,6 +79,10 @@ bool LaneWorker::submit(rc_frame *f, const char **busyOp, DWORD *ageMs)
     m_slot = f;
     m_inFlight = 1;
     rc_strcpy(m_op, sizeof m_op, f->type);
+    {
+        const char *id = rc_frame_get(f, "id");
+        rc_strcpy(m_inFlightId, sizeof m_inFlightId, id ? id : "");
+    }
     m_startedAt = GetTickCount();
     SetEvent(m_wake.get());
     return true;
@@ -113,6 +118,76 @@ bool LaneWorker::submitContinuation(rc_frame *f, DWORD waitMs)
         WaitForSingleObject(m_room.get(), 50);
         waited += 50;
     }
+}
+
+bool LaneWorker::mayAnswer(const char *id)
+{
+    ScopedLock lock(&m_lock);
+    if (!m_cancelled[0] || !id || !*id)
+        return true;
+    return strcmp(id, m_cancelled) != 0;
+}
+
+CancelResult LaneWorker::cancel(const char *id)
+{
+    bool running = false;
+
+    if (!id || !*id)
+        return CANCEL_NO_SUCH_ID;
+    {
+        ScopedLock lock(&m_lock);
+
+        /* Still in the slot, never started: it simply goes. Nothing was
+         * sent and nothing will be, which is the strongest form of the
+         * promise and needs no mark. */
+        if (m_slot)
+        {
+            const char *waiting = rc_frame_get(m_slot, "id");
+            if (waiting && strcmp(waiting, id) == 0)
+            {
+                rc_frame_delete(m_slot);
+                m_slot = 0;
+                m_inFlight = 0;
+                m_op[0] = '\0';
+                m_inFlightId[0] = '\0';
+                return CANCEL_DROPPED;
+            }
+        }
+        /* A continuation of a transfer: same thing, one at a time. */
+        for (int i = 0; i < m_contN; ++i)
+        {
+            int at = (m_contHead + i) % CONT_MAX;
+            const char *waiting = rc_frame_get(m_cont[at], "id");
+            if (waiting && strcmp(waiting, id) == 0)
+            {
+                rc_frame_delete(m_cont[at]);
+                for (int j = i; j < m_contN - 1; ++j)
+                    m_cont[(m_contHead + j) % CONT_MAX] =
+                        m_cont[(m_contHead + j + 1) % CONT_MAX];
+                m_contN--;
+                SetEvent(m_room.get());
+                return CANCEL_DROPPED;
+            }
+        }
+        if (m_inFlight && m_inFlightId[0] &&
+            strcmp(m_inFlightId, id) == 0)
+        {
+            /* THE MARK, set before the handler is told. From here its
+             * replies are dropped, so the race between the cancel and the
+             * answer is decided rather than run. */
+            rc_strcpy(m_cancelled, sizeof m_cancelled, id);
+            running = true;
+        }
+    }
+    /* Outside the lock, and without waiting: the reader carries the
+     * heartbeat, and the promise is kept by the mark rather than by this
+     * call having finished anything.
+     *
+     * Asked even when no frame matched, because a transfer is not a frame:
+     * a PUT between two of its chunks leaves this lane idle, and the
+     * handler is the only thing that knows it is open. */
+    bool claimed = m_handler->cancel(id);
+    return (running || claimed) ? CANCEL_STOPPED : CANCEL_NO_SUCH_ID;
 }
 
 void LaneWorker::signalStop()
@@ -167,6 +242,9 @@ void LaneWorker::loop()
         rc_frame *f;
 
         WaitForSingleObject(m_wake.get(), LANE_IDLE_SLICE_MS);
+        /* Before anything is picked up: a cancel that arrived while this
+         * lane was idle has nothing else to wake it. */
+        m_handler->idle();
         {
             ScopedLock lock(&m_lock);
             fromSlot = m_contN == 0 && m_slot != 0;
@@ -185,8 +263,15 @@ void LaneWorker::loop()
             if (fromSlot)
             {
                 ScopedLock lock(&m_lock);
+                /* The work this mark belonged to is over, so the id is free
+                 * again -- and it could not have been reused before now,
+                 * because a lane runs one request at a time. */
+                if (m_cancelled[0] && m_inFlightId[0] &&
+                    strcmp(m_cancelled, m_inFlightId) == 0)
+                    m_cancelled[0] = '\0';
                 m_inFlight = 0;
                 m_op[0] = '\0';
+                m_inFlightId[0] = '\0';
             }
             /* More may be waiting; go round before sleeping again. */
             if (!stopping)

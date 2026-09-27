@@ -277,7 +277,8 @@ direction proof onwards.
 | `7d1257c` | `ship()` -- step 5b |
 | `7b9a1b3` | the guest run, measured |
 | `912e6bd` | the Gaston rename |
-| (this) | the agreement test, the budget, and the docs |
+| `73d7141` | the agreement test, the budget, and the docs |
+| (this) | `CANCEL` on Tflush, and the inherited socket measured |
 
 Sixty-six tests under `tests/python/remote/`, four contract tests under
 `tests/python/meta/`. `make test`: 3623 passed. Committed at load: gaston
@@ -293,13 +294,19 @@ test written against Wine alone would have shown neither.
 **Four deviations from the plan above**, each for a reason found in the code
 rather than at the desk:
 
-- The non-inheritable listening socket did not land. It needs a `Listener`
-  change and a child process to test against, and the case it guards -- an
-  `EXEC` child holding the port -- is an NT and Wine behaviour, measured
-  absent on 98.
-- `CANCEL` is in the op table and has no handler. The contract is 9P's
-  `Tflush` and the thing it needs is an op long-running enough to race
-  against; writing it before that exists is writing it blind.
+- The non-inheritable listening socket **cannot be done on this toolchain**,
+  which took building it to find out. Both mechanisms fail:
+  `SetHandleInformation` is Win2000+ and on the import deny list, and the
+  `DuplicateHandle` trick `execjob.cpp` uses for a PIPE destroys a SOCKET --
+  `closesocket` and `CloseHandle` both take it with them, and the port then
+  never comes free at all. wirecheck's control case is what caught that: a
+  plain open-close-reopen stopped working with no child anywhere near it.
+  So the hazard is measured and bounded instead: an inheriting child holds
+  the port for its own lifetime and gives it back the moment it ends, on NT
+  and Wine, and on 98 does not hold it at all. That bound is what the bind
+  retry is sized against.
+- `CANCEL` landed after all. Its reason for waiting -- "nothing cancellable
+  to test it against" -- was spent the moment the job lane existed.
 - `remotecheck.exe` was never built. Its justification was the config
   refusals and the cancel race; the refusals turned out to be reachable
   through the socket suite by reading the guest's own log, and the cancel
@@ -312,7 +319,7 @@ rather than at the desk:
 
 - The P200 itself, and the two things nothing records about it: a configured
   TCP/IP stack, and how `GREMOTE.EXE` gets there the first time.
-- `CANCEL`, the non-inheritable socket, and autostart, as above.
+- Autostart through `RunServices`, which needs a shipped `.REG`.
 - `REBOOT mode=reboot`, and `REBOOT` with force against an open DOS box.
   Neither was run: the first ends the session doing the measuring, and the
   second is the one that can lose somebody's work.

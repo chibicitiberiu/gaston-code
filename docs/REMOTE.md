@@ -305,9 +305,14 @@ protocol and must not drift into it.
 - **Every request is tagged with the connection generation.** Output from an
   older generation is dropped, so a job still finishing for a dead client never
   lands in the new client's stream (Python restarts ids at 1).
-- **`CANCEL id=` follows `BACKLOG.md` 6** (9P `Tflush`): its ack means the
+- **`CANCEL` follows `BACKLOG.md` 6** (9P `Tflush`): its ack means the
   request will never be answered, and the id cannot be reused before the ack.
   It compares the id under the lock, fixing the id-blind EXECKILL (`BACKLOG.md` 9).
+  *Corrected 2026-09-27 while building it:* it carries TWO ids, as `Tflush`
+  does. The first draft of the table gave it only the target's, and the ack
+  then comes back under the victim's id and lands in whatever is waiting for
+  the victim's own reply -- indistinguishable from the answer this op
+  promises will never come.
 - **Lanes.** One worker per lane, one request in flight per lane, `ERR busy
   op= age_ms=` otherwise:
 
@@ -342,7 +347,7 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
 |---|---|---|---|
 | `AUTH` | `ver`, `secret` | `HELLO` (above) | `bad_secret`, `bad_version`, `not_allowed`, `busy` (another client is live) |
 | `PING` | none | `OK`; also serves as the heartbeat | none |
-| `CANCEL` | `id` of target | `OK id=` (target is dead) | `no_such_id` |
+| `CANCEL` | `target` (the id to stop); `id` is its own | `OK id=` (target is dead, and will never be answered) | `no_such_id` |
 | `SYSINFO` | none | `OK` with `mem_free_kb`, `uptime_ms`. No USER/GDI free-resource numbers: `GetFreeSystemResources` is 16-bit only (`PLAN.md` Toolchain facts) | none |
 | `PS` | none | `DATA` records `pid` (unsigned: 9x pids are obfuscated pointers with the high bit set), `ppid`, `threads`, `exe`; `END count=` | `no_toolhelp` |
 | `KILL` | `pid`, optional `force=1` | `OK` | `pending` (TerminateProcess said yes and the process is still there; on 98 that is not the same thing), `denied` (deny list below), `no_such_pid`, `failed` |

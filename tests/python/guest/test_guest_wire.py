@@ -27,7 +27,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 20, sorted(verdicts)
+    assert len(verdicts) == 23, sorted(verdicts)
 
 
 def test_a_listening_port_is_never_shared(verdicts):
@@ -77,4 +77,40 @@ def test_a_send_with_no_reserve_still_uses_the_whole_queue(verdicts):
     """Which is every caller in win/net -- the client passes no reserve, so
     its behaviour is unchanged by the parameter existing."""
     status, detail = verdicts["no-reserve-still-fills-the-whole-queue"]
+    assert status == "pass", detail
+
+
+# --- a child can inherit the listening socket ------------------------------
+#
+# CreateProcess with bInheritHandles=TRUE hands over every inheritable
+# handle, and libexec passes TRUE because the child needs its output pipe.
+# There is no way to stop a SOCKET going with it on this toolchain:
+# SetHandleInformation is Win2000+ and on the import deny list, and the
+# DuplicateHandle trick execjob.cpp uses for a PIPE destroys a socket --
+# closesocket and CloseHandle both take it with them, and the port then never
+# comes free at all.
+#
+# So these MEASURE the hazard and its bound rather than asserting a fix. On
+# Windows 98, the platform this ships to, a child does not hold the socket at
+# all; under Wine it does, which is where the tests run.
+
+def test_a_closed_listener_frees_its_port(verdicts):
+    """The control, and it earns its place: the first version of the case
+    below failed with no child anywhere near it, because the change being
+    tested had broken close(). Without this that would have read as "the
+    child inherited the socket"."""
+    status, detail = verdicts["a-closed-listener-frees-its-port"]
+    assert status == "pass", detail
+
+
+def test_an_inheriting_child_holds_the_port(verdicts):
+    """Measured, not assumed, and it is why gremote retries its bind."""
+    status, detail = verdicts["an-inheriting-child-holds-the-port"]
+    assert status == "pass", detail
+
+
+def test_and_gives_the_port_back_when_it_goes(verdicts):
+    """What bounds the hazard: the port is held for the child's lifetime and
+    not beyond, so a restart that retries its bind gets there."""
+    status, detail = verdicts["and-gives-it-back-when-it-goes"]
     assert status == "pass", detail

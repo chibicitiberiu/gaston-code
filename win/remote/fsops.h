@@ -41,6 +41,16 @@ public:
     void handle(rc_frame *f);
     void abandon(rc_frame *f);
 
+    /* LaneHandler, on the READER thread. A GET stops at its next chunk
+     * because the gate refuses its next DATA; an open PUT is thrown away,
+     * temp and all, because nothing will ever close it. */
+    bool cancel(const char *id);
+
+    /* On the fs thread: where a cancelled transfer is actually taken down. */
+    void idle();
+
+    void setGate(ReplyGate *gate) { m_gate = gate; }
+
 private:
     FsOps(const FsOps &);
     FsOps &operator=(const FsOps &);
@@ -58,6 +68,7 @@ private:
     void abortPut(const char *why);
 
     Connection *m_conn;
+    ReplyGate *m_gate;
 
     /* One transfer at a time, and it belongs to the SESSION rather than to
      * the process: a new client gets a new FsOps, so a half-finished PUT
@@ -65,6 +76,11 @@ private:
     ChunkSink m_sink;
     char m_putId[64];
     unsigned long m_putCrc;
+    /* Set by cancel() on the reader, acted on by idle() on this lane's own
+     * thread. The sink holds a live handle this thread can be inside
+     * WriteFile on, so the reader may not touch it -- the same reason, and
+     * the same shape, as rc_syncrpc_abort. */
+    volatile LONG m_abortWanted;
 };
 
 #endif

@@ -3,7 +3,8 @@
 #include "core/str.h"
 #include "wire/link.h"
 
-Responder::Responder(Connection &conn, const char *id) : m_conn(&conn)
+Responder::Responder(Connection &conn, const char *id, ReplyGate *gate)
+    : m_conn(&conn), m_gate(gate)
 {
     rc_strcpy(m_id, sizeof m_id, id ? id : "");
 }
@@ -16,6 +17,15 @@ bool Responder::say(const char *type, const char *const *keys,
     const char *v[MAX_REPLY_HEADERS + 1];
     int total = 0;
 
+    /* Cancelled: the caller was promised it would never hear about this
+     * one, so nothing goes out. FALSE rather than true, and the difference
+     * is the point: a streaming handler reads this as "nobody is listening"
+     * and stops -- ExecOut turns it into EXEC_SINK_GONE and ends the child,
+     * GetSender stops the pump. Answering true would suppress the reply and
+     * leave the machine reading a file to the end for a caller that asked
+     * it not to. */
+    if (m_gate && !m_gate->mayAnswer(m_id))
+        return false;
     if (n > MAX_REPLY_HEADERS)
         n = MAX_REPLY_HEADERS;
     if (m_id[0])

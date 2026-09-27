@@ -15,6 +15,17 @@
  * sitting in the slot when the worker stops, both get a reply. Silence costs
  * the caller its whole budget and tells it nothing.
  *
+ * CANCEL, AND WHAT ITS ACK MEANS. 9P's Tflush, copied rather than
+ * re-derived (docs/BACKLOG.md 6): the ack means the cancelled request will
+ * NEVER be answered, and the caller may reuse its id once the ack arrives.
+ * The hard half is the race -- did the cancel beat the reply? -- and the
+ * answer here is a mark rather than a wait. An id marked cancelled has its
+ * replies dropped at the Responder, so a handler that was already most of
+ * the way through its answer still produces no frame; the mark is cleared by
+ * the worker when that frame is finally done with. Since a lane runs one
+ * request at a time, a reused id cannot start until the old work has
+ * cleared, so the mark can never suppress the wrong request.
+ *
  * AND WHY THERE IS A SECOND QUEUE. A PUT is not one frame: it opens with
  * PUT, continues with DATA chunks and closes with END, and each of those is
  * a short unit of work rather than one long-running request. Sent through
@@ -41,6 +52,15 @@
 #include "core/thread.h"
 #include "wire/frame.h"
 
+/* Asked before a reply goes out, so a handler does not have to remember
+ * that its request might have been cancelled underneath it. */
+class ReplyGate
+{
+public:
+    virtual ~ReplyGate() {}
+    virtual bool mayAnswer(const char *id) = 0;
+};
+
 class LaneHandler
 {
 public:
@@ -52,9 +72,34 @@ public:
     /* For a frame that will never run -- the worker is stopping. Owns `f`.
      * Still has to answer it. */
     virtual void abandon(rc_frame *f) = 0;
+
+    /* READER THREAD, while `id` is the request in flight. Stop it, and
+     * return without waiting: the reader carries the heartbeat. Whether the
+     * work actually ends is the handler's business; whether the caller ever
+     * hears about it is the gate's.
+     *
+     * It may only SIGNAL. Anything the lane's own thread could be inside --
+     * a handle it is mid-write on -- is cleaned up in idle(), not here.
+     *
+     * Returns whether this was the handler's to cancel. That matters for
+     * work with no frame in flight to match against: a PUT is a sequence of
+     * short frames, so between two of them the lane is idle and the only
+     * thing that knows a transfer is open is the handler. */
+    virtual bool cancel(const char *id) { (void)id; return false; }
+
+    /* On the lane's thread, every time round the loop, frame or no frame.
+     * Where the work cancel() asked for actually happens. */
+    virtual void idle() {}
 };
 
-class LaneWorker
+enum CancelResult
+{
+    CANCEL_DROPPED = 0,     /* it had not started; it is gone, unanswered */
+    CANCEL_STOPPED,         /* it was running; it has been told to stop */
+    CANCEL_NO_SUCH_ID       /* nothing here by that name */
+};
+
+class LaneWorker : public ReplyGate
 {
 public:
     LaneWorker();
@@ -74,7 +119,14 @@ public:
      * than the queue can absorb. */
     bool submitContinuation(rc_frame *f, DWORD waitMs);
 
-    /* What is running, or NULL. Reader thread; for CANCEL, later. */
+    /* READER THREAD. Take `id` out of this lane, by whichever of the three
+     * routes applies. See the CANCEL note at the top for what the answer
+     * promises. */
+    CancelResult cancel(const char *id);
+
+    /* ReplyGate, for the Responders this lane's handler makes. */
+    bool mayAnswer(const char *id);
+
     bool inFlight() const { return m_inFlight != 0; }
 
     void signalStop();
@@ -117,6 +169,8 @@ private:
     volatile LONG m_running;
     volatile LONG m_inFlight;   /* handed over OR being handled */
     char m_op[RC_MAX_TYPE];     /* what is in flight, under m_lock */
+    char m_inFlightId[64];      /* its id, under m_lock */
+    char m_cancelled[64];       /* whose replies to drop, under m_lock */
     DWORD m_startedAt;
 };
 

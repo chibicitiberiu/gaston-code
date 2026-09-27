@@ -36,9 +36,40 @@ enum { GET_CHUNK = 8192 };
  * few seconds rather than a wedged lane. */
 enum { GET_DEFAULT_MAX = 4u * 1024u * 1024u };
 
-FsOps::FsOps(Connection &conn) : m_conn(&conn), m_putCrc(MZ_CRC32_INIT)
+FsOps::FsOps(Connection &conn)
+    : m_conn(&conn), m_gate(0), m_putCrc(MZ_CRC32_INIT), m_abortWanted(0)
 {
     m_putId[0] = '\0';
+}
+
+bool FsOps::cancel(const char *id)
+{
+    /* A GET needs nothing done to it: its next DATA goes through the
+     * Responder, the gate refuses it, and the pump stops at the chunk
+     * boundary -- which is PUMP_CONSUMER_STOPPED doing the job BACKLOG 6
+     * named it for.
+     *
+     * A PUT does. It is not one frame, so there is no handler in flight to
+     * refuse anything: the sink is sitting open with a temp beside somebody
+     * else's file, waiting for chunks that are not coming. */
+    if (!m_sink.active() || !m_putId[0] || strcmp(m_putId, id) != 0)
+        return false;
+    InterlockedExchange((LONG *)&m_abortWanted, 1);
+    return true;
+}
+
+void FsOps::idle()
+{
+    if (!m_abortWanted)
+        return;
+    InterlockedExchange((LONG *)&m_abortWanted, 0);
+    if (m_sink.active())
+    {
+        rc_log("fs: cancelled the transfer to %s", m_sink.targetPath());
+        /* The temp goes and the file at the target, if there was one, is
+         * untouched -- nothing was ever moved aside. */
+        abortPut("cancelled");
+    }
 }
 
 /* NO MOVE-ASIDE, and this is the sharpest decision in the file.
@@ -700,7 +731,7 @@ void FsOps::mv(Responder &r, rc_frame *f)
 
 void FsOps::handle(rc_frame *f)
 {
-    Responder r(*m_conn, rc_frame_get(f, "id"));
+    Responder r(*m_conn, rc_frame_get(f, "id"), m_gate);
     if (strcmp(f->type, "LS") == 0)
         ls(r, f);
     else if (strcmp(f->type, "STAT") == 0)
@@ -728,7 +759,7 @@ void FsOps::handle(rc_frame *f)
 
 void FsOps::abandon(rc_frame *f)
 {
-    Responder r(*m_conn, rc_frame_get(f, "id"));
+    Responder r(*m_conn, rc_frame_get(f, "id"), m_gate);
     /* A transfer that will never be finished leaves nothing behind: the
      * temp goes, and the file at the target -- if there was one -- is
      * untouched, because nothing was moved aside. */

@@ -36,9 +36,19 @@ class JobOps : public LaneHandler
 public:
     JobOps(const ExecConfig &cfg, Connection &conn);
 
+    ~JobOps();
+
     /* LaneHandler, on the job thread. Both free `f`. */
     void handle(rc_frame *f);
     void abandon(rc_frame *f);
+
+    /* LaneHandler, on the READER thread while the job runs. Signals and
+     * returns: ExecJob::cancel does not do the stopping itself, which is a
+     * Toolhelp walk and a bounded wait, and that runs on run()'s thread. */
+    bool cancel(const char *id);
+
+    /* The lane, so replies pass its cancel gate. Set once at startup. */
+    void setGate(ReplyGate *gate) { m_gate = gate; }
 
 private:
     JobOps(const JobOps &);
@@ -49,6 +59,14 @@ private:
 
     const ExecConfig *m_cfg;
     Connection *m_conn;
+    ReplyGate *m_gate;
+
+    /* The command running now, and its id. Guarded by m_lock, because the
+     * reader thread reads them to cancel while the job thread is setting
+     * and clearing them -- the shape rpc.cpp's g_job/g_job_id arrived at. */
+    CRITICAL_SECTION m_lock;
+    ExecJob *m_running;
+    char m_runningId[64];
 };
 
 #endif

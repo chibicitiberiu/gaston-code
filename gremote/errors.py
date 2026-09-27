@@ -31,6 +31,15 @@ class Refused(RemoteError):
         super().__init__(f"the machine refused{where} with {code!r}{extra}")
 
 
+class Cancelled(RemoteError):
+    """Raised in the thread that was waiting for a cancelled request.
+
+    The machine promised never to answer it, so waiting out the budget would
+    be waiting for something that is not coming. This is what the promise
+    looks like from the caller's side.
+    """
+
+
 class Disconnected(RemoteError):
     """The link went away, in either direction.
 

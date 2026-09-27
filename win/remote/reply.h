@@ -24,14 +24,20 @@
 #error "remote/reply.h is C++"
 #endif
 
+#include "remote/lane.h"
 #include "wire/connection.h"
 
 class Responder
 {
 public:
     /* `id` may be empty, for a request that arrived without one; the reply
-     * then carries none either, which is as much as can honestly be said. */
-    Responder(Connection &conn, const char *id);
+     * then carries none either, which is as much as can honestly be said.
+     *
+     * `gate` is the lane this request is running on, or NULL for one the
+     * reader answers itself. A cancelled request's replies are dropped here
+     * rather than in every handler -- see the CANCEL note in remote/lane.h
+     * for why the mark is what keeps the promise. */
+    Responder(Connection &conn, const char *id, ReplyGate *gate = 0);
 
     /* At most MAX_REPLY_HEADERS beyond the id. A handler that needs more
      * than that is describing a record, and records go in a body. */
@@ -61,6 +67,7 @@ private:
              bool bulk);
 
     Connection *m_conn;
+    ReplyGate *m_gate;
     char m_id[64];
 };
 
