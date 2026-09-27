@@ -1,7 +1,7 @@
 """ship(): end the running build, write the new one, start it again.
 
 This is REMOTE.md step 5b, and the reason the fs lane was folded into step 4
--- without PUT, a new retroclaude.exe still travels to the test box on a CD.
+-- without PUT, a new gaston.exe still travels to the test box on a CD.
 
 Two traps are encoded here rather than remembered, both of which have cost
 real time on this project: a running exe is LOCKED, and the old install

@@ -8,6 +8,13 @@
 # and the four conclusions p200-run1 had to correct). The FILE contents,
 # refusals and platform behaviours are real; the RATES are not.
 #
+# NAMES: this run happened just before RetroClaude became Gaston Code, so
+# the guest paths below are C:\RETRO and the client binary is
+# retroclaude.exe. They are left as they were MEASURED -- rewriting a record
+# to match a later rename is how a measurement stops being one. The current
+# spellings are C:\GASTON and gaston.exe, and nothing about the numbers
+# depends on either.
+#
 # The host reaches the guest through QMP hostfwd_add (tools/vm/qmp.py
 # hostfwd 7401), NOT through a libvirt <portForward> -- libvirt refuses that
 # on anything but the passt backend, and this domain is slirp with a

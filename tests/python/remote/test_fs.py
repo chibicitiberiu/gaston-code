@@ -360,7 +360,7 @@ def test_mv_of_nothing_is_missing(remote, tmp_path_factory):
 def test_a_wrong_crc_refuses_the_commit_and_leaves_nothing(remote,
                                                            tmp_path_factory):
     """The verifier is what makes PUT safe to point at a binary: a truncated
-    retroclaude.exe is a bricked client. The CRC is compared against what was
+    gaston.exe is a bricked client. The CRC is compared against what was
     accumulated on the way in, not by re-reading the temp -- the bytes went
     past once and the platter should not have to do it again.
     """
