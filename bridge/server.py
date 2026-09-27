@@ -29,6 +29,7 @@ from .services.config import BridgeConfig
 from .services.connection import ConnectionService
 from .services.coordinator import SessionCoordinator
 from .services.guest_exec import GuestExecService
+from .services.guest_fs import GuestFsService
 from .services.options import (
     MODE_LABEL,
     MODE_ORDER,
@@ -157,6 +158,7 @@ class Bridge:
         )
         self.ui = UiService(connection=self.connection)
         self.proc = ProcService(connection=self.connection)
+        self.guest_fs = GuestFsService(connection=self.connection)
         self.permissions = PermissionService(
             connection=self.connection,
             presentation=self.presentation,
@@ -236,6 +238,11 @@ class Bridge:
             "UIEND":        self.ui.ui_frame,
             "PSRESULT":     self.proc.proc_frame,
             "PSKILLRESULT": self.proc.proc_frame,
+            "FSDAT":        self.guest_fs.fs_frame,
+            "FSDATEND":     self.guest_fs.fs_frame,
+            "FSPUTACK":     self.guest_fs.fs_frame,
+            "FSDRIVE":      self.guest_fs.fs_frame,
+            "FSDRIVEEND":   self.guest_fs.fs_frame,
             "PERMREPLY":    self.permissions.reply,
             "GETSESSIONS":  self.session.on_getsessions,
             "GETPAGE":      self.presentation.on_getpage,
@@ -468,6 +475,7 @@ class Bridge:
             "The connected machine disconnected while this was running.",
         )
         self.proc.fail_calls(guest)
+        self.guest_fs.fail_calls(guest)
 
 
     def _ensure_background_tasks(self, guest: GuestSession) -> None:

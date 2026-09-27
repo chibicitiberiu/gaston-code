@@ -23,6 +23,12 @@ FRAMEPROTO_CPP = os.path.join(REPO, "win", "net", "frameproto.cpp")
 SYNCRPC_CPP = os.path.join(REPO, "win", "sync", "syncrpc.cpp")
 PROTOCOL_PY = os.path.join(REPO, "bridge", "wire", "protocol.py")
 SYNCTRANSPORT_PY = os.path.join(REPO, "bridge", "files", "synctransport.py")
+# Every module that builds a Frame() aimed at the guest has to be listed
+# here, or the type it invents is invisible to this test. guest_fs.py is
+# here for that reason and not because it builds any today -- its frames
+# all come from protocol.py, and the next person to inline one is who
+# this line is for.
+GUEST_FS_PY = os.path.join(REPO, "bridge", "services", "guest_fs.py")
 
 
 def guest_handled_types() -> set[str]:
@@ -55,7 +61,7 @@ def bridge_outbound_types() -> set[str]:
     """Parse all frame types the bridge sends to the guest."""
     types = set()
 
-    for path in (PROTOCOL_PY, SYNCTRANSPORT_PY):
+    for path in (PROTOCOL_PY, SYNCTRANSPORT_PY, GUEST_FS_PY):
         tree = ast.parse(open(path, encoding="utf-8").read(), path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Frame":

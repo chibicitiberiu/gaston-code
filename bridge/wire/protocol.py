@@ -503,6 +503,56 @@ def ui_click(ui_id: str, target: str, *, double: bool = False,
     return Frame("UICLICK", h)
 
 
+def fs_get(fs_id: str, path: str, *, max_bytes: int = 0) -> Frame:
+    """Read a file on the connected machine, at any path.
+
+    The path is a HEADER and not the body. SYNCPUT puts its path in the body,
+    length-prefixed, because that format predates the header being an option,
+    and getting it back out needs a parser with four refusals; a Windows path
+    cannot contain a newline, so there is nothing to work around here.
+
+    `max_bytes` is enforced ON THE GUEST, not by counting what arrives. A cap
+    applied on this side still has the guest read and send the whole file, so
+    a request for a swap file is a socket held open for as long as it takes.
+    Zero means the guest's own ceiling, and the reply says `truncated=1` when
+    either bit.
+    """
+    h = {"id": fs_id, "path": truncate_header_value(path)}
+    if max_bytes:
+        h["max_bytes"] = str(max_bytes)
+    return Frame("FSGET", h)
+
+
+def fs_put(fs_id: str, path: str, off: int, chunk: bytes) -> Frame:
+    """One chunk of a file going the other way.
+
+    `path` rides every frame but is read only from the one at offset zero --
+    the guest captures it once for the life of the transfer, because a
+    mid-stream change would splice a file out of two destinations.
+
+    `off` is checked by the guest against what it has already written. A gap
+    means a frame was lost, duplicated or reordered, and writing it anyway
+    makes a file of the right length and the wrong contents.
+    """
+    return Frame("FSPUT", {"id": fs_id, "path": truncate_header_value(path),
+                           "off": str(off)}, chunk)
+
+
+def fs_putend(fs_id: str, crc: int) -> Frame:
+    """Close a transfer and ask the guest to put it in place.
+
+    The checksum is over the raw bytes. Nothing on the fs lane classifies or
+    folds line endings -- that is the sync layer's negotiation, and this is a
+    byte-exact transfer.
+    """
+    return Frame("FSPUTEND", {"id": fs_id, "crc": str(crc)})
+
+
+def fs_drives(fs_id: str) -> Frame:
+    """Every drive letter the machine has, with type, label and free space."""
+    return Frame("FSDRIVES", {"id": fs_id})
+
+
 def ui_focus(ui_id: str, target: str, *, settle: int = 0,
              timeout_ms: int = 8000) -> Frame:
     """Bring a window to the front without acting on it.

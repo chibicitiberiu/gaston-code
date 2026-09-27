@@ -42,6 +42,23 @@ class ExecCall:
 
 
 @dataclass
+class FsCall:
+    """One outstanding fs-lane request.
+
+    `data` accumulates FSDAT bodies for a get and `rows` accumulates FSDRIVE
+    records; a put fills neither and is resolved by its ack alone. Here rather
+    than in the service for the same reason UiCall is: the table it lives in
+    belongs to the session, and a service that owned the type would have the
+    session importing it back.
+    """
+
+    kind: str                       # get | put | drives
+    future: asyncio.Future
+    data: bytearray = field(default_factory=bytearray)
+    rows: list = field(default_factory=list)
+
+
+@dataclass
 class UiCall:
     """One outstanding desktop request.
 
@@ -203,6 +220,12 @@ class GuestSession:
     #: thread, so no lock: nothing on that side queues them.
     proc_pending: dict[str, asyncio.Future] = field(default_factory=dict)
     proc_seq: int = 0
+    #: In-flight fs-lane calls, keyed by `f`-prefixed id. A separate table
+    #: from `sync.pending` even though both travel the guest's STREAM lane:
+    #: they answer different futures, and the guest enforces the prefix
+    #: split rather than relying on the two allocators never colliding.
+    fs_pending: dict[str, FsCall] = field(default_factory=dict)
+    fs_seq: int = 0
     #: The sync subprotocol's own id namespace, in-flight table, baseline
     #: lock and running flag.
     sync: GuestSyncState = field(default_factory=GuestSyncState)
