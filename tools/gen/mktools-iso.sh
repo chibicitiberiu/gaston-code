@@ -126,12 +126,14 @@ cat > "$STAGE/SETUP.BAT" <<'BAT'
 REM COMMAND.COM rejects a trailing backslash on a COPY destination
 REM ("Invalid directory"), so C:\GASTON is written without one below.
 IF NOT EXIST C:\GASTON\NUL MD C:\GASTON
-COPY D:\*.EXE C:\GASTON > NUL
+COPY /Y D:\*.EXE C:\GASTON > NUL
 REM gaston.ini is an 8.3 name, so the CD's GASTON.INI IS the file the app
 REM opens. Before the rename the app read retroclaude.ini, and a plain copy of
 REM the CD's RETROCL.INI once left it on compiled-in defaults with an empty
 REM sync root and no error anywhere -- the long names below are that lesson.
-COPY D:\GASTON.INI C:\GASTON > NUL
+REM The destination is still named in full, with /Y: a COPY to the directory
+REM was seen keeping the old file on a reinstall (gremote, 2026-09-27).
+COPY /Y D:\GASTON.INI C:\GASTON\gaston.ini > NUL
 REM The cold-start transcript document. Without it the app shows a bare grey
 REM rectangle until a bridge answers, which is also when it most needs to say
 REM something. Long name deliberately: the app opens view.htm beside itself.
