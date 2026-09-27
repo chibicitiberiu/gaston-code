@@ -288,7 +288,8 @@ $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 # cmovcheck fail with "owned module never appears in the map", so each lib
 # joins the list in the commit that first calls into it.
 REMOTE_SRCS = remote/main.cpp remote/config.cpp remote/allow.cpp \
-              remote/server.cpp
+              remote/server.cpp remote/optable.cpp remote/reply.cpp \
+              remote/control.cpp
 GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBWIRE) $(LIBEXEC) \
                $(LIBCORE)
 gremote: $(BUILD)/gremote.exe

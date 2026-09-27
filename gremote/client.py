@@ -31,6 +31,7 @@ import time
 from bridge.wire.frame import Frame, FrameReader
 
 from .errors import Disconnected, Refused, Timeout
+from .ops import Process, SysInfo, codepage, parse_processes, parse_sysinfo
 
 #: 7890 and 7897 are the Gaston client's, 7900+ the test harness's.
 DEFAULT_PORT = 7401
@@ -72,6 +73,12 @@ class Remote:
         self.request_timeout = request_timeout
         self.ping_every = ping_every
         self.hello: dict[str, str] = {}
+        #: Filenames and window text are ANSI; what a console child writes is
+        #: OEM. HELLO reports both so nothing here has to guess, and getting
+        #: them the wrong way round is silent until somebody has an accented
+        #: character in a path.
+        self.acp = "latin-1"
+        self.oemcp = "latin-1"
 
         self._connect_timeout = connect_timeout
         self._sock: socket.socket | None = None
@@ -109,6 +116,8 @@ class Remote:
         if reply.type != "HELLO":
             raise Refused(reply.headers.get("code", "?"), "AUTH")
         self.hello = dict(reply.headers)
+        self.acp = codepage(self.hello.get("acp", ""))
+        self.oemcp = codepage(self.hello.get("oemcp", ""))
         self._pinger = threading.Thread(target=self._ping_loop,
                                         name="gremote-heartbeat", daemon=True)
         self._pinger.start()
@@ -134,6 +143,41 @@ class Remote:
 
     def ping(self) -> None:
         self.request("PING")
+
+    def sysinfo(self) -> SysInfo:
+        return parse_sysinfo(self.request("SYSINFO"))
+
+    def ps(self) -> list[Process]:
+        """Every process on the machine.
+
+        Raises Refused("no_toolhelp") where there is no way to enumerate --
+        NT 4, which 9x is not, but the guest resolves Toolhelp at runtime
+        rather than importing it and so can say so instead of failing to
+        load.
+        """
+        _, chunks = self.stream("PS")
+        return parse_processes(chunks, self.acp)
+
+    def kill(self, pid: int, force: bool = False) -> None:
+        """End a process.
+
+        Refusals worth knowing by name: `denied` for the handful that hang
+        9x when killed, `dos_session` for anything with a DOS VM under it
+        (which needs force, and costs a stranded REDIR32 either way), and
+        `pending` -- on 98 TerminateProcess returning success is not the
+        same as the process being gone.
+        """
+        headers = {"pid": f"{pid:08x}"}
+        if force:
+            headers["force"] = "1"
+        self.request("KILL", headers)
+
+    def reboot(self, mode: str = "reboot") -> None:
+        """Restart, log off, or power down. There is no undo and no
+        confirmation beyond this call, so it spells the confirmation out on
+        the wire rather than letting a stray REBOOT frame end somebody's
+        session."""
+        self.request("REBOOT", {"confirm": "yes", "mode": mode})
 
     def request(self, op: str, headers: dict[str, str] | None = None,
                 body: bytes = b"", timeout: float | None = None) -> Frame:

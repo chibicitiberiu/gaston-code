@@ -35,6 +35,7 @@
 #include "core/thread.h"
 #include "exec/process.h"
 #include "remote/config.h"
+#include "remote/control.h"
 #include "wire/connection.h"
 #include "wire/listener.h"
 
@@ -44,7 +45,7 @@ class Session : public FrameSink
 {
 public:
     Session(const ServerConfig &cfg, unsigned long generation,
-            const Processes &procs);
+            Processes &procs);
 
     /* Adopt the accepted socket and start the threads. */
     bool begin(SOCKET accepted);
@@ -77,7 +78,9 @@ private:
     const ServerConfig *m_cfg;
     const Processes *m_procs;
     unsigned long m_generation;
+    /* Declared before m_control, which is handed a reference to it. */
     Connection m_conn;
+    ControlOps m_control;
     volatile LONG m_dead;
     bool m_authed;
 };

@@ -8,6 +8,8 @@
 #include "core/log.h"
 #include "core/str.h"
 #include "exec/system.h"
+#include "remote/optable.h"
+#include "remote/reply.h"
 #include "wire/link.h"
 
 /* gremote's own protocol version. NOT the client's RC_PROTO_VERSION: this is
@@ -31,9 +33,10 @@ enum { BAD_SECRET_PAUSE_MS = 1000 };
 /* ------------------------------------------------------------- Session */
 
 Session::Session(const ServerConfig &cfg, unsigned long generation,
-                 const Processes &procs)
+                 Processes &procs)
     : m_cfg(&cfg), m_procs(&procs), m_generation(generation),
-      m_conn(this, false), m_dead(0), m_authed(false)
+      m_conn(this, false), m_control(procs, m_conn), m_dead(0),
+      m_authed(false)
 {
     /* Deflate off in v0 (docs/gremote-plan.md): the only large payload is a
      * screenshot and the ui lane is step 6, so the 192KB of persistent
@@ -160,26 +163,36 @@ void Session::onFrame(Connection &c, rc_frame *f)
         rc_log("server: %s before AUTH", f->type);
         refuse("not_authed", true);
     }
-    else if (strcmp(f->type, "PING") == 0)
-    {
-        const char *id = rc_frame_get(f, "id");
-        const char *keys[1];
-        const char *vals[1];
-        int n = 0;
-        if (id && *id) { keys[0] = "id"; vals[0] = id; n = 1; }
-        m_conn.send("OK", keys, vals, n, NULL, 0, RC_SEND_WAIT_UI, false, 0);
-    }
     else
     {
-        /* The lanes arrive in the next commits. Until then an unknown op is
-         * answered rather than dropped, for the same reason as above. */
-        const char *keys[2];
-        const char *vals[2];
-        const char *id = rc_frame_get(f, "id");
-        int n = 1;
-        keys[0] = "code"; vals[0] = "unknown_op";
-        if (id && *id) { keys[1] = "id"; vals[1] = id; n = 2; }
-        m_conn.send("ERR", keys, vals, n, NULL, 0, RC_SEND_WAIT_UI, false, 0);
+        Responder r(m_conn, rc_frame_get(f, "id"));
+        const GOpRow *row;
+
+        if (strcmp(f->type, "PING") == 0)
+        {
+            /* The Session's own, not the control lane's: it is about this
+             * connection rather than about the machine, and it is what
+             * resets the peer's side of the heartbeat. */
+            r.ok();
+        }
+        else if (!gremoteOp(f->type, &row))
+        {
+            r.err("unknown_op");
+        }
+        else if (row->lane == G_CONTROL)
+        {
+            /* Inline, on this thread. See remote/control.h for what that
+             * costs and why these ops pay it. */
+            if (!m_control.handle(r, f))
+                r.err("unknown_op");
+        }
+        else
+        {
+            /* The job and fs lanes arrive next. Answered rather than
+             * dropped meanwhile, for the same reason as everything else
+             * here: silence costs the caller its whole budget. */
+            r.err("not_implemented");
+        }
     }
     rc_frame_delete(f);
 }
