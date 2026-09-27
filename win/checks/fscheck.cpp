@@ -25,6 +25,7 @@
 #include "fs/path.h"
 #include "fs/reader.h"
 #include "fs/writer.h"
+#include "fs/xfer.h"
 
 static int g_failures;
 static Path g_scratch;
@@ -579,6 +580,171 @@ static void caseStat()
     RemoveDirectoryA(d.str());
 }
 
+/* --- xfer ---------------------------------------------------------------- */
+
+static void caseSink()
+{
+    Path target, temp;
+    AlwaysOk ok;
+    char detail[160];
+
+    scratchPath(target, "sunk.txt");
+
+    {
+        ChunkSink s;
+        DeleteFileA(target.str());
+        if (!s.beginAbsolute(target.str(), testNames(true)))
+        {
+            say("xfer.sink_commit", false, "begin refused");
+        }
+        else
+        {
+            bool chunks = s.write(0, "abcd", 4) == CHUNK_OK &&
+                          s.write(4, "efgh", 4) == CHUNK_OK;
+            rc_strf(detail, sizeof(detail), "received %lu",
+                    (unsigned long)s.received());
+            say("xfer.sink_commit",
+                chunks && s.received() == 8 && s.commit(&ok) == COMMIT_OK &&
+                exists(target.str()), detail);
+        }
+        DeleteFileA(target.str());
+    }
+    {
+        /* A gap means a frame was lost, duplicated or reordered. Writing it
+         * anyway makes a file of the right length and the wrong contents,
+         * which then checksums as a mismatch with no clue why. */
+        ChunkSink s;
+        ChunkStatus st;
+        DeleteFileA(target.str());
+        s.beginAbsolute(target.str(), testNames(true));
+        s.write(0, "abcd", 4);
+        st = s.write(8, "wxyz", 4);
+        rc_strf(detail, sizeof(detail), "status %d, received %lu", (int)st,
+                (unsigned long)s.received());
+        say("xfer.sink_out_of_order",
+            st == CHUNK_OUT_OF_ORDER && s.received() == 4, detail);
+        s.abort("the test is over");
+    }
+    {
+        ChunkSink s;
+        DeleteFileA(target.str());
+        s.beginAbsolute(target.str(), testNames(true));
+        temp.set(s.tempPath());
+        s.write(0, "half a file", 11);
+        s.abort("deliberately");
+        say("xfer.sink_abort",
+            !exists(temp.str()) && !exists(target.str()) && !s.active(),
+            "no temp and no target");
+    }
+    {
+        /* A verifier that says no must leave the destination as it was AND
+         * leave no temp -- this is docs/mem-audit F1 as a property of the
+         * sink rather than of one caller. */
+        ChunkSink s;
+        AlwaysMismatch bad;
+        DeleteFileA(target.str());
+        putFile(target.str(), "original", 8);
+        s.beginAbsolute(target.str(), testNames(true));
+        temp.set(s.tempPath());
+        s.write(0, "replacement", 11);
+        say("xfer.sink_verify_fails",
+            s.commit(&bad) == COMMIT_VERIFY_FAILED && exists(target.str()) &&
+            !exists(temp.str()),
+            "target untouched, temp removed");
+        DeleteFileA(target.str());
+    }
+}
+
+namespace {
+
+class ChunkLog : public ChunkConsumer
+{
+public:
+    ChunkLog() : calls(0), bytes(0), contiguous(true), total(0), stopAt(0) {}
+    virtual bool onChunk(const void *, unsigned len, unsigned long off,
+                         unsigned long whole)
+    {
+        if (off != bytes) contiguous = false;
+        calls++;
+        bytes += len;
+        total = whole;
+        if (stopAt && calls >= stopAt) return false;
+        return true;
+    }
+    unsigned calls;
+    unsigned long bytes;
+    bool contiguous;
+    unsigned long total;
+    unsigned stopAt;
+};
+
+class Tee : public ByteSink
+{
+public:
+    Tee() : bytes(0) {}
+    virtual bool write(const void *, unsigned len)
+    {
+        bytes += len;
+        return true;
+    }
+    unsigned long bytes;
+};
+
+} /* namespace */
+
+static void caseSource()
+{
+    Path p;
+    char detail[160];
+
+    scratchPath(p, "source.txt");
+    putFile(p.str(), "0123456789", 10);
+
+    {
+        ChunkSource src;
+        ChunkLog log;
+        Tee tee;
+        PumpResult r;
+
+        if (!src.open(p.str()))
+        {
+            say("xfer.source", false, "open refused");
+            DeleteFileA(p.str());
+            return;
+        }
+        /* total() is known before a single chunk goes out, so a receiver can
+         * size or refuse up front. */
+        bool sizedFirst = src.total() == 10;
+        r = src.pump(log, &tee, 4, 0);
+        rc_strf(detail, sizeof(detail),
+                "%u chunks, %lu bytes, tee %lu, total %lu", log.calls,
+                log.bytes, tee.bytes, log.total);
+        say("xfer.source", r == PUMP_DONE && sizedFirst && log.calls == 3 &&
+            log.bytes == 10 && log.contiguous && log.total == 10, detail);
+        /* The tee must see every byte exactly once and in order -- the sync
+         * classifier's CR carry depends on it. */
+        say("xfer.source_tee", tee.bytes == 10, detail);
+    }
+    {
+        ChunkSource src;
+        ChunkLog log;
+        log.stopAt = 1;
+        src.open(p.str());
+        say("xfer.source_stops",
+            src.pump(log, 0, 4, 0) == PUMP_CONSUMER_STOPPED && log.calls == 1,
+            "a consumer that has gone away ends the transfer");
+    }
+    {
+        ChunkSource src;
+        ChunkLog log;
+        src.open(p.str());
+        say("xfer.source_max_bytes",
+            src.pump(log, 0, 4, 6) == PUMP_TRUNCATED && log.bytes == 6,
+            "the cap is honoured on this side of the wire");
+    }
+    DeleteFileA(p.str());
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -605,7 +771,8 @@ int main(int argc, char **argv)
             casePath, caseWorkingName, caseReserve,
             caseWriterCommits, caseWriterRefusesAndCleansUp,
             caseWriterAbort, caseWriterNoAside, caseRecover,
-            caseReader, caseWalk, caseStat
+            caseReader, caseWalk, caseStat,
+            caseSink, caseSource
         };
         unsigned i;
         for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
