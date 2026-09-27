@@ -10,13 +10,7 @@
  * parameter and has no opinion about what they are.
  */
 #include "sync/sync.h"
-#include "fs/path.h"
-
-static WorkNames syncWorkNames()
-{
-    return WorkNames(RC_SYNC_TMP_SUFFIX, RC_SYNC_OLD_SUFFIX,
-                     RC_SYNC_WORK_SUFFIX, true);
-}
+#include "sync/worknames.h"
 
 extern "C" int rc_sync_contained(const char *rel)
 {

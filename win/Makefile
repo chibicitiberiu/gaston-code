@@ -127,7 +127,7 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 # drives.cpp and freespace.cpp are separate translation units on purpose: the
 # client wants free space for one volume and never enumerates drives, so
 # splitting them keeps the enumeration out of retroclaude.exe's image.
-FS_SRCS = fs/path.cpp fs/reader.cpp
+FS_SRCS = fs/path.cpp fs/file.cpp fs/dir.cpp fs/list.cpp fs/reader.cpp
 LIBFS = $(LIBDIR)/libfs.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).

@@ -17,8 +17,11 @@
 #include "core/log.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
+#include "fs/dir.h"
+#include "fs/path.h"
 #include "fs/reader.h"
 #include "sync/scanner.h"
+#include "sync/worknames.h"
 #include "miniz.h"
 
 /* --- classification + checksum, in ONE read pass ------------------------- */
@@ -179,15 +182,6 @@ int rc_sync_join(char *out, unsigned cap, const char *root, const char *rel)
     return ok;
 }
 
-/* --- the walk ------------------------------------------------------------ */
-
-typedef struct {
-    rc_sync_sink sink;
-    void        *ctx;
-    int          count;
-    int          overflow;
-} walk_ctx;
-
 unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
                               const rc_sync_stat *st)
 {
@@ -218,138 +212,109 @@ unsigned rc_sync_manifest_row(char *out, unsigned cap, const char *rel,
     return hn + rn + 1;
 }
 
-static void walk(const char *root, const char *rel, int depth, walk_ctx *w)
+/* --- the walk ------------------------------------------------------------
+ *
+ * The walk itself is libfs (fs/dir.h). What stays here is the part that is
+ * about sync rather than about directories: the content stat that produces a
+ * class and two checksums, and the rule that our own working names never
+ * reach a manifest.
+ */
+
+namespace {
+
+class SyncWalkFilter : public WalkFilter
 {
-    char pattern[MAX_PATH];
-    char child[MAX_PATH];
-    char full[MAX_PATH];
-    WIN32_FIND_DATAA fd;
-
-    if (depth > RC_SYNC_MAX_DEPTH || w->overflow) return;
-
-    if (*rel) rc_sync_join(pattern, sizeof(pattern), root, rel);
-    else      rc_strf(pattern, sizeof(pattern), "%s", root);
-    /* Bounded, but strncat's failure is a pattern with the "\\*" missing or
-     * half-appended rather than an error -- and FindFirstFileA then either
-     * fails (the subtree vanishes) or succeeds on the bare directory (the
-     * scan invents directories). The caller has already refused anything that
-     * would not fit; this is the assertion that it did. */
-    if (!rc_strcpy(pattern + strlen(pattern),
-                   sizeof(pattern) - strlen(pattern), "\\*"))
-        return;
-
-    FindHandle h(FindFirstFileA(pattern, &fd));
-    if (!h.valid()) return;
-
-    do {
-        rc_sync_stat st;
-
-        if (fd.cFileName[0] == '.' &&
-            (fd.cFileName[1] == '\0' ||
-             (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0')))
-            continue;
-
+public:
+    virtual bool skip(const char *name)
+    {
         /* Never report our own working files. rc_sync_recover knows these
          * names; the scanner did not, so a half-written `.gaston-tmp` was
          * offered to the bridge as an ordinary new file and pulled. */
-        if (rc_sync_is_working_name(fd.cFileName)) continue;
+        return isWorkingName(name, syncWorkNames());
+    }
+};
 
-        /* ALWAYS the long name, never cAlternateFileName. The 8.3 alias is not
-         * stable -- deleting one file renumbers ~1/~2 for the others -- so
-         * keying on it would rename files at random. */
-        /* CHECKED, because `child` feeds the joins below, and those feed a
-         * DeleteFileA and a MoveFileA. A truncated relative path names a
-         * different file, and this function runs at the top of every
-         * rc_workdir_apply -- i.e. whenever a conversation commits to a
-         * folder -- inside the user's own work directory. Skipping the entry
-         * loses a recovery; acting on a truncated one loses a file. */
-        if (*rel) {
-            if (!rc_strf(child, sizeof(child), "%s/%s", rel, fd.cFileName))
-                continue;
-        } else {
-            if (!rc_strf(child, sizeof(child), "%s", fd.cFileName))
-                continue;
+class SyncWalkSink : public DirSink
+{
+public:
+    SyncWalkSink(const char *root, rc_sync_sink sink, void *ctx)
+        : m_root(root), m_sink(sink), m_ctx(ctx) {}
+
+    virtual bool onEntry(const char *rel, const FileInfo &info)
+    {
+        rc_sync_stat st;
+        Path full;
+
+        memset(&st, 0, sizeof(st));
+
+        if (info.type != 'f')
+        {
+            st.type = info.type;
+            m_sink(m_ctx, rel, &st);
+            return true;
         }
 
-        if (w->count >= RC_SYNC_MAX_FILES) { w->overflow = 1; break; }
-
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            memset(&st, 0, sizeof(st));
-            /* Can this directory's own listing pattern even be formed?
-             * root + '\' + child + "\*" + NUL. If not, both ways of finding
-             * out are silent and both are wrong:
-             *
-             *   - one byte short, and strncat appends only the backslash;
-             *     FindFirstFileA then fails and the ENTIRE SUBTREE vanishes
-             *     from the manifest, which the bridge reads as the user having
-             *     deleted every file in it.
-             *   - exactly full, and strncat appends nothing; FindFirstFileA
-             *     succeeds on the bare directory path, returns the directory's
-             *     own entry, and walk recurses on the same truncated pattern
-             *     to RC_SYNC_MAX_DEPTH -- inventing a chain of directories the
-             *     bridge then dutifully creates with os.makedirs.
-             *
-             * `u` says what is true: it is there and we cannot read it. */
-            if (strlen(root) + 1 + strlen(child) + 3 > sizeof(pattern)) {
-                rc_log("sync: cannot list %s -- no room for a search pattern",
-                       child);
-                st.type = 'u';
-                w->sink(w->ctx, child, &st);
-                w->count++;
-                continue;                       /* and do NOT recurse */
-            }
-            st.type = 'd';
-            w->sink(w->ctx, child, &st);
-            w->count++;
-            walk(root, child, depth + 1, w);
-        } else {
-            /* A truncated join names a DIFFERENT file, so stat'ing it would
-             * report someone else's size and checksum under this path. `u`
-             * says what is true: it is there and we cannot address it. */
-            if (!rc_sync_join(full, sizeof(full), root, child)) {
-                memset(&st, 0, sizeof(st));
-                st.type = 'u';
-                w->sink(w->ctx, child, &st);
-                w->count++;
-                continue;
-            }
-            rc_sync_stat_file(full, &st);
-            /* type 0 means the stat found nothing where FindNextFileA had just
-             * seen something. Emitting it as-is put a row on the wire whose
-             * first field was a NUL: _snprintf("%c", 0) writes an empty string,
-             * so the line carried no fields at all, the bridge failed to parse
-             * it, and the manifest count then disagreed with `files=` -- which
-             * aborts THE WHOLE PASS, with a log warning as the only symptom.
-             * Same shape as the directory-versus-file crash.
-             *
-             * `u` rather than skipping the row. Skipping is right for the race
-             * that suggests itself (the file really was deleted between the
-             * enumerate and the stat, so absent is true and the next pass
-             * agrees). But the stat also fails PERMANENTLY for a name
-             * FindFirstFileA returns with a substitute character for a byte
-             * outside the codepage -- and omitting that row tells the bridge
-             * the user deleted a file they can see in Explorer. `u` says
-             * "something is here and I cannot read it", which is true in both
-             * cases, keeps the count honest, and costs the race one pass. */
-            if (!st.type) st.type = 'u';
-            w->sink(w->ctx, child, &st);
-            w->count++;
+        /* A truncated join names a DIFFERENT file, so stat'ing it would
+         * report someone else's size and checksum under this path. `u` says
+         * what is true: it is there and we cannot address it. */
+        full.join(m_root, rel);
+        if (!full.ok())
+        {
+            st.type = 'u';
+            m_sink(m_ctx, rel, &st);
+            return true;
         }
-    } while (FindNextFileA(h.get(), &fd));
-}
+
+        rc_sync_stat_file(full.str(), &st);
+
+        /* type 0 means the stat found nothing where the enumeration had just
+         * seen something. Emitting it as-is put a row on the wire whose first
+         * field was a NUL: the line carried no fields at all, the bridge
+         * failed to parse it, and the manifest count then disagreed with
+         * `files=` -- which aborts THE WHOLE PASS, with a log warning as the
+         * only symptom.
+         *
+         * `u` rather than skipping the row. Skipping is right for the race
+         * that suggests itself (the file really was deleted between the
+         * enumerate and the stat, so absent is true and the next pass
+         * agrees). But the stat also fails PERMANENTLY for a name the
+         * enumeration returns with a substitute character for a byte outside
+         * the codepage -- and omitting that row tells the bridge the user
+         * deleted a file they can see in Explorer. `u` says "something is
+         * here and I cannot read it", which is true in both cases, keeps the
+         * count honest, and costs the race one pass. */
+        if (!st.type) st.type = 'u';
+        m_sink(m_ctx, rel, &st);
+        return true;
+    }
+
+private:
+    const char   *m_root;
+    rc_sync_sink  m_sink;
+    void         *m_ctx;
+};
+
+} /* namespace */
 
 int rc_sync_scan(const char *root, rc_sync_sink sink, void *ctx)
 {
-    walk_ctx w;
-    DWORD attr = GetFileAttributesA(root);
+    SyncWalkFilter filter;
+    SyncWalkSink walkSink(root, sink, ctx);
+    WalkLimits limits(RC_SYNC_MAX_DEPTH, RC_SYNC_MAX_FILES);
+    int count = 0;
 
-    if (attr == 0xFFFFFFFF || !(attr & FILE_ATTRIBUTE_DIRECTORY)) return -1;
-
-    w.sink = sink; w.ctx = ctx; w.count = 0; w.overflow = 0;
-    walk(root, "", 0, &w);
-    /* A truncated manifest is indistinguishable from a mass deletion, so the
-     * caller must abort the whole pass rather than act on what it received. */
-    return w.overflow ? -2 : w.count;
+    switch (walkTree(root, limits, &filter, walkSink, count))
+    {
+    case WALK_NO_ROOT:
+        return -1;
+    case WALK_OVERFLOW:
+        /* A truncated manifest is indistinguishable from a mass deletion, so
+         * the caller must abort the whole pass rather than act on what it
+         * received. */
+        return -2;
+    default:
+        return count;
+    }
 }
 
 /* --- writing ------------------------------------------------------------- */

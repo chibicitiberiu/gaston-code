@@ -1,13 +1,7 @@
 #include "fs/reader.h"
 
-/* FILETIME is 100ns since 1601; the unix epoch is 11644473600 seconds later. */
-static DWORD toUnix(const FILETIME &ft)
-{
-    ULARGE_INTEGER u;
-    u.LowPart = ft.dwLowDateTime;
-    u.HighPart = ft.dwHighDateTime;
-    return (DWORD)((u.QuadPart / 10000000ULL) - 11644473600ULL);
-}
+#include "fs/finddata.h"
+
 
 FileReader::FileReader()
     : m_file(INVALID_HANDLE_VALUE), m_size(0), m_mtime(0), m_delivered(0)
@@ -26,7 +20,7 @@ bool FileReader::open(const char *full)
     if (!m_file.valid()) return false;
 
     m_size = GetFileSize(m_file.get(), NULL);
-    if (GetFileTime(m_file.get(), NULL, NULL, &ft)) m_mtime = toUnix(ft);
+    if (GetFileTime(m_file.get(), NULL, NULL, &ft)) m_mtime = fsToUnix(ft);
     m_delivered = 0;
     return true;
 }
