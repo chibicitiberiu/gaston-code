@@ -20,7 +20,7 @@ static const char *const SYNC_KEYS[] = { "root" };
  * which IniFile refuses, rather than a valid-looking path to another file. */
 static const char *iniPath(Path &out, const char *exeDir)
 {
-    out.join(exeDir ? exeDir : "", "retroclaude.ini");
+    out.join(exeDir ? exeDir : "", "gaston.ini");
     return out.ok() ? out.str() : "";
 }
 

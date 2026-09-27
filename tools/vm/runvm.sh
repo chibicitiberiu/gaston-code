@@ -59,4 +59,4 @@ exec qemu-system-i386 \
   -qmp unix:"$VM/qmp.sock",server=on,wait=off \
   -spice port="$SPICE_PORT",addr=127.0.0.1,disable-ticketing=on \
   -display "$VIEW" \
-  -name "RetroClaude Win98SE"
+  -name "Gaston Code Win98SE"

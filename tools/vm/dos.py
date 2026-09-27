@@ -292,7 +292,7 @@ def install_client(name: str) -> str:
     """Put the freshly built client on the guest under `name`, and return it.
 
     It does NOT overwrite the running one, and that is the whole point.
-    Windows 98 maps a running image, so `COPY D:\\RETROCL.EXE C:\\RETRO` fails
+    Windows 98 maps a running image, so `COPY D:\\GASTON.EXE C:\\GASTON` fails
     with "Sharing violation" -- which prints as one line in a console whose
     screendumps are frequently stale, so it reads as success. Twice a test ran
     against the previous binary and its result was taken at face value.
@@ -304,7 +304,7 @@ def install_client(name: str) -> str:
     down to reconnect churn.)
 
     A fresh name sidesteps all of it. The config is read from the exe's own
-    directory, so `C:\\RETRO\\RC7.EXE` picks up the same retroclaude.ini, and
+    directory, so `C:\\GASTON\\RC7.EXE` picks up the same gaston.ini, and
     193KB on a 1.7GB disk is not a consideration.
     """
     run("CLS")
@@ -319,9 +319,9 @@ def install_client(name: str) -> str:
     #: the previous one's. Seen twice in one session.
     #:
     #: A name that does not exist cannot prompt.
-    run(f"IF EXIST C:\\RETRO\\{name} DEL C:\\RETRO\\{name}", settle=2.0)
-    run(f"COPY D:\\RETROCL.EXE C:\\RETRO\\{name}", settle=6.0)
-    return f"C:\\RETRO\\{name}"
+    run(f"IF EXIST C:\\GASTON\\{name} DEL C:\\GASTON\\{name}", settle=2.0)
+    run(f"COPY D:\\GASTON.EXE C:\\GASTON\\{name}", settle=6.0)
+    return f"C:\\GASTON\\{name}"
 
 
 def run(cmd: str, settle: float = 3.0) -> None:

@@ -508,7 +508,7 @@ def _summarise(args: dict) -> str:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="RetroClaude bridge")
+    ap = argparse.ArgumentParser(description="Gaston Code bridge")
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address; use the retro-segment interface, not 0.0.0.0")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -546,10 +546,10 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
     The secret is the one thing that is not an argument: a shared secret on a
     command line is readable by every process on the box.
     """
-    secret = os.environ.get("RETROCLAUDE_SECRET")
+    secret = os.environ.get("GASTON_SECRET")
     if not secret:
         secret = "dev-secret"
-        log.warning("RETROCLAUDE_SECRET unset; using %r (development only)",
+        log.warning("GASTON_SECRET unset; using %r (development only)",
                     secret)
     config = BridgeConfig(
         secret=secret,

@@ -12,7 +12,7 @@ loopback finishes in about a second, which is not a window you can type into,
 and `--link-bps` throttles the bridge's own sending logic rather than the wire.
 
 So this is a bridge stub: enough of the handshake to satisfy the guest, then
-whatever frames the test wants. It talks to the SHIPPING retroclaude.exe over a
+whatever frames the test wants. It talks to the SHIPPING gaston.exe over a
 real socket, so what it proves is about the binary on the Windows 98 machine
 and not about a model of it.
 

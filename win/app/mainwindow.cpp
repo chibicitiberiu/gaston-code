@@ -982,7 +982,7 @@ void MainWindow::createChildren(HWND hwnd, HINSTANCE inst)
      *     was still NULL, because rc_pagebar::create is ~30 lines below here.
      *     A no-op on either branch.
      *
-     * So `autoscroll=0` in retroclaude.ini round-tripped perfectly and the
+     * So `autoscroll=0` in gaston.ini round-tripped perfectly and the
      * transcript still yanked to the bottom on every append. Toggling Follow
      * at runtime was always a separate and correct path; only the PERSISTED
      * preference was dead -- the one that has to survive a restart.
@@ -1370,7 +1370,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
                 if (m_html) m_html->set_autoscroll(m_cfg->autoscroll);
                 if (!m_store->save(*m_cfg) && m_html)
                     m_html->error("That setting could not be saved to "
-                                  "retroclaude.ini and will not survive a "
+                                  "gaston.ini and will not survive a "
                                   "restart. The drive may be full or "
                                   "write-protected.");
                 rc_log("autoscroll: %s", m_cfg->autoscroll ? "on" : "off");
@@ -1578,7 +1578,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
                 char line[192];
                 if (!m_store->save(*m_cfg) && m_html)
                     m_html->error("That setting could not be saved to "
-                                  "retroclaude.ini and will not survive a "
+                                  "gaston.ini and will not survive a "
                                   "restart. The drive may be full or "
                                   "write-protected.");
 

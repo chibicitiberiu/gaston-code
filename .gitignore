@@ -57,13 +57,15 @@ vm/watch/
 vm/tools-stage/
 vm/*.partial.*
 
-# NOT ignored, deliberately: win/retroclaude.ini is the template config, and
+# NOT ignored, deliberately: win/gaston.ini is the template config, and
 # the guest's own runtime copy now lands beside its exe in build/win/, which
 # is ignored by the first rule in this file.
 
-# win/checks/netcheck.c and rpccheck.c call rc_log_open("."), so running one
-# from the repo root drops retroclaude.log here. The binaries are right to log --
-# that is what they are for -- but the log is scratch, not source.
+# Running the client (or a check, under its own name) from the repo root drops
+# its log here. The binaries are right to log -- that is what they are for --
+# but the log is scratch, not source. /retroclaude.log is from before the
+# rename, and still sits in older checkouts.
+/gaston.log
 /retroclaude.log
 *.log
 # And the SHOUTED form. gitignore is case-sensitive on Linux, so `*.log`

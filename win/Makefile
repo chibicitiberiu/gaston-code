@@ -1,4 +1,4 @@
-# retroclaude.exe -- the single Win98 guest binary.
+# gaston.exe -- the single Win98 guest binary.
 #
 # One executable, one TCP connection, three threads (UI / reader / RPC worker).
 # See ../docs/PLAN.md.
@@ -126,7 +126,7 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 #
 # drives.cpp and freespace.cpp are separate translation units on purpose: the
 # client wants free space for one volume and never enumerates drives, so
-# splitting them keeps the enumeration out of retroclaude.exe's image.
+# splitting them keeps the enumeration out of gaston.exe's image.
 FS_SRCS = fs/path.cpp fs/file.cpp fs/dir.cpp fs/list.cpp fs/reader.cpp \
           fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp
 LIBFS = $(LIBDIR)/libfs.lib
@@ -412,7 +412,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 
 # `all` builds the CHECK BINARIES TOO, and that is not tidiness.
 #
-# It used to be retroclaude.exe alone, so every check binary was only ever
+# It used to be gaston.exe alone, so every check binary was only ever
 # rebuilt by naming its own target. tests/python runs them under Wine, which
 # means the suite happily ran an hours-old netcheck.exe against freshly
 # changed net.cpp and reported a pass -- the exact failure the standing rule
@@ -423,10 +423,10 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 #
 # The cost is a few seconds. A green suite that tested the previous commit is
 # worth far less than that.
-retroclaude: $(BUILD)/retroclaude.exe
-retroclaude.exe: $(BUILD)/retroclaude.exe
+gaston: $(BUILD)/gaston.exe
+gaston.exe: $(BUILD)/gaston.exe
 
-all: msgids $(BUILD)/retroclaude.exe gremote synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
+all: msgids $(BUILD)/gaston.exe gremote synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
      netcheck rpccheck probe execprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
@@ -587,7 +587,7 @@ $(OBJ)/core/thread.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 # other order (link first, then `wrc file.res file.exe` to inject) also works
 # and is what most Watcom examples show; it is not used here because it makes
 # the EXE a two-step artefact, and a build interrupted between the steps
-# leaves a retroclaude.exe that is newer than every prerequisite and has no
+# leaves a gaston.exe that is newer than every prerequisite and has no
 # icon. One link, one output.
 #
 # -i=$(CURDIR) is what lets gaston.rc say `#include "app/resource.h"` -- the
@@ -634,9 +634,9 @@ $(LIBAUTOMATION): $(call objs,$(AUTOMATION_SRCS))
 msgids:
 	@$(PYTHON) $(TOP)/tools/check/msgids.py $(CURDIR)
 
-$(BUILD)/retroclaude.exe: $(OBJS) $(BUILD)/gaston.res | msgids
+$(BUILD)/gaston.exe: $(OBJS) $(BUILD)/gaston.res | msgids
 	@$(WLINK) $(LFLAGS), resource=$(BUILD)/gaston.res, \
-	  map=$(BUILD)/retroclaude.map $(LIBS) name $@ $(LINKIN)
+	  map=$(BUILD)/gaston.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # The CMOV gate used to be a count against a baseline, and the baseline moved
@@ -681,7 +681,7 @@ PYTHON ?= python3
 # program is not competing for that memory and never runs beside the client.
 # It is set rather than omitted because the gate compares against whatever
 # it is given, and 0 means "must be empty", not "not applicable".
-check: check-sources check-retroclaude check-gremote check-autocheck check-fscheck
+check: check-sources check-gaston check-gremote check-autocheck check-fscheck
 
 # gremote's budget is its own. The number is deliberately loose while the
 # lanes are still arriving -- one measured against a skeleton would be raised
@@ -694,8 +694,8 @@ check-fscheck: CHECK_CAP   = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
 check-autocheck: CHECK_CAP   = 200000
 
-check-retroclaude: CHECK_OWNED = $(OBJS)
-check-retroclaude: CHECK_CAP   = $(COMMITTED_CAP)
+check-gaston: CHECK_OWNED = $(OBJS)
+check-gaston: CHECK_CAP   = $(COMMITTED_CAP)
 
 check-sources:
 	@echo "=== unbounded string functions (the overflow family) ==="

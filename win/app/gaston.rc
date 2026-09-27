@@ -1,4 +1,4 @@
-/* Resources for retroclaude.exe.
+/* Resources for gaston.exe.
  *
  * Compiled by wrc and bound at link time (see win/Makefile). Before this
  * file existed the EXE carried no resource section at all: the window and
@@ -60,11 +60,11 @@ FILESUBTYPE    0x0L
        * blank value -- verified on the guest. */
       VALUE "FileDescription",  "Gaston Code\0"
       VALUE "FileVersion",      RC_VER_STR "\0"
-      VALUE "InternalName",     "retroclaude\0"
+      VALUE "InternalName",     "gaston\0"
       /* Win98 gives LegalCopyright its own labelled line at the top of the
        * tab, above the fold, rather than burying it in the list. */
       VALUE "LegalCopyright",   "Copyright (c) 2026 Tiberiu Chibici. MIT.\0"
-      VALUE "OriginalFilename", "RETROCL.EXE\0"
+      VALUE "OriginalFilename", "GASTON.EXE\0"
       VALUE "ProductName",      "Gaston Code\0"
       VALUE "ProductVersion",   RC_VER_STR "\0"
     }

@@ -1,4 +1,4 @@
-/* The client's settings: retroclaude.ini beside the exe, read and written
+/* The client's settings: gaston.ini beside the exe, read and written
  * through libcore's IniFile.
  *
  * Replaces rc_config and core/ini.cpp (docs/REMOTE.md, C3). The difference
@@ -31,7 +31,7 @@ struct ClientConfig
 class ConfigStore
 {
 public:
-    /* <exeDir>\retroclaude.ini */
+    /* <exeDir>\gaston.ini */
     explicit ConfigStore(const char *exeDir);
 
     /* Defaults, then the file. A missing file is written with the defaults

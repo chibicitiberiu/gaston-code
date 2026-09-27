@@ -91,7 +91,7 @@ wine-smoke: guest-checks
 # everything -- so after a `make clean; make test` their two suites would hit
 # guest_exe's loud failure, which is the good outcome of a bad list.
 guest-checks:
-	@$(MAKE) -C win retroclaude gremote synccheck inicheck inifilecheck appcheck windowcheck wirecheck execcheck uicheck cppcheck rpccheck framecheck netcheck autocheck \
+	@$(MAKE) -C win gaston gremote synccheck inicheck inifilecheck appcheck windowcheck wirecheck execcheck uicheck cppcheck rpccheck framecheck netcheck autocheck \
 	                probe capscheck workcheck toolcheck fscheck
 
 # RichEdit 2.0 was what Win98 shipped, and this gated on the 3.0-only messages
@@ -151,11 +151,11 @@ test: guest-checks
 # into fifteen seconds. Not a gate -- `make test` is -- but the difference
 # between running the tests after every edit and running them after every
 # third one.
-# Ensures retroclaude.exe is present so test_import_gate.py runs in full on clean checkouts
-guest-retroclaude:
-	@$(MAKE) -C win retroclaude
+# Ensures gaston.exe is present so test_import_gate.py runs in full on clean checkouts
+guest-gaston:
+	@$(MAKE) -C win gaston
 
-test-fast: guest-retroclaude
+test-fast: guest-gaston
 	@$(PY) -m pytest tests/python -m "not guest" -q
 
 # Run all verification gates together: static PE audit (imports, CMOV, frames,

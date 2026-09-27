@@ -15,7 +15,7 @@ copy extract.exe %RAMD%:\ > NUL
 LH %ramd%:\MSCDEX.EXE /D:mscd001 /L:%CDROM% > NUL
 
 ECHO.
-ECHO RetroClaude unattended Windows 98 SE install
+ECHO Gaston Code unattended Windows 98 SE install
 ECHO.
 
 REM Make C: bootable so Setup's reboots land on the hard disk.

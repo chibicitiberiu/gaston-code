@@ -17,4 +17,4 @@ sleep 1
 virsh change-media "$DOM" hdc "$ISO" --insert --live
 sleep 2
 echo "host   $(stat -c%s vm/tools.iso) bytes  $(md5sum vm/tools.iso | cut -c1-12)"
-echo "exe    $(stat -c%s build/win/retroclaude.exe) bytes"
+echo "exe    $(stat -c%s build/win/gaston.exe) bytes"

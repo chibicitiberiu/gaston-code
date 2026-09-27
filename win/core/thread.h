@@ -4,7 +4,7 @@
  * since the library split was planned; this is it, and gremote is why it
  * finally matters. Every thread in the tree until now was started by hand,
  * and all eight sites pass 0 for the stack -- so every one of them takes the
- * image default. MEASURED on build/win/retroclaude.exe: 1 MB reserve,
+ * image default. MEASURED on build/win/gaston.exe: 1 MB reserve,
  * **64 KB commit**, per thread. gremote has six (its message loop, the accept
  * loop, Connection's reader and sender, the job worker, the fs worker), which
  * is 384 KB of committed stack on a 32 MB machine before it has done

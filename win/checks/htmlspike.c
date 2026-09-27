@@ -274,7 +274,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 
     /* A file rather than document.write, so this proves rendering without
      * also depending on navigation-complete timing. */
-    f = fopen("C:\\RETRO\\SPIKE.HTM", "wb");
+    f = fopen("C:\\GASTON\\SPIKE.HTM", "wb");
     if (f) {
         fputs("<html><head><style>\r\n"
               "body{font:8pt 'MS Sans Serif';margin:8px;background:#fff;color:#000}\r\n"
@@ -285,7 +285,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
               "font:9pt 'Courier New';color:#000080;margin:6px 0}\r\n"
               "li{margin:2px 0}\r\n"
               "</style></head><body>\r\n"
-              "<h2>RetroClaude</h2>\r\n"
+              "<h2>Gaston Code</h2>\r\n"
               "<div class=you>&gt; does MSHTML host on Win98 from C?</div>\r\n"
               "<p>If you can read this with a <b>bold</b> word, a tinted quote"
               " box above and a bordered code block below, then yes.</p>\r\n"

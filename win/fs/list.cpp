@@ -2,7 +2,7 @@
  *
  * Nothing in the client lists a single directory -- the sync layer walks whole
  * trees and the agent has `dir` -- so keeping it apart from walkTree keeps it
- * out of retroclaude.exe's image. gremote's LS is its caller.
+ * out of gaston.exe's image. gremote's LS is its caller.
  */
 #include "fs/dir.h"
 

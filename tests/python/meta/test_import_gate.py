@@ -38,15 +38,15 @@ def gate():
 @pytest.fixture(scope="module")
 def baseline(gate):
     """The real binary's imports, so the synthetic cases stay realistic."""
-    exe = os.path.join(conftest.REPO, "build", "win", "retroclaude.exe")
+    exe = os.path.join(conftest.REPO, "build", "win", "gaston.exe")
     if not os.path.exists(exe):
-        pytest.skip("retroclaude.exe not built")
+        pytest.skip("gaston.exe not built")
     return gate.imports(exe)
 
 
 def _run(gate, monkeypatch, dlls, syms):
     monkeypatch.setattr(gate, "imports", lambda exe: (dlls, syms))
-    exe = os.path.join(conftest.REPO, "build", "win", "retroclaude.exe")
+    exe = os.path.join(conftest.REPO, "build", "win", "gaston.exe")
     return gate.main(["imports.py", exe])
 
 

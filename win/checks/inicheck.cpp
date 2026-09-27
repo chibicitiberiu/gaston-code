@@ -67,7 +67,7 @@ int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : ".";
     Path path;
-    path.join(dir, "retroclaude.ini");
+    path.join(dir, "gaston.ini");
     DeleteFileA(path.str());
 
     /* --- round trip ----------------------------------------------------- */

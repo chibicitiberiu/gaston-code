@@ -15,7 +15,7 @@ extern "C" {
 #endif
 /* `program` names both the file (<exe_dir>\\<program>.log) and the banner.
  * It is a parameter because more than one of our programs can sit in one
- * directory -- gremote.exe beside retroclaude.exe on the test box -- and a
+ * directory -- gremote.exe beside gaston.exe on the test box -- and a
  * shared log file is two programs interleaving lines into each other's
  * diagnostics with no way to tell whose is whose. */
 int  rc_log_open(const char *exe_dir, const char *program);

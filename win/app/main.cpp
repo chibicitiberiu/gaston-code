@@ -1,4 +1,4 @@
-/* retroclaude.exe -- native Windows 98 client for Claude Code.
+/* gaston.exe -- native Windows 98 client for Claude Code.
  *
  * ClientApp is the composition root (docs/REMOTE.md, C4-C5a): App runs the
  * lifecycle and ClientApp fills in each phase. initialize() does what can
@@ -89,7 +89,7 @@ bool ClientApp::initialize()
      * created" is the primary diagnostic: an NT-only static import kills the
      * process at load, before WinMain, leaving nothing else behind. */
     exeDir(m_exeDir, sizeof(m_exeDir));
-    rc_log_open(m_exeDir, "retroclaude");
+    rc_log_open(m_exeDir, "gaston");
     rc_log("os version: %08lx", GetVersion());
 
     /* One instance. A second one is not a harmless duplicate: the bridge holds
@@ -104,7 +104,7 @@ bool ClientApp::initialize()
      * quick succession. FindWindow then raises the one that is already there,
      * so a second launch behaves like clicking the taskbar button. */
     {
-        HANDLE once = CreateMutexA(NULL, FALSE, "RetroClaudeSingleInstance");
+        HANDLE once = CreateMutexA(NULL, FALSE, "GastonSingleInstance");
         if (once && GetLastError() == ERROR_ALREADY_EXISTS) {
             HWND other = FindWindowA(RC_MAIN_CLASS, NULL);
             rc_log("another instance is running; raising it and exiting");
@@ -146,7 +146,7 @@ bool ClientApp::initialize()
     if (!m_store.valid() || !m_store->load(&m_config)) {
         char msg[512];
         rc_strf(msg, sizeof(msg),
-                "retroclaude.ini has a setting that cannot be used:\n\n%s\n\n"
+                "gaston.ini has a setting that cannot be used:\n\n%s\n\n"
                 "Fix or remove it and start again.\n\n%s",
                 m_store.valid() ? m_store->error() : "out of memory",
                 m_store.valid() ? m_store->path() : "");

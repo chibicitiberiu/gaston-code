@@ -360,8 +360,8 @@ static void probe_exec(void)
     say("shell for this OS: %s%s", shell, is9x ? "  (16-bit!)" : "");
     say("The assertion is 'output non-empty AND correct', not 'did not hang'.");
 
-    rc_strf(cmd, sizeof(cmd), "%s /c echo RETROCLAUDE_MARKER", shell);
-    try_cmd("echo through the shell", cmd, "RETROCLAUDE_MARKER");
+    rc_strf(cmd, sizeof(cmd), "%s /c echo GASTON_MARKER", shell);
+    try_cmd("echo through the shell", cmd, "GASTON_MARKER");
 
     rc_strf(cmd, sizeof(cmd), "%s /c ver", shell);
     try_cmd("ver", cmd, NULL);
@@ -3716,7 +3716,7 @@ int main(int argc, char **argv)
      * waiting on CTS from a cable that is not there, hanging a run that has
      * no serial capture set up anyway. PROBE.LOG is the record.
      */
-    say("RetroClaude Phase 0 probe");
+    say("Gaston Code Phase 0 probe");
     say("results are appended to PROBE.LOG beside this exe");
     say("built %s %s", __DATE__, __TIME__);
 

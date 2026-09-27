@@ -1,4 +1,4 @@
-"""A Linux stand-in for retroclaude.exe that speaks the real wire protocol.
+"""A Linux stand-in for gaston.exe that speaks the real wire protocol.
 
 This is the highest-leverage file in the project. It means the entire bridge can
 be built and tested before any Win98 code exists, and afterwards it stays as:
@@ -796,11 +796,11 @@ async def run(args) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Linux stand-in for retroclaude.exe")
+    ap = argparse.ArgumentParser(description="Linux stand-in for gaston.exe")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=7890)
     ap.add_argument("--secret",
-                    default=os.environ.get("RETROCLAUDE_SECRET", "dev-secret"))
+                    default=os.environ.get("GASTON_SECRET", "dev-secret"))
     ap.add_argument("--raw", action="store_true",
                     help="dump frames instead of rendering them")
     args = ap.parse_args()

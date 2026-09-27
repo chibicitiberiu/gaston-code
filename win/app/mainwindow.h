@@ -42,7 +42,7 @@ class rc_statusbar;
 
 /* The window class. WinMain's single-instance check finds the running copy
  * by it, so it is named once, here. */
-#define RC_MAIN_CLASS "RetroClaudeWnd"
+#define RC_MAIN_CLASS "GastonWnd"
 
 class MainWindow : public Service, public Window, public ReconnectListener, public TurnListener,
                    public FrameSender, public ChatListListener,

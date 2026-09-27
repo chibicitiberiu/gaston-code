@@ -24,14 +24,14 @@ TimeZone="GMT"
 VRC=0
 
 [NameAndOrg]
-Name="RetroClaude"
-Org="RetroAI"
+Name="Gaston Code"
+Org="Gaston Code"
 Display=0
 
 [Network]
 ComputerName="RETRO98"
 Workgroup="WORKGROUP"
-Description="RetroClaude guest"
+Description="Gaston Code guest"
 Display=0
 PrimaryLogon=VREDIR
 Clients=VREDIR

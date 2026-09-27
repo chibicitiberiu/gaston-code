@@ -65,7 +65,7 @@ class rc_cache {
     int path_for(char *out, unsigned cap, int n) const;
 
 public:
-    /* `exe_dir` is where retroclaude.exe lives -- the INI and the log are
+    /* `exe_dir` is where gaston.exe lives -- the INI and the log are
      * already there, and a cache somewhere else would be a second place to
      * look when clearing one machine's state. */
     static rc_cache *create(const char *exe_dir);

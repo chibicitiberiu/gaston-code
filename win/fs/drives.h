@@ -3,7 +3,7 @@
  *
  * Split across two translation units on purpose. The client wants free space
  * for one volume and never enumerates drives, so `enumerateDrives` lives in
- * its own object and stays out of retroclaude.exe's image entirely.
+ * its own object and stays out of gaston.exe's image entirely.
  */
 #ifndef RC_FS_DRIVES_H
 #define RC_FS_DRIVES_H

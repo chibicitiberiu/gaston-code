@@ -23,11 +23,11 @@ from __future__ import annotations
 import argparse
 import socket
 
-#: Where the bridge normally listens, so the guest's own retrocl.ini works
+#: Where the bridge normally listens, so the guest's own gaston.ini works
 #: against a probe without editing anything on the machine.
 PORT = 7890
 
-#: The development secret in vm/retrocl.ini. Not a credential; it exists so a
+#: The development secret in vm/gaston.ini. Not a credential; it exists so a
 #: stray process on the host cannot be mistaken for the guest.
 SECRET = "dev-secret"
 

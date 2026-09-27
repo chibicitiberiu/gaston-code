@@ -4,7 +4,7 @@
  * WHY C++ AT ALL. The language was never argued -- PLAN.md's toolchain section
  * is meticulous about -bm, WLINK_LNK and WINVER pinning and silent on this --
  * and C came from retro-agent, a codebase this project meant to lift from and
- * largely did not. Measured against the target: a mixed C/C++ retroclaude.exe
+ * largely did not. Measured against the target: a mixed C/C++ gaston.exe
  * imports the same symbols from the same DLLs, has the same CMOV count, and
  * committed-at-load BSS went DOWN. The load-time hazard that would have
  * settled it -- one NT-only import kills the image before WinMain with nothing

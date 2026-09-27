@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build an unattended Windows 98 SE guest for RetroClaude.
+# Build an unattended Windows 98 SE guest for Gaston Code.
 #
 # Win98 Setup supports an answer file (MSBATCH.INF) -- this is how OEMs
 # deployed it. Combined with partitioning and formatting the disk from Linux,
@@ -75,14 +75,14 @@ TimeZone="GMT"
 VRC=0
 
 [NameAndOrg]
-Name="RetroClaude"
-Org="RetroAI"
+Name="Gaston Code"
+Org="Gaston Code"
 Display=0
 
 [Network]
 ComputerName="RETRO98"
 Workgroup="WORKGROUP"
-Description="RetroClaude guest"
+Description="Gaston Code guest"
 Display=0
 PrimaryLogon=VREDIR
 Clients=VREDIR
@@ -140,7 +140,7 @@ copy extract.exe %RAMD%:\ > NUL
 LH %ramd%:\MSCDEX.EXE /D:mscd001 /L:%CDROM% > NUL
 
 ECHO.
-ECHO RetroClaude unattended Windows 98 SE install
+ECHO Gaston Code unattended Windows 98 SE install
 ECHO.
 
 REM Make C: bootable so Setup's reboots land on the hard disk.

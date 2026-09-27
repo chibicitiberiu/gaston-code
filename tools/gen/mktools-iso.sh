@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a CD image carrying the RetroClaude binaries and the Phase 0 test
+# Build a CD image carrying the Gaston Code binaries and the Phase 0 test
 # programs into the guest.
 #
 # A CD rather than a floppy because the binaries already exceed 1.44MB, and
@@ -20,7 +20,7 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 # looks exactly like a copy of a file that is not wanted.
 #
 # So: `need` for anything the guest cannot do without, `want` for the rest --
-# and `want` still SAYS when it skips. Only RETROCL.INI is genuinely allowed
+# and `want` still SAYS when it skips. Only GASTON.INI is genuinely allowed
 # to be absent twice, because the two sources deliberately overwrite.
 missing=0
 need() {                                # fail loudly
@@ -37,7 +37,7 @@ want() {                                # skip, but out loud
 want "$HERE/build/win/probe.exe" "PROBE.EXE"
 want "$HERE/build/win/htmlspike.exe" "HTMLSPK.EXE"
 want "$HERE/build/win/execprobe.exe" "EXECPRB.EXE"
-need "$HERE/build/win/retroclaude.exe" "RETROCL.EXE"
+need "$HERE/build/win/gaston.exe" "GASTON.EXE"
 want "$HERE/build/win/netcheck.exe" "NETCHECK.EXE"
 # The collision-mode check. It runs green under Wine and that proves the
 # code, never the platform -- CopyFile, MoveFile and the 8.3 aliasing
@@ -69,10 +69,10 @@ want "$HERE/build/win/uicheck.exe" "UICHECK.EXE"
 # The injection test DLL (probe 0.15d). It must be a real file the system
 # can map into other processes, so it rides here like the exes do.
 want "$HERE/build/win/HOOKDLL.DLL" "HOOKDLL.DLL"
-# vm/retrocl.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
+# vm/gaston.ini points at 10.0.2.2 (the QEMU user-mode host) and wins over
 # the Wine-tier default of 127.0.0.1 when it exists.
-cp "$HERE/win/retroclaude.ini" "$STAGE/RETROCL.INI" 2>/dev/null || true
-cp "$HERE/vm/retrocl.ini"      "$STAGE/RETROCL.INI" 2>/dev/null || true
+cp "$HERE/win/gaston.ini" "$STAGE/GASTON.INI" 2>/dev/null || true
+cp "$HERE/vm/gaston.ini"      "$STAGE/GASTON.INI" 2>/dev/null || true
 # What to look for on the machine. Without this on the CD the detector finds
 # nothing and the feature is inert -- it fails silently, because "no INI" and
 # "nothing installed" produce the same empty report by design.
@@ -124,37 +124,36 @@ need "$HERE/tools/gen/w98kit/UITEST.HTM" "UITEST.HTM"
 cat > "$STAGE/SETUP.BAT" <<'BAT'
 @ECHO OFF
 REM COMMAND.COM rejects a trailing backslash on a COPY destination
-REM ("Invalid directory"), so C:\RETRO is written without one below.
-IF NOT EXIST C:\RETRO\NUL MD C:\RETRO
-COPY D:\*.EXE C:\RETRO > NUL
-REM The app reads retroclaude.ini, NOT retrocl.ini. ISO level 1 forces the 8.3
-REM name on the CD, so a plain "COPY D:\*.INI" lands a file the client never
-REM opens -- it then falls back to its compiled-in defaults and, in the case
-REM that cost an hour, ran with an empty sync root and no error anywhere.
-REM Name the destination explicitly. The Win98 DOS box speaks long filenames.
-COPY D:\RETROCL.INI C:\RETRO\retroclaude.ini > NUL
+REM ("Invalid directory"), so C:\GASTON is written without one below.
+IF NOT EXIST C:\GASTON\NUL MD C:\GASTON
+COPY D:\*.EXE C:\GASTON > NUL
+REM gaston.ini is an 8.3 name, so the CD's GASTON.INI IS the file the app
+REM opens. Before the rename the app read retroclaude.ini, and a plain copy of
+REM the CD's RETROCL.INI once left it on compiled-in defaults with an empty
+REM sync root and no error anywhere -- the long names below are that lesson.
+COPY D:\GASTON.INI C:\GASTON > NUL
 REM The cold-start transcript document. Without it the app shows a bare grey
 REM rectangle until a bridge answers, which is also when it most needs to say
 REM something. Long name deliberately: the app opens view.htm beside itself.
-REM Long name again, and for the same reason as retroclaude.ini above: the
+REM Long name deliberately, for the reason given above: the
 REM detector opens tools_detect.ini beside the exe, and ISO level 1 can only
 REM carry TOOLSDET.INI. TOOLS.INI is the user's and is NEVER shipped -- it is
 REM read second so their additions win, and copying one over it on every
 REM install would throw those away.
-IF EXIST D:\TOOLSDET.INI COPY D:\TOOLSDET.INI C:\RETRO\tools_detect.ini > NUL
-IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\RETRO\view.htm > NUL
-IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\RETRO\spin.gif > NUL
+IF EXIST D:\TOOLSDET.INI COPY D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL
+IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\GASTON\view.htm > NUL
+IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\GASTON\spin.gif > NUL
 C:
-CD \RETRO
-ECHO Copied to C:\RETRO.  Run PROBE to start the Phase 0 experiments.
+CD \GASTON
+ECHO Copied to C:\GASTON.  Run PROBE to start the Phase 0 experiments.
 BAT
 sed -i 's/$/\r/' "$STAGE/SETUP.BAT"
 
 cat > "$STAGE/README.TXT" <<'TXT'
-RetroClaude test payload
+Gaston Code test payload
 ========================
 
-SETUP.BAT     copies everything to C:\RETRO and cd's there.
+SETUP.BAT     copies everything to C:\GASTON and cd's there.
 
 PROBE.EXE     the Phase 0 experiments: W-suffix imports, threads under -bm,
               16-bit EXEC capture, BI_RLE8, deflate throughput. Writes
@@ -173,14 +172,14 @@ TOOLCHK.EXE   prints what tool detection found, in the wire encoding:
               The same code the client runs, so what this prints is what
               the bridge is told.
 
-RETROCL.EXE   the GUI client. Reads RETROCL.INI from its own directory.
+GASTON.EXE    the GUI client. Reads GASTON.INI from its own directory.
 
 TOOLSDET.INI  what to look for when reporting which tools this machine has.
               Installed as tools_detect.ini and REPLACED on every install.
               To add something of your own, put it in TOOLS.INI beside it:
               that file is never shipped and is read second, so it wins.
 
-Copy these to C:\RETRO before running, so they can write their log files.
+Copy these to C:\GASTON before running, so they can write their log files.
 TXT
 unix2dos -q "$STAGE/README.TXT" 2>/dev/null || sed -i 's/$/\r/' "$STAGE/README.TXT"
 
@@ -189,5 +188,5 @@ elif command -v mkisofs >/dev/null; then MK=mkisofs
 elif command -v xorrisofs >/dev/null; then MK=xorrisofs
 else echo "need genisoimage/mkisofs/xorrisofs" >&2; exit 1; fi
 
-"$MK" -quiet -o "$OUT" -V RETROTOOLS -iso-level 1 -J -r "$STAGE"
+"$MK" -quiet -o "$OUT" -V GASTONTOOLS -iso-level 1 -J -r "$STAGE"
 ls -lh "$OUT" | awk '{print "  built " $NF " (" $5 ")"}'

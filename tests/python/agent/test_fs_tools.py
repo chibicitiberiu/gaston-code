@@ -205,12 +205,12 @@ def test_a_mounted_cd_is_not_an_empty_drive():
     definition. The guest answers the question directly now."""
     from bridge.services.guest_fs import Drive
     fs = FakeFs(drives=[
-        Drive(letter="D", type=5, label="RETROTOOLS", serial="9",
+        Drive(letter="D", type=5, label="GASTONTOOLS", serial="9",
               free_kb=0, total_kb=2482, has_media=True),
     ])
     body = _body(_call(_server(fs), "drives", {}))
     assert "empty" not in body, body
-    assert "RETROTOOLS" in body
+    assert "GASTONTOOLS" in body
     assert "0 MB" in body
 
 
