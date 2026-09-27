@@ -193,11 +193,17 @@ REM joins the exe's directory with the literal long name, and on FAT
 REM GREMOTE.INI is a DIFFERENT FILE. Without this line every key reads back
 REM empty and the first thing anyone sees is a complaint about the port,
 REM which is the one setting that was not wrong.
-IF EXIST D:\GREMOTE.INI COPY D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
-IF EXIST D:\GREMOTE.REG COPY D:\GREMOTE.REG C:\GASTON > NUL
-IF EXIST D:\TOOLSDET.INI COPY D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL
-IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\GASTON\view.htm > NUL
-IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\GASTON\spin.gif > NUL
+REM /Y and a NAMED DESTINATION on every one of these, for the reason the
+REM gaston.ini line above gives and for one more found on the guest: after
+REM the CD is swapped, a COPY to a DIRECTORY silently kept the old file
+REM while the same copy to a named file replaced it. Win98 serves fresh
+REM directory entries with stale data blocks for a while after a media
+REM change, so these are the copies most likely to land the previous disc.
+IF EXIST D:\GREMOTE.INI COPY /Y D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
+IF EXIST D:\GREMOTE.REG COPY /Y D:\GREMOTE.REG C:\GASTON\GREMOTE.REG > NUL
+IF EXIST D:\TOOLSDET.INI COPY /Y D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL
+IF EXIST D:\VIEW.HTM COPY /Y D:\VIEW.HTM C:\GASTON\view.htm > NUL
+IF EXIST D:\SPIN.GIF COPY /Y D:\SPIN.GIF C:\GASTON\spin.gif > NUL
 C:
 CD \GASTON
 ECHO Copied to C:\GASTON.
