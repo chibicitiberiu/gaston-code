@@ -15,6 +15,8 @@
 #include <new>
 
 #include "fs/xfer.h"
+#include "fs/path.h"
+#include "sync/scanner.h"
 #include "sync/verify.h"
 #include "sync/worknames.h"
 #include "sync/sync.h"
@@ -646,129 +648,131 @@ static void do_mkdir(rc_net *net, rc_frame *f)
 
 /* --- sending a file ------------------------------------------------------ */
 
+namespace {
+
+/* SYNCDAT chunks. The consumer half of libfs's ChunkSource: it is handed
+ * bytes with an offset and turns them into frames, which is the exe's job and
+ * not the library's (REMOTE.md). */
+class SyncDatSender : public ChunkConsumer
+{
+public:
+    SyncDatSender(rc_net *net, const char *id) : m_net(net), m_id(id) {}
+
+    virtual bool onChunk(const void *data, unsigned len, unsigned long off,
+                         unsigned long total)
+    {
+        char totals[16], offs[16];
+        const char *keys[3];
+        const char *vals[3];
+
+        rc_strf(totals, sizeof(totals), "%lu", total);
+        rc_strf(offs, sizeof(offs), "%lu", off);
+        keys[0] = "id";    vals[0] = m_id;
+        keys[1] = "total"; vals[1] = totals;
+        keys[2] = "off";   vals[2] = offs;
+        /* False rather than an error: the link went, so stop cleanly instead
+         * of producing the rest of the file for nobody. */
+        return rc_net_send(m_net, "SYNCDAT", keys, vals, 3, data, len) == 0;
+    }
+
+private:
+    rc_net     *m_net;
+    const char *m_id;
+};
+
+} /* namespace */
+
+/* Read `full` once and send it, classifying and checksumming the SAME bytes
+ * on the way past rather than reading the file a second time to do it. That
+ * tee is why ChunkSource takes one.
+ *
+ * Returns the status token; fills crc/cls only when it returns "ok".
+ */
+static const char *stream_file(rc_net *net, const char *id, const char *full,
+                               unsigned long *crc_out, char *cls_out)
+{
+    ChunkSource source;
+    DWORD attr;
+
+    /* What the path IS, cheaply and WITHOUT reading content -- the same three
+     * outcomes rc_sync_stat_file's attribute check gives (see there for why a
+     * directory or a share-locked file must never read back as `missing`),
+     * but without the full read that function does afterwards: this is about
+     * to read the file itself, once, while streaming it. */
+    attr = GetFileAttributesA(full);
+    if (attr == 0xFFFFFFFF)                   return "missing";
+    if (attr & FILE_ATTRIBUTE_DIRECTORY)      return "is_directory";
+    if (!source.open(full))                   return "locked";
+
+    {
+        ContentScanner *scan = ContentScanner::create();
+        SyncDatSender sender(net, id);
+        PumpResult r;
+
+        /* Out of memory is not "the file is fine" here either -- the same
+         * answer ContentScanner::create's own comment gives. */
+        if (!scan) return "locked";
+
+        r = source.pump(sender, scan, RC_SYNC_CHUNK, 0);
+
+        /* Always finish -- the crc and cls it produces on an aborted transfer
+         * are only ever looked at by the bridge when status == "ok", which
+         * the failing branches below never set, so a partial scan is
+         * harmless. */
+        scan->finish(cls_out, 0, 0, crc_out);
+        scan->destroy();
+
+        if (r == PUMP_CONSUMER_STOPPED) return "locked";  /* the link went */
+        if (r != PUMP_DONE)             return "locked";
+    }
+    return "ok";
+}
+
 static void do_get(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
     const char *keys[4];
     const char *vals[4];
-    char full[MAX_PATH], total[16], offs[16], crcs[16], clss[4];
+    char crcs[16], clss[4];
     char root[MAX_PATH];
+    Path full;
     /* Zeroed HERE, not only on the branch that reads a real file: every
-     * refusal branch below (bad_path, too_long, missing, is_directory,
-     * locked) falls straight through to the crc/cls _snprintf calls without
+     * refusal below falls straight through to the crc/cls formatting without
      * ever computing either, and uninitialised locals would have sent the
      * bridge whatever garbage was on the worker's stack. crc=0, cls=0 (which
      * prints as RC_CLS_TEXT below) is what the bridge has always been sent on
      * those branches; preserved exactly. */
     unsigned long crc = 0;
     char cls = 0;
-    HANDLE h;
-    rc_sync_scanner *scan;
-    /* Heap, for the same reason as do_scan's manifest: this runs on the RPC
-     * worker, which only has the image's 64KB stack commit underneath
-     * whatever else is on it. rc_sync_scanner is heap-allocated internally
-     * too (see sync.h) -- between the two, nothing this function needs is on
-     * the stack. */
-    char *buf;
-    DWORD attr;
-    DWORD size = 0, got = 0, sent = 0;
     const char *status = "ok";
 
     if (!id) {
-        /* NAMED, not dropped in silence. The bridge allocated a future for
-         * this frame and will wait out its whole budget -- 120s for an exec,
-         * 300s for a put or get, 600s for a scan -- with nothing anywhere
-         * saying why. rpc.cpp already explains this exact cost for a WRONGLY
-         * SHAPED ack and treats it as the reason lane-specific ack types
-         * exist; a frame answered with nothing at all is worse and was the
-         * one case nothing logged. There is no id to answer to, so a log
-         * line is all that is available. (audit 01.37) */
+        /* NAMED, not dropped in silence -- see do_put for the whole cost of
+         * answering a frame with nothing at all. */
         rc_log("%s: frame carries no id -- dropped, and the bridge will wait "
                "out its timeout", f->type);
         return;
     }
-    buf = (char *)HeapAlloc(GetProcessHeap(), 0, RC_SYNC_CHUNK);
-    if (!buf) {
-        const char *k[2]; const char *v[2];
-        k[0] = "id";     v[0] = id;
-        k[1] = "status"; v[1] = "locked";   /* retryable, and honest: we could
-                                             * not read it right now */
-        rc_log("sync: no memory for a get buffer");
-        rc_net_send(net, "SYNCDATEND", k, v, 2, NULL, 0);
-        return;
-    }
-    /* `bad_path`, matching do_put (syncrpc.c) and do_mkdir below -- not
-     * `missing`. The cause is identical (rc_sync_contained refused the
-     * relative path) and used to be reported as `missing` here alone, which
-     * reads as "the user deleted the file" and would send the bridge down the
-     * wrong branch entirely: `missing` is something a retry can never fix,
-     * `bad_path` is something the bridge sent that it should not have. */
-    if (!rc_sync_contained(f->body)) status = "bad_path";
-    /* The same refusal as do_mkdir above, and the consequence here is worse: a
-     * truncated join stats and OPENS a different existing file, and its bytes
-     * go back to the bridge acked as the path that was asked for -- so the
-     * bridge writes one file's contents over another's, with a crc that
-     * matches what it received. */
+
+    /* `bad_path`, matching do_put and do_mkdir -- not `missing`. The cause is
+     * identical (the relative path was refused) and used to be reported as
+     * `missing` here alone, which reads as "the user deleted the file" and
+     * would send the bridge down the wrong branch entirely: `missing` is
+     * something a retry can never fix, `bad_path` is something the bridge
+     * sent that it should not have. */
+    if (!isContainedRelative(f->body)) status = "bad_path";
     /* Snapshot, not the live global: a work-directory change on the UI thread
      * mid-join splices a path out of two roots (see the note on g_root). */
     else if (!root_snapshot(root, sizeof(root)))
         status = "no_root";
-    else if (!rc_sync_join(full, sizeof(full), root, f->body))
-        status = "too_long";
     else {
-        /* What the path IS, cheaply and WITHOUT reading content -- the same
-         * three outcomes rc_sync_stat_file's own attribute check gives (see
-         * there for why a directory or a share-locked file must never read
-         * back as `missing`), but without the full read that function does
-         * afterwards: do_get is about to read the file itself, once, while
-         * streaming it, and cannot afford rc_sync_stat_file's pass first. */
-        attr = GetFileAttributesA(full);
-        if (attr == 0xFFFFFFFF)              status = "missing";
-        else if (attr & FILE_ATTRIBUTE_DIRECTORY) status = "is_directory";
-        else {
-            h = CreateFileA(full, GENERIC_READ,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (h == INVALID_HANDLE_VALUE) status = "locked";
-            else {
-                scan = rc_sync_scanner_begin();
-                if (!scan) {
-                    /* Out of memory is not "the file is fine" here either --
-                     * same answer rc_sync_scanner_begin's own comment gives. */
-                    status = "locked";
-                } else {
-                    /* The `total` header goes out on the FIRST SYNCDAT chunk,
-                     * so the size must be known before streaming starts.
-                     * GetFileSize on the handle we already hold is cheap (no
-                     * content read) and 9x-safe. */
-                    size = GetFileSize(h, NULL);
-                    rc_strf(total, sizeof(total), "%lu", (unsigned long)size);
-                    while (ReadFile(h, buf, RC_SYNC_CHUNK, &got, NULL) && got) {
-                        /* Classify and checksum this SAME chunk instead of
-                         * reading the file a second time to do it -- the
-                         * whole point of do_get having its own scan. */
-                        rc_sync_scanner_feed(scan, buf, got);
-                        rc_strf(offs, sizeof(offs), "%lu", (unsigned long)sent);
-                        keys[0] = "id";    vals[0] = id;
-                        keys[1] = "total"; vals[1] = total;
-                        keys[2] = "off";   vals[2] = offs;
-                        if (rc_net_send(net, "SYNCDAT", keys, vals, 3,
-                                        buf, got) != 0) {
-                            status = "locked";   /* the link went; stop cleanly */
-                            break;
-                        }
-                        sent += got;
-                    }
-                    /* Always finish -- it frees `scan`. The crc/cls it
-                     * produces on an aborted (send-failed) transfer are only
-                     * ever looked at by the bridge when status == "ok", which
-                     * this branch never sets, so a partial scan there is
-                     * harmless. */
-                    rc_sync_scanner_finish(scan, &cls, &crc);
-                }
-                CloseHandle(h);
-            }
-        }
+        /* A truncated join stats and OPENS a different existing file, and its
+         * bytes go back to the bridge acked as the path that was asked for --
+         * so the bridge writes one file's contents over another's, with a crc
+         * that matches what it received. */
+        full.join(root, f->body);
+        if (!full.ok()) status = "too_long";
+        else status = stream_file(net, id, full.str(), &crc, &cls);
     }
 
     rc_strf(crcs, sizeof(crcs), "%lu", crc);
@@ -779,7 +783,6 @@ static void do_get(rc_net *net, rc_frame *f)
     keys[2] = "crc";    vals[2] = crcs;
     keys[3] = "cls";    vals[3] = clss;
     rc_net_send(net, "SYNCDATEND", keys, vals, 4, NULL, 0);
-    HeapFree(GetProcessHeap(), 0, buf);
 }
 
 static rc_att_lookup_fn g_att_lookup = NULL;
