@@ -1,4 +1,4 @@
-# RetroClaude — native Windows 98 client for Claude Code
+# Gaston Code — native Windows 98 client for Claude Code
 
 *Revised after adversarial review. Corrections to the first draft are marked **[R]**.*
 

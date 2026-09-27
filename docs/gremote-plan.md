@@ -5,7 +5,7 @@
 `REMOTE.md` splits the client into five static libraries so a second program
 can be built from the code the shipping client runs. All five now exist --
 `libcore`, `libwire`, `libexec`, `libfs`, `libautomation` -- and each was
-proven inside `retroclaude.exe` first, which was the point of the ordering.
+proven inside `gaston.exe` first, which was the point of the ordering.
 `gremote.exe` is the program that consumes them, and it is what `BACKLOG.md`
 1b has been waiting for: the physical Pentium 200 is reached today by burning
 a floppy and reading COM1 (`tools/gen/mkw98kit.sh`), so there is no way to run
@@ -19,7 +19,7 @@ at a time, a 30-second heartbeat, a shared secret and a CIDR allow-list.
 
 - **Three lanes: control, job, fs.** REMOTE.md assigned fs to step 5, but 5a
   landed the library and 5b (`ship()`) is blocked only on this exe. Folding fs
-  in is what makes the loop work: without `PUT` a new `retroclaude.exe` still
+  in is what makes the loop work: without `PUT` a new `gaston.exe` still
   travels by CD.
 - **The ui lane waits for step 6.** `win/automation/` is already a library,
   but `ui/uiservice.h` is built on `rc_net` and gremote needs a `Connection`
@@ -175,7 +175,7 @@ wine-smoke`.
    with a literal long name; on FAT an 8.3 file written from DOS is a
    different file, every key reads back empty, and the first symptom points at
    the one thing that is not wrong. `SETUP.BAT` copies to the long name, as it
-   already does for `retroclaude.ini`.
+   already does for `gaston.ini`.
 2. A refusal must not raise a modal on an unattended box. `secret=change-me`
    refuses startup: log and exit, with a message box only behind an explicit
    interactive flag.
@@ -236,7 +236,7 @@ On the guest, `hostfwd_add`'d and from a clean boot:
    answering `truncated=1` rather than streaming for ten minutes.
 5. `PUT` outside any sync root, killed mid-transfer, leaving nothing behind.
 6. A streaming `GET` in flight while a `PING` is answered: the reserved slot.
-7. `ship()` replacing `retroclaude.exe` with the client running, and a
+7. `ship()` replacing `gaston.exe` with the client running, and a
    self-update rolled back from a deliberately broken binary.
 8. Autostart: reboot, and gremote answers before anyone logs on.
 9. Runtime working set idle and under load -- the number the stack reserves

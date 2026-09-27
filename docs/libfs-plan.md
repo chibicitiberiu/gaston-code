@@ -139,7 +139,7 @@ netcheck cppcheck` (link only), `make -C win check` (record committed-at-load),
 
 The link check is not optional. `sync/sync.cpp` is in **five** object lists
 (`OBJS`, `SYNCCHECK_OBJS`, `WORKCHECK_OBJS`, `NETCHECK_OBJS`, `RPCCHECK_OBJS`),
-`make all` builds only `retroclaude.exe`, `make check` runs three gates, and
+`make all` builds only `gaston.exe`, `make check` runs three gates, and
 `test-fast` deselects the guest marker -- so a broken check binary would hide
 from commit 1 to commit 5.
 

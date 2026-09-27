@@ -657,7 +657,7 @@ ahead of it.
 
 *A scope question 01.35 raises that nothing answers.* Its second and third
 points -- the guest's single-instance mutex
-(`"RetroClaudeSingleInstance"`) and `FindWindowA("RetroClaudeWnd")`
+(`"GastonSingleInstance"`) and `FindWindowA("GastonWnd")`
 forbidding a second window (`win/app/main.cpp:1822-1824`), and every
 worker-side module being a hard singleton (`g_net` in `rpc.cpp:56`,
 `g_cancel`/`g_child` in `exec.cpp` (gone since libexec: per-job now), `g_root`/`g_put` in
@@ -1138,7 +1138,7 @@ transcript as the baseline.
 
 ---
 
-## 12. RetroAI as an external MCP server, and the two restart problems behind it
+## 12. Gaston as an external MCP server, and the two restart problems behind it
 
 **Status:** deferred by decision, 2026-09-23. Designed and reviewed against the
 source; nothing built.
@@ -1200,7 +1200,7 @@ the `pkill -f "python -m bridge.server"` trap, which matches the wrapping shell
 of the command running it. The recursion does not vanish -- editing the
 supervisor still needs a human -- so it stays small and boring.
 
-**The guest.** `RETROCL.EXE` serves the RPC that would replace `RETROCL.EXE`,
+**The guest.** `GASTON.EXE` serves the RPC that would replace `GASTON.EXE`,
 and Win98 maps the running image: `tools/vm/dos.py:151` records that the
 resulting `COPY` failure *"prints as one line in a console whose screendumps
 are frequently stale, so it reads as success. Twice a test ran against the
@@ -1233,7 +1233,7 @@ exit, swaps, relaunches, and the client reconnects on its own backoff.
   rolls back a good binary. The guest already distinguishes a refusal (an
   `ERROR` frame it received and renders) from an unreachable bridge (a socket
   error and a backoff).
-- Leave `RETROCL.INI` out of the rollback: it is read from the exe's own
+- Leave `GASTON.INI` out of the rollback: it is read from the exe's own
   directory and `win/core/ini.cpp` defaults anything missing.
 - Still uncovered: a page fault leaves an orphaned child, because the running
   `ExecJob` is cancelled only on the graceful path (`rc_net_stop` ->
@@ -1635,7 +1635,7 @@ on 9x there is no quiet way to raise a window across a process boundary.
 
 ### The setting, and the indicator
 
-- **Setting:** `[ui] automation` in `retroclaude.ini`, through `ClientConfig`
+- **Setting:** `[ui] automation` in `gaston.ini`, through `ClientConfig`
   (`win/app/config.h`, which today holds host, port, secret, syncRoot,
   autoscroll).
 - **Declared at handshake, not assumed** -- the standing rule. A HELLO header

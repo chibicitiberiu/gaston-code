@@ -503,7 +503,7 @@ from gremote import Remote
 with Remote("192.168.1.50", secret="...") as r:
     res = r.exec(r"C:\WINDOWS\COMMAND.COM /c mem", timeout=20)
     print(res.output_text)                 # decoded with HELLO's oemcp
-    r.put("build/win/retroclaude.exe", r"C:\Gaston\retroclaude.exe")
+    r.put("build/win/gaston.exe", r"C:\Gaston\gaston.exe")
     for p in r.ps(): ...
     r.kill(pid)
     img = r.screenshot()                   # PIL.Image
@@ -526,7 +526,7 @@ with Remote("192.168.1.50", secret="...") as r:
   exe locks its file; a second copy raises the first and exits) become code.
 - `PUT` writes a temp file, checks the CRC from `END`, then deletes the target
   and renames (`MoveFileExA` is on the deny list). A truncated
-  `retroclaude.exe` is a bricked client.
+  `gaston.exe` is a bricked client.
 
 ## Safety of the test box
 
@@ -570,8 +570,8 @@ with Remote("192.168.1.50", secret="...") as r:
 - **The gates key on object paths, not basenames**, now that basenames can
   repeat (`cmovcheck.py` matches basenames against `$(OBJS)` today).
 - **`make check` is parameterised by EXE / MAP / CAP** and runs for both
-  `retroclaude.exe` and `gremote.exe`. Today every step hardcodes
-  `retroclaude.exe`.
+  `gaston.exe` and `gremote.exe`. Today every step hardcodes
+  `gaston.exe`.
 - **The gates must keep seeing code that moves into a lib.**
   `tools/check/stackframes.py:36` exempts every `.lib:` module and
   `cmovcheck.py:57-59` only counts basenames in `$(OBJS)`, so as written both
@@ -599,7 +599,7 @@ in every measurement taken while it is running.
 
 ## Build order
 
-Each step leaves `retroclaude.exe` building and behaving the same, and ends
+Each step leaves `gaston.exe` building and behaving the same, and ends
 with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 
 1. **The build first, then libcore.**
@@ -660,7 +660,7 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    real box.**
    *Scoped 2026-09-27 (`docs/gremote-plan.md`):* **the fs lane is built here,
    not in step 5.** libfs and its handlers landed in 5a, and 5b (`ship()`)
-   waits on nothing but this exe -- so without `PUT` a new `retroclaude.exe`
+   waits on nothing but this exe -- so without `PUT` a new `gaston.exe`
    would still travel by CD, which is the thing this step exists to stop. The
    ui lane still waits for step 6. **Deflate is off in v0**: the only large
    payload is a screenshot and screenshots are step 6, so `HELLO` says

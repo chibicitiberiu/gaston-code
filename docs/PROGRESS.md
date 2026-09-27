@@ -3192,3 +3192,30 @@ Committed at load: 405,976 before; 434,648 with exceptions and no containers;
 - **A real race found on the way:** the sync worker read and edited the
   attachment tables without the lock the UI thread used for them.
 
+
+## The name: RetroClaude becomes Gaston Code (2026-09-27)
+
+The project had been "Gaston Code" in the window title and CLAUDE.md for a
+while, with the old name still in the files. README.md has the reasons for the
+name. What changed:
+
+- **Guest:** `gaston.exe` (`GASTON.EXE` on the CD), `gaston.ini`, `gaston.log`,
+  installed to `C:\GASTON` by `SETUP.BAT`. The window class is `GastonWnd` and
+  the single-instance mutex is `GastonSingleInstance`, so an old client
+  running beside a new one is not detected; close it first. The CD volume is
+  `GASTONTOOLS`.
+- **`gaston.ini` is an 8.3 name.** The CD's `GASTON.INI` is the file the app
+  opens. The old long-name trap (the client reading `retroclaude.ini` while
+  the CD carried `RETROCL.INI`) is gone with it.
+- **Bridge:** the secret is `GASTON_SECRET`. `RETROCLAUDE_SECRET` is no
+  longer read.
+- **Build:** `make -C win gaston`, `check-gaston`, and `guest-gaston` at
+  the top.
+- **Left alone on purpose:**
+  - the `rc_`/`RC_` C prefix: renamed as code is touched, like the rest of the
+    naming;
+  - the libvirt domain `retroclaude-win98`, the Wine prefix
+    `~/.local/share/retroclaude` and the checkout path `~/Dev/RetroAI`: live
+    state outside git, renamed with the VM or not at all;
+  - history (these notes, the audits, `docs/measurements/`), which says what
+    the files were called then.
