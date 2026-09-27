@@ -3,7 +3,7 @@
  * The subtle part is not the directory walk, it is agreeing with the bridge
  * about what a file IS. Both sides compute a class and a checksum, and if they
  * ever disagree about which function to apply they compare the outputs of
- * different functions forever. So the rules here mirror bridge/paths.py
+ * different functions forever. So the rules here mirror bridge/files/paths.py
  * exactly, and the reasons are repeated rather than cross-referenced -- a
  * comment in another language in another directory is not a comment anybody
  * reads while fixing this file.

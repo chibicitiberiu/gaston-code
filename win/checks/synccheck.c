@@ -8,7 +8,7 @@
  *
  * So: this walks a directory and prints one line per file. tests/python runs it
  * under Wine over a generated corpus and diffs the output against
- * bridge/paths.py. Same corpus, same answers, or the build is wrong.
+ * bridge/files/paths.py. Same corpus, same answers, or the build is wrong.
  */
 #include <windows.h>
 #include <stdio.h>

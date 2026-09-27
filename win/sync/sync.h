@@ -13,8 +13,8 @@ extern "C" {
 #endif
 #include <windows.h>
 
-/* Comparison class. Must match bridge/paths.py exactly -- the two sides compare
- * the outputs of these functions, so a disagreement is permanent. */
+/* Comparison class. Must match bridge/files/paths.py exactly -- the two sides
+ * compare the outputs of these functions, so a disagreement is permanent. */
 #define RC_CLS_TEXT  't'    /* uniform line endings; compared normalised */
 #define RC_CLS_EXACT 'b'    /* binary, mixed endings, lone CR: byte-exact */
 

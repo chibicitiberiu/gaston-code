@@ -58,6 +58,12 @@ can hold the box (see Protocol).
 | `libfs` | `win/fs/` | list/stat/read/write/remove/mkdir/move, chunked transfer (the sink extracted from `export.cpp`, per `BACKLOG.md` 6), drives and free space | libcore |
 | `libautomation` | `win/automation/` | screenshot, window enumeration, control tree, MSAA metadata, mouse and keyboard input | libcore |
 
+The **CRLF/binary classifier and its dual CRC stay in `win/sync/`**, not in
+`libfs`. They are bridge agreement rather than filesystem behaviour: they
+mirror `bridge/files/paths.py` and honour `.gitattributes`, which libfs has
+never heard of, and `gremote`'s `GET` is byte-exact. libfs gives them a
+one-pass read hook (`fs::ByteSink`) so nothing reads a file twice.
+
 `libautomation` is deliberately **not** called `libui` (renamed 2026-09-25). It
 drives *other* programs' windows -- screenshot, window list, control tree, MSAA,
 synthetic input -- and has nothing to do with the chat client's own interface,
@@ -92,8 +98,13 @@ Rules for the libraries:
 ## C++ structure
 
 The dialect stays what `rc_cpp.h` says: C++98 as Open Watcom implements it, no
-exceptions, no RTTI, no STL, trivial templates only, **no file-scope objects
-with non-trivial constructors**.
+RTTI, trivial templates only, **no file-scope objects with non-trivial
+constructors** (they run before `rc_log_open`, so a failure there has nowhere
+to report). Exceptions are **on** (`-xs`) and the STL is allowed as of
+2026-09-25 -- `std::vector`, `std::string`, `std::wstring`, `std::list` in
+place of fixed `MAX_*` tables -- but not `<iostream>`/`<fstream>`, and nothing
+uses exceptions for control flow. `Buf`/`Path` stay wherever a Win32 call fills
+a fixed buffer. See CLAUDE.md, which is the current word on this.
 
 ### Naming and layout
 
@@ -338,6 +349,43 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
 | `REBOOT` | `confirm=yes`, optional `mode=logoff\|reboot\|poweroff` | `OK`, then `ExitWindowsEx` | `unconfirmed` |
 | `EXEC` | `timeout_ms`, `cwd`, optional `shell`; body is the command line | `DATA` output chunks (OEM bytes, untouched), `END exit=, truncated=, timed_out=` | `busy`, `spawn_failed` |
 | `LAUNCH` | `cwd`, `show`; body is the command line | `OK pid=` | `spawn_failed` |
+
+The fs lane. The client answers these as `FS*` frames (`win/rpc/fsrpc.cpp`,
+step 5a); `gremote` reuses the same handlers behind the shorter names in the
+lane table above. Every error token here is one `win/sync/syncrpc.cpp` already
+produces, which is a constraint and not a coincidence -- see the note after the
+table.
+
+| Op | Request headers / body | Reply | Errors |
+|---|---|---|---|
+| `LS` | `path`, optional `max_entries` | `DATA` records `name`, `type`, `size`, `mtime`, `attrs`; `END count=, truncated=` | `bad_path`, `missing`, `too_many` |
+| `STAT` | `path` | `OK type=, size=, mtime=, attrs=` | `bad_path`, `too_long`, `missing`, `locked` |
+| `GET` | `path`, optional `max_bytes` | `DATA` chunks (`total`, `off`), then `END status=, crc=, truncated=` | `bad_path`, `too_long`, `missing`, `is_directory`, `locked` |
+| `PUT` | `off`; body is the path on the first chunk, then raw bytes. `END crc=` closes it | `OK bytes=, crc=` | `bad_path`, `too_long`, `no_parent`, `no_space`, `locked`, `readonly`, `out_of_order`, `crc_mismatch`, `busy` |
+| `RM` | `path` | `OK` | `bad_path`, `missing`, `is_directory`, `readonly`, `locked` |
+| `MKDIR` | `path` | `OK` | `bad_path`, `too_long`, `no_parent`, `exists`, `is_file` |
+| `MV` | `from`, `to` | `OK` | `bad_path`, `too_long`, `missing`, `exists`, `locked` |
+| `DRIVES` | none | `DATA` records `letter`, `type`, `label`, `serial`, `total`, `free`; `END count=` | none |
+
+- **`max_bytes` is honoured by the guest, not the caller.** A bridge-side cap
+  still has the guest read and send the whole file; pointed at a swap file that
+  is a socket held open for as long as it takes. `truncated=1` says it stopped.
+- **`PUT` outside a sync root does not move the old file aside.** The aside
+  exists so no instant has no file, and it is safe only because
+  `rc_sync_recover` runs over the sync root at startup. Nothing will ever run a
+  recovery pass over `C:\WINDOWS`, so a failure there must leave the original
+  in place or leave nothing at all -- never a `.gaston-old` with no file at the
+  real path.
+- **The error vocabulary is closed by a test.**
+  `tests/python/guest/test_guest_agreement.py` diffs `bridge/status.py`'s
+  `SyncStatus` against the literals it scrapes out of `win/sync/syncrpc.cpp`,
+  in both directions. A token the fs handlers can send that `syncrpc.cpp`
+  cannot makes that test fail. Adding one means widening the extraction in the
+  same commit.
+- **`DRIVES` sets `SEM_FAILCRITICALERRORS`** for the length of the
+  enumeration. `GetVolumeInformationA` on an empty floppy otherwise trips the
+  9x critical-error handler, which is a modal dialog on the user's screen
+  raised by a read-only call, blocking the worker until someone dismisses it.
 
 The ui lane, **as built in the client** (`win/ui/`). These are the frame
 types the shipping client answers today; `gremote` will reuse the same
@@ -605,7 +653,11 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    exe as a client, so the reverse direction has no precedent here. Then ship
    to the VM, then the P200. **First useful milestone: ssh-equivalent on the
    real box.**
-5. **libfs**, the fs lane, `PUT` with CRC and temp-rename, `ship()`, self-update.
+5. **libfs**, the fs lane, `PUT` with CRC and temp-rename, `ship()`,
+   self-update. Split in two: **5a** is the library plus the client moved onto
+   it, plus the fs lane in the client and the agent's `get_file`/`put_file`/
+   `drives` tools (`docs/libfs-plan.md`). **5b** is `ship()` and self-update,
+   which need `GREMOTE.EXE` from step 4 and cannot start before it.
 6. **libautomation.** Screenshot, window list, focus and input, control tree,
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.
