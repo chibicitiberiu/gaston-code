@@ -126,7 +126,7 @@ class SyncStatus(str, Enum):
       * scan (SYNCEND):        OK, NO_ROOT, TOO_MANY
       * put (SYNCPUTACK):      OK, BUSY, BAD_PATH, READONLY, NO_PARENT,
                                 NO_SPACE, LOCKED, TOO_LONG, CHANGED,
-                                CRC_MISMATCH
+                                CRC_MISMATCH, OUT_OF_ORDER
       * mkdir (SYNCMKDIRACK):  OK, BAD_PATH, EXISTS, IS_FILE, NO_PARENT,
                                 TOO_LONG, NO_SPACE
       * get (SYNCDATEND):      OK, BAD_PATH, LOCKED, IS_DIRECTORY, MISSING,
@@ -149,6 +149,14 @@ class SyncStatus(str, Enum):
     TOO_LONG = "too_long"
     CHANGED = "changed"
     CRC_MISMATCH = "crc_mismatch"
+    #: A SYNCPUT chunk that did not continue where the last one stopped, so a
+    #: frame was lost, duplicated or reordered. New with libfs (step 5a): the
+    #: guest used to read `off` only to spot the first chunk and wrote every
+    #: other one wherever the file pointer happened to be, which produced a
+    #: file of the right length and the wrong contents and then failed its
+    #: checksum with nothing to say why. Retryable -- the transfer is what
+    #: went wrong, not the file.
+    OUT_OF_ORDER = "out_of_order"
     EXISTS = "exists"
     IS_FILE = "is_file"
     IS_DIRECTORY = "is_directory"

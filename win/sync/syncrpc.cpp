@@ -11,6 +11,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include "sync/syncrpc.h"
+
+#include <new>
+
+#include "fs/xfer.h"
+#include "sync/verify.h"
+#include "sync/worknames.h"
 #include "sync/sync.h"
 #include "core/log.h"
 #include "core/path.h"
@@ -277,9 +283,28 @@ static struct {
     char   root[MAX_PATH];
     /* Where the first chunk's file bytes begin, as the parser measured it. */
     unsigned data_off;
-    HANDLE h;
-    int    active;
 } g_put;
+
+/* The sink that owns the handle, the temp file and the "is one running"
+ * flag, which used to be three fields of g_put and a set of rules about
+ * which of them meant what.
+ *
+ * On the heap, created on the first PUT, because a ChunkSink has a
+ * constructor and a file-scope object with a non-trivial constructor runs
+ * before rc_log_open -- which is why `make check` gates them. Kept for the
+ * life of the process, like the rest of this file's state. */
+static ChunkSink *g_put_sink;
+
+static ChunkSink *putSink(void)
+{
+    if (!g_put_sink) {
+        void *p = HeapAlloc(GetProcessHeap(), 0, sizeof(ChunkSink));
+        if (!p) return NULL;
+        g_put_sink = new (p) ChunkSink();
+    }
+    return g_put_sink;
+}
+
 
 /* The transfer that most recently failed. A put is a STREAM -- chunks, then
  * SYNCPUTEND -- so once one chunk fails, everything else carrying that id
@@ -306,36 +331,20 @@ static void put_fail(rc_net *net, const char *id, const char *why)
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = why;
     rc_net_send(net, "SYNCPUTACK", keys, vals, 2, NULL, 0);
-    if (g_put.h != INVALID_HANDLE_VALUE && g_put.h != NULL) {
-        CloseHandle(g_put.h);
-        DeleteFileA(g_put.tmp);
-    }
-    g_put.h = INVALID_HANDLE_VALUE;
-    g_put.active = 0;
-}
 
-/* A refusal AFTER do_putend has closed the handle.
- *
- * put_fail's own cleanup is keyed on `g_put.h` being live, and do_putend
- * closes that handle before the compare-and-swap check -- it has to, the
- * commit needs it closed. So from that CloseHandle onward put_fail's
- * DeleteFileA can never fire, and every refusal in the compare-and-swap
- * block used to leave a fully-written .gaston-tmp in the user's tree. That
- * is the ORDINARY path, not a corner: the whole point of if_crc is to refuse
- * a push when the user edited the file, so an edit conflict leaked one every
- * time. sync.h's own note records the same outcome arriving by a different
- * route ("the bridge's tree grew `café.md.gaston-tmp` ... and nothing ever
- * removed it").
- *
- * Keyed on the NAME, because that is the thing that still exists once the
- * handle is gone. See docs/mem-audit F1. */
-static void putend_fail(rc_net *net, const char *id, const char *why)
-{
-    if (g_put.tmp[0]) {
-        DeleteFileA(g_put.tmp);
-        g_put.tmp[0] = '\0';
-    }
-    put_fail(net, id, why);
+    /* ONE cleanup for every refusal, whether or not the handle is still open.
+     * There used to be two, and the split was the bug (docs/mem-audit F1):
+     * this one was keyed on the handle being live, do_putend closes the
+     * handle before its compare-and-swap check because the commit needs it
+     * closed, and so every refusal after that point left a fully-written
+     * .gaston-tmp in the user's tree. Not a corner case either -- the whole
+     * point of if_crc is to refuse a push when the user edited the file, so
+     * an edit conflict leaked one every time.
+     *
+     * The sink owns the temp by NAME, which is the thing that still exists
+     * once the handle is gone, so there is nothing left for the ordering to
+     * get wrong. */
+    if (g_put_sink) g_put_sink->abort(why);
 }
 
 /* 01.26: g_put is exactly the kind of worker-side singleton that finding
@@ -367,8 +376,9 @@ void rc_syncrpc_abort(void)
 static void do_put(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
-    const char *off = rc_frame_get(f, "off");
-    DWORD wrote = 0;
+    const char *offs = rc_frame_get(f, "off");
+    unsigned long off = offs ? (unsigned long)atol(offs) : 0;
+    ChunkSink *sink = putSink();
 
     if (!id) {
         /* NAMED, not dropped in silence. The bridge allocated a future for
@@ -383,26 +393,22 @@ static void do_put(rc_net *net, rc_frame *f)
                "out its timeout", f->type);
         return;
     }
+    if (!sink) { put_fail(net, id, "no_space"); return; }
 
-    if (off && atol(off) == 0) {
+    if (offs && off == 0) {
         /* First chunk: open. */
         g_put_failed[0] = '\0';     /* a new transfer, so answer again */
         if (g_put_aborted) {
             /* rc_syncrpc_abort() ran on the UI thread since the last frame
              * this worker handled -- the connection that owned the previous
              * PUT dropped mid-stream, with no SYNCPUTEND to close it out.
-             * Clean up the abandoned temp file here, on the worker thread,
-             * where g_put.h has always safely lived, instead of trusting the
+             * Clean up the abandoned temp here, on the worker thread, where
+             * the handle has always safely lived, instead of trusting the
              * "busy" check below to reject every transfer forever. */
-            if (g_put.h != INVALID_HANDLE_VALUE && g_put.h != NULL) {
-                CloseHandle(g_put.h);
-                DeleteFileA(g_put.tmp);
-            }
-            g_put.h = INVALID_HANDLE_VALUE;
-            g_put.active = 0;
+            sink->abort("the connection that owned it dropped");
             g_put_aborted = 0;
         }
-        if (g_put.active) { put_fail(net, id, "busy"); return; }
+        if (sink->active()) { put_fail(net, id, "busy"); return; }
 
         /* ONE parser, shared with `synccheck --putpath`. See its comment. */
         switch (rc_syncrpc_put_path(f->body, f->body_len,
@@ -420,12 +426,10 @@ static void do_put(rc_net *net, rc_frame *f)
             put_fail(net, id, "no_root");
             return;
         }
-        g_put.h = rc_sync_begin_write(g_put.root, g_put.rel,
-                                      g_put.tmp, sizeof(g_put.tmp));
-        if (g_put.h == INVALID_HANDLE_VALUE) {
+        if (!sink->begin(g_put.root, g_put.rel, syncWorkNames())) {
             /* Reporting every open failure as `readonly` sent a real
-             * investigation after Win98 file permissions when the actual cause
-             * was a missing parent directory -- CreateFileA returns
+             * investigation after Win98 file permissions when the actual
+             * cause was a missing parent directory -- CreateFileA returns
              * ERROR_PATH_NOT_FOUND for that, and the bridge had simply never
              * sent the SYNCMKDIR. Pass the distinction on. */
             DWORD err = GetLastError();
@@ -437,25 +441,39 @@ static void do_put(rc_net *net, rc_frame *f)
             else if (err == ERROR_FILENAME_EXCED_RANGE ||
                      err == ERROR_BUFFER_OVERFLOW) why = "too_long";
             else if (err == ERROR_INVALID_NAME)   why = "bad_path";
-            rc_log("sync: cannot open %s for writing: err=%lu (%s)",
-                   g_put.tmp, (unsigned long)err, why);
+            rc_log("sync: cannot open a temp for %s: err=%lu (%s)",
+                   g_put.rel, (unsigned long)err, why);
             put_fail(net, id, why);
             return;
         }
-        g_put.active = 1;
     }
-    if (!g_put.active || strcmp(g_put.id, id) != 0) {
+    if (!sink->active() || strcmp(g_put.id, id) != 0) {
         put_fail(net, id, "busy");
         return;
     }
     {
         /* From the parser, not recomputed: see rc_syncrpc_put_path. Only
          * the FIRST chunk carries the prefix; later chunks are all data. */
-        unsigned skip = (off && atol(off) == 0) ? g_put.data_off : 0;
+        unsigned skip = (off == 0) ? g_put.data_off : 0;
         if (f->body_len > skip) {
-            if (!WriteFile(g_put.h, f->body + skip,
-                           f->body_len - skip, &wrote, NULL)) {
+            switch (sink->write(off, f->body + skip, f->body_len - skip)) {
+            case CHUNK_OK:
+                break;
+            case CHUNK_OUT_OF_ORDER:
+                /* NEW HERE, and it was never checked before: `off` was read
+                 * only to spot the first chunk, so a frame that arrived out
+                 * of order was written wherever the file pointer happened to
+                 * be. That produces a file of the right length and the wrong
+                 * contents, which then fails its checksum at SYNCPUTEND with
+                 * nothing to say why. export.cpp had this check; this side
+                 * did not. */
+                rc_log("sync: put %s: chunk at %lu, expected %lu", id, off,
+                       (unsigned long)sink->received());
+                put_fail(net, id, "out_of_order");
+                break;
+            default:
                 put_fail(net, id, "no_space");
+                break;
             }
         }
     }
@@ -471,15 +489,14 @@ static void do_putend(rc_net *net, rc_frame *f)
     const char *vals[3];
     char gotcrc[16];
     rc_sync_stat cur;
-    char full[MAX_PATH];
-    int rc;
+    Path full;
+    ChunkSink *sink = g_put_sink;
+    char wantCls = cls && *cls ? *cls : RC_CLS_TEXT;
 
-    if (!id || !g_put.active || strcmp(g_put.id, id) != 0) {
+    if (!id || !sink || !sink->active() || strcmp(g_put.id, id) != 0) {
         put_fail(net, id ? id : "?", "busy");
         return;
     }
-    CloseHandle(g_put.h);
-    g_put.h = INVALID_HANDLE_VALUE;
 
     /* COMPARE AND SWAP. The manifest is a snapshot taken over seconds; a save
      * landing after the scanner walked past this file would otherwise be
@@ -491,17 +508,18 @@ static void do_putend(rc_net *net, rc_frame *f)
          * overwritten would pass or fail on the wrong evidence -- and passing
          * is the direction that loses the user's save. Audit 01.61 closed this
          * class for do_get and do_mkdir and missed this third site. */
-        if (!rc_sync_join(full, sizeof(full), g_put.root, g_put.rel)) {
-            putend_fail(net, id, "too_long");
+        full.join(g_put.root, g_put.rel);
+        if (!full.ok()) {
+            put_fail(net, id, "too_long");
             return;
         }
         memset(&cur, 0, sizeof(cur));
-        rc_sync_stat_file(full, &cur);
+        rc_sync_stat_file(full.str(), &cur);
         if (strcmp(ifc, "absent") == 0) {
             /* Anything at all at the path contradicts "absent". */
-            if (cur.type != 0) { putend_fail(net, id, "changed"); return; }
+            if (cur.type != 0) { put_fail(net, id, "changed"); return; }
         } else if (cur.type == 'u') {
-            putend_fail(net, id, "locked");
+            put_fail(net, id, "locked");
             return;
         } else if (cur.type != 'f') {
             /* The bridge expected a file with a specific checksum and the path
@@ -509,40 +527,47 @@ static void do_putend(rc_net *net, rc_frame *f)
              * deleted it between the scan and here. Both mean the world moved
              * under the decision, which is exactly what `changed` is for.
              * Falling through instead would commit over it. */
-            putend_fail(net, id, "changed");
+            put_fail(net, id, "changed");
             return;
-        } else if (RC_CRC_FOR(cur, cls && *cls ? *cls : RC_CLS_TEXT)
+        } else if (RC_CRC_FOR(cur, wantCls)
                    != (unsigned long)strtoul(ifc, NULL, 10)) {
             /* Compare-and-swap against the checksum the BRIDGE's class
              * selects. Using our own classification here compared the output
              * of one function against the other whenever the bridge had a
              * `-text` override for the path, so every push was refused as
              * `changed` and the file never moved again. */
-            putend_fail(net, id, "changed");
+            put_fail(net, id, "changed");
             return;
         }
     }
 
-    rc = rc_sync_commit(g_put.root, g_put.rel, g_put.tmp,
-                        crc ? strtoul(crc, NULL, 10) : 0,
-                        cls && *cls ? *cls : RC_CLS_TEXT);
-    g_put.active = 0;
-    if (rc == 0) g_moved++;          /* one file landed; see rc_syncrpc_moved */
+    {
+        SyncCrcVerifier verifier(crc ? strtoul(crc, NULL, 10) : 0, wantCls);
+        CommitStatus st = sink->commit(&verifier);
 
-    if (rc == -2) { put_fail(net, id, "crc_mismatch"); return; }
-    /* -4 is the working-name reserve, and it is NOT `no_space`: the disk is
-     * fine and retrying will never help. The bridge stops pushing the path and
-     * reports it instead, which is the only useful answer. */
-    if (rc == -4) { put_fail(net, id, "too_long");     return; }
-    /* -1 (the just-verified temp file no longer stats as a plain file) and -3
-     * (the final MoveFileA into place failed) are not disk-space problems
-     * either -- both point at something else holding the path right after we
-     * let go of it, which is the same "try again" shape as the file being
-     * open for read in do_get. `no_space` used to be the catch-all for every
-     * non-zero rc_sync_commit that was not -2 or -4, which sent the model
-     * looking at free disk space for a cause that was actually a lock. */
-    if (rc == -1 || rc == -3) { put_fail(net, id, "locked");    return; }
-    if (rc != 0)  { put_fail(net, id, "no_space");     return; }
+        if (st == COMMIT_OK) g_moved++;   /* see rc_syncrpc_moved */
+
+        if (st == COMMIT_VERIFY_FAILED) {
+            put_fail(net, id, "crc_mismatch");
+            return;
+        }
+        /* The working-name reserve is NOT `no_space`: the disk is fine and
+         * retrying will never help. The bridge stops pushing the path and
+         * reports it instead, which is the only useful answer. */
+        if (st == COMMIT_NO_ROOM) { put_fail(net, id, "too_long"); return; }
+        /* Unverifiable (the just-written temp no longer reads back as a plain
+         * file) and a failed rename are not disk-space problems either --
+         * both point at something else holding the path right after we let go
+         * of it, the same "try again" shape as the file being open for read in
+         * do_get. `no_space` used to be the catch-all for every non-zero
+         * return that was not a mismatch or the reserve, which sent the model
+         * looking at free disk space for a cause that was actually a lock. */
+        if (st == COMMIT_UNVERIFIABLE || st == COMMIT_RENAME_FAILED) {
+            put_fail(net, id, "locked");
+            return;
+        }
+        if (st != COMMIT_OK) { put_fail(net, id, "no_space"); return; }
+    }
 
     /* The bridge advances its baseline from THIS crc, never from a re-scan --
      * a re-scan could pick up a write the agent made during the transfer and

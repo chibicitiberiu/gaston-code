@@ -369,25 +369,33 @@ def test_sync_status_vocabulary_matches_the_guest():
     where every `status=` value in this file actually comes from.
 
     Extracted with four targeted regexes rather than a C parser: `status =
-    "..."` / `why = "..."` assignments, `put_fail`/`putend_fail`'s third argument, the `?
+    "..."` / `why = "..."` assignments, `put_fail`'s third argument, the `?
     "a" : "b"` ternary in do_mkdir (`exists`/`is_file`), and do_scan's
     heap-allocation-failure fallback, which sets `v[1]` beside `k[1] =
     "status"` rather than assigning a variable named `status`. Verified by
-    hand against a manual read of the file before this was written: it
-    reproduces that reading's 16-token set exactly, matching neither more
-    nor fewer.
+    hand against a manual read of the file before this was written.
+
+    THIS IS WHY EVERY STATUS LITERAL STAYS IN syncrpc.cpp. libfs (step 5a)
+    turned the commit path into a CommitStatus enum, and it would have been
+    natural to map that enum to wire tokens inside the library or in a shared
+    header. Neither would be matched by anything below, and because the
+    assertion is set EQUALITY in both directions, the failure would have been
+    loud rather than silent -- but the fix would have been to weaken this
+    test. The handlers keep their literals instead.
     """
     src = pathlib.Path(conftest.HERE, "win", "sync", "syncrpc.cpp").read_text()
 
     found: set[str] = set()
     for m in re.finditer(r'\b(?:status|why)\s*=\s*"([a-z_]+)"', src):
         found.add(m.group(1))
-    # put_fail AND putend_fail. The second exists because do_putend closes
-    # the temp file's handle before the compare-and-swap check, which makes
-    # put_fail's handle-keyed DeleteFileA unreachable -- every refusal after
-    # that point has to remove the temp by name instead (docs/mem-audit F1).
-    # It carries the same vocabulary, and `changed` now reaches the wire
-    # ONLY through it, so missing it here loses a real token.
+    # put_fail, and putend_fail for as long as anything still spells it that
+    # way. There were two: do_putend closes the temp file's handle before the
+    # compare-and-swap check, which made put_fail's handle-keyed DeleteFileA
+    # unreachable, so every refusal after that point had to remove the temp by
+    # name instead (docs/mem-audit F1). libfs closed that by construction --
+    # the sink owns the temp by name, so one cleanup covers both -- and
+    # putend_fail went with it. The `end` stays optional in this pattern
+    # because the shape is the thing being matched, not one function's name.
     for m in re.finditer(r'\bput(?:end)?_fail\([^;]*?,\s*"([a-z_]+)"\s*\)',
                          src):
         found.add(m.group(1))
