@@ -21,8 +21,11 @@ cannot build or run the guest.
 """
 
 import os
+import shutil
+import socket
 import subprocess
 import tempfile
+import time
 
 import pytest
 
@@ -214,3 +217,121 @@ def guest_verdicts(name: str, *args, cwd=None, timeout: float = 300) -> dict:
             rows[parts[1]] = (parts[0], parts[2])
     assert rows, f"{name} printed no verdicts:\n{guest_says(out)}"
     return rows
+
+
+# --- a guest binary that STAYS UP -------------------------------------------
+#
+# run_guest above is subprocess.run: start a binary, wait for it to finish,
+# read what it printed. Every guest binary until now has been a client or a
+# one-shot check, so that was the whole shape.
+#
+# gremote is neither. It listens and the test is the caller, which is the
+# direction docs/REMOTE.md flagged as having no precedent here -- wirecheck
+# proves libwire's server half with both ends inside one Wine process, and
+# test_guest_net.py crosses the boundary with Python listening and Wine
+# dialling out. Nothing had yet connected INTO a socket held by a Wine
+# process.
+#
+# It is also a GUI-subsystem image, so it prints nothing: gremote.log beside
+# the exe is the diagnostic, and log() is what an assertion message shows.
+#
+# There is no remote QUIT, deliberately (REMOTE.md: "stopping gremote
+# remotely is EXEC of something that kills it, which is deliberate
+# friction"), so stopping it is killing the process.
+
+def free_port() -> int:
+    """A port nothing is listening on, as far as anyone can tell.
+
+    Inherently a guess -- the socket is closed before the guest binds it --
+    but the alternative is parsing a port back out of the log, and the guest
+    has to be told which port to bind before it can report one.
+    """
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+class GuestServer:
+    """A guest exe running under Wine with a port open, as a context manager.
+
+    `ini` is written beside a copy of the exe in `workdir`, under BOTH the
+    long name and the 8.3 one -- not because Wine needs it, but because the
+    guest does and a test that only ever writes one name would not catch the
+    day that changes (docs/gremote-plan.md, trap 1).
+    """
+
+    def __init__(self, exe_name: str, workdir, ini: str, port: int,
+                 ini_name: str = "gremote.ini",
+                 ready: str = "server: listening on"):
+        self.exe_name = exe_name
+        self.dir = str(workdir)
+        self.port = port
+        self.ready = ready
+        self.proc = None
+        shutil.copy(guest_exe(exe_name), os.path.join(self.dir, exe_name))
+        body = ini.replace("\n", "\r\n").encode("latin-1")
+        for name in (ini_name, ini_name.split(".")[0][:8].upper() + ".INI"):
+            with open(os.path.join(self.dir, name), "wb") as f:
+                f.write(body)
+
+    def log(self) -> str:
+        path = os.path.join(self.dir, self.exe_name.replace(".exe", ".log"))
+        try:
+            with open(path, errors="replace") as f:
+                return f.read()
+        except OSError as e:
+            return f"(no log: {e})"
+
+    def refusal(self, timeout: float = 60) -> tuple[int, str]:
+        """Start it expecting it to REFUSE to run, and hand back the exit
+        code and the log. For the settings that must stop a machine coming up
+        listening at all -- there is no socket to ask in that case, and the
+        log is the whole diagnostic."""
+        proc = subprocess.Popen(
+            [WINE, os.path.join(self.dir, self.exe_name)],
+            cwd=self.dir, env=wine_env(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+            pytest.fail(f"{self.exe_name} kept running; it should have "
+                        f"refused to start\n{self.log()}")
+        return code, self.log()
+
+    def __enter__(self):
+        self.proc = subprocess.Popen(
+            [WINE, os.path.join(self.dir, self.exe_name)],
+            cwd=self.dir, env=wine_env(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Readiness comes from the LOG, not from a test connection.
+        # gremote serves one client at a time, so a probe that connects and
+        # hangs up is a client: it takes the slot, and the next connection --
+        # the actual test -- is answered `busy` until the accept loop notices
+        # the hangup and tears the session down. Every test in the suite
+        # failed that way once. The log is opened FILE_SHARE_READ precisely
+        # so it can be read while the guest is writing it.
+        deadline = time.time() + 40
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                pytest.fail(f"{self.exe_name} exited with "
+                            f"{self.proc.returncode} before it was ready\n"
+                            f"{self.log()}")
+            if self.ready in self.log():
+                return self
+            time.sleep(0.2)
+        self.__exit__(None, None, None)
+        pytest.fail(f"{self.exe_name} never logged {self.ready!r}\n"
+                    f"{self.log()}")
+
+    def __exit__(self, *exc):
+        if self.proc is None:
+            return
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=10)
+        self.proc = None

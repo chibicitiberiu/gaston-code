@@ -1,0 +1,262 @@
+"""The connection: handshake, request/reply, heartbeat.
+
+WHY A READER THREAD. The simple shape -- send, then read until a frame
+arrives -- breaks on the first streaming op and on the heartbeat, both of
+which put frames on the wire that the caller did not ask for at that moment.
+So one thread reads, and dispatches each frame to whoever is waiting on its
+`id`. Requests then block on an Event instead of on the socket, and a `GET`
+streaming chunks while a `PING` goes out in the middle is unremarkable
+rather than a desynchronised stream.
+
+WHY THE CODEC COMES FROM THE BRIDGE. `bridge/wire/frame.py` is the frame
+grammar, deliberately stdlib-only and pinned that way by a test that spawns a
+subprocess and asserts the import graph is exactly bridge, bridge.wire,
+bridge.wire.frame. Nothing else from the bridge is imported here -- not
+`protocol.py`, which pulls in the CP1252 folding and the capability tables
+that belong to the client's protocol and not to this one.
+
+DEFLATE IS OFF. The server reports `deflate=0` in HELLO and this never sets
+`enc=deflate`; a compressing peer talking to a non-compressing one has the
+link dropped under it rather than degrading, so the two ends agree by not
+trying. See docs/gremote-plan.md.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import socket
+import threading
+import time
+
+from bridge.wire.frame import Frame, FrameReader
+
+from .errors import Disconnected, Refused, Timeout
+
+#: 7890 and 7897 are the Gaston client's, 7900+ the test harness's.
+DEFAULT_PORT = 7401
+
+#: The protocol this speaks. Not the client's RC_PROTO_VERSION: gremote is a
+#: separate op namespace on the same frame grammar and the two must not drift
+#: into each other (docs/REMOTE.md).
+PROTO_VERSION = 1
+
+#: Frame types that finish a request. `DATA` accumulates instead.
+_TERMINAL = frozenset({"OK", "ERR", "END"})
+
+
+class _Call:
+    """One outstanding request, waited on by the thread that made it."""
+
+    __slots__ = ("chunks", "done", "reply")
+
+    def __init__(self) -> None:
+        self.chunks: list[Frame] = []
+        self.reply: Frame | None = None
+        self.done = threading.Event()
+
+
+class Remote:
+    """A live connection to one machine.
+
+    One caller at a time is the server's rule, not this class's: a second
+    connection while another is live is answered `ERR code=busy` and closed.
+    """
+
+    def __init__(self, host: str, secret: str, port: int = DEFAULT_PORT,
+                 connect_timeout: float = 10.0,
+                 request_timeout: float = 30.0,
+                 ping_every: float = 10.0) -> None:
+        self.host = host
+        self.port = port
+        self.secret = secret
+        self.request_timeout = request_timeout
+        self.ping_every = ping_every
+        self.hello: dict[str, str] = {}
+
+        self._connect_timeout = connect_timeout
+        self._sock: socket.socket | None = None
+        self._send_lock = threading.Lock()
+        self._calls: dict[str, _Call] = {}
+        self._calls_lock = threading.Lock()
+        self._greeting = _Call()
+        self._seq = 0
+        self._closing = threading.Event()
+        self._reader: threading.Thread | None = None
+        self._pinger: threading.Thread | None = None
+        self._last_sent = 0.0
+        self._failure: str = ""
+
+    # --- lifecycle ---------------------------------------------------------
+
+    def __enter__(self) -> Remote:
+        self.connect()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def connect(self) -> None:
+        """Open the socket, authenticate, and keep HELLO."""
+        self._sock = socket.create_connection((self.host, self.port),
+                                              self._connect_timeout)
+        self._sock.settimeout(None)
+        self._reader = threading.Thread(target=self._read_loop,
+                                        name="gremote-reader", daemon=True)
+        self._reader.start()
+        self._send(Frame("AUTH", {"ver": str(PROTO_VERSION),
+                                  "secret": self.secret}))
+        reply = self._wait(self._greeting, self._connect_timeout, "AUTH")
+        if reply.type != "HELLO":
+            raise Refused(reply.headers.get("code", "?"), "AUTH")
+        self.hello = dict(reply.headers)
+        self._pinger = threading.Thread(target=self._ping_loop,
+                                        name="gremote-heartbeat", daemon=True)
+        self._pinger.start()
+
+    def close(self) -> None:
+        """Hang up. The machine is free for the next caller at once, rather
+        than after its heartbeat timeout."""
+        self._closing.set()
+        sock, self._sock = self._sock, None
+        if sock is not None:
+            # A FIN before the close: an abrupt RST is reported to crash
+            # Win98's Winsock, and the server follows the same rule.
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_WR)
+            sock.close()
+        for t in (self._reader, self._pinger):
+            if t is not None and t is not threading.current_thread():
+                t.join(timeout=5)
+        self._reader = self._pinger = None
+        self._fail_pending("the connection was closed")
+
+    # --- requests ----------------------------------------------------------
+
+    def ping(self) -> None:
+        self.request("PING")
+
+    def request(self, op: str, headers: dict[str, str] | None = None,
+                body: bytes = b"", timeout: float | None = None) -> Frame:
+        """Send one request and return its terminal frame.
+
+        Raises Refused on `ERR`, so a caller that only wants the happy path
+        does not have to check. The chunks of a streaming op are on the
+        returned call via `stream()` rather than here.
+        """
+        reply, _ = self.stream(op, headers, body, timeout)
+        return reply
+
+    def stream(self, op: str, headers: dict[str, str] | None = None,
+               body: bytes = b"",
+               timeout: float | None = None) -> tuple[Frame, list[Frame]]:
+        """As `request`, and also the `DATA` frames that arrived before the
+        terminal one."""
+        call = _Call()
+        sent = dict(headers or {})
+        with self._calls_lock:
+            self._seq += 1
+            # Ids restart at 1 per connection. The server tags every request
+            # with the connection generation, so an answer from a previous
+            # one is dropped rather than landing in this stream.
+            ident = f"c{self._seq}"
+            sent["id"] = ident
+            self._calls[ident] = call
+        try:
+            self._send(Frame(op, sent, body))
+            reply = self._wait(call, timeout or self.request_timeout, op)
+        finally:
+            with self._calls_lock:
+                self._calls.pop(ident, None)
+        if reply.type == "ERR":
+            raise Refused(reply.headers.get("code", "?"), op,
+                          reply.headers.get("msg", ""))
+        return reply, call.chunks
+
+    # --- plumbing ----------------------------------------------------------
+
+    def _send(self, frame: Frame) -> None:
+        sock = self._sock
+        if sock is None:
+            raise Disconnected(self._failure or "not connected")
+        data = frame.encode()
+        with self._send_lock:
+            try:
+                sock.sendall(data)
+            except OSError as e:
+                raise Disconnected(f"sending {frame.type}: {e}") from e
+            self._last_sent = time.monotonic()
+
+    def _wait(self, call: _Call, timeout: float, op: str) -> Frame:
+        if not call.done.wait(timeout):
+            raise Timeout(f"no answer to {op} in {timeout:g}s")
+        if call.reply is None:
+            raise Disconnected(self._failure or f"the link went away during {op}")
+        return call.reply
+
+    def _finish(self, call: _Call, frame: Frame | None) -> None:
+        call.reply = frame
+        call.done.set()
+
+    def _fail_pending(self, why: str) -> None:
+        self._failure = self._failure or why
+        with self._calls_lock:
+            waiting = list(self._calls.values())
+            self._calls.clear()
+        for call in [*waiting, self._greeting]:
+            if not call.done.is_set():
+                self._finish(call, None)
+
+    def _read_loop(self) -> None:
+        reader: FrameReader[Frame] = FrameReader(Frame)
+        why = "the machine closed the connection"
+        try:
+            while True:
+                sock = self._sock
+                if sock is None:
+                    break
+                data = sock.recv(65536)
+                if not data:
+                    break
+                for frame in reader.feed(data):
+                    self._dispatch(frame)
+        except OSError as e:
+            why = f"the link failed: {e}"
+        except Exception as e:  # a codec error is still the link's end
+            why = f"the machine sent something unreadable: {e}"
+        finally:
+            if not self._closing.is_set():
+                self._fail_pending(why)
+
+    def _dispatch(self, frame: Frame) -> None:
+        ident = frame.headers.get("id", "")
+        if not ident:
+            # HELLO, and the ERR that replaces it when the handshake fails,
+            # are the only frames with no id to correlate on. After the
+            # handshake an id-less frame is the answer to the heartbeat's
+            # own PING, which nobody is waiting for.
+            if not self._greeting.done.is_set():
+                self._finish(self._greeting, frame)
+            return
+        with self._calls_lock:
+            call = self._calls.get(ident)
+        if call is None:
+            # An answer to a request nobody is waiting for: one that timed
+            # out, or one from a previous connection. Dropping it is the
+            # point of tagging the generation.
+            return
+        if frame.type in _TERMINAL:
+            self._finish(call, frame)
+        else:
+            call.chunks.append(frame)
+
+    def _ping_loop(self) -> None:
+        """A PING when the socket has been quiet, so a long call on the main
+        thread never looks like a dead client."""
+        while not self._closing.wait(1.0):
+            quiet = time.monotonic() - self._last_sent
+            if quiet < self.ping_every:
+                continue
+            try:
+                self._send(Frame("PING"))
+            except Disconnected:
+                return

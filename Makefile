@@ -122,7 +122,7 @@ RE3_ONLY = EM_SETTEXTEX EM_GETTEXTEX EM_GETTEXTLENGTHEX \
 # Config lives in pyproject.toml so this target and every editor agree.
 pylint-py:
 	@echo "=== ruff (lint) ==="
-	@$(PY) -m ruff check bridge/ tools/ tests/
+	@$(PY) -m ruff check bridge/ gremote/ tools/ tests/
 	@echo "=== mypy (types) ==="
 	@$(PY) -m mypy
 
