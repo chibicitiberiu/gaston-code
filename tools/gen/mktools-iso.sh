@@ -193,12 +193,16 @@ REM joins the exe's directory with the literal long name, and on FAT
 REM GREMOTE.INI is a DIFFERENT FILE. Without this line every key reads back
 REM empty and the first thing anyone sees is a complaint about the port,
 REM which is the one setting that was not wrong.
-REM /Y and a NAMED DESTINATION on every one of these, for the reason the
-REM gaston.ini line above gives and for one more found on the guest: after
-REM the CD is swapped, a COPY to a DIRECTORY silently kept the old file
-REM while the same copy to a named file replaced it. Win98 serves fresh
-REM directory entries with stale data blocks for a while after a media
-REM change, so these are the copies most likely to land the previous disc.
+REM /Y on all of these for consistency with the lines above, and not for
+REM any effect it has here: MEASURED on the guest, COMMAND.COM's COPY
+REM overwrites silently in a batch file whatever you pass it, and the
+REM Yes/No/All prompt /Y suppresses appears only when a person types the
+REM line at the prompt. So /Y is for whoever runs these by hand.
+REM
+REM The destination is named in full for the 8.3 mapping -- gremote.ini is
+REM not GREMOTE.INI on FAT -- and NOT because the form affects overwriting.
+REM It does not: a directory destination, a wildcard source and C:\DIR\*.*
+REM all replace an existing file, all measured.
 IF EXIST D:\GREMOTE.INI COPY /Y D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
 IF EXIST D:\GREMOTE.REG COPY /Y D:\GREMOTE.REG C:\GASTON\GREMOTE.REG > NUL
 IF EXIST D:\TOOLSDET.INI COPY /Y D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL

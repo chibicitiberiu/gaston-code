@@ -221,9 +221,48 @@ entirely:
 
 ...which is the same sentence the client's long-name trap produces, about the
 one setting that was not wrong. Re-copying after the swap fixed it.
-`COPY D:\FILE.EXE C:\DIR` also silently kept the OLD file; naming the
-destination file explicitly (`C:\DIR\FILE.EXE`) worked. **After a media
-change, re-copy everything and check a file's CONTENTS, not its size.**
+
+**After a media change, re-copy everything and check a file's CONTENTS, not
+its size.** That is the whole finding.
+
+=== 10a. AND A CORRECTION TO IT, MEASURED THE NEXT DAY ===
+
+The first version of this section blamed the DESTINATION FORM as well. It
+said `COPY D:\FILE.EXE C:\DIR` silently kept the old file where
+`COPY /Y D:\FILE.EXE C:\DIR\FILE.EXE` replaced it, and a peer had already
+written that into a comment on the strength of it.
+
+It is wrong. The failing copy and the working one differed in TWO ways -- one
+named the destination and passed /Y, the other did neither -- and both ran
+minutes apart with a freshly swapped disc underneath. Nothing was isolated.
+
+Run properly, with the files placed by gremote so no CD is anywhere near it,
+every form replaces an existing file:
+
+    COPY /Y SRC\A.TXT DST\A.TXT     1 file(s) copied   REPLACED
+    COPY    SRC\A.TXT DST\A.TXT     1 file(s) copied   REPLACED
+    COPY    SRC\A.TXT DST           1 file(s) copied   REPLACED
+    COPY    SRC\*.TXT DST           2 file(s) copied   REPLACED
+    COPY /Y SRC\*.TXT DST\*.*       2 file(s) copied   REPLACED
+    COPY /Q SRC\A.TXT DST\A.TXT     1 file(s) copied   REPLACED
+
+The last line is the one that explains the rest: COMMAND.COM ignores a switch
+it does not recognise, so `/Q` is accepted as readily as `/Y` and neither
+changes anything. So the GREMOTE.EXE that "would not install" was the stale
+cache and nothing else; the second copy worked because time had passed.
+
+What /Y DOES do, also measured. Typed at the prompt by a person, COPY over an
+existing file asks:
+
+    Overwrite C:\CPDEST\A.TXT (Yes/No/All)?
+
+In a batch file, or through `COMMAND.COM /c`, it does not ask and overwrites
+silently. So /Y is worth having in SETUP.BAT for whoever runs a line by hand,
+and is inert when the file runs itself.
+
+Naming the destination in full is still right, for the reason it was
+originally introduced and not this one: `gremote.ini` is not `GREMOTE.INI`
+on FAT, and only the named form puts the long name there.
 
 === Still owed by the real machine ===
 
