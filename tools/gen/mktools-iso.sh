@@ -58,6 +58,12 @@ want "$HERE/build/win/rpccheck.exe"  "RPCCHK.EXE"
 # fs/list.o at all: the client does not.
 want "$HERE/build/win/fscheck.exe"   "FSCHECK.EXE"
 want "$HERE/build/win/framecheck.exe" "FRAMECHK.EXE"
+# gremote.exe (REMOTE.md step 4): the machine driven from Linux. Unlike
+# everything else on this CD it is not a check that prints and exits -- it
+# LISTENS, and the host reaches it through QMP hostfwd_add (see
+# tools/vm/qmp.py). It is also the first thing here that needs an ini of its
+# own, which is why SETUP.BAT below copies the long name.
+want "$HERE/build/win/gremote.exe" "GREMOTE.EXE"
 # The automation library's own checks, and the wire record's. These carry
 # everything Phase 6 added, and three of their answers are known to differ
 # under Wine: its oleacc has no Win32 class proxies, it never emits
@@ -73,6 +79,24 @@ want "$HERE/build/win/HOOKDLL.DLL" "HOOKDLL.DLL"
 # the Wine-tier default of 127.0.0.1 when it exists.
 cp "$HERE/win/gaston.ini" "$STAGE/GASTON.INI" 2>/dev/null || true
 cp "$HERE/vm/gaston.ini"      "$STAGE/GASTON.INI" 2>/dev/null || true
+
+# gremote's ini. bind is 0.0.0.0 because QEMU's slirp forwards to the guest's
+# own address, not to its loopback -- a server bound to 127.0.0.1 inside the
+# guest is not reachable through hostfwd. vm/gremote.ini overrides this if it
+# exists, the same way vm/gaston.ini overrides the client's.
+cat > "$STAGE/GREMOTE.INI" <<'INI'
+[server]
+bind=0.0.0.0
+port=7401
+secret=vm-secret
+allow=
+heartbeat_timeout_s=30
+[exec]
+max_timeout_ms=120000
+max_output_kb=1024
+INI
+sed -i 's/$/\r/' "$STAGE/GREMOTE.INI"
+cp "$HERE/vm/gremote.ini" "$STAGE/GREMOTE.INI" 2>/dev/null || true
 # What to look for on the machine. Without this on the CD the detector finds
 # nothing and the feature is inert -- it fails silently, because "no INI" and
 # "nothing installed" produce the same empty report by design.
@@ -146,6 +170,13 @@ REM detector opens tools_detect.ini beside the exe, and ISO level 1 can only
 REM carry TOOLSDET.INI. TOOLS.INI is the user's and is NEVER shipped -- it is
 REM read second so their additions win, and copying one over it on every
 REM install would throw those away.
+REM And gremote.ini. The client's own ini needs no such line any more -- it
+REM is gaston.ini, which is already 8.3 -- but gremote's is not: the server
+REM joins the exe's directory with the literal long name, and on FAT
+REM GREMOTE.INI is a DIFFERENT FILE. Without this line every key reads back
+REM empty and the first thing anyone sees is a complaint about the port,
+REM which is the one setting that was not wrong.
+IF EXIST D:\GREMOTE.INI COPY D:\GREMOTE.INI C:\GASTON\gremote.ini > NUL
 IF EXIST D:\TOOLSDET.INI COPY D:\TOOLSDET.INI C:\GASTON\tools_detect.ini > NUL
 IF EXIST D:\VIEW.HTM COPY D:\VIEW.HTM C:\GASTON\view.htm > NUL
 IF EXIST D:\SPIN.GIF COPY D:\SPIN.GIF C:\GASTON\spin.gif > NUL

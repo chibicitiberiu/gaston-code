@@ -33,6 +33,18 @@ per command -- 0.73ms against 22ms. A click is now about fifteen packets.
     tools/vm/qmp.py load clean
     tools/vm/qmp.py reset
     tools/vm/qmp.py status
+    tools/vm/qmp.py hostfwd 7401            # reach a listener INSIDE the guest
+    tools/vm/qmp.py hostfwd 7401 --remove
+
+`hostfwd` is how the host reaches something the guest is LISTENING on, which
+until gremote nothing needed. The domain uses QEMU's user-mode (slirp)
+networking, so the guest can dial out and the host cannot dial in -- and
+libvirt's own `<portForward>` is not the answer: it refuses anything but the
+passt backend ("the <portForward> element can only be used with the 'passt'
+backend"), and switching backends would swap this guest's whole network
+stack, DHCP range and hand-configured NE2000 for the sake of one port.
+slirp's own hostfwd_add does it at runtime instead: no XML edit, no restart,
+and `--remove` undoes it. It does NOT survive a restart, which is the price.
 """
 from __future__ import annotations
 
@@ -395,6 +407,51 @@ def connect():
     raise SystemExit(f"no {SOCK} and no virsh -- is the guest running?")
 
 
+def _netdev_id(q) -> str:
+    """Which netdev slirp is behind.
+
+    Asked rather than assumed: libvirt names it hostnet0 today, but that is
+    its choice and not a contract, and hostfwd_add against the wrong name
+    fails in a way that reads like the guest is not listening.
+    """
+    # cmd() already unwraps "return", and for human-monitor-command that is
+    # the console text itself rather than an object.
+    out = str(q.cmd("human-monitor-command",
+                    **{"command-line": "info network"}))
+    for line in out.splitlines():
+        # QEMU draws the netdev as a child of the nic it is attached to:
+        #   net0: index=0,type=nic,model=ne2k_isa,macaddr=...
+        #    \ hostnet0: index=0,type=user,net=10.0.2.0,restrict=off
+        # The backslash is part of that drawing, not of the name, and
+        # passing it along is what "extraneous characters at the end of
+        # line" means when hostfwd_add refuses.
+        line = line.strip().lstrip("\\").strip()
+        if "type=user" in line and ":" in line:
+            return line.split(":", 1)[0].strip()
+    raise SystemExit("qmp: no user-mode netdev; is this guest on slirp?\n"
+                     + out)
+
+
+def hostfwd(q, port: int, *, remove: bool = False, host: str = "127.0.0.1",
+            guest_port: int | None = None) -> str:
+    """Forward host:port into the guest, or take the forward away.
+
+    Bound to 127.0.0.1 rather than every interface: this opens a door into a
+    Windows 98 machine with no patches after 2002, and it is meant for the
+    tests on this box, not for the LAN.
+    """
+    dev = _netdev_id(q)
+    inner = guest_port if guest_port is not None else port
+    verb = "hostfwd_remove" if remove else "hostfwd_add"
+    rule = (f"{dev} tcp:{host}:{port}" if remove
+            else f"{dev} tcp:{host}:{port}-:{inner}")
+    said = str(q.cmd("human-monitor-command",
+                     **{"command-line": f"{verb} {rule}"})).strip()
+    if said and said != "{}":
+        raise SystemExit(f"qmp: {verb} refused: {said}")
+    return f"{verb} {rule}"
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -441,6 +498,13 @@ def main() -> int:
                     **{"command-line": f"loadvm {rest[0]}"}))
     elif verb == "reset":
         q.cmd("system_reset")
+    elif verb == "hostfwd":
+        if not rest:
+            print("hostfwd: which port?", file=sys.stderr)
+            return 2
+        port = int(rest[0])
+        remove = "--remove" in rest or "-r" in rest
+        print(hostfwd(q, port, remove=remove))
     elif verb == "status":
         print(q.status())
     elif verb == "quit":

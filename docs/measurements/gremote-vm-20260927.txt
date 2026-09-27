@@ -1,0 +1,177 @@
+# gremote.exe on the Windows 98 guest -- REMOTE.md step 4 and 5b
+#
+# QEMU/libvirt `retroclaude-win98`, Win98 SE 4.10.2222 A, 32288 KB, 800x600.
+# Built 2026-09-27, GREMOTE.EXE 233,984 bytes, committed at load 238,665.
+#
+# EMULATED, not the P200. Every timing below is a host CPU pretending to be a
+# Pentium, and this project has been misled by that before (docs/BACKLOG.md 4,
+# and the four conclusions p200-run1 had to correct). The FILE contents,
+# refusals and platform behaviours are real; the RATES are not.
+#
+# The host reaches the guest through QMP hostfwd_add (tools/vm/qmp.py
+# hostfwd 7401), NOT through a libvirt <portForward> -- libvirt refuses that
+# on anything but the passt backend, and this domain is slirp with a
+# hand-configured NE2000.
+
+=== 1. handshake and the one client slot ===
+
+HELLO   ver=1 os=Windows 4.10 build 2222 A  cpu=x86 family 6 model 5, 1 cpu
+        mem_kb=32288 mem_free_kb=7412 acp=1252 oemcp=437
+        msaa=0 toolhelp=1 deflate=0
+
+second client while one is live   ERR code=busy, then closed
+first client straight afterwards  answers PING   <- busy must not cost the
+                                                    caller that has the box
+wrong secret                      ERR code=bad_secret at 0.02s
+                                  link closed at 1.02s with a FIN
+                                  (the pause is BEFORE the close, and an
+                                   abrupt RST is reported to crash Win98's
+                                   Winsock)
+frame before AUTH                 ERR code=not_authed
+
+=== 2. the heartbeat ===
+
+a client that authenticates and then says nothing at all:
+    dropped after 30.6s, configured heartbeat_timeout_s=30
+
+a client whose socket is destroyed with SO_LINGER 0 (an RST, no FIN):
+    the box was free again after 0.5s -- the reader's recv fails at once,
+    so the heartbeat is the floor and not the usual case
+
+=== 3. the disk ===
+
+drive A: type=2 media=1 total=1423KB    free=1210KB   label=''
+drive C: type=3 media=1 total=2042956KB free=1609128KB label='WIN98'
+drive D: type=5 media=1 total=2720KB    free=0KB      label='RETROTOOLS'
+
+  D: is the mounted tools CD: ZERO free and media=1. That is the 5a bug
+  restated as a measurement -- has_media comes from GetVolumeInformation
+  succeeding, never from free bytes, or every disc reads as an empty drive.
+
+GET  C:\RETRO\GREMOTE.EXE   233,984 bytes in 0.15s (1530 KB/s), crc verified,
+                            byte-identical to the host's copy
+GET  with max_bytes=200     200 bytes, truncated=1   <- the guest stops, not
+                                                        the caller
+PUT  64 KB                  0.10s (636 KB/s)
+PUT  retroclaude.exe        451,584 bytes in 0.61s (719 KB/s), read back
+                            byte-identical
+round trip 64 KB            identical, CRC matched
+working files afterwards    none
+
+MKDIR C:\RETRO\GRTEST\DEEP  created, parents and all
+MV over an existing file    refused `exists`   <- a silent replace would be
+                                                  a delete nobody asked for
+RM of a directory           refused `is_directory`
+STAT of nothing             `missing`, not `locked`
+
+=== 4. processes and commands ===
+
+PS                  9 processes, pids as unsigned hex
+                    ffcf52bd KERNEL32.DLL, ffff8525 MSGSRV32.EXE,
+                    ffff9395 MPREXE.EXE, fffe74ad EXPLORER.EXE, ...
+KILL our own pid    refused `denied`  <- without its own pid on the deny
+                                         list, the first thing anyone does
+                                         with a listing is end the program
+                                         they are talking to
+EXEC COMMAND.COM /c VER   1.54s, exit=0, via_shell=0, 36 bytes
+                          "Windows 98 [Version 4.10.2222]"
+EXEC COMMAND.COM /c DIR   exit=0, 3714 bytes
+
+=== 5. the reserved out-queue slot ===
+
+A 233,984-byte GET streaming while a second thread pings:
+    0.21s, 2 PINGs answered, 0 lost.
+
+Without RC_OUTQ_RESERVE the DATA frames share one flat 64KB budget with the
+reply the reader owes, and the server can starve its own heartbeat with its
+own answer. This is the case that motivated the libwire change.
+
+=== 6. A RUNNING EXE IS LOCKED -- the thing Wine could not prove ===
+
+This is the measurement worth the whole session, because it went the other
+way under Wine.
+
+    a copy of NOTEPAD.EXE, launched:  in the process listing as fffdaf51
+    a plain PUT over its image:       REFUSED with `locked`
+    still running afterwards:         yes, untouched
+
+    the same write through ship():    killed fffdaf51, wrote 28,672 bytes,
+                                      0.19s, nothing left running,
+                                      no working files
+
+So ship()'s kill-then-write is not defensive coding, it is the only way the
+write happens at all on this platform. Under Wine the plain PUT succeeds --
+Wine does not hold the image -- which is exactly the class of thing
+`make wine-smoke` is documented as unable to settle.
+
+Noted while finding this: a second GREMOTE.EXE launched under another name
+exited immediately and never appeared in the listing, because gremote is
+single-instance on a named mutex. The check works. Wine allows the second
+instance, so a test written against Wine alone would not have shown it.
+
+=== 7. memory, idle and under load ===
+
+idle, three reads          6292, 6292, 6292 KB free
+after 4 x 450KB GET        6216, 6216, 6216, 6216 KB free  (1.0s for four)
+after 3 x 450KB PUT        6208 KB free
+drift from idle            -84 KB
+
+The numbers do not move BETWEEN repeats, which is the property the design is
+for: bounded allocation, streaming everywhere, no per-request heap growth.
+The -84 KB is where it settles, not a slope.
+
+=== 8. REBOOT, and what it does NOT do on this guest ===
+
+REBOOT with no confirm=yes      refused `unconfirmed`
+REBOOT mode=sideways            refused `bad_mode`
+REBOOT confirm=yes mode=poweroff  acknowledged; Windows began shutting down
+
+What happened next is worth writing down, because two of the three effects
+were mine and one was not.
+
+  1. Explorer closed and the taskbar went, but the MS-DOS Prompt stayed and
+     the shutdown STOPPED THERE. ExitWindowsEx without EWX_FORCE asks
+     applications to close, and a DOS session does not. `force` is a
+     parameter of requestReboot for exactly this, and gremote does not pass
+     it -- deliberately, since forcing ends unsaved work without asking. On
+     a box with a console open, REBOOT needs force or a person.
+  2. Closing the prompt by hand let it continue to a bare desktop, and it
+     then sat there. This guest has no APM, so EWX_POWEROFF has nothing to
+     power the machine off WITH: it gets as far as "everything is closed"
+     and stays. `virsh destroy` finished the job. On this VM the useful mode
+     is `reboot`; poweroff is for hardware that can do it.
+  3. gremote itself exited cleanly on the way down -- its hidden window took
+     WM_ENDSESSION and stopped the services, which is what that window is
+     for.
+
+One measurement mistake of my own, recorded because it would mislead the
+next person: after the shutdown began, connecting to 127.0.0.1:7401 still
+SUCCEEDED, and I read that as "gremote has not seen WM_ENDSESSION". It had.
+The host-side listener belongs to QEMU's hostfwd and exists whether or not
+anything in the guest is listening -- the connection is accepted and then
+reset. With a port forward, "the port answers" is not "the server is up".
+
+Noted but not changed: requestReboot runs on the reader thread and
+ExitWindowsEx does not return, so Connection::join times out and release()
+leaks the socket rather than closing it under a live thread. That is the
+correct behaviour of the leak rule, in a process that is ending anyway, and
+the alternative -- bouncing the call to another thread -- would add a thread
+and a message for no observable gain. If ExitWindowsEx ever fails, it
+returns and the reader carries on, which is the case that matters.
+
+=== Still owed by the real machine ===
+
+- gremote's footprint WITH AND WITHOUT the client running. Measuring the
+  "without" half needs the client, and the guest's client dials 10.0.2.2:7890,
+  which on this host is a live bridge belonging to somebody else's session.
+  It is a P200 measurement.
+- `bind` after a restart: TIME_WAIT behaviour, and whether the 240s retry
+  ever earns its keep.
+- disk_free_kb above 2GB. C: here is 2042956 KB with 1609128 free, so the
+  clamp that libfs removed still cannot be demonstrated on this guest.
+- REBOOT mode=reboot, and REBOOT with force against an open DOS box. Neither
+  was run here: the first ends the session this was measuring from, and the
+  second is the one that can lose somebody's work.
+- Autostart through RunServices. Not built yet: it needs a shipped .REG,
+  because ADVAPI32 is not on tools/check/imports.py's allow-list and writing
+  the key from C would fail the import gate.

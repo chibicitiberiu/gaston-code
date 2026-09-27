@@ -85,12 +85,26 @@ class Remote:
     def __init__(self, host: str, secret: str, port: int = DEFAULT_PORT,
                  connect_timeout: float = 10.0,
                  request_timeout: float = 30.0,
-                 ping_every: float = 10.0) -> None:
+                 ping_every: float = 10.0,
+                 busy_retry_s: float = 8.0) -> None:
         self.host = host
         self.port = port
         self.secret = secret
         self.request_timeout = request_timeout
         self.ping_every = ping_every
+        #: How long to keep trying when the machine answers `busy`.
+        #:
+        #: It serves one caller at a time, and letting go is not instant: the
+        #: reader has to notice the socket went, and the accept loop has to
+        #: come round and tear the session down. MEASURED on the guest at
+        #: roughly a second after a refused handshake, which pauses before it
+        #: drops the link so that a wrong secret costs a second.
+        #:
+        #: So a script that disconnects and reconnects -- which is most
+        #: scripts -- would otherwise meet `busy` for its own previous self.
+        #: Set to 0 to get the raw answer, which is what a caller checking
+        #: whether somebody ELSE has the box wants.
+        self.busy_retry_s = busy_retry_s
         self.hello: dict[str, str] = {}
         #: Filenames and window text are ANSI; what a console child writes is
         #: OEM. HELLO reports both so nothing here has to guess, and getting
@@ -122,10 +136,29 @@ class Remote:
         self.close()
 
     def connect(self) -> None:
-        """Open the socket, authenticate, and keep HELLO."""
+        """Open the socket, authenticate, and keep HELLO.
+
+        Retries a `busy` answer for `busy_retry_s`; see that attribute for
+        why, and pass 0 to get the first answer instead.
+        """
+        deadline = time.monotonic() + self.busy_retry_s
+        while True:
+            try:
+                self._connect_once()
+                return
+            except Refused as e:
+                if e.code != "busy" or time.monotonic() >= deadline:
+                    raise
+                self.close()
+                time.sleep(0.25)
+
+    def _connect_once(self) -> None:
         self._sock = socket.create_connection((self.host, self.port),
                                               self._connect_timeout)
         self._sock.settimeout(None)
+        self._closing.clear()
+        self._greeting = _Call()
+        self._failure = ""
         self._reader = threading.Thread(target=self._read_loop,
                                         name="gremote-reader", daemon=True)
         self._reader.start()
