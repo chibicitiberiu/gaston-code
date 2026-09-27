@@ -198,23 +198,41 @@ void Session::onFrame(Connection &c, rc_frame *f)
         }
         else if (row->lane == G_JOB)
         {
-            toLane(m_job, f);
+            toLane(m_job, f, row->continues);
             return;             /* the lane owns the frame */
         }
         else
         {
-            toLane(m_fs, f);
+            toLane(m_fs, f, row->continues);
             return;             /* the lane owns the frame */
         }
     }
     rc_frame_delete(f);
 }
 
-void Session::toLane(LaneWorker &lane, rc_frame *f)
+/* How long the reader will wait for room in a lane's continuation queue
+ * before giving up on the transfer. Five seconds of a disk not keeping up
+ * is a stall, not a hiccup. */
+enum { CONT_WAIT_MS = 5000 };
+
+void Session::toLane(LaneWorker &lane, rc_frame *f, bool continues)
 {
     const char *busyOp = "";
     DWORD ageMs = 0;
 
+    if (continues)
+    {
+        /* A PUT's own chunks. They go to the FIFO, which the reader waits
+         * on rather than refusing -- not reading the socket for a moment is
+         * what tells the sender to slow down. Refusing here would refuse a
+         * transfer its own bytes the first time the platter fell behind. */
+        if (lane.submitContinuation(f, CONT_WAIT_MS))
+            return;
+        Responder r(m_conn, rc_frame_get(f, "id"));
+        r.err("busy");
+        rc_frame_delete(f);
+        return;
+    }
     if (lane.submit(f, &busyOp, &ageMs))
         return;                 /* the lane owns it now */
 

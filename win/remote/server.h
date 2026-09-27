@@ -72,7 +72,7 @@ private:
 
     void onAuth(rc_frame *f);
     /* Hand `f` to a lane, or answer busy. Takes ownership either way. */
-    void toLane(LaneWorker &lane, rc_frame *f);
+    void toLane(LaneWorker &lane, rc_frame *f, bool continues);
     void sendHello();
     /* `code` goes out as ERR code=<code>, and `fatal` ends the session
      * after it -- with the one-second pause the handshake owes a wrong

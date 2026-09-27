@@ -27,6 +27,7 @@ import contextlib
 import socket
 import threading
 import time
+import zlib
 
 from bridge.wire.frame import Frame, FrameReader
 
@@ -35,6 +36,7 @@ from .ops import (
     Drive,
     Entry,
     ExecResult,
+    FileBytes,
     Process,
     Stat,
     SysInfo,
@@ -42,6 +44,7 @@ from .ops import (
     parse_drives,
     parse_entries,
     parse_exec,
+    parse_get,
     parse_processes,
     parse_stat,
     parse_sysinfo,
@@ -202,6 +205,79 @@ class Remote:
             headers["max_entries"] = str(max_entries)
         _, chunks = self.stream("LS", headers)
         return parse_entries(chunks, self.acp)
+
+    def get(self, path: str, max_bytes: int = 0,
+            timeout: float = 120.0) -> FileBytes:
+        """Read a file off the machine, byte for byte.
+
+        `max_bytes` is honoured BY THE GUEST. A cap applied here would still
+        have a 200MHz box read a swap file off a 1998 platter and push it
+        down a socket for as long as it takes; the guest stops and says
+        `truncated` instead. Without one it stops at its own four-megabyte
+        ceiling.
+        """
+        headers = {"path": path}
+        if max_bytes:
+            headers["max_bytes"] = str(max_bytes)
+        end, chunks = self.stream("GET", headers, timeout=timeout)
+        return parse_get(end, chunks)
+
+    def put(self, path: str, data: bytes, chunk: int = 8192,
+            timeout: float = 120.0) -> int:
+        """Write a file onto the machine. Returns the bytes it took.
+
+        The guest writes a temp beside the target, checks the CRC, and only
+        then replaces -- and it never moves the old file aside first. The
+        aside exists so no instant has no file, and it is safe only where a
+        recovery pass sweeps afterwards; nothing will ever sweep C:\\WINDOWS.
+        So a failure out here leaves the original in place or leaves nothing,
+        never a `.gaston-old` with no file at the real path.
+
+        The chunks go out without waiting for an ack. The guest's lane holds
+        a short queue for them and stops reading the socket when it is full,
+        which is what tells this side to slow down.
+        """
+        call = _Call()
+        with self._calls_lock:
+            self._seq += 1
+            ident = f"c{self._seq}"
+            self._calls[ident] = call
+        try:
+            crc = zlib.crc32(data) & 0xFFFFFFFF
+            first = data[:chunk]
+            self._send(Frame("PUT", {"id": ident, "path": path, "off": "0"},
+                             first))
+            off = len(first)
+            while off < len(data):
+                piece = data[off:off + chunk]
+                self._send(Frame("DATA", {"id": ident, "off": str(off)},
+                                 piece))
+                off += len(piece)
+            self._send(Frame("END", {"id": ident, "crc": f"{crc:08x}"}))
+            reply = self._wait(call, timeout, "PUT")
+        finally:
+            with self._calls_lock:
+                self._calls.pop(ident, None)
+        if reply.type == "ERR":
+            raise Refused(reply.headers.get("code", "?"), "PUT",
+                          reply.headers.get("detail", ""))
+        return int(reply.headers.get("bytes", "0"))
+
+    def rm(self, path: str) -> None:
+        self.request("RM", {"path": path})
+
+    def mkdir(self, path: str) -> None:
+        """Create a directory, parents and all. `exists` if the last level is
+        already there -- the parents being there is the normal case and is
+        not an error."""
+        self.request("MKDIR", {"path": path})
+
+    def mv(self, src: str, dst: str) -> None:
+        """Rename. Refuses an existing target rather than replacing it: a
+        move that silently overwrote something would be a delete nobody
+        asked for. Never crosses volumes -- MoveFileEx is NT-only and on the
+        guest's import deny list."""
+        self.request("MV", {"from": src, "to": dst})
 
     def stat(self, path: str) -> Stat:
         return parse_stat(self.request("STAT", {"path": path}))

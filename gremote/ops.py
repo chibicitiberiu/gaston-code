@@ -7,6 +7,7 @@ fields happens here, on the side that has a real language to do it in.
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
 
 from bridge.wire.frame import Frame
@@ -69,6 +70,23 @@ class Drive:
     total_kb: int
     free_kb: int
     label: str
+
+
+@dataclass(frozen=True)
+class FileBytes:
+    """What a GET brought back.
+
+    `crc` is of what was SENT, taken on the same pass that sent it, so it
+    verifies the transfer rather than the file: for a truncated read it is
+    the CRC of the prefix, which is the only thing there is to check.
+    """
+
+    data: bytes
+    crc: int
+    truncated: bool
+
+    def verify(self) -> bool:
+        return zlib.crc32(self.data) & 0xFFFFFFFF == self.crc
 
 
 @dataclass(frozen=True)
@@ -202,3 +220,12 @@ def parse_drives(chunks: list[Frame], encoding: str) -> list[Drive]:
             out.append(Drive(letter, int(kind), media == "1",
                              int(serial, 16), int(total), int(free), label))
     return out
+
+
+def parse_get(end: Frame, chunks: list[Frame]) -> FileBytes:
+    """Chunks in the order the guest sent them, which is the order it read
+    them: ChunkSource pumps contiguously and each frame says where it goes,
+    so a gap would be a bug rather than something to reassemble around."""
+    body = b"".join(c.body for c in chunks)
+    return FileBytes(body, int(end.headers.get("crc", "0"), 16),
+                     end.headers.get("truncated") == "1")

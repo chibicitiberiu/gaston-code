@@ -27,6 +27,7 @@
 #error "remote/fsops.h is C++"
 #endif
 
+#include "fs/xfer.h"
 #include "remote/lane.h"
 #include "remote/reply.h"
 #include "wire/connection.h"
@@ -47,8 +48,23 @@ private:
     void ls(Responder &r, rc_frame *f);
     void stat(Responder &r, rc_frame *f);
     void drives(Responder &r);
+    void get(Responder &r, rc_frame *f);
+    void put(Responder &r, rc_frame *f);
+    void putChunk(Responder &r, rc_frame *f);
+    void putEnd(Responder &r, rc_frame *f);
+    void rm(Responder &r, rc_frame *f);
+    void mkdir(Responder &r, rc_frame *f);
+    void mv(Responder &r, rc_frame *f);
+    void abortPut(const char *why);
 
     Connection *m_conn;
+
+    /* One transfer at a time, and it belongs to the SESSION rather than to
+     * the process: a new client gets a new FsOps, so a half-finished PUT
+     * cannot outlive the caller that started it. */
+    ChunkSink m_sink;
+    char m_putId[64];
+    unsigned long m_putCrc;
 };
 
 #endif
