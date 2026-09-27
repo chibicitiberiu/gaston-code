@@ -55,6 +55,17 @@ gate.
 
 **Plan (2026-09-25):** drive the box with `gremote.exe`, `docs/REMOTE.md` step 4.
 
+**The tool exists (2026-09-27).** `gremote.exe` is built and proven on the
+QEMU guest -- exec, processes, the whole fs lane and `ship()`, measured in
+`docs/measurements/gremote-vm-20260927.txt`. What is still owed is the
+hardware, and two preconditions nothing in this tree records: whether the
+P200 has a NIC with a configured TCP/IP stack, and how `GREMOTE.EXE` reaches
+it the first time -- its only proven channel is a 1.44MB floppy via
+`tools/gen/mkw98kit.sh`, which is where it should be added. Autostart
+through `RunServices` is the other missing piece for an unattended box; it
+needs a shipped `.REG` rather than registry calls in C, because ADVAPI32 is
+not on `tools/check/imports.py`'s allow-list.
+
 ---
 
 ## 2. Memory optimisation

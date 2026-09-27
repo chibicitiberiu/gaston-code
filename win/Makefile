@@ -683,12 +683,15 @@ PYTHON ?= python3
 # it is given, and 0 means "must be empty", not "not applicable".
 check: check-sources check-gaston check-gremote check-autocheck check-fscheck
 
-# gremote's budget is its own. The number is deliberately loose while the
-# lanes are still arriving -- one measured against a skeleton would be raised
-# by every commit after it, which is how a budget stops meaning anything. It
-# is tightened to the measured figure once the last op lands.
+# gremote's budget is its own, and unlike the client's it is a claim about a
+# program that runs BESIDE the thing being measured -- every number taken
+# while it is up has this in it. Measured as the lanes landed: 203337 for the
+# skeleton, 205897 with the op table and the control lane, 217161 with the
+# job lane, 222281 with LS/STAT/DRIVES, 238665 with the rest of fs and
+# ship(). The cap is the last of those plus room for the ui lane's handlers
+# at step 6; a raise past that wants a measured reason, like the client's.
 check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
-check-gremote: CHECK_CAP   = 300000
+check-gremote: CHECK_CAP   = 250000
 check-fscheck: CHECK_OWNED = $(FSCHECK_OBJS)
 check-fscheck: CHECK_CAP   = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)

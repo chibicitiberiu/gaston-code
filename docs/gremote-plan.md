@@ -251,3 +251,69 @@ confirmed against the VM's measurement. Two preconditions nothing in this tree
 records: whether that box has a NIC and a configured TCP/IP stack, and how
 `GREMOTE.EXE` gets there the first time -- its only proven channel is a 1.44MB
 floppy via `tools/gen/mkw98kit.sh`, which is where it should be added.
+
+## Progress
+
+### Done (2026-09-27)
+
+Fifteen commits on top of `128f63e`, each gated with `make -C win all`,
+`make -C win check` for both exes, `make test-fast`, `pytest
+tests/python/remote -q`, `make lint`, and `make wine-smoke` from the
+direction proof onwards.
+
+| Commit | What |
+|---|---|
+| `e1a7317` | this plan, reviewed twice before any code |
+| `9a2388c` | `core/thread.h` -- a thread whose stack size somebody chose |
+| `01afdf0` | `Connection`'s two threads onto it |
+| `6e0f60d` | a send can say what it must leave for somebody else |
+| `403cee3` | the log knows which program is writing it |
+| `8674017` | gremote.exe: it binds, accepts one client, and shakes hands |
+| `1f94647` | the Python package, and the direction proof as a test |
+| `e3cb36a` | the op table, and the control lane |
+| `50cf03e` | the job lane |
+| `fa97fd7` | LS, STAT, DRIVES |
+| `510a2bf` | GET, PUT, RM, MKDIR, MV |
+| `7d1257c` | `ship()` -- step 5b |
+| `7b9a1b3` | the guest run, measured |
+| `912e6bd` | the Gaston rename |
+| (this) | the agreement test, the budget, and the docs |
+
+Sixty-six tests under `tests/python/remote/`, four contract tests under
+`tests/python/meta/`. `make test`: 3623 passed. Committed at load: gaston
+464665 of 470000, gremote 238665 of 250000.
+
+**What the guest settled that Wine could not.** A running exe is locked on
+Windows 98: a plain PUT over a live image is refused, and ship()'s
+kill-then-write is the only way the write lands. Wine lets the PUT through.
+Found alongside it: a second gremote under another name never starts, because
+the single-instance mutex works -- and Wine allows the second instance, so a
+test written against Wine alone would have shown neither.
+
+**Four deviations from the plan above**, each for a reason found in the code
+rather than at the desk:
+
+- The non-inheritable listening socket did not land. It needs a `Listener`
+  change and a child process to test against, and the case it guards -- an
+  `EXEC` child holding the port -- is an NT and Wine behaviour, measured
+  absent on 98.
+- `CANCEL` is in the op table and has no handler. The contract is 9P's
+  `Tflush` and the thing it needs is an op long-running enough to race
+  against; writing it before that exists is writing it blind.
+- `remotecheck.exe` was never built. Its justification was the config
+  refusals and the cancel race; the refusals turned out to be reachable
+  through the socket suite by reading the guest's own log, and the cancel
+  race has nothing to race yet. A check binary with one job left is four
+  hand-kept lists for one test.
+- Autostart moved to a shipped `.REG`. Writing the `RunServices` key from C
+  means ADVAPI32, which is not on the import allow-list.
+
+### Still open
+
+- The P200 itself, and the two things nothing records about it: a configured
+  TCP/IP stack, and how `GREMOTE.EXE` gets there the first time.
+- `CANCEL`, the non-inheritable socket, and autostart, as above.
+- `REBOOT mode=reboot`, and `REBOOT` with force against an open DOS box.
+  Neither was run: the first ends the session doing the measuring, and the
+  second is the one that can lose somebody's work.
+- The ui lane, which is step 6 and unchanged by any of this.

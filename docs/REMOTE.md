@@ -668,6 +668,19 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    The VM is reached with QMP `hostfwd_add` rather than a libvirt
    `<portForward>`, which libvirt accepts only on the `passt` backend --
    ours is slirp with a hand-configured `ne2k_isa`.
+   **Step 4 is complete (2026-09-27), and 5b with it**, verified on the real
+   guest and not only under Wine --
+   `docs/measurements/gremote-vm-20260927.txt`. gremote answers the control,
+   job and fs lanes; the Python package drives all three; `ship()` works.
+   The measurement that earns the step: **a running exe is locked on Windows
+   98**, so a plain PUT over a live image is refused and ship()'s
+   kill-then-write is the only way the write happens at all. Wine does not
+   hold the image and lets the PUT through, which is the class of thing
+   `make wine-smoke` is documented as unable to settle.
+   Left for the ui lane at step 6, and recorded in `docs/gremote-plan.md`:
+   `CANCEL` (the contract is specified, nothing cancellable enough to test it
+   against yet), autostart through `RunServices`, and a non-inheritable
+   listening socket.
 5. **libfs**, the fs lane, `PUT` with CRC and temp-rename, `ship()`,
    self-update. Split in two: **5a** is the library plus the client moved onto
    it, plus the fs lane in the client and the agent's `get_file`/`put_file`/

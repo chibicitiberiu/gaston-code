@@ -3219,3 +3219,57 @@ name. What changed:
     state outside git, renamed with the VM or not at all;
   - history (these notes, the audits, `docs/measurements/`), which says what
     the files were called then.
+
+## R9 step 4 -- `gremote.exe`, and 5b with it (2026-09-27)
+
+The five libraries existed and nothing but the client consumed them. Step 4 is
+the second program: a headless Win98 server built from `libcore`, `libwire`,
+`libexec` and `libfs`, which LISTENS while Linux connects. `docs/REMOTE.md`
+has the design, `docs/gremote-plan.md` the plan and the deviations, and
+`docs/measurements/gremote-vm-20260927.txt` the guest run.
+
+It answers three lanes. Control (`SYSINFO PS KILL REBOOT`, plus `AUTH` and
+`PING`) runs inline on the reader thread; job (`EXEC LAUNCH`) and fs (`LS STAT
+GET PUT RM MKDIR MV DRIVES`) each get a worker, one request in flight, with
+`ERR busy op= age_ms=` rather than a queue. The fs lane's `ship()` is step 5b,
+which is why fs was folded into step 4 at all: without `PUT`, a new
+`gaston.exe` still travels to the test box on a CD.
+
+**The measurement that earns the step**: a running exe is LOCKED on Windows
+98. A plain `PUT` over a live image is refused, the process untouched; the
+same write through `ship()` ends it first and lands. Under Wine the plain
+`PUT` succeeds -- Wine does not hold the image -- so this is exactly the class
+of thing `make wine-smoke` is documented as unable to settle. Found beside it:
+a second gremote under another name never starts, because the single-instance
+mutex works, and Wine allows the second instance.
+
+Four things the work changed outside `win/remote/`:
+
+- **`core/thread.h`**, which REMOTE.md's libcore row had listed since the
+  split was planned. Every thread in the tree passed 0 for the stack, taking
+  the image default -- measured at 1 MB reserve and **64 KB commit** each.
+  gremote has six. `make check` cannot see any of them: it sums PE sections,
+  and a thread stack is not in the image, so the sizes are chosen against
+  runtime working set instead.
+- **A reserved slot in libwire's out queue.** `RC_OUTQ_MAX_BYTES` was one flat
+  64 KB budget, so a streaming `GET` could fill it and starve the `PONG` the
+  reader owes -- a server killing its own heartbeat with its own reply.
+  `Connection::send` gained a trailing `reserveBytes`, defaulted to 0, and
+  every existing caller is unchanged.
+- **`rc_log_open` takes a program name.** It hardcoded one filename, and
+  gremote is meant to sit in the same directory as the client.
+- **QMP `hostfwd_add`** (`tools/vm/qmp.py hostfwd`). The host could never
+  reach a listener inside the guest, and libvirt's `<portForward>` is not the
+  answer: it validates against the RNG and is then refused by libvirt itself,
+  which accepts it only on the `passt` backend. This domain is slirp with a
+  hand-configured NE2000.
+
+Wine proved what Wine can: 66 tests under `tests/python/remote/` drive the
+real binary over a real socket, which is the direction REMOTE.md flagged as
+having no precedent here. Four contract tests pin the guest's op table and
+refusal vocabulary against the Python that drives it, because
+`test_frame_contract.py` reads a hardcoded file list and knows nothing of
+either.
+
+Committed at load: `gaston.exe` 464665 of 470000, `gremote.exe` 238665 of
+250000. `make test` 3623 passed.
