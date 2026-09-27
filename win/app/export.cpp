@@ -85,18 +85,28 @@ rc_export *rc_export::create(rc_html *html_)
 
 rc_export::~rc_export()
 {
-    /* A transfer still open at shutdown is an abandoned one: close the handle
-     * and take the temp file with it rather than leaving a half-written
-     * .$$$ beside a file the user never got. */
-    cleanup();
+    /* A transfer still open at shutdown is an abandoned one: the sink closes
+     * its handle and takes the temp with it rather than leaving a
+     * half-written .$$$ beside a file the user never got. */
+    cleanup("the client is closing");
 }
 
-void rc_export::cleanup(void)
+/* Export writes beside the destination, never in %TEMP%: the rename at the
+ * end has to be within one volume, and the user may well have chosen a floppy
+ * or a network drive.
+ *
+ * aside = false. There is no recovery pass over wherever the person pointed
+ * the Save dialog, so a `.$$$-old` left behind by a crash between the two
+ * moves would be there forever. The Save dialog has already asked about an
+ * existing file, so delete-then-rename is what was agreed to. */
+static WorkNames exportNames()
 {
-    fp.reset();
-    if (tmp[0]) { DeleteFileA(tmp); tmp[0] = '\0'; }
-    dest[0] = '\0';
-    got = 0;
+    return WorkNames(".$$$", "", 4, false);
+}
+
+void rc_export::cleanup(const char *why)
+{
+    sink.abort(why);
     total = 0;
 }
 
@@ -104,47 +114,39 @@ int rc_export::begin(HWND owner, const char *suggested)
 {
     char path[MAX_PATH];
 
-    if (fp.valid()) {
+    if (sink.active()) {
         if (html) html->error("An export is already in progress.");
         return 0;
     }
     if (!ask_for_path(owner, suggested, path, sizeof(path)))
         return 0;
 
-    /* The temp file sits beside the destination, not in %TEMP%: the rename at
-     * the end has to be within one volume to be atomic, and the user may well
-     * have chosen a floppy or a network drive. */
-    /* CHECKED, because at the MAX_PATH boundary the format truncates back to
-     * exactly `path` and then tmp == dest. Everything downstream assumes they
-     * are different files: fopen(tmp, "wb") would truncate the user's chosen
-     * file in place before a byte had arrived, EXPORTEND's DeleteFileA(dest)
-     * would delete what had just been written, and every mid-transfer
-     * cleanup() does DeleteFileA(tmp) -- i.e. deletes dest. The outcome is
-     * losing a pre-existing file the bridge never touched, which is the one
-     * thing an export must not do. (audit 01.37) */
-    if (!rc_strf(tmp, sizeof(tmp), "%s.$$$", path)) {
-        rc_log("export: %s leaves no room for a .$$$ beside it",
-               path);
-        if (html)
-            html->error("That path is too long for this machine to write a "
-                        "temporary file beside it. Nothing was written. "
-                        "Choose a shorter path or a folder nearer the root.");
-        tmp[0] = '\0';
+    /* At the MAX_PATH boundary the temp name truncates back to exactly the
+     * destination, and then every downstream step acts on the user's chosen
+     * file: the open would truncate it in place before a byte arrived, and
+     * every abort would delete it. Losing a pre-existing file the bridge never
+     * touched is the one thing an export must not do. beginAbsolute refuses
+     * rather than truncating. (audit 01.37) */
+    if (!sink.beginAbsolute(path, exportNames())) {
+        DWORD err = GetLastError();
+        if (err == ERROR_FILENAME_EXCED_RANGE) {
+            rc_log("export: %s leaves no room for a .$$$ beside it", path);
+            if (html)
+                html->error("That path is too long for this machine to write "
+                            "a temporary file beside it. Nothing was written. "
+                            "Choose a shorter path or a folder nearer the "
+                            "root.");
+        } else {
+            rc_log("export: cannot open a temp beside %s (%lu)", path,
+                   (unsigned long)err);
+            if (html)
+                html->error("Could not create the file. Check the drive has "
+                            "room and is not write-protected.");
+        }
         return 0;
     }
-    fp.reset(fopen(tmp, "wb"));
-    if (!fp.valid()) {
-        rc_log("export: cannot open %s", tmp);
-        if (html)
-            html->error("Could not create the file. Check the drive has room "
-                        "and is not write-protected.");
-        tmp[0] = '\0';
-        return 0;
-    }
-    rc_strf(dest, sizeof(dest), "%s", path);
-    got = 0;
     total = 0;
-    rc_log("export: writing to %s", tmp);
+    rc_log("export: writing to %s", sink.tempPath());
     return 1;
 }
 
@@ -153,20 +155,19 @@ void rc_export::give_up(void)
     /* Called on an immediate send failure AND from the disconnect branch in
      * main.cpp, where a transfer may be part-written rather than not started
      * -- so the message says how far it got rather than asserting "before any
-     * data arrived", which was only true of the first caller. cleanup()
-     * closes the FILE* and removes the .$$$ either way: a half-written export
-     * is not a smaller export, it is a broken file. */
-    if (fp.valid())
+     * data arrived", which was only true of the first caller. A half-written
+     * export is not a smaller export, it is a broken file. */
+    if (sink.active())
         rc_log("export: abandoned after %lu of %lu bytes",
-               (unsigned long)got, (unsigned long)total);
-    cleanup();
+               (unsigned long)sink.received(), (unsigned long)total);
+    cleanup("the request did not reach the bridge");
 }
 
 int rc_export::frame(rc_frame *f)
 {
     if (strcmp(f->type, "EXPORTSTART") == 0) {
         const char *t = rc_frame_get(f, "total");
-        if (!fp.valid()) {
+        if (!sink.active()) {
             /* Nothing asked for this, so nothing is open. Possible after a
              * reconnect that replayed a request, and dropping it is correct:
              * writing to a path the user has not chosen would be worse. */
@@ -180,31 +181,33 @@ int rc_export::frame(rc_frame *f)
     if (strcmp(f->type, "EXPORTDAT") == 0) {
         const char *o = rc_frame_get(f, "off");
         unsigned long off = o ? (unsigned long)atol(o) : 0;
-        if (!fp.valid()) return 1;
+        if (!sink.active()) return 1;
 
-        /* A chunk that does not continue where the last one stopped means a
-         * hole, and a file with a hole in it renders as garbage from that
-         * point on with nothing to say why. Refuse the whole export instead.
-         * `off` is in DECOMPRESSED bytes, which is what has been written. */
-        if (off != got) {
-            rc_log("export: chunk at %lu, expected %lu -- abandoning",
-                   off, got);
+        /* `off` is in DECOMPRESSED bytes, which is what has been written. */
+        switch (sink.write(off, f->body, f->body_len)) {
+        case CHUNK_OK:
+            break;
+        case CHUNK_OUT_OF_ORDER:
+            /* A chunk that does not continue where the last one stopped means
+             * a hole, and a file with a hole in it renders as garbage from
+             * that point on with nothing to say why. Refuse the whole export
+             * instead. */
+            rc_log("export: chunk at %lu, expected %lu -- abandoning", off,
+                   (unsigned long)sink.received());
             if (html)
                 html->error("The export arrived out of order and has been "
                             "discarded. Nothing was written.");
-            cleanup();
-            return 1;
-        }
-        if (f->body_len
-            && fwrite(f->body, 1, f->body_len, fp.get()) != f->body_len) {
-            rc_log("export: write failed at %lu", got);
+            cleanup("a chunk arrived out of order");
+            break;
+        default:
+            rc_log("export: write failed at %lu",
+                   (unsigned long)sink.received());
             if (html)
                 html->error("Writing the file failed -- the drive may be "
                             "full. Nothing was kept.");
-            cleanup();
-            return 1;
+            cleanup("the write failed");
+            break;
         }
-        got += f->body_len;
         return 1;
     }
 
@@ -212,38 +215,11 @@ int rc_export::frame(rc_frame *f)
         const char *st = rc_frame_get(f, "status");
         const char *why = rc_frame_get(f, "reason");
         int ok = (st && strcmp(st, "ok") == 0);
+        unsigned long got = (unsigned long)sink.received();
         char msg[320];
+        char where[MAX_PATH];
 
-        if (!fp.valid()) return 1;
-        /* CHECKED, because stdio buffers and this is where the last buffer
-         * actually reaches the disk.
-         *
-         * Every fwrite above is checked, but a full floppy or network drive
-         * fails inside fclose, which returns EOF -- and that return was
-         * discarded. `got == total` still held, because it counts bytes
-         * handed to fwrite rather than bytes on disk, so a TRUNCATED file was
-         * renamed into the name the user chose. export.h names that exact
-         * outcome as the thing the temp file exists to prevent: "they would
-         * open it, see most of a conversation, and have no way to tell that
-         * the end is missing."
-         *
-         * release(), not reset(): the guard's own release() calls fclose and
-         * throws away what it returns, which is exactly the return value
-         * this block exists to check. So the close stays hand-written; the
-         * guard only hands over the FILE* it would otherwise have closed
-         * itself. */
-        {
-            int closed = fclose(fp.release());
-            if (closed != 0) {
-                rc_log("export: fclose failed after %lu bytes -- out of disk?",
-                       (unsigned long)got);
-                if (html)
-                    html->error("The export could not be written to disk and "
-                                "has been discarded. Nothing was written.");
-                cleanup();
-                return 1;
-            }
-        }
+        if (!sink.active()) return 1;
 
         if (!ok) {
             rc_log("export: bridge reported failure: %s", why ? why : "?");
@@ -251,7 +227,7 @@ int rc_export::frame(rc_frame *f)
                     "The export did not finish%s%s Nothing was written.",
                     (why && *why) ? ": " : ".", (why && *why) ? why : "");
             if (html) html->error(msg);
-            cleanup();
+            cleanup("the bridge reported a failure");
             return 1;
         }
         if (total && got != total) {
@@ -259,33 +235,38 @@ int rc_export::frame(rc_frame *f)
             if (html)
                 html->error("The export finished short and has been "
                             "discarded. Nothing was written.");
-            cleanup();
+            cleanup("the transfer finished short");
             return 1;
         }
 
-        /* MoveFileA refuses to overwrite, and the Save dialog has already
-         * asked about an existing file -- so delete first and accept that a
-         * failure here leaves the temp file, which is named after the
-         * destination and findable. */
-        DeleteFileA(dest);
-        if (!MoveFileA(tmp, dest)) {
-            rc_log("export: rename %s -> %s failed (%lu)", tmp, dest,
+        /* The old worry here was stdio: every fwrite was checked, but a full
+         * floppy fails inside fclose, and that return was discarded -- so a
+         * TRUNCATED file was renamed into the name the user chose, which is
+         * the exact outcome the temp file exists to prevent. FileWriter uses
+         * WriteFile and buffers nothing, so a full disk fails at the write
+         * that fills it and is reported above. The failure mode is gone
+         * rather than handled. */
+        rc_strf(where, sizeof(where), "%s", sink.tempPath());
+        rc_strf(msg, sizeof(msg), "Conversation exported to %s (%lu bytes).",
+                sink.targetPath(), got);
+
+        if (sink.commit(NULL) != COMMIT_OK) {
+            rc_log("export: could not put %s in place (%lu)", where,
                    (unsigned long)GetLastError());
+            /* The bytes are written and verified; only the rename failed, and
+             * aside=false means the sink deliberately left the temp behind
+             * rather than deleting the one copy that exists. Say where it is. */
             rc_strf(msg, sizeof(msg),
                     "The conversation was written but could not be renamed. "
-                    "It is at %s", tmp);
+                    "It is at %s", where);
             if (html) html->error(msg);
-            /* NOT cleanup(): that would delete the file this just told the
-             * user where to find. fp is already released, above. */
-            tmp[0] = '\0'; dest[0] = '\0'; got = 0; total = 0;
+            total = 0;
             return 1;
         }
-        rc_strf(msg, sizeof(msg), "Conversation exported to %s (%lu bytes).",
-                dest, got);
+
         rc_log("export: %s", msg);
         if (html) html->notice(msg);
-        tmp[0] = '\0';
-        cleanup();
+        total = 0;
         return 1;
     }
 

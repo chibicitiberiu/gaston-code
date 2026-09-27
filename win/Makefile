@@ -525,12 +525,13 @@ $(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 # loops are where speed shows. The whole-client question is BACKLOG.md 2.
 $(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
-# fs/ is mostly not a loop. path, file, dir, list and writer are refusals,
-# one-shot syscalls and a directory enumeration whose cost is the platter, so
-# -os is free there; reader and xfer ARE the transfer loops and keep -otexan.
-# Measured below.
+# fs/ is mostly not a loop: refusals, one-shot syscalls, a directory
+# enumeration whose cost is the platter, and xfer's per-chunk bookkeeping.
+# fs/reader.o is the one that actually runs over every byte, and it keeps
+# -otexan. Measured: xfer at -os and at -otexan came to the same committed
+# total to the byte, so it is here for honesty rather than for the bytes.
 $(OBJ)/fs/path.o $(OBJ)/fs/file.o $(OBJ)/fs/dir.o $(OBJ)/fs/list.o \
-$(OBJ)/fs/writer.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+$(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # And the same now applies to most of sync/. The note above says sync/ keeps
 # -otexan for "the codec, the CRC pass and the transfer loops"; after step 5a

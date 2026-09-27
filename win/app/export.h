@@ -19,6 +19,10 @@
  * the name the user chose, which is worse than no file at all -- they would
  * open it, see most of a conversation, and have no way to tell that the end
  * is missing.
+ *
+ * That sink is fs/xfer.h now, and this is one of its three callers. It went
+ * the other way round: BACKLOG 6 named the version that used to live here as
+ * the cleanest of the three implementations and the one to extract from.
  */
 #ifndef RC_EXPORT_H
 #define RC_EXPORT_H
@@ -28,25 +32,30 @@
 #endif
 
 #include <windows.h>
-#include <stdio.h>
 #include "net/frameproto.h"
-#include "core/rc_cpp.h"    /* File, the RAII guard `fp` uses */
+#include "fs/xfer.h"        /* the sink this was extracted into */
 
 class rc_html;
 
 class rc_export {
-    File  fp;
-    char  dest[MAX_PATH];
-    char  tmp[MAX_PATH];
-    unsigned long got;      /* decompressed bytes written so far */
+    /* The transfer itself is libfs now. What is left here is the part that is
+     * about EXPORT rather than about writing a file: which frames mean what,
+     * and what to tell the person when it goes wrong.
+     *
+     * Export's policy differs from the sync layer's in three ways, and all
+     * three are carried by WorkNames and a NULL verifier rather than by a
+     * second implementation: the suffix is `.$$$`, there is no checksum to
+     * check, and the old file is NOT moved aside -- on a failed rename the
+     * temp is left findable and the person is told where it is. */
+    ChunkSink sink;
     unsigned long total;    /* what EXPORTSTART said to expect, or 0 */
     rc_html *html;          /* notices and errors; may be NULL */
 
     rc_export(const rc_export &);
     rc_export &operator=(const rc_export &);
-    rc_export() : fp(0), got(0), total(0), html(0) { dest[0] = tmp[0] = 0; }
+    rc_export() : total(0), html(0) {}
 
-    void cleanup(void);
+    void cleanup(const char *why);
 
 public:
     static rc_export *create(rc_html *html);
@@ -66,7 +75,7 @@ public:
 
     /* Is a transfer in progress? Export refuses to start a second one: two
      * sinks would interleave into each other's files. */
-    int busy(void) const { return fp.valid(); }
+    int busy(void) const { return sink.active(); }
 };
 
 #endif
