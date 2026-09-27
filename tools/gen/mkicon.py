@@ -87,88 +87,101 @@ class Canvas:
                     self.put(x0 + dx, y0 + dy, ch)
 
 
-# A speech bubble, 18x11, for the 32x32 screen. Three dots because the shape
-# has to survive being 22 pixels wide: an ellipsis reads as "a conversation"
-# where any glyph of actual text would just be noise at this size.
-BUBBLE32 = [
-    "..wwwwwwwwwwwwww..",
-    ".wwwwwwwwwwwwwwww.",
-    "wwwwwwwwwwwwwwwwww",
-    "wwkkwwwwkkwwwwkkww",
-    "wwkkwwwwkkwwwwkkww",
-    "wwwwwwwwwwwwwwwwww",
-    "wwwwwwwwwwwwwwwwww",
-    ".wwwwwwwwwwwwwwww.",
-    "..wwwwwwwwwwwwww..",
-    "..wwww............",
-    "..ww..............",
+# The screen's occupant, 26x20, for the 32x32 icon. Our own caricature of
+# Gaston Lagaffe (README, "Why Gaston Code?"): the mop of hair with its quiff,
+# eyes half shut, the big round nose, a grin, and the green turtleneck -- the
+# traits, not Franquin's drawing. The face is white shaded with silver
+# because the sixteen colours have no skin tone; yellow read as a cartoon of
+# the wrong family. '.' is the screen, which is Win95 desktop teal: on a
+# black CRT the hair, which is most of him, vanished.
+GASTON32 = [
+    "...........kk.............",
+    ".........kkkkkkkk.........",
+    ".......kkkkkkkkkkkk.......",
+    "......kkkkkkkkkkkkkk......",
+    ".....kkkkkkkkkkkkkkkk.....",
+    ".....kkkkkkkkkkkkkkkkk....",
+    "....kkkkkkkkkkkkkkkkkk....",
+    "....kkkkwkkkkwkkkkkwkkk...",
+    "....kkkwwkkkwwwkkkwwwkk...",
+    "....kkwwwwkwwwwwkwwwwsk...",
+    ".....kwkkkwwwwwwwkkkssk...",
+    ".....kwwwwwwkkkwwwwwsk....",
+    ".....kwwwwwkwwwkwwwwsk....",
+    "......kwwwwkwwskwwwsk.....",
+    "......kwwwwwkkkwwwwsk.....",
+    ".......kwkwwwwwwwkwsk.....",
+    ".......kwwkkkkkkkwsk......",
+    "........kkwwwwwwwkk.......",
+    "...kkeeeekkkkkkkeeeeekk...",
+    "..keeeeeeeeeeeeeeeeeeeeek.",
 ]
 
-# At 16x16 the bubble is gone. The screen's usable interior is 10x5 pixels,
-# and a bubble drawn to fit it has no black margin left to be a bubble
-# against -- rendered, it reads as a face. What survives the size is the
-# ellipsis alone, lit on a dark screen: the same "a conversation is
-# happening" and none of the shape that cannot be drawn.
-DOTS16 = [
-    "wwkwwkww",
-    "wwkwwkww",
+# At 16x16 the screen is 12x9 and only the silhouette survives: hair, a
+# face with a nose, and the sweater's green. The green is what still says
+# "him" at taskbar size.
+GASTON16 = [
+    "....kkkk....",
+    "..kkkkkkkk..",
+    "..kkkkkkkkk.",
+    "..kwkkwkkwk.",
+    "..kwwwwwwsk.",
+    "..kwwkkwwsk.",
+    "...kwwwwsk..",
+    ".kkeekkeekk.",
+    "keeeeeeeeeek",
 ]
 
 
 def art32():
-    """A CRT on its stand, with a chat bubble on the screen.
+    """A CRT on its stand, with Gaston on the screen.
 
     Silver rather than the beige a real 1998 monitor was: beige is not in the
     16 colours, and C0C0C0 is what Win95's own My Computer icon uses for the
-    same object -- so it reads as "a PC" to the eye the icon is aimed at.
+    same object -- so it reads as "a PC" to the eye the icon is aimed at. The
+    screen takes most of the height, and the stand is squeezed to fit him.
     """
     c = Canvas(32, 32)
     # Chassis: black outline, silver body, lit from the top left.
-    c.rect(1, 3, 30, 23, "k")
-    c.rect(2, 4, 29, 22, "s")
-    c.rect(2, 4, 29, 4, "w")
-    c.rect(2, 4, 2, 22, "w")
-    c.rect(29, 5, 29, 22, "d")
-    c.rect(3, 22, 29, 22, "d")
+    c.rect(0, 0, 31, 26, "k")
+    c.rect(1, 1, 30, 25, "s")
+    c.rect(1, 1, 30, 1, "w")
+    c.rect(1, 1, 1, 25, "w")
+    c.rect(30, 2, 30, 25, "d")
+    c.rect(2, 25, 30, 25, "d")
     # Screen, sunken: dark on the top and left, light on the bottom and right.
-    c.rect(4, 7, 27, 7, "d")
-    c.rect(4, 7, 4, 19, "d")
-    c.rect(5, 19, 27, 19, "w")
-    c.rect(27, 8, 27, 19, "w")
-    c.rect(5, 8, 26, 18, "k")
-    c.sprite(7, 8, BUBBLE32)
-    # Power LED. Two pixels of lime, and the only saturated colour in the
-    # icon -- which is what makes the machine read as switched on.
-    c.rect(25, 21, 26, 21, "l")
+    c.rect(2, 2, 29, 2, "d")
+    c.rect(2, 2, 2, 23, "d")
+    c.rect(3, 23, 29, 23, "w")
+    c.rect(29, 3, 29, 23, "w")
+    c.rect(3, 3, 28, 22, "t")
+    c.sprite(3, 3, GASTON32)
+    # Power LED. Two pixels of lime, the only saturated colour on the
+    # chassis -- which is what makes the machine read as switched on.
+    c.rect(26, 24, 27, 24, "l")
     # Neck and base.
-    c.rect(12, 24, 19, 25, "k")
-    c.rect(13, 24, 18, 24, "s")
-    c.rect(13, 25, 18, 25, "d")
-    c.rect(8, 26, 23, 28, "k")
-    c.rect(9, 27, 22, 27, "s")
+    c.rect(12, 27, 19, 28, "k")
+    c.rect(13, 27, 18, 27, "s")
+    c.rect(7, 29, 24, 31, "k")
+    c.rect(8, 30, 23, 30, "s")
     return c
 
 
 def art16():
     """The same object with every optional pixel removed."""
     c = Canvas(16, 16)
-    c.rect(0, 1, 15, 11, "k")
-    c.rect(1, 2, 14, 10, "s")
-    c.rect(1, 2, 14, 2, "w")
-    c.rect(1, 2, 1, 10, "w")
-    c.rect(14, 3, 14, 10, "d")
-    c.rect(2, 10, 14, 10, "d")
-    c.rect(2, 3, 13, 3, "d")
-    c.rect(2, 3, 2, 9, "d")
-    c.rect(3, 9, 13, 9, "w")
-    c.rect(13, 4, 13, 9, "w")
-    c.rect(3, 4, 12, 8, "k")
-    c.sprite(4, 5, DOTS16)
+    c.rect(0, 0, 15, 12, "k")
+    c.rect(1, 1, 14, 11, "s")
+    c.rect(1, 1, 14, 1, "w")
+    c.rect(1, 1, 1, 11, "w")
+    c.rect(14, 2, 14, 11, "d")
+    c.rect(2, 2, 13, 10, "t")
+    c.sprite(2, 2, GASTON16)
     # No LED at this size: one lime pixel next to a silver one is a speck.
-    c.rect(6, 12, 9, 12, "k")
-    c.rect(7, 12, 8, 12, "d")
-    c.rect(4, 13, 11, 14, "k")
-    c.rect(5, 13, 10, 13, "s")
+    c.rect(6, 13, 9, 13, "k")
+    c.rect(7, 13, 8, 13, "d")
+    c.rect(4, 14, 11, 15, "k")
+    c.rect(5, 14, 10, 14, "s")
     return c
 
 
