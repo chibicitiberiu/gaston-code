@@ -1526,12 +1526,18 @@ our own window from a dialog it had not read.
   agent's `ver` came back `spawn_failed` with nothing saying why. The bridge
   should tell the agent (and log) that no shell was reported; the client
   should log a missing `tools_detect.ini`.
-- **Processes, system info and reboot have no agent tool.** libexec has
-  `Processes` (list, kill with the deny list, launch), `readSystemInfo` and
-  `requestReboot`, proven on real 98, but no client op or machine tool uses
-  them yet; 98 has no tasklist or taskkill, so an agent cannot see or end a
-  hung program at all. PLAN.md already calls `list_processes` the strongest
-  case; it lands with gremote (REMOTE.md step 4) or as client ops.
+- **No process tools for the agent.** *Fixed 2026-09-27:* machine tools
+  `ps` and `kill` (PSLIST/PSKILL on the client's reader thread), verified
+  end to end on the VM -- a live Notepad ended, two stuck orphans reported
+  `pending` honestly (`docs/measurements/ps-kill-vm-20260927.txt`). Told
+  "find it with ps", Haiku first ran `exec ps`; exec's description now
+  names the tools. System info and reboot still have no tool (by choice).
+- **Killing a console program strands its console VM** (below), and a
+  guest carrying stranded VMs later **blue-screened in VMM** releasing a
+  kernel object through a stale pointer while running `start notepad`
+  (`docs/measurements/bsod-vm-20260927.txt`, one sighting; the same
+  command on a clean box returned in 2s). Open decision: should `kill`
+  refuse a console program without `force`, or warn that its VM stays?
 - **No exec check runs on the guest.** *Fixed 2026-09-27:* `execcheck` now
   runs its own exe in child modes, directly or through COMSPEC, and has a
   `--detached-to FILE` mode for the guest (a console parent would hide

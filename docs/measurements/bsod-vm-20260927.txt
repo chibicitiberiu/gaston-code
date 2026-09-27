@@ -1,0 +1,51 @@
+# BSOD on the VM, 2026-09-27 ~02:42, captured live before any restart.
+
+## Screen
+
+  A fatal exception 0E has occurred at 0028:C000A4B0 in VXD VMM(01) +
+  000094B0. The current application will be terminated.
+
+0E is a page fault; VMM(01) is the Windows 98 virtual machine manager, ring 0.
+
+## Registers (after the fault; the CPU is in the BSOD handler now)
+
+CR2=000a1000 -- the address the faulting access touched.
+Eight EIP samples over 4s, all CPL=0 in VMM's range (c0001460 x2, c0001754,
+c00036d0, c0003a6c, c000aa48, c00341c1 x2), HLT=0: the BSOD handler.
+
+## The faulting code, VMM+94B0 (0xC000A4B0)
+
+  c000a4ae: mov  eax,eax
+  c000a4b0: cmp  word [eax+2], 0x4553     <- faults: eax+2 ~ 0xA0FFF/0xA1000
+  c000a4b6: jne  c000a4bf
+  c000a4b8: cli
+  c000a4b9: dec  word [eax]
+  c000a4bc: js   c000a4c0
+  c000a4be: sti
+  c000a4bf: ret
+
+Its neighbour at c000a490 is the matching increment (pushf; cli; inc word
+[eax]; cmp eax,[eax+4] ...). A 16-bit count at +0, a 2-byte signature at
++2 checked before the decrement: a VMM synchronisation object (mutex- or
+semaphore-like) being released through a pointer that is not one. EAX was
+~0x000A0FFD -- low memory, the VGA window of a VM -- i.e. a stale or
+garbage object pointer, not a NULL.
+
+## What was running (bridge log, :7891)
+
+  02:42:32  exec x1: start notepad   (agent, allowed; through COMMAND.COM)
+  02:42:23  last "guest reports" line; the next, due ~02:42:53, never came
+  02:43:22  bridge budget ran out, asked the guest to kill x1 (no answer)
+
+So the guest died between ~02:42:32 and ~02:42:53: during `start notepad`
+under a piped COMMAND.COM, or at most at its 20s timeout's stop.
+
+## State of the guest beforehand -- the likely accomplice
+
+Not a clean box. Left by this session's tests:
+  - 2 WINOA386.MOD half-dead (1 thread): console VMs stranded when
+    execcheck killed a console program (BACKLOG 17);
+  - 2 EXECCHK.EXE that `kill` could not end (children of a dead VM);
+    the agent's kill of both came back `pending` minutes earlier.
+A VMM object released through a stale pointer fits a system carrying
+half-dead VMs whose objects were never torn down. One sighting; not proof.

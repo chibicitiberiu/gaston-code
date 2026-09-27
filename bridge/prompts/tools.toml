@@ -11,6 +11,8 @@
 description = '''
 Run a command on the connected machine (the old computer the user is sitting at), and return its output. By default the command runs through the system shell, whichever that machine has. Output is captured as the console codepage and capped at 32KB. The user must approve every call on their own screen, so prefer one command that answers the question over several that explore.
 
+To see or end running programs, use the `ps` and `kill` tools, not a command: the machine may have no command for it at all (Windows 98 has no tasklist or taskkill).
+
 ONE COMMAND PER CALL. Whether commands can be chained, and with what, depends on the shell that machine has -- the system prompt says which one it is and what it accepts. To run several steps regardless of shell, write a script file into the mirrored folder and run that; it is also one approval instead of several.
 
 IMPORTANT: the command must be non-interactive. Anything that stops to ask a question -- a delete or a format asking 'Are you sure (Y/N)?' -- will HANG until the timeout kills it: that prompt is read from the machine's own console and there is no way to answer it from here -- NOT by piping one in either, which was measured and does not work. Use a form that does not ask: a switch that says yes, or a more specific target.'''

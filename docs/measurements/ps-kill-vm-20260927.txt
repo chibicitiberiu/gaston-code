@@ -1,0 +1,21 @@
+# ps and kill end to end on the VM, 2026-09-27: bridge --model haiku on :7891, RCX.EXE (d961e4f)
+
+## Round 1 (guest degraded by earlier test leftovers)
+ps listed every process incl. 2 orphan EXECCHK.EXE; kill on both -> pending (children of a dead DOS VM, unkillable); the agent re-ran ps as the pending text says.
+Then 'start notepad' never answered and the guest blue-screened in VMM: docs/measurements/bsod-vm-20260927.txt.
+
+## Round 2 (after restart; 'start notepad' returned ok in 2s)
+03:09:57 INFO    bridge.coordinator: input: Start Notepad with: start notepad. Then find it with ps and end it with kill.
+03:10:31 INFO    bridge.permdesk: permission allow for mcp__machine__exec (toolu_011zJBCPPRNgnjMXLw4W2PaH)
+03:10:31 INFO    bridge.guest_exec: exec x2: start notepad
+03:10:33 INFO    bridge.guest_exec: exec x2 finished: status=ok code=0 bytes=0
+03:11:07 INFO    bridge.permdesk: permission deny for mcp__machine__exec (toolu_01PKM9qv4YQmS2MCVjw5C99C)
+03:11:39 INFO    bridge.coordinator: input: Not exec: use your ps tool (the machine's process list), then your kill tool on the Notepad.
+03:12:06 INFO    bridge.permdesk: permission allow for mcp__machine__ps (toolu_01VvCEidLFku6TqiBFgFPFED)
+03:12:34 INFO    bridge.permdesk: permission allow for mcp__machine__kill (toolu_01MCiyv5SfLQkxUwd6LMjjSy)
+
+Told 'find it with ps', Haiku first ran exec 'ps' (denied) and offered tasklist; pointed at its ps tool it listed, found NOTEPAD.EXE fffb61b7, kill -> 'Process fffb61b7 has ended.', Notepad left the taskbar.
+Fix: exec's description now names ps/kill for running programs.
+
+## execcheck on the clean guest, three runs
+run 1: stale binary (old kill case), 22/23, stranded one console VM; runs 2 and 3: current build, 23/23 each, WINOA386 count unchanged between them, no REDIR32, no orphans.
