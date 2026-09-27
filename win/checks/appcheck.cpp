@@ -16,6 +16,7 @@
 #include <string.h>
 #include "core/rc_cpp.h"
 #include "core/app.h"
+#include "core/thread.h"
 
 /* POD, so no static constructor (make check fails the build on one). */
 static char g_trace[512];
@@ -202,6 +203,40 @@ private:
     UniqueObj<Recorder> m_a, m_b, m_c;
 };
 
+/* Somewhere for burn()'s frames to end up, so they are not optimised away.
+ * POD, so no static constructor (make check fails the build on one). */
+static volatile LONG g_sink;
+
+class Body : public Runnable
+{
+public:
+    Body() : ran(0), gate(0), deep(0) {}
+
+    void run()
+    {
+        if (gate)
+            WaitForSingleObject(gate, 10000);
+        if (deep)
+            burn(deep);
+        ran = 1;
+    }
+
+    /* Frames under a page, several of them: what the stack-frame gate
+     * permits, and therefore what a chosen stack size has to hold. */
+    static void burn(int n)
+    {
+        char frame[1024];
+        memset(frame, n & 0xff, sizeof frame);
+        if (n > 1)
+            burn(n - 1);
+        g_sink += frame[0];
+    }
+
+    volatile LONG ran;
+    HANDLE gate;
+    int deep;
+};
+
 static int runOnce(TestApp *app)
 {
     int code = app->run("");
@@ -274,6 +309,60 @@ int main(void)
     {
         delete new TestApp(0, 0, 0);
         say("never-run-creates-nothing", g_trace[0] == '\0');
+    }
+
+    /* --- core/thread.h ------------------------------------------------
+     *
+     * Thread is libcore's, not App's, but it is what App's services start
+     * and this is the exe that already links libcore and runs under Wine.
+     * A second check binary for one class would be four more hand-kept
+     * lists (all:, .PHONY, guest-checks, the ISO) for no more coverage. */
+    {
+        Body b;
+        Thread t;
+        bool started = t.start(b, "runs-and-joins", 0);
+        bool joined = t.join(5000);
+        say("thread-runs-and-joins", started && joined && b.ran);
+    }
+    {
+        /* The point of the class. 16 KB against the image's 64 KB commit,
+         * with four 1 KB frames actually used on it -- the frame gate caps
+         * any one of them below a page, so the depth is what is left to
+         * get wrong. */
+        Body b;
+        b.deep = 4;
+        Thread t;
+        bool started = t.start(b, "small-stack", 16u * 1024u);
+        bool joined = t.join(5000);
+        say("thread-takes-a-small-stack", started && joined && b.ran);
+    }
+    {
+        /* A service whose start() failed is still signalled and joined
+         * (core/app.h), so this must not be an error. */
+        Thread t;
+        say("join-without-start-is-true", t.join(0) && !t.started());
+    }
+    {
+        Body b;
+        Thread t;
+        bool first = t.start(b, "once", 0);
+        bool second = t.start(b, "twice", 0);
+        t.join(5000);
+        say("a-thread-starts-once", first && !second);
+    }
+    {
+        /* join() says false rather than lying, which is what joinOrLeak()
+         * turns into a leak instead of a free under a live thread. */
+        Body b;
+        Handle gate(CreateEventA(NULL, TRUE, FALSE, NULL));
+        b.gate = gate.get();
+        Thread t;
+        bool started = t.start(b, "still-running", 0);
+        bool early = t.join(50);
+        SetEvent(gate.get());
+        bool late = t.join(5000);
+        say("join-reports-a-thread-still-running",
+            started && !early && late && b.ran);
     }
     return 0;
 }

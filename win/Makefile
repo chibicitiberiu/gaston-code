@@ -102,7 +102,7 @@ MINIZ = third_party/miniz/miniz.c
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
-            core/app.cpp core/window.cpp core/heap.cpp
+            core/app.cpp core/window.cpp core/heap.cpp core/thread.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 # libwire (docs/REMOTE.md, step 2): the frame codec and Connection, the
 # framed TCP link. Knows the wire format and no frame types; each protocol's
