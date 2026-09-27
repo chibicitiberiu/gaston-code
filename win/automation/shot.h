@@ -20,14 +20,9 @@
 
 #include <windows.h>
 
-class ByteSink
-{
-public:
-    virtual ~ByteSink() {}
-    /* False stops the capture. A sink whose connection has gone says so
-     * rather than letting a megabyte be produced for nobody. */
-    virtual bool write(const void *data, unsigned len) = 0;
-};
+/* ByteSink moved to libcore: libfs streams files through the same
+ * interface, and gremote links both libraries. */
+#include "core/bytesink.h"
 
 struct ShotOptions
 {

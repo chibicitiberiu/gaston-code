@@ -127,7 +127,7 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 # drives.cpp and freespace.cpp are separate translation units on purpose: the
 # client wants free space for one volume and never enumerates drives, so
 # splitting them keeps the enumeration out of retroclaude.exe's image.
-FS_SRCS = fs/path.cpp
+FS_SRCS = fs/path.cpp fs/reader.cpp
 LIBFS = $(LIBDIR)/libfs.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
@@ -151,7 +151,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
-       rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp sync/compat.cpp \
+       rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp sync/compat.cpp sync/scanner.cpp \
        sync/syncrpc.cpp \
        ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libexec before libcore: the first three
@@ -180,7 +180,7 @@ $(BUILD)/htmlspike.exe: $(HTMLSPIKE_OBJS)
 
 # Phase 0 guest experiments. Console subsystem so it can be run from a DOS box
 # and its output read without a GUI.
-SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp sync/compat.cpp \
+SYNCCHECK_OBJS = $(call objs,checks/synccheck.c sync/sync.cpp sync/compat.cpp sync/scanner.cpp \
                  $(MINIZ)) $(LIBFS) $(LIBCORE)
 synccheck: $(BUILD)/synccheck.exe
 $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
@@ -352,7 +352,7 @@ $(BUILD)/toolcheck.exe: $(TOOLCHECK_OBJS)
 	@echo "built $@"
 
 WORKCHECK_OBJS = $(call objs,checks/workcheck.cpp app/workcopy.cpp sync/sync.cpp \
-                 sync/compat.cpp $(MINIZ)) $(LIBFS) $(LIBCORE)
+                 sync/compat.cpp sync/scanner.cpp $(MINIZ)) $(LIBFS) $(LIBCORE)
 workcheck: $(BUILD)/workcheck.exe
 $(BUILD)/workcheck.exe: $(WORKCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
@@ -395,7 +395,7 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp \
-                sync/compat.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                sync/compat.cpp sync/scanner.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
@@ -410,7 +410,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/sync.cpp \
-                sync/compat.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                sync/compat.cpp sync/scanner.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe

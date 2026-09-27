@@ -17,6 +17,8 @@
 #include "core/log.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
+#include "fs/reader.h"
+#include "sync/scanner.h"
 #include "miniz.h"
 
 /* --- classification + checksum, in ONE read pass ------------------------- */
@@ -27,146 +29,10 @@
  * accumulated as we go and the right one is chosen at the end. Two CRC
  * accumulations cost far less than a second pass over the platter.
  */
-/* The definition behind sync.h's opaque `rc_sync_scanner` -- same type, so
- * rc_sync_stat_file (below) and the public rc_sync_scanner_begin/feed/finish
- * API are the ONE accumulation, not two copies that could drift apart. */
-struct rc_sync_scanner {
-    unsigned long crc_raw;      /* every byte as it is on disk */
-    unsigned long crc_norm;     /* CRLF collapsed to LF */
-    int  saw_nul;
-    int  saw_crlf;
-    int  saw_bare_lf;
-    int  saw_lone_cr;           /* a CR not followed by LF -- includes \r\r\n */
-    int  pending_cr;            /* last byte of the previous chunk was CR */
-    /* The normalised copy of the chunk being scanned. It lives HERE, in a
-     * heap-allocated state block, and not as a local in scan_chunk -- see the
-     * note on rc_sync_stat_file.
-     *
-     * ONE BYTE MORE THAN A CHUNK, and the byte is load-bearing. A CR carried
-     * in from the previous chunk is emitted in front of this chunk's first
-     * byte, so an n-byte chunk that does not itself end in CR normalises to
-     * n + 1 bytes. At RC_SYNC_CHUNK that wrote one byte past the scanner's
-     * heap block -- into the next block's header -- whenever a chunk of a
-     * streamed file ended in 0x0D. do_get and attget allocate the scanner on
-     * its own, so a SYNCGET of such a file corrupted the heap, and the process
-     * died later in KERNEL32's heap code with nothing logged, or its sender
-     * failed with WSAEINVAL on a queued item whose length had been
-     * overwritten (drainprobe, 2026-09-25). rc_sync_stat_file never showed
-     * it: its scratch follows this struct, so the stray byte landed in bytes
-     * already consumed. */
-    unsigned char nb[RC_SYNC_CHUNK + 1];
-};
-typedef struct rc_sync_scanner scan_state;
-
-static void scan_chunk(scan_state *s, const unsigned char *buf, unsigned n)
-{
-    unsigned i;
-    unsigned char *nb = s->nb;
-    unsigned nn = 0;
-
-    s->crc_raw = mz_crc32(s->crc_raw, buf, n);
-
-    for (i = 0; i < n; i++) {
-        unsigned char c = buf[i];
-
-        if (s->pending_cr) {
-            /* Resolve the CR carried over from the previous chunk or byte. */
-            if (c == '\n') {
-                s->saw_crlf = 1;
-                nb[nn++] = '\n';        /* CRLF collapses to LF */
-                s->pending_cr = 0;
-                continue;
-            }
-            /* A CR followed by anything else -- including another CR, which is
-             * how \r\r\n gets here. Both are byte-exact cases: normalisation
-             * is NOT idempotent on them, and a file that is rewritten on every
-             * pass never converges. */
-            s->saw_lone_cr = 1;
-            nb[nn++] = '\r';
-            s->pending_cr = 0;
-        }
-
-        if (c == 0) s->saw_nul = 1;
-
-        if (c == '\r') {
-            s->pending_cr = 1;          /* decided by the next byte */
-            continue;
-        }
-        if (c == '\n') s->saw_bare_lf = 1;
-        nb[nn++] = c;
-    }
-    if (nn) s->crc_norm = mz_crc32(s->crc_norm, nb, nn);
-}
-
-static char scan_class(const scan_state *s)
-{
-    if (s->saw_nul)      return RC_CLS_EXACT;   /* anywhere, not a sniff window */
-    if (s->saw_lone_cr)  return RC_CLS_EXACT;   /* lone CR and \r\r\n */
-    if (s->saw_crlf && s->saw_bare_lf) return RC_CLS_EXACT;   /* mixed */
-    return RC_CLS_TEXT;
-}
-
-/* --- the incremental API, for a caller that must do something else with
- * each chunk (do_get sends it to the bridge) in the SAME pass that scans it,
- * rather than paying rc_sync_stat_file's own read first. ------------------ */
-
-/* Resolve the CR pending at EOF (if any), classify, and hand back whichever
- * of cls/crc_raw/crc_norm/crc the caller asked for (any out pointer may be
- * NULL). rc_sync_stat_file (below) uses this for its own tail instead of a
- * second copy of the same four lines, and that is not tidiness: it is the
- * only reason a mistake here is guaranteed to be caught. do_get's read is
- * exercised only by SYNCGET over the wire, which nothing in this suite
- * drives end to end; rc_sync_stat_file's is exercised directly by
- * synccheck.exe under the guest-agreement tests. One function used by both
- * means a wrong crc/cls choice fails THOSE tests -- proven by deliberately
- * breaking this function during development and watching
- * test_guest_agreement.py's checksum tests name the exact mismatch, with
- * every other test in the suite (do_get has no test of its own) staying
- * green. Two copies would have let that break through silently. */
-static void scan_finish(scan_state *s, char *cls_out, unsigned long *raw_out,
-                        unsigned long *norm_out, unsigned long *crc_out)
-{
-    char cls;
-
-    /* A file ending in CR: the carry never resolved, so it is a lone CR. */
-    if (s->pending_cr) {
-        unsigned char cr = '\r';
-        s->saw_lone_cr = 1;
-        s->crc_norm = mz_crc32(s->crc_norm, &cr, 1);
-    }
-
-    cls = scan_class(s);
-    if (cls_out)  *cls_out  = cls;
-    if (raw_out)  *raw_out  = s->crc_raw;
-    if (norm_out) *norm_out = s->crc_norm;
-    /* Which of the two THIS class wants -- see RC_CRC_FOR's own comment for
-     * why getting this wrong is a permanent disagreement with the bridge,
-     * not a glitch. */
-    if (crc_out)  *crc_out  = RC_CRC_FOR(*s, cls);
-}
-
-rc_sync_scanner *rc_sync_scanner_begin(void)
-{
-    rc_sync_scanner *s = (rc_sync_scanner *)HeapAlloc(GetProcessHeap(), 0,
-                                                       sizeof(*s));
-    if (!s) return NULL;
-    memset(s, 0, sizeof(*s));
-    s->crc_raw = s->crc_norm = MZ_CRC32_INIT;
-    return s;
-}
-
-void rc_sync_scanner_feed(rc_sync_scanner *s, const void *buf, unsigned n)
-{
-    scan_chunk(s, (const unsigned char *)buf, n);
-}
-
-void rc_sync_scanner_finish(rc_sync_scanner *s, char *cls_out,
-                            unsigned long *crc_out)
-{
-    if (!s) return;
-    scan_finish(s, cls_out, NULL, NULL, crc_out);
-    HeapFree(GetProcessHeap(), 0, s);
-}
+/* The classifier and its two checksums moved to sync/scanner.cpp
+ * (ContentScanner), which implements fs::ByteSink so the one read pass
+ * libfs does can feed it. The C names it still exports are there for
+ * win/checks/rpccheck.c. */
 
 static DWORD to_unix(const FILETIME *ft)
 {
@@ -179,47 +45,20 @@ static DWORD to_unix(const FILETIME *ft)
     return (DWORD)((u.QuadPart / 10000000ULL) - 11644473600ULL);
 }
 
-/* The scratch for one file scan: the 8KB read buffer and the scan state, which
- * carries another 8KB for the normalised copy.
- *
- * ON THE HEAP, DELIBERATELY, and this is not a micro-optimisation -- it is the
- * fix for a real invalid-page-fault on the guest. The RPC worker thread gets
- * the image's 64KB stack COMMIT, and do_scan already holds a ~62KB manifest
- * buffer in its frame when it calls down here. Open Watcom emits a plain
- * `sub esp, 0x202c` for an 8KB frame with no stack probe, so the next push
- * lands BELOW the guard page rather than on it: the page is never committed,
- * and the process dies with "invalid page fault in module RETROCL.EXE".
- *
- * It is also why this looked intermittent. It ran for a whole session against
- * a flat tree and faulted the first time the tree gained a subdirectory --
- * one more `walk` frame, about 1.1KB, was enough to move the skip past the
- * guard. Nothing about the new directory was wrong; it just shifted the
- * arithmetic. A bug you cannot reproduce by trying the same thing twice. */
-typedef struct {
-    scan_state    st;
-    unsigned char buf[RC_SYNC_CHUNK];
-} scan_scratch;
-
 int rc_sync_stat_file(const char *path, rc_sync_stat *out)
 {
-    scan_scratch *sc;
-    scan_state *stp;
-    unsigned char *buf;
-    DWORD got = 0;
-    FILETIME ft;
-
     DWORD attr;
 
     memset(out, 0, sizeof(*out));
 
     /* Ask what the path IS before trying to read it.
      *
-     * Without this, every CreateFileA failure came back as type 'u', so a
-     * MISSING file and a DIRECTORY were both indistinguishable from a file
-     * held under a share-deny lock. The bridge treats `locked` as transient
-     * and retries forever, so a pull of something the user had just deleted
-     * never resolved and never reported anything. Caught by driving the real
-     * guest: SYNCGET on a nonexistent path answered `locked`.
+     * Without this, every open failure came back as type 'u', so a MISSING
+     * file and a DIRECTORY were both indistinguishable from a file held under
+     * a share-deny lock. The bridge treats `locked` as transient and retries
+     * forever, so a pull of something the user had just deleted never resolved
+     * and never reported anything. Caught by driving the real guest: SYNCGET
+     * on a nonexistent path answered `locked`.
      *
      * type 0 means "nothing here", which is distinct from 'u' ("something is
      * here and we cannot read it") and from 'f'. */
@@ -227,51 +66,35 @@ int rc_sync_stat_file(const char *path, rc_sync_stat *out)
     if (attr == 0xFFFFFFFF) return 0;
     if (attr & FILE_ATTRIBUTE_DIRECTORY) { out->type = 'd'; return 0; }
 
-    sc = (scan_scratch *)HeapAlloc(GetProcessHeap(), 0, sizeof(scan_scratch));
-    if (!sc) {
+    {
+        FileReader reader;
+        ContentScanner *scan;
+
+        if (!reader.open(path)) { out->type = 'u'; return 0; }
+
         /* Out of memory is not "the file is fine". Unreadable is the honest
          * answer and the one the bridge already knows to skip for a pass. */
-        out->type = 'u';
-        return 0;
-    }
-    stp = &sc->st;
-    buf = sc->buf;
+        scan = ContentScanner::create();
+        if (!scan) { out->type = 'u'; return 0; }
 
-    memset(stp, 0, sizeof(*stp));
-    stp->crc_raw = stp->crc_norm = MZ_CRC32_INIT;
-
-    /* FILE_SHARE_READ | FILE_SHARE_WRITE: a Win98 editor holds a share-deny
-     * lock, and a file we cannot read must be reported UNREADABLE rather than
-     * omitted. Omitting it reads as absent, which becomes a tombstone, and then
-     * the user's later edits are invisible forever. */
-    Handle h(CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
-    if (!h.valid()) {
-        out->type = 'u';
-        HeapFree(GetProcessHeap(), 0, sc);
-        return 0;
-    }
-
-    for (;;) {
-        if (!ReadFile(h.get(), buf, RC_SYNC_CHUNK, &got, NULL)) {
+        if (reader.readAll(*scan, RC_SYNC_CHUNK, 0) != READ_DONE)
+        {
+            scan->destroy();
             out->type = 'u';
-            HeapFree(GetProcessHeap(), 0, sc);
             return 0;
         }
-        if (!got) break;
-        scan_chunk(stp, buf, got);
-        out->size += got;
-    }
-    if (GetFileTime(h.get(), NULL, NULL, &ft)) out->mtime = to_unix(&ft);
 
-    out->type = 'f';
-    /* The tail fixup (CR pending at EOF), classification and crc_raw/
-     * crc_norm/crc choice are ALL in scan_finish, shared with the public
-     * rc_sync_scanner_finish that do_get uses -- see that function's comment
-     * for why sharing it, rather than keeping two copies of this tail, is
-     * what makes a wrong choice here provably fail this suite. */
-    scan_finish(stp, &out->cls, &out->crc_raw, &out->crc_norm, &out->crc);
-    HeapFree(GetProcessHeap(), 0, sc);
+        out->size  = reader.delivered();
+        out->mtime = reader.mtime();
+        out->type  = 'f';
+        /* The tail fixup (a CR pending at EOF), the classification and the
+         * crc_raw/crc_norm/crc choice are ALL in ContentScanner::finish,
+         * shared with the C facade do_get uses -- one function, so a wrong
+         * choice here provably fails the guest-agreement tests rather than
+         * slipping through the one path that has no test of its own. */
+        scan->finish(&out->cls, &out->crc_raw, &out->crc_norm, &out->crc);
+        scan->destroy();
+    }
     return 0;
 }
 
