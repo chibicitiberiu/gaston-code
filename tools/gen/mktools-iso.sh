@@ -131,8 +131,12 @@ REM gaston.ini is an 8.3 name, so the CD's GASTON.INI IS the file the app
 REM opens. Before the rename the app read retroclaude.ini, and a plain copy of
 REM the CD's RETROCL.INI once left it on compiled-in defaults with an empty
 REM sync root and no error anywhere -- the long names below are that lesson.
-REM The destination is still named in full, with /Y: a COPY to the directory
-REM was seen keeping the old file on a reinstall (gremote, 2026-09-27).
+REM /Y is inert here -- under COMMAND.COM /c, COPY overwrites silently -- and
+REM is kept for whoever types the line by hand, where it stops the
+REM "Overwrite (Yes/No/All)?" prompt. Measured on the guest 2026-09-27: the
+REM destination's form (directory, named file, *.*) makes no difference to
+REM overwriting. A copy that seems to keep an old file right after a CD swap
+REM is Win98 still reading the previous disc: re-copy and check contents.
 COPY /Y D:\GASTON.INI C:\GASTON\gaston.ini > NUL
 REM The cold-start transcript document. Without it the app shows a bare grey
 REM rectangle until a bridge answers, which is also when it most needs to say
