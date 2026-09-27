@@ -89,7 +89,7 @@ bool ClientApp::initialize()
      * created" is the primary diagnostic: an NT-only static import kills the
      * process at load, before WinMain, leaving nothing else behind. */
     exeDir(m_exeDir, sizeof(m_exeDir));
-    rc_log_open(m_exeDir);
+    rc_log_open(m_exeDir, "retroclaude");
     rc_log("os version: %08lx", GetVersion());
 
     /* One instance. A second one is not a harmless duplicate: the bridge holds

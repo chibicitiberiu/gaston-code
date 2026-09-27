@@ -402,11 +402,11 @@ static void reserveCases(Listener &l)
 
 int main(void)
 {
-    rc_log_open(".");
+    rc_log_open(".", "wirecheck");
     Listener l;
     if (!l.open("127.0.0.1", 0, 4))
     {
-        say("listen", false, "open failed; see retroclaude.log");
+        say("listen", false, "open failed; see wirecheck.log");
         return 1;
     }
     listenerCases(l);

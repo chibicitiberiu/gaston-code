@@ -114,7 +114,7 @@ static int slowsend_main(int argc, char **argv)
     unsigned max_outq = 0;
     DWORD stop_t0, stop_ms;
 
-    if (rc_log_open(".") != 0) {
+    if (rc_log_open(".", "netcheck") != 0) {
         printf("FAIL: cannot open log\n");
         return 2;
     }
@@ -235,7 +235,7 @@ int main(int argc, char **argv)
     secret = (argc > 3) ? argv[3] : "dev-secret";
     if (argc > 4) g_prompt = argv[4];
 
-    if (rc_log_open(".") != 0) {
+    if (rc_log_open(".", "netcheck") != 0) {
         printf("FAIL: cannot open log\n");
         return 2;
     }

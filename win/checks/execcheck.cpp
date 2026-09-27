@@ -642,7 +642,7 @@ int main(int argc, char **argv)
     rc_strf(g_shell, sizeof g_shell, "%s /c",
             comspec ? comspec : "COMMAND.COM");
     rc_strf(g_forever, sizeof g_forever, "%s --tick NUL 120", g_self);
-    rc_log_open(".");
+    rc_log_open(".", "execcheck");
     tooLong();
     output();
     stopping();

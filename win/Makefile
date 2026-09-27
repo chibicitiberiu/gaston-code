@@ -700,7 +700,7 @@ check-%: $(BUILD)/%.exe
 	   $(BUILD)/$*.map $(CHECK_OWNED)
 	@echo "=== static constructors (they run BEFORE WinMain, so before the log) ==="
 	@# Verified on the target: a file-scope object's constructor runs before
-	@# WinMain and its destructor at exit. log.c opens retroclaude.log from
+	@# WinMain and its destructor at exit. log.cpp opens <program>.log from
 	@# WinMain's first statement deliberately, because "no log file" is the
 	@# signal that main never ran -- so a static ctor that faults reproduces
 	@# exactly the undebuggable position the logging discipline exists to

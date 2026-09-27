@@ -363,7 +363,7 @@ static void immediate_survives_busy_job(void)
 /* rc_log_open(".") below writes here; opened with FILE_SHARE_READ, so this
  * can read it back while rpc.c's own handle is still open and writing to it
  * from the worker thread. */
-#define LOG_FILE "retroclaude.log"
+#define LOG_FILE "rpccheck.log"
 
 static int log_contains(const char *needle)
 {
@@ -887,8 +887,8 @@ static int attget_cases(const char *root)
 
 int main(int argc, char **argv)
 {
-    if (rc_log_open(".") != 0) {
-        fprintf(stderr, "rpccheck: cannot open retroclaude.log\n");
+    if (rc_log_open(".", "rpccheck") != 0) {
+        fprintf(stderr, "rpccheck: cannot open " LOG_FILE "\n");
         return 1;
     }
 

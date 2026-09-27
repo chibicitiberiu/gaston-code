@@ -10,10 +10,13 @@ static HANDLE g_fh = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION g_lock;
 static int g_ready = 0;
 static char g_path[MAX_PATH];
+/* A literal from the caller, kept for the exiting banner. Never freed. */
+static const char *g_program = "?";
 
-int rc_log_open(const char *exe_dir)
+int rc_log_open(const char *exe_dir, const char *program)
 {
-    rc_strf(g_path, sizeof(g_path), "%s\\retroclaude.log", exe_dir);
+    g_program = (program && *program) ? program : "?";
+    rc_strf(g_path, sizeof(g_path), "%s\\%s.log", exe_dir, g_program);
 
     InitializeCriticalSection(&g_lock);
     g_ready = 1;
@@ -21,7 +24,7 @@ int rc_log_open(const char *exe_dir)
     g_fh = CreateFileA(g_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (g_fh == INVALID_HANDLE_VALUE) return -1;
-    rc_log("=== retroclaude starting ===");
+    rc_log("=== %s starting ===", g_program);
     return 0;
 }
 
@@ -94,7 +97,7 @@ void rc_log(const char *fmt, ...)
 void rc_log_close(void)
 {
     if (g_fh == INVALID_HANDLE_VALUE) return;
-    rc_log("=== retroclaude exiting ===");
+    rc_log("=== %s exiting ===", g_program);
 
     /* Close under the lock, so a thread inside rc_log cannot be between its
      * handle test and its WriteFile when this happens. */
