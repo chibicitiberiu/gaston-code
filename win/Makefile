@@ -152,7 +152,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
-       rpc/rpc.cpp rpc/procrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
+       rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
        sync/syncrpc.cpp \
        ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libexec before libcore: the first three
@@ -407,7 +407,7 @@ all: msgids $(BUILD)/retroclaude.exe synccheck inicheck inifilecheck appcheck wi
 # net.o now calls into the RPC worker, so netcheck must link it too or
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
-                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/manifest.cpp \
+                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
                 sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
@@ -422,7 +422,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # needed -- see the comment at the top of rpccheck.c for why rc_net_send is a
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
-                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp sync/manifest.cpp \
+                $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
                 sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
@@ -540,7 +540,7 @@ $(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 # frame handling, refusals and adapters onto libfs. So scanner.cpp keeps the
 # speed and its neighbours stop paying for it.
 $(OBJ)/sync/manifest.o $(OBJ)/sync/putpath.o $(OBJ)/sync/syncrpc.o \
-$(OBJ)/sync/verify.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+$(OBJ)/sync/verify.o $(OBJ)/rpc/fsrpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The

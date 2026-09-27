@@ -21,6 +21,7 @@
 #include "exec/execjob.h"
 #include "rpc/procrpc.h"
 #include "ui/uirpc.h"
+#include "rpc/fsrpc.h"
 #include "sync/syncrpc.h"
 #include "sync/sync.h"
 #include <new>
@@ -629,7 +630,15 @@ static unsigned rpc_thread_body(void *arg)
             }
         }
         if (from_syncq) {
-            rc_syncrpc_handle(g_net, f);
+            /* Two families share this queue and this worker. The dispatch
+             * has to be HERE and cannot be a row in RC_LANE_TABLE: that table
+             * says which lane a frame belongs to, and everything taken off
+             * the sync queue used to go to rc_syncrpc_handle unconditionally
+             * -- which ends in `else rc_log("unhandled frame")`. An FS frame
+             * with a lane row and a handler would have been logged, dropped,
+             * and left the caller waiting out its whole budget. */
+            if (!rc_fsrpc_handle(g_net, f))
+                rc_syncrpc_handle(g_net, f);
             drop(f);
             continue;
         }
@@ -836,6 +845,14 @@ static void reject_sync_busy(rc_frame *f)
     else if (strcmp(f->type, "SYNCGET") == 0 ||
              strcmp(f->type, "ATTGET") == 0)     ack = "SYNCDATEND";
     else if (strcmp(f->type, "SYNCMKDIR") == 0)  ack = "SYNCMKDIRACK";
+    /* The fs lane shares this queue, so it shares this refusal -- with its
+     * own ack shapes, for the reason the comment above gives: an ack the
+     * caller does not expect reaches the right future carrying the wrong
+     * number of fields, and surfaces as a parse error naming neither. */
+    else if (strcmp(f->type, "FSGET") == 0)      ack = "FSDATEND";
+    else if (strcmp(f->type, "FSPUT") == 0 ||
+             strcmp(f->type, "FSPUTEND") == 0)   ack = "FSPUTACK";
+    else if (strcmp(f->type, "FSDRIVES") == 0)   ack = "FSDRIVEEND";
 
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = "busy";
@@ -861,10 +878,21 @@ static int is_sync(const rc_frame *f)
  * and sync ids are s<n>; today they differ only by a prefix nobody checks, and
  * a stray frame answering the wrong subsystem's future is the kind of bug that
  * takes a day to find. */
+/* The fs lane is STREAM too, so is_sync() is true for it -- but its ids come
+ * from a different allocator and must not be confused with the sync layer's.
+ * A third prefix rather than sharing `s`: the two families answer different
+ * futures, and "sync ids and fs ids happen to be unique between them" is a
+ * property of today's bridge, not a rule anything enforces. */
+static int is_fs(const rc_frame *f)
+{
+    return strncmp(f->type, "FS", 2) == 0;
+}
+
 static int id_matches_family(const rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
     if (!id || !*id) return 0;
+    if (is_fs(f)) return id[0] == 'f';
     return is_sync(f) ? (id[0] == 's') : (id[0] == 'x');
 }
 

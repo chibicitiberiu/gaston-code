@@ -20,7 +20,19 @@ const rc_lane_row RC_LANE_TABLE[] = {
     { "UICLICK",  RC_LANE_DESKTOP },
     { "UIKEYS",   RC_LANE_DESKTOP },
     { "UISHOT",   RC_LANE_DESKTOP },
-    { "UIFOCUS",  RC_LANE_DESKTOP }
+    { "UIFOCUS",  RC_LANE_DESKTOP },
+    /* The fs lane (step 5a). STREAM, alongside the sync frames, because that
+     * is what they are: bounded file I/O on the worker that already blocks on
+     * the disk. REMOTE.md gives gremote a thread of its own for these, and
+     * gremote should have one -- it has no UI thread and no sync pass to
+     * share with. The client does not, and a fifth thread's committed stack
+     * is real on a 32MB box. What makes sharing safe is the cap: FSGET stops
+     * at max_bytes, so it cannot hold the worker the way an unbounded read of
+     * a swap file could. */
+    { "FSGET",    RC_LANE_STREAM },
+    { "FSPUT",    RC_LANE_STREAM },
+    { "FSPUTEND", RC_LANE_STREAM },
+    { "FSDRIVES", RC_LANE_STREAM }
 };
 const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
 
@@ -38,5 +50,6 @@ int rc_frame_compressible(const char *type)
 {
     return strcmp(type, "EXECOUT") == 0 ||
            strcmp(type, "SYNCDAT") == 0 ||
-           strcmp(type, "SYNCENT") == 0;
+           strcmp(type, "SYNCENT") == 0 ||
+           strcmp(type, "FSDAT") == 0;
 }

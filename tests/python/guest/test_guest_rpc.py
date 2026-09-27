@@ -54,7 +54,18 @@ def test_lane_table_matches_the_codes_actual_behaviour(verdicts):
     assert verdicts["lane(PSKILL) == IMMEDIATE"][0] == "pass"
     for t in ("SYNCSCAN", "SYNCPUT", "SYNCPUTEND", "SYNCMKDIR", "SYNCGET"):
         assert verdicts["lane(%s) == STREAM" % t][0] == "pass"
+    # The fs lane (step 5a) shares STREAM with the sync family, because it is
+    # the same kind of work on the same worker. What makes that safe rather
+    # than merely convenient is FSGET's cap: an unbounded read would hold the
+    # worker the way a request for a swap file could.
+    for t in ("FSGET", "FSPUT", "FSPUTEND", "FSDRIVES"):
+        assert verdicts["lane(%s) == STREAM" % t][0] == "pass"
     for t in ("TEXT", "READY", "TURN", "BOGUS"):
+        assert verdicts["lane(%s) == UI" % t][0] == "pass"
+    # The guest's own replies must never route back INTO a lane. FSDAT is the
+    # one that would hurt: it carries file bytes, so a rule that claimed it
+    # would hand a chunk of somebody's file to a handler as a request.
+    for t in ("FSDAT", "FSDATEND", "FSPUTACK"):
         assert verdicts["lane(%s) == UI" % t][0] == "pass"
 
 

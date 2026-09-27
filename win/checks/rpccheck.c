@@ -115,6 +115,19 @@ static void lane_table_cases(void)
     check_lane("UICLICK",    RC_LANE_DESKTOP);
     check_lane("UIKEYS",     RC_LANE_DESKTOP);
     check_lane("UISHOT",     RC_LANE_DESKTOP);
+    /* The fs lane (step 5a). STREAM, sharing the sync worker: they are the
+     * same kind of work, and FSGET's cap is what keeps the sharing safe. */
+    check_lane("FSGET",      RC_LANE_STREAM);
+    check_lane("FSPUT",      RC_LANE_STREAM);
+    check_lane("FSPUTEND",   RC_LANE_STREAM);
+    check_lane("FSDRIVES",   RC_LANE_STREAM);
+    /* And the replies, which the guest SENDS and must never route back in.
+     * FSDAT is the one that would hurt: it carries file bytes, and a lane
+     * rule that claimed it would hand a chunk of somebody's file to a
+     * handler as though it were a request. */
+    check_lane("FSDAT",      RC_LANE_UI);
+    check_lane("FSDATEND",   RC_LANE_UI);
+    check_lane("FSPUTACK",   RC_LANE_UI);
     /* And the rule that makes the desktop lane safe to add: the reply types
      * the GUEST sends must never be routed back INTO it. A prefix rule
      * would have claimed all three. */

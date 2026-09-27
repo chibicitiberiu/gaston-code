@@ -360,13 +360,18 @@ table.
 |---|---|---|---|
 | `LS` | `path`, optional `max_entries` | `DATA` records `name`, `type`, `size`, `mtime`, `attrs`; `END count=, truncated=` | `bad_path`, `missing`, `too_many` |
 | `STAT` | `path` | `OK type=, size=, mtime=, attrs=` | `bad_path`, `too_long`, `missing`, `locked` |
-| `GET` | `path`, optional `max_bytes` | `DATA` chunks (`total`, `off`), then `END status=, crc=, truncated=` | `bad_path`, `too_long`, `missing`, `is_directory`, `locked` |
-| `PUT` | `off`; body is the path on the first chunk, then raw bytes. `END crc=` closes it | `OK bytes=, crc=` | `bad_path`, `too_long`, `no_parent`, `no_space`, `locked`, `readonly`, `out_of_order`, `crc_mismatch`, `busy` |
+| `GET` | `path`, optional `max_bytes` | `DATA` chunks (`total`, `off`), then `END status=, crc=, bytes=, truncated=` | `bad_path`, `missing`, `is_directory`, `locked` |
+| `PUT` | `path` on the first frame and `off` on every one; the body is raw bytes and nothing else. `END crc=` closes it | `OK bytes=, crc=` | `bad_path`, `too_long`, `no_parent`, `no_space`, `locked`, `readonly`, `out_of_order`, `crc_mismatch`, `busy` |
 | `RM` | `path` | `OK` | `bad_path`, `missing`, `is_directory`, `readonly`, `locked` |
 | `MKDIR` | `path` | `OK` | `bad_path`, `too_long`, `no_parent`, `exists`, `is_file` |
 | `MV` | `from`, `to` | `OK` | `bad_path`, `too_long`, `missing`, `exists`, `locked` |
 | `DRIVES` | none | `DATA` records `letter`, `type`, `label`, `serial`, `total`, `free`; `END count=` | none |
 
+- **The path travels in a header, not in the body.** `SYNCPUT` puts it in
+  the body, length-prefixed, and needs a parser with four refusals to get it
+  back out -- which exists because that format predates the header being an
+  option. There is no reason to repeat it: a Windows path cannot contain a
+  newline, so a header holds one, and the body stays raw bytes.
 - **`max_bytes` is honoured by the guest, not the caller.** A bridge-side cap
   still has the guest read and send the whole file; pointed at a swap file that
   is a socket held open for as long as it takes. `truncated=1` says it stopped.
