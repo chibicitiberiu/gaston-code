@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from .client import DEFAULT_PORT, Remote
 from .errors import Disconnected, Refused, RemoteError, Timeout
+from .ship import ShipResult
 
 __all__ = [
     "DEFAULT_PORT",
@@ -27,5 +28,6 @@ __all__ = [
     "Refused",
     "Remote",
     "RemoteError",
+    "ShipResult",
     "Timeout",
 ]

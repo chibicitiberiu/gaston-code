@@ -49,6 +49,8 @@ from .ops import (
     parse_stat,
     parse_sysinfo,
 )
+from .ship import ShipResult
+from .ship import ship as _ship
 
 #: 7890 and 7897 are the Gaston client's, 7900+ the test harness's.
 DEFAULT_PORT = 7401
@@ -262,6 +264,17 @@ class Remote:
             raise Refused(reply.headers.get("code", "?"), "PUT",
                           reply.headers.get("detail", ""))
         return int(reply.headers.get("bytes", "0"))
+
+    def ship(self, local_path: str, remote_path: str, *,
+             relaunch: bool = True, cwd: str = "") -> ShipResult:
+        """Put a new build on the machine and start it again.
+
+        See gremote/ship.py for the two traps this exists to encode: a
+        running exe is locked, and a second copy of the client raises the
+        first and exits.
+        """
+        return _ship(self, local_path, remote_path, relaunch=relaunch,
+                     cwd=cwd)
 
     def rm(self, path: str) -> None:
         self.request("RM", {"path": path})
