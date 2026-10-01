@@ -522,6 +522,86 @@ static void caseWalk()
     RemoveDirectoryA(tree.str());
 }
 
+/* WINE CANNOT SEE THE BUG THIS CASE EXISTS FOR, so a green run here proves
+ * nothing about it. listDirectory used to build "C:\\\\*" for a drive root
+ * -- a doubled separator -- and Wine's FindFirstFileA normalises that away
+ * and lists the directory anyway. Real Windows 98 does not. Measured
+ * 2026-10-01 on an Athlon XP running 98 SE, same binary both ways:
+ *
+ *     before the fix   dir.list_root   C:\\ -> 0 entries    FAIL
+ *     after the fix    dir.list_root   C:\\ -> 29 entries   pass
+ *     either way, under Wine           C:\\ -> 4 entries    pass
+ *
+ * This is the "Wine proves the code, never the platform" rule with the
+ * polarity people do not expect: Wine was MORE forgiving than the target and
+ * hid a real defect. The same caveat applies to
+ * test_ls_of_a_drive_root_lists_it in tests/python/remote/test_fs.py.
+ */
+static void caseList()
+{
+    Path dir, a, b, root;
+    char detail[160];
+
+    scratchPath(dir, "listing");
+    CreateDirectoryA(dir.str(), NULL);
+    a.join(dir.str(), "one.txt");  putFile(a.str(), "1", 1);
+    b.join(dir.str(), "two.txt");  putFile(b.str(), "2", 1);
+
+    {
+        CountSink s;
+        bool got = listDirectory(dir.str(), s);
+        rc_strf(detail, sizeof(detail), "%d files, %d dot entries",
+                s.files, s.dots);
+        say("dir.list", got && s.files == 2 && s.dirs == 0 && s.dots == 0,
+            detail);
+    }
+    {
+        /* A DRIVE ROOT, which is where this broke on real hardware. "C:\"
+         * already ends in its separator, the pattern came out "C:\\*",
+         * FindFirstFileA refused it, and every root on the machine answered
+         * an empty listing -- while C:\GASTON, which has no trailing
+         * separator, listed fine. The pattern is arithmetic on a string, so
+         * Wine settles it. */
+        CountSink s;
+        char win[MAX_PATH];
+        UINT got = GetWindowsDirectoryA(win, sizeof(win));
+
+        if (!got || got >= sizeof(win) || win[1] != ':')
+        {
+            say("dir.list_root", false, "no drive letter to list");
+        }
+        else
+        {
+            root.setn(win, 3);              /* "C:\", separator and all */
+            bool listed = listDirectory(root.str(), s);
+            rc_strf(detail, sizeof(detail), "%s -> %d entries", root.str(),
+                    s.files + s.dirs + s.unreadable);
+            say("dir.list_root",
+                listed && s.files + s.dirs + s.unreadable > 0 && !s.dots,
+                detail);
+        }
+    }
+    {
+        /* The other half of the same decision: a failure is reported as a
+         * failure. A pattern that will not fit returns false rather than
+         * running the loop zero times and calling it a listing. */
+        CountSink s;
+        Path over;
+        char many[MAX_PATH];
+        unsigned i;
+
+        for (i = 0; i < sizeof(many) - 1; i++) many[i] = 'x';
+        many[sizeof(many) - 1] = '\0';
+        over.set(many);                     /* no room for "\*" */
+        say("dir.list_refuses", !listDirectory(over.str(), s) && !s.files,
+            "a pattern that does not fit is not an empty directory");
+    }
+
+    DeleteFileA(a.str());
+    DeleteFileA(b.str());
+    RemoveDirectoryA(dir.str());
+}
+
 /* --- file ---------------------------------------------------------------- */
 
 static void caseStat()
@@ -852,7 +932,7 @@ int main(int argc, char **argv)
             casePath, caseWorkingName, caseReserve,
             caseWriterCommits, caseWriterRefusesAndCleansUp,
             caseWriterAbort, caseWriterNoAside, caseRecover,
-            caseReader, caseWalk, caseStat,
+            caseReader, caseWalk, caseList, caseStat,
             caseSink, caseSource, caseDrives
         };
         unsigned i;

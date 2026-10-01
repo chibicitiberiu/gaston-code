@@ -95,6 +95,44 @@ def test_ls_of_a_file_is_not_an_empty_listing(remote, tree):
     assert e.value.code == "not_a_directory", e.value.code
 
 
+# NOTE: this test is VACUOUS UNDER WINE and passes with or without the fix.
+# listDirectory used to build "C:\\*" for a drive root, and Wine's
+# FindFirstFileA normalises the doubled separator away; real Windows 98 does
+# not. Measured 2026-10-01 on an Athlon XP running 98 SE: 0 entries before
+# the fix, 29 after, while Wine said 4 either way. It is kept because it
+# documents the contract and would catch a regression that broke roots
+# everywhere -- but the thing that actually guards this is running fscheck on
+# the guest. See the comment on caseList in win/checks/fscheck.cpp.
+def test_ls_of_a_drive_root_lists_it(remote):
+    """Found on a real 98 machine: every root answered 0 entries while
+    C:\\GASTON answered 7, and `dir C:\\ /B` answered 21. A root already
+    ends in its separator, so the search pattern came out "C:\\\\*" and
+    FindFirstFile refused it."""
+    entries = remote.ls("C:\\")
+    assert entries, remote.server.log()
+
+
+def test_a_listing_that_fails_is_not_an_empty_listing(remote,
+                                                      tmp_path_factory):
+    """The root bug was only invisible because LS threw listDirectory's
+    return away, so any failure at all came back as `END count=0`. Here the
+    directory stats as a directory and then cannot be opened: the answer has
+    to be a refusal, because a count of zero is a lie the caller cannot tell
+    from an empty directory."""
+    d = tmp_path_factory.mktemp("shut")
+    closed = d / "no-entry"
+    closed.mkdir()
+    (closed / "in-here.txt").write_bytes(b"x")
+    closed.chmod(0o000)
+    try:
+        assert remote.stat(conftest.wine_path(closed)).is_dir, "it stats"
+        with pytest.raises(Refused) as e:
+            remote.ls(conftest.wine_path(closed))
+        assert e.value.code == "locked", e.value.code
+    finally:
+        closed.chmod(0o700)
+
+
 def test_ls_stops_at_the_cap_and_admits_it(remote, tmp_path_factory):
     d = tmp_path_factory.mktemp("many")
     for i in range(12):

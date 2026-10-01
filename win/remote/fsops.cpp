@@ -213,7 +213,16 @@ void FsOps::ls(Responder &r, rc_frame *f)
         r.err("no_memory");
         return;
     }
-    listDirectory(path, *rows.get());
+    if (!listDirectory(path, *rows.get()))
+    {
+        /* Not an empty directory: a directory that was never read. The
+         * `not_a_directory` answer above exists for the same reason -- a
+         * count of zero is indistinguishable from the truth, and the caller
+         * acts on it. Classified here, immediately, before flush() or
+         * anything else can overwrite GetLastError. */
+        r.err(whyNoStat());
+        return;
+    }
     rows->flush();
     if (rows->stopped())
         return;                 /* the link is gone; END would not arrive */
