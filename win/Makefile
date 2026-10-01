@@ -72,7 +72,24 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # option menus, attachment bar measured 451,081 with app/ at -os): each
 # container type instantiates its own code, roughly 5-10 KB per module.
 # Raise it only with a measured reason.
-COMMITTED_CAP ?= 470000
+#
+# 470,000 -> 474,096 on 2026-10-01, by the user's decision, and the reason is
+# alignment rather than code. At 470,000 the client was not 2,263 bytes from
+# the cap in any useful sense -- it was TWO BYTES from a 4,096-byte cliff.
+# DGROUP's data chain ended at 0x469ffe and _BSS is page-aligned at
+# 0x46a000, so the next byte of static data anywhere in gaston pushed _BSS to
+# 0x46b000 and the gate, which sums max(virtual, raw) per PE section, charged
+# the whole empty page. Measured when the `automation` HELLO capability
+# landed: the feature itself is 404 bytes of _TEXT and CONST, _BSS and _DATA
+# unchanged to the byte, and the reported growth was 4,500. Its own HELLO key
+# string is eleven characters, so there was no version of it that fit.
+#
+# The page is bought once. 474,096 carries that padding page plus the 3,970
+# bytes of static data that now fit inside it, so the next small feature does
+# not re-enact this. The alternative was hunting 126 bytes of CONST to delete
+# somewhere unrelated, which realigns _BSS and buys nothing structural -- the
+# feature after it lands on the same boundary and somebody goes hunting again.
+COMMITTED_CAP ?= 474096
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
