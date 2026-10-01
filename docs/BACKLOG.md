@@ -2275,3 +2275,33 @@ What closing this takes:
 One case stays open even then, and it is worth stating: an install detected with
 **no version at all** cannot be told it mismatches, because there is nothing to
 compare. Only giving those markers versions fixes that, which is this item.
+
+## 26. A cancelled `ui` request still gets done
+
+Noticed in a live session, 2026-10-01, as one DEBUG line:
+
+    bridge.ui: ui frame UIEND for u3, which nobody awaits
+
+The user interrupted a `ui` call mid-flight. The bridge dropped the pending
+entry, the guest's desktop worker finished the enumeration anyway, and the reply
+arrived for a future nobody held.
+
+**Nothing is broken.** The frame is logged and discarded, the id is already
+gone, and the next call allocates a fresh one. It is recorded because of what it
+costs on a slow machine rather than what it corrupts: the desktop worker is
+single-threaded, so a cancelled enumeration is work the NEXT `ui` call queues
+behind -- on the Athlon box a desktop tree is tens of milliseconds and on the
+Pentium 200 it is not.
+
+**What closing it would take.** There is no cancel on the ui lane. `EXECKILL`
+exists for the job lane and is `RC_LANE_IMMEDIATE` so it is answered on the
+reader rather than behind the work it is cancelling; a `UICANCEL` would be the
+same shape, plus a generation check in `win/ui/uiservice.cpp` so a worker
+part-way through an enumeration stops rather than finishing and sending.
+
+**Why it is deferred rather than done.** Every reply the guest can send to the
+ui lane is bounded and small, and the only way to observe the cost is to cancel
+a `ui` call and immediately make another on a machine slow enough to notice.
+That measurement has not been taken, and a cancel path built against a cost
+nobody has measured is a third lane's worth of generation bookkeeping bought on
+a guess. Take the measurement first.
