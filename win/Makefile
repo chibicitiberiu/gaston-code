@@ -725,8 +725,24 @@ check: check-sources check-gaston check-gremote check-gupdate \
 # job lane, 222281 with LS/STAT/DRIVES, 238665 with the rest of fs and
 # ship(). The cap is the last of those plus room for the ui lane's handlers
 # at step 6; a raise past that wants a measured reason, like the client's.
+#
+# 250000 -> 264000 on 2026-10-01, by decision, because that single pot of
+# headroom was spent twice over on the same day: the tray icon measured
+# +7680 (of which +2144 is the -xs exception machinery for a new translation
+# unit, before any of its own code) and the UPDATE op measured +2048, which
+# together come to 249929 -- 71 bytes under, which is a coincidence and not
+# a margin. 264000 is that 249929 plus back the ~10KB the line above
+# earmarked for the ui lane, so step 6 still has what it was promised.
+#
+# Worth knowing what this number is and is not. It is the sum of the PE
+# image's sections: the memory Windows commits when it loads the file, on a
+# guest that may have 32MB. It is not a limit on transferring the file, and
+# nothing refuses to ship a larger one. It stays tight rather than being
+# dropped because gremote runs BESIDE the client being measured, so its
+# footprint is inside every number this project has ever taken of the client
+# on real hardware.
 check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
-check-gremote: CHECK_CAP   = 250000
+check-gremote: CHECK_CAP   = 264000
 # gupdate's budget. It links libcore and nothing else, and it runs for a
 # few seconds beside a gremote that is on its way out -- so this is a cap on
 # a transient, not on a resident, and it is still set tight because the
