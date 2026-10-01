@@ -1,4 +1,4 @@
-"""libexec's ExecJob, run as the shipping code under Wine.
+"""libexec, run as the shipping code under Wine.
 
 `win/checks/execcheck.cpp` drives `ExecJob` directly: the refuse-rather-than-
 truncate guard, output reaching the sink, the cap, the exit code, a failed
@@ -7,6 +7,13 @@ via-shell flag. What COMMAND.COM does on the
 real guest -- REDIR32, the DOS VM, the always-zero exit code -- Wine cannot
 show; `win/checks/execprobe.cpp` measures that on the VM
 (docs/measurements/execprobe-vm-*).
+
+Since 2026-10-02 it also drives `exec/cpuid.cpp`, which is libexec too. Those
+cases assert a SHAPE and never a particular processor, because they run here on
+whatever the developer has and on the guest on a Pentium or an Athlon: that the
+instruction is detected rather than assumed, that the vendor is the twelve
+characters it is specified to be, that the brand string has had the processor's
+own padding removed, and that a short buffer truncates rather than overruns.
 """
 
 import conftest
@@ -27,8 +34,39 @@ def test_every_case_passes(verdicts):
     assert not bad, bad
 
 
+#: Every case `execcheck.exe` prints, counted rather than listed.
+#:
+#: NOT A STYLE RULE: a case that stops running prints nothing, and
+#: `test_every_case_passes` is satisfied by an empty set. The count is what
+#: catches a case that silently went away -- which is why it is asserted
+#: exactly rather than as a minimum.
+#:
+#: 24 -> 29 on 2026-10-02, when `exec/cpuid.cpp` landed in libexec and brought
+#: five cases with it.
+CASE_COUNT = 29
+
+
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 24, sorted(verdicts)
+    assert len(verdicts) == CASE_COUNT, sorted(verdicts)
+
+
+def test_the_processor_is_asked_rather_than_assumed(verdicts):
+    """`GetSystemInfo` gives a family and a model number, and the HELLO header
+    built from it read `x86 family 6 model 10, 1 cpu` -- which an agent read as
+    a weak machine, choosing an interpreted language over the Visual C++ 6.0
+    installed beside it on a 256MB Athlon XP.
+
+    The brand string is what System Properties and dxdiag show, because all
+    three read the same CPUID leaves. Nothing here asserts WHICH processor:
+    under Wine that is the developer's, and on the guest it is a Pentium with
+    no brand string at all, which is a pass.
+    """
+    for case in ("cpuid-is-detected-not-assumed",
+                 "the-vendor-is-twelve-characters",
+                 "the-brand-string-has-no-padding",
+                 "the-brand-string-fits-the-header-buffer",
+                 "a-short-buffer-truncates"):
+        assert verdicts[case][0] == "pass", (case, verdicts[case])
 
 
 def test_an_overlong_command_is_refused_not_truncated(verdicts):
