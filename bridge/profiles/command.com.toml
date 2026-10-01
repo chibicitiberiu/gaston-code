@@ -220,6 +220,22 @@ chkdsk = "/F"
 # GUESS; A NOTE MAY NOT -- `measured` says on what machine and what
 # version, and a test asserts it is present.
 title = "COMMAND.COM"
+# THE ONE LINE THAT IS RESIDENT, and the only part of this note the agent
+# reads without asking for it. Everything else here is fetched with
+# `mcp__machine__toolnote("command.com")`, which it can only do after a first
+# command it has no reason to doubt -- so this line has to carry the fact that
+# fires on that first command and leaves no symptom. It is not a title:
+# "COMMAND.COM" was what stood here while `title` doubled as the headline, and
+# it told an agent nothing it had not already read off the inventory row.
+#
+# WHICH FACT, of the four below: the chaining one. It is the only one that can
+# damage a file -- `echo World> C:\IN.TXT & cscript //nologo C:\HELLO.VBS`
+# writes "World  & cscript //nologo C:\HELLO.VBS" INTO IN.TXT and exits 0 --
+# and it is the only one with no symptom at all, so there is nothing to send
+# the agent looking. The others (`2>&1`, `start`, the locked .exe) announce
+# themselves as something odd, which is enough to get the note fetched before
+# the damage is done.
+headline = '''COMMAND.COM, not cmd.exe -- one command per line. `&`, `&&`, `||` and a newline are not separators, do not error, and with a redirect on the line are WRITTEN INTO THE FILE instead; exit is 0 either way.'''
 measured = "Windows 98 SE 4.10.2222 on the vm/ guest, 2026-09-20; chaining re-measured on real hardware, 2026-10-01"
 body = '''
 The shell is COMMAND.COM, not cmd.exe. Measured on this machine:

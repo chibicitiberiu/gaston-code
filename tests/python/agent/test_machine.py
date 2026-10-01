@@ -143,6 +143,35 @@ def test_prompt_does_not_promise_tools_that_do_not_exist():
     assert "mcp__machine__" in out
 
 
+def test_the_prompt_is_honest_whether_or_not_the_screen_tools_exist():
+    """BACKLOG.md 19 made the five screen tools conditional on the client
+    declaring `automation`, so any sentence here asserting the agent can see
+    or click the screen becomes a lie on a machine that said no.
+
+    This prompt does not have one, and that is the point worth pinning rather
+    than a change worth making: the sentence it DOES have is conditional, and
+    it predates the capability by being written as "only the tools actually
+    offered to you exist". The system prompt is one text for every client and
+    is built before the tool list, so a claim about a specific capability does
+    not belong in it at all -- the honest version is the one that defers to
+    what was offered.
+    """
+    out = system_prompt(HELLO, "/work")
+    assert "Only the tools actually offered to you exist" in out
+    assert "unless a tool for that is present" in out
+    low = out.lower()
+    # The only mention of a screen is the one the assertions above pin, and it
+    # is preceded by "do not assume". Anything that names one of the five tools
+    # by name, or states the capability flatly, is a promise to every client.
+    for claim in ("mcp__machine__shot", "mcp__machine__click",
+                  "mcp__machine__ui", "mcp__machine__keys",
+                  "mcp__machine__focus", "you can take a screenshot",
+                  "you can click on"):
+        assert claim not in low, f"the prompt promises {claim!r} to every client"
+    assert low.count("you can see its screen") == 1
+    assert "do not assume\nyou can see its screen" in low
+
+
 def test_prompt_warns_about_the_hardware():
     """The point of the whole thing: an answer that ignores a 200MHz machine
     with single-digit MB free is the wrong answer for this user."""
@@ -199,6 +228,14 @@ def test_the_conflict_path_agrees_with_the_sync_layer():
 # telling it about `-l=nt_win`. A gate whose failure mode is silence is not
 # a gate. The cost is a bigger prompt on every request, which is why the
 # tests below are as much about the budget as about the text.
+#
+# 2026-10-01: WHAT IS RESIDENT IS NOW ONE LINE PER TOOL, bodies included for
+# the shell, which was the last exception. The gate above did not change
+# shape -- a fact that fires before the agent has any reason to ask still has
+# to be resident -- it changed size: the chaining fact is the shell's
+# `headline` in `command.com.toml`, and `start`, `2>&1` and the locked .exe
+# are a `toolnote` call away because each of them announces itself as
+# something odd happening first.
 
 from bridge.agent.machine import MAX_FACT_BLOCKS, tools_block
 from bridge.agent.toolrules import Found
@@ -323,19 +360,44 @@ def test_a_second_toolchain_is_listed_and_is_no_longer_a_dead_end():
     assert out.count("mcp__machine__toolnote") >= 1
 
 
-def test_the_shell_note_is_resident_whatever_else_was_found():
-    """There is no "look it up first" moment for a shell: the first command
-    fails before the agent could know to ask. So it is resident regardless of
-    what else was found -- and it is the one note that did NOT move behind
-    `toolnote`."""
+def test_the_shell_is_advertised_like_every_other_note():
+    """WAS `test_the_shell_note_is_resident_whatever_else_was_found`, and what
+    it asserted -- COMMAND.COM's whole body in the prompt of every request --
+    stopped being the design later on 2026-10-01.
+
+    The argument it was built on is still true: there is no look-it-up-first
+    moment for a shell, because the first command fails before the agent knows
+    to ask, and on this shell it fails silently. What changed is the remedy.
+    941 characters about `start`, `2>&1` and a locked .exe were being carried
+    to machines that may be running 4DOS, while the one line that IS resident
+    per tool was spent on the literal string "COMMAND.COM" -- which the
+    inventory row above it already said. So the dangerous fact moved into the
+    headline and the rest moved behind the fetch.
+    """
     out = tools_block([SHELL, WATCOM])
-    assert "Too many parameters" in out
+    # The body is fetched now. `Too many parameters` is asserted against the
+    # fetched body in test_toolnotes.py, where the other four facts already
+    # were.
+    assert "Too many parameters" not in out
+    # Named, so it can be asked for, and carrying the fact that cannot wait.
+    assert "command.com" in out
+    assert "not cmd.exe" in out
+    assert "WRITTEN INTO THE FILE" in out
     assert "Open Watcom C/C++ 1.9" in out
 
 
-def test_a_machine_with_only_a_shell_gets_the_shell_note():
+def test_a_machine_with_only_a_shell_is_told_to_fetch_its_note():
+    """The shape this change fixed, as opposed to the one it traded. A shell
+    was EXCLUDED from the headline list, so a machine with nothing but a shell
+    got a body and no pointer at all -- `toolnote` was never named on it, and
+    an agent there could not have asked for anything even had it wanted to.
+
+    Now it gets the row, the headline, the imperative and the tool's name; the
+    other facts (`2>&1` among them) are one call away."""
     out = tools_block([SHELL])
-    assert "2>&1" in out
+    assert "2>&1" not in out
+    assert "mcp__machine__toolnote" in out
+    assert "BEFORE your first command" in out
 
 
 def test_cscript_is_advertised_alongside_the_toolchain():
@@ -344,7 +406,7 @@ def test_cscript_is_advertised_alongside_the_toolchain():
     dropped, which is what the old per-kind budgets did as soon as a machine
     had two of anything."""
     out = tools_block([SHELL, CSCRIPT, WATCOM])
-    assert "Too many parameters" in out
+    assert "not cmd.exe" in out
     assert "Windows Script Host (CScript)" in out
     assert "Open Watcom C/C++ 1.9" in out
     assert "CSCRIPT.EXE (v5.0)" in out
@@ -433,11 +495,24 @@ def test_cscript_alone_with_shell_stays_inside_budget():
 #: `mcp__machine__toolnote` like every toolchain note now is, not whether
 #: the number can go up again.
 #:
-#: NOT COVERED, deliberately: a machine with two shells whose notes are
-#: both resident. Only `command.com` has a note today; `4dos` with one
-#: would add roughly 170 characters, which 3400 now admits -- so this is no
-#: longer a breach, just untested. Shell notes are the one thing that stays
-#: resident (there is no "look it up first" moment for a shell).
+#: 2026-10-01, LATER THE SAME DAY: that question got asked and answered. The
+#: shell note DID have facts that belong behind `mcp__machine__toolnote`, and
+#: all but one of them went there -- what stays resident is the shell's
+#: headline, carrying the chaining fact, which is the only one that can
+#: damage a file before there is any symptom to send the agent looking. The
+#: worst case the tree can produce fell from 2,897 to 2,434.
+#:
+#: WHICH LEAVES THIS CAP LOOSE, and that is deliberate rather than
+#: unnoticed: 3,400 is the user's number from earlier the same day ("fine to
+#: raise it and get important instructions in") and lowering it to re-tighten
+#: a gate they had just widened is their call, not this file's. What the
+#: assertions below still catch is a note going MISSING -- every headline is
+#: named one by one in `test_the_budget_is_asserted_against_the_worst_case`.
+#:
+#: NOT COVERED, deliberately: a machine with two shells that both have
+#: notes. Only `command.com` has one today; a `4dos` note would add one more
+#: headline and one more fetchable name, not a second body, so the shape no
+#: longer depends on how many shells are present.
 MAX_BLOCK_CHARS = 3400
 
 
@@ -468,8 +543,11 @@ JDK = Found("jdk", "toolchain", r"C:\Java-WorkShop20\JDK", True, version="1.1.3"
 
 
 def test_the_jdk_note_stays_inside_the_same_budget_watcom_does():
-    """Measured 2026-10-01, with the shell note resident as it always is:
+    """Measured 2026-10-01, when the shell note was still resident in full:
     watcom 2,774 and jdk 2,788 against the 2,800 cap -- 12 characters spare.
+    Both are about 900 characters smaller now that it is not, and the
+    assertion is kept because what it guards is the relative cost of the two
+    notes rather than either number.
 
     That is deliberately thin and it is the whole reason this assertion
     exists rather than a comment. The JDK note is 960 rendered characters
@@ -657,7 +735,8 @@ def test_the_real_machines_combination_fits_the_budget():
 
     Measured with the PATH block, because that is what ships: every live
     session prints it, and a budget asserted against a shape the product
-    does not produce is not a budget. 2,710 as at 2026-10-01.
+    does not produce is not a budget. 2,710 as at 2026-10-01 with the shell
+    note resident in full; 2,291 once it was not.
     """
     path = [r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"]
     out = tools_block([SHELL, CSCRIPT, JDK, MSVC], path=path)
@@ -671,26 +750,42 @@ def test_the_budget_is_asserted_against_the_worst_case_the_tree_can_make():
     product is actually for.
 
     So this is every profile in the tree that has a note, at once, with the
-    longer `basis` wording and the PATH block. 2,849 as at 2026-10-01.
-    A sixth measured tool still fits and a seventh does not, and this is
-    where that is said rather than in a prompt nobody is counting.
+    longer `basis` wording and the PATH block. 2,849 as at 2026-10-01 with
+    the shell note resident in full; 2,434 once it was not, which is where
+    the slack under the cap came from. The worst case is still what is
+    asserted, because the thing this exists to catch is a note going missing
+    unnoticed -- hence the headlines named one by one below.
     """
     every = [SHELL, CSCRIPT, JDK, MSVC,
              Found("watcom", "toolchain", r"C:\WATCOM", True)]
     out = tools_block(every, path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
     # Every one of them advertised, none of them expanded.
-    for headline in ("Windows Script Host (CScript)", "Sun JDK 1.1",
+    for headline in ("COMMAND.COM, not cmd.exe",
+                     "Windows Script Host (CScript)", "Sun JDK 1.1",
                      "Microsoft Visual C++ 6.0", "Open Watcom C/C++ 1.9"):
         assert headline in out, headline
     assert len(out) < MAX_BLOCK_CHARS, len(out)
 
 
-def test_the_shell_note_is_still_resident_in_full():
-    """Not moved behind the fetch. There is no "look it up first" moment for
-    a shell: the first command fails before the agent knows to ask."""
-    out = tools_block([SHELL, JDK, MSVC])
-    assert "Too many parameters" in out
-    assert "2>&1" in out
+def test_the_shells_headline_leads_the_list_on_a_full_machine():
+    """WAS `test_the_shell_note_is_still_resident_in_full`. The body went
+    behind the fetch with every other body; what replaced it is a row at the
+    TOP of the list, whatever the alphabet says, because it is the only
+    headline about the NEXT command rather than about one the agent has
+    already decided to run.
+
+    `command.com` happens to sort first among the names that have notes
+    today, so this would pass by accident -- hence `borlandc`, which sorts
+    ahead of it and has no note, and the stricter check below that the shell's
+    row really is the first line under the heading.
+    """
+    out = tools_block([SHELL, JDK, MSVC,
+                       Found("borlandc", "toolchain", r"C:\BC5", True)])
+    assert "Too many parameters" not in out
+    assert "2>&1" not in out
+    lines = out.splitlines()
+    head = lines.index("FETCH THE NOTE BEFORE YOU USE ANY OF THESE:")
+    assert lines[head + 2].strip().startswith("command.com"), lines[head + 2]
 
 
 # --- a note gaining versions must not cost the resident block a character ---
@@ -741,3 +836,124 @@ def test_the_resident_headline_is_the_base_notes(monkeypatch):
     out = tools_block([SHELL, JDK])
     assert "Sun JDK 1.1" in out
     assert "Sun JDK 1.3" not in out
+
+
+# --- the shell stops being the exception ------------------------------------
+#
+# Until 2026-10-01 the shell's note was rendered into the prompt in full on
+# every request, and the argument for it was sound: which shell is present
+# changes how every command must be written, and there is no moment when the
+# agent could look it up first, because the first command fails before it
+# knows to ask. On COMMAND.COM it fails SILENTLY --
+#
+#   echo World> C:\IN.TXT & cscript //nologo C:\HELLO.VBS
+#
+# writes `World  & cscript //nologo C:\HELLO.VBS` into IN.TXT and exits 0,
+# which actually happened to a user's agent.
+#
+# What was wrong was the remedy, not the argument. 941 characters of
+# COMMAND.COM specifics went to every machine, including one that may be
+# running 4DOS, while the one line that IS resident per tool -- the headline
+# -- was spent on the literal string "COMMAND.COM" that the inventory row
+# above it already carried. So: the fact with no symptom is the headline, the
+# pointer says to fetch before the first command rather than when something
+# looks wrong, and the other four facts are a call away.
+#
+# These are about the contract, not about the wording. The wording is in
+# `command.com.toml` and `bridge/prompts/machine.toml`.
+
+FOURDOS = Found("4dos", "shell", r"C:\4DOS\4DOS.COM", True)
+
+
+def test_the_resident_shell_line_carries_the_fact_that_has_no_symptom():
+    """The one fact that can corrupt a file before anything looks wrong. If
+    only the fetch carried it, a first command could do the damage before the
+    agent had any reason to fetch anything."""
+    out = tools_block([SHELL, MSVC])
+    assert "not cmd.exe" in out          # which shell, said once
+    for fact in ("`&`", "`&&`", "`||`", "newline"):
+        assert fact in out, fact
+    assert "not separators" in out
+    assert "do not error" in out         # nothing will tell you
+    assert "WRITTEN INTO THE FILE" in out
+
+
+def test_the_shell_line_is_one_line():
+    """It sits in a column next to a padded name. A body that grew a second
+    paragraph would break the table and be read as prose about the tool
+    above it."""
+    for name in ("command.com", "watcom", "jdk", "msvc", "cscript"):
+        assert "\n" not in _tn.NOTES[name].headline, name
+
+
+def test_the_shell_pointer_is_stronger_than_the_general_one():
+    """Two different claims. "Before the first command that uses one" is
+    actionable when the agent decides to run `cl`; the shell is used by the
+    first command whatever it is, so the shell's line has to say "before your
+    first command" or it fires too late."""
+    out = tools_block([SHELL, MSVC])
+    assert "BEFORE your first command" in out
+    assert "not after something\nlooks wrong" in out
+    # Named, so the agent can type it straight into the call.
+    assert "Start with `command.com`" in out
+
+
+def test_the_shell_pointer_sits_under_the_names_not_at_the_bottom():
+    """Measured for the toolchain pointer in e34f704: at the bottom of the
+    block haiku never called `toolnote` (0/2) and planned the exact command
+    the note exists to prevent; directly under the inventory rows with an
+    imperative heading, 5/5. The shell's pointer is the one that must fire
+    before the FIRST command, so it gets at least that position -- above the
+    general pointer, the shells paragraph and the PATH."""
+    out = tools_block([SHELL, MSVC], path=[r"C:\WINDOWS"])
+    assert out.index("Start with `command.com`") < out.index(
+        'Call `mcp__machine__toolnote("<name>")`')
+    assert out.index("Start with `command.com`") < out.index(
+        "Shells on that machine")
+    assert out.index("Start with `command.com`") < out.index("this PATH")
+
+
+def test_a_shell_nobody_measured_gets_no_pointer_to_a_note_that_is_not_there():
+    """`4dos` is detected and has no `[note]`. Telling the agent to fetch one
+    buys a refused call and teaches it the pointer is noise."""
+    out = tools_block([FOURDOS, MSVC])
+    assert "4dos" in out                 # listed
+    assert "Start with" not in out       # but not advertised as having a note
+    assert "mcp__machine__toolnote" in out   # msvc still is
+
+
+def test_a_second_shell_with_no_note_does_not_displace_the_one_with_a_note():
+    """`4dos` sorts first and has nothing to say. The pointer must name the
+    shell whose note exists, not whichever shell the alphabet put first."""
+    out = tools_block([FOURDOS, SHELL])
+    assert "Start with `command.com`" in out
+
+
+def test_the_shell_body_is_not_resident_in_any_shape():
+    """The whole point of the move. Asserted on the real machine's
+    combination, with the PATH block, because that is what ships."""
+    out = tools_block([SHELL, CSCRIPT, JDK, MSVC],
+                      path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
+    for fetched in ("Too many parameters", "2>&1", "start prog.exe",
+                    "Permission denied", "if errorlevel"):
+        assert fetched not in out, fetched
+
+
+def test_the_move_made_the_block_smaller_not_bigger():
+    """A headline and a pointer in place of a 941-character body. Measured
+    2026-10-01: the real machine's combination went 2,758 -> 2,291 with the
+    PATH block, and a shell-only machine 1,968 -> 1,831 -- which is the one
+    that gained a heading and a pointer it never used to get at all."""
+    path = [r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"]
+    assert len(tools_block([SHELL, CSCRIPT, JDK, MSVC], path=path)) < 2500
+    assert len(tools_block([SHELL], path=path)) < 1900
+
+
+def test_the_shell_note_declares_no_version_and_should_not():
+    """The version tiers apply to this note like any other now. It carries no
+    `for_version`, which is correct: COMMAND.COM's version is Windows'
+    version, nobody has measured a second one, and a claim of `4.10` would
+    put a disclosure banner on every DOS 6 and Windows 95 machine for facts
+    that are the same on all of them."""
+    assert _tn.NOTES["command.com"].for_version == ""
+    assert _tn.NOTES["command.com"].resolve("4.10.2222").exact

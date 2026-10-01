@@ -38,9 +38,43 @@ def _tool_decorated_names(src: str) -> set[str]:
     return names
 
 
+def _local_lists(build_fn) -> dict:
+    """Every `name = <expr>` inside build(), by name.
+
+    Needed because the registration list is no longer one literal. Since
+    BACKLOG.md 19 the five screen tools are a separate list that is empty for
+    a client declaring no automation, and it is spliced in:
+
+        screen = [machine_ui, ...] if automation else []
+        tools=[machine_exec, ...] + screen + [machine_ps, ...]
+
+    A reader of the old version of this function saw `tools=` was not a plain
+    list, returned the empty set, and the test then reported EVERY tool as
+    unregistered -- which is the failure mode of a source-level check that
+    pattern-matches one spelling. Resolving the names instead keeps it
+    answering the question it was written to answer.
+    """
+    out = {}
+    for node in ast.walk(build_fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out[t.id] = node.value
+    return out
+
+
 def _registered_names(src: str) -> set[str]:
-    """The identifiers passed as tools=[...] to create_sdk_mcp_server."""
+    """Every tool identifier that can reach create_sdk_mcp_server's tools=.
+
+    The union over every branch, deliberately: this check is about a tool
+    function that is defined and then wired up NOWHERE, which is a mistake in
+    the source. Whether a particular client gets a particular tool is a
+    different question with a different answer per connection, and it is
+    tested by calling build() -- see test_tools_surface.py.
+    """
     tree = ast.parse(src)
+    build_fn = tree.body[0]
+    locals_ = _local_lists(build_fn)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -49,8 +83,27 @@ def _registered_names(src: str) -> set[str]:
         if fname != "create_sdk_mcp_server":
             continue
         for kw in node.keywords:
-            if kw.arg == "tools" and isinstance(kw.value, ast.List):
-                return {e.id for e in kw.value.elts if isinstance(e, ast.Name)}
+            if kw.arg != "tools":
+                continue
+            found, seen = set(), set()
+            todo = [kw.value]
+            while todo:
+                expr = todo.pop()
+                # ELEMENTS OF LIST LITERALS ONLY. Walking every Name in the
+                # expression would also collect the condition a branch is
+                # taken on (`automation`, and the `guest`/`C` inside it),
+                # which are not tools and would make the inverse check --
+                # "nothing registered that build() does not define" -- fail
+                # on its own helper variables.
+                for sub in ast.walk(expr):
+                    if isinstance(sub, ast.List):
+                        found |= {e.id for e in sub.elts
+                                  if isinstance(e, ast.Name)}
+                    elif isinstance(sub, ast.Name) and sub.id in locals_ \
+                            and sub.id not in seen:
+                        seen.add(sub.id)
+                        todo.append(locals_[sub.id])
+            return found
     return set()
 
 
@@ -747,3 +800,69 @@ async def test_the_shipped_jdk_line_claim_is_not_qualified(monkeypatch):
         assert "NOT THE VERSION" not in out, asked
         assert "A PATCH RELEASE APART" not in out, asked
         assert "no collections framework" in out, asked
+
+
+# --- the shell's note is fetched like every other --------------------------
+#
+# It was resident in the system prompt in full until 2026-10-01, on the
+# argument that there is no look-it-up-first moment for a shell. The argument
+# held; the remedy did not -- it shipped COMMAND.COM's `start`, `2>&1` and
+# file-locking facts to every machine, including ones that may be running
+# 4DOS. The fact that cannot wait is now the shell's resident headline and the
+# rest arrives through here, so these are about the fetch actually working for
+# a name with a dot in it and a `kind` of "shell".
+
+SHELL = Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", False)
+
+
+async def test_the_shell_note_can_be_fetched_by_name(monkeypatch):
+    """`command.com` is the name the inventory prints and the name the profile
+    file is called. A dot in it is not a path and must not be treated as
+    one."""
+    h = _toolnote(monkeypatch, [SHELL, MSVC])
+    out = _text_of(await h({"name": "command.com"}))
+    assert "COMMAND.COM" in out
+    # The four facts that stopped being resident. Each one measured, each one
+    # now only reachable through this call.
+    for fact in ("Too many parameters", "2>&1", "start prog.exe",
+                 "Permission denied"):
+        assert fact in out, fact
+
+
+async def test_the_shell_note_is_matched_however_it_is_capitalised(monkeypatch):
+    """The model reads `command.com` out of a table and the note itself calls
+    it COMMAND.COM. Refusing over the case it picked costs a round trip."""
+    h = _toolnote(monkeypatch, [SHELL])
+    assert "Too many parameters" in _text_of(await h({"name": "COMMAND.COM"}))
+
+
+async def test_the_shell_note_says_where_it_was_measured(monkeypatch):
+    """Resident text had no room for provenance; fetched text does, and this
+    note is the one whose facts were re-measured on real hardware after two
+    wrong guesses."""
+    out = _text_of(await _toolnote(monkeypatch, [SHELL])({"name":
+                                                         "command.com"}))
+    assert "Measured:" in out
+    assert "Windows 98 SE" in out
+
+
+async def test_a_refusal_names_the_shell_among_what_is_there(monkeypatch):
+    """The refusal lists what the machine has so the next call lands. A shell
+    that was excluded from that list would be unreachable in practice: the
+    agent would be told the machine has nothing but `msvc`."""
+    h = _toolnote(monkeypatch, [SHELL, MSVC])
+    out = await h({"name": "bash"})
+    assert out["isError"] is True
+    assert "command.com" in _text_of(out)
+
+
+async def test_the_shell_note_is_rendered_against_the_shell_that_was_found(
+        monkeypatch):
+    """This note has no `{root}` in it, so the risk is the opposite one:
+    rendering must not mangle a body with no placeholder, and must not leave a
+    stray placeholder behind if one is ever added."""
+    h = _toolnote(monkeypatch, [Found("command.com", "shell",
+                                      r"D:\DOS\COMMAND.COM", True)])
+    out = _text_of(await h({"name": "command.com"}))
+    assert r"D:\DOS\COMMAND.COM" in out      # the header names what was found
+    assert "{root}" not in out and "{version}" not in out

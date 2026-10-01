@@ -326,3 +326,22 @@ Call `mcp__machine__toolnote("<name>")` BEFORE the first command that uses
 one, not after something fails: several of those notes are about commands
 that FAIL WHILE LOOKING LIKE THEY SUCCEEDED, so nothing you see will tell
 you that you needed it. The call reaches nothing and needs no approval.'''
+
+# THE SHELL'S POINTER IS A DIFFERENT CLAIM, which is why it is a different
+# string and sits above the general one. "Before the first command that uses
+# one" is something an agent can act on when it chooses to run `cl`; the shell
+# is used by the first command whatever that command is, so the only wording
+# that fires in time is "before your first command on this machine".
+#
+# Measured, like the placement of the heading was. The shell's body was
+# resident until 2026-10-01 precisely because there is no look-it-up-first
+# moment for a shell -- so moving it behind the fetch is only safe if the
+# fetch actually happens first, and this line plus the shell's headline are
+# what make it happen. `{shell}` is the detected name, so the sentence names
+# `command.com` or `4dos` rather than "the shell", and the agent can type it
+# straight into the call.
+shell_pointer = '''
+Start with `{shell}`: every command on that machine goes through that shell,
+so its note is the one you need BEFORE your first command, not after something
+looks wrong. Its line above is the part that cannot wait; the rest is one
+call away.'''

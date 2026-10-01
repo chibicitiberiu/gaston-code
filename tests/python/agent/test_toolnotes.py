@@ -702,3 +702,54 @@ def test_the_shipped_profiles_land_in_the_tiers_they_should():
         r = msvc.resolve(asked)
         assert r.tier == TIER_NEAREST, asked
         assert r.direction == direction, asked
+
+
+# --- the shell's headline is load-bearing text, not a label -----------------
+#
+# Every other profile leaves `headline` out and falls back to `title`, which
+# is fine for a toolchain: the agent reads "Open Watcom C/C++ 1.9", knows a
+# note exists and fetches it when it decides to compile something. The shell
+# cannot work that way. Its note moved behind `mcp__machine__toolnote` on
+# 2026-10-01, and the first command is already running under the shell by the
+# time the agent has any reason to ask about it -- on COMMAND.COM it is
+# running with `&` in it, writing the rest of the command line into a file and
+# exiting 0.
+#
+# So one fact rides in the headline. The failure these guard against is
+# silent in exactly the way the note is: delete the `headline` key and the
+# resident line falls back to "COMMAND.COM", the prompt still renders, every
+# other test still passes, and the protection is gone.
+
+
+def test_the_shell_note_has_a_headline_of_its_own():
+    note = NOTES["command.com"]
+    assert note.headline_text, "command.com.toml lost its `headline`"
+    assert note.headline != note.title
+
+
+def test_the_shell_headline_says_which_shell_it_is():
+    """`cmd.exe` is the thing the model will otherwise assume, and naming the
+    wrong one is cheaper to correct here than after a command."""
+    h = NOTES["command.com"].headline
+    assert "COMMAND.COM" in h
+    assert "not cmd.exe" in h
+
+
+def test_the_shell_headline_carries_the_fact_with_no_symptom():
+    """Of the five facts in the body, this is the only one that can damage a
+    file with nothing at all to show for it -- `echo World> C:\\IN.TXT &
+    cscript //nologo C:\\HELLO.VBS` writes the tail of the command line INTO
+    IN.TXT and exits 0. The others announce themselves as something odd
+    happening, which is enough to get the note fetched before any harm."""
+    h = NOTES["command.com"].headline
+    for part in ("`&`", "`&&`", "`||`", "newline", "not separators",
+                 "do not error", "WRITTEN INTO THE FILE"):
+        assert part in h, part
+
+
+def test_a_headline_is_a_single_line_for_every_note():
+    """It is printed in a column beside a padded tool name. A second line
+    would break that table and read as prose about the row above it."""
+    for name, note in NOTES.items():
+        assert "\n" not in note.headline, name
+        assert note.headline.strip() == note.headline, name

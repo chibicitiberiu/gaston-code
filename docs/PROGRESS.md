@@ -3432,3 +3432,101 @@ and read back 1491 about one run in three.
 Committed at load: `gaston.exe` 467737 of 470000, `gremote.exe` 251465 of
 264000, `gupdate.exe` 51712 of 64000. The logger costs each of them one or
 three 512-byte sections; `gupdate` links `libcore` alone and gained no DLL.
+
+## The shell note stops being the one that is always resident (2026-10-01)
+
+`e34f704` moved every toolchain note body behind `mcp__machine__toolnote` and
+left shells out, with an argument in the code for why: which shell is present
+changes how every command must be written, and there is no moment when the
+agent could look it up first, because the first command fails before it knows
+to ask. On COMMAND.COM it fails SILENTLY --
+
+    echo World> C:\IN.TXT & cscript //nologo C:\HELLO.VBS
+
+writes `World  & cscript //nologo C:\HELLO.VBS` into IN.TXT and exits 0, which
+is how a user's agent came to trust a corrupted input file.
+
+The argument was right about the danger and wrong about the remedy. The
+exception cost 941 characters on every request of every session to carry
+COMMAND.COM's `start`, `2>&1` and file-locking facts to a machine that may be
+running 4DOS -- the user's words: "it's one of the possible shells, 4shell
+might be a better option and having all that info about command.com might be
+useless". And it spent the one line that WAS resident per tool, the headline,
+on the literal string `COMMAND.COM`, which the inventory row above it already
+said.
+
+So the fact that cannot wait is resident and the rest is fetched. One line in
+`command.com.toml`:
+
+    COMMAND.COM, not cmd.exe -- one command per line. `&`, `&&`, `||` and a
+    newline are not separators, do not error, and with a redirect on the line
+    are WRITTEN INTO THE FILE instead; exit is 0 either way.
+
+Of the five facts in that note it is the only one that can damage a file with
+nothing at all to show for it. The other four (`2>&1` making a file called
+`&1`, `start` returning nothing whether the program ran, a running `.exe`
+locked against the linker, `%ERRORLEVEL%` not expanding) announce themselves
+as something odd happening, which is enough to get the note fetched before any
+harm is done.
+
+The shell's row also leads the headline list, whatever the alphabet says,
+because it is the only headline about the NEXT command rather than about one
+the agent has already chosen to run -- `borlandc` sorting ahead of
+`command.com` would push it down for no reason a reader could see. And it gets
+a pointer of its own above the general one, because the two make different
+claims: "before the first command that uses one" is actionable when the agent
+decides to run `cl`, while the shell is used by the first command whatever it
+is.
+
+    Start with `command.com`: every command on that machine goes through that
+    shell, so its note is the one you need BEFORE your first command, not
+    after something looks wrong. Its line above is the part that cannot wait;
+    the rest is one call away.
+
+### Measured, with a control, because the whole trade rests on the order
+
+`e34f704` measured where the toolchain pointer sits rather than guessing, and
+this is the same question one step more dangerous: the shell note is the one
+that has to be fetched before the FIRST command.
+
+haiku, the real system prompt, the real `machine` MCP server, a fake guest
+recording tool calls in order. 10/10 runs fetched `command.com` before their
+first `exec` -- 5 asked to write a file and then run a script with it (the
+two-step shape that tempts `&`), 5 asked for a single `ver`.
+
+The control is what makes that a number. The same prompt with the headline cut
+back to the old literal "COMMAND.COM" and the shell pointer removed -- heading
+and inventory identical -- went 0/3, and all three runs typed
+
+    echo World > C:\WORK\CHAT\IN.TXT & C:\WINDOWS\COMMAND\CSCRIPT.EXE ...
+
+which is the exact command that corrupted the file this note exists for.
+
+Worth recording as the next failure to expect: in one of the ten good runs,
+haiku fetched the note and then typed `echo ver > getver.bat & getver.bat`
+anyway. A note that is read is still a note that can be ignored; what the
+headline and the pointer buy is that it is read.
+
+### What else moved
+
+`MAX_FACT_BLOCKS` stays 0 and now means what it says -- no note body is
+resident, with no exception. The worst case the profile tree can produce fell
+from 2,897 characters to 2,434 against a 3,400 cap, and a machine with nothing
+but a shell went from 1,968 to 1,831 while GAINING the heading and the pointer
+it never used to get at all: a shell was excluded from the headline list, so
+`toolnote` was never even named on such a machine.
+
+`toolnote`'s own description now says to call it before the first command of
+any kind for the shell, not just before a build, and `exec`'s says the system
+prompt "names the note that says what it accepts" rather than claiming to say
+what it accepts itself -- which stopped being true when the body moved.
+
+The tests that asserted the shell note was resident in full were rewritten
+rather than deleted, to the new contract: the body is absent, the headline
+carries the chaining fact, the shell's row leads the list, the pointer sits
+above the general one and above the PATH, and a shell nobody has measured
+(`4dos`) is listed without being advertised as having a note. The body strings
+they pinned (`Too many parameters`, `2>&1`, `start prog.exe`,
+`Permission denied`) are now asserted against the FETCHED text in
+`tests/python/agent/test_agent_tools.py`, alongside the ones
+`test_toolnotes.py` already held.

@@ -144,9 +144,45 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
                         inside=inside, where=where, conflicts=conflicts)
 
 
-#: How many toolchain BODIES are resident. Zero, since 2026-10-01: they are
+#: How many note BODIES are resident. Zero, since 2026-10-01: they are
 #: fetched with `mcp__machine__toolnote` and only a one-line headline each
 #: stays in the prompt.
+#:
+#: SHELLS INCLUDED, since later the same day, and they were the one exception
+#: until then. The argument for keeping the shell's body resident was real:
+#: which shell is present changes how every command must be written, and
+#: there is no moment when the agent could look it up first, because the
+#: first command fails before it knows to ask -- and on COMMAND.COM it fails
+#: SILENTLY, writing `& cscript //nologo C:\HELLO.VBS` into a file and
+#: exiting 0. What the exception got wrong is the remedy. It paid 941
+#: characters on every request of every session to carry COMMAND.COM's
+#: `start`, `2>&1` and file-locking facts to machines that may be running
+#: 4DOS, and it spent the one line that WAS resident per tool -- the
+#: headline -- on the literal string "COMMAND.COM", which the inventory row
+#: above it already said.
+#:
+#: So the fact that cannot wait is resident as the shell's headline
+#: (`command.com.toml` `headline`), the pointer under the list says to fetch
+#: the shell's note before the first command rather than when something
+#: looks wrong, and the other four facts are a `toolnote` call away like
+#: every toolchain's.
+#:
+#: MEASURED BEFORE SHIPPING, because the whole trade rests on the fetch
+#: happening BEFORE the first command and not after it. haiku, the real
+#: prompt, the real `machine` server, a fake guest: 10/10 runs fetched
+#: `command.com` first -- 5 asked to write a file and then run a script
+#: (the two-step shape that tempts `&`), 5 asked for one `ver`. The control
+#: is what makes that a number rather than a hope: the same prompt with the
+#: headline reduced to the old literal "COMMAND.COM" and the shell pointer
+#: removed went 0/3, and all three typed
+#: `echo World > C:\WORK\CHAT\IN.TXT & ...cscript...` -- the exact command
+#: that corrupted a user's file. The headline and the pointer are carrying
+#: that, not the heading above them, which was unchanged between the two.
+#:
+#: NOT A GUARANTEE, and worth saying because it is the next failure to
+#: expect: in one of the ten, haiku fetched the note and then typed
+#: `echo ver > getver.bat & getver.bat` anyway. A note that is read is still
+#: a note that can be ignored; what changed is that it is read.
 #:
 #: THE CAP WAS 1, AND 1 WAS A BUG WEARING A BUDGET'S CLOTHES. `found` arrives
 #: alphabetically from `toolrules.inventory`, so on a machine with both a Sun
@@ -167,18 +203,18 @@ MAX_FACT_BLOCKS = 0
 
 
 def tools_block(found: list, path: list | None = None) -> str:
-    r"""The inventory, the shell's note, and a line per note that is not.
+    r"""The inventory, a line per measured note, and how to go and read one.
 
     `found` is `toolrules.inventory(...)`. Empty gives "" -- a heading over
     an empty table is a paragraph the model reads on every request to learn
     nothing, and "nothing was detected" is not the same claim as "nothing is
     installed", which is why silence is the honest output.
 
-    WHAT IS RESIDENT AND WHAT IS NOT, since 2026-10-01: the rows, the shell
-    note in full, and one headline per other measured tool. The bodies are
-    fetched with `mcp__machine__toolnote`, because they did not fit -- see
-    MAX_FACT_BLOCKS above for the measurements and for the note that was
-    being dropped in silence before they moved.
+    WHAT IS RESIDENT AND WHAT IS NOT, since 2026-10-01: the rows and one
+    headline per measured tool, the shell's first. No body at all, the
+    shell's included -- see MAX_FACT_BLOCKS above for the measurements, for
+    the note that was being dropped in silence before they moved, and for why
+    the shell stopped being the exception.
 
     Everything printed is rendered against the root that was actually FOUND.
     A user with Watcom at `D:\OW` would otherwise get an inventory row
@@ -210,10 +246,10 @@ def tools_block(found: list, path: list | None = None) -> str:
         "nothing matched, not that the thing is missing.",
     ]
 
-    # ONE LINE EACH for everything measured that is not a shell, naming the
-    # tool as `toolnote` wants it spelled. Without this the agent cannot
-    # ask: it has no way to know a note exists, and `toolnote` becomes a
-    # tool nothing ever calls.
+    # ONE LINE EACH for everything measured, SHELLS INCLUDED, naming the tool
+    # as `toolnote` wants it spelled. Without this the agent cannot ask: it
+    # has no way to know a note exists, and `toolnote` becomes a tool nothing
+    # ever calls.
     #
     # DIRECTLY UNDER THE ROWS, and that position was measured rather than
     # chosen. Sitting at the bottom of the block -- after the shell note,
@@ -223,10 +259,18 @@ def tools_block(found: list, path: list | None = None) -> str:
     # Visual C++ note exists to prevent. The names and the obligation
     # attached to them belong in the same eyeful.
     #
+    # THE SHELL'S ROW LEADS, whatever the alphabet says, and the inventory
+    # above stays alphabetical. Every command goes through the shell, so its
+    # headline is the one line here that is about the NEXT command rather
+    # than about a command the agent has decided to run; `borlandc` sorting
+    # ahead of `command.com` would push it down the list for no reason a
+    # reader could see.
+    #
     # Rendered against the found root like the bodies are, so a headline
     # mentioning a path cannot contradict the row above it.
-    fetchable = [f for f in found
-                 if f.kind != "shell" and f.name in notes.NOTES]
+    measured = [f for f in found if f.name in notes.NOTES]
+    shelly = [f for f in measured if f.kind == "shell"]
+    fetchable = shelly + [f for f in measured if f.kind != "shell"]
     if fetchable:
         width = max(len(f.name) for f in fetchable)
         out += ["", prompts.text("machine.notes.heading"), ""]
@@ -237,7 +281,19 @@ def tools_block(found: list, path: list | None = None) -> str:
                                           getattr(f, "version", "")
                                           or note.default_version))
             out.append(f"  {f.name:<{width}}  {line}")
-        out += ["", prompts.text("machine.notes.pointer").strip("\n")]
+        out += [""]
+        # THE SHELL POINTER FIRST, and stronger than the general one, because
+        # it makes a different claim. "Before the first command that uses
+        # one" is advice an agent can act on when it decides to use `cl`; the
+        # shell is used by the first command whatever that command is, so the
+        # only wording that fires in time is "before your first command on
+        # this machine". Only rendered when a shell note is actually there --
+        # a machine whose shell nobody has measured must not be told to go
+        # and fetch a note that does not exist.
+        if shelly:
+            out += [prompts.text("machine.notes.shell_pointer",
+                                 shell=shelly[0].name).strip("\n"), ""]
+        out += [prompts.text("machine.notes.pointer").strip("\n")]
 
     # THE SHELLS, NAMED, because the model is the one that picks: a machine
     # has as many shells as it has (`command.com`/`4dos` on DOS,
@@ -292,17 +348,11 @@ def tools_block(found: list, path: list | None = None) -> str:
             "tool above that is missing from it still runs by full path.",
         ]
 
-    # THE SHELL NOTE IS RESIDENT AND IS NOT NEGOTIABLE. Which shell is
-    # present changes how every single command must be written, and unlike a
-    # toolchain there is no moment when the agent could look it up first:
-    # the first command fails before it knows to ask. Every other note is a
-    # headline here and a `toolnote` call away.
-    shell_notes = [f for f in found
-                   if f.kind == "shell" and f.name in notes.NOTES]
-    for f in shell_notes:
-        out += ["", notes.NOTES[f.name].render(
-            f.path, version=getattr(f, "version", ""))]
-
+    # THE SHELL NOTE USED TO BE RENDERED HERE IN FULL, and nothing takes its
+    # place at the bottom of the block: it is a headline at the top of the
+    # list and a `toolnote` call away, like every other note. The argument
+    # for the exception, what was wrong with it and what carries the urgent
+    # fact now are all recorded above MAX_FACT_BLOCKS.
     return "\n".join(out)
 
 
