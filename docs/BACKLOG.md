@@ -2215,3 +2215,63 @@ direction, and the reader returns only when the peer reciprocates, or after
 a machine shutdown is the ordinary case. That is correct behaviour for the leak
 rule; it is only a problem when somebody waits for it, which is what §23 was
 about.
+
+## 24. The log rotation is consumed before the single-instance check
+
+`rc_log_open` renames `<program>.log` to `<program>.prv` as its first act, and
+`App::initialize()` reaches the single-instance mutex check only afterwards. So a
+second copy that bounces off the mutex has **already spent the rotation**: it
+writes its own handful of lines, the previous run's log is now `.prv`, and the
+run somebody actually wanted to read has been pushed out of both files.
+
+Found 2026-10-01 while measuring the shutdown fix, by losing a log to it: a
+failed `mode=poweroff` left the box on the logon prompt with the mutex held, the
+next launch bounced, and the evidence of the failure was gone. That is the same
+class of bug `.prv` was written to fix (a93df53), arriving one step earlier.
+
+Not fixed on purpose, because the obvious move trades one diagnostic for
+another. Rotating *after* the single-instance check puts it after the point where
+"no log file was created at all" is the only signal for an image that died at
+load -- an NT-only static import kills the process before `WinMain` with nothing
+written, and that absence is how you tell it apart from a program that started
+and failed. Closing it properly needs the rotation to know whether this copy is
+the one that will go on to run: either the mutex check moves ahead of logging
+(and then logs nothing about why it exited), or the rotation becomes lazy and
+happens on the first line written after the instance check passes, which is the
+better shape and is a change to `log.cpp`'s contract rather than a tweak.
+
+Until then: on a box where a second copy may have bounced, `.prv` is not
+necessarily the run you want, and `gupdate.log` is the independent record of what
+happened to the binary.
+
+## 25. Detection refuses to find a toolchain newer than its note
+
+`win/tools_detect.ini`'s `[jdk]` section deliberately lists only 1.1-era install
+paths, and `bridge/profiles/msvc.toml` deliberately declines a
+`[detect.version].default`, for the same reason in both cases: a note is prose
+about one release, and stating 1.1's absences in front of a JDK 1.3 -- or
+stamping "6.0" on a 16-bit `C:\MSVC` -- is confidently wrong in the direction
+that wastes the most time. Refusing to detect it at all was the only defence
+available.
+
+That defence is now unnecessary. `for_version` and `[[note.variant]]` landed
+2026-10-01 (af59ebb, 10409d8): `toolnote` resolves the version in play to the
+nearest release anybody has measured, and an inexact match names both numbers
+above the body and says which way it is wrong. A JDK 1.3 can now be detected and
+described honestly as "measured on 1.1, and 1.3 came after it".
+
+What closing this takes:
+
+- `win/tools_detect.ini` gains the 1.2/1.3/1.4-era `[jdk]` markers it currently
+  omits, and whatever paths Sun's installers of that era actually wrote. Guest
+  side, so it needs a reflash.
+- `bridge/profiles/jdk.toml` gains the matching `[detect.version]` rows, and the
+  comment that currently justifies listing only 1.1 layouts is rewritten -- it is
+  load-bearing for the `default = "1.1"` and stops being true.
+- `bridge/profiles/msvc.toml` can then map `DevStudio\VC` to "5.0" and `MSDEV` to
+  "4.0" instead of leaving them unversioned, because a 5.0 install asking a 6.0
+  note now produces a labelled answer rather than a silent one.
+
+One case stays open even then, and it is worth stating: an install detected with
+**no version at all** cannot be told it mismatches, because there is nothing to
+compare. Only giving those markers versions fixes that, which is this item.
