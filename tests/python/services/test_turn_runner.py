@@ -43,6 +43,9 @@ class DummyGuest:
         self.turn_degraded = ""
         self.synccoord = MagicMock()
         self.synccoord.agent_notices = []
+        # Which machine this is, as GuestSession derives it from HELLO.
+        self.machine = "guest-a"
+
 
 
 def test_turn_verdict():
@@ -110,7 +113,9 @@ async def test_run_turn_locked_success(turn_deps):
     assert conn.send.call_count >= 2
     pres.write_block.assert_called_once()
     pres.flush_text.assert_called_once()
-    conv.add.assert_called_once_with("sess-1")
+    # Filed under the machine it was started from, not just under this
+    # bridge: `mine` alone cannot tell two guests apart (BACKLOG §21).
+    conv.add.assert_called_once_with("sess-1", "guest-a")
 
 
 @pytest.mark.asyncio
