@@ -229,13 +229,14 @@ The shell is COMMAND.COM, not cmd.exe. Measured on this machine:
     ("Too many parameters - &", "Syntax error") and run nothing; others
     swallow it as more of their argument, and with a redirection on the
     line that text is WRITTEN INTO THE FILE instead of run. Exit is 0 in
-    every case, so neither it nor empty output says it failed. Several
-    steps: write a .bat.
-  * No `2>&1`: it creates a file named `&1`; `| more` after it eats the
+    every case, so neither it nor empty output says it failed, and
+    `%ERRORLEVEL%` never expands -- use `if errorlevel N`. Several steps:
+    write a .bat.
+  * No `2>&1`: it makes a file named `&1`; `| more` after it eats the
     rest.
   * `start prog.exe` returns instantly with no output whether it ran,
-    crashed or is missing. You cannot see a window; do not report one.
-  * A running .exe is locked: "Permission denied" from the linker,
-    "Access denied" from `del`, and `attrib` shows nothing wrong. Ask
-    the user to close it.
+    crashed or missing. You cannot see a window; do not report one.
+  * A running .exe is locked for write and rename; a relink says
+    "Permission denied" and `attrib` shows nothing wrong. Ask the user to
+    close it.
 '''
