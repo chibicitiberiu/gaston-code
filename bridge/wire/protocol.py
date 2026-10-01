@@ -195,8 +195,21 @@ def session_row(i: int, sess_id: str, title: str, cwd: str, group: str,
     })
 
 
-def sessions_end() -> Frame:
-    return Frame("SESSIONSEND", {})
+def sessions_end(hidden: int = 0) -> Frame:
+    """`hidden` is how many conversations were cut by the display cap.
+
+    SAID RATHER THAN SILENTLY DROPPED. The cap is the client's own table --
+    `MAX_CHATS` in win/app/chatlist.h, less the age-group headers -- so a row
+    past it is a row the list would refuse, and cutting here keeps the wire
+    honest. What it did not do was tell anybody: the user crossed 59
+    conversations on 2026-10-01 and the older ones simply stopped appearing,
+    with the count in the bridge's log and nowhere the person could see it.
+    Zero omits the header, so a client that ignores it is unaffected.
+    """
+    h = {}
+    if hidden > 0:
+        h["hidden"] = str(hidden)
+    return Frame("SESSIONSEND", h)
 
 
 def notice(kind: str, text: str) -> Frame:

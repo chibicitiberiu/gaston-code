@@ -14,6 +14,16 @@ block = '''
 '''
 unknown = "unknown"
 os_unreported = "Windows (version not reported)"
+# WHO THIS MACHINE IS, and why the agent is told. Its memory directory is keyed
+# on the working directory rather than on the machine, so a remembered fact
+# about "the connected machine" is a fact with no subject the moment a second
+# machine dials in -- which happened on 2026-10-01.
+identity = '''
+This machine identifies itself as `{machine}`. Facts you learn about it -- a
+compiler's real path, a shell's quirks, how a tool actually behaves -- belong to
+THIS machine and may be false of the next one. **If you write any of it down for
+later, name this id in what you write.** Your notes are not filed per machine,
+so one that says "the connected machine" is a note whose subject is lost.'''
 
 [sync]
 # what the mirrored folder is called when the guest has not named one

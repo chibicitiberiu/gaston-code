@@ -70,3 +70,35 @@ def test_the_default_is_stable_across_restarts():
     """mkdtemp would throw the baseline away on every restart and re-sync
     every conversation from nothing."""
     assert default_sync_root() == default_sync_root()
+
+
+# --- two things that were silent -------------------------------------------
+
+def test_the_chat_list_says_how_many_did_not_fit():
+    """The cap is the CLIENT's table (MAX_CHATS less the age-group headers), so
+    the bridge cuts to match it. What it did not do was say so: the user
+    crossed 59 conversations and the older ones stopped appearing, with the
+    count in the bridge's log and nowhere on their screen."""
+    from bridge.wire.protocol import sessions_end
+    assert sessions_end(29).headers.get("hidden") == "29"
+    # Zero omits it, so a client that ignores the header is unaffected.
+    assert "hidden" not in sessions_end(0).headers
+    assert "hidden" not in sessions_end().headers
+
+
+def test_the_prompt_names_which_machine_this_is():
+    """The agent's own memory directory is keyed on the working directory, not
+    on the machine, so a note about "the connected machine" loses its subject
+    the moment a second one dials in -- which is how a CRLF fact learned on the
+    Athlon box got filed where the QEMU guest would read it."""
+    from bridge.agent.machine import describe
+    out = describe({"mem_kb": "261120", "machine": "087dfc60-bde9-11f1"})
+    assert "087dfc60-bde9-11f1" in out
+    assert "name this id" in out
+
+
+def test_a_machine_that_declares_no_id_is_not_lectured():
+    """An older client sends no `machine` header. Telling it to name an id it
+    does not have would be an instruction it cannot follow."""
+    from bridge.agent.machine import describe
+    assert "name this id" not in describe({"mem_kb": "261120"})

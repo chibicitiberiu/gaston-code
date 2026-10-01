@@ -177,7 +177,9 @@ class SessionService:
         listing = self._resolve_sesslist().listing()
         rows = (conv_store.filter(listing, guest.machine)
                 if conv_store is not None else listing)
+        hidden = 0
         if len(rows) > DISPLAY_LIMIT:
+            hidden = len(rows) - DISPLAY_LIMIT
             log.info("chat list: %d conversations, showing the newest %d",
                      len(rows), DISPLAY_LIMIT)
             rows = rows[:DISPLAY_LIMIT]
@@ -186,7 +188,7 @@ class SessionService:
             await self.connection.send(guest, session_row(
                 i, r["id"], r["title"], r["cwd"], r.get("group", ""),
                 bool(guest.conv_id and guest.conv_id == r["id"])))
-        await self.connection.send(guest, sessions_end())
+        await self.connection.send(guest, sessions_end(hidden))
 
     async def on_getsessions(self, guest: GuestSession, f: Frame) -> None:
         await self.send_sessions(guest)

@@ -31,7 +31,7 @@ def describe(h: dict) -> str:
         return f"{v // 1024} MB" if v >= 1024 else f"{v} KB"
 
     unknown = prompts.text("machine.facts.unknown")
-    return prompts.text(
+    out = prompts.text(
         "machine.facts.block",
         os=h.get("os") or prompts.text("machine.facts.os_unreported"),
         cpu=h.get("cpu") or unknown,
@@ -39,6 +39,25 @@ def describe(h: dict) -> str:
         screen=h.get("screen") or unknown,
         disk_free=kb("disk_free_kb"),
     ).strip("\n")
+
+    # WHICH MACHINE THIS IS, by the id it declared, and what that is FOR.
+    #
+    # Anything the agent learns here -- that a batch file needs CRLF, that a
+    # compiler's root has an alias nobody can guess -- is true of THIS machine
+    # and may be false of the next one. Its own memory directory is keyed on
+    # the working directory, not on the machine, so a memory written without
+    # the id in it is a fact with no subject: one was written on 2026-10-01
+    # saying batch files on "the connected Windows machine" need CRLF, into a
+    # directory shared by every machine this bridge talks to.
+    #
+    # Said rather than solved, because that directory belongs to the CLI and
+    # not to us. A note that names the machine is still readable when a
+    # different one is attached; a note that does not is a trap for the next
+    # session.
+    mid = (h.get("machine") or "").strip()
+    if mid:
+        out += "\n" + prompts.text("machine.facts.identity", machine=mid)
+    return out
 
 
 def _sync_paragraph(workdir: str, sync_dir: str | None,

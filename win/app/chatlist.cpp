@@ -190,9 +190,31 @@ void ChatList::addRow(const char *id, const char *title, const char *grp,
 
 void ChatList::onSessionsEnd(rc_frame *f)
 {
-    (void)f;
+    /* HOW MANY DID NOT FIT, as a last non-selectable row.
+     *
+     * The cap is this table's own (MAX_CHATS, less one row per age-group
+     * header), so the bridge cuts to match it -- and until 2026-10-02 said
+     * nothing. The user crossed it at 88 conversations and the older ones
+     * simply stopped appearing, with the count in the bridge's log and
+     * nowhere on this screen. A header row carries no id, so it cannot be
+     * clicked and cannot be mistaken for a conversation.
+     *
+     * Added before endRows() so it is inside the same redraw, and only when
+     * there is room: a line saying "some rows are missing" that itself
+     * displaced a row would be its own joke. */
+    const char *hidden = rc_frame_get(f, "hidden");
+    if (hidden && *hidden && m_rows.size() < MAX_CHATS) {
+        char label[RC_CHAT_LABEL];
+        Row header;
+        header.header = true;
+        m_rows.push_back(header);
+        rc_strf(label, sizeof(label), "%s older not shown", hidden);
+        SendMessageA(m_list, LB_ADDSTRING, 0, (LPARAM)label);
+    }
     endRows();
-    rc_log("chat list: %u rows", (unsigned)m_rows.size());
+    rc_log("chat list: %u rows%s%s", (unsigned)m_rows.size(),
+           (hidden && *hidden) ? ", hidden: " : "",
+           (hidden && *hidden) ? hidden : "");
 }
 
 void ChatList::beginRows()
