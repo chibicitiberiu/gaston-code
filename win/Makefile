@@ -89,7 +89,22 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # not re-enact this. The alternative was hunting 126 bytes of CONST to delete
 # somewhere unrelated, which realigns _BSS and buys nothing structural -- the
 # feature after it lands on the same boundary and somebody goes hunting again.
-COMMITTED_CAP ?= 474096
+#
+# 474,096 -> 478,192 on 2026-10-02: the padding page bought above is now spent,
+# and this is the next one, for the same structural reason. Two features landed
+# on it -- the CPUID brand string (exec/cpuid.cpp, plus a 64-byte and a 16-byte
+# field in SystemInfo and a cpu[] buffer grown from 64 to 160) and FSLS, the
+# client's directory listing, which is an 8KB SINK ON THE HEAP and whose static
+# cost is the handler and its strings. Measured 474,393 against 474,096: 297
+# bytes over, which is again the gate charging a whole page rather than the
+# features being large. One page, bought once, with room above it so the next
+# small feature does not re-enact this either.
+#
+# WHAT WOULD MAKE THIS A REAL PROBLEM rather than an accounting one: the number
+# the guest actually cares about is runtime working set on a 32MB box, and this
+# gate cannot see a thread stack at all. If this is hit twice more, measure
+# that instead of raising this again.
+COMMITTED_CAP ?= 478192
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a

@@ -69,6 +69,7 @@ class GuestExecService:
                         ),
                     }
                 ],
+                "is_error": True,
                 "isError": True,
             }
 
@@ -100,7 +101,8 @@ class GuestExecService:
                                 ),
                             }
                         ],
-                        "isError": True,
+                        "is_error": True,
+                "isError": True,
                     }
             elif usable:
                 prefix = (
@@ -121,7 +123,8 @@ class GuestExecService:
                             ),
                         }
                     ],
-                    "isError": True,
+                    "is_error": True,
+                "isError": True,
                 }
             guest.exec_seq += 1
             exec_id = f"x{guest.exec_seq}"
@@ -145,7 +148,8 @@ class GuestExecService:
                             ),
                         }
                     ],
-                    "isError": True,
+                    "is_error": True,
+                "isError": True,
                 }
 
             if cwd:
@@ -163,7 +167,8 @@ class GuestExecService:
                                 ),
                             }
                         ],
-                        "isError": True,
+                        "is_error": True,
+                "isError": True,
                     }
 
             await self.connection.send(
@@ -194,7 +199,8 @@ class GuestExecService:
                             ),
                         }
                     ],
-                    "isError": True,
+                    "is_error": True,
+                "isError": True,
                 }
             except asyncio.CancelledError:
                 self.kill_exec(guest, exec_id)
@@ -280,6 +286,7 @@ class GuestExecService:
         fut.set_result(
             {
                 "content": [{"type": "text", "text": head + body}],
+                "is_error": status.is_error,
                 "isError": status.is_error,
             }
         )

@@ -548,6 +548,25 @@ def fs_putend(fs_id: str, crc: int) -> Frame:
     return Frame("FSPUTEND", {"id": fs_id, "crc": str(crc)})
 
 
+def fs_ls(fs_id: str, path: str, *, max_entries: int = 0) -> Frame:
+    """One level of one directory on the connected machine, at any path.
+
+    Rows arrive in FSENT bodies, one per line, `<type> <size> <mtime> <attrs>
+    <name>` -- the same shape gremote's LS has used since step 4
+    (win/remote/fsops.cpp), because the primitive underneath is the same
+    `listDirectory` and two formats for one answer is two parsers to keep
+    right.
+
+    `max_entries` is enforced ON THE GUEST and the reply says `truncated=1`
+    when it bit. A capped listing is NOT a short listing: a caller that reads
+    one as the whole directory has been told files were deleted.
+    """
+    h = {"id": fs_id, "path": truncate_header_value(path)}
+    if max_entries:
+        h["max_entries"] = str(max_entries)
+    return Frame("FSLS", h)
+
+
 def fs_drives(fs_id: str, *, probe: bool = False) -> Frame:
     """Every drive letter the machine has, with type, label and free space.
 

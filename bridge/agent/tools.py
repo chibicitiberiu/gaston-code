@@ -63,8 +63,24 @@ def _ui_explain(exc: UiError) -> str:
 
 
 def _text(body: str, *, error: bool = False) -> dict:
+    """A tool result, and BOTH SPELLINGS of the error flag.
+
+    `claude_agent_sdk` reads `result.get("is_error", False)` when it builds the
+    `CallToolResult` (`__init__.py`, `run_tool`), while the MCP wire field it
+    produces is `isError`. This wrote only `isError`, so the key never matched
+    and EVERY refusal from EVERY tool here reached the model as a SUCCESS
+    carrying refusal text -- which is most of the way there, since the words
+    arrive, and wrong in the one way that matters: a failed call the model is
+    told succeeded is a call it has no reason to retry or route around.
+
+    Both keys, not just the one the SDK reads today: the dict also goes
+    straight to test harnesses and anything else that speaks MCP's own
+    spelling, and a result that is an error under one name and a success under
+    the other is the bug this comment exists because of.
+    """
     out: dict = {"content": [{"type": "text", "text": body}]}
     if error:
+        out["is_error"] = True
         out["isError"] = True
     return out
 
@@ -878,6 +894,85 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             raise
 
     @tool(
+        "list_dir",
+        prompts.text("tools.list_dir.description"),
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string",
+                         "description": prompts.text(
+                             "tools.list_dir.args.path")},
+                "max_entries": {"type": "integer",
+                                "description": prompts.text(
+                                    "tools.list_dir.args.max_entries")},
+            },
+            "required": ["path"],
+        },
+    )
+    async def machine_list_dir(args: dict) -> dict:
+        """WHY THIS EARNS ITS PLACE (CLAUDE.md: "a tool earns its place only if
+        `exec` does the job badly").
+
+        Measured on real hardware, twelve files in one directory
+        (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt):
+
+            dir /b <path>   131 bytes, names only, no sizes or dates
+            dir    <path>   about 1,100 -- volume label, serial number, a
+                            directory header, `.` and `..`, a free-space
+                            footer, and BOTH the 8.3 and the long name per row
+
+        So `exec` can give the agent names cheaply or details expensively, and
+        neither answer is machine-readable, neither can be had without the
+        console codepage in the middle, and a path with a space in it has to be
+        quoted for a shell that splits on whitespace. A live session ran plain
+        `dir` six times to check single files it had just compiled.
+
+        `listDirectory` has been in libfs since step 5a and gremote has used it
+        since step 4; this is the client's half of the same primitive, with the
+        same wire shape.
+        """
+        try:
+            if fs is None or guest is None:
+                return _text(prompts.text("tools.fs.refused.unavailable"),
+                             error=True)
+            path = str(args.get("path", "")).strip()
+            if not path:
+                return _text(_fs_refused("bad_path"), error=True)
+            try:
+                got = await fs.ls(guest, path,
+                                  max_entries=int(args.get("max_entries") or 0))
+            except FsError as exc:
+                return _text(_fs_refused(exc.status, path), error=True)
+
+            if not got.entries:
+                return _text(prompts.text("tools.list_dir.view.empty",
+                                          path=path))
+            # DIRECTORIES FIRST, then by name, both case-insensitively. The
+            # guest emits them in the order the filesystem hands them over,
+            # which on FAT is creation order -- useful to nobody reading a
+            # listing, and unstable between two calls on the same directory.
+            rows = sorted(got.entries,
+                          key=lambda e: (not e.is_dir, e.name.lower()))
+            width = max(len(e.name) for e in rows)
+            out = [prompts.text("tools.list_dir.view.header", path=path)]
+            for e in rows:
+                if e.is_dir:
+                    size = prompts.text("tools.list_dir.view.dir")
+                elif e.type != "f":
+                    size = prompts.text("tools.list_dir.view.unknown")
+                else:
+                    size = f"{e.size:>10}"
+                out.append(f"  {e.name:<{width}}  {size}")
+            body = "\n".join(out)
+            if got.truncated:
+                body += "\n" + prompts.text(
+                    "tools.list_dir.view.truncated", count=len(rows))
+            return _text(body)
+        except Exception:
+            log.exception("mcp__machine__list_dir failed: %r", args)
+            raise
+
+    @tool(
         "drives",
         prompts.text("tools.drives.description"),
         {"type": "object",
@@ -1072,6 +1167,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                                           machine_ps,
                                           machine_kill,
                                           machine_get_file,
+                                          machine_list_dir,
                                           machine_put_file,
                                           machine_drives,
                                           machine_toolnote])

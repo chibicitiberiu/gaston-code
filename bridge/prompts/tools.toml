@@ -305,6 +305,8 @@ missing = '''
 There is nothing at "{path}" on the machine.'''
 is_directory = '''
 "{path}" is a folder, not a file.'''
+not_a_directory = '''
+"{path}" is a file, not a folder, so there is nothing to list. Its size and date are in the listing of the folder it is in.'''
 locked = '''
 "{path}" could not be read or written just now -- another program on the machine is probably holding it. Worth trying again.'''
 readonly = '''
@@ -408,6 +410,46 @@ Wrote {bytes} bytes to {path} on the machine.'''
 # byte-identical to the one here -- and so a later `get_file` showing CRLF is
 # not a mystery.
 converted = ''' Line endings were converted to that machine's, so it is not byte-identical to your copy.'''
+
+# WHY A TOOL AND NOT `dir`. The bar is CLAUDE.md's: a tool earns its place only
+# if `exec` does the job badly. Measured on real Windows 98, twelve files in one
+# directory (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt):
+#
+#   dir /b <path>    131 bytes -- names, no sizes, no dates
+#   dir    <path>    about 1,100 -- volume label, serial number, a directory
+#                    header, `.` and `..`, a free-space footer, and BOTH the
+#                    8.3 and the long name on every row
+#
+# Cheap or detailed, never both; neither machine-readable; both in the console
+# codepage rather than the one long names are stored in; and a path with a space
+# in it has to be quoted for a shell that splits on whitespace. A live session
+# ran plain `dir` six times to check single files it had just compiled.
+[list_dir]
+description = '''
+List one directory on the connected machine, by its full path, including outside the folder your files are mirrored into.
+
+Use this rather than the shell's directory command, which costs several times as much for the same answer, returns it in the console's own character set, and prints each name twice on a machine with short-name aliases. This returns names, sizes and which entries are folders.
+
+One level only -- it does not descend. For a whole tree, list the folders you care about.'''
+
+[list_dir.args]
+path = '''
+The full path of the directory, written the way that machine writes paths.'''
+max_entries = '''
+Stop after this many entries; the machine enforces it while reading. There is a ceiling in any case and the reply says when either one bit.'''
+
+[list_dir.view]
+header = '''{path}'''
+dir = '''     <dir>'''
+unknown = '''         ?'''
+empty = '''
+{path} is an empty directory.'''
+# A CAPPED LISTING IS NOT A SHORT ONE. An agent that reads one as the whole
+# directory has been told the rest of the files are gone.
+truncated = '''
+(Stopped at {count} entries -- there are more in this directory. Ask for a
+higher `max_entries`, or treat this as a partial answer: it is NOT the whole
+directory.)'''
 
 [drives]
 description = '''

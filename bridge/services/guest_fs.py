@@ -20,7 +20,8 @@ import zlib
 from dataclasses import dataclass
 
 from ..guest import FsCall, GuestSession
-from ..wire.protocol import fs_drives, fs_get, fs_put, fs_putend
+from ..wire import fold
+from ..wire.protocol import fs_drives, fs_get, fs_ls, fs_put, fs_putend
 
 log = logging.getLogger("bridge.fs")
 
@@ -51,6 +52,32 @@ class Drive:
 
 
 @dataclass
+class Entry:
+    """One row of a directory listing.
+
+    `type` is the guest's own single character -- 'f', 'd', or 'u' for
+    something it could not classify -- rather than a bool, because "I do not
+    know what this is" is a real answer on a 1998 filesystem and folding it
+    into `is_dir=False` is how a directory gets treated as a file.
+    """
+    name: str
+    type: str
+    size: int
+    mtime: int
+    attrs: int
+
+    @property
+    def is_dir(self) -> bool:
+        return self.type == "d"
+
+
+@dataclass
+class Listing:
+    entries: list
+    truncated: bool
+
+
+@dataclass
 class FileBytes:
     data: bytes
     crc: int
@@ -72,6 +99,41 @@ class FsError(Exception):
     def __init__(self, status: str) -> None:
         super().__init__(status)
         self.status = status
+
+
+def _parse_entries(blob: bytes) -> list:
+    """`<type> <size> <mtime> <attrs> <name>` per line, into Entry rows.
+
+    SPLIT FOUR TIMES AND NO MORE. A name can contain spaces -- most long
+    names on a Windows machine do -- so the name is whatever is left after the
+    four fixed fields, and `split(None, 4)` is the whole rule. A line that
+    does not have five fields is dropped rather than guessed at: a row this
+    cannot parse is a row whose name it does not know, and inventing one puts
+    a wrong path in front of the agent.
+
+    Decoded with the machine's ANSI codepage, not the console's. VFAT stores
+    long names in the ANSI page and this listing comes from
+    FindFirstFileA/cFileName, not from a console child -- conflating the two
+    is the classic 9x encoding bug and turns every accented name to mojibake.
+    """
+    out = []
+    for raw in blob.split(b"\n"):
+        if not raw.strip():
+            continue
+        parts = raw.split(None, 4)
+        if len(parts) < 5:
+            log.debug("unparseable listing row dropped: %r", raw[:80])
+            continue
+        try:
+            out.append(Entry(
+                name=fold.decode(parts[4]),
+                type=parts[0].decode("ascii", "replace")[:1] or "u",
+                size=int(parts[1]),
+                mtime=int(parts[2]),
+                attrs=int(parts[3], 16)))
+        except (ValueError, UnicodeDecodeError):
+            log.debug("unparseable listing row dropped: %r", raw[:80])
+    return out
 
 
 class GuestFsService:
@@ -144,6 +206,25 @@ class GuestFsService:
             raise FsError(status or "no_status")
         return int(headers.get("bytes", "0") or 0)
 
+    async def ls(self, guest: GuestSession, path: str, *,
+                 max_entries: int = 0) -> Listing:
+        """One level of one directory. Raises FsError on a refusal."""
+        fs_id, wait = self._begin(guest, "ls")
+        try:
+            await self.connection.send(guest, fs_ls(fs_id, path,
+                                                    max_entries=max_entries))
+            headers = await asyncio.wait_for(wait.future, timeout=BUDGET_S)
+        except TimeoutError as exc:
+            raise FsError("timeout") from exc
+        finally:
+            guest.fs_pending.pop(fs_id, None)
+
+        status = headers.get("status", "")
+        if status != "ok":
+            raise FsError(status or "no_status")
+        return Listing(entries=list(wait.rows),
+                       truncated=headers.get("truncated") == "1")
+
     async def drives(self, guest: GuestSession, *,
                      probe: bool = False) -> list[Drive]:
         fs_id, wait = self._begin(guest, "drives")
@@ -171,6 +252,18 @@ class GuestFsService:
 
         if f.type == "FSDAT":
             wait.data.extend(f.body or b"")
+            return
+        if f.type == "FSENT":
+            # PARSED HERE AND NOT IN THE TOOL, because the rows arrive across
+            # frame boundaries: the guest fills an 8KB buffer and flushes it,
+            # so a line can be split between two FSENT bodies. Accumulating
+            # the bytes and splitting at the end is the only correct order.
+            wait.data.extend(f.body or b"")
+            return
+        if f.type == "FSENTEND":
+            wait.rows.extend(_parse_entries(bytes(wait.data)))
+            if not wait.future.done():
+                wait.future.set_result(dict(f.headers))
             return
         if f.type == "FSDRIVE":
             h = f.headers

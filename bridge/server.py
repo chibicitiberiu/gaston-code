@@ -246,6 +246,8 @@ class Bridge:
             "FSPUTACK":     self.guest_fs.fs_frame,
             "FSDRIVE":      self.guest_fs.fs_frame,
             "FSDRIVEEND":   self.guest_fs.fs_frame,
+            "FSENT":        self.guest_fs.fs_frame,
+            "FSENTEND":     self.guest_fs.fs_frame,
             "PERMREPLY":    self.permissions.reply,
             "GETSESSIONS":  self.session.on_getsessions,
             "GETPAGE":      self.presentation.on_getpage,

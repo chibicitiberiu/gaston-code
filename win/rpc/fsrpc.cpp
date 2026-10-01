@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "core/rc_cpp.h"
 #include "core/str.h"
+#include "fs/dir.h"
 #include "fs/drives.h"
 #include "fs/file.h"
 #include "fs/xfer.h"
@@ -317,6 +318,153 @@ static void do_fsget(rc_net *net, rc_frame *f)
     rc_net_send(net, "FSDATEND", keys, vals, 5, NULL, 0);
 }
 
+/* --- listing one directory ------------------------------------------------- */
+/*
+ * WHY A TOOL AND NOT `dir`. CLAUDE.md's bar is that a tool earns its place
+ * only if `exec` does the job badly, and measured on real hardware
+ * (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt) `dir` does:
+ * twelve files cost about 1,100 bytes of volume label, serial number,
+ * directory header, `.` and `..`, a free-space footer and BOTH name forms per
+ * row. `dir /b` is 131 bytes but drops the sizes and dates. Neither can be
+ * asked for a machine-readable answer, both come back in the console codepage
+ * rather than the ANSI one, and a path with a space in it has to be quoted for
+ * a shell that splits on whitespace. A live session ran `dir` six times to
+ * check single files it had just compiled.
+ *
+ * `listDirectory` has been in libfs since step 5a with no production caller on
+ * this side -- gremote has used it since step 4 (win/remote/fsops.cpp). This
+ * is the client's half, and it is deliberately the SAME wire shape: rows in
+ * the body, one per line, `<type> <size> <mtime> <attrs> <name>`.
+ */
+
+enum { RC_FS_LS_MAX = 2000 };
+
+namespace {
+
+class FsEntRows : public DirSink
+{
+public:
+    FsEntRows(rc_net *net, const char *id, int max)
+        : m_net(net), m_id(id), m_len(0), m_count(0), m_max(max),
+          m_truncated(false), m_stopped(false) {}
+
+    virtual bool onEntry(const char *rel, const FileInfo &info)
+    {
+        char line[MAX_PATH + 64];
+        unsigned n;
+
+        if (m_count >= m_max)
+        {
+            /* TRUNCATED IS A FACT, not a short listing. A caller that reads a
+             * capped listing as the whole directory has been told files were
+             * deleted. */
+            m_truncated = true;
+            return false;
+        }
+        rc_strf(line, sizeof(line), "%c %lu %lu %08lx %s\n",
+                info.type ? info.type : 'u', (unsigned long)info.size,
+                (unsigned long)info.mtime, (unsigned long)info.attrs, rel);
+        n = (unsigned)strlen(line);
+        if (m_len + n > sizeof(m_buf) && !flush())
+            return false;
+        memcpy(m_buf + m_len, line, n);
+        m_len += n;
+        m_count++;
+        return true;
+    }
+
+    bool flush()
+    {
+        const char *keys[1];
+        const char *vals[1];
+        if (!m_len)
+            return true;
+        keys[0] = "id"; vals[0] = m_id;
+        if (rc_net_send(m_net, "FSENT", keys, vals, 1, m_buf, m_len) != 0)
+        {
+            m_stopped = true;
+            return false;
+        }
+        m_len = 0;
+        return true;
+    }
+
+    int count() const { return m_count; }
+    bool truncated() const { return m_truncated; }
+    bool stopped() const { return m_stopped; }
+
+private:
+    rc_net     *m_net;
+    const char *m_id;
+    char        m_buf[RC_FS_CHUNK];
+    unsigned    m_len;
+    int         m_count, m_max;
+    bool        m_truncated, m_stopped;
+};
+
+} /* namespace */
+
+static void do_fsls(rc_net *net, rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    const char *path = rc_frame_get(f, "path");
+    const char *maxText = rc_frame_get(f, "max_entries");
+    const char *keys[4];
+    const char *vals[4];
+    const char *status = "ok";
+    char count[16], trunc[4];
+    int max = maxText ? atoi(maxText) : RC_FS_LS_MAX;
+    int n = 0;
+    int truncated = 0;
+    bool gone = false;
+
+    if (!id) {
+        rc_log("FSLS: frame carries no id -- dropped, and the caller will "
+               "wait out its timeout");
+        return;
+    }
+    if (max <= 0 || max > RC_FS_LS_MAX) max = RC_FS_LS_MAX;
+
+    if (!path || !*path) status = "bad_path";
+    else {
+        FileInfo info;
+        /* STAT FIRST, so "there is no such directory" and "it is a file" are
+         * different answers rather than both arriving as an empty listing.
+         * The count alone cannot tell them apart and the caller acts on it. */
+        if (!statPath(path, info) || info.type == 0)
+                                              status = "missing";
+        else if (info.type != 'd')            status = "not_a_directory";
+        else {
+            /* ON THE HEAP: FsEntRows carries an 8KB buffer and the build gate
+             * refuses any stack frame reaching one page. */
+            UniqueObj<FsEntRows> rows(new FsEntRows(net, id, max));
+            if (!rows.valid()) status = "no_memory";
+            else if (!listDirectory(path, *rows.get()))
+            {
+                /* Not an empty directory: one that was never read. */
+                status = "locked";
+            }
+            else
+            {
+                rows->flush();
+                n = rows->count();
+                truncated = rows->truncated() ? 1 : 0;
+                gone = rows->stopped();
+            }
+        }
+    }
+
+    if (gone)
+        return;                 /* the link is gone; END would not arrive */
+    rc_strf(count, sizeof(count), "%d", n);
+    rc_strf(trunc, sizeof(trunc), "%d", truncated);
+    keys[0] = "id";        vals[0] = id;
+    keys[1] = "status";    vals[1] = status;
+    keys[2] = "count";     vals[2] = count;
+    keys[3] = "truncated"; vals[3] = trunc;
+    rc_net_send(net, "FSENTEND", keys, vals, 4, NULL, 0);
+}
+
 /* --- drives --------------------------------------------------------------- */
 
 namespace {
@@ -410,6 +558,7 @@ int rc_fsrpc_handle(rc_net *net, rc_frame *f)
     if (strcmp(f->type, "FSGET") == 0)          do_fsget(net, f);
     else if (strcmp(f->type, "FSPUT") == 0)     do_fsput(net, f);
     else if (strcmp(f->type, "FSPUTEND") == 0)  do_fsputend(net, f);
+    else if (strcmp(f->type, "FSLS") == 0)      do_fsls(net, f);
     else if (strcmp(f->type, "FSDRIVES") == 0)  do_fsdrives(net, f);
     else return 0;
     return 1;

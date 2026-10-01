@@ -96,12 +96,34 @@ def test_no_tool_names_one_operating_system():
             assert leak not in d[name], f"{name} names {leak}"
 
 
-def test_ls_is_not_offered():
-    """CLAUDE.md's bar: a tool earns its place only if `exec` does the job
-    badly. The machine's own shell lists a directory perfectly well, and a
-    tool that duplicates it costs context on every single request."""
-    assert "ls" not in _descriptions()
-    assert "stat" not in _descriptions()
+def test_a_directory_listing_IS_offered_and_here_is_why():
+    """WAS `test_ls_is_not_offered`, whose reasoning was "the machine's own
+    shell lists a directory perfectly well". It does not, and the numbers that
+    settled it were measured on real Windows 98 on 2026-10-01
+    (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt) -- twelve files
+    in one directory:
+
+        dir /b <path>    131 bytes -- names, no sizes, no dates
+        dir    <path>    about 1,100 -- volume label, serial number, a
+                         directory header, `.` and `..`, a free-space footer,
+                         and BOTH the 8.3 and the long name on every row
+
+    So `exec` gives names cheaply or details expensively and never both;
+    neither answer is machine-readable; both arrive in the CONSOLE codepage
+    while long names are stored in the ANSI one; and a path containing a space
+    has to be quoted for a shell that splits on whitespace. The session that
+    produced those numbers ran plain `dir` six times to check single files it
+    had just compiled.
+
+    CLAUDE.md's bar is unchanged -- this clears it rather than lowering it.
+    `stat` does not: `list_dir` answers the same question for a whole
+    directory, and a single file's size and date come back in the listing of
+    the folder it is in.
+    """
+    d = _descriptions()
+    assert "list_dir" in d
+    assert "ls" not in d           # OS-neutral naming, not the Unix verb
+    assert "stat" not in d
 
 
 def test_get_file_returns_text_as_text():
@@ -387,3 +409,95 @@ def test_the_endings_question_is_asked_of_the_machine_not_of_an_os():
     out = _body(_call(srv, "get_file", {"path": "/tmp/x"}))
     assert "NOT what this machine uses" not in out
     assert "COMMAND.COM" not in out
+
+
+# --- list_dir ---------------------------------------------------------------
+
+def _fs_listing(entries, truncated=False):
+    from bridge.services.guest_fs import Listing
+
+    class LsFs(FakeFs):
+        async def ls(self, guest, path, *, max_entries=0):
+            if self.raise_status:
+                raise FsError(self.raise_status)
+            self.ls_calls.append((path, max_entries))
+            return Listing(entries=list(entries), truncated=truncated)
+
+    fs = LsFs()
+    fs.ls_calls = []
+    return fs
+
+
+def _entry(name, type="f", size=0, mtime=0, attrs=0):
+    from bridge.services.guest_fs import Entry
+    return Entry(name=name, type=type, size=size, mtime=mtime, attrs=attrs)
+
+
+def test_folders_sort_first_then_names():
+    """The guest emits whatever order the filesystem hands over, which on FAT
+    is creation order -- useful to nobody reading a listing, and not even
+    stable between two calls on the same directory."""
+    fs = _fs_listing([_entry("zebra.txt"), _entry("Beta", "d"),
+                      _entry("alpha.txt"), _entry("Alpha", "d")])
+    out = _body(_call(_server(fs), "list_dir", {"path": r"C:\W"}))
+    order = [ln.split()[0] for ln in out.splitlines() if ln.startswith("  ")]
+    assert order == ["Alpha", "Beta", "alpha.txt", "zebra.txt"]
+
+
+def test_a_type_the_guest_could_not_classify_is_not_called_a_file():
+    """'u' is a real answer on a 1998 filesystem. Folding it into "not a
+    directory" is how one gets opened as a file."""
+    fs = _fs_listing([_entry("odd", "u"), _entry("real.txt", "f", 42)])
+    out = _body(_call(_server(fs), "list_dir", {"path": r"C:\W"}))
+    assert "?" in out
+    assert "42" in out
+
+
+def test_an_empty_directory_says_so():
+    """Rather than a header with nothing under it, which reads as a failure."""
+    out = _body(_call(_server(_fs_listing([])), "list_dir",
+                      {"path": r"C:\W"}))
+    assert "empty" in out.lower()
+
+
+def test_a_capped_listing_says_it_is_not_the_whole_directory():
+    """The failure this prevents: an agent reads a capped listing as complete
+    and reports that the rest of the files are gone."""
+    fs = _fs_listing([_entry("a.txt")], truncated=True)
+    out = _body(_call(_server(fs), "list_dir", {"path": r"C:\W"}))
+    assert "NOT the whole" in out
+
+
+def test_max_entries_reaches_the_machine():
+    """Enforced there, not by counting what arrives: a cap applied on this
+    side still has the guest read and send everything."""
+    fs = _fs_listing([_entry("a.txt")])
+    _call(_server(fs), "list_dir", {"path": r"C:\W", "max_entries": 50})
+    assert fs.ls_calls[0] == (r"C:\W", 50)
+
+
+def test_a_refusal_comes_back_as_a_refusal():
+    fs = _fs_listing([])
+    fs.raise_status = "not_a_directory"
+    res = _call(_server(fs), "list_dir", {"path": r"C:\W\F.TXT"})
+    bad = res["isError"] if isinstance(res, dict) else res.is_error
+    assert bad
+    assert "is a file, not a folder" in _body(res)
+
+
+def test_a_name_with_spaces_survives_the_wire_format():
+    """Rows are `<type> <size> <mtime> <attrs> <name>` and most long names on
+    a Windows machine contain a space, so the name is everything after the
+    four fixed fields and nothing else."""
+    from bridge.services.guest_fs import _parse_entries
+    rows = _parse_entries(b"d 0 1 00000010 Program Files\n"
+                          b"f 9 2 00000020 My Notes v2.txt\n")
+    assert [r.name for r in rows] == ["Program Files", "My Notes v2.txt"]
+
+
+def test_an_unparseable_row_is_dropped_not_guessed():
+    """A row this cannot parse is a row whose name it does not know, and
+    inventing one puts a wrong path in front of the agent."""
+    from bridge.services.guest_fs import _parse_entries
+    rows = _parse_entries(b"f 1 2 3 ok.txt\nnonsense\nf x y z bad.txt\n")
+    assert [r.name for r in rows] == ["ok.txt"]

@@ -384,7 +384,17 @@ def test_sync_status_vocabulary_matches_the_guest():
     loud rather than silent -- but the fix would have been to weaken this
     test. The handlers keep their literals instead.
     """
-    src = pathlib.Path(conftest.HERE, "win", "sync", "syncrpc.cpp").read_text()
+    # BOTH FS FILES, since 2026-10-02. `win/rpc/fsrpc.cpp` has been answering
+    # on this same vocabulary since step 5a -- deliberately, because one
+    # vocabulary across two lanes is cheaper to keep right than two -- and
+    # nothing read it. It had already drifted: `no_memory` was being sent by a
+    # file no test looked at, so an agent hitting it got "which this bridge
+    # does not recognise" instead of the guest's own word. Adding the second
+    # path here is what surfaced that.
+    src = "\n".join(
+        pathlib.Path(conftest.HERE, *parts).read_text()
+        for parts in (("win", "sync", "syncrpc.cpp"),
+                      ("win", "rpc", "fsrpc.cpp")))
 
     found: set[str] = set()
     for m in re.finditer(r'\b(?:status|why)\s*=\s*"([a-z_]+)"', src):
@@ -413,15 +423,15 @@ def test_sync_status_vocabulary_matches_the_guest():
     # rather than the assertion weakened.
     for m in re.finditer(r'\breturn\s+"([a-z_]+)"\s*;', src):
         found.add(m.group(1))
-    assert found, ("extracted nothing from win/sync/syncrpc.cpp -- the "
-                   "regexes above no longer match the file's shape")
+    assert found, ("extracted nothing from the fs handlers -- the regexes "
+                   "above no longer match either file's shape")
 
     from bridge.status import SyncStatus
     bridge_side = {s.value for s in SyncStatus if s is not SyncStatus.UNKNOWN}
 
     missing = found - bridge_side
     assert not missing, (
-        f"win/sync/syncrpc.cpp can send {missing}, which SyncStatus "
+        f"the fs handlers can send {missing}, which SyncStatus "
         f"(bridge/status.py) does not name. An unrecognised status parses "
         f"to SyncStatus.UNKNOWN rather than a wrong answer -- see "
         f"SyncStatus.parse's docstring -- but the log and the model both "
@@ -429,8 +439,9 @@ def test_sync_status_vocabulary_matches_the_guest():
     extra = bridge_side - found
     assert not extra, (
         f"SyncStatus names {extra}, which this extraction did not find in "
-        f"win/sync/syncrpc.cpp -- either the guest no longer sends it, or "
-        f"the regexes above need a new case for how it is produced now.")
+        f"win/sync/syncrpc.cpp or win/rpc/fsrpc.cpp -- either the guest no "
+        f"longer sends it, or the regexes above need a new case for how it "
+        f"is produced now.")
 
 
 def test_exec_status_vocabulary_matches_the_guest():

@@ -865,6 +865,7 @@ static void reject_sync_busy(rc_frame *f)
     else if (strcmp(f->type, "FSPUT") == 0 ||
              strcmp(f->type, "FSPUTEND") == 0)   ack = "FSPUTACK";
     else if (strcmp(f->type, "FSDRIVES") == 0)   ack = "FSDRIVEEND";
+    else if (strcmp(f->type, "FSLS") == 0)       ack = "FSENTEND";
 
     keys[0] = "id";     vals[0] = id;
     keys[1] = "status"; vals[1] = "busy";

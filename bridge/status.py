@@ -131,9 +131,29 @@ class SyncStatus(str, Enum):
                                 TOO_LONG, NO_SPACE
       * get (SYNCDATEND):      OK, BAD_PATH, LOCKED, IS_DIRECTORY, MISSING,
                                 TOO_LONG
+
+    AND THE FS LANE'S, since 2026-10-02. `win/rpc/fsrpc.cpp` has been sending
+    statuses on this vocabulary all along -- FSDATEND and FSPUTACK reuse it
+    deliberately, because one vocabulary across two lanes is cheaper to keep
+    right than two -- but nothing pinned it, and it had already drifted:
+    `no_memory` was being sent by a file no test read. Widening
+    `test_sync_status_vocabulary_matches_the_guest` to extract from both files
+    is what found it.
+
+      * ls (FSENTEND):         OK, BAD_PATH, MISSING, NOT_A_DIRECTORY,
+                                LOCKED, NO_MEMORY
     """
 
     OK = "ok"
+    #: FS LANE ONLY. The mirror of IS_DIRECTORY: you asked for a listing and
+    #: the path names a file. Both exist because a count of zero cannot tell
+    #: "empty directory" from "not a directory", and the caller acts on it.
+    NOT_A_DIRECTORY = "not_a_directory"
+    #: FS LANE ONLY, and it predates this enum naming it: the listing sink
+    #: carries an 8KB buffer and is heap-allocated because the build gate
+    #: refuses a stack frame reaching one page, so `new` failing is a real
+    #: branch rather than a theoretical one on a 32MB machine.
+    NO_MEMORY = "no_memory"
     NO_ROOT = "no_root"
     TOO_MANY = "too_many"
     BUSY = "busy"

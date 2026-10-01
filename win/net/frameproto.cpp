@@ -32,7 +32,11 @@ const rc_lane_row RC_LANE_TABLE[] = {
     { "FSGET",    RC_LANE_STREAM },
     { "FSPUT",    RC_LANE_STREAM },
     { "FSPUTEND", RC_LANE_STREAM },
-    { "FSDRIVES", RC_LANE_STREAM }
+    { "FSDRIVES", RC_LANE_STREAM },
+    /* FSLS joins them (2026-10-02). One level of one directory, capped at
+     * 2,000 entries, so it is bounded the same way FSGET is -- which is the
+     * property that makes sharing the worker safe. */
+    { "FSLS",     RC_LANE_STREAM }
 };
 const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
 
@@ -51,5 +55,8 @@ int rc_frame_compressible(const char *type)
     return strcmp(type, "EXECOUT") == 0 ||
            strcmp(type, "SYNCDAT") == 0 ||
            strcmp(type, "SYNCENT") == 0 ||
-           strcmp(type, "FSDAT") == 0;
+           strcmp(type, "FSDAT") == 0 ||
+           /* Rows of text, exactly like SYNCENT's: names, sizes and dates
+            * compress well and there are up to 2,000 of them. */
+           strcmp(type, "FSENT") == 0;
 }
