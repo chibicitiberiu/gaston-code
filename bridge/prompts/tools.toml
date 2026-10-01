@@ -9,25 +9,25 @@
 
 [exec]
 description = '''
-Run a command on the connected machine (the old computer the user is sitting at), and return its output. By default the command runs through the system shell, whichever that machine has. Output is captured as the console codepage and capped at 32KB. The user must approve every call on their own screen, so prefer one command that answers the question over several that explore.
+Run one command on the connected machine (the old computer the user is sitting at) and return its output. It runs through that machine's system shell by default. Output comes back in the console codepage, capped at 32KB. The user approves every call on their own screen, so prefer one command that answers the question over several that explore.
 
-To see or end running programs, use the `ps` and `kill` tools, not a command: the machine may have no command for it at all (Windows 98 has no tasklist or taskkill).
+To see or end running programs use `ps` and `kill`, not a command: the machine may have no command for that at all.
 
-To read a file's contents, or to write one, use `get_file` and `put_file` instead: printing a file through the shell mangles anything that is not plain text and caps what comes back.
+To read or write a file use `get_file` and `put_file`: through the shell, anything that is not plain text is mangled and long output is cut short.
 
-ONE COMMAND PER CALL. Whether commands can be chained, and with what, depends on the shell that machine has -- the system prompt says which one it is and what it accepts. To run several steps regardless of shell, write a script file into the mirrored folder and run that; it is also one approval instead of several.
+ONE COMMAND PER CALL. Whether commands chain, and with what, is the shell's business -- the system prompt says which shell this machine has and what it accepts. For several steps, write a script into the mirrored folder and run that; it is also one approval instead of several.
 
-IMPORTANT: the command must be non-interactive. Anything that stops to ask a question -- a delete or a format asking 'Are you sure (Y/N)?' -- will HANG until the timeout kills it: that prompt is read from the machine's own console and there is no way to answer it from here -- NOT by piping one in either, which was measured and does not work. Use a form that does not ask: a switch that says yes, or a more specific target.'''
+IMPORTANT: the command must be non-interactive. Anything that stops to ask -- a delete or a format asking 'Are you sure (Y/N)?' -- HANGS until the timeout kills it: that prompt is read on the machine's own console and cannot be answered from here, not even by piping one in. Use a form that does not ask: a switch that says yes, or a more specific target.'''
 
 [exec.args]
 command = '''
-The command line to run, written for the target machine's own shell and path conventions -- the system prompt says what those are.'''
+The command line, written for that machine's own shell and path conventions; the system prompt says what those are.'''
 timeout_ms = '''
 How long to allow, in milliseconds. Default {default_timeout_ms}, clamped to {max_timeout_ms}. The machine is slow; a compile may genuinely need minutes.'''
 shell = '''
-Which of the connected machine's shells to run the command through. The system prompt lists the ones it has; omit this to use the first of them. Pass "none" to spawn a program directly instead, which gives cleaner quoting but loses built-ins, pipes and redirection.'''
+Which of the machine's shells to run through. The system prompt lists the ones it has; omit this for the first. "none" spawns the program directly: cleaner quoting, no built-ins, pipes or redirection.'''
 cwd = '''
-Working directory on the connected machine. Optional -- leave it out and the command runs in this conversation's own folder on that machine, which is where your files arrive.'''
+Working directory on the machine. Omit it to run in this conversation's own folder there, which is where your files arrive.'''
 
 # Added to a result, not the tool description: read only when they apply.
 [exec.notes]
@@ -39,29 +39,29 @@ The machine reported no shell, so this ran as a program directly: shell built-in
 
 [sync_status]
 description = '''
-Report the state of file synchronisation with the connected machine: which of your files could not be copied there and why, which are in conflict, and which are currently refusing your writes.
+Report the state of file synchronisation with the connected machine: which of your files could not be copied there and why, which are in conflict, and which are refusing your writes.
 
-Read this when a file you wrote does not seem to have arrived, before concluding that it did. Writing a file always succeeds here; whether it reached the user's machine is a separate question and this is the only way to answer it. Read-only and cheap to call.'''
+Writing a file always succeeds here; whether it reached the user's machine is a separate question, and this is the only way to answer it. Read-only and cheap.'''
 
 [sync_resolve]
 description = '''
 Resolve one halted synchronisation decision, after the user has confirmed they are finished with the file.
 
-When you and the user both change the same file, their copy wins and yours is moved aside -- and the path then REFUSES your writes, mechanically, until this is called. That is deliberate: you cannot usefully react to a conflict during the turn in which it happened, so the bridge stops you rather than asking you to stop.
+When you and the user both change the same file, their copy wins and yours is moved aside -- and the path then REFUSES your writes until this is called. You cannot usefully react to a conflict during the turn it happened in, so the bridge stops you rather than asking you to stop.
 
-Do not call this to make an error go away. Call it once you have read the preserved copy, merged what you need, and the user has said they have finished with the file. The user approves every call on their own screen.'''
+Do not call this to make an error go away: call it once you have read the preserved copy and merged what you need. The user approves every call on their own screen.'''
 
 [sync_resolve.args]
 action = '''
-release (default) -- lift the write refusal on this path, having merged; accept-revert -- the user really did undo your change, so take their version and discard yours; accept-tree -- answers a whole-pass refusal, takes no path; forget -- stop tracking a path that is gone from both sides and should not come back.'''
+release (default) -- you have merged; lift the write refusal. accept-revert -- the user really did undo your change: take theirs, discard yours. accept-tree -- answers a whole-pass refusal, takes no path. forget -- stop tracking a path gone from both sides for good.'''
 
 [ui]
 description = '''
-Read the controls on the machine's screen: windows, buttons, text boxes, menus, and what they say. Returns one line per control with a `sel=` selector you pass to `click` and `keys`.
+Read the controls on the machine's screen: windows, buttons, text boxes, menus, and what they say. One line per control, with a `sel=` selector to pass to `click` and `keys`.
 
-Prefer this over `shot`. It is far cheaper, it is exact, and it gives you something you can click; a picture gives you neither a name nor a guarantee. Reach for `shot` when this comes back with almost nothing, which means the program draws itself rather than using controls.
+Prefer this over `shot`: far cheaper, exact, and it gives you something you can click. Reach for `shot` when this comes back with almost nothing, which means the program draws itself rather than using controls.
 
-Start with `scope="foreground"` -- the window the person is looking at -- and widen to `desktop` only when you need to find something else.'''
+Start with `scope="foreground"`, the window the person is looking at, and widen to `desktop` only to find something else.'''
 
 [ui.args]
 scope = '''
@@ -69,19 +69,19 @@ scope = '''
 pid = '''
 With `scope="pid"`, the process to read. From the process list.'''
 max_nodes = '''
-Stop after this many controls. Default 400. A busy desktop is around 80; a file list can be thousands, and reading all of them is slow and rarely what you wanted.'''
+Stop after this many controls. Default 400. A busy desktop is around 80; a file list can be thousands, and reading all of them is slow.'''
 msaa = '''
-Also ask the accessibility layer for each control's name, state and default action. OFF by default and worth leaving off: it is a separate call into another program per control and costs roughly as much as everything else put together. Turn it on when you need to know whether a checkbox is ticked, or when a control has no text of its own.'''
+Also ask the accessibility layer for each control's name, state and default action. OFF by default and worth leaving off: one call into another program per control, costing roughly as much as everything else put together. Turn it on to read whether a checkbox is ticked, or for a control with no text of its own.'''
 hidden = '''
 Include windows that are not on screen. Off by default, and not merely for speed: asking about a hidden window can bring it to life -- the Start menu once ended up painted on screen with nothing owning it.'''
 wait_for = '''
-A selector to wait for before reading. Use this instead of reading, finding nothing, and reading again: the machine is slow and a dialog may take a second to appear. Waits on the change feed rather than polling, so it costs almost nothing.'''
+A selector to wait for before reading. Use this instead of reading, finding nothing and reading again: the machine is slow and a dialog takes a moment to appear. It watches rather than polls, so it costs almost nothing.'''
 wait_ms = '''
 How long `wait_for` may wait, in milliseconds. Default 5000.'''
 settle_ms = '''
-Wait for the screen to stop changing for this many milliseconds before reading. Useful right after a click, while a window is still being drawn. Costs nothing -- it watches rather than looks.'''
+Wait for the screen to stop changing for this many milliseconds before reading. For right after a click, while a window is still being drawn. It watches rather than looks, so it costs nothing.'''
 inproc = '''
-Read the window from INSIDE the program that owns it. The only way to get the contents of a list box, a tree or a file list: those are unreachable from outside on this machine, at any speed. Costs more and is refused for the shell and the system processes, so ask for it when you need a list's rows and not otherwise. It never falls back quietly -- if it is refused you are told, because the ordinary answer would be missing exactly what you asked for.'''
+Read the window from INSIDE the program that owns it. The only way to get the rows of a list box, a tree or a file list -- unreachable from outside on this machine, at any speed. Costs more and is refused for the shell and the system processes, so ask for it when you need a list's rows and not otherwise. It never falls back quietly: if it is refused you are told.'''
 target = '''
 With `inproc`, a selector for a window belonging to the program to read. Defaults to whatever is in front.'''
 items = '''
@@ -92,7 +92,7 @@ With `inproc`, read the rows of lists and trees. On by default, since it is the 
 description = '''
 Click one control on the machine, named by the `sel=` value that `ui` reported for it.
 
-If more than one control matches, nothing is clicked and you are told how many -- pick one deliberately by adding `:nth(2)` to the selector rather than hoping. The click is a real mouse click at the control's position, and it is refused if something else is covering it.'''
+If more than one control matches, nothing is clicked and you are told how many -- add `:nth(2)` to the selector to pick one deliberately. It is a real mouse click at the control's position, refused if something else covers it.'''
 
 [click.args]
 target = '''
@@ -100,7 +100,7 @@ The selector, copied from the `sel=` field of the control you want. For example 
 double = '''
 Double-click instead of single. For opening an icon in a list.'''
 settle = '''
-After clicking, wait for the screen to stop changing for this many milliseconds. Saves a round trip when the click opens a dialog you are about to read.'''
+After clicking, wait for the screen to stop changing for this many milliseconds. Saves a round trip when the click opens a dialog.'''
 
 [keys]
 description = '''
@@ -120,13 +120,13 @@ After typing, wait for the screen to stop changing for this many milliseconds.''
 description = '''
 Bring a window to the front.
 
-You rarely need this: `click` and `keys` already bring a window forward when they have to. Use it when pressing something would be wrong -- most often before `shot`, when the window you want to photograph is behind another one.
+Rarely needed: `click` and `keys` already raise a window when they have to. Use it when pressing something would be wrong -- most often before `shot`, when the window you want to photograph is behind another one.
 
-It makes the window active, which takes the keyboard away from whoever is sitting at the machine. There is no way to raise a window quietly on this system.'''
+It makes the window active, taking the keyboard away from whoever is sitting at the machine; there is no way to raise a window quietly on this system.'''
 
 [focus.args]
 target = '''
-Selector for a control in the window to raise. The window that contains it comes forward; you do not have to name the window itself.'''
+Selector for a control in the window to raise. The window containing it comes forward; you need not name the window itself.'''
 settle = '''
 After raising it, wait for the screen to stop changing for this many milliseconds.'''
 
@@ -134,7 +134,7 @@ After raising it, wait for the screen to stop changing for this many millisecond
 description = '''
 Take a picture of the machine's screen.
 
-Use it when `ui` comes back with nothing useful -- a program that draws its own interface, a game, an installer that is one big window -- or when you need to see what something looks like rather than what it is called. For finding and clicking a control, `ui` is cheaper and exact.'''
+Use it when `ui` comes back with nothing useful -- a program that draws its own interface, a game, a one-window installer -- or when you need to see what something looks like rather than what it is called. For finding and clicking a control, `ui` is cheaper and exact.'''
 
 [shot.args]
 x = '''
@@ -227,7 +227,7 @@ Typed {n} characters into {where}.'''
 
 [ps]
 description = '''
-List the programs running on the connected machine: process id (hex), parent id, thread count and program path. Use it to find a program that has hung, or to see what a command left running. It works while a command is still running, so you can look for what is stuck. Nothing is changed.'''
+List the programs running on the connected machine: process id (hex), parent id, thread count and program path. For finding a program that has hung, or seeing what a command left running; it works while a command is still running, so you can look for what is stuck. Changes nothing.'''
 
 [ps.view]
 truncated = '''
@@ -318,15 +318,15 @@ The machine answered "{status}" for "{path}", which this bridge does not recogni
 description = '''
 Read a file from anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into.
 
-Use this rather than printing a file through the shell. The shell mangles anything that is not plain text, caps its output well below the size of a real file, and returns it in the console's own character set. This returns the file.
+Use this rather than printing a file through the shell, which mangles anything that is not plain text, truncates it, and returns it in the console's own character set. This returns the file.
 
-Text comes back as text. Anything else is saved here, beside your folder, and the reply says where -- so you can open it with your ordinary tools.'''
+Text comes back as text. Anything else is saved here, beside your folder, and the reply says where.'''
 
 [get_file.args]
 path = '''
 The full path on the connected machine, written the way that machine writes paths.'''
 max_bytes = '''
-Stop after this many bytes. The machine enforces it while reading, so a huge file costs only what you asked for. There is a ceiling in any case, and the reply says when either one bit.'''
+Stop after this many bytes; the machine enforces it while reading, so a huge file costs only what you asked for. There is a ceiling in any case and the reply says when either one bit.'''
 
 [get_file.view]
 binary = '''
@@ -338,11 +338,9 @@ truncated = '''
 
 [put_file]
 description = '''
-Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into.
+Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into. There is no other way to do that: the shell cannot write anything but plain short text, and the mirrored folder reaches one place only.
 
-There is no other way to do this. The shell cannot write anything that is not plain short text, and the mirrored folder only reaches one place.
-
-This overwrites whatever is at that path. The user approves every call and sees the destination, so say in your message what you are about to replace and why.'''
+This overwrites whatever is at that path. The user approves every call and sees the destination, so say what you are about to replace and why.'''
 
 [put_file.args]
 path = '''
@@ -366,7 +364,7 @@ Wrote {bytes} bytes to {path} on the machine.'''
 description = '''
 List the connected machine's drive letters, what kind each one is, and how much room is free.
 
-Read-only and cheap. Worth a call before writing a large file, or when you need to know whether a letter is a hard disk, a CD-ROM or an empty floppy drive -- which the machine's own directory listing does not say.'''
+Read-only and cheap. Worth a call before writing a large file, or to tell a hard disk from a CD-ROM or an empty floppy drive -- which the machine's own directory listing does not say.'''
 
 [drives.view]
 no_media = '''empty'''
