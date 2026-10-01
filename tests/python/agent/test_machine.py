@@ -80,7 +80,13 @@ def test_prompt_warns_about_names_that_cannot_cross():
     out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
                         guest_root="C:\\WORK")
     assert "aux.c" in out
-    assert "skipped and reported rather than renamed" in out
+    flat = " ".join(out.split())
+    assert "skipped and reported, never renamed" in flat
+    assert "Pick a different name" in flat
+
+    # Moved from the whole sentence to the rule on 2026-10-02, when the prompt
+    # was cut for length: the rule is "skipped, not renamed, so choose another
+    # name", and the wording around it is free to change.
 
 
 def test_prompt_says_the_users_copy_wins():
@@ -89,9 +95,12 @@ def test_prompt_says_the_users_copy_wins():
     out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
                         guest_root="C:\\WORK")
     low = out.lower()
-    assert "their version is kept" in low
-    assert "never overwritten and never lost" in " ".join(low.split())
+    assert "copy wins" in low
+    assert "theirs is kept" in low
+    assert "theirs is never lost" in " ".join(low.split())
     assert "refusing your writes" in low
+    # Assertions moved from prose to the rule on 2026-10-02 (prompt trim): the
+    # user's version survives, and the refusal is mechanical.
 
 
 def test_prompt_gives_the_conflict_procedure_in_order():
@@ -105,8 +114,13 @@ def test_prompt_gives_the_conflict_procedure_in_order():
                         guest_root="C:\\WORK")
     assert "mine.N" in out and "base.N" in out
     assert "common ancestor" in out
-    assert "Continue button" in out
-    assert "different name" in out, "the obvious workaround is not ruled out"
+    assert "Continue" in out
+    assert "writing elsewhere" in " ".join(out.split()), (
+        "the obvious workaround is not ruled out")
+
+    # 2026-10-02: moved from full sentences ("Continue button", "different
+    # name") to the fragments that carry each instruction, after the prompt
+    # was trimmed. The workaround ban now reads "writing elsewhere".
 
 
 def test_prompt_tells_the_agent_not_to_ask_for_a_second_confirmation():
@@ -120,11 +134,16 @@ def test_prompt_tells_the_agent_not_to_ask_for_a_second_confirmation():
     out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
                         guest_root="C:\\WORK")
     flat = " ".join(out.split())
-    assert "already lifted the refusal" in flat
+    assert "lifted the refusal" in flat
     assert "do not ask them again" in flat.lower()
     assert "Merge. Keep both changes where they are independent" in flat
     # sync_resolve is still documented, but as the exception rather than a gate
-    assert "should not normally be necessary" in flat
+    assert "If the path is still refusing writes" in flat
+    assert "sync_resolve" in flat
+
+    # 2026-10-02: the assertion on "should not normally be necessary" moved to
+    # the condition that makes the exception ("still refusing"), since the
+    # trimmed prompt no longer editorialises about how often it happens.
 
 
 def test_prompt_says_the_conflict_message_is_not_from_the_user():
@@ -157,8 +176,9 @@ def test_the_prompt_is_honest_whether_or_not_the_screen_tools_exist():
     what was offered.
     """
     out = system_prompt(HELLO, "/work")
-    assert "Only the tools actually offered to you exist" in out
-    assert "unless a tool for that is present" in out
+    flat = " ".join(out.split())
+    assert "Only the tools actually offered exist" in flat
+    assert "unless a tool for that is present" in flat
     low = out.lower()
     # The only mention of a screen is the one the assertions above pin, and it
     # is preceded by "do not assume". Anything that names one of the five tools
@@ -168,8 +188,12 @@ def test_the_prompt_is_honest_whether_or_not_the_screen_tools_exist():
                   "mcp__machine__focus", "you can take a screenshot",
                   "you can click on"):
         assert claim not in low, f"the prompt promises {claim!r} to every client"
-    assert low.count("you can see its screen") == 1
-    assert "do not assume\nyou can see its screen" in low
+    flow = " ".join(low.split())
+    assert flow.count("you can see its screen") == 1
+    assert "do not assume you can see its screen" in flow
+    # 2026-10-02: re-flowed before matching, and "to you" dropped from the
+    # first fragment; the prompt was trimmed and its line breaks moved. The
+    # rule (defer to the tools offered, never promise a screen) is unchanged.
 
 
 def test_prompt_warns_about_the_hardware():
@@ -177,12 +201,19 @@ def test_prompt_warns_about_the_hardware():
     with single-digit MB free is the wrong answer for this user."""
     out = system_prompt(HELLO, "/work").lower()
     assert "memory" in out
-    assert "install" in out
+    assert "package manager" in out
+    # 2026-10-02: "install" was an accident of the old wording; the rule is
+    # that nothing can be fetched, so the prompt must say there is no package
+    # manager.
 
 
 def test_prompt_separates_the_two_machines():
     out = system_prompt(HELLO, "/work")
-    assert "different computers" in out
+    flat = " ".join(out.split())
+    assert "has not run over there" in flat
+    assert "THAT machine" in out
+    # 2026-10-02: "different computers" was cut with the sentence around it;
+    # the rule is that a command run here has not run on the guest.
 
 
 def test_the_conflict_path_is_the_one_that_exists():
@@ -548,7 +579,14 @@ def test_cscript_alone_with_shell_stays_inside_budget():
 #: invocation detail -- which belongs behind `mcp__machine__toolnote`, costs
 #: one call instead of every request, and is exactly the drift that put a
 #: 941-character shell body in every prompt until this morning.
-MAX_BLOCK_CHARS = 5000
+#:
+#: 5000 -> 4100 on 2026-10-02, after the agent-facing prompt text was trimmed
+#: for length (the two pointer paragraphs lost their justification; the rules
+#: stayed). Worst case, all five noted tools with the PATH block: 4,342 ->
+#: 3,998. The real machine's combination with the PATH block: 3,957 -> 3,613.
+#: 4100 leaves about 100 characters, a little under one more headline, which is
+#: the same slack the earlier caps were set with.
+MAX_BLOCK_CHARS = 4100
 
 
 def test_the_block_stays_inside_its_budget():
@@ -956,8 +994,10 @@ def test_the_shell_pointer_is_stronger_than_the_general_one():
     first command whatever it is, so the shell's line has to say "before your
     first command" or it fires too late."""
     out = tools_block([SHELL, MSVC])
-    assert "BEFORE your\nfirst command" in out
-    assert "rather than after something looks wrong" in out
+    assert "before your FIRST command" in " ".join(out.split())
+    # 2026-10-02: the "rather than after something looks wrong" clause was cut
+    # as inferable; the assertion is now the emphasised "FIRST command" that
+    # carries the instruction.
     # Named, so the agent can type it straight into the call.
     assert "Start with `command.com`" in out
 
@@ -971,7 +1011,7 @@ def test_the_shell_pointer_sits_under_the_names_not_at_the_bottom():
     general pointer, the shells paragraph and the PATH."""
     out = tools_block([SHELL, MSVC], path=[r"C:\WINDOWS"])
     assert out.index("Start with `command.com`") < out.index(
-        'Call `mcp__machine__toolnote("<name>")`')
+        'mcp__machine__toolnote("<name>")')
     assert out.index("Start with `command.com`") < out.index(
         "Shells on that machine")
     assert out.index("Start with `command.com`") < out.index("this PATH")

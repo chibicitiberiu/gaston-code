@@ -367,14 +367,19 @@ def test_get_file_says_what_endings_the_file_has():
     out = _body(_call(_server(FakeFs(data=b"one\ntwo\n")), "get_file",
                       {"path": r"C:\W\B.BAT"}))
     assert "LF" in out
-    assert "NOT what this machine uses" in out
+    assert "NOT the CRLF this machine uses" in out
+    # 2026-10-02: moved to the rule (foreign endings named, with the ones this
+    # machine wants); the consequence sentence was cut from the line and lives
+    # in the shell's note.
 
 
 def test_native_endings_are_reported_as_fine():
     out = _body(_call(_server(FakeFs(data=b"one\r\ntwo\r\n")), "get_file",
                       {"path": r"C:\W\B.BAT"}))
-    assert "what this machine uses" in out
-    assert "NOT what this machine uses" not in out
+    assert "CRLF" in out and "this machine's own" in out
+    assert "NOT" not in out
+    # 2026-10-02: native endings are still reported as fine; the phrase
+    # changed with the trim, the absence of "NOT" is the rule.
 
 
 def test_get_file_hands_back_text_with_local_endings():
