@@ -304,8 +304,20 @@ static void rpc_watch_start(void)
     p_next_change  = (FNCN)GetProcAddress(k32, "FindNextChangeNotification");
     p_close_change = (FCCN)GetProcAddress(k32, "FindCloseChangeNotification");
 
-    if (!root[0] || !p_first_change || !p_next_change) {
-        rc_log("rpc: no directory watcher; polling every %dms", RPC_SWEEP_MS);
+    /* Three different reasons, and they used to share one line reading "no
+     * directory watcher", which cost an investigation on real hardware: that
+     * wording says the PLATFORM cannot watch a directory, when the usual cause
+     * is that nothing has asked it to yet. g_sync_root stays empty until the
+     * bridge names a tree, so with sync off it is empty for the whole run and
+     * the honest answer is that there is nothing to watch. Say which. */
+    if (!root[0]) {
+        rc_log("rpc: no tree is mirrored yet, so nothing to watch; "
+               "sweeping every %dms", RPC_SWEEP_MS);
+        return;
+    }
+    if (!p_first_change || !p_next_change) {
+        rc_log("rpc: this machine has no FindFirstChangeNotification; "
+               "polling %s every %dms", root, RPC_SWEEP_MS);
         return;
     }
     g_watch = p_first_change(root, TRUE,
