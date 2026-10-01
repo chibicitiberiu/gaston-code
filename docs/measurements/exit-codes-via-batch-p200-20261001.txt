@@ -62,13 +62,21 @@ Each case is a .bat written to the guest with CRLF endings and run as
 The shape this determines
 -------------------------
 
+DECIDED 2026-10-01: zero versus non-zero is enough. The exact code is
+recoverable (Q7) and is not worth what it costs -- a flat cascade over 0..255
+is about 6KB, which would have meant a static wrapper written once per session
+plus a generated file per command, and two levels of `call` nesting that were
+never measured. Success or failure is the question anyone actually asks of a
+build. So the whole wrapper is four lines:
+
   @echo off
   <the approved command, verbatim -- prefixed with `call ` ONLY if its
    leading token names a .bat>
-  <cascade of `if errorlevel N goto nN`, descending, then one label per N
-   echoing a sentinel line>
+  if errorlevel 1 echo <sentinel> fail
+  if not errorlevel 1 echo <sentinel> ok
 
-Three constraints fall out of the measurements above:
+Both halves of that pair are what Q1, Q2 and Q3 above actually ran, so nothing
+in it is extrapolated. Three constraints stand:
 
   * `call` only for a .bat. B2 says `call` breaks a builtin's redirection and
     W1 says a bare .bat never returns, so the two cases need opposite
@@ -78,16 +86,11 @@ Three constraints fall out of the measurements above:
     swallowed by the same `command.com /c` the wrapper exists to work around.
     The bridge strips the LAST line matching the sentinel; a program that
     prints the same text earlier does not confuse it.
-  * A builtin's exit code does not exist on this shell (Q1). The wrapper tells
-    the truth about programs, which is every compiler, linker and interpreter,
-    and reports "unknown" for a builtin rather than reporting 0 as success.
-
-Size, if the full 0..255 range is wanted: a flat descending cascade is about
-three lines per distinguishable value, so 256 values is roughly 6KB -- too much
-to write per command on a 1998 platter. Split it instead: a static WRAP.BAT
-holding the cascade, written once per session, and a small generated CMD.BAT
-holding the command, which is the only part that changes. W2 proves one level
-of `call` nesting works; two levels was not measured.
+  * A builtin's exit code does not exist on this shell (Q1): `dir NOSUCHFILE`
+    prints "File not found" and leaves errorlevel at 0. So the sentinel is
+    emitted only when the leading token is a PROGRAM. For a builtin the shell
+    has no answer and the bridge says so, rather than reporting the 0 that
+    would read as success.
 
 The command the user approved must be what lands in the generated file,
 byte for byte. The guard classifies the original text; the wrapper is
