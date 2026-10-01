@@ -1,0 +1,235 @@
+# The shutdown hang, reproduced in the QEMU guest -- A/B against a7a7768
+#
+# QEMU/libvirt `retroclaude-win98` (qemu:///session), Win98 SE 4.10.2222 A,
+# 32288 KB, 800x600, clean: no DAEMON Tools, no WebTV, nothing third-party
+# that hooks shutdown. 2026-10-01.
+#
+# WHY THE VM. The user's Athlon XP hung twice on the way down with gremote
+# running -- "stuck with no desktop", forced out with Ctrl+Alt+Del twice --
+# and the fix in a7a7768 was already on it when it hung the second time. That
+# machine carries two notorious 9x shutdown-hangers, so the evidence there
+# cannot settle anything. This guest has neither and is free to wedge.
+#
+# THE TWO BINARIES, built in scratch worktrees so the live tree was not
+# touched (another agent is in win/remote/ and win/core/log.* right now):
+#
+#   arm A   a7a7768^ (af59ebb)  239,616 bytes  md5 9a8bdaf0289d8e37e23b1919a6a7938e
+#   arm B   a7a7768  (the fix)  239,616 bytes  md5 77404532ba57f2f2f0a3c903520c1061
+#
+# Same size and the SAME committed-at-load figure, 242,761 bytes, for both --
+# the commit's "zero bytes added" is confirmed, which also means that number
+# cannot tell the two apart. What can: the string `WITHOUT joining any of
+# them`, present only in B, and the md5. Every run below fetched
+# C:\GREMOTE\GREMOTE.EXE back over the wire with GET and checked the md5
+# BEFORE triggering anything, because being wrong about which binary is on
+# the guest has happened.
+#
+# EMULATED, so no timing here is a P200 timing. What is real: which screen
+# the machine ends on, which tasks are left, and what the log says.
+
+
+=== THE RESULT: BOTH ARMS HANG ===
+
+    arm   binary            who asks for the reboot      runs   outcome
+    ---   ---------------   --------------------------   ----   -------------
+     A    a7a7768^          gremote, over the wire        2     HUNG both
+     B    a7a7768 (fix)     gremote, over the wire        2     HUNG both
+     C    none running      the Start menu                1     rebooted, 5s
+     D    a7a7768 + client  the Start menu                1     rebooted, 5s
+     E    both builds       RUNDLL32 launched BY gremote  2     rebooted, 3s
+     F    a7a7768^          RUNDLL32, then KILLed         1     HUNG, and a GPF
+     G    none running      Start menu, "Shut down"       1     halted, clean
+
+A hang is: 200-240 s with the video mode never leaving 800x600, Explorer
+gone, bare teal desktop, nothing on it. A reboot is: the mode goes
+800x600 -> 640x400 -> 720x400 -> 800x600 within about fifteen seconds, which
+is POST and then Win98 coming back.
+
+So a7a7768 is NOT the hang, and a7a7768 does not CAUSE the hang either. It is
+a real fix for a real deadlock (section 3) and it leaves a second, separate
+fault untouched.
+
+
+=== 1. WHAT THE HANG LOOKS LIKE ===
+
+Screenshot: gremote-shutdown-vm-20261001-hang.png. The desktop pattern with
+no icons, no taskbar, no window, and the cursor where it was left. Identical
+at 5 s and at 250 s. This is the user's "stuck with no desktop", to the pixel.
+
+The CPU is NOT spinning. Sampled every 20 s for four minutes, every sample
+identical and identical to a sample taken before the reboot was asked for:
+
+    EIP=00006a2a  CS=0108 base 000f0000  CPL=0  HLT=1
+    CR0=8000001b  CR3=007ab000
+
+HLT=1 at the same address as an idle desktop: the machine is parked waiting
+for an interrupt that settles nothing. Whatever is wrong is a wait, not a
+loop, which is why `info registers` is of limited use here and why the task
+list below is the measurement that pays.
+
+Ctrl+Alt+Del during the hang brings up Close Program with exactly ONE entry:
+
+    Systray
+
+(gremote-shutdown-vm-20261001-tasks.png.) Not gremote -- gremote has already
+gone; connecting to 7401 from the host gets an immediate RST, which through a
+hostfwd means nothing inside the guest is listening. A second Ctrl+Alt+Del on
+Systray says "This program is not responding".
+
+End Task on Systray does NOT release the shutdown. The desktop stays bare for
+another two minutes. Two Ctrl+Alt+Dels then force the restart -- the same two
+the user needed on the P200.
+
+
+=== 2. THE LOGS, AND THE FIX DOING EXACTLY WHAT IT CLAIMS ===
+
+Read off the guest over COM1 (`dos.fetch`) after the forced reboot, before
+anything restarted gremote and truncated the file.
+
+arm A, a7a7768^:
+
+    17:25:26.960 === gremote starting ===
+    17:25:27.980 control: REBOOT mode=reboot
+    17:25:27.980 system: ExitWindowsEx(2)
+    17:25:27.980 app: Windows is ending the session
+    17:25:30.950 thread: the network reader did not stop within 3000ms
+    17:25:30.950 net: reader=258 sender=0 still running; leaking the socket
+    17:25:30.950 === gremote exiting ===
+
+arm B, a7a7768:
+
+    17:39:57.950 === gremote starting ===
+    17:40:11.950 control: REBOOT mode=reboot
+    17:40:11.950 system: ExitWindowsEx(2)
+    17:40:11.950 app: Windows asks whether the session may end; yes
+    17:40:12.940 app: Windows is ending the session; signalling every service
+                      and leaving this handler WITHOUT joining any of them
+    17:40:12.940 app: the session is ending; abandoning server unjoined
+    17:40:12.940 === gremote exiting ===
+
+All four lines REMOTE.md asks for are there, in order, and the handler costs
+0.99 s against 2.97 s unfixed -- the deadlock is gone, on the real platform,
+not under Wine. The three-second timeout line disappears because nothing
+waits for the reader any more.
+
+And the machine hangs either way.
+
+
+=== 3. WHERE THE SECOND FAULT IS: WHO CALLS ExitWindowsEx ===
+
+Four controls, each run from a clean boot, each changing exactly one thing.
+
+C. NOTHING of ours running. Start > Shut Down > Restart.
+   Rebooted in five seconds. So this guest shuts down.
+
+D. gremote (the FIXED build) running, a client CONNECTED, idle.
+   Start > Shut Down > Restart.
+   Rebooted in five seconds. So gremote merely BEING there during a shutdown
+   -- with a live socket, lane threads and all -- costs nothing. It takes
+   WM_ENDSESSION and gets out of the way.
+
+E. gremote running, a client connected, and the reboot asked for by a
+   DIFFERENT process that gremote itself launched:
+       LAUNCH C:\WINDOWS\RUNDLL32.EXE shell32.dll,SHExitWindowsEx 2
+   Rebooted in three seconds. Run twice, once with the fixed build and once
+   with the pre-fix build (md5 checked both times). Both clean.
+
+G. Nothing running, Start > Shut Down > "Shut down" rather than Restart.
+   Reached the BIOS halt (real mode, CS=f000, HLT) in about five seconds.
+   Worth recording because §8 of gremote-vm-20260927.txt put a poweroff that
+   stopped at a bare desktop down to this guest having no APM. It is not that
+   simple: a poweroff asked for by the shell completes, and mode=reboot --
+   which has nothing to do with APM at all -- stops at the SAME bare desktop.
+   That attribution should be revisited; the common factor in both stalls is
+   gremote asking, not the power management.
+
+So the only arrangement that hangs is the one where **gremote's own process
+calls ExitWindowsEx**. Not gremote running. Not a client connected. Not the
+reboot itself.
+
+THE SHAPE THIS SUGGESTS. On 9x the process that calls ExitWindowsEx drives
+the shutdown; the call does not return, and the broadcast to every other
+application runs out of that call. gremote calls it inline on the Connection
+reader thread (measured 2026-09-27 and written down then), and one to three
+seconds later its own WM_ENDSESSION handler takes the whole process down with
+ExitProcess -- while that call has not returned. The driver of the broadcast
+is killed mid-broadcast. Explorer has already gone by then; Systray has not
+been dealt with yet, and never is. That matches every observation: the bare
+desktop, Systray alone and not responding, an idle CPU, and End Task on
+Systray changing nothing because the thing that would carry on is no longer
+in memory.
+
+It also explains why rundll32 works: rundll32 sits inside ExitWindowsEx until
+the machine goes, so the broadcast keeps its driver.
+
+NOT PROVEN, and the way to prove it is a change rather than another run: make
+the process that called ExitWindowsEx outlive the call. Either hand REBOOT to
+a helper process the way gupdate.exe is already a separate exe, or refuse to
+let App quit while a reboot this process asked for is in flight.
+
+a7a7768 makes the process exit SOONER -- one second instead of three -- so if
+anything it widens the window. It did not measurably make things worse (both
+arms hang the same way at the same place, twice each), but it is the right
+thing to keep for the deadlock and the wrong place to look for this.
+
+
+=== 4. AN ASIDE WITH TEETH: A GPF IN USER.EXE ===
+
+Arm F was meant to be arm E with the initiator killed mid-flight. The KILL
+never landed -- gremote had already taken WM_ENDSESSION and stopped answering
+-- but the run produced something else worth keeping
+(gremote-shutdown-vm-20261001-gpf.png):
+
+    GREMOTE caused a general protection fault
+    in module USER.EXE at 0010:00000c00.
+    EAX=00022f78 CS=1767 EIP=00000c00 EFLGS=00000246
+    EBX=16f70000 SS=1bff ESP=00008b0e EBP=00668b1e
+    ECX=000224cf DS=16d7 ESI=00020830 FS=0cff
+    EDX=00000000 ES=206f EDI=00430000 GS=0000
+    Bytes at CS:EIP: 8e c1 26 39 06 16 00 74 42 8b d8 66 ff 77 08 6a
+
+The fault is in 16-bit USER.EXE, attributed to GREMOTE, with the machine
+already on its way down and the GPF dialog sitting on a desktop with no shell
+behind it -- which is a hang by itself, and exactly the failure mode the
+a7a7768 commit message predicted for the client's abandoned workers. Seen
+once, on the PRE-FIX binary, with a KILL in flight against a process that was
+inside ExitWindowsEx. Not reproduced; recorded so the next person who sees it
+knows it has happened before.
+
+
+=== 5. WHAT THIS SAYS ABOUT THE USER'S MACHINE ===
+
+The symptom reproduces on a clean Windows 98 with nothing third-party on it,
+so the P200's hang needs no explanation involving DAEMON Tools or WebTV. Two
+details from that machine now read differently:
+
+  * "gremote's port closed and the machine stopped answering ping, so Windows
+    got past unloading the network stack." On the VM the port also closes --
+    because gremote EXITS, early, which is the suspected cause rather than
+    evidence of progress.
+  * "gaston.exe was not running at all." Consistent: the client is not
+    involved. Arm D shows a connected gremote is not involved either, as long
+    as it is not the one asking.
+
+What the P200 would add that this cannot: whether the same wedge happens with
+a real shell, real drivers and a machine that can genuinely power off. The
+prediction is that it does, and that the log there will show the same two
+lines in the same second followed by the same early exit.
+
+
+=== HOW IT WAS RUN ===
+
+Two detached `git worktree`s under the session scratchpad at a7a7768^ and
+a7a7768; `make gremote` in each; two small ISOs (vm/shutarmA.iso,
+vm/shutarmB.iso) each carrying one GREMOTE.EXE, a gremote.ini, an ARM.TXT
+naming the build and its md5, and a GRSETUP.BAT that copies them to
+C:\GREMOTE. Installed through Start > Run, launched through Start > Run,
+driven with the `gremote` Python package over `tools/vm/qmp.py hostfwd 7401`.
+
+Every run began from a clean boot, with no console window open -- an open DOS
+box is itself a documented way to stall a 9x shutdown, and leaving one
+stranded has produced a BSOD on this guest before.
+
+The guest disk was copied to vm/win98.qcow2.bak-20261001-171920 before any of
+this, and the domain's CD was put back to vm/tools.iso and the domain left
+shut off afterwards.
