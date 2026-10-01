@@ -721,6 +721,88 @@ void FsOps::mkdir(Responder &r, rc_frame *f)
     r.ok();
 }
 
+/* True for "C:", "C:\", "C:\\" and the like -- a drive letter, a colon, and
+ * nothing after it but separators. Checked by inspection, the same way
+ * isContainedRelative is: refusing a drive root outright costs nothing and
+ * there is no caller for whom deleting one was ever the intent. */
+static bool isDriveRoot(const char *path)
+{
+    size_t i;
+
+    if (path[1] != ':')
+        return false;
+    for (i = 2; path[i]; i++)
+    {
+        if (path[i] != '\\' && path[i] != '/')
+            return false;
+    }
+    return true;
+}
+
+/* Why RemoveDirectoryA refused, from the error the platform left behind.
+ *
+ * Win98 hands back a DIFFERENT code for each of the three real refusals --
+ * non-empty, read-only, and "this is some process's current directory" --
+ * and collapsing them into one `locked` would tell the caller nothing about
+ * which is true, on a machine where "try again" is the right answer to only
+ * one of the three. */
+static const char *whyNoRmdir()
+{
+    switch (GetLastError())
+    {
+    case ERROR_DIR_NOT_EMPTY:       return "not_empty";
+    case ERROR_ACCESS_DENIED:       return "readonly";
+    case ERROR_CURRENT_DIRECTORY:   return "is_cwd";
+    case ERROR_FILENAME_EXCED_RANGE:
+    case ERROR_BUFFER_OVERFLOW:     return "too_long";
+    case ERROR_INVALID_NAME:
+    case ERROR_INVALID_DRIVE:       return "bad_path";
+    default:                        return "locked";
+    }
+}
+
+/* The mirror of mkdir: that one creates a directory and is happy to find one
+ * already there; this one removes a directory and only an EMPTY one --
+ * RemoveDirectoryA already refuses anything else, so "not recursive" is not
+ * a restriction added here, it is what the platform call does. A caller
+ * that wants a tree gone enumerates with LS and removes files with RM, the
+ * same way it would have to without this op; the dangerous loop belongs on
+ * the Linux side, where it can be read (gremote/client.py's rmtree). */
+void FsOps::rmdir(Responder &r, rc_frame *f)
+{
+    const char *path = rc_frame_get(f, "path");
+    FileInfo info;
+
+    if (!path || !*path)
+    {
+        r.err("bad_path");
+        return;
+    }
+    if (isDriveRoot(path))
+    {
+        r.err("drive_root");
+        return;
+    }
+    if (!statPath(path, info) || info.type == 0)
+    {
+        r.err(whyNoStat());
+        return;
+    }
+    if (info.type != 'd')
+    {
+        /* Same spelling MKDIR uses for the reverse case (something there
+         * and it is not a directory), whether it is a file or 'u'. */
+        r.err("is_file");
+        return;
+    }
+    if (!RemoveDirectoryA(path))
+    {
+        r.err(whyNoRmdir());
+        return;
+    }
+    r.ok();
+}
+
 void FsOps::mv(Responder &r, rc_frame *f)
 {
     const char *from = rc_frame_get(f, "from");
@@ -782,6 +864,8 @@ void FsOps::handle(rc_frame *f)
         rm(r, f);
     else if (strcmp(f->type, "MKDIR") == 0)
         mkdir(r, f);
+    else if (strcmp(f->type, "RMDIR") == 0)
+        rmdir(r, f);
     else if (strcmp(f->type, "MV") == 0)
         mv(r, f);
     else

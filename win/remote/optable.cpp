@@ -28,6 +28,7 @@ const GOpRow G_OP_TABLE[] = {
     { "END",     G_FS,      true  },
     { "RM",      G_FS,      false },
     { "MKDIR",   G_FS,      false },
+    { "RMDIR",   G_FS,      false },
     { "MV",      G_FS,      false },
     { "DRIVES",  G_FS,      false }
 };

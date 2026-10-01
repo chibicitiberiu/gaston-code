@@ -31,7 +31,7 @@ import zlib
 
 from bridge.wire.frame import Frame, FrameReader
 
-from .errors import Cancelled, Disconnected, Refused, Timeout
+from .errors import Cancelled, Disconnected, Refused, RemoteError, Timeout
 from .ops import (
     Drive,
     Entry,
@@ -371,6 +371,56 @@ class Remote:
         already there -- the parents being there is the normal case and is
         not an error."""
         self.request("MKDIR", {"path": path})
+
+    def rmdir(self, path: str) -> None:
+        """Remove an EMPTY directory. Not recursive, and not a flag on `rm`:
+        RemoveDirectoryA already refuses anything but an empty directory, so
+        this is the platform call's own restriction rather than one added
+        here. Refusals worth knowing by name: `not_empty`, `readonly` (the
+        directory itself, not a file inside it), `is_cwd` (some process has
+        it as its current directory), `is_file` (it is not a directory at
+        all) and `drive_root` (`C:\\` and the like, refused outright -- there
+        is no caller for whom that was ever the intent).
+
+        For a tree, see `rmtree`: the recursive walk lives here, in Python,
+        where it can be read, rather than on the guest."""
+        self.request("RMDIR", {"path": path})
+
+    def rmtree(self, path: str, max_depth: int = 64) -> None:
+        """Remove a directory and everything in it.
+
+        THE DANGEROUS LOOP, ON PURPOSE, ON THIS SIDE. The guest offers `LS`,
+        `RM` and `RMDIR` and nothing that recurses by itself: a single wire
+        op that deletes a subtree is the most dangerous thing this surface
+        could offer, on a machine where the person at the keyboard never
+        loses a byte, and the three primitives already compose into it. This
+        is that composition, kept here instead of on the guest so the whole
+        loop is one function a person can read rather than C that runs
+        unattended on somebody else's machine.
+
+        Depth-first, files before the directory that held them, same as `rm
+        -r`. A failure partway through -- a locked file, a read-only
+        subdirectory -- raises `Refused` and stops; whatever was already
+        removed stays removed, and RMDIR's own refusal of a non-empty
+        directory means a partial run can never be mistaken for a complete
+        one; it leaves the leftovers in a directory that still refuses to
+        go.
+
+        `max_depth` is a sanity cap, not a security boundary -- FAT has no
+        symlinks to loop on -- and exists so a mistaken path does not walk
+        further than any real tree on this machine would.
+        """
+        if max_depth <= 0:
+            raise RemoteError(
+                f"rmtree: max depth exceeded above {path!r}")
+        sep = "\\"
+        for entry in self.ls(path):
+            child = path.rstrip(sep) + sep + entry.name
+            if entry.is_dir:
+                self.rmtree(child, max_depth=max_depth - 1)
+            else:
+                self.rm(child)
+        self.rmdir(path)
 
     def mv(self, src: str, dst: str) -> None:
         """Rename. Refuses an existing target rather than replacing it: a

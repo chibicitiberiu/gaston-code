@@ -64,6 +64,7 @@ private:
     void putEnd(Responder &r, rc_frame *f);
     void rm(Responder &r, rc_frame *f);
     void mkdir(Responder &r, rc_frame *f);
+    void rmdir(Responder &r, rc_frame *f);
     void mv(Responder &r, rc_frame *f);
     void abortPut(const char *why);
 

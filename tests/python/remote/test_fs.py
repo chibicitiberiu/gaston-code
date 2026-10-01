@@ -383,6 +383,63 @@ def test_mkdir_where_a_file_sits_says_which(remote, tree):
     assert e.value.code == "is_file", e.value.code
 
 
+def test_rmdir_removes_an_empty_directory(remote, tmp_path_factory):
+    d = tmp_path_factory.mktemp("rmdir-empty")
+    (d / "gone").mkdir()
+    remote.rmdir(conftest.wine_path(d / "gone"))
+    assert not (d / "gone").exists()
+
+
+def test_rmdir_refuses_a_non_empty_directory(remote, tmp_path_factory):
+    """The case this op exists for: RM cannot do it, and EXEC of `rd` was
+    the fallback until now. RemoveDirectoryA refuses on its own -- this is
+    not a check added here, it is the platform call's own restriction."""
+    d = tmp_path_factory.mktemp("rmdir-full")
+    (d / "full").mkdir()
+    (d / "full" / "still-here.txt").write_bytes(b"x")
+    with pytest.raises(Refused) as e:
+        remote.rmdir(conftest.wine_path(d / "full"))
+    assert e.value.code == "not_empty", e.value.code
+    assert (d / "full" / "still-here.txt").exists()
+
+
+def test_rmdir_of_nothing_is_missing(remote, tmp_path_factory):
+    d = tmp_path_factory.mktemp("rmdir-none")
+    with pytest.raises(Refused) as e:
+        remote.rmdir(conftest.wine_path(d / "never"))
+    assert e.value.code == "missing", e.value.code
+
+
+def test_rmdir_refuses_a_file(remote, tree):
+    """The mirror of MKDIR's `is_file`: something is there and it is not a
+    directory, so removing it as one would be removing the wrong thing."""
+    with pytest.raises(Refused) as e:
+        remote.rmdir(conftest.wine_path(tree / "one.txt"))
+    assert e.value.code == "is_file", e.value.code
+
+
+def test_rmdir_refuses_a_drive_root(remote):
+    """Nothing good comes of trying. Refused outright, before RemoveDirectoryA
+    is ever called -- so this is safe to run against the guest's real C:."""
+    with pytest.raises(Refused) as e:
+        remote.rmdir("C:\\")
+    assert e.value.code == "drive_root", e.value.code
+    assert remote.stat("C:\\").is_dir, "C:\\ must still be there"
+
+
+def test_rmtree_removes_a_small_tree(remote, tmp_path_factory):
+    """The Python-side helper: the recursive loop is here, not on the
+    guest, so it is the composition of LS/RM/RMDIR under test rather than a
+    fourth wire op."""
+    d = tmp_path_factory.mktemp("rmtree")
+    root = d / "tree"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.txt").write_bytes(b"x")
+    (root / "sub" / "b.txt").write_bytes(b"y")
+    remote.rmtree(conftest.wine_path(root))
+    assert not root.exists()
+
+
 def test_mv_renames(remote, tmp_path_factory):
     d = tmp_path_factory.mktemp("mv")
     (d / "before.txt").write_bytes(b"same bytes")
