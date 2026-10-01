@@ -249,10 +249,22 @@ class OptionsService:
         await self.set_mode(guest, f.headers.get("mode", ""))
 
     async def set_mode(self, guest: GuestSession, mode: str) -> None:
-        """Change the permission mode live."""
+        """Change the permission mode live.
+
+        BACKLOG 18: there is no SDK-reported list of which permission modes a
+        given model accepts (unlike `supportedEffortLevels` for effort), so
+        the menu cannot honestly refuse to offer one up front without
+        hardcoding a per-model guess -- exactly the kind of table
+        `send_options`'s effort handling goes out of its way to avoid. So the
+        fix here is the other honest option: accept the refusal, put
+        `guest.perm_mode` back to the mode actually in force, and resend the
+        menu so the guest agrees with the bridge instead of showing a tick
+        next to a mode that was never applied.
+        """
         if mode not in MODE_ORDER:
             log.warning("ignoring unknown permission mode %r", mode)
             return
+        was = guest.perm_mode
         guest.perm_mode = mode
         self.remember_settings(guest)
         label = MODE_LABEL.get(mode, mode)
@@ -260,12 +272,25 @@ class OptionsService:
             try:
                 await guest.claude.set_permission_mode(mode)
             except Exception as exc:
-                log.exception("permission mode change failed")
+                # A model refusing a mode it cannot run (Haiku has no Auto)
+                # is an expected outcome, not a bridge bug -- one line naming
+                # the model and mode, not a traceback. `guest.claude`'s own
+                # `_opts.permission_mode` was never updated on this path (the
+                # assignment there runs only after the await succeeds), so
+                # the Session and `guest.perm_mode` are both put back in
+                # sync with what is actually running.
+                log.warning(
+                    "permission mode -> %s refused for model %s: %s",
+                    mode, self.effective_model(guest) or "(default)", exc,
+                )
+                guest.perm_mode = was
+                self.remember_settings(guest)
                 if self.write_block:
                     await self.write_block(
                         guest,
                         H.error(
-                            "Could not change the permission mode: " + str(exc)[:160]
+                            "Could not set permission mode to " + label + ": "
+                            + str(exc)[:160]
                         ),
                     )
                 await self.send_options(guest)
