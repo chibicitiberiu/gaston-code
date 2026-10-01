@@ -23,11 +23,14 @@ env = ["COMSPEC"]
 
 [shell]
 # Fragments a command might be split on. `&`, `&&` and `||` are NOT
-# separators to this shell -- measured on the guest, which answers
-# "Too many parameters - &" and runs nothing. They stay in the pattern
-# because this is the guard's splitter: splitting on a non-separator can
-# only OVER-split, which fails safe, while missing one would let a fragment
-# through uninspected.
+# separators to this shell -- measured on real hardware, 2026-10-01. What
+# happens to the text after one depends on the command before it: `dir` and
+# `ver` reject it ("Too many parameters - &") and run nothing, but `echo`
+# takes it as more of its own argument and prints it -- or, with a
+# redirection on the line, writes it INTO the file instead of running it.
+# Every case exits 0. They stay in the pattern because this is the guard's
+# splitter: splitting on a non-separator can only OVER-split, which fails
+# safe, while missing one would let a fragment through uninspected.
 #
 # `\r` and `\n` joined them for exactly that reason (02.10). A newline does
 # not chain commands on this shell either, but `split_args` treats it as
@@ -191,29 +194,48 @@ fdisk = "/STATUS"
 chkdsk = "/F"
 
 [note]
-# The exit-code line: measured 2026-09-26 on the vm/ guest, 0 even for a
+# The exit code fact: measured 2026-09-26 on the vm/ guest, 0 even for a
 # failing child and for a program that does not exist; a direct spawn gets
-# the real code (docs/measurements/execprobe-vm-gui-20260926.txt). One line
-# because this block has a hard budget (tests/python/agent/test_machine.py).
+# the real code (docs/measurements/execprobe-vm-gui-20260926.txt). Folded
+# into the chaining bullet below rather than kept as its own line, because
+# this block has a hard budget (tests/python/agent/test_machine.py).
+#
+# The chaining bullet itself was corrected 2026-10-01 after real Win98
+# hardware disagreed with both of the first two guesses at this. `&`, `&&`
+# and `||` are NEVER separators -- that part was always right -- but what
+# happens to the rest of the line depends on the command before it, and an
+# earlier draft of this note only had one of the two halves:
+#   dir C:\WINDOWS\WIN.INI & echo TWO   -> "Too many parameters - &"  exit 0
+#   echo ONE & echo TWO                 -> prints "ONE & echo TWO"    exit 0
+#   echo ONE > D.TXT & echo TWO         -> no output at all           exit 0
+#                                           D.TXT now contains "ONE  & echo TWO"
+# `dir` and `ver` parse their arguments and reject the extra text; `echo`
+# (and anything else that just takes free text) swallows it as more of its
+# own argument, and if that line also redirects, the swallowed text -- `&`
+# and all -- is what gets WRITTEN INTO THE FILE. The one constant is the
+# exit code: always 0, whichever of the three happened, which is why the
+# agent that triggered this trusted a corrupted input file.
+#
 # Shown to the assistant when this tool is detected. DETECTION MAY
 # GUESS; A NOTE MAY NOT -- `measured` says on what machine and what
 # version, and a test asserts it is present.
 title = "COMMAND.COM"
-measured = "Windows 98 SE 4.10.2222 on the vm/ guest, 2026-09-20"
+measured = "Windows 98 SE 4.10.2222 on the vm/ guest, 2026-09-20; chaining re-measured on real hardware, 2026-10-01"
 body = '''
-The shell is COMMAND.COM, which is not cmd.exe. Every line below was
-measured on this machine, mostly by an agent getting it wrong first:
+The shell is COMMAND.COM, not cmd.exe. Measured on this machine:
 
-  * One command, one line. `&`, `&&`, `||` and a newline are not separators;
-    the complaint varies ("Too many parameters - &", "Syntax error") and
-    `call x.bat && y` is the silent case -- no output, no error, `y` never
-    ran. For several steps write a .bat into the mirrored folder and run it.
-  * No `2>&1`: it creates a file literally named `&1`, and a following
-    `| more` eats the rest of the output.
+  * One line, one command. `&`, `&&`, `||` and a newline are literal
+    text here, never separators. Some reject the extra text
+    ("Too many parameters - &", "Syntax error") and run nothing; others
+    swallow it as more of their argument, and with a redirection on the
+    line that text is WRITTEN INTO THE FILE instead of run. Exit is 0 in
+    every case, so neither it nor empty output says it failed. Several
+    steps: write a .bat.
+  * No `2>&1`: it creates a file named `&1`; `| more` after it eats the
+    rest.
   * `start prog.exe` returns instantly with no output whether it ran,
-    crashed, or does not exist. You cannot see a window -- do not report one.
-  * A running .exe is locked: "Permission denied" from the linker, "Access
-    denied" from `del`, and `attrib` shows nothing wrong. Ask the user to
-    close it.
-  * Exit code: always 0. Judge by the output.
+    crashed or is missing. You cannot see a window; do not report one.
+  * A running .exe is locked: "Permission denied" from the linker,
+    "Access denied" from `del`, and `attrib` shows nothing wrong. Ask
+    the user to close it.
 '''
