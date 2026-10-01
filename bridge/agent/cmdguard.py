@@ -552,6 +552,61 @@ def deployment_gap(*, guest_root: str = "", shell: str = "",
     return None
 
 
+def drive_root_write(path: str, *, shell: str = "", caps=None) -> str | None:
+    r"""Why writing to this path puts a file in the top level of a disk, or None.
+
+    NOT ABOUT THE MIRROR, and that is why it is separate from `reason` and
+    from `deployment_gap`. A machine with no mirror at all still has a drive
+    root, and the root is still the wrong place for a file: nothing sweeps
+    it, no installer owns it, and what lands there outlives the conversation
+    that put it there. On 2026-10-01 an agent on real hardware -- told
+    correctly that nothing was mirrored, and told nothing at all about where
+    to write instead -- `put_file`d straight into `C:\`. `docs/REMOTE.md`
+    §"Where things go on a target machine" exists because the QEMU guest's
+    `C:\` had already become a midden the same way.
+
+    THE SAME GRAMMAR AS EVERYTHING ELSE HERE: the drive pattern and the
+    separator come from the shell's profile, so this says `C:\X.TXT` on
+    COMMAND.COM and `/x.txt` on a POSIX machine without either spelling
+    being written down in Python. An unusable grammar answers None, like
+    every other judgement in this file -- and like every other judgement in
+    this file, None is "nothing found", never a grant.
+
+    A RELATIVE PATH ANSWERS None TOO. The bridge is never told the guest's
+    working directory (see `Guard.resolve`), so `x.txt` may or may not land
+    in a root and saying either would be inventing the answer.
+
+    This warns; it does not refuse. `C:\AUTOEXEC.BAT` and `C:\CONFIG.SYS`
+    are real files a person may genuinely want edited, and a path check
+    cannot tell one of those from a scratch file -- only the person reading
+    the prompt can. So it does what the rest of this module does: turns a
+    would-be-silent call into a visible one.
+    """
+    guard = Guard(grammar_for(shell), caps)
+    g = guard.g
+    if not g.usable:
+        return None
+    t = guard.norm(path)
+    if not t:
+        return None
+    drive = ""
+    if g.drive is not None:
+        m = g.drive.match(t)
+        if m:
+            drive, t = t[:m.end()], t[m.end():]
+    if not t.startswith(g.sep):
+        return None                 # relative: unresolvable, so unjudgeable
+    leaf = t[len(g.sep):]
+    if not leaf or g.sep in leaf:
+        return None                 # the root itself, or inside some folder
+    # SHORT ON PURPOSE. The bar hands a warning 68 characters
+    # (`permdesk.BAR_BYTES` less the command's share), so a long sentence is
+    # a sentence nobody reads the end of -- and the one word that has to
+    # survive the clip is where the file is going.
+    return ("writes %s into the top level of %s, not into any folder -- is "
+            "that where it belongs?" % (t, drive + g.sep))
+
+
 def reason(command: str, *, cwd: str = "", guest_root: str = "",
            shell: str = "", caps=None, announce_gaps: bool = True) -> str | None:
     """Why this command line may reach outside the mirror, or None.

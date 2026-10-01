@@ -254,6 +254,23 @@ class PermissionDesk:
                     shell=shell,
                     caps=getattr(self._guest, "caps", None),
                     announce_gaps=False)
+                # A FILE WRITE IS NOT A COMMAND, so `reason` never looked at
+                # one: it reads `args["command"]`, which `put_file` does not
+                # have, and answered None for every destination it was ever
+                # given. That hole is 2026-10-01's second half -- an agent
+                # with no mirror wrote into the root of C: on real hardware,
+                # and the only thing the person saw was "Write a file on
+                # your machine". Judged here rather than refused in the tool
+                # for the reason the rest of this module is judged here: it
+                # is a warning on the bar, not a boundary, and the person
+                # reading it is the one who can tell C:\AUTOEXEC.BAT from
+                # scratch. Independent of the mirror, so it fires whether or
+                # not `--sync-dir` was given.
+                if not warning and tool_name.endswith("__put_file"):
+                    warning = cmdguard.drive_root_write(
+                        str((args or {}).get("path") or ""),
+                        shell=shell,
+                        caps=getattr(self._guest, "caps", None))
                 if warning:
                     log.info("guard: %s -- %s", warning, str(args)[:80])
 

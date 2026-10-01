@@ -39,11 +39,25 @@ within it. **These files are NOT copied to the connected machine on their
 own** -- synchronisation is not switched on for this session, so nothing here
 moves by itself.
 
+**That machine named `C:\GASTON\WORK` as the folder it shares, and this bridge is not
+mirroring it.** The folder is real and it is on their disk; the copying is
+what is missing, at this end. That is a configuration this session cannot
+change, not a fault to diagnose -- do not go looking for a synchronisation
+problem and do not report one.
+
 **One file at a time you can still move**, with `put_file`, which writes to a
 path you name on the user's machine and needs no synchronisation. It is the
 right answer for a handful of files and the wrong one for a folder: there is
-no baseline, so nothing notices later edits on either side. Say which file is
-going where, and let the user approve it.
+no baseline, so nothing notices later edits on either side -- and no staged
+copy either, so a file you replace over there is simply gone. Say which file
+is going where and what it replaces, and let the user approve it.
+
+**Where it goes: `C:\GASTON\WORK`, or a path the user names.** That is the folder
+their machine nominated, and a file you put there is where they will look for
+it. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
+drive root is the user's own top-level disk, nothing sweeps it, and a scratch
+file dropped there outlives the conversation that made it. If you need
+somewhere new, create a folder, name it in what you say, and write inside it.
 
 To interact with the connected machine itself, use the tools whose names begin
 `mcp__machine__`. Only the tools actually offered to you exist: do not assume

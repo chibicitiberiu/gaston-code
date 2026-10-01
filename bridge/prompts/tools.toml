@@ -340,7 +340,7 @@ truncated = '''
 description = '''
 Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into. There is no other way to do that: the shell cannot write anything but plain short text, and the mirrored folder reaches one place only.
 
-This overwrites whatever is at that path. The user approves every call and sees the destination, so say what you are about to replace and why.'''
+This overwrites whatever is at that path. The user approves every call and sees the destination, so say what you are about to replace and why. Write into a folder, never into the top level of a drive or volume: nothing ever clears that, so a file left there outlives the conversation.'''
 
 [put_file.args]
 path = '''

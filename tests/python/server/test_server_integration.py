@@ -2803,3 +2803,87 @@ def test_a_guest_path_is_joined_with_the_separator_the_guest_uses():
     assert paths.sep_of("C:\\GASTON") == "\\"
     assert paths.sep_of("/srv/gaston") == "/"
     assert paths.sep_of("") == "/"
+
+
+# --- the guest declares a share and this bridge has no mirror ----------------
+#
+# The configuration that produced the 2026-10-01 bug on real hardware, end to
+# end: the client's INI named `C:\WORK`, it created the folder at startup and
+# announced it in HELLO, and the bridge was started with no `--sync-dir`. The
+# `harness` fixture builds exactly that bridge, so the only thing these have
+# to add is the header.
+
+
+async def test_a_declared_share_reaches_the_agent_even_with_no_mirror(harness):
+    """Where the declaration used to stop. `sync_root` was logged at attach
+    and then read only by `WorkspaceService.guest_path`, which composes a
+    CHILD of it -- and its one caller returns early when `config.sync_dir` is
+    unset. So with sync off the guest's root reached nothing the agent could
+    see, and the agent was told only that nothing was mirrored."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"READY"})
+    prompt = harness.bridge.connection.guest.claude.system_prompt["append"]
+    assert "C:\\WORK" in prompt
+    assert "is not\nmirroring it" in prompt
+    assert "Never the root of a drive" in prompt
+    await harness.close(w)
+
+
+async def test_no_conversation_folder_is_invented_from_the_declared_share(
+    harness,
+):
+    """The other half of the honest answer: the bridge says what is true and
+    does NOT start mirroring. Adopting the guest's root would mean inventing
+    a tree on this side and running a bidirectional sync with deletion
+    propagation into a folder that already has the user's files in it --
+    which is the one subsystem that can lose them."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"READY"})
+    g = harness.bridge.connection.guest
+    g.first_prompt = "Sky color"
+    await harness.bridge.workspace.ensure_work_dir(g)
+    assert g.work_guest == ""
+    assert g.work_dir == ""
+    await harness.close(w)
+
+
+async def test_a_file_put_in_the_drive_root_is_flagged_on_the_bar(harness):
+    """What now stops the write being silent. `cmdguard.reason` reads
+    `args["command"]`, which `put_file` does not have, so the destination
+    was never judged by anything -- the person approved a bar reading
+    "Write a file on your machine" and got a file in `C:\\`."""
+    reader, writer = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await _recv(harness, reader, "OPTIONSEND")
+
+    task = harness.bridge.connection.guest.claude.ask(
+        "mcp__machine__put_file",
+        {"path": "C:\\NOTES.TXT", "content": "x"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+
+    assert body.startswith("! "), body
+    assert "top level" in body, body
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await harness.close(writer)
+
+
+async def test_a_file_put_in_a_folder_is_not_flagged(harness):
+    """A warning on every prompt is the defect `deployment_gap` exists to
+    undo. The ordinary destination must read exactly as it does today."""
+    reader, writer = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await _recv(harness, reader, "OPTIONSEND")
+
+    task = harness.bridge.connection.guest.claude.ask(
+        "mcp__machine__put_file",
+        {"path": "C:\\WORK\\NOTES.TXT", "content": "x"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+
+    assert not body.startswith("!"), body
+    assert "top level" not in body, body
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await harness.close(writer)

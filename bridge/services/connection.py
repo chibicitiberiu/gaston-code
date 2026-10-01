@@ -166,9 +166,41 @@ class ConnectionService:
             page_blocks,
         )
         log.info("client rules: %s", caps.summary())
+        # WHICH machine, so "why is my chat list empty" and "why am I seeing
+        # the other box's chats" are both one grep away. An absent id is a
+        # client from before 2026-10-01, and the wide list that comes with
+        # it; say so rather than printing nothing, because nothing reads as
+        # a bridge that did not look (BACKLOG.md §21).
         log.info(
-            "guest mirrors %s", h.get("sync_root") or "(file sharing is off)"
+            "guest identifies as %s",
+            h.get("machine")
+            or "(no id -- it sees every conversation this bridge started)",
         )
+        # BOTH HALVES, OR NEITHER. This used to print the guest's declared
+        # share and stop, which is how one log came to hold
+        #     guest mirrors C:\\WORK
+        # and, two minutes later and from the same connection,
+        #     no folder is mirrored from this machine
+        # with nothing joining them. Both lines were true: the guest had been
+        # configured with a share, and this bridge had not been given
+        # `--sync-dir`, so nothing was being copied and no conversation
+        # folder would ever be created under it. The operator could not see
+        # the disagreement, and neither could the agent, which put a file in
+        # the root of C: instead. The agent is told now (machine.toml's
+        # `no_sync_declared`); this is the same sentence for the operator.
+        declared = h.get("sync_root") or ""
+        if not declared:
+            log.info("guest mirrors nothing (file sharing is off on it)")
+        elif self.config.sync_dir:
+            log.info("guest mirrors %s", declared)
+        else:
+            log.warning(
+                "guest declared %s as its shared folder, but this bridge was "
+                "started with no --sync-dir: NOTHING is mirrored, no "
+                "conversation folder will be created under it, and every "
+                "file reaching that machine will be a one-off put_file with "
+                "no baseline and no staged copy behind it. Pass --sync-dir "
+                "if the two were meant to agree.", declared)
 
         is_reconnect = self.guest is not None
         if self.guest is not None:

@@ -56,6 +56,12 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
     The third is the new normal: this prompt is built when the session is,
     which is before the conversation has committed to a folder -- that happens
     at the first tool call, and the agent is told the path in a notice then.
+
+    `home` is the guest's OWN declared share, straight from HELLO, and it is
+    read by the sync-off branch as well as the not-yet one. That is the whole
+    of 2026-10-01's bug: a guest that declared `C:\\WORK` against a bridge
+    with no `--sync-dir` was told nothing was mirrored and nothing about
+    where to put a file instead, so it put one in the root of C:.
     """
     if sync_dir and not guest_root:
         under = (prompts.text("machine.sync.under_home", home=home)
@@ -64,7 +70,23 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
                             workdir=workdir, under=under)
 
     if not sync_dir:
-        return prompts.text("machine.sync.no_sync", workdir=workdir)
+        # THE TWO SIDES DISAGREE HERE, and until 2026-10-01 nothing said so.
+        # The guest announces its configured share in HELLO (`sync_root`),
+        # the bridge only mirrors when it was given `--sync-dir`, and the
+        # pair "guest mirrors C:\\WORK" / "no folder is mirrored from this
+        # machine" sat two minutes apart in one log with nothing joining
+        # them. The agent read the second half, concluded it had nowhere
+        # agreed to write, and `put_file`d into the root of C: on somebody's
+        # real disk -- which this paragraph now names as the one destination
+        # that is never right.
+        declared = (prompts.text("machine.sync.no_sync_declared", home=home)
+                    if home
+                    else prompts.text("machine.sync.no_sync_undeclared"))
+        where = (prompts.text("machine.sync.no_sync_where", home=home)
+                 if home
+                 else prompts.text("machine.sync.no_sync_where_unknown"))
+        return prompts.text("machine.sync.no_sync", workdir=workdir,
+                            declared=declared, where=where)
 
     where = guest_root or prompts.text("machine.sync.default_root")
     rel = os.path.relpath(sync_dir, workdir) if sync_dir != workdir else "."

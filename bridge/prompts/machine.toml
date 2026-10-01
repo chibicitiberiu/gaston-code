@@ -37,19 +37,59 @@ normal rather than a fault: a conversation that is only being talked to shares
 no files. **Do not go looking for a synchronisation problem, and do not report
 one.** Write in the folder the notice names, once it names one.'''
 
-# sync is not configured at all
+# sync is not configured at all. {declared} says whether the machine named a
+# folder anyway -- it usually has -- and {where} names a destination, because
+# an agent told only "nothing is mirrored" picked the root of C: (2026-10-01).
 no_sync = '''
 Your file editing tools operate on the working copy at `{workdir}` on this
 proxy, which exists to stage files for the user's machine. Use them normally
 within it. **These files are NOT copied to the connected machine on their
 own** -- synchronisation is not switched on for this session, so nothing here
 moves by itself.
+{declared}
 
 **One file at a time you can still move**, with `put_file`, which writes to a
 path you name on the user's machine and needs no synchronisation. It is the
 right answer for a handful of files and the wrong one for a folder: there is
-no baseline, so nothing notices later edits on either side. Say which file is
-going where, and let the user approve it.'''
+no baseline, so nothing notices later edits on either side -- and no staged
+copy either, so a file you replace over there is simply gone. Say which file
+is going where and what it replaces, and let the user approve it.
+{where}'''
+
+# the two sides disagree: the machine named a share, this bridge has no mirror
+no_sync_declared = '''
+
+**That machine named `{home}` as the folder it shares, and this bridge is not
+mirroring it.** The folder is real and it is on their disk; the copying is
+what is missing, at this end. That is a configuration this session cannot
+change, not a fault to diagnose -- do not go looking for a synchronisation
+problem and do not report one.'''
+
+# ... and when it named nothing, so there is no obvious destination either
+no_sync_undeclared = '''
+
+That machine named no shared folder either, so there is no agreed place on it
+and nothing is being copied in either direction. That is the configuration,
+not a fault -- do not go looking for a synchronisation problem.'''
+
+# where a file put on the machine should land, when it named a folder
+no_sync_where = '''
+
+**Where it goes: `{home}`, or a path the user names.** That is the folder
+their machine nominated, and a file you put there is where they will look for
+it. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
+drive root is the user's own top-level disk, nothing sweeps it, and a scratch
+file dropped there outlives the conversation that made it. If you need
+somewhere new, create a folder, name it in what you say, and write inside it.'''
+
+# ... and when it named none, so the user has to be asked
+no_sync_where_unknown = '''
+
+**So ask where a file should go before you put one there.** **Never the root
+of a drive.** `C:\YOURFILE.TXT` is not a destination: a drive root is the
+user's own top-level disk, nothing sweeps it, and a scratch file dropped there
+outlives the conversation that made it. Propose a folder, say why, and write
+inside it once they agree.'''
 
 # the normal case: a folder exists on both sides
 mirrored = '''

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from bridge.agent.cmdguard import reason
+from bridge.agent.cmdguard import drive_root_write, reason
 
 #: The mirrored folder these cases are written against.
 ROOT = "C:\\GASTON\\CHAT1"
@@ -451,3 +451,51 @@ def test_an_unexpandable_variable_is_unresolved_not_outside():
     why = ask(r"del C:\GASTON\CHAT1\%T%\x")
     assert why is not None
     assert "cannot be resolved" in why, why
+
+
+# --- a drive root is not a folder -------------------------------------------
+#
+# A SEPARATE QUESTION FROM CONTAINMENT, and the 2026-10-01 bug is what
+# separates them. The machine had declared `C:\WORK`, the bridge had been
+# started with no `--sync-dir`, so nothing was mirrored and `reason()` was
+# right to say so -- and `put_file` carries no `command`, so `reason()` never
+# looked at the destination at all. The file landed in `C:\`.
+
+
+def test_a_file_written_into_the_drive_root_is_flagged():
+    why = drive_root_write(r"C:\OUTPUT.TXT", shell="command.com")
+    assert why is not None
+    assert "top level" in why, why
+
+
+def test_a_file_in_a_folder_is_not_flagged():
+    """The warning must not fire on the ordinary case, or it is on every
+    prompt and stops being read -- the same defect `deployment_gap` exists
+    to undo."""
+    assert drive_root_write(r"C:\WORK\OUTPUT.TXT", shell="command.com") is None
+    assert drive_root_write(r"C:\WORK\SUB\A.TXT", shell="command.com") is None
+
+
+def test_dot_dot_cannot_climb_back_out_to_the_root():
+    """`norm` resolves first, so the destination is judged by where it
+    LANDS. A prefix test on the raw string calls this one a folder."""
+    why = drive_root_write(r"C:\WORK\..\OUTPUT.TXT", shell="command.com")
+    assert why is not None, "resolves to C:\\OUTPUT.TXT"
+
+
+def test_the_root_itself_is_not_this_warning():
+    """`put_file` to `C:\\` fails for its own reasons; claiming it writes a
+    file into the top level would be a sentence about something else."""
+    assert drive_root_write("C:\\", shell="command.com") is None
+
+
+def test_a_relative_path_says_nothing_rather_than_guessing():
+    """The bridge is never told the guest's working directory, so `x.txt`
+    may or may not land in a root. Saying either is inventing the answer."""
+    assert drive_root_write("OUTPUT.TXT", shell="command.com") is None
+
+
+def test_a_shell_with_no_rules_answers_nothing():
+    """Same discipline as the rest of the module: an unusable grammar
+    decides nothing, and None was never a grant."""
+    assert drive_root_write(r"C:\OUTPUT.TXT", shell="no-such-shell") is None
