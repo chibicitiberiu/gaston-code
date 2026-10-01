@@ -150,7 +150,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
-       app/config.cpp app/oleservice.cpp app/connservice.cpp \
+       app/config.cpp app/machineid.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
        rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
        sync/syncrpc.cpp \
@@ -160,7 +160,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
        $(LIBFS) $(LIBCORE)
 
-.PHONY: gremote fscheck execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: gremote gupdate fscheck execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -195,6 +195,18 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 INICHECK_OBJS = $(call objs,checks/inicheck.cpp app/config.cpp) $(LIBCORE)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
+# The machine identity: minted once with CoCreateGuid, written beside the exe,
+# read back on every launch after that. Under Wine because the file half is
+# real I/O and the mint half is OLE32 -- and because a client that silently
+# re-mints on every launch is indistinguishable from one that works until the
+# chat list comes up empty. See BACKLOG.md 21.
+IDCHECK_OBJS = $(call objs,checks/idcheck.cpp app/machineid.cpp) $(LIBCORE)
+idcheck: $(BUILD)/idcheck.exe
+$(BUILD)/idcheck.exe: $(IDCHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
 	  $(LINKIN)
 	@echo "built $@"
@@ -298,6 +310,28 @@ gremote.exe: $(BUILD)/gremote.exe
 $(BUILD)/gremote.exe: $(GREMOTE_OBJS)
 	@$(WLINK) system nt_win option quiet, osversion=4.0, \
 	  map=$(BUILD)/gremote.map $(LIBS) name $@ $(LINKIN)
+	@echo "built $@ ($$(stat -c%s $@) bytes)"
+
+# gupdate.exe -- the self-updater, and the only program that can replace
+# gremote.exe (win/remote/gupdate.cpp says why a second process is needed at
+# all). Its own exe rather than a mode of gremote's, because the whole point
+# is to be the thing still running when gremote is not.
+#
+# Deliberately NOT in GREMOTE_OBJS and deliberately one translation unit: it
+# links libcore alone -- no libwire, no libexec, no Winsock, no Toolhelp --
+# so the program that has to work when everything else has stopped depends on
+# as little as possible. 8.3 output name, like every file that has to reach a
+# FAT volume on a CD.
+#
+# system nt_win for the same reason gremote uses it: a console image opens a
+# console, and this is started by something that may be running before
+# anybody has logged on.
+GUPDATE_OBJS = $(call objs,remote/gupdate.cpp) $(LIBCORE)
+gupdate: $(BUILD)/gupdate.exe
+gupdate.exe: $(BUILD)/gupdate.exe
+$(BUILD)/gupdate.exe: $(GUPDATE_OBJS)
+	@$(WLINK) system nt_win option quiet, osversion=4.0, \
+	  map=$(BUILD)/gupdate.map $(LIBS) name $@ $(LINKIN)
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
 # Window and SubclassedWindow (core/window.h): WM_CREATE seeing hwnd(),
@@ -426,7 +460,7 @@ $(BUILD)/probe.exe: $(PROBE_OBJS)
 gaston: $(BUILD)/gaston.exe
 gaston.exe: $(BUILD)/gaston.exe
 
-all: msgids $(BUILD)/gaston.exe gremote synccheck inicheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
+all: msgids $(BUILD)/gaston.exe gremote gupdate synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
      netcheck rpccheck probe execprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
@@ -681,7 +715,8 @@ PYTHON ?= python3
 # program is not competing for that memory and never runs beside the client.
 # It is set rather than omitted because the gate compares against whatever
 # it is given, and 0 means "must be empty", not "not applicable".
-check: check-sources check-gaston check-gremote check-autocheck check-fscheck
+check: check-sources check-gaston check-gremote check-gupdate \
+       check-autocheck check-fscheck
 
 # gremote's budget is its own, and unlike the client's it is a claim about a
 # program that runs BESIDE the thing being measured -- every number taken
@@ -692,6 +727,16 @@ check: check-sources check-gaston check-gremote check-autocheck check-fscheck
 # at step 6; a raise past that wants a measured reason, like the client's.
 check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
 check-gremote: CHECK_CAP   = 250000
+# gupdate's budget. It links libcore and nothing else, and it runs for a
+# few seconds beside a gremote that is on its way out -- so this is a cap on
+# a transient, not on a resident, and it is still set tight because the
+# whole argument for a separate exe is that it depends on as little as
+# possible. Measured 50,688 (2026-10-01); the cap is that plus room for the
+# connect-back probe the updater does not do yet (win/remote/gupdate.cpp,
+# "what it does not catch"), which would bring in wsock32.
+check-gupdate: CHECK_OWNED = $(GUPDATE_OBJS)
+check-gupdate: CHECK_CAP   = 64000
+
 check-fscheck: CHECK_OWNED = $(FSCHECK_OBJS)
 check-fscheck: CHECK_CAP   = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)

@@ -64,6 +64,14 @@ want "$HERE/build/win/framecheck.exe" "FRAMECHK.EXE"
 # tools/vm/qmp.py). It is also the first thing here that needs an ini of its
 # own, which SETUP.BAT below copies by name.
 want "$HERE/build/win/gremote.exe" "GREMOTE.EXE"
+# The self-updater, and the only program that can replace GREMOTE.EXE: a
+# running exe is locked and gremote's own pid is on the KILL deny list, so
+# ship() can deploy a new build to everything on the box except the thing
+# doing the deploying (win/remote/gupdate.cpp). UPDATE REFUSES when this
+# file is not beside the server, so a CD without it means self-update is
+# loudly unavailable rather than quietly broken. SETUP.BAT needs no line
+# of its own: `COPY /Y D:\*.EXE` below takes it.
+want "$HERE/build/win/gupdate.exe" "GUPDATE.EXE"
 # The automation library's own checks, and the wire record's. These carry
 # everything Phase 6 added, and three of their answers are known to differ
 # under Wine: its oleacc has no Win32 class proxies, it never emits
