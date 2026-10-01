@@ -335,6 +335,16 @@ class SessionService:
                     sync_dir=work_dir if sync_dir_opt else None,
                     guest_root=guest.work_guest,
                     home=(guest.hello or {}).get("sync_root") or "",
+                    # WHERE THE FOLDER IS GOING TO BE, for the sync-off
+                    # branch. The folder is committed at the first tool call
+                    # and this prompt is built before it, so `guest_root` is
+                    # empty on a conversation's first turn -- and with no
+                    # mirror that path is the only destination the agent will
+                    # ever be given. Separate from `guest_root` on purpose:
+                    # the mirrored branch must keep telling the difference
+                    # between a folder that exists and one that is coming.
+                    planned=self.workspace.planned_guest_dir(guest)
+                    if hasattr(self.workspace, "planned_guest_dir") else "",
                     tools=guest.tools, path=guest.path),
             },
             model=self.options.effective_model(guest),
@@ -404,6 +414,8 @@ class SessionService:
         guest.pending_resume = ""
         guest.work_dir = ""
         guest.work_guest = ""
+        guest.work_planned = ""
+        guest.work_told = ""
         guest.first_prompt = ""
         self.workspace.retarget_perms(guest)
         await guest.view.reset()
@@ -438,15 +450,28 @@ class SessionService:
             if hasattr(self.workspace, "config")
             else getattr(self.connection, "sync_dir", None)
         )
-        if name and sync_dir_opt:
-            guest.work_dir = os.path.join(sync_dir_opt, name)
+        # THE FOLDER ON THE MACHINE IS RESTORED WHETHER OR NOT THERE IS A
+        # MIRROR. It was gated on `sync_dir` with the rest, so reopening a
+        # conversation on a bridge with no `--sync-dir` forgot which folder it
+        # had been working in and the first tool call named a second one --
+        # same conversation, two folders on the user's disk, and the files
+        # split between them. The guest path is what the store holds; the
+        # local tree is still the mirror's business.
+        if name:
+            guest.work_planned = name
             guest.work_guest = (
-                (conv_store.guest_folder(session_id) if conv_store is not None else None)
+                (conv_store.guest_folder(session_id)
+                 if conv_store is not None else None)
                 or self.workspace.guest_path(guest, name)
             )
         else:
-            guest.work_dir = self.workspace.stored_work_dir(session_id)
+            guest.work_planned = ""
             guest.work_guest = ""
+        guest.work_told = ""
+        if name and sync_dir_opt:
+            guest.work_dir = os.path.join(sync_dir_opt, name)
+        else:
+            guest.work_dir = self.workspace.stored_work_dir(session_id)
         guest.first_prompt = ""
         self.workspace.retarget_perms(guest)
 

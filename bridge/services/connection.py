@@ -183,24 +183,34 @@ class ConnectionService:
         #     no folder is mirrored from this machine
         # with nothing joining them. Both lines were true: the guest had been
         # configured with a share, and this bridge had not been given
-        # `--sync-dir`, so nothing was being copied and no conversation
-        # folder would ever be created under it. The operator could not see
-        # the disagreement, and neither could the agent, which put a file in
-        # the root of C: instead. The agent is told now (machine.toml's
-        # `no_sync_declared`); this is the same sentence for the operator.
+        # `--sync-dir`, so nothing was being copied. The operator could not
+        # see the disagreement, and neither could the agent, which put a file
+        # in the root of C: instead. The agent is told now (machine.toml's
+        # `no_sync_declared_folder`); this is the same sentence for the
+        # operator.
+        #
+        # "AND NO CONVERSATION FOLDER WILL BE CREATED UNDER IT" is gone from
+        # the warning, because it stopped being true the same day: the client
+        # makes the conversation's folder under its own work root whether or
+        # not this end mirrors anything. What is missing with no `--sync-dir`
+        # is the copying, which is what this now says.
         declared = h.get("sync_root") or ""
         if not declared:
-            log.info("guest mirrors nothing (file sharing is off on it)")
+            log.info(
+                "guest declared no work root, so this bridge will not name a "
+                "folder on it for any conversation -- every file reaching it "
+                "goes to a path the agent asks the user for")
         elif self.config.sync_dir:
             log.info("guest mirrors %s", declared)
         else:
             log.warning(
-                "guest declared %s as its shared folder, but this bridge was "
-                "started with no --sync-dir: NOTHING is mirrored, no "
-                "conversation folder will be created under it, and every "
-                "file reaching that machine will be a one-off put_file with "
-                "no baseline and no staged copy behind it. Pass --sync-dir "
-                "if the two were meant to agree.", declared)
+                "guest declared %s as its work root, but this bridge was "
+                "started with no --sync-dir: each conversation still gets its "
+                "own folder under it, made by the client, and NOTHING is "
+                "mirrored -- every file reaching that machine will be a "
+                "one-off put_file with no baseline and no staged copy behind "
+                "it. Pass --sync-dir if the two were meant to agree.",
+                declared)
 
         is_reconnect = self.guest is not None
         if self.guest is not None:

@@ -526,11 +526,50 @@ def test_the_disagreement_is_not_reported_as_a_fault():
 def test_a_drive_root_is_named_as_the_destination_that_is_never_right():
     """What nothing said before. `put_file` takes any path, the bar shows
     one clipped line, and `C:\\X.TXT` reads much like `C:\\WORK\\X.TXT` at
-    640x480."""
+    640x480.
+
+    This is the degenerate shape of the sync-off case: a share, but nothing
+    nameable under it for this conversation. The destination is therefore the
+    share with an instruction to make a folder in it -- NOT the share itself
+    as the place to drop files, which is what the first fix said.
+    """
     out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
                         home="C:\\WORK")
     assert "Never the root of a drive" in out
-    assert "Where it goes: `C:\\WORK`" in out
+    assert "a folder under `C:\\WORK`" in out
+
+
+def test_the_conversations_own_folder_is_the_destination_with_no_mirror():
+    """THE DESIGN, and what the first fix left out. A conversation gets its
+    own folder under the share -- made by the client, with no mirror on this
+    side -- and the agent is told to use it as its working directory. Being
+    told only `C:\\WORK` was better than `C:\\` and still not the answer."""
+    out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
+                        home="C:\\WORK", planned="C:\\WORK\\SKYCOLOR")
+    assert "USE `C:\\WORK\\SKYCOLOR` AS YOUR WORKING DIRECTORY" in out
+    assert "Never the root of a drive" in out
+    # And it must not ALSO tell the agent to go and invent one.
+    assert "make a folder under" not in out
+
+
+def test_a_committed_folder_beats_a_planned_one():
+    """`planned` is a prediction and `guest_root` is a fact; once the folder
+    exists the prompt names the real thing."""
+    out = system_prompt(HELLO, "/work", sync_dir=None,
+                        guest_root="C:\\WORK\\REAL", home="C:\\WORK",
+                        planned="C:\\WORK\\GUESS")
+    assert "C:\\WORK\\REAL" in out
+    assert "GUESS" not in out
+
+
+def test_a_planned_folder_is_ignored_when_there_is_a_mirror():
+    """The mirrored branch tells a folder that exists from one that is
+    coming, and a prediction fed into it would promise a mirror that is not
+    running yet."""
+    out = system_prompt(HELLO, "/work", sync_dir="/work", guest_root=None,
+                        home="C:\\WORK", planned="C:\\WORK\\SKYCOLOR")
+    assert "does not have a folder on the user's machine yet" in out
+    assert "SKYCOLOR" not in out
 
 
 def test_a_machine_that_declared_nothing_is_told_to_ask():

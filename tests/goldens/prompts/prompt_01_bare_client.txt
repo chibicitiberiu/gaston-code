@@ -52,12 +52,18 @@ no baseline, so nothing notices later edits on either side -- and no staged
 copy either, so a file you replace over there is simply gone. Say which file
 is going where and what it replaces, and let the user approve it.
 
-**Where it goes: `C:\GASTON\WORK`, or a path the user names.** That is the folder
-their machine nominated, and a file you put there is where they will look for
-it. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
-drive root is the user's own top-level disk, nothing sweeps it, and a scratch
-file dropped there outlives the conversation that made it. If you need
-somewhere new, create a folder, name it in what you say, and write inside it.
+**This conversation gets its own folder under `C:\GASTON\WORK`, and that folder is
+your working directory on that machine.** `C:\GASTON\WORK` is what their machine
+shares; the folder inside it is named after what you were asked for and is
+created by their machine the first time you use a tool on it. Its path
+arrives in an automatic message at the top of a turn -- use it, and name it
+in what you say so the user knows where to look.
+
+If you have not been given a path, make a folder under `C:\GASTON\WORK` yourself and
+write inside that. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a
+destination: a drive root is the user's own top-level disk, nothing sweeps
+it, and a scratch file dropped there outlives the conversation that made
+it.
 
 To interact with the connected machine itself, use the tools whose names begin
 `mcp__machine__`. Only the tools actually offered to you exist: do not assume

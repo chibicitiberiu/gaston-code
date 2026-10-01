@@ -64,6 +64,35 @@ def test_prompt_golden_01_bare_client():
     assert_matches_prompt_golden("prompt_01_bare_client", prompt)
 
 
+def test_prompt_golden_01b_no_mirror_with_a_conversation_folder():
+    """Scenario 1b: no `--sync-dir`, and the machine's own per-conversation
+    folder is the destination.
+
+    The ORDINARY sync-off shape, and 01 is the degenerate one beside it: that
+    scenario has a share with nothing nameable under it, which happens when a
+    title reduces to nothing a FAT volume will hold. Both were one paragraph
+    until 2026-10-01, and the one it printed said nothing about where a file
+    should go -- so an agent put one in the root of C: on real hardware.
+    """
+    h = hello("s").headers
+    h["cpu"] = "Pentium II"
+    h["ram_mb"] = "64"
+    h["os"] = "Windows 98 SE"
+    h["sync_root"] = "C:\\WORK"
+
+    prompt = machine.system_prompt(
+        h=h,
+        workdir="/home/user/work",
+        sync_dir=None,
+        guest_root=None,
+        home="C:\\WORK",
+        planned="C:\\WORK\\SKYCOLOR",
+        tools=[],
+        path=[],
+    )
+    assert_matches_prompt_golden("prompt_01b_no_mirror_folder", prompt)
+
+
 def test_prompt_golden_02_full_inventory():
     """Scenario 2: Full machine inventory with compiler, assembler, tools, and sync root."""
     h = hello("s").headers

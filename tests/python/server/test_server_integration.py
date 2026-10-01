@@ -2443,6 +2443,11 @@ async def test_a_command_reaching_outside_the_mirror_is_announced(harness):
     # is narrower -- measuring against the parent would call a write into a
     # sibling conversation's folder "inside the mirror".
     harness.bridge.connection.guest.work_guest = "C:\\WORK"
+    # The MIRROR too. Since 2026-10-01 a conversation has a folder on the
+    # machine with or without one, so `work_guest` alone no longer
+    # describes a tree there is a copy of here -- which is what
+    # containment is measured against.
+    harness.bridge.connection.guest.work_dir = "/tmp/mirror/WORK"
 
     task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
@@ -2477,6 +2482,11 @@ async def test_the_warning_is_readable_in_the_transcript_not_just_the_bar(
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     harness.bridge.connection.guest.work_guest = "C:\\WORK"
+    # The MIRROR too. Since 2026-10-01 a conversation has a folder on the
+    # machine with or without one, so `work_guest` alone no longer
+    # describes a tree there is a copy of here -- which is what
+    # containment is measured against.
+    harness.bridge.connection.guest.work_dir = "/tmp/mirror/WORK"
 
     task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
@@ -2498,6 +2508,11 @@ async def test_a_device_inside_the_mirror_is_not_called_outside_it(harness):
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     harness.bridge.connection.guest.work_guest = "C:\\WORK"
+    # The MIRROR too. Since 2026-10-01 a conversation has a folder on the
+    # machine with or without one, so `work_guest` alone no longer
+    # describes a tree there is a copy of here -- which is what
+    # containment is measured against.
+    harness.bridge.connection.guest.work_dir = "/tmp/mirror/WORK"
 
     task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
@@ -2553,11 +2568,17 @@ async def test_a_bridge_with_no_mirror_says_so_once_not_on_every_command(
     await harness.close(writer)
 
 
-async def test_a_contained_command_gets_no_added_reassurance(harness):
+async def test_a_contained_command_gets_no_added_reassurance(harness, tmp_path):
     """The bar must read exactly as it does today for an ordinary command."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     harness.bridge.connection.guest.work_guest = "C:\\WORK"
+    # BOTH HALVES, because the guard's question is "is there a copy here to
+    # restore from" and only `work_dir` answers it. Since 2026-10-01 a
+    # conversation has a folder on the machine with or without a mirror, so
+    # setting `work_guest` alone describes a state in which nothing is
+    # restorable -- see the test below.
+    harness.bridge.connection.guest.work_dir = str(tmp_path / "WORK")
 
     task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
@@ -2571,6 +2592,33 @@ async def test_a_contained_command_gets_no_added_reassurance(harness):
     assert "mirror" not in body.lower()
     assert not body.startswith("!")
     task.cancel()
+    await harness.close(writer)
+
+
+async def test_an_unmirrored_folder_does_not_silence_the_gap(harness):
+    """A FOLDER ON THE MACHINE IS NOT A MIRROR. The conversation has its own
+    folder over there now even with no `--sync-dir`, and if the guard read
+    that as "something is mirrored" it would stop saying the one true thing
+    about this deployment -- nothing a command changes can be restored -- and
+    would start judging containment against a tree that has no copy here."""
+    reader, writer = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await _recv(harness, reader, "OPTIONSEND")
+    g = harness.bridge.connection.guest
+    await harness.send(writer, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(reader, {"TURN"}, 10.0)
+    await g.claude.use_tool()
+    assert g.work_guest == "C:\\WORK\\SKYCOLOU"
+    assert g.work_dir == ""
+
+    task = g.claude.ask("mcp__machine__exec",
+                        {"command": "dir", "cwd": "C:\\WORK\\SKYCOLOU"})
+    await _recv(harness, reader, "PERMREQ")
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    transcript = "".join(g.view.pages.all_text())
+    assert "no folder is mirrored" in transcript
     await harness.close(writer)
 
 
@@ -2833,21 +2881,167 @@ async def test_a_declared_share_reaches_the_agent_even_with_no_mirror(harness):
     await harness.close(w)
 
 
-async def test_no_conversation_folder_is_invented_from_the_declared_share(
+async def test_a_conversation_gets_a_folder_on_the_machine_with_no_mirror(
     harness,
 ):
-    """The other half of the honest answer: the bridge says what is true and
-    does NOT start mirroring. Adopting the guest's root would mean inventing
-    a tree on this side and running a bidirectional sync with deletion
-    propagation into a folder that already has the user's files in it --
-    which is the one subsystem that can lose them."""
+    """THE WHOLE POINT, end to end. The machine declares the home its user
+    configured, this bridge has no `--sync-dir`, the user speaks, the first
+    tool call runs -- and the conversation has its own folder on their machine
+    and no tree on this side.
+
+    This test asserted the opposite on 2026-10-01 (`work_guest == ""`), and it
+    PASSED either way: it reached `ensure_work_dir` without
+    `claude.start_turn()`, so there was no conversation id to name a folder
+    against and the function returned before any of the behaviour it was
+    meant to be pinning. The turn is driven properly here."""
     r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
-    await harness.recv_until(r, {"READY"})
+    await harness.recv_until(r, {"OPTIONSEND"})
     g = harness.bridge.connection.guest
-    g.first_prompt = "Sky color"
-    await harness.bridge.workspace.ensure_work_dir(g)
+    await harness.send(w, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await g.claude.use_tool()
+
+    assert g.work_guest == "C:\\WORK\\SKYCOLOU"
+    assert g.work_dir == "", "no mirror was configured and none was invented"
+    await harness.close(w)
+
+
+async def test_the_folder_reaches_the_client_in_the_option_row_it_already_has(
+    harness,
+):
+    """WHO CREATES IT, and over what. No new wire op: the OPTION `work` row
+    already carries the path on every options batch, and the client's
+    OPTIONSEND handler hands it to `rc_workdir_apply`
+    (`win/app/mainwindow.cpp` -> `win/app/workdir.cpp`), which creates it
+    parents and all and makes it that side's live work root. A new frame
+    would have had to pass the exec test in docs/PLAN.md 3.1 to buy
+    something this already does."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge.connection.guest
+    await harness.send(w, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await g.claude.use_tool()
+
+    frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    work = [f for f in frames
+            if f.type == "OPTION" and f.headers.get("kind") == "work"]
+    assert work, [f.type for f in frames]
+    assert work[-1].headers.get("id") == "C:\\WORK\\SKYCOLOU"
+    await harness.close(w)
+
+
+async def test_the_agent_is_told_to_use_the_folder_as_its_working_directory(
+    harness,
+):
+    """AN INSTRUCTION, in front of the message that provokes the writing.
+
+    The channel is the one thing here that is not obvious. The system prompt
+    cannot carry it: it is built when the connection ATTACHES, before the user
+    has said anything, and the folder is named from the conversation's title.
+    The transcript notice is for the person at the keyboard. `with_sync_preamble`
+    arrives a turn late and does not run without a mirror at all. So the
+    instruction goes at the top of the turn, where the title already exists
+    and the tool call that writes has not happened yet.
+    """
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge.connection.guest
+    await harness.send(w, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+
+    sent = g.claude.last_prompt
+    assert "USE `C:\\WORK\\SKYCOLOU` AS YOUR WORKING DIRECTORY" in sent
+    assert "Never the\nroot of a drive" in sent
+    assert sent.endswith("Sky colour"), "the user's own message still last"
+    # And the folder the agent was promised is the folder that gets made.
+    await g.claude.use_tool()
+    assert g.work_guest == "C:\\WORK\\SKYCOLOU"
+    await harness.close(w)
+
+
+async def test_the_working_directory_is_said_once_not_every_turn(harness):
+    """A paragraph in front of every message is a paragraph the model skims.
+    It is said once per FOLDER, so a folder the user changes under the agent
+    is said again and an unchanged one is not."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge.connection.guest
+    # Driven through the turn runner rather than two INPUT frames: the second
+    # turn's TURN frames are indistinguishable in the stream from the first
+    # turn's, so a frame-driven second turn races its own assertion.
+    g.first_prompt = "Sky colour"
+    await harness.bridge.turn_runner.run_turn(g, "Sky colour")
+    await g.claude.use_tool()
+    assert "WORKING DIRECTORY" in g.claude.last_prompt
+
+    await harness.bridge.turn_runner.run_turn(g, "And again")
+    assert g.claude.last_prompt == "And again"
+    await harness.close(w)
+
+
+async def test_nothing_is_prepended_when_a_mirror_is_carrying_the_files(
+    harness, tmp_path,
+):
+    """With a mirror the agent writes on this side and the mirror carries it,
+    and the system prompt's mirrored paragraph says so at length. A second
+    instruction here would be noise on every conversation that works."""
+    harness.bridge.config.sync_dir = str(tmp_path / "mirror")
+    os.makedirs(harness.bridge.config.sync_dir, exist_ok=True)
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge.connection.guest
+    await harness.send(w, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    assert g.claude.last_prompt == "Sky colour"
+    await harness.close(w)
+
+
+async def test_reopening_a_conversation_lands_in_the_same_folder(harness):
+    """IDEMPOTENCY ACROSS A SWITCH, and it was gated on `sync_dir` with the
+    rest: reopening a conversation on a bridge with no `--sync-dir` forgot
+    which folder it had been working in, so the next tool call named a second
+    one -- one conversation, two folders on the user's disk, files split
+    between them with nothing saying so."""
+    r, w = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge.connection.guest
+    await harness.send(w, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await g.claude.use_tool()
+    first, sid = g.work_guest, g.conv_id
+
+    # Driven directly rather than through a NEWSESSION frame: the reply is
+    # another OPTIONSEND, which is indistinguishable in the stream from the
+    # one the tool call's own `send_options` just sent.
+    await harness.bridge.coordinator.new_session(g)
+    assert g.work_guest == "", "a new conversation starts with no folder"
+
+    await harness.bridge.coordinator.switch(g, sid)
+    assert g.work_guest == first
+    await harness.close(w)
+
+
+async def test_no_folder_is_invented_when_the_machine_declared_no_home(
+    harness,
+):
+    """The one place the honest answer is still "nowhere". A client with sync
+    unconfigured on its own side has nominated nothing, and a path chosen by
+    this end would be a directory on somebody's real disk that nobody asked
+    for -- the drive-root mistake one step tidier. The agent is told to ask,
+    and the drive root is named as the destination that is never right."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"OPTIONSEND"})
+    g = harness.bridge.connection.guest
+    assert not (g.hello or {}).get("sync_root")
+    await harness.send(w, Frame("INPUT", {}, b"Sky colour"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    await g.claude.use_tool()
+
     assert g.work_guest == ""
-    assert g.work_dir == ""
+    prompt = g.claude.system_prompt["append"]
+    assert "named no shared folder" in prompt
+    assert "ask where a file should go" in prompt
     await harness.close(w)
 
 

@@ -42,7 +42,8 @@ def describe(h: dict) -> str:
 
 def _sync_paragraph(workdir: str, sync_dir: str | None,
                     guest_root: str | None,
-                    home: str | None = None) -> str:
+                    home: str | None = None,
+                    planned: str | None = None) -> str:
     """What to say about files, which depends on whether sync is configured.
 
     THREE paragraphs now, and only one of them is ever true at a time. Getting
@@ -62,6 +63,20 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
     of 2026-10-01's bug: a guest that declared `C:\\WORK` against a bridge
     with no `--sync-dir` was told nothing was mirrored and nothing about
     where to put a file instead, so it put one in the root of C:.
+
+    `planned` is where this conversation's own folder ON THE MACHINE is about
+    to be, and it is read ONLY by the sync-off branch. The first fix said
+    "write into `C:\\WORK`", the share itself, which is better than the drive
+    root and still not the design: a conversation gets its own folder under
+    that share, created by the client at the first tool call. The prompt is
+    built before that call, so a committed path (`guest_root`) is not
+    available on a first turn and a planned one is -- and with no mirror,
+    that path is the only destination the agent is ever handed, because every
+    byte reaching the machine is a `put_file` to a path it typed itself.
+
+    `guest_root` is deliberately NOT reused for this. The mirrored branch
+    distinguishes a folder that exists from one that is coming, and feeding
+    it a prediction would make it promise a mirror that is not running yet.
     """
     if sync_dir and not guest_root:
         under = (prompts.text("machine.sync.under_home", home=home)
@@ -79,12 +94,31 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
         # agreed to write, and `put_file`d into the root of C: on somebody's
         # real disk -- which this paragraph now names as the one destination
         # that is never right.
-        declared = (prompts.text("machine.sync.no_sync_declared", home=home)
-                    if home
-                    else prompts.text("machine.sync.no_sync_undeclared"))
-        where = (prompts.text("machine.sync.no_sync_where", home=home)
-                 if home
-                 else prompts.text("machine.sync.no_sync_where_unknown"))
+        #
+        # THREE ANSWERS, and which one is true is a fact about the machine
+        # rather than about this bridge:
+        #
+        #   folder  the machine shares a home AND this conversation has (or
+        #           is one tool call away from having) its own folder inside
+        #           it. The only one that hands the agent a destination.
+        #   home    a home, but nothing nameable under it yet -- a title that
+        #           reduces to nothing a FAT volume holds, or every candidate
+        #           name already owned by another conversation.
+        #   none    the client has sync unconfigured on its own side. There
+        #           is nowhere agreed, and the bridge does not invent a
+        #           directory on somebody's real disk to cover for it.
+        folder = guest_root or planned or ""
+        if folder:
+            declared = prompts.text("machine.sync.no_sync_declared_folder",
+                                    home=home or folder, folder=folder)
+            where = prompts.text("machine.sync.no_sync_where_folder",
+                                 folder=folder)
+        elif home:
+            declared = prompts.text("machine.sync.no_sync_declared", home=home)
+            where = prompts.text("machine.sync.no_sync_where", home=home)
+        else:
+            declared = prompts.text("machine.sync.no_sync_undeclared")
+            where = prompts.text("machine.sync.no_sync_where_unknown")
         return prompts.text("machine.sync.no_sync", workdir=workdir,
                             declared=declared, where=where)
 
@@ -275,6 +309,7 @@ def tools_block(found: list, path: list | None = None) -> str:
 def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
                   guest_root: str | None = None,
                   home: str | None = None,
+                  planned: str | None = None,
                   tools: list | None = None,
                   path: list | None = None) -> str:
     """Text appended to Claude Code's own system prompt.
@@ -287,6 +322,7 @@ def system_prompt(h: dict, workdir: str, sync_dir: str | None = None,
         "machine.system.text",
         describe=describe(h),
         workdir=workdir,
-        sync_paragraph=_sync_paragraph(workdir, sync_dir, guest_root, home),
+        sync_paragraph=_sync_paragraph(workdir, sync_dir, guest_root, home,
+                                       planned),
         tools_block=tools_block(tools or [], path),
     ).strip()

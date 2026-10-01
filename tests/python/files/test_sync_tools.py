@@ -68,10 +68,30 @@ def test_status_says_so_before_a_folder_exists(b):
 
 
 def test_status_says_so_plainly_when_sync_is_off(tmp_path):
+    """And NAMES A DESTINATION. It used to end "there is no tool that would
+    copy it", which was stale (`put_file` copies one) and was the shape of
+    answer that left an agent with nowhere to write and a drive root to write
+    it in -- 2026-10-01, on real hardware. With no guest attached there is no
+    work root to name either, so what it says here is ask."""
     bridge = Bridge("s", host="127.0.0.1", port=0)
     out = bridge.sync.sync_status_text()
     assert "not switched on" in out
-    assert "no tool that would copy it" in out
+    assert "ask the user where a file should go" in out
+    assert "not a fault" in out
+
+
+def test_status_names_the_folder_on_the_machine_when_sync_is_off(b):
+    """The machine declared a work root, so this conversation has a folder
+    under it -- made by the client, with nothing mirrored on this side."""
+    b.config.sync_dir = None
+    g = _committed_guest("", "")
+    g.hello = {"sync_root": "C:\\WORK"}
+    g.first_prompt = "Sky colour"
+    g.pending_resume = "a1b2c3d4"   # what `conv_id` reads for an unopened chat
+    b.connection.guest = g
+    out = b.sync.sync_status_text()
+    assert "C:\\WORK\\SKYCOLOU" in out
+    assert "put_file" in out
 
 
 def test_sync_state_defaults_to_none_like_sync_dir(tmp_path):

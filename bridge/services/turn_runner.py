@@ -12,6 +12,7 @@ import logging
 from collections.abc import AsyncIterable
 from typing import Any
 
+from ..agent import prompts
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import (
@@ -173,6 +174,42 @@ class TurnRunner:
         await self.clear_agent_notices(pending, guest=g)
         return "\n".join(lines) + text
 
+    def with_workdir_preamble(self, text: str,
+                              guest: GuestSession | None = None) -> str:
+        r"""Name this conversation's folder on the machine, once.
+
+        ONLY WHEN THERE IS NO MIRROR, and then it is the only channel that
+        arrives in time. With a mirror the agent writes on this side and the
+        mirror carries it, and the system prompt's mirrored paragraph says so
+        already. Without one, every byte reaching the machine is a `put_file`
+        to a path the agent types -- and on 2026-10-01 an agent with no path
+        typed `C:\`, on somebody's real disk.
+
+        The system prompt cannot do this job. It is built when the connection
+        ATTACHES, before the user has said anything, and the folder is named
+        from the conversation's title. By the time there is a title the prompt
+        is frozen for the life of the session.
+
+        So the folder is NAMED here, at the top of the turn (the title is the
+        user's first message, which `coordinator.on_input` has already
+        recorded), and CREATED at the first tool call by the machine itself.
+        Naming makes no directory anywhere -- see
+        `WorkspaceService.planned_guest_dir` -- so a conversation that is only
+        talked to still touches nothing.
+        """
+        g = guest or getattr(self.connection, "guest", None)
+        if g is None or getattr(self.config, "sync_dir", None):
+            return text
+        if self.workspace is None:
+            return text
+        folder = self.workspace.planned_guest_dir(g)
+        # Said once per FOLDER rather than once per conversation, so a folder
+        # the user changes under the agent (SETWORK) is said again.
+        if not folder or g.work_told == folder:
+            return text
+        g.work_told = folder
+        return prompts.text("machine.sync.workdir_told", folder=folder) + text
+
     async def resume_turn(self, guest: GuestSession, answered) -> None:
         """Continue: wait for the wire to be ours, THEN unlatch, THEN explain."""
         async with guest.turn_lock:
@@ -246,6 +283,10 @@ class TurnRunner:
         was_command = text.lstrip().startswith("/")
         if not was_command:
             text = await self.with_sync_preamble(text, guest=guest)
+            # AFTER the sync preamble, so it sits closest to the user's own
+            # message: this is the instruction the next tool call acts on, and
+            # the sync one is about a conflict that has already happened.
+            text = self.with_workdir_preamble(text, guest=guest)
         prompt_payload: str | AsyncIterable[dict] = text
         if (attach or attach_id) and not was_command:
             prompt_payload = await self.attachment.assemble_prompt(

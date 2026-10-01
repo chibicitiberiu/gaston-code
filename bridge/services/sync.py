@@ -639,10 +639,25 @@ class SyncService:
     def sync_status_text(self, guest: GuestSession | None = None) -> str:
         """Everything the agent cannot otherwise find out about sync state."""
         if not self.config.sync_dir:
+            # NAME THE DESTINATION. "there is no tool that would copy it" was
+            # both stale -- `put_file` copies one -- and the shape of answer
+            # that left an agent with nowhere to write and a drive root to
+            # write it in (2026-10-01). The conversation has a folder on that
+            # machine whether or not anything is mirrored.
+            g = self._get_guest(guest)
+            folder = (self.workspace.planned_guest_dir(g)
+                      if g is not None and self.workspace is not None else "")
+            where = (f"Your working directory on that machine is {folder}; "
+                     f"files go there, one at a time, with put_file. "
+                     if folder else
+                     "That machine declared no work root either, so ask the "
+                     "user where a file should go before putting one there. ")
             return (
                 "File synchronisation is not switched on for this session. "
-                "Nothing you write here reaches the user's machine, and "
-                "there is no tool that would copy it."
+                "Nothing you write on this proxy reaches the user's machine "
+                "by itself. " + where +
+                "Nothing is being copied in either direction and nothing "
+                "will be: that is the configuration, not a fault."
             )
         g = self._get_guest(guest)
         mirror = self.workspace.mirror_dir(g) if g is not None else ""

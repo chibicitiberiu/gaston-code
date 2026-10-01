@@ -56,6 +56,18 @@ copy either, so a file you replace over there is simply gone. Say which file
 is going where and what it replaces, and let the user approve it.
 {where}'''
 
+# the machine shares a folder AND this conversation has its own folder inside
+# it. The only sync-off case that hands the agent a destination, and the one
+# the design always intended: the client creates a folder per conversation
+# under the home the user configured, whether or not anything is mirrored.
+no_sync_declared_folder = '''
+
+**That machine shares `{home}`, and this conversation's own folder inside it
+is `{folder}`.** The folders are real and they are on their disk; what is
+missing is the copying, at this end. That is a configuration this session
+cannot change, not a fault to diagnose -- do not go looking for a
+synchronisation problem and do not report one.'''
+
 # the two sides disagree: the machine named a share, this bridge has no mirror
 no_sync_declared = '''
 
@@ -72,15 +84,62 @@ That machine named no shared folder either, so there is no agreed place on it
 and nothing is being copied in either direction. That is the configuration,
 not a fault -- do not go looking for a synchronisation problem.'''
 
+# where a file put on the machine goes, when this conversation has a folder
+no_sync_where_folder = '''
+
+**USE `{folder}` AS YOUR WORKING DIRECTORY ON THAT MACHINE.** It belongs to
+this conversation, it sits inside the folder the machine shares, and the
+client creates it the first time you use a tool -- so if a tool call is the
+first thing you do, it is being made as that call runs. Put files there,
+make subdirectories there, and name the path in what you say so the user
+knows where to look. A file the user asked for goes there unless they name
+somewhere else.
+
+**Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
+drive root is the user's own top-level disk, nothing sweeps it, and a scratch
+file dropped there outlives the conversation that made it.'''
+
 # where a file put on the machine should land, when it named a folder
 no_sync_where = '''
 
-**Where it goes: `{home}`, or a path the user names.** That is the folder
-their machine nominated, and a file you put there is where they will look for
-it. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
-drive root is the user's own top-level disk, nothing sweeps it, and a scratch
-file dropped there outlives the conversation that made it. If you need
-somewhere new, create a folder, name it in what you say, and write inside it.'''
+**This conversation gets its own folder under `{home}`, and that folder is
+your working directory on that machine.** `{home}` is what their machine
+shares; the folder inside it is named after what you were asked for and is
+created by their machine the first time you use a tool on it. Its path
+arrives in an automatic message at the top of a turn -- use it, and name it
+in what you say so the user knows where to look.
+
+If you have not been given a path, make a folder under `{home}` yourself and
+write inside that. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a
+destination: a drive root is the user's own top-level disk, nothing sweeps
+it, and a scratch file dropped there outlives the conversation that made
+it.'''
+
+# prepended to the user's message, once, when a conversation commits to a
+# folder on a machine this bridge is not mirroring.
+#
+# THE ONLY CHANNEL THAT ARRIVES IN TIME. The system prompt is built when the
+# connection attaches, before the user has said anything -- so it cannot name
+# a folder that is named from the conversation's title. The transcript notice
+# is for the person at the keyboard and the agent never sees it. And nothing
+# else reaches the agent between "the user asked for a file" and "the agent
+# chose a path", which on 2026-10-01 was the root of C: on real hardware.
+workdir_told = '''[Automatic message from the bridge, not from the user.]
+
+**USE `{folder}` AS YOUR WORKING DIRECTORY ON THE CONNECTED MACHINE.** It is
+this conversation's own folder, inside the folder that machine shares, and
+that machine creates it the first time you use a tool -- so it is there by
+the time you can write into it. Put the user's files there with `put_file`,
+make subdirectories there, and say the path in what you report. **Never the
+root of a drive.**
+
+Nothing is mirrored in this session, so a file written here on the proxy
+stays here however well the write appears to succeed. Moving it is a
+`put_file` to a path you name.
+
+--- the user's message follows ---
+
+'''
 
 # ... and when it named none, so the user has to be asked
 no_sync_where_unknown = '''

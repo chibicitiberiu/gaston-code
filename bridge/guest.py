@@ -126,6 +126,25 @@ class GuestSession:
     #: first message, so anything chosen before then is a guess the user has
     #: to live with. The toolbar shows "<unset>" for exactly that long.
     work_guest: str = ""
+    #: The folder NAME this conversation has settled on, with no root in
+    #: front of it -- `LISTFILE`.
+    #:
+    #: Set either when the folder is committed or, earlier, when the system
+    #: prompt asks where the folder is GOING to be: the prompt is built when
+    #: the session is, and the folder is not created until the first tool
+    #: call, so without this the prompt would name one candidate and
+    #: `name_work_dir` would be free to pick another. The agent would be
+    #: holding a path that never gets made, which with no mirror is the only
+    #: path it has (`WorkspaceService.planned_guest_dir`).
+    work_planned: str = ""
+    #: The folder path the AGENT has been told to work in, as last told.
+    #:
+    #: Only used when nothing is mirrored, which is when that path is the
+    #: only destination the agent is ever given
+    #: (`TurnRunner.with_workdir_preamble`). Kept so the instruction goes in
+    #: front of one turn rather than every one, and so a folder the user
+    #: changes under the agent is said again.
+    work_told: str = ""
     #: The first thing the user said in this conversation.
     #:
     #: Kept because the FOLDER IS NAMED FROM IT, and the folder is committed

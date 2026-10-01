@@ -241,7 +241,17 @@ class PermissionDesk:
                 # disabled it entirely; without caps it folded case
                 # unconditionally, calling `/WORK/x` contained in a mirror
                 # rooted at `/work` on a case-sensitive machine.
-                root = str(getattr(self._guest, "work_guest", "") or "")
+                # THE MIRRORED FOLDER, which is not the same thing as the
+                # conversation's folder on the machine. Since 2026-10-01 a
+                # conversation gets a folder over there whether or not this
+                # bridge mirrors anything, so `work_guest` alone would answer
+                # "yes, there is a folder" to a question that is really "is
+                # there a copy of it here to restore from". `work_dir` is the
+                # tree on THIS side and is set only with a `--sync-dir`, so it
+                # is what the containment judgement -- and the gap sentence
+                # underneath it -- actually depend on.
+                root = (str(getattr(self._guest, "work_guest", "") or "")
+                        if getattr(self._guest, "work_dir", "") else "")
                 # THE SHELL THIS CALL NAMED. Judging by any other is judging
                 # a grammar the command will not run under.
                 shell = self._shell(args)
