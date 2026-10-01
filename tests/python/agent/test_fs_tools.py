@@ -19,6 +19,7 @@ class FakeFs:
         self.raise_status = raise_status
         self._drives = list(drives)
         self.put_calls: list = []
+        self.probe_calls: list = []
 
     async def get(self, guest, path, *, max_bytes=0):
         if self.raise_status:
@@ -36,9 +37,10 @@ class FakeFs:
         self.put_calls.append((path, data))
         return len(data)
 
-    async def drives(self, guest):
+    async def drives(self, guest, *, probe=False):
         if self.raise_status:
             raise FsError(self.raise_status)
+        self.probe_calls.append(probe)
         return self._drives
 
 
@@ -212,6 +214,30 @@ def test_a_mounted_cd_is_not_an_empty_drive():
     assert "empty" not in body, body
     assert "GASTONTOOLS" in body
     assert "0 MB" in body
+
+
+def test_drives_says_not_checked_when_the_guest_never_probed():
+    """has_media=None is a removable or a CD-ROM the guest did not ask about
+    (BACKLOG 20) -- distinct from False, which means it asked and there is
+    nothing there. Collapsing the two would report an unprobed floppy as
+    known to be empty, which is the guess the guest change exists to avoid.
+    """
+    from bridge.services.guest_fs import Drive
+    fs = FakeFs(drives=[
+        Drive(letter="A", type=2, label="", serial="0", free_kb=0,
+              has_media=None),
+    ])
+    body = _body(_call(_server(fs), "drives", {}))
+    assert "not checked" in body, body
+    assert "empty" not in body, body
+
+
+def test_drives_forwards_probe_to_the_guest():
+    fs = FakeFs(drives=[])
+    _body(_call(_server(fs), "drives", {}))
+    assert fs.probe_calls == [False], fs.probe_calls
+    _body(_call(_server(fs), "drives", {"probe": True}))
+    assert fs.probe_calls == [False, True], fs.probe_calls
 
 
 def test_every_tool_refuses_clearly_with_no_machine_attached():

@@ -49,7 +49,8 @@ from .ops import (
     parse_stat,
     parse_sysinfo,
 )
-from .ship import ShipResult
+from .ship import ShipResult, UpdateResult
+from .ship import self_update as _self_update
 from .ship import ship as _ship
 
 #: 7890 and 7897 are the Gaston client's, 7900+ the test harness's.
@@ -347,6 +348,21 @@ class Remote:
         return _ship(self, local_path, remote_path, relaunch=relaunch,
                      cwd=cwd)
 
+    def self_update(self, local_path: str, **kw) -> UpdateResult:
+        """Replace THIS server with `local_path`, and wait for it to answer.
+
+        `ship()` cannot do it: gremote's own pid is on the guest's kill deny
+        list, so ending the process holding the target image comes back
+        `denied` -- measured on the hardware, 2026-10-01. See gremote/ship.py
+        for the shape and win/remote/gupdate.cpp for the program that does
+        the swap.
+
+        THIS CONNECTION IS CLOSED by the time it returns, whatever happens:
+        the server it was talking to is gone. The result carries the HELLO
+        of the one that replaced it.
+        """
+        return _self_update(self, local_path, **kw)
+
     def rm(self, path: str) -> None:
         self.request("RM", {"path": path})
 
@@ -366,10 +382,19 @@ class Remote:
     def stat(self, path: str) -> Stat:
         return parse_stat(self.request("STAT", {"path": path}))
 
-    def drives(self) -> list[Drive]:
+    def drives(self, probe: bool = False) -> list[Drive]:
         """What letters exist, and what is behind them. `dir` can list one
-        volume; it cannot say which letters there are or which is a CD."""
-        _, chunks = self.stream("DRIVES")
+        volume; it cannot say which letters there are or which is a CD.
+
+        `probe` is off by default (BACKLOG 20): against a removable drive or
+        a CD-ROM, asking for the label and free space moves the mechanism --
+        an audible seek on a real floppy, and a multi-second retry if it is
+        empty. Without it those drives still come back, with their letter
+        and type known and `has_media` reported as `None` (not probed, and
+        not the same thing as "probed and empty"). Pass `True` for the old
+        behaviour."""
+        headers = {"probe": "1"} if probe else None
+        _, chunks = self.stream("DRIVES", headers)
         return parse_drives(chunks, self.acp)
 
     def sysinfo(self) -> SysInfo:

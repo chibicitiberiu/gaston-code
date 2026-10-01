@@ -42,9 +42,12 @@ class Drive:
     serial: str
     free_kb: int
     total_kb: int = 0
-    #: Whether the volume answered. NOT the same as having room: a mounted
-    #: CD-ROM has zero bytes free and is not an empty drive.
-    has_media: bool = False
+    #: Whether the volume answered: True (probed, present), False (probed,
+    #: nothing in it) or None (a removable or CD-ROM the guest did not probe
+    #: -- BACKLOG 20). None is NOT the same as False: a mounted CD-ROM has
+    #: zero bytes free and is not an empty drive, and a drive nobody asked
+    #: is not known to be empty either.
+    has_media: bool | None = None
 
 
 @dataclass
@@ -141,10 +144,11 @@ class GuestFsService:
             raise FsError(status or "no_status")
         return int(headers.get("bytes", "0") or 0)
 
-    async def drives(self, guest: GuestSession) -> list[Drive]:
+    async def drives(self, guest: GuestSession, *,
+                     probe: bool = False) -> list[Drive]:
         fs_id, wait = self._begin(guest, "drives")
         try:
-            await self.connection.send(guest, fs_drives(fs_id))
+            await self.connection.send(guest, fs_drives(fs_id, probe=probe))
             await asyncio.wait_for(wait.future, timeout=BUDGET_S)
         except TimeoutError as exc:
             raise FsError("timeout") from exc
@@ -177,7 +181,7 @@ class GuestFsService:
                 serial=h.get("serial", ""),
                 free_kb=int(h.get("free_kb", "0") or 0),
                 total_kb=int(h.get("total_kb", "0") or 0),
-                has_media=h.get("media") == "1"))
+                has_media={"1": True, "0": False}.get(h.get("media"))))
             return
 
         if not wait.future.done():

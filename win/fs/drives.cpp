@@ -5,7 +5,7 @@
 #include "core/rc_cpp.h"
 
 DriveInfo::DriveInfo()
-    : letter(0), type(DRIVE_UNKNOWN), serial(0), hasMedia(false)
+    : letter(0), type(DRIVE_UNKNOWN), serial(0), media(MEDIA_UNKNOWN)
 {
     label[0] = '\0';
     totalBytes.QuadPart = 0;
@@ -35,7 +35,7 @@ private:
 
 } /* namespace */
 
-void enumerateDrives(DriveSink &sink)
+void enumerateDrives(DriveSink &sink, bool probe)
 {
     DWORD mask = GetLogicalDrives();
     QuietErrors quiet;
@@ -45,6 +45,7 @@ void enumerateDrives(DriveSink &sink)
     {
         DriveInfo info;
         char root[8];
+        bool removable;
 
         if (!(mask & (1UL << i))) continue;
 
@@ -55,11 +56,17 @@ void enumerateDrives(DriveSink &sink)
 
         info.letter = root[0];
         info.type = GetDriveTypeA(root);
+        removable = (info.type == DRIVE_REMOVABLE ||
+                     info.type == DRIVE_CDROM);
 
-        /* A removable with no media answers nothing, slowly, and used to
-         * answer with a dialog. Its letter and its type are still true and
-         * are still worth reporting -- "there is a floppy drive and it is
-         * empty" is an answer. */
+        /* The letter and the type above are always free. Everything below
+         * moves the mechanism on a removable drive or a CD-ROM bay, so it
+         * only runs there when the caller asked for it (BACKLOG 20) -- a
+         * fixed, network or RAM disk entry is never skipped, because none
+         * of those can seek. A removable with no media answers nothing,
+         * slowly, and used to answer with a dialog; its letter and its
+         * type are still true and are still worth reporting on their own. */
+        if (!removable || probe)
         {
             DWORD serial = 0, maxComp = 0, flags = 0;
             char label[64];
@@ -69,14 +76,18 @@ void enumerateDrives(DriveSink &sink)
             {
                 rc_strcpy(info.label, sizeof(info.label), label);
                 info.serial = serial;
-                info.hasMedia = true;
+                info.media = MEDIA_PRESENT;
             }
-        }
+            else
+            {
+                info.media = MEDIA_ABSENT;
+            }
 
-        {
-            ULARGE_INTEGER freeb, total;
-            if (freeBytes64(root, freeb)) info.freeBytes = freeb;
-            if (totalBytes64(root, total)) info.totalBytes = total;
+            {
+                ULARGE_INTEGER freeb, total;
+                if (freeBytes64(root, freeb)) info.freeBytes = freeb;
+                if (totalBytes64(root, total)) info.totalBytes = total;
+            }
         }
 
         if (!sink.onDrive(info)) return;

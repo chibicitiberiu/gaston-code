@@ -59,6 +59,8 @@ EXPECTED = {
     "xfer.source_max_bytes",
     "drives.enumerate",
     "drives.media_is_not_free_space",
+    "drives.quiet_leaves_removable_unknown",
+    "drives.probe_asks_what_quiet_skipped",
     "drives.volume_info",
     "drives.free_bytes",
     "drives.saturates",

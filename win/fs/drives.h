@@ -14,17 +14,28 @@
 
 #include <windows.h>
 
+/* Whether the volume answered, and whether anybody asked.
+ *
+ * A third state and not a bool: UNKNOWN is distinct from ABSENT. A removable
+ * or a CD-ROM that `enumerateDrives` was not told to probe is UNKNOWN --
+ * nobody looked -- which is a different fact from ABSENT, which means the
+ * probe ran and there is nothing in the drive. Collapsing them to one false
+ * is exactly the guess BACKLOG 20 asks not to make: it would report a floppy
+ * with a disk in it as empty, having never looked. */
+enum DriveMedia
+{
+    MEDIA_UNKNOWN = 0,
+    MEDIA_ABSENT  = 1,
+    MEDIA_PRESENT = 2
+};
+
 struct DriveInfo
 {
     char  letter;         /* 'A'..'Z' */
     UINT  type;           /* GetDriveType: DRIVE_FIXED, DRIVE_CDROM, ... */
     char  label[64];      /* empty when there is no media OR no label */
     DWORD serial;
-    /* Whether the volume answered at all. NOT derivable from freeBytes: a
-     * CD-ROM that is present and readable has zero bytes free, and reporting
-     * that as "no disk" is how a mounted disc gets described as an empty
-     * drive. (Found on the guest: D: RETROTOOLS, 0 free, reported empty.) */
-    bool  hasMedia;
+    DriveMedia media;
     ULARGE_INTEGER totalBytes;
     ULARGE_INTEGER freeBytes;
 
@@ -38,16 +49,30 @@ public:
     virtual bool onDrive(const DriveInfo &info) = 0;   /* false stops */
 };
 
-/* Every letter GetLogicalDrives reports.
+/* Every letter GetLogicalDrives reports. GetLogicalDrives (a bitmask) and
+ * GetDriveTypeA (a lookup in a table the OS already built at boot) touch
+ * nothing and are always called -- the letter and the type are free.
+ *
+ * GetVolumeInformationA and the free/total space calls are a different
+ * matter: against a floppy or a CD-ROM bay they move the mechanism. Against
+ * `A:` with no disk in it, that is an audible seek and, on some drives, a
+ * retry loop that takes seconds -- a side effect nobody asked for from a
+ * read-only listing (BACKLOG 20). So they run unconditionally only for a
+ * drive that cannot physically do this (fixed, network, RAM disk); for a
+ * removable or a CD-ROM they run only when `probe` is true, and otherwise
+ * the entry comes back with `media == MEDIA_UNKNOWN` and zeroed label/
+ * serial/space -- true answers (the letter exists, this is its type), not
+ * guesses.
  *
  * Sets SEM_FAILCRITICALERRORS for the length of the enumeration and restores
  * it afterwards. Without that, asking an empty floppy for its volume label
  * trips the 9x critical-error handler, which is a MODAL DIALOG on the person's
  * screen -- raised by a call they approved as read-only, and blocking whatever
- * thread is doing this until somebody walks over and dismisses it. Removable
- * drives with no media are reported with their type and nothing else.
+ * thread is doing this until somebody walks over and dismisses it. That
+ * guards the dialog, not the seek: SEM_FAILCRITICALERRORS does nothing about
+ * the motor, which is why `probe` exists at all.
  */
-void enumerateDrives(DriveSink &sink);
+void enumerateDrives(DriveSink &sink, bool probe = false);
 
 /* Free bytes available to the caller on the volume `pathOrRoot` is on.
  *

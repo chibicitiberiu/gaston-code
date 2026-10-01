@@ -182,11 +182,29 @@ def test_a_drive_with_media_is_not_confused_with_an_empty_one(remote):
     """has_media comes from GetVolumeInformation succeeding, never from
     free bytes. A mounted CD has none by definition, and inferring
     emptiness that way reported every disc as an empty drive -- a bug found
-    by running it on the guest, not by reading it."""
+    by running it on the guest, not by reading it. C: is DRIVE_FIXED, so it
+    is probed whether or not `probe` is set -- only a removable or a CD-ROM
+    is held back."""
     c = [d for d in remote.drives() if d.letter == "C"]
     assert c, "no C: at all"
     assert c[0].has_media is True, c[0]
     assert c[0].total_kb > 0, c[0]
+
+
+def test_drives_does_not_probe_removable_media_unless_asked(remote):
+    """BACKLOG 20. Wine has no floppy motor to prove silent -- see the module
+    docstring -- so this proves the CODE PATH instead: by default a
+    removable or a CD-ROM comes back with `has_media=None` (nobody asked),
+    and `probe=True` is accepted and answers the same letters either way.
+    What only the real machine confirms is that the quiet path makes no
+    sound; that is BACKLOG 20's hardware test, not this one."""
+    quiet = remote.drives()
+    probed = remote.drives(probe=True)
+    assert {d.letter for d in quiet} == {d.letter for d in probed}, (
+        quiet, probed)
+    removable = [d for d in quiet if d.type in (2, 5)]  # REMOVABLE, CDROM
+    for d in removable:
+        assert d.has_media is None, d
 
 
 # --- GET -------------------------------------------------------------------

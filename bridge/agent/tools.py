@@ -709,7 +709,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     @tool(
         "drives",
         prompts.text("tools.drives.description"),
-        {"type": "object", "properties": {}, "required": []},
+        {"type": "object",
+         "properties": {"probe": {"type": "boolean"}},
+         "required": []},
     )
     async def machine_drives(args: dict) -> dict:
         try:
@@ -717,7 +719,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 return _text(prompts.text("tools.fs.refused.unavailable"),
                              error=True)
             try:
-                rows = await fs.drives(guest)
+                rows = await fs.drives(guest, probe=bool(args.get("probe")))
             except FsError as exc:
                 return _text(_fs_refused(exc.status), error=True)
             kinds = {0: "unknown", 1: "no such drive", 2: "removable",
@@ -725,7 +727,13 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             lines = [f"{'drive':<6} {'kind':<12} {'free':>10} "
                      f"{'size':>10}  label"]
             for d in rows:
-                if not d.has_media:
+                if d.has_media is None:
+                    # Not probed -- a removable or a CD-ROM, and `probe` was
+                    # not set. Distinct from `False`: this is "nobody asked",
+                    # not "asked, and it is empty" (BACKLOG 20).
+                    free = prompts.text("tools.drives.view.media_unknown")
+                    size = ""
+                elif not d.has_media:
                     # Reported on the guest's own answer, not inferred from
                     # zero bytes free. A mounted CD has none and is not an
                     # empty drive -- which is exactly how D: RETROTOOLS came

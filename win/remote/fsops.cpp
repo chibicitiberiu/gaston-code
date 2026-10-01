@@ -262,6 +262,20 @@ void FsOps::stat(Responder &r, rc_frame *f)
     r.ok(keys, vals, 4);
 }
 
+/* "1" (probed, media present), "0" (probed, nothing in the drive) or "?"
+ * (never asked -- a removable or a CD-ROM `DRIVES` did not probe). The
+ * third spelling is the point: collapsing it into "0" would report a
+ * floppy that was never looked at as one known to be empty. */
+static const char *mediaToken(DriveMedia m)
+{
+    switch (m)
+    {
+    case MEDIA_PRESENT: return "1";
+    case MEDIA_ABSENT:  return "0";
+    default:            return "?";
+    }
+}
+
 /* One line per drive: "letter type media serial total_kb free_kb label".
  * The label is last, for the same reason a filename is. */
 class DriveRows : public DriveSink
@@ -275,8 +289,8 @@ public:
         char line[160];
         unsigned n;
 
-        rc_strf(line, sizeof line, "%c %u %d %08lx %lu %lu %s\n",
-                d.letter, d.type, d.hasMedia ? 1 : 0,
+        rc_strf(line, sizeof line, "%c %u %s %08lx %lu %lu %s\n",
+                d.letter, d.type, mediaToken(d.media),
                 (unsigned long)d.serial,
                 (unsigned long)(d.totalBytes.QuadPart / 1024),
                 (unsigned long)(d.freeBytes.QuadPart / 1024), d.label);
@@ -323,8 +337,10 @@ private:
     bool m_stopped;
 };
 
-void FsOps::drives(Responder &r)
+void FsOps::drives(Responder &r, rc_frame *f)
 {
+    const char *probeText = rc_frame_get(f, "probe");
+    bool probe = probeText && probeText[0] == '1';
     char count[16];
     const char *keys[1];
     const char *vals[1];
@@ -338,8 +354,15 @@ void FsOps::drives(Responder &r)
     /* enumerateDrives sets SEM_FAILCRITICALERRORS for the length of the
      * walk. Without it, GetVolumeInformationA on an empty A: trips the 9x
      * critical-error handler -- a modal dialog on somebody's screen, raised
-     * by a read-only call, blocking this thread until it is dismissed. */
-    enumerateDrives(*rows.get());
+     * by a read-only call, blocking this thread until it is dismissed.
+     *
+     * probe=0 (the default -- BACKLOG 20) is also why that dialog is the
+     * rarer case now: a removable or a CD-ROM is not asked for its volume
+     * label or its free space at all unless the caller sets probe=1, so
+     * there is usually nothing left to trip the handler on A:. SEM_FAIL-
+     * CRITICALERRORS stays in enumerateDrives regardless, because `probe=1`
+     * still has to not pop a dialog. */
+    enumerateDrives(*rows.get(), probe);
     rows->flush();
     if (rows->stopped())
         return;
@@ -746,7 +769,7 @@ void FsOps::handle(rc_frame *f)
     else if (strcmp(f->type, "STAT") == 0)
         stat(r, f);
     else if (strcmp(f->type, "DRIVES") == 0)
-        drives(r);
+        drives(r, f);
     else if (strcmp(f->type, "GET") == 0)
         get(r, f);
     else if (strcmp(f->type, "PUT") == 0)

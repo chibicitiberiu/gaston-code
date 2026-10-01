@@ -833,19 +833,28 @@ namespace {
 class DriveCount : public DriveSink
 {
 public:
-    DriveCount() : seen(0), sawC(false), withLabel(0), mediaSeen(0)
+    DriveCount() : seen(0), sawC(false), withLabel(0), mediaSeen(0),
+                   removableSeen(0), removableUnknown(0)
     {
         detail[0] = '\0';
     }
     virtual bool onDrive(const DriveInfo &info)
     {
         char one[64];
+        bool removable = (info.type == DRIVE_REMOVABLE ||
+                          info.type == DRIVE_CDROM);
         seen++;
         if (info.letter == 'C') sawC = true;
         if (info.label[0]) withLabel++;
-        if (info.hasMedia) mediaSeen++;
+        if (info.media == MEDIA_PRESENT) mediaSeen++;
+        if (removable)
+        {
+            removableSeen++;
+            if (info.media == MEDIA_UNKNOWN) removableUnknown++;
+        }
         rc_strf(one, sizeof(one), "%c=%u%s ", info.letter, info.type,
-                info.hasMedia ? "+media" : "");
+                info.media == MEDIA_PRESENT ? "+media" :
+                info.media == MEDIA_ABSENT ? "+empty" : "+unknown");
         rc_strcpy(detail + strlen(detail),
                   (unsigned)(sizeof(detail) - strlen(detail)), one);
         return true;
@@ -854,6 +863,8 @@ public:
     bool sawC;
     int withLabel;
     int mediaSeen;
+    int removableSeen;
+    int removableUnknown;
     char detail[256];
 };
 
@@ -861,7 +872,7 @@ public:
 
 static void caseDrives()
 {
-    DriveCount c;
+    DriveCount c, cp;
     ULARGE_INTEGER freeb;
     char detail[320];
 
@@ -880,10 +891,25 @@ static void caseDrives()
     note("drives.volume_info", c.withLabel ? "at least one volume answered"
                                            : "no volume labels readable");
     /* Zero free is not no-media, and the drives listing said otherwise until
-     * a guest run showed a mounted CD reported as an empty drive. */
+     * a guest run showed a mounted CD reported as an empty drive. C: is
+     * DRIVE_FIXED, never skipped by the quiet default, so this still proves
+     * the distinction on every platform this runs on. */
     say("drives.media_is_not_free_space", c.mediaSeen >= 1,
         "a volume that answered is marked as having media whatever its free "
         "space");
+
+    /* BACKLOG 20. This proves the CODE PATH -- that the default run never
+     * calls GetVolumeInformationA/GetDiskFreeSpace* against a removable or a
+     * CD-ROM -- not the silence on a real floppy, which Wine has no motor to
+     * demonstrate either way. `probe=true` asks the ones the quiet pass
+     * skipped, which the second count is here to show. */
+    enumerateDrives(cp, true);
+    say("drives.quiet_leaves_removable_unknown",
+        c.removableUnknown == c.removableSeen,
+        "no removable or CD-ROM drive answers media without being asked");
+    say("drives.probe_asks_what_quiet_skipped",
+        cp.mediaSeen >= c.mediaSeen,
+        "probe=true gets at least everything the quiet pass got");
 
     /* The 64-bit answer is the reason this exists: GetDiskFreeSpaceA is
      * clamped by the OS to about 2GB of clusters, and that figure goes into

@@ -62,10 +62,12 @@ class Stat:
 class Drive:
     letter: str
     type: int
-    #: False for a floppy or CD bay with nothing in it. NOT derivable from
-    #: free bytes: a mounted CD has none by definition, and inferring
-    #: emptiness that way reported every disc as an empty drive.
-    has_media: bool
+    #: True (probed, present), False (probed, nothing in it) or None (a
+    #: removable or CD-ROM `DRIVES` did not probe -- BACKLOG 20). None is
+    #: NOT the same as False: a mounted CD has no bytes free by definition,
+    #: and so does a drive nobody asked about, and conflating the two
+    #: reported every disc as an empty drive on the first guest run.
+    has_media: bool | None
     serial: int
     total_kb: int
     free_kb: int
@@ -206,7 +208,11 @@ def parse_stat(frame: Frame) -> Stat:
 
 
 def parse_drives(chunks: list[Frame], encoding: str) -> list[Drive]:
-    """`letter type media serial total_kb free_kb label`, label last."""
+    """`letter type media serial total_kb free_kb label`, label last.
+
+    `media` is "1" (present), "0" (probed, absent) or "?" (never probed --
+    a removable or a CD-ROM `DRIVES` was not asked about, BACKLOG 20).
+    """
     out: list[Drive] = []
     for chunk in chunks:
         for line in chunk.body.decode(encoding, "replace").splitlines():
@@ -217,7 +223,8 @@ def parse_drives(chunks: list[Frame], encoding: str) -> list[Drive]:
                 continue
             letter, kind, media, serial, total, free = parts[:6]
             label = parts[6] if len(parts) > 6 else ""
-            out.append(Drive(letter, int(kind), media == "1",
+            has_media = {"1": True, "0": False}.get(media)
+            out.append(Drive(letter, int(kind), has_media,
                              int(serial, 16), int(total), int(free), label))
     return out
 

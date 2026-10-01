@@ -57,7 +57,7 @@ private:
 
     void ls(Responder &r, rc_frame *f);
     void stat(Responder &r, rc_frame *f);
-    void drives(Responder &r);
+    void drives(Responder &r, rc_frame *f);
     void get(Responder &r, rc_frame *f);
     void put(Responder &r, rc_frame *f);
     void putChunk(Responder &r, rc_frame *f);

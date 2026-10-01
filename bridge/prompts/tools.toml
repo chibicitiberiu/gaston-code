@@ -364,7 +364,8 @@ Wrote {bytes} bytes to {path} on the machine.'''
 description = '''
 List the connected machine's drive letters, what kind each one is, and how much room is free.
 
-Read-only and cheap. Worth a call before writing a large file, or to tell a hard disk from a CD-ROM or an empty floppy drive -- which the machine's own directory listing does not say.'''
+Read-only and cheap for a hard disk or a network share. For a floppy or a CD-ROM it is cheap too UNLESS you set `probe` true: that asks the drive for its label and free space, which on real hardware means the drive seeks, takes a moment, and can retry if it is empty. Without `probe`, a removable drive's letter and kind still come back, just not what is in it -- call again with `probe` true if you need to know.'''
 
 [drives.view]
 no_media = '''empty'''
+media_unknown = '''not checked'''

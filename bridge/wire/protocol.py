@@ -548,9 +548,20 @@ def fs_putend(fs_id: str, crc: int) -> Frame:
     return Frame("FSPUTEND", {"id": fs_id, "crc": str(crc)})
 
 
-def fs_drives(fs_id: str) -> Frame:
-    """Every drive letter the machine has, with type, label and free space."""
-    return Frame("FSDRIVES", {"id": fs_id})
+def fs_drives(fs_id: str, *, probe: bool = False) -> Frame:
+    """Every drive letter the machine has, with type, label and free space.
+
+    `probe` is off by default (BACKLOG 20): against a removable drive or a
+    CD-ROM bay, the label and free-space calls move the mechanism -- an
+    audible seek on a real floppy, and on some drives a multi-second retry
+    when it is empty. The letter and the type are unconditional either way;
+    a caller that genuinely wants to know what is in A: sets `probe=True`
+    and gets the old behaviour.
+    """
+    h = {"id": fs_id}
+    if probe:
+        h["probe"] = "1"
+    return Frame("FSDRIVES", h)
 
 
 def ui_focus(ui_id: str, target: str, *, settle: int = 0,

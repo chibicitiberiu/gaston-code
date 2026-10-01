@@ -353,8 +353,16 @@ public:
         /* Sent separately from the free figure, because they are different
          * questions: a mounted CD has zero bytes free and is not an empty
          * drive. Without this the caller has to guess, and it guesses wrong
-         * for every disc. */
-        keys[7] = "media";    vals[7] = info.hasMedia ? "1" : "0";
+         * for every disc. A third spelling, "unknown", is what a removable
+         * or a CD-ROM gets when FSDRIVES ran with probe=0 (BACKLOG 20) --
+         * nobody looked, which is not the same fact as "0". */
+        keys[7] = "media";
+        switch (info.media)
+        {
+        case MEDIA_PRESENT: vals[7] = "1";       break;
+        case MEDIA_ABSENT:  vals[7] = "0";       break;
+        default:            vals[7] = "unknown"; break;
+        }
         if (rc_net_send(m_net, "FSDRIVE", keys, vals, 8, NULL, 0) != 0)
             return false;
         m_n++;
@@ -374,6 +382,8 @@ private:
 static void do_fsdrives(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
+    const char *probeText = rc_frame_get(f, "probe");
+    bool probe = probeText && probeText[0] == '1';
     const char *keys[2];
     const char *vals[2];
     char n[16];
@@ -384,7 +394,10 @@ static void do_fsdrives(rc_net *net, rc_frame *f)
     }
     {
         DriveRows rows(net, id);
-        enumerateDrives(rows);
+        /* probe=0 by default (BACKLOG 20): a removable or a CD-ROM is not
+         * asked for its volume label or free space unless the caller sets
+         * probe=1. The letter and the type are unconditional either way. */
+        enumerateDrives(rows, probe);
         rc_strf(n, sizeof(n), "%d", rows.count());
     }
     keys[0] = "id";    vals[0] = id;
