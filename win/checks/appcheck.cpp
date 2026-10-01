@@ -30,6 +30,10 @@
 /* POD, so no static constructor (make check fails the build on one). */
 static char g_trace[512];
 static HINSTANCE g_instance;
+/* Somewhere to read a log file back into. Static rather than a local because
+ * `make check` gates any stack frame at a page, and these cases want to hold
+ * a whole small log at once. */
+static char g_file[2048];
 
 /* Its own block, clear of core/'s WM_APP + 0x100 (tools/check/msgids.py). */
 #define WM_CHECK_FILTERED (WM_APP + 0x200)
@@ -75,6 +79,47 @@ static void say(const char *name, bool pass)
     g_trace[0] = '\0';
 }
 
+/* --- reading a log back ----------------------------------------------------
+ *
+ * The rotation and the shutdown trace are both claims about what is IN THE
+ * FILE after the program has gone, which is how a person reads them on the
+ * real machine, so these cases assert on the bytes rather than on a return
+ * value. FILE_SHARE_WRITE as well as READ: some of them read a log while
+ * another handle on it is still open. */
+static int slurp(const char *path)
+{
+    DWORD n = 0;
+
+    g_file[0] = '\0';
+    Handle f(CreateFileA(path, GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
+    if (!f.valid())
+        return 0;
+    if (!ReadFile(f.get(), g_file, sizeof g_file - 1, &n, NULL))
+        return 0;
+    g_file[n] = '\0';
+    return 1;
+}
+
+static int has(const char *text)
+{
+    return strstr(g_file, text) != 0;
+}
+
+/* a before b, with either missing counting as no. */
+static int before(const char *a, const char *b)
+{
+    const char *pa = strstr(g_file, a);
+    const char *pb = strstr(g_file, b);
+    return pa && pb && pa < pb;
+}
+
+static int exists(const char *path)
+{
+    return GetFileAttributesA(path) != (DWORD)-1;
+}
+
 enum
 {
     FAIL_INIT = 1,
@@ -91,12 +136,23 @@ enum
     SLOW_JOIN = 128,
     /* Is App's hidden window really in the set USER broadcasts the session
      * messages to? EnumWindows walks top-level windows, which is that set. */
-    CHECK_TOP_LEVEL = 256
+    CHECK_TOP_LEVEL = 256,
+    /* WM_ENDSESSION with ENDSESSION_LOGOFF in the lParam. gremote is meant to
+     * survive a logoff and not a shutdown, so the log has to say which one it
+     * saw -- which means the handler has to read the lParam at all. */
+    LOGOFF_ON_START = 512
 };
 
 /* Long enough to tell a wait from a return, short enough not to slow the
- * suite. The handler must come back in a small fraction of it. */
-enum { SLOW_JOIN_MS = 1500, PROMPT_MS = 500 };
+ * suite. The handler must come back in a small fraction of it.
+ *
+ * TICK_SLACK_MS is not padding for its own sake. `Sleep(1500)` timed with
+ * GetTickCount reads back as 1491 often enough to fail about one run in
+ * three, because GetTickCount advances in ~15ms steps and the Sleep is
+ * measured against a counter that may have ticked just before it started.
+ * The two thresholds are 1500 and 500, so a third of a tick's worth of slack
+ * cannot blur them. */
+enum { SLOW_JOIN_MS = 1500, PROMPT_MS = 500, TICK_SLACK_MS = 32 };
 
 static HWND g_wantWindow;
 static int g_foundWindow;
@@ -151,6 +207,16 @@ public:
         }
         if (m_flags & END_SESSION_ON_START)
             PostMessageA(m_app->window(), WM_ENDSESSION, TRUE, 0);
+        if (m_flags & LOGOFF_ON_START)
+        {
+            /* Both, in the order USER sends them: the query line is how
+             * "WM_ENDSESSION never arrived" is told from "the broadcast never
+             * reached us", so it has to be exercised too. */
+            PostMessageA(m_app->window(), WM_QUERYENDSESSION, 0,
+                         ENDSESSION_LOGOFF);
+            PostMessageA(m_app->window(), WM_ENDSESSION, TRUE,
+                         ENDSESSION_LOGOFF);
+        }
         if (m_flags & CHECK_TOP_LEVEL)
         {
             g_wantWindow = m_app->window();
@@ -196,7 +262,11 @@ enum
 {
     APP_FAIL_INITIALIZE = 1,
     APP_EXIT_ZERO = 2,
-    APP_NO_SERVICES = 4
+    APP_NO_SERVICES = 4,
+    /* What gaston and gremote really do: close the log as the last act of
+     * cleanup(). That is what makes the handler's own closing line need
+     * rc_log_tail, so the cases that read the file back set this. */
+    APP_CLOSES_LOG = 8
 };
 
 /* Three services, A B C, created in order with their dependencies (here
@@ -270,6 +340,8 @@ protected:
         m_b.reset();
         m_a.reset();
         trace('C', '.');
+        if (m_appFlags & APP_CLOSES_LOG)
+            rc_log_close();
     }
 
 private:
@@ -398,7 +470,7 @@ int main(void)
          * jC present, dC absent. */
         int code = runTimed(new TestApp(0, 0, SLOW_JOIN | QUIT_ON_START,
                                         0, SLOW_JOIN_MS));
-        bool waited = g_elapsedMs >= SLOW_JOIN_MS;
+        bool waited = g_elapsedMs + TICK_SLACK_MS >= SLOW_JOIN_MS;
         bool joined = strstr(g_trace, "jC") != 0;
         bool leaked = strstr(g_trace, "dC") == 0;
         traceMs(g_elapsedMs);
@@ -512,6 +584,153 @@ int main(void)
         bool late = t.join(5000);
         say("join-reports-a-thread-still-running",
             started && !early && late && b.ran);
+    }
+
+    /* --- core/log.h ---------------------------------------------------
+     *
+     * THE LOG USED TO DELETE THE EVIDENCE. rc_log_open opened with
+     * CREATE_ALWAYS, and the first act of recovering a hung Windows 98 box is
+     * a forced restart -- so the lines written on the way down, the only
+     * record of the hang, were destroyed by the act of recovering from it.
+     * The user's real Pentium hung during shutdown twice and both reboots
+     * learned nothing. rc_log_open now renames <program>.log to
+     * <program>.prv first.
+     *
+     * These cases come LAST on purpose: everything above runs with no log
+     * open, so App's own rc_log calls go nowhere and cannot land in the files
+     * read back here. They run in whatever directory the binary was started
+     * in, which for the suite is a fresh temp dir (tests/python/conftest.py,
+     * run_guest). */
+    {
+        rc_log_open(".", "lrot");
+        rc_log("MARKER-ONE");
+        rc_log_close();
+        int second = rc_log_open(".", "lrot");
+        rc_log("MARKER-TWO");
+        rc_log_close();
+
+        slurp("lrot.prv");
+        bool kept = has("MARKER-ONE") && has("=== lrot exiting ===");
+        slurp("lrot.log");
+        bool fresh = has("MARKER-TWO") && !has("MARKER-ONE") &&
+                     has("the previous run is now lrot.prv");
+        say("log-keeps-the-previous-run", second == 0 && kept && fresh);
+    }
+    {
+        /* Nothing to keep, and no empty .prv pretending there was. */
+        int opened = rc_log_open(".", "lfirst");
+        rc_log_close();
+        slurp("lfirst.log");
+        say("log-first-run-keeps-nothing",
+            opened == 0 && !exists("lfirst.prv") &&
+            has("=== lfirst starting ===") && !has("previous run"));
+    }
+    {
+        /* THE NAME. `.prv` has an 8.3 spelling; `.log.old` has none, and on
+         * FAT a name with no 8.3 form is a DIFFERENT file from DOS and from
+         * the installer -- which this project has paid for before. Pinned on
+         * the longest stem that uses this (gremote, 7 characters). */
+        rc_log_open(".", "gremote");
+        rc_log_close();
+        rc_log_open(".", "gremote");
+        rc_log_close();
+        say("log-rotation-name-has-an-8-3-spelling",
+            exists("gremote.prv") && !exists("gremote.log.old") &&
+            strlen("gremote") <= 8);
+    }
+    {
+        /* Several of our exes share one directory on the test box, so the
+         * rotation has to be per program or one of them eats the other's
+         * previous run. */
+        rc_log_open(".", "lpa");
+        rc_log("AAA");
+        rc_log_close();
+        rc_log_open(".", "lpb");
+        rc_log("BBB");
+        rc_log_close();
+        rc_log_open(".", "lpa");
+        rc_log_close();
+        rc_log_open(".", "lpb");
+        rc_log_close();
+
+        slurp("lpa.prv");
+        bool a = has("AAA") && !has("BBB");
+        slurp("lpb.prv");
+        bool b = has("BBB") && !has("AAA");
+        say("log-rotation-is-per-program", a && b);
+    }
+    {
+        /* A FAILED ROTATION MUST STILL LOG. A diagnostic feature that can
+         * prevent logging is worse than the bug it fixes, so this forces the
+         * rename to fail -- .prv held open with no sharing, which is what a
+         * read-only directory or a file somebody else has open looks like
+         * from here -- and asks for the current run anyway. */
+        rc_log_open(".", "lfail");
+        rc_log("MARKER-OLD");
+        rc_log_close();
+
+        Handle hold(CreateFileA("lfail.prv", GENERIC_WRITE, 0, NULL,
+                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL));
+        DWORD written = 0;
+        bool held = hold.valid() != 0;
+        if (held)
+            WriteFile(hold.get(), "HELD\r\n", 6, &written, NULL);
+
+        int opened = rc_log_open(".", "lfail");
+        rc_log("MARKER-NEW");
+        rc_log_close();
+        hold.reset();
+
+        slurp("lfail.log");
+        bool logs = opened == 0 && has("=== lfail starting ===") &&
+                    has("MARKER-NEW") &&
+                    has("could NOT be kept as lfail.prv");
+        slurp("lfail.prv");
+        bool untouched = has("HELD");
+        say("log-survives-a-failed-rotation",
+            held && written == 6 && logs && untouched);
+    }
+    {
+        /* THE SHUTDOWN TRACE, read back the way a person reads it after a
+         * forced restart. Four markers, each settling one case: the handler
+         * was entered; the signalling got through; cleanup() ran; and the
+         * handler returned to Windows. The last of those lands AFTER
+         * cleanup() closed the log, so it proves rc_log_tail's reopen as
+         * well -- without it, a fault on the way out of the handler and a
+         * clean exit end with the same line. */
+        rc_log_open(".", "lend");
+        runOnce(new TestApp(0, 0, END_SESSION_ON_START, APP_CLOSES_LOG));
+        slurp("lend.log");
+        bool entered = has("Windows is ending the session "
+                           "(a shutdown or restart)");
+        bool signalled = has("abandoning RC unjoined");
+        bool cleaning = has("every service is signalled and abandoned; "
+                            "cleaning up");
+        bool returned = before("=== lend exiting ===",
+                               "the session-end handler is returning to "
+                               "Windows");
+        say("end-session-writes-entry-through-exit-to-the-log",
+            entered && signalled && cleaning && returned);
+    }
+    {
+        /* And it reads the lParam, because "gremote outlives a logoff" is a
+         * claim the log has to be able to confirm or deny. */
+        rc_log_open(".", "lloff");
+        runOnce(new TestApp(0, 0, LOGOFF_ON_START, APP_CLOSES_LOG));
+        slurp("lloff.log");
+        say("end-session-says-whether-it-was-a-logoff",
+            has("asks whether the session may end (a logoff)") &&
+            has("Windows is ending the session (a logoff)"));
+    }
+    {
+        /* The ordinary path stays quiet: these lines mean a session end, and
+         * a line that appears either way settles nothing. */
+        rc_log_open(".", "lquit");
+        runOnce(new TestApp(0, 0, QUIT_ON_START, APP_CLOSES_LOG));
+        slurp("lquit.log");
+        say("an-ordinary-quit-writes-no-session-lines",
+            has("=== lquit exiting ===") && !has("session") &&
+            !has("cleaning up"));
     }
     return 0;
 }

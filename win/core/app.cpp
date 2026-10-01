@@ -110,12 +110,26 @@ void App::shutdown()
         return;
     m_shutDown = true;
     stopServices();
+    /* The boundary between the two halves of the teardown, and only on the
+     * path where it is evidence. Reading a log back afterwards, a fault in a
+     * service's signalStop and a fault in cleanup()'s destructors are
+     * otherwise the same absence. */
+    if (m_sessionEnding)
+        rc_log("app: every service is signalled and abandoned; cleaning up");
     cleanup();
+}
+
+/* Which kind of session end, from the lParam the handlers are given. On 9x
+ * this is the difference between "log off" and "shut down", and gremote is
+ * meant to survive one and not the other (docs/REMOTE.md), so a log that
+ * does not say which cannot answer whether it behaved. */
+static const char *endSessionKind(LPARAM lp)
+{
+    return (lp & ENDSESSION_LOGOFF) ? "a logoff" : "a shutdown or restart";
 }
 
 bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
 {
-    (void)lp;
     *result = 0;
     switch (msg)
     {
@@ -128,8 +142,12 @@ bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
          * back -- so the teardown waits for WM_ENDSESSION, which is Windows
          * saying it has committed. The log line is worth its bytes: it is
          * how a shutdown that stalls LATER is told from one that stalled
-         * here. */
-        rc_log("app: Windows asks whether the session may end; yes");
+         * here -- and, now that the previous run's log survives the restart
+         * that recovers the machine, it is also how "WM_ENDSESSION never
+         * arrived" is told from "the broadcast never reached us at all".
+         * USER sends this one first, to every top-level window. */
+        rc_log("app: Windows asks whether the session may end (%s); yes",
+               endSessionKind(lp));
         *result = TRUE;
         return true;
     case WM_ENDSESSION:
@@ -159,17 +177,43 @@ bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
          * cleanup() as the ordinary path. joinOrLeak() reads the flag and
          * abandons each service unjoined instead of waiting for it, and
          * cleanup() still gets to write and close the log -- a hang with no
-         * log is this project's worst case, and the two lines above plus one
-         * per abandoned service are what say afterwards that a session end
-         * was seen and the fast path was taken.
+         * log is this project's worst case, and the lines below are what say
+         * afterwards that a session end was seen and the fast path was
+         * taken.
          *
          * Nothing is freed that a live thread can touch: abandoning means
          * releasing the UniqueObj, so cleanup()'s reset() finds it empty,
-         * and runApp() leaks the App itself for the same reason. */
+         * and runApp() leaks the App itself for the same reason.
+         *
+         * FOUR MARKERS, AND THEY ARE THE WHOLE POINT OF THE PATH. The log is
+         * read after a forced restart, so every line it does not contain has
+         * to mean something definite:
+         *
+         *   no "entered" line          -- WM_ENDSESSION never arrived (and
+         *                                 the WM_QUERYENDSESSION line above
+         *                                 says whether the broadcast reached
+         *                                 us at all);
+         *   "entered" and no more      -- faulted while signalling, with the
+         *                                 abandoned-X lines naming how far;
+         *   "cleaning up" and no more  -- faulted in cleanup();
+         *   "returning ... after N ms" -- the fast path ran to the end, and
+         *                                 N says whether it was fast.
+         *
+         * The last of those is written with rc_log_tail, not rc_log, because
+         * cleanup() has closed the log by then: it reopens the file and
+         * appends. Without it the exiting banner is the final line on both a
+         * clean return and a fault on the way out. */
         m_sessionEnding = true;
-        rc_log("app: Windows is ending the session; signalling every service "
-               "and leaving this handler WITHOUT joining any of them");
-        shutdown();
+        {
+            DWORD t0 = GetTickCount();
+            rc_log("app: Windows is ending the session (%s); signalling every "
+                   "service and leaving this handler WITHOUT joining any of "
+                   "them", endSessionKind(lp));
+            shutdown();
+            rc_log_tail("app: the session-end handler is returning to Windows "
+                        "after %lu ms; nothing below this line is ours",
+                        (unsigned long)(GetTickCount() - t0));
+        }
         PostQuitMessage(0);
         return true;
     }

@@ -592,8 +592,9 @@ install directory, and scratch in three places. None of it was wrong when it
 was written; it accumulated because nobody said where things went.
 
     C:\GASTON\      the client: gaston.exe, gaston.ini, view.htm,
-                     spin.gif, tools_detect.ini, gaston.log
-    C:\GREMOTE\     the server: gremote.exe, gremote.ini, gremote.log
+                     spin.gif, tools_detect.ini, gaston.log, gaston.prv
+    C:\GREMOTE\     the server: gremote.exe, gremote.ini, gremote.log,
+                     gremote.prv
     C:\WORK\        the sync root, and NOTHING else. Conversation folders
                      live under it; it must never contain either program,
                      or the client mirrors itself to the bridge
@@ -937,20 +938,37 @@ Things only the real box can answer, collected so the first session covers them:
 
   Fixed by never joining on that path (above). **Only the real box can
   confirm the fix**: Wine has no 9x shutdown and no Win16Mutex, so
-  `appcheck` can prove the handler returns promptly and nothing more. What to
-  look for afterwards, in `GREMOTE.LOG` beside the exe:
+  `appcheck` can prove the handler returns promptly and nothing more.
 
-  - `app: Windows asks whether the session may end; yes`
-  - `app: Windows is ending the session; signalling every service and leaving
-    this handler WITHOUT joining any of them`
+  **Read `GREMOTE.PRV`, not `GREMOTE.LOG`.** Forcing the restart is how the
+  hang is recovered, and the restarted `gremote` truncated its own log -- so
+  the evidence was destroyed by the recovery, twice, before `rc_log_open`
+  learned to rename the old file first (`win/core/log.cpp`). `.LOG` is the run
+  that came up after the reboot; `.PRV` is the one that went down.
+
+  What to look for in it:
+
+  - `app: Windows asks whether the session may end (a shutdown or restart);
+    yes`
+  - `app: Windows is ending the session (a shutdown or restart); signalling
+    every service and leaving this handler WITHOUT joining any of them`
   - `app: the session is ending; abandoning server unjoined`
+  - `app: every service is signalled and abandoned; cleaning up`
   - `=== gremote exiting ===`
+  - `app: the session-end handler is returning to Windows after N ms; nothing
+    below this line is ours`
 
-  All four, and the machine reaching the reboot. The last two are the proof
-  the fast path ran to the end rather than faulting in it; a log that stops
-  after the second line is a new bug, not this one.
+  All of them, with a small N, and the machine reaching the reboot. Each line
+  that is MISSING names a different failure, which is the point of having six
+  rather than two: no first line at all means the broadcast never reached us;
+  the first without the second means `WM_ENDSESSION` never arrived; the second
+  without `cleaning up` means it faulted while signalling, and the
+  `abandoning` lines say how far it got; `cleaning up` without the banner
+  means it faulted in `cleanup()`; and the last line -- written after the log
+  was closed, by reopening it -- is the only thing that distinguishes a clean
+  return to Windows from a fault on the way out of the handler.
 - **Shutdown with the client running**, same question, same log lines in
-  `GASTON.LOG` (`abandoning desktop` / `connection` / `main window` / `ole`
+  `GASTON.PRV` (`abandoning desktop` / `connection` / `main window` / `ole`
   `unjoined`). The client had the longer wait of the two, so if a desktop ever
   hung on the way down with `gaston.exe` up, this was why.
 - **Does `gremote` survive a LOGOFF, as `RegisterServiceProcess` promises?**
@@ -967,10 +985,12 @@ Things only the real box can answer, collected so the first session covers them:
   that it survives a logoff.
 
   To test: connect, log off at the console, and see whether the port still
-  answers. If it does not, `GREMOTE.LOG`'s last lines will say which message
-  arrived. The fix, if needed, is to read `WM_ENDSESSION`'s `lParam` for
-  `ENDSESSION_LOGOFF` and ignore a logoff -- which is a judgement about what
-  that bit means on 98, so it wants the measurement first. Note this is
+  answers. If it does not, `GREMOTE.PRV`'s last lines will say which message
+  arrived, and both handlers now print `(a logoff)` or `(a shutdown or
+  restart)` from `WM_ENDSESSION`'s `lParam` -- so the measurement is a matter
+  of reading the file. ACTING on the bit, by ignoring a logoff, is a
+  judgement about what it means on 98 and still wants that measurement
+  first. Note this is
   unchanged by the 2026-10-01 fix: that changed only whether the handler
   waits, never which messages lead to a quit.
 

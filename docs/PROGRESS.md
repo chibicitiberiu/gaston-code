@@ -3350,3 +3350,85 @@ purpose: unifying them means deciding which of two incompatible behaviours
 the one id has, and that belongs with §7's mirror decision.
 
 Committed at load: `gaston.exe` 466201 of 470000.
+
+## The log survives the restart that recovers the machine (2026-10-01)
+
+The user's real Pentium 200 hung during shutdown, twice. Both times the
+recovery was a forced restart, and the restarted `gremote`'s first act was
+`CreateFileA(..., CREATE_ALWAYS)` on `GREMOTE.LOG` -- so the lines written on
+the way down, the only record of what happened, were destroyed by the act of
+recovering from it. Measured on the box afterwards: the file opened with
+`17:09:19 === gremote starting ===` and held nothing else. Two reboots, two
+investigations, nothing learned from either.
+
+This is the same failure CLAUDE.md's no-NT-imports rule exists to prevent --
+"a hang with no log written and nothing to debug" -- arriving by a different
+road. A log that deletes itself when you reach for it is not a diagnostic.
+
+**Rotate on open, one generation, `<program>.PRV`.** `rc_log_open` renames
+`<program>.log` to `<program>.prv` before it truncates anything.
+
+The two alternatives, and why not. *Appending with a separator* keeps
+everything, and everything is what a 1998 IDE platter does not have room for;
+capping it means asking the size, copying the tail of the file forward and
+truncating, which is extra passes and a temp file on the one path that has to
+work when the disk is full and the machine is already in trouble -- a trim
+that goes wrong eats the evidence it was protecting. *N generations* means N
+renames in sequence at startup, each able to fail halfway and leave a set
+nobody can order, for a run nobody has ever wanted: the evidence is read
+immediately after the bad run, by rebooting, which is exactly one run back.
+Two files, one rename. A rename inside one directory also moves a directory
+entry and copies no data, so unlike a copy it needs no free space.
+
+**`.prv`, not `.log.old`.** A name with no 8.3 spelling is a DIFFERENT file
+seen from DOS and from the installer, which this project has already paid for
+once with `retroclaude.ini`. Every program that logs has a stem of eight
+characters or fewer, so `GREMOTE.PRV`, `GASTON.PRV` and `GUPDATE.PRV` are all
+8.3 -- and the name is derived from the `program` argument, so the seven exes
+that share a directory never rotate each other's log.
+
+**Nothing the rotation does can stop logging.** It is a diagnostic nicety and
+logging is the diagnostic itself. Every path through `rotate()` falls through
+to the same `CreateFileA` as before and the return value is unchanged: no
+previous log (first run) is silent; a truncated path, a read-only directory, a
+`.prv` somebody holds open, a `.log` the dying copy still has -- each leaves
+the old run lost and says so in the new log, with the error code. `appcheck`
+forces that case by holding the `.prv` open with no sharing and asserts the
+current run is logged anyway.
+
+### And the trace on the way down, so there is something worth recovering
+
+`a7a7768` left four lines on a session end, which cannot tell these apart: the
+fast path ran to completion, the handler was entered and faulted inside it, and
+`WM_ENDSESSION` never arrived at all. Now six, each absence meaning one thing:
+
+| line | what its absence says |
+| --- | --- |
+| `asks whether the session may end (a logoff \| a shutdown or restart)` | the broadcast never reached us |
+| `Windows is ending the session (...)` | `WM_ENDSESSION` never arrived |
+| `abandoning <service> unjoined` | how far the signalling got |
+| `every service is signalled and abandoned; cleaning up` | it faulted while signalling |
+| `=== <program> exiting ===` | it faulted in `cleanup()` |
+| `the session-end handler is returning to Windows after N ms` | it faulted on the way out, OR the handler is where the machine stopped |
+
+The last of those needed `rc_log_tail`, because `cleanup()` closes the log --
+so the exiting banner was the final line on a clean return and on a fault on
+the way out alike. It writes to the open handle if there is one and otherwise
+reopens the file and appends. `N` is also the number the whole fast path exists
+to keep small, and nothing was printing it.
+
+The `lParam` was being thrown away (`(void)lp`). Both handlers now print
+whether it was a logoff, which is what BACKLOG/REMOTE's "does `gremote`
+survive a logoff" question needs in order to be answerable by reading a file.
+
+`win/checks/appcheck.cpp` grew eight cases (21 -> 29) and reads the log files
+back, because these are claims about what is IN THE FILE after the program has
+gone. They come last in that binary on purpose: everything above runs with no
+log open, so `App`'s own lines cannot land in the files being read. One
+unrelated flake fixed while there -- `an-ordinary-quit-still-joins-and-waits`
+compared a `Sleep(1500)` against `GetTickCount`, which advances in ~15ms steps
+and read back 1491 about one run in three.
+
+Committed at load: `gaston.exe` 467737 of 470000, `gremote.exe` 251465 of
+264000, `gupdate.exe` 51712 of 64000. The logger costs each of them one or
+three 512-byte sections; `gupdate` links `libcore` alone and gained no DLL.

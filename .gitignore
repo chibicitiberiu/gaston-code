@@ -73,6 +73,12 @@ vm/*.partial.*
 # and the name it lands under when one is run from the repo root under
 # Wine. It was swept into a commit by a `git add -A` before anybody noticed.
 *.LOG
+# The previous run, which rc_log_open renames the log to before it truncates
+# it (win/core/log.cpp). Same reasoning as the line above and the same two
+# spellings: the guest writes GREMOTE.PRV, a check run from the repo root
+# writes netcheck.prv.
+*.prv
+*.PRV
 
 # Claude Code transcript dumps. Large, and they are a record of a
 # conversation rather than of this project.

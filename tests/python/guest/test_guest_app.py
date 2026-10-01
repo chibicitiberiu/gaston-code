@@ -10,9 +10,11 @@ trace and these assert on the trace, not on the header's description of it.
 Tokens: I. initialize, P. parseArgs, C. cleanup, f. preTranslate consumed;
 then i init, s start, x signalStop, j join, d destructor, and the service id.
 
-The same binary also covers `win/core/thread.h`, which is libcore's and not
-App's -- but it is what App's services start, and a second check binary for
-one class would be four more hand-kept lists for no more coverage.
+The same binary also covers `win/core/thread.h` and `win/core/log.h`, which are
+libcore's and not App's -- but Thread is what App's services start, and the log
+is where App's shutdown trace ends up, so both are read back here. A second
+check binary for either would be four more hand-kept lists for no more
+coverage.
 """
 
 import conftest
@@ -34,7 +36,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 21, sorted(verdicts)
+    assert len(verdicts) == 29, sorted(verdicts)
 
 
 def test_up_in_order_down_in_reverse_signal_before_join(verdicts):
@@ -147,3 +149,86 @@ def test_join_admits_a_thread_is_still_running(verdicts):
     thread -- so join() saying true when it timed out would be the bug that
     rule exists to prevent."""
     assert verdicts["join-reports-a-thread-still-running"][0] == "pass"
+
+
+# --- core/log.h ------------------------------------------------------------
+#
+# The log used to delete the evidence. `rc_log_open` opened with CREATE_ALWAYS,
+# and the first act of recovering a hung Windows 98 box is a forced restart --
+# so the lines written on the way down, the only record of the hang, were
+# destroyed by the act of recovering from it. Measured on the user's real
+# Pentium: it hung during shutdown twice, and GREMOTE.LOG held only the run
+# that had just started. rc_log_open now renames <program>.log to
+# <program>.prv before it truncates anything.
+#
+# appcheck is where these live because it is the binary that already links
+# libcore alone and runs headless under Wine, and because the second half of
+# the same fix -- what App's session-end handler writes -- is this file's
+# subject anyway.
+
+def test_the_previous_run_survives_the_next_start(verdicts):
+    """One generation, kept by renaming rather than copying: a rename inside
+    one directory moves a directory entry and needs no free space, which
+    matters because a full disk is one of the states this has to survive."""
+    assert verdicts["log-keeps-the-previous-run"][0] == "pass"
+
+
+def test_a_first_run_leaves_no_previous_log(verdicts):
+    """No empty .prv pretending there was a run before this one."""
+    assert verdicts["log-first-run-keeps-nothing"][0] == "pass"
+
+
+def test_the_rotated_name_has_an_8_3_spelling(verdicts):
+    """`GREMOTE.PRV` does and `GREMOTE.LOG.OLD` does not, and on FAT a name
+    with no 8.3 form is a DIFFERENT file seen from DOS or from the installer
+    -- a trap this project has already paid for once with an INI file."""
+    assert verdicts["log-rotation-name-has-an-8-3-spelling"][0] == "pass"
+
+
+def test_each_program_rotates_its_own_log(verdicts):
+    """gremote.exe sits beside gaston.exe and gupdate.exe in one directory on
+    the test box, so a shared .prv would have one of them eating another's
+    only record of a shutdown."""
+    assert verdicts["log-rotation-is-per-program"][0] == "pass"
+
+
+def test_a_rotation_that_fails_still_logs(verdicts):
+    """The load-bearing half. A diagnostic feature that can PREVENT logging is
+    worse than the bug it fixes, so the check holds the .prv open with no
+    sharing -- a read-only directory, or a file the dying copy still has --
+    and asks for the current run anyway. It gets it, plus a line saying the
+    previous one could not be kept."""
+    assert verdicts["log-survives-a-failed-rotation"][0] == "pass"
+
+
+def test_the_session_end_handler_is_traced_from_entry_to_exit(verdicts):
+    """Four markers in the file, each settling one reading of a hang:
+
+    no entry line        -- WM_ENDSESSION never arrived, and the
+                            WM_QUERYENDSESSION line says whether the
+                            broadcast reached us at all;
+    entry and no more    -- it faulted while signalling, with the
+                            abandoned-<service> lines saying how far it got;
+    "cleaning up"        -- signalling finished, so a fault after this one is
+                            in cleanup();
+    "returning ... N ms" -- the fast path ran to the end, and N is the number
+                            the whole path exists to keep small.
+
+    The last of those is written AFTER cleanup() closed the log, by reopening
+    it (`rc_log_tail`). Without it the exiting banner is the final line on a
+    clean return and on a fault on the way out alike."""
+    assert verdicts["end-session-writes-entry-through-exit-to-the-log"][0] \
+        == "pass"
+
+
+def test_the_log_says_whether_it_was_a_logoff(verdicts):
+    """`ENDSESSION_LOGOFF` in the lParam, which the handler used to throw
+    away. "gremote outlives a logoff but not a shutdown" is a claim about
+    behaviour, and a log that does not say which one it saw cannot confirm
+    or deny it (docs/REMOTE.md, P200 checklist)."""
+    assert verdicts["end-session-says-whether-it-was-a-logoff"][0] == "pass"
+
+
+def test_an_ordinary_quit_writes_none_of_those_lines(verdicts):
+    """A line that appears on both paths settles nothing."""
+    assert verdicts["an-ordinary-quit-writes-no-session-lines"][0] == "pass"
