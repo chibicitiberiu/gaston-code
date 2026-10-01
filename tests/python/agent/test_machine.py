@@ -413,13 +413,32 @@ def test_cscript_alone_with_shell_stays_inside_budget():
 #: headline, so a sixth measured tool fits and a seventh does not -- and
 #: this says so rather than a prompt nobody is counting.
 #:
+#: 2900 -> 3400 on 2026-10-01, by the user's decision, after the 2900
+#: headroom was gone within hours. Two measured COMMAND.COM facts landed
+#: that day -- `%ERRORLEVEL%` does not expand, and a running .exe is locked
+#: against rename as well as write -- and fitting them meant shaving words
+#: out of three unrelated bullets, the last three characters coming from
+#: "creates" -> "makes" and dropping an "is". That is not a way to record a
+#: fact somebody paid for on real hardware. Their words: "MAX_BLOCK_CHARS =
+#: 2900 seems like an arbitrary limit. Fine to raise it and get important
+#: instructions in."
+#:
+#: 3400 against a worst case of 2,897 leaves room for roughly a dozen more
+#: headlines or two more shell bullets. It is still a cap and still
+#: asserted against the worst case the tree can produce, because the thing
+#: it exists to catch is a note going MISSING unnoticed, which is what
+#: happened under 2800. It is not a claim that 3,400 characters is a good
+#: size for a prompt -- if this is ever hit again, the question to ask is
+#: whether the shell note has facts that belong behind
+#: `mcp__machine__toolnote` like every toolchain note now is, not whether
+#: the number can go up again.
+#:
 #: NOT COVERED, deliberately: a machine with two shells whose notes are
 #: both resident. Only `command.com` has a note today; `4dos` with one
-#: would add roughly 170 characters and breach. Shell notes are the one
-#: thing that stays resident (there is no "look it up first" moment for a
-#: shell), so that is a real decision and not an oversight -- it is just
-#: not one any machine has forced yet.
-MAX_BLOCK_CHARS = 2900
+#: would add roughly 170 characters, which 3400 now admits -- so this is no
+#: longer a breach, just untested. Shell notes are the one thing that stays
+#: resident (there is no "look it up first" moment for a shell).
+MAX_BLOCK_CHARS = 3400
 
 
 def test_the_block_stays_inside_its_budget():
