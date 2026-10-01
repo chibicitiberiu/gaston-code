@@ -1998,3 +1998,79 @@ why this is written down rather than closed.
   the real machine ever rolls back a build that was merely slow, the number
   is the first thing to look at -- and `GUPDATE.LOG` records how long the
   image actually survived, precisely so that question has an answer.
+
+## 23. The machine hung on shutdown -- fixed, with three things left open
+
+**Status:** the hang is fixed, 2026-10-01. What is written down here is what
+the fix deliberately does *not* do, and the one question only the real box can
+settle.
+
+**What happened.** The physical Pentium 200 hung on the way down with
+`gremote` running: no desktop, no reboot, two Ctrl+Alt+Dels to force it. The
+reboot had been asked for over `gremote`'s own connection.
+
+`App::onMessage` joined its services from inside the `WM_ENDSESSION` handler,
+and Windows does not continue a 9x shutdown until that window procedure
+returns. So every join budget was shutdown held up -- and in this case a
+deadlock too: the handler waited on the accept thread (8 s), the accept thread
+on `Connection::join` for the reader (3 s), and the reader was inside
+`ExitWindowsEx`, which does not return and whose broadcast was `SendMessage`ing
+the window whose handler was waiting. It unwedged only because every wait in
+that ring happened to have a timeout. With Explorer already gone there is no
+desktop for the "not responding" dialog, so what a person sees is a machine
+that has stopped. The client was worse: `ConnectionService::join` hands the
+job to `rc_net_stop` and ignores the App's budget, which is about 42 seconds.
+
+The handler now signals every service, abandons each *unjoined*, writes and
+closes the log, and returns; `runApp` leaks the App because those threads hold
+pointers into its members. `docs/REMOTE.md` has the rule and the P200 entry.
+
+**1. Wine cannot confirm it, and nothing else here can either.** There is no
+9x shutdown under Wine, no Win16Mutex, and no shell to produce the End Task
+dialog. `appcheck` proves the necessary condition -- the handler returns in
+milliseconds against a service that never wakes, where it used to take the full
+budget -- and that is the whole of what a host test can say. The P200 entry in
+`REMOTE.md` lists the four log lines to look for on the real machine.
+
+**2. Nothing is flushed on the way out beyond the log, and that is a choice.**
+The session-ending path drops whatever the client's RPC worker was about to
+answer and whatever `gremote`'s lanes had queued; the peer sees a dropped link.
+Draining first was considered and rejected: a drain is a wait, a wait is the
+bug, and the bridge already treats a lost link as a lost link. It costs nothing
+a person typed -- the client saves settings when they change, not at exit --
+but a future op whose reply matters more than the shutdown's promptness would
+have to earn its wait, and say so here.
+
+**3. `WM_QUERYENDSESSION` still does nothing but agree.** The tempting
+optimisation is to start signalling there, since the gap before `WM_ENDSESSION`
+is free time in which threads could actually wind down cleanly. It is not safe
+as things stand: another program can veto the shutdown, `WM_ENDSESSION` then
+arrives with `wParam` 0, and there is no un-signalling a service -- the result
+would be a live process with a dead server on a machine that is staying up.
+Closing this needs services that can be *un*-signalled, or a `reinit` the
+lifecycle does not have, which is a bigger change than the hang warranted.
+
+**4. `ConnectionService::signalStop()` does not exist, so the client's fast
+path sends no FIN.** The `Service` contract is two passes -- `signalStop()`
+never blocks, `join()` waits -- but `ConnectionService` declares only `join()`
+and hands the whole thing to `rc_net_stop`, which signals, drains and joins in
+one call. On the ordinary path that is merely unusual; on the session-ending
+path it means the connection is abandoned with *nothing* having been signalled,
+so the bridge learns the link is gone when the process dies rather than from a
+FIN. Harmless -- the bridge treats a dropped link as a dropped link -- and not
+fixed here on purpose: splitting `rc_net_stop` into a signal half and a join
+half means reordering the three phases whose order `net.cpp` documents at
+length as the thing that was wrong before (clearing `running` first silently
+threw away every ack the RPC worker's drain composed). Worth doing when
+somebody is in that file anyway, with `wirecheck` watching. `gremote` does not
+have the problem: `ServerService::signalStop` is a flag and nothing else.
+
+**Not a gap, recorded so it is not re-derived:** `shutdown(sock, SD_SEND)` does
+not wake a blocking `recv` on the local socket -- it half-closes the *sending*
+direction, and the reader returns only when the peer reciprocates, or after
+`heartbeat_timeout_s` (default 30) in the `select()` in front of every `recv`.
+`Connection::signalStop`'s own comment says as much. So `Connection::join`'s
+3 s budget times out and leaks whenever the peer does not close, which during
+a machine shutdown is the ordinary case. That is correct behaviour for the leak
+rule; it is only a problem when somebody waits for it, which is what §23 was
+about.

@@ -17,7 +17,8 @@ App::App(HINSTANCE instance)
       m_exitCode(RUN_FAILED),
       m_quitEarly(false),
       m_ran(false),
-      m_shutDown(false)
+      m_shutDown(false),
+      m_sessionEnding(false)
 {
 }
 
@@ -122,17 +123,54 @@ bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
         PostQuitMessage((int)wp);
         return true;
     case WM_QUERYENDSESSION:
+        /* Agree, and change nothing. A shutdown any other program vetoes is
+         * cancelled and we would have no way to put a signalled service
+         * back -- so the teardown waits for WM_ENDSESSION, which is Windows
+         * saying it has committed. The log line is worth its bytes: it is
+         * how a shutdown that stalls LATER is told from one that stalled
+         * here. */
+        rc_log("app: Windows asks whether the session may end; yes");
         *result = TRUE;
         return true;
     case WM_ENDSESSION:
-        /* Windows may end the process as soon as this returns, so the
-         * services stop here and not after the loop. */
-        if (wp)
+        if (!wp)
         {
-            rc_log("app: Windows is ending the session");
-            shutdown();
-            PostQuitMessage(0);
+            /* Somebody vetoed it. Nothing was torn down, so there is
+             * nothing to undo. */
+            rc_log("app: the session end was cancelled; carrying on");
+            return true;
         }
+        /* RETURN FAST, AND DO NOT JOIN ANYTHING HERE.
+         *
+         * Windows does not carry on with its shutdown until this window
+         * procedure returns. On 9x a handler that takes its time is the
+         * "not responding / End Task" dialog, and by WM_ENDSESSION Explorer
+         * is already gone, so there is no desktop left to show it on -- the
+         * machine just sits there with no desktop and no reboot, which is
+         * what a real Pentium 200 did on 2026-10-01 (docs/REMOTE.md, P200
+         * checklist). The thread Windows is waiting for can also be one of
+         * ours: gremote's REBOOT calls ExitWindowsEx on the Connection
+         * reader thread, that call never returns, and the broadcast it
+         * drives SendMessages THIS window -- so joining here would wait on
+         * the accept thread, which waits on the reader, which waits on this
+         * handler.
+         *
+         * So: set the flag FIRST, then run the same stopServices() and
+         * cleanup() as the ordinary path. joinOrLeak() reads the flag and
+         * abandons each service unjoined instead of waiting for it, and
+         * cleanup() still gets to write and close the log -- a hang with no
+         * log is this project's worst case, and the two lines above plus one
+         * per abandoned service are what say afterwards that a session end
+         * was seen and the fast path was taken.
+         *
+         * Nothing is freed that a live thread can touch: abandoning means
+         * releasing the UniqueObj, so cleanup()'s reset() finds it empty,
+         * and runApp() leaks the App itself for the same reason. */
+        m_sessionEnding = true;
+        rc_log("app: Windows is ending the session; signalling every service "
+               "and leaving this handler WITHOUT joining any of them");
+        shutdown();
+        PostQuitMessage(0);
         return true;
     }
     return false;

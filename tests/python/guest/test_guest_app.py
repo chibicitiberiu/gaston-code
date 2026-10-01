@@ -34,7 +34,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 16, sorted(verdicts)
+    assert len(verdicts) == 21, sorted(verdicts)
 
 
 def test_up_in_order_down_in_reverse_signal_before_join(verdicts):
@@ -59,9 +59,50 @@ def test_a_stuck_service_is_leaked_not_deleted(verdicts):
     assert "jB" in trace and "dB" not in trace
 
 
-def test_windows_ending_the_session_stops_services_once(verdicts):
+def test_windows_ending_the_session_signals_every_service_once(verdicts):
+    """Signalled once, and NOT joined. Windows holds its whole shutdown on
+    App's window procedure returning, so the session-ending path signals and
+    leaves; `jA` appearing here would be the hang back."""
     trace = verdicts["end-session-stops-once"][1]
-    assert trace.count("xA") == 1 and trace.count("jA") == 1
+    assert trace.count("xA") == 1 and "jA" not in trace
+
+
+def test_ending_the_session_does_not_wait_for_a_stuck_service(verdicts):
+    """The regression a real Pentium 200 paid for on 2026-10-01: it hung
+    during shutdown with gremote running, because WM_ENDSESSION joined the
+    services from inside the window procedure. With the reboot arriving over
+    gremote's own connection that is also a deadlock -- the handler waits on
+    the accept thread, which waits on the reader thread, which is inside
+    ExitWindowsEx SendMessaging this very window. The detail column carries
+    the measured duration; against the joining code it was the full budget."""
+    verdict, detail = verdicts["end-session-does-not-wait-for-a-stuck-service"]
+    assert verdict == "pass", detail
+
+
+def test_an_ordinary_quit_still_joins_and_waits(verdicts):
+    """The other half, and why the answer is not simply "never join". After
+    the message loop the process goes on living, so an orphan thread is a
+    real bug: the ordinary path waits out its budget and then leaks rather
+    than freeing. Only the session-ending path is allowed to be in a hurry."""
+    verdict, detail = verdicts["an-ordinary-quit-still-joins-and-waits"]
+    assert verdict == "pass", detail
+
+
+def test_the_app_itself_is_leaked_on_a_session_end(verdicts):
+    """The abandoned services' threads hold pointers into the App's members
+    -- gremote's lanes use a Processes that lives in GremoteApp -- so running
+    its destructor under them is a fault raised on a desktop that has already
+    gone. runApp leaks it there and keeps it on an ordinary quit."""
+    assert verdicts["run-app-leaks-the-app-on-a-session-end"][0] == "pass"
+    assert verdicts["run-app-keeps-the-app-on-an-ordinary-quit"][0] == "pass"
+
+
+def test_the_hidden_window_is_top_level(verdicts):
+    """It has to be, or none of the above ever runs: USER broadcasts
+    WM_QUERYENDSESSION and WM_ENDSESSION to top-level windows, and App's is a
+    hidden zero-size WS_POPUP because HWND_MESSAGE is Win2000+. EnumWindows
+    walks that same set, so finding it there is the confirmation."""
+    assert verdicts["app-window-is-top-level"][0] == "pass"
 
 
 def test_pretranslate_sees_messages_before_dispatch(verdicts):

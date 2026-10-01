@@ -8,7 +8,16 @@
  *
  * Trace tokens: I. initialize, P. parseArgs, C. cleanup, f. preTranslate
  * consumed the check message; then per service i init, s start,
- * x signalStop, j join, d destructor, followed by the service's id.
+ * x signalStop, j join, d destructor, followed by the service's id. A timed
+ * case also appends how long its run() took.
+ *
+ * WHAT THE TIMED CASES ARE FOR. A real Pentium 200 hung during shutdown on
+ * 2026-10-01 with gremote running, because App's WM_ENDSESSION handler joined
+ * its services from inside the window procedure -- and Windows will not carry
+ * on with a 9x shutdown until that procedure returns. The pair
+ * `end-session-does-not-wait-for-a-stuck-service` and
+ * `an-ordinary-quit-still-joins-and-waits` pin BOTH halves of the answer: the
+ * session-ending path must not wait, and the ordinary path still must.
  */
 #include <windows.h>
 #include <process.h>
@@ -38,6 +47,28 @@ static void trace(char what, char id)
     }
 }
 
+/* Append a free-form token, for the timed cases: the detail column is what a
+ * failure is read from, and "it was slow" is useless without the number. */
+static void traceWord(const char *word)
+{
+    size_t n = strlen(g_trace);
+    size_t w = strlen(word);
+    if (n + w + 2 < sizeof g_trace)
+    {
+        if (n)
+            g_trace[n++] = ' ';
+        memcpy(g_trace + n, word, w + 1);
+    }
+}
+
+static void traceMs(DWORD ms)
+{
+    char buf[24];
+    _snprintf(buf, sizeof buf, "%lums", (unsigned long)ms);
+    buf[sizeof buf - 1] = '\0';
+    traceWord(buf);
+}
+
 static void say(const char *name, bool pass)
 {
     printf("%s\t%s\t%s\n", pass ? "pass" : "FAIL", name, g_trace);
@@ -52,8 +83,32 @@ enum
     STUCK_JOIN = 8,
     QUIT_FROM_THREAD = 16,
     END_SESSION_ON_START = 32,
-    POST_FILTERED_ON_START = 64
+    POST_FILTERED_ON_START = 64,
+    /* A thread that never wakes. STUCK_JOIN only SAYS it did not stop and
+     * returns at once; this one burns the whole budget first, which is what
+     * a real WaitForSingleObject on a thread parked in recv() does and the
+     * only way to measure that a handler waited. */
+    SLOW_JOIN = 128,
+    /* Is App's hidden window really in the set USER broadcasts the session
+     * messages to? EnumWindows walks top-level windows, which is that set. */
+    CHECK_TOP_LEVEL = 256
 };
+
+/* Long enough to tell a wait from a return, short enough not to slow the
+ * suite. The handler must come back in a small fraction of it. */
+enum { SLOW_JOIN_MS = 1500, PROMPT_MS = 500 };
+
+static HWND g_wantWindow;
+static int g_foundWindow;
+
+static BOOL CALLBACK lookForWindow(HWND h, LPARAM lp)
+{
+    (void)lp;
+    if (h != g_wantWindow)
+        return TRUE;
+    g_foundWindow = 1;
+    return FALSE;
+}
 
 static unsigned __stdcall quitLater(void *arg)
 {
@@ -96,6 +151,13 @@ public:
         }
         if (m_flags & END_SESSION_ON_START)
             PostMessageA(m_app->window(), WM_ENDSESSION, TRUE, 0);
+        if (m_flags & CHECK_TOP_LEVEL)
+        {
+            g_wantWindow = m_app->window();
+            g_foundWindow = 0;
+            EnumWindows(lookForWindow, 0);
+            m_app->quit(0);
+        }
         if (m_flags & POST_FILTERED_ON_START)
         {
             PostMessageA(m_app->window(), WM_CHECK_FILTERED, 0, 0);
@@ -111,6 +173,14 @@ public:
         trace('j', m_id);
         if (m_thread.valid())
             WaitForSingleObject(m_thread.get(), timeoutMs);
+        if (m_flags & SLOW_JOIN)
+        {
+            /* The whole budget, then the truth. A service that will not come
+             * back costs its caller the timeout -- which is fine after the
+             * message loop and fatal inside WM_ENDSESSION. */
+            Sleep(timeoutMs);
+            return false;
+        }
         return !(m_flags & STUCK_JOIN);
     }
 
@@ -134,9 +204,13 @@ enum
 class TestApp : public App
 {
 public:
-    TestApp(unsigned a, unsigned b, unsigned c, unsigned appFlags = 0)
+    /* `joinMs` is the budget stopServices() hands joinOrLeak. Ten for the
+     * ordering cases, where waiting is only overhead; SLOW_JOIN_MS for the
+     * two that measure whether it waited at all. */
+    TestApp(unsigned a, unsigned b, unsigned c, unsigned appFlags = 0,
+            DWORD joinMs = 10)
         : App(g_instance), m_flagsA(a), m_flagsB(b), m_flagsC(c),
-          m_appFlags(appFlags)
+          m_appFlags(appFlags), m_joinMs(joinMs)
     {
     }
 
@@ -185,9 +259,9 @@ protected:
         if (m_c.valid()) m_c->signalStop();
         if (m_b.valid()) m_b->signalStop();
         if (m_a.valid()) m_a->signalStop();
-        joinOrLeak(m_c, 10);
-        joinOrLeak(m_b, 10);
-        joinOrLeak(m_a, 10);
+        joinOrLeak(m_c, *this, m_joinMs);
+        joinOrLeak(m_b, *this, m_joinMs);
+        joinOrLeak(m_a, *this, m_joinMs);
     }
 
     void cleanup()
@@ -200,6 +274,7 @@ protected:
 
 private:
     unsigned m_flagsA, m_flagsB, m_flagsC, m_appFlags;
+    DWORD m_joinMs;
     UniqueObj<Recorder> m_a, m_b, m_c;
 };
 
@@ -244,6 +319,21 @@ static int runOnce(TestApp *app)
     return code;
 }
 
+/* Same thing, with the wall clock around it. The only slow thing any TestApp
+ * does is join a SLOW_JOIN service, so the run's duration IS the time spent
+ * waiting -- and when the stop came from WM_ENDSESSION, that is time spent
+ * inside the window procedure with Windows waiting on it. */
+static DWORD g_elapsedMs;
+
+static int runTimed(TestApp *app)
+{
+    DWORD t0 = GetTickCount();
+    int code = app->run("");
+    g_elapsedMs = GetTickCount() - t0;
+    delete app;
+    return code;
+}
+
 int main(void)
 {
     g_instance = GetModuleHandleA(0);
@@ -276,11 +366,70 @@ int main(void)
         say("quit-from-another-thread", code == 3);
     }
     {
-        /* Windows ending the session stops and cleans up from inside the
-         * message, once, and the loop then ends. */
+        /* Windows ending the session signals every service once and cleans
+         * up from inside the message, and the loop then ends. No j and no d:
+         * the fast path abandons each service where it stands rather than
+         * joining it, and abandoned means released, so nothing is freed
+         * under a thread that may still be live. */
         int code = runOnce(new TestApp(0, 0, END_SESSION_ON_START));
         say("end-session-stops-once", code == 0 && strcmp(g_trace,
-            "I. P. iA iB iC sA sB sC xC xB xA jC jB jA dC dB dA C.") == 0);
+            "I. P. iA iB iC sA sB sC xC xB xA C.") == 0);
+    }
+    {
+        /* THE REGRESSION a forced reset paid for. C's threads never wake, so
+         * joining it costs the full budget. Inside WM_ENDSESSION that budget
+         * is Windows 98's shutdown held on our window procedure -- and when
+         * the reboot arrived over gremote's own connection, a deadlock
+         * against our reader thread as well (core/app.h). The handler must
+         * come back at once. */
+        int code = runTimed(new TestApp(0, 0, SLOW_JOIN | END_SESSION_ON_START,
+                                        0, SLOW_JOIN_MS));
+        bool prompt = g_elapsedMs < PROMPT_MS;
+        bool signalled = strstr(g_trace, "xC") != 0;
+        bool noJoin = strstr(g_trace, "jC") == 0;
+        traceMs(g_elapsedMs);
+        say("end-session-does-not-wait-for-a-stuck-service",
+            code == 0 && prompt && signalled && noJoin);
+    }
+    {
+        /* The other half of the same decision, and the reason it is not just
+         * "never join": here the process goes on living, so an orphan thread
+         * matters. The ordinary path waits out the budget and then LEAKS --
+         * jC present, dC absent. */
+        int code = runTimed(new TestApp(0, 0, SLOW_JOIN | QUIT_ON_START,
+                                        0, SLOW_JOIN_MS));
+        bool waited = g_elapsedMs >= SLOW_JOIN_MS;
+        bool joined = strstr(g_trace, "jC") != 0;
+        bool leaked = strstr(g_trace, "dC") == 0;
+        traceMs(g_elapsedMs);
+        say("an-ordinary-quit-still-joins-and-waits",
+            code == 7 && waited && joined && leaked);
+    }
+    {
+        /* runApp leaks the App on a session end, because the threads it just
+         * abandoned hold pointers into the App's own members. */
+        UniqueObj<TestApp> app(new TestApp(0, 0, END_SESSION_ON_START));
+        int code = runApp(app, "");
+        say("run-app-leaks-the-app-on-a-session-end",
+            code == 0 && !app.valid());
+    }
+    {
+        /* And keeps it on an ordinary quit, so the destructors run. */
+        UniqueObj<TestApp> app(new TestApp(0, 0, QUIT_ON_START));
+        int code = runApp(app, "");
+        bool kept = app.valid();
+        app.reset();
+        say("run-app-keeps-the-app-on-an-ordinary-quit",
+            code == 7 && kept && strstr(g_trace, "dA") != 0);
+    }
+    {
+        /* App's window is a hidden zero-size WS_POPUP, chosen because
+         * HWND_MESSAGE is Win2000+. EnumWindows walks TOP-LEVEL windows,
+         * which is the set USER broadcasts WM_QUERYENDSESSION and
+         * WM_ENDSESSION to -- so finding it there is what says the whole
+         * session-end path can reach it at all. */
+        runOnce(new TestApp(0, 0, CHECK_TOP_LEVEL));
+        say("app-window-is-top-level", g_foundWindow != 0);
     }
     {
         TestApp *app = new TestApp(0, 0, 0, APP_NO_SERVICES);

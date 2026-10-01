@@ -19,9 +19,43 @@
  *
  * WHY A HIDDEN WINDOW. quit() must work from any thread. PostThreadMessage to
  * a thread that has no queue yet fails silently on 9x, and a window also
- * receives WM_ENDSESSION, on which App stops the services and cleans up
- * before Windows ends the process. It is a plain hidden top-level window:
- * HWND_MESSAGE is 2000+.
+ * receives WM_ENDSESSION, on which App signals the services and gets out of
+ * the way before Windows ends the process. It is a plain hidden top-level
+ * window: HWND_MESSAGE is 2000+, and EnumWindows finding it (appcheck) is
+ * what says it really is in the set USER broadcasts the session messages to.
+ *
+ * TWO TEARDOWN PATHS, AND THEY ARE NOT THE SAME ONE. Both run stopServices()
+ * and cleanup(); what differs is whether a join is allowed to WAIT.
+ *
+ *   the ordinary path (quit(), the loop ends, run() returns) joins properly.
+ *   The process goes on living afterwards -- the updater starts a replacement
+ *   and the shell may still be holding a window -- so an orphan thread is a
+ *   real bug and waiting for it is right.
+ *
+ *   the session-ending path (WM_ENDSESSION) MUST NOT WAIT AT ALL. Windows
+ *   does not continue its shutdown until this window procedure returns, and
+ *   on 9x a handler that does not come back promptly is the "not responding /
+ *   End Task" dialog -- with Explorer already gone there is no desktop to put
+ *   that dialog on, so the machine simply stops. Worse, the thread Windows is
+ *   waiting for can be one of OURS: gremote's REBOOT runs ExitWindowsEx on
+ *   the Connection reader thread, ExitWindowsEx does not return, and the
+ *   broadcast it drives SendMessages this very window -- so a join here waits
+ *   for the accept thread, which waits for the reader, which waits for this
+ *   handler. A three-way deadlock broken only by a timeout firing, which is
+ *   seconds of a frozen machine every shutdown and a wedge if any one wait in
+ *   the chain is unbounded. Observed on real hardware 2026-10-01
+ *   (docs/REMOTE.md, P200 checklist).
+ *
+ * sessionEnding() is the one bit that separates them, and joinOrLeak() is the
+ * one place that reads it: on a session end it ABANDONS each service
+ * unjoined rather than waiting, which is net.cpp's leak rule with the wait
+ * taken out -- a service whose threads may still be live is leaked, never
+ * freed. runApp() then leaks the App itself for the same reason, since those
+ * threads hold pointers into its members.
+ *
+ * WM_QUERYENDSESSION DELIBERATELY DOES NOTHING BUT AGREE. A shutdown another
+ * program vetoes is cancelled, and there is no un-signalling a service, so
+ * nothing is torn down until Windows has committed with WM_ENDSESSION.
  */
 #ifndef RC_APP_H
 #define RC_APP_H
@@ -87,20 +121,6 @@ bool initService(UniqueObj<T> &slot, T *made)
     return true;
 }
 
-/* For stopServices(): join, and if the threads did not stop, LEAK the
- * service rather than let cleanup() delete it under them -- freeing memory
- * a live thread still touches is a crash later and somewhere else, the rule
- * net.cpp's shutdown arrived at the hard way. */
-template <class T>
-void joinOrLeak(UniqueObj<T> &slot, DWORD timeoutMs)
-{
-    if (slot.valid() && !slot->join(timeoutMs))
-    {
-        rc_log("app: leaking %s, its threads did not stop", slot->name());
-        slot.release();
-    }
-}
-
 class App
 {
 public:
@@ -118,6 +138,12 @@ public:
 
     /* For services that post to the main thread. Null before run(). */
     HWND window() const;
+
+    /* True from the moment WM_ENDSESSION said the session really is ending.
+     * joinOrLeak() reads it and abandons instead of waiting; runApp() reads
+     * it and leaks the App. Set on the main thread, inside the handler,
+     * before anything is torn down. */
+    bool sessionEnding() const { return m_sessionEnding; }
 
 protected:
     explicit App(HINSTANCE instance);
@@ -172,6 +198,65 @@ private:
     bool m_quitEarly;
     bool m_ran;
     bool m_shutDown;
+    bool m_sessionEnding;
 };
+
+/* For stopServices(): join, and if the threads did not stop, LEAK the
+ * service rather than let cleanup() delete it under them -- freeing memory
+ * a live thread still touches is a crash later and somewhere else, the rule
+ * net.cpp's shutdown arrived at the hard way.
+ *
+ * `app` is not decoration. On a session end this does not join AT ALL: it
+ * abandons the service where it stands, because Windows is holding its whole
+ * shutdown on this window procedure returning and a thread that will not wake
+ * must not be able to hold up the machine (see the header comment). That is
+ * why the App is a parameter rather than the timeout being a literal -- the
+ * old two-argument form is gone so no call site can quietly keep waiting.
+ *
+ * The service's threads are then still running with nothing joined, which is
+ * exactly the state the leak rule is for: nothing is freed, so nothing they
+ * touch goes away under them, and the process is about to end anyway. */
+template <class T>
+void joinOrLeak(UniqueObj<T> &slot, App &app, DWORD timeoutMs)
+{
+    if (!slot.valid())
+        return;
+    if (app.sessionEnding())
+    {
+        rc_log("app: the session is ending; abandoning %s unjoined",
+               slot->name());
+        slot.release();
+        return;
+    }
+    if (!slot->join(timeoutMs))
+    {
+        rc_log("app: leaking %s, its threads did not stop", slot->name());
+        slot.release();
+    }
+}
+
+/* What a WinMain does, once rather than once per exe: run the app, and if
+ * Windows ended the session, LEAK it instead of destroying it.
+ *
+ * The leak is the same rule one level up. On that path the services were
+ * abandoned unjoined, so their threads may still be inside the App's own
+ * members -- gremote's threads hold a ServerConfig, an ExecConfig and a
+ * Processes that all live in GremoteApp, and running ~GremoteApp under them
+ * would FreeLibrary the Toolhelp DLL a lane worker is calling into. A fault
+ * there is a GPF dialog raised on a desktop that no longer exists, which is
+ * the hang this whole path exists to avoid. ExitProcess takes the threads
+ * and the memory a moment later regardless.
+ *
+ * Returns the code already mapped for WinMain: RUN_FAILED becomes 1. */
+template <class T>
+int runApp(UniqueObj<T> &app, const char *cmdLine)
+{
+    if (!app.valid())
+        return 1;
+    int code = app->run(cmdLine);
+    if (app->sessionEnding())
+        app.release();
+    return code == App::RUN_FAILED ? 1 : code;
+}
 
 #endif

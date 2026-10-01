@@ -232,15 +232,26 @@ void ClientApp::stopServices()
 {
     /* Signal all, then join each, in reverse. The connection stops first,
      * while the window its reader posts frames to still exists; OLE goes
-     * last, after the window has released MSHTML. */
+     * last, after the window has released MSHTML.
+     *
+     * THE 5000s ARE NOT THE REAL BUDGET and that is the point of passing the
+     * App. ConnectionService::join ignores the timeout and hands the job to
+     * rc_net_stop, which times itself: 30s for the RPC worker, 2s of drain,
+     * 5s each for the reader and the sender. MainWindow::join ignores it too
+     * and runs WM_DESTROY, which tears MSHTML down. Inside WM_ENDSESSION that
+     * is up to about three quarters of a minute of Windows 98 shutdown held
+     * on this window procedure, with no desktop left to show the End Task
+     * dialog on -- so on a session end joinOrLeak abandons each service
+     * unjoined instead (core/app.h). Nothing the person typed is lost by it:
+     * the settings are saved when they change, not here. */
     if (m_ui.valid()) m_ui->signalStop();
     if (m_connection.valid()) m_connection->signalStop();
     if (m_window.valid()) m_window->signalStop();
     if (m_ole.valid()) m_ole->signalStop();
-    joinOrLeak(m_ui, 5000);
-    joinOrLeak(m_connection, 5000);
-    joinOrLeak(m_window, 5000);
-    joinOrLeak(m_ole, 5000);
+    joinOrLeak(m_ui, *this, 5000);
+    joinOrLeak(m_connection, *this, 5000);
+    joinOrLeak(m_window, *this, 5000);
+    joinOrLeak(m_ole, *this, 5000);
 }
 
 void ClientApp::cleanup()
@@ -257,9 +268,10 @@ void ClientApp::cleanup()
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     (void)prev;
+    /* runApp, not run(): on a session end the services were abandoned with
+     * their threads live, and those threads reach into this object's rc_net
+     * and config. runApp leaks it rather than destroying it under them
+     * (core/app.h). */
     UniqueObj<ClientApp> app(new ClientApp(inst, show));
-    if (!app.valid())
-        return 1;
-    int code = app->run(cmd);
-    return code == App::RUN_FAILED ? 1 : code;
+    return runApp(app, cmd);
 }

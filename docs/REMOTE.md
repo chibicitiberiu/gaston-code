@@ -187,13 +187,39 @@ class ClientApp : public App              /* app/main.cpp */
   on each, so threads wind down in parallel. `joinOrLeak()` releases a service
   whose threads did not stop instead of letting `cleanup()` delete it under
   them: the rule `net.cpp:1085-1200` arrived at the hard way.
+- **There are two shutdown paths and only one of them may wait.**
+  `joinOrLeak()` takes the `App` so it can tell them apart.
+  - *The ordinary path* -- `quit()`, the loop ends, `run()` returns. The
+    process goes on living, so an orphan thread is a real bug: join properly,
+    and leak only what would not stop.
+  - *The session-ending path* -- `WM_ENDSESSION`. **Nothing is joined at all.**
+    Windows does not carry on with a 9x shutdown until that window procedure
+    returns; a handler that takes its time is the "not responding / End Task"
+    dialog, and by `WM_ENDSESSION` Explorer has gone, so there is no desktop
+    left to put the dialog on. Worse, the thread Windows is waiting for can be
+    one of ours: `REBOOT` runs `ExitWindowsEx` on the `Connection` reader
+    thread, that call does not return, and the broadcast it drives
+    `SendMessage`s App's own window -- so a join there waits on the accept
+    thread, which waits on the reader, which waits on the handler. A machine
+    hung exactly this way on 2026-10-01 (P200 checklist below). So:
+    `signalStop()` everything, abandon each service *unjoined*, write and
+    close the log, return. `runApp()` then leaks the `App` itself, because the
+    abandoned threads hold pointers into its members.
+  - `WM_QUERYENDSESSION` agrees and changes nothing: a shutdown another
+    program vetoes is cancelled, and there is no un-signalling a service.
+  - Pinned by `appcheck`'s `end-session-does-not-wait-for-a-stuck-service`
+    (the handler returns in milliseconds against a service that never wakes)
+    and `an-ordinary-quit-still-joins-and-waits` (the other half).
 - **A failed step still shuts down.** `main()` is skipped, `stopServices()`
   and `cleanup()` run, and both cope with a partial start: an empty
   `UniqueObj`, a service whose `init()` failed.
 - **`App` owns a hidden top-level window** (a `Window`, `core/window.h`), not
   a bare thread queue: `PostThreadMessage` to a thread without a queue fails
-  silently on 9x, and the window receives `WM_ENDSESSION`, on which App stops
-  the services and cleans up before Windows ends the process.
+  silently on 9x, and the window receives `WM_ENDSESSION`, on which App
+  signals the services and gets out of the way before Windows ends the
+  process. `appcheck` confirms `EnumWindows` finds it -- that set is what USER
+  broadcasts the session messages to, so being in it is what makes the whole
+  path reachable.
 - **The app object lives on the heap**, made by `WinMain`: a file-scope object
   would construct before `WinMain` and the log, and a local would put every
   member in one stack frame.
@@ -854,6 +880,61 @@ Things only the real box can answer, collected so the first session covers them:
 - `bind` after a restart: TIME_WAIT behaviour.
 - `gremote` memory idle and under load, with and without the client running.
 - Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI numbers in `SYSINFO`.
+- **Shutdown with `gremote` installed and running.** *Observed on the real
+  P200, 2026-10-01: the machine hung on the way down -- "stuck with no
+  desktop", no reboot -- and took two Ctrl+Alt+Dels to force. The reboot had
+  been asked for over `gremote`'s own connection.*
+
+  The cause was `App`'s `WM_ENDSESSION` handler joining its services from
+  inside the window procedure. Windows waits for that procedure before it
+  carries on, so every join budget is a 9x shutdown held up, and in this case
+  a deadlock as well: the handler waited on the accept thread (8 s), the accept
+  thread on `Connection::join` for the reader (3 s), and the reader was inside
+  `ExitWindowsEx`, which does not return and whose broadcast was
+  `SendMessage`ing the very window whose handler was waiting. Broken only by
+  the timeouts firing, which is seconds of frozen USER with no desktop to
+  report anything on. The same shape was worse in the client, where
+  `ConnectionService::join` hands the job to `rc_net_stop` and ignores the
+  App's budget entirely: about three quarters of a minute.
+
+  Fixed by never joining on that path (above). **Only the real box can
+  confirm the fix**: Wine has no 9x shutdown and no Win16Mutex, so
+  `appcheck` can prove the handler returns promptly and nothing more. What to
+  look for afterwards, in `GREMOTE.LOG` beside the exe:
+
+  - `app: Windows asks whether the session may end; yes`
+  - `app: Windows is ending the session; signalling every service and leaving
+    this handler WITHOUT joining any of them`
+  - `app: the session is ending; abandoning server unjoined`
+  - `=== gremote exiting ===`
+
+  All four, and the machine reaching the reboot. The last two are the proof
+  the fast path ran to the end rather than faulting in it; a log that stops
+  after the second line is a new bug, not this one.
+- **Shutdown with the client running**, same question, same log lines in
+  `GASTON.LOG` (`abandoning desktop` / `connection` / `main window` / `ole`
+  `unjoined`). The client had the longer wait of the two, so if a desktop ever
+  hung on the way down with `gaston.exe` up, this was why.
+- **Does `gremote` survive a LOGOFF, as `RegisterServiceProcess` promises?**
+  Found while fixing the shutdown hang, and not answered by anything here.
+  *A full shutdown does reach it: the VM run of 2026-09-27
+  (`docs/measurements/gremote-vm-20260927.txt` §8) recorded its hidden window
+  taking `WM_ENDSESSION` while registered as a service process, so
+  registration buys no exemption there.* A logoff is the untested half. 9x
+  broadcasts the same two messages at logoff, and `RSP_SIMPLE_SERVICE` is
+  supposed to keep a service process out of that broadcast -- but if it does
+  not, `App` treats the message the only way it can and quits, and "it will
+  outlive a logoff" in `GREMOTE.LOG` is a claim the program does not keep.
+  §9 of that same file proves only that the process runs *before* a logon, not
+  that it survives a logoff.
+
+  To test: connect, log off at the console, and see whether the port still
+  answers. If it does not, `GREMOTE.LOG`'s last lines will say which message
+  arrived. The fix, if needed, is to read `WM_ENDSESSION`'s `lParam` for
+  `ENDSESSION_LOGOFF` and ignore a logoff -- which is a judgement about what
+  that bit means on 98, so it wants the measurement first. Note this is
+  unchanged by the 2026-10-01 fix: that changed only whether the handler
+  waits, never which messages lead to a quit.
 
 ## Open decisions
 

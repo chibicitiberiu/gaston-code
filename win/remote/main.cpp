@@ -196,8 +196,14 @@ void GremoteApp::stopServices()
 {
     if (m_server.valid()) m_server->signalStop();
     /* Generous: the accept loop wakes within a quarter second, then drains
-     * and joins the live client's Connection. */
-    joinOrLeak(m_server, 8000);
+     * and joins the live client's Connection.
+     *
+     * ON A SESSION END THIS WAITS FOR NOTHING. Those 8 seconds are 8 seconds
+     * of a Windows 98 shutdown held on our window procedure, and when the
+     * reboot came in over the connection they are also a deadlock against our
+     * own reader thread (core/app.h). joinOrLeak takes the App for exactly
+     * that reason and abandons the server unjoined instead. */
+    joinOrLeak(m_server, *this, 8000);
 }
 
 void GremoteApp::cleanup()
@@ -212,9 +218,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     (void)prev;
     (void)show;
+    /* runApp, not run(): on a session end the services were abandoned with
+     * their threads live, and those threads hold m_config, m_exec and
+     * m_procs, which are members of this object. runApp leaks it rather than
+     * destroying it under them (core/app.h). */
     UniqueObj<GremoteApp> app(new GremoteApp(inst));
-    if (!app.valid())
-        return 1;
-    int code = app->run(cmd);
-    return code == App::RUN_FAILED ? 1 : code;
+    return runApp(app, cmd);
 }
