@@ -68,6 +68,12 @@ NT_ONLY = {
     "MoveFileExA":        "win/sync/sync.cpp -- wants it for an atomic commit",
     "MoveFileExW":        "NT-only",
     "SetHandleInformation": "win/exec/execjob.cpp documents avoiding it",
+    # Prevent sleep's mechanism 3 (win/remote/tray.h). Documented minimum
+    # Windows XP, and whether 98's KERNEL32 exports it at all could not be
+    # established from any document -- which is exactly the shape that gets
+    # statically imported by a well-meaning edit and dies at load with no log.
+    # Resolved with GetProcAddress in TrayService::holdSystemAwake.
+    "SetThreadExecutionState": "2000/XP+; win/remote/tray.cpp resolves it",
     "GetDiskFreeSpaceExA":  "win/app/workcopy.cpp documents avoiding it",
     "GetDiskFreeSpaceExW":  "NT-only",
     # The usual neighbours a well-meaning edit reaches for:

@@ -20,10 +20,16 @@ static const long DEFAULT_HEARTBEAT_S = 30;
 static const long DEFAULT_MAX_TIMEOUT_MS = 120000;
 static const long DEFAULT_MAX_OUTPUT_KB = 1024;
 
+/* OFF, and the only defensible default. Turning it on changes how the hardware
+ * behaves while gremote is up, so an install that predates the option has to
+ * come up behaving exactly as it did before. */
+static const bool DEFAULT_PREVENT_SLEEP = false;
+
 static const char *const SERVER_KEYS[] = {
     "bind", "port", "secret", "allow", "heartbeat_timeout_s"
 };
 static const char *const EXEC_KEYS[] = { "max_timeout_ms", "max_output_kb" };
+static const char *const MACHINE_KEYS[] = { "prevent_sleep" };
 
 /* Fills m_path for IniFile's constructor. A truncated path becomes "",
  * which IniFile refuses, rather than a valid-looking path to another file. */
@@ -57,7 +63,8 @@ bool ServerConfigStore::fail(const char *why)
     return false;
 }
 
-bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec)
+bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
+                             MachineConfig *machine)
 {
     rc_strcpy(cfg->bind, sizeof cfg->bind, DEFAULT_BIND);
     cfg->port = DEFAULT_PORT;
@@ -66,6 +73,7 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec)
     cfg->heartbeatS = DEFAULT_HEARTBEAT_S;
     exec->maxTimeoutMs = DEFAULT_MAX_TIMEOUT_MS;
     exec->maxOutputKb = DEFAULT_MAX_OUTPUT_KB;
+    machine->preventSleep = DEFAULT_PREVENT_SLEEP;
     m_error[0] = '\0';
 
     if (!m_ini.ok())
@@ -94,7 +102,10 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec)
          * bounds the total a single command may hand back, not any one
          * allocation. */
         m_ini.getInt("exec", "max_output_kb", DEFAULT_MAX_OUTPUT_KB,
-                     1, 16384, &exec->maxOutputKb);
+                     1, 16384, &exec->maxOutputKb) &&
+        m_ini.checkKeys("machine", MACHINE_KEYS, 1) &&
+        m_ini.getBool("machine", "prevent_sleep", DEFAULT_PREVENT_SLEEP,
+                      &machine->preventSleep);
 
     if (!existed)
     {
@@ -107,6 +118,7 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec)
         m_ini.setInt("server", "heartbeat_timeout_s", cfg->heartbeatS);
         m_ini.setInt("exec", "max_timeout_ms", exec->maxTimeoutMs);
         m_ini.setInt("exec", "max_output_kb", exec->maxOutputKb);
+        m_ini.setBool("machine", "prevent_sleep", machine->preventSleep);
         m_ini.flush();
         rc_log("config: wrote a starting %s", m_ini.path());
     }

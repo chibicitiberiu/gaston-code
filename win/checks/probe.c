@@ -12,6 +12,8 @@
  *   probe            run everything
  *   probe threads    run one section
  *   probe automation Phase 6's gates 0.12 and 0.13 (screen strips, oleacc)
+ *   probe power      has this box SetThreadExecutionState, and does a running
+ *                    gremote refuse a suspend when one is put to it
  */
 #include <windows.h>
 #include <process.h>
@@ -3693,6 +3695,103 @@ done:
     ReleaseDC(NULL, screen);
 }
 
+
+/* --------------------------------------------------------------------
+ * power -- can this machine be stopped from putting itself to sleep?
+ *
+ * Two questions the documentation could not answer and Wine cannot answer
+ * either, which is what this program is for.
+ *
+ * 1. DOES THIS KERNEL32 EXPORT SetThreadExecutionState? Microsoft documents a
+ *    minimum of Windows XP and says nothing about 9x, but the Windows 2000
+ *    Application Specification makes the OnNow requirement "indicate busy
+ *    application status properly" mandatory for WINDOWS 98 and names that call
+ *    as the way to do it. No export list settled it, so ask the machine. If it
+ *    is here, gremote's Prevent sleep uses it and never fakes input; if it is
+ *    not, the zero-delta mouse_event nudge is the layer that has to carry the
+ *    idle case (win/remote/tray.h, mechanisms 3 and 4).
+ *
+ * 2. DOES A RUNNING gremote ACTUALLY REFUSE A SUSPEND? Both veto messages are
+ *    sent at its hidden tray window and the replies are printed. This is the
+ *    one part of Prevent sleep that can be exercised on a machine with no APM,
+ *    because the message is synthesised here rather than waiting for a power
+ *    driver the QEMU guest does not have at all -- so it is also what
+ *    tests/python/remote/test_sleep.py drives under Wine.
+ *
+ * What this CANNOT tell you, and nothing but an idle real machine can: whether
+ * 98 sends either message of its own accord when the standby timer expires.
+ * For that, leave the box alone past its Power Management timeout with
+ * prevent_sleep=0 and read GREMOTE.LOG -- gremote logs the query even when it
+ * is going to say yes, precisely so that measurement does not change the
+ * machine's behaviour.
+ *
+ * SendMessageTimeout and never SendMessage: the target is another process and
+ * a probe must not be able to wedge on it.
+ */
+static void probe_power(void)
+{
+    typedef DWORD (WINAPI *ExecStateFn)(DWORD);
+    HMODULE k32;
+    ExecStateFn set_exec;
+    HWND tray;
+    DWORD_PTR reply;
+
+    say("");
+    say("=== power  prevent sleep: the mechanisms ===");
+
+    /* KERNEL32 is already mapped in every process; this is a refcount. */
+    k32 = LoadLibraryA("KERNEL32.DLL");
+    set_exec = k32 ? (ExecStateFn)GetProcAddress(k32, "SetThreadExecutionState")
+                   : NULL;
+    if (set_exec)
+    {
+        /* Take the hold and put it straight back, so this probe does not leave
+         * the machine awake behind it. ES_CONTINUOUS alone clears it. */
+        DWORD was = set_exec(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        set_exec(ES_CONTINUOUS);
+        say("SetThreadExecutionState : PRESENT, returned %08lx -- gremote will "
+            "use it and will NOT fake input", (unsigned long)was);
+    }
+    else
+    {
+        say("SetThreadExecutionState : absent -- expected on 98; the nudge is "
+            "what has to carry the idle case");
+    }
+    if (k32) FreeLibrary(k32);
+
+    tray = FindWindowA("GastonRemoteTray", NULL);
+    if (!tray)
+    {
+        say("gremote window          : NOT FOUND -- start gremote.exe first, "
+            "then run this again");
+        return;
+    }
+    say("gremote window          : found");
+
+    /* BROADCAST_QUERY_DENY is 0x424d5144; TRUE means it agreed to suspend. */
+    reply = 0;
+    if (!SendMessageTimeoutA(tray, WM_POWERBROADCAST, PBT_APMQUERYSUSPEND, 0,
+                             SMTO_ABORTIFHUNG, 5000, &reply))
+        say("WM_POWERBROADCAST reply : NO ANSWER (timed out or hung)");
+    else
+        say("WM_POWERBROADCAST reply : %08lx -- %s", (unsigned long)reply,
+            reply == (DWORD_PTR)BROADCAST_QUERY_DENY
+                ? "BROADCAST_QUERY_DENY, so Prevent sleep is ON and refusing"
+                : "not a denial, so Prevent sleep is off");
+
+    /* And the obsolete one, which is the message whose delivery set Microsoft
+     * actually documents (each window EnumWindows returns). PWR_FAIL is -1. */
+    reply = 0;
+    if (!SendMessageTimeoutA(tray, WM_POWER, PWR_SUSPENDREQUEST, 0,
+                             SMTO_ABORTIFHUNG, 5000, &reply))
+        say("WM_POWER reply          : NO ANSWER (timed out or hung)");
+    else
+        say("WM_POWER reply          : %08lx -- %s", (unsigned long)reply,
+            (LONG)reply == PWR_FAIL
+                ? "PWR_FAIL, so Prevent sleep is ON and refusing"
+                : "not a refusal, so Prevent sleep is off");
+}
+
 /* -------------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3744,6 +3843,7 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "targeted")) probe_targeted();
     if (!only || !strcmp(only, "gditext"))  probe_gditext();
     if (!only || !strcmp(only, "waitfor"))  probe_waitfor();
+    if (!only || !strcmp(only, "power"))    probe_power();
 
     say("");
     say("=== done -- results also in PROBE.LOG ===");

@@ -42,6 +42,24 @@ struct ServerConfig
     long heartbeatS;        /* 0 disables the drop; see the comment in .cpp */
 };
 
+/* The machine gremote is running ON, as opposed to the socket it answers on.
+ *
+ * One setting so far. It is here rather than in ServerConfig because it is not
+ * about the connection at all: it changes how the hardware behaves while this
+ * program is up, which is a different kind of claim and wants a different
+ * section in the file. "Keep the screen on" and "do not run the screen saver"
+ * would join it here if they are ever wanted.
+ */
+struct MachineConfig
+{
+    /* Refuse the machine's attempts to suspend itself, and keep its idle
+     * timer from expiring. OFF by default, deliberately: it changes how the
+     * hardware behaves, and an existing install must come up behaving exactly
+     * as it did before this option existed. See remote/tray.h for the three
+     * mechanisms and which of them this platform actually has. */
+    bool preventSleep;
+};
+
 struct ExecConfig
 {
     /* The ceiling a caller's timeout_ms is clamped to, and it is CLAMPED
@@ -66,7 +84,7 @@ public:
      * value's business (an unset secret, an unparseable range). A missing
      * file is written with the defaults so there is something to edit --
      * and that file does not start, which is the intent. */
-    bool load(ServerConfig *cfg, ExecConfig *exec);
+    bool load(ServerConfig *cfg, ExecConfig *exec, MachineConfig *machine);
 
     const char *error() const;
     const char *path() const;

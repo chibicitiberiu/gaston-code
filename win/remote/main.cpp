@@ -146,6 +146,7 @@ private:
     unsigned m_stayTicks;
     ServerConfig m_config;
     ExecConfig m_exec;
+    MachineConfig m_machine;
     /* Toolhelp, resolved once: HELLO reports whether this machine has it,
      * and the control lane's PS and KILL will want the same object. */
     Processes m_procs;
@@ -248,7 +249,7 @@ bool GremoteApp::parseArgs(const char *cmdLine)
     m_store.reset(new ServerConfigStore(m_exeDir));
     if (!m_store.valid())
         return false;
-    if (!m_store->load(&m_config, &m_exec))
+    if (!m_store->load(&m_config, &m_exec, &m_machine))
     {
         refuse(m_store->error());
         return false;
@@ -277,7 +278,7 @@ bool GremoteApp::initializeServices()
      * with no shell has already logged the one line that explains why
      * there is no icon. */
     return initService(m_tray,
-                       new TrayService(*this, instance(), m_config,
+                       new TrayService(*this, instance(), m_config, m_machine,
                                        *m_server.get()));
 }
 

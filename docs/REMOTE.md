@@ -267,6 +267,11 @@ heartbeat_timeout_s=30
 max_timeout_ms=120000
 max_output_kb=1024
 
+[machine]
+; 1 refuses this box's attempts to put itself to sleep, which otherwise takes
+; the network with it. 0 (the default) leaves the machine alone.
+prevent_sleep=0
+
 [ui]
 ; 0 skips oleacc.dll even if present
 msaa=1
@@ -286,6 +291,14 @@ level=info
 - **The composition root loads the INI once into per-service config structs**
   (`ServerConfig`, `ExecConfig`, `UiConfig`) and hands each service its struct.
   Services never read the INI.
+- **`[machine]` is the box, not the socket.** `prevent_sleep` is the only key
+  so far. It is **off by default**: it changes how the hardware behaves, so an
+  install that predates the option has to come up exactly as it did before. The
+  tray menu's checked **Prevent sleep** item is the same switch at the keyboard,
+  and the tooltip carries `[awake]` while it is on. `win/remote/tray.h` has the
+  four mechanisms, what is documented for 9x about each, and why
+  `SystemParametersInfo`'s power flags are not among them -- they mutate a
+  persistent system setting that no restore can be guaranteed to put back.
 - **Invalid values refuse startup**, the same rule as the handshake: never
   guess. `secret=change-me` counts as invalid. The refusal is logged, and shown
   in a message box only when started interactively: a modal box on an
@@ -960,6 +973,45 @@ Things only the real box can answer, collected so the first session covers them:
   `SetForegroundWindow`/`PostMessage` pair), that Exit leaves no ghost icon
   behind -- and neither does a shutdown, which takes the same
   `signalStop()` path with nothing joined.
+- **Prevent sleep, and it is the one item here with an open question behind
+  it.** `win/remote/tray.h` argues the four mechanisms; what no document
+  settles, and what Wine and the QEMU guest cannot settle either (that guest has
+  **no APM at all**, which is why `mode=poweroff` there degrades to a logoff),
+  is whether Windows 98 asks an application's permission when its OWN standby
+  timer expires. Three runs answer it, in this order:
+
+  1. `probe power`, with `gremote` up. One line says whether this KERNEL32
+     exports `SetThreadExecutionState` -- Microsoft documents a minimum of XP,
+     but the Windows 2000 Application Specification made "indicate busy
+     application status properly" mandatory for *98*, so it is worth asking the
+     machine rather than the docs. The other two lines send both veto messages
+     at `gremote`'s window and print what came back.
+  2. **The clean measurement.** `prevent_sleep=0`, Power Management set to its
+     shortest system standby, and leave the box alone past it. `gremote` logs a
+     suspend query **even when it is going to say yes**, exactly so this
+     measurement does not change the machine's behaviour. A
+     `the machine asks to suspend (...)` line means an idle standby does ask,
+     and which message it names settles `WM_POWERBROADCAST` versus the obsolete
+     `WM_POWER`. **Silence means no veto can ever help**, and the nudge is the
+     only layer that can.
+  3. `prevent_sleep=1`, same wait. `REFUSED` then
+     `the suspend was abandoned` is the veto working.
+     `the machine is suspending ANYWAY` is it being asked and ignored. Neither
+     line, and the box still up, is the nudge doing it -- and
+     `the first nudge went out` near the top of the log is what says the nudge
+     was running at all. That line exists because the nudge is the one mechanism
+     of the four with **no automated coverage anywhere**: it is used only when
+     `SetThreadExecutionState` is absent, and under Wine, where every `gremote`
+     test runs, that call is present.
+
+  Also at the keyboard: that **Prevent sleep** is checked on the menu and
+  `[awake]` is in the tooltip; that pressing Standby from Start > Shut Down with
+  it on gets 9x's "some application or device has rejected the suspend"
+  complaint (Intel's 1997 APM paper says it will, and that is the option
+  working); and that **tray > Exit writes the `Prevent sleep OFF` line with its
+  count** -- the Wine suite cannot see that one, because `GuestServer` stops the
+  guest by terminating the process and no teardown runs
+  (`tests/python/remote/test_sleep.py` says so).
 - `gremote` memory idle and under load, with and without the client running.
 - Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI numbers in `SYSINFO`.
 - **Shutdown with `gremote` installed and running.** *Observed on the real
