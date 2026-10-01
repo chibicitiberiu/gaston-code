@@ -97,7 +97,12 @@ def awake(tmp_path):
 
 @pytest.fixture
 def default(tmp_path):
-    """gremote with no [machine] section at all -- an existing install."""
+    """gremote with no [machine] section at all -- an existing install.
+
+    `ini()` writes [server] and [exec] and stops, which is exactly the file
+    sitting on the real machine. The fixture entering at all is the assertion
+    that matters: GuestServer waits for `server: listening on` in the log and
+    fails the case if the process exits first."""
     port = conftest.free_port()
     with conftest.GuestServer("gremote.exe", tmp_path, ini(port),
                               port) as server:
@@ -155,13 +160,33 @@ def test_a_granted_suspend_is_logged_too(default):
 
 # --- the option -------------------------------------------------------------
 
-def test_prevent_sleep_is_off_when_nothing_asks_for_it(default):
-    """An install that predates the option must come up behaving exactly as it
-    did before. Off means SILENT as well: no line claiming a mode nobody chose,
-    and nothing in the tooltip."""
+def test_an_ini_with_no_machine_section_starts_and_takes_the_default(default):
+    """THE REGRESSION A ROLLED-BACK DEPLOYMENT PAID FOR, 2026-10-01.
+
+    Shipping this option refused to start on the real Pentium 200, because its
+    installed gremote.ini has [server] and [exec] and no [machine] at all -- the
+    ordinary state of every install that updates. `IniFile::has()` answered TRUE
+    for the absent key (it probed with a sentinel containing control characters,
+    and 9x does not hand those back unaltered), so the key read as the empty
+    string and refused startup as `[machine] prevent_sleep: must be 0 or 1`.
+    gupdate rolled the image back, which is the only reason the box kept a
+    server.
+
+    ABSENT IS NOT INVALID. The strict 0/1 check below stays; it must simply not
+    fire on a key that is not there.
+
+    HONEST ABOUT WHAT THIS CASE IS WORTH: it passed before the fix as well,
+    because Wine returns the sentinel intact and so the bug does not exist here.
+    It is pinned anyway -- the shape is now named in the suite, so a future
+    reader knows it is load-bearing rather than incidental -- but the case that
+    actually fails against the broken code is in
+    tests/python/guest/test_guest_inifile.py, and the only place this one is
+    real is the guest."""
     log = default.log()
+    assert "server: listening on" in log, log
     assert "Prevent sleep ON" not in log, log
     assert "[awake]" not in log, log
+    assert "must be 0 or 1" not in log, log
 
 
 def test_the_ini_turns_it_on_and_says_which_mechanisms_are_running(awake):

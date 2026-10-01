@@ -58,7 +58,17 @@ static const char BODY[] =
     "\r\n"
     "[clean]\r\n"
     "port=1\r\n"
-    "Bind=0.0.0.0\r\n";
+    "Bind=0.0.0.0\r\n"
+    "\r\n"
+    /* The string the OLD has() used as its absent-marker, as a real value.
+     * That implementation read the key, got its own sentinel back and called
+     * the key absent -- so a value a user had written was silently replaced by
+     * a default. It is here as a VALUE because this is the one shape of the
+     * 2026-10-01 guest failure that Wine can actually reproduce: both are the
+     * same root cause, a lookup that depends on one particular string
+     * surviving a round trip through the profile API. */
+    "[sentinel]\r\n"
+    "old=\001absent\001\r\n";
 
 int main(void)
 {
@@ -90,6 +100,22 @@ int main(void)
     say("has-empty-value", ini.has("server", "blank"), "blank=");
     say("has-absent", !ini.has("server", "nope"), "nope");
     say("has-absent-section", !ini.has("nosuch", "port"), "[nosuch]");
+    /* THE CASE WITH TEETH, and the only one here that fails against the
+     * implementation this replaced. A value that happens to equal the marker a
+     * sentinel-based has() probes with is reported ABSENT by it, and the user's
+     * value is thrown away for a default. Same root cause as the guest failure:
+     * a lookup that only works while one particular string survives a round
+     * trip (core/inifile.cpp, has()). */
+    say("has-a-value-that-looks-like-a-probe",
+        ini.has("sentinel", "old"), "old=\\001absent\\001");
+    {
+        char out[32];
+        bool got = ini.getString("sentinel", "old", "fallback", out,
+                                 sizeof out);
+        say("string-value-that-looks-like-a-probe",
+            got && strcmp(out, "\001absent\001") == 0,
+            out[0] ? out : "(empty)");
+    }
 
     /* --- strings -------------------------------------------------------- */
     {
@@ -190,6 +216,31 @@ int main(void)
         bool v = false;
         bool got = ini.getBool("server", "nope", true, &v);
         say("bool-absent-default", got && v, "true");
+    }
+    {
+        /* THE SHAPE THAT STOPPED THE REAL MACHINE on 2026-10-01: a new optional
+         * setting read out of a section the installed file does not have at
+         * all. ABSENT IS NOT INVALID -- it takes the documented default and is
+         * not an error -- or shipping any new key breaks every install that
+         * predates it, which on a Pentium 200 means walking over with a floppy.
+         * Both polarities, because a default of false going wrong looks
+         * identical to a default of false being honoured. */
+        bool t = false, f = true;
+        bool gotT = ini.getBool("nosuch", "prevent_sleep", true, &t);
+        bool gotF = ini.getBool("nosuch", "prevent_sleep", false, &f);
+        say("bool-absent-section-takes-the-default",
+            gotT && t && gotF && !f, gotT && gotF ? "true, false" : ini.error());
+    }
+    {
+        long v = 0;
+        bool got = ini.getInt("nosuch", "port", 7401, 1, 65535, &v);
+        say("int-absent-section-takes-the-default", got && v == 7401, "7401");
+    }
+    {
+        char out[32];
+        bool got = ini.getString("nosuch", "bind", "0.0.0.0", out, sizeof out);
+        say("string-absent-section-takes-the-default",
+            got && strcmp(out, "0.0.0.0") == 0, out);
     }
 
     /* --- unknown keys --------------------------------------------------- */

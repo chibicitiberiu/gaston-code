@@ -43,7 +43,15 @@ public:
     bool ok() const;
     const char *path() const;
 
-    /* Present at all, even as `key=` with nothing after it. */
+    /* Present at all, even as `key=` with nothing after it. False for a key
+     * whose section is not in the file either.
+     *
+     * ABSENT IS NOT INVALID, and every getter below depends on this one telling
+     * the truth about it: an absent key takes its default and is not an error,
+     * which is what lets a new optional setting ship without breaking an
+     * install whose file predates it. Getting that wrong stopped a real
+     * Windows 98 box from starting on 2026-10-01; inifile.cpp's comment on this
+     * function has the mechanism and why Wine could not see it. */
     bool has(const char *section, const char *key) const;
 
     /* Each getter: absent -> the default and true. Present and valid -> the

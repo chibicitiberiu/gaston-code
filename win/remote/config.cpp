@@ -107,6 +107,36 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
         m_ini.getBool("machine", "prevent_sleep", DEFAULT_PREVENT_SLEEP,
                       &machine->preventSleep);
 
+    /* ONLY WHEN THE FILE IS NOT THERE AT ALL, and a new key is NOT backfilled
+     * into one that is. That distinction was tested the hard way on 2026-10-01,
+     * when prevent_sleep shipped and the real machine refused to start on its
+     * own installed ini (core/inifile.cpp, has()), and it is worth stating now
+     * that the question has been asked.
+     *
+     * Writing the missing key would make it discoverable to somebody holding
+     * EDIT.COM, which is a real benefit and is not enough. Startup is a read
+     * path, and turning it into a write path on this platform means writing to
+     * FAT -- possibly read-only media, since the install can come off a CD;
+     * possibly a file somebody has open in an editor; and from RunServices,
+     * before anyone has logged on, so a failed write is a line in a log nobody
+     * reads while the machine behaves perfectly. It buys nothing at that moment.
+     *
+     * The larger cost is to the file itself. Today what is in it is what
+     * somebody put there. If starting up adds keys, it becomes a mixture and
+     * "did I set this, or did the program?" has no answer -- which matters most
+     * for exactly the settings somebody would want to check, like a secret or a
+     * mode that changes how the hardware behaves.
+     *
+     * So discoverability is served the two other ways: a FRESH install gets the
+     * whole file written here with prevent_sleep=0 in it, and on a machine that
+     * already has an ini the tray menu shows the option without opening any file
+     * at all -- which for a person at a Windows 98 keyboard is better than a line
+     * they would have to go looking for. docs/REMOTE.md documents the key and its
+     * default for the person editing by hand.
+     *
+     * The menu is deliberately NOT persisted either, for the same reason the
+     * option exists: it is a temporary thing. The menu is "for now", the ini is
+     * "from boot", and the log records both. */
     if (!existed)
     {
         /* Something to edit. It refuses to start until the secret changes,

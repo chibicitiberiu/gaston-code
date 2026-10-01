@@ -4,9 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* What `has()` asks for as the default. No real value starts with a control
- * character, so getting this back means the key is absent. */
-static const char ABSENT[] = "\001absent\001";
+/* The two defaults `has()` asks with. They differ in CONTENT and in LENGTH, so
+ * absence is still detected on a platform that mangles one and not the other.
+ * See has() for why there are two rather than one sentinel. */
+static const char PROBE_A[] = "x";
+static const char PROBE_B[] = "yy";
 
 /* Longest integer text accepted, sign included. A long is at most 11. */
 static const unsigned INT_TEXT = 16;
@@ -45,14 +47,61 @@ bool IniFile::fail(const char *section, const char *key, const char *why)
     return false;
 }
 
+/* TWO PROBES, DELIBERATELY, AND NOT ONE SENTINEL.
+ *
+ * This asked once with a default of "\001absent\001" and said "absent" when that
+ * string came back. MEASURED WRONG ON THE REAL MACHINE, 2026-10-01: a
+ * gremote.ini with no [machine] section at all made gremote refuse to start with
+ * `[machine] prevent_sleep: must be 0 or 1`, and rolled itself back. That
+ * message can only come from getInt() failing, and with the key absent the only
+ * way to reach it is this function answering TRUE for a key that is not there --
+ * whereupon getString() reads the key, gets "" and getInt() calls "" not a whole
+ * number. The 16-bit profile code behind the 9x API does not hand a control
+ * character back unaltered, so the comparison could never match and every
+ * absent key looked present.
+ *
+ * WINE HANDS IT BACK INTACT, which is why every test passed on three machines
+ * and the guest fell over on the first one: `has-absent` and
+ * `has-absent-section` in inifilecheck had covered this since the file was
+ * written, and covered it on the one platform where it worked. "Wine proves the
+ * code, never the platform", and this is what that rule costs when the thing
+ * being proved is a round trip through somebody else's parser.
+ *
+ * It had never been exercised there before either, which is the only reason it
+ * survived this long: every key IniFile had ever been asked for on that box was
+ * present in the file, so the false branch had no first run until a new optional
+ * setting shipped.
+ *
+ * SO NOTHING HAS TO SURVIVE A ROUND TRIP ANY MORE. Ask twice with two ordinary
+ * defaults that differ. A key that IS there gives the same answer both times,
+ * because the answer comes out of the file and the default is never used. A key
+ * that is not there gives each default back, and they differ. That holds whether
+ * the platform alters the bytes, the length, or neither.
+ *
+ * The three cases this has to get right, all of them pinned in inifilecheck:
+ *
+ *   `key=` with nothing after it is PRESENT (both calls return the same empty
+ *   string, so they match) -- which is what makes getInt refuse it as "not a
+ *   whole number" rather than silently taking a default nobody wrote;
+ *
+ *   a value that happens to equal one of the probes is PRESENT, because both
+ *   calls return it;
+ *
+ *   a value longer than the buffer is PRESENT, because both calls truncate it
+ *   identically. Truncation does not matter here: nothing reads these bytes
+ *   except the comparison.
+ *
+ * The cost is one more profile call per lookup, on a file Windows keeps cached
+ * and that is read once at startup.
+ */
 bool IniFile::has(const char *section, const char *key) const
 {
-    char probe[sizeof ABSENT + 1];
+    char a[16], b[16];
     if (!m_ok)
         return false;
-    GetPrivateProfileStringA(section, key, ABSENT, probe, sizeof probe,
-                             m_path.str());
-    return strcmp(probe, ABSENT) != 0;
+    GetPrivateProfileStringA(section, key, PROBE_A, a, sizeof a, m_path.str());
+    GetPrivateProfileStringA(section, key, PROBE_B, b, sizeof b, m_path.str());
+    return strcmp(a, b) == 0;
 }
 
 bool IniFile::getString(const char *section, const char *key,
