@@ -327,6 +327,7 @@ bool Session::end()
 ServerService::ServerService(const ServerConfig &cfg, const ExecConfig &exec,
                              Processes &procs, App &app)
     : m_cfg(&cfg), m_exec(&exec), m_procs(&procs), m_app(&app), m_stop(0),
+      m_status(STATUS_BINDING), m_boundPort(0), m_peerAddr(0), m_served(0),
       m_generation(0)
 {
 }
@@ -449,6 +450,9 @@ void ServerService::serve(SocketGuard &s)
     }
     /* adopt() owns the socket from its first line, including on failure. */
     s.release();
+    InterlockedExchange((LONG *)&m_peerAddr, (LONG)peer.sin_addr.s_addr);
+    InterlockedExchange((LONG *)&m_served, (LONG)m_generation);
+    InterlockedExchange((LONG *)&m_status, STATUS_CONNECTED);
     rc_log("server: client %lu from %s", m_generation,
            inet_ntoa(peer.sin_addr));
 }
@@ -459,8 +463,11 @@ void ServerService::acceptLoop()
     {
         rc_log("server: could not listen on %s:%ld; nothing will reach this "
                "machine", m_cfg->bind, m_cfg->port);
+        InterlockedExchange((LONG *)&m_status, STATUS_DOWN);
         return;
     }
+    InterlockedExchange((LONG *)&m_boundPort, (LONG)m_listener.port());
+    InterlockedExchange((LONG *)&m_status, STATUS_LISTENING);
     rc_log("server: listening on %s:%d, heartbeat %lds, allow=%s",
            m_cfg->bind, m_listener.port(), m_cfg->heartbeatS,
            m_cfg->allowText[0] ? m_cfg->allowText : "(anywhere)");
@@ -478,6 +485,8 @@ void ServerService::acceptLoop()
                 m_session.release();    /* leak rather than free under it */
             else
                 m_session.reset();
+            InterlockedExchange((LONG *)&m_peerAddr, 0);
+            InterlockedExchange((LONG *)&m_status, STATUS_LISTENING);
         }
         if (m_listener.accept(s, ACCEPT_SLICE_MS))
             serve(s);
@@ -491,4 +500,6 @@ void ServerService::acceptLoop()
             m_session.reset();
     }
     m_listener.close();
+    InterlockedExchange((LONG *)&m_peerAddr, 0);
+    InterlockedExchange((LONG *)&m_status, STATUS_DOWN);
 }

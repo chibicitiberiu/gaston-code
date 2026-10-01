@@ -116,6 +116,33 @@ public:
     void signalStop();
     bool join(DWORD timeoutMs);
 
+    /* What the tray shows, and the only thing another thread may ask about
+     * this service.
+     *
+     * Four scalars rather than a peek at m_session, because signalStop()'s
+     * comment below is a rule and not a note: the accept thread is the only
+     * reader or writer of m_session, and a status call that dereferenced it
+     * from the main thread would race the teardown it does between accepts.
+     * These are written by the accept thread through InterlockedExchange
+     * and read raw -- an aligned 32-bit load on x86 is atomic, and the
+     * worst a stale read costs is a tooltip that is one state behind. */
+    enum Status
+    {
+        STATUS_BINDING = 0,   /* not started, or in the four-minute retry */
+        STATUS_LISTENING,     /* bound, no client */
+        STATUS_CONNECTED,     /* a client is live */
+        STATUS_DOWN           /* the bind gave up; nothing will arrive */
+    };
+    Status status() const { return (Status)m_status; }
+    /* The port actually bound, which is the configured one unless it was 0. */
+    int boundPort() const { return (int)m_boundPort; }
+    /* The live client's address, in network order; 0 when there is none.
+     * Not a string: inet_ntoa has one static buffer per process and the
+     * accept thread is already using it. */
+    unsigned long peerAddr() const { return (unsigned long)m_peerAddr; }
+    /* Clients taken up since this process started. */
+    unsigned long served() const { return (unsigned long)m_served; }
+
 private:
     class Accept : public Runnable
     {
@@ -143,6 +170,11 @@ private:
     Accept m_accept;
     Thread m_thread;
     volatile LONG m_stop;
+    /* The snapshot above. Accept-thread writes, any-thread reads. */
+    volatile LONG m_status;
+    volatile LONG m_boundPort;
+    volatile LONG m_peerAddr;
+    volatile LONG m_served;
     unsigned long m_generation;
     UniqueObj<Session> m_session;
 };

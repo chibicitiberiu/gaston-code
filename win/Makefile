@@ -302,7 +302,7 @@ $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 REMOTE_SRCS = remote/main.cpp remote/config.cpp remote/allow.cpp \
               remote/server.cpp remote/optable.cpp remote/reply.cpp \
               remote/control.cpp remote/lane.cpp \
-              remote/jobops.cpp remote/fsops.cpp
+              remote/jobops.cpp remote/fsops.cpp remote/tray.cpp
 GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBWIRE) $(LIBEXEC) \
                $(LIBFS) $(LIBCORE)
 gremote: $(BUILD)/gremote.exe
@@ -733,6 +733,9 @@ check: check-sources check-gaston check-gremote check-gupdate \
 # together come to 249929 -- 71 bytes under, which is a coincidence and not
 # a margin. 264000 is that 249929 plus back the ~10KB the line above
 # earmarked for the ui lane, so step 6 still has what it was promised.
+#
+# With both landed it measures 250441, 512 over that estimate -- PE section
+# rounding, which is why the estimate was never going to be exact.
 #
 # Worth knowing what this number is and is not. It is the sum of the PE
 # image's sections: the memory Windows commits when it loads the file, on a

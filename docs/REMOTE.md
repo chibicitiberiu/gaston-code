@@ -210,6 +210,12 @@ class ClientApp : public App              /* app/main.cpp */
   - Pinned by `appcheck`'s `end-session-does-not-wait-for-a-stuck-service`
     (the handler returns in milliseconds against a service that never wakes)
     and `an-ordinary-quit-still-joins-and-waits` (the other half).
+- **A service with no threads takes `signalStop()` and no `join` at all**, so
+  no `joinOrLeak()` either -- there is nothing to abandon, and a call that
+  logged "abandoning X unjoined" on every session end would say something
+  untrue. `TrayService` is the first of these: `signalStop()` takes the icon
+  out of the notification area, which is work that must happen on *both*
+  paths and cannot block on either (`win/remote/main.cpp`'s `stopServices`).
 - **A failed step still shuts down.** `main()` is skipped, `stopServices()`
   and `cleanup()` run, and both cope with a partial start: an empty
   `UniqueObj`, a service whose `init()` failed.
@@ -492,6 +498,15 @@ handlers behind the shorter names in the lane table above.
   replacement is staged and an updater process is already running to
   install it, and it can point at nothing but the running image. See
   "Safety of the test box" and `win/remote/control.cpp`'s `update()`.*
+- **The tray icon's Exit is not that `QUIT` either, and is not an exception
+  to it.** The bullet above is about a caller on the far end of the socket:
+  what the friction protects is the machine's reachability from the other
+  side. The person at the keyboard is standing in front of the box and can
+  already pull the power, so making them hunt the process out of a task list
+  protects nothing -- and the icon exists precisely because, with no window,
+  there was no other way to tell a crashed `gremote` from a working one.
+  `win/remote/tray.cpp` makes that argument at the `AppendMenu` call, so
+  nobody later "fixes" it by adding a remote `QUIT` to match.
 
 `UIFOCUS` raises the window containing `target` and does nothing else.
 `UICLICK` and `UIKEYS` already raise what they need, so it exists for the case
@@ -700,7 +715,18 @@ in every measurement taken while it is running.
   buffer, exec's 8KB chunk. No per-request heap growth; streaming everywhere.
   The output cap is a parameter (`ExecOptions::maxOutput`; the client passes
   32KB), since the remote shell streams rather than buffers.
-- `make check` gives `gremote.exe` its own committed-at-load cap.
+- `make check` gives `gremote.exe` its own committed-at-load cap: 242,761
+  before the tray icon and 250,441 after it, against 264,000 (2026-10-01).
+  The icon's +7,680 is about 6KB of real image and the rest PE section
+  rounding, and +2,144 of the 6KB is the `-xs` exception machinery a new
+  translation unit brings before any of its own code. The `win/Makefile`
+  comment at `check-gremote` carries the whole series and the reason the cap
+  was raised.
+- `TrayService` loads SHELL32 only while the icon is up, and lets it go again
+  when there is no notification area -- which is the whole of the pre-logon
+  life of a RunServices copy, and SHELL32 pulls four more DLLs behind it. It
+  is resolved with `LoadLibrary`/`GetProcAddress`, so the import count stays
+  at three DLLs.
 - The first P200 session measures `gremote` idle and under load, so later
   client measurements can subtract it.
 
@@ -878,6 +904,18 @@ Things only the real box can answer, collected so the first session covers them:
   (same file): a listening socket is not kept alive by an inheriting child;
   closing it in the parent frees the port. Wine and NT differ.*
 - `bind` after a restart: TIME_WAIT behaviour.
+- **The tray icon, end to end**, which Wine cannot answer. Boot with no one
+  logged on (`gremote` up from RunServices, `EXPLORER` not running) and check
+  `GREMOTE.LOG` says "no notification area yet"; then log on and check the
+  icon APPEARS -- that is the `TaskbarCreated` broadcast reaching a window
+  created before the shell existed, and it is the one part of
+  `win/remote/tray.cpp` with no test behind it. Then kill and restart
+  `EXPLORER` and check the icon comes back. Also: that the stock
+  `IDI_APPLICATION` at `SM_CXSMICON` looks like anything at 16x16 on a real
+  98 desktop, that the menu dismisses on a click outside it (the
+  `SetForegroundWindow`/`PostMessage` pair), that Exit leaves no ghost icon
+  behind -- and neither does a shutdown, which takes the same
+  `signalStop()` path with nothing joined.
 - `gremote` memory idle and under load, with and without the client running.
 - Whether `rsrc32.dll`'s free-resources export works, if we want USER/GDI numbers in `SYSINFO`.
 - **Shutdown with `gremote` installed and running.** *Observed on the real

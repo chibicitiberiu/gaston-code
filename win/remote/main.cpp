@@ -11,7 +11,9 @@
  * when it starts, and this is meant to be started from RunServices before
  * anyone logs on. App's hidden window is not decoration either: quit() works
  * from any thread through it, and it is what receives WM_ENDSESSION so the
- * services stop before Windows ends the process.
+ * services stop before Windows ends the process. Nothing is ever shown: the
+ * one thing on the screen is a notification-area icon, and the window behind
+ * that is hidden too (remote/tray.h).
  *
  * WHY A REFUSAL IS NOT A DIALOG. A bad setting on an unattended machine must
  * not put up a modal nobody will ever dismiss -- it would hold the box until
@@ -29,6 +31,7 @@
 #include "exec/process.h"
 #include "remote/config.h"
 #include "remote/server.h"
+#include "remote/tray.h"
 
 static const char TITLE[] = "Gaston Remote";
 
@@ -105,6 +108,7 @@ private:
     Processes m_procs;
     UniqueObj<ServerConfigStore> m_store;
     UniqueObj<ServerService> m_server;
+    UniqueObj<TrayService> m_tray;
 };
 
 GremoteApp::GremoteApp(HINSTANCE instance)
@@ -183,8 +187,18 @@ bool GremoteApp::initializeServices()
      * updater is already waiting for that to happen. Why that is not the
      * remote QUIT docs/REMOTE.md forbids is argued above
      * ControlOps::update. */
-    return initService(m_server,
-                       new ServerService(m_config, m_exec, m_procs, *this));
+    if (!initService(m_server,
+                     new ServerService(m_config, m_exec, m_procs, *this)))
+        return false;
+    /* Dependency order: the tray reads the server's status, so the server
+     * exists first. The tray never fails startup -- see TrayService::init
+     * -- but it is built here rather than in startServices so that the
+     * icon is up before the accept loop begins, and so that a cold boot
+     * with no shell has already logged the one line that explains why
+     * there is no icon. */
+    return initService(m_tray,
+                       new TrayService(*this, instance(), m_config,
+                                       *m_server.get()));
 }
 
 bool GremoteApp::startServices()
@@ -194,6 +208,19 @@ bool GremoteApp::startServices()
 
 void GremoteApp::stopServices()
 {
+    /* The icon first: NIM_DELETE wants a live process behind it, and the
+     * server's join below can take the better part of a second.
+     *
+     * THIS IS RIGHT ON BOTH TEARDOWN PATHS, and for the same reason either
+     * way: signalStop() is called on every service on both of them
+     * (core/app.h), so the icon comes off before the process goes, and a
+     * session end does not get a ghost in a notification area that may
+     * outlive us. It is also safe to do from inside the WM_ENDSESSION
+     * handler, which must return promptly: by then Explorer is gone, so
+     * Shell_NotifyIcon finds no tray window and fails at once, and the tray
+     * has no threads to join -- which is why it takes no joinOrLeak below.
+     * Nothing here waits. */
+    if (m_tray.valid()) m_tray->signalStop();
     if (m_server.valid()) m_server->signalStop();
     /* Generous: the accept loop wakes within a quarter second, then drains
      * and joins the live client's Connection.
@@ -208,6 +235,9 @@ void GremoteApp::stopServices()
 
 void GremoteApp::cleanup()
 {
+    /* Reverse of initializeServices: the tray holds a reference to the
+     * server. */
+    m_tray.reset();
     m_server.reset();
     m_store.reset();
     rc_log_mem("exiting");
