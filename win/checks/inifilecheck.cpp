@@ -102,18 +102,46 @@ int main(void)
     say("has-absent-section", !ini.has("nosuch", "port"), "[nosuch]");
     /* THE CASE WITH TEETH, and the only one here that fails against the
      * implementation this replaced. A value that happens to equal the marker a
-     * sentinel-based has() probes with is reported ABSENT by it, and the user's
-     * value is thrown away for a default. Same root cause as the guest failure:
-     * a lookup that only works while one particular string survives a round
-     * trip (core/inifile.cpp, has()). */
+     * sentinel-based has() probes with is reported ABSENT by it. Same root cause
+     * as the guest failure: a lookup that only works while one particular string
+     * survives a round trip (core/inifile.cpp, has()).
+     *
+     * It means slightly different things on the two platforms, and both are
+     * worth having. On Wine the value round-trips, so this is the sentinel
+     * COLLISION: the old code read its own marker back and called the key
+     * absent. On Windows 98 the value cannot be read at all -- measured, see
+     * below -- so there it is the `key=` case in disguise: a key that exists and
+     * whose value the API cannot carry is still PRESENT. */
     say("has-a-value-that-looks-like-a-probe",
         ini.has("sentinel", "old"), "old=\\001absent\\001");
     {
+        /* WHAT THIS ASSERTS, AND WHY IT IS NOT A ROUND TRIP ANY MORE.
+         *
+         * It used to require the bytes back, and that FAILED on real Windows 98
+         * SE on 2026-10-01 with `(empty)`:
+         * GetPrivateProfileStringA returns zero characters for a value holding a
+         * control character. Our code was right and the assertion was wrong --
+         * it expected the platform to carry something the platform does not
+         * carry, in EITHER direction, which is the same fact that made the old
+         * sentinel unable to come back and every absent key look present
+         * (docs/measurements/inifile-absent-key-p200-20261001.txt).
+         *
+         * So assert the property that actually matters and is true on both: A
+         * KEY THAT EXISTS NEVER READS BACK AS THE CALLER'S DEFAULT. Wine hands
+         * over the bytes, 98 hands over an empty string, and neither is
+         * "fallback" -- while the old implementation returned exactly
+         * "fallback", silently substituting a default for a line somebody had
+         * written into the file. The teeth are in that comparison, not in the
+         * round trip.
+         *
+         * The detail column carries what was actually read, so a guest run says
+         * `(empty)` and a Wine run shows the bytes. The platform difference stays
+         * VISIBLE in the output without either platform failing. */
         char out[32];
         bool got = ini.getString("sentinel", "old", "fallback", out,
                                  sizeof out);
-        say("string-value-that-looks-like-a-probe",
-            got && strcmp(out, "\001absent\001") == 0,
+        say("string-present-never-reads-back-as-the-default",
+            got && strcmp(out, "fallback") != 0,
             out[0] ? out : "(empty)");
     }
 

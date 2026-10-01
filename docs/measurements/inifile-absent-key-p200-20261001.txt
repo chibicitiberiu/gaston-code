@@ -1,0 +1,171 @@
+# A control-character value does not survive the 9x profile API, in either
+# direction -- and that is why every absent INI key looked present
+#
+# The user's real Windows 98 SE machine (the P200 checklist box in
+# docs/REMOTE.md), 2026-10-01, 22:04-22:25. Not the QEMU guest: Wine and the
+# emulator both get this right, which is the whole point of the file.
+#
+# HEADLINE, and it is a platform fact rather than a bug in our code:
+# GetPrivateProfileStringA on Windows 98 will neither RETURN a string holding a
+# control character as a default, nor READ one back out of a file. Both
+# directions were measured here, three weeks of passing tests apart from each
+# other. The first direction broke a deployment; the second explained it.
+#
+# WHY IT COST A ROLLED-BACK DEPLOY. `IniFile::has()` decided a key was absent by
+# asking for it with a default of "\001absent\001" and checking whether that
+# string came back. On 9x it cannot come back, so the comparison never matched
+# and has() answered PRESENT for every key that was not there. getString then
+# read the key with a default of "", got nothing, and getInt refused "" as "not a
+# whole number" -- which getBool reported as "must be 0 or 1". An absent optional
+# setting therefore refused startup, which is the opposite of what CLAUDE.md
+# requires: a value present and wrong refuses, ABSENT takes its default.
+#
+# Fixed in 0998f0f by asking TWICE with two ordinary defaults that differ in
+# content and in length. A key that is there answers the same both times, because
+# the answer comes out of the file and the default is never used; a key that is
+# not there hands each default back, and they differ. Nothing has to survive a
+# round trip, which is what makes it immune to this whole class.
+
+
+=== 1. THE FAILED DEPLOY (ef916a4, before the fix) ===
+
+gremote.exe was updated over the wire onto a box whose C:\GREMOTE\gremote.ini
+holds [server] and [exec] and no [machine] section at all -- the ordinary state
+of every install that updates rather than being created fresh.
+
+GREMOTE.PRV, the failed run's own log. It survived only because the .PRV log
+rotation had landed hours earlier the same afternoon; with CREATE_ALWAYS this
+file would have been destroyed by the next start and there would be nothing
+below.
+
+    22:04:39.600 === gremote starting ===
+    22:04:39.600 log: the previous run is now gremote.prv
+    22:04:39.600 os version: c0000a04
+    22:04:39.600 config: C:\GREMOTE\gremote.ini: [machine] prevent_sleep: must be 0 or 1
+    22:04:39.600 gremote: [machine] prevent_sleep: must be 0 or 1
+    22:04:39.600 === gremote exiting ===
+
+GUPDATE.LOG:
+
+    started as fffa7cc3 and exited 1 after 7ms
+    ROLLING BACK -- the new image did not stay up. The one that failed is still
+    at C:\GREMOTE\GREMOTE.UPD.
+
+The rollback worked exactly as designed on a genuinely broken deployment: 253 ms
+to release the image, the failure seen from the exit code, the old binary back
+and serving, the broken one kept at GREMOTE.UPD for inspection. The machine never
+lost its server, which is the only reason this was an afternoon rather than a
+drive.
+
+Worth noting what the log could NOT say. "must be 0 or 1" names a value, and
+there was no value -- getBool overwrites getInt's reason, so the one clue that
+pointed at has() ("not a whole number", i.e. it read an empty string) was
+discarded before it reached the file. The clobbering is left alone for now, by
+decision; it is a change for whoever is next in libcore for another reason.
+
+
+=== 2. THE DEPLOY AFTER THE FIX (0998f0f) ===
+
+Same machine, same ini, still no [machine] section:
+
+    22:24:51.370 === gremote starting ===
+    22:24:51.370 tray: icon added to the notification area
+    22:24:51.370 server: listening on 0.0.0.0:7401, heartbeat 30s, allow=10.0.0.0/24
+
+No "Prevent sleep" line and no refusal: the absent key took its documented
+default, silently, which is what a new optional setting has to do.
+
+
+=== 3. THE CAUSE, MEASURED -- inifilecheck.exe on the real machine ===
+
+36 rows, 1 FAIL. The relevant ones:
+
+    pass  has-absent                                nope
+    pass  has-absent-section                        [nosuch]
+    pass  has-a-value-that-looks-like-a-probe       old=\001absent\001
+    FAIL  string-value-that-looks-like-a-probe      (empty)
+    pass  string-absent-default                     fallback
+    pass  int-absent-default                        42
+    pass  bool-absent-default                       true
+    pass  bool-absent-section-takes-the-default     true, false
+    pass  int-absent-section-takes-the-default      7401
+    pass  string-absent-section-takes-the-default   0.0.0.0
+    pass  absent-section-passes                     [nosuch]
+
+READ THE THIRD AND FOURTH LINES TOGETHER. Between them they settle the cause:
+
+  - has-a-value-that-looks-like-a-probe PASSES. The two probes correctly call a
+    key holding "\001absent\001" PRESENT, so the fix works on the platform it was
+    written for. Note what that also proves: both calls returned the SAME thing,
+    so 9x did NOT fall back to the default for a value it could not carry -- the
+    key was found.
+
+  - string-value-that-looks-like-a-probe FAILS, with `(empty)`. Reading that same
+    value back yields ZERO CHARACTERS on 9x.
+
+So on Windows 98 a key whose value holds a control character is indistinguishable
+from `key=` with nothing after it: found, and empty. Nothing we do can recover
+those bytes, and nothing we do could have got the old sentinel back.
+
+That case was OUR ASSERTION BEING WRONG, not our code. It required a round trip
+the platform does not perform. It now asserts the property that is true on both
+platforms and that the old implementation got wrong -- a key that exists never
+reads back as the CALLER'S DEFAULT (Wine hands over the bytes, 98 hands over an
+empty string, the broken version handed over "fallback") -- and is renamed
+string-present-never-reads-back-as-the-default. The detail column still prints
+what was actually read, so the platform difference stays visible in the output
+without either platform failing.
+
+
+=== 4. WHY NO TEST CAUGHT IT FOR AS LONG AS THE FILE HAS EXISTED ===
+
+has-absent and has-absent-section have been in inifilecheck since it was written.
+They pass under Wine AGAINST THE BROKEN CODE -- verified by building the pre-fix
+inifile.cpp with the current cases, where all eight absent-key cases pass and only
+the two sentinel cases fail. Wine stores and returns a control-character value
+intact; the emulated guest was never asked, because nothing ran inifilecheck
+there.
+
+"Wine proves the code, never the platform" -- and this is what the rule costs when
+the thing being proved is a round trip through somebody else's parser. A sentinel
+is not a test of our logic; it is a bet on an implementation detail of
+GetPrivateProfileString, and the bet was settled against us.
+
+It survived this long only because the false branch had no first run on real
+hardware: checkKeys is strict about unknown keys, so that box's ini held exactly
+the keys IniFile knew, and every lookup had always found something. prevent_sleep
+was the first absent key ever asked for there.
+
+
+=== 5. WHAT ELSE WAS ON THE SAME BROKEN PATH ===
+
+All 14 IniFile getter call sites, in both shipping exes: 8 in
+win/remote/config.cpp and 6 in win/app/config.cpp. One defect, shared blast
+radius.
+
+gaston.exe was affected too, and the guess that it would not be was backwards. A
+section being PRESENT does not help, because GetPrivateProfileString cannot tell a
+missing section from a missing key -- both just return the default. The box's
+gaston.ini has a [ui] section holding autoscroll=1; the getBool("ui",
+"automation", ...) added in 2ae9b7c would have refused startup there with
+`[ui] automation: must be 0 or 1` on the next client deploy, independently of the
+gremote change that exposed the bug. gaston.exe is relinked with the fix.
+
+
+=== 6. WHAT TO BELIEVE FROM THIS FILE ===
+
+Settled, measured on real hardware:
+
+  - a control-character value is not carried by the 9x profile API in either
+    direction;
+  - an absent key and an absent section are the same thing to that API;
+  - a key that exists but whose value cannot be carried reads back as empty, not
+    as the caller's default;
+  - the two-probe has() is correct on 9x, and an absent key or section now takes
+    its default and starts the program.
+
+NOT settled, and not needed for any of the above: whether it is the control
+characters specifically, or any non-printable byte, or something about that
+particular string. The fix does not depend on the answer -- it depends on nothing
+surviving a round trip at all -- so the question was left open rather than
+answered with a guess.

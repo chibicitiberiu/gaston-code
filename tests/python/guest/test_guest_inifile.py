@@ -27,6 +27,16 @@ value it threw away for a default. Same root cause -- a lookup that works only
 while one particular string survives a round trip -- and it is the one shape of
 the failure Wine CAN reproduce. Verified: against the old implementation it and
 its getString sibling fail and the eight absent-key cases all still pass.
+
+AND THE GUEST THEN MEASURED THE CAUSE, which until then was inference: running
+this binary on real Windows 98 SE gave 36 rows and one failure, and it was the
+getString sibling, reading `(empty)`. **A value holding a control character
+cannot be read back on 9x either** -- `GetPrivateProfileStringA` returns zero
+characters for it. The same fact in both directions: nothing could come back, so
+the old sentinel never matched, so every absent key looked present. That case now
+asserts the property that is true on both platforms instead of a round trip only
+one of them performs; see its comment in inifilecheck.cpp and
+docs/measurements/inifile-absent-key-p200-20261001.txt.
 """
 
 import conftest
@@ -94,9 +104,18 @@ def test_a_lookup_does_not_depend_on_a_sentinel_surviving(verdicts):
 
     The old sentinel version got this exactly backwards for a value that happened
     to equal its marker -- it reported the key absent and silently substituted a
-    default for something a person had written into the file."""
+    default for something a person had written into the file.
+
+    The second case is the one that asserts there was no such substitution, and
+    it does NOT require the bytes back. It used to, and real Windows 98 SE failed
+    it with `(empty)`: a control-character value cannot be read on 9x at all. Our
+    code was right and the assertion was wrong. What both platforms do agree on,
+    and what the old code got wrong, is that A KEY THAT EXISTS NEVER READS BACK
+    AS THE CALLER'S DEFAULT -- Wine gives the bytes, 98 gives an empty string,
+    and the broken version gave "fallback". The detail column still shows which
+    platform ran it."""
     assert verdicts["has-a-value-that-looks-like-a-probe"][0] == "pass"
-    assert verdicts["string-value-that-looks-like-a-probe"][0] == "pass"
+    assert verdicts["string-present-never-reads-back-as-the-default"][0] == "pass"
 
 
 def test_an_absent_key_or_section_takes_its_documented_default(verdicts):

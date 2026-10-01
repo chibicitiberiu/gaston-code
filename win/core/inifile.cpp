@@ -56,9 +56,15 @@ bool IniFile::fail(const char *section, const char *key, const char *why)
  * message can only come from getInt() failing, and with the key absent the only
  * way to reach it is this function answering TRUE for a key that is not there --
  * whereupon getString() reads the key, gets "" and getInt() calls "" not a whole
- * number. The 16-bit profile code behind the 9x API does not hand a control
- * character back unaltered, so the comparison could never match and every
- * absent key looked present.
+ * number.
+ *
+ * THE CAUSE WAS THEN MEASURED ON THE SAME MACHINE, and it is a platform fact
+ * rather than a quirk of that one string: GetPrivateProfileStringA on Windows 98
+ * will neither hand a control-character default BACK nor READ one out of a file.
+ * Running inifilecheck there gave 36 rows and one failure, and the failure was
+ * reading such a value: zero characters returned. Both directions, the same
+ * fact -- so the sentinel could never come back, and every absent key looked
+ * present (docs/measurements/inifile-absent-key-p200-20261001.txt).
  *
  * WINE HANDS IT BACK INTACT, which is why every test passed on three machines
  * and the guest fell over on the first one: `has-absent` and
@@ -77,6 +83,11 @@ bool IniFile::fail(const char *section, const char *key, const char *why)
  * because the answer comes out of the file and the default is never used. A key
  * that is not there gives each default back, and they differ. That holds whether
  * the platform alters the bytes, the length, or neither.
+ *
+ * It is also why no sentinel would have done. Picking a printable marker only
+ * moves the collision: any string a user could write into the file is one this
+ * function could mistake for its own default. The two-probe form has no marker to
+ * collide with.
  *
  * The three cases this has to get right, all of them pinned in inifilecheck:
  *
