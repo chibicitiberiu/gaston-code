@@ -1,0 +1,333 @@
+# The shutdown hang, FIXED -- the hypothesis tested by changing the code
+#
+# Follow-on to gremote-shutdown-vm-20261001.txt, which localised the fault to
+# "gremote's own process calls ExitWindowsEx" and said the way to settle it was
+# a change rather than another run. This is that change and those runs.
+#
+# Same guest: QEMU/libvirt `retroclaude-win98` (qemu:///session), Win98 SE
+# 4.10.2222 A, 32288 KB, 800x600, clean. 2026-10-01, 18:30-19:45.
+#
+# The guest disk was copied to vm/win98.qcow2.bak-20261001-182519 before any of
+# this. The earlier agent's vm/win98.qcow2.bak-20261001-171920 was left alone.
+#
+# THE CHANGE, in one sentence: when the session end is one THIS PROCESS asked
+# for, App tears down exactly as before and then does NOT PostQuitMessage -- the
+# message loop keeps running, the thread inside ExitWindowsEx carries the
+# shutdown to the end, and Windows ends the process itself. That is candidate
+# (b). Candidate (a), handing REBOOT to a helper process, was not built: (b) is
+# the experiment that settles the diagnosis, and it worked.
+
+
+=== THE RESULT ===
+
+    build                       who asks            runs  outcome
+    -------------------------   -----------------   ----  --------------------
+    HEAD 704375b, unfixed       gremote, the wire     2   HUNG both
+    HEAD + the fix (3 builds)   gremote, the wire     8   REBOOTED all eight
+    HEAD + the fix              the Start menu        1   rebooted, 20 s
+    HEAD + the fix, poweroff    gremote, the wire     3   see section 4
+
+Six runs of the unfixed code have now hung on this guest (two here, four in the
+earlier file across a7a7768 and a7a7768^) and eight runs of the fixed code have
+rebooted. Nothing else about the machine changed between them.
+
+A reboot is the video mode going 800x600 -> 640x400 -> 720x400 -> 800x600, POST
+and then Win98 coming back; measured at 9 s, 15 s and 19 s from the REBOOT
+frame, run after run, with about a second of spread. A hang is 800x600 held for
+as long as anyone watches.
+
+EMULATED, so none of these are P200 timings. What is real: which screen the
+machine ends on, which tasks are left, and what the log says.
+
+
+=== THE BINARIES, AND WHY md5 AND NOT SIZE ===
+
+Both of the first pair are 247,808 bytes. Watcom stamps the PE with the link
+time, so even the SAME source at the SAME path builds to a different md5 twice
+running -- the md5 identifies the FILE, never the commit. Every run below
+fetched C:\GREMOTE\GREMOTE.EXE back over the wire with GET and hashed it on the
+host BEFORE anything was triggered.
+
+    GRHEAD.EXE   HEAD 704375b, unfixed    247,808   dd6dab9e66ff168f59448a54dc292642
+    GRFIX  v1    + stay alive             247,808   0e36573222b3efe3379f62cb7bd993e4
+    GRFIX  v2    watchdog moved to gremote 248,320  d9f289068b2b231706bf616be30ad09b
+    GRFIX  final + the 3-minute give-up   250,368   5a6b41cab73ba7ab5dd2a08966348ac5
+
+v1 and v2 differ from the final build only in the watchdog described in
+section 4; the stay-alive decision itself is identical in all three, which is
+why their eight reboots are one result and not three.
+
+The tree was rebuilt once more after the last run, for two comment lines.
+`cmp -l` against the tested GRFIX gives TWO differing bytes, both inside the PE
+TimeDateStamp -- so the code in the tree is byte-identical to the code that
+took every measurement above, and only its md5 moved.
+
+The unfixed arm is HEAD, not a7a7768. It had to be: the tray icon (81ca7ef)
+landed AFTER a7a7768, so the arms the earlier file measured had no notification
+area at all -- and the task left over in every hang is Systray. That the hang
+reproduces identically with and without our icon is itself worth knowing.
+
+ONE ISO, NOT TWO, carrying both exes under their own names with a GRSETUP.BAT
+that takes FIX or HEAD. The arms are then switched without touching the CD
+drive, which is the swap that has served stale blocks before.
+
+
+=== 1. THE FIXED BUILD REBOOTS ===
+
+Eight runs, each from a desktop with no console window open, gremote started
+from Start > Run and driven over `tools/vm/qmp.py hostfwd 7401`.
+
+    build   run   first mode change   back at 800x600   outcome
+    -----   ---   -----------------   ---------------   -------
+    v1       1    640x400 at   9 s    19 s              rebooted
+    v1       2    640x400 at   9 s    19 s              rebooted
+    v1       3    640x400 at   9 s    19 s              rebooted
+    v2       1    640x400 at   9 s    18 s              rebooted
+    v2       2    640x400 at   9 s    19 s              rebooted
+    final    1    640x400 at   9 s    18 s              rebooted
+    final    2    640x400 at   9 s    19 s              rebooted
+    final    3    640x400 at   9 s    18 s              rebooted
+
+Each one came back to the logon prompt on its own. No Ctrl+Alt+Del, no forced
+reset, nothing left behind: the run after each of them started gremote again
+with no complaint about a copy already running.
+
+
+=== 2. THE UNFIXED BUILD HANGS, ON THE SAME BOOT PATTERN ===
+
+Two runs, interleaved between the fixed ones, same install flow, same clean
+boot, md5 dd6dab9e... confirmed on the guest both times.
+
+Both: 800x600 held for the full three minutes watched. Bare teal desktop, no
+icons, no taskbar, cursor where it was left. gremote already gone -- the port
+gives an immediate RST, which through a hostfwd means nothing in the guest is
+listening. Ctrl+Alt+Del shows exactly ONE task, Systray, and a second one says
+it is not responding.
+
+The CPU is parked, not spinning, at the same address both times and the same
+address the earlier file recorded:
+
+    run 1   EIP=00006a2a  CS=0108 base 000f0000  CPL=0  HLT=1
+    run 2   EIP=00006a2a  CS=0108 base 000f0000  CPL=0  HLT=1
+
+Recovered with Ctrl+Alt+Del (once on the first, twice on the second). Neither
+restart ran ScanDisk.
+
+
+=== 3. THE LOGS, WHICH DIFFER BY ONE CLAUSE ===
+
+Read over the wire from GREMOTE.PRV after the machine came back -- the restart
+that recovers a hang would otherwise be what destroys the evidence, which is
+what `log: the previous run is now gremote.prv` exists to stop.
+
+Unfixed (hang, run 1). Every line REMOTE.md asks for, in order:
+
+    18:44:27.940 control: REBOOT mode=reboot
+    18:44:27.940 system: ExitWindowsEx(2)
+    18:44:27.940 app: Windows asks whether the session may end (a shutdown or
+                      restart); yes
+    18:44:28.990 app: Windows is ending the session (a shutdown or restart);
+                      signalling every service and leaving this handler WITHOUT
+                      joining any of them
+    18:44:28.990 app: the session is ending; abandoning server unjoined
+    18:44:28.990 app: every service is signalled and abandoned; cleaning up
+    18:44:28.990 === gremote exiting ===
+    18:44:28.990 app: the session-end handler is returning to Windows after
+                      68 ms; nothing below this line is ours
+
+Fixed (reboot, final build run 1). The same eight lines to the millisecond
+pattern, and then:
+
+    19:14:14.950 app: the session-end handler is returning to Windows after
+                      46 ms; this process stays up to drive the shutdown it
+                      asked for
+
+That clause is the whole change. Everything above it is identical -- the
+teardown, the abandonment, the 40-70 ms handler, the closing banner. One
+machine wedges and one reboots.
+
+Which also kills a reading the earlier file could not: the hang is NOT about
+how fast the handler returns, or what it tears down, or in what order. It is
+about whether ExitProcess follows.
+
+
+=== 4. WHAT THE FIX BROKE, AND WHAT PUTTING IT BACK COST ===
+
+**A session end can fail to take.** `REBOOT mode=poweroff` on this guest logs
+`ExitWindowsEx(8)` and then -- this is the detail that pays -- Windows reports
+the session end as A LOGOFF:
+
+    19:33:27.940 system: ExitWindowsEx(8)
+    19:33:27.940 app: Windows asks whether the session may end (a logoff); yes
+
+With no APM to switch the machine off, 9x runs the entire teardown, cannot
+power down, and comes back to the LOGON PROMPT. (Better than the earlier file's
+§3, where the same request on the unfixed build stopped at a bare desktop. The
+fix helps here too.) But "stay up until Windows ends us" then means forever:
+every service abandoned, nothing listening, and GastonRemoteSingleInstance
+still held -- so the next `C:\GREMOTE\GREMOTE.EXE` from Start > Run writes
+
+    gremote: another copy is already running; exiting
+
+and the box answers nothing and cannot be told to. Measured, twice, before it
+was fixed. That is worse than the hang, because the hang at least announces
+itself.
+
+**The watch that comes with staying.** `win/remote/main.cpp` arms a 15-second
+timer in `stopServices()` on that path and reads it in `preTranslate()`:
+
+  * `Shell_TrayWnd` back -- Explorer goes before WM_ENDSESSION and stays gone
+    for the rest of a shutdown that is really happening, so the taskbar
+    existing again is Windows saying it carried on living. Quit.
+  * three minutes with no shell -- a reboot on this guest is through POST in
+    nine seconds, so a machine still here at three minutes is one where the
+    session end did not happen or that is already wedged, and in neither case
+    is there a broadcast left to drive. Quit, and say so.
+  * one minute with no shell -- one line, then watch on in silence. A machine
+    that never comes back must not fill its own disk explaining it.
+
+The shell signal alone was BUILT AND MEASURED INSUFFICIENT: a failed poweroff
+lands on the logon prompt, where Explorer is not running either, so an
+unattended box sat there with the mutex held. v2, which killed the timer after
+a minute, left exactly that. The give-up is why the final build is the final
+build. The run that proves it:
+
+    19:33:28.980 app: the session-end handler is returning to Windows after
+                      38 ms; this process stays up to drive the shutdown it
+                      asked for
+    19:34:28.960 gremote: the shell is still gone a minute after the session
+                      end, so the shutdown is still going or this machine is
+                      wedged; watching on without saying more
+    19:36:28.980 gremote: three minutes after the session end this machine is
+                      still here, so nothing is left to drive; exiting so a new
+                      copy can be started
+
+and the relaunch after it started normally, with the mutex free.
+
+**Where the watchdog lives, and why not in App.** In `GremoteApp`, not in
+`App`. Not taste: in libcore it cost gaston.exe 4,608 bytes of committed-at-
+load -- a page of AUTO plus data -- for a path the client can never take,
+against 2,263 bytes of headroom. Measured both ways:
+
+    gaston, App unchanged                     467,737
+    gaston, stay-alive decision in App        467,737   (+0)
+    gaston, decision + watchdog in App        472,345   (+4,608, OVER)
+    gaston, watchdog in gremote               467,737   (+0)
+
+gremote carries it instead: +4,608, measured against the tree HEAD of the
+moment (cfbd120, another agent having landed RMDIR mid-session), 252,489 ->
+257,097 of 264,000. App's header now
+states the obligation -- an app that calls ExitWindowsEx owes the watch -- and
+names where gremote discharges it.
+
+
+=== 5. THE CONTROLS STILL HOLD ===
+
+**Somebody else asking still gets out of the way.** The fixed build running,
+a client connected, Start > Shut Down > Restart: rebooted, 800x600 -> 640x400
+at 4 s, back at 800x600 by 20 s. The log takes the other branch and says so:
+
+    19:43:06.970 app: Windows asks whether the session may end (a shutdown or
+                      restart); yes
+    19:43:07.950 app: Windows is ending the session ...
+    19:43:07.950 app: the session-end handler is returning to Windows after
+                      49 ms; nothing below this line is ours
+
+So the two paths are really two paths, and the one that was already measured
+good is untouched.
+
+**Under Wine, what Wine can hold.** Two new `appcheck` cases, run by
+`tests/python/guest/test_guest_app.py`:
+
+  * `a-session-end-we-asked-for-does-not-quit-the-loop` -- the services are
+    signalled and abandoned exactly as on any session end, and the message loop
+    is STILL RUNNING when the handler returns. A thread playing Windows ends it
+    800 ms later with code 11; App quitting by itself would be code 0 and
+    prompt, and the two cannot read the same.
+  * `the-log-says-when-the-process-is-staying-up` -- the closing line names
+    which ending it took. It used to promise "nothing below this line is ours",
+    which on the staying-up path is false, and that line is the first thing a
+    person reads after a forced restart.
+
+Wine has no 9x shutdown, no Win16Mutex and no Systray, so it can hold the
+DECISION and nothing about the platform. Everything in sections 1-5 above is
+the guest.
+
+
+=== 6. THE GPF IN USER.EXE ===
+
+Not reproduced, and not claimed fixed. It was seen once, on the pre-fix binary,
+with a KILL in flight against a process that was inside ExitWindowsEx, and
+nothing here went looking for it.
+
+The argument that it should now be RARER is the same one the a7a7768 commit
+made about abandoned workers, one level up. That GPF was raised in 16-bit
+USER.EXE and attributed to GREMOTE while the machine was on its way down -- the
+shape of a thread killed inside a USER call, or of a call into something the
+dying process had already let go. The fix removes the kill: on a session end
+this process asked for, nothing calls ExitProcess any more while its own
+threads are inside USER. Explorer is gone by then, so a GPF dialog there has no
+desktop to appear on, which is a hang in its own right.
+
+Against that, staying up for seconds rather than exiting at one second leaves
+the abandoned lane threads running LONGER, so any fault they would have had is
+now reachable for longer. Those threads hold `m_config`, `m_exec` and `m_procs`
+in GremoteApp, and `runApp` already leaks the App on this path rather than
+running its destructor under them -- which is the reason that leak exists.
+Nothing was destroyed early in eight runs.
+
+Net: one fault mechanism removed, one exposure window widened, and no
+measurement of either. Whoever sees it next should know it has happened twice.
+
+
+=== 7. A FOOTGUN THIS RUN PAID FOR, NOT FIXED HERE ===
+
+`rc_log_open` rotates .LOG to .PRV before `initialize()` reaches the
+single-instance check -- so a second copy that exits with "another copy is
+already running" has ALREADY consumed the rotation, and one that writes six
+lines and leaves can push a run worth reading out of .PRV. That is how the
+first failed-poweroff log was lost: two launches that both bounced off the
+mutex, two rotations, and the run in between was gone.
+
+The same family as the bug `log: the previous run is now gremote.prv` was
+written to fix, and not touched here because moving the rotation after the
+instance check also moves it after the point where "no log file was created"
+is the primary diagnostic for an image that died at load.
+
+
+=== 8. WHAT THE P200 WOULD STILL ADD ===
+
+A real shell, real drivers, a machine that can genuinely power off, and a
+shutdown slow enough to say whether three minutes is the right give-up. The
+prediction is that `REBOOT mode=reboot` now reboots it, and that GREMOTE.PRV
+there ends with `this process stays up to drive the shutdown it asked for` and
+nothing after it.
+
+`mode=poweroff` there is the one genuinely open question: this guest has no
+APM, so it degraded to a logoff, and a machine that CAN power off has never
+been measured.
+
+
+=== HOW IT WAS RUN ===
+
+One ISO, vm/shutfix.iso, carrying GRFIX.EXE, GRHEAD.EXE, a gremote.ini, an
+ARMS.TXT with both md5s, and a GRSETUP.BAT that takes FIX or HEAD and copies
+one of them to C:\GREMOTE\GREMOTE.EXE. Inserted with the domain SHUT OFF
+(`change-media --config`), so no live CD swap was involved at all. Rebuilt and
+reinserted the same way for each of the three fixed builds, each time with a
+`virsh destroy` / `virsh start` around it -- never a reboot, this domain has no
+ACPI.
+
+Every run began from a clean boot with no console window open, and the install
+batch's window was closed with Alt+F4 and confirmed gone by screenshot before
+anything was launched: a stranded DOS box is a documented way to stall a 9x
+shutdown and has produced a BSOD on this guest before.
+
+Installed and launched through Start > Run, keyboard only (Ctrl+Esc, R). Driven
+with the `gremote` Python package over `tools/vm/qmp.py hostfwd 7401` -- which
+survives a guest reboot and does not survive a domain restart. Liveness was
+never taken from a successful connect(): QEMU holds the host-side listener
+either way, so the probe sends a byte and reads, and an RST is how "nothing is
+listening in the guest" is told from "the forward is up".
+
+The CD was put back to vm/tools.iso and the domain left shut off afterwards.

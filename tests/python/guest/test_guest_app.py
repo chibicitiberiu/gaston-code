@@ -36,7 +36,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 29, sorted(verdicts)
+    assert len(verdicts) == 31, sorted(verdicts)
 
 
 def test_up_in_order_down_in_reverse_signal_before_join(verdicts):
@@ -78,6 +78,30 @@ def test_ending_the_session_does_not_wait_for_a_stuck_service(verdicts):
     ExitWindowsEx SendMessaging this very window. The detail column carries
     the measured duration; against the joining code it was the full budget."""
     verdict, detail = verdicts["end-session-does-not-wait-for-a-stuck-service"]
+    assert verdict == "pass", detail
+
+
+def test_a_session_end_we_asked_for_does_not_quit_the_loop(verdicts):
+    """The second half of the same 2026-10-01 measurement, and the one not
+    waiting did not cover. On 9x the process that calls ExitWindowsEx DRIVES
+    the shutdown -- the call never returns, the broadcast to every other
+    application runs out of it, and the 16-bit USER code it is executing holds
+    Win16Mutex between the sends. So App tearing down promptly and then
+    exiting killed that driver a second later, after Explorer had gone and
+    before Systray was dealt with: a bare teal desktop, one unanswering task,
+    an idle CPU, and no reboot. Four runs out of four on a clean Windows 98
+    guest, against two builds; the same guest rebooted in three seconds when a
+    rundll32 it had launched made the call instead, because rundll32 stays
+    parked inside ExitWindowsEx until the machine goes
+    (docs/measurements/gremote-shutdown-vm-20261001.txt).
+
+    Wine has no 9x shutdown and no Win16Mutex, so it cannot see any of that.
+    What it CAN hold is the decision: the services are signalled and abandoned
+    exactly as on any session end, and the message loop is still running when
+    the handler returns. The exit code says who ended it -- 11 is the thread
+    playing Windows, 0 would be App quitting by itself."""
+    verdict, detail = \
+        verdicts["a-session-end-we-asked-for-does-not-quit-the-loop"]
     assert verdict == "pass", detail
 
 
@@ -219,6 +243,15 @@ def test_the_session_end_handler_is_traced_from_entry_to_exit(verdicts):
     clean return and on a fault on the way out alike."""
     assert verdicts["end-session-writes-entry-through-exit-to-the-log"][0] \
         == "pass"
+
+
+def test_the_log_says_when_the_process_is_staying_up(verdicts):
+    """The closing line used to end "nothing below this line is ours", which
+    on the staying-up path is false -- the watchdog writes under it fifteen
+    seconds later if the machine is somehow still there. That line is the
+    first thing a person reads after a forced restart, so it has to name
+    which of the two endings the handler took."""
+    assert verdicts["the-log-says-when-the-process-is-staying-up"][0] == "pass"
 
 
 def test_the_log_says_whether_it_was_a_logoff(verdicts):

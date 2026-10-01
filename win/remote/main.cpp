@@ -35,6 +35,46 @@
 
 static const char TITLE[] = "Gaston Remote";
 
+/* THE WATCH THAT COMES WITH STAYING UP.
+ *
+ * When REBOOT asks Windows to end the session, this process must not exit
+ * while its own thread is inside ExitWindowsEx driving the broadcast -- doing
+ * so wedges a Windows 98 on a bare desktop, measured four runs out of four
+ * (core/app.h, docs/measurements/gremote-shutdown-vm-20261001.txt). App
+ * therefore skips its PostQuitMessage on that path and the message loop keeps
+ * running until Windows ends the process itself.
+ *
+ * But a session end can fail to take. `mode=poweroff` on a machine with no
+ * power management runs the whole teardown, cannot switch the machine off,
+ * and brings Windows back to the logon prompt -- measured on the same guest,
+ * same day. What is left then is this process with every service abandoned,
+ * nothing listening, and GastonRemoteSingleInstance still held, so a new copy
+ * started from Start > Run says "another copy is already running" and exits.
+ * A test box that answers nothing and cannot be told to is worse than the
+ * hang.
+ *
+ * Shell_TrayWnd is the first signal. Explorer goes before WM_ENDSESSION and
+ * stays gone for the rest of a shutdown that is really happening; the taskbar
+ * existing again is Windows saying it carried on living, and at that moment
+ * there is nothing left to outlive.
+ *
+ * It is not sufficient on its own, and that was MEASURED rather than reasoned
+ * about: a failed poweroff lands on the LOGON prompt, where Explorer is not
+ * running either, so an unattended box would sit there with the mutex held
+ * until somebody walked over and logged in. Hence the second signal, which is
+ * just time. Three minutes is far beyond any shutdown that is going to
+ * finish -- on this guest a reboot is through POST in nine seconds -- so a
+ * machine still here at three minutes is one where the session end did not
+ * happen or already wedged, and in neither case is there a broadcast left for
+ * this process to drive. It exits and says so.
+ *
+ * In between, the timer keeps watching and stops WRITING after a minute: a
+ * machine that never comes back must not fill its own disk explaining it. The
+ * lines it does write are how the next person tells "gremote left too early
+ * again" from "gremote stayed and the shutdown stalled somewhere else". */
+enum { STAY_TICK_MS = 15000, STAY_QUIET_TICKS = 4, STAY_GIVEUP_TICKS = 12 };
+static const UINT_PTR STAY_TIMER = 1;
+
 /* Stay running when the person logs off.
  *
  * On 9x a process started from RunServices runs before anyone logs on, and
@@ -93,14 +133,17 @@ protected:
     bool parseArgs(const char *cmdLine);
     bool initializeServices();
     bool startServices();
+    bool preTranslate(MSG &msg);
     void stopServices();
     void cleanup();
 
 private:
     void refuse(const char *what);
+    bool stayTick();
 
     char m_exeDir[MAX_PATH];
     bool m_interactive;
+    unsigned m_stayTicks;
     ServerConfig m_config;
     ExecConfig m_exec;
     /* Toolhelp, resolved once: HELLO reports whether this machine has it,
@@ -112,9 +155,46 @@ private:
 };
 
 GremoteApp::GremoteApp(HINSTANCE instance)
-    : App(instance), m_interactive(false)
+    : App(instance), m_interactive(false), m_stayTicks(0)
 {
     m_exeDir[0] = '\0';
+}
+
+/* One tick of the watch described at the top of this file. True consumes the
+ * message. */
+bool GremoteApp::stayTick()
+{
+    m_stayTicks++;
+    /* rc_log_tail, not rc_log, throughout: cleanup() closed the log before the
+     * session-end handler returned, and this reopens the file and appends. */
+    if (FindWindowA("Shell_TrayWnd", NULL))
+    {
+        KillTimer(window(), STAY_TIMER);
+        rc_log_tail("gremote: the shell is back, so the session end did not "
+                    "take; exiting so a new copy can be started");
+        quit(0);
+    }
+    else if (m_stayTicks >= STAY_GIVEUP_TICKS)
+    {
+        KillTimer(window(), STAY_TIMER);
+        rc_log_tail("gremote: three minutes after the session end this "
+                    "machine is still here, so nothing is left to drive; "
+                    "exiting so a new copy can be started");
+        quit(0);
+    }
+    else if (m_stayTicks == STAY_QUIET_TICKS)
+    {
+        rc_log_tail("gremote: the shell is still gone a minute after the "
+                    "session end, so the shutdown is still going or this "
+                    "machine is wedged; watching on without saying more");
+    }
+    return true;
+}
+
+bool GremoteApp::preTranslate(MSG &msg)
+{
+    return msg.message == WM_TIMER && msg.wParam == STAY_TIMER &&
+           sessionEndAskedByUs() && stayTick();
 }
 
 void GremoteApp::refuse(const char *what)
@@ -231,6 +311,16 @@ void GremoteApp::stopServices()
      * own reader thread (core/app.h). joinOrLeak takes the App for exactly
      * that reason and abandons the server unjoined instead. */
     joinOrLeak(m_server, *this, 8000);
+
+    /* AND ARM THE WATCH, when this is the session end we asked for. Here
+     * rather than anywhere else because here is the one place that runs
+     * inside the WM_ENDSESSION handler, while the window still exists and
+     * before cleanup() closes the log. Nothing waits: SetTimer returns at
+     * once, and the thread that is driving the shutdown has released
+     * Win16Mutex into the SendMessage it is blocked in. See the top of this
+     * file for what the watch is for. */
+    if (sessionEndAskedByUs())
+        SetTimer(window(), STAY_TIMER, STAY_TICK_MS, NULL);
 }
 
 void GremoteApp::cleanup()

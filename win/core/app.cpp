@@ -18,7 +18,8 @@ App::App(HINSTANCE instance)
       m_quitEarly(false),
       m_ran(false),
       m_shutDown(false),
-      m_sessionEnding(false)
+      m_sessionEnding(false),
+      m_askedSessionEnd(false)
 {
 }
 
@@ -210,10 +211,50 @@ bool App::onMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result)
                    "service and leaving this handler WITHOUT joining any of "
                    "them", endSessionKind(lp));
             shutdown();
+            /* The closing line says which of the two endings below it got,
+             * because "nothing below this line is ours" is only true on one
+             * of them now -- on the other, the watchdog writes under it. */
             rc_log_tail("app: the session-end handler is returning to Windows "
-                        "after %lu ms; nothing below this line is ours",
-                        (unsigned long)(GetTickCount() - t0));
+                        "after %lu ms; %s",
+                        (unsigned long)(GetTickCount() - t0),
+                        m_askedSessionEnd
+                            ? "this process stays up to drive the shutdown it "
+                              "asked for"
+                            : "nothing below this line is ours");
         }
+        /* AND NOW THE SECOND HALF: whether to leave.
+         *
+         * If somebody else asked -- the shell, a logoff -- the driver of the
+         * shutdown is their thread and the right thing is to get out of the
+         * way, which is what PostQuitMessage does and what a Start-menu
+         * restart with gremote running was measured doing in five seconds.
+         *
+         * If WE asked, leaving is the bug. The thread that called
+         * ExitWindowsEx is still inside it, driving the broadcast, holding
+         * Win16Mutex between sends; ExitProcess would take it with everything
+         * else and the machine would stop on a bare desktop with Systray
+         * unanswering. So: no PostQuitMessage, the loop goes on pumping, and
+         * Windows ends this process as part of the shutdown it is already
+         * running -- the shape rundll32 has, which this guest rebooted from
+         * twice in three seconds. See the header for the measurements.
+         *
+         * STAYING IS RIGHT ONLY WHILE THE SHUTDOWN IS STILL HAPPENING, and
+         * a session end can fail to take: EWX_POWEROFF on a machine with no
+         * power management runs the whole teardown, cannot switch the machine
+         * off, and returns to the logon prompt (measured on the clean guest,
+         * 2026-10-01). What is left then is a process with every service
+         * abandoned, nothing listening and -- in gremote's case -- the
+         * single-instance mutex still held, so no replacement can start
+         * either. Watching for that is the DERIVED app's job, because it is
+         * the derived app that knows what it was holding: gremote arms a
+         * timer in its stopServices() and quits when Shell_TrayWnd comes
+         * back, or after three minutes (win/remote/main.cpp, which has the
+         * argument). Any app that calls ExitWindowsEx owes
+         * the same watch. It is not here because it is four kilobytes of a
+         * page in every exe that links libcore, and the client never asks
+         * for a session end at all. */
+        if (m_askedSessionEnd)
+            return true;
         PostQuitMessage(0);
         return true;
     }

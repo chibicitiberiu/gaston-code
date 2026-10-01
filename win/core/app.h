@@ -56,6 +56,46 @@
  * WM_QUERYENDSESSION DELIBERATELY DOES NOTHING BUT AGREE. A shutdown another
  * program vetoes is cancelled, and there is no un-signalling a service, so
  * nothing is torn down until Windows has committed with WM_ENDSESSION.
+ *
+ * AND WHEN WE ASKED FOR IT, WE DO NOT EXIT. Not waiting is half the answer;
+ * the other half is not leaving either. On 9x the process that calls
+ * ExitWindowsEx is the one that DRIVES the shutdown: the call does not
+ * return, the broadcast to every other application runs out of it, and the
+ * 16-bit USER code it is executing holds Win16Mutex between the sends. So a
+ * process that calls ExitWindowsEx on one thread and then ExitProcesses
+ * itself a second later -- which is exactly what PostQuitMessage from this
+ * handler used to do -- kills the driver mid-broadcast, after Explorer has
+ * gone and before Systray has been dealt with. The machine is left on a bare
+ * desktop with one unanswering task and an idle CPU, and no Ctrl+Alt+Del on
+ * that task releases it. MEASURED four times out of four, against two builds,
+ * on a clean Windows 98 guest with nothing third-party on it
+ * (docs/measurements/gremote-shutdown-vm-20261001.txt); the same guest
+ * rebooted in three seconds when a rundll32 it launched made the call
+ * instead, because rundll32 stays parked inside ExitWindowsEx until the
+ * machine goes.
+ *
+ * noteSessionEndAsked() is how the op that made the call says so, and
+ * WM_ENDSESSION reads it: the teardown is identical either way, but instead
+ * of PostQuitMessage the handler returns and the message loop KEEPS RUNNING,
+ * so the thread inside ExitWindowsEx carries the shutdown to the end and
+ * Windows ends this process itself. A session end somebody ELSE asked for
+ * still quits, because there the driver is the shell's thread and leaving
+ * promptly is what is wanted (also measured: a Start-menu restart with
+ * gremote up and a client connected rebooted in five seconds).
+ *
+ * AND A SESSION END CAN FAIL TO TAKE, which is the obligation that comes with
+ * staying. EWX_POWEROFF on a machine with no power management runs the entire
+ * teardown, cannot switch the machine off, and returns to the logon prompt --
+ * also measured, on the same guest. Staying then leaves a process with every
+ * service abandoned, nothing listening and, in gremote's case, the
+ * single-instance mutex still held, so no replacement can start either: worse
+ * than the hang it avoided. So AN APP THAT CALLS ExitWindowsEx MUST ALSO
+ * WATCH FOR THE SHUTDOWN THAT DID NOT HAPPEN and quit when it sees one.
+ * gremote does it in stopServices() and preTranslate() (win/remote/main.cpp):
+ * a timer, with Shell_TrayWnd coming back as the signal that Windows carried
+ * on living and three minutes as the backstop -- because a failed poweroff
+ * lands on the LOGON prompt, where the shell is not running either. It is not in App because it is a four-kilobyte page in every exe
+ * that links libcore and the client never asks for a session end at all.
  */
 #ifndef RC_APP_H
 #define RC_APP_H
@@ -145,6 +185,21 @@ public:
      * before anything is torn down. */
     bool sessionEnding() const { return m_sessionEnding; }
 
+    /* "This process is the one that asked Windows to end the session."
+     *
+     * Call it BEFORE ExitWindowsEx, not after: on success that call never
+     * returns, and the WM_ENDSESSION it broadcasts reaches the main thread
+     * while it is still inside. Call it again with false if the call came
+     * back refused, so that a later shutdown somebody else asks for is still
+     * treated as theirs.
+     *
+     * Written on whichever thread made the call and read on the main thread,
+     * with no lock: an aligned bool on x86, the same looseness
+     * m_sessionEnding already lives with, and the write provably precedes the
+     * broadcast that triggers the read. */
+    void noteSessionEndAsked(bool asked) { m_askedSessionEnd = asked; }
+    bool sessionEndAskedByUs() const { return m_askedSessionEnd; }
+
 protected:
     explicit App(HINSTANCE instance);
 
@@ -199,6 +254,7 @@ private:
     bool m_ran;
     bool m_shutDown;
     bool m_sessionEnding;
+    bool m_askedSessionEnd;
 };
 
 /* For stopServices(): join, and if the threads did not stop, LEAK the

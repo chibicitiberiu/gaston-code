@@ -202,8 +202,27 @@ void ControlOps::reboot(Responder &r, rc_frame *f)
     r.ok();
     /* Before the machine goes, not after: ExitWindowsEx does not return. */
     m_conn->drain(REBOOT_FLUSH_MS);
+    /* And this before the call, for the same reason the reply is: on 9x the
+     * WM_ENDSESSION the call broadcasts arrives on the main thread while this
+     * thread is still inside it, and the handler has to already know that the
+     * shutdown is OURS -- because the one thing it must not then do is end
+     * this process and take the broadcast's driver with it. Four runs out of
+     * four hung that way (docs/measurements/gremote-shutdown-vm-20261001.txt,
+     * core/app.h). */
+    m_app->noteSessionEndAsked(true);
     if (!requestReboot(which, false))
-        rc_log("control: Windows refused the shutdown");
+    {
+        /* Refused, so nothing is in flight and nothing was torn down: put the
+         * flag back, or the next shutdown the SHELL asks for would find this
+         * process declining to exit on a claim that is no longer true. The
+         * caller already has its OK -- the reply cannot wait for a call that
+         * does not return on success -- so the honest signal that this did
+         * not work is that the machine is still up and this server is still
+         * answering on the same socket, plus the line below. */
+        rc_log("control: Windows refused the shutdown; this machine is "
+               "staying up and the server is still listening");
+        m_app->noteSessionEndAsked(false);
+    }
 }
 
 /* Is `path` plausibly a 32-bit Windows image for this machine?

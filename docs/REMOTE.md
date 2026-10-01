@@ -205,6 +205,14 @@ class ClientApp : public App              /* app/main.cpp */
     `signalStop()` everything, abandon each service *unjoined*, write and
     close the log, return. `runApp()` then leaks the `App` itself, because the
     abandoned threads hold pointers into its members.
+  - *And on a session end THIS PROCESS asked for, it does not quit either.*
+    `App` skips its `PostQuitMessage`, the message loop keeps running, and the
+    thread inside `ExitWindowsEx` carries the shutdown to the end -- because on
+    9x that thread is what DRIVES it. `ControlOps::reboot` sets
+    `noteSessionEndAsked(true)` before the call. The derived app then owes the
+    other half: a watch for the session end that failed to take, which
+    `GremoteApp` discharges with a timer in `stopServices()` and
+    `preTranslate()`. Both measured on the guest; see the P200 checklist.
   - `WM_QUERYENDSESSION` agrees and changes nothing: a shutdown another
     program vetoes is cancelled, and there is no un-signalling a service.
   - Pinned by `appcheck`'s `end-session-does-not-wait-for-a-stuck-service`
@@ -595,15 +603,45 @@ was written; it accumulated because nobody said where things went.
                      spin.gif, tools_detect.ini, gaston.log, gaston.prv
     C:\GREMOTE\     the server: gremote.exe, gremote.ini, gremote.log,
                      gremote.prv
-    C:\WORK\        the sync root, and NOTHING else. Conversation folders
-                     live under it; it must never contain either program,
-                     or the client mirrors itself to the bridge
+    C:\WORK\        the client's work root, and NOTHING else. Conversation
+                     folders live under it; it must never contain either
+                     program, or the client mirrors itself to the bridge
     C:\TEMP\GR\    scratch for a test session, and the only place a test
                      may write. Emptied at the end of the session that
                      made it
 
 Four directories. Anything a test leaves outside them is a bug in the test,
 and `ls` of each of these should be explicable in one sentence.
+
+**`C:\WORK\<CONVERSATION>` is where the agent works, and it does not depend on
+the bridge mirroring anything.** *Corrected 2026-10-01, the same day it bit:
+the folder was created only when the bridge had a `--sync-dir`, so against a
+bridge without one the agent had no destination it had been given and wrote a
+file into the root of `C:` on the user's own machine.* The split:
+
+- **The work root is the client's**, named in its own `gaston.ini` and created
+  by it at startup (`win/app/main.cpp`). The bridge never chooses the parent;
+  it reads `sync_root` from HELLO.
+- **The folder inside it is named by the bridge**, from the conversation's
+  title, because that is where the title and the client's declared naming
+  rules (`illegal`, `maxcomp`, `shortnames`, `case`, `devices` -- `bridge/caps.py`,
+  `win/caps.h`) are both in hand. `WorkspaceService.choose_name`.
+- **The folder is created by the client**, from the `OPTION work` row of the
+  options batch it already receives: `rc_workdir_apply` makes it parents and
+  all and makes it that side's live work root (`win/app/workdir.cpp`). No wire
+  op was added for this, because one would have had to beat what already
+  happens (docs/PLAN.md §3.1, the exec test).
+- **Both happen at the FIRST TOOL CALL**, not at the handshake: the name comes
+  from the title and there is no title until the user has spoken. A
+  conversation that is only talked to still creates nothing.
+- **Mirroring is a separate question.** `--sync-dir` decides whether there is
+  a tree on the bridge paired with that folder, with a baseline and deletion
+  propagation. Without it the folder on the machine is still the agent's
+  working directory there; files reach it one at a time through `put_file`.
+- **If the client declares no work root at all, nothing is invented.** There is
+  no agreed place on that machine, and a path chosen by the bridge would be a
+  directory on somebody's real disk that nobody asked for. The agent is told to
+  ask, and told that a drive root is never the answer.
 
 The two programs get their OWN directories rather than sharing one. They are
 separate products with separate configs and separate logs, one of them is
@@ -659,7 +697,12 @@ directory it writes into -- which is a reason not to have them cohabit.
   something that kills it remains the general way to stop it, at the same
   price it always cost.
 - **`REBOOT`** exists for a wedged client. `ExitWindowsEx` needs no privileges
-  on 9x.
+  on 9x. The `OK` goes out before the call, because on success the call does
+  not return -- so the honest signal that a reboot did NOT happen is that the
+  machine is still up and this server is still answering on the same socket,
+  with `control: Windows refused the shutdown; this machine is staying up and
+  the server is still listening` in the log. What the op must never do is end
+  this process while that call is in flight: see the P200 checklist below.
 - **Autostart** through the `RunServices` registry key plus
   `RegisterServiceProcess` (resolved dynamically), so `gremote` runs before
   logon and survives logoff. Installing it is a one-time manual step.
@@ -940,6 +983,42 @@ Things only the real box can answer, collected so the first session covers them:
   confirm the fix**: Wine has no 9x shutdown and no Win16Mutex, so
   `appcheck` can prove the handler returns promptly and nothing more.
 
+  **That was half of it. The other half was leaving at all.** Not joining made
+  the handler return in 40-70 ms and the machine still hung, four runs out of
+  four on a clean Windows 98 guest against two builds
+  (`docs/measurements/gremote-shutdown-vm-20261001.txt`). On 9x the process
+  that calls `ExitWindowsEx` DRIVES the shutdown: the call does not return, the
+  broadcast runs out of it, and the 16-bit USER code it is executing holds
+  Win16Mutex between the sends. Returning promptly and then `ExitProcess`ing a
+  second later killed that driver mid-broadcast, after Explorer had gone and
+  before Systray was dealt with -- bare teal desktop, one unanswering task, an
+  idle CPU parked at `EIP=00006a2a`, and no `End Task` releasing it. A
+  `rundll32` gremote launched to make the same call rebooted the same guest in
+  three seconds, because it stays parked inside `ExitWindowsEx`.
+
+  So **on a session end this process asked for, `App` does not
+  `PostQuitMessage`**: it tears down exactly as above, returns, and the message
+  loop keeps running until Windows ends the process itself.
+  `ControlOps::reboot` says so with `noteSessionEndAsked(true)` before the
+  call, and clears it if the call comes back refused. A session end somebody
+  ELSE asked for still quits, because there the driver is the shell's thread.
+  Eight fixed runs rebooted and two unfixed runs hung, interleaved, same boot
+  pattern (`docs/measurements/gremote-shutdown-fix-vm-20261001.txt`).
+
+  **Staying brings an obligation: a session end can fail to take.**
+  `mode=poweroff` on a machine with no power management runs the whole
+  teardown, cannot switch the machine off, and returns to the logon prompt --
+  measured. Staying then leaves gremote with every service abandoned, nothing
+  listening and `GastonRemoteSingleInstance` still held, so no replacement can
+  start: a box that answers nothing and cannot be told to, which is worse than
+  the hang. `GremoteApp` therefore arms a 15 s timer in `stopServices()` on
+  that path and quits when `Shell_TrayWnd` comes back, or after three minutes
+  regardless. The shell signal alone was measured insufficient, because a
+  failed poweroff lands on the logon prompt where Explorer is not running
+  either. The watch lives in gremote and not in `App` because in libcore it
+  cost `gaston.exe` 4,608 bytes of committed-at-load for a path the client can
+  never take.
+
   **Read `GREMOTE.PRV`, not `GREMOTE.LOG`.** Forcing the restart is how the
   hang is recovered, and the restarted `gremote` truncated its own log -- so
   the evidence was destroyed by the recovery, twice, before `rc_log_open`
@@ -955,12 +1034,26 @@ Things only the real box can answer, collected so the first session covers them:
   - `app: the session is ending; abandoning server unjoined`
   - `app: every service is signalled and abandoned; cleaning up`
   - `=== gremote exiting ===`
-  - `app: the session-end handler is returning to Windows after N ms; nothing
-    below this line is ours`
+  - `app: the session-end handler is returning to Windows after N ms; this
+    process stays up to drive the shutdown it asked for`
 
-  All of them, with a small N, and the machine reaching the reboot. Each line
-  that is MISSING names a different failure, which is the point of having six
-  rather than two: no first line at all means the broadcast never reached us;
+  All of them, with a small N, and the machine reaching the reboot. **That last
+  clause is the one to read.** It is `nothing below this line is ours` when the
+  session end was somebody else's -- a Start-menu restart, a logoff -- and
+  `this process stays up to drive the shutdown it asked for` when it was
+  `REBOOT`'s. A `REBOOT` whose log says the former is a build without the
+  stay-alive fix, and that machine is going to wedge.
+
+  Two further lines appear only when the shutdown DID NOT HAPPEN, and seeing
+  either on the P200 is a finding:
+
+  - `gremote: the shell is still gone a minute after the session end, ...`
+  - `gremote: three minutes after the session end this machine is still here,
+    so nothing is left to drive; exiting so a new copy can be started`
+
+  Each line that is MISSING names a different failure, which is the point of
+  having six rather than two: no first line at all means the broadcast never
+  reached us;
   the first without the second means `WM_ENDSESSION` never arrived; the second
   without `cleaning up` means it faulted while signalling, and the
   `abandoning` lines say how far it got; `cleaning up` without the banner

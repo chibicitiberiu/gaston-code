@@ -140,7 +140,15 @@ enum
     /* WM_ENDSESSION with ENDSESSION_LOGOFF in the lParam. gremote is meant to
      * survive a logoff and not a shutdown, so the log has to say which one it
      * saw -- which means the handler has to read the lParam at all. */
-    LOGOFF_ON_START = 512
+    LOGOFF_ON_START = 512,
+    /* The session end WE asked for: noteSessionEndAsked(true) first, then
+     * WM_ENDSESSION, which is the order ExitWindowsEx produces. The handler
+     * must then NOT end the message loop -- on 9x the thread inside
+     * ExitWindowsEx is driving the whole shutdown and ExitProcess would kill
+     * it mid-broadcast. A thread quits the loop a moment later so the case can
+     * finish; the code and the elapsed time are what say whether App quit by
+     * itself or waited to be told. */
+    ASKED_FOR_IT_ON_START = 1024
 };
 
 /* Long enough to tell a wait from a return, short enough not to slow the
@@ -153,6 +161,11 @@ enum
  * The two thresholds are 1500 and 500, so a third of a tick's worth of slack
  * cannot blur them. */
 enum { SLOW_JOIN_MS = 1500, PROMPT_MS = 500, TICK_SLACK_MS = 32 };
+
+/* How long the asked-for-it case leaves the app running before telling it to
+ * stop. Comfortably above PROMPT_MS, so "App quit on its own" and "App had to
+ * be told" cannot read the same. */
+enum { STAY_MS = 800 };
 
 static HWND g_wantWindow;
 static int g_foundWindow;
@@ -170,6 +183,16 @@ static unsigned __stdcall quitLater(void *arg)
 {
     Sleep(50);
     ((App *)arg)->quit(3);
+    return 0;
+}
+
+/* Windows' job, played by a thread: the thing that ends a process which has
+ * decided not to end itself. Code 11 so the verdict can tell this ending from
+ * App's own PostQuitMessage(0). */
+static unsigned __stdcall quitMuchLater(void *arg)
+{
+    Sleep(STAY_MS);
+    ((App *)arg)->quit(11);
     return 0;
 }
 
@@ -207,6 +230,14 @@ public:
         }
         if (m_flags & END_SESSION_ON_START)
             PostMessageA(m_app->window(), WM_ENDSESSION, TRUE, 0);
+        if (m_flags & ASKED_FOR_IT_ON_START)
+        {
+            unsigned tid;
+            m_thread.reset((HANDLE)_beginthreadex(0, 0, quitMuchLater, m_app,
+                                                  0, &tid));
+            m_app->noteSessionEndAsked(true);
+            PostMessageA(m_app->window(), WM_ENDSESSION, TRUE, 0);
+        }
         if (m_flags & LOGOFF_ON_START)
         {
             /* Both, in the order USER sends them: the query line is how
@@ -446,6 +477,29 @@ int main(void)
         int code = runOnce(new TestApp(0, 0, END_SESSION_ON_START));
         say("end-session-stops-once", code == 0 && strcmp(g_trace,
             "I. P. iA iB iC sA sB sC xC xB xA C.") == 0);
+    }
+    {
+        /* AND THE OTHER HALF OF THE SAME 2026-10-01 MEASUREMENT. When the
+         * shutdown is one WE asked for, the handler must tear down and then
+         * STAY: on 9x the thread sitting inside ExitWindowsEx is driving the
+         * broadcast, so a PostQuitMessage here is an ExitProcess a second
+         * later that kills the driver after Explorer has gone and before
+         * Systray is dealt with -- a bare desktop and no reboot, four runs out
+         * of four (docs/measurements/gremote-shutdown-vm-20261001.txt).
+         *
+         * Wine cannot test the shutdown, but it can test the decision: the
+         * services are signalled and abandoned exactly as before, and the loop
+         * is still running afterwards. Code 11 and STAY_MS on the clock are
+         * what say it was the thread playing Windows that ended this, not App
+         * quitting by itself -- App quitting by itself would be code 0 and
+         * promptly. */
+        int code = runTimed(new TestApp(0, 0, ASKED_FOR_IT_ON_START));
+        bool stayed = g_elapsedMs + TICK_SLACK_MS >= STAY_MS;
+        bool signalled = strstr(g_trace, "xA") != 0;
+        bool noJoin = strstr(g_trace, "jA") == 0;
+        traceMs(g_elapsedMs);
+        say("a-session-end-we-asked-for-does-not-quit-the-loop",
+            code == 11 && stayed && signalled && noJoin);
     }
     {
         /* THE REGRESSION a forced reset paid for. C's threads never wake, so
@@ -711,6 +765,20 @@ int main(void)
                                "Windows");
         say("end-session-writes-entry-through-exit-to-the-log",
             entered && signalled && cleaning && returned);
+    }
+    {
+        /* AND THE LOG HAS TO SAY WHICH ENDING IT TOOK. The closing line used
+         * to promise "nothing below this line is ours", which on the staying-up
+         * path is not true -- the watchdog writes under it. A line that says
+         * the wrong one of these is worse than no line: it is the line a
+         * person reads first after a forced restart. */
+        rc_log_open(".", "lstay");
+        runOnce(new TestApp(0, 0, ASKED_FOR_IT_ON_START, APP_CLOSES_LOG));
+        slurp("lstay.log");
+        say("the-log-says-when-the-process-is-staying-up",
+            has("the session-end handler is returning to Windows") &&
+            has("stays up to drive the shutdown it asked for") &&
+            !has("nothing below this line is ours"));
     }
     {
         /* And it reads the lParam, because "gremote outlives a logoff" is a
