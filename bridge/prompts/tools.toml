@@ -219,6 +219,16 @@ cannot_drive = '''
 This machine cannot be driven from here.'''
 bad_scope = '''
 Unknown scope {scope}; use desktop, foreground or pid.'''
+# BOTH DIRECTIONS, because both were silent. `scope: "pid"` with no pid read
+# as "no filter" and returned the whole desktop; a pid passed with any other
+# scope was ignored. Each told the agent it had asked for something it had not.
+pid_needed = '''
+`scope: "pid"` needs a `pid`, and 0 is not one. Run `ps` to get the process
+id you want, then ask again -- or use `scope: "foreground"` for whatever the
+user is looking at, or `scope: "desktop"` for everything.'''
+pid_unused = '''
+You passed `pid: {pid}` with `scope: "{scope}"`, which ignores it. Use
+`scope: "pid"` to look at one process, or drop the `pid`.'''
 clicked = '''
 Clicked {target}.'''
 focused = '''

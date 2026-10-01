@@ -329,10 +329,24 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             if scope not in ("desktop", "foreground", "pid"):
                 return _text(prompts.text("tools.ui.view.bad_scope",
                                           scope=repr(scope)), error=True)
+            # `pid` AND `scope="pid"` TRAVEL TOGETHER OR NEITHER DOES.
+            # `int(a.get("pid") or 0)` makes absent and 0 the same value, and
+            # the guest reads 0 as "no filter" -- so `scope: "pid"` with no pid
+            # quietly returned the WHOLE DESKTOP. On 2026-10-01 an agent asked
+            # for the windows of one program, got a 25-control desktop dump,
+            # could not find what it was looking for in it, and had no reason
+            # to suspect the scope it asked for was not the scope it got.
+            pid = int(a.get("pid") or 0)
+            if scope == "pid" and pid <= 0:
+                return _text(prompts.text("tools.ui.view.pid_needed"),
+                             error=True)
+            if pid > 0 and scope != "pid":
+                return _text(prompts.text("tools.ui.view.pid_unused",
+                                          scope=scope, pid=pid), error=True)
             nodes, headers = await ui.tree(
                 guest,
                 scope=scope,
-                pid=int(a.get("pid") or 0),
+                pid=pid,
                 max_nodes=max(1, min(int(a.get("max_nodes") or 400), 4000)),
                 msaa=bool(a.get("msaa")),
                 hidden=bool(a.get("hidden")),
