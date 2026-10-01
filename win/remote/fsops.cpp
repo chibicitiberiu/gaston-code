@@ -739,25 +739,79 @@ static bool isDriveRoot(const char *path)
     return true;
 }
 
-/* Why RemoveDirectoryA refused, from the error the platform left behind.
- *
- * Win98 hands back a DIFFERENT code for each of the three real refusals --
- * non-empty, read-only, and "this is some process's current directory" --
- * and collapsing them into one `locked` would tell the caller nothing about
- * which is true, on a machine where "try again" is the right answer to only
- * one of the three. */
-static const char *whyNoRmdir()
+/* A sink that stops at the first entry. listDirectory already skips "."
+ * and ".." (fsIsDotEntry, win/fs/list.cpp), so the first callback at all
+ * means there is something real in there. */
+class AnyEntry : public DirSink
 {
-    switch (GetLastError())
+public:
+    AnyEntry() : m_found(false) {}
+
+    bool onEntry(const char *, const FileInfo &)
     {
-    case ERROR_DIR_NOT_EMPTY:       return "not_empty";
-    case ERROR_ACCESS_DENIED:       return "readonly";
-    case ERROR_CURRENT_DIRECTORY:   return "is_cwd";
+        m_found = true;
+        return false;            /* one is enough; stop the walk */
+    }
+
+    bool found() const { return m_found; }
+
+private:
+    bool m_found;
+};
+
+/* Asks the disk directly whether `path` holds anything. Used only to tell a
+ * non-empty directory apart from a merely-denied one when the error code
+ * alone cannot -- see whyNoRmdir. Any failure to even read it (the
+ * directory vanished, a lock) answers false rather than claim bytes it did
+ * not see. */
+static bool hasAnyEntry(const char *path)
+{
+    AnyEntry probe;
+    listDirectory(path, probe);
+    return probe.found();
+}
+
+/* Why RemoveDirectoryA refused.
+ *
+ * MEASURED on Windows 98 SE, 2026-10-01: a directory holding one file
+ * refused with ERROR_ACCESS_DENIED, not ERROR_DIR_NOT_EMPTY -- the latter
+ * is an NT-era code this platform does not appear to send. Trusting the
+ * error number alone here answered `readonly` for the single most likely
+ * failure and reserved `not_empty` for a code that never actually arrives,
+ * which is worse than not classifying it at all. The same run found a
+ * directory with the read-only attribute SET removed without complaint,
+ * so there is no read-only-directory case to name either -- `readonly` was
+ * wrong on both counts and is gone.
+ *
+ * So ERROR_ACCESS_DENIED is no longer trusted on its own: this asks the
+ * disk which case it actually is. ERROR_DIR_NOT_EMPTY is kept and answered
+ * directly, in case a platform that really does send it shows up later. */
+static const char *whyNoRmdir(const char *path)
+{
+    DWORD err = GetLastError();
+
+    switch (err)
+    {
+    case ERROR_DIR_NOT_EMPTY:
+        return "not_empty";
+    case ERROR_ACCESS_DENIED:
+        return hasAnyEntry(path) ? "not_empty" : "denied";
+    case ERROR_CURRENT_DIRECTORY:
+        /* DEFENSIVE, NOT MEASURED. The one attempt to produce this --
+         * COMMAND.COM /K launched with this directory as its cwd -- proved
+         * nothing: `ps` showed zero COMMAND.COM processes alive by the time
+         * RMDIR ran, so it had already exited and this branch was never
+         * actually reached. Kept because Win32 documents the code, not
+         * because it has been observed here. */
+        return "is_cwd";
     case ERROR_FILENAME_EXCED_RANGE:
-    case ERROR_BUFFER_OVERFLOW:     return "too_long";
+    case ERROR_BUFFER_OVERFLOW:
+        return "too_long";
     case ERROR_INVALID_NAME:
-    case ERROR_INVALID_DRIVE:       return "bad_path";
-    default:                        return "locked";
+    case ERROR_INVALID_DRIVE:
+        return "bad_path";
+    default:
+        return "locked";
     }
 }
 
@@ -797,7 +851,7 @@ void FsOps::rmdir(Responder &r, rc_frame *f)
     }
     if (!RemoveDirectoryA(path))
     {
-        r.err(whyNoRmdir());
+        r.err(whyNoRmdir(path));
         return;
     }
     r.ok();

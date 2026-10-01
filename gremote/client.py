@@ -376,11 +376,18 @@ class Remote:
         """Remove an EMPTY directory. Not recursive, and not a flag on `rm`:
         RemoveDirectoryA already refuses anything but an empty directory, so
         this is the platform call's own restriction rather than one added
-        here. Refusals worth knowing by name: `not_empty`, `readonly` (the
-        directory itself, not a file inside it), `is_cwd` (some process has
-        it as its current directory), `is_file` (it is not a directory at
-        all) and `drive_root` (`C:\\` and the like, refused outright -- there
-        is no caller for whom that was ever the intent).
+        here. Refusals worth knowing by name: `not_empty` (MEASURED on
+        Windows 98 SE, 2026-10-01: the platform answers this with the same
+        ERROR_ACCESS_DENIED a genuine denial uses, so the guest asks the
+        disk directly rather than trust the error number -- see
+        win/remote/fsops.cpp's whyNoRmdir), `denied` for whatever is left
+        once "not empty" is ruled out (the read-only-directory case this was
+        expected to name turned out, on the same run, not to stop the
+        removal at all), `is_cwd` (defensive -- Win32 documents an error for
+        "this is some process's current directory", but no attempt here has
+        actually produced it), `is_file` (it is not a directory at all) and
+        `drive_root` (`C:\\` and the like, refused outright -- there is no
+        caller for whom that was ever the intent).
 
         For a tree, see `rmtree`: the recursive walk lives here, in Python,
         where it can be read, rather than on the guest."""

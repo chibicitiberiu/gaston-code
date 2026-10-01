@@ -393,7 +393,17 @@ def test_rmdir_removes_an_empty_directory(remote, tmp_path_factory):
 def test_rmdir_refuses_a_non_empty_directory(remote, tmp_path_factory):
     """The case this op exists for: RM cannot do it, and EXEC of `rd` was
     the fallback until now. RemoveDirectoryA refuses on its own -- this is
-    not a check added here, it is the platform call's own restriction."""
+    not a check added here, it is the platform call's own restriction.
+
+    `not_empty` is pinned here as the token itself, not as a stand-in for
+    "the platform's own refusal". MEASURED on Windows 98 SE, 2026-10-01: the
+    platform does not send ERROR_DIR_NOT_EMPTY for this at all -- it sends
+    the same ERROR_ACCESS_DENIED a genuinely denied removal would, which a
+    first version of whyNoRmdir trusted at face value and answered
+    `readonly`, confidently wrong about the single most likely failure. The
+    guest now asks the disk directly (win/remote/fsops.cpp's hasAnyEntry)
+    rather than infer the reason from a code this platform does not use the
+    way later Windows does."""
     d = tmp_path_factory.mktemp("rmdir-full")
     (d / "full").mkdir()
     (d / "full" / "still-here.txt").write_bytes(b"x")
