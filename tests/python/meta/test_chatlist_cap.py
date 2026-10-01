@@ -56,6 +56,25 @@ def test_the_bridge_never_sends_more_rows_than_the_guest_can_hold():
         f"the guest would drop the tail of the list in silence")
 
 
+def test_there_is_room_for_the_row_that_says_rows_are_missing():
+    """The list ends with "N older not shown" when the cap bit, and that is a
+    row like any other -- it counts against MAX_CHATS like any other.
+
+    Measured on the real box the moment it shipped: 59 conversations plus four
+    age groups plus the notice is exactly 64, so it fitted by one. On a day
+    whose conversations span all five buckets it would not have, and the row
+    that got dropped would have been the one telling the user rows were
+    dropped. That is the failure this asserts against, not an off-by-one.
+    """
+    headers = len(_age_groups())
+    assert session_service.DISPLAY_LIMIT + headers + 1 <= _max_chats(), (
+        f"{session_service.DISPLAY_LIMIT} conversations plus {headers} group "
+        f"headers leaves no room for the \"N older not shown\" row inside "
+        f"MAX_CHATS ({_max_chats()}); when every age group is present the "
+        f"notice is what the guest would silently drop -- lower DISPLAY_LIMIT "
+        f"in {Path(session_service.__file__).name}, not this assertion")
+
+
 def test_the_cap_is_worth_having():
     """A display cap below the fetch, or the fetch is the only bound and the
     wire carries rows the list cannot show."""

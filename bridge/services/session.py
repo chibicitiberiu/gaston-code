@@ -44,8 +44,21 @@ log = logging.getLogger("bridge.session")
 #: the guest dropping the tail in silence. Cutting here as well keeps the wire
 #: honest: a row past the cap is a frame the list would refuse.
 #:
-#: Pinned against the header by tests/python/meta/test_chatlist_cap.py.
-DISPLAY_LIMIT = 59
+#: 59 -> 58 on 2026-10-02, AND THE ROW IT GIVES UP IS THE POINT. The list now
+#: ends with "N older not shown" when the cap bit, which is a row like any
+#: other and counts against MAX_CHATS like any other. Measured on the real box
+#: the moment it shipped: 59 conversations plus four age groups plus the notice
+#: is exactly 64, so it fitted by one -- and on a day whose conversations span
+#: all five buckets it would not have, and the notice would have been the row
+#: that got dropped. The thing that tells you rows are missing must not be the
+#: thing that goes missing.
+#:
+#: The trade is one conversation, and only for someone who has more than 58:
+#: below that nothing is hidden, so there is no notice and nothing is given up.
+#:
+#: Pinned against the header by tests/python/meta/test_chatlist_cap.py,
+#: including the row the notice needs.
+DISPLAY_LIMIT = 58
 
 
 def shows_tool_result(is_err: bool, stopped: bool) -> bool:
