@@ -49,7 +49,7 @@ class Session : public FrameSink
 {
 public:
     Session(const ServerConfig &cfg, const ExecConfig &exec,
-            unsigned long generation, Processes &procs);
+            unsigned long generation, Processes &procs, App &app);
 
     /* Adopt the accepted socket and start the threads. */
     bool begin(SOCKET accepted);
@@ -103,8 +103,12 @@ private:
 class ServerService : public Service
 {
 public:
+    /* `app` is passed down to ControlOps so UPDATE can stop this process
+     * once it has a replacement running that will put a server back. The
+     * long argument for why that is not the remote QUIT docs/REMOTE.md
+     * forbids is above ControlOps::update. */
     ServerService(const ServerConfig &cfg, const ExecConfig &exec,
-                  Processes &procs);
+                  Processes &procs, App &app);
 
     const char *name() const { return "server"; }
     bool init();
@@ -134,6 +138,7 @@ private:
     const ServerConfig *m_cfg;
     const ExecConfig *m_exec;
     Processes *m_procs;
+    App *m_app;
     Listener m_listener;
     Accept m_accept;
     Thread m_thread;

@@ -15,6 +15,7 @@ const GOpRow G_OP_TABLE[] = {
     { "PS",      G_CONTROL, false },
     { "KILL",    G_CONTROL, false },
     { "REBOOT",  G_CONTROL, false },
+    { "UPDATE",  G_CONTROL, false },
 
     { "EXEC",    G_JOB,     false },
     { "LAUNCH",  G_JOB,     false },

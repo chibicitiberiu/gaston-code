@@ -178,8 +178,13 @@ bool GremoteApp::parseArgs(const char *cmdLine)
 
 bool GremoteApp::initializeServices()
 {
+    /* The App goes in because UPDATE stops it: a self-update has to end
+     * this process before the replacement can take the image, and the
+     * updater is already waiting for that to happen. Why that is not the
+     * remote QUIT docs/REMOTE.md forbids is argued above
+     * ControlOps::update. */
     return initService(m_server,
-                       new ServerService(m_config, m_exec, m_procs));
+                       new ServerService(m_config, m_exec, m_procs, *this));
 }
 
 bool GremoteApp::startServices()

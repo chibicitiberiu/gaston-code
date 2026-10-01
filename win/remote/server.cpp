@@ -33,9 +33,9 @@ enum { BAD_SECRET_PAUSE_MS = 1000 };
 /* ------------------------------------------------------------- Session */
 
 Session::Session(const ServerConfig &cfg, const ExecConfig &exec,
-                 unsigned long generation, Processes &procs)
+                 unsigned long generation, Processes &procs, App &app)
     : m_cfg(&cfg), m_procs(&procs), m_generation(generation),
-      m_conn(this, false), m_control(procs, m_conn),
+      m_conn(this, false), m_control(procs, m_conn, app),
       m_jobOps(exec, m_conn), m_fsOps(m_conn), m_dead(0),
       m_authed(false)
 {
@@ -325,8 +325,9 @@ bool Session::end()
 /* ------------------------------------------------------- ServerService */
 
 ServerService::ServerService(const ServerConfig &cfg, const ExecConfig &exec,
-                             Processes &procs)
-    : m_cfg(&cfg), m_exec(&exec), m_procs(&procs), m_stop(0), m_generation(0)
+                             Processes &procs, App &app)
+    : m_cfg(&cfg), m_exec(&exec), m_procs(&procs), m_app(&app), m_stop(0),
+      m_generation(0)
 {
 }
 
@@ -438,7 +439,7 @@ void ServerService::serve(SocketGuard &s)
 
     m_generation++;
     m_session.reset(new Session(*m_cfg, *m_exec, m_generation,
-                                *m_procs));
+                                *m_procs, *m_app));
     if (!m_session.valid() || !m_session->begin(s.get()))
     {
         rc_log("server: could not take up the connection from %s",

@@ -26,7 +26,7 @@ from .errors import (
     RemoteError,
     Timeout,
 )
-from .ship import ShipResult
+from .ship import ShipResult, UpdateResult
 
 __all__ = [
     "DEFAULT_PORT",
@@ -37,4 +37,5 @@ __all__ = [
     "RemoteError",
     "ShipResult",
     "Timeout",
+    "UpdateResult",
 ]

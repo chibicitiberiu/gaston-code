@@ -152,7 +152,14 @@ def test_the_control_lane_holds_only_what_may_run_on_the_reader():
     """The bar is not "is it quick" but "can it block and can it re-enter".
     An op added here runs on the thread that carries the heartbeat, and on
     9x a hung 16-bit app holding Win16Mutex blocks USER and GDI from every
-    32-bit thread."""
+    32-bit thread.
+
+    UPDATE is the one that opens a file, and it is here on purpose: the
+    read is 90 bytes of PE header from a file the caller wrote seconds ago,
+    and on the fs lane a stuck GET would be exactly the state in which you
+    could not ship the fix for it. Same argument that puts PS and KILL
+    here. The list is spelled out rather than derived so that adding to it
+    costs an edit and a sentence."""
     text = OPTABLE.read_text()
     body = text[text.index("G_OP_TABLE[]"):]
     body = body[:body.index("};")]
@@ -160,4 +167,4 @@ def test_the_control_lane_holds_only_what_may_run_on_the_reader():
                re.findall(r'\{\s*"([A-Z]+)"\s*,\s*(G_\w+)', body)
                if lane == "G_CONTROL"}
     assert control == {"AUTH", "PING", "CANCEL", "SYSINFO", "PS", "KILL",
-                       "REBOOT"}, control
+                       "REBOOT", "UPDATE"}, control
