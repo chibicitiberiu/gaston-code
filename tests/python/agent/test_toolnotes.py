@@ -303,28 +303,43 @@ def test_a_version_older_than_anything_measured_is_flagged_the_other_way():
     assert r.body.version == "1.1"
 
 
-def test_closeness_counts_the_major_number_first():
-    """1.9 asked, 1.1 and 2.0 measured. Arithmetic says 2.0 (0.1 away
-    against 0.8); this says 1.1, because what breaks a build is crossing a
-    major release and not counting minors. Java 1.1 -> 1.2 moved the whole
-    collections framework; 1.1.3 -> 1.1.8 moved almost nothing."""
+def test_the_lower_body_answers_even_when_a_higher_one_is_numerically_nearer():
+    """1.9 asked, 1.1 and 2.0 measured. Arithmetic would say 2.0 -- 0.1 away
+    against 0.8 -- and the rule says 1.1, because it is the greatest version
+    at or below the one in play. 2.0 is a release line this machine has not
+    reached, and a note from it would name things that are not there."""
     r = _note("1.1", "2.0").resolve("1.9")
     assert r.body.version == "1.1"
     assert r.direction == "ahead"
 
 
-def test_a_tie_goes_to_the_older_body():
+def test_a_minor_gap_is_not_scored_across_a_major_boundary():
+    r"""THE BUG THE FIRST IMPLEMENTATION HAD, pinned so it cannot come back.
+
+    2.0 asked, 1.1.3 and 1.2.0 measured. Scoring the component-wise absolute
+    difference major-first compares minor gaps of 1 and 2 and picks 1.1.3 --
+    the FURTHER of the two from 2.0 by any reading, because minor numbering
+    restarts at a major boundary and the subtraction does not know that.
+    Ordinary version ordering has no such hole."""
+    r = _note("1.1.3", "1.2.0").resolve("2.0")
+    assert r.body.version == "1.2.0"
+    assert r.direction == "ahead"
+
+
+def test_the_older_body_wins_when_one_sits_either_side():
     """1.1 asked, 1.0 and 1.2 measured -- one minor either side. The older
     one wins: it describes a SUBSET of what is there, so its wrongness costs
     the agent opportunity, where the newer one's costs it a failed build.
-    Both are disclosed, which is why this preference is a tiebreak and not
-    a policy."""
+    Both are disclosed, which is why this is a preference and not a
+    guarantee."""
     r = _note("1.0", "1.2").resolve("1.1")
     assert r.body.version == "1.0"
     assert r.direction == "ahead"
 
 
-def test_the_patch_level_decides_only_after_the_minor():
+def test_the_patch_level_decides_only_inside_one_line():
+    """1.1.4 asked. 1.2.9 is a different line and loses to 1.1.0 whatever
+    the patch numbers are."""
     r = _note("1.1.0", "1.2.9").resolve("1.1.4")
     assert r.body.version == "1.1.0"
 
@@ -508,3 +523,182 @@ def test_the_shipped_profiles_declare_the_versions_they_were_measured_on():
     assert claiming == {"jdk": "1.1", "msvc": "6.0"}, claiming
     with_variants = sorted(n for n, note in NOTES.items() if note.variants)
     assert with_variants == [], with_variants
+
+
+# --- the three tiers, explicit ----------------------------------------------
+#
+# THE ORDER IS THE USER'S, 2026-10-01: "same version, same minor version,
+# closest (lower first)". It was two outcomes before -- exact, or nearest --
+# and that collapsed two different events into one. A body measured on 1.1.3
+# answering a 1.1.8 machine is a patch release apart; a 1.1 note answering a
+# 1.3 machine is the case `jdk.toml` refused to detect 1.2+ at all because
+# of. Giving the first the second's shouted banner is how an agent learns to
+# skim the banner.
+#
+# TIER 2 CHANGES ANSWERS, which is why it is a tier and not an emergent
+# property of tier 3. "Lower first" on its own hands a 1.1.2 machine a 1.0.9
+# note when a 1.1.5 note was sitting there, because 1.0.9 is below and
+# therefore wins. Same major.minor comes first, and the tests below assert
+# the TIER as well as the body -- the tier is what decides which warning the
+# agent reads, and a note picked right with the wrong warning attached is
+# still the failure this exists to prevent.
+
+from bridge.agent.toolnotes import TIER_EXACT, TIER_NEAREST, TIER_PATCH, line
+
+
+def test_a_line_is_the_major_and_the_minor():
+    assert line((1, 1, 8)) == (1, 1)
+    assert line((1, 1)) == (1, 1)
+    # A bare major is that major's .0 line, so `6` and `6.0` share one.
+    assert line((6,)) == (6, 0)
+    assert line((6, 0)) == (6, 0)
+    assert line((1, 2, 0)) == (1, 2)
+
+
+def test_tier_one_is_the_same_version_however_it_is_written():
+    assert _note("1.1", "1.2").resolve("1.2").tier == TIER_EXACT
+    assert _note("6").resolve("6.0").tier == TIER_EXACT
+    assert _note("6.0").resolve("6").tier == TIER_EXACT
+
+
+def test_the_prefix_rule_stays_in_tier_one_and_is_not_softened():
+    """A profile writing `for_version = "1.1"` is declaring the 1.1 LINE,
+    which is what jdk.toml's title already says in prose. Answering a machine
+    on 1.1.3 with it is exact, and qualifying it would put a caveat on the
+    one shipped profile that uses the key -- the whole point of which was to
+    stop refusing to detect 1.2+."""
+    n = _note("1.1", "1.2")
+    for asked in ("1.1", "1.1.0", "1.1.3", "1.1.8", "1.1.8.1"):
+        r = n.resolve(asked)
+        assert r.tier == TIER_EXACT, asked
+        assert r.direction == "", asked
+        assert r.body.version == "1.1", asked
+
+
+def test_tier_two_is_a_patch_release_apart():
+    """Both numbers name a patch level and they differ."""
+    r = _note("1.1.3", "1.2.0").resolve("1.1.8")
+    assert r.tier == TIER_PATCH
+    assert r.body.version == "1.1.3"
+    assert r.direction == "ahead"
+
+
+def test_asking_about_a_line_a_body_is_more_specific_than_is_tier_two():
+    """The other half of `covers` being one-directional. `1.1` covers
+    `1.1.3`; `1.1.3` does NOT cover `1.1`, because a body measured on one
+    point release is not a statement about the line it came from. It is the
+    nearest thing there is, so it answers -- quietly qualified."""
+    r = _note("1.1.3").resolve("1.1")
+    assert r.tier == TIER_PATCH
+    assert r.direction == "behind"
+
+
+def test_a_different_minor_is_tier_three_even_when_it_is_adjacent():
+    """1.1 and 1.2 are one minor apart and a whole collections framework
+    apart. Adjacency on paper is not closeness in a toolchain, which is the
+    entire reason tier 2 stops at the minor."""
+    r = _note("1.1").resolve("1.2")
+    assert r.tier == TIER_NEAREST
+    assert r.direction == "ahead"
+
+
+def test_the_same_line_beats_a_lower_body_from_another_line():
+    """THE CASE THAT MAKES TIER 2 A TIER. 1.1.2 asked, with 1.0.9 and 1.1.5
+    measured.
+
+    Tier 3's rule on its own picks 1.0.9: it is at or below 1.1.2, so it
+    wins, and the agent is handed a note from the PREVIOUS minor line while
+    a note from its own line sat right there. Tier 2 restricts to the 1.1
+    line first and picks 1.1.5 -- slightly ahead of the machine, and labelled
+    as a patch release rather than a generation.
+
+    Delete tier 2 and this test fails on both the body and the tier, which is
+    the whole reason it is written as two assertions."""
+    r = _note("1.0.9", "1.1.5").resolve("1.1.2")
+    assert r.tier == TIER_PATCH
+    assert r.body.version == "1.1.5"
+    assert r.direction == "behind"
+
+
+def test_an_absurd_patch_number_does_not_pull_the_answer_across_a_line():
+    """Patch 50 is not a release any 1998 toolchain shipped; the numbers are
+    chosen to separate the rules rather than to be realistic. Under a plain
+    sum of differences 1.2.49 scores 1 + 1 = 2 against 1.1.0's 50, so
+    arithmetic picks the other LINE. The line decides first, so it does
+    not."""
+    r = _note("1.1.0", "1.2.49").resolve("1.1.50")
+    assert r.tier == TIER_PATCH
+    assert r.body.version == "1.1.0"
+
+
+def test_tier_two_takes_the_highest_patch_at_or_below_the_one_asked():
+    """Same rule as tier 3, run on one line's worth of candidates: the
+    greatest at or below. 1.1.7 answering 1.1.8 is a better note than 1.1.0
+    answering it, and both are below, so the higher one wins."""
+    r = _note("1.1.0", "1.1.7").resolve("1.1.8")
+    assert r.tier == TIER_PATCH
+    assert r.body.version == "1.1.7"
+
+
+def test_inside_the_line_the_lower_patch_still_wins_over_a_higher_one():
+    """1.1.5 asked with 1.1.3 and 1.1.7 measured -- two either side, and the
+    gap is the same size. Same reason it goes down in tier 3: an older body
+    describes a subset of what is there, where a newer one names things that
+    are not."""
+    r = _note("1.1.3", "1.1.7").resolve("1.1.5")
+    assert r.tier == TIER_PATCH
+    assert r.body.version == "1.1.3"
+
+
+def test_tier_three_is_the_greatest_version_at_or_below():
+    """And when nothing is below, the lowest above. The argument for
+    preferring below is why tier 2 exists at all: what breaks a build is
+    crossing a release line."""
+    r = _note("1.1", "2.0").resolve("1.9")
+    assert r.tier == TIER_NEAREST
+    assert r.body.version == "1.1"
+    up = _note("4.0", "6.0").resolve("3.1")
+    assert up.tier == TIER_NEAREST
+    assert up.body.version == "4.0"
+    assert up.direction == "behind"
+
+
+def test_the_tiers_are_tried_in_order_not_scored_together():
+    """1.1.9 asked, 1.1.0 and 1.2.0 measured. 1.2.0 is one patch away if you
+    count that way and 1.1.0 is nine, and 1.1.0 still answers -- the line
+    decides before any of that is looked at."""
+    r = _note("1.1.0", "1.2.0").resolve("1.1.9")
+    assert r.tier == TIER_PATCH
+    assert r.body.version == "1.1.0"
+
+
+def test_exact_still_means_tier_one_for_every_caller_that_only_asks_that():
+    n = _note("1.1.3", "1.2.0")
+    assert n.resolve("1.1.3").exact
+    assert not n.resolve("1.1.8").exact
+    assert not n.resolve("2.0").exact
+    assert n.resolve("").exact
+    assert n.resolve("latest").exact
+
+
+def test_the_shipped_profiles_land_in_the_tiers_they_should():
+    """Against the real `for_version` values committed on 2026-10-01: jdk
+    "1.1", msvc "6.0". The 1.1 line is claimed, so every 1.1.x is tier 1 and
+    1.2 upwards is tier 3 -- there is no patch-level body to land in tier 2
+    yet, and that is a fact about the tree rather than about the rule."""
+    jdk = NOTES["jdk"]
+    for asked in ("1.1", "1.1.3", "1.1.8"):
+        assert jdk.resolve(asked).tier == TIER_EXACT, asked
+    for asked in ("1.2", "1.3", "1.4.2"):
+        r = jdk.resolve(asked)
+        assert r.tier == TIER_NEAREST, asked
+        assert r.direction == "ahead", asked
+
+    msvc = NOTES["msvc"]
+    for asked in ("6", "6.0", "6.0a", "6.0.1"):
+        assert msvc.resolve(asked).tier == TIER_EXACT, asked
+    for asked, direction in (("4.2", "behind"), ("5.0", "behind"),
+                             ("7.0", "ahead")):
+        r = msvc.resolve(asked)
+        assert r.tier == TIER_NEAREST, asked
+        assert r.direction == direction, asked

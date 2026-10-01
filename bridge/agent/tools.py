@@ -830,13 +830,29 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                     version=asked, name=hit.name,
                     versions=documented or prompts.text(
                         "tools.toolnote.view.versions_none")))
-            if not res.exact:
+            if res.tier != notes.TIER_EXACT:
                 origin = prompts.text(
                     "tools.toolnote.view.origin_asked" if asked
                     else "tools.toolnote.view.origin_reported")
-                out.append(prompts.text(
-                    f"tools.toolnote.view.{res.direction}",
-                    asked=res.asked, have=res.body.version, origin=origin))
+                # ONE QUIET LINE FOR A PATCH RELEASE, THE BANNER FOR A
+                # DIFFERENT LINE. Spending "THIS IS NOT THE VERSION IN FRONT
+                # OF YOU" on 1.1.3 answering 1.1.8 is how the agent learns to
+                # skim it before the 1.1-answering-1.3 case arrives, which is
+                # the one the JDK profile exists as a refusal because of. The
+                # patch case is still said out loud, because `Measured:` is
+                # the whole basis for acting without checking -- it is just
+                # said in proportion.
+                if res.tier == notes.TIER_PATCH:
+                    major, minor = notes.line(
+                        notes.parse_version(res.body.version) or ())
+                    out.append(prompts.text(
+                        "tools.toolnote.view.patch",
+                        asked=res.asked, have=res.body.version,
+                        origin=origin, line=f"{major}.{minor}"))
+                else:
+                    out.append(prompts.text(
+                        f"tools.toolnote.view.{res.direction}",
+                        asked=res.asked, have=res.body.version, origin=origin))
             # WHICH NUMBER GOES INTO `{version}` IN THE BODY. On an exact
             # match, the version in play -- so a bare `C:\\JDK1.1.8` still
             # renders "JDK 1.1.8" as it always has. On an inexact one, the
@@ -845,6 +861,10 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             # disclosure above is there to prevent.
             shown = (res.body.version if not res.exact
                      else (res.asked if res.understood else reported))
+            # Unchanged by the tiers: anything short of exact renders the
+            # version the body was MEASURED on, because "JDK 1.1.8, measured
+            # on this machine:" over 1.1.3 facts is a version claim nobody
+            # checked, in the authoritative voice of a measured note.
             out.append(res.body.render(hit.path,
                                        shown or note.default_version))
             return _text("\n\n".join(out))

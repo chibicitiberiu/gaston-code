@@ -430,6 +430,17 @@ ahead = '''THIS IS NOT THE VERSION IN FRONT OF YOU. {asked} is {origin}; the new
 behind = '''THIS IS NOT THE VERSION IN FRONT OF YOU. {asked} is {origin}; the nearest release anybody has measured is {have}, and what follows is that one.
 
 {have} came AFTER {asked}, so anything this note tells you to use may not exist yet on the machine you are driving, and the error you get will name a missing symbol rather than the era it came from. Confirm before depending on it.'''
+# TIER 2, AND IT IS DELIBERATELY NOT THE BANNER. Same major.minor, different
+# patch release: 1.1.3 answering a 1.1.8 machine. The facts are about the same
+# generation of the tool, so shouting here would spend the warning that tier 3
+# needs -- the 1.1-note-in-front-of-a-1.3-machine case, which is why jdk.toml
+# refused to detect 1.2+ at all before any of this existed.
+#
+# Said out loud all the same, because `Measured:` is the agent's whole basis
+# for acting without checking. The claim is kept narrow on purpose: it says
+# what IS warranted (same line, same era) and what is not (nobody ran these
+# commands on the version in play), rather than reassuring.
+patch = '''A PATCH RELEASE APART, not a generation: this was measured on {have}, and {asked} is {origin}. Both are {line}, so nothing below is about a different era of the tool -- but nobody has run these commands on {asked}, and a build number or a path under the root may have moved.'''
 origin_asked = '''what you asked about'''
 origin_reported = '''what the machine reports'''
 bad_version = '''`{version}` is not a version number this could place, so it was ignored and what follows is the note you would have got without it. Versions measured for `{name}`: {versions}.'''

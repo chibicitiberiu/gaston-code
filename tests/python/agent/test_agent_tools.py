@@ -643,3 +643,107 @@ async def test_a_shipped_profile_resolves_or_discloses(monkeypatch):
 
     # The bare call still renders what it did before the parameter existed.
     assert "JDK 1.1.3, measured on this machine" in plain
+
+
+# --- the tiers, as the agent reads them -------------------------------------
+#
+# Three outcomes, three different amounts of noise. The resolution order is
+# the user's, 2026-10-01: same version, same minor version, closest with the
+# lower one first. What the agent SEES is the half that matters here --
+# whether it gets silence, one line, or the banner -- because an agent that
+# cannot tell an exact note from a near one believes both the same amount.
+
+
+def _patch_note():
+    """A note documenting two patch releases on different lines."""
+    return _notes.Note(
+        title="Fake Compiler", measured="a machine, 2026-10-01", body="",
+        variants=(_notes.Body("1.1.3", "Fake Compiler 1.1.3",
+                              "a 1.1.3 box, 2026-10-01",
+                              "Fake {version} at {root}: the 1.1.3 facts."),
+                  _notes.Body("1.2.0", "Fake Compiler 1.2.0",
+                              "a 1.2.0 box, 2026-10-01",
+                              "Fake {version} at {root}: the 1.2.0 facts.")))
+
+
+async def test_a_patch_release_apart_gets_one_line_and_not_the_banner(
+        monkeypatch):
+    """THE POINT OF TIER 2. 1.1.3 answering 1.1.8 is the same generation of
+    the tool, and shouting "THIS IS NOT THE VERSION IN FRONT OF YOU" at it
+    spends the warning that the 1.1-note-on-a-1.3-machine case needs. Crying
+    wolf in the cheap case is how the expensive one stops being read."""
+    h = _with_fake(monkeypatch, _patch_note(),
+                   found=(Found("faketool", "toolchain", r"D:\FAKE", True,
+                                version="1.1.8"),))
+    out = _text_of(await h({"name": "faketool"}))
+    assert "NOT THE VERSION IN FRONT OF YOU" not in out
+    assert "A PATCH RELEASE APART" in out
+    assert "the 1.1.3 facts" in out
+
+
+async def test_the_quiet_line_still_names_both_numbers_and_the_line(
+        monkeypatch):
+    """Quieter is not vaguer. `Measured:` is the agent's whole basis for
+    acting without checking, so the gap is stated precisely -- and the claim
+    is kept narrow: same line, same era, nobody ran it on your version."""
+    h = _with_fake(monkeypatch, _patch_note())
+    out = _text_of(await h({"name": "faketool", "version": "1.1.8"}))
+    assert "measured on 1.1.3" in out
+    assert "1.1.8 is what you asked about" in out
+    assert "Both are 1.1" in out
+    assert "nobody has run these commands on 1.1.8" in out
+
+
+async def test_a_patch_match_still_renders_the_version_it_was_measured_on(
+        monkeypatch):
+    """Softer warning, same discipline about the body. "Fake 1.1.8 ... the
+    1.1.3 facts" would be a version claim nobody checked, stated in the
+    authoritative voice of a measured note."""
+    h = _with_fake(monkeypatch, _patch_note())
+    out = _text_of(await h({"name": "faketool", "version": "1.1.8"}))
+    assert "Fake 1.1.3 at D:\\FAKE" in out
+    assert "Fake 1.1.8 at" not in out
+
+
+async def test_a_different_line_still_gets_the_banner(monkeypatch):
+    """Tier 3 is untouched. 2.0 asked against 1.1.3 and 1.2.0 crosses a
+    release line, which is the thing that breaks a build."""
+    h = _with_fake(monkeypatch, _patch_note())
+    out = _text_of(await h({"name": "faketool", "version": "2.0"}))
+    assert "NOT THE VERSION IN FRONT OF YOU" in out
+    assert "A PATCH RELEASE APART" not in out
+    assert "the 1.2.0 facts" in out
+
+
+async def test_the_same_line_wins_the_body_and_the_warning_together(
+        monkeypatch):
+    """Both halves of tier 2 in one call: 1.1.3 answers rather than 1.2.0,
+    AND the agent is told it is a patch gap rather than a generation gap. A
+    resolution that got the body right and the warning wrong would still be
+    the failure this exists to prevent, so both are asserted."""
+    h = _with_fake(monkeypatch, _patch_note())
+    out = _text_of(await h({"name": "faketool", "version": "1.1.9"}))
+    assert "the 1.1.3 facts" in out
+    assert "A PATCH RELEASE APART" in out
+    assert "NOT THE VERSION IN FRONT OF YOU" not in out
+
+
+async def test_an_exact_match_is_still_silent(monkeypatch):
+    h = _with_fake(monkeypatch, _patch_note())
+    out = _text_of(await h({"name": "faketool", "version": "1.2.0"}))
+    assert "NOT THE VERSION" not in out
+    assert "A PATCH RELEASE APART" not in out
+    assert "the 1.2.0 facts" in out
+
+
+async def test_the_shipped_jdk_line_claim_is_not_qualified(monkeypatch):
+    """jdk.toml declares `for_version = "1.1"`, which claims the LINE. Every
+    1.1.x must come back unqualified by either warning -- a caveat on the one
+    shipped profile that uses the key would undo what the key was added for,
+    which was to stop refusing to detect anything newer."""
+    h = _toolnote(monkeypatch, [JDK])
+    for asked in ("1.1", "1.1.3", "1.1.8"):
+        out = _text_of(await h({"name": "jdk", "version": asked}))
+        assert "NOT THE VERSION" not in out, asked
+        assert "A PATCH RELEASE APART" not in out, asked
+        assert "no collections framework" in out, asked

@@ -95,20 +95,46 @@ def covers(have: tuple[int, ...], want: tuple[int, ...]) -> bool:
     return len(have) < len(want) and want[:len(have)] == have
 
 
-def distance(have: tuple[int, ...], want: tuple[int, ...]) -> tuple[int, ...]:
-    """How far apart two versions are, MAJOR FIRST, as a sortable tuple.
+def line(v: tuple[int, ...]) -> tuple[int, int]:
+    """The major.minor `v` belongs to. `(1, 1, 8)` and `(1, 1)` share one.
 
-    Component-wise absolute difference, compared lexicographically -- so a
-    difference in the major number beats any difference in the minor, and a
-    minor beats any patch. This is not arithmetic distance and it should not
-    be: with 1.1 and 2.0 documented and 1.9 asked about, plain subtraction
-    picks 2.0 (0.1 away against 0.8) and this picks 1.1, because the thing
-    that breaks a build is crossing a major release, not counting minors.
-    Java 1.1 -> 1.2 moved the whole collections framework; 1.1.3 -> 1.1.8
-    moved almost nothing.
+    Two components because that is where these toolchains put the boundary
+    that matters. Java 1.1 -> 1.2 moved the whole collections framework;
+    1.1.3 -> 1.1.8 moved almost nothing, and Visual C++ 6.0 -> 6.0a moved a
+    service pack. A single-component version is `6` -> `(6, 0)`, so `6` and
+    `6.0` share a line as well as being the same number.
     """
-    pa, pb = _pad(have, want)
-    return tuple(abs(x - y) for x, y in zip(pa, pb, strict=True))
+    padded = v + (0,) * max(0, 2 - len(v))
+    return (padded[0], padded[1])
+
+
+def nearest(pool: list, want: tuple[int, ...]) -> tuple:
+    """The best of `pool` for `want`: LOWER FIRST, in the user's words.
+
+    The greatest candidate at or below `want`; and only if there is none, the
+    lowest one above it. `pool` is `[(parsed_version, Body), ...]` and the
+    answer is one of its pairs.
+
+    THERE IS NO DISTANCE METRIC HERE AND THE FIRST ATTEMPT AT ONE WAS WRONG.
+    It scored the component-wise absolute difference major-first, which is
+    nonsense as soon as the majors differ, because the minor numbering
+    restarts: asked about 2.0 with 1.1.3 and 1.2.0 documented, it compared
+    minor gaps of 1 and 2 and picked 1.1.3 -- the FURTHER of the two from
+    2.0, by any reading. Ordinary version ordering has no such hole, and
+    "lower first" is both simpler and the rule that was asked for.
+
+    WHY LOWER. The two directions fail differently. A note measured on an
+    older release describes a subset of what is there, so its "no ArrayList"
+    is wrong in a way that costs an agent opportunity. One measured on a
+    NEWER release tells the agent to use things that do not exist yet, which
+    fails at the compiler. Neither is acceptable undisclosed, which is why
+    both carry a warning -- this only decides which to reach for first.
+    """
+    below = [cb for cb in pool
+             if _pad(cb[0], want)[0] <= _pad(cb[0], want)[1]]
+    if below:
+        return max(below, key=lambda cb: _pad(cb[0], want)[0])
+    return min(pool, key=lambda cb: _pad(cb[0], want)[0])
 
 
 @dataclass(frozen=True)
@@ -143,24 +169,46 @@ class Body:
                          .strip("\n"))
 
 
+#: The three tiers a match can land in, and they are the three things a
+#: caller has to say something different about.
+#:
+#: A BOOLEAN WAS NOT ENOUGH, which is what this replaced on 2026-10-01. With
+#: two outcomes, a body measured on 1.1.3 answering a 1.1.8 machine got the
+#: same shouted banner as a 1.1 note answering a 1.3 machine -- and those are
+#: not the same event. One is a patch release apart, where the facts are
+#: about the same generation of the tool; the other is the case the JDK
+#: profile exists as a refusal because of. Spending the loud warning on the
+#: first is how an agent learns to skim it before the second arrives.
+TIER_EXACT = 1
+TIER_PATCH = 2
+TIER_NEAREST = 3
+
+
 @dataclass(frozen=True)
 class Resolved:
-    """Which body answers for a version, and whether it really does.
+    """Which body answers for a version, and how well it really does.
 
-    `exact` is False ONLY when a body was picked that was measured against a
-    different version than the one in play. It is True when no version was
-    in play at all, and True when the profile makes no version claim -- in
-    both of those cases there is nothing to disclose, because nothing was
-    approximated. Callers must say something when it is False: see
-    `tools.toolnote.view.ahead` / `.behind`.
+    `tier` is the whole of it:
+
+      1 `TIER_EXACT`    -- the body's version covers the one in play, or
+                           there was no version in play at all, or the
+                           profile makes no version claim. Nothing was
+                           approximated, so nothing is disclosed.
+      2 `TIER_PATCH`    -- same major.minor, different patch release. One
+                           quiet line (`tools.toolnote.view.patch`).
+      3 `TIER_NEAREST`  -- the nearest thing measured, and it is a different
+                           line. The banner (`.ahead` / `.behind`).
+
+    `exact` survives as a property because most callers only want to know
+    whether to say anything at all.
     """
 
     body: Body
     #: The version string that was in play: the caller's argument, or the one
     #: detection reported. "" if neither.
     asked: str
-    exact: bool
-    #: "" when exact. "ahead" when `asked` is NEWER than the body -- the
+    tier: int = TIER_EXACT
+    #: "" at tier 1. "ahead" when `asked` is NEWER than the body -- the
     #: dangerous direction, where the note's absences are absences of the
     #: past. "behind" when the body documents a later release than `asked`.
     direction: str = ""
@@ -168,6 +216,10 @@ class Resolved:
     #: all. The argument is then ignored, and the caller says so rather than
     #: pretending it was honoured.
     understood: bool = True
+
+    @property
+    def exact(self) -> bool:
+        return self.tier == TIER_EXACT
 
 
 @dataclass(frozen=True)
@@ -237,30 +289,58 @@ class Note:
         return self.base.render(root, version or self.default_version)
 
     def resolve(self, version: str = "") -> Resolved:
-        """The body nearest `version`, and whether it is really that version.
+        """The body nearest `version`, and how near it actually is.
 
-        THE ORDERING RULE, in full, because being approximate quietly is the
-        failure this exists to prevent:
+        THREE TIERS, TRIED IN ORDER, and the order is the user's: same
+        version, then same minor version, then closest with the lower one
+        first. Written out because being approximate quietly is the failure
+        this exists to prevent.
 
-          1. No version in play, or no body in this profile declares one:
-             the base body, `exact=True`. Nothing was approximated, so
-             nothing is disclosed. This is every shipped profile today.
-          2. A version that `parse_version` cannot place: same answer, with
-             `understood=False` so the caller can say the argument was
-             dropped. Guessing which release "latest" meant would be worse.
-          3. A body that `covers` it (same number, or a shorter prefix of
-             it): that body, `exact=True`.
-          4. Otherwise the body at the smallest `distance`, major component
-             first; ties to the LOWER version. `exact=False`, and
-             `direction` says which way the gap runs.
+        Two cases come before any of it:
 
-        THE TIE GOES DOWN because the two directions fail differently. A
-        note measured on an older release describes a subset of what is
-        there: its "no ArrayList" is wrong, and wrong in a way that costs an
-        agent nothing but opportunity. A note measured on a NEWER one tells
-        the agent to use things that do not exist yet, which fails at the
-        compiler. Neither is acceptable undisclosed, which is why both carry
-        a warning rather than why one is preferred.
+          * No version in play, or no body in this profile declares one:
+            the base body at `TIER_EXACT`. Nothing was approximated, so
+            nothing is disclosed.
+          * A version `parse_version` cannot place: the same answer, with
+            `understood=False` so the caller can say the argument was
+            dropped. Guessing which release "latest" meant would be worse.
+
+        Then:
+
+          1. `TIER_EXACT` -- a body that `covers` the version: the same
+             number, or a strictly shorter prefix of it. THE PREFIX STAYS IN
+             TIER 1 AND IS NOT A NEAR MISS. A profile writing
+             `for_version = "1.1"` is declaring the 1.1 LINE, which is what
+             `jdk.toml`'s title already says in prose, so answering a
+             machine on 1.1.3 with it is exact and must not be qualified.
+             Softening it would put a caveat on the one shipped profile that
+             uses this key.
+          2. `TIER_PATCH` -- same `line`, i.e. same major.minor, different
+             patch, picked with `nearest` out of that line alone. Reached
+             when both numbers name a patch level and they differ (`1.1.3`
+             answering `1.1.8`), and also when the body is more specific
+             than the question (`1.1.3` asked about `1.1`) -- which is the
+             other half of `covers` being one-directional.
+          3. `TIER_NEAREST` -- `nearest` over everything: the greatest
+             version at or below the one in play, or failing that the lowest
+             above it.
+
+        TIER 2 IS A FILTER AND IT CHANGES ANSWERS, which is the argument for
+        making it a tier of its own rather than letting it emerge. Asked
+        about 1.1.2 with 1.0.9 and 1.1.5 measured, "lower first" alone picks
+        1.0.9 -- it is below, so it wins, and the agent is handed a note from
+        the previous minor line when a note from its OWN line was sitting
+        right there. Tier 2 picks 1.1.5 and labels it a patch release ahead.
+        Same major.minor beats closest-lower, in that order, because
+        crossing a release line is the thing that breaks a build: Java
+        1.1 -> 1.2 moved the whole collections framework, and 1.1.3 -> 1.1.8
+        moved almost nothing.
+
+        AND IT CHANGES WHAT THE AGENT IS TOLD, which is the other half. A
+        patch release apart gets one quiet line; a different line gets the
+        banner. Two outcomes could not express that, and spending the banner
+        on 1.1.3-answering-1.1.8 is how an agent learns to skim it before
+        the 1.1-answering-1.3 case arrives.
         """
         asked = (version or "").strip()
         want = parse_version(asked)
@@ -276,21 +356,33 @@ class Note:
             fallback = max(cands, key=lambda cb: cb[0])[1]
 
         if not asked:
-            return Resolved(fallback, "", True)
+            return Resolved(fallback, "")
         if want is None:
-            return Resolved(fallback, asked, True, understood=False)
+            return Resolved(fallback, asked, understood=False)
         if not cands:
-            return Resolved(fallback, asked, True)
+            return Resolved(fallback, asked)
 
+        # TIER 1: the same version, however it is written.
         for have, b in cands:
             if covers(have, want):
-                return Resolved(b, asked, True)
+                return Resolved(b, asked)
 
-        have, b = min(cands, key=lambda cb: (distance(cb[0], want),
-                                             _pad(cb[0], want)[0]))
-        padded_have, padded_want = _pad(have, want)
-        ahead = padded_have < padded_want
-        return Resolved(b, asked, False, "ahead" if ahead else "behind")
+        def _direction(have: tuple[int, ...]) -> str:
+            padded_have, padded_want = _pad(have, want)
+            return "ahead" if padded_have < padded_want else "behind"
+
+        # TIER 2: the same minor version, and it is tried BEFORE anything is
+        # compared across lines. A candidate from the asked version's own
+        # line wins even when one from another line is lower and would
+        # therefore have been preferred.
+        same_line = [cb for cb in cands if line(cb[0]) == line(want)]
+        if same_line:
+            have, b = nearest(same_line, want)
+            return Resolved(b, asked, TIER_PATCH, _direction(have))
+
+        # TIER 3: closest, lower first.
+        have, b = nearest(cands, want)
+        return Resolved(b, asked, TIER_NEAREST, _direction(have))
 
 
 def _variants(name: str, n: dict, title: str) -> tuple[Body, ...]:
