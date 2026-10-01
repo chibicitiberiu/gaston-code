@@ -4,6 +4,7 @@
 #include "core/rc_cpp.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "exec/cpuid.h"
 
 void readSystemInfo(SystemInfo &out)
 {
@@ -35,6 +36,11 @@ void readSystemInfo(SystemInfo &out)
     out.cpuFamily = si.wProcessorLevel;
     out.cpuModel = si.wProcessorRevision >> 8;
     out.cpuCount = si.dwNumberOfProcessors;
+    /* Both may legitimately come back empty -- a 386 has no CPUID at all and
+     * a Pentium has no brand string -- so neither is checked. The caller
+     * composes whatever it got; `memset` above already made them empty. */
+    cpuBrand(out.cpuBrandName, sizeof out.cpuBrandName);
+    cpuVendor(out.cpuVendorName, sizeof out.cpuVendorName);
 
     out.acp = GetACP();
     out.oemcp = GetOEMCP();

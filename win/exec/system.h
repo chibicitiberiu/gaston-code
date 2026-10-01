@@ -28,6 +28,13 @@ struct SystemInfo
     unsigned cpuFamily;     /* wProcessorLevel */
     unsigned cpuModel;      /* high byte of wProcessorRevision */
     DWORD cpuCount;
+    /* WHAT THE PROCESSOR CALLS ITSELF, which is what System Properties and
+     * dxdiag show -- they read the same CPUID string. Empty when this CPU has
+     * no brand string, which is everything older than about 1999, so the
+     * Pentium 200 this project also drives reports a vendor and nothing more.
+     * See exec/cpuid.h for why the family/model pair alone was a problem. */
+    char cpuBrandName[64];
+    char cpuVendorName[16];
     unsigned acp;           /* ANSI codepage: file names, window text */
     unsigned oemcp;         /* OEM codepage: what console children write */
 };

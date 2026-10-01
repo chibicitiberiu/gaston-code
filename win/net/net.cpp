@@ -199,7 +199,14 @@ void rc_net_set_automation(rc_net *n, int mode)
 /* The only way to add a HELLO header. Drops rather than overruns, and says so.
  * A dropped header degrades the bridge's picture of the machine; an overrun
  * corrupts the stack while building the very first frame. */
-#define RC_HELLO_MAX 32
+/* 48 since 2026-10-02, up from 32. It was 29 used of 32, and
+ * tests/python/meta/test_hello_headers.py refuses to let the last two slots
+ * go: the header list IS the capability declaration, so running out of room
+ * means the next client rule has nowhere to go and the cheap workaround --
+ * packing them into bit fields -- is the thing caps.h exists to refuse.
+ * bridge/wire/frame.py's MAX_HELLO_HEADERS moves with it, and that test
+ * asserts the two agree. */
+#define RC_HELLO_MAX 48
 /* Stringify a macro's VALUE, not its name -- RC_STR2 is the extra expansion
  * pass without which HDR("eol", ...) would send the literal text
  * "RC_CAP_EOL". */
@@ -235,7 +242,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
 {
     char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
     char oemcp[16];
-    char osver[96], cpu[64], screen[32];
+    char osver[96], cpu[160], screen[32];
     /* Lives for the whole function, not just the block that fills it: HDR
      * records the pointer and rc_frame_build runs at the end. On the stack
      * with its neighbours rather than in BSS -- this frame is ~1.4KB against
@@ -359,8 +366,33 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
             HDR("os", osver);
         }
 
-        rc_strf(cpu, sizeof(cpu), "x86 family %u model %u, %lu cpu",
-                  sys.cpuFamily, sys.cpuModel, (unsigned long)sys.cpuCount);
+        /* WHAT THE PROCESSOR CALLS ITSELF, when it can say.
+         *
+         * This read `x86 family 6 model 10, 1 cpu` until 2026-10-02. That is
+         * accurate, and it is also what an agent reads as "a weak machine":
+         * one chose an interpreted language over the Visual C++ 6.0 installed
+         * beside it, reasoning from "tight memory and single CPU" -- on an
+         * Athlon XP 2000+ with 256MB, which for this operating system is
+         * close to the best hardware it ever ran on.
+         *
+         * The brand string is what System Properties and dxdiag show, because
+         * all three read the same CPUID leaves (exec/cpuid.h). The family and
+         * model stay on the line behind it: they are what the OS itself
+         * believes, they are two numbers, and when the brand string is absent
+         * -- every CPU older than about 1999, the Pentium 200 included --
+         * they plus the vendor are the whole answer. */
+        if (sys.cpuBrandName[0])
+            rc_strf(cpu, sizeof(cpu),
+                    "%s (family %u model %u), %lu cpu",
+                    sys.cpuBrandName, sys.cpuFamily, sys.cpuModel,
+                    (unsigned long)sys.cpuCount);
+        else if (sys.cpuVendorName[0])
+            rc_strf(cpu, sizeof(cpu), "%s x86 family %u model %u, %lu cpu",
+                    sys.cpuVendorName, sys.cpuFamily, sys.cpuModel,
+                    (unsigned long)sys.cpuCount);
+        else
+            rc_strf(cpu, sizeof(cpu), "x86 family %u model %u, %lu cpu",
+                    sys.cpuFamily, sys.cpuModel, (unsigned long)sys.cpuCount);
         HDR("cpu", cpu);
 
         /* The SCREEN dc: GetDC(NULL) pairs with ReleaseDC(NULL, dc), which

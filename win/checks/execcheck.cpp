@@ -27,6 +27,7 @@
 #include "core/str.h"
 #include "exec/execjob.h"
 #include "exec/process.h"
+#include "exec/cpuid.h"
 #include "exec/system.h"
 
 static int g_failures;
@@ -538,6 +539,37 @@ static void system()
      * refused before ExitWindowsEx is ever called. */
     say("reboot-refuses-an-unknown-mode",
         !requestReboot((RebootMode)99, false), "");
+
+    /* CPUID. Nothing here asserts a PARTICULAR processor -- these run under
+     * Wine on a 2026 CPU and on a Pentium 200 -- so what is checked is the
+     * shape: that the instruction is detected rather than assumed, that the
+     * vendor is the twelve characters it is specified to be, and that the
+     * brand string, WHEN THERE IS ONE, has had the processor's padding
+     * removed. A CPU with no brand string reporting none is a pass. */
+    bool have = cpuidPresent();
+    char vendor[16], brand[64];
+    bool gotV = cpuVendor(vendor, sizeof vendor);
+    bool gotB = cpuBrand(brand, sizeof brand);
+    rc_strf(detail, sizeof detail, "cpuid=%d vendor=%s brand=%s",
+            have ? 1 : 0, gotV ? vendor : "(none)", gotB ? brand : "(none)");
+    say("cpuid-is-detected-not-assumed", have == (gotV || gotB) || !gotV,
+        detail);
+    say("the-vendor-is-twelve-characters",
+        !gotV || strlen(vendor) == 12, gotV ? vendor : "(none)");
+    say("the-brand-string-has-no-padding",
+        !gotB || (brand[0] != ' ' && brand[strlen(brand) - 1] != ' '),
+        gotB ? brand : "(none)");
+    say("the-brand-string-fits-the-header-buffer",
+        strlen(si.cpuBrandName) < sizeof si.cpuBrandName, si.cpuBrandName);
+    /* A tiny buffer must truncate, never overrun: the one case a caller with
+     * a short field would hit. */
+    {
+        char small[8];
+        memset(small, 0x7F, sizeof small);
+        cpuBrand(small, sizeof small);
+        say("a-short-buffer-truncates",
+            strlen(small) < sizeof small, small);
+    }
 }
 
 /* Child modes: the programs the cases run. Plain Win32 console code, so

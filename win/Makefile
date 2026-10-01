@@ -133,7 +133,7 @@ LIBWIRE = $(LIBDIR)/libwire.lib
 # and managing processes. libcore only; it knows nothing of the wire, and
 # mapping requests to jobs is the exe's job. Listed BEFORE libcore wherever
 # both are linked.
-EXEC_SRCS = exec/execjob.cpp exec/process.cpp exec/system.cpp
+EXEC_SRCS = exec/cpuid.cpp exec/execjob.cpp exec/process.cpp exec/system.cpp
 LIBEXEC = $(LIBDIR)/libexec.lib
 
 # libfs (docs/REMOTE.md step 5a, docs/libfs-plan.md): paths, stat, the walk,
