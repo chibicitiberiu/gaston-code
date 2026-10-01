@@ -3530,3 +3530,235 @@ they pinned (`Too many parameters`, `2>&1`, `start prog.exe`,
 `Permission denied`) are now asserted against the FETCHED text in
 `tests/python/agent/test_agent_tools.py`, alongside the ones
 `test_toolnotes.py` already held.
+
+## Everything a live session on real hardware exposed (2026-10-02)
+
+One build-something session through the bridge, driven by the user on the Athlon
+XP box, and then the transcript read line by line. Seven complaints came out of
+it and the answers to four of them were defects somewhere else entirely. What
+follows is each one and what it actually was.
+
+### The configuration was wrong, and it was mine
+
+**"Since adding put and get, the agent completely ignores auto-sync."** It did
+not: the bridge had been started without `--sync-dir`, so there was no sync to
+ignore, and the prompt that configuration produces *orders* `put_file` ("Put the
+user's files there with `put_file`"). The user's rule, stated earlier and not
+followed: auto sync is always on once a work directory exists, and the bridge
+makes one in temp if nobody named it.
+
+`--sync-dir` now defaults to a stable tree under the system temp dir, and a
+named `--cwd` is mirrored as it stands rather than left sitting beside a mirror
+somewhere else -- the agent's file tools operate on `cwd`, so a mirror anywhere
+else means every edit succeeds and never arrives. Stable rather than `mkdtemp`,
+because a new tree per restart throws the baseline away and re-syncs every
+conversation from nothing. `--no-sync` is the old behaviour and several prompt
+branches still need it.
+
+The reason this mattered beyond the wasted run: the configuration it produced is
+the one that routes every file through `put_file`.
+
+### `put_file` wrote bytes; the sync layer converts them
+
+`bridge/services/guest_fs.py` is "byte for byte, with no baseline and no opinion
+about line endings", which is right for the lane and was wrong as the only
+behaviour on offer. The sync layer has a whole `.gitattributes`-shaped
+classifier (`bridge/files/attrs.py`, `P.classify`) and `SYNCPUTEND` carries a
+class field for exactly this. So the same batch file was runnable through one
+path and silently broken through the other.
+
+Measured (`docs/measurements/batch-eol-and-dir-b-p200-20261001.txt`):
+
+    LF.BAT    "@echo off\necho one\nset FOO=bar\necho [%FOO%]\n"  ->  "OFF"
+    CRLF.BAT  the same with \r\n                                  ->  "one" "[bar]"
+
+COMMAND.COM reads the whole LF file as ONE command line, `SET` becomes an
+argument so `%FOO%` never exists, and both exit 0. The session spent eleven tool
+calls and two throwaway batch files finding that out.
+
+`put_file` and `get_file` now take `translation`, default on, named for what it
+covers -- the codepage **and** the endings, since a str has to be encoded for a
+single-byte machine either way. The classifier is the sync layer's own, so a NUL
+anywhere, a lone CR, a `\r\r\n` or mixed endings are left exactly as they are.
+
+**`get_file` hid the defect it was called to diagnose.** The agent read the
+file back specifically to find out why it would not run, got 190 bytes of
+text that looked perfect, and learned nothing: LF and CRLF render identically.
+It now says which endings the file has, relative to what the client declared in
+`HELLO` rather than to an operating system this code has decided it is talking
+to.
+
+**And an unencodable character was a traceback.** `fold.encode_exact` raises and
+the handler logged and re-raised, so one box-drawing character in a README
+reached the agent as an exception with no advice in it. cp1252 holds the euro
+sign and does not hold U+2500, Cyrillic or any emoji. It is a refusal now,
+naming the character, its codepoint, the codepage and the offset.
+
+### The agent fetched four toolchain notes before it knew which one it wanted
+
+5,828 characters, and then it chose VBScript anyway. It was doing as instructed.
+This was resident:
+
+    FETCH THE NOTE BEFORE YOU USE ANY OF THESE:
+
+      command.com  COMMAND.COM, not cmd.exe -- one command per line. ...
+      cscript      Windows Script Host (CScript)
+      jdk          Sun JDK 1.1
+      msvc         Microsoft Visual C++ 6.0
+
+Three of the four "headlines" are the `title` field, which is what the inventory
+row above already said. There was nothing to choose with, under an imperative in
+capitals saying to fetch.
+
+Every profile gains an `about` -- two or three sentences on what the tool is and
+when you would pick it -- at the PROFILE level and not inside `[note]`, because
+ten of the fifteen profiles have no note and a machine with `debug` on it got a
+name and no description at all. Three fields now with three jobs: `about` is
+what it IS (resident, needs no measurement), `headline` is what goes WRONG first
+(resident, measured), `body` is HOW to drive it (fetched, measured). The
+imperative inverts: you already know what these are, so call `toolnote` for the
+one you have chosen.
+
+`MAX_BLOCK_CHARS` 3,400 -> 5,000 against a measured 4,342, by the user's call
+("cap is arbitrary, goal is getting good instructions"). All fifteen profiles at
+once is 8,081 and is asserted separately, as the bound nobody reaches rather
+than a target.
+
+Found while doing it: the shell pointer picked `shelly[0]`, the first shell by
+position. With `4dos` present and unmeasured it would have named `4dos` and sent
+the agent for a note that does not exist, while `command.com` -- whose note does
+exist -- went unnamed.
+
+### "Tight memory and single CPU, so VBScript" -- on a machine with Visual C++ 6.0
+
+Two sources, both fixed. The facts block gave `x86 family 6 model 10, 1 cpu` and
+`255 MB total`, raw, with no era; and the hardware section said "It has a slow
+processor and very little free memory" unconditionally, whatever the machine
+reported, which on a 256MB Athlon XP is false.
+
+The section now opens by saying to judge the figures against 1998 -- Windows 98
+ran on 16 to 64 MB and is unstable above about 512 -- states that a native
+compiler is the ordinary way to work here rather than an extravagance, and names
+what is actually scarce: the platter rather than the CPU, the GDI and USER heaps,
+and anything that would have to be fetched. The range is given as a fact rather
+than computed into an adjective, so it reads correctly on a 32MB box too.
+
+And the processor says its own name. `CPUID` leaves `0x80000002-4`, which is
+where System Properties and dxdiag get it too -- so this asks the processor
+rather than shelling out and parsing a text file for a value two instructions
+return, and it works on the VM where dxdiag may not be installed. On real
+hardware:
+
+    AMD Athlon(tm) XP 2000+ (family 6 model 10), 1 cpu
+
+Nothing assumes `CPUID` exists: the EFLAGS.ID test runs first and the extended
+leaf count is checked before any leaf is read. The brand string postdates 1999,
+so the Pentium 200 reports vendor plus family and model, which is the expected
+answer rather than a failure. No clock speed -- nothing on 9x reports one and
+the agreed bound was "what dxdiag or System Properties sees".
+
+### `dir` six times, for single files it had just compiled
+
+`listDirectory` has been in libfs since step 5a and gremote has called it since
+step 4. The client's fs lane handled `FSGET`, `FSPUT`, `FSPUTEND` and `FSDRIVES`
+and nothing else, so the only way for the agent to see a directory was the
+shell. Measured, twelve files in one directory:
+
+    dir /b <path>    131 bytes -- names, no sizes, no dates
+    dir    <path>    about 1,100 -- volume label, serial, header, . and ..,
+                     a free-space footer, and BOTH name forms per row
+
+Cheap or detailed, never both; neither machine-readable; both in the console
+codepage while long names are stored in the ANSI one; and a path with a space
+has to be quoted for a shell that splits on whitespace. `FSLS`/`FSENT`/`FSENTEND`
+on the client, `GuestFsService.ls`, and `list_dir` on the tool surface, with the
+same wire shape gremote's `LS` uses because the primitive is the same.
+CLAUDE.md's bar is unchanged -- this clears it rather than lowering it, and
+`stat` still does not.
+
+Two things fell out. The fs lane's status vocabulary was never pinned and had
+already drifted: `fsrpc.cpp` sends `no_memory`, which `SyncStatus` did not name,
+so it reached the agent as "a status this bridge does not recognise". The
+agreement test now reads both fs handlers. And `_text` wrote `isError` while the
+SDK reads `is_error`, so **every refusal from every tool here arrived as a
+SUCCESS** carrying refusal text -- the words got through, but a failed call the
+model is told succeeded is one it has no reason to retry or route around.
+
+### The shell cannot say whether a build worked, and now it can
+
+`command.com /c` exits 0 whatever happened, so the agent verified every single
+compile with a follow-up `dir`: two round trips per build. `if errorlevel`
+INSIDE a batch file does see a program's real code, so the bridge writes a
+wrapper to the machine's temp directory (`HELLO` gains `temp`, from
+`GetTempPathA`), runs that, and strips the verdict off stdout.
+
+Zero versus non-zero only. The exact code is recoverable with a descending
+cascade -- measured, `RC=1` -- and was dropped by the user's decision, since it
+would have cost a 6KB cascade, a static wrapper per session and two levels of
+`call` nesting nobody measured.
+
+Four constraints, each measured, and **the fourth one bit after the feature was
+already written and shipped**:
+
+  * `call` only for a `.bat`. Without it a nested batch file never returns and
+    the verdict lines do not run. With it, a builtin's redirection breaks --
+    `call echo REDIR> R.TXT` gives "File creation error" where the same line
+    without it works.
+  * The verdict rides stdout, because the wrapper's own exit code is swallowed
+    by the same `command.com /c` it exists to work around. Only the last
+    matching line counts.
+  * A builtin has no exit code on this shell at all. `dir NOSUCHFILE.XYZ` prints
+    "File not found" and leaves errorlevel at 0, so wrapping one would report
+    success for a command that failed. Builtins get no wrapper and no claim,
+    which is why the profile carries the list.
+  * **errorlevel has to be forced non-zero before the command runs.** The first
+    version did not, and a program that does not exist reported `ok` -- the one
+    case the whole feature was quoted as closing. `if errorlevel` reads whatever
+    the last PROGRAM left behind and a command that never ran leaves it alone,
+    so the shell printed "Bad command or file name" and errorlevel stayed at 0.
+    `echo x| find "y" > nul` is what sets it; the four candidates that do not
+    are recorded in the profile with why (a builtin cannot, `FINDSTR.EXE` is not
+    on Windows 98, `fc` and `more` against a missing file do not set it, and
+    `attrib` does but prints into the user's output).
+
+Six cases correct on real hardware afterwards: a program that succeeds, one that
+exits 3, one that does not exist, output left undisturbed, `javac` on a missing
+source, and `java -version`.
+
+The approved command goes into the file byte for byte and the log records both
+spellings. The guard classified that text and the permission desk showed it; if
+the wrapper ever rewrote it, the dialog would be describing something other than
+what runs.
+
+### Two things the person could not see
+
+The chat list's cap is the CLIENT's table -- `MAX_CHATS` less one row per
+age-group header -- so the bridge cuts to match it, which keeps the wire honest.
+It said nothing: the user crossed it at 88 conversations and the older ones
+simply stopped appearing, with the count in the bridge's log and nowhere on
+their screen. `SESSIONSEND` carries it now and the list ends with a
+non-selectable row, only when there is room for one.
+
+And the agent is told which machine it is acting for. Its memory directory is
+keyed on the working directory rather than on the machine, so a fact learned
+here is filed where the next machine reads it -- one was written saying batch
+files on "the connected Windows machine" need CRLF, which is true of the Athlon
+box and unverified anywhere else. The directory belongs to the CLI, not to us,
+so the prompt says it rather than solving it.
+
+### What was already right
+
+`ui`'s `scope: "pid"` with no pid returned the whole desktop (`int(a.get("pid")
+or 0)` makes absent and 0 the same value and the guest reads 0 as "no filter"),
+and both directions now refuse. But the AWT window missing from that tree was
+not a bug: the user had closed it.
+
+Work-directory names are already deduplicated properly -- a collision takes a
+numeric tail that REPLACES the end of the stem so it still fits eight
+characters, the conversation id is a second stem when a title reduces to nothing
+FAT will hold, and it refuses rather than sharing a folder. Left alone.
+
+`COMMITTED_CAP` 474,096 -> 478,192: the padding page bought on 2026-10-01 is
+spent and this is the next one, 297 bytes over on a page-granular gate. If it is
+hit twice more the thing to measure is runtime working set, which this gate
+cannot see at all.
