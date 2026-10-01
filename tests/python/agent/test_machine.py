@@ -633,3 +633,53 @@ def test_the_shell_note_is_still_resident_in_full():
     out = tools_block([SHELL, JDK, MSVC])
     assert "Too many parameters" in out
     assert "2>&1" in out
+
+
+# --- a note gaining versions must not cost the resident block a character ---
+#
+# The budget above has 51 characters of slack against the worst case the tree
+# can produce, and `toolnote` grew a `version` parameter on 2026-10-01 so a
+# profile can carry a body per release. That is deliberately all FETCHED
+# text: the resident side is one headline per tool and a pointer, and the
+# headline comes from the base `[note]` whatever else the profile documents.
+#
+# Said here rather than trusted, because the failure is not a crash. Adding
+# `[[note.variant]]` to msvc.toml and quietly spending the slack would show
+# up as the block being truncated on the one machine this is built for, with
+# nothing in the logs.
+
+from bridge.agent import toolnotes as _tn
+
+
+def test_a_profile_with_several_versions_costs_the_prompt_nothing(monkeypatch):
+    before = tools_block([SHELL, JDK, MSVC],
+                         path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
+    base = _tn.NOTES["jdk"]
+    monkeypatch.setitem(_tn.NOTES, "jdk", _tn.Note(
+        title=base.title, measured=base.measured, body=base.body,
+        default_version=base.default_version,
+        headline_text=base.headline_text, for_version="1.1",
+        variants=(_tn.Body("1.2", "Sun JDK 1.2", "a 1.2 machine, 2026-10-01",
+                           "A whole second body, " + "x" * 2000),
+                  _tn.Body("1.3", "Sun JDK 1.3", "a 1.3 machine, 2026-10-01",
+                           "And a third, " + "y" * 2000))))
+    after = tools_block([SHELL, JDK, MSVC],
+                        path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
+    assert after == before
+
+
+def test_the_resident_headline_is_the_base_notes(monkeypatch):
+    """Not the newest variant's. A machine reporting 1.3 would otherwise get
+    a headline for a version and a note body for another, which is the same
+    two-authoritative-sources-disagreeing shape as a note quoting the wrong
+    root -- and the inventory row is the thing the agent reaches for."""
+    base = _tn.NOTES["jdk"]
+    monkeypatch.setitem(_tn.NOTES, "jdk", _tn.Note(
+        title=base.title, measured=base.measured, body=base.body,
+        default_version=base.default_version,
+        headline_text=base.headline_text, for_version="1.1",
+        variants=(_tn.Body("1.3", "Sun JDK 1.3", "a 1.3 box, 2026-10-01",
+                           "The 1.3 body."),)))
+    out = tools_block([SHELL, JDK])
+    assert "Sun JDK 1.1" in out
+    assert "Sun JDK 1.3" not in out

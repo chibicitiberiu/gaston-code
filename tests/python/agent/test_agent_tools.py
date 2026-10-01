@@ -414,3 +414,232 @@ async def test_a_machine_that_reported_nothing_is_not_a_traceback(monkeypatch):
     h = _toolnote(monkeypatch, [])
     out = await h({"name": "jdk"})
     assert out["isError"] is True
+
+
+# --- toolnote takes a version, and says when it could not match it ----------
+#
+# A note is about a RELEASE, not about a product, and until now there was
+# nowhere to say so -- so the only defence against describing the wrong one
+# was to refuse to detect it. `jdk.toml` lists 1.1-era paths and nothing
+# later because its body is a list of what Java 1.1 lacks, and that list is
+# "confidently wrong in front of a 1.2+ install where half of it came back".
+# A JDK 1.3 on the machine was therefore reported as no JDK at all.
+#
+# Now the caller names a version, the nearest measured body answers, and an
+# inexact match SAYS SO WITH BOTH NUMBERS IN IT. That last part is the
+# feature: an approximate note the agent cannot distinguish from an exact one
+# is worse than no note, because it is believed the same amount.
+
+from bridge.agent import toolnotes as _notes
+
+
+def _fake_note(*, base="", base_version="", variants=()):
+    return _notes.Note(
+        title="Fake Compiler", measured="a machine, 2026-10-01",
+        body=base, for_version=base_version,
+        variants=tuple(_notes.Body(version=v, title=f"Fake Compiler {v}",
+                                   measured=f"a {v} box, 2026-10-01",
+                                   body=f"Fake {{version}} at {{root}}: "
+                                        f"the {v} facts.")
+                       for v in variants))
+
+
+FAKE = Found("faketool", "toolchain", r"D:\FAKE", True, version="1.1")
+
+
+def _with_fake(monkeypatch, note, found=(FAKE,)):
+    monkeypatch.setitem(_notes.NOTES, "faketool", note)
+    return _toolnote(monkeypatch, list(found))
+
+
+def _toolnote_schema(monkeypatch) -> dict:
+    captured = {}
+
+    def fake_create_sdk_mcp_server(*, name, version, tools):
+        captured["by_name"] = {t.name: t for t in tools}
+        return {"type": "sdk", "name": name, "instance": object()}
+
+    monkeypatch.setattr(T, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
+    bridge = _FakeHost()
+    T.build(bridge.guest_exec, bridge.sync, bridge.workspace)
+    return captured["by_name"]["toolnote"].input_schema
+
+
+def test_the_version_is_optional_and_name_is_still_the_only_requirement(
+        monkeypatch):
+    """REQUIRED WOULD HAVE BEEN THE WRONG CHOICE. The machine already
+    reports a version for most toolchains, so making the model name one is
+    asking it to retype a number out of its own prompt -- and a fat-fingered
+    digit there returns a note about a release nobody is running. Every call
+    shaped the way yesterday's calls were shaped still works."""
+    schema = _toolnote_schema(monkeypatch)
+    assert set(schema["properties"]) == {"name", "version"}
+    assert schema["required"] == ["name"]
+    assert schema["properties"]["version"]["type"] == "string"
+    assert schema["properties"]["version"]["description"].strip()
+
+
+async def test_an_exact_version_reads_exactly_as_it_did_before(monkeypatch):
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")))
+    out = _text_of(await h({"name": "faketool", "version": "1.2"}))
+    assert "the 1.2 facts" in out
+    assert "NOT THE VERSION" not in out
+
+
+async def test_a_point_release_matches_the_line_that_documents_it(monkeypatch):
+    """1.1 measured, 1.1.8 asked. No warning: a disclosure on a note that
+    does fit is how an agent learns to skim the ones that do not."""
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")))
+    out = _text_of(await h({"name": "faketool", "version": "1.1.8"}))
+    assert "the 1.1 facts" in out
+    assert "NOT THE VERSION" not in out
+    # And the body still renders the version the CALLER is on.
+    assert "Fake 1.1.8 at D:\\FAKE" in out
+
+
+async def test_a_newer_machine_than_anything_measured_is_told_so(monkeypatch):
+    """THE CASE THE JDK PROFILE EXISTS AS A REFUSAL BECAUSE OF. The note
+    comes back, and it comes back labelled -- naming the version measured
+    and the version asked for, because "may not match your version" is a
+    disclaimer and not something a model can act on."""
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")))
+    out = _text_of(await h({"name": "faketool", "version": "1.3"}))
+    assert "the 1.2 facts" in out
+    assert "NOT THE VERSION IN FRONT OF YOU" in out
+    assert "1.3" in out and "1.2" in out
+    # The direction, named: the machine is AHEAD, so an absence in the note
+    # is an absence in 1.2 and not an absence on that machine.
+    assert "came AFTER" in out
+    assert "absent on this machine" in out
+
+
+async def test_the_warning_sits_above_the_body_it_qualifies(monkeypatch):
+    """An agent that reads "no collections framework" and then a caveat has
+    already decided what to write. The caveat is an instruction about how to
+    read what follows, so it goes where instructions go."""
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1",)))
+    out = _text_of(await h({"name": "faketool", "version": "9.0"}))
+    assert out.index("NOT THE VERSION") < out.index("the 1.1 facts")
+
+
+async def test_an_older_machine_gets_the_other_warning(monkeypatch):
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")))
+    out = _text_of(await h({"name": "faketool", "version": "1.0"}))
+    assert "the 1.1 facts" in out
+    assert "NOT THE VERSION IN FRONT OF YOU" in out
+    assert "may not exist yet" in out
+
+
+async def test_an_inexact_body_renders_the_version_it_was_measured_on(
+        monkeypatch):
+    """`Fake 1.3 at D:\\FAKE` over 1.2 facts is the single sentence the
+    whole disclosure above it is there to prevent -- a header stating a
+    version nobody checked, in the authoritative voice of a measured note."""
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")))
+    out = _text_of(await h({"name": "faketool", "version": "1.3"}))
+    assert "Fake 1.2 at D:\\FAKE" in out
+    assert "Fake 1.3 at" not in out
+
+
+async def test_the_version_defaults_to_what_the_machine_reported(monkeypatch):
+    """Asking the model to retype a number out of its own prompt is asking
+    for the wrong note when it fat-fingers one."""
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")),
+                   found=(Found("faketool", "toolchain", r"D:\FAKE", True,
+                                version="1.2"),))
+    out = _text_of(await h({"name": "faketool"}))
+    assert "the 1.2 facts" in out
+    assert "NOT THE VERSION" not in out
+
+
+async def test_a_detected_version_nobody_measured_is_disclosed_unprompted(
+        monkeypatch):
+    """THE PAYOFF, and the reason detection can stop refusing to find newer
+    toolchains. Nobody asked about 1.3; the machine said 1.3, the newest
+    note is 1.2, and the mismatch is reported without the agent having
+    thought to ask. The warning is attributed to the machine rather than to
+    the caller, because the caller named nothing."""
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")),
+                   found=(Found("faketool", "toolchain", r"D:\FAKE", True,
+                                version="1.3"),))
+    out = _text_of(await h({"name": "faketool"}))
+    assert "NOT THE VERSION IN FRONT OF YOU" in out
+    assert "what the machine reports" in out
+    assert "what you asked about" not in out
+
+
+async def test_an_asked_mismatch_is_attributed_to_the_caller(monkeypatch):
+    h = _with_fake(monkeypatch, _fake_note(variants=("1.1", "1.2")))
+    out = _text_of(await h({"name": "faketool", "version": "1.3"}))
+    assert "what you asked about" in out
+    assert "what the machine reports" not in out
+
+
+async def test_a_version_that_is_not_a_version_is_not_an_error(monkeypatch):
+    """It is ignored, out loud, and the note still arrives -- with the
+    versions that DO exist named, so the next call is right. Refusing would
+    cost a round trip to deliver text the agent could have had."""
+    h = _with_fake(monkeypatch, _fake_note(base="The base facts.",
+                                           variants=("1.1", "1.2")))
+    out = await h({"name": "faketool", "version": "latest"})
+    assert out.get("isError") is not True
+    text = _text_of(out)
+    assert "not a version number" in text
+    assert "1.1, 1.2" in text
+    assert "The base facts." in text
+
+
+async def test_a_note_that_is_not_filed_by_version_says_that_too(monkeypatch):
+    """Which is every shipped profile today. The agent is told the argument
+    went nowhere AND that there was nowhere for it to go, rather than being
+    left to wonder whether it named the version wrongly."""
+    h = _with_fake(monkeypatch, _fake_note(base="The only facts."))
+    text = _text_of(await h({"name": "faketool", "version": "???"}))
+    assert "not filed by version" in text
+
+
+async def test_a_variant_shows_its_own_provenance_not_the_bases(monkeypatch):
+    """The header's `Measured:` line is the agent's whole basis for acting
+    without checking. A variant showing the base's would attribute 1.2 facts
+    to a 1.1 machine."""
+    h = _with_fake(monkeypatch, _fake_note(base="Base.", base_version="1.1",
+                                           variants=("1.2",)))
+    out = _text_of(await h({"name": "faketool", "version": "1.2"}))
+    assert "a 1.2 box, 2026-10-01" in out
+    assert "Fake Compiler 1.2" in out
+
+
+async def test_a_shipped_profile_resolves_or_discloses(monkeypatch):
+    """Resolution against a SHIPPED profile, not an injected one. Succeeds
+    test_a_shipped_profile_behaves_exactly_as_it_did, which asserted that a
+    version argument had nothing to resolve against -- true only while the
+    Python side waited for a profile to declare `for_version`. jdk.toml
+    declared "1.1" on 2026-10-01, so the live path is the one worth pinning:
+    an exact match stays silent, an inexact one names both numbers, and a
+    version that will not parse changes nothing."""
+    h = _toolnote(monkeypatch, [JDK])
+    plain = _text_of(await h({"name": "jdk"}))
+
+    # 1.1 and 1.1.3 are one claim written two ways: a note measured on "1.1"
+    # is claiming the 1.1 line, which is what the profile's title already says
+    # in prose, so neither may warn.
+    for exact in ("1.1", "1.1.3"):
+        out = _text_of(await h({"name": "jdk", "version": exact}))
+        assert "NOT THE VERSION" not in out, exact
+        assert "no collections framework" in out, exact
+
+    # 1.3 is AHEAD of anything measured. That is the direction that costs a
+    # failed build rather than a missed opportunity, so it must name BOTH
+    # numbers -- a bare "may not match" is a disclaimer a model cannot act on.
+    ahead = _text_of(await h({"name": "jdk", "version": "1.3"}))
+    assert "NOT THE VERSION" in ahead
+    assert "1.3" in ahead and "1.1" in ahead
+    assert "no collections framework" in ahead
+
+    # Junk is ignored, not refused: refusing spends a round trip to withhold
+    # text the agent could have had.
+    junk = _text_of(await h({"name": "jdk", "version": "junk"}))
+    assert "no collections framework" in junk
+
+    # The bare call still renders what it did before the parameter existed.
+    assert "JDK 1.1.3, measured on this machine" in plain

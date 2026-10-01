@@ -397,10 +397,43 @@ This reads nothing on the connected machine and runs nothing: it is free, it is 
 [toolnote.args]
 name = '''
 The tool's name, spelled exactly as the inventory in the system prompt spells it.'''
+# RESIDENT TEXT, so it is two sentences and not five. The default is the
+# right one often enough that most calls should leave it out, and the second
+# sentence is the only part that is load-bearing: it tells the model that an
+# answer may be about a neighbouring release, which is what makes the
+# disclosure in the body credible rather than surprising.
+version = '''
+Which release, like `1.1` or `6.0`. Omit it for the one the machine reported. The nearest measured note comes back, and says so when it is not the one you named.'''
 
 [toolnote.view]
 header = '''{title}, on the connected machine at `{path}`.
 Measured: {measured}'''
+# THE TWO DIRECTIONS FAIL DIFFERENTLY AND SAY DIFFERENT THINGS.
+#
+# `ahead` is the dangerous one: the machine is NEWER than anything measured,
+# so the note's absences are absences of the past. The JDK note is a list of
+# what Java 1.1 lacks, and read in front of a 1.3 install half of it came
+# back -- collections, Swing -- so an agent that believes it writes 1998 Java
+# on a 2000 machine and never finds out it did not have to. Until this
+# existed the only defence was refusing to detect 1.2+ at all.
+#
+# `behind` is the loud one: the note documents a later release, so what it
+# tells you to use may simply not be there, and the compiler says so on the
+# first build. Still disclosed -- an agent that knows why a symbol is missing
+# spends one round trip, and one that does not goes hunting the disk.
+#
+# BOTH NAME BOTH NUMBERS. "This note may not match your version" is not a
+# disclosure; it is a disclaimer, and a model cannot act on it.
+ahead = '''THIS IS NOT THE VERSION IN FRONT OF YOU. {asked} is {origin}; the newest release anybody has measured is {have}, and what follows is that one.
+
+{asked} came AFTER {have}, so it has things this note describes as absent. Read every absence below as "absent in {have}", never as "absent on this machine", and confirm with one command anything you are about to work around. The paths, flags and failure modes are still the best information there is -- they are just older than the machine.'''
+behind = '''THIS IS NOT THE VERSION IN FRONT OF YOU. {asked} is {origin}; the nearest release anybody has measured is {have}, and what follows is that one.
+
+{have} came AFTER {asked}, so anything this note tells you to use may not exist yet on the machine you are driving, and the error you get will name a missing symbol rather than the era it came from. Confirm before depending on it.'''
+origin_asked = '''what you asked about'''
+origin_reported = '''what the machine reports'''
+bad_version = '''`{version}` is not a version number this could place, so it was ignored and what follows is the note you would have got without it. Versions measured for `{name}`: {versions}.'''
+versions_none = '''none, this note is not filed by version'''
 unknown = '''There is no tool called `{name}` on that machine, or at least detection did not find one. These were found and have notes: {known}.'''
 no_note = '''`{name}` was detected on that machine, but nobody has measured it, so there is no note -- and a guess here would be worse than silence. Notes exist for: {known}.'''
 none_at_all = '''Nothing was detected on that machine, so there are no notes to read.'''

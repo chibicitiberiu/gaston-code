@@ -52,6 +52,12 @@ env = ["MSVCDIR"]
 # example, which is why the measured pair is written out rather than
 # illustrated.
 title = "Microsoft Visual C++ 6.0"
+# Which release this prose is true of. Note what it does NOT fix: a 16-bit
+# C:\MSVC or C:\MSDEV install is detected with no version at all, and an
+# unversioned machine cannot be told it mismatches -- there is nothing to
+# compare. That case is still only closed by giving those markers versions in
+# [detect.version], which is a detection change and wants its own measurement.
+for_version = "6.0"
 measured = "Visual C++ 6.0 (VC98) on the user's real Windows 98 machine, 2026-10-01. A stdio program compiled, linked and ran there with the .bat below (HELLO.OBJ 453 bytes, HELLO.EXE 28,672 bytes). The silent MSPDB60.DLL failure was isolated by running that build twice changing only PATH; the VCVARS32.BAT overflow was observed on the same box."
 body = '''
 Microsoft Visual C++ 6.0, root

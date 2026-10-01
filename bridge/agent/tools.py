@@ -759,6 +759,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
          "properties": {
              "name": {"type": "string",
                       "description": prompts.text("tools.toolnote.args.name")},
+             "version": {
+                 "type": "string",
+                 "description": prompts.text("tools.toolnote.args.version")},
          },
          "required": ["name"]},
     )
@@ -774,6 +777,19 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         `guest.tools` is read at CALL time rather than captured at build
         time, for the same reason every other closure here takes `guest`:
         it is the inventory of the machine whose conversation this is.
+
+        `version` IS OPTIONAL AND THE DEFAULT IS WHAT THE MACHINE SAID.
+        Detection already reports a version for most toolchains, and that
+        is the version the caller almost always means -- asking the model
+        to repeat it back would be asking it to retype a number out of its
+        own prompt and give a wrong note when it fat-fingered one.
+
+        THE DISCLOSURE SITS ABOVE THE BODY, not under it. An agent that
+        reads "no collections framework" and then a caveat has already
+        decided what to write; the caveat is an instruction about how to
+        read what follows, so it goes where instructions go. There is no
+        second copy at the bottom: two warnings about one note train the
+        model to skim both.
         """
         try:
             found = list(getattr(guest, "tools", None) or []) if guest else []
@@ -797,11 +813,41 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                                           name=hit.name,
                                           known=", ".join(known) or "none"),
                              error=True)
-            version = getattr(hit, "version", "")
-            head = prompts.text("tools.toolnote.view.header",
-                                title=note.title, path=hit.path,
-                                measured=note.measured)
-            return _text(head + "\n\n" + note.render(hit.path, version=version))
+            asked = str(args.get("version") or "").strip()
+            reported = getattr(hit, "version", "") or ""
+            res = note.resolve(asked or reported)
+            out = [prompts.text("tools.toolnote.view.header",
+                                title=res.body.title, path=hit.path,
+                                measured=res.body.measured)]
+            if not res.understood:
+                # The argument was dropped, and saying so is the whole of
+                # the handling. Guessing which release `latest` or `VC98`
+                # meant is exactly the silent approximation this change
+                # exists to stop.
+                documented = ", ".join(note.versions)
+                out.append(prompts.text(
+                    "tools.toolnote.view.bad_version",
+                    version=asked, name=hit.name,
+                    versions=documented or prompts.text(
+                        "tools.toolnote.view.versions_none")))
+            if not res.exact:
+                origin = prompts.text(
+                    "tools.toolnote.view.origin_asked" if asked
+                    else "tools.toolnote.view.origin_reported")
+                out.append(prompts.text(
+                    f"tools.toolnote.view.{res.direction}",
+                    asked=res.asked, have=res.body.version, origin=origin))
+            # WHICH NUMBER GOES INTO `{version}` IN THE BODY. On an exact
+            # match, the version in play -- so a bare `C:\\JDK1.1.8` still
+            # renders "JDK 1.1.8" as it always has. On an inexact one, the
+            # version the body was MEASURED on, because "JDK 1.3, measured
+            # on this machine:" over 1.1 facts is the sentence the whole
+            # disclosure above is there to prevent.
+            shown = (res.body.version if not res.exact
+                     else (res.asked if res.understood else reported))
+            out.append(res.body.render(hit.path,
+                                       shown or note.default_version))
+            return _text("\n\n".join(out))
         except Exception:
             log.exception("mcp__machine__toolnote failed: %r", args)
             raise
