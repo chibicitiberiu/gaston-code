@@ -5,6 +5,19 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Microsoft Visual C++ 6.0 -- a real optimising native compiler for C and C++
+(`cl`), with the linker, MFC and the Win32 SDK beside it. This is the
+heavyweight on a Windows machine of this era and the right answer for anything
+that has to be fast, small, or talk to Windows directly. Its environment has
+to be set up before `cl` will run at all, which is what its note is mostly
+about.'''
+
 [detect]
 kind = "toolchain"
 # Directories a marker may sit in. One is dropped from the marker

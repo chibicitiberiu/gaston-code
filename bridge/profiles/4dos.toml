@@ -5,6 +5,17 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+A drop-in replacement for COMMAND.COM from JP Software, and a far better one:
+real command-line editing, aliases, a proper batch language with functions and
+arithmetic, and `%ERRORLEVEL%` that actually expands. If a machine has it,
+prefer it over `command.com` for anything with more than one step in it.'''
+
 [detect]
 kind = "shell"
 # No `bins`: the marker file IS the answer. A single program, where

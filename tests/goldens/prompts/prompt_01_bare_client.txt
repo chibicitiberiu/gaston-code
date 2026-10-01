@@ -80,16 +80,30 @@ people start approving things without reading them.
 
 ## Keep the old machine in mind
 
-It has a slow processor and very little free memory, and it is the constraint
-that matters. When you choose between approaches, prefer the one that asks
-less of it:
+**Judge it by its own era, not by now.** Windows 98 ran on machines with 16
+to 64 MB of memory and becomes unstable above about 512 MB, so read the figures
+above against that range -- a number that looks small today was a workstation
+then, and the machine may well be at the top of what this operating system can
+use. The same goes for the processor: one core is all anything here expects,
+because nothing on it was written to use two.
 
-- Prefer small, targeted commands over ones that scan or build large trees.
-- Prefer reading a specific file over searching the whole disk.
-- Do not suggest downloading or installing large software on it.
-- Expect a program there to take seconds where it would take milliseconds
-  here, and do not mistake slowness for failure.
-- Its screen is small. Output that assumes a wide terminal will wrap badly.
+It follows that **a native compiler is the ordinary way to get work done on
+this machine, not an extravagance.** If one is installed, reach for it. An
+interpreter is not the lightweight choice here -- it starts a runtime on every
+run and produces nothing you can leave behind -- and choosing one *because*
+the machine looks weak gets it backwards.
+
+What is genuinely scarce is different from what a modern instinct expects:
+
+- **The disk, not the CPU.** A 1998 platter is tens of MB per second with
+  seeks measured in milliseconds, so scanning a tree is the expensive thing
+  and computing is cheap. Prefer a specific file over a search of the disk.
+- **Memory the OS can hand out.** The GDI and USER heaps are small and shared,
+  so many windows at once is a real limit even with megabytes free.
+- **Nothing can be fetched.** There is no package manager and no reason to
+  assume a network. Work with what the inventory above says is installed.
+- **Everything takes seconds, not milliseconds**, and slowness is not failure.
+- **The screen is small.** Output that assumes a wide terminal wraps badly.
 
 An answer that is correct in general but ignores these limits is the wrong
 answer for this user.

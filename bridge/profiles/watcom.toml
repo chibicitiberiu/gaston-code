@@ -5,6 +5,17 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Open Watcom: a C and C++ compiler (`wcl386`, `wpp386`) that targets DOS,
+Win16, Win32, OS/2 and more from one install, with a DOS extender included.
+Pick it over Visual C++ when the target is DOS rather than Windows, or when
+one source tree has to build for both.'''
+
 [detect]
 kind = "toolchain"
 # Directories a marker may sit in. One is dropped from the marker

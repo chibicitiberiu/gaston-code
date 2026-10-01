@@ -5,6 +5,18 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Sun's JDK 1.1 -- `javac` and `java`, with AWT for windows. The language and
+the library are 1997: no Swing, no collections framework, no generics, and a
+JVM started afresh on every run, so it is slow to invoke and fine once
+running. Pick it for something portable or with a GUI that you would rather
+write once than fight a C compiler over.'''
+
 [detect]
 kind = "toolchain"
 # `bin\` and nothing else. Every Sun JDK of this era puts javac there --

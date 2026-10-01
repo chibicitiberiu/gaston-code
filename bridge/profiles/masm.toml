@@ -5,6 +5,18 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Microsoft's Macro Assembler: x86 assembly with a strong macro processor, the
+assembler Microsoft's own tools and documentation are written against. Use it
+when the thing being written genuinely has to be assembly -- a stub, an
+interrupt handler, something size-critical -- and not as a way to avoid a
+compiler.'''
+
 [detect]
 kind = "toolchain"
 # Directories a marker may sit in. One is dropped from the marker

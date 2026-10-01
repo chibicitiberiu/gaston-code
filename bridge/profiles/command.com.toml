@@ -5,6 +5,17 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+The machine's command interpreter, the MS-DOS 7.x one that ships with Windows
+98. Every `exec` goes through it unless you pass `shell: "none"`, so its
+grammar is the grammar of every command you send, and it is not cmd.exe --
+the differences bite on the first line, not in the corners.'''
+
 [detect]
 kind = "shell"
 # No `bins`: the marker file IS the answer. A single program, where

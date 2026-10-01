@@ -5,6 +5,17 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Turbo C (or Turbo C++), Borland's small fast 16-bit DOS compiler from the late
+1980s. It compiles C quickly in very little memory and knows nothing later
+than DOS -- no Win32, no 32-bit code, no modern C. Reach for it on a machine
+with nothing else, or when the program is small and must be a DOS .exe.'''
+
 [detect]
 kind = "toolchain"
 # Directories a marker may sit in. One is dropped from the marker

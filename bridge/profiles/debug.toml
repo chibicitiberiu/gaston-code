@@ -5,6 +5,18 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+The MS-DOS debugger, and on a 1998 machine it is also the only assembler and
+hex editor present by default. It takes a script on stdin, so it can assemble
+a few instructions, patch bytes in a file, or dump a sector without anything
+being installed. Use it when nothing better exists; it is a last resort, not
+a toolchain.'''
+
 [detect]
 kind = "tool"
 # No `bins`: the marker file IS the answer. A single program, where

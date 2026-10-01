@@ -5,6 +5,18 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+QBasic, the interpreter that shipped with DOS: BASIC with an editor, no
+compile step and no output file. Good for a quick calculation or a throwaway
+program on a machine with nothing else installed. It cannot produce an .exe --
+that was QuickBASIC, a different product -- so nothing written in it can be
+left behind as a program.'''
+
 [detect]
 kind = "tool"
 # No `bins`: the marker file IS the answer. A single program, where

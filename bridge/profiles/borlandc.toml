@@ -5,6 +5,17 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Borland C++ for DOS and Win16 -- `bcc` plus the TLINK linker and the
+Turbo Vision and OWL libraries. A 16-bit compiler: 64KB memory models, `far`
+pointers and no Win32. Right for DOS or a 16-bit Windows program, wrong for
+anything that needs a flat address space.'''
+
 [detect]
 kind = "toolchain"
 # Directories a marker may sit in. One is dropped from the marker

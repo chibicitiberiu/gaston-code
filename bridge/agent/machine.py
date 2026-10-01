@@ -13,8 +13,9 @@ describe the machine actually connected.
 from __future__ import annotations
 
 import os
+import textwrap
 
-from . import prompts, toolrules
+from . import profiles, prompts, toolrules
 from . import toolnotes as notes
 
 
@@ -268,20 +269,73 @@ def tools_block(found: list, path: list | None = None) -> str:
     #
     # Rendered against the found root like the bodies are, so a headline
     # mentioning a path cannot contradict the row above it.
-    measured = [f for f in found if f.name in notes.NOTES]
-    shelly = [f for f in measured if f.kind == "shell"]
-    fetchable = shelly + [f for f in measured if f.kind != "shell"]
-    if fetchable:
-        width = max(len(f.name) for f in fetchable)
+    # WHAT EACH ONE IS, for everything detected, and WHAT WILL GO WRONG for
+    # the subset anybody has measured. Two different lists until 2026-10-01,
+    # when the first turned out not to exist: a tool without a `[note]` --
+    # ten of the fifteen profiles -- got an inventory row and no description,
+    # and a tool WITH one got its `title` repeated under a heading reading
+    # FETCH THE NOTE BEFORE YOU USE ANY OF THESE. So an agent choosing a
+    # toolchain had nothing to choose with and did the only thing that
+    # instruction allows: fetched every note it could see.
+    #
+    # DIRECTLY UNDER THE ROWS, and that position was measured rather than
+    # chosen. Sitting at the bottom of the block -- after the shell note,
+    # the shells paragraph and the PATH -- Haiku read the inventory, picked
+    # `C:\PROGRA~1\MICROS~2\VC98\BIN\cl.exe hello.c` straight out of it
+    # and never called `toolnote` at all, which is the exact command the
+    # Visual C++ note exists to prevent. The names and the obligation
+    # attached to them belong in the same eyeful.
+    #
+    # THE SHELL'S ROW LEADS, whatever the alphabet says, and the inventory
+    # above stays alphabetical. Every command goes through the shell, so its
+    # headline is the one line here that is about the NEXT command rather
+    # than about a command the agent has decided to run; `borlandc` sorting
+    # ahead of `command.com` would push it down the list for no reason a
+    # reader could see.
+    #
+    # Everything is rendered against the root that was FOUND, so a paragraph
+    # mentioning a path cannot contradict the row above it.
+    described = [f for f in found
+                 if profiles.about(f.name) or f.name in notes.NOTES]
+    shelly = [f for f in described if f.kind == "shell"]
+    listed = shelly + [f for f in described if f.kind != "shell"]
+    if listed:
         out += ["", prompts.text("machine.notes.heading"), ""]
-        for f in fetchable:
-            note = notes.NOTES[f.name]
-            line = (note.headline.replace("{root}", f.path)
-                                 .replace("{version}",
-                                          getattr(f, "version", "")
-                                          or note.default_version))
-            out.append(f"  {f.name:<{width}}  {line}")
-        out += [""]
+        lead = prompts.text("machine.notes.headline_lead").strip()
+        for f in listed:
+            note = notes.NOTES.get(f.name)
+            ver = getattr(f, "version", "") or (
+                note.default_version if note else "")
+
+            def render(text: str, f=f, ver=ver) -> str:
+                return (text.replace("{root}", f.path)
+                            .replace("{version}", ver)).strip()
+
+            # The paragraph answers "which of these do I want", so it leads.
+            # Falling back to `title` keeps a measured tool describable while
+            # its `about` is still unwritten; a profile with neither is not
+            # listed here at all, because a name under a "what each of these
+            # is" heading with nothing after it is worse than silence.
+            about = render(profiles.about(f.name))
+            if not about and note:
+                about = render(note.title)
+            if not about:
+                continue
+            out += textwrap.wrap(f"**{f.name}** -- {about}", width=78)
+
+            # A headline is not more description: it is what goes wrong on the
+            # next command, so it is labelled and indented under the paragraph
+            # rather than folded into it. Only tools that HAVE one get the
+            # line -- `headline` falls back to `title`, and "Sun JDK 1.1"
+            # under "Before your first command:" would read as a warning
+            # about nothing.
+            if note and note.headline_text.strip():
+                out += textwrap.wrap(f"{lead} {render(note.headline_text)}",
+                                     width=76,
+                                     initial_indent="  ",
+                                     subsequent_indent="  ")
+            out += [""]
+
         # THE SHELL POINTER FIRST, and stronger than the general one, because
         # it makes a different claim. "Before the first command that uses
         # one" is advice an agent can act on when it decides to use `cl`; the
@@ -290,10 +344,21 @@ def tools_block(found: list, path: list | None = None) -> str:
         # this machine". Only rendered when a shell note is actually there --
         # a machine whose shell nobody has measured must not be told to go
         # and fetch a note that does not exist.
-        if shelly:
+        # THE FIRST SHELL THAT HAS A NOTE, not the first shell. `4dos` sorts
+        # ahead of `command.com` and has nothing measured, and a pointer
+        # naming it would send the agent to fetch a note that does not exist
+        # -- while the shell whose note DOES exist went unnamed. `shelly`
+        # orders the descriptions; this chooses what to point at.
+        with_note = [f for f in shelly if f.name in notes.NOTES]
+        if with_note:
             out += [prompts.text("machine.notes.shell_pointer",
-                                 shell=shelly[0].name).strip("\n"), ""]
-        out += [prompts.text("machine.notes.pointer").strip("\n")]
+                                 shell=with_note[0].name).strip("\n"), ""]
+        # And the general pointer only where there is something to fetch: on a
+        # machine whose tools are all description and no measurement, telling
+        # the agent to call `toolnote` is telling it to call a tool that will
+        # refuse.
+        if any(f.name in notes.NOTES for f in listed):
+            out += [prompts.text("machine.notes.pointer").strip("\n")]
 
     # THE SHELLS, NAMED, because the model is the one that picks: a machine
     # has as many shells as it has (`command.com`/`4dos` on DOS,

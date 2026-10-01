@@ -81,6 +81,35 @@ def note(name: str) -> dict:
     return ALL.get(name, {}).get("note", {})
 
 
+def about(name: str) -> str:
+    r"""WHAT THIS TOOL IS, two or three sentences, resident in the prompt.
+
+    TOP LEVEL AND NOT UNDER `[note]`, which is the whole point. Five of the
+    fifteen profiles have a `[note]`; the other ten are detection only, so a
+    machine with `debug` or `masm` on it got an inventory row naming a tool
+    and nothing at all saying what the tool was (real hardware, 2026-10-01 --
+    `debug` appeared exactly like that). Describing a tool needs no
+    measurement and carries no provenance claim, so it must not be gated on
+    having one.
+
+    THE DIVISION OF LABOUR, since three fields now sound alike:
+
+      about     what it IS and when you would pick it. Resident. Needs no
+                measurement. Every profile should have one.
+      headline  what goes WRONG on the next command, before any symptom.
+                Resident. Measured. Only where such a fact exists.
+      body      HOW to drive it here. Fetched with `mcp__machine__toolnote`.
+                Measured, with `measured` naming the machine and version.
+
+    An `about` that strays into invocation detail is body text in the wrong
+    place: it costs every request instead of one call, and it is the reason
+    the agent had nothing to choose between four toolchains with
+    (bridge conversation d669cb85 -- it fetched all four notes, 5,828
+    characters, before it knew which one it wanted).
+    """
+    return str(ALL.get(name, {}).get("about", "")).strip()
+
+
 def shell(name: str) -> dict:
     """The command guard's tables for one shell, or {} if it has none."""
     return ALL.get(name, {}).get("shell", {})

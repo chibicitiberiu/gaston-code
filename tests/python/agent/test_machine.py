@@ -315,11 +315,16 @@ def test_the_costliest_watcom_fact_is_reachable():
     wcl386's own help -- it is in a sample makefile.
 
     It was resident until 2026-10-01 and is now one `toolnote` call away.
-    What has to hold HERE is that the agent knows to make the call: a
-    headline naming Watcom, and the tool named next to it.
+    What has to hold HERE is that the agent knows to make the call: the tool
+    described well enough to be chosen, and `toolnote` named next to it.
+
+    The assertion was `"Open Watcom C/C++ 1.9" in out` -- the note's `title`,
+    which stood in as the resident line until `about` replaced it. A title is
+    not a description, which is the whole reason `about` exists.
     """
     out = tools_block([WATCOM])
-    assert "Open Watcom C/C++ 1.9" in out
+    assert "**watcom**" in out
+    assert "wcl386" in out           # the about says what to reach for
     assert "mcp__machine__toolnote" in out
 
 
@@ -354,9 +359,12 @@ def test_a_second_toolchain_is_listed_and_is_no_longer_a_dead_end():
     note behind it is one call away."""
     out = tools_block([WATCOM, Found("turboc", "toolchain", r"C:\TC", True)])
     assert r"C:\TC" in out          # listed
-    assert "Open Watcom C/C++ 1.9" in out
-    # turboc has no measured note, so it gets a row and no headline --
-    # detection may guess, notes may not.
+    assert "**watcom**" in out
+    # turboc has no measured note, and since 2026-10-01 that no longer means
+    # it goes undescribed: `about` is description and carries no provenance
+    # claim, so it does not wait on anybody measuring anything.
+    assert "**turboc**" in out
+    assert "16-bit" in out
     assert out.count("mcp__machine__toolnote") >= 1
 
 
@@ -383,7 +391,7 @@ def test_the_shell_is_advertised_like_every_other_note():
     assert "command.com" in out
     assert "not cmd.exe" in out
     assert "WRITTEN INTO THE FILE" in out
-    assert "Open Watcom C/C++ 1.9" in out
+    assert "**watcom**" in out
 
 
 def test_a_machine_with_only_a_shell_is_told_to_fetch_its_note():
@@ -397,7 +405,7 @@ def test_a_machine_with_only_a_shell_is_told_to_fetch_its_note():
     out = tools_block([SHELL])
     assert "2>&1" not in out
     assert "mcp__machine__toolnote" in out
-    assert "BEFORE your first command" in out
+    assert "Before your first command:" in out
 
 
 def test_cscript_is_advertised_alongside_the_toolchain():
@@ -407,8 +415,9 @@ def test_cscript_is_advertised_alongside_the_toolchain():
     had two of anything."""
     out = tools_block([SHELL, CSCRIPT, WATCOM])
     assert "not cmd.exe" in out
-    assert "Windows Script Host (CScript)" in out
-    assert "Open Watcom C/C++ 1.9" in out
+    assert "**cscript**" in out
+    assert "Windows Script Host" in out
+    assert "**watcom**" in out
     assert "CSCRIPT.EXE (v5.0)" in out
 
 
@@ -513,7 +522,33 @@ def test_cscript_alone_with_shell_stays_inside_budget():
 #: notes. Only `command.com` has one today; a `4dos` note would add one more
 #: headline and one more fetchable name, not a second body, so the shape no
 #: longer depends on how many shells are present.
-MAX_BLOCK_CHARS = 3400
+#: 2026-10-01, LATER STILL: 3400 -> 5000, and this time the block got BIGGER
+#: on purpose. Every profile gained an `about` paragraph -- two or three
+#: sentences saying what the tool is and when you would pick it -- because the
+#: resident line for a tool without its own `headline` was its `title` ("Sun
+#: JDK 1.1"), which is what the inventory row above already said, under a
+#: heading reading FETCH THE NOTE BEFORE YOU USE ANY OF THESE. An agent asked
+#: to build something on a machine with four toolchains had nothing to choose
+#: with and did the only thing that instruction allows: it fetched all four,
+#: 5,828 characters in one turn, and then chose VBScript anyway (bridge
+#: conversation d669cb85). The user's call on the cap: "cap is arbitrary, goal
+#: is getting good instructions."
+#:
+#: So the number is set from what the tree now produces rather than the other
+#: way round. The real machine's combination is 3,957 with the PATH block and
+#: every profile with a note at once is 4,342; 5,000 leaves room for two more
+#: tools on one machine. The ceiling nobody reaches -- all fifteen profiles --
+#: is 8,081 and has its own assertion, deliberately separate, because a budget
+#: asserted against a machine that does not exist stops being read.
+#:
+#: WHAT THIS STILL CATCHES is the same thing it always caught: a tool going
+#: silently undescribed. Each one is named individually in
+#: `test_the_budget_is_asserted_against_the_worst_case_the_tree_can_make`.
+#: And if it is hit again, the question is whether an `about` has drifted into
+#: invocation detail -- which belongs behind `mcp__machine__toolnote`, costs
+#: one call instead of every request, and is exactly the drift that put a
+#: 941-character shell body in every prompt until this morning.
+MAX_BLOCK_CHARS = 5000
 
 
 def test_the_block_stays_inside_its_budget():
@@ -717,8 +752,11 @@ def test_two_toolchains_both_reach_the_agent():
     assert "jdk" in out and "msvc" in out
     # Each is named with enough that the agent knows a note exists for it.
     assert out.count("toolnote") >= 1
-    assert "Sun JDK 1.1" in out
-    assert "Microsoft Visual C++ 6.0" in out
+    # And, since 2026-10-01, with enough to tell them APART without fetching
+    # either -- which is the thing that was missing when an agent fetched all
+    # four notes on this machine before it knew which one it wanted.
+    assert "**jdk**" in out and "no Swing" in out
+    assert "**msvc**" in out and "optimising native compiler" in out
 
 
 def test_the_agent_is_told_how_to_fetch_a_note():
@@ -736,7 +774,8 @@ def test_the_real_machines_combination_fits_the_budget():
     Measured with the PATH block, because that is what ships: every live
     session prints it, and a budget asserted against a shape the product
     does not produce is not a budget. 2,710 as at 2026-10-01 with the shell
-    note resident in full; 2,291 once it was not.
+    note resident in full; 2,291 once it was not; 3,957 once every tool
+    carried an `about` paragraph saying what it is.
     """
     path = [r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"]
     out = tools_block([SHELL, CSCRIPT, JDK, MSVC], path=path)
@@ -751,20 +790,43 @@ def test_the_budget_is_asserted_against_the_worst_case_the_tree_can_make():
 
     So this is every profile in the tree that has a note, at once, with the
     longer `basis` wording and the PATH block. 2,849 as at 2026-10-01 with
-    the shell note resident in full; 2,434 once it was not, which is where
-    the slack under the cap came from. The worst case is still what is
-    asserted, because the thing this exists to catch is a note going missing
-    unnoticed -- hence the headlines named one by one below.
+    the shell note resident in full; 2,434 once it was not; 4,342 once every
+    tool carried an `about`. The worst case is still what is asserted,
+    because the thing this exists to catch is a tool going undescribed
+    unnoticed -- hence each one named one by one below.
+
+    NOT THE REAL CEILING ANY MORE, and that is deliberate. Every profile in
+    the tree, not only the five with notes, is 8,081 -- see
+    `test_every_profile_at_once_is_still_bounded`. No machine has fifteen
+    toolchains on it, so this combination is the one a budget should track and
+    the other is a bound rather than a target.
     """
     every = [SHELL, CSCRIPT, JDK, MSVC,
              Found("watcom", "toolchain", r"C:\WATCOM", True)]
     out = tools_block(every, path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
-    # Every one of them advertised, none of them expanded.
-    for headline in ("COMMAND.COM, not cmd.exe",
-                     "Windows Script Host (CScript)", "Sun JDK 1.1",
-                     "Microsoft Visual C++ 6.0", "Open Watcom C/C++ 1.9"):
-        assert headline in out, headline
+    # Every one of them described, none of their bodies expanded.
+    for name in ("command.com", "cscript", "jdk", "msvc", "watcom"):
+        assert f"**{name}**" in out, name
+    assert "COMMAND.COM, not cmd.exe" in out      # the one resident headline
     assert len(out) < MAX_BLOCK_CHARS, len(out)
+
+
+def test_every_profile_at_once_is_still_bounded():
+    """The real ceiling, which no machine reaches. Fifteen profiles, each with
+    an `about`, is 8,081 characters -- worth knowing, and worth failing on if
+    a profile is ever given an `about` the length of a note body.
+
+    If a REAL machine ever lands near this, the thing to shorten is the
+    paragraphs, not this number. See MAX_BLOCK_CHARS.
+    """
+    from bridge.agent import profiles as _pf
+    every = [Found(n, "shell" if _pf.detect(n).get("kind") == "shell"
+                   else "toolchain", "C:\\TOOLS\\" + n.upper(), True)
+             for n in sorted(_pf.names())]
+    out = tools_block(every, path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
+    for n in sorted(_pf.names()):
+        assert f"**{n}**" in out, n
+    assert len(out) < 9000, len(out)
 
 
 def test_the_shells_headline_leads_the_list_on_a_full_machine():
@@ -784,8 +846,8 @@ def test_the_shells_headline_leads_the_list_on_a_full_machine():
     assert "Too many parameters" not in out
     assert "2>&1" not in out
     lines = out.splitlines()
-    head = lines.index("FETCH THE NOTE BEFORE YOU USE ANY OF THESE:")
-    assert lines[head + 2].strip().startswith("command.com"), lines[head + 2]
+    head = lines.index("### What each of these is")
+    assert lines[head + 2].startswith("**command.com**"), lines[head + 2]
 
 
 # --- a note gaining versions must not cost the resident block a character ---
@@ -834,8 +896,10 @@ def test_the_resident_headline_is_the_base_notes(monkeypatch):
         variants=(_tn.Body("1.3", "Sun JDK 1.3", "a 1.3 box, 2026-10-01",
                            "The 1.3 body."),)))
     out = tools_block([SHELL, JDK])
-    assert "Sun JDK 1.1" in out
     assert "Sun JDK 1.3" not in out
+    # `about` is per profile and version-free by construction, so a variant
+    # cannot reach the resident block through it either.
+    assert "**jdk**" in out
 
 
 # --- the shell stops being the exception ------------------------------------
@@ -892,8 +956,8 @@ def test_the_shell_pointer_is_stronger_than_the_general_one():
     first command whatever it is, so the shell's line has to say "before your
     first command" or it fires too late."""
     out = tools_block([SHELL, MSVC])
-    assert "BEFORE your first command" in out
-    assert "not after something\nlooks wrong" in out
+    assert "BEFORE your\nfirst command" in out
+    assert "rather than after something looks wrong" in out
     # Named, so the agent can type it straight into the call.
     assert "Start with `command.com`" in out
 
@@ -939,14 +1003,30 @@ def test_the_shell_body_is_not_resident_in_any_shape():
         assert fetched not in out, fetched
 
 
-def test_the_move_made_the_block_smaller_not_bigger():
-    """A headline and a pointer in place of a 941-character body. Measured
-    2026-10-01: the real machine's combination went 2,758 -> 2,291 with the
-    PATH block, and a shell-only machine 1,968 -> 1,831 -- which is the one
-    that gained a heading and a pointer it never used to get at all."""
+def test_moving_the_bodies_out_is_what_paid_for_the_paragraphs():
+    """WAS `test_the_move_made_the_block_smaller_not_bigger`, and that name
+    stopped being true on purpose.
+
+    Two changes on 2026-10-01, in order. Moving every note body behind
+    `mcp__machine__toolnote` took the real machine's combination from 2,758 to
+    2,291 and a shell-only machine from 1,968 to 1,831. Then `about` spent
+    some of it back -- 3,957 and 2,509 -- to buy the thing the first change
+    had left missing: a way to CHOOSE a tool without fetching its note.
+
+    What is asserted is the shape, not the direction. Each tool's description
+    costs a few hundred characters once per session; the fetch it replaces
+    cost 5,828 in a single turn and still got the choice wrong. A machine with
+    one shell and nothing else has to stay small, because there is nothing to
+    choose between on it.
+    """
     path = [r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"]
-    assert len(tools_block([SHELL, CSCRIPT, JDK, MSVC], path=path)) < 2500
-    assert len(tools_block([SHELL], path=path)) < 1900
+    four = len(tools_block([SHELL, CSCRIPT, JDK, MSVC], path=path))
+    one = len(tools_block([SHELL], path=path))
+    assert four < 4200, four
+    assert one < 2600, one
+    # The paragraphs are what grew it, so four tools must not cost four times
+    # a one-tool machine: the headings, pointers and caveats are paid once.
+    assert four < 2 * one
 
 
 def test_the_shell_note_declares_no_version_and_should_not():

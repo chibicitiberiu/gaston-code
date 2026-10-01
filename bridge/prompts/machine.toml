@@ -291,16 +291,30 @@ people start approving things without reading them.
 
 ## Keep the old machine in mind
 
-It has a slow processor and very little free memory, and it is the constraint
-that matters. When you choose between approaches, prefer the one that asks
-less of it:
+**Judge it by its own era, not by now.** Windows 98 ran on machines with 16
+to 64 MB of memory and becomes unstable above about 512 MB, so read the figures
+above against that range -- a number that looks small today was a workstation
+then, and the machine may well be at the top of what this operating system can
+use. The same goes for the processor: one core is all anything here expects,
+because nothing on it was written to use two.
 
-- Prefer small, targeted commands over ones that scan or build large trees.
-- Prefer reading a specific file over searching the whole disk.
-- Do not suggest downloading or installing large software on it.
-- Expect a program there to take seconds where it would take milliseconds
-  here, and do not mistake slowness for failure.
-- Its screen is small. Output that assumes a wide terminal will wrap badly.
+It follows that **a native compiler is the ordinary way to get work done on
+this machine, not an extravagance.** If one is installed, reach for it. An
+interpreter is not the lightweight choice here -- it starts a runtime on every
+run and produces nothing you can leave behind -- and choosing one *because*
+the machine looks weak gets it backwards.
+
+What is genuinely scarce is different from what a modern instinct expects:
+
+- **The disk, not the CPU.** A 1998 platter is tens of MB per second with
+  seeks measured in milliseconds, so scanning a tree is the expensive thing
+  and computing is cheap. Prefer a specific file over a search of the disk.
+- **Memory the OS can hand out.** The GDI and USER heaps are small and shared,
+  so many windows at once is a real limit even with megabytes free.
+- **Nothing can be fetched.** There is no package manager and no reason to
+  assume a network. Work with what the inventory above says is installed.
+- **Everything takes seconds, not milliseconds**, and slowness is not failure.
+- **The screen is small.** Output that assumes a wide terminal wraps badly.
 
 An answer that is correct in general but ignores these limits is the wrong
 answer for this user.
@@ -319,13 +333,38 @@ answer for this user.
 # not used, and the failure mode of not using this one is the agent running
 # a build command with complete confidence and reading a silent failure as
 # success -- which is the behaviour the notes exist to prevent.
+#
+# 2026-10-01, LATER: the heading used to read "FETCH THE NOTE BEFORE YOU USE
+# ANY OF THESE" over a column of one-liners which, for every tool without its
+# own `headline`, was the `title` field -- "Sun JDK 1.1" -- repeating the
+# inventory row above. An agent asked to build something therefore had no way
+# to choose between four toolchains except to fetch all four, which is what it
+# did: 5,828 characters before it knew which one it wanted, and then it picked
+# VBScript anyway. The user's instruction: "let's instead provide a paragraph
+# about each tool so agent knows what it's about without having to call the
+# tool. Make it clear that calling the tool is only necessary to understand
+# how to use it, not to learn about it."
+#
+# So the heading now introduces descriptions rather than demanding fetches,
+# and the obligation moved to where it is true: you already know what these
+# are; the note is HOW to drive one, and it is needed before the first command
+# that does.
 [notes]
-heading = '''FETCH THE NOTE BEFORE YOU USE ANY OF THESE:'''
+heading = '''### What each of these is'''
 pointer = '''
-Call `mcp__machine__toolnote("<name>")` BEFORE the first command that uses
-one, not after something fails: several of those notes are about commands
-that FAIL WHILE LOOKING LIKE THEY SUCCEEDED, so nothing you see will tell
-you that you needed it. The call reaches nothing and needs no approval.'''
+You now know what each of those is, so there is nothing to look up in order to
+CHOOSE one. What a note adds is HOW to drive it on this machine -- the
+invocation, the switches, what it does instead of what its documentation says.
+Call `mcp__machine__toolnote("<name>")` for the one you have chosen, BEFORE the
+first command that uses it and not after something fails: most of those notes
+are about commands that FAIL WHILE LOOKING LIKE THEY SUCCEEDED, so nothing you
+see will tell you that you needed it. One name, not the list. The call reaches
+nothing, runs nothing and needs no approval.'''
+
+# Introduces a `headline` where one exists. The paragraph above it says what
+# the tool is; this says what will go wrong first, so it is not optional
+# reading and must not look like more description.
+headline_lead = '''Before your first command:'''
 
 # THE SHELL'S POINTER IS A DIFFERENT CLAIM, which is why it is a different
 # string and sits above the general one. "Before the first command that uses
@@ -342,6 +381,7 @@ you that you needed it. The call reaches nothing and needs no approval.'''
 # straight into the call.
 shell_pointer = '''
 Start with `{shell}`: every command on that machine goes through that shell,
-so its note is the one you need BEFORE your first command, not after something
-looks wrong. Its line above is the part that cannot wait; the rest is one
-call away.'''
+whatever else you have chosen, so its note is the one you need BEFORE your
+first command rather than after something looks wrong. The line marked
+"Before your first command" above it is the part that cannot wait; the rest
+is one call away.'''

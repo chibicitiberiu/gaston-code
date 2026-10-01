@@ -5,6 +5,18 @@
 # here, in data, so it can change without touching Python and without
 # reflashing a 1998 PC.
 
+# WHAT THIS TOOL IS -- resident in the system prompt for every
+# request, so the agent can CHOOSE without fetching anything.
+# Description, not provenance: it needs no `measured` line. What
+# goes wrong goes in `[note] headline`; how to drive it goes in
+# `[note] body`, which is fetched. See `profiles.about`.
+about = '''
+Windows Script Host's console host: it runs a VBScript or JScript file
+directly, with no compiler and no build step. The right choice for gluing
+things together -- files, the registry, COM objects, other programs -- and the
+wrong one for anything arithmetic-heavy or interactive, since it is
+interpreted and has no window of its own.'''
+
 [detect]
 kind = "tool"
 # No `bins`: the marker file IS the answer. A single program, where
