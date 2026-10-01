@@ -248,6 +248,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * with its neighbours rather than in BSS -- this frame is ~1.4KB against
      * a 4096 gate, and BSS is the budget that is actually tight. */
     char sroot[MAX_PATH];
+    char temp[MAX_PATH];
     /* This array overflowed the moment mem_kb was added, and the fix at the
      * time was to make it bigger -- which left the same trap armed for the
      * next field. There are eleven entries now and there was NO bounds check
@@ -423,6 +424,26 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
             }
         }
     }
+    /* WHERE A SCRATCH FILE GOES ON THIS MACHINE.
+     *
+     * The bridge needs one writable path that is not the user's work folder:
+     * `command.com /c` loses a program's exit code (always 0, even for a
+     * program that does not exist), and the only way to get it back is a
+     * wrapper batch file that runs the command and echoes what `if errorlevel`
+     * saw -- measured on real hardware, docs/measurements/
+     * exit-codes-via-batch-p200-20261001.txt. That file is plumbing. It does
+     * not belong in a folder the person looks at.
+     *
+     * GetTempPathA, so it honours TMP and TEMP the way everything else on the
+     * machine does, and it is KERNEL32 on 95 onward. The trailing backslash it
+     * returns is kept: the bridge joins with it and a path is easier to
+     * compose than to guess the convention of. Absent means the bridge does
+     * not write there, which costs the exit code and nothing else. */
+    {
+        DWORD got = GetTempPathA(sizeof(temp), temp);
+        if (got > 0 && got < sizeof(temp)) HDR("temp", temp);
+    }
+
     if (n->sess[0]) HDR("sess", n->sess);
 
     /* WHICH MACHINE THIS IS, so the bridge can keep one guest's chat list

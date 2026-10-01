@@ -125,7 +125,14 @@ FAKE_IDENTITY = {
     "mem_kb": "32768",
     "mem_free_kb": "2420",
     "os": "Windows 4.10 build 67766095 ",
-    "cpu": "x86 family 5 model 8, 1 cpu",
+    # A Pentium 200's answer, and deliberately the version WITHOUT a brand
+    # string: that CPU has none (CPUID's extended leaves postdate it), so the
+    # vendor plus family and model is the whole truth and this is the shape the
+    # bridge must render correctly. The Athlon box sends the other shape.
+    "cpu": "GenuineIntel x86 family 5 model 8, 1 cpu",
+    # Where a scratch file goes. `GetTempPathA`'s trailing separator is part of
+    # what the real client sends, so it is part of what this sends.
+    "temp": "C:\\WINDOWS\\TEMP\\",
     "screen": "640x480x8",
     "disk_free_kb": "512000",
 }

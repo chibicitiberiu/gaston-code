@@ -36,6 +36,14 @@ Working directory on the machine. Omit it to run in this conversation's own fold
 # (BACKLOG 17).
 no_shell = '''
 The machine reported no shell, so this ran as a program directly: shell built-ins (dir, ver, copy) and redirection cannot work. Name a program by its path.'''
+# THE ONE THING THIS SHELL COULD NEVER SAY. `command.com /c` exits 0 whatever
+# happened, so until 2026-10-02 a failed compile and a clean one were
+# indistinguishable from here and the agent had to go and look. The wrapper in
+# bridge/services/execwrap.py recovers zero-versus-non-zero; this is how it is
+# reported. Said only on failure -- on success the output is the answer and a
+# sentence claiming it worked is a line in every prompt saying nothing.
+failed = '''
+THIS COMMAND FAILED: the program returned a non-zero exit code. Its own output above is all there is to go on, and on this machine that output is often empty or looks like success. Do not treat it as done.'''
 
 [sync_status]
 description = '''

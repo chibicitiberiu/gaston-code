@@ -153,14 +153,17 @@ class Bridge:
             send_options=self.options.send_options,
             spawn_sync=lambda reason: self._spawn(self.sync.run_sync(reason)),
         )
+        self.ui = UiService(connection=self.connection)
+        self.proc = ProcService(connection=self.connection)
+        self.guest_fs = GuestFsService(connection=self.connection)
+        # AFTER guest_fs, because it takes it: the exit-code wrapper is a file
+        # written through the fs lane (bridge/services/execwrap.py).
         self.guest_exec = GuestExecService(
             connection=self.connection,
             spawn=self._spawn,
             pre_exec=self._pre_exec,
+            fs=self.guest_fs,
         )
-        self.ui = UiService(connection=self.connection)
-        self.proc = ProcService(connection=self.connection)
-        self.guest_fs = GuestFsService(connection=self.connection)
         self.permissions = PermissionService(
             connection=self.connection,
             presentation=self.presentation,

@@ -163,6 +163,57 @@ devices = [
   "lpt5", "lpt6", "lpt7", "lpt8", "lpt9", "nul", "prn",
 ]
 
+# --- getting an exit code back out of this shell ---------------------------
+#
+# MEASURED ON REAL HARDWARE, 2026-10-01
+# (docs/measurements/exit-codes-via-batch-p200-20261001.txt). `command.com /c`
+# exits 0 whatever happened -- for a failing child and for a program that does
+# not exist -- so `exec` through this shell could not say whether a build
+# worked, and a live session verified every single compile with a follow-up
+# `dir`: two round trips per build.
+#
+# `if errorlevel` INSIDE a batch file does see a program's real code. A
+# descending cascade recovers the exact number, and that was measured too and
+# then dropped by decision: zero versus non-zero is the question anyone asks of
+# a build, and the exact value would have cost a 6KB cascade, a static wrapper
+# written once per session and two levels of `call` nesting nobody measured.
+[shell.exit_code]
+# `/c` loses it. A shell that does not sets this false (or omits the table) and
+# the bridge uses the code the client already reports.
+lost = true
+# Written to the machine's temp directory and run in place of the command. The
+# bridge fills {call}, {command} and {sentinel}; it writes the file with this
+# shell's own line endings, because an LF-only .bat is read as ONE command line
+# here and exits 0 (the other half of the same measurement).
+wrapper = '''@echo off
+{call}{command}
+if errorlevel 1 echo {sentinel} fail
+if not errorlevel 1 echo {sentinel} ok
+'''
+ext = ".bat"
+# `call` GOES ON ONLY FOR THESE, and both directions were measured. Without
+# `call` a nested .bat never returns, so the lines after it -- the whole
+# verdict -- do not run. WITH `call` a builtin's redirection breaks: `call echo
+# REDIR> R.TXT` gives "File creation error" where the same line without it
+# works. So the two cases need opposite treatment and the leading token decides.
+call_exts = [".bat"]
+# A BUILTIN'S EXIT CODE DOES NOT EXIST ON THIS SHELL. `dir NOSUCHFILE.XYZ`
+# prints "File not found" and leaves errorlevel at 0 (measured), so wrapping
+# one would report success for a command that failed -- strictly worse than
+# saying nothing. These get no wrapper and no claim.
+#
+# The list is COMMAND.COM's documented internal commands; `dir` is the one that
+# was measured, and it is the one that matters because it is what an agent
+# reaches for most.
+builtins = [
+  "break", "call", "cd", "chdir", "cls", "copy", "ctty", "date", "del",
+  "dir", "echo", "erase", "exit", "for", "goto", "if", "lfnfor", "lh",
+  "loadhigh", "lock", "md", "mkdir", "path", "pause", "prompt", "rd",
+  "rem", "ren", "rename", "rmdir", "set", "shift", "time", "truename",
+  "type", "unlock", "ver", "verify", "vol",
+]
+
+
 # Always ask, whatever the arguments, for one of two reasons: the damage is
 # not named by any argument, or the command changes what a path MEANS and so
 # invalidates every later verdict. The value is what the user is told.

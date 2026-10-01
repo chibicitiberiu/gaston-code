@@ -39,6 +39,12 @@ class ExecCall:
     #: the agent asked for `shell: "none"`). A built-in like `ver` then fails
     #: to start with nothing saying why -- BACKLOG 17.
     no_shell: bool = False
+    #: Run through a wrapper batch file so an exit code could be recovered at
+    #: all (`bridge/services/execwrap.py`). The flag and not the sentinel,
+    #: because the sentinel is a module constant: what varies per call is
+    #: whether to look for it, and looking for it when nothing wrote it would
+    #: strip a line out of a program's real output.
+    wrapped: bool = False
 
 
 @dataclass
