@@ -103,6 +103,14 @@ FAKE_CAPS = {
 # and a client that names a root while claiming to have none would be lying
 # to itself before the bridge ever gets a chance to.
 FAKE_IDENTITY = {
+    # WHICH machine this is. The real guest mints one on first run and keeps
+    # it beside the exe (win/app/machineid.h); fakegui is a machine too, and
+    # a FIXED one is what makes it behave like a guest rather than like a
+    # wildcard -- its conversations land in its own chat list and not in the
+    # Win98 box's, which is the whole point of the header. Constant rather
+    # than generated per process so that restarting fakegui does not lose
+    # the chats it started last time.
+    "machine": "fa4ec01d-0000-4000-8000-000000000001",
     "mem_kb": "32768",
     "mem_free_kb": "2420",
     "os": "Windows 4.10 build 67766095 ",

@@ -171,6 +171,20 @@ void rc_net_set_link_bps(rc_net *n, unsigned long bps)
     if (c) c->setLinkBps(bps);
 }
 
+void rc_net_set_machine(rc_net *n, const char *id)
+{
+    if (!n) return;
+    if (!id) id = "";
+    /* DROPPED, not truncated. A truncated id is a perfectly valid-looking
+     * id belonging to nobody, and the bridge would file this machine's
+     * conversations under it forever. */
+    if (!rc_strf(n->machine, sizeof(n->machine), "%s", id)) {
+        rc_log("net: machine id does not fit in %u bytes; not reporting it",
+               (unsigned)sizeof(n->machine));
+        n->machine[0] = '\0';
+    }
+}
+
 /* The only way to add a HELLO header. Drops rather than overruns, and says so.
  * A dropped header degrades the bridge's picture of the machine; an overrun
  * corrupts the stack while building the very first frame. */
@@ -367,6 +381,14 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
         }
     }
     if (n->sess[0]) HDR("sess", n->sess);
+
+    /* WHICH MACHINE THIS IS, so the bridge can keep one guest's chat list
+     * out of another's. `mine` on the bridge says only that THIS BRIDGE
+     * started a conversation, which is the same answer for every machine
+     * that dials it. Absent means "do not narrow", so a client that has no
+     * id -- or an older one that never sent this -- behaves as before.
+     * (BACKLOG.md §21.) */
+    if (n->machine[0]) HDR("machine", n->machine);
 
     /* The ANSI codepage, and this one closes a SILENT corruption.
      *

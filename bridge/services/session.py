@@ -36,6 +36,17 @@ from .options import EFFORT_LABEL, MODE_ORDER
 
 log = logging.getLogger("bridge.session")
 
+#: How many conversations the chat list sends, applied AFTER the filter.
+#:
+#: The guest's list is capped at `MAX_CHATS` (64) rows in `win/app/chatlist.h`
+#: and the age-group headers count against that cap -- `sessions._age_group`
+#: has five buckets -- so 59 conversations is the most that can arrive without
+#: the guest dropping the tail in silence. Cutting here as well keeps the wire
+#: honest: a row past the cap is a frame the list would refuse.
+#:
+#: Pinned against the header by tests/python/meta/test_chatlist_cap.py.
+DISPLAY_LIMIT = 59
+
 
 def shows_tool_result(is_err: bool, stopped: bool) -> bool:
     """Does the user see this tool result?
@@ -146,10 +157,30 @@ class SessionService:
         Extracted so the list can be pushed when the conversation id CHANGES
         as well as when the guest asks. The effort fork changes it, and until
         now nothing told the guest.
+
+        FETCH WIDE, FILTER, THEN CAP -- in that order, and the cap is last.
+        The listing is the whole host's and the filter throws most of it
+        away, so a limit applied first is a limit on OTHER PEOPLE'S work:
+        the guest's chats fell off the end of a 50-row fetch as sessions in
+        unrelated checkouts turned up newer, and nothing said so. See
+        `sesslist.FETCH_LIMIT` for the measurement, and `DISPLAY_LIMIT` for
+        the bound that survives.
+
+        The filter is BOTH halves of "ours" -- this bridge and this machine.
+        `mine` is written on the bridge host and cannot tell one guest from
+        another, so a second Win98 box, or the real XP 2000+ beside the QEMU
+        one, saw the other's conversations with the other's drive letters in
+        every path (BACKLOG.md §21). A guest that sends no `machine` header
+        gets the old, wider list rather than an empty one.
         """
         conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
         listing = self._resolve_sesslist().listing()
-        rows = conv_store.filter(listing) if conv_store is not None else listing
+        rows = (conv_store.filter(listing, guest.machine)
+                if conv_store is not None else listing)
+        if len(rows) > DISPLAY_LIMIT:
+            log.info("chat list: %d conversations, showing the newest %d",
+                     len(rows), DISPLAY_LIMIT)
+            rows = rows[:DISPLAY_LIMIT]
         await self.connection.send(guest, sessions_start(len(rows)))
         for i, r in enumerate(rows):
             await self.connection.send(guest, session_row(
@@ -327,7 +358,7 @@ class SessionService:
                  work_dir, machine.describe(guest.hello))
         conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
         if conv_store is not None:
-            conv_store.add(s.session_id)
+            conv_store.add(s.session_id, guest.machine)
         return s
 
     async def resume_pending(self, guest: GuestSession) -> bool:

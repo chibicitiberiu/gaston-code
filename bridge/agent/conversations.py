@@ -3,12 +3,19 @@
 Three things are remembered, and all three are the same shape of fact -- a
 conversation id and something this bridge decided about it:
 
-  * **whether it is ours.** The chat list used to show everything
+  * **whose it is.** The chat list used to show everything
     `list_sessions()` returned, which on a working machine is mostly
     conversations from a desktop with a different set of tools, a different
     screen and a different idea of what a path looks like. Continuing one of
     those *from Windows 98* rarely makes sense. There is no settable tag in
-    ClaudeAgentOptions, so the bridge remembers the ids it started.
+    ClaudeAgentOptions, so the bridge remembers the ids it started -- and,
+    since 2026-10-01, WHICH MACHINE it started them for. "A different set of
+    tools, a different screen, a different idea of what a path looks like"
+    was always as true of a second guest as of the desktop, and `mine` alone
+    cannot tell them apart: it is written on the bridge host and says only
+    that THIS BRIDGE was involved. The machine says who it is in `HELLO`
+    (`machine`, minted once and kept beside the exe -- `win/app/machineid.h`)
+    and the id is filed beside `mine`.
   * **its model, effort and permission mode.** THE CONVERSATION'S, not the
     machine's. These used to live on the guest and nowhere else, which meant
     opening a chat you had set to Plan and Opus gave you whatever the last
@@ -73,6 +80,12 @@ class Conversations:
     A row carries whichever of these it has been told:
 
         mine    true if this bridge started the conversation
+        machine the guest it was started FROM, as HELLO's `machine` header.
+                ABSENT MEANS ANY, and that is not a stopgap: every row
+                written before 2026-10-01 has no machine (89 of them on the
+                developer's box the day this landed), and a row that meant
+                "no machine" rather than "any machine" would have emptied
+                every chat list the moment this shipped.
         model   "" is a REAL value meaning the bridge's own default
         effort  likewise
         mode    one of the permission modes
@@ -171,9 +184,18 @@ class Conversations:
 
     # --- whose conversation it is ------------------------------------------
 
-    def add(self, session_id: str | None) -> None:
-        """Record that this bridge started the conversation."""
-        self._put(session_id, mine=True)
+    def add(self, session_id: str | None, machine: str = "") -> None:
+        """Record that this bridge started the conversation, on `machine`.
+
+        An empty `machine` writes NO machine field rather than an empty one,
+        so a client that does not identify itself leaves rows that every
+        machine can see -- the same reading legacy rows get, arrived at the
+        same way rather than by a second rule.
+        """
+        fields: dict = {"mine": True}
+        if machine:
+            fields["machine"] = machine
+        self._put(session_id, **fields)
 
     def __contains__(self, session_id: str | None) -> bool:
         # `or ""`, the same normalisation every other lookup here uses:
@@ -182,17 +204,41 @@ class Conversations:
         # only the annotation was narrower than the behaviour.
         return bool((self._map.get(session_id or "") or {}).get("mine"))
 
-    def filter(self, rows: list[dict]) -> list[dict]:
-        """Narrow a listing to conversations this bridge started.
+    def machine(self, session_id: str | None) -> str:
+        """Which guest this conversation was started from, "" if unrecorded."""
+        return (self._map.get(session_id or "") or {}).get("machine", "")
+
+    def belongs(self, session_id: str | None, machine: str = "") -> bool:
+        """Is this a conversation `machine` should be offered?
+
+        Two questions, and both have to be yes. `mine` is this BRIDGE's
+        claim and `machine` is the GUEST's, and they fail differently: a
+        conversation from another bridge has no row at all, where one from
+        another guest has a row saying so.
+
+        ABSENT ON EITHER SIDE MEANS ANY. A row with no machine predates the
+        field and belongs to whoever is asking; a caller with no machine is
+        a client that did not identify itself, and narrowing its list to
+        nothing would be worse than the over-broad list it has always had.
+        """
+        row = self._map.get(session_id or "") or {}
+        if not row.get("mine"):
+            return False
+        theirs = row.get("machine", "")
+        return not machine or not theirs or theirs == machine
+
+    def filter(self, rows: list[dict], machine: str = "") -> list[dict]:
+        """Narrow a listing to conversations this bridge started, for this
+        guest.
 
         `mine`, not row presence: a row can exist because a conversation was
         given a folder or a model while it was open, which is not the same
         claim as this bridge having started it.
         """
-        return [r for r in rows if r.get("id") in self]
+        return [r for r in rows if self.belongs(r.get("id"), machine)]
 
     def __len__(self) -> int:
-        """Rows, not conversations started -- `mine` is one field among six."""
+        """Rows, not conversations started -- `mine` is one field among seven."""
         return len(self._map)
 
     # --- model, effort, permission mode ------------------------------------

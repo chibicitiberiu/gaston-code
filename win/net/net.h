@@ -80,7 +80,19 @@ typedef struct {
      * never been written down anywhere. If the bridge ever lengthens them,
      * both buffers move together. (audit 01.38) */
     char          sess[64];
+    /* WHICH MACHINE THIS IS -- HELLO's `machine` header, minted once and
+     * kept beside the exe (app/machineid.h). Empty means "not reported",
+     * and the bridge then files conversations exactly as it did before this
+     * header existed. 40 and not 64: the id is 36 characters by
+     * construction, and anything that is not that shape is refused before
+     * it reaches here. */
+    char          machine[40];
 } rc_net;
+
+/* Tell the link which machine it is. Call it BEFORE rc_net_start; the value
+ * is copied, and one too long to fit is dropped with a log line rather than
+ * truncated into a second machine's identity. */
+void rc_net_set_machine(rc_net *n, const char *id);
 
 /* `tools` and `tools_len` are the machine's own inventory, carried as
  * HELLO's BODY rather than as headers -- the header array caps at 32 with

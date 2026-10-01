@@ -258,6 +258,24 @@ class GuestSession:
             return self.claude.session_id
         return self.pending_resume
 
+    @property
+    def machine(self) -> str:
+        """WHICH machine this is -- the guest's own id, from HELLO.
+
+        Not `sess_id`, which is minted here and lasts one connection, and
+        not the hostname, which is `WIN98` on every fresh install. The guest
+        mints a GUID on first run and keeps it beside the exe
+        (`win/app/machineid.h`), so it survives reboots, reconnects and
+        bridge restarts.
+
+        "" when the client does not send one -- any build from before
+        2026-10-01, or one whose id file could not be written. Everything
+        that reads this has to treat "" as "do not narrow", because the
+        alternative is a client that silently loses its own chat list
+        (BACKLOG.md §21).
+        """
+        return self.hello.get("machine", "")
+
     def set_link_speed(self, bps: float | None) -> None:
         """Propagate a measured (or CLI-default) link speed to every live
         coalescer, so a conversation already streaming picks it up too, not

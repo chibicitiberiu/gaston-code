@@ -17,6 +17,7 @@
 #include "app/config.h"
 #include "app/connservice.h"
 #include "ui/uiservice.h"
+#include "app/machineid.h"
 #include "app/mainwindow.h"
 #include "app/oleservice.h"
 #include "core/app.h"
@@ -60,6 +61,11 @@ private:
     ClientConfig m_config;
     rc_net m_net;
     UniqueObj<ConfigStore> m_store;
+    /* Which machine this is, for HELLO. A plain member and not a service:
+     * it has no thread, nothing to start or stop, and it is read once. It
+     * still lives on the app rather than in a file static, so its lifetime
+     * is the app's (docs/REMOTE.md, C4-C5a). */
+    MachineId m_machine;
     /* Services, in dependency order: OLE before the window that hosts
      * MSHTML, the window before the connection that posts to it. */
     UniqueObj<OleService> m_ole;
@@ -193,8 +199,18 @@ bool ClientApp::initialize()
 
 bool ClientApp::initializeServices()
 {
-    return initService(m_ole, new OleService(RC_TITLE)) &&
-           initService(m_window, new MainWindow(instance(), m_show, this,
+    if (!initService(m_ole, new OleService(RC_TITLE)))
+        return false;
+
+    /* AFTER OLE and BEFORE the connection. CoCreateGuid lives in OLE32, and
+     * this is the first point at which that library is certainly up; the
+     * connection service is what eventually calls rc_net_start, which is
+     * what sends the id. A failure in here is not a failure to start: the
+     * client runs without an identity and says so in the log. */
+    m_machine.load(m_exeDir);
+    rc_net_set_machine(&m_net, m_machine.id());
+
+    return initService(m_window, new MainWindow(instance(), m_show, this,
                                                 &m_config, m_store.get(),
                                                 m_exeDir, &m_net)) &&
            initService(m_connection, new ConnectionService(&m_net)) &&

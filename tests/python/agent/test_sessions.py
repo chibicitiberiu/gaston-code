@@ -215,3 +215,57 @@ def test_an_ordinary_user_message_is_not_a_summary():
         "role": "user",
         "content": [{"type": "tool_result", "content": "x"}],
     }) is None
+
+
+# --- how wide the fetch is --------------------------------------------------
+#
+# `listing()` returns the newest sessions on the WHOLE MACHINE, and every
+# caller narrows that afterwards. A small fetch is therefore a fetch of other
+# people's work: measured on the development box, 50 rows held 33 of this
+# bridge's 87 conversations and the other 54 were simply not recent enough.
+
+
+def test_the_default_fetch_is_wide_enough_to_filter_from(monkeypatch):
+    from bridge.agent import sessions as S
+
+    asked = {}
+
+    def fake(directory=None, limit=None):
+        asked["directory"], asked["limit"] = directory, limit
+        return []
+
+    monkeypatch.setattr(S, "list_sessions", fake)
+    S.listing()
+    assert asked["limit"] == S.FETCH_LIMIT
+    assert S.FETCH_LIMIT >= 200, (
+        "all 87 of this bridge's conversations were inside the newest 200 "
+        "when the bug was measured; a narrower fetch loses the oldest of "
+        "them again")
+
+
+def test_an_explicit_limit_still_wins(monkeypatch):
+    """The wide default is a default, not a floor: `history_html`'s callers
+    and any paging caller must still be able to ask for less."""
+    from bridge.agent import sessions as S
+
+    asked = {}
+
+    def fake(directory=None, limit=None):
+        asked["limit"] = limit
+        return []
+
+    monkeypatch.setattr(S, "list_sessions", fake)
+    S.listing(limit=5)
+    assert asked["limit"] == 5
+
+
+def test_a_failed_listing_is_empty_rather_than_an_exception(monkeypatch):
+    """The chat list is drawn from this; a raise here used to be a dead
+    left-hand column with no explanation."""
+    from bridge.agent import sessions as S
+
+    def boom(directory=None, limit=None):
+        raise OSError("no projects directory")
+
+    monkeypatch.setattr(S, "list_sessions", boom)
+    assert S.listing() == []

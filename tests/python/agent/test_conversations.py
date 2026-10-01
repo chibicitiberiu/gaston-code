@@ -79,6 +79,82 @@ def test_ids_that_appear_later_can_still_be_registered(tmp_path):
     assert c.filter([{"id": "assigned-later"}]) == [{"id": "assigned-later"}]
 
 
+# --- which machine it was started from -------------------------------------
+
+
+def test_each_machine_sees_only_its_own(tmp_path):
+    """The bug §21 records: one bridge, two guests, and the Win98 box's chat
+    list full of the QEMU box's conversations."""
+    path = tmp_path / "c.json"
+    c = Conversations(path)
+    c.add("from-win98", "win98-id")
+    c.add("from-xp", "xp-id")
+    rows = [{"id": "from-win98"}, {"id": "from-xp"}]
+
+    assert [r["id"] for r in c.filter(rows, "win98-id")] == ["from-win98"]
+    assert [r["id"] for r in c.filter(rows, "xp-id")] == ["from-xp"]
+    # And across a restart, which is the only reason it is on disk.
+    assert [r["id"] for r in Conversations(path).filter(rows, "xp-id")] == [
+        "from-xp"]
+
+
+def test_a_row_written_before_the_field_existed_belongs_to_everyone(tmp_path):
+    """THE COMPATIBILITY RULE. There were 89 rows of this shape on the
+    developer's machine the day the field landed; a row with no machine that
+    meant "no machine" rather than "any machine" would have emptied every
+    chat list on the first connection after the upgrade."""
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"ancient": {"mine": True}}))
+    c = Conversations(path)
+
+    assert c.machine("ancient") == ""
+    for asking in ("win98-id", "xp-id", ""):
+        assert c.filter([{"id": "ancient"}], asking) == [{"id": "ancient"}], (
+            "a row from before the field has to stay visible everywhere")
+
+
+def test_a_client_that_does_not_say_which_machine_it_is_sees_everything(
+        tmp_path):
+    """A guest whose id file could not be written, or any build older than
+    the header, gets the list it has always had rather than an empty one."""
+    c = Conversations(tmp_path / "c.json")
+    c.add("from-win98", "win98-id")
+    c.add("from-nowhere")
+    assert len(c.filter([{"id": "from-win98"}, {"id": "from-nowhere"}], "")) == 2
+
+
+def test_an_unidentified_conversation_shows_up_on_every_machine(tmp_path):
+    """The other direction of the same rule: `add` with no machine writes no
+    machine field, which is the same "any" a legacy row gets. One rule, not
+    two."""
+    c = Conversations(tmp_path / "c.json")
+    c.add("no-machine")
+    assert c.machine("no-machine") == ""
+    assert c.filter([{"id": "no-machine"}], "win98-id") == [{"id": "no-machine"}]
+
+
+def test_the_machine_does_not_make_a_conversation_ours(tmp_path):
+    """Both halves are required. A conversation nothing started here has no
+    row, and a row without `mine` is not a claim that it did."""
+    c = Conversations(tmp_path / "c.json")
+    c.set_folder("not-ours", "NOTES")
+    assert not c.belongs("not-ours", "win98-id")
+    assert c.filter([{"id": "not-ours"}], "win98-id") == []
+
+
+def test_the_machine_is_remembered_beside_the_settings(tmp_path):
+    """`add` merges rather than replaces, like every other writer here."""
+    path = tmp_path / "c.json"
+    c = Conversations(path)
+    c.remember("conv", model="opus")
+    c.add("conv", "win98-id")
+    c.set_folder("conv", "NOTES")
+    reread = Conversations(path)
+    assert reread.machine("conv") == "win98-id"
+    assert reread.settings("conv") == {"model": "opus"}
+    assert reread.folder("conv") == "NOTES"
+
+
 # --- model, effort, permission mode ----------------------------------------
 
 

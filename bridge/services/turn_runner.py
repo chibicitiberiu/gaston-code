@@ -266,7 +266,7 @@ class TurnRunner:
         if guest.claude:
             conv_store = self.conv
             if conv_store is not None:
-                conv_store.add(guest.claude.session_id)
+                conv_store.add(guest.claude.session_id, guest.machine)
         sealed = guest.view.pages.message_boundary()
         if sealed:
             await self.connection.send(

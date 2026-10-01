@@ -66,8 +66,38 @@ def _age_group(when) -> str:
     return "Older"
 
 
-def listing(cwd: str | None = None, limit: int = 50) -> list[dict]:
-    """Sessions, newest first, flattened to what the UI actually shows."""
+#: How many rows to ask the SDK for when the caller does not say.
+#:
+#: NOT 50, which it used to be, because every caller here FILTERS what comes
+#: back -- `send_sessions` keeps only the conversations this bridge started,
+#: `conv_title` and `workspace.stored_work_dir` look for one id -- and
+#: `list_sessions()` with no `directory` returns the newest sessions ON THE
+#: WHOLE MACHINE, every project. Limiting before filtering meant unrelated
+#: work on the host evicted the guest's chats from its own list.
+#:
+#: Measured here on 2026-10-01: 228 sessions on disk, 87 of them started by
+#: this bridge. The newest 50 held 33 of those 87; the newest 100 held 63;
+#: all 87 were inside the newest 200. So a busy afternoon in another checkout
+#: cost the guest a chat per turn.
+#:
+#: 500 and not more because the rows are held and formatted here, and not
+#: less because the fetch is not what costs: `_list_all_sessions` stats and
+#: head/tail-reads EVERY session file in every project before it sorts and
+#: slices, so the limit truncates the answer and saves no I/O. Measured over
+#: those 228 files: 0.10s at limit=50, 0.10s with no limit at all.
+FETCH_LIMIT = 500
+
+
+def listing(cwd: str | None = None, limit: int = FETCH_LIMIT) -> list[dict]:
+    """Sessions, newest first, flattened to what the UI actually shows.
+
+    `cwd` scopes to ONE project directory, and no caller passes it: a
+    conversation gets its own folder under the mirror
+    (`workspace.name_work_dir`), so the chat list spans as many project
+    directories as there are conversations and no single directory selects
+    them. It stays on the signature because a caller that wants one
+    conversation's project -- not the list -- would want exactly this.
+    """
     try:
         rows = list_sessions(directory=cwd, limit=limit)
     except Exception:
