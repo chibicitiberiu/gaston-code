@@ -250,3 +250,35 @@ def test_cscript_detection_identifies_wsh_5_6_when_wshcon_present():
         Fact("cscript", "file", r"C:\WINDOWS\SYSTEM\WSHCON.DLL"),
     ])
     assert got == [Found("cscript", "tool", r"C:\WINDOWS\COMMAND\CSCRIPT.EXE", True, version="5.6")]
+
+
+def test_the_java_workshop_jdk_resolves_to_the_jdk_and_not_the_product():
+    r"""Measured 2026-10-01 on the user's machine: Java WorkShop 2.0 keeps a
+    whole JDK under `JDK\`, so the root an agent needs is that subdirectory
+    -- `C:\Java-WorkShop20` has the IDE in it and no javac."""
+    got = inventory([Fact("jdk", "file",
+                          r"C:\Java-WorkShop20\JDK\bin\javac.exe")])
+    assert got == [Found("jdk", "toolchain", r"C:\Java-WorkShop20\JDK",
+                         True, version="1.1.3")]
+
+
+def test_a_standalone_jdk_is_reported_as_1_1_without_claiming_a_patch():
+    """Only 1.1 layouts are listed, so the default says 1.1 and stops
+    there. A third digit nobody measured would read as `java -version`
+    output when it is a directory name."""
+    got = inventory([Fact("jdk", "file", r"C:\JDK1.1.6\bin\javac.exe")])
+    assert got[0].version == "1.1"
+
+
+def test_classpath_is_never_taken_as_the_jdk_root():
+    r"""It names jars and class directories, not an install, so as a root it
+    would put the toolchain at `.;C:\MYAPP\CLASSES` -- the wrong-row failure
+    this whole layer exists to avoid.
+
+    The shipped INI no longer asks for it either (measured 2026-10-01: the
+    machine sets seven variables and CLASSPATH is not one of them), so this
+    guards the rule rather than the lookup. `tools.ini` is the user's and
+    can still name it, which is why the rule has to hold on its own.
+    """
+    assert "CLASSPATH" not in RULES["jdk"].env
+    assert inventory([Fact("jdk", "env", r"CLASSPATH=.;C:\MYAPP\CLASSES")]) == []

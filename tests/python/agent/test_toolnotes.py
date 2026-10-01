@@ -117,3 +117,59 @@ def test_cscript_note_includes_batch_and_timeout_flags():
     assert "//nologo" in body
     assert "//B" in body
     assert "//T:" in body
+
+
+def test_the_jdk_note_names_the_1_1_absences_an_agent_reaches_for():
+    """The version number alone does not help: a model writes `ArrayList`
+    and `String.format` by reflex, javac 1.1 says `class ArrayList not
+    found` or nothing useful, and the agent has been told not to go
+    exploring. So the absences are named rather than implied."""
+    body = NOTES["jdk"].body
+    for absent in ("ArrayList", "HashMap", "Iterator", "generics",
+                   "StringBuilder", "String.format", "regex", "Swing"):
+        assert absent in body, absent
+    # And what to use instead, which is the half that makes it actionable.
+    for instead in ("Vector", "Hashtable", "Enumeration", "StringBuffer",
+                    "AWT"):
+        assert instead in body, instead
+
+
+def test_the_jdk_note_separates_the_two_kinds_of_failure():
+    """Both measured on the machine, 2026-10-01, and they differ -- which is
+    worth more than blanket scepticism would have been.
+
+    `javac` with no arguments prints its usage and exits 0; a real compile
+    error sets errorlevel and prints `Bad.java:3: ';' expected.` with a
+    caret and a count. So the agent is told the code IS trustworthy for the
+    case it cares about, and told not to read a 0 from a rejected command
+    line as a build.
+
+    IT HAS TO NAME `if errorlevel 1`, not "the exit code": COMMAND.COM
+    returns 0 for a failing child whatever happened, so the number that
+    reaches this bridge through the shell cannot carry the distinction and
+    the test pins the construct that can.
+    """
+    body = NOTES["jdk"].body
+    assert "`if errorlevel 1`" in body
+    assert "exits 0" in body
+
+
+def test_the_jdk_note_renders_root_and_version():
+    out = NOTES["jdk"].render(r"C:\JDK1.1.8", version="1.1.8")
+    assert "JDK 1.1.8" in out
+    assert r"C:\JDK1.1.8\bin\javac" in out
+    assert "{root}" not in out and "{version}" not in out
+
+
+def test_the_jdk_note_invokes_the_tools_by_full_path():
+    r"""Measured 2026-10-01 on the real machine: PATH is
+    `C:\WINDOWS;C:\WINDOWS\COMMAND` and nothing else, so the JDK is not on
+    it and no variable points at it. A bare `javac hello.java` there is
+    `Bad command or file name`, which names the program and not the
+    environment -- and three sessions have already read that as "the
+    compiler is not installed" and gone hunting the disk.
+    """
+    body = NOTES["jdk"].body
+    assert r"{root}\bin\javac" in body
+    assert r"{root}\bin\java Hello" in body
+    assert "\n        javac " not in body, "a bare javac will not run there"

@@ -1,0 +1,68 @@
+# What the bridge knows about `jdk`.
+#
+# ONE FILE PER TOOL under `bridge/profiles/`, named for what the guest reports.
+# The client looks and says what it found; everything about what that MEANS is
+# here, in data, so it can change without touching Python and without
+# reflashing a 1998 PC.
+
+[detect]
+kind = "toolchain"
+# `bin\` and nothing else. Every Sun JDK of this era puts javac there --
+# including the one inside Java WorkShop, whose root is the JDK\ directory
+# of the product and not the product directory.
+bins = ["bin"]
+# Variables that name the root DIRECTLY, which is the whole of what this
+# list means -- so CLASSPATH can never be one, whatever it is set to: it
+# names jars and class directories, and taken as a root it would report a
+# toolchain at `.;C:\MYAPP\CLASSES`. It was briefly asked for in
+# tools_detect.ini and has been removed from there too; nothing reads it.
+env = ["JAVA_HOME"]
+
+[detect.version]
+# From the install layout, which is as far as detection may go -- the real
+# answer is one `java -version`, which the inventory block already tells the
+# agent it may spend. Java WorkShop 2.0 shipped exactly one JDK, measured
+# below; a directory someone renamed would lie to this table and not to that
+# command.
+'JAVA-WORKSHOP20\JDK\BIN\JAVAC.EXE' = "1.1.3"
+'JDK1.1.8\BIN\JAVAC.EXE' = "1.1.8"
+# Only 1.1 layouts are listed in tools_detect.ini, so this default is a
+# statement about which installs can reach this profile at all, not a guess
+# about an unknown one.
+default = "1.1"
+
+[note]
+# THE ERRORLEVEL BULLET NAMES `if errorlevel 1` ON PURPOSE. Measured on the
+# real machine 2026-10-01: an arg-less javac prints its usage and exits 0,
+# while a genuine compile error sets the code -- so the distinction is worth
+# telling the agent about. But COMMAND.COM hands back 0 for a failing child
+# whatever happened (`command.com.toml`, measured 2026-09-26), so the number
+# that reaches this bridge through the shell cannot carry it. `if errorlevel
+# 1` inside a .bat is where the difference is actually visible, and a note
+# that said "javac sets errorlevel" without saying how to read it would send
+# the agent to the one number that is always 0.
+#
+# Shown to the assistant when this tool is detected. DETECTION MAY
+# GUESS; A NOTE MAY NOT -- `measured` says on what machine and what
+# version, and a test asserts it is present.
+title = "Sun JDK 1.1"
+measured = '''JDK 1.1.3, reporting itself as `java version "JDK1.1.3/jws:97.08.28"`, in Sun Java WorkShop 2.0 at C:\\Java-WorkShop20\\JDK on the user's real Windows 98 machine. Compile and run measured end to end there 2026-10-01, from a scratch directory by full path with nothing on PATH and no CLASSPATH set, as was the split between a usage error (exit 0) and a real compile error (sets errorlevel)'''
+body = '''
+JDK {version}, measured on this machine:
+
+  * Build, then run by CLASS name; bin\ may not be on PATH:
+        {root}\bin\javac -d . Hello.java
+        {root}\bin\java Hello
+    No `java Hello.java`, no `java -jar`.
+  * `if errorlevel 1` fires on a real compile error, and the message names
+    file, line and column; a bad argument prints usage and exits 0.
+  * THIS IS JAVA 1.1, not Java as written now. Reach for any of this by
+    reflex and it will not compile; the error names the line, not the era:
+      - no collections framework: Vector, Hashtable and Enumeration, never
+        List, Map, Set, ArrayList, HashMap or Iterator (1.2); what comes out
+        is an Object to cast
+      - no generics, for-each, autoboxing, varargs or enums (1.5)
+      - no StringBuilder (it is StringBuffer), String.format, printf,
+        String.split, replaceAll, java.util.regex or Scanner
+      - no Swing: AWT only (Frame, Panel, Button)
+'''
