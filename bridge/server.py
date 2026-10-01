@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import logging
 import os
+import tempfile
 
 from .agent import permissions as perms
 from .agent import sessions as sesslist
@@ -517,11 +519,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="model for sessions (default: sonnet)")
     ap.add_argument("--effort", default=None, choices=[None, "low", "medium",
                                                        "high", "xhigh", "max"])
-    # Deliberately separate from --cwd and never defaulted. Defaulting to the
-    # launch directory would point sync at the whole repo, .venv and
-    # vm/*.qcow2 included.
+    # Deliberately separate from --cwd, and never defaulted TO THE LAUNCH
+    # DIRECTORY -- that would point sync at the whole repo, .venv and
+    # vm/*.qcow2 included. It IS defaulted, to a directory of its own under
+    # the system temp dir: see `default_sync_root`.
     ap.add_argument("--sync-dir", default=None,
-                    help="the tree mirrored to the guest; sync is off without it")
+                    help="the tree mirrored to the guest (default: a "
+                         "directory under the system temp dir)")
+    ap.add_argument("--no-sync", action="store_true",
+                    help="do not mirror anything, not even the default temp "
+                         "tree; files reach the guest only by put_file")
     ap.add_argument("--sync-state", default=None,
                     help="where the baseline lives; MUST be outside --sync-dir, "
                          "or it is mirrored to the guest and recurses")
@@ -540,6 +547,35 @@ def init_logging(verbose: bool = False) -> None:
     )
 
 
+def default_sync_root() -> str:
+    r"""Where the mirrored tree lives when nobody named one.
+
+    SYNC IS ON WHENEVER THERE IS A WORK DIRECTORY, which is the design and
+    not a convenience: a conversation's folder is created on the guest the
+    first time a tool runs, and from that moment the two sides are supposed
+    to converge. A bridge started without `--sync-dir` used to leave the
+    guest half of that arrangement in place and the bridge half missing --
+    the client made `C:\WORK\<title>`, named it in the prompt, and nothing
+    was mirrored into it. Every file then had to travel by `put_file`, which
+    writes bytes with no opinion about line endings, so a batch file written
+    on this side did not run on that side (docs/measurements/
+    batch-eol-and-dir-b-p200-20261001.txt). The sync layer converts; the
+    one-off path does not. Having the default be "no mirror" meant the
+    cheaper, lossier path was what you got by accident.
+
+    STABLE, NOT RANDOM. `mkdtemp` would be a new tree on every restart, so
+    the baseline would be thrown away and every conversation would re-sync
+    from nothing. One path per user, reused, so a bridge restart picks up
+    where it left off.
+
+    Under the system temp dir because these are scratch trees for a machine
+    that is being talked to, not a place to keep work -- say so, loudly, at
+    startup, because a reboot of THIS host takes them.
+    """
+    base = os.path.join(tempfile.gettempdir(), "gaston-%s" % getpass.getuser())
+    return os.path.join(base, "work")
+
+
 def load_config(args: argparse.Namespace) -> BridgeConfig:
     """Command line plus environment, validated, or `SystemExit`.
 
@@ -551,15 +587,33 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
         secret = "dev-secret"
         log.warning("GASTON_SECRET unset; using %r (development only)",
                     secret)
+    # `--no-sync` is the only way to get the old behaviour, and it has to be
+    # asked for: see `default_sync_root` for why "off" is the wrong default.
+    sync_dir = args.sync_dir
+    if not sync_dir and not args.no_sync:
+        # A named --cwd is mirrored AS IT STANDS. The agent's file tools
+        # operate there, and a mirror somewhere else would leave every edit
+        # on this side -- which is the exact arrangement this default exists
+        # to end. The old warning was about defaulting to the LAUNCH
+        # directory, which nobody chose; --cwd is chosen.
+        sync_dir = args.cwd or default_sync_root()
+        log.info("no --sync-dir given; mirroring %s%s", sync_dir,
+                 "" if args.cwd else " (under the system temp dir, so a "
+                                     "reboot of THIS host takes it)")
+
     config = BridgeConfig(
         secret=secret,
         host=args.host,
         port=args.port,
-        cwd=args.cwd,
+        # The agent's file tools operate on `cwd`; if that is not the
+        # mirrored tree then everything it writes stays on this side. When
+        # neither was named, they are the same directory and the prompt's
+        # "the whole working directory is mirrored" branch is the true one.
+        cwd=args.cwd or sync_dir,
         model=args.model,
         effort=args.effort,
         link_bps=args.link_bps,
-        sync_dir=args.sync_dir,
+        sync_dir=sync_dir,
         sync_state=args.sync_state,
     )
     try:
@@ -571,6 +625,11 @@ def load_config(args: argparse.Namespace) -> BridgeConfig:
 
 def prepare_state(config: BridgeConfig) -> None:
     """Make what the baseline needs before anything can write to it."""
+    if config.sync_dir:
+        # The mirror too, not just the baseline: a default under the temp dir
+        # does not exist on a fresh boot, and the first scan of a missing
+        # tree is not a useful error message.
+        os.makedirs(config.sync_dir, exist_ok=True)
     if config.sync_state:
         os.makedirs(config.sync_state, exist_ok=True)
         log.info("sync: %s <-> guest, baseline in %s",
