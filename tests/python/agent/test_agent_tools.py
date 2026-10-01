@@ -312,3 +312,105 @@ async def test_sync_resolve_forget_is_passed_through_case_insensitively(
     _, handlers = _build_tools(monkeypatch, bridge, guest="machine-a")
     await handlers["sync_resolve"]({"path": "notes.txt", "action": "FORGET"})
     assert bridge.resolve_calls[-1] == ("notes.txt", "forget", "machine-a")
+
+
+# --- toolnote: the measured bodies, fetched rather than resident -----------
+#
+# The system prompt carried one toolchain note and dropped the rest in
+# alphabetical order, so the user's machine -- a Sun JDK and Visual C++ 6 --
+# lost the C++ note and with it `cl` printing nothing at all when a
+# directory is missing from PATH. The bodies moved behind this tool; these
+# are about it answering for the machine whose conversation it is.
+
+from bridge.agent.toolrules import Found
+
+
+class _Guest:
+    def __init__(self, tools):
+        self.tools = tools
+
+
+def _text_of(out: dict) -> str:
+    return "".join(b.get("text", "") for b in out["content"])
+
+
+def _toolnote(monkeypatch, found):
+    captured = {}
+
+    def fake_create_sdk_mcp_server(*, name, version, tools):
+        captured["by_name"] = {t.name: t.handler for t in tools}
+        return {"type": "sdk", "name": name, "instance": object()}
+
+    monkeypatch.setattr(T, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
+    bridge = _FakeHost()
+    T.build(bridge.guest_exec, bridge.sync, bridge.workspace,
+            guest=_Guest(found))
+    return captured["by_name"]["toolnote"]
+
+
+JDK = Found("jdk", "toolchain", r"C:\Java-Workshop20\JDK", True, version="1.1.3")
+MSVC = Found("msvc", "toolchain", r"C:\VC98", True, version="6.0")
+
+
+async def test_both_toolchains_are_reachable_not_just_the_first(monkeypatch):
+    """THE BUG, from the other side. Alphabetical order decided which note
+    existed; now it decides nothing."""
+    h = _toolnote(monkeypatch, [JDK, MSVC])
+    jdk = _text_of(await h({"name": "jdk"}))
+    msvc = _text_of(await h({"name": "msvc"}))
+    assert "Sun JDK 1.1" in jdk
+    assert "Visual C++" in msvc
+    # The fact alphabetical order was throwing away: `cl` with MSPDB60.DLL's
+    # directory off PATH prints nothing on either stream and only the exit
+    # code says it failed.
+    assert "prints NOTHING AT ALL" in " ".join(msvc.split())
+
+
+async def test_the_note_is_rendered_against_the_root_that_was_found(monkeypatch):
+    r"""A standalone 1.1 install is nowhere near Java WorkShop's layout. A
+    note quoting one while the inventory names the other is two
+    authoritative sources disagreeing, the more detailed one wrong."""
+    h = _toolnote(monkeypatch, [Found("jdk", "toolchain", r"C:\JDK1.1.8",
+                                      True, version="1.1.8")])
+    out = _text_of(await h({"name": "jdk"}))
+    assert r"C:\JDK1.1.8\bin\javac -d ." in out
+    assert "JDK 1.1.8" in out
+    assert "{root}" not in out and "{version}" not in out
+
+
+async def test_the_note_says_where_it_was_measured(monkeypatch):
+    """The agent is being told to act on this without checking, so it is
+    entitled to know what it was measured on and when."""
+    h = _toolnote(monkeypatch, [JDK])
+    assert "Measured:" in _text_of(await h({"name": "jdk"}))
+
+
+async def test_a_tool_that_is_not_on_that_machine_is_refused(monkeypatch):
+    """And refused by naming what IS there. A bare "unknown" invites a
+    second guess; the list ends the exchange in one call."""
+    h = _toolnote(monkeypatch, [JDK])
+    out = await h({"name": "watcom"})
+    assert out["isError"] is True
+    assert "jdk" in _text_of(out)
+
+
+async def test_a_detected_tool_nobody_measured_says_so(monkeypatch):
+    """Detection may guess; notes may not. Inventing one here would be the
+    exact failure the profiles' `measured` field exists to prevent."""
+    h = _toolnote(monkeypatch, [JDK, Found("pkzip", "tool", r"C:\PKZIP", True)])
+    out = await h({"name": "pkzip"})
+    assert out["isError"] is True
+    assert "nobody has measured" in _text_of(out)
+
+
+async def test_the_name_is_matched_as_the_prompt_prints_it(monkeypatch):
+    """The model retypes the name out of a table in its own prompt. A
+    refusal over capitalisation costs a round trip and teaches it nothing."""
+    h = _toolnote(monkeypatch, [MSVC])
+    assert "Visual C++" in _text_of(await h({"name": "MSVC"}))
+
+
+async def test_a_machine_that_reported_nothing_is_not_a_traceback(monkeypatch):
+    h = _toolnote(monkeypatch, [])
+    out = await h({"name": "jdk"})
+    assert out["isError"] is True

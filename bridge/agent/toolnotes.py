@@ -44,6 +44,21 @@ class Note:
     measured: str
     body: str
     default_version: str = ""
+    #: ONE LINE, resident where the body is not. The body is fetched now
+    #: (`mcp__machine__toolnote`) rather than printed on every request, and
+    #: a fetch nothing advertises never happens -- so each detected tool
+    #: still costs one line saying what it is and that a note exists.
+    #:
+    #: Optional in the profile, because the profiles are measured text and
+    #: this is a presentation detail. Absent, `title` stands in: it is
+    #: already one short line naming the product and its version, which is
+    #: the minimum the agent needs to decide whether to ask. A profile that
+    #: wants to spend its line better adds `headline` under `[note]`.
+    headline_text: str = ""
+
+    @property
+    def headline(self) -> str:
+        return (self.headline_text or self.title).strip()
 
     def render(self, root: str, version: str = "") -> str:
         v = version or self.default_version
@@ -64,7 +79,8 @@ def _build() -> dict[str, Note]:
         out[name] = Note(title=n.get("title", name),
                          measured=n.get("measured", ""),
                          body=n.get("body", ""),
-                         default_version=default_ver)
+                         default_version=default_ver,
+                         headline_text=n.get("headline", ""))
     return out
 
 

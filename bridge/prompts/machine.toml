@@ -246,3 +246,24 @@ less of it:
 An answer that is correct in general but ignores these limits is the wrong
 answer for this user.
 '''
+
+# --- what is known about each tool, and how to go and read it ---------------
+#
+# RESIDENT IS THE HEADLINE, FETCHED IS THE BODY. Until 2026-10-01 the bodies
+# were resident and capped at one toolchain, so a machine with both a JDK and
+# Visual C++ got the JDK's note and lost the C++ one in silence -- including
+# the measured fact that `cl` prints NOTHING AT ALL when a directory is
+# missing from PATH. Raising the cap was not on offer: shell + msvc alone is
+# 3,707 characters against a 2,800 budget.
+#
+# The pointer has to earn its own line. A capability nothing advertises is
+# not used, and the failure mode of not using this one is the agent running
+# a build command with complete confidence and reading a silent failure as
+# success -- which is the behaviour the notes exist to prevent.
+[notes]
+heading = '''FETCH THE NOTE BEFORE YOU USE ANY OF THESE:'''
+pointer = '''
+Call `mcp__machine__toolnote("<name>")` BEFORE the first command that uses
+one, not after something fails: several of those notes are about commands
+that FAIL WHILE LOOKING LIKE THEY SUCCEEDED, so nothing you see will tell
+you that you needed it. The call reaches nothing and needs no approval.'''

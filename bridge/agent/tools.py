@@ -33,6 +33,7 @@ from ..services.ui import UiError
 from ..wire import fold
 from ..wire.uiview import render_tree, to_png
 from . import prompts
+from . import toolnotes as notes
 
 log = logging.getLogger("bridge.tools")
 
@@ -751,6 +752,60 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__drives failed: %r", args)
             raise
 
+    @tool(
+        "toolnote",
+        prompts.text("tools.toolnote.description"),
+        {"type": "object",
+         "properties": {
+             "name": {"type": "string",
+                      "description": prompts.text("tools.toolnote.args.name")},
+         },
+         "required": ["name"]},
+    )
+    async def machine_toolnote(args: dict) -> dict:
+        """The one tool that reaches nothing.
+
+        The note is rendered against the root and version DETECTION FOUND,
+        not against the one the profile was written on. A machine with the
+        JDK under Java WorkShop and a machine with a bare `C:\\JDK1.1.8`
+        get the same note with different commands in it -- which is the
+        whole reason the bodies are written against `{root}`.
+
+        `guest.tools` is read at CALL time rather than captured at build
+        time, for the same reason every other closure here takes `guest`:
+        it is the inventory of the machine whose conversation this is.
+        """
+        try:
+            found = list(getattr(guest, "tools", None) or []) if guest else []
+            known = [f.name for f in found if f.name in notes.NOTES]
+            if not found:
+                return _text(prompts.text("tools.toolnote.view.none_at_all"),
+                             error=True)
+            want = str(args.get("name") or "").strip().lower()
+            # Matched case-insensitively because the inventory is printed
+            # into a prompt and a model retyping `MSVC` or `JDK` from it is
+            # not making a mistake worth a refusal.
+            hit = next((f for f in found if f.name.lower() == want), None)
+            if hit is None:
+                return _text(prompts.text("tools.toolnote.view.unknown",
+                                          name=args.get("name"),
+                                          known=", ".join(known) or "none"),
+                             error=True)
+            note = notes.NOTES.get(hit.name)
+            if note is None:
+                return _text(prompts.text("tools.toolnote.view.no_note",
+                                          name=hit.name,
+                                          known=", ".join(known) or "none"),
+                             error=True)
+            version = getattr(hit, "version", "")
+            head = prompts.text("tools.toolnote.view.header",
+                                title=note.title, path=hit.path,
+                                measured=note.measured)
+            return _text(head + "\n\n" + note.render(hit.path, version=version))
+        except Exception:
+            log.exception("mcp__machine__toolnote failed: %r", args)
+            raise
+
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,
@@ -760,7 +815,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                                           machine_kill,
                                           machine_get_file,
                                           machine_put_file,
-                                          machine_drives])
+                                          machine_drives,
+                                          machine_toolnote])
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

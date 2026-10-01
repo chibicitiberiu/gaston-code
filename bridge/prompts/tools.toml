@@ -369,3 +369,38 @@ Read-only and cheap for a hard disk or a network share. For a floppy or a CD-ROM
 [drives.view]
 no_media = '''empty'''
 media_unknown = '''not checked'''
+
+# THE ONE TOOL THAT TALKS TO NOBODY. Every other tool here reaches the
+# connected machine; this one answers out of `bridge/profiles/*.toml`, the
+# measured notes the system prompt used to carry in full.
+#
+# It exists because the prompt could not carry them. Rendered bodies,
+# 2026-10-01: msvc 1,813 characters, watcom 964, jdk 957, cscript 804,
+# shell 893, against a 2,800-character budget for the whole block -- so the
+# old code rendered ONE toolchain note and dropped the rest in alphabetical
+# order. On the machine this is built for that silently cost the Visual C++
+# note, and with it the measured fact that `cl` prints nothing at all when a
+# directory is missing from PATH.
+#
+# Kept honest against "the exec test" (docs/PLAN.md 3.1): `exec` cannot do
+# this at all. There is nothing on the guest to run -- the knowledge is on
+# the bridge, and the alternative to a tool is resident text that does not
+# fit.
+[toolnote]
+description = '''
+What is actually known about one tool installed on the connected machine -- measured on a real machine of that era, not quoted from its documentation.
+
+The system prompt lists which names have a note. Call this before your FIRST build, compile or script command with that tool. Most of these notes are about commands that FAIL WHILE LOOKING LIKE THEY SUCCEEDED -- empty output, exit code 0, a usage message -- so the thing that would send you looking for a note never happens. One call, and it holds for the rest of the conversation.
+
+This reads nothing on the connected machine and runs nothing: it is free, it is instant, and it needs no approval.'''
+
+[toolnote.args]
+name = '''
+The tool's name, spelled exactly as the inventory in the system prompt spells it.'''
+
+[toolnote.view]
+header = '''{title}, on the connected machine at `{path}`.
+Measured: {measured}'''
+unknown = '''There is no tool called `{name}` on that machine, or at least detection did not find one. These were found and have notes: {known}.'''
+no_note = '''`{name}` was detected on that machine, but nobody has measured it, so there is no note -- and a guess here would be worse than silence. Notes exist for: {known}.'''
+none_at_all = '''Nothing was detected on that machine, so there are no notes to read.'''

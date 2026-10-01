@@ -110,31 +110,46 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
                         inside=inside, where=where, conflicts=conflicts)
 
 
-#: How many fact blocks may be resident at once, on top of the shells'.
+#: How many toolchain BODIES are resident. Zero, since 2026-10-01: they are
+#: fetched with `mcp__machine__toolnote` and only a one-line headline each
+#: stays in the prompt.
 #:
-#: THE CAP IS LOAD-BEARING, not a tidiness preference. A fresh conversation's
-#: prompt is ~3,500 characters (`guest_root` is empty until the first tool
-#: call and nothing rebuilds the session), and one toolchain note is ~600 of
-#: them. Two measured toolchains on one machine and this block is a third of
-#: the prompt -- so the budget would be honest only for as long as the
-#: feature was unsuccessful. A second toolchain goes in as an inventory row
-#: and nothing more; if that starts costing calls, that is the trigger to
-#: look at skills, not to raise this number.
-MAX_FACT_BLOCKS = 1
+#: THE CAP WAS 1, AND 1 WAS A BUG WEARING A BUDGET'S CLOTHES. `found` arrives
+#: alphabetically from `toolrules.inventory`, so on a machine with both a Sun
+#: JDK and Visual C++ 6 -- which is the machine this is built for -- `jdk`
+#: took the single slot and the C++ note was dropped with nothing said. The
+#: fact lost that way was `cl` printing NO OUTPUT AT ALL when a directory is
+#: missing from PATH, a failure shaped exactly like success.
+#:
+#: Raising it was never available. Rendered bodies measured 2026-10-01: msvc
+#: 1,813, watcom 964, jdk 957, cscript 804, shell 893. `shell + msvc` alone
+#: is 3,707 against a 2,800 budget, so per-toolchain budgeting could only
+#: ever change WHICH note was dropped.
+#:
+#: The constant stays, at 0, because the alternative is a silent assumption.
+#: If a body is ever worth making resident again this is the number to argue
+#: with, and the argument has to beat the measurements above.
+MAX_FACT_BLOCKS = 0
 
 
 def tools_block(found: list, path: list | None = None) -> str:
-    r"""The inventory, plus the measured notes for what was found.
+    r"""The inventory, the shell's note, and a line per note that is not.
 
     `found` is `toolrules.inventory(...)`. Empty gives "" -- a heading over
     an empty table is a paragraph the model reads on every request to learn
     nothing, and "nothing was detected" is not the same claim as "nothing is
     installed", which is why silence is the honest output.
 
-    Every note is rendered against the root that was actually FOUND. A user
-    with Watcom at `D:\OW` would otherwise get an inventory row saying
-    `D:\OW` and a note saying `C:\WATCOM` -- two authoritative sources
-    disagreeing, the more detailed one wrong.
+    WHAT IS RESIDENT AND WHAT IS NOT, since 2026-10-01: the rows, the shell
+    note in full, and one headline per other measured tool. The bodies are
+    fetched with `mcp__machine__toolnote`, because they did not fit -- see
+    MAX_FACT_BLOCKS above for the measurements and for the note that was
+    being dropped in silence before they moved.
+
+    Everything printed is rendered against the root that was actually FOUND.
+    A user with Watcom at `D:\OW` would otherwise get an inventory row
+    saying `D:\OW` and a note saying `C:\WATCOM` -- two authoritative
+    sources disagreeing, the more detailed one wrong.
     """
     if not found:
         return ""
@@ -160,6 +175,35 @@ def tools_block(found: list, path: list | None = None) -> str:
         "fine; a survey of the disk is not. An entry being absent means",
         "nothing matched, not that the thing is missing.",
     ]
+
+    # ONE LINE EACH for everything measured that is not a shell, naming the
+    # tool as `toolnote` wants it spelled. Without this the agent cannot
+    # ask: it has no way to know a note exists, and `toolnote` becomes a
+    # tool nothing ever calls.
+    #
+    # DIRECTLY UNDER THE ROWS, and that position was measured rather than
+    # chosen. Sitting at the bottom of the block -- after the shell note,
+    # the shells paragraph and the PATH -- Haiku read the inventory, picked
+    # `C:\PROGRA~1\MICROS~2\VC98\BIN\cl.exe hello.c` straight out of it
+    # and never called `toolnote` at all, which is the exact command the
+    # Visual C++ note exists to prevent. The names and the obligation
+    # attached to them belong in the same eyeful.
+    #
+    # Rendered against the found root like the bodies are, so a headline
+    # mentioning a path cannot contradict the row above it.
+    fetchable = [f for f in found
+                 if f.kind != "shell" and f.name in notes.NOTES]
+    if fetchable:
+        width = max(len(f.name) for f in fetchable)
+        out += ["", prompts.text("machine.notes.heading"), ""]
+        for f in fetchable:
+            note = notes.NOTES[f.name]
+            line = (note.headline.replace("{root}", f.path)
+                                 .replace("{version}",
+                                          getattr(f, "version", "")
+                                          or note.default_version))
+            out.append(f"  {f.name:<{width}}  {line}")
+        out += ["", prompts.text("machine.notes.pointer").strip("\n")]
 
     # THE SHELLS, NAMED, because the model is the one that picks: a machine
     # has as many shells as it has (`command.com`/`4dos` on DOS,
@@ -214,28 +258,16 @@ def tools_block(found: list, path: list | None = None) -> str:
             "tool above that is missing from it still runs by full path.",
         ]
 
-    # Shell notes are not counted against MAX_FACT_BLOCKS. Which shell is
+    # THE SHELL NOTE IS RESIDENT AND IS NOT NEGOTIABLE. Which shell is
     # present changes how every single command must be written, and unlike a
-    # toolchain there is no moment when the agent could look it up first --
-    # the first command fails before it knows to ask.
-    # Toolchains are capped at MAX_FACT_BLOCKS (1) so multiple compilers do
-    # not overwhelm the prompt. Standalone tools get their own budget.
-    toolchain_budget = MAX_FACT_BLOCKS
-    tool_budget = 1
-    for f in found:
-        note = notes.NOTES.get(f.name)
-        if note is None:
-            continue
-        if f.kind == "toolchain":
-            if toolchain_budget <= 0:
-                continue
-            toolchain_budget -= 1
-        elif f.kind != "shell":
-            if tool_budget <= 0:
-                continue
-            tool_budget -= 1
-        version = getattr(f, "version", "")
-        out += ["", note.render(f.path, version=version)]
+    # toolchain there is no moment when the agent could look it up first:
+    # the first command fails before it knows to ask. Every other note is a
+    # headline here and a `toolnote` call away.
+    shell_notes = [f for f in found
+                   if f.kind == "shell" and f.name in notes.NOTES]
+    for f in shell_notes:
+        out += ["", notes.NOTES[f.name].render(
+            f.path, version=getattr(f, "version", ""))]
 
     return "\n".join(out)
 

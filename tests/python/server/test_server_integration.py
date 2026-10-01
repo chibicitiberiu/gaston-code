@@ -2695,7 +2695,11 @@ async def test_the_inventory_is_in_the_prompt_the_session_was_built_with(
     await harness.recv_until(r, {"READY"})
     prompt = harness.bridge.connection.guest.claude.system_prompt["append"]
     assert "What is installed on that machine" in prompt
-    assert "-l=nt_win" in prompt
+    # `-l=nt_win` was asserted here while the Watcom BODY was resident. It
+    # moved behind `mcp__machine__toolnote` on 2026-10-01; what has to
+    # arrive in the prompt now is the headline and the way to fetch it.
+    assert "Open Watcom C/C++ 1.9" in prompt
+    assert "mcp__machine__toolnote" in prompt
     await harness.close(w)
 
 

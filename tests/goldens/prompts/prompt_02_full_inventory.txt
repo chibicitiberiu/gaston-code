@@ -143,6 +143,15 @@ machine's claim about itself. One command to confirm something is
 fine; a survey of the disk is not. An entry being absent means
 nothing matched, not that the thing is missing.
 
+FETCH THE NOTE BEFORE YOU USE ANY OF THESE:
+
+  watcom  Open Watcom C/C++ 1.9
+
+Call `mcp__machine__toolnote("<name>")` BEFORE the first command that uses
+one, not after something fails: several of those notes are about commands
+that FAIL WHILE LOOKING LIKE THEY SUCCEEDED, so nothing you see will tell
+you that you needed it. The call reaches nothing and needs no approval.
+
 Shells on that machine: `command.com`.
 
 `exec` runs through `command.com` unless you name
@@ -176,23 +185,6 @@ The shell is COMMAND.COM, not cmd.exe. Measured on this machine:
   * A running .exe is locked: "Permission denied" from the linker,
     "Access denied" from `del`, and `attrib` shows nothing wrong. Ask
     the user to close it.
-
-Open Watcom 1.9 at C:\WATCOM -- measured on this machine, not inferred:
-
-  * A WINDOWED app, in one step:
-        wcl386 -bt=nt -l=nt_win hello.c
-    `-l=nt_win` is the Windows subsystem. `-l=nt` is the CONSOLE subsystem,
-    and the linker cheerfully says "creating a Windows NT character-mode
-    executable" while you wait for a window that never appears. This is the
-    costliest thing here to get wrong, and it is not in wcl386's own help --
-    it is in SAMPLES\WIN\GENERIC\WIN32\MAKEFILE.
-  * Layout, so you never need to list it: binnt\ (wcc386, wpp386, wlink,
-    wmake, wrc), binw\ (DOS-hosted tools, and the linker's wlsystem.lnk,
-    which it reads on every link), h\ and h\nt\ (headers), lib386\ and
-    lib386\nt\ (import libraries), samples\.
-  * C:\WATCOM\SETVARS.BAT sets WATCOM, PATH, INCLUDE and EDPATH, and is called
-    from AUTOEXEC.BAT -- so a fresh DOS box already has them.
-  * Worked Win32 examples: C:\WATCOM\SAMPLES\WIN\GENERIC\WIN32\.
 
 ## Keep the old machine in mind
 

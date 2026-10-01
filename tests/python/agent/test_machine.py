@@ -259,16 +259,31 @@ def test_a_note_is_written_against_the_root_that_was_found():
     r"""The whole point of detection is finding a toolchain somewhere other
     than the obvious place. A row saying `D:\OW` over a note saying
     `C:\WATCOM` is two authoritative sources disagreeing, with the more
-    detailed one wrong."""
+    detailed one wrong.
+
+    THE BODY MOVED (2026-10-01): it is fetched with `mcp__machine__toolnote`
+    rather than printed here, so the property is asserted where the text now
+    comes out -- `test_agent_tools.py`
+    `test_the_note_is_rendered_against_the_root_that_was_found`. What this
+    still owns is the half that stayed: nothing resident may name a root
+    detection did not find.
+    """
     out = tools_block([Found("watcom", "toolchain", r"D:\OW", True)])
-    assert r"D:\OW\SETVARS.BAT" in out
+    assert r"D:\OW" in out
     assert "C:\\WATCOM" not in out
 
 
-def test_the_costliest_watcom_fact_is_resident():
+def test_the_costliest_watcom_fact_is_reachable():
     """`-l=nt_win`. Seven exec calls in the baseline, and it is not in
-    wcl386's own help -- it is in a sample makefile."""
-    assert "-l=nt_win" in tools_block([WATCOM])
+    wcl386's own help -- it is in a sample makefile.
+
+    It was resident until 2026-10-01 and is now one `toolnote` call away.
+    What has to hold HERE is that the agent knows to make the call: a
+    headline naming Watcom, and the tool named next to it.
+    """
+    out = tools_block([WATCOM])
+    assert "Open Watcom C/C++ 1.9" in out
+    assert "mcp__machine__toolnote" in out
 
 
 def test_a_detected_tool_with_no_note_still_gets_its_row():
@@ -278,34 +293,44 @@ def test_a_detected_tool_with_no_note_still_gets_its_row():
     assert "pkzip" in out
 
 
-def test_at_most_one_toolchain_note_is_resident():
-    """The cap is load-bearing: a fresh conversation's prompt is ~3,500
-    characters and one toolchain note is ~600 of them. Without this the
-    budget is honest only for as long as the feature is unsuccessful."""
+def test_no_toolchain_body_is_resident():
+    """WAS `test_at_most_one_toolchain_note_is_resident`, and one was the
+    bug. `found` arrives alphabetically, so on the machine this is built for
+    -- a Sun JDK and Visual C++ 6 -- the JDK took the only slot and the C++
+    note was dropped with nothing said. Raising the cap was never available:
+    shell + msvc renders 3,707 characters against 2,800.
+
+    So the number is 0 and the bodies are fetched. See MAX_FACT_BLOCKS in
+    machine.py for the measurements.
+    """
     both = tools_block([
         WATCOM,
         Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True),
     ])
-    assert both.count("Open Watcom 1.9 at") == 1
-    assert MAX_FACT_BLOCKS == 1
+    assert "Open Watcom 1.9 at" not in both
+    assert MAX_FACT_BLOCKS == 0
 
 
-def test_a_second_toolchain_is_listed_but_not_explained():
-    """It goes in as an inventory row or it does not ship. If that starts
-    costing calls, that is the trigger to look at skills -- not to raise the
-    cap."""
+def test_a_second_toolchain_is_listed_and_is_no_longer_a_dead_end():
+    """It used to go in as an inventory row and nothing more -- a name with
+    no way to learn anything about it. Now the row is still a row and the
+    note behind it is one call away."""
     out = tools_block([WATCOM, Found("turboc", "toolchain", r"C:\TC", True)])
     assert r"C:\TC" in out          # listed
-    assert out.count("measured on this machine, not inferred") <= 1
+    assert "Open Watcom C/C++ 1.9" in out
+    # turboc has no measured note, so it gets a row and no headline --
+    # detection may guess, notes may not.
+    assert out.count("mcp__machine__toolnote") >= 1
 
 
-def test_the_shell_note_is_not_charged_against_the_toolchain_cap():
+def test_the_shell_note_is_resident_whatever_else_was_found():
     """There is no "look it up first" moment for a shell: the first command
     fails before the agent could know to ask. So it is resident regardless of
-    what else was found."""
+    what else was found -- and it is the one note that did NOT move behind
+    `toolnote`."""
     out = tools_block([SHELL, WATCOM])
     assert "Too many parameters" in out
-    assert "-l=nt_win" in out
+    assert "Open Watcom C/C++ 1.9" in out
 
 
 def test_a_machine_with_only_a_shell_gets_the_shell_note():
@@ -313,13 +338,15 @@ def test_a_machine_with_only_a_shell_gets_the_shell_note():
     assert "2>&1" in out
 
 
-def test_cscript_note_is_resident_alongside_shell_and_toolchain():
-    """cscript is a standalone tool, so it has its own slot. All three
-    notes compose and are resident."""
+def test_cscript_is_advertised_alongside_the_toolchain():
+    """It used to have its own resident slot. Now the shell note is resident
+    and both of the others are headlines -- the point being that neither is
+    dropped, which is what the old per-kind budgets did as soon as a machine
+    had two of anything."""
     out = tools_block([SHELL, CSCRIPT, WATCOM])
     assert "Too many parameters" in out
-    assert "-l=nt_win" in out
-    assert "Windows Script Host 5.0" in out
+    assert "Windows Script Host (CScript)" in out
+    assert "Open Watcom C/C++ 1.9" in out
     assert "CSCRIPT.EXE (v5.0)" in out
 
 
@@ -362,7 +389,37 @@ def test_cscript_alone_with_shell_stays_inside_budget():
 #: Breaching 1,400 is also the trigger the plan named for revisiting skills --
 #: see docs/BACKLOG.md. This number going up again is that conversation, not
 #: another edit here.
-MAX_BLOCK_CHARS = 2800
+#:
+#: 2026-10-01: THAT CONVERSATION HAPPENED, and what moved was the shape
+#: rather than the budget. Note BODIES are no longer resident -- they are
+#: fetched with `mcp__machine__toolnote` and each detected tool costs one
+#: headline line instead. So this number no longer bounds something
+#: open-ended; it bounds the fixed prose, the inventory rows, the shell
+#: note, and about 35 characters per measured tool.
+#:
+#: Measured the same day. The real target machine -- command.com, cscript
+#: 5.0, Sun JDK 1.1.3, Visual C++ 6.0, PATH printed -- was 3,848 characters
+#: WITH THE VISUAL C++ NOTE ALREADY SILENTLY DROPPED, and is 2,716 now with
+#: every note reachable.
+#:
+#: 2800 -> 2900 IS THE ONE DELIBERATE RISE, and it buys a test rather than
+#: slack. A machine carrying every note the profile tree has (the four
+#: above plus Watcom) renders 2,849, which 2800 did not admit -- so the
+#: budget could only ever have been asserted against a combination chosen
+#: to fit, which is what the old 2800 was doing and is how the dropped note
+#: went unnoticed in the first place. The cap is now set above the worst
+#: case the tree can actually produce, and the worst case is what is
+#: asserted. The remaining 51 characters are a little over one more
+#: headline, so a sixth measured tool fits and a seventh does not -- and
+#: this says so rather than a prompt nobody is counting.
+#:
+#: NOT COVERED, deliberately: a machine with two shells whose notes are
+#: both resident. Only `command.com` has a note today; `4dos` with one
+#: would add roughly 170 characters and breach. Shell notes are the one
+#: thing that stays resident (there is no "look it up first" moment for a
+#: shell), so that is a real decision and not an oversight -- it is just
+#: not one any machine has forced yet.
+MAX_BLOCK_CHARS = 2900
 
 
 def test_the_block_stays_inside_its_budget():
@@ -386,3 +443,193 @@ def test_a_machine_with_no_shell_is_told_so():
     out = tools_block([WATCOM])
     assert "reported no shell" in out
     assert "reported no shell" not in tools_block([SHELL, WATCOM])
+
+
+JDK = Found("jdk", "toolchain", r"C:\Java-WorkShop20\JDK", True, version="1.1.3")
+
+
+def test_the_jdk_note_stays_inside_the_same_budget_watcom_does():
+    """Measured 2026-10-01, with the shell note resident as it always is:
+    watcom 2,774 and jdk 2,788 against the 2,800 cap -- 12 characters spare.
+
+    That is deliberately thin and it is the whole reason this assertion
+    exists rather than a comment. The JDK note is 960 rendered characters
+    against Watcom's 964, so it does not move the worst case the cap was set
+    from; anything added to it does, immediately and loudly.
+
+    THIS IS NOT A VERDICT ON MAX_FACT_BLOCKS. It says one toolchain note
+    fits, not that one is the right number: the machine this note was
+    measured on also has Visual C++ 6, `jdk` sorts before `msvc`, and the
+    note that loses the single slot to alphabetical order is the one
+    carrying `cl` failing with no output at all. That combination is 2,915
+    here -- over the cap with the C++ note already dropped -- and it is an
+    open question, not something this test blesses.
+    """
+    out = tools_block([SHELL, JDK])
+    assert len(out) < MAX_BLOCK_CHARS, len(out)
+
+
+def test_the_jdk_note_is_rendered_against_the_root_that_was_found():
+    r"""A standalone 1.1 install is nowhere near Java WorkShop's layout, and
+    the note must not quote one while the inventory row names the other.
+    It matters more here than for Watcom: the commands in this note are
+    written out in full, because nothing on that machine puts the JDK on
+    PATH.
+
+    THE COMMANDS MOVED behind `mcp__machine__toolnote` on 2026-10-01 and
+    the assertion about them went with them (`test_agent_tools.py`
+    `test_the_note_is_rendered_against_the_root_that_was_found`). What is
+    left here is the half that is still resident, and it is the half that
+    would mislead: the root in the row, and no trace of the layout the
+    profile happened to be measured on.
+    """
+    out = tools_block([SHELL, Found("jdk", "toolchain", r"C:\JDK1.1.8",
+                                    True, version="1.1.8")])
+    assert r"C:\JDK1.1.8" in out
+    assert "Java-WorkShop20" not in out
+
+
+# --- the two sides disagreeing about the mirror ------------------------------
+#
+# Observed on real hardware, 2026-10-01. The client created `C:\WORK` at
+# startup and announced it in HELLO; the bridge had been started with no
+# `--sync-dir`, so it mirrored nothing and never created a conversation
+# folder. The log held "guest mirrors C:\WORK" and, two minutes later,
+# "no folder is mirrored from this machine", with nothing joining them. The
+# agent read the second half, concluded it had nowhere agreed to write, and
+# put a file in the root of C: on somebody's actual disk.
+
+
+def test_a_declared_share_with_no_mirror_is_named_as_a_disagreement():
+    """The machine's own share is a fact the agent needs even when -- in
+    fact ESPECIALLY when -- this bridge is not honouring it. Told only
+    "nothing is mirrored", an agent has no destination at all."""
+    out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
+                        home="C:\\WORK")
+    assert "C:\\WORK" in out
+    assert "is not\nmirroring it" in out
+    # And still the truth about the copying, which has not changed.
+    assert "NOT copied to the connected machine on their\nown" in out
+
+
+def test_the_disagreement_is_not_reported_as_a_fault():
+    """"NAMING A FOLDER THAT DOES NOT EXIST YET sent one agent off to
+    diagnose a sync fault instead of writing the file it had been asked
+    for." The same trap, one branch over: a folder that exists and is not
+    being copied reads like a broken mirror unless the prompt says it is
+    the configuration."""
+    out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
+                        home="C:\\WORK")
+    assert "do not go looking for a synchronisation\nproblem" in out
+
+
+def test_a_drive_root_is_named_as_the_destination_that_is_never_right():
+    """What nothing said before. `put_file` takes any path, the bar shows
+    one clipped line, and `C:\\X.TXT` reads much like `C:\\WORK\\X.TXT` at
+    640x480."""
+    out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
+                        home="C:\\WORK")
+    assert "Never the root of a drive" in out
+    assert "Where it goes: `C:\\WORK`" in out
+
+
+def test_a_machine_that_declared_nothing_is_told_to_ask():
+    """No share, so there is no folder to name -- and inventing one would
+    be the bridge guessing at somebody's disk layout."""
+    out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
+                        home="")
+    assert "named no shared folder" in out
+    assert "ask where a file should go" in out
+    assert "Never the root\nof a drive" in out
+
+
+def test_the_mirrored_branch_is_untouched_by_any_of_this():
+    """Three paragraphs, one true at a time. The sync-on text must not have
+    acquired a sentence about a disagreement that cannot exist there."""
+    out = system_prompt(HELLO, "/work", sync_dir="/work/machine",
+                        guest_root="C:\\WORK", home="C:\\WORK")
+    assert "is not\nmirroring it" not in out
+    assert "named no shared folder" not in out
+
+
+# --- two toolchains on one machine ------------------------------------------
+#
+# THE BUG THIS PINS. `MAX_FACT_BLOCKS = 1` rendered exactly one toolchain
+# note, and `found` arrives alphabetically from `toolrules.inventory`, so on
+# the user's real machine -- which has a Sun JDK and Visual C++ 6 -- `jdk`
+# took the slot and the C++ note was dropped in silence. The fact lost that
+# way was `cl` producing NO OUTPUT AT ALL when a directory is missing from
+# PATH: a failure that reads as success.
+#
+# Raising the cap was not available either: shell 893 + msvc 1813 renders
+# 3,707 characters against a 2,800 cap, before the inventory rows.
+#
+# So the shape changed instead. Bodies are no longer resident; each detected
+# tool gets a one-line headline and the agent fetches the body with
+# `mcp__machine__toolnote`. These tests are about the property that broke --
+# neither toolchain is silently forgotten -- and not about which vehicle
+# delivers it.
+
+MSVC = Found("msvc", "toolchain", r"C:\Program Files\Microsoft Visual Studio\VC98",
+             True, version="6.0")
+
+
+def test_two_toolchains_both_reach_the_agent():
+    """Neither is silently dropped. Before this, `jdk` sorted first and the
+    `cl` note was never rendered on the one machine that has both."""
+    out = tools_block([SHELL, JDK, MSVC])
+    assert "jdk" in out and "msvc" in out
+    # Each is named with enough that the agent knows a note exists for it.
+    assert out.count("toolnote") >= 1
+    assert "Sun JDK 1.1" in out
+    assert "Microsoft Visual C++ 6.0" in out
+
+
+def test_the_agent_is_told_how_to_fetch_a_note():
+    """A capability nothing advertises will not be used. The pointer names
+    the tool and says when to call it, or the headline is just trivia."""
+    out = tools_block([SHELL, JDK, MSVC])
+    assert "mcp__machine__toolnote" in out
+
+
+def test_the_real_machines_combination_fits_the_budget():
+    """shell + cscript + msvc + jdk, which is what is actually connected.
+    Under the old shape this was 3,848 characters with the Visual C++ note
+    ALREADY DROPPED.
+
+    Measured with the PATH block, because that is what ships: every live
+    session prints it, and a budget asserted against a shape the product
+    does not produce is not a budget. 2,710 as at 2026-10-01.
+    """
+    path = [r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"]
+    out = tools_block([SHELL, CSCRIPT, JDK, MSVC], path=path)
+    assert len(out) < MAX_BLOCK_CHARS, len(out)
+    assert len(tools_block([SHELL, CSCRIPT, JDK, MSVC])) < MAX_BLOCK_CHARS
+
+
+def test_the_budget_is_asserted_against_the_worst_case_the_tree_can_make():
+    """Not against a combination chosen to fit, which is how the old cap
+    held: 2800 was true of `shell + watcom` and false of the machine the
+    product is actually for.
+
+    So this is every profile in the tree that has a note, at once, with the
+    longer `basis` wording and the PATH block. 2,849 as at 2026-10-01.
+    A sixth measured tool still fits and a seventh does not, and this is
+    where that is said rather than in a prompt nobody is counting.
+    """
+    every = [SHELL, CSCRIPT, JDK, MSVC,
+             Found("watcom", "toolchain", r"C:\WATCOM", True)]
+    out = tools_block(every, path=[r"C:\WINDOWS", r"C:\WINDOWS\COMMAND"])
+    # Every one of them advertised, none of them expanded.
+    for headline in ("Windows Script Host (CScript)", "Sun JDK 1.1",
+                     "Microsoft Visual C++ 6.0", "Open Watcom C/C++ 1.9"):
+        assert headline in out, headline
+    assert len(out) < MAX_BLOCK_CHARS, len(out)
+
+
+def test_the_shell_note_is_still_resident_in_full():
+    """Not moved behind the fetch. There is no "look it up first" moment for
+    a shell: the first command fails before the agent knows to ask."""
+    out = tools_block([SHELL, JDK, MSVC])
+    assert "Too many parameters" in out
+    assert "2>&1" in out
