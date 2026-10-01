@@ -1,0 +1,94 @@
+Recovering a real exit code from COMMAND.COM
+============================================
+
+Machine : Athlon XP 2000+, Windows 98 SE 4.10.2222 A, real hardware 10.0.0.125,
+          driven through gremote on port 7401
+Date    : 2026-10-01
+Why     : `command.com /c <cmd>` exits 0 whatever happened -- for a failing
+          child and for a program that does not exist
+          (docs/measurements/execprobe-vm-gui-20260926.txt). So `exec` through
+          the shell cannot say whether a build worked, and a live session
+          verified every single compile with a follow-up `dir`: two round trips
+          per build. The question was whether a wrapper batch file can get the
+          code back out. It can.
+
+
+What was measured
+-----------------
+
+Each case is a .bat written to the guest with CRLF endings and run as
+`command.com /c <file>` with cwd set to the file's directory.
+
+  Q1  a failing BUILTIN, then `if errorlevel 1`
+      dir NOSUCHFILE.XYZ > nul          -> "File not found" then SAW-ZERO
+      ** a builtin's failure is not visible to `if errorlevel` at all **
+
+  Q2  a failing .exe, then `if errorlevel 1`
+      java NoSuchClassAtAll > nul       -> SAW-NONZERO
+
+  Q3  a SUCCEEDING .exe, then `if errorlevel 1`
+      java -version > nul               -> SAW-ZERO
+
+  Q7  the same failing .exe, then a descending cascade of
+      `if errorlevel N goto nN` for N = 8..1
+                                        -> RC=1
+      ** the EXACT code is recoverable, not just zero/non-zero **
+
+  W1  a .bat invoked from a .bat WITHOUT `call`
+      -> the inner .bat ran and the outer never resumed. The lines after it,
+         including the whole cascade, did not execute.
+
+  W2  the same WITH `call`
+      -> inner ran, outer resumed, RC-NONZERO reported. `call` is mandatory
+         when the command is itself a batch file.
+
+  W3  `call` of an .exe by absolute path
+      -> ran, RC-ZERO reported. `call` is harmless for a program.
+
+  W4  a command with a redirect, then the sentinel
+      java -version > OUT.TXT           -> ".GASTONRC 0" and OUT.TXT empty
+      (empty because -version writes to stderr, which is the expected
+      behaviour and not a wrapper problem)
+
+  B1  `call` of a BUILTIN
+      call echo HELLO-FROM-BUILTIN      -> printed, sentinel printed
+
+  B2  `call` of a builtin WITH a redirect
+      call echo REDIR> R.TXT            -> "File creation error", R.TXT empty
+      ** `call` is NOT transparent here. The same line without `call` works.
+         So `call` must be used only when the leading token is a .bat. **
+
+
+The shape this determines
+-------------------------
+
+  @echo off
+  <the approved command, verbatim -- prefixed with `call ` ONLY if its
+   leading token names a .bat>
+  <cascade of `if errorlevel N goto nN`, descending, then one label per N
+   echoing a sentinel line>
+
+Three constraints fall out of the measurements above:
+
+  * `call` only for a .bat. B2 says `call` breaks a builtin's redirection and
+    W1 says a bare .bat never returns, so the two cases need opposite
+    treatment. The leading token is already parsed by the command guard, which
+    knows `.bat` from `exts`.
+  * The sentinel travels on stdout, because the wrapper's own exit code is
+    swallowed by the same `command.com /c` the wrapper exists to work around.
+    The bridge strips the LAST line matching the sentinel; a program that
+    prints the same text earlier does not confuse it.
+  * A builtin's exit code does not exist on this shell (Q1). The wrapper tells
+    the truth about programs, which is every compiler, linker and interpreter,
+    and reports "unknown" for a builtin rather than reporting 0 as success.
+
+Size, if the full 0..255 range is wanted: a flat descending cascade is about
+three lines per distinguishable value, so 256 values is roughly 6KB -- too much
+to write per command on a 1998 platter. Split it instead: a static WRAP.BAT
+holding the cascade, written once per session, and a small generated CMD.BAT
+holding the command, which is the only part that changes. W2 proves one level
+of `call` nesting works; two levels was not measured.
+
+The command the user approved must be what lands in the generated file,
+byte for byte. The guard classifies the original text; the wrapper is
+plumbing around it and must not become something else to approve.
