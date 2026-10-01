@@ -1584,7 +1584,8 @@ our own window from a dialog it had not read.
 ## 18. A refused permission-mode change leaves the client showing the wrong mode
 
 **Status:** found 2026-09-27 while setting up the BACKLOG 16 end-to-end check.
-Open. Small, and it cost an hour.
+First two asks fixed 2026-10-01 in `bridge/services/options.py` `set_mode`.
+The "related" item below is still open.
 
 Picking **Auto** in the client's Mode menu with Haiku selected fails in the
 bridge:
@@ -1604,17 +1605,32 @@ is written is a host-side log the person at the Win98 box is not reading. I
 spent a while assuming Auto was applied and that the permission bar appearing
 was a second bug.
 
-What it needs:
+What it needed:
 
 - the refusal sent to the client, so the menu snaps back to the mode that is
-  actually in force and the transcript says why ("Haiku cannot run in Auto");
+  actually in force and the transcript says why ("Haiku cannot run in
+  Auto") -- **done**: `set_mode` now remembers the mode in force before the
+  attempt, and on refusal puts `guest.perm_mode` back to it and resends the
+  options menu, so the tick in the client lands on the mode that is really
+  running. The transcript gets an `H.error` block naming the mode and the
+  CLI's own reason.
+- the bridge log downgraded from a traceback to one line, because this is a
+  refusal, not a crash -- **done**: `log.exception` (ERROR, with traceback)
+  became `log.warning` naming the model and the mode.
 - ideally the menu not offering a mode the current model cannot enter, since
-  the model is chosen right next to it in the same toolbar;
-- and the bridge log downgraded from a traceback to one line, because this is
-  a refusal, not a crash.
+  the model is chosen right next to it in the same toolbar -- **not done,
+  on purpose**: unlike effort (`supportedEffortLevels`, read straight off
+  the CLI's model list), there is no SDK-reported list of which permission
+  modes a given model accepts. Filtering the Mode menu up front would mean
+  hardcoding a per-model table and keeping it current by hand, which is the
+  exact shape of staleness `send_options`'s effort handling was written to
+  avoid. Accepting the refusal and resyncing is the honest fix available
+  without that table; revisit this item if the CLI ever exposes
+  `supportedPermissionModes` (or similar) the way it does for effort.
 
 Related: the mode and the model are separate dropdowns whose valid
 combinations are not independent, and nothing in the client knows that.
+Still open -- see the "not done" item just above.
 
 ---
 
@@ -1652,7 +1668,14 @@ on 9x there is no quiet way to raise a window across a process boundary.
 - **Declared at handshake, not assumed** -- the standing rule. A HELLO header
   (`bridge/caps.py`, `win/caps.h`), and the bridge registers `ui`, `click`,
   `keys`, `shot` (and `focus`) **only when the client says yes**, so a client
-  with it off costs nothing in context.
+  with it off costs nothing in context. Measured 2026-10-01, against haiku's
+  200K window: those five tools are 1,576 tokens of the 20,360 a fresh
+  session starts with -- 7.7% of the window, and 46% of everything the
+  `machine` server contributes. They are registered unconditionally today
+  (`bridge/agent/tools.py` `build()` has no capability to gate on), so a
+  client that never drives the screen pays for all five on every request.
+  This is the single largest saving available in the part of the context
+  budget this project owns.
 - **The guest gates too.** All five ops refuse with a clear status when the
   setting is off, whatever the bridge believes. The HELLO header is an
   optimisation; the refusal is the control.
@@ -1696,3 +1719,282 @@ someone has chosen it.
 
 Both are cheap to change and expensive to get wrong in opposite directions, so
 they are the user's call, not a default picked here.
+
+## 20. `DRIVES` spins the floppy motor -- CLOSED 2026-10-01
+
+**Found 2026-10-01**, on the first real-hardware run, by the person sitting
+next to the machine: they heard it. The VM has a floppy image and no motor,
+so nothing about this was visible on QEMU.
+
+`enumerateDrives` (`win/fs/drives.cpp`) walked the drive letters and called
+`GetVolumeInformationA`, then `freeBytes64`/`totalBytes64`
+(`GetDiskFreeSpaceExA`/`GetDiskFreeSpaceA`), on every one -- unconditionally,
+including a removable or a CD-ROM. Against a real `A:` that is what seeks:
+`GetDriveTypeA` and `GetLogicalDrives` touch nothing, but the volume and
+free-space calls reach the medium. It also cost: a `DRIVES` call on the XP
+2000+ took **4.53 seconds** where every other op on that machine was
+milliseconds, and the time was all in the floppy.
+
+`SEM_FAILCRITICALERRORS` did NOT help here and was never meant to. It was
+already set in `enumerateDrives` (the `QuietErrors` guard), and it
+suppresses the "There is no disk in drive A:" dialog -- a real risk on an
+unattended box, since that dialog is modal and nobody is there to dismiss
+it. It never stopped the access that provokes it; closing this needed both,
+and the dialog guard was already correct and needed no change.
+
+**Why it was a defect and not a quirk.** `DRIVES` is a read-only listing. A
+caller asking what letters exist had not asked to touch any of them, and a
+listing with a physical side effect is one an agent trips over without
+knowing -- an `ls` that wears out hardware. It also made the op's cost
+unpredictable in a way nothing in the reply explained.
+
+**What closed it.** `enumerateDrives` took a `probe` parameter (default
+`false`). The letter and `GetDriveTypeA`'s type are read unconditionally, as
+before. `GetVolumeInformationA` and the free/total space calls now run
+unconditionally only for a drive that cannot seek (fixed, network, RAM
+disk); for `DRIVE_REMOVABLE` and `DRIVE_CDROM` they run only when `probe` is
+true. `DriveInfo.hasMedia` (a bool) became `DriveInfo.media`, a tri-state
+`DriveMedia` (`MEDIA_UNKNOWN` / `MEDIA_ABSENT` / `MEDIA_PRESENT`) -- the third
+state the note below asked for, so an unprobed removable drive is reported
+as "nobody looked" rather than guessed empty.
+
+Both callers of `enumerateDrives` were fixed, since both can reach a real
+floppy:
+
+- **gremote's `DRIVES`** (`win/remote/fsops.cpp`) reads an optional `probe`
+  header on the request (`"1"` to probe, absent/anything else is quiet) and
+  passes it through. The wire line's `media` field is now `"1"` / `"0"` /
+  `"?"` instead of `0`/`1`. `gremote/ops.py` and `gremote/client.py` were
+  updated to match: `Drive.has_media` is `bool | None`, `None` for `"?"`,
+  and `Remote.drives(probe=True)` asks for the old behaviour. Covered by
+  `tests/python/remote/test_fs.py::test_drives_does_not_probe_removable_media_unless_asked`
+  (proves the code path -- quiet by default, same letters either way -- not
+  the silence; Wine has no floppy motor to prove that on) and by
+  `win/checks/fscheck.cpp`'s `caseDrives` (`drives.quiet_leaves_removable_unknown`,
+  `drives.probe_asks_what_quiet_skipped`), which also only prove the
+  branch is taken.
+- **the agent's `drives` tool** (`bridge/agent/tools.py` ->
+  `bridge/services/guest_fs.py` -> `win/rpc/fsrpc.cpp`'s `FSDRIVES`, used by
+  `gaston.exe`, not gremote) is the path the person actually heard: `FSDRIVES`
+  gained the same `probe` header and quiet default, `FSDRIVE`'s `media`
+  header gained the third spelling `"unknown"`, and the `drives` tool gained
+  an optional `probe` boolean argument (documented in its description) so
+  the one caller that genuinely wants to know what is in `A:` still can.
+  `bridge/services/guest_fs.py`'s `Drive.has_media` is now `bool | None`;
+  the tool prints "not checked" for `None` rather than conflating it with
+  "empty". Covered by `tests/python/agent/test_fs_tools.py`
+  (`test_drives_says_not_checked_when_the_guest_never_probed`,
+  `test_drives_forwards_probe_to_the_guest`).
+
+**Measured:** `gremote.exe` committed-at-load went from 240713 to 242761
+bytes (budget 250000) -- no new translation unit, all of it inside
+`fsops.cpp`/`drives.cpp`/`drives.h`.
+
+**What only the real machine confirms, and Wine cannot:** that a `DRIVES`
+call against the floppy with `probe` unset makes no sound and takes no
+noticeable time, the way the motor spin that found this bug did. Wine proves
+the branch runs; it has no motor to prove silent.
+
+## 21. `mine` was per-bridge, not per-guest-machine -- CLOSED
+
+**[R] CLOSED 2026-10-01**, by decision, the same day it was found. The
+client mints a random GUID on first run, keeps it beside the exe and
+reports it in `HELLO`; the bridge files it beside `mine` and narrows the
+chat list by it. What was built, and what was decided, is at the bottom
+of this section. The problem, as found:
+
+**Found 2026-10-01**, fixing the chat list losing conversations. That bug was
+filtering after limiting -- `listing()` fetched the newest 50 sessions on the
+whole host and `send_sessions` filtered them down to ours afterwards, so work
+in any other checkout evicted the guest's chats (measured: 50 fetched, 33 of
+ours in them, 54 of ours missing). Fetching wide and capping after the filter
+closes that. It does not close what the filter is filtering ON.
+
+`bridge/agent/conversations.py` opens by arguing the case for the filter, and
+the argument is about a MACHINE:
+
+> **whether it is ours.** The chat list used to show everything
+> `list_sessions()` returned, which on a working machine is mostly
+> conversations from a desktop with a different set of tools, a different
+> screen and a different idea of what a path looks like. Continuing one of
+> those *from Windows 98* rarely makes sense. There is no settable tag in
+> ClaudeAgentOptions, so the bridge remembers the ids it started.
+
+"A different set of tools, a different screen, a different idea of what a
+path looks like" is exactly as true of a SECOND GUEST as it is of the desktop.
+But `mine` is written to `~/.gaston-code/conversations.json` on the bridge
+host and says only that *this bridge* started the conversation. Point one
+bridge at two machines -- the QEMU Win98 box and the real XP 2000+, or a
+Win98 guest and an NT 4 one -- and each sees the other's conversations in its
+list, with the other's drive letters, the other's compiler and the other's
+`sync_root` in the folder paths. Resuming one of those from the wrong machine
+is the same mistake the filter exists to prevent, one level down.
+
+It has not bitten yet because there has been one guest at a time. It is not
+hypothetical: §7 above already wants the sync baseline bound to a machine
+rather than to a bridge, and §1b puts a second physical machine in the loop
+deliberately.
+
+**What was built.** A machine identity on the wire, in three pieces.
+
+*The guest owns it.* `win/app/machineid.{h,cpp}`: `CoCreateGuid` once on
+first run, written as one line of ASCII to `machine.id` beside the exe, read
+back on every launch after that. `MachineId` is a plain member of
+`ClientApp`, loaded in `initializeServices()` immediately after `OleService`
+-- after OLE because `CoCreateGuid` lives in OLE32, before the connection
+service because that is what eventually calls `rc_net_start`.
+
+*Where it is stored, and why not `gaston.ini`.* The open question above
+offered the volume serial or a key in the INI. Neither:
+
+* the **volume serial** is derived state, and `tree_id` already uses it, so
+  the two would be the same number meaning two things -- and reformatting a
+  disk would silently retire a machine's whole chat list;
+* **`gaston.ini`** can be written (`IniFile::setString`/`flush`, and
+  `ConfigStore::save` already does) -- but it holds the host, the port and
+  the secret, and by design a value in it that is present but wrong REFUSES
+  STARTUP. Putting a write-once identity in the file that can refuse the
+  client's launch buys nothing and risks the configuration. gaston.ini is
+  also rewritten whenever a setting changes, so the id would be rewritten
+  with it, for no reason.
+
+A separate one-line file cannot corrupt the config if it is interrupted, is
+fixable with EDIT.COM, and moves to a new install by copying one file. Its
+name is 8.3 by construction, so nothing has to spell out a short alias.
+
+*It is not allowed to stop the client.* Failure to generate (`CoCreateGuid`
+refuses) or to persist (read-only or full media) leaves the id EMPTY, logged,
+and the client starts normally. An empty id sends no header, and the bridge
+then filters by `mine` alone -- exactly what every build before this did.
+Deliberately NOT a per-boot id: one minted but not written would be a
+different machine every launch, so the chat list would come up empty every
+morning with nothing to say why. A `machine.id` that exists but does not
+hold an id is replaced rather than refused, and says so in the log, because
+nobody hand-authors that file.
+
+*The wire.* One more `HELLO` header, `machine`. HELLO sent **27** headers
+and now sends **28**, against `RC_HELLO_MAX` **32** in `win/net/net.cpp` and
+`MAX_HELLO_HEADERS` **32** in `bridge/wire/frame.py`: four slots left. The
+other cap is a red herring worth naming, because it is the one you find
+first -- `RC_MAX_HEADERS` 16 in `win/wire/frame.h` bounds what the guest
+PARSES, and the guest never receives a HELLO. That arithmetic was held
+nowhere, so `tests/python/meta/test_hello_headers.py` now pins it: the
+header list is parsed out of the `HDR()` calls, no key is sent twice, the
+list fits the guest's array, the guest's array fits the bridge's cap, and at
+least two slots stay free. Running out matters because the header list IS
+the capability declaration -- CLAUDE.md's "client rules are declared at
+handshake" -- so a full array means the next client rule has nowhere to go.
+
+*The bridge.* `Conversations` gains a `machine` field beside `mine` and a
+`belongs()` that asks both questions; `filter()` takes the connected guest's
+id, which `GuestSession.machine` reads off `HELLO`. `SessionService.add` and
+`TurnRunner` file every new conversation under it.
+
+**ABSENT MEANS ANY, on both sides.** A row written before the field has no
+machine and stays visible to every guest -- 89 such rows on this developer's
+box the day it landed, and a reading of "no machine" rather than "any
+machine" would have emptied every chat list on the first connection after
+the upgrade. A client that sends no header gets the old, wider list rather
+than an empty one. One rule, not two: `add()` with no machine writes no
+machine field, so an unidentified conversation looks exactly like a legacy
+one. Both directions are tested
+(`tests/python/agent/test_conversations.py`,
+`tests/python/services/test_session.py`).
+
+*And the guest half is run, not read.* `win/checks/idcheck.cpp` drives the
+shipping `app/machineid.cpp` under Wine --
+`tests/python/guest/test_guest_machineid.py` reads its verdicts -- because
+every way this can go wrong is invisible from outside the process: a client
+that re-mints on each launch behaves perfectly until the morning the list is
+empty. It asserts the mint, the file, the SAME id on the second launch, a
+different id in a different directory, trailing CRLF trimmed, garbage
+replaced and the replacement persisted, and no id at all when the directory
+cannot hold the file.
+
+**It composes with the fetch/cap order and does not disturb it.**
+`send_sessions` still fetches `FETCH_LIMIT` (500) rows, filters, and caps at
+`DISPLAY_LIMIT` (59) LAST. The machine filter is part of the filter step,
+which is the only place it can go: applied after the cap it would send a
+short list while the guest's own chats sat further down the fetch, which is
+the §21-adjacent bug this file opens with.
+
+**Still open: whether this id and §7's baseline identity are the same id.**
+They should be, and this does not unify them -- deliberately. §7's `tree_id`
+is derived from the volume serial and is checked as an identity by
+`scan_guest`, which REFUSES a pass when it changes; that refusal is the
+guard against pointing one baseline at a reformatted or swapped disk, and it
+is correct for exactly the reason a chat list's id must NOT work that way (a
+reformat should not retire your conversations). Unifying them is therefore
+not a rename. It means deciding which of the two behaviours the single id
+has, and then giving the other one back by a different route -- most likely
+`tree_id` becoming `machine` + a volume-change check carried as its own
+field, so "which machine" and "has the disk underneath it changed" stop
+being one answer. That is a change to the sync layer's identity contract and
+belongs with §7's mirror decision, not ahead of it. Nothing in what shipped
+here forecloses it: the guest already has one persistent id and `HELLO`
+already carries it, so §7 can adopt it when it is settled rather than mint a
+second one.
+
+---
+
+## 22. Self-update rolls back from a load failure, not from a silent one
+
+**Status:** built to here by decision, 2026-10-01. `gremote.exe` can now
+replace itself (`UPDATE` + `win/remote/gupdate.cpp` + `gremote/ship.py`'s
+`self_update`), and the automatic rollback covers one of the two ways a new
+build can fail to serve.
+
+**What is covered, and why it was worth building.** `gupdate` keeps the
+previous image as `GREMOTE.OLD` -- the cheap, reliable half: a person always
+has one rename between them and the build that worked. On top of that it
+holds the `PROCESS_INFORMATION` handle of the image it just started and
+waits `-verify` milliseconds on it. If the process is gone by then it puts
+`GREMOTE.OLD` back and starts that instead. That is not a guess: on this
+platform a single NT-only static import kills an image at LOAD, before
+`WinMain`, with no log written -- the failure mode `CLAUDE.md` opens with --
+and from the parent's side it is simply a handle that signals immediately.
+The same catch fires for a build that refuses its own config. Proven under
+Wine by shipping `capscheck.exe` at the server:
+`tests/python/remote/test_update.py::test_a_replacement_that_does_not_stay_up_is_rolled_back`.
+
+**What is NOT covered.** A replacement that loads, stays up, and never
+answers. A build that starts and then fails to bind -- the port is in
+`TIME_WAIT` from the connection the update itself just dropped, say, and the
+bind retry gives up after four minutes -- or one that wedges before its
+accept loop, is indistinguishable from a healthy one through a process
+handle. `gupdate` would report success and the machine would be unreachable
+until somebody walks over and renames `GREMOTE.OLD` back.
+
+**To close it**, `gupdate` needs to probe the port rather than the process:
+
+- read `gremote.ini` from beside the destination for `bind`/`port` (it
+  already links `libcore`, so `IniFile` is free);
+- link `wsock32` and connect to `127.0.0.1:<port>` inside the verify
+  window, retrying while the socket is refused. A TCP connect is enough --
+  it does not need the secret, and asking for a handshake would mean
+  teaching the updater the protocol;
+- treat "never accepted a connection inside the window" the same as "the
+  process exited", and roll back.
+
+The cost is real but small: Winsock startup, an INI read, and about 10KB of
+image on a program currently measuring 50,688 committed at load against a
+64,000 cap (`win/Makefile`, `check-gupdate`). It was left out because the
+caller on the other end of the wire is ALREADY doing exactly that probe --
+`self_update` reconnects and reports what answered -- so the gap is "the
+guest cannot self-heal from a silent failure", not "nobody finds out". On a
+machine in another room that distinction is the whole difference, which is
+why this is written down rather than closed.
+
+**Two smaller things deferred with it.**
+
+- **`gupdate.exe` cannot update itself.** It runs from where it is
+  installed, so it holds its own image. Replacing it needs a copy of it in
+  `%TEMP%` to do the swap -- the same trick, one level up. Nothing needs it
+  yet: `UPDATE` refuses when the updater is missing, so a stale updater is a
+  loud failure rather than a quiet one.
+- **The verify window is fixed per call, not adaptive.** `-verify 4000` is
+  generous for Wine and for a P200 with a warm cache, and has never been
+  measured against a cold start off a 1998 platter with the disk busy. If
+  the real machine ever rolls back a build that was merely slow, the number
+  is the first thing to look at -- and `GUPDATE.LOG` records how long the
+  image actually survived, precisely so that question has an answer.

@@ -3273,3 +3273,80 @@ either.
 
 Committed at load: `gaston.exe` 464665 of 470000, `gremote.exe` 238665 of
 250000. `make test` 3623 passed.
+
+## The guest says which machine it is (2026-10-01)
+
+A Windows 98 box connected and its chat list was somebody else's: 87
+conversations from the QEMU VM, every one of them marked `mine` in
+`~/.gaston-code/conversations.json`. `mine` is written on the BRIDGE HOST.
+It answers "did this bridge start the conversation" and gives the same
+answer to every machine that dials in, which is the right answer only while
+there is exactly one of them. `bridge/agent/conversations.py` had already
+argued the case for the filter in its own docstring -- a conversation from a
+machine "with a different set of tools, a different screen and a different
+idea of what a path looks like" is rarely worth continuing -- and that
+argument is about a MACHINE, not about a bridge.
+
+So the client owns an identity now. `CoCreateGuid` once on first run,
+written to `machine.id` beside the exe, read back on every launch after
+that, and reported as one more `HELLO` header (`win/app/machineid.h`). The
+bridge files it beside `mine` and narrows the chat list to it.
+
+**A file of its own rather than a key in `gaston.ini`,** which `IniFile` is
+perfectly able to write. `gaston.ini` holds the host, the port and the
+secret, and a value in it that is present but wrong refuses startup by
+design -- putting a write-once identity in the one file that can stop the
+client launching buys nothing. It is also rewritten whenever a setting
+changes, so the id would ride along every time for no reason. One line of
+ASCII in an 8.3-named file cannot corrupt the configuration if the power
+goes out mid-write, and it is fixable with EDIT.COM.
+
+**Not the volume serial,** which was the cheaper option on the table.
+`tree_id` already derives from it, so the two would be one number meaning
+two things -- and a reformat would silently retire a machine's whole chat
+list, which is correct for a sync baseline and wrong for a conversation
+history.
+
+**It cannot stop the client starting.** If the GUID will not generate, or
+the file will not be written, the id is empty, the header is not sent, and
+the bridge filters by `mine` alone -- the behaviour every build before this
+had. Deliberately not a per-boot id: one minted but never written would be a
+different machine every morning, and the chat list would come up empty with
+nothing to explain it.
+
+**Absent means ANY, on both sides, and that is the whole compatibility
+story.** There were 89 rows with no machine on this developer's box the day
+it landed. A reading of "no machine" rather than "any machine" would have
+emptied every chat list on the first connection after the upgrade. A client
+that sends no header gets the old wider list rather than an empty one, and
+`add()` with no machine writes no field at all, so an unidentified
+conversation and a legacy one are indistinguishable by construction rather
+than by a second rule.
+
+`send_sessions` still reads fetch-wide / filter / cap, with the cap LAST:
+the machine test is part of the filter step, which is the only place it can
+go. Applied after the cap it would send a short list while the guest's own
+conversations sat further down the fetch -- the same shape as the bug fixed
+earlier the same day.
+
+HELLO went from 27 headers to 28 against a cap of 32 on both sides. That
+arithmetic was held nowhere, and the cap you find first (`RC_MAX_HEADERS`
+16) is the wrong one -- it bounds what the guest PARSES, and the guest never
+receives a HELLO. `tests/python/meta/test_hello_headers.py` now parses the
+`HDR()` calls out of `net.cpp` and pins all of it, including that two slots
+stay free: the header list IS the capability declaration, so a full array
+means the next client rule has nowhere to go.
+
+`win/checks/idcheck.cpp` runs the shipping `MachineId` under Wine, because
+every one of its failure modes is invisible from outside the process: the
+mint, the file, the same id on the second launch, a different id in a
+different directory, trailing CRLF trimmed, garbage replaced AND the
+replacement persisted, and no id at all when the directory cannot hold the
+file.
+
+BACKLOG.md §21 is closed. §7's question -- whether the sync baseline's
+identity should be this same id -- is answered there and left open on
+purpose: unifying them means deciding which of two incompatible behaviours
+the one id has, and that belongs with §7's mirror decision.
+
+Committed at load: `gaston.exe` 466201 of 470000.

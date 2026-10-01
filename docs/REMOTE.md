@@ -456,7 +456,16 @@ handlers behind the shorter names in the lane table above.
   first four can hang 9x; `REDIR32` cannot be killed at all, only turned into
   a zombie; Win16 kill safety is untested.
 - **There is no remote `QUIT`.** Stopping `gremote` remotely is `EXEC` of
-  something that kills it, which is deliberate friction.
+  something that kills it, which is deliberate friction. *Refined
+  2026-10-01, when self-update made the tension real: what the friction
+  protects is the machine's reachability -- a caller must not be able to
+  take the box away from itself with one frame and have nothing to show for
+  it. `REBOOT` already stops this process, harder, and is allowed because
+  the box comes back. `UPDATE` is allowed on the same test, and is built so
+  it cannot be degraded into a bare quit: it stops only after a validated
+  replacement is staged and an updater process is already running to
+  install it, and it can point at nothing but the running image. See
+  "Safety of the test box" and `win/remote/control.cpp`'s `update()`.*
 
 `UIFOCUS` raises the window containing `target` and does nothing else.
 `UICLICK` and `UIKEYS` already raise what they need, so it exists for the case
@@ -533,13 +542,80 @@ with Remote("192.168.1.50", secret="...") as r:
   and renames (`MoveFileExA` is on the deny list). A truncated
   `gaston.exe` is a bricked client.
 
+## Where things go on a target machine
+
+Decided 2026-10-01, on the first real-hardware run, because the QEMU guest's
+C:\ had become a midden -- `C:\RETRO` and `C:\GASTON` side by side, a
+dozen smoke-test leftovers called `BIG`, `WRITEME3`, `PINEAPPL` loose in the
+install directory, and scratch in three places. None of it was wrong when it
+was written; it accumulated because nobody said where things went.
+
+    C:\GASTON\      the client: gaston.exe, gaston.ini, view.htm,
+                     spin.gif, tools_detect.ini, gaston.log
+    C:\GREMOTE\     the server: gremote.exe, gremote.ini, gremote.log
+    C:\WORK\        the sync root, and NOTHING else. Conversation folders
+                     live under it; it must never contain either program,
+                     or the client mirrors itself to the bridge
+    C:\TEMP\GR\    scratch for a test session, and the only place a test
+                     may write. Emptied at the end of the session that
+                     made it
+
+Four directories. Anything a test leaves outside them is a bug in the test,
+and `ls` of each of these should be explicable in one sentence.
+
+The two programs get their OWN directories rather than sharing one. They are
+separate products with separate configs and separate logs, one of them is
+deployed by the other, and `ship()` ends every process running from the
+directory it writes into -- which is a reason not to have them cohabit.
+
 ## Safety of the test box
 
-- **Self-update keeps a way back.** `gremote` copies itself to `%TEMP%`, the copy
-  waits for the old pid to exit, renames `GREMOTE.EXE` to `GREMOTE.OLD`, puts the
-  new one in place, launches it, and waits for it to answer on localhost. If it
-  does not answer (an NT-only import dies at load with no log), the copy
-  restores `GREMOTE.OLD` and launches that.
+- **Self-update keeps a way back.** *Built 2026-10-01, and the shape changed
+  on the way: the sketch had `gremote` copy ITSELF to `%TEMP%`, and what
+  shipped is a separate 47KB exe, `gupdate.exe`, installed beside the
+  server.* A caller `PUT`s the new build to a staging path and sends
+  `UPDATE`; the server validates it, starts `gupdate` and stops. `gupdate`
+  waits for the old process to let go, renames `GREMOTE.EXE` to
+  `GREMOTE.OLD`, puts the new one in place and launches it. If the new
+  image does not stay up it restores `GREMOTE.OLD` and launches that.
+  `gremote/ship.py`'s `self_update` then reconnects and reports what
+  answered, because the machine stops being able to speak for itself in the
+  middle of this.
+  - **Why a second exe rather than a copy of the server.** The copy would
+    carry libwire, libexec, libfs and Winsock into a program whose whole
+    job is to still be working when the server is not. `gupdate` links
+    `libcore` alone.
+  - **How it knows the old process has gone: two polls, not one.** A
+    running `.exe` is LOCKED on Windows 98, so "can I open the destination
+    for writing" is the question asked directly rather than through a pid
+    and `OpenProcess` -- which needs the pid, survives pid reuse by luck,
+    and answers a different question anyway. But the relaunch needs a
+    second fact: gremote is single-instance, and a copy started while the
+    old one lives exits silently, which would read as a successful update
+    that changed nothing. So it also waits for the named mutex
+    `GastonRemoteSingleInstance` to disappear. Wine does not lock a running
+    image, so under Wine only the mutex test says anything and on the guest
+    both do -- which is exactly why there are two.
+  - **The wait is bounded and its timeout is not silent.** 60 seconds by
+    default. When it expires nothing is written at all, and the destination
+    is launched anyway: either the old process is alive and the launch
+    hits the mutex, or it died holding the image and the launch is the
+    recovery. Every failure path in `gupdate` ends with something started
+    and a line in `GUPDATE.LOG`; a machine with no server and no
+    explanation is the one outcome it is written to avoid.
+  - **Rollback covers a load failure, not a silent one.** See
+    `docs/BACKLOG.md` §22 for what a port probe would add and what it would
+    cost.
+- **There is still no remote QUIT, and `UPDATE` is not one.** The rule below
+  forbids casually taking the machine away from itself. `UPDATE` stops the
+  server only after it has found the updater beside the exe, resolved its
+  own image path from the loader, been given a source that exists, differs
+  from that image, and reads as a 32-bit PE, and successfully STARTED the
+  updater -- any of which failing is an `ERR` with the server still running.
+  The destination is never a header; it is always the running image. So
+  there is no spelling of `UPDATE` that means "stop", and `EXEC` of
+  something that kills it remains the general way to stop it, at the same
+  price it always cost.
 - **`REBOOT`** exists for a wedged client. `ExitWindowsEx` needs no privileges
   on 9x.
 - **Autostart** through the `RunServices` registry key plus
