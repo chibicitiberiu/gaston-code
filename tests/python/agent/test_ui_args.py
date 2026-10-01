@@ -86,3 +86,66 @@ def test_the_default_scope_still_needs_no_pid():
     _call(_server(ui), "ui", {})
     assert ui.calls[0]["scope"] == "desktop"
     assert ui.calls[0]["pid"] == 0
+
+
+# --- which PART of a compound selector was missing -------------------------
+#
+# `A > B` failing said only "Nothing on screen matches that selector ... the
+# window may not be open", and an agent believed it: in a live session
+# `HelloGuiClass[text="Hello Application"] > Button[text="Close"]` came back
+# that way while the window was on screen and the program simply had no Close
+# button (2026-10-02). The guest sends the index of the part that matched
+# nothing; the text is recovered from the selector the caller sent.
+
+def test_the_failing_part_is_named():
+    from bridge.agent.tools import _ui_explain
+    from bridge.services.ui import UiError
+    exc = UiError("not_found", "", {"step": "1"})
+    out = _ui_explain(exc, 'HelloGuiClass[text="Hello App"] > Button[text="Close"]')
+    assert 'Button[text="Close"]' in out
+    assert "the rest of it did match" in out
+    # And it must NOT still be telling the agent the window may be gone.
+    assert "may not be open" not in out
+
+
+def test_the_container_is_named_when_that_is_what_was_missing():
+    from bridge.agent.tools import _ui_explain
+    from bridge.services.ui import UiError
+    out = _ui_explain(UiError("not_found", "", {"step": "0"}),
+                      "NoSuchWindow > Button")
+    assert "NoSuchWindow" in out
+
+
+def test_a_single_part_selector_gets_the_plain_message():
+    """Nothing to apportion blame between, so naming a part would be noise.
+    The guest does not send `step` for a one-component selector either."""
+    from bridge.agent.tools import _ui_explain
+    from bridge.services.ui import UiError
+    out = _ui_explain(UiError("not_found"), "Button")
+    assert "Read the screen again" in out
+
+
+def test_a_quoted_angle_bracket_is_not_a_separator():
+    """`Button[text="a > b"]` is ONE component. Miscounting shifts the index
+    and names the wrong part, which is the failure being fixed."""
+    from bridge.agent.tools import _selector_part
+    assert _selector_part('Window > Button[text="a > b"]', "1") == \
+        'Button[text="a > b"]'
+
+
+def test_a_nonsense_step_names_nothing_rather_than_guessing():
+    from bridge.agent.tools import _selector_part
+    assert _selector_part("A > B", "7") == ""
+    assert _selector_part("A > B", "") == ""
+
+
+def test_an_unknown_key_is_reported_with_the_token():
+    """`bad_key` alone sends the agent hunting through its own string. And the
+    message has to lead with "nothing was typed", because the thing it will
+    otherwise assume is that some of the string went in."""
+    from bridge.agent.tools import _ui_explain
+    from bridge.services.ui import UiError
+    out = _ui_explain(UiError("bad_key", "", {"key": "[Frobnicate]"}))
+    assert "[Frobnicate]" in out
+    assert "NOTHING was typed" in out
+    assert "Delete" in out          # and what it could have written instead

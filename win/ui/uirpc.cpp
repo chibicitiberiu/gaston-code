@@ -559,6 +559,27 @@ static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
         ui_end(net, id, "no_memory", NULL, NULL, 0);
         return NULL;
     }
+    /* WHICH PART was not there, when the selector has more than one.
+     * `A > B` failing says nothing about whether A was present, and a caller
+     * told only "nothing matches" reads it as the window being gone: in a live
+     * session `HelloGuiClass[text="Hello Application"] > Button[text="Close"]`
+     * was answered that way while the window was on screen and only the button
+     * did not exist -- the program had no Close button at all (2026-10-02).
+     *
+     * The INDEX, not the text. The caller has the selector it sent and can
+     * split it; sending the component back would be this side re-rendering a
+     * string it was given, and getting the spacing subtly wrong. */
+    {
+        int step = r.unmatchedStep();
+        char stepText[16];
+        if (step >= 0 && sel.stepCount() > 1)
+        {
+            rc_strf(stepText, sizeof(stepText), "%d", step);
+            k[0] = "step"; v[0] = stepText;
+            ui_end(net, id, "not_found", k, v, 1);
+            return NULL;
+        }
+    }
     ui_end(net, id, "not_found", NULL, NULL, 0);
     return NULL;
 }
@@ -572,6 +593,7 @@ static const char *input_result_name(InputResult r)
     case INPUT_NO_WINDOW:      return "no_window";
     case INPUT_NOT_FOREGROUND: return "not_foreground";
     case INPUT_OCCLUDED:       return "occluded";
+    case INPUT_BAD_KEY:        return "bad_key";
     case INPUT_FAILED:         return "failed";
     }
     return "failed";
@@ -715,10 +737,25 @@ static void do_keys(rc_net *net, UiContext *ctx, rc_frame *f)
         }
     }
 
-    r = ctx->input.typeText(win, text);
-    if (r == INPUT_OK)
-        settle_after(ctx, f);
-    ui_end(net, id, input_result_name(r), NULL, NULL, 0);
+    {
+        /* THE TOKEN IT DID NOT UNDERSTAND, quoted back. "bad_key" alone sends
+         * the caller looking through its own string; a `[Del ete]` named in
+         * the reply is a one-line fix. Nothing was typed -- typeText checks
+         * the whole string before the first keystroke. */
+        char bad[48];
+        const char *k[1];
+        const char *v[1];
+        r = ctx->input.typeText(win, text, bad, sizeof(bad));
+        if (r == INPUT_OK)
+            settle_after(ctx, f);
+        if (r == INPUT_BAD_KEY && bad[0])
+        {
+            k[0] = "key"; v[0] = bad;
+            ui_end(net, id, input_result_name(r), k, v, 1);
+            return;
+        }
+        ui_end(net, id, input_result_name(r), NULL, NULL, 0);
+    }
 }
 
 /* ---- SHOT ------------------------------------------------------------ */

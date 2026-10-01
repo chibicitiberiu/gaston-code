@@ -44,7 +44,38 @@ DEFAULT_TIMEOUT_MS = 20_000
 MAX_TIMEOUT_MS = 120_000
 
 
-def _ui_explain(exc: UiError) -> str:
+def _selector_part(target: str, step: str) -> str:
+    """The `step`-th component of a `>` selector, or "".
+
+    THE SPLIT IS HERE AND NOT ON THE GUEST, which sends only the index. The
+    guest would be re-rendering a string it was handed, and getting the
+    spacing subtly different from what the caller wrote -- so it names the
+    position and this names the text.
+
+    `>` INSIDE A QUOTED VALUE IS NOT A SEPARATOR: `Button[text="a > b"]` is one
+    component. Without this the count slips and the message blames the wrong
+    part, which is the whole failure being fixed.
+    """
+    try:
+        want = int(step)
+    except (TypeError, ValueError):
+        return ""
+    parts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    for ch in target:
+        if ch == '"':
+            depth ^= 1
+        if ch == ">" and not depth:
+            parts.append("".join(cur).strip())
+            cur = []
+            continue
+        cur.append(ch)
+    parts.append("".join(cur).strip())
+    return parts[want] if 0 <= want < len(parts) else ""
+
+
+def _ui_explain(exc: UiError, target: str = "") -> str:
     """A guest status, as something the model can act on.
 
     Every one of these says what to do next, which is why they live in
@@ -55,8 +86,21 @@ def _ui_explain(exc: UiError) -> str:
     #: not the "unknown status" fallback that a missing placeholder would
     #: otherwise produce.
     fields.setdefault("on_top", "another window")
+    fields.setdefault("key", "that")
+    status = exc.status
+    #: WHICH PART of a compound selector was missing. `A > B` failing says
+    #: nothing about whether A was there, and an agent told only "nothing
+    #: matches ... the window may not be open" believed the window had gone --
+    #: while it was on screen and only the button did not exist, because the
+    #: program had no Close button at all (live session, 2026-10-02). The guest
+    #: sends the index; the component text is recovered here.
+    if status == "not_found":
+        part = _selector_part(target, fields.get("step", ""))
+        if part:
+            fields["part"] = part
+            status = "not_found_part"
     try:
-        base = prompts.text(f"tools.ui.refused.{exc.status}", **fields)
+        base = prompts.text(f"tools.ui.refused.{status}", **fields)
     except KeyError:
         base = prompts.text("tools.ui.refused.unknown", status=exc.status)
     return f"{base} ({exc.detail})" if exc.detail else base
@@ -374,7 +418,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             )
             return _text(render_tree(nodes, headers))
         except UiError as exc:
-            return _text(_ui_explain(exc), error=True)
+            return _text(_ui_explain(exc, str(a.get("target") or "")),
+                         error=True)
         except Exception:
             log.exception("mcp__machine__ui failed: %r", args)
             raise
@@ -413,7 +458,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             return _text(prompts.text("tools.ui.view.clicked",
                                       target=target))
         except UiError as exc:
-            return _text(_ui_explain(exc), error=True)
+            return _text(_ui_explain(exc, str(a.get("target") or "")),
+                         error=True)
         except Exception:
             log.exception("mcp__machine__click failed: %r", args)
             raise
@@ -458,7 +504,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             return _text(prompts.text("tools.ui.view.bad_character"),
                          error=True)
         except UiError as exc:
-            return _text(_ui_explain(exc), error=True)
+            return _text(_ui_explain(exc, str(a.get("target") or "")),
+                         error=True)
         except Exception:
             log.exception("mcp__machine__keys failed: %r", args)
             raise
@@ -493,7 +540,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                            settle=max(0, min(int(a.get("settle") or 0), 5000)))
             return _text(prompts.text("tools.ui.view.focused", target=target))
         except UiError as exc:
-            return _text(_ui_explain(exc), error=True)
+            return _text(_ui_explain(exc, str(a.get("target") or "")),
+                         error=True)
         except Exception:
             log.exception("mcp__machine__focus failed: %r", args)
             raise
@@ -539,7 +587,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 "mimeType": "image/png",
             }]}
         except UiError as exc:
-            return _text(_ui_explain(exc), error=True)
+            return _text(_ui_explain(exc, str(a.get("target") or "")),
+                         error=True)
         except Exception:
             log.exception("mcp__machine__shot failed: %r", args)
             raise

@@ -17,6 +17,10 @@ Resolver::Resolver(const Selector &sel, MsaaSource *msaa)
     m_cacheN = 0;
     m_enriched = 0;
     m_nth = 0;
+    /* Watcom is C++98 and this class is heap-allocated by some callers, so
+     * every member is set by hand -- CLAUDE.md, "new T() does not zero a
+     * class". A garbage hit count would report a step as present. */
+    memset(m_stepHit, 0, sizeof(m_stepHit));
     m_found = false;
     m_tooDeep = 0;
     m_end = WALK_COMPLETE;
@@ -72,6 +76,16 @@ const Enrichment *Resolver::enrichmentFor(const Node &n)
     return got ? &e : 0;
 }
 
+int Resolver::unmatchedStep() const
+{
+    for (int i = m_sel.stepCount() - 1; i >= 0; i--)
+    {
+        if (i < RC_SEL_STEPS && m_stepHit[i] == 0)
+            return i;
+    }
+    return -1;
+}
+
 bool Resolver::stepMatches(int si, const Node &n)
 {
     /* Cheap pass first. An MSAA attribute answers "unknown, keep it" with no
@@ -85,7 +99,7 @@ bool Resolver::stepMatches(int si, const Node &n)
      * checkbox is already settled and must not drag a 3 ms cross-process
      * call in behind it. */
     if (!m_sel.stepNeedsEnrichment(si, n))
-        return true;
+        return noteHit(si);
 
     const Enrichment *e = enrichmentFor(n);
     if (!e)
@@ -96,7 +110,21 @@ bool Resolver::stepMatches(int si, const Node &n)
          * to prevent. */
         return false;
     }
-    return m_sel.matchesStep(si, n, e);
+    if (!m_sel.matchesStep(si, n, e))
+        return false;
+    return noteHit(si);
+}
+
+/* Records that step `si` matched a node on its own, and returns true so it can
+ * stand in for the `return true` it replaces. Counted at the SUCCESSFUL exits
+ * only: a node that passes the cheap pass and then fails on an MSAA attribute
+ * has not matched, and counting it would report the selector as present when
+ * the thing it names is not. */
+bool Resolver::noteHit(int si)
+{
+    if (si >= 0 && si < RC_SEL_STEPS)
+        m_stepHit[si]++;
+    return true;
 }
 
 /* Can steps[0..si] be satisfied by the ancestor chain[0..ai]?

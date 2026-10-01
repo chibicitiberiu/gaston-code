@@ -24,10 +24,63 @@ def test_every_case_passes(verdicts):
     assert not bad, bad
 
 
+#: A hard count, so a case that stops being emitted fails instead of
+#: vanishing -- `test_every_case_passes` is satisfied by an empty set, which is
+#: what makes this the only guard against a case quietly going away.
+#:
+#: 129 -> 147 on 2026-10-02: fourteen cases for the named-key syntax in
+#: `typeText` -- including three for bracket escaping, asked for by name -- and
+#: four for which part of a compound selector was not found. Both were defects
+#: a live session hit (docs/measurements/keys-named-p200-20261002.txt).
+CASE_COUNT = 147
+
+
 def test_every_case_ran(verdicts):
-    #: A hard count, so a case that stops being emitted fails instead of
-    #: vanishing. Raise it deliberately when cases are added.
-    assert len(verdicts) == 129, sorted(verdicts)
+    assert len(verdicts) == CASE_COUNT, sorted(verdicts)
+
+
+def test_named_keys_parse_and_refuse(verdicts):
+    """`[Delete]` used to be typed as eight characters, and the call said
+    "Typed 39 characters" -- an agent clearing a text box got
+    `John[Delete][Delete][D` in the field (2026-10-02).
+
+    The refusals are the half that matters: an unknown token must type NOTHING
+    and must name itself, or the caller is left hunting through its own string.
+    Ctrl+Alt+Delete is checked as a COMPOSED token, which is how it would
+    otherwise slip past a guard that only reads keyboard state.
+    """
+    for case in ("keys-accepts-a-named-key",
+                 "keys-accepts-modifiers",
+                 "keys-accepts-the-sendkeys-brace",
+                 "keys-names-are-case-insensitive",
+                 "keys-doubled-bracket-is-a-literal",
+                 "keys-a-closing-bracket-needs-no-escape",
+                 "keys-an-escaped-token-is-not-a-token",
+                 "keys-doubled-brace-is-a-literal",
+                 "keys-refuses-an-unknown-name",
+                 "keys-names-the-token-it-refused",
+                 "keys-refuses-an-unterminated-bracket",
+                 "keys-refuses-an-empty-token",
+                 "keys-refuses-a-bad-modifier",
+                 "keys-refuses-ctrl-alt-del-even-as-one-token"):
+        assert verdicts[case][0] == "pass", (case, verdicts[case])
+
+
+def test_a_failed_selector_says_which_part_was_missing(verdicts):
+    """`A > B` failing said only "nothing matches ... the window may not be
+    open", and an agent believed it while the window was on screen and only the
+    button did not exist (2026-10-02).
+
+    The ordering is the subtle part: the leaf is tested against every node and
+    the ancestors only once the leaf matched, so a missing leaf leaves the
+    ancestors untested -- blaming the FIRST unmatched step would blame the
+    window for the button.
+    """
+    for case in ("resolve-blames-the-leaf-not-the-container",
+                 "resolve-blames-the-container-when-the-leaf-is-there",
+                 "resolve-reports-a-step-when-nothing-matches",
+                 "resolve-blames-nothing-when-it-succeeds"):
+        assert verdicts[case][0] == "pass", (case, verdicts[case])
 
 
 def test_the_grammar_refuses_what_it_should(verdicts):

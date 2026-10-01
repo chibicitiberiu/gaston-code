@@ -117,10 +117,28 @@ public:
      * ran out of time before we could tell". */
     WalkEnd walkEnd() const     { return m_end; }
 
+    /* WHICH PART OF THE SELECTOR MATCHED NOTHING, or -1 if every part matched
+     * something and only the combination failed.
+     *
+     * `A > B` failing says nothing about whether A was there, and the caller
+     * cannot tell: in a live session `HelloGuiClass[text="Hello Application"]
+     * > Button[text="Close"]` was answered "Nothing on screen matches that
+     * selector ... the window may not be open" -- while the window was on
+     * screen and only the button did not exist, because the program had no
+     * Close button at all (2026-10-02).
+     *
+     * THE HIGHEST-INDEXED step with no hits, not the lowest. The leaf is
+     * tested against every node and the ancestors only when the leaf matched,
+     * so a leaf that never matched leaves the ancestors untested with zero
+     * hits each -- and reporting the first of those would blame the window for
+     * the button's absence, which is the bug this is here to fix. */
+    int unmatchedStep() const;
+
 private:
     virtual bool onNode(const Node &n);
 
     bool stepMatches(int si, const Node &n);
+    bool noteHit(int si);
     bool matchUp(int si, int ai);
     const Enrichment *enrichmentFor(const Node &n);
 
@@ -135,6 +153,9 @@ private:
     int     m_cacheN;
     int     m_enriched;
     int     m_nth;          /* :nth on the last step, 0 for none */
+    /* Nodes each step matched on its own, ignoring the rest of the chain.
+     * Only ever read after a failure, to say which part was not there. */
+    int     m_stepHit[RC_SEL_STEPS];
     bool    m_found;        /* m_st->match holds the answer */
     int     m_tooDeep;
     WalkEnd m_end;
