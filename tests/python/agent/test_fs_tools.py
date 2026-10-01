@@ -247,3 +247,143 @@ def test_every_tool_refuses_clearly_with_no_machine_attached():
                        ("drives", {})):
         body = _body(_call(srv, name, args))
         assert "No machine is connected" in body, name
+
+
+# --- translation: the lane has no opinion, the TOOL does --------------------
+#
+# `bridge/services/guest_fs.py` is "byte for byte, with no baseline and no
+# opinion about line endings", and that is right for the lane. It was wrong as
+# the only behaviour the agent could get: the sync layer classifies text and
+# converts, put_file did not, so the SAME file was runnable through one path
+# and silently broken through the other.
+#
+# Measured on real Windows 98 the day this was found
+# (docs/measurements/batch-eol-and-dir-b-p200-20261001.txt):
+#
+#   LF.BAT    "@echo off\necho one\nset FOO=bar\necho [%FOO%]\n"  -> "OFF"
+#   CRLF.BAT  the same with \r\n                                  -> "one" "[bar]"
+#
+# Both exit 0. The session that hit it spent eleven tool calls on it, and
+# `get_file` -- called specifically to diagnose it -- showed text that looked
+# perfect, because LF and CRLF render identically.
+
+LF_BAT = "@echo off\necho one\nset FOO=bar\n"
+
+
+def test_text_is_converted_to_the_machines_endings_by_default():
+    fs = FakeFs()
+    _call(_server(fs), "put_file", {"path": r"C:\W\B.BAT", "content": LF_BAT})
+    sent = fs.put_calls[0][1]
+    assert b"\r\n" in sent
+    assert b"\n" not in sent.replace(b"\r\n", b"")
+
+
+def test_the_reply_says_the_bytes_are_not_identical_any_more():
+    """Otherwise a later `get_file` showing CRLF is a mystery, and the agent
+    has no way to know the two copies differ."""
+    fs = FakeFs()
+    out = _body(_call(_server(fs), "put_file",
+                      {"path": r"C:\W\B.BAT", "content": LF_BAT}))
+    assert "converted" in out.lower()
+
+
+def test_translation_false_sends_the_bytes_as_they_are():
+    fs = FakeFs()
+    _call(_server(fs), "put_file",
+          {"path": r"C:\W\B.BAT", "content": LF_BAT, "translation": False})
+    assert fs.put_calls[0][1] == LF_BAT.encode("cp1252")
+
+
+def test_a_file_with_nul_bytes_is_never_converted(tmp_path):
+    """`P.classify` is the sync layer's own classifier and this is its first
+    rule: a NUL ANYWHERE means byte-exact. Normalising a PDF shifts every
+    xref offset, and a PDF can run kilobytes of ASCII before its first
+    stream."""
+    blob = b"%PDF-1.2\nstream\n\x00\x01\n\nmore\n"
+    (tmp_path / "f.bin").write_bytes(blob)
+    fs = FakeFs()
+    _call(_server(fs, workdir=str(tmp_path)), "put_file",
+          {"path": r"C:\W\F.BIN", "from_path": "f.bin"})
+    assert fs.put_calls[0][1] == blob
+
+
+def test_mixed_endings_are_left_alone(tmp_path):
+    """Not fussiness: we cannot know which the user wanted, and converting
+    would rewrite their file while the normalised CRC stayed identical, so
+    nothing would report it. See `P.classify`."""
+    blob = b"one\r\ntwo\nthree\r\n"
+    (tmp_path / "m.txt").write_bytes(blob)
+    fs = FakeFs()
+    _call(_server(fs, workdir=str(tmp_path)), "put_file",
+          {"path": r"C:\W\M.TXT", "from_path": "m.txt"})
+    assert fs.put_calls[0][1] == blob
+
+
+def test_an_unencodable_character_is_a_refusal_not_a_traceback():
+    """Until 2026-10-02 `fold.encode_exact` raised straight out of the tool:
+    the handler logged and re-raised, so one box-drawing character in a README
+    reached the agent as an exception with no advice in it. Measured the same
+    day: cp1252 holds the euro sign and does not hold U+2500."""
+    fs = FakeFs()
+    out = _body(_call(_server(fs), "put_file",
+                      {"path": r"C:\W\R.TXT", "content": "a \u2500 b"}))
+    assert fs.put_calls == []            # nothing was written
+    assert "U+2500" in out               # which character
+    assert "cp1252" in out               # and why it cannot hold it
+
+
+def test_a_character_the_codepage_does_hold_goes_through():
+    fs = FakeFs()
+    _call(_server(fs), "put_file", {"path": r"C:\W\E.TXT",
+                                    "content": "10 \u20ac"})
+    assert fs.put_calls[0][1] == b"10 \x80"
+
+
+def test_get_file_says_what_endings_the_file_has():
+    """The line that was missing. An agent read a batch file back to find out
+    why it would not run, got text that looked right, and learned nothing."""
+    out = _body(_call(_server(FakeFs(data=b"one\ntwo\n")), "get_file",
+                      {"path": r"C:\W\B.BAT"}))
+    assert "LF" in out
+    assert "NOT what this machine uses" in out
+
+
+def test_native_endings_are_reported_as_fine():
+    out = _body(_call(_server(FakeFs(data=b"one\r\ntwo\r\n")), "get_file",
+                      {"path": r"C:\W\B.BAT"}))
+    assert "what this machine uses" in out
+    assert "NOT what this machine uses" not in out
+
+
+def test_get_file_hands_back_text_with_local_endings():
+    out = _body(_call(_server(FakeFs(data=b"one\r\ntwo\r\n")), "get_file",
+                      {"path": r"C:\W\B.TXT"}))
+    assert "one\ntwo" in out
+
+
+def test_get_file_untranslated_goes_to_a_file_like_a_binary(tmp_path):
+    """The agent cannot hold bytes, so byte-exact has to mean a local file --
+    the same route a binary already took."""
+    wd = tmp_path / "work"
+    wd.mkdir()
+    out = _body(_call(_server(FakeFs(data=b"one\r\ntwo\r\n"),
+                              workdir=str(wd)), "get_file",
+                      {"path": r"C:\W\B.TXT", "translation": False}))
+    assert "one\ntwo" not in out
+    assert "saved" in out.lower() or ".gaston" in out
+
+
+def test_the_endings_question_is_asked_of_the_machine_not_of_an_os():
+    """CLAUDE.md: the tool surface should survive being pointed at MS-DOS,
+    Windows 3.1 or NT 4. A client that declares `eol=lf` must be told LF is
+    its native ending, not lectured about COMMAND.COM."""
+    from bridge.files import caps as _C
+
+    class LfGuest:
+        caps = _C.POSIX
+    srv = machine_tools.build(None, None, None, LfGuest(),
+                              fs=FakeFs(data=b"one\ntwo\n"),
+                              workdir="")["machine"]["instance"]
+    out = _body(_call(srv, "get_file", {"path": "/tmp/x"}))
+    assert "NOT what this machine uses" not in out
+    assert "COMMAND.COM" not in out

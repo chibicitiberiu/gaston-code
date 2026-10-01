@@ -28,6 +28,7 @@ from typing import Annotated
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from ..files import caps as C
+from ..files import paths as P
 from ..services.guest_fs import FsError
 from ..services.proc import ProcError
 from ..services.ui import UiError
@@ -596,6 +597,104 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         caps = getattr(guest, "caps", None) if guest is not None else None
         return getattr(caps, "acp", "") or ""
 
+    def _fscaps():
+        """The client's declared conventions, or the defaults.
+
+        `P.to_guest` reads `caps.eol` from this, which is how a file lands
+        with the endings the MACHINE asked for instead of the ones this host
+        happens to use.
+        """
+        return getattr(guest, "caps", None) or P.DEFAULT
+
+    #: Whether a tool call wants the bytes converted. Default ON.
+    #:
+    #: THE LANE DOES NOT CONVERT, DELIBERATELY: `guest_fs.py` is "byte for
+    #: byte, with no baseline and no opinion about line endings", and that is
+    #: right for the lane. It was wrong as the only behaviour the agent could
+    #: get. The sync layer classifies text and converts; put_file did not; so
+    #: the same batch file was runnable through one path and silently broken
+    #: through the other, and on 2026-10-01 a live session spent eleven tool
+    #: calls finding that out (docs/measurements/
+    #: batch-eol-and-dir-b-p200-20261001.txt -- COMMAND.COM reads an LF-only
+    #: .bat as ONE command line and exits 0).
+    #:
+    #: WHAT IT COVERS, both halves, which is why it is not called `eol`:
+    #:
+    #:   encoding  text on this side is Unicode and that machine's is a
+    #:             single-byte codepage. A str has to be encoded either way
+    #:             -- there is no "raw" form of a str for a cp1252 machine --
+    #:             so this always happens, and a character the codepage
+    #:             cannot hold is a NAMED REFUSAL rather than an exception
+    #:             out of the tool. It is never transliterated: `fold.encode`
+    #:             would turn U+00B7 into `.`, which in a path invents a
+    #:             separator, and file contents include paths and commands.
+    #:   endings   LF <-> CRLF, by `P.classify`, so a file with a NUL
+    #:             anywhere, a lone CR, a \r\r\n or mixed endings is left
+    #:             exactly as it is. Those rules are not fussiness: see
+    #:             `P.classify` for why normalisation has to be idempotent.
+    #:
+    #: Off is for the case that has to be byte-exact -- a checksum, an archive
+    #: you are staging through, a file whose endings are the thing you are
+    #: inspecting.
+    def _translating(args: dict) -> bool:
+        v = args.get("translation")
+        if v is None:
+            return True
+        if isinstance(v, str):
+            return v.strip().lower() not in ("off", "false", "no", "0", "raw")
+        return bool(v)
+
+    def _endings(data: bytes, cls: str) -> str:
+        """What to say about this file's line endings.
+
+        Five shapes, because `P.classify` distinguishes five and the agent
+        needs to know WHICH: "mixed endings" and "lone CR" are things it may
+        have caused and can fix, while "binary" is not.
+
+        AND RELATIVE TO WHAT THE MACHINE DECLARED, never to an operating
+        system this code has decided it is talking to. `caps.eol` says which
+        ending that client writes, so "not the one this machine uses" is the
+        fact that matters and stays true on a DOS box, an NT box or a PDP.
+        """
+        if b"\x00" in data:
+            return prompts.text("tools.get_file.endings.binary")
+        if cls != P.CLASS_TEXT:
+            return prompts.text("tools.get_file.endings.irregular")
+        if b"\n" not in data and b"\r" not in data:
+            return prompts.text("tools.get_file.endings.none")
+        names = ("lf", "crlf", "cr")
+        got = "crlf" if b"\r\n" in data else "lf"
+        want = getattr(_fscaps(), "eol", C.EOL_CRLF)
+        want_name = names[want] if 0 <= want < len(names) else "lf"
+        key = "native" if got == want_name else "foreign"
+        return prompts.text(
+            "tools.get_file.endings." + key,
+            eol=prompts.text("tools.get_file.eol." + got),
+            want=prompts.text("tools.get_file.eol." + want_name))
+
+    def _encode_text(text: str) -> tuple[bytes, str]:
+        """A str -> that machine's bytes, or ("", reason).
+
+        `encode_exact` raises `UnicodeEncodeError`, and until 2026-10-02 this
+        call sat under a bare `except Exception: raise`, so one box-drawing
+        character in a README reached the agent as a traceback. Measured the
+        same day: cp1252 holds the euro sign and does not hold U+2500,
+        Cyrillic or any emoji.
+        """
+        # The codec THAT WAS USED, not the one that was asked for. `_acp()` is
+        # "" until a machine declares one and `encode_exact` then falls back to
+        # the connection's codepage, so naming `_acp()` in the refusal could
+        # report a codepage that had nothing to do with the failure.
+        cp = _acp() or fold.codec()
+        try:
+            return fold.encode_exact(text, cp), ""
+        except UnicodeEncodeError as exc:
+            bad = text[exc.start:exc.end]
+            return b"", prompts.text(
+                "tools.put_file.refused.unencodable",
+                char=bad, code=("U+%04X" % ord(bad[0])) if bad else "?",
+                cp=cp or "the machine's codepage", at=str(exc.start))
+
     def _fetched_dir() -> str:
         """Where a fetched binary lands.
 
@@ -619,6 +718,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 "max_bytes": {"type": "integer",
                               "description": prompts.text(
                                   "tools.get_file.args.max_bytes")},
+                "translation": {"type": "boolean",
+                                "description": prompts.text(
+                                    "tools.get_file.args.translation")},
             },
             "required": ["path"],
         },
@@ -640,12 +742,23 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             note = (prompts.text("tools.get_file.view.truncated")
                     if got.truncated else "")
 
+            # WHAT THE ENDINGS ARE, said out loud, because the agent cannot
+            # see them. On 2026-10-01 a session read a batch file back
+            # SPECIFICALLY to find out why it would not run, got text that
+            # looked perfect, and learned nothing -- LF and CRLF render
+            # identically. The answer it needed was one word.
+            cls = P.classify(got.data)
+            note += "\n" + prompts.text("tools.get_file.view.endings",
+                                        kind=_endings(got.data, cls))
+
             # A NUL anywhere means binary, the same rule the guest's own
             # classifier uses -- not a sniff window, because a file that is
             # text for its first 8KB and binary afterwards is binary.
-            if b"\x00" not in got.data:
+            # `translation=false` takes the same route as a binary: the agent
+            # cannot hold bytes, so byte-exact means a local file.
+            if b"\x00" not in got.data and _translating(args):
                 try:
-                    body = fold.decode(got.data, _acp())
+                    body = fold.decode(P.to_bridge(got.data, cls), _acp())
                 except Exception:
                     body = None
                 if body is not None:
@@ -682,6 +795,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 "from_path": {"type": "string",
                               "description": prompts.text(
                                   "tools.put_file.args.from_path")},
+                "translation": {"type": "boolean",
+                                "description": prompts.text(
+                                    "tools.put_file.args.translation")},
             },
             "required": ["path"],
         },
@@ -719,14 +835,30 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                         error=True)
                 data = await asyncio.to_thread(pathlib.Path(target).read_bytes)
             else:
-                data = fold.encode_exact(str(content), _acp())
+                data, why = _encode_text(str(content))
+                if why:
+                    return _text(why, error=True)
+
+            # CONVERT LAST, over the bytes, whichever source they came from,
+            # so `content=` and `from_path=` cannot disagree about what lands.
+            # `P.classify` is the sync layer's own classifier, so a file put
+            # here and the same file mirrored arrive identical -- which is the
+            # entire point, and was not true until 2026-10-02.
+            converted = ""
+            if _translating(args):
+                cls = P.classify(data)
+                if cls == P.CLASS_TEXT:
+                    out = P.to_guest(data, cls, _fscaps())
+                    if out != data:
+                        converted = prompts.text("tools.put_file.view.converted")
+                    data = out
 
             try:
                 n = await fs.put(guest, path, data)
             except FsError as exc:
                 return _text(_fs_refused(exc.status, path), error=True)
             return _text(prompts.text("tools.put_file.view.wrote",
-                                      path=path, bytes=n))
+                                      path=path, bytes=n) + converted)
         except Exception:
             log.exception("mcp__machine__put_file failed: %r", args)
             raise

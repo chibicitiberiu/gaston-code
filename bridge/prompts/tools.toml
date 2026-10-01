@@ -322,13 +322,17 @@ Read a file from anywhere on the connected machine, by its full path, including 
 
 Use this rather than printing a file through the shell, which mangles anything that is not plain text, truncates it, and returns it in the console's own character set. This returns the file.
 
-Text comes back as text. Anything else is saved here, beside your folder, and the reply says where.'''
+Text comes back as text, converted to the endings you are used to, and the reply says which endings the file actually has on that machine -- the one thing you cannot see by looking at it. Anything that is not text is saved here, beside your folder, and the reply says where.'''
 
 [get_file.args]
 path = '''
 The full path on the connected machine, written the way that machine writes paths.'''
 max_bytes = '''
 Stop after this many bytes; the machine enforces it while reading, so a huge file costs only what you asked for. There is a ceiling in any case and the reply says when either one bit.'''
+# RESIDENT, so two sentences. The second is the only part that is load-bearing:
+# it names the cases where off is the right answer, which is a short list.
+translation = '''
+Leave this out. Set it false only to get the bytes exactly as they are on that machine, which saves them to a local file instead of returning them -- for a checksum, an archive you are passing through, or when the line endings are the thing you are inspecting.'''
 
 [get_file.view]
 binary = '''
@@ -337,6 +341,24 @@ binary = '''
 truncated = '''
 
 (Stopped early -- there is more of this file on the machine.)'''
+# SAID EVERY TIME, not only when it is surprising. On 2026-10-01 an agent read
+# a batch file back specifically to find out why COMMAND.COM would not run it,
+# got text that looked exactly right, and learned nothing: LF and CRLF render
+# identically. It took a separate controlled experiment to recover the one word
+# this line now carries.
+endings = '''
+(On that machine this file has {kind}.)'''
+
+[get_file.endings]
+native = '''{eol} line endings, which is what this machine uses'''
+foreign = '''{eol} line endings, which is NOT what this machine uses -- it writes {want}. A script or batch file with the wrong endings here can be misread as a single line, do nothing, and still report success'''
+none = '''no line endings at all'''
+binary = '''no line endings to speak of: it contains NUL bytes, so it is binary'''
+irregular = '''irregular line endings -- a lone CR, a CR CR LF, or a mixture -- so nothing will convert it in either direction'''
+[get_file.eol]
+lf = '''LF'''
+crlf = '''CRLF'''
+cr = '''CR'''
 
 [put_file]
 description = '''
@@ -350,17 +372,32 @@ The full path on the connected machine, written the way that machine writes path
 content = '''
 The text to write. For anything that is not text, write it to a file in your own folder first and pass `from_path` instead.'''
 from_path = '''
-A file in your own folder to send as-is, byte for byte. Use this for anything that is not text. Relative to your folder; nothing outside it can be sent.'''
+A file in your own folder to send. Use this for anything that is not text. Relative to your folder; nothing outside it can be sent.'''
+# RESIDENT. The first sentence has to be enough on its own, because the agent
+# that most needs this is the one that did not read past it.
+translation = '''
+Leave this out: text is written with the endings that machine expects, so a .bat or a script will actually run there. Set it false only when the bytes have to arrive exactly as they are -- an archive, a signed file, something whose checksum matters. Files with NUL bytes are never converted either way.'''
 
 [put_file.refused]
 one_source = '''
 Pass either `content` or `from_path`, not both and not neither.'''
 from_path = '''
 "{path}" is not a file in your own folder. `from_path` is relative to that folder and cannot reach outside it.'''
+# A REFUSAL, NOT AN EXCEPTION. Until 2026-10-02 this case went out as a
+# traceback: `fold.encode_exact` raises and the handler logged and re-raised,
+# so one box-drawing character in a README was an error with no advice in it.
+# The character is named because a 40KB file has one bad byte in it somewhere
+# and the agent cannot find it by looking.
+unencodable = '''
+That machine cannot store "{char}" ({code}): its character set is {cp}, which has no such character, and writing an approximation of it would be changing your file rather than saving it. It is at character {at} of what you passed. Replace it -- an ASCII equivalent, or a different word -- and try again.'''
 
 [put_file.view]
 wrote = '''
 Wrote {bytes} bytes to {path} on the machine.'''
+# Said when it happened, so the agent knows the file on that machine is not
+# byte-identical to the one here -- and so a later `get_file` showing CRLF is
+# not a mystery.
+converted = ''' Line endings were converted to that machine's, so it is not byte-identical to your copy.'''
 
 [drives]
 description = '''
