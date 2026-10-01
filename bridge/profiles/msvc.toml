@@ -15,4 +15,76 @@ bins = ["BIN"]
 # Variables that name the root directly. Reported by the client
 # only if it was asked to look at them -- a test asserts these
 # appear in the shipped tools_detect.ini.
+#
+# VCVARS32.BAT sets this, not the installer -- and as an 8.3 path
+# (`set MSVCDir=C:\PROGRA~1\MICROS~2\VC98`, read off the real machine
+# 2026-10-01). So a box where nobody has run vcvars in this shell reports
+# nothing here and is found by its marker file instead; and when it IS
+# reported it is already in the form the shell can execute, unlike the
+# long path a file marker resolves to.
 env = ["MSVCDIR"]
+
+[detect.version]
+# `VC98` is Visual C++ 6.0's own directory name; 5.0 installs under
+# `DevStudio\VC` and 4.x under `MSDEV`. Read off the layout, which is also
+# why there is no `default`: the older markers in this section (`C:\MSVC`,
+# `C:\MSDEV`) are 16-bit and 4.x installs, and stamping those "6.0" would
+# put a wrong version in the one row the agent reads. No match just drops
+# the `(vN)` from that row, which is the honest outcome.
+'\VC98\' = "6.0"
+
+[note]
+# Shown to the assistant when this tool is detected. DETECTION MAY
+# GUESS; A NOTE MAY NOT -- `measured` says on what machine and what
+# version, and a test asserts it is present.
+#
+# WHY THIS EXISTS. Detection says a compiler is there; it says nothing
+# about how to drive one. On 2026-10-01 a real Win98 box with VS6 on it was
+# asked to build a program and the agent never touched the compiler: it ran
+# `dir C:\WINDOWS\*.EXE`, found cscript, and wrote the thing in VBScript.
+# Detection was broken that day too -- but a name and a path with no note
+# is still only half an answer, and this file was eighteen lines of
+# `[detect]` with nothing after it.
+#
+# THE FIRST DRAFT OF THIS NOTE GUESSED `MICROS~1` and would have pointed
+# the agent at Microsoft Office, which was installed nine minutes earlier
+# and took the alias. That is the bullet's own rule catching its own
+# example, which is why the measured pair is written out rather than
+# illustrated.
+title = "Microsoft Visual C++ 6.0"
+measured = "Visual C++ 6.0 (VC98) on the user's real Windows 98 machine, 2026-10-01. A stdio program compiled, linked and ran there with the .bat below (HELLO.OBJ 453 bytes, HELLO.EXE 28,672 bytes). The silent MSPDB60.DLL failure was isolated by running that build twice changing only PATH; the VCVARS32.BAT overflow was observed on the same box."
+body = '''
+Microsoft Visual C++ 6.0, root
+{root}
+Measured on this machine, mostly by an agent getting it wrong first:
+
+  * The root has SPACES and COMMAND.COM splits on whitespace, so run cl by
+    its 8.3 alias -- and READ the alias, never guess it. `dir C:\PROGRA~1`
+    here prints two Microsoft directories: Office was created nine minutes
+    earlier and took `MICROS~1`, so Visual Studio is `MICROS~2`. Aliases
+    go out in creation order on the disk they were made on. (The row above
+    is long because detection uses the Win32 API; the shell cannot.)
+  * CL.EXE imports MSPDB60.DLL, which is not beside it but under
+    `COMMON\MSDEV98\BIN`. With that directory off PATH, cl prints NOTHING
+    AT ALL -- no error, no banner, nothing on stdout or stderr -- and only
+    the exit code says it failed. Check it: empty output is not success.
+  * `call VCVARS32.BAT` DOES NOT WORK on this machine: it echoes its
+    banner, then "Out of environment space" twice, then "Bad command or
+    file name". Set the four variables yourself. Environment also dies
+    with the shell and `&&` chains nothing, so one .bat holds all of it --
+    this exact sequence built and ran a program here:
+
+        @echo off
+        set MSVCDir=C:\PROGRA~1\MICROS~2\VC98
+        set PATH=C:\PROGRA~1\MICROS~2\COMMON\MSDEV98\BIN;%MSVCDir%\BIN;%PATH%
+        set INCLUDE=%MSVCDir%\INCLUDE
+        set LIB=%MSVCDir%\LIB
+        cl /nologo hello.c
+
+  * `cl` compiles AND links: that echoed `hello.c` and wrote HELLO.OBJ and
+    HELLO.EXE, a Win32 console program that ran. INCLUDE and LIB there are
+    the plain VC98 ones, enough for stdio -- MFC and ATL want their own
+    and are untested here. `/Fename.exe` names the exe. For a windowed app
+    (not measured here) add `user32.lib gdi32.lib /link
+    /subsystem:windows` and write WinMain.
+'''
