@@ -525,6 +525,73 @@ void resolving(void)
         say("resolve-reports-truncation", got == RESOLVE_TRUNCATED, detail);
     }
 
+    /* WHICH PART of a compound selector was not there.
+     *
+     * `A > B` failing says nothing about whether A was present, and a caller
+     * told only "nothing matches" reads it as the window being gone: in a live
+     * session `HelloGuiClass[text="Hello Application"] > Button[text="Close"]`
+     * came back that way while the window was on screen and only the button did
+     * not exist -- the program had no Close button at all (2026-10-02).
+     *
+     * The leaf is tested against every node and the ancestors only once the
+     * leaf matched, so a leaf that never matched leaves the ancestors untested
+     * with zero hits each. Reporting the FIRST of those would blame the
+     * container for the leaf's absence, which is the bug; the last is right. */
+    {
+        static Selector s;
+        static char err[128];
+        static char detail[160];
+        WalkOptions o;
+        o.root = top;
+        o.visibleOnly = false;
+        o.wantText = true;
+        TreeWalker w;
+
+        /* The container exists, the leaf does not: blame the leaf, step 1. */
+        s.parse("GRTop > GRNotAThing", err, sizeof(err));
+        {
+            Resolver r(s, NULL);
+            ResolveOutcome got = r.resolve(o, w);
+            rc_strf(detail, sizeof(detail), "outcome=%d unmatched=%d",
+                    (int)got, r.unmatchedStep());
+            say("resolve-blames-the-leaf-not-the-container",
+                got == RESOLVE_NONE && r.unmatchedStep() == 1, detail);
+        }
+
+        /* Neither exists. Still the leaf, because that is what was looked for
+         * first and the container was never reached. */
+        s.parse("GRNope > GRNotAThing", err, sizeof(err));
+        {
+            Resolver r(s, NULL);
+            ResolveOutcome got = r.resolve(o, w);
+            rc_strf(detail, sizeof(detail), "outcome=%d unmatched=%d",
+                    (int)got, r.unmatchedStep());
+            say("resolve-reports-a-step-when-nothing-matches",
+                got == RESOLVE_NONE && r.unmatchedStep() >= 0, detail);
+        }
+
+        /* The leaf is there and the container is not: blame the container. */
+        s.parse("GRNope > Button", err, sizeof(err));
+        {
+            Resolver r(s, NULL);
+            ResolveOutcome got = r.resolve(o, w);
+            rc_strf(detail, sizeof(detail), "outcome=%d unmatched=%d",
+                    (int)got, r.unmatchedStep());
+            say("resolve-blames-the-container-when-the-leaf-is-there",
+                got == RESOLVE_NONE && r.unmatchedStep() == 0, detail);
+        }
+
+        /* A selector that resolves blames nothing. */
+        s.parse("GRTop > Button", err, sizeof(err));
+        {
+            Resolver r(s, NULL);
+            r.resolve(o, w);
+            rc_strf(detail, sizeof(detail), "unmatched=%d", r.unmatchedStep());
+            say("resolve-blames-nothing-when-it-succeeds",
+                r.unmatchedStep() == -1, detail);
+        }
+    }
+
     /* The free role. A Button's style IS its role, so [role=checkbox] on a
      * real checkbox must resolve with ZERO cross-process calls -- that is
      * the 46-of-82 controls that never reach MSAA. */
@@ -1156,6 +1223,82 @@ void inputRefusals(void)
     say("input-rejects-dead-window", in.clickWindow(NULL) == INPUT_NO_WINDOW,
         "NULL hwnd");
 
+    /* NAMED KEYS. The validation pass runs BEFORE focus(), so every case here
+     * reaches the parser and stops there -- our own window would otherwise
+     * refuse first, which is exactly what makes these testable without
+     * touching anybody's desktop.
+     *
+     * WHY THEY EXIST. `typeText` was characters only, while the tool calling
+     * it advertised arrow keys -- which are not characters. An agent asked to
+     * clear a text box sent `[Delete][Delete][Delete][Delete]Tiberiu`, got
+     * `John[Delete][Delete][D` in the box, and was told "Typed 39 characters"
+     * (live session, 2026-10-02). */
+    {
+        char bad[48];
+
+        /* A name it knows gets as far as the self-refusal, which means the
+         * parser accepted it. */
+        say("keys-accepts-a-named-key",
+            in.typeText(mine, "[Delete]", bad, sizeof bad) == INPUT_REFUSED_SELF,
+            "[Delete]");
+        say("keys-accepts-modifiers",
+            in.typeText(mine, "[Ctrl+A][Shift+Home][Alt+F4]", bad,
+                        sizeof bad) == INPUT_REFUSED_SELF,
+            "[Ctrl+A][Shift+Home][Alt+F4]");
+        say("keys-accepts-the-sendkeys-brace",
+            in.typeText(mine, "{Enter}", bad, sizeof bad) == INPUT_REFUSED_SELF,
+            "{Enter}");
+        say("keys-names-are-case-insensitive",
+            in.typeText(mine, "[dELeTe][ESC][pgdn]", bad,
+                        sizeof bad) == INPUT_REFUSED_SELF,
+            "mixed case");
+        say("keys-doubled-bracket-is-a-literal",
+            in.typeText(mine, "a[[b", bad, sizeof bad) == INPUT_REFUSED_SELF,
+            "a[[b");
+        /* ESCAPING, both halves. A `]` is special only INSIDE a token, so it
+         * needs no escape of its own -- and that asymmetry has to be a
+         * decision rather than an accident, hence the case. Delivery of all of
+         * these is measured on real hardware
+         * (docs/measurements/keys-named-p200-20261002.txt); what is checked
+         * here is that the parser accepts them instead of refusing. */
+        say("keys-a-closing-bracket-needs-no-escape",
+            in.typeText(mine, "a]b", bad, sizeof bad) == INPUT_REFUSED_SELF,
+            "a]b");
+        say("keys-an-escaped-token-is-not-a-token",
+            in.typeText(mine, "[[Delete]", bad,
+                        sizeof bad) == INPUT_REFUSED_SELF,
+            "[[Delete] types the text, not the key");
+        say("keys-doubled-brace-is-a-literal",
+            in.typeText(mine, "{{x}", bad, sizeof bad) == INPUT_REFUSED_SELF,
+            "{{x}");
+
+        /* AND THE REFUSALS, which are the point: an unknown token must not be
+         * typed as characters, and the reply must name it. */
+        bad[0] = 0;
+        say("keys-refuses-an-unknown-name",
+            in.typeText(mine, "x[Frobnicate]y", bad,
+                        sizeof bad) == INPUT_BAD_KEY && bad[0], bad);
+        say("keys-names-the-token-it-refused",
+            strcmp(bad, "[Frobnicate]") == 0, bad);
+        bad[0] = 0;
+        say("keys-refuses-an-unterminated-bracket",
+            in.typeText(mine, "clear [Delete", bad,
+                        sizeof bad) == INPUT_BAD_KEY, bad);
+        bad[0] = 0;
+        say("keys-refuses-an-empty-token",
+            in.typeText(mine, "[]", bad, sizeof bad) == INPUT_BAD_KEY, bad);
+        bad[0] = 0;
+        say("keys-refuses-a-bad-modifier",
+            in.typeText(mine, "[Hyper+A]", bad,
+                        sizeof bad) == INPUT_BAD_KEY, bad);
+        /* The one that must never be sent, composed in a single token so it
+         * sails past pressKey's keyboard-state guard. */
+        bad[0] = 0;
+        say("keys-refuses-ctrl-alt-del-even-as-one-token",
+            in.typeText(mine, "[Ctrl+Alt+Delete]", bad,
+                        sizeof bad) != INPUT_OK, "never, on any path");
+    }
+
     rc_strf(detail, sizeof(detail), "SendInput %s",
             in.usingSendInput() ? "present" : "absent, using keybd_event");
     say("input-resolves-sendinput-dynamically", true, detail);
@@ -1646,12 +1789,68 @@ static const Section SECTIONS[] =
     inputRefusals, enrichment, capture
 };
 
+/* --type-into <class> <text> -- DELIVERY, which Wine cannot answer.
+ *
+ * The parser cases above are logic and belong under Wine. Whether a
+ * synthesised VK_DELETE actually deletes a character in a real Windows 98 edit
+ * control is a platform fact, and nothing in this tree had ever delivered one:
+ * `pressKey` had no caller and `typeText` could only send characters.
+ *
+ * A MODE, not a case, because it needs a target that is not ours -- Input
+ * refuses our own windows, by process and on purpose. Point it at another
+ * program's window class, type into it, and read the control back. The caller
+ * compares; this only reports what the control holds afterwards, because a
+ * verdict needs to know what was there before.
+ */
+static int typeInto(const char *cls, const char *text)
+{
+    HWND top = FindWindowA(cls, NULL);
+    if (!top)
+    {
+        printf("no-window\t%s\n", cls);
+        return 2;
+    }
+    HWND edit = FindWindowExA(top, NULL, "Edit", NULL);
+    if (!edit)
+    {
+        printf("no-edit\t%s\n", cls);
+        return 3;
+    }
+
+    Input in;
+    char bad[48];
+
+    /* NO CLICK. That is the point of the mode: naming a child control has to
+     * be enough. It was not until 2026-10-02 -- `focus()` raised the root
+     * window and left the keyboard focus wherever it already was, so this
+     * returned INPUT_OK into an empty box, and the one live session that hit it
+     * only worked because it had clicked first. */
+    InputResult r = in.typeText(edit, text, bad, sizeof bad);
+
+    /* SETTLE FIRST. `keybd_event` is asynchronous -- it posts to the system
+     * queue and returns -- so reading the control the instant typeText returns
+     * caught it mid-string: "Hello" read back as "H". Half a second is far more
+     * than a 1.6GHz machine needs for a dozen keys and keeps this a measurement
+     * rather than a race. */
+    Sleep(500);
+
+    /* WM_GETTEXT, not MSAA: this is asking the control itself what it holds,
+     * which is the only answer that proves a keystroke landed. */
+    char got[256];
+    got[0] = 0;
+    SendMessageA(edit, WM_GETTEXT, (WPARAM)sizeof(got), (LPARAM)got);
+    printf("result=%d bad=\"%s\" text=\"%s\"\n", (int)r, bad, got);
+    return r == INPUT_OK ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     /* A mode, not a case: it writes a file for the Python side to open, and
      * prints dimensions rather than verdict rows. */
     if (argc > 2 && !strcmp(argv[1], "--shot"))
         return writeShot(argv[2]);
+    if (argc > 3 && !strcmp(argv[1], "--type-into"))
+        return typeInto(argv[2], argv[3]);
 
     (void)argc; (void)argv;
     for (unsigned i = 0; i < sizeof(SECTIONS) / sizeof(SECTIONS[0]); i++)
