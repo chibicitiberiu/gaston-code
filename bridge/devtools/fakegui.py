@@ -91,6 +91,17 @@ FAKE_CAPS = {
     "maxdepth": "8",    # RC_CAP_MAXDEPTH
     "maxfiles": "2000", # RC_CAP_MAXFILES
     "deflate": "1",     # RC_CAP_DEFLATE
+    # RC_AUTOMATION_SCREEN, for the same reason every other value in here is
+    # the Win9x one: fakegui stands in for that client, and that client
+    # declares a screen. Declaring none of it would mean the bridge builds
+    # every test session WITHOUT the five screen tools and every real one with
+    # them -- two tool surfaces, and the tested one is the one nobody ships.
+    #
+    # It does not implement UITREE/UICLICK/UIKEYS/UISHOT/UIFOCUS, exactly as
+    # it does not implement a mirrored tree: declaring a capability is what is
+    # under test here, answering the ops is win/ui/uirpc.cpp's job and is
+    # checked on the guest.
+    "automation": "1",
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a

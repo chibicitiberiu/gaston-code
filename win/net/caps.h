@@ -13,8 +13,9 @@
  * Ten headers is about a hundred and twenty bytes, once per connection, on a
  * link that carries kilobytes of transcript per turn.
  *
- * Every value here is a compile-time literal except the codepage, which is one
- * GetACP() call. This client holds no tables and computes nothing: it reports
+ * Every value here is a compile-time literal except two: the codepage, which
+ * is one GetACP() call, and `automation`, which is a setting the person at the
+ * machine chose. This client holds no tables and computes nothing: it reports
  * what it is, and the bridge holds what that implies. Same split as the rest
  * of the codebase.
  *
@@ -55,6 +56,25 @@ extern "C" {
 
 #define RC_DEFLATE_NONE     0
 #define RC_DEFLATE_STREAM   1
+
+/* Whether this client can be DRIVEN -- read its own screen, click, type,
+ * photograph it, raise a window. The second value here that is not a
+ * compile-time literal (the codepage is the first): it comes from
+ * `[ui] automation` in gaston.ini, because a machine that can drive a screen
+ * is not the same question as whether the person at it wants their mouse
+ * moved. rc_net_set_automation carries it to the handshake.
+ *
+ * Room to grow, which is why it is an enum and not a flag: a client that can
+ * photograph a screen but not type into it, or enumerate windows without
+ * being able to capture them, is a third and a fourth value here and no new
+ * header. A bridge that does not recognise the value REFUSES rather than
+ * assuming 0 or 1 -- see bridge/files/caps.py.
+ *
+ * NONE is the restrictive reading and so it is 0, which also means a client
+ * that never sets the field (the check harnesses in win/checks, which have
+ * no screen to drive) declares the safe thing by construction. */
+#define RC_AUTOMATION_NONE   0  /* no screen: the five ui tools do not exist */
+#define RC_AUTOMATION_SCREEN 1  /* read the screen, click, type, shoot, focus */
 
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits

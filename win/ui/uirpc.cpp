@@ -2,6 +2,7 @@
 #include "ui/uicontext.h"
 #include "ui/uirec.h"
 #include "automation/resolve.h"
+#include "net/caps.h"
 #include "automation/shot.h"
 #include "ui/inject.h"
 #include "core/log.h"
@@ -853,6 +854,31 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
     if (!ctx->ready)
     {
         rc_uirpc_refuse(net, f, "busy");
+        return;
+    }
+
+    /* THE CONTROL, not the optimisation (BACKLOG.md 19).
+     *
+     * The handshake tells the bridge not to offer the five screen tools when
+     * `[ui] automation` is off, and that is where the context saving is -- but
+     * a declaration cannot be the control, for two reasons. A conversation
+     * outlives a reconnect, so a session built while the setting was on still
+     * holds the five tools after the client comes back declaring none of them.
+     * And nothing about the bridge is under this machine's control anyway: the
+     * only place that can refuse to move somebody's mouse is the process that
+     * would move it.
+     *
+     * Read from `net` on every request rather than captured in the context, so
+     * turning the capability OFF takes effect on the next request instead of
+     * the next connection -- the asymmetry 19 asks for, since the safe
+     * direction should never wait. */
+    if (net && net->automation == RC_AUTOMATION_NONE)
+    {
+        /* No log line of its own: ui_end carries the status to the bridge,
+         * which already logs every refusal and holds the sentence the agent
+         * reads. A second copy here would cost CONST bytes on the one image
+         * that has none spare (below). */
+        rc_uirpc_refuse(net, f, "automation_off");
         return;
     }
 

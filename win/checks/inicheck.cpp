@@ -80,6 +80,7 @@ int main(int argc, char **argv)
         out.port = 7999;
         rc_strcpy(out.secret, sizeof out.secret, "not-dev-secret");
         out.autoscroll = false;
+        out.automation = false;
         rc_strcpy(out.syncRoot, sizeof out.syncRoot, "C:\\WORK\\SUB");
 
         ConfigStore store(dir);
@@ -93,11 +94,17 @@ int main(int argc, char **argv)
         eqL("port", in.port, out.port);
         eqS("secret", in.secret, out.secret);
         eqL("autoscroll", in.autoscroll ? 1 : 0, out.autoscroll ? 1 : 0);
+        eqL("automation", in.automation ? 1 : 0, out.automation ? 1 : 0);
         eqS("sync_root", in.syncRoot, out.syncRoot);
 
         /* The tripwire for a field added to the struct and to neither
          * function: it cannot check the field, but it can refuse to pass
-         * quietly. 64 + 4 + 128 + 128 + 1, padded to a multiple of 4. */
+         * quietly. 64 + 4 + 128 + 128 + 2, padded to a multiple of 4 -- and
+         * note that `automation` fit in the padding the first bool left, so
+         * this number did NOT move when it was added. That is exactly the
+         * hole a tripwire on a size has: it catches a field that changes the
+         * layout and not one that slots into a gap, which is why every field
+         * still gets its own eq above rather than relying on this line. */
         eqL("sizeof", (long)sizeof(ClientConfig), 328L);
         DeleteFileA(path.str());
     }
@@ -109,6 +116,9 @@ int main(int argc, char **argv)
         bool loaded = store.load(&cfg);
         truth("defaults", loaded && strcmp(cfg.host, "192.168.1.2") == 0 &&
               cfg.port == 7890 && cfg.autoscroll &&
+              /* ON by default. An install that upgrades keeps the five screen
+               * tools it already had; see config.h. */
+              cfg.automation &&
               strcmp(cfg.syncRoot, "C:\\Gaston") == 0, cfg.host);
         truth("first-save", GetFileAttributesA(path.str()) != 0xFFFFFFFF,
               "written on first run");
@@ -140,6 +150,28 @@ int main(int argc, char **argv)
         ConfigStore store(dir);
         bool loaded = store.load(&cfg);
         truth("retired-key", loaded && !cfg.autoscroll, store.error());
+    }
+    {
+        /* The setting is read, and `off` is a value somebody can actually
+         * write -- the whole point of BACKLOG.md 19. */
+        writeFile(path.str(), "[ui]\r\nautomation=0\r\n");
+        ClientConfig cfg;
+        ConfigStore store(dir);
+        bool loaded = store.load(&cfg);
+        truth("automation-off", loaded && !cfg.automation, store.error());
+    }
+    {
+        /* CLAUDE.md: an invalid value refuses startup. A capability that
+         * silently fell back to its default on `automation=maybe` would be
+         * the permissive reading arrived at in silence -- and it would be
+         * arrived at for the one setting whose whole purpose is to say no. */
+        writeFile(path.str(), "[ui]\r\nautomation=maybe\r\n");
+        ClientConfig cfg;
+        ConfigStore store(dir);
+        bool loaded = store.load(&cfg);
+        truth("automation-invalid",
+              !loaded && strstr(store.error(), "automation") != 0,
+              store.error());
     }
 
     DeleteFileA(path.str());

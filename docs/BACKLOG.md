@@ -1634,10 +1634,10 @@ Still open -- see the "not done" item just above.
 
 ---
 
-## 19. UI automation should be opt-in, and say when it is driving
+## 19. UI automation should be opt-in, and say when it is driving -- CLOSED 2026-10-01
 
-**Status:** deferred 2026-09-27, asked for by the user after §16 landed. Not
-started. Two things that belong together.
+**Asked for by the user 2026-09-27 after §16 landed. Closed 2026-10-01**, with
+two parts deliberately not done and recorded below rather than dropped.
 
 Screen control is not like the other tools. It moves the mouse, types, and
 since §16 it also **takes the foreground away from whoever is at the machine**
@@ -1660,31 +1660,186 @@ this in front of the person" unreachable.
 Its description says it activates the target and takes the keyboard, because
 on 9x there is no quiet way to raise a window across a process boundary.
 
-### The setting, and the indicator
+### The capability, the setting and the gate -- done 2026-10-01
 
-- **Setting:** `[ui] automation` in `gaston.ini`, through `ClientConfig`
-  (`win/app/config.h`, which today holds host, port, secret, syncRoot,
-  autoscroll).
-- **Declared at handshake, not assumed** -- the standing rule. A HELLO header
-  (`bridge/caps.py`, `win/caps.h`), and the bridge registers `ui`, `click`,
-  `keys`, `shot` (and `focus`) **only when the client says yes**, so a client
-  with it off costs nothing in context. Measured 2026-10-01, against haiku's
-  200K window: those five tools are 1,576 tokens of the 20,360 a fresh
-  session starts with -- 7.7% of the window, and 46% of everything the
-  `machine` server contributes. They are registered unconditionally today
-  (`bridge/agent/tools.py` `build()` has no capability to gate on), so a
-  client that never drives the screen pays for all five on every request.
-  This is the single largest saving available in the part of the context
-  budget this project owns.
-- **The guest gates too.** All five ops refuse with a clear status when the
-  setting is off, whatever the bridge believes. The HELLO header is an
-  optimisation; the refusal is the control.
-- **Turning it off should be immediate** -- the guest starts refusing at once.
-  Turning it ON needs a reconnect before the tools are advertised. That
-  asymmetry is deliberate: the safe direction should never wait.
-- **Indicator:** `win/app/statusbar.h` has four panes and a `set_override`
-  already; `win/app/bar.h` is the pattern for something loud and transient
-  (it is how the permission bar works).
+**Why, and it is not the token count.** Declaring five tools a client cannot
+use is wrong whatever it costs. This entry used to say gating them "costs
+nothing in context", which was false only in the sense that the capability did
+not exist yet -- there was no way to know, so the tools went to everyone.
+
+**What it does cost, stated precisely, because the first version of this
+paragraph got it wrong.** Measured 2026-10-01 with
+`ClaudeSDKClient.get_context_usage()` against haiku's 200K window: `ui`,
+`click`, `keys`, `shot` and `focus` are **1,576 tokens** -- 46% of everything
+the `machine` server contributes and 7.7% of the 20,360 a fresh session starts
+with. Those schemas sit in the request's `tools` array, so they occupy context
+window space **once for the session** (about 0.8% of a 200K window), and
+prompt caching means they are billed once per cache write. It is **not** re-paid
+per request, and nothing in the code or the commits says it is. Corroborated
+offline the same day by serialising what `build()` hands the SDK: 6,054 of
+14,735 characters of tool definition, 41.1% of the server, which at the ~3.8
+characters per token that mixed JSON and prose runs to is the same 1,576.
+
+**The header.** `automation`, HELLO header 29 of 32, a small integer enum with
+room to grow (`win/net/caps.h`, `bridge/files/caps.py`):
+
+- `RC_AUTOMATION_NONE` / `AUTOMATION_NONE` = 0 -- no screen; the five tools do
+  not exist for this session.
+- `RC_AUTOMATION_SCREEN` / `AUTOMATION_SCREEN` = 1 -- read the screen, click,
+  type, photograph, raise a window.
+
+An enum and not a flag for the reason `caps.py` gives for all of them: a client
+that can photograph a screen but not type into it, or enumerate windows without
+being able to capture them, is a third and a fourth value here and no new
+header. A value the bridge does not recognise is **refused**, not masked to 0
+or 1 -- both guesses are wrong for an unknown value, since NONE throws away a
+capability the client says it has and SCREEN offers five tools shaped for a
+screen it may not have.
+
+It is also the second HELLO value that is not a compile-time literal (the
+codepage is the first): it comes from the INI, through
+`rc_net_set_automation`, which is called before the connection service exists
+so the first HELLO carries it.
+
+**The guest's setting, and the default is ON.** `[ui] automation` in
+`gaston.ini`, through `ClientConfig` (`win/app/config.{h,cpp}`), `getBool`, so
+`automation=maybe` **refuses startup naming the key** like every other invalid
+value. The default for a missing key is **1**, and the argument is the upgrade
+path: the five ops have shipped and been used on real hardware since §16, so
+defaulting off would silently remove five tools from every install that
+updates, and the symptom is an agent reporting it cannot see the screen with
+no error anywhere to explain it. The INI is written with its defaults on first
+run, so a fresh install gets a visible `automation=1` line to flip -- which is
+what "chosen" means in a file edited with EDIT.COM. §19's argument for OFF was
+"stops screen control arriving in an upgrade"; screen control arrived in §16
+and is already there, so OFF would be *removing* it in an upgrade, which is
+the change nobody asked for.
+
+**The bridge's default for an absent header is SCREEN, and it is the one
+default in `caps.py` that is not the restrictive value.** That rule exists for
+guesses nothing downstream can detect -- `devices=0` on a DOS box wedges the
+RPC worker, a wrong codepage mangles a filename and round-trips forever. This
+one is detected and refused by the client itself, the only process that can
+move somebody's mouse, so the permissive guess costs one round trip with a
+sentence attached. What is left is `caps.py`'s other rule -- an absent field
+means the deployed client -- and the deployed client drives a screen. It also
+means the bridge half is safe to deploy ahead of the client half: a pre-§19
+guest keeps all five tools and behaves exactly as before.
+
+**The bridge gate.** `bridge/agent/tools.py`'s `build()`, and **nothing had to
+be threaded in**: `guest` was already a parameter, and `guest.caps` is set at
+attach (`bridge/handshake.py` -> `ConnectionService._attach`) before any
+session is built. The five closures are still defined either way -- defining
+one costs nothing, it is the schema reaching the model that costs -- and
+`tools=[...]` splices in a `screen` list that is empty for a client declaring
+NONE. A guest of `None` is a harness, not a computer, and gets no screen.
+
+**The guest gates too, and that is the control.** `rc_uirpc_handle` refuses
+every one of the five ops with `automation_off` when `net->automation` is NONE,
+whatever the bridge believes, and reads the field live rather than capturing it
+-- so turning the capability OFF takes effect on the next request instead of
+the next connection, which is the asymmetry this entry asked for. The handshake
+header is the optimisation.
+
+**And the bridge refuses a stale conversation without a round trip.** Not
+registering the tools only shapes a session at the moment it is built, and a
+`GuestSession` outlives a reconnect -- so a conversation opened while the
+setting was on still holds the five after the client comes back declaring none
+of them. `_ui_ready()` reads the live declaration, so that call is answered on
+the bridge rather than waking the machine's desktop worker to be told the same
+thing. Neither side relies on the other for this.
+
+**The system prompt needed no change, and that is worth a test rather than a
+diff.** It already said "Only the tools actually offered to you exist: do not
+assume you can see its screen or list its windows unless a tool for that is
+present" -- written before the capability existed and honest either way. A
+system prompt is one text for every client and is built before the tool list,
+so a claim about a specific capability does not belong in it;
+`test_the_prompt_is_honest_whether_or_not_the_screen_tools_exist` pins that no
+sentence names one of the five tools or states the capability flatly. **No
+prompt goldens were regenerated**, and `MAX_BLOCK_CHARS` did not move.
+
+**`fakegui` declares `automation=1`.** It stands in for the Win9x guest and is
+the only client the server suites run against, so declaring none of it would
+mean the bridge builds every tested session without the five tools and every
+shipped one with them. It does not implement the five ops, exactly as it does
+not implement a mirrored tree:
+`test_fakegui_hello_headers_match_guest_net_cpp` is about declaring the
+capability, and answering the ops is `win/ui/uirpc.cpp`'s job.
+
+**Tests.** `tests/python/files/test_caps.py` (round trip, unknown value
+refused, the non-restrictive default made deliberate, `POSIX` has no screen,
+the summary says which); `tests/python/agent/test_tools_surface.py` (all five
+present when declared, none when not, exactly five and nothing else moves, a
+client that never said keeps them, no new parameter on `build`, the stale
+conversation refused); `tests/python/meta/test_hello_headers.py` (declared at
+the handshake; the budget checks already cover 29 of 32 with 3 free);
+`tests/python/agent/test_machine.py` (the prompt stays honest);
+`tests/python/guest/test_guest_config.py` + `win/checks/inicheck.cpp` (the
+setting round-trips, defaults on, and `automation=maybe` refuses startup).
+
+`test_agent_tools.py`'s `_registered_names` had to learn that `tools=[...]` is
+no longer one literal; it pattern-matched a single `ast.List` and reported
+EVERY tool as unregistered the moment the screen list was spliced in, which is
+the failure mode of a source-level check written against one spelling.
+
+### Two things did not land
+
+**1. The indicator, which is still an open decision.** `win/app/statusbar.h`'s
+fourth pane with `set_override`, or `win/app/bar.h`'s loud transient bar, or
+both. The argument for the bar is that during a click or a keystroke sequence
+the agent is competing with the person for the keyboard and has just stolen the
+foreground; the argument against a quiet pane is the foreground flap below. Not
+taken here because it is a taste decision the user asked to keep.
+
+Turning the setting on or off from a MENU is part of the same piece of work and
+is also not done: the INI is read once at startup, so today a change needs a
+restart. `net->automation` is read live by the refusal path specifically so a
+menu item can make "off" immediate when somebody builds one.
+
+**2. `gaston.exe` cannot hold the guest half at the current cap.** Measured
+with `make -C win check-gaston`:
+
+```
+pristine a3c30e3      467,737   (2,263 spare of 470,000)
+with the guest half   471,833   OVER BY 1,833
+```
+
+**The feature's own static cost is 404 bytes** -- `_TEXT` +272, `CONST` +132,
+`_BSS` and `_DATA` unchanged to the byte. No new container, no `std::string`,
+no new static buffer; the value is an `int` in `rc_net` and reaches the wire as
+a compile-time literal through `RC_STR`, so there is no formatting code at all.
+
+The other **4,096 bytes are one page of DGROUP alignment padding**, and they
+are an accident of where HEAD happens to sit. From the linker map:
+
+```
+                        pristine        with the change
+CONST                   0x8e8e          0x8f12      (+132)
+data chain ends at      0x469ffe        0x46a07e
+_BSS starts at          0x46a000        0x46b000    (+4096)
+_BSS size               0x32e8          0x32e8      (unchanged)
+```
+
+`_BSS` is page-aligned, and at a3c30e3 the data chain ends **2 bytes** short of
+`0x46a000`. The Makefile's figure is `sum(max(virtual, raw))` per PE section,
+so DGROUP's virtual size carries that padding and the gate charges for it. Any
+static data growth at all -- 3 bytes, let alone the 11 the HELLO key costs --
+buys the whole page. There is no cheaper honest version: the wire shape is
+fixed by CLAUDE.md (one header, a small integer enum, no bit packing), and the
+unavoidable part alone is past the 2 bytes available.
+
+The page is paid once. Past it there are 3,970 bytes of data growth already
+bought. So this is a real decision with three answers, none of them taken here:
+
+- raise `COMMITTED_CAP` by 4,096, which buys this and the next 3,970 bytes of
+  static data in one step (the user deferred raising it, so this is theirs);
+- free **126 bytes** of CONST or DATA anywhere in `gaston.exe`, which puts
+  `_BSS` back on `0x46a000` and makes this feature's committed cost ~404 bytes;
+- ship the bridge half alone. It is safe -- the absent-header default is
+  SCREEN, so nothing changes for the current client -- but then no client ever
+  declares NONE, the 1,576 tokens are never saved, and the capability exists on
+  paper only.
 
 ### Known and accepted: manual approval makes the foreground flap
 
@@ -1701,24 +1856,10 @@ So the window under the pointer changes twice per approval, and anything the
 person types in between lands wherever the foreground happens to be. It is
 awkward rather than wrong, and it is worse for a sequence of ops than for one.
 
-It is recorded here because it bears on the two open decisions below rather
-than standing alone: a quiet status pane is harder to justify when the screen
-is visibly flapping, and it is an argument for the feature being off unless
-someone has chosen it.
-
-**Open decisions, deliberately not taken here:**
-
-1. Indicator style: a quiet status pane whenever enabled, a loud bar only
-   while an op runs, or both. The argument for the bar is that during a click
-   or a keystroke sequence the agent is competing with the person for the
-   keyboard and has just stolen the foreground.
-2. What a missing key means. **Off** matches "optional, enabled in settings"
-   and stops screen control arriving in an upgrade; **on** preserves today's
-   behaviour and does not break existing scripts, including the other
-   session's.
-
-Both are cheap to change and expensive to get wrong in opposite directions, so
-they are the user's call, not a default picked here.
+It bears on the indicator decision above rather than standing alone: a quiet
+status pane is harder to justify when the screen is visibly flapping, and it
+is an argument for the feature being off unless someone has chosen it -- which
+is now something they can choose.
 
 ## 20. `DRIVES` spins the floppy motor -- CLOSED 2026-10-01
 

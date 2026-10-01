@@ -275,3 +275,60 @@ def test_declaring_single_capability_marks_declared():
     assert C.from_hello({"maxfiles": "500"}).declared
     assert C.from_hello({"acp": "1252"}).declared
     assert C.from_hello({"case": "0"}).declared
+
+
+# --- automation: the one capability about the person, not the machine --------
+
+
+def test_a_client_can_say_it_will_not_be_driven():
+    """BACKLOG.md 19. Any Win98 box can drive its own screen; whether the
+    person at it wants their mouse moved and their foreground stolen is a
+    different question, so it is declared rather than inferred from the fact
+    that the machine has a display."""
+    off = C.from_hello({"automation": "0"})
+    on = C.from_hello({"automation": "1"})
+    assert off != on
+    assert off.automation == C.AUTOMATION_NONE
+    assert on.automation == C.AUTOMATION_SCREEN
+
+
+def test_an_automation_value_the_bridge_does_not_know_is_refused():
+    """Both guesses are wrong for an unknown value -- NONE throws away a
+    capability the client says it has, SCREEN offers five tools shaped for a
+    screen it may not have -- which is exactly when a handshake refuses."""
+    with pytest.raises(C.CapsError) as e:
+        C.from_hello({"automation": "2"})
+    assert "automation" in str(e.value)
+    with pytest.raises(C.CapsError):
+        C.from_hello({"automation": "yes"})
+
+
+def test_automation_is_the_one_default_that_is_not_the_restrictive_one():
+    """And this test exists to make that deliberate rather than an oversight.
+
+    The restrictive-default rule (see the module docstring) is about guesses
+    nothing downstream can detect. This one is detected: the client refuses
+    every screen op itself when the setting is off, whatever the bridge
+    believes. What is left is caps.py's other rule -- an absent field means
+    the deployed client -- and the deployed client drives a screen. A bridge
+    updated ahead of its client must not silently lose five tools on a
+    machine that can use all of them.
+    """
+    assert C.from_hello({}).automation == C.AUTOMATION_SCREEN
+    assert not C.from_hello({}).declared
+
+
+def test_declaring_only_automation_counts_as_declaring():
+    assert C.from_hello({"automation": "0"}).declared
+
+
+def test_a_client_with_no_screen_at_all_is_nameable():
+    """A PDP running Unix has nothing for anyone to click on."""
+    assert C.POSIX.automation == C.AUTOMATION_NONE
+
+
+def test_the_summary_says_whether_the_screen_can_be_driven():
+    """"Why did the agent say it could not see the screen" starts in the log,
+    like every other capability question."""
+    assert "automation=off" in C.from_hello({"automation": "0"}).summary()
+    assert "automation=screen" in C.from_hello({"automation": "1"}).summary()

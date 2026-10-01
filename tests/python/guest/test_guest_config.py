@@ -57,3 +57,21 @@ def test_an_old_ini_with_a_retired_key_still_loads(tmp_path):
     """font_size was written by older clients and real INIs still carry it."""
     out = _run(str(tmp_path))
     assert "ok   retired-key" in out.stdout, out.stdout
+
+
+def test_screen_control_is_a_setting_and_defaults_to_on(tmp_path):
+    """BACKLOG.md 19. ON for a missing key: the five screen ops have shipped
+    since Phase 6, so defaulting it off would take them away from every
+    install that upgrades, with nothing anywhere saying why the agent had
+    stopped being able to see the screen."""
+    out = _run(str(tmp_path))
+    assert "ok   automation" in out.stdout, out.stdout
+    assert "ok   automation-off" in out.stdout, out.stdout
+
+
+def test_an_unusable_automation_value_refuses_startup(tmp_path):
+    """CLAUDE.md: an invalid value refuses startup. Falling back to the
+    default on `automation=maybe` would be the permissive reading arrived at
+    in silence, for the one setting whose entire purpose is to say no."""
+    out = _run(str(tmp_path))
+    assert "ok   automation-invalid" in out.stdout, out.stdout

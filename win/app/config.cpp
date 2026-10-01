@@ -13,7 +13,8 @@ static const char DEFAULT_SYNC_ROOT[] = "C:\\Gaston";
 static const char *const BRIDGE_KEYS[] = { "host", "port", "secret" };
 /* font_size is RETIRED, not unknown: older clients wrote it and INIs on real
  * machines still carry it. Accepted and ignored, so an old INI still loads. */
-static const char *const UI_KEYS[] = { "autoscroll", "font_size" };
+static const char *const UI_KEYS[] = { "autoscroll", "font_size",
+                                      "automation" };
 static const char *const SYNC_KEYS[] = { "root" };
 
 /* Fills m_path for IniFile's constructor. A truncated path becomes "",
@@ -47,6 +48,8 @@ bool ConfigStore::load(ClientConfig *cfg)
     rc_strcpy(cfg->secret, sizeof cfg->secret, DEFAULT_SECRET);
     rc_strcpy(cfg->syncRoot, sizeof cfg->syncRoot, DEFAULT_SYNC_ROOT);
     cfg->autoscroll = true;
+    /* ON, which is what this client has always done. See config.h. */
+    cfg->automation = true;
 
     if (!m_ini.ok())
         return false;
@@ -54,7 +57,7 @@ bool ConfigStore::load(ClientConfig *cfg)
     bool existed = GetFileAttributesA(m_ini.path()) != 0xFFFFFFFF;
     bool good =
         m_ini.checkKeys("bridge", BRIDGE_KEYS, 3) &&
-        m_ini.checkKeys("ui", UI_KEYS, 2) &&
+        m_ini.checkKeys("ui", UI_KEYS, 3) &&
         m_ini.checkKeys("sync", SYNC_KEYS, 1) &&
         m_ini.getString("bridge", "host", DEFAULT_HOST, cfg->host,
                         sizeof cfg->host) &&
@@ -62,6 +65,7 @@ bool ConfigStore::load(ClientConfig *cfg)
         m_ini.getString("bridge", "secret", DEFAULT_SECRET, cfg->secret,
                         sizeof cfg->secret) &&
         m_ini.getBool("ui", "autoscroll", true, &cfg->autoscroll) &&
+        m_ini.getBool("ui", "automation", true, &cfg->automation) &&
         m_ini.getString("sync", "root", DEFAULT_SYNC_ROOT, cfg->syncRoot,
                         sizeof cfg->syncRoot);
     if (!good)
@@ -70,8 +74,9 @@ bool ConfigStore::load(ClientConfig *cfg)
         return false;
     }
 
-    rc_log("config: bridge=%s:%ld autoscroll=%d sync_root='%s'", cfg->host,
-           cfg->port, cfg->autoscroll ? 1 : 0, cfg->syncRoot);
+    rc_log("config: bridge=%s:%ld autoscroll=%d automation=%d "
+           "sync_root='%s'", cfg->host, cfg->port, cfg->autoscroll ? 1 : 0,
+           cfg->automation ? 1 : 0, cfg->syncRoot);
 
     if (!existed)
         save(*cfg);
@@ -88,6 +93,7 @@ bool ConfigStore::save(const ClientConfig &cfg)
     ok = m_ini.setInt("bridge", "port", cfg.port) && ok;
     ok = m_ini.setString("bridge", "secret", cfg.secret) && ok;
     ok = m_ini.setBool("ui", "autoscroll", cfg.autoscroll) && ok;
+    ok = m_ini.setBool("ui", "automation", cfg.automation) && ok;
     ok = m_ini.setString("sync", "root", cfg.syncRoot) && ok;
     m_ini.flush();
     if (!ok)

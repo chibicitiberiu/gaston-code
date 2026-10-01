@@ -164,3 +164,123 @@ def test_exec_still_warns_that_an_interactive_command_hangs():
     """This one is about the transport rather than the shell -- there is no
     console to answer a prompt from -- so it stays, phrased generally."""
     assert "non-interactive" in _descriptions()["exec"]
+
+
+# --- the five screen tools are offered only to a client that can be driven ---
+#
+# BACKLOG.md 19. Declaring a tool the client cannot use is wrong whatever it
+# costs, and it is not free: measured 2026-10-01 against haiku's 200K window,
+# `ui`, `click`, `keys`, `shot` and `focus` are 1,576 tokens -- 46% of
+# everything the `machine` server contributes and 7.7% of the 20,360 a fresh
+# session starts with. They live in the request's `tools` array, so that is
+# once for the SESSION, not per request.
+
+from bridge.files import caps as C
+
+SCREEN_TOOLS = ("ui", "click", "keys", "shot", "focus")
+
+
+class _Guest:
+    """Just enough of a GuestSession: `caps`, parsed at the handshake.
+
+    Deliberately not a mock of `build`'s other arguments. The point under test
+    is that the capability reaches `build` through the guest it was already
+    given -- nothing new threaded in -- so the test has to go the same way.
+    """
+
+    def __init__(self, caps):
+        self.caps = caps
+        self.tools = []
+
+
+def _names(guest) -> set:
+    srv = machine_tools.build(None, None, None, guest)["machine"]["instance"]
+    listed = asyncio.run(srv._request_handlers["tools/list"].handler(None, None))
+    return {t.name for t in listed.tools}
+
+
+def test_a_client_that_declares_a_screen_gets_all_five():
+    names = _names(_Guest(C.from_hello({"automation": "1"})))
+    for t in SCREEN_TOOLS:
+        assert t in names, f"{t} must be offered to a client with a screen"
+
+
+def test_a_client_that_declares_none_gets_none_of_them():
+    names = _names(_Guest(C.from_hello({"automation": "0"})))
+    for t in SCREEN_TOOLS:
+        assert t not in names, f"{t} was declared to a client that cannot use it"
+
+
+def test_turning_the_screen_off_costs_nothing_else():
+    """The gate must take exactly five tools and leave the rest alone. A
+    conditional list is easy to get wrong in the direction nobody notices
+    until the agent cannot run a command either."""
+    on = _names(_Guest(C.from_hello({"automation": "1"})))
+    off = _names(_Guest(C.from_hello({"automation": "0"})))
+    assert on - off == set(SCREEN_TOOLS)
+    assert "exec" in off and "get_file" in off and "drives" in off
+
+
+def test_a_client_that_never_said_keeps_what_it_already_had():
+    """An absent header means the deployed client, and the deployed client has
+    driven a screen since Phase 6. A bridge updated ahead of its client must
+    not silently take five tools away from a machine that can use all of
+    them -- the agent would simply report it could not see the screen, with
+    nothing anywhere saying why."""
+    names = _names(_Guest(C.from_hello({})))
+    for t in SCREEN_TOOLS:
+        assert t in names
+
+
+def test_the_capability_reaches_build_through_the_guest_it_already_takes():
+    """No new parameter. `guest.caps` is set at attach, before any session is
+    built (bridge/handshake.py -> ConnectionService._attach), so the tool
+    surface and the machine it addresses come from one object -- which is the
+    same invariant test_the_tools_are_bound_to_a_guest_not_just_the_bridge
+    pins for the call sites."""
+    import inspect
+
+    sig = inspect.signature(machine_tools.build)
+    assert "automation" not in sig.parameters, (
+        "the capability was threaded in beside the guest; it belongs to the "
+        "guest, and two sources for one fact is how they disagree")
+
+
+def test_a_harness_with_no_machine_is_not_offered_a_screen():
+    """`build(None, None, None, None)` is a test, not a computer."""
+    for t in SCREEN_TOOLS:
+        assert t not in _names(None)
+
+
+def test_a_conversation_that_outlived_the_setting_is_refused_without_a_round_trip():
+    """Not registering them only shapes a session at the moment it is built.
+
+    A GuestSession survives a reconnect, so a conversation opened while screen
+    control was on still holds the five after the client comes back declaring
+    none of them. The handlers read the LIVE declaration, so the call is
+    answered here instead of waking the machine's desktop worker to be told
+    the same thing -- which is also why the guest refuses on its own authority
+    (`rc_uirpc_handle`): neither side is relying on the other for this.
+    """
+    captured: dict = {}
+    real = machine_tools.create_sdk_mcp_server
+
+    def grab(*, name, version, tools):
+        captured.update({t.name: t.handler for t in tools})
+        return real(name=name, version=version, tools=tools)
+
+    guest = _Guest(C.from_hello({"automation": "1"}))
+    machine_tools.create_sdk_mcp_server = grab
+    try:
+        machine_tools.build(None, None, None, guest, ui=object())
+    finally:
+        machine_tools.create_sdk_mcp_server = real
+    handlers = captured
+    assert "shot" in handlers
+
+    guest.caps = C.from_hello({"automation": "0"})
+    out = asyncio.run(handlers["shot"]({}))
+    body = out["content"][0]["text"].lower()
+    assert out.get("isError")
+    assert "turned off" in body
+    assert "person at the keyboard" in body

@@ -185,6 +185,17 @@ void rc_net_set_machine(rc_net *n, const char *id)
     }
 }
 
+void rc_net_set_automation(rc_net *n, int mode)
+{
+    if (!n) return;
+    /* Anything this build does not recognise becomes NONE rather than being
+     * passed through: the bridge refuses a value it does not know, and a
+     * refused handshake over a mistyped setting would take the whole client
+     * down rather than one capability. */
+    n->automation = (mode == RC_AUTOMATION_SCREEN) ? RC_AUTOMATION_SCREEN
+                                                   : RC_AUTOMATION_NONE;
+}
+
 /* The only way to add a HELLO header. Drops rather than overruns, and says so.
  * A dropped header degrades the bridge's picture of the machine; an overrun
  * corrupts the stack while building the very first frame. */
@@ -440,6 +451,19 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("maxdepth",   RC_STR(RC_CAP_MAXDEPTH));
     HDR("maxfiles",   RC_STR(RC_CAP_MAXFILES));
     HDR("deflate",    RC_STR(RC_CAP_DEFLATE));
+
+    /* ...and the one that is not a property of the hardware. Whether the
+     * agent is offered the five screen tools at all, because declaring a tool
+     * the client cannot use is wrong however little it costs -- and it is not
+     * nothing: measured 2026-10-01, `ui`, `click`, `keys`, `shot` and `focus`
+     * are 1,576 tokens of the 20,360 a session starts with, sitting in the
+     * request's `tools` array for the whole session.
+     *
+     * A literal either way, so no buffer: rc_net_set_automation has already
+     * reduced whatever was configured to one of the two values. */
+    HDR("automation", n->automation == RC_AUTOMATION_SCREEN
+                      ? RC_STR(RC_AUTOMATION_SCREEN)
+                      : RC_STR(RC_AUTOMATION_NONE));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the

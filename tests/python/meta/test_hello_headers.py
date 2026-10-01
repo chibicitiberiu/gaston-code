@@ -16,7 +16,8 @@ the three can drift apart in two directions, both silent:
 
 Adding a header is a two-line change that can cost either of those, so the
 count is asserted rather than remembered. The `machine` header (BACKLOG.md
-§21) went in at 27 of 32 and is why this file exists.
+§21) went in at 27 of 32 and is why this file exists, and `automation`
+(§19) at 28.
 
 Reads both sources as text. No Wine, no build.
 """
@@ -120,6 +121,15 @@ def test_a_machine_id_cannot_overflow_a_header_value():
                                                "net" / "net.h").read_text())
     assert m, "no machine[] field in win/net/net.h"
     assert int(m.group(1)) <= MAX_HEADER_VALUE
+
+
+def test_screen_control_is_declared_at_the_handshake():
+    """BACKLOG.md 19: whether the agent may drive this screen decides whether
+    five tools exist for the session, and the tool list is built from HELLO --
+    so this cannot arrive on a later frame. It is also the one HELLO value
+    that is not a compile-time literal apart from the codepage: it comes from
+    `[ui] automation` in gaston.ini via rc_net_set_automation."""
+    assert "automation" in _hello_keys()
 
 
 def test_every_cap_in_caps_h_reaches_the_wire():

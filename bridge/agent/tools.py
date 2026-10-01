@@ -27,6 +27,7 @@ from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from ..files import caps as C
 from ..services.guest_fs import FsError
 from ..services.proc import ProcError
 from ..services.ui import UiError
@@ -96,6 +97,18 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     `mcp_servers=tools.build(self)` and the dict key is fixed here rather than
     being a second place to get the prefix wrong.
     """
+
+    # WHETHER THE FIVE SCREEN TOOLS EXIST FOR THIS SESSION. Read off the
+    # guest's own declaration -- nothing new is threaded in, because `guest`
+    # has carried `caps` since the handshake parsed it (bridge/handshake.py
+    # -> ConnectionService._attach), which is before any session is built.
+    #
+    # A guest of None is a harness, not a machine: no screen, so no tools.
+    # Doing it this way means a fake client in a test gets the same answer by
+    # the same route as a real one.
+    _caps = getattr(guest, "caps", None) if guest is not None else None
+    automation = (getattr(_caps, "automation", C.AUTOMATION_NONE)
+                  != C.AUTOMATION_NONE) if _caps is not None else False
 
     @tool(
         "exec",
@@ -256,6 +269,17 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     def _ui_ready() -> str:
         if ui is None or guest is None:
             return prompts.text("tools.ui.view.cannot_drive")
+        # THE STALE CONVERSATION. A GuestSession outlives a reconnect, so a
+        # session built while the setting was on still holds these five after
+        # the client comes back declaring none of them -- not registering them
+        # only shapes a session at the moment it is built. Read from `caps`
+        # on every call rather than from the `automation` captured above, so
+        # the live declaration wins and the refusal does not wake the machine's
+        # desktop worker to be told the same thing.
+        live = getattr(guest, "caps", None)
+        if live is not None and getattr(
+                live, "automation", C.AUTOMATION_NONE) == C.AUTOMATION_NONE:
+            return prompts.text("tools.ui.refused.automation_off")
         return ""
 
     @tool(
@@ -872,12 +896,34 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__toolnote failed: %r", args)
             raise
 
+    # THE SCREEN TOOLS ARE NOT REGISTERED FOR A CLIENT THAT CANNOT BE DRIVEN.
+    #
+    # Declaring a tool the client cannot use is wrong whatever it costs, and
+    # it is not free: measured 2026-10-01 against haiku's 200K window, these
+    # five are 1,576 tokens -- 46% of everything this server contributes and
+    # 7.7% of the 20,360 a fresh session starts with. They sit in the
+    # request's `tools` array, so that is once for the SESSION (about 0.8% of
+    # the window, billed once per cache write), not per request.
+    #
+    # The closures above are still defined either way. Defining one costs
+    # nothing; it is the schema reaching the model that costs, and that is
+    # this list.
+    #
+    # Not a security boundary. A conversation outlives a reconnect, so a
+    # session built while the setting was on keeps these five after the client
+    # comes back declaring none of them -- and the client refuses every screen
+    # op itself in that window (`rc_uirpc_handle`), which is where the control
+    # has to live anyway. This list is about what the agent is TOLD it has.
+    screen = [machine_ui, machine_click, machine_keys, machine_shot,
+              machine_focus] if automation else []
+    if not automation:
+        log.info("machine: screen tools withheld -- the client declares no "
+                 "automation support")
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,
-                                          machine_ui, machine_click,
-                                          machine_keys, machine_shot,
-                                          machine_focus, machine_ps,
+                                          *screen,
+                                          machine_ps,
                                           machine_kill,
                                           machine_get_file,
                                           machine_put_file,

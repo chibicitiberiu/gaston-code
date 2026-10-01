@@ -55,6 +55,13 @@ That is not symmetric politeness -- the two directions fail very differently:
 Same shape for case folding: guessing `sensitive` on an insensitive filesystem
 silently overwrites one file with another and then oscillates forever, while
 guessing `fold` on a sensitive one refuses a newcomer out loud.
+
+`automation` is the one field whose default is NOT the restrictive value, and
+the paragraph above is why rather than an exception to it: the rule is about
+guesses nothing downstream can detect. A permissive guess here is detected and
+refused by the client itself -- the only process that can move somebody's
+mouse -- so the worst it costs is one round trip with a sentence attached. See
+the note on the field.
 """
 
 from __future__ import annotations
@@ -160,6 +167,22 @@ WORKRESERVE_GASTON = 11     #: len(".gaston-tmp") == len(".gaston-old")
 #: 1: client may deflate outbound with persistent stream
 DEFLATE_NONE = 0
 DEFLATE_STREAM = 1
+
+#: Whether this client can be DRIVEN -- its own screen read, clicked, typed
+#: into, photographed, a window raised. It decides whether the `machine`
+#: server offers `ui`, `click`, `keys`, `shot` and `focus` at all.
+#:
+#: Not a fact about the hardware. A Win98 box can obviously drive its own
+#: screen; whether the person sitting at it wants their mouse moved and their
+#: foreground stolen is a different question, and it is theirs to answer
+#: (`[ui] automation` in gaston.ini). So this is the one capability a machine
+#: declares about its OWNER rather than about itself.
+#:
+#: Room to grow, which is why it is an enum: a client that can photograph a
+#: screen but not type into it, or enumerate windows without being able to
+#: capture them, is a third and a fourth value and no new header.
+AUTOMATION_NONE = 0
+AUTOMATION_SCREEN = 1
 
 #: What a Win32 GetACP() number means to Python. Only the pages a machine of
 #: this era can actually be set to; anything else is refused rather than
@@ -270,6 +293,26 @@ class Caps:
     #: others. This is the case the handshake exists for.
     manifest: int = 1
     deflate: int = DEFLATE_NONE
+    #: THE ONE DEFAULT THAT IS NOT THE RESTRICTIVE VALUE, and the paragraph
+    #: above about `devices` is the reason rather than an exception to it.
+    #: That rule exists because the permissive guess on a path rule corrupts
+    #: in silence and nothing downstream can detect it. Nothing like that is
+    #: reachable here: the only process that can move somebody's mouse is the
+    #: one at their keyboard, and it refuses every screen op on its own
+    #: authority when the setting is off, whatever this bridge believes
+    #: (`rc_uirpc_handle`). The header decides whether five tools are DECLARED;
+    #: the guest decides whether anything HAPPENS.
+    #:
+    #: With that settled, the rule the default has to answer to is caps.py's
+    #: other one -- "an absent field means the deployed client, which is the
+    #: only client that has ever connected without declaring" -- and the
+    #: deployed client drives a screen and has done since Phase 6. Defaulting
+    #: to NONE would mean a bridge updated ahead of its client silently loses
+    #: five tools on a machine that can use all of them, with no error
+    #: anywhere and the agent reporting it cannot see the screen. The other
+    #: way round costs one refused round trip with a sentence attached, plus
+    #: the 1,576 tokens the five schemas occupy.
+    automation: int = AUTOMATION_SCREEN
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -299,7 +342,8 @@ class Caps:
                 f"maxfiles={self.maxfiles} "
                 f"shortnames={'8.3' if self.shortnames else 'long'} "
                 f"manifest=v{self.manifest} "
-                f"deflate={'stream' if self.deflate else 'none'}")
+                f"deflate={'stream' if self.deflate else 'none'} "
+                f"automation={'screen' if self.automation else 'off'}")
 
 
 class CapsError(Exception):
@@ -358,7 +402,7 @@ def from_hello(h: dict) -> Caps:
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
-        "maxfiles", "deflate"))
+        "maxfiles", "deflate", "automation"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -388,6 +432,13 @@ def from_hello(h: dict) -> Caps:
         maxcomp=_num(h, "maxcomp", 255, 12, 65536),
         manifest=_num(h, "manifest", 1, 1, 2),
         deflate=_enum(h, "deflate", (DEFLATE_NONE, DEFLATE_STREAM), DEFLATE_NONE),
+        # Refused rather than guessed, like every other enum here, and this
+        # one has a reason of its own: a value we do not know means the client
+        # can be driven in a way this bridge has no tool for, and both guesses
+        # are wrong -- NONE throws away a capability it has, SCREEN offers five
+        # tools shaped for a screen it may not have.
+        automation=_enum(h, "automation", (AUTOMATION_NONE, AUTOMATION_SCREEN),
+                         AUTOMATION_SCREEN),
         declared=declared,
     )
 
@@ -404,6 +455,10 @@ POSIX = Caps(acp="latin-1", case=CASE_SENSITIVE, devices=DEVICES_NONE,
              # even though nothing about its filesystem is constrained.
              workreserve=WORKRESERVE_GASTON,
              maxpath=4096, maxcomp=255, manifest=2, deflate=DEFLATE_STREAM,
+             # A PDP running Unix has no screen for anyone to click on, and
+             # naming that here is what keeps the five screen tools out of a
+             # session with a client that is not a desktop at all.
+             automation=AUTOMATION_NONE,
              declared=True)
 
 #: What a client that declares nothing is assumed to be. Named for the

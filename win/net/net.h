@@ -87,12 +87,30 @@ typedef struct {
      * construction, and anything that is not that shape is refused before
      * it reaches here. */
     char          machine[40];
+    /* CAN THIS CLIENT BE DRIVEN -- HELLO's `automation` header, one of
+     * caps.h's RC_AUTOMATION_* values, from `[ui] automation` in the INI.
+     *
+     * Zero is RC_AUTOMATION_NONE, so a client that never sets it (the check
+     * harnesses, which have no screen) declares the restrictive thing without
+     * a line of code. Read in two places: rc_net_start puts it on the wire so
+     * the bridge knows whether to offer the five screen tools at all, and
+     * rc_uirpc_handle refuses every screen op when it is NONE. The header is
+     * the optimisation; that refusal is the control, and it reads this field
+     * live so turning the capability off never waits for a reconnect.
+     * (BACKLOG.md 19.) */
+    int           automation;
 } rc_net;
 
 /* Tell the link which machine it is. Call it BEFORE rc_net_start; the value
  * is copied, and one too long to fit is dropped with a log line rather than
  * truncated into a second machine's identity. */
 void rc_net_set_machine(rc_net *n, const char *id);
+
+/* Tell the link whether this client may be driven -- an RC_AUTOMATION_* from
+ * net/caps.h. Call it BEFORE rc_net_start for the handshake to carry it;
+ * calling it later still takes effect for the guest-side refusal, which is
+ * how "off" can be immediate while "on" waits for the next HELLO. */
+void rc_net_set_automation(rc_net *n, int mode);
 
 /* `tools` and `tools_len` are the machine's own inventory, carried as
  * HELLO's BODY rather than as headers -- the header array caps at 32 with

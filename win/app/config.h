@@ -26,6 +26,14 @@ struct ClientConfig
     char secret[128];
     char syncRoot[128];     /* "" disables sync entirely */
     bool autoscroll;
+    /* May the agent drive this screen -- read the window tree, click, type,
+     * take a picture, raise a window? Declared at the handshake, and the
+     * bridge offers the five screen tools only when it is true (BACKLOG.md
+     * 19). DEFAULTS TO TRUE: the ops have shipped since Phase 6 and this
+     * client can genuinely drive a screen, so defaulting it off would remove
+     * five tools from every install that upgrades, with no error anywhere to
+     * say why the agent had stopped being able to see anything. */
+    bool automation;
 };
 
 class ConfigStore
