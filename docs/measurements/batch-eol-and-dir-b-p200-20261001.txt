@@ -1,0 +1,90 @@
+Batch-file line endings, and what `dir /b` costs
+================================================
+
+Machine : Athlon XP 2000+, 256MB, Windows 98 SE 4.10.2222 A, real hardware
+          10.0.0.125, driven through gremote on port 7401
+Date    : 2026-10-01
+Why     : a live session (bridge conversation d669cb85, 22:43-22:45) spent six
+          exec round trips and two throwaway .bat files discovering that a
+          batch file written on Linux does not run on COMMAND.COM. Neither
+          fact below was written down anywhere, so it had to be rediscovered
+          at the keyboard.
+
+
+1. A .bat with LF-only line endings is read as ONE command
+----------------------------------------------------------
+
+Both files put byte-exact with gremote PUT, same four logical lines:
+
+  LF.BAT    "@echo off\necho one\nset FOO=bar\necho [%FOO%]\n"      (44 bytes)
+  CRLF.BAT  "@echo off\r\necho one\r\nset FOO=bar\r\necho [%FOO%]\r\n" (48 bytes)
+
+Run as `command.com /c <path>`:
+
+  LF.BAT    -> 'OFF\r\n\r\n'          exit 0
+  CRLF.BAT  -> 'one\r\n[bar]\r\n'     exit 0
+
+COMMAND.COM reads the whole LF file as a single command line:
+
+  @echo off echo one set FOO=bar echo [%FOO%]
+
+ECHO prints "OFF" and swallows the rest; SET never runs, so %FOO% never
+exists. **Exit is 0** and there is no error on stdout, which is why the
+session's agent read "OFF" as an echo artefact rather than as a parse failure
+and went on to blame its compiler invocation.
+
+The confirming experiment, from that session, was a file with no `@echo off`
+at all:
+
+  t2.bat = "echo first\necho off\necho hello\nset FOO=bar\necho %FOO%\n"
+
+  C:\WORK\BUILDASI>echo first
+  echo off
+  echo hello
+  set FOO=bar
+  echo
+
+  first
+  echo off
+  echo hello
+  set FOO=bar
+  echo
+
+COMMAND.COM's own prompt echo prints the entire file as the argument list of
+one ECHO. Note `echo %FOO%` came out as `echo ` -- the variable was empty
+because SET was an argument, not a command.
+
+Consequence for the bridge: `put_file` writes bytes verbatim and deliberately
+has "no opinion about line endings" (bridge/services/guest_fs.py:1-12), while
+the sync layer classifies text and converts (bridge/files/attrs.py). So the
+SAME file reaches this machine runnable through sync and broken through
+put_file. `get_file` is no help diagnosing it: it decodes to text, and LF vs
+CRLF is invisible in what the agent is shown -- the session's agent read the
+file back, saw what looked correct, and learned nothing.
+
+
+2. `dir /b` works on Win98's COMMAND.COM, and costs a tenth as much
+-------------------------------------------------------------------
+
+Same directory, 12 files, same connection:
+
+  command.com /c dir /b C:\WORK\BUILDASI    -> 131 bytes
+  command.com /c dir    C:\WORK\BUILDASI    -> about 1,100 bytes
+
+`/b` emits bare names, one per line, and emits the LONG name:
+
+  Hello.class
+  Hello.java
+  GuiCheck.class
+  ...
+
+Plain `dir` emits the volume label, the serial number, the directory header,
+`.` and `..`, a free-space footer, AND both name forms per row:
+
+  HELLO~1  CLA           955  10-01-26 10:41p Hello.class
+  GUICHE~1 JAV           190  10-01-26 10:42p GuiCheck.java
+
+The session's agent ran plain `dir` six times to check single files it had
+just compiled. The 8.3 column is worth paying for exactly once -- when a path
+has to be spelled for a tool that cannot take long names -- and `dir /b` is
+the right default for everything else.
