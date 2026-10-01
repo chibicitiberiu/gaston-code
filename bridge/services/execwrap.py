@@ -8,7 +8,7 @@ per build, on a machine where each one is a second.
 
 `if errorlevel` INSIDE a batch file does see a program's real code. Measured on
 real hardware, 2026-10-01
-(`docs/measurements/exit-codes-via-batch-p200-20261001.txt`):
+(`docs/measurements/exit-codes-via-batch-p200-20261002.txt`):
 
     failing .exe, then `if errorlevel 1`      -> fired
     succeeding .exe, same                     -> did not fire
@@ -19,7 +19,18 @@ anyone asks of a build, and the exact value would have cost a 6KB cascade, a
 static wrapper written once per session and two levels of `call` nesting
 nobody measured. So the wrapper is four lines.
 
-THREE CONSTRAINTS, each from a measurement and each of which would have bitten:
+FOUR CONSTRAINTS, each from a measurement and each of which would have bitten
+-- the fourth one did, in the first version of this file:
+
+  * **errorlevel has to be forced non-zero BEFORE the command runs.**
+    `if errorlevel` reads whatever the last PROGRAM left behind, and a command
+    that never ran leaves it alone -- so a typo, a missing compiler or a wrong
+    path read as SUCCESS: the shell printed "Bad command or file name" and
+    errorlevel stayed at 0. That is the one case this feature was built to
+    close, and the first version got it wrong on real hardware. Forcing it
+    first turns "unchanged" into "failed", which is the honest reading: nothing
+    ran, so nothing succeeded. The line that does it is in the profile, with
+    the four candidates that do not work and why.
 
   * **`call` only for a batch file.** Without it a nested .bat never returns
     and the verdict lines simply do not run. With it, a builtin's redirection

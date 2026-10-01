@@ -95,3 +95,50 @@ in it is extrapolated. Three constraints stand:
 The command the user approved must be what lands in the generated file,
 byte for byte. The guard classifies the original text; the wrapper is
 plumbing around it and must not become something else to approve.
+
+
+2026-10-02: the first version of this was WRONG for a missing program
+---------------------------------------------------------------------
+
+Built exactly as above and run against the same box, it reported SUCCESS for a
+program that does not exist -- the one case the whole feature was quoted as
+closing. `if errorlevel` reads whatever the last PROGRAM left behind, and a
+command that never ran leaves it alone, so the shell printed "Bad command or
+file name" and errorlevel stayed at 0.
+
+The fix is to force errorlevel non-zero BEFORE the command, which turns
+"unchanged" into "failed". That is the honest reading: nothing ran, so nothing
+succeeded. A program that does run overwrites it either way.
+
+Candidates, all measured on this box the same day. The test is a .bat that runs
+only the candidate and then reports what `if errorlevel 1` saw:
+
+  echo x| find "y" > nul              -> FAIL   and prints nothing
+  attrib nosuchfile.xyz > nul         -> FAIL   but prints "File not found - ..."
+  fc nosuch1.xyz nosuch2.xyz > nul    -> ok     (does not set it)
+  more < nosuchfile.xyz > nul         -> ok     and prints "File not found"
+  echo x| findstr "y" > nul           -> ok     -- FINDSTR.EXE is not on Win98
+
+A builtin cannot do it at all: `dir nosuchfile` leaves errorlevel at 0, which
+is the same measurement that keeps builtins out of the wrapper entirely.
+
+So the wrapper is five lines:
+
+  @echo off
+  echo x| find "y" > nul
+  <the approved command, `call `-prefixed only for a .bat>
+  if errorlevel 1 echo <sentinel> fail
+  if not errorlevel 1 echo <sentinel> ok
+
+If FIND.EXE is absent the line fails to run, errorlevel stays 0, and this
+degrades to the behaviour above -- a missing program reads as success. Worse
+than working, no worse than not having the wrapper.
+
+Six cases, all correct on real hardware 2026-10-02:
+
+  a program that succeeds              ok
+  a program that fails (exit 3)        fail
+  a program that does not exist        fail     output: "Bad command or file name"
+  output is not disturbed              ok       output: "hello"
+  javac on a missing source            fail     output: "error: Can't read: ..."
+  java -version                        ok       output: the version banner

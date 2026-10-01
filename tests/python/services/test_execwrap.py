@@ -5,7 +5,7 @@ were indistinguishable from the bridge and the agent had to go and look -- a
 live session verified every single build with a follow-up `dir`.
 
 Everything asserted here was measured on real Windows 98 on 2026-10-01
-(docs/measurements/exit-codes-via-batch-p200-20261001.txt). The three that
+(docs/measurements/exit-codes-via-batch-p200-20261002.txt). The three that
 would each have broken it silently:
 
     without `call`, a nested .bat never returns and the verdict never runs
@@ -122,3 +122,30 @@ def test_the_sentinel_cannot_be_rewritten_by_the_shell():
     interpreted rather than printed."""
     for ch in ">", "<", "|", "&", "%", '"':
         assert ch not in W.SENTINEL
+
+
+def test_errorlevel_is_forced_before_the_command_runs():
+    r"""THE CASE THE FIRST VERSION OF THIS GOT WRONG, on real hardware.
+
+    `if errorlevel` reads whatever the last PROGRAM left behind, so a command
+    that never ran leaves it alone -- and `build-nothing-here.exe` reported
+    SUCCESS: the shell printed "Bad command or file name" and errorlevel stayed
+    at 0. That is the one case the feature was built to close.
+
+    Six cases are correct on the Athlon box since the pre-set went in
+    (docs/measurements/exit-codes-via-batch-p200-20261002.txt), including a
+    missing program and `javac` on a source file that is not there.
+    """
+    out = W.body(SHELL, "javac A.java")
+    lines = out.decode().split("\r\n")
+    # Before the command, not after: after it would overwrite the answer.
+    assert lines[0] == "@echo off"
+    assert "find" in lines[1]
+    assert lines[2] == "javac A.java"
+
+
+def test_the_preset_prints_nothing_into_the_users_output():
+    r"""`attrib nosuchfile.xyz` also sets errorlevel and prints "File not
+    found - nosuchfile.xyz", which would land in the output as though the
+    command had said it."""
+    assert "> nul" in W.body(SHELL, "javac A.java").decode()

@@ -166,7 +166,7 @@ devices = [
 # --- getting an exit code back out of this shell ---------------------------
 #
 # MEASURED ON REAL HARDWARE, 2026-10-01
-# (docs/measurements/exit-codes-via-batch-p200-20261001.txt). `command.com /c`
+# (docs/measurements/exit-codes-via-batch-p200-20261002.txt). `command.com /c`
 # exits 0 whatever happened -- for a failing child and for a program that does
 # not exist -- so `exec` through this shell could not say whether a build
 # worked, and a live session verified every single compile with a follow-up
@@ -185,7 +185,30 @@ lost = true
 # bridge fills {call}, {command} and {sentinel}; it writes the file with this
 # shell's own line endings, because an LF-only .bat is read as ONE command line
 # here and exits 0 (the other half of the same measurement).
+#
+# THE `find` LINE IS LOAD-BEARING AND IT IS NOT A JOKE. `if errorlevel` reads
+# whatever the last PROGRAM left behind, and a command that never ran leaves it
+# alone -- so a typo, a missing compiler or a path that is wrong read as
+# SUCCESS: the shell printed "Bad command or file name" and errorlevel stayed
+# at 0 (measured on real hardware, 2026-10-02, when the first version of this
+# wrapper got that case wrong). Forcing it non-zero first turns "unchanged"
+# into "failed", which is the honest reading: nothing ran, so nothing
+# succeeded.
+#
+# WHY `find` and not something tidier, all measured the same day on the same
+# box. A builtin cannot do it -- `dir nosuchfile` leaves errorlevel at 0, which
+# is the whole reason builtins are excluded below. `findstr` does not exist on
+# Windows 98. `fc` and `more` against a missing file both leave it at 0 as well,
+# and `more` prints "File not found" into the output. `attrib` works and prints
+# "File not found - nosuchfile.xyz", which would land in the user's output.
+# FIND.EXE returns 1 when the string is absent, ships with every DOS and
+# Windows, and with `> nul` prints nothing at all.
+#
+# If FIND.EXE is missing, the line fails to run, errorlevel stays 0 and this
+# degrades to the behaviour it had before -- a missing program reads as success.
+# Worse than working, no worse than not having the wrapper.
 wrapper = '''@echo off
+echo x| find "y" > nul
 {call}{command}
 if errorlevel 1 echo {sentinel} fail
 if not errorlevel 1 echo {sentinel} ok
