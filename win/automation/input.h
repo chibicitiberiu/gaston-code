@@ -21,6 +21,12 @@ enum InputResult
     INPUT_NO_WINDOW,        /* not a window, or gone */
     INPUT_NOT_FOREGROUND,   /* focus would not move; we did not type */
     INPUT_OCCLUDED,         /* something else is on top of the point */
+    /* A `[Name]` in the text that is not a key this knows. NOTHING WAS
+     * TYPED: the whole string is checked before the first keystroke, because
+     * a string half delivered into somebody's text box is worse than one
+     * refused. Before this existed `[Delete]` was typed as eight characters
+     * and reported as success -- measured in a live session, 2026-10-02. */
+    INPUT_BAD_KEY,
     INPUT_FAILED
 };
 
@@ -79,10 +85,27 @@ public:
      * same real click a coordinate would. */
     InputResult clickWindow(HWND target);
 
-    /* Plain characters and the few keys a dialog needs. Ctrl+Alt+Del is
+    /* Characters, and named keys in square brackets. Ctrl+Alt+Del is
      * refused: on 9x the VMM owns it at ring 0 so this probably cannot
-     * synthesise it anyway, and the cost of being wrong is a reboot. */
-    InputResult typeText(HWND target, const char *text);
+     * synthesise it anyway, and the cost of being wrong is a reboot.
+     *
+     *     Hello[Tab]world[Enter]
+     *     [Ctrl+A][Delete]              -- clear a text box
+     *     [Alt+F4]  [Shift+Home]  [Ctrl+Shift+End]
+     *     [[                            -- a literal '['
+     *
+     * Names are matched without regard to case and listed in KEY_NAMES
+     * (input.cpp), which `tests/python/guest/test_guest_agreement.py` scrapes
+     * so the bridge cannot advertise a key this does not have.
+     *
+     * AN UNKNOWN NAME IS A REFUSAL AND NOTHING IS TYPED -- `badKey` is then
+     * filled with the offending token. A plain `[` that opens nothing this
+     * recognises is also refused rather than typed, because the alternative
+     * is what used to happen: the brackets went into the user's text box and
+     * the call reported success. Pass NULL for `badKey` if the name is not
+     * wanted. */
+    InputResult typeText(HWND target, const char *text,
+                         char *badKey = 0, unsigned badKeySize = 0);
     InputResult pressKey(HWND target, int vk);
 
     bool usingSendInput() const { return m_sendInput != 0; }

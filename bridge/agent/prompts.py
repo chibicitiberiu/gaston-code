@@ -58,12 +58,21 @@ def all() -> dict:
     return _cache
 
 
-def text(key: str, **ctx) -> str:
+def text(key: str, /, **ctx) -> str:
     """One fragment, substituted. `key` is `<file>.<table>...<name>`.
 
     Raises rather than returning a placeholder: a missing fragment means the
     agent is about to be told less than it should be, and the quiet version of
     that is a prompt with a hole in it that nothing reports.
+
+    `key` IS POSITIONAL-ONLY, and the `/` is load-bearing. `**ctx` holds the
+    placeholders a fragment names, and several of them come straight from a
+    guest frame's headers -- so the moment a fragment wanted `{key}`, which is
+    the natural name for the key a `[Name]` token failed to be, the call raised
+    `TypeError: text() got multiple values for argument 'key'`. At runtime, in
+    the refusal path, which is where nobody looks until it fires. The `/` makes
+    the parameter unreachable by name instead of renaming the placeholder and
+    leaving the collision for the next header.
     """
     node: object = all()
     for part in key.split("."):

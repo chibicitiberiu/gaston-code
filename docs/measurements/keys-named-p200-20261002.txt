@@ -1,0 +1,111 @@
+Named keys, and what they actually do on a Windows 98 edit control
+=================================================================
+
+Machine : Athlon XP 2000+, Windows 98 SE 4.10.2222 A, real hardware 10.0.0.125
+Date    : 2026-10-02
+Driven  : `autocheck.exe --type-into HelloGuiClass "<text>"` over gremote, against
+          HELLOGUI.EXE -- a Win32 app with a real EDIT control, built by the
+          agent itself in an earlier session. The mode calls Input::typeText on
+          the edit control by name, sleeps 500ms, and reads the control back with
+          WM_GETTEXT.
+Why     : a live session asked to clear a text box and sent
+          `[Delete][Delete][Delete][Delete]Tiberiu`. The field ended up holding
+          `John[Delete][Delete][D` and the reply said "Typed 39 characters".
+
+
+1. There was no bracket syntax at all
+-------------------------------------
+
+`typeText` iterated characters through VkKeyScanA and nothing else, while the
+tool description promised "plain characters plus Tab, Enter, Escape and the
+arrow keys" -- and an arrow key is not a character, so there was no way to send
+one. The brackets went in as text and the call reported success.
+
+Implemented, and the refusal half verified on this machine:
+
+  [Frobnicate]   -> result=5 (INPUT_BAD_KEY) bad="[Frobnicate]" text unchanged
+
+Nothing is typed when a token does not parse, because the whole string is
+checked before the first keystroke.
+
+
+2. Naming a child control did not give it the keyboard
+------------------------------------------------------
+
+With the brackets working, typing into the edit control BY NAME still did
+nothing -- and said it had worked:
+
+  typeText(edit, "Tiberiu")      -> result=0  text=""     <-- before the fix
+  click(edit) then the same      -> result=0  text="Tiberiu"
+
+`Input::focus` raised the ROOT window and only called `SetFocus` in its fallback
+branch, the one for a window that refuses to come forward. On the ordinary path
+the keystrokes went to whichever child already had focus. The one live session
+that hit this got away with it because it clicked the box first, which is what
+the tool description tells you to do -- but the tool also ACCEPTS a child target,
+which says the text goes there.
+
+`focus()` now attaches to the owning thread and sets focus whenever the target is
+a child, then detaches. Re-measured with no click at all:
+
+  [Ctrl+A][Delete]Tiberiu        -> result=0  text="Tiberiu"
+
+
+3. Ctrl+A is NOT select-all here
+--------------------------------
+
+This is the fact worth having. A box holding text, no click, settled reads:
+
+  [Ctrl+A][Delete]               -> text unchanged      (twice, consecutively)
+  [Ctrl+A]Z                      -> text unchanged
+
+Ctrl+A select-all in an EDIT control is a later Windows convention; the Win98
+control does not implement it, and nothing reports that it did nothing. An
+earlier run of this probe appeared to show it working -- that was the probe
+reading WM_GETTEXT before the asynchronous keybd_event had been processed, the
+same race that made "Hello" read back as "H". Hence the 500ms settle.
+
+What DOES work, measured on the same control:
+
+  [Home][Shift+End][Delete]      -> text=""             clears it
+  [Home][Shift+End]wiped         -> text="wiped"        replaces it
+  [End][Backspace]x5             -> text=""             clears a 5-char box
+  abc                            -> appends at the caret
+  [End][Backspace]               -> removes the last character
+
+So the idiom to put in front of an agent is `[Home][Shift+End][Delete]`, and the
+first draft of the tool description said `[Ctrl+A][Delete]` -- which would have
+sent the next session into the same hole this one came out of.
+
+
+4. Escaping a bracket, asked for by name and measured
+-----------------------------------------------------
+
+`[` opens a token, so it needs an escape; `]` is special only INSIDE one, so it
+does not. That asymmetry is a decision, not an accident, and it is the kind of
+thing worth checking rather than reasoning about. Every line below was run
+against the same control, clearing with `[Home][Shift+End][Delete]` first:
+
+  sent 'a[[b'          -> 'a[b'        a doubled bracket in the middle
+  sent '[['            -> '['          on its own
+  sent '[[Delete]'     -> '[Delete]'   an escaped token stays text
+  sent 'a]b'           -> 'a]b'        a closing bracket needs no escape
+  sent ']]'            -> ']]'         and doubling one is just two of them
+  sent '[[a]]'         -> '[a]]'       only the OPENING pair collapses
+  sent '{{x}'          -> '{x}'        the brace form escapes the same way
+  sent 'x[Home][[y'    -> '[yx'        an escape after a real key still works
+
+The last one is the one that would have broken quietly: `x` types, `[Home]`
+moves the caret to the front, and `[[y` then inserts `[y` THERE rather than at
+the end -- which is correct, and only visible because the expected string was
+written down before the run.
+
+
+5. The modifier bits were nearly wrong in silence
+-------------------------------------------------
+
+`MOD_SHIFT`, `MOD_CONTROL` and `MOD_ALT` are already macros in winuser.h for
+RegisterHotKey, and their values are DIFFERENT from the ones VkKeyScan returns:
+`MOD_ALT` is 1 there and 4 here. Watcom rejected the enum as a syntax error,
+which is the only reason this was found at compile time rather than as every
+modifier being wrong at runtime. The enum is `KEYMOD_*` now.
