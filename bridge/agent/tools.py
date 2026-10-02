@@ -26,7 +26,6 @@ import mimetypes
 import os
 import pathlib
 import re
-from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -336,16 +335,26 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     @tool(
         "sync_resolve",
         prompts.text("tools.sync_resolve.description"),
+        # A full schema, not the Annotated shorthand: the shorthand marks
+        # every property required, and `accept-tree` has no path to give.
+        # The schema said one thing and the code below another -- the same
+        # trap `exec`'s comment describes.
         {
-            "path": Annotated[
-                str,
-                "The path, relative to the mirrored folder, exactly as "
-                "sync_status reported it.",
-            ],
-            "action": Annotated[
-                str,
-                prompts.text("tools.sync_resolve.args.action"),
-            ],
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path, relative to the mirrored "
+                                   "folder, exactly as sync_status reported "
+                                   "it. Not needed for accept-tree.",
+                },
+                "action": {
+                    "type": "string",
+                    "description": prompts.text(
+                        "tools.sync_resolve.args.action"),
+                },
+            },
+            "required": [],
         },
     )
     async def machine_sync_resolve(args: dict) -> dict:
@@ -445,6 +454,13 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             if pid > 0 and scope != "pid":
                 return _text(prompts.text("tools.ui.view.pid_unused",
                                           scope=scope, pid=pid), error=True)
+            # `target` WITHOUT `inproc` WAS DROPPED ON THE WAY OUT
+            # (protocol.ui_tree only sends it on the inproc branch), so the
+            # agent got the whole scope back and no word that the control it
+            # named had played no part. Said, rather than sent and ignored.
+            if a.get("target") and not a.get("inproc"):
+                return _text(prompts.text("tools.ui.view.target_unused"),
+                             error=True)
             nodes, headers = await ui.tree(
                 guest,
                 scope=scope,

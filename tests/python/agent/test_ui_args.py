@@ -248,3 +248,29 @@ def test_an_ambiguous_wait_is_not_reported_as_nothing_found():
     assert "More than one control" in out
     assert "Nothing on screen" not in out
     assert ":nth(" in out            # and what to do about it
+
+
+def test_a_target_without_inproc_is_refused():
+    """`target` only travels on the inproc branch (protocol.ui_tree), so
+    without `inproc` it was dropped on the way out and the agent got the
+    whole scope back believing it had named one control."""
+    ui = FakeUi()
+    out = _body(_call(_server(ui), "ui", {"target": "Notepad"}))
+    assert ui.calls == []
+    assert "inproc" in out
+
+
+def test_a_target_with_inproc_goes_through():
+    ui = FakeUi()
+    _call(_server(ui), "ui", {"target": "Notepad", "inproc": True})
+    assert ui.calls[0]["target"] == "Notepad"
+
+
+def test_sync_resolve_does_not_require_a_path():
+    """`accept-tree` has no path, and the code accepts that; the schema used
+    to say otherwise (the Annotated shorthand marks everything required)."""
+    srv = _server(FakeUi())
+    listed = asyncio.run(srv._request_handlers["tools/list"].handler(None, None))
+    tools = listed.root.tools if hasattr(listed, "root") else listed.tools
+    schema = next(t.input_schema for t in tools if t.name == "sync_resolve")
+    assert "path" not in schema.get("required", [])

@@ -270,6 +270,10 @@ user is looking at, or `scope: "desktop"` for everything.'''
 pid_unused = '''
 You passed `pid: {pid}` with `scope: "{scope}"`, which ignores it. Use
 `scope: "pid"` to look at one process, or drop the `pid`.'''
+target_unused = '''
+`target` only means something with `inproc: true`, which reads the rows of one
+program's lists and trees. Without it the tree is read from `scope`, and the
+`target` would have been ignored. Add `inproc: true`, or drop the `target`.'''
 clicked = '''
 Clicked {target}.'''
 focused = '''
