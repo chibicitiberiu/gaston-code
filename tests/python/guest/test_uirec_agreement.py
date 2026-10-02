@@ -47,7 +47,12 @@ pytestmark = conftest.needs_guest
 #: NOT refused by the gate, a malformed list carrying the parser's reason, a
 #: missing `target=`, an unparseable one, and a header clamped to the link's
 #: own ceiling rather than a literal.
-CASE_COUNT = 48
+#:
+#: 48 -> 50 the same day: the stop flag reaching the WALK and not just the
+#: step list, which is the mechanism BACKLOG 26 has been waiting for -- a
+#: cancelled enumeration used to run to completion on a single-threaded
+#: worker and the next request queued behind it.
+CASE_COUNT = 50
 
 
 @pytest.fixture(scope="module")

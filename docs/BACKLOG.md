@@ -2365,11 +2365,29 @@ docstring lists "the request was cancelled" as a reason). So the flag reaches
 all three ops there, and **the client's `UICANCEL` now raises it for all three
 too** rather than for step lists alone.
 
-What is still owed is this entry's original demand: the number. Cancel a tree
-walk on the Athlon, start another immediately, and say what the old behaviour
-was costing. Until that is written down, the fix is a cheap one taken on a
-guess -- which is better than an expensive one taken on a guess, but it is not
-the same as knowing.
+**The VM's number, 2026-10-03** (`docs/measurements/ui-cancel-vm-20261003.txt`,
+`tools/probe/cancelprobe.py`): a full MSAA-enriched desktop walk is **0.16 s
+at 72 nodes and 0.58-0.71 s at 109**, well under the 8 s default deadline. So
+on an emulator a cancelled enumeration costs the next request well under a
+second -- the cheap end this entry already guessed at. A cancelled capture is
+worth more: 190,464 of a full screen's 481,078 bytes arrive before the strip
+loop reads the flag and stops.
+
+**And measuring it found a second bug, which is the better reason this was
+worth doing.** With the flag wired in, eight attempts to cancel a walk lost
+the race and the log said `UICANCEL ... matches no running request` every
+time. `UICANCEL` is `RC_LANE_IMMEDIATE` so the reader answers it at once --
+but `g_run_id` was only written when the desktop WORKER picked the frame up,
+so a cancel for a request still in the queue was logged and dropped. That
+window has existed since UICANCEL was built; it was invisible while only step
+lists could be cancelled, because a step list is long enough that the cancel
+almost always arrives after the worker has started. A 0.16 s walk is not.
+`rc_uirpc_cancel` now remembers an id it could not stop and the worker starts
+that request already stopped: cancelled on attempt 1, in 0.00 s.
+
+What is still owed is this entry's original demand on a machine slow enough to
+care. 0.71 s is the floor, not the answer; the Athlon and the P200 are where
+the motivation would show.
 
 ## 27. Prevent sleep works in practice, and three of its four mechanisms are untested
 

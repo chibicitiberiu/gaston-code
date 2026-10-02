@@ -1,0 +1,77 @@
+UICANCEL against a walk and a capture, and the window it used to fall through
+=============================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE 4.10.2222 A, 32MB
+Date    : 2026-10-03
+Driven  : a bridge stub (tools/probe/cancelprobe.py) with the client shipped
+          over gremote. No model, no bridge.
+Why     : BACKLOG 26 asked for a number before anything was built --
+          "a cancel path built against a cost nobody has measured is a third
+          lane's worth of generation bookkeeping bought on a guess. Take the
+          measurement first." The ui lane's own STOP needed the flag anyway
+          (REMOTE.md step 6), so the marginal cost of reaching the walk and
+          the capture was two polls on functions that already returned bool.
+          This is the number, and it is also how a second bug was found.
+
+
+1. What a walk costs when nothing stops it
+------------------------------------------
+
+  scope=desktop, max_nodes=4000, msaa=1, hidden=1
+
+      72 nodes, no hidden windows      0.16 s
+      77 nodes, hidden included        0.71 s
+
+Both are far below the 8 s default deadline, so on THIS machine a cancelled
+enumeration costs the next request well under a second. BACKLOG 26 guessed as
+much -- "on the Athlon box a desktop tree is tens of milliseconds and on the
+Pentium 200 it is not" -- and the VM is the cheap end of that. The expensive
+end is still unmeasured.
+
+
+2. The cancel never arrived, eight times out of eight
+-----------------------------------------------------
+
+With the flag wired into TreeSink and ShotFrames, sending UITREE and UICANCEL
+back to back:
+
+      attempt 1..8    status=ok, 0.27 s      the walk ran to completion
+
+and GASTON.LOG held eight copies of
+
+      desktop: UICANCEL c1_N matches no running request -- ignored
+
+The flag was never raised. UICANCEL is RC_LANE_IMMEDIATE on purpose -- it is
+answered on the reader so it does not queue behind the work it is stopping --
+and `g_run_id` was only written when the DESKTOP WORKER picked the frame up.
+Between `rc_uirpc_post` and that moment nothing knew the id, so a cancel for a
+request that was still in the queue was logged and dropped.
+
+That window has been there since UICANCEL was built. It was invisible while
+only step lists could be cancelled, because a step list is long enough that a
+cancel for it almost always arrives after the worker has started; a 0.16 s
+walk is not.
+
+
+3. After: a request cancelled before it starts does not run
+------------------------------------------------------------
+
+`rc_uirpc_cancel` now remembers an id it could not stop, and the worker starts
+that request with the flag already up.
+
+      walk cancelled       attempt 1, 0.00 s     (a full walk is 0.71 s)
+      next request         0.03 s, status=ok     the lane is free at once
+      capture cancelled    0.04 s, 126,976 of 481,078 bytes arrived
+
+The capture number is the saving made visible: a 800x600 8bpp screen is
+481,078 bytes and 126,976 of them were sent before the strip loop read the
+flag and stopped. ByteSink's `false` has always meant this; nothing was
+reading it for a cancel.
+
+
+What this does NOT settle
+-------------------------
+
+BACKLOG 26's own question -- what the old behaviour cost on a machine slow
+enough to care -- still wants the Athlon or the P200. 0.71 s here is the
+floor, not the answer. The mechanism is proved; the motivation is not.

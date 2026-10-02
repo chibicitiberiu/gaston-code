@@ -139,7 +139,7 @@ TreeSink::TreeSink(UiLink &l, UiContext *c, bool wantMsaa)
     : link(l), ctx(c), frameCap(l.bodyCap()),
       buf((char *)HeapAlloc(GetProcessHeap(), 0, l.bodyCap())),
       len(0), batch(0), total(0), enriched(0), dropped(0),
-      msaa(wantMsaa), cap(0)
+      msaa(wantMsaa), cap(0), stopped(false)
 {
 }
 
@@ -158,6 +158,18 @@ bool TreeSink::onNode(const Node &n)
 {
     const Enrichment *e = 0;
     Enrichment got;
+
+    /* Stopped between nodes. The walker already had WALK_STOPPED for a sink
+     * that says no, and a node is the right grain: one more WM_GETTEXT at a
+     * bounded timeout, not a whole walk. */
+    {
+        volatile LONG *stop = link.stopFlag();
+        if (stop && *stop)
+        {
+            stopped = true;
+            return false;
+        }
+    }
 
     /* Only when asked. Each field is a marshalled call into another
      * process and a tree is hundreds of nodes; this is the difference
@@ -498,6 +510,15 @@ void rc_ui_tree(UiLink &link, UiContext *ctx, rc_frame *f)
     WalkEnd end = ctx->walker.walk(o, sink);
     ctx->deadline.disarm();
     sink.flush();
+
+    if (sink.stopped)
+    {
+        /* The caller asked for this; it is not a short answer to explain
+         * away. The records already sent stand -- they were true when they
+         * were written -- but the status says the walk did not finish. */
+        link.end("cancelled", NULL, NULL, 0);
+        return;
+    }
 
     rc_strf(nodes, sizeof(nodes), "%d", sink.total);
     rc_strf(enr, sizeof(enr), "%d", sink.enriched);

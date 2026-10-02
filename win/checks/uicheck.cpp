@@ -534,7 +534,8 @@ class FakeUiLink : public UiLink
 {
 public:
     FakeUiLink(int level) : m_level(level), m_ended(false), m_nkv(0),
-                            m_reported(0), m_records(0), m_bytes(0)
+                            m_reported(0), m_records(0), m_bytes(0),
+                            m_stop(0)
     {
         m_status[0] = '\0';
         m_detail[0] = '\0';
@@ -566,6 +567,7 @@ public:
     virtual const UiLimits &limits() const { return m_limits; }
     virtual volatile LONG *stopFlag() { return &m_stop; }
 
+    void raise() { m_stop = 1; }
     const char *status() const { return m_status; }
     const char *detail() const { return m_detail; }
     bool ended() const { return m_ended; }
@@ -605,6 +607,7 @@ static bool mkFrame(rc_frame &f, char *raw, unsigned rawCap, const char *type,
 static void refusals(void)
 {
     static char raw[2048];
+    static char detail[200];
     rc_frame f;
     const char *k[2];
     const char *v[2];
@@ -716,6 +719,39 @@ static void refusals(void)
         }
         else
             say("resolve-with-a-bad-selector-says-why", false, "no frame");
+    }
+
+    /* The stop flag reaches the WALK, not just the step list. BACKLOG 26 is
+     * about a cancelled enumeration running to completion on a
+     * single-threaded worker, so the next request queues behind work nobody
+     * wants; this is the poll that ends it. A node is the right grain --
+     * one more bounded WM_GETTEXT, not a whole walk. */
+    {
+        FakeUiLink link(RC_AUTOMATION_STEPS);
+        TreeSink sink(link, NULL, false);
+        Node n = mk("0/1", "Button", "OK", 1);
+        bool first = sink.ready() && sink.onNode(n);
+        link.raise();
+        bool second = sink.onNode(n);
+        rc_strf(detail, sizeof(detail), "first=%d second=%d stopped=%d",
+                (int)first, (int)second, (int)sink.stopped);
+        say("a-walk-stops-when-the-flag-goes-up",
+            first && !second && sink.stopped, detail);
+    }
+
+    /* And a capture stops at a strip boundary, through the same flag and the
+     * same bool ByteSink has always returned. */
+    {
+        FakeUiLink link(RC_AUTOMATION_STEPS);
+        char junk[64];
+        memset(junk, 'x', sizeof(junk));
+        link.raise();
+        /* ShotFrames is internal to uirpc.cpp, so what is pinned here is the
+         * contract it relies on: the link hands out a flag a producer can
+         * read, and the same one the walk above used. */
+        say("the-stop-flag-is-the-links-to-give",
+            link.stopFlag() != NULL && *link.stopFlag() != 0,
+            "one flag, read by the walk, the capture and the step runner");
     }
 
     /* The limits come from the LINK, not from the handlers. A caller's

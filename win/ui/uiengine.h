@@ -73,6 +73,7 @@ struct TreeSink : public NodeSink
     int        dropped;
     bool       msaa;
     int        cap;
+    bool       stopped;         /* the stop flag was up mid-walk */
 
 private:
     TreeSink(const TreeSink &);

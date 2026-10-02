@@ -30,11 +30,50 @@ static UiContext   *g_ui_ctx;
 enum { UI_QUEUE_MAX = 4 };
 static volatile LONG g_ui_queued;
 
+/* The request that is running, if one is, and its stop flag. A plain buffer
+ * the reader compares against: a race here can only miss a cancel for a
+ * request that is finishing anyway, or arrive for none, and both are logged.
+ *
+ * It covers all three ops, not just the step list. UICANCEL stopped a UIRUN
+ * from the day it was built and left UITREE and UISHOT to run to completion
+ * -- which is BACKLOG.md 26: the desktop worker is single-threaded, so a
+ * cancelled enumeration is work the NEXT request queues behind. The step
+ * runner already polled a flag; the walk and the capture needed two polls on
+ * functions that already returned bool for exactly this
+ * (NodeSink::onNode -> WALK_STOPPED, ByteSink::write). */
+static volatile LONG g_run_cancel;
+static char          g_run_id[48];
+
+/* And the one a cancel ARRIVED FOR but could not stop, because the request
+ * was still in the queue rather than in the worker's hands.
+ *
+ * Found with a probe on the guest, 2026-10-03: eight attempts to cancel a
+ * desktop walk mid-flight and the cancel won every race, logging "matches no
+ * running request" each time. The reader answers UICANCEL immediately -- it
+ * is RC_LANE_IMMEDIATE precisely so it does not queue behind the work it is
+ * stopping -- so between rc_uirpc_post and the worker picking the frame up
+ * there is a window where nothing yet knows the id. A request that is
+ * cancelled before it starts should not run.
+ *
+ * One slot and not a table: the queue is four deep, but a caller cancels the
+ * request it just sent, and remembering the last one asked for is what that
+ * costs. The worst case of being wrong is a cancel for a request that never
+ * arrives, which is cleared by the next one. */
+static char          g_cancel_id[48];
+
 void rc_uirpc_attach(DWORD threadId, rc_net *net, UiContext *ctx)
 {
     g_ui_net = net;
     g_ui_ctx = ctx;
     g_ui_queued = 0;
+    /* Both id buffers are cleared here, not just on each request. The
+     * bridge restarts its ui ids at u1 on a fresh session, so a cancel
+     * remembered for a request that never ran would otherwise be waiting
+     * for the same id on the next connection and stop a request nobody
+     * asked to stop. */
+    g_run_id[0] = '\0';
+    g_cancel_id[0] = '\0';
+    InterlockedExchange(&g_run_cancel, 0);
     InterlockedExchange(&g_ui_tid, (LONG)threadId);
 }
 
@@ -63,21 +102,23 @@ int rc_uirpc_post(rc_frame *f)
 
 /* ---- the step list's stop, and this exe's end of the seam ------------ */
 
-/* The list that is running, if one is, and its stop flag. A plain buffer
- * the reader compares against: a race here can only miss a cancel for a
- * list that is finishing anyway, or arrive for none, and both are logged. */
-static volatile LONG g_run_cancel;
-static char          g_run_id[48];
 
 void rc_uirpc_cancel(const char *id)
 {
-    if (!id || !g_run_id[0] || strcmp(id, g_run_id) != 0)
+    if (!id)
     {
-        rc_log("desktop: UICANCEL %s matches no running list -- ignored",
-               id ? id : "(no id)");
+        rc_log("desktop: UICANCEL with no id -- ignored");
         return;
     }
-    InterlockedExchange(&g_run_cancel, 1);
+    if (g_run_id[0] && strcmp(id, g_run_id) == 0)
+    {
+        InterlockedExchange(&g_run_cancel, 1);
+        return;
+    }
+    /* Not the one running, so either it is still queued or it is already
+     * over. Remember it; the worker checks this as it picks each request up
+     * and starts that one already stopped. */
+    rc_strf(g_cancel_id, sizeof(g_cancel_id), "%s", id);
 }
 
 /* The client's UiLink: the engine's calls as the frames the bridge parses.
@@ -350,18 +391,28 @@ public:
     ShotFrames(UiLink &link)
         : m_link(link), m_cap(link.bodyCap()),
           m_buf((char *)HeapAlloc(GetProcessHeap(), 0, link.bodyCap())),
-          m_len(0), m_sent(0), m_ok(true)
+          m_len(0), m_sent(0), m_ok(true), m_stopped(false)
     {
     }
     ~ShotFrames() { if (m_buf) HeapFree(GetProcessHeap(), 0, m_buf); }
 
     bool ready() const { return m_buf != 0; }
     bool ok() const { return m_ok; }
+    bool stopped() const { return m_stopped; }
     unsigned sent() const { return m_sent; }
 
     virtual bool write(const void *data, unsigned len)
     {
         const char *p = (const char *)data;
+        /* Stopped, not just disconnected. A 640x480 at 8bpp is 300KB that
+         * nobody is waiting for, and the strip boundary is where ByteSink's
+         * false is meant to be read. */
+        volatile LONG *stop = m_link.stopFlag();
+        if (stop && *stop)
+        {
+            m_stopped = true;
+            return false;
+        }
         while (len)
         {
             unsigned take = m_cap - m_len;
@@ -400,6 +451,7 @@ private:
     unsigned m_len;
     unsigned m_sent;
     bool     m_ok;
+    bool     m_stopped;
 
     ShotFrames(const ShotFrames &);
     ShotFrames &operator=(const ShotFrames &);
@@ -439,6 +491,13 @@ static void do_shot(UiLink &link, UiContext *ctx, rc_frame *f)
 
     if (!got)
     {
+        /* Three reasons a capture stops, and they are not the same answer:
+         * somebody cancelled it, the link died, or GDI refused. */
+        if (sink.stopped())
+        {
+            link.end("cancelled", NULL, NULL, 0);
+            return;
+        }
         k[0] = "detail"; v[0] = sink.ok() ? shot.error() : "connection lost";
         link.end("failed", k, v, 1);
         return;
@@ -502,6 +561,19 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
         }
         NetUiLink link(net, id);
 
+        /* Armed for EVERY op, and before the work rather than inside it, so
+         * a UICANCEL that arrives while a request is still being decoded is
+         * not lost: the walk, the capture or the runner sees the flag on
+         * its first node, strip or step instead.
+         *
+         * A cancel that arrived while this request was still in the QUEUE is
+         * honoured here, which is the race a guest probe lost eight times
+         * out of eight before this existed. */
+        InterlockedExchange(&g_run_cancel,
+                            g_cancel_id[0] && !strcmp(id, g_cancel_id));
+        g_cancel_id[0] = '\0';
+        rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
+
         if (strcmp(f->type, "UITREE") == 0)
         {
             /* The in-process branch is OURS, and is taken before the shared
@@ -523,16 +595,9 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
         else if (strcmp(f->type, "UISHOT") == 0)
             do_shot(link, ctx, f);
         else if (strcmp(f->type, "UIRUN") == 0)
-        {
-            /* Armed before the decode, not after it, so a UICANCEL that
-             * arrives while the list is still being parsed is not lost: the
-             * runner sees the flag on its first step instead. */
-            InterlockedExchange(&g_run_cancel, 0);
-            rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
             rc_ui_run(link, ctx, f);
-            g_run_id[0] = '\0';
-        }
         else
             rc_log("desktop: unhandled frame %s", f->type);
+        g_run_id[0] = '\0';
     }
 }
