@@ -195,6 +195,20 @@ def render_request(tool_name: str, args: dict, ctx,
         parts.append('<p class="permwarn"><b>Check this one:</b> '
                      + H.esc(_clip(warning, 400)) + "</p>")
 
+    # A step list, as the numbered steps it will take -- the bar has room
+    # for the first few words of that and this block has room for all of
+    # it. The raw JSON follows in the table for anyone who wants it.
+    if tool_name == "mcp__machine__input" and isinstance(args, dict):
+        from .steps import StepError, compile_steps
+        try:
+            phrases = compile_steps(args.get("steps")).phrases
+        except (StepError, TypeError, ValueError):
+            phrases = []
+        if phrases:
+            parts.append("<ol>" + "".join(
+                "<li>" + H.esc(_clip(p, 200)) + "</li>" for p in phrases)
+                + "</ol>")
+
     rows = _rows(args)
     if rows:
         parts.append("<table>")
@@ -231,6 +245,13 @@ def _machine_detail(tool_name: str, args: dict) -> str:
     if tool_name == "mcp__machine__kill" and args.get("pid"):
         line = f"process {args['pid']}"
         return line + " (forced)" if args.get("force") else line
+    # EVERY STEP, in words. Approving one `input` call approves the whole
+    # list -- focus this, type that, press Enter, close the other -- so the
+    # bar is the one place the person sees what is about to happen to their
+    # keyboard and mouse, and a bare tool name there would be a blank cheque.
+    if tool_name == "mcp__machine__input" and args.get("steps"):
+        from .steps import summary as steps_summary
+        return steps_summary(args["steps"])
     return ""
 
 
@@ -257,7 +278,8 @@ def summary(tool_name: str, ctx, args: dict | None = None) -> str:
                  "drives": "List your machine's drives",
                  "list_dir": "List a folder on your machine",
                  "ps": "List the programs running on your machine",
-                 "kill": "End a program on your machine"}
+                 "kill": "End a program on your machine",
+                 "input": "Use your machine's keyboard and mouse"}
         bare = display.lower().replace("mcp__machine__", "")
         display = plain.get(bare, display)
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)

@@ -220,3 +220,45 @@ async def test_list_rows_come_back_as_their_own_records():
     assert nodes[1].role == "listitem"
     assert nodes[1].name == "AUTOEXEC.BAT"
     assert headers["items"] == "1"
+
+
+# --- the `input` step list --------------------------------------------------
+
+
+async def test_a_run_returns_its_status_and_per_step_body():
+    """Not raised on: a list that failed at step 3 still ran two steps the
+    agent needs to hear about."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.run(g, b"wait\tms=1\n", timeout_ms=5000,
+                                       step_ms=1000))
+    await reply(svc, g, Frame("UIEND", {"status": "focus_lost", "step": "0"},
+                              b"i=0\tstatus=focus_lost\tms=3\n"))
+    headers, body = await task
+    assert headers["status"] == "focus_lost"
+    assert body.startswith(b"i=0\tstatus=focus_lost")
+    sent = svc.connection.sent[0]
+    assert sent.type == "UIRUN" and sent.body == b"wait\tms=1\n"
+    assert sent.headers["timeout_ms"] == "5000"
+
+
+async def test_a_run_the_guest_outlasts_is_cancelled_on_the_guest(
+        monkeypatch):
+    """The bridge giving up must also stop the list on the machine -- a list
+    nobody waits for would hold the desktop lane, and any keys it holds, for
+    the rest of its time."""
+    import bridge.services.ui as U
+    monkeypatch.setattr(U, "BUDGET_SLACK_S", 0.05)
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.run(g, b"wait\tms=99999\n", timeout_ms=10,
+                                       step_ms=10))
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if any(f.type == "UICANCEL" for f in svc.connection.sent):
+            break
+    cancel = [f for f in svc.connection.sent if f.type == "UICANCEL"]
+    assert cancel and cancel[0].headers["id"] == svc.connection.sent[0].headers["id"]
+    # And the guest's answer to the cancel is what the caller gets.
+    await reply(svc, g, Frame("UIEND", {"status": "cancelled", "step": "0"},
+                              b"i=0\tstatus=cancelled\tms=60\n"))
+    headers, _ = await task
+    assert headers["status"] == "cancelled"

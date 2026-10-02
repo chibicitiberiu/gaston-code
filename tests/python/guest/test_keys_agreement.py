@@ -115,3 +115,26 @@ _PROSE_WORDS = {
     "taking", "is", "a", "to", "not", "this", "knows", "so", "are", "for",
     "typed",
 }
+
+
+def test_every_frozen_key_name_resolves_on_the_guest():
+    """The `input` tool's contract: every name in the bridge's frozen table
+    (bridge/agent/keynames.py) and every alias is one the guest's KEY_NAMES
+    maps. A name the bridge accepts and the guest does not is refused at run
+    time as a bad key -- after the steps before it already ran."""
+    from bridge.agent import keynames as K
+    missing = (set(K.KEYS) | set(K.ALIASES)) - _guest_names()
+    assert not missing, (
+        f"bridge/agent/keynames.py accepts {sorted(missing)}, which KEY_NAMES "
+        f"in {INPUT_CPP} does not resolve")
+
+
+def test_the_guest_has_no_name_the_frozen_table_lacks():
+    """The other direction, for the names a CHORD or a hold can reach: a
+    guest-only name is one the bridge refuses and the agent can never use,
+    which is drift waiting to be mistaken for a feature."""
+    from bridge.agent import keynames as K
+    extra = _guest_names() - set(K.KEYS) - set(K.ALIASES)
+    assert not extra, (
+        f"KEY_NAMES has {sorted(extra)}, which bridge/agent/keynames.py does "
+        f"not list")

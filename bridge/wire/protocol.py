@@ -648,6 +648,25 @@ def ui_shot(ui_id: str, *, x: int = 0, y: int = 0, w: int = 0, h: int = 0,
                             "w": str(w), "h": str(h), "bpp": str(bpp)})
 
 
+def ui_run(ui_id: str, body: bytes, *, timeout_ms: int, step_ms: int,
+           settle: int = 0) -> Frame:
+    """The `input` tool's step list, compiled by agent/steps.py.
+
+    The steps ride the BODY: a header value is capped at 255 encoded bytes,
+    and a selector clipped to fit one is a different selector. The guest
+    answers with one UIEND whose body holds a line per step that ran."""
+    h = {"id": ui_id, "timeout_ms": str(timeout_ms), "step_ms": str(step_ms)}
+    if settle:
+        h["settle"] = str(settle)
+    return Frame("UIRUN", h, body)
+
+
+def ui_cancel(ui_id: str) -> Frame:
+    """Stop a running step list. The guest answers on the run's own UIEND,
+    with `cancelled`; this frame has no reply of its own."""
+    return Frame("UICANCEL", {"id": ui_id})
+
+
 # --- processes ------------------------------------------------------------
 
 

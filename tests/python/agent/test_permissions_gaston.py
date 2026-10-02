@@ -183,6 +183,17 @@ def test_kill_names_the_process_it_will_end():
     assert "forced" in forced
 
 
+def test_an_input_call_is_described_step_by_step():
+    """Approving one call approves the whole list, so both the bar and the
+    block below it say what every step does."""
+    args = {"steps": [{"focus": "Notepad"}, "hi[Enter]", {"close": "Notepad"}]}
+    line = summary("mcp__machine__input", _NoCtx(), args)
+    assert "keyboard and mouse" in line
+    assert "bring Notepad to the front" in line
+    html = render_request("mcp__machine__input", args, _NoCtx())
+    assert "<ol>" in html and "close Notepad" in html
+
+
 # --- MAX_BODY --------------------------------------------------------------
 
 

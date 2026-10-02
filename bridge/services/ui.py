@@ -152,6 +152,56 @@ class UiService:
                           f"the guest sent {claimed} bytes, {len(got)} arrived")
         return got, headers
 
+    async def run(self, guest: GuestSession, body: bytes, *,
+                  timeout_ms: int, step_ms: int, settle: int = 0
+                  ) -> tuple[dict, bytes]:
+        """Run a compiled step list. Returns the UIEND headers -- status
+        included, NOT raised on, because a list that failed at step 5 still
+        ran four steps the agent needs to hear about -- and the per-step
+        body.
+
+        When the bridge's own budget runs out first it says so to the guest
+        with UICANCEL, so a ten-minute list nobody is waiting for does not
+        keep the desktop lane, and the keys it holds, for the rest of its
+        time."""
+        async with guest.ui_lock:
+            guest.ui_seq += 1
+            ui_id = f"u{guest.ui_seq}"
+            fut = asyncio.get_running_loop().create_future()
+            call = UiCall(future=fut, kind="run")
+            guest.ui_pending[ui_id] = call
+            try:
+                await self.connection.send(
+                    guest, P.ui_run(ui_id, body, timeout_ms=timeout_ms,
+                                    step_ms=step_ms, settle=settle))
+                try:
+                    headers = await asyncio.wait_for(
+                        asyncio.shield(fut),
+                        timeout=(timeout_ms / 1000.0) + BUDGET_SLACK_S)
+                except TimeoutError:
+                    await self._cancel(guest, ui_id)
+                    try:
+                        # The guest answers a cancel within a second or so;
+                        # its reply says how far the list got.
+                        headers = await asyncio.wait_for(fut, timeout=5.0)
+                    except TimeoutError as exc:
+                        raise UiError(
+                            "timeout", "the guest did not answer, even to a "
+                            "cancel; it may still be working") from exc
+                except asyncio.CancelledError:
+                    # The turn was abandoned. The list must not run on.
+                    await self._cancel(guest, ui_id)
+                    raise
+            finally:
+                guest.ui_pending.pop(ui_id, None)
+        return headers, bytes(call.data)
+
+    async def _cancel(self, guest: GuestSession, ui_id: str) -> None:
+        try:
+            await self.connection.send(guest, P.ui_cancel(ui_id))
+        except Exception:                 # best effort: the link may be gone
+            log.warning("ui: could not send UICANCEL for %s", ui_id)
+
     # --- receiving ----------------------------------------------------
 
     async def ui_frame(self, guest: GuestSession, f) -> None:
@@ -186,6 +236,9 @@ class UiService:
             call.data.extend(f.body)
 
         elif f.type == "UIEND":
+            # A step list's per-step lines ride its UIEND's own body.
+            if call.kind == "run" and f.body:
+                call.data.extend(f.body[:SHOT_MAX])
             if not call.future.done():
                 call.future.set_result(dict(f.headers))
 

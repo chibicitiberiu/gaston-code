@@ -222,11 +222,11 @@ def _build_tools(monkeypatch, bridge, guest="guest-1"):
 
 
 async def test_build_wraps_the_server_with_the_outermost_timeout(monkeypatch):
-    """300_000ms, and larger than the guest's own 120s ceiling and the
-    bridge's own budget -- see the comment above the return in tools.py for
-    why the ordering matters."""
+    """700_000ms since `input` (a step list may run 10 minutes), and larger
+    than every budget beneath it -- see the comment above the return in
+    tools.py for why the ordering matters."""
     result, _ = _build_tools(monkeypatch, _FakeHost())
-    assert result["machine"]["timeout"] == 300_000
+    assert result["machine"]["timeout"] == 700_000
     assert result["machine"]["name"] == "machine"
 
 

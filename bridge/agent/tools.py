@@ -39,6 +39,7 @@ from ..wire.uiview import render_tree, to_png
 from . import prompts
 from . import toolnotes as notes
 from .selectors import render_candidates, split_steps
+from .steps import STEP_TIMEOUT_DEFAULT, StepError, compile_steps, parse_reply
 
 log = logging.getLogger("bridge.tools")
 
@@ -143,6 +144,74 @@ def _ui_explain(exc: UiError, target: str = "") -> str:
     except KeyError:
         base = prompts.text("tools.ui.refused.unknown", status=exc.status)
     return f"{base} ({exc.detail})" if exc.detail else base
+
+
+def _render_run(headers: dict, body: bytes, compiled, steps: list
+                ) -> tuple[str, bool]:
+    """A step list's outcome, as the agent needs it: how far it got, what
+    each step that ran did, and -- for the one that failed -- the same
+    sentence `click` or `ui` would have given, naming the step as it was
+    written. Returns (text, failed)."""
+    rows, released = parse_reply(body)
+    status = headers.get("status", "")
+    lines: list[str] = []
+    for row in rows:
+        try:
+            wire = int(row.get("i", b"-1"))
+        except ValueError:
+            continue
+        idx = compiled.origin[wire] if 0 <= wire < len(compiled.origin) else 0
+        phrase = compiled.phrases[idx - 1] if 0 < idx <= len(
+            compiled.phrases) else "?"
+        st = row.get("status", b"").decode("ascii", "replace")
+        hit = row.get("hit", b"").decode("cp1252", "replace")
+        detail = row.get("detail", b"").decode("cp1252", "replace")
+        line = f"{idx}. {phrase}: {st}"
+        if hit and st == "ok":
+            line += f" ({hit})"
+        if detail and st == "ok":
+            line += f" -- {detail}"
+        lines.append(line)
+    # Several wire lines can belong to one step (a string with chords); the
+    # agent counted steps, so the list is folded to one line per step.
+    seen: dict[str, str] = {}
+    for line in lines:
+        key = line.split(".", 1)[0]
+        seen[key] = line if key not in seen or not line.endswith(": ok") \
+            else seen[key]
+    out = list(seen.values())
+    if released:
+        out.append(prompts.text("tools.input.view.released"))
+
+    if status == "ok":
+        return (prompts.text("tools.input.view.done", n=len(steps))
+                + "\n" + "\n".join(out)), False
+
+    wire = int(headers.get("step", "0") or 0)
+    idx = compiled.origin[wire] if 0 <= wire < len(compiled.origin) else 0
+    step = steps[idx - 1] if 0 < idx <= len(steps) else ""
+    target = ""
+    if isinstance(step, dict):
+        for k in ("click", "focus", "close", "move", "wait_for", "wait_gone",
+                  "wait_text", "where"):
+            if isinstance(step.get(k), str):
+                target = step[k]
+                break
+    fields = dict(headers)
+    part_row = next((r for r in rows if r.get("i") == str(wire).encode()),
+                    {})
+    if part_row.get("part"):
+        fields["step"] = part_row["part"].decode("ascii", "replace")
+    # The guest says `timeout` for a step that ran out of time, which is not
+    # the machine failing to answer -- that sentence would send the agent
+    # looking for a dead link.
+    if status == "timeout":
+        status = "step_timeout"
+    exc = UiError(status, headers.get("detail", ""), fields)
+    why = _ui_explain(exc, target)
+    head = prompts.text("tools.input.view.failed", step=idx,
+                        n=len(steps), done=headers.get("done", "0"))
+    return head + "\n" + "\n".join(out) + "\n" + why, True
 
 
 def _text(body: str, *, error: bool = False) -> dict:
@@ -617,6 +686,56 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                          error=True)
         except Exception:
             log.exception("mcp__machine__focus failed: %r", args)
+            raise
+
+    @tool(
+        "input",
+        prompts.text("tools.input.description"),
+        {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "description": prompts.text("tools.input.args.steps"),
+                    "items": {"type": ["string", "object"]},
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": prompts.text("tools.input.args.timeout")},
+                "settle": {
+                    "type": "integer",
+                    "description": prompts.text("tools.input.args.settle")},
+            },
+            "required": ["steps"],
+        },
+    )
+    async def machine_input(args: dict) -> dict:
+        a = args or {}
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            live = getattr(guest, "caps", None)
+            acp = getattr(live, "acp", "cp1252") or "cp1252"
+            try:
+                compiled = compile_steps(
+                    a.get("steps"), timeout=a.get("timeout"),
+                    settle=a.get("settle"),
+                    encode=lambda t: fold.encode_exact(t, acp),
+                    keys_version=getattr(live, "keys", 0) or 1)
+            except StepError as exc:
+                return _text(prompts.text("tools.input.refused",
+                                          why=str(exc)), error=True)
+            headers, body = await ui.run(
+                guest, compiled.body, timeout_ms=compiled.timeout_ms,
+                step_ms=STEP_TIMEOUT_DEFAULT, settle=compiled.settle)
+            text, failed = _render_run(headers, body, compiled,
+                                       a.get("steps") or [])
+            return _text(text, error=failed)
+        except UiError as exc:
+            return _text(_ui_explain(exc, ""), error=True)
+        except Exception:
+            log.exception("mcp__machine__input failed: %r", args)
             raise
 
     @tool(
@@ -1348,8 +1467,15 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     # comes back declaring none of them -- and the client refuses every screen
     # op itself in that window (`rc_uirpc_handle`), which is where the control
     # has to live anyway. This list is about what the agent is TOLD it has.
-    screen = [machine_ui, machine_click, machine_keys, machine_shot,
-              machine_focus] if automation else []
+    # A client that runs step lists gets `input` IN PLACE OF click, keys and
+    # focus: one tool that does all three and more, in one round trip, with
+    # the release and focus guarantees the single-shot tools never had. An
+    # older client keeps the three it can answer.
+    steps_ok = automation and getattr(_caps, "automation",
+                                      0) >= C.AUTOMATION_STEPS
+    screen = ([machine_ui, machine_input, machine_shot] if steps_ok
+              else [machine_ui, machine_click, machine_keys, machine_shot,
+                    machine_focus] if automation else [])
     if not automation:
         log.info("machine: screen tools withheld -- the client declares no "
                  "automation support")
@@ -1374,4 +1500,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     # result eventually resolves a future nobody is reading.
     #
     # Ordering: guest clamp (<=120s) < bridge budget (clamp + 30s) < this.
-    return {"machine": {**server, "timeout": 300_000}}
+    # And for `input`: a step list may run 10 minutes (steps.py,
+    # SCRIPT_TIMEOUT_MAX), the bridge waits that plus 20s and then 5s more
+    # for the answer to its UICANCEL -- so this sits above 625s.
+    return {"machine": {**server, "timeout": 700_000}}

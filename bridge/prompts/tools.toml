@@ -150,6 +150,53 @@ Selector for a control in the window to raise. The window containing it comes fo
 settle = '''
 After raising it, wait for the screen to stop changing for this many milliseconds.'''
 
+[input]
+description = '''
+Drive the machine's keyboard and mouse: a list of steps, run in order on the machine, stopping at the first one that fails. One call does what would otherwise take many -- focus a window, type, press a shortcut, wait for the dialog it opens, type into that, wait for it to close.
+
+Name WHAT to click, not where: a control by selector, an `item` inside it (a list row, a toolbar button, a desktop icon), or `text` inside a text box. Screen pixels are the last resort, for a spot nothing else can name.
+
+Typing goes only to the window you put in front (with `focus`, a `click`, or a `wait_for` that found it). If another window takes the front mid-list, the list stops rather than typing into it. Anything you hold down with `down` must be released with `up` in the same list; nothing stays held after a call.'''
+
+# Not a table of statuses: the compiler's own reason already names the step
+# and says what is wrong. Nothing was sent to the machine.
+refused = '''
+Nothing was done -- the list was refused before it reached the machine: {why}'''
+
+[input.args]
+steps = '''
+The steps, in order. A STRING is text to type, with named keys and chords in square brackets: `"notes.txt[Enter]"`, `"[Ctrl+S]"`, `"[Home][Shift+End]"`; `[[` types a literal `[`. Every other step is an OBJECT naming one action:
+
+- `{"focus": SEL}` -- bring a window or control to the front.
+- `{"click": SEL}` -- click a control. Add `"item": "readme.txt"` for a row or icon inside it, `"text": "hello"` for some text inside a text box (`"edge": "end"` lands after it), or `"at": [x, y]` for an offset from its top-left. `"button": "right"` or `"middle"`, `"double": true`. Pixels only as `{"click": {"screen": [x, y]}}`.
+- `{"close": SEL}` -- ask a window to close, the polite way; if it asks "save changes?" the step says so and that dialog is where typing goes next.
+- `{"down": KEY}` / `{"up": KEY}` -- hold and release a key (`Shift`, `Ctrl`, `Alt`, `AltGr`, ...) or a mouse button (`LButton`, `RButton`, `MButton`; a button takes `"where": SEL` and the same `item`/`text`/`at` as click).
+- `{"move": SEL}` (same targets as click), `{"move_by": [dx, dy]}` -- move the pointer; with a button held this is a drag.
+- `{"wait": MS}` -- pause.
+- `{"wait_for": SEL}`, `{"wait_gone": SEL}`, `{"wait_text": SEL, "text": "Done"}` -- wait for a control to appear, to go, or to say something. A wait that times out stops the list.
+- `{"idle": MS}` -- wait until the screen has been still for this long.
+
+Any step takes `"timeout": MS` (default 30000, at most 120000).
+
+SEL is a selector, as `ui` prints them in `sel=`: `Notepad`, `[class="#32770"][text~="save*"] Button[text~="ok"]`. `~=` ignores case and the `&` of a mnemonic, with `*` and `?` as wildcards; a space means "anywhere inside". If several controls match, nothing happens and you are shown which -- narrow it with the window they are in.
+
+Key names: Enter, Tab, Escape (Esc), Backspace, Delete, Insert, Home, End, PageUp, PageDown, Up, Down, Left, Right, Space, F1-F24, Shift, Ctrl, Alt, AltGr, LShift, RShift, LCtrl, RCtrl, LAlt, RAlt, LWin, RWin, Apps, CapsLock, NumLock, ScrollLock, PrintScreen, Pause, Numpad0-Numpad9, NumpadEnter. Chords take `Ctrl+`, `Alt+` and `Shift+`: `[Ctrl+Shift+End]`.
+
+Ctrl+A is NOT select-all in this machine's text boxes. To replace what is there, `[Home][Shift+End]` and type over it.'''
+timeout = '''
+Milliseconds the whole list may take. Default 120000 (2 minutes), at most 600000 (10 minutes).'''
+settle = '''
+After every action, wait until the screen has been still this many milliseconds (at most 5000). Useful on a slow machine where a click takes a moment to open its dialog.'''
+
+[input.view]
+done = '''
+All {n} steps ran.'''
+failed = '''
+Step {step} of {n} failed; the steps before it ran, nothing after it did.'''
+released = '''
+Something was still held when the list ended and was released for you -- give every `down` its `up`.'''
+
+
 [shot]
 description = '''
 Take a picture of the machine's screen.
@@ -232,6 +279,38 @@ hook_refused = '''
 The machine would not let us into that program.'''
 no_reply = '''
 We got into that program and it never answered. Read it from the outside instead, without `inproc`.'''
+# The `input` step list's own outcomes. The guest's detail follows each in
+# parentheses, so these say what it means and what to do next.
+step_timeout = '''
+That step ran out of time, so the list stopped there.'''
+script_timeout = '''
+The list ran out of its overall time before this step; nothing after it ran. Raise `timeout`, or split the list.'''
+cancelled = '''
+The list was stopped before it finished; anything held was released.'''
+focus_lost = '''
+Another window came to the front, so the list stopped rather than type into it. Look at what is in front (`ui` with `scope: "foreground"`), deal with it, then `focus` the window you meant and carry on.'''
+bad_char = '''
+A character in the text cannot be typed on this machine's keyboard layout or code page, so NOTHING in that step was typed.'''
+not_visible = '''
+That spot is not on screen, so nothing was clicked. Nothing scrolls for you: scroll or move the caret there first.'''
+no_msaa = '''
+Items inside a control can't be named on this machine: it has no accessibility support, or that control answers none of its questions. Click the control with an `at` offset instead -- read the positions from a `shot`.'''
+no_item = '''
+Nothing inside that control has that name.'''
+ambiguous_item = '''
+More than one item inside that control matches, so nothing was done. Use a fuller name, or `item_nth` to pick one.'''
+no_text_match = '''
+That text box does not contain that text.'''
+ambiguous_text = '''
+That text occurs more than once in the box, so nothing was done. Make it longer, or pick one with `text_nth`.'''
+not_edit = '''
+`text` finds words inside a plain text box (an Edit control) only. For anything else name an `item`, or use an `at` offset.'''
+prompted = '''
+The window did not close: it asked a question first. That dialog is in front now, and the next typing goes to it -- answer it in your next list.'''
+still_open = '''
+The window was asked to close and is still there, without asking anything. It may be busy; look at it with `ui`, or end the program with `kill`.'''
+bad_steps = '''
+The machine could not read the step list -- the client and the bridge disagree about its format. Tell the user; the client may need updating.'''
 unknown = '''
 The machine refused: {status}.'''
 

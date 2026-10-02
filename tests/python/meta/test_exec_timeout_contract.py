@@ -83,3 +83,14 @@ def test_the_three_timeouts_are_ordered():
     assert floor < default < ceiling
     bridge_budget_at_ceiling_ms = ceiling + 30_000
     assert bridge_budget_at_ceiling_ms < mcp_timeout
+
+
+def test_the_longest_step_list_fits_inside_the_mcp_timeout():
+    """`input`: the script ceiling, the bridge's slack above it, and the 5s
+    it waits for the guest to answer a UICANCEL, all under the MCP tool
+    timeout -- otherwise the CLI abandons a list the guest is still running
+    and holding keys for."""
+    from bridge.agent.steps import SCRIPT_TIMEOUT_MAX
+    from bridge.services.ui import BUDGET_SLACK_S
+    worst_s = SCRIPT_TIMEOUT_MAX / 1000 + BUDGET_SLACK_S + 5
+    assert worst_s * 1000 < _bridge_mcp_tool_timeout_ms()
