@@ -152,3 +152,28 @@ RegisterHotKey, and their values are DIFFERENT from the ones VkKeyScan returns:
 `MOD_ALT` is 1 there and 4 here. Watcom rejected the enum as a syntax error,
 which is the only reason this was found at compile time rather than as every
 modifier being wrong at runtime. The enum is `KEYMOD_*` now.
+
+
+Control: Ctrl+A on STOCK Windows 98 SE, in Notepad
+---------------------------------------------------
+
+Same question as above, and the same answer. The QEMU guest, stock retail,
+typing into Notepad's edit control by name with no click:
+
+  type hello                      -> 'hello'
+  [Ctrl+A][Delete]                -> 'hello'      unchanged
+  [Ctrl+A]Z                       -> 'helloZ'     appended, so nothing selected
+  [Home][Shift+End][Delete]       -> ''           cleared
+  works                           -> 'works'
+
+Identical to the Athlon. Ctrl+A is not select-all on this platform, on a
+machine with nothing added to it, in the application most likely to implement
+the accelerator itself. Three applications now: the custom Win32 edit control,
+Notepad on the Athlon, and Notepad here.
+
+The run carries two other things with it, for free. The named keys parsed and
+delivered on stock 98 -- `[Ctrl+A]`, `[Delete]`, `[Home]`, `[Shift+End]`. And
+`--type-into` does not click, so the focus fix (attaching to the owning thread
+and setting focus on a named CHILD control) works on stock 98 too, which until
+now had only been measured on the Athlon.
+

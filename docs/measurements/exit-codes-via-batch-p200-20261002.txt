@@ -142,3 +142,28 @@ Six cases, all correct on real hardware 2026-10-02:
   output is not disturbed              ok       output: "hello"
   javac on a missing source            fail     output: "error: Can't read: ..."
   java -version                        ok       output: the version banner
+
+
+Control: the same four cases on STOCK Windows 98 SE
+----------------------------------------------------
+
+The Athlon has an autopatcher on it, so every behaviour measured there is open
+to the question of whether a stock machine does the same -- which is how
+`SetThreadExecutionState` came to be re-checked and is a fair question of
+anything else here. Re-run on the QEMU guest, stock retail with nothing added,
+2026-10-02:
+
+  a program that succeeds        -> ok      output ''
+  a program that fails (exit 3)  -> fail    output ''
+  a program that does not exist  -> fail    output 'Bad command or file name'
+  output is not disturbed        -> ok      output 'hello'
+
+Four of four identical, INCLUDING the `echo x| find "y" > nul` pre-set, which
+is the part that would have been most believable as a patched-in difference:
+the missing-program case reports failure on both machines, so FIND.EXE returns
+1 for a string it cannot find on stock 98 as well.
+
+This was never likely -- COMMAND.COM's parsing and FIND.EXE's exit code are not
+things an unofficial service pack sets out to change -- but "not likely" is not
+"checked", and the cost of checking was four commands.
+
