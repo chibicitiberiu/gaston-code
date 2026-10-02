@@ -2316,3 +2316,64 @@ a `ui` call and immediately make another on a machine slow enough to notice.
 That measurement has not been taken, and a cancel path built against a cost
 nobody has measured is a third lane's worth of generation bookkeeping bought on
 a guess. Take the measurement first.
+
+## 27. Prevent sleep works in practice, and three of its four mechanisms are untested
+
+**Status, 2026-10-02:** accepted by the user as working -- "from my pov, it
+seems to work so far and i'm happy, and will report if it ever sleeps while
+option is on". This entry exists so that does not get re-remembered later as
+"fully tested", because it is not.
+
+**What is actually established.** `SetThreadExecutionState` is PRESENT and
+answers on two independent machines -- the autopatched Athlon XP and the STOCK
+retail QEMU guest, which is the control that matters because the autopatcher
+could have added it (`docs/measurements/sleep-mechanisms-p200-20261002.txt`).
+It is called on the hidden window's message-loop thread, which lives for the
+process, so the per-thread state cannot lapse. Both veto handlers answer
+correctly when asked: `BROADCAST_QUERY_DENY` and `PWR_FAIL`. The nudge
+(mechanism 4) is never armed, because it only arms when
+`SetThreadExecutionState` fails and it does not.
+
+**What is not.** THE VETO HAS NEVER FIRED IN ANGER. The only messages those
+handlers have ever seen are ones `probe power` synthesised and sent at the
+window itself. With a 1-minute system standby and Prevent sleep on, the Athlon
+sat 26 minutes and gremote logged NO suspend query -- and it logs one even when
+it intends to say yes, so that silence is real. By elimination the thing
+holding the box awake is the nudge-free `SetThreadExecutionState`, not the
+veto. So the belt-and-braces argued in `win/remote/tray.h` is, in practice, one
+brace, and the backup has no evidence behind it.
+
+There is also no baseline: nobody has watched this machine sleep. The user's
+own earlier report -- it kept sleeping while they drove it over gremote, and
+stopped once the option went on -- is a real before/after and the best evidence
+there is, but it was not recorded under controlled conditions.
+
+**Three ways to close it, cheapest first.**
+
+1. **`probe suspend` -- ask for a suspend instead of waiting for one.**
+   `SetSystemPowerState(TRUE, FALSE)` is documented on 95/98 and runs the real
+   sequence: it asks every application and, if one denies, sends
+   `PBT_APMQUERYSUSPENDFAILED` and gives up. `tray.h` already cites that page
+   as the basis for mechanism 1 and NOTHING IN THIS TREE HAS EVER CALLED IT.
+   With Prevent sleep on, a denial proves the veto end to end in seconds, with
+   no idle wait and no settings change. With it off, the machine suspends --
+   which is the missing baseline, at the cost of somebody pressing a key.
+
+2. **QEMU with `acpi=off`.** The guest has no APM at all, which is why
+   `mode=poweroff` there degrades to a logoff and why it can never raise a
+   query. `tools/vm/runvm.sh` passes `-machine pc-i440fx-9.2,acpi=on`, and
+   Win98 with ACPI present will not generally fall back to APM. SeaBIOS does
+   implement APM, so turning ACPI off may give the guest a standby timer -- and
+   with it, the veto path in CI rather than only on somebody's desk. One flag
+   and one boot answers it; Device Manager says immediately.
+
+3. **86Box or PCem.** The faithful option: a real Award or AMI BIOS with APM
+   1.2, which is what QEMU lacks. Also another Win98 install, ROM images and a
+   slow emulator. Worth it only if 2 fails and the veto matters enough to pay
+   for.
+
+**What would change the priority:** anything that makes
+`SetThreadExecutionState` stop working -- a different KERNEL32, a machine where
+the export is absent, or the call turning out to be a stub that returns a
+plausible value. Today it is the entire feature and the other three mechanisms
+are a hypothesis.
