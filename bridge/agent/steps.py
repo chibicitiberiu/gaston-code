@@ -72,6 +72,10 @@ _MOD_FAMILY = {"lctrl": "ctrl", "rctrl": "ctrl", "lalt": "alt",
                "ralt": "alt", "altgr": "alt"}
 
 
+#: Object keys a model writes when it means a key press.
+_KEYISH = {"key", "keys", "press", "hotkey", "chord", "send", "tap"}
+
+
 class StepError(ValueError):
     """A list refused before anything was sent. `index` is 1-based."""
 
@@ -357,6 +361,14 @@ class _Compiler:
                                    "naming one action")
         kinds = [k for k in step if k in _KINDS]
         if len(kinds) != 1:
+            # The shape a model reaches for first: `{"key": "Alt+F4"}`. Keys
+            # and chords are STRINGS in this list, and saying so beats
+            # listing every action -- measured, the bare list did not land.
+            if not kinds and _KEYISH & set(step):
+                name = next(str(step[k]) for k in step if k in _KEYISH)
+                raise StepError(index, f"keys and chords are plain strings "
+                                       f"in the list, not objects: write "
+                                       f"\"[{name.strip('[]')}]\" instead")
             raise StepError(index, "a step names exactly one action: "
                                    + ", ".join(sorted(_KINDS)))
         kind = kinds[0]
@@ -483,6 +495,24 @@ def compile_steps(steps, *, timeout=None, settle=None, encode=None,
                            f"may carry {MAX_BODY} -- split it")
     return Compiled(body=body, timeout_ms=script, settle=settle_ms,
                     origin=c.origin, phrases=c.phrases)
+
+
+def precheck(args: dict) -> str | None:
+    """Why a call would be refused, or None -- checked BEFORE the permission
+    bar. A list the tool is going to refuse anyway must not cost the person
+    a click: measured in a live session (2026-10-02), Haiku sent a list with
+    two malformed steps, the bar asked twice, and each Allow bought one error
+    message. The machine's code page is not known here, so characters are
+    left to the tool's own check; everything else is the same compile."""
+    if not isinstance(args, dict):
+        return "the arguments are not an object"
+    try:
+        compile_steps(args.get("steps"), timeout=args.get("timeout"),
+                      settle=args.get("settle"),
+                      encode=lambda t: t.encode("utf-8"))
+    except StepError as exc:
+        return str(exc)
+    return None
 
 
 def summary(steps) -> str:

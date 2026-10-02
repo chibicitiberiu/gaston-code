@@ -35,7 +35,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from ..status import PromptEndReason
 from ..view import html as H
 from ..wire.protocol import permend, permreq, permstate, permwait
-from . import cmdguard, toolrules
+from . import cmdguard, prompts, toolrules
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 
@@ -216,6 +216,18 @@ class PermissionDesk:
                 log.info("auto-refused %s outside the working copy: %s",
                          tool_name, str(args)[:120])
                 return PermissionResultDeny(message=refuse, interrupt=False)
+
+            # A step list the tool would refuse is refused HERE, before the
+            # bar: asking the person to approve a list that cannot run costs
+            # them a click per mistake and tells them nothing.
+            if tool_name == "mcp__machine__input":
+                from .steps import precheck
+                why = precheck(args)
+                if why is not None:
+                    log.info("auto-refused a malformed input list: %s", why)
+                    return PermissionResultDeny(
+                        message=prompts.text("tools.input.refused", why=why),
+                        interrupt=False)
 
             # What this command reaches outside the mirrored folder, if
             # anything. It ONLY EVER ADDS A WARNING, never a reassurance: the

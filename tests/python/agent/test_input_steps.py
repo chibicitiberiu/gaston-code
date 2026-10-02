@@ -245,3 +245,16 @@ def test_a_refused_list_never_reaches_the_machine():
     text, err = _call(ui, {"steps": [{"down": "Shift"}]})
     assert err and ui.sent is None
     assert "refused before it reached the machine" in text
+
+
+def test_a_key_written_as_an_object_is_told_the_string_form():
+    """`{"key": "Alt+F4"}` -- what Haiku wrote in a live session."""
+    with pytest.raises(S.StepError) as e:
+        S.compile_steps([{"key": "Alt+F4"}])
+    assert '"[Alt+F4]"' in str(e.value)
+
+
+def test_the_precheck_refuses_what_the_tool_would():
+    assert S.precheck({"steps": [{"move": {"at": [81, 21]}}]})
+    assert S.precheck({"steps": ["x", {"down": "Shift"}]})
+    assert S.precheck({"steps": [{"focus": "Notepad"}, "x"]}) is None
