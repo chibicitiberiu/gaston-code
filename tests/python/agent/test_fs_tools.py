@@ -8,6 +8,7 @@ and what `from_path` can reach -- behave as intended.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 
 from bridge.agent import tools as machine_tools
 from bridge.services.guest_fs import FsError
@@ -148,13 +149,35 @@ def test_get_file_saves_a_binary_beside_the_folder_and_never_inside_it(
                 {"path": "Q:\\PROG.EXE"})
     body = _body(res)
 
-    saved = tmp_path / ".gaston" / "fetched" / "PROG.EXE"
-    assert saved.exists(), body
-    assert saved.read_bytes() == b"MZ\x00\x00binary"
-    assert str(saved) in body
+    # One subdirectory per SOURCE PATH since 2026-10-02, keyed on a hash of
+    # it: the name used to be the basename alone, so two `CONFIG.SYS` from
+    # different directories silently overwrote each other and the agent was
+    # handed a path that no longer held what it thought.
+    fetched = tmp_path / ".gaston" / "fetched"
+    saved = [q for q in fetched.rglob("PROG.EXE")]
+    assert len(saved) == 1, body
+    assert saved[0].read_bytes() == b"MZ\x00\x00binary"
+    assert str(saved[0]) in body
     # The load-bearing half: nothing landed under the mirrored folder.
     assert not any(p.name == "PROG.EXE"
                    for p in workdir.rglob("*")), "a fetched file is in the mirror"
+
+
+def test_two_files_with_one_name_do_not_overwrite_each_other(tmp_path):
+    """`C:\\A\\CONFIG.SYS` then `C:\\B\\CONFIG.SYS` used to land on the same
+    local path, so the second replaced the first and the agent was told a
+    location that no longer held what it had just fetched."""
+    workdir = tmp_path / "conv"
+    workdir.mkdir()
+    a = _body(_call(_server(FakeFs(data=b"\x00first"), str(workdir)),
+                    "get_file", {"path": "C:\\A\\CONFIG.SYS"}))
+    b = _body(_call(_server(FakeFs(data=b"\x00second"), str(workdir)),
+                    "get_file", {"path": "C:\\B\\CONFIG.SYS"}))
+    pa = a.strip().splitlines()[-1].strip()
+    pb = b.strip().splitlines()[-1].strip()
+    assert pa != pb, (pa, pb)
+    assert pathlib.Path(pa).read_bytes() == b"\x00first"
+    assert pathlib.Path(pb).read_bytes() == b"\x00second"
 
 
 def test_a_refusal_is_reported_in_the_machines_own_word():
@@ -506,3 +529,53 @@ def test_an_unparseable_row_is_dropped_not_guessed():
     from bridge.services.guest_fs import _parse_entries
     rows = _parse_entries(b"f 1 2 3 ok.txt\nnonsense\nf x y z bad.txt\n")
     assert [r.name for r in rows] == ["ok.txt"]
+
+
+# --- what comes back inline, and what does not -----------------------------
+#
+# Until 2026-10-02 EVERY text file came back in full, with the only ceiling the
+# guest's 4MB -- about a million tokens for one call, on a machine whose logs
+# reach that size. The only thing in the way was the agent choosing to pass
+# `max_bytes`, whose description reads like an optimisation.
+
+def test_short_text_still_comes_back_inline():
+    out = _body(_call(_server(FakeFs(data=b"host=10.0.0.45\r\n")), "get_file",
+                      {"path": r"C:\G\gaston.ini"}))
+    assert "host=10.0.0.45" in out
+
+
+def test_long_text_is_downloaded_instead_of_returned(tmp_path):
+    from bridge.agent.tools import GET_INLINE_MAX
+    workdir = tmp_path / "conv"
+    workdir.mkdir()
+    big = b"a line of perfectly ordinary text\r\n" * 2000
+    assert len(big) > GET_INLINE_MAX
+    out = _body(_call(_server(FakeFs(data=big), str(workdir)), "get_file",
+                      {"path": r"C:\BIG.LOG"}))
+    assert "a line of perfectly ordinary text" not in out    # not in context
+    assert "Downloaded to" in out
+    assert "text" in out                                      # what it is
+    assert "KB" in out or "MB" in out                         # how big
+    saved = list((tmp_path / ".gaston" / "fetched").rglob("BIG.LOG"))
+    assert len(saved) == 1 and saved[0].read_bytes() == big
+
+
+def test_the_reply_says_what_kind_of_file_it_is(tmp_path):
+    """Type and size alongside the path: the path is what the agent acts on,
+    the other two are what tell it whether to Read the thing, Grep it, or
+    leave it alone."""
+    workdir = tmp_path / "conv"
+    workdir.mkdir()
+    out = _body(_call(_server(FakeFs(data=b"MZ\x90\x00" + b"\x00" * 40),
+                              str(workdir)), "get_file",
+                      {"path": r"C:\HELLO.EXE"}))
+    assert "executable program" in out
+    assert "bytes" in out
+
+
+def test_an_unrecognised_binary_is_still_described(tmp_path):
+    workdir = tmp_path / "conv"
+    workdir.mkdir()
+    out = _body(_call(_server(FakeFs(data=b"\x00\x01\x02\x03nothing known"),
+                              str(workdir)), "get_file", {"path": r"C:\ODD.DAT"}))
+    assert "binary data" in out or "octet" in out

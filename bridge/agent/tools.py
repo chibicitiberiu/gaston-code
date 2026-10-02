@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import logging
+import mimetypes
 import os
 import pathlib
 import re
@@ -39,6 +41,19 @@ from . import prompts
 from . import toolnotes as notes
 
 log = logging.getLogger("bridge.tools")
+
+#: How much text `get_file` will hand back INLINE. Above it, and for anything
+#: that is not text, the bytes go to a file on this proxy and the reply says
+#: only where -- `Read` and `Grep` are better at the rest than a second
+#: pagination surface inside this tool would be, and the agent already has
+#: them.
+#:
+#: 16KB is about four thousand tokens: large enough for any config file, a
+#: batch file, a source file or a short log, and small enough that a careless
+#: `get_file` of something big cannot cost a turn. The guest's own 4MB ceiling
+#: still applies to what travels, and is fine now that the big cases land on
+#: disk rather than in context.
+GET_INLINE_MAX = 16 * 1024
 
 # The guest clamps this too; a tool argument is a suggestion, not a promise.
 DEFAULT_TIMEOUT_MS = 20_000
@@ -827,6 +842,72 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         base = os.path.dirname(workdir.rstrip(os.sep)) if workdir else "."
         return os.path.join(base, ".gaston", "fetched")
 
+    #: What a downloaded file IS, for the one line the agent gets about it.
+    #:
+    #: SNIFFED, NOT SHELLED OUT. `file(1)` gives better prose and would make
+    #: this tool behave differently depending on what is installed on the
+    #: proxy, which is the one thing a tool surface must not do.
+    #:
+    #: NO OPERATING SYSTEM IS NAMED, and `test_no_os_in_code` enforces it: an
+    #: MZ header is an "executable program" here, not a DOS one, because this
+    #: table is shown to the agent and the tool surface has to survive being
+    #: pointed at a different machine (CLAUDE.md, "Tool names are OS-neutral").
+    #: Which operating system it is belongs in the profiles, not in a string
+    #: this prints. Anything unrecognised falls back to the extension, and
+    #: then to an honest "binary data".
+    _MAGIC = (
+        (b"MZ",                    "executable program"),
+        (b"PK\x03\x04",            "ZIP archive"),
+        (b"MSCF",                  "CAB archive"),
+        (b"GIF8",                  "GIF image"),
+        (b"\x89PNG",               "PNG image"),
+        (b"\xff\xd8\xff",          "JPEG image"),
+        (b"BM",                    "BMP image"),
+        (b"%PDF",                  "PDF document"),
+        (b"\xd0\xcf\x11\xe0",      "OLE compound document"),
+        (b"\x1f\x8b",              "gzip data"),
+        (b"RIFF",                  "RIFF media (WAV or AVI)"),
+        (b"\x00\x00\x01\x00",      "icon"),
+    )
+
+    def _describe(data: bytes, path: str, textual: bool) -> str:
+        if textual:
+            return "text"
+        for magic, what in _MAGIC:
+            if data.startswith(magic):
+                return what
+        guess, _ = mimetypes.guess_type(path.replace("\\", "/"))
+        return guess or "binary data"
+
+    def _size(n: int) -> str:
+        """Bytes under 10KB, otherwise the round number a person reads."""
+        if n < 10 * 1024:
+            return f"{n} bytes"
+        if n < 1024 * 1024:
+            return f"{n / 1024:.0f} KB"
+        return f"{n / (1024 * 1024):.1f} MB"
+
+    async def _save_fetched(path: str, data: bytes) -> str:
+        """Write the bytes down and return where.
+
+        ONE SUBDIRECTORY PER SOURCE PATH, keyed on a hash of it. The name used
+        to be the basename alone, so fetching `C:\\A\\CONFIG.SYS` and then
+        `C:\\B\\CONFIG.SYS` silently overwrote the first with the second and
+        handed back a path that no longer held what the agent thought. The
+        hash is short and the basename is kept beside it, because the agent
+        has to read this path back and an opaque filename is one it cannot
+        recognise in its own transcript.
+        """
+        digest = hashlib.sha256(path.encode("utf-8", "replace")).hexdigest()[:8]
+        dest_dir = os.path.join(_fetched_dir(), digest)
+        await asyncio.to_thread(os.makedirs, dest_dir, exist_ok=True)
+        name = os.path.basename(path.replace("\\", "/").rstrip("/")) or "file"
+        dest = os.path.join(dest_dir, name)
+        # Off the loop: a few megabytes onto a real disk is not instantaneous,
+        # and this runs while a turn is live.
+        await asyncio.to_thread(pathlib.Path(dest).write_bytes, data)
+        return dest
+
     @tool(
         "get_file",
         prompts.text("tools.get_file.description"),
@@ -862,41 +943,46 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             note = (prompts.text("tools.get_file.view.truncated")
                     if got.truncated else "")
 
-            # WHAT THE ENDINGS ARE, said out loud, because the agent cannot
-            # see them. On 2026-10-01 a session read a batch file back
-            # SPECIFICALLY to find out why it would not run, got text that
-            # looked perfect, and learned nothing -- LF and CRLF render
-            # identically. The answer it needed was one word.
-            cls = P.classify(got.data)
-            note += "\n" + prompts.text("tools.get_file.view.endings",
-                                        kind=_endings(got.data, cls))
-
             # A NUL anywhere means binary, the same rule the guest's own
             # classifier uses -- not a sniff window, because a file that is
             # text for its first 8KB and binary afterwards is binary.
-            # `translation=false` takes the same route as a binary: the agent
-            # cannot hold bytes, so byte-exact means a local file.
-            if b"\x00" not in got.data and _translating(args):
+            cls = P.classify(got.data)
+            textual = (b"\x00" not in got.data) and _translating(args)
+
+            # SMALL TEXT COMES BACK INLINE AND NOTHING ELSE DOES.
+            #
+            # Until 2026-10-02 every text file was returned in full, with the
+            # only ceiling the GUEST's 4MB -- about a million tokens of context
+            # for one `get_file`, on a machine whose logs reach that size, and
+            # the only thing in the way was the agent choosing to pass
+            # `max_bytes`. Its description reads like an optimisation, not a
+            # safety rail.
+            #
+            # The binary path already did the right thing: write it down, say
+            # where. This is the same rule applied to the case that could
+            # actually hurt, with a small-file exception so reading a 2KB .ini
+            # does not cost two round trips on a machine where each one is a
+            # second.
+            if textual and len(got.data) <= GET_INLINE_MAX:
                 try:
                     body = fold.decode(P.to_bridge(got.data, cls), _acp())
                 except Exception:
                     body = None
                 if body is not None:
-                    return _text(body + note)
+                    # WHAT THE ENDINGS ARE, said out loud, because the agent
+                    # cannot see them. On 2026-10-01 a session read a batch
+                    # file back SPECIFICALLY to find out why it would not run,
+                    # got text that looked perfect, and learned nothing -- LF
+                    # and CRLF render identically.
+                    return _text(body + note + "\n" + prompts.text(
+                        "tools.get_file.view.endings",
+                        kind=_endings(got.data, cls)))
 
-            # Binary: the agent cannot hold bytes, so they go to a file and it
-            # is told where. Not into the mirror -- see _fetched_dir.
-            dest_dir = _fetched_dir()
-            await asyncio.to_thread(os.makedirs, dest_dir,
-                                    exist_ok=True)
-            name = os.path.basename(path.replace("\\", "/").rstrip("/")) or "file"
-            dest = os.path.join(dest_dir, name)
-            # Off the loop: a few megabytes onto a real disk is not
-            # instantaneous, and this runs while a turn is live.
-            await asyncio.to_thread(pathlib.Path(dest).write_bytes, got.data)
-            return _text(prompts.text("tools.get_file.view.binary",
-                                      path=path, local=dest,
-                                      bytes=len(got.data)) + note)
+            dest = await _save_fetched(path, got.data)
+            return _text(prompts.text("tools.get_file.view.downloaded",
+                                      kind=_describe(got.data, path, textual),
+                                      size=_size(len(got.data)),
+                                      local=dest) + note)
         except Exception:
             log.exception("mcp__machine__get_file failed: %r", args)
             raise
