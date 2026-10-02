@@ -463,12 +463,35 @@ static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
         if (rep.end != UIWAIT_ALREADY && rep.end != UIWAIT_SETTLED)
         {
             char detail[96];
+            /* THE WAITER'S OWN ANSWER, not "not_found" for all four.
+             *
+             * Every non-settled end used to go out as `not_found`, whose
+             * sentence begins "Nothing on screen matches that selector" -- so
+             * a wait that matched THREE controls and could not choose between
+             * them told the caller nothing matched. Measured on real hardware
+             * 2026-10-02: `ui wait_for='[text="Control Panel"]'` after opening
+             * Control Panel came back `end=3 after 5005ms, 5 scans, matched=3`
+             * rendered as "nothing matches ... the window may not be open",
+             * and the agent believed it and went looking for the window with a
+             * screenshot. The window was open; the title just appears three
+             * times, on the frame, the toolbar and the address bar.
+             *
+             * The statuses already exist and the bridge already has the right
+             * sentence for each; this stopped throwing the distinction away. */
+            const char *why = "not_found";
+            if (rep.end == UIWAIT_AMBIGUOUS)      why = "ambiguous";
+            else if (rep.end == UIWAIT_TRUNCATED) why = "truncated";
             rc_strf(detail, sizeof(detail),
-                    "end=%d after %lums, %d scans, matched=%d",
-                    (int)rep.end, (unsigned long)rep.ms, rep.rechecks,
-                    rep.matchCount);
+                    "%d controls match after %lums and %d scans",
+                    rep.matchCount, (unsigned long)rep.ms, rep.rechecks);
+            if (rep.end == UIWAIT_TIMEOUT)
+                rc_strf(detail, sizeof(detail),
+                        "waited %lums over %d scans; %s",
+                        (unsigned long)rep.ms, rep.rechecks,
+                        rep.everMatched ? "it appeared and then went"
+                                        : "it never appeared");
             k[0] = "detail"; v[0] = detail;
-            ui_end(net, id, "not_found", k, v, 1);
+            ui_end(net, id, why, k, v, 1);
             return;
         }
     }
@@ -743,9 +766,11 @@ static void do_keys(rc_net *net, UiContext *ctx, rc_frame *f)
          * the reply is a one-line fix. Nothing was typed -- typeText checks
          * the whole string before the first keystroke. */
         char bad[48];
+        char nkeys[16];
         const char *k[1];
         const char *v[1];
-        r = ctx->input.typeText(win, text, bad, sizeof(bad));
+        unsigned sent = 0;
+        r = ctx->input.typeText(win, text, bad, sizeof(bad), &sent);
         if (r == INPUT_OK)
             settle_after(ctx, f);
         if (r == INPUT_BAD_KEY && bad[0])
@@ -754,7 +779,11 @@ static void do_keys(rc_net *net, UiContext *ctx, rc_frame *f)
             ui_end(net, id, input_result_name(r), k, v, 1);
             return;
         }
-        ui_end(net, id, input_result_name(r), NULL, NULL, 0);
+        /* KEYSTROKES, which the caller cannot work out from the string it
+         * sent: `[Enter]` is seven characters and one keypress. */
+        rc_strf(nkeys, sizeof(nkeys), "%u", sent);
+        k[0] = "keys"; v[0] = nkeys;
+        ui_end(net, id, input_result_name(r), k, v, 1);
     }
 }
 
