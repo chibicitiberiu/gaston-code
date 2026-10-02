@@ -1298,7 +1298,9 @@ async def test_choosing_auto_says_what_it_does_not_do(harness):
     frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     body = harness.body(frames).decode("cp1252")
     assert "Permission mode set to Auto" in body
-    assert "not consulted" in body
+    # Since 2026-10-02 Auto does add something for the dangerous machine
+    # tools -- the reviewer -- and the caveat says what, and when it asks.
+    assert "second opinion" in body and "you are asked" in body
     await harness.close(w)
 
 

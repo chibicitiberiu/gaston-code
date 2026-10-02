@@ -171,7 +171,8 @@ def render_request(tool_name: str, args: dict, ctx,
     the guard's sentence in front of the command meant the user read the
     sentence and never saw the command (02.4).
     """
-    display = getattr(ctx, "display_name", None) or tool_name
+    display = plain_name(tool_name,
+                         getattr(ctx, "display_name", None) or tool_name)
     title = getattr(ctx, "title", None)
     desc = getattr(ctx, "description", None)
 
@@ -273,6 +274,34 @@ def _machine_detail(tool_name: str, args: dict) -> str:
     return ""
 
 
+#: The bar is 640 pixels wide and the person reads it in a second.
+#: `put_file: C:\\WINDOWS\\SYSTEM.INI` is not a sentence.
+_PLAIN = {"exec": "Run on your machine",
+         "put_file": "Write a file on your machine",
+         "get_file": "Read a file from your machine",
+         "drives": "List your machine's drives",
+         "list_dir": "List a folder on your machine",
+         "ps": "List the programs running on your machine",
+         "kill": "End a program on your machine",
+         "input": "Use your machine's keyboard and mouse",
+         "mkdir": "Make a folder on your machine",
+         "move": "Move or rename on your machine",
+         "delete": "Delete on your machine",
+         "copy": "Copy on your machine",
+         "rmdir": "Remove a folder on your machine",
+         "launch": "Start a program on your machine"}
+
+
+def plain_name(tool_name: str, display: str) -> str:
+    """A machine tool in words ("Delete on your machine"), else `display`.
+    The bar line and the block above it say the same thing -- the block used
+    to head itself `mcp__machine__delete`."""
+    if not tool_name.startswith("mcp__machine__"):
+        return display
+    bare = display.lower().replace("mcp__machine__", "")
+    return _PLAIN.get(bare, display)
+
+
 def summary(tool_name: str, ctx, args: dict | None = None) -> str:
     """The one line the guest puts in the bar's STATIC.
 
@@ -285,27 +314,8 @@ def summary(tool_name: str, ctx, args: dict | None = None) -> str:
     command. When there is no description, fall back to the most telling
     argument.
     """
-    display = getattr(ctx, "display_name", None) or tool_name
-    if tool_name.startswith("mcp__machine__"):
-        # The bar is 640 pixels wide and the person reads it in a second.
-        # `put_file: C:\WINDOWS\SYSTEM.INI` is not a sentence, and this is
-        # the one tool where misreading it costs them a file.
-        plain = {"exec": "Run on your machine",
-                 "put_file": "Write a file on your machine",
-                 "get_file": "Read a file from your machine",
-                 "drives": "List your machine's drives",
-                 "list_dir": "List a folder on your machine",
-                 "ps": "List the programs running on your machine",
-                 "kill": "End a program on your machine",
-                 "input": "Use your machine's keyboard and mouse",
-                 "mkdir": "Make a folder on your machine",
-                 "move": "Move or rename on your machine",
-                 "delete": "Delete on your machine",
-                 "copy": "Copy on your machine",
-                 "rmdir": "Remove a folder on your machine",
-                 "launch": "Start a program on your machine"}
-        bare = display.lower().replace("mcp__machine__", "")
-        display = plain.get(bare, display)
+    display = plain_name(tool_name,
+                         getattr(ctx, "display_name", None) or tool_name)
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)
     if not desc and args:
         desc = _machine_detail(tool_name, args)

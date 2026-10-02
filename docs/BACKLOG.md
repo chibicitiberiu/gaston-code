@@ -2398,14 +2398,13 @@ now reached. These were decided against, or deferred, on purpose:
 - **Text that exists only as pixels** -- owner-drawn controls, canvases. Would
   be OCR on the bridge (the guest transforms nothing) followed by a `screen`
   click at the found point. Until then: `at` offsets read off a `shot`.
-- **Recursive delete.** `delete` removes one file and `rmdir` an empty folder.
-  A tree removal is the one fs op that loses data wholesale, and gremote's
-  `rmtree` keeps that loop on the Linux side where it can be read; an agent's
-  version would need a listing in the permission bar of everything it is
-  about to remove.
-- **A folder across drives.** Measured on the Athlon: MoveFileA moves a FILE
-  from C: to D: (98 copies it) and refuses a FOLDER (`cross_volume`). Copying
-  a tree is the agent's loop, file by file, for the same reason as above.
+- **Recursive delete and folders across drives -- DONE the same day**, at
+  the user's call ("go above and beyond what win98 lets us do"): win/fs/tree.h
+  copies, moves and deletes whole trees, deletes go to the Recycle Bin unless
+  `permanent`, nothing is overwritten unless `overwrite`, the bar shows what a
+  call touches, and in Auto a reviewer model decides or asks the person. What
+  is still out: trees past 5,000 entries or 200MB in one call (the caller
+  splits), and a Recycle Bin on removable drives (98 has none).
 - **gremote's UI lane** (REMOTE.md step 6) should be a thin adapter over
   `StepRunner` (win/automation/steps.h), exactly as `win/ui/uisteps.cpp` is
   for the client -- the runner knows nothing of either wire.

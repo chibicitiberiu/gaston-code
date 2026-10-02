@@ -110,3 +110,60 @@ def test_manual_never_consults_the_reviewer(monkeypatch):
     asyncio.run(go())
     assert not called
     assert any(f.type == "PERMREQ" for f in sent)
+
+
+# --- the second gate: calls that came round the desk -----------------------
+
+
+def test_a_call_the_desk_approved_passes_the_gate_once(monkeypatch):
+    async def fake_review(guest, tool, args, preview_text=""):
+        return True, "asked for"
+
+    monkeypatch.setattr(review, "review", fake_review)
+    desk = _desk(Guest("auto"), [], [])
+    args = {"path": "C:\\TEMP\\OLD"}
+
+    async def go():
+        await desk.callback()("mcp__machine__delete", args, Ctx())
+        first = await desk.gate("mcp__machine__delete", args)
+        return first
+
+    assert asyncio.run(go()) is None
+    assert not desk._approved            # consumed, not reusable
+
+
+def test_a_call_that_came_round_the_desk_is_reviewed_in_the_tool(
+        monkeypatch):
+    """Measured: in Auto the CLI approved a delete without calling the desk.
+    The gate puts the reviewer back in front of it."""
+    seen = []
+
+    async def fake_review(guest, tool, args, preview_text=""):
+        seen.append(tool)
+        return True, "asked for"
+
+    monkeypatch.setattr(review, "review", fake_review)
+    desk = _desk(Guest("auto"), [], [])
+    assert asyncio.run(desk.gate("mcp__machine__delete",
+                                 {"path": "C:\\TEMP\\OLD"})) is None
+    assert seen == ["mcp__machine__delete"]
+
+
+def test_an_unsure_reviewer_in_the_gate_asks_the_person(monkeypatch):
+    async def fake_review(guest, tool, args, preview_text=""):
+        return False, "not what was asked"
+
+    monkeypatch.setattr(review, "review", fake_review)
+    sent = []
+    desk = _desk(Guest("auto"), [], sent)
+
+    async def go():
+        task = asyncio.ensure_future(desk.gate("mcp__machine__delete",
+                                               {"path": "C:\\X"}))
+        await asyncio.sleep(0.05)
+        done = task.done()
+        task.cancel()
+        return done
+
+    assert asyncio.run(go()) is False     # waiting on the person
+    assert any(f.type == "PERMREQ" for f in sent)

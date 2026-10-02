@@ -26,8 +26,10 @@ the state machine that sits on top of it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import time
 from collections import deque
 
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
@@ -94,6 +96,9 @@ class PermissionDesk:
         #: about to touch, counted on the guest (agent/review.py). Optional:
         #: a desk without one shows the bar without the count.
         self._preview = preview
+        #: Calls this desk approved, (key, when), for `gate`.
+        self._approved: deque = deque(maxlen=64)
+        self._gate_seq = 0
         self._cwd = cwd
         self._write_block = write_block
         self._send = send
@@ -184,9 +189,71 @@ class PermissionDesk:
         """Is there a prompt on screen right now."""
         return self.pending is not None
 
+    # --- the second gate, for calls that never reached the first ---------
+    #
+    # MEASURED on the VM (2026-10-02): in Auto, with Sonnet, the CLI approved
+    # mkdir, put_file and a whole-folder delete ITSELF and never called
+    # `can_use_tool` -- so the preview and the reviewer this desk runs were
+    # skipped for exactly the mode they were built for. The dangerous machine
+    # tools therefore ask again from inside the tool: a call the desk already
+    # approved passes at once; one that came round it is decided here, by the
+    # same code, and a reviewer that is unsure puts the bar up from in there.
+
+    #: How long an approval from the desk stands for the tool that follows.
+    APPROVAL_S = 300.0
+
+    @staticmethod
+    def _key(tool_name: str, args) -> str:
+        return tool_name + "\0" + json.dumps(args or {}, sort_keys=True,
+                                             default=str)
+
+    async def gate(self, tool_name: str, args: dict) -> str | None:
+        """None when the call may go ahead; otherwise why it may not, in
+        words for the agent."""
+        key = self._key(tool_name, args)
+        now = time.monotonic()
+        while self._approved and now - self._approved[0][1] > self.APPROVAL_S:
+            self._approved.popleft()
+        for i, (k, _) in enumerate(self._approved):
+            if k == key:
+                del self._approved[i]
+                return None
+        self._gate_seq += 1
+
+        class _Ctx:
+            tool_use_id = f"gate-{self._gate_seq}"
+            suggestions: tuple = ()
+            title = description = display_name = None
+
+        log.info("second gate for %s: it did not come through the desk",
+                 tool_name)
+        result = await self.callback()(tool_name, args, _Ctx())
+        self._approved_take(key)
+        if isinstance(result, PermissionResultAllow):
+            return None
+        return getattr(result, "message", "") or "Refused."
+
+    def _approved_take(self, key: str) -> None:
+        for i, (k, _) in enumerate(self._approved):
+            if k == key:
+                del self._approved[i]
+                return
+
     # --- the callback claude_agent_sdk calls into ---------------------------
 
     def callback(self):
+        inner = self._callback()
+
+        async def recording(tool_name: str, args: dict, ctx):
+            result = await inner(tool_name, args, ctx)
+            if isinstance(result, PermissionResultAllow):
+                self._approved.append((self._key(tool_name, args),
+                                       time.monotonic()))
+            return result
+
+        return recording
+
+    def _callback(self):
         """Build the can_use_tool callback for this guest.
 
         Everything that reaches here gets a bar. There is deliberately no

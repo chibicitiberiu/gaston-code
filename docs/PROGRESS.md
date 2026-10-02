@@ -3931,3 +3931,41 @@ word replaced, the result read back with `ui`, Notepad closed through its save
 prompt by selector, and a click on Gaston's own window refused.
 docs/measurements/keyboard-layouts-vm-20261002.txt,
 input-and-ops-real-hw-20261002.txt. Deferred on purpose: BACKLOG 28.
+
+### Later the same day: whole folders, the Recycle Bin, and a reviewer for Auto
+
+The user's call on the fs tools: "go above and beyond what win98 lets us do"
+-- the agent expects `cp -r`, `mv` and `rm -r`, so the guest provides them
+(win/fs/tree.h): copy a file or a tree to any drive; move by rename when it
+can and otherwise copy, verify every file and only then remove the source;
+delete a file or a tree to the Recycle Bin (SHFileOperation, FOF_ALLOWUNDO),
+or for good with `permanent`. Nothing is overwritten without `overwrite`, and
+every conflict is found before the first byte moves. Capped at 5,000 entries
+and 200MB a call. Behind `ops=2`.
+
+**Mitigations, decided with the user.** The Recycle Bin, so a delete can be
+undone; refusing to overwrite unless asked; and leaning on approval: before a
+delete, copy or move reaches the bar the guest counts what it touches and the
+bar says so ("C:\WORK\OLD to the Recycle Bin (a folder of 132 files in 14
+folders, 3.2 MB: ...)"). In Auto -- the user's words, "literally asking an
+agent if this is safe" -- a reviewer model (agent/review.py) reads the
+person's recent requests, the call and that count, and answers SAFE (go
+ahead, with a line in the transcript saying the reviewer approved it, not the
+person) or ASK (the bar, with its reason). It can never refuse on its own.
+
+**Measured: Auto skips the permission callback.** On the VM with Sonnet, the
+CLI approved mkdir, put_file and a whole-folder delete itself and never
+called `can_use_tool` -- so the preview and the reviewer were skipped in the
+mode they were built for (and Haiku cannot use Auto at all). The dangerous
+tools now gate themselves (`PermissionDesk.gate`): a call the desk approved
+passes once; one that came round it is decided in the tool by the same code.
+On the VM after that: a delete in C:\TEMP the person asked for was approved
+by the reviewer with the count in the transcript; a delete in C:\WINDOWS\TEMP
+put the bar up with "the delete touches C:\WINDOWS ..." and the person's Deny
+reached the agent, which did not retry.
+
+**Verified.** treeprobe 9/9 on the VM and 11/11 on the Athlon -- a folder moved
+to D: and back whole, a folder in C:\RECYCLED; fscheck's nine tree cases under
+Wine; the reviewer against the real model (approved a build folder the person
+asked to clear, sent C:\WINDOWS\SYSTEM to the person). The client's load size
+rose one page, to 506,233 of 506,864.

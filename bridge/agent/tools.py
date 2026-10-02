@@ -1142,7 +1142,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     async def _fs_change(name: str, op: str, path: str, to: str = "", *,
                          creates_at: str = "", is_dir: bool = False,
                          overwrite: bool = False,
-                         permanent: bool = False) -> dict:
+                         permanent: bool = False,
+                         raw_args: dict | None = None) -> dict:
         why = _ops_ready()
         if why:
             return _text(why, error=True)
@@ -1156,6 +1157,14 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 p_, creates=made or bool(creates_at), is_dir=is_dir)
             if refusal:
                 return _text(refusal, error=True)
+        # THE SECOND GATE (permdesk.gate). A delete, copy or move that came
+        # round the permission desk -- Auto lets the CLI approve on its own --
+        # is decided here instead: the preview, the reviewer, the bar.
+        desk = getattr(guest, "perms", None)
+        if name in ("delete", "copy", "move") and desk is not None:
+            refused = await desk.gate(f"mcp__machine__{name}", raw_args)
+            if refused:
+                return _text(refused, error=True)
         try:
             h = await fs.op(guest, op, path, to.strip(), overwrite=overwrite,
                             permanent=permanent)
@@ -1216,7 +1225,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             a = args or {}
             return await _fs_change("move", "FSMV", str(a.get("path", "")),
                                     str(a.get("to", "")),
-                                    overwrite=bool(a.get("overwrite")))
+                                    overwrite=bool(a.get("overwrite")),
+                                    raw_args=a)
         except Exception:
             log.exception("mcp__machine__move failed: %r", args)
             raise
@@ -1240,7 +1250,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             a = args or {}
             return await _fs_change("copy", "FSCOPY", str(a.get("path", "")),
                                     str(a.get("to", "")),
-                                    overwrite=bool(a.get("overwrite")))
+                                    overwrite=bool(a.get("overwrite")),
+                                    raw_args=a)
         except Exception:
             log.exception("mcp__machine__copy failed: %r", args)
             raise
@@ -1261,7 +1272,8 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         try:
             a = args or {}
             return await _fs_change("delete", "FSRM", str(a.get("path", "")),
-                                    permanent=bool(a.get("permanent")))
+                                    permanent=bool(a.get("permanent")),
+                                    raw_args=a)
         except Exception:
             log.exception("mcp__machine__delete failed: %r", args)
             raise

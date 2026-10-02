@@ -38,11 +38,10 @@ MODE_LABEL = {
 }
 MODE_CAVEAT = {
     "auto": (
-        "Measured on this bridge: with the permission prompt installed, "
-        "the model's own danger classifier is not consulted -- "
-        "`git reset --hard` on a repo with uncommitted work ran "
-        "unchanged in Auto and in Manual. Auto still asks you; it does "
-        "not add a second opinion."
+        "Auto lets the agent go ahead without asking you for most tools. "
+        "Deleting, moving and copying on your machine still gets a second "
+        "opinion: a reviewer reads what you asked for and what the call "
+        "touches, and when it is not sure, you are asked."
     ),
 }
 
