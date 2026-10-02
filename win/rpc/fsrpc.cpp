@@ -11,6 +11,7 @@
 #include "fs/drives.h"
 #include "fs/file.h"
 #include "fs/ops.h"
+#include "fs/tree.h"
 #include "fs/xfer.h"
 #include "miniz.h"
 
@@ -571,36 +572,98 @@ static void do_fsdrives(rc_net *net, rc_frame *f)
     rc_net_send(net, "FSDRIVEEND", keys, vals, 2, NULL, 0);
 }
 
-/* --- the four mutations -------------------------------------------------- */
+/* --- the mutations -------------------------------------------------------- */
 
-/* MKDIR (with parents, an existing directory is fine), MV, RM and RMDIR, each
- * answered with one FSOPEND carrying libfs's reason (fs/ops.h) -- the same
- * words gremote sends for the same failures, classified once. Bounded: one
- * syscall each, plus a one-entry listing when RMDIR has to tell "not empty"
- * from "denied". */
+/* MKDIR (with parents, an existing directory is fine) and RMDIR (empty) are
+ * fs/ops.h; RM, MV and COPY are fs/tree.h -- a file or a whole folder, the
+ * way an agent expects any OS to do them, with nothing overwritten unless
+ * `overwrite=1`, a move that never loses its source, and a delete that goes
+ * to the Recycle Bin unless `permanent=1`. STATS is what a delete or copy is
+ * about to touch, for the permission bar.
+ *
+ * One FSOPEND each, with libfs's reason and what was done. Bounded by
+ * fs/tree.h's caps, so a copy cannot hold this worker past the bridge's
+ * budget. */
 static void do_fsop(rc_net *net, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
     const char *path = rc_frame_get(f, "path");
-    const char *why;
-    const char *keys[2];
-    const char *vals[2];
+    const char *to = rc_frame_get(f, "to");
+    const char *ow = rc_frame_get(f, "overwrite");
+    const char *perm = rc_frame_get(f, "permanent");
+    bool overwrite = ow && ow[0] == '1';
+    const char *why = 0;
+    const char *how = 0;
+    char detail[MAX_PATH + 8];
+    char files[16], dirs[16], bytes[24];
+    const char *keys[8];
+    const char *vals[8];
+    TreeDone done;
+    TreeStats st;
+    int n = 0;
+    bool stats = false;
 
+    detail[0] = '\0';
     if (!id) {
         rc_log("%s: frame carries no id -- dropped", f->type);
         return;
     }
     if (strcmp(f->type, "FSMKDIR") == 0)
         why = fsMakeDirectory(path, true);
-    else if (strcmp(f->type, "FSRM") == 0)
-        why = fsRemoveFile(path);
     else if (strcmp(f->type, "FSRMDIR") == 0)
         why = fsRemoveDirectory(path);
-    else
-        why = fsMovePath(path, rc_frame_get(f, "to"));
-    keys[0] = "id";     vals[0] = id;
-    keys[1] = "status"; vals[1] = why ? why : "ok";
-    rc_net_send(net, "FSOPEND", keys, vals, 2, NULL, 0);
+    else if (strcmp(f->type, "FSRM") == 0) {
+        why = fsDeleteTree(path, perm && perm[0] == '1', done, detail,
+                           sizeof(detail));
+        how = "deleted";
+        if (done.recycled) how = "recycled";
+    }
+    else if (strcmp(f->type, "FSCOPY") == 0) {
+        why = fsCopyTree(path, to, overwrite, done, detail, sizeof(detail));
+        how = "copied";
+    }
+    else if (strcmp(f->type, "FSSTATS") == 0) {
+        why = fsTreeStats(path, st);
+        stats = true;
+    }
+    else {
+        why = fsMoveTree(path, to, overwrite, done, detail, sizeof(detail));
+        how = "copied";
+        if (done.renamed) how = "renamed";
+    }
+
+    if (stats) {
+        done.files = st.files;
+        done.dirs = st.dirs;
+        done.bytes = st.bytes;
+        how = "file";
+        if (st.isDir) how = "dir";
+    }
+    rc_strf(files, sizeof(files), "%lu", (unsigned long)done.files);
+    rc_strf(dirs, sizeof(dirs), "%lu", (unsigned long)done.dirs);
+    rc_strf(bytes, sizeof(bytes), "%lu",
+            (unsigned long)(done.bytes > 0xFFFFFFFFUL ? 0xFFFFFFFFUL
+                                                       : done.bytes));
+    keys[n] = "id";     vals[n++] = id;
+    keys[n] = "status"; vals[n++] = why ? why : "ok";
+    keys[n] = "files";  vals[n++] = files;
+    keys[n] = "dirs";   vals[n++] = dirs;
+    keys[n] = "bytes";  vals[n++] = bytes;
+    if (how && (!why || stats)) { keys[n] = "how"; vals[n++] = how; }
+    if (detail[0])      { keys[n] = "detail"; vals[n++] = detail; }
+
+    /* STATS: the first names, one per line, so the bar can show what a
+     * folder actually holds. */
+    char sample[RC_TREE_SAMPLE * (MAX_PATH + 1)];
+    unsigned len = 0;
+    if (stats && !why)
+        for (int i = 0; i < st.sampleN; i++) {
+            unsigned l = (unsigned)strlen(st.sample[i]);
+            memcpy(sample + len, st.sample[i], l);
+            len += l;
+            sample[len++] = '\n';
+        }
+    rc_net_send(net, "FSOPEND", keys, vals, n, len ? sample : NULL, len);
 }
 
 int rc_fsrpc_handle(rc_net *net, rc_frame *f)
@@ -612,7 +675,9 @@ int rc_fsrpc_handle(rc_net *net, rc_frame *f)
     else if (strcmp(f->type, "FSDRIVES") == 0)  do_fsdrives(net, f);
     else if (strcmp(f->type, "FSMKDIR") == 0 || strcmp(f->type, "FSMV") == 0
              || strcmp(f->type, "FSRM") == 0
-             || strcmp(f->type, "FSRMDIR") == 0) do_fsop(net, f);
+             || strcmp(f->type, "FSRMDIR") == 0
+             || strcmp(f->type, "FSCOPY") == 0
+             || strcmp(f->type, "FSSTATS") == 0) do_fsop(net, f);
     else return 0;
     return 1;
 }

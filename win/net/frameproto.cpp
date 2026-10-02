@@ -44,7 +44,10 @@ const rc_lane_row RC_LANE_TABLE[] = {
     { "FSMKDIR",  RC_LANE_STREAM },
     { "FSMV",     RC_LANE_STREAM },
     { "FSRM",     RC_LANE_STREAM },
-    { "FSRMDIR",  RC_LANE_STREAM }
+    { "FSRMDIR",  RC_LANE_STREAM },
+    /* A whole tree, but capped (fs/tree.h): 5,000 entries, 200MB. */
+    { "FSCOPY",   RC_LANE_STREAM },
+    { "FSSTATS",  RC_LANE_STREAM }
 };
 const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
 

@@ -114,7 +114,13 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # time and not just this one: free physical memory with the client up,
 # before and after the feature set, on the guest
 # (docs/measurements/workingset-*-20261002.txt).
-COMMITTED_CAP ?= 502768
+#
+# 502,768 -> 506,864 (one page), the same day: copy, move and delete of whole
+# trees -- the Recycle Bin, a move that never loses its source, nothing
+# overwritten unless asked (fs/tree.h) -- measured at 506,233. Written as
+# plain data first; the std::string version was 11KB. The runtime number is
+# re-measured on the guest with it (docs/measurements/workingset-*).
+COMMITTED_CAP ?= 506864
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -170,7 +176,7 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 # client wants free space for one volume and never enumerates drives, so
 # splitting them keeps the enumeration out of gaston.exe's image.
 FS_SRCS = fs/path.cpp fs/file.cpp fs/dir.cpp fs/list.cpp fs/reader.cpp \
-          fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp fs/ops.cpp
+          fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp fs/ops.cpp fs/tree.cpp
 LIBFS = $(LIBDIR)/libfs.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
@@ -646,7 +652,7 @@ $(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 # total to the byte, so it is here for honesty rather than for the bytes.
 $(OBJ)/fs/path.o $(OBJ)/fs/file.o $(OBJ)/fs/dir.o $(OBJ)/fs/list.o \
 $(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o $(OBJ)/fs/freespace.o \
-$(OBJ)/fs/drives.o $(OBJ)/fs/ops.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+$(OBJ)/fs/drives.o $(OBJ)/fs/ops.o $(OBJ)/fs/tree.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # The `input` step list and the code it drives, for the same reason as
 # app/: a step is a resolve, a syscall and a refusal, and its cost is the

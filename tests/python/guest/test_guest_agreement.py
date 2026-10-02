@@ -397,7 +397,8 @@ def test_sync_status_vocabulary_matches_the_guest():
                       ("win", "rpc", "fsrpc.cpp"),
                       # The four mutations' reasons, shared with gremote,
                       # are returned from libfs (2026-10-02).
-                      ("win", "fs", "ops.cpp")))
+                      ("win", "fs", "ops.cpp"),
+                      ("win", "fs", "tree.cpp")))
 
     found: set[str] = set()
     for m in re.finditer(r'\b(?:status|why)\s*=\s*"([a-z_]+)"', src):

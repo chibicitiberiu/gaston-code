@@ -93,7 +93,10 @@ extern "C" {
  * bridge offers none of the tools: an FSLS sent to a client that predates it
  * lands on the UI thread as "unhandled", and `list_dir` waited out four
  * minutes. */
-#define RC_CAP_OPS 1
+/* 2 (2026-10-02, later the same day): RM and MV take whole folders, COPY
+ * and STATS exist, a delete goes to the Recycle Bin unless `permanent`, and
+ * nothing is overwritten unless `overwrite` (fs/tree.h). */
+#define RC_CAP_OPS 2
 
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits

@@ -130,6 +130,8 @@ static void lane_table_cases(void)
     check_lane("FSMV",       RC_LANE_STREAM);
     check_lane("FSRM",       RC_LANE_STREAM);
     check_lane("FSRMDIR",    RC_LANE_STREAM);
+    check_lane("FSCOPY",     RC_LANE_STREAM);
+    check_lane("FSSTATS",    RC_LANE_STREAM);
     /* Started on the reader like PSLIST: CreateProcess, nothing waited on. */
     check_lane("PSLAUNCH",   RC_LANE_IMMEDIATE);
     /* And the replies, which the guest SENDS and must never route back in.

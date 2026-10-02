@@ -188,6 +188,18 @@ class SyncStatus(str, Enum):
     DENIED = "denied"
     IS_CWD = "is_cwd"
     CROSS_VOLUME = "cross_volume"
+    #: Whole-tree copy, move and delete (win/fs/tree.cpp): past the caps
+    #: (5,000 entries, 200MB); a file where a folder is, or the reverse; a
+    #: folder copied into itself; a copy that arrived short; no Recycle Bin
+    #: on that drive; the shell said done and the thing is still there; a
+    #: move whose copy arrived but whose source could not all be removed.
+    TOO_BIG = "too_big"
+    TYPE_CLASH = "type_clash"
+    INTO_ITSELF = "into_itself"
+    SHORT_COPY = "short_copy"
+    NO_RECYCLE_BIN = "no_recycle_bin"
+    NOT_REMOVED = "not_removed"
+    COPIED_NOT_REMOVED = "copied_not_removed"
     #: NOT one of the guest's own tokens -- what `parse` returns for a value
     #: that is not. See `parse`'s docstring for why this exists instead of
     #: falling back to OK the way `ExecStatus.parse` does.

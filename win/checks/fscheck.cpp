@@ -23,6 +23,7 @@
 #include "fs/dir.h"
 #include "fs/drives.h"
 #include "fs/file.h"
+#include "fs/tree.h"
 #include "fs/path.h"
 #include "fs/reader.h"
 #include "fs/writer.h"
@@ -932,6 +933,106 @@ static void caseDrives()
         "a string with no drive letter is refused, not guessed at");
 }
 
+
+/* --- tree: copy, move, delete of whole folders (fs/tree.h) ---------------- */
+
+static void caseTree()
+{
+    static Path t, sub, a, b, c, ca, cb, m, inner, junk;
+    static char detail[MAX_PATH + 64];
+    static char why[MAX_PATH + 8];
+    static char base[MAX_PATH];
+
+    /* ABSOLUTE: the tree calls refuse a relative path on purpose -- in the
+     * client it would be relative to the client's own folder, which no
+     * caller means -- and the scratch root this harness is given is not. */
+    if (!GetFullPathNameA(g_scratch.str(), sizeof(base), base, NULL))
+    {
+        say("tree.stats", false, "no full path for the scratch root");
+        return;
+    }
+    t.join(base, "tree");
+    sub.join(base, "tree\\sub");
+    a.join(base, "tree\\a.txt");
+    b.join(base, "tree\\sub\\b.txt");
+    CreateDirectoryA(t.str(), NULL);
+    CreateDirectoryA(sub.str(), NULL);
+    putFile(a.str(), "alpha", 5);
+    putFile(b.str(), "bravo!!", 7);
+
+    {
+        TreeStats st;
+        const char *r = fsTreeStats(t.str(), st);
+        rc_strf(detail, sizeof(detail), "%s files=%lu dirs=%lu bytes=%lu",
+                r ? r : "ok", (unsigned long)st.files, (unsigned long)st.dirs,
+                (unsigned long)st.bytes);
+        say("tree.stats", !r && st.isDir && st.files == 2 && st.dirs == 1
+            && st.bytes == 12, detail);
+    }
+
+    c.join(base, "copy");
+    ca.join(base, "copy\\a.txt");
+    cb.join(base, "copy\\sub\\b.txt");
+    {
+        TreeDone d;
+        const char *r = fsCopyTree(t.str(), c.str(), false, d, why,
+                                   sizeof(why));
+        FileInfo fi;
+        rc_strf(detail, sizeof(detail), "%s files=%lu at %s", r ? r : "ok",
+                (unsigned long)d.files, why);
+        say("tree.copy", !r && d.files == 2 && statPath(cb.str(), fi)
+            && fi.size == 7 && exists(a.str()), detail);
+    }
+    {
+        /* A file onto a file: refused, and the target untouched. */
+        TreeDone d;
+        const char *r = fsCopyTree(a.str(), ca.str(), false, d, why,
+                                   sizeof(why));
+        say("tree.copy_refuses_existing", r && !strcmp(r, "exists"),
+            r ? r : "ok");
+        r = fsCopyTree(a.str(), ca.str(), true, d, why, sizeof(why));
+        say("tree.copy_overwrite", !r, r ? r : "ok");
+    }
+    {
+        /* Into an existing folder means INSIDE it -- and inside itself is
+         * refused before anything is walked. */
+        TreeDone d;
+        const char *r = fsCopyTree(t.str(), sub.str(), false, d, why,
+                                   sizeof(why));
+        say("tree.copy_into_itself", r && !strcmp(r, "into_itself"),
+            r ? r : "ok");
+    }
+    m.join(base, "moved");
+    {
+        TreeDone d;
+        const char *r = fsMoveTree(c.str(), m.str(), false, d, why,
+                                   sizeof(why));
+        say("tree.move_rename", !r && d.renamed && !exists(c.str())
+            && exists(m.str()), r ? r : "ok");
+    }
+    {
+        TreeDone d;
+        const char *r = fsDeleteTree(m.str(), true, d, why, sizeof(why));
+        rc_strf(detail, sizeof(detail), "%s files=%lu dirs=%lu", r ? r : "ok",
+                (unsigned long)d.files, (unsigned long)d.dirs);
+        say("tree.delete_permanent", !r && !exists(m.str()) && d.files == 2
+            && d.dirs == 2, detail);
+    }
+    {
+        TreeDone d;
+        const char *r = fsDeleteTree("C:\\", true, d, why, sizeof(why));
+        say("tree.delete_refuses_root", r && !strcmp(r, "drive_root"),
+            r ? r : "ok");
+        r = fsDeleteTree("relative\\path", true, d, why, sizeof(why));
+        say("tree.delete_refuses_relative", r && !strcmp(r, "bad_path"),
+            r ? r : "ok");
+    }
+    {
+        TreeDone d;
+        fsDeleteTree(t.str(), true, d, why, sizeof(why));
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -959,7 +1060,7 @@ int main(int argc, char **argv)
             caseWriterCommits, caseWriterRefusesAndCleansUp,
             caseWriterAbort, caseWriterNoAside, caseRecover,
             caseReader, caseWalk, caseList, caseStat,
-            caseSink, caseSource, caseDrives
+            caseSink, caseSource, caseDrives, caseTree
         };
         unsigned i;
         for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
