@@ -41,23 +41,28 @@ def _guest_names() -> set[str]:
 
 
 def _advertised() -> set[str]:
-    """The names the two agent-facing strings spell out.
+    """The names the `input` tool's prose spells out, after "Key names:".
 
     Taken from the prose rather than a list, because the prose is what the
     agent reads -- a list kept beside it would be the thing that drifts.
-    `F1-F12` is a range and is expanded.
+    `F1-F24` and `Numpad0-Numpad9` are ranges and are expanded; `Escape (Esc)`
+    is two names. (It read the `keys` tool's prose until that tool was
+    retired for `input`, 2026-10-02.)
     """
-    said = (prompts.text("tools.keys.args.text") + " "
-            + prompts.text("tools.ui.refused.bad_key", key="x"))
-    words = set(re.findall(r"\b([A-Z][a-zA-Z]+|F1-F12|arrows?)\b", said))
+    said = prompts.text("tools.input.args.steps")
+    m = re.search(r"Key names: (.*?)\. Chords", said, re.S)
+    assert m, "the input tool no longer lists its key names after 'Key names:'"
     out: set[str] = set()
-    for w in words:
-        if w == "F1-F12":
-            out |= {f"f{n}" for n in range(1, 13)}
-        elif w.lower().startswith("arrow"):
-            out |= {"up", "down", "left", "right"}
-        else:
-            out.add(w.lower())
+    for item in re.split(r",\s*", m.group(1)):
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z]+\d+)?",
+                               item):
+            rng = re.fullmatch(r"([A-Za-z]+)(\d+)-\1(\d+)", word)
+            if rng:
+                out |= {f"{rng.group(1).lower()}{n}"
+                        for n in range(int(rng.group(2)),
+                                       int(rng.group(3)) + 1)}
+            else:
+                out.add(word.lower())
     return out
 
 

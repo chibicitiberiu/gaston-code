@@ -553,142 +553,6 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             raise
 
     @tool(
-        "click",
-        prompts.text("tools.click.description"),
-        {
-            "type": "object",
-            "properties": {
-                "target": {
-                    "type": "string",
-                    "description": prompts.text("tools.click.args.target")},
-                "double": {
-                    "type": "boolean",
-                    "description": prompts.text("tools.click.args.double")},
-                "settle": {
-                    "type": "integer",
-                    "description": prompts.text("tools.click.args.settle")},
-            },
-            "required": ["target"],
-        },
-    )
-    async def machine_click(args: dict) -> dict:
-        try:
-            why = _ui_ready()
-            if why:
-                return _text(why, error=True)
-            a = args or {}
-            target = str(a.get("target") or "").strip()
-            if not target:
-                return _text(prompts.text("tools.ui.refused.no_target"),
-                             error=True)
-            await ui.click(guest, target, double=bool(a.get("double")),
-                           settle=max(0, min(int(a.get("settle") or 0), 5000)))
-            return _text(prompts.text("tools.ui.view.clicked",
-                                      target=target))
-        except UiError as exc:
-            return _text(_ui_explain(exc, str(a.get("target") or "")),
-                         error=True)
-        except Exception:
-            log.exception("mcp__machine__click failed: %r", args)
-            raise
-
-    @tool(
-        "keys",
-        prompts.text("tools.keys.description"),
-        {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string",
-                         "description": prompts.text("tools.keys.args.text")},
-                "target": {
-                    "type": "string",
-                    "description": prompts.text("tools.keys.args.target")},
-                "settle": {
-                    "type": "integer",
-                    "description": prompts.text("tools.keys.args.settle")},
-            },
-            "required": ["text"],
-        },
-    )
-    async def machine_keys(args: dict) -> dict:
-        try:
-            why = _ui_ready()
-            if why:
-                return _text(why, error=True)
-            a = args or {}
-            text = str(a.get("text") or "")
-            if not text:
-                return _text(prompts.text("tools.ui.refused.no_text"),
-                             error=True)
-            headers = await ui.keys(
-                guest, text, target=str(a.get("target") or ""),
-                settle=max(0, min(int(a.get("settle") or 0), 5000)))
-            where = a.get("target") or "the focused control"
-            # KEYSTROKES AS THE GUEST COUNTED THEM, not the length of the
-            # string. With named keys the two parted company: `[Enter]` is
-            # seven characters and one keypress, and this said "Typed 7
-            # characters" (real hardware, 2026-10-02, where
-            # `[Down]x6[Enter]` was reported as 43). `len(text)` survives as
-            # the fallback for a client too old to send the count, where it is
-            # still the only number available and was always what was meant.
-            n = len(text)
-            try:
-                if headers and headers.get("keys"):
-                    n = int(headers["keys"])
-            except (TypeError, ValueError):
-                pass
-            return _text(_ctrl_a_note(text) + prompts.text("tools.ui.view.typed",
-                                      n=n, where=where))
-        except UnicodeEncodeError:
-            # fold.encode_exact refuses rather than approximating. Typing an
-            # approximation of what was asked for is how the wrong thing
-            # ends up in somebody's file.
-            return _text(prompts.text("tools.ui.view.bad_character"),
-                         error=True)
-        except UiError as exc:
-            return _text(_ui_explain(exc, str(a.get("target") or "")),
-                         error=True)
-        except Exception:
-            log.exception("mcp__machine__keys failed: %r", args)
-            raise
-
-    @tool(
-        "focus",
-        prompts.text("tools.focus.description"),
-        {
-            "type": "object",
-            "properties": {
-                "target": {
-                    "type": "string",
-                    "description": prompts.text("tools.focus.args.target")},
-                "settle": {
-                    "type": "integer",
-                    "description": prompts.text("tools.focus.args.settle")},
-            },
-            "required": ["target"],
-        },
-    )
-    async def machine_focus(args: dict) -> dict:
-        try:
-            why = _ui_ready()
-            if why:
-                return _text(why, error=True)
-            a = args or {}
-            target = str(a.get("target") or "").strip()
-            if not target:
-                return _text(prompts.text("tools.ui.refused.no_target"),
-                             error=True)
-            await ui.focus(guest, target,
-                           settle=max(0, min(int(a.get("settle") or 0), 5000)))
-            return _text(prompts.text("tools.ui.view.focused", target=target))
-        except UiError as exc:
-            return _text(_ui_explain(exc, str(a.get("target") or "")),
-                         error=True)
-        except Exception:
-            log.exception("mcp__machine__focus failed: %r", args)
-            raise
-
-    @tool(
         "input",
         prompts.text("tools.input.description"),
         {
@@ -731,7 +595,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 step_ms=STEP_TIMEOUT_DEFAULT, settle=compiled.settle)
             text, failed = _render_run(headers, body, compiled,
                                        a.get("steps") or [])
-            return _text(text, error=failed)
+            typed = " ".join(st for st in a.get("steps") or []
+                             if isinstance(st, str))
+            return _text(_ctrl_a_note(typed) + text, error=failed)
         except UiError as exc:
             return _text(_ui_explain(exc, ""), error=True)
         except Exception:
@@ -1474,8 +1340,12 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     steps_ok = automation and getattr(_caps, "automation",
                                       0) >= C.AUTOMATION_STEPS
     screen = ([machine_ui, machine_input, machine_shot] if steps_ok
-              else [machine_ui, machine_click, machine_keys, machine_shot,
-                    machine_focus] if automation else [])
+              else [machine_ui, machine_shot] if automation else [])
+    if automation and not steps_ok:
+        # click, keys and focus were retired for `input` (2026-10-02). A
+        # client too old to run step lists can still be READ, not driven.
+        log.info("machine: this client runs no step lists, so it is offered "
+                 "ui and shot only -- update it for `input`")
     if not automation:
         log.info("machine: screen tools withheld -- the client declares no "
                  "automation support")

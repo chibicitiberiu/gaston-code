@@ -639,185 +639,12 @@ static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
     return NULL;
 }
 
-static const char *input_result_name(InputResult r)
-{
-    switch (r)
-    {
-    case INPUT_OK:             return "ok";
-    case INPUT_REFUSED_SELF:   return "refused_self";
-    case INPUT_NO_WINDOW:      return "no_window";
-    case INPUT_NOT_FOREGROUND: return "not_foreground";
-    case INPUT_OCCLUDED:       return "occluded";
-    case INPUT_BAD_KEY:        return "bad_key";
-    case INPUT_FAILED:         return "failed";
-    }
-    return "failed";
-}
-
-static void settle_after(UiContext *ctx, rc_frame *f)
-{
-    DWORD quiet = (DWORD)header_num(f, "settle", 0, 0, 5000);
-    if (!quiet)
-        return;
-    /* What you want after a click and before reading the result: the
-     * repaint, the animation and the dialog construction are all still in
-     * flight. Costs no tree scans at all. */
-    WaitReport rep;
-    UiWaiter waiter(ctx->watch, ctx->walker, &ctx->msaa);
-    waiter.forIdle(quiet, quiet * 4, rep);
-}
-
-static void do_click(rc_net *net, UiContext *ctx, rc_frame *f)
-{
-    const char *id = rc_frame_get(f, "id");
-    WalkOptions o;
-    HWND target;
-    InputResult r;
-
-    if (!id)
-    {
-        rc_log("UICLICK: no id -- dropped");
-        return;
-    }
-    base_options(o, ctx, f);
-    target = resolve_target(net, ctx, f, id, o);
-    if (!target)
-        return;
-
-    r = ctx->input.clickWindow(target);
-    if (r == INPUT_OK && header_flag(f, "double", false))
-        r = ctx->input.clickWindow(target);
-    if (r == INPUT_OK)
-        settle_after(ctx, f);
-
-    /* A click is refused only after the window has been raised and looked at
-     * again, so "occluded" now means something that a raise did not fix.
-     * Saying WHICH window is the only way the caller can tell our own window
-     * from a dialog it has not read yet. */
-    if (r == INPUT_OCCLUDED && ctx->input.blocker()[0])
-    {
-        const char *k[1];
-        const char *v[1];
-        k[0] = "on_top"; v[0] = ctx->input.blocker();
-        ui_end(net, id, input_result_name(r), k, v, 1);
-        return;
-    }
-    ui_end(net, id, input_result_name(r), NULL, NULL, 0);
-}
-
-/* ---- FOCUS ----------------------------------------------------------- */
-
-/* Raise a window WITHOUT acting on it. click and keys already raise what they
- * need (BACKLOG 16), so this is for the case where pressing something would
- * be wrong: a screenshot of a window that is behind another, or getting a
- * window in front of the person at the machine.
- *
- * On 9x this necessarily ACTIVATES the target -- BringWindowToTop and
- * SetWindowPos(HWND_TOP, SWP_NOACTIVATE) are both ignored across a process
- * boundary (docs/measurements/focus-vm-20260927.txt). There is no quiet
- * version of this op to offer.
- */
-static void do_focus(rc_net *net, UiContext *ctx, rc_frame *f)
-{
-    const char *id = rc_frame_get(f, "id");
-    WalkOptions o;
-    HWND target;
-    InputResult r;
-
-    if (!id)
-    {
-        rc_log("UIFOCUS: no id -- dropped");
-        return;
-    }
-    base_options(o, ctx, f);
-    target = resolve_target(net, ctx, f, id, o);
-    if (!target)
-        return;                 /* already answered */
-
-    r = ctx->input.focus(target);
-    if (r == INPUT_OK)
-        settle_after(ctx, f);
-
-    ui_end(net, id, input_result_name(r), NULL, NULL, 0);
-}
-
-static void do_keys(rc_net *net, UiContext *ctx, rc_frame *f)
-{
-    const char *id = rc_frame_get(f, "id");
-    const char *target = rc_frame_get(f, "target");
-    WalkOptions o;
-    HWND win = NULL;
-    InputResult r;
-    char text[512];
-    unsigned n;
-
-    if (!id)
-    {
-        rc_log("UIKEYS: no id -- dropped");
-        return;
-    }
-
-    /* The text is the BODY, never a header: a header value is truncated at
-     * 255 bytes and it is truncated silently, which for typed input means
-     * half a command reaching a shell. */
-    n = f->body_len;
-    if (n >= sizeof(text))
-        n = sizeof(text) - 1;
-    if (n && f->body)
-        memcpy(text, f->body, n);
-    text[n] = '\0';
-    if (!n)
-    {
-        ui_end(net, id, "no_text", NULL, NULL, 0);
-        return;
-    }
-
-    base_options(o, ctx, f);
-    if (target && target[0])
-    {
-        win = resolve_target(net, ctx, f, id, o);
-        if (!win)
-            return;
-    }
-    else
-    {
-        /* No target means whatever has focus, which is a real request --
-         * after a click, the thing to type into is the thing that just took
-         * focus. */
-        win = GetForegroundWindow();
-        if (!win)
-        {
-            ui_end(net, id, "no_window", NULL, NULL, 0);
-            return;
-        }
-    }
-
-    {
-        /* THE TOKEN IT DID NOT UNDERSTAND, quoted back. "bad_key" alone sends
-         * the caller looking through its own string; a `[Del ete]` named in
-         * the reply is a one-line fix. Nothing was typed -- typeText checks
-         * the whole string before the first keystroke. */
-        char bad[48];
-        char nkeys[16];
-        const char *k[1];
-        const char *v[1];
-        unsigned sent = 0;
-        r = ctx->input.typeText(win, text, bad, sizeof(bad), &sent);
-        if (r == INPUT_OK)
-            settle_after(ctx, f);
-        if (r == INPUT_BAD_KEY && bad[0])
-        {
-            k[0] = "key"; v[0] = bad;
-            ui_end(net, id, input_result_name(r), k, v, 1);
-            return;
-        }
-        /* KEYSTROKES, which the caller cannot work out from the string it
-         * sent: `[Enter]` is seven characters and one keypress. */
-        rc_strf(nkeys, sizeof(nkeys), "%u", sent);
-        k[0] = "keys"; v[0] = nkeys;
-        ui_end(net, id, input_result_name(r), k, v, 1);
-    }
-}
+/* CLICK, FOCUS and KEYS lived here until 2026-10-02. A client that runs
+ * step lists is offered `input` instead (ui/uisteps.cpp), which does all
+ * three in one round trip with the focus check and held-key release they
+ * never had, so the single-shot ops were retired with their bridge tools.
+ * The library calls they made -- Input::clickWindow, focus, typeText -- stay,
+ * measured by autocheck and the probes. */
 
 /* ---- SHOT ------------------------------------------------------------ */
 
@@ -981,10 +808,7 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
     }
 
     if      (strcmp(f->type, "UITREE")  == 0) do_tree(net, ctx, f);
-    else if (strcmp(f->type, "UICLICK") == 0) do_click(net, ctx, f);
-    else if (strcmp(f->type, "UIKEYS")  == 0) do_keys(net, ctx, f);
     else if (strcmp(f->type, "UISHOT")  == 0) do_shot(net, ctx, f);
-    else if (strcmp(f->type, "UIFOCUS") == 0) do_focus(net, ctx, f);
     else if (strcmp(f->type, "UIRUN")   == 0) rc_uirpc_run(net, ctx, f);
     else rc_log("desktop: unhandled frame %s", f->type);
 }

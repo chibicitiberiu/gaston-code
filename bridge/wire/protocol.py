@@ -500,20 +500,6 @@ def ui_tree(ui_id: str, *, scope: str = "desktop", pid: int = 0,
     return Frame("UITREE", h)
 
 
-def ui_click(ui_id: str, target: str, *, double: bool = False,
-             settle: int = 0, timeout_ms: int = 8000) -> Frame:
-    """Click one control, named by a selector the bridge computed.
-
-    Never a handle: an HWND is meaningless across a session and 9x reuses
-    them, so one sent back later can click whatever inherited it.
-    """
-    h = {"id": ui_id, "target": truncate_header_value(target),
-         "timeout_ms": str(timeout_ms)}
-    if double:
-        h["double"] = "1"
-    if settle:
-        h["settle"] = str(settle)
-    return Frame("UICLICK", h)
 
 
 def fs_get(fs_id: str, path: str, *, max_bytes: int = 0) -> Frame:
@@ -596,44 +582,8 @@ def fs_drives(fs_id: str, *, probe: bool = False) -> Frame:
     return Frame("FSDRIVES", h)
 
 
-def ui_focus(ui_id: str, target: str, *, settle: int = 0,
-             timeout_ms: int = 8000) -> Frame:
-    """Bring a window to the front without acting on it.
-
-    `click` and `keys` raise what they need already, so this is for the case
-    where pressing something would be wrong -- most often a screenshot of a
-    window that is behind another one.
-
-    On 9x it activates the target: nothing else works across a process
-    boundary, so there is no quiet variant to offer.
-    """
-    h = {"id": ui_id, "target": truncate_header_value(target),
-         "timeout_ms": str(timeout_ms)}
-    if settle:
-        h["settle"] = str(settle)
-    return Frame("UIFOCUS", h)
 
 
-def ui_keys(ui_id: str, text: str, *, target: str = "", settle: int = 0,
-            timeout_ms: int = 8000) -> Frame:
-    """Type into a control, or into whatever has focus when `target` is
-    empty -- which after a click is the thing that just took it.
-
-    The text is the BODY for the same reason a command line is: a header
-    value is truncated at 255 bytes and truncated silently, and half a
-    typed command is still typed.
-
-    `encode_exact`, not `fold.encode`: folding is the display
-    transliterator and would rewrite what gets typed into somebody's
-    machine. It raises on a character CP1252 cannot carry, and the caller
-    refuses rather than approximating.
-    """
-    h = {"id": ui_id, "timeout_ms": str(timeout_ms)}
-    if target:
-        h["target"] = truncate_header_value(target)
-    if settle:
-        h["settle"] = str(settle)
-    return Frame("UIKEYS", h, fold.encode_exact(text))
 
 
 def ui_shot(ui_id: str, *, x: int = 0, y: int = 0, w: int = 0, h: int = 0,

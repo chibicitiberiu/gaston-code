@@ -177,7 +177,11 @@ def test_exec_still_warns_that_an_interactive_command_hangs():
 
 from bridge.files import caps as C
 
-SCREEN_TOOLS = ("ui", "click", "keys", "shot", "focus")
+#: What a client that runs step lists is offered. `click`, `keys` and `focus`
+#: were retired for `input` on 2026-10-02; a client too old to run step lists
+#: keeps the two that only READ the screen (READ_TOOLS).
+SCREEN_TOOLS = ("ui", "input", "shot")
+READ_TOOLS = ("ui", "shot")
 
 
 class _Guest:
@@ -200,9 +204,15 @@ def _names(guest) -> set:
 
 
 def test_a_client_that_declares_a_screen_gets_all_five():
-    names = _names(_Guest(C.from_hello({"automation": "1"})))
+    names = _names(_Guest(C.from_hello({"automation": "2"})))
     for t in SCREEN_TOOLS:
         assert t in names, f"{t} must be offered to a client with a screen"
+
+
+def test_a_client_too_old_for_step_lists_can_still_read_the_screen():
+    names = _names(_Guest(C.from_hello({"automation": "1"})))
+    assert set(READ_TOOLS) <= names
+    assert not {"input", "click", "keys", "focus"} & names
 
 
 def test_a_client_that_declares_none_gets_none_of_them():
@@ -215,7 +225,7 @@ def test_turning_the_screen_off_costs_nothing_else():
     """The gate must take exactly five tools and leave the rest alone. A
     conditional list is easy to get wrong in the direction nobody notices
     until the agent cannot run a command either."""
-    on = _names(_Guest(C.from_hello({"automation": "1"})))
+    on = _names(_Guest(C.from_hello({"automation": "2"})))
     off = _names(_Guest(C.from_hello({"automation": "0"})))
     assert on - off == set(SCREEN_TOOLS)
     assert "exec" in off and "get_file" in off and "drives" in off
@@ -228,7 +238,7 @@ def test_a_client_that_never_said_keeps_what_it_already_had():
     them -- the agent would simply report it could not see the screen, with
     nothing anywhere saying why."""
     names = _names(_Guest(C.from_hello({})))
-    for t in SCREEN_TOOLS:
+    for t in READ_TOOLS:
         assert t in names
 
 

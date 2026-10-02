@@ -188,9 +188,12 @@ def test_a_steps_client_gets_input_in_place_of_click_keys_focus():
     assert not {"click", "keys", "focus"} & names
 
 
-def test_a_screen_client_keeps_the_three_it_can_answer():
+def test_a_screen_client_can_read_but_not_drive():
+    """click, keys and focus were retired for `input`; a client too old to
+    run step lists keeps ui and shot."""
     names = _names(_Guest(C.AUTOMATION_SCREEN))
-    assert {"click", "keys", "focus"} <= names and "input" not in names
+    assert {"ui", "shot"} <= names
+    assert not {"input", "click", "keys", "focus"} & names
 
 
 class _FakeUi:

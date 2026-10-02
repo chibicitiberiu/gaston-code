@@ -110,11 +110,16 @@ static void lane_table_cases(void)
     check_lane("SYNCMKDIR",  RC_LANE_STREAM);
     check_lane("SYNCGET",    RC_LANE_STREAM);
     /* Phase 6. Named one by one in the table rather than matched on a "UI"
-     * prefix, so this is four assertions and not one. */
+     * prefix, so each is its own assertion. UICANCEL is the exception that
+     * makes this worth checking: it must NOT queue behind the list it stops.
+     * UICLICK and UIKEYS were retired for UIRUN (2026-10-02) and must now
+     * fall through to the UI lane like any type nobody claims. */
     check_lane("UITREE",     RC_LANE_DESKTOP);
-    check_lane("UICLICK",    RC_LANE_DESKTOP);
-    check_lane("UIKEYS",     RC_LANE_DESKTOP);
     check_lane("UISHOT",     RC_LANE_DESKTOP);
+    check_lane("UIRUN",      RC_LANE_DESKTOP);
+    check_lane("UICANCEL",   RC_LANE_IMMEDIATE);
+    check_lane("UICLICK",    RC_LANE_UI);
+    check_lane("UIKEYS",     RC_LANE_UI);
     /* The fs lane (step 5a). STREAM, sharing the sync worker: they are the
      * same kind of work, and FSGET's cap is what keeps the sharing safe. */
     check_lane("FSGET",      RC_LANE_STREAM);

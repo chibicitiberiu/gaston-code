@@ -17,10 +17,7 @@ const rc_lane_row RC_LANE_TABLE[] = {
      * types, and a prefix rule silently claims every future name that
      * happens to start the same way. */
     { "UITREE",   RC_LANE_DESKTOP },
-    { "UICLICK",  RC_LANE_DESKTOP },
-    { "UIKEYS",   RC_LANE_DESKTOP },
     { "UISHOT",   RC_LANE_DESKTOP },
-    { "UIFOCUS",  RC_LANE_DESKTOP },
     /* The `input` step list, and its stop. UICANCEL is IMMEDIATE because
      * the desktop worker is the thread running the list it is meant to
      * stop -- queued behind it, it would arrive when the list had ended. */

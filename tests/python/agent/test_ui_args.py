@@ -187,53 +187,10 @@ def test_it_is_a_note_and_not_a_refusal():
 
 
 # --- the reply has to say what actually happened ---------------------------
-
-class CountingUi(FakeUi):
-    def __init__(self, headers=None):
-        super().__init__()
-        self._headers = headers or {}
-
-    async def keys(self, guest, text, *, target="", settle=0, timeout_ms=8000):
-        self.calls.append({"text": text, "target": target})
-        return dict(self._headers)
-
-
-def _keys_server(ui):
-    return machine_tools.build(None, None, None, AutomationGuest(),
-                               ui=ui)["machine"]["instance"]
-
-
-def test_the_reply_counts_keystrokes_not_characters():
-    """`[Enter]` is seven characters and ONE keypress. Measured on real
-    hardware 2026-10-02: `[Down][Down][Down][Down][Down][Down][Enter]` came
-    back as "Typed 43 characters", which is the length of the string and tells
-    the agent nothing about what went in."""
-    ui = CountingUi({"keys": "7"})
-    out = _body(_call(_keys_server(ui), "keys",
-                      {"text": "[Down][Down][Down][Down][Down][Down][Enter]"}))
-    assert "7 keystrokes" in out
-    assert "43" not in out
-
-
-def test_one_named_key_is_one_keystroke():
-    ui = CountingUi({"keys": "1"})
-    out = _body(_call(_keys_server(ui), "keys", {"text": "[Enter]"}))
-    assert "1 keystrokes" in out      # grammar is not worth a branch here
-
-
-def test_a_client_too_old_to_count_still_gets_a_number():
-    """The count arrives in a header a previous client does not send. Falling
-    back to the string length is what this always did, and for plain text it
-    is still exactly right."""
-    ui = CountingUi({})
-    out = _body(_call(_keys_server(ui), "keys", {"text": "hello"}))
-    assert "5 keystrokes" in out
-
-
-def test_a_nonsense_count_does_not_break_the_reply():
-    ui = CountingUi({"keys": "banana"})
-    out = _body(_call(_keys_server(ui), "keys", {"text": "hello"}))
-    assert "5 keystrokes" in out
+#
+# The keystroke-count tests that lived here went with the `keys` tool
+# (2026-10-02). `input` reports keystrokes per step from the guest's own
+# count -- tests/python/agent/test_input_steps.py.
 
 
 def test_an_ambiguous_wait_is_not_reported_as_nothing_found():

@@ -114,30 +114,8 @@ class UiService:
         uisel.build_selectors(nodes)
         return nodes, headers
 
-    async def click(self, guest: GuestSession, target: str, *,
-                    double: bool = False, settle: int = 0,
-                    timeout_ms: int = 8000) -> dict:
-        headers, _ = await self._call(
-            guest, P.ui_click("", target, double=double, settle=settle,
-                              timeout_ms=timeout_ms),
-            "click", timeout_ms + settle * 4)
-        return headers
 
-    async def focus(self, guest: GuestSession, target: str, *,
-                    settle: int = 0, timeout_ms: int = 8000) -> dict:
-        headers, _ = await self._call(
-            guest, P.ui_focus("", target, settle=settle,
-                              timeout_ms=timeout_ms),
-            "focus", timeout_ms + settle * 4)
-        return headers
 
-    async def keys(self, guest: GuestSession, text: str, *, target: str = "",
-                   settle: int = 0, timeout_ms: int = 8000) -> dict:
-        headers, _ = await self._call(
-            guest, P.ui_keys("", text, target=target, settle=settle,
-                             timeout_ms=timeout_ms),
-            "keys", timeout_ms + settle * 4)
-        return headers
 
     async def shot(self, guest: GuestSession, *, x: int = 0, y: int = 0,
                    w: int = 0, h: int = 0, bpp: int = 8,

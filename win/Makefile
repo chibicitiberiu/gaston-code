@@ -821,7 +821,11 @@ check-gupdate: CHECK_CAP   = 64000
 check-fscheck: CHECK_OWNED = $(FSCHECK_OBJS)
 check-fscheck: CHECK_CAP   = 200000
 check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
-check-autocheck: CHECK_CAP   = 200000
+# 200,000 -> 212,000 (2026-10-02): the step runner's cases link the runner
+# and libautomation's new input primitives -- 203,633 measured. A test
+# harness that never ships; the cap is here so it notices growth, not to
+# hold it to the client's budget.
+check-autocheck: CHECK_CAP   = 212000
 
 check-gaston: CHECK_OWNED = $(OBJS)
 check-gaston: CHECK_CAP   = $(COMMITTED_CAP)

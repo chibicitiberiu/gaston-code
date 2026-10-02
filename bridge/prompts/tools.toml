@@ -69,7 +69,7 @@ release (default) -- you have merged; lift the write refusal. accept-revert -- t
 
 [ui]
 description = '''
-Read the controls on the machine's screen: windows, buttons, text boxes, menus, and what they say. One line per control, with a `sel=` selector to pass to `click` and `keys`.
+Read the controls on the machine's screen: windows, buttons, text boxes, menus, and what they say. One line per control, with a `sel=` selector to pass to `input`.
 
 Prefer this over `shot`: far cheaper, exact, and it gives you something you can click. Reach for `shot` when this comes back with almost nothing, which means the program draws itself rather than using controls.
 
@@ -99,56 +99,6 @@ With `inproc`, a selector for a window belonging to the program to read. Default
 items = '''
 With `inproc`, read the rows of lists and trees. On by default, since it is the reason to use it.'''
 
-
-[click]
-description = '''
-Click one control on the machine, named by the `sel=` value that `ui` reported for it.
-
-If more than one control matches, nothing is clicked and you are told which ones -- narrow the selector with the window they are in. It is a real mouse click at the control's position, refused if something else covers it.'''
-
-[click.args]
-target = '''
-The selector, copied from the `sel=` field of the control you want, or written by hand: `[class="#32770"][text~="save*"] Button[text~="ok"]`. `~=` matches ignoring case and the `&` of a mnemonic, with `*` and `?` as wildcards; a space means "anywhere inside".'''
-double = '''
-Double-click instead of single. For opening an icon in a list.'''
-settle = '''
-After clicking, wait for the screen to stop changing for this many milliseconds. Saves a round trip when the click opens a dialog.'''
-
-[keys]
-description = '''
-Type text on the machine, into a named control or into whatever has focus.
-
-This is real typing, one key at a time, so it goes wherever the keyboard would. After clicking a text box, call this with no target.'''
-
-[keys.args]
-# IT USED TO SAY "plus Tab, Enter, Escape and the arrow keys", which was a
-# promise the implementation could not keep: an arrow key is not a character and
-# there was no syntax for one. An agent clearing a text box sent
-# `[Delete][Delete][Delete][Delete]Tiberiu`, got `John[Delete][Delete][D` in the
-# box, and was told "Typed 39 characters" (2026-10-02). The brackets are real
-# now; this says so.
-text = '''
-Characters to type, with named keys in square brackets: `Hello[Tab]world[Enter]`, `[Alt+F4]`, `[Home][Shift+End][Delete]` to clear a text box. Backspace, Tab, Enter, Escape, Space, Delete, Insert, Home, End, PageUp, PageDown, the arrows and F1-F12, each taking `Ctrl+`, `Alt+` and `Shift+`. To type a bracket, double it: `[[` gives `[` and `[[Delete]` gives the text `[Delete]`. A closing `]` is only special inside a name, so it needs no escape. An unknown name types nothing and says so.
-
-Ctrl+A is NOT select-all in this machine's text boxes -- measured, it does nothing. To replace what is there, select it with `[Home][Shift+End]` and type over it.'''
-target = '''
-Optional selector for the control to type into; it is focused first. Leave empty to type into whatever has focus.'''
-settle = '''
-After typing, wait for the screen to stop changing for this many milliseconds.'''
-
-[focus]
-description = '''
-Bring a window to the front.
-
-Rarely needed: `click` and `keys` already raise a window when they have to. Use it when pressing something would be wrong -- most often before `shot`, when the window you want to photograph is behind another one.
-
-It makes the window active, taking the keyboard away from whoever is sitting at the machine; there is no way to raise a window quietly on this system.'''
-
-[focus.args]
-target = '''
-Selector for a control in the window to raise. The window containing it comes forward; you need not name the window itself.'''
-settle = '''
-After raising it, wait for the screen to stop changing for this many milliseconds.'''
 
 [input]
 description = '''
@@ -260,7 +210,7 @@ No text was given.'''
 # is that some of it went in. The whole string is checked before the first
 # keystroke for exactly that reason.
 bad_key = '''
-`{key}` is not a key this knows, so NOTHING was typed. Named keys are Backspace, Tab, Enter, Escape, Space, Delete, Insert, Home, End, PageUp, PageDown, the four arrows and F1-F12, with optional `Ctrl+`, `Alt+` and `Shift+`. Write `[[` for a literal bracket.'''
+`{key}` is not a key this knows, so NOTHING was typed. The key names are listed in the `input` tool's description (Enter, Tab, Escape, Delete, Backspace, F1-F24, Shift, Ctrl, Alt, AltGr, the arrows, ...), with optional `Ctrl+`, `Alt+` and `Shift+` in a chord. Write `[[` for a literal bracket.'''
 no_memory = '''
 The machine ran out of memory doing that.'''
 busy = '''

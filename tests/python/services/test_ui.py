@@ -88,7 +88,7 @@ async def test_records_arrive_in_several_frames():
 
 async def test_a_refusal_is_raised_with_its_status():
     g, svc = guest_and_service()
-    task = asyncio.create_task(svc.click(g, "Button"))
+    task = asyncio.create_task(svc.tree(g, wait_for="Button"))
     await reply(svc, g, Frame("UIEND", {"status": "ambiguous",
                                         "detail": "4 controls match"}))
     with pytest.raises(UiError) as got:
