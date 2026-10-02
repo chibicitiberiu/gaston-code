@@ -668,12 +668,32 @@ with Remote("192.168.1.50", secret="...") as r:
     r.put("build/win/gaston.exe", r"C:\Gaston\gaston.exe")
     for p in r.ps(): ...
     r.kill(pid)
-    img = r.screenshot()                   # PIL.Image
-    for w in r.windows(): ...
-    node = r.tree(hwnd).find(role="push button", name="OK")
-    r.click(node)                          # or r.click(x, y)
-    r.type("hello"); r.keys("alt+f4")
+    tree = r.tree()                        # the control tree, with selectors
+    [ok] = tree.find("OK")                 # -> 'Button[text="OK"]'
+    run = r.run([{"click": ok}, "hello", {"wait_text": "Notepad Edit",
+                                          "text": "hello"}])
+    if not run.ok:
+        print(run.status, [(s.index, s.status, s.detail) for s in run.steps])
+    open("shot.bmp", "wb").write(r.shot())  # or r.png(), with Pillow here
 ```
+
+- **The desktop ops mirror the client's**, which is not tidiness: the
+  handlers are the same code (`win/ui/uiengine.cpp` behind `UiLink`), and the
+  Python reuses the bridge's own record parser, selector builder, step
+  compiler and key table. A step list that works through the `input` tool
+  works here, and a malformed one is refused on THIS side before anything is
+  sent.
+- **`run()` does not raise on a failing list**, and that is the one place
+  this package departs from "an ERR is an exception". A list that failed at
+  step 5 still ran four steps the caller has to hear about, and the report of
+  them arrives in the `DATA` frames an exception would discard. `StepRun.ok`
+  is the thing to branch on. `bridge/services/ui.py` made the same exception
+  for the same reason.
+- **`stop()` is not `cancel()`.** `cancel` is 9P's `Tflush` and its ack means
+  the request will never be answered; `stop` promises only that the work
+  stops, and the target comes back `cancelled` with whatever it had.
+- **`shot()`'s ceiling is enforced as the frames arrive**, on the reader
+  thread. By the time the caller sees them the memory is already spent.
 
 - **Heartbeat on the Python side:** a background thread sends `PING` every
   10 seconds when the socket has been quiet, sharing the send lock with

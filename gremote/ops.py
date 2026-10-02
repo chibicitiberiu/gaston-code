@@ -10,6 +10,8 @@ from __future__ import annotations
 import zlib
 from dataclasses import dataclass
 
+from bridge.agent import steps as _steps
+from bridge.wire import uirec, uisel
 from bridge.wire.frame import Frame
 
 
@@ -236,3 +238,122 @@ def parse_get(end: Frame, chunks: list[Frame]) -> FileBytes:
     body = b"".join(c.body for c in chunks)
     return FileBytes(body, int(end.headers.get("crc", "0"), 16),
                      end.headers.get("truncated") == "1")
+
+
+@dataclass(frozen=True)
+class UiTree:
+    """What `TREE` saw.
+
+    `nodes` are the guest's own records, parsed by the same
+    `bridge/wire/uirec.py` the client's tree goes through -- which is the
+    point of sharing the encoder rather than writing a second one.
+
+    `selectors` is one addressable name per node, in the SAME ORDER. That
+    order is load-bearing: `:nth(k)` counts matches in the guest's
+    depth-first walk order, so the ordinals are only right because nothing
+    sorted or filtered the list first (bridge/wire/uisel.py).
+    """
+
+    nodes: list
+    selectors: list[str]
+    walk: str
+    dropped: int
+    too_deep: int
+    self_skipped: int
+
+    def find(self, substring: str) -> list[str]:
+        """Selectors whose node text or name contains `substring`, folded
+        for case. A convenience for a script, not a selector engine -- the
+        guest has one of those and it is the thing that resolves."""
+        want = substring.lower()
+        out = []
+        # strict: one selector per node is the invariant, and a mismatch
+        # means the selector builder and the record list disagree -- which
+        # would silently address the wrong control.
+        for node, sel in zip(self.nodes, self.selectors, strict=True):
+            text = ((getattr(node, "text", "") or "")
+                    + " " + (getattr(node, "name", "") or ""))
+            if want in text.lower():
+                out.append(sel)
+        return out
+
+
+@dataclass(frozen=True)
+class StepResult:
+    """One step that ran."""
+
+    index: int
+    status: str
+    ms: int
+    hit: str
+    detail: str
+    part: int
+
+
+@dataclass(frozen=True)
+class StepRun:
+    """What `RUN` did, whether or not it finished.
+
+    NOT an exception on a non-ok status, deliberately, and the bridge took
+    the same decision for the same reason: a list that failed at step 5 still
+    ran four steps the caller has to hear about. `ok` is the thing to branch
+    on; `steps` is what actually happened.
+    """
+
+    status: str
+    done: int
+    failed_at: int
+    detail: str
+    released: bool
+    steps: list[StepResult]
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "ok"
+
+
+def parse_run(end: Frame, chunks: list[Frame], encoding: str) -> StepRun:
+    """The terminator's headers plus the per-step body.
+
+    The body goes through the bridge's own `steps.parse_reply`, because the
+    escaping is the guest's and there should be one reader of it -- a second
+    one is how the two spellings drift.
+    """
+    rows, released = _steps.parse_reply(b"".join(c.body for c in chunks))
+    steps = [
+        StepResult(
+            index=int(r.get("i", b"-1")),
+            status=r.get("status", b"").decode("ascii", "replace"),
+            ms=int(r.get("ms", b"0")),
+            hit=r.get("hit", b"").decode(encoding, "replace"),
+            detail=r.get("detail", b"").decode(encoding, "replace"),
+            part=int(r.get("part", b"-1")),
+        )
+        for r in rows
+    ]
+    h = end.headers
+    return StepRun(
+        status="ok" if end.type == "OK" else h.get("code", "failed"),
+        done=int(h.get("done", "0")),
+        failed_at=int(h.get("step", "-1")),
+        detail=h.get("detail", ""),
+        released=released,
+        steps=steps,
+    )
+
+
+def parse_tree(end: Frame, chunks: list[Frame], encoding: str) -> UiTree:
+    nodes = uirec.parse_records(b"".join(c.body for c in chunks), encoding)
+    # In place, on `nodes`, and the order it is given them is the order the
+    # guest walked -- `:nth(k)` counts matches in that order, so nothing may
+    # sort or filter the list before this.
+    uisel.build_selectors(nodes)
+    h = end.headers
+    return UiTree(
+        nodes=nodes,
+        selectors=[n.sel for n in nodes],
+        walk=h.get("walk", ""),
+        dropped=int(h.get("dropped", "0")),
+        too_deep=int(h.get("too_deep", "0")),
+        self_skipped=int(h.get("self", "0")),
+    )

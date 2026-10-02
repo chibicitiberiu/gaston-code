@@ -29,6 +29,8 @@ import threading
 import time
 import zlib
 
+from bridge.agent import steps as _steps
+from bridge.wire import fold
 from bridge.wire.compress import (
     ENC_DEFLATE,
     LEVEL_UP,
@@ -46,15 +48,19 @@ from .ops import (
     FileBytes,
     Process,
     Stat,
+    StepRun,
     SysInfo,
+    UiTree,
     codepage,
     parse_drives,
     parse_entries,
     parse_exec,
     parse_get,
     parse_processes,
+    parse_run,
     parse_stat,
     parse_sysinfo,
+    parse_tree,
 )
 from .ship import ShipResult, UpdateResult
 from .ship import self_update as _self_update
@@ -75,13 +81,21 @@ _TERMINAL = frozenset({"OK", "ERR", "END"})
 class _Call:
     """One outstanding request, waited on by the thread that made it."""
 
-    __slots__ = ("cancelled", "chunks", "done", "reply")
+    __slots__ = ("body_bytes", "cancelled", "chunks", "done",
+                 "max_body_bytes", "overflow", "reply")
 
-    def __init__(self) -> None:
+    def __init__(self, max_body_bytes: int = 0) -> None:
         self.chunks: list[Frame] = []
         self.reply: Frame | None = None
         self.cancelled = False
         self.done = threading.Event()
+        #: Enforced as the frames ARRIVE, on the reader thread. By the time
+        #: the caller sees them the memory is already spent, so a ceiling
+        #: applied there is not a ceiling. 0 means none, which is every op
+        #: but the one that photographs a screen.
+        self.max_body_bytes = max_body_bytes
+        self.body_bytes = 0
+        self.overflow = False
 
 
 class Remote:
@@ -327,6 +341,136 @@ class Remote:
                                   on_id=on_id)
         return parse_get(end, chunks)
 
+    def _keys_version(self) -> int:
+        """Which key names this machine resolves.
+
+        Frozen and append-only (bridge/agent/keynames.py), reported in HELLO
+        so a name newer than the box knows is refused HERE, naming the step,
+        rather than sent to a guest that would refuse it less helpfully. A
+        machine too old to say defaults to 1, which is the only table that
+        has ever shipped.
+        """
+        try:
+            return max(1, int(self.hello.get("keys", "1")))
+        except ValueError:
+            return 1
+
+    # --- the desktop -------------------------------------------------------
+
+    def tree(self, scope: str = "desktop", *, pid: int = 0,
+             max_nodes: int = 400, msaa: bool = False, hidden: bool = False,
+             text: bool = True, wait_for: str = "", wait_ms: int = 5000,
+             settle_ms: int = 0, timeout_ms: int = 8000,
+             items_of: str = "", timeout: float = 60.0) -> UiTree:
+        """Read the control tree, or one control's items with `items_of`.
+
+        The nodes come back as the guest wrote them and the selectors are
+        built here, in the order the guest walked -- `:nth(k)` counts matches
+        in that order, so nothing may sort or filter the list first.
+        """
+        headers = {
+            "scope": scope,
+            "max_nodes": str(max_nodes),
+            "text": "1" if text else "0",
+            "msaa": "1" if msaa else "0",
+            "hidden": "1" if hidden else "0",
+            "timeout_ms": str(timeout_ms),
+        }
+        if pid:
+            headers["pid"] = str(pid)
+        if wait_for:
+            headers["wait_for"] = wait_for
+            headers["wait_ms"] = str(wait_ms)
+        if settle_ms:
+            headers["settle_ms"] = str(settle_ms)
+        if items_of:
+            # One control's accessible children, not the window tree: the
+            # names an `item` target addresses.
+            headers["acc"] = "1"
+            headers["target"] = items_of
+        end, chunks = self.stream("TREE", headers, timeout=timeout)
+        return parse_tree(end, chunks, self.acp)
+
+    def run(self, steps, *, timeout_ms: int = 120000,
+            step_ms: int = 30000, settle: int = 0,
+            timeout: float | None = None, on_id=None) -> StepRun:
+        """Run a list of input steps, and say what happened to each.
+
+        `steps` is the same JSON the `input` tool takes, compiled by the same
+        `bridge/agent/steps.py` -- so a list that works here works there, and
+        a malformed one is refused HERE, before anything is sent.
+
+        It does NOT raise on a failing list. `StepRun.ok` is the thing to
+        branch on; `.steps` is what actually ran, which a raise would throw
+        away along with the DATA frames carrying it.
+        """
+        compiled = _steps.compile_steps(
+            steps, timeout=timeout_ms, settle=settle,
+            encode=lambda t: fold.encode_exact(t, self.acp),
+            keys_version=self._keys_version())
+        headers = {"timeout_ms": str(compiled.timeout_ms),
+                   "step_ms": str(step_ms)}
+        if compiled.settle:
+            headers["settle"] = str(compiled.settle)
+        end, chunks = self.stream(
+            "RUN", headers, compiled.body,
+            timeout=timeout if timeout is not None
+            else compiled.timeout_ms / 1000.0 + 20.0,
+            on_id=on_id, raise_on_err=False)
+        return parse_run(end, chunks, self.acp)
+
+    def stop(self, ident: str, timeout: float = 10.0) -> bool:
+        """Stop a desktop request, and let it answer anyway.
+
+        NOT `cancel`. That one is 9P's Tflush and its ack promises the
+        request will never be answered; this promises only that it will
+        stop, and the target comes back `cancelled` with whatever it had.
+        Returns False when the machine had nothing by that name.
+        """
+        try:
+            self.request("STOP", {"target": ident}, timeout=timeout)
+        except Refused as e:
+            if e.code == "no_such_id":
+                return False
+            raise
+        return True
+
+    def shot(self, *, x: int = 0, y: int = 0, w: int = 0, h: int = 0,
+             bpp: int = 8, max_bytes: int = 4 * 1024 * 1024,
+             timeout: float = 120.0) -> bytes:
+        """Photograph the screen, or a rectangle of it. Returns a BMP.
+
+        `w` and `h` are a width and a height, not a right and a bottom; 0
+        means the whole screen. `bpp` defaults to the display's own depth
+        capped at 8, because an 8bpp screen sent as 24 is three times the
+        bytes and a conversion the guest should not be doing.
+
+        `max_bytes` is enforced while the frames ARRIVE, not after: the
+        reader appends every DATA frame to a list before this method sees
+        any of them, so a ceiling applied here would fire once the memory
+        was already spent.
+        """
+        headers = {"x": str(x), "y": str(y), "w": str(w), "h": str(h),
+                   "bpp": str(bpp)}
+        end, chunks = self.stream("SHOT", headers, timeout=timeout,
+                                  max_body_bytes=max_bytes)
+        data = b"".join(c.body for c in chunks)
+        declared = int(end.headers.get("bytes", "0"))
+        if declared and len(data) != declared:
+            raise RemoteError(
+                f"the machine said {declared} bytes of image and "
+                f"{len(data)} arrived")
+        return data
+
+    def png(self, **kw) -> bytes:
+        """`shot`, converted. Needs Pillow on THIS side; the guest sends a
+        native-depth BMP because converting is not its job."""
+        from bridge.wire.uiview import to_png
+        out = to_png(self.shot(**kw))
+        if out is None:
+            raise RemoteError("no Pillow here, so the BMP cannot be converted")
+        return out
+
     def put(self, path: str, data: bytes, chunk: int = 8192,
             timeout: float = 120.0) -> int:
         """Write a file onto the machine. Returns the bytes it took.
@@ -534,10 +678,20 @@ class Remote:
 
     def stream(self, op: str, headers: dict[str, str] | None = None,
                body: bytes = b"", timeout: float | None = None,
-               on_id=None) -> tuple[Frame, list[Frame]]:
+               on_id=None, raise_on_err: bool = True,
+               max_body_bytes: int = 0) -> tuple[Frame, list[Frame]]:
         """As `request`, and also the `DATA` frames that arrived before the
-        terminal one."""
-        call = _Call()
+        terminal one.
+
+        `raise_on_err=False` RETURNS the ERR instead, with everything that
+        arrived before it. Exactly one op wants that and it is not a
+        preference: a step list that failed at step 5 still ran four steps,
+        and the report of them is in the DATA frames this otherwise discards
+        on the way out. The bridge made the same exception for the same
+        reason -- see `bridge/services/ui.py`, which says a failing run "still
+        ran four steps the agent needs to hear about".
+        """
+        call = _Call(max_body_bytes)
         sent = dict(headers or {})
         with self._calls_lock:
             self._seq += 1
@@ -558,9 +712,13 @@ class Remote:
         finally:
             with self._calls_lock:
                 self._calls.pop(ident, None)
-        if reply.type == "ERR":
+        if call.overflow:
+            raise RemoteError(
+                f"{op} sent more than the {max_body_bytes} bytes asked for")
+        if reply.type == "ERR" and raise_on_err:
             raise Refused(reply.headers.get("code", "?"), op,
-                          reply.headers.get("msg", ""))
+                          reply.headers.get("detail")
+                          or reply.headers.get("msg", ""))
         return reply, call.chunks
 
     # --- plumbing ----------------------------------------------------------
@@ -663,8 +821,16 @@ class Remote:
             return
         if frame.type in _TERMINAL:
             self._finish(call, frame)
-        else:
-            call.chunks.append(frame)
+            return
+        call.body_bytes += len(frame.body)
+        if call.max_body_bytes and call.body_bytes > call.max_body_bytes:
+            # Stop GROWING, not stop reading: the link stays in step, the
+            # machine finishes saying what it was saying, and the waiter is
+            # told. Dropping the connection would cost the next request a
+            # reconnect over a cap this end chose.
+            call.overflow = True
+            return
+        call.chunks.append(frame)
 
     def _ping_loop(self) -> None:
         """A PING when the socket has been quiet, so a long call on the main
