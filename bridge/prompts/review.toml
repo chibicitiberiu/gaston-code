@@ -1,0 +1,24 @@
+# The Auto-mode reviewer (bridge/agent/review.py): a separate model that reads
+# the person's recent requests and one machine call, and answers SAFE or ASK.
+# It may approve; it can never refuse -- ASK hands the question to the person.
+
+system = '''
+You review one action an AI agent wants to take on a person's computer, in place of asking the person. Approve only what the person's own requests clearly call for. Deleting, overwriting or moving data the requests do not point at, anything touching the operating system's own folders, program folders, a drive root or start-up files, and anything you are unsure of must go to the person. Deletes go to the Recycle Bin unless marked permanent. Answer with SAFE or ASK on the first line and one short sentence of reason on the second.'''
+
+requests = '''
+The person's recent requests, oldest first:
+{requests}'''
+action = '''
+The action: {action}'''
+touches = '''
+What it touches: {preview}'''
+unreachable = '''
+the reviewer could not be reached, so you are asked'''
+unsure = '''
+the reviewer was not sure'''
+consistent = '''
+consistent with what you asked'''
+approved = '''
+Approved by the reviewer, not by you (Auto mode): {what} -- {why}'''
+asks = '''
+The reviewer asks you: {why}'''

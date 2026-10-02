@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from ..agent import permissions as perms
+from ..agent import review
 from ..agent.permdesk import PermissionDesk
 from ..agent.session import TOOLS
 from ..guest import GuestSession
@@ -30,8 +31,11 @@ class PermissionService:
         presentation: Any = None,
         workspace: Any = None,
         spawn: Any = None,
+        guest_fs: Any = None,
     ) -> None:
         self.connection = connection
+        #: For the bar's preview of what a delete, copy or move touches.
+        self.guest_fs = guest_fs
         self.presentation = presentation
         self.workspace = workspace
         self.spawn = spawn or asyncio.create_task
@@ -57,6 +61,8 @@ class PermissionService:
                     if self.workspace
                     else None
                 ),
+                preview=lambda tool, args: review.preview(
+                    self.guest_fs, guest, tool, args),
             )
         return guest.perms
 

@@ -547,12 +547,18 @@ def fs_putend(fs_id: str, crc: int) -> Frame:
     return Frame("FSPUTEND", {"id": fs_id, "crc": str(crc)})
 
 
-def fs_op(fs_id: str, op: str, path: str, to: str = "") -> Frame:
-    """One of the four mutations: FSMKDIR, FSRM, FSRMDIR, FSMV (`to` only
-    for FSMV). Each is answered by one FSOPEND."""
+def fs_op(fs_id: str, op: str, path: str, to: str = "", *,
+          overwrite: bool = False, permanent: bool = False) -> Frame:
+    """FSMKDIR, FSRM, FSRMDIR, FSMV, FSCOPY or FSSTATS (`to` for a move or
+    a copy). `overwrite` lets a copy or move replace; `permanent` makes a
+    delete skip the Recycle Bin. Each is answered by one FSOPEND."""
     h = {"id": fs_id, "path": truncate_header_value(path)}
     if to:
         h["to"] = truncate_header_value(to)
+    if overwrite:
+        h["overwrite"] = "1"
+    if permanent:
+        h["permanent"] = "1"
     return Frame(op, h)
 
 

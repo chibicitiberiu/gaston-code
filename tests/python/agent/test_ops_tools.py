@@ -10,13 +10,18 @@ from bridge.services.guest_fs import FsError
 
 
 class FakeFs:
-    def __init__(self, raise_status=""):
+    def __init__(self, raise_status="", headers=None):
         self.calls, self.raise_status = [], raise_status
+        self.headers = headers or {"status": "ok"}
+        self.flags = []
 
-    async def op(self, guest, op, path, to=""):
+    async def op(self, guest, op, path, to="", *, overwrite=False,
+                 permanent=False):
         self.calls.append((op, path, to))
+        self.flags.append((overwrite, permanent))
         if self.raise_status:
-            raise FsError(self.raise_status)
+            raise FsError(self.raise_status, "C:\\X\\stuck.txt")
+        return self.headers
 
 
 class FakeProc:
@@ -29,7 +34,7 @@ class FakeProc:
 
 
 class Guest:
-    def __init__(self, ops=1, work_dir="", work_guest=""):
+    def __init__(self, ops=2, work_dir="", work_guest=""):
         self.caps = C.Caps(ops=ops)
         self.work_dir, self.work_guest = work_dir, work_guest
 
@@ -61,7 +66,13 @@ def _names(guest):
 
 
 def test_a_client_that_answers_them_is_offered_them():
-    assert {"mkdir", "move", "delete", "rmdir", "launch"} <= _names(Guest())
+    assert {"mkdir", "copy", "move", "delete", "rmdir",
+            "launch"} <= _names(Guest())
+
+
+def test_a_client_on_the_first_ops_version_is_not():
+    """ops=1 had file-only delete and no copy; the tools now promise trees."""
+    assert not {"copy", "delete", "move"} & _names(Guest(ops=1))
 
 
 def test_a_client_that_never_said_is_not():
@@ -164,3 +175,81 @@ def test_launch_says_why_it_did_not_start():
     proc = FakeProc({"status": "not_found", "error": "2"})
     text, err = _call(Guest(), "launch", {"command": "nosuch"}, proc=proc)
     assert err and "full path" in text
+
+
+def test_delete_goes_to_the_recycle_bin_unless_permanent():
+    fs = FakeFs(headers={"status": "ok", "how": "recycled", "files": "3",
+                         "dirs": "1", "bytes": "2048"})
+    text, err = _call(Guest(), "delete", {"path": r"C:\OLD"}, fs=fs)
+    assert not err and "Recycle Bin" in text and "3 files" in text
+    assert fs.flags == [(False, False)]
+    fs = FakeFs(headers={"status": "ok", "how": "deleted", "files": "1"})
+    text, _ = _call(Guest(), "delete", {"path": r"C:\OLD",
+                                        "permanent": True}, fs=fs)
+    assert "for good" in text and fs.flags == [(False, True)]
+
+
+def test_copy_sends_overwrite_only_when_asked():
+    fs = FakeFs(headers={"status": "ok", "files": "2", "bytes": "10"})
+    text, err = _call(Guest(), "copy", {"path": r"C:\A", "to": r"D:\B"},
+                      fs=fs)
+    assert not err and fs.calls == [("FSCOPY", r"C:\A", r"D:\B")]
+    assert fs.flags == [(False, False)] and "every file checked" in text
+    _call(Guest(), "copy", {"path": r"C:\A", "to": r"D:\B",
+                            "overwrite": True}, fs=fs)
+    assert fs.flags[-1] == (True, False)
+
+
+def test_a_move_says_whether_it_renamed_or_copied():
+    fs = FakeFs(headers={"status": "ok", "how": "copied", "files": "5"})
+    text, _ = _call(Guest(), "move", {"path": r"C:\A", "to": r"D:\A"},
+                    fs=fs)
+    assert "original removed" in text
+
+
+def test_a_tree_refusal_names_where_it_stopped():
+    fs = FakeFs("short_copy")
+    text, err = _call(Guest(), "copy", {"path": r"C:\A", "to": r"D:\A"},
+                      fs=fs)
+    assert err and "shorter" in text and "stuck.txt" in text
+
+
+# --- the preview and the reviewer ------------------------------------------
+
+
+def test_the_preview_counts_what_a_folder_holds():
+    from bridge.agent.review import describe
+    line = describe({"how": "dir", "files": "132", "dirs": "14",
+                     "bytes": str(3 * 1024 * 1024)}, ["a.txt", "b/c.txt"])
+    assert "132 files in 14 folders, 3.0 MB" in line and "b\\c.txt" in line
+    assert describe({"how": "file", "bytes": "2048"}, []) == "a file, 2 KB"
+
+
+def test_the_reviewer_approves_only_on_safe(monkeypatch):
+    from bridge.agent import review
+
+    async def said(text):
+        async def _ask(prompt):
+            return text
+        return _ask
+
+    class G:
+        recent_prompts = ("delete the old build folder C:\\WORK\\BUILD",)
+
+    for answer, ok in (("SAFE\nthe person asked for it", True),
+                       ("ASK\nnot mentioned", False), ("maybe", False)):
+        monkeypatch.setattr(review, "_ask", asyncio.run(said(answer)))
+        approved, why = asyncio.run(review.review(
+            G(), "mcp__machine__delete", {"path": r"C:\WORK\BUILD"}))
+        assert approved is ok and why
+
+
+def test_a_reviewer_that_fails_hands_it_to_the_person(monkeypatch):
+    from bridge.agent import review
+
+    async def boom(prompt):
+        raise RuntimeError("no network")
+    monkeypatch.setattr(review, "_ask", boom)
+    approved, why = asyncio.run(review.review(
+        type("G", (), {"recent_prompts": []})(), "mcp__machine__delete", {}))
+    assert not approved and "could not be reached" in why

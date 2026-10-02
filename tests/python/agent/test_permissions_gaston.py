@@ -201,7 +201,11 @@ def test_a_move_names_both_ends_and_a_launch_its_command():
     line = summary("mcp__machine__launch", _NoCtx(), {"command": "notepad"})
     assert "Start a program" in line and "notepad" in line
     line = summary("mcp__machine__delete", _NoCtx(), {"path": r"C:\X"})
-    assert "Delete a file" in line and r"C:\X" in line
+    assert "Delete" in line and "Recycle Bin" in line and r"C:\X" in line
+    line = summary("mcp__machine__delete", _NoCtx(),
+                   {"path": r"C:\X", "permanent": True,
+                    "_preview": "a folder of 3 files"})
+    assert "PERMANENTLY" in line and "3 files" in line
 
 
 # --- MAX_BODY --------------------------------------------------------------

@@ -108,7 +108,7 @@ FAKE_CAPS = {
     "keys": "1",
     # The fs mutations, launch and live memory: declared for parity with the
     # real client's HELLO; FakeGui answers none of those frames.
-    "ops": "1",
+    "ops": "2",
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a

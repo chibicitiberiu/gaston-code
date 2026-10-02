@@ -458,7 +458,7 @@ def from_hello(h: dict) -> Caps:
         # newer than this bridge knows is refused like any unknown enum,
         # because the names it would accept are names nobody here can check.
         keys=_num(h, "keys", 0, 0, 1),
-        ops=_num(h, "ops", 0, 0, 1),
+        ops=_num(h, "ops", 0, 0, 2),
         declared=declared,
     )
 

@@ -159,6 +159,9 @@ class SessionCoordinator:
         attach_name = f.headers.get("attach_name")
         if not guest.work_guest and not guest.first_prompt:
             guest.first_prompt = text
+        # What the Auto-mode reviewer judges a machine call against
+        # (agent/review.py): the person's own recent words.
+        guest.recent_prompts = [*guest.recent_prompts[-4:], text]
         if attach:
             await self.workspace.ensure_work_dir(guest)
             for part in attach.split("|"):

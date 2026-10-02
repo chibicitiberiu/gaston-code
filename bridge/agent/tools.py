@@ -1082,14 +1082,15 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__put_file failed: %r", args)
             raise
 
-    def _ops_ready() -> str:
+    def _ops_ready(need: int = 2) -> str:
         """Why the operations added with `input` cannot be offered to this
         client right now, or "" -- read from the LIVE caps, since a session
-        outlives a reconnect to an older client."""
+        outlives a reconnect to an older client. list_dir needs ops 1; the
+        tree-aware mutations and launch, 2."""
         if fs is None or guest is None:
             return prompts.text("tools.fs.refused.unavailable")
         live = getattr(guest, "caps", None)
-        if getattr(live, "ops", 0) < 1:
+        if getattr(live, "ops", 0) < need:
             return prompts.text("tools.fs.refused.client_too_old")
         return ""
 
@@ -1139,12 +1140,14 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         return ""
 
     async def _fs_change(name: str, op: str, path: str, to: str = "", *,
-                         creates_at: str = "", is_dir: bool = False) -> dict:
+                         creates_at: str = "", is_dir: bool = False,
+                         overwrite: bool = False,
+                         permanent: bool = False) -> dict:
         why = _ops_ready()
         if why:
             return _text(why, error=True)
         path = path.strip()
-        if not path or (op == "FSMV" and not to.strip()):
+        if not path or (op in ("FSMV", "FSCOPY") and not to.strip()):
             return _text(_fs_refused("bad_path", path), error=True)
         for p_, made in ((path, False), (to.strip(), True)):
             if not p_:
@@ -1154,11 +1157,27 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             if refusal:
                 return _text(refusal, error=True)
         try:
-            await fs.op(guest, op, path, to.strip())
+            h = await fs.op(guest, op, path, to.strip(), overwrite=overwrite,
+                            permanent=permanent)
         except FsError as exc:
-            return _text(_fs_refused(exc.status, path), error=True)
-        return _text(prompts.text(f"tools.{name}.view.done", path=path,
-                                  to=to.strip()))
+            text = _fs_refused(exc.status, path)
+            if exc.detail:
+                text += " " + prompts.text("tools.fs.view.stopped_at",
+                                           where=exc.detail)
+            return _text(text, error=True)
+        files = int(h.get("files", 0) or 0)
+        dirs = int(h.get("dirs", 0) or 0)
+        size = int(h.get("bytes", 0) or 0)
+        amount = prompts.text("tools.fs.view.amount", files=files, dirs=dirs,
+                              size=f"{size / 1048576:.1f} MB" if size >= 1048576
+                              else f"{size // 1024} KB")
+        view = f"tools.{name}.view.done"
+        if name == "delete":
+            view += "_recycled" if h.get("how") == "recycled" else "_permanent"
+        if name == "move":
+            view += "_renamed" if h.get("how") == "renamed" else "_copied"
+        return _text(prompts.text(view, path=path, to=to.strip(),
+                                  amount=amount))
 
     @tool(
         "mkdir",
@@ -1186,31 +1205,63 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
              "path": {"type": "string",
                       "description": prompts.text("tools.move.args.path")},
              "to": {"type": "string",
-                    "description": prompts.text("tools.move.args.to")}},
+                    "description": prompts.text("tools.move.args.to")},
+             "overwrite": {"type": "boolean",
+                           "description": prompts.text(
+                               "tools.move.args.overwrite")}},
          "required": ["path", "to"]},
     )
     async def machine_move(args: dict) -> dict:
         try:
             a = args or {}
             return await _fs_change("move", "FSMV", str(a.get("path", "")),
-                                    str(a.get("to", "")))
+                                    str(a.get("to", "")),
+                                    overwrite=bool(a.get("overwrite")))
         except Exception:
             log.exception("mcp__machine__move failed: %r", args)
+            raise
+
+    @tool(
+        "copy",
+        prompts.text("tools.copy.description"),
+        {"type": "object",
+         "properties": {
+             "path": {"type": "string",
+                      "description": prompts.text("tools.copy.args.path")},
+             "to": {"type": "string",
+                    "description": prompts.text("tools.copy.args.to")},
+             "overwrite": {"type": "boolean",
+                           "description": prompts.text(
+                               "tools.copy.args.overwrite")}},
+         "required": ["path", "to"]},
+    )
+    async def machine_copy(args: dict) -> dict:
+        try:
+            a = args or {}
+            return await _fs_change("copy", "FSCOPY", str(a.get("path", "")),
+                                    str(a.get("to", "")),
+                                    overwrite=bool(a.get("overwrite")))
+        except Exception:
+            log.exception("mcp__machine__copy failed: %r", args)
             raise
 
     @tool(
         "delete",
         prompts.text("tools.delete.description"),
         {"type": "object",
-         "properties": {"path": {"type": "string",
-                                 "description": prompts.text(
-                                     "tools.delete.args.path")}},
+         "properties": {
+             "path": {"type": "string",
+                      "description": prompts.text("tools.delete.args.path")},
+             "permanent": {"type": "boolean",
+                           "description": prompts.text(
+                               "tools.delete.args.permanent")}},
          "required": ["path"]},
     )
     async def machine_delete(args: dict) -> dict:
         try:
-            return await _fs_change("delete", "FSRM",
-                                    str((args or {}).get("path", "")))
+            a = args or {}
+            return await _fs_change("delete", "FSRM", str(a.get("path", "")),
+                                    permanent=bool(a.get("permanent")))
         except Exception:
             log.exception("mcp__machine__delete failed: %r", args)
             raise
@@ -1327,7 +1378,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             # GATED on the client saying it answers FSLS: one that predates
             # it routed the frame to its UI thread as "unhandled", and the
             # call waited out four minutes before saying anything.
-            why = _ops_ready()
+            why = _ops_ready(1)
             if why:
                 return _text(why, error=True)
             path = str(args.get("path", "")).strip()
@@ -1569,9 +1620,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     # The fs mutations and `launch`, for a client that answers them. One
     # that does not is not told they exist -- and list_dir refuses on the
     # live caps, since it was registered before the gate existed.
-    ops_ok = _caps is not None and getattr(_caps, "ops", 0) >= 1
-    ops = ([machine_mkdir, machine_move, machine_delete, machine_rmdir,
-            machine_launch] if ops_ok else [])
+    ops_ok = _caps is not None and getattr(_caps, "ops", 0) >= 2
+    ops = ([machine_mkdir, machine_copy, machine_move, machine_delete,
+            machine_rmdir, machine_launch] if ops_ok else [])
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,

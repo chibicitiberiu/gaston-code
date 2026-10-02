@@ -426,6 +426,20 @@ is_cwd = '''
 "{path}" is some program's current folder, so it cannot be removed while that program runs.'''
 cross_volume = '''
 The folder "{path}" cannot be moved to another drive on this machine -- files can, folders cannot. Make the folder there with mkdir and move its files one by one.'''
+too_big = '''
+"{path}" is more than one call may handle (5,000 files and folders, or 200 MB). Do it a folder at a time.'''
+type_clash = '''
+A file and a folder have the same name at the destination of "{path}", so nothing was done.'''
+into_itself = '''
+"{path}" cannot be copied or moved into itself.'''
+short_copy = '''
+A file copied from "{path}" arrived shorter than the original -- the disk may be full. Nothing was removed.'''
+no_recycle_bin = '''
+The drive "{path}" is on has no Recycle Bin (a floppy, a network or CD drive), so nothing was deleted. Ask the person before deleting it for good with `permanent`.'''
+not_removed = '''
+Windows said "{path}" was deleted, and it is still there -- something is probably using it.'''
+copied_not_removed = '''
+"{path}" was copied in full, and then some of the original could not be removed. Both copies exist now; look at what is left of the original before doing anything else.'''
 client_too_old = '''
 The client on this machine is too old for this tool. Update Gaston Code on the machine; until then, `exec` can do it.'''
 sync_own = '''
@@ -436,6 +450,12 @@ in_conflict = '''
 "{path}" is inside the mirrored folder and the sync layer is holding "{held}" in conflict, so nothing there is changed until that is resolved (sync_status, then sync_resolve).'''
 unknown = '''
 The machine answered "{status}" for "{path}", which this bridge does not recognise.'''
+
+[fs.view]
+stopped_at = '''
+It stopped at "{where}".'''
+amount = '''
+{files} files, {dirs} folders, {size}'''
 
 [mkdir]
 description = '''
@@ -451,29 +471,53 @@ done = '''
 
 [move]
 description = '''
-Move or rename a file or a folder on the machine. It never replaces something already at the destination. A file can move to another drive; a folder cannot.'''
+Move or rename a file or a whole folder on the machine -- within a drive or to another one, the way `mv` would. Moving into an existing folder puts it inside that folder. Nothing already there is replaced unless you set `overwrite`. Across drives the folder is copied, every file checked, and only then is the original removed: a failure part-way leaves the original whole.'''
 
 [move.args]
 path = '''
 What to move: the full path of a file or folder.'''
 to = '''
-The full new path, including the name -- `C:\\WORK\\OLD.TXT` to `C:\\WORK\\ARCHIVE\\OLD.TXT`.'''
+Where to: a full new path, or an existing folder to move it into.'''
+overwrite = '''
+Replace files already at the destination, and merge into a folder that exists. Off by default; say why you need it.'''
 
 [move.view]
-done = '''
+done_renamed = '''
 "{path}" is now "{to}".'''
+done_copied = '''
+"{path}" was copied to "{to}" ({amount}), every file checked, and the original removed.'''
 
 [delete]
 description = '''
-Delete one file on the machine. Not a folder (use rmdir), and no wildcards: one named file. A write-protected file is deleted too -- it is the file you named.'''
+Delete a file or a whole folder on the machine. It goes to the Recycle Bin, so the person can put it back -- unless you set `permanent`, which you should only do when they asked for it, or for a drive with no Recycle Bin (a floppy). The person is shown what it contains before they approve.'''
 
 [delete.args]
 path = '''
-The full path of the file.'''
+The full path of the file or folder.'''
+permanent = '''
+Skip the Recycle Bin: gone for good. Off by default.'''
 
 [delete.view]
+done_recycled = '''
+"{path}" is in the Recycle Bin ({amount}); it can be put back from there.'''
+done_permanent = '''
+"{path}" is deleted for good ({amount}).'''
+
+[copy]
+description = '''
+Copy a file or a whole folder on the machine, to any drive -- the way `cp -r` would. Copying into an existing folder puts it inside that folder. Nothing already there is replaced unless you set `overwrite`; every conflict is checked before the first file is copied, and every copied file is checked for size.'''
+
+[copy.args]
+path = '''
+What to copy: the full path of a file or folder.'''
+to = '''
+Where to: a full new path, or an existing folder to copy it into.'''
+overwrite = '''
+Replace files already at the destination, and merge into a folder that exists. Off by default.'''
+
+[copy.view]
 done = '''
-"{path}" is deleted.'''
+"{path}" is copied to "{to}" ({amount}), every file checked.'''
 
 [rmdir]
 description = '''

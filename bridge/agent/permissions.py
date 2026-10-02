@@ -148,7 +148,9 @@ def _rows(args: dict) -> list[tuple[str, str]]:
             rows.append((key, _clip(args[key])))
             seen.add(key)
     for key, value in args.items():
-        if key in seen or value in (None, "", [], {}):
+        # `_`-keys are the desk's own annotations (the preview), shown in
+        # their own paragraph, not as an argument the agent passed.
+        if key in seen or key.startswith("_") or value in (None, "", [], {}):
             continue
         rows.append((key, _clip(value)))
     return rows
@@ -194,6 +196,9 @@ def render_request(tool_name: str, args: dict, ctx,
     if warning:
         parts.append('<p class="permwarn"><b>Check this one:</b> '
                      + H.esc(_clip(warning, 400)) + "</p>")
+    if isinstance(args, dict) and args.get("_preview"):
+        parts.append("<p><b>What it touches:</b> "
+                     + H.esc(_clip(args["_preview"], 600)) + "</p>")
 
     # A step list, as the numbered steps it will take -- the bar has room
     # for the first few words of that and this block has room for all of
@@ -249,9 +254,17 @@ def _machine_detail(tool_name: str, args: dict) -> str:
     # list -- focus this, type that, press Enter, close the other -- so the
     # bar is the one place the person sees what is about to happen to their
     # keyboard and mouse, and a bare tool name there would be a blank cheque.
-    # Both ends: "move: C:\\WORK\\A.TXT" alone hides where it is going.
-    if tool_name == "mcp__machine__move" and args.get("path"):
-        return f"{args['path']} -> {args.get('to', '')}"
+    # Both ends: "move: C:\\WORK\\A.TXT" alone hides where it is going. And
+    # the guest's own count of what it touches, when the desk asked.
+    seen = f" ({args['_preview']})" if args.get("_preview") else ""
+    if tool_name in ("mcp__machine__move", "mcp__machine__copy") \
+            and args.get("path"):
+        replace = ", REPLACING what is there" if args.get("overwrite") else ""
+        return f"{args['path']} -> {args.get('to', '')}{replace}{seen}"
+    if tool_name == "mcp__machine__delete" and args.get("path"):
+        where = ("PERMANENTLY" if args.get("permanent")
+                 else "to the Recycle Bin")
+        return f"{args['path']} {where}{seen}"
     if tool_name == "mcp__machine__launch" and args.get("command"):
         return str(args["command"])
     if tool_name == "mcp__machine__input" and args.get("steps"):
@@ -287,7 +300,8 @@ def summary(tool_name: str, ctx, args: dict | None = None) -> str:
                  "input": "Use your machine's keyboard and mouse",
                  "mkdir": "Make a folder on your machine",
                  "move": "Move or rename on your machine",
-                 "delete": "Delete a file on your machine",
+                 "delete": "Delete on your machine",
+                 "copy": "Copy on your machine",
                  "rmdir": "Remove a folder on your machine",
                  "launch": "Start a program on your machine"}
         bare = display.lower().replace("mcp__machine__", "")

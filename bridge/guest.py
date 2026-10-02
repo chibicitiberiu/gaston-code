@@ -171,6 +171,8 @@ class GuestSession:
     #: the Session, and a mode the user chose must not quietly revert to
     #: "default" because the object holding it was thrown away.
     perm_mode: str = "default"
+    #: The person's last few prompts, newest last, for the Auto reviewer.
+    recent_prompts: list = field(default_factory=list)
     #: Everything about writing bytes to this guest -- the socket writer, the
     #: send lock, the persistent compressor and the measured link speed.
     link: GuestLink = field(default_factory=GuestLink)

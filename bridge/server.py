@@ -169,6 +169,7 @@ class Bridge:
             presentation=self.presentation,
             workspace=self.workspace,
             spawn=self._spawn,
+            guest_fs=self.guest_fs,
         )
         self.sync = SyncService(
             config=self.config,

@@ -35,7 +35,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from ..status import PromptEndReason
 from ..view import html as H
 from ..wire.protocol import permend, permreq, permstate, permwait
-from . import cmdguard, prompts, toolrules
+from . import cmdguard, prompts, review, toolrules
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 
@@ -88,8 +88,12 @@ class PermissionDesk:
     """
 
     def __init__(self, guest, *, cwd: str | None, write_block, send,
-                spawn, ensure_work=None) -> None:
+                spawn, ensure_work=None, preview=None) -> None:
         self._guest = guest
+        #: `async (tool_name, args) -> str`: what a delete, copy or move is
+        #: about to touch, counted on the guest (agent/review.py). Optional:
+        #: a desk without one shows the bar without the count.
+        self._preview = preview
         self._cwd = cwd
         self._write_block = write_block
         self._send = send
@@ -296,17 +300,47 @@ class PermissionDesk:
                 if warning:
                     log.info("guard: %s -- %s", warning, str(args)[:80])
 
+            # WHAT IT TOUCHES, counted on the guest, for a delete, copy or
+            # move: the person approving "delete C:\\WORK\\OLD" needs to know
+            # that is 132 files.
+            bar_args = args
+            preview_text = ""
+            if tool_name.startswith("mcp__machine__") and self._preview:
+                preview_text = await self._preview(tool_name, args)
+                if preview_text:
+                    bar_args = {**(args or {}), "_preview": preview_text}
+
+            # AUTO: A SECOND OPINION INSTEAD OF A BAR -- the user's own words,
+            # "in auto mode, literally asking an agent if this is safe". The
+            # reviewer can approve; it cannot refuse. Unsure, unreachable or
+            # slow, it hands the question to the person with its reason.
+            if (tool_name.startswith("mcp__machine__")
+                    and getattr(self._guest, "perm_mode", "") == "auto"):
+                approved, why = await review.review(self._guest, tool_name,
+                                                    args, preview_text)
+                if approved:
+                    log.info("reviewer approved %s: %s", tool_name, why)
+                    await self._write_block(H.notice(prompts.text(
+                        "review.approved",
+                        what=perms.summary(tool_name, ctx, bar_args),
+                        why=why)))
+                    return PermissionResultAllow()
+                log.info("reviewer asks the person about %s: %s",
+                         tool_name, why)
+                note = prompts.text("review.asks", why=why)
+                warning = f"{warning} {note}" if warning else note
+
             loop = asyncio.get_running_loop()
             prompt = PendingPrompt(
                 tool_use_id=tool_use_id,
                 tool_name=tool_name,
                 future=loop.create_future(),
                 suggestions=list(getattr(ctx, "suggestions", None) or []),
-                body=render_request(tool_name, args, ctx,
+                body=render_request(tool_name, bar_args, ctx,
                                     warning=warning or ""),
                 allows=perms.allows_always(
                     tool_name, getattr(ctx, "suggestions", None) or []),
-                summary=_bar_line(perms.summary(tool_name, ctx, args),
+                summary=_bar_line(perms.summary(tool_name, ctx, bar_args),
                                   warning or ""),
             )
 

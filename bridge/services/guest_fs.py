@@ -30,6 +30,10 @@ log = logging.getLogger("bridge.fs")
 #: tool's own ceiling is 300s, which this has to sit inside.
 BUDGET_S = 240.0
 
+#: A whole-tree copy, move or delete: under the MCP tool timeout (700s) with
+#: room for the bar and the reviewer in front of it.
+TREE_S = 600.0
+
 #: What one FSPUT frame carries. The guest's inbound frame buffer is 64KB and
 #: the sync layer has used 8KB against it for years.
 CHUNK = 8192
@@ -84,6 +88,11 @@ class FileBytes:
     truncated: bool
 
 
+def _acp(guest) -> str:
+    caps = getattr(guest, "caps", None)
+    return getattr(caps, "acp", "") or "cp1252"
+
+
 class FsError(Exception):
     """A refusal from the guest, carrying its status word.
 
@@ -96,9 +105,11 @@ class FsError(Exception):
     one vocabulary rather than letting a second grow beside it.
     """
 
-    def __init__(self, status: str) -> None:
+    def __init__(self, status: str, detail: str = "") -> None:
         super().__init__(status)
         self.status = status
+        #: For a tree operation: the path it stopped at.
+        self.detail = detail
 
 
 def _parse_entries(blob: bytes) -> list:
@@ -226,19 +237,39 @@ class GuestFsService:
                        truncated=headers.get("truncated") == "1")
 
     async def op(self, guest: GuestSession, op: str, path: str,
-                 to: str = "") -> None:
-        """FSMKDIR / FSRM / FSRMDIR / FSMV. Raises FsError on a refusal."""
+                 to: str = "", *, overwrite: bool = False,
+                 permanent: bool = False) -> dict:
+        """FSMKDIR / FSRM / FSRMDIR / FSMV / FSCOPY. The reply's headers
+        (files, dirs, bytes, how). Raises FsError on a refusal, carrying the
+        path a tree operation stopped at in `detail`."""
+        headers, _ = await self._op(guest, fs_op(
+            "", op, path, to, overwrite=overwrite, permanent=permanent))
+        return headers
+
+    async def stats(self, guest: GuestSession,
+                    path: str) -> tuple[dict, list[str]]:
+        """What is at `path`: a file, or a folder with its counts and its
+        first few names (relative, "/"-separated)."""
+        headers, body = await self._op(guest, fs_op("", "FSSTATS", path))
+        names = [n for n in fold.decode(body, _acp(guest)).split("\n") if n]
+        return headers, names
+
+    async def _op(self, guest: GuestSession, frame) -> tuple[dict, bytes]:
         fs_id, wait = self._begin(guest, "op")
+        frame.headers["id"] = fs_id
         try:
-            await self.connection.send(guest, fs_op(fs_id, op, path, to))
-            headers = await asyncio.wait_for(wait.future, timeout=BUDGET_S)
+            await self.connection.send(guest, frame)
+            # A tree is capped at 200MB (win/fs/tree.h); at the P200's ~1MB/s
+            # that is minutes, not the four a single file is given.
+            headers = await asyncio.wait_for(wait.future, timeout=TREE_S)
         except TimeoutError as exc:
             raise FsError("timeout") from exc
         finally:
             guest.fs_pending.pop(fs_id, None)
         status = headers.get("status", "")
         if status != "ok":
-            raise FsError(status or "no_status")
+            raise FsError(status or "no_status", headers.get("detail", ""))
+        return headers, bytes(wait.data)
 
     async def drives(self, guest: GuestSession, *,
                      probe: bool = False) -> list[Drive]:
@@ -292,6 +323,9 @@ class GuestFsService:
                 has_media={"1": True, "0": False}.get(h.get("media"))))
             return
 
+        if f.type == "FSOPEND" and f.body:
+            # FSSTATS' first names, one per line.
+            wait.data.extend(f.body)
         if not wait.future.done():
             wait.future.set_result(dict(f.headers))
 
