@@ -18,8 +18,8 @@ Why     : `win/remote/tray.h` argues four mechanisms from the documentation and
                               refusing
 
 
-1. SetThreadExecutionState exists on Windows 98 SE
---------------------------------------------------
+1. SetThreadExecutionState exists on Windows 98 SE -- on TWO machines
+----------------------------------------------------------------------
 
 Microsoft documents a minimum of Windows XP. It is exported here and it
 answers. The reason to ask the machine rather than the documentation was the
@@ -27,9 +27,33 @@ Windows 2000 Application Specification, which made "indicate busy application
 status properly" mandatory for 98 -- so the API had to be there for an
 application to comply with. It is.
 
-That matters because it is the only one of the four mechanisms that stops a
-suspend being PROPOSED rather than refusing one that has been. With it present,
-gremote does not need the input-faking fallback at all.
+THE FIRST RUN DID NOT ESTABLISH THAT, and the user said so: the Athlon box has
+an autopatcher on it, which could perfectly well have added the export. A claim
+about "Windows 98 SE" cannot rest on a machine that is not stock. So the same
+probe was run on the QEMU guest -- stock Windows 98 SE retail, nothing added:
+
+    SetThreadExecutionState : PRESENT, returned 80000000
+    WM_POWERBROADCAST reply : 00000001 -- not a denial, so Prevent sleep is off
+    WM_POWER reply          : 00000001 -- not a refusal, so Prevent sleep is off
+
+Identical presence and identical return value. The autopatcher is not what
+provides it; it is in stock 98 SE's KERNEL32, and the claim stands on two
+independent machines rather than one unusual one.
+
+The second half of that output is a bonus control. The VM's gremote has Prevent
+sleep OFF, and the probe says so -- which is what makes the Athlon's
+BROADCAST_QUERY_DENY and PWR_FAIL mean something instead of being what the
+probe always prints.
+
+This matters because SetThreadExecutionState is the only one of the four
+mechanisms that stops a suspend being PROPOSED rather than refusing one that
+has been. With it present, gremote does not need the input-faking fallback at
+all.
+
+What the VM still cannot answer is runs 2 and 3: that guest has NO APM, which
+is why `mode=poweroff` there degrades to a logoff. Presence of the API is a
+question a stock machine can settle; whether an idle timer asks permission is
+not.
 
 
 2. Both veto handlers are wired and answer correctly

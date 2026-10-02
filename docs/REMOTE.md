@@ -984,7 +984,9 @@ Things only the real box can answer, collected so the first session covers them:
      (`docs/measurements/sleep-mechanisms-p200-20261002.txt`).
      `SetThreadExecutionState` is **PRESENT** on Windows 98 SE and returned
      `80000000`, so the nudge is available and the input-faking fallback is not
-     needed. Both veto handlers answer correctly: `WM_POWERBROADCAST` ->
+     needed. Confirmed on **two** machines, because the Athlon has an
+     autopatcher that could have added it: the stock retail QEMU guest reports
+     the same presence and the same value. Both veto handlers answer correctly: `WM_POWERBROADCAST` ->
      `BROADCAST_QUERY_DENY`, `WM_POWER` -> `PWR_FAIL`. The probe SYNTHESISES
      both messages, so this proves the handlers and not that Windows ever sends
      them -- runs 2 and 3 below are still the ones that matter.
