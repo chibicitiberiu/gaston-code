@@ -643,12 +643,60 @@ void StepRunner::settle(DWORD left)
 
 /* ---- one step ------------------------------------------------------- */
 
+/* Which part of a window's frame a point is on, for the parts where a
+ * click does something other than reach the program's content. */
+static const char *frameArea(LRESULT ht)
+{
+    switch (ht)
+    {
+    case HTMENU:     return "menu bar";
+    case HTCAPTION:  return "title bar";
+    case HTSYSMENU:  return "system menu";
+    case HTCLOSE:    return "close box";
+    case HTMINBUTTON:return "minimise box";
+    case HTMAXBUTTON:return "maximise box";
+    case HTVSCROLL:  return "vertical scroll bar";
+    case HTHSCROLL:  return "horizontal scroll bar";
+    case HTLEFT: case HTRIGHT: case HTTOP: case HTBOTTOM:
+    case HTTOPLEFT: case HTTOPRIGHT: case HTBOTTOMLEFT: case HTBOTTOMRIGHT:
+                     return "border";
+    default:         return 0;
+    }
+}
+
+/* WHAT A POINTER STEP LANDED ON: the top-level window, the control under
+ * the point when that is not the window itself, and the part of the frame
+ * when the point is on one. The top-level alone said "Notepad" for a drag
+ * that started on Notepad's MENU BAR -- a live session's guessed pixels
+ * (2026-10-02) -- and the agent, told every step was ok, reported text it
+ * had never typed. Saying "menu bar" is what lets it notice. */
 static void hitAt(int x, int y, char *out, unsigned cap)
 {
     POINT p;
     p.x = x;
     p.y = y;
-    describeTop(WindowFromPoint(p), out, cap);
+    HWND w = WindowFromPoint(p);
+    describeTop(w, out, cap);
+    if (!w)
+        return;
+    unsigned len = (unsigned)strlen(out);
+    HWND top = Input::rootOf(w);
+    if (w != top)
+    {
+        char cls[40];
+        cls[0] = '\0';
+        GetClassNameA(w, cls, sizeof(cls));
+        rc_strf(out + len, cap - len, " > %s", cls);
+        len = (unsigned)strlen(out);
+    }
+    DWORD_PTR ht = HTNOWHERE;
+    if (SendMessageTimeoutA(w, WM_NCHITTEST, 0, MAKELPARAM(x, y),
+                            SMTO_ABORTIFHUNG, 200, &ht))
+    {
+        const char *area = frameArea((LRESULT)ht);
+        if (area)
+            rc_strf(out + len, cap - len, " (%s)", area);
+    }
 }
 
 static HKL foregroundLayout(void)

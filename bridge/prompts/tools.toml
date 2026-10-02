@@ -189,8 +189,12 @@ settle = '''
 After every action, wait until the screen has been still this many milliseconds (at most 5000). Useful on a slow machine where a click takes a moment to open its dialog.'''
 
 [input.view]
+# OK MEANS DELIVERED. A live session (2026-10-02) was told every step was ok
+# after a drag on guessed pixels had landed on the menu bar, and reported text
+# it had never typed and a window it had never closed. The tool cannot know
+# what the agent meant; it can say what `ok` does and does not promise.
 done = '''
-All {n} steps ran.'''
+All {n} steps ran. "ok" means the input was delivered, not that it did what you meant -- look at where each click landed below, and check the result (`ui`, or a `wait_text` at the end of the list) before saying it worked.'''
 failed = '''
 Step {step} of {n} failed; the steps before it ran, nothing after it did.'''
 released = '''
