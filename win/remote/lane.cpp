@@ -235,6 +235,21 @@ rc_frame *LaneWorker::takeNext(bool *stopping)
 
 void LaneWorker::loop()
 {
+    /* Once, on this thread, before anything is served. A handler whose
+     * state is thread-bound -- an apartment, a message queue, a filter that
+     * belongs to the thread that registered it -- sets it up here, because
+     * whoever constructed the handler was a different thread.
+     *
+     * A failure clears m_running rather than returning: takeNext() then
+     * reports `stopping` at once, so the queue is drained and answered by
+     * the same path a normal stop uses instead of being left silent. */
+    if (!m_handler->onThreadStart())
+    {
+        rc_log("lane: the handler could not start on its own thread");
+        ScopedLock lock(&m_lock);
+        m_running = 0;
+    }
+
     for (;;)
     {
         bool stopping = false;
@@ -294,4 +309,5 @@ void LaneWorker::loop()
         ScopedLock lock(&m_lock);
         m_inFlight = 0;
     }
+    m_handler->onThreadStop();
 }

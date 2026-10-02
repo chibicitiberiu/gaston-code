@@ -337,6 +337,59 @@ static void refusal(Listener &l)
         closeBoth(p.server, p.client, p.clientSink), "");
 }
 
+/* --- the outbound half, started late --------------------------------------
+ *
+ * A SERVER does not know what its client can do until the client's first
+ * frame. gremote learns it from AUTH, so the codec is constructed with the
+ * inflater running and the deflater waiting (docs/REMOTE.md step 6): a
+ * client that never asks keeps a raw link, which matters because a
+ * compressing peer talking to a non-compressing one drops the link rather
+ * than degrading, and the only repair path for a box reached by CD is
+ * ship(), which needs the link.
+ */
+static void deferred(Listener &l)
+{
+    static char body[4000];
+    memset(body, 'z', sizeof body);
+
+    /* Deferred and never allowed: the peer that cannot inflate is not sent
+     * anything compressed, so the link survives what `refusal` above shows
+     * killing it. */
+    {
+        Pair p(true, false);
+        p.client.deferDeflate();
+        bool up = p.up(l, 0);
+        sendText(p.client, "BULK", body, sizeof body, true);
+        rc_frame *f = p.serverSink.next(3000);
+        bool plain = f && f->body_len == sizeof body;
+        say("deferred-deflate-sends-plain", up && plain,
+            f ? (plain ? "arrived uncompressed"
+                       : "arrived, but not the length that went in")
+              : "nothing arrived");
+        rc_frame_delete(f);
+        say("deferred-pair-stops-clean",
+            closeBoth(p.client, p.server, p.serverSink), "");
+    }
+
+    /* Allowed after the fact, to a peer that CAN inflate: the frame is
+     * compressed from that point and arrives whole. */
+    {
+        Pair p(true, true);
+        p.client.deferDeflate();
+        bool up = p.up(l, 0);
+        p.client.allowDeflate();
+        sendText(p.client, "BULK", body, sizeof body, true);
+        rc_frame *f = p.serverSink.next(3000);
+        bool whole = f && f->body_len == sizeof body
+                  && f->body[0] == 'z' && f->body[sizeof body - 1] == 'z';
+        say("allowed-deflate-round-trips", up && whole,
+            f ? "inflated to the bytes that went in" : "nothing arrived");
+        rc_frame_delete(f);
+        say("allowed-pair-stops-clean",
+            closeBoth(p.client, p.server, p.serverSink), "");
+    }
+}
+
 /* --- the out-queue reserve ------------------------------------------------
  *
  * A server whose control lane answers on the reader thread (docs/REMOTE.md)
@@ -528,6 +581,7 @@ int main(int argc, char **argv)
     traffic(l);
     heartbeat(l);
     refusal(l);
+    deferred(l);
     reserveCases(l);
     inheritCases();
     l.close();

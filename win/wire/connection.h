@@ -70,6 +70,28 @@ public:
     Connection(FrameSink *sink, bool compress);
     ~Connection();
 
+    /* Construct with compression available, but do not START the outbound
+     * half until the peer has said it can inflate. Call before `start`.
+     *
+     * For a SERVER that learns what its client can do from the client's
+     * first frame. gremote does: the Python declares `deflate=1` on AUTH and
+     * gremote answers `HELLO deflate=1`, so a client that never says it
+     * keeps a raw link and keeps working. That matters more than it sounds
+     * -- a compressing peer talking to a non-compressing one drops the link
+     * rather than degrading, and the only way to repair a box reachable by
+     * CD is ship(), which needs the link.
+     *
+     * The INBOUND half still starts, so a peer that compresses is never
+     * dropped for it. What waits is the 64KB deflate scratch and the
+     * deflate stream, which a raw-link client then never pays for. */
+    void deferDeflate();
+
+    /* Turn the outbound half on. Takes the lock, because `m_lock` guards the
+     * codec as well as the queue and the sender reads shouldCompress under
+     * it -- a flag published without it would still leave mz_deflateInit
+     * racing a compressBody. Safe to call more than once. */
+    void allowDeflate();
+
     /* Resolve, connect, and accept sends. Reports CONNECTING, then FAILED
      * on any failure. Whatever it managed to create is released by the
      * normal stop sequence, so call that even after a false. */
@@ -173,6 +195,9 @@ private:
 
     FrameSink *m_sink;
     bool m_compress;
+    /* Set by deferDeflate(): begin() then starts the inflater only, and the
+     * deflater waits for allowDeflate(). */
+    bool m_deferDeflate;
     Codec *m_codec;
     bool m_used;
 

@@ -15,6 +15,17 @@ EXE_NAME = "wirecheck.exe"
 
 pytestmark = conftest.needs_guest
 
+#: Asserted exactly, not as a minimum: a case that stops running prints
+#: nothing, so the count is the only thing that catches one which silently
+#: went away. A bare 23 until 2026-10-03.
+#:
+#: 23 -> 27: four cases for a codec whose OUTBOUND half starts late. A server
+#: does not know what its client can do until the client's first frame, so
+#: gremote constructs with the inflater running and the deflater waiting --
+#: deferred and never allowed sends plain, allowed after the fact round trips
+#: whole, and both pairs stop clean.
+CASE_COUNT = 27
+
 
 @pytest.fixture(scope="module")
 def verdicts():
@@ -27,7 +38,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    assert len(verdicts) == 23, sorted(verdicts)
+    assert len(verdicts) == CASE_COUNT, sorted(verdicts)
 
 
 def test_a_listening_port_is_never_shared(verdicts):

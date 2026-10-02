@@ -114,7 +114,7 @@ public:
     };
 
     /* A fresh pair of streams and zeroed stats. */
-    void begin();
+    void begin(bool withDeflate);
     /* Separate, because their gates differ: see release(). */
     void finishInflate();
     void finishDeflate();
@@ -125,10 +125,12 @@ public:
     const char *compressBody(const void *body, unsigned bodyLen,
                              unsigned *outLen);
     void takeSample(unsigned long *bytesIn, unsigned long *us);
+    /* Public because the outbound half can start LATE, when a peer says it
+     * can inflate. Idempotent: it ends a live stream first. */
+    void beginDeflate();
 
 private:
     void beginInflate();
-    void beginDeflate();
     unsigned long elapsedSince(const LARGE_INTEGER &t0);
 };
 
@@ -177,10 +179,14 @@ inline void Connection::Codec::beginDeflate()
     }
 }
 
-inline void Connection::Codec::begin()
+/* `withDeflate` false starts the inflater only. shouldCompress already
+ * refuses while `defReady` is 0, so nothing compresses until beginDeflate()
+ * is called -- the gate was there, it just had nobody deciding it late. */
+inline void Connection::Codec::begin(bool withDeflate)
 {
     beginInflate();
-    beginDeflate();
+    if (withDeflate)
+        beginDeflate();
     deflateIn = 0;
     deflateOut = 0;
     deflateUs = 0;
@@ -376,6 +382,7 @@ const char *rc_state_name(rc_state s)
 Connection::Connection(FrameSink *sink, bool compress)
     : m_sink(sink),
       m_compress(compress),
+      m_deferDeflate(false),
       m_codec(0),
       m_used(false),
       m_wsaUp(false),
@@ -483,7 +490,7 @@ void Connection::goLive()
     if (m_compress)
     {
         m_codec = new Codec;
-        m_codec->begin();
+        m_codec->begin(!m_deferDeflate);
     }
     m_running = 1;
 }
@@ -938,6 +945,18 @@ unsigned Connection::outqBytes()
 {
     ScopedLockIf lock(&m_lock, m_lockUp);
     return m_queued;
+}
+
+void Connection::deferDeflate()
+{
+    m_deferDeflate = true;
+}
+
+void Connection::allowDeflate()
+{
+    ScopedLock held(&m_lock);
+    if (m_codec)
+        m_codec->beginDeflate();
 }
 
 void Connection::takeDeflateSample(unsigned long *bytesIn, unsigned long *us)

@@ -1,0 +1,71 @@
+Deflate on gremote's wire: what it cost, what it bought, and the upgrade
+=======================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE 4.10.2222 A, 32MB
+Date    : 2026-10-03
+Why     : REMOTE.md step 4 turned compression off outright -- "the only large
+          payload is a screenshot and the ui lane is step 6". The lane is
+          built, so the decision comes back. The question is not whether
+          deflate works; it is whether turning it on can be done without
+          bricking a machine that is reached by CD.
+
+
+1. The upgrade, which is the part that could go wrong
+-----------------------------------------------------
+
+A compressing peer talking to a non-compressing one DROPS the link rather
+than degrading (wirecheck's `uncompressed-peer-refuses-deflate`), and the
+only way to repair gremote on a box with no network bootstrap is ship(),
+which needs the link. So the order matters:
+
+  * the Python OFFERS `deflate=1` on AUTH and compresses nothing yet;
+  * gremote starts its outbound half and answers `HELLO deflate=1`;
+  * the Python arms on reading that header, never on sending the offer.
+
+Measured end to end, with the NEW Python against the OLD gremote still
+installed on the guest:
+
+      before the update   HELLO deflate=0   link raw, and self_update()
+                                            itself travelled over it
+      after the update    HELLO deflate=1
+
+So the compatibility case is not an argument, it is the path the update
+itself took.
+
+
+2. A 220,000-byte round trip, both ways, both link types
+---------------------------------------------------------
+
+  payload: "the quick brown fox jumps over the lazy dog 0123456789\n" x 4000
+
+      deflate=1    put 0.09 s    get 0.04 s    byte-exact
+      deflate=0    put 0.25 s    get 0.06 s    byte-exact
+
+The PUT is host -> guest, which is the direction the design calls cheap: the
+host compresses at whatever level it likes and the guest only inflates. 2.7x
+on this payload, which is about as compressible as text gets.
+
+The GET is guest -> host and barely moved, which is the predicted answer and
+not a disappointment. `Connection::Codec::shouldCompress` is
+`linkBps < deflateBps / 2`, so on a fast link against a CPU that compresses
+slowly the guest declines -- correctly: 220KB raw at LAN speed beats
+compressing it first. Where `deflate=1` earns its keep upward is a slow link,
+which is BACKLOG 1's `tc netem` gate and an ISA NE2000, neither of which this
+emulator is.
+
+
+3. What it cost in the image
+-----------------------------
+
+      gremote.exe   260,169 -> 260,681   (+512, committed at load)
+      gaston.exe    511,913 -> 511,913   (unchanged)
+
+The client is untouched because the deferral is opt-in: `Connection` still
+starts both halves unless a caller asks it not to, and only gremote does.
+That was worth checking rather than assuming -- a split that defaulted the
+outbound half off would have silently stopped the client compressing
+EXECOUT, SYNCDAT, SYNCENT, FSDAT and FSENT, losing the measured 1.27x the
+persistent-dictionary design exists for, with no test to catch it.
+
+The 64KB deflate scratch is still only allocated on a connection that asked
+for it, so a raw-link caller pays nothing.

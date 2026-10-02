@@ -90,6 +90,23 @@ public:
     /* On the lane's thread, every time round the loop, frame or no frame.
      * Where the work cancel() asked for actually happens. */
     virtual void idle() {}
+
+    /* ON THE LANE'S THREAD, once each, around everything else.
+     *
+     * For a handler whose state is THREAD-BOUND rather than merely private.
+     * The desktop lane is the reason they exist: it needs a message queue
+     * forced into existence before anything is told the thread is there, an
+     * STA to make MSAA calls from, and a message filter that belongs to the
+     * thread that registered it -- none of which can be set up by whoever
+     * constructed the handler, because that was a different thread.
+     *
+     * `onThreadStart` returning false stops the lane before it serves
+     * anything, and `start()` reports it: a desktop worker with no apartment
+     * would answer every request wrongly rather than not at all.
+     *
+     * The job and fs lanes want neither and say so by not overriding. */
+    virtual bool onThreadStart() { return true; }
+    virtual void onThreadStop() {}
 };
 
 enum CancelResult

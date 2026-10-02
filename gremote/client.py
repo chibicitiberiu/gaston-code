@@ -29,6 +29,13 @@ import threading
 import time
 import zlib
 
+from bridge.wire.compress import (
+    ENC_DEFLATE,
+    LEVEL_UP,
+    MIN_WORTH_COMPRESSING,
+    StreamCompressor,
+    StreamDecompressor,
+)
 from bridge.wire.frame import Frame, FrameReader
 
 from .errors import Cancelled, Disconnected, Refused, RemoteError, Timeout
@@ -88,7 +95,8 @@ class Remote:
                  connect_timeout: float = 10.0,
                  request_timeout: float = 30.0,
                  ping_every: float = 10.0,
-                 busy_retry_s: float = 8.0) -> None:
+                 busy_retry_s: float = 8.0,
+                 deflate: bool = True) -> None:
         self.host = host
         self.port = port
         self.secret = secret
@@ -128,6 +136,14 @@ class Remote:
         self._last_sent = 0.0
         self._failure: str = ""
 
+        #: Offer compression on AUTH. The machine answers `HELLO deflate=1`
+        #: only if it took it up, and NOTHING is compressed until that answer
+        #: arrives -- see `_connect_once`. Set false to force a raw link,
+        #: which is what a test comparing the two wants.
+        self._offer_deflate = deflate
+        self._zip_out: StreamCompressor | None = None
+        self._zip_in: StreamDecompressor | None = None
+
     # --- lifecycle ---------------------------------------------------------
 
     def __enter__(self) -> Remote:
@@ -164,12 +180,27 @@ class Remote:
         self._reader = threading.Thread(target=self._read_loop,
                                         name="gremote-reader", daemon=True)
         self._reader.start()
-        self._send(Frame("AUTH", {"ver": str(PROTO_VERSION),
-                                  "secret": self.secret}))
+        auth = {"ver": str(PROTO_VERSION), "secret": self.secret}
+        if self._offer_deflate:
+            # An OFFER, not a switch. Saying it here and compressing from
+            # here would put `enc=deflate` in front of a gremote too old to
+            # inflate, and that drops the link rather than degrading -- on a
+            # machine whose only repair path is ship(), which needs the link.
+            auth["deflate"] = "1"
+        self._zip_out = self._zip_in = None
+        self._send(Frame("AUTH", auth))
         reply = self._wait(self._greeting, self._connect_timeout, "AUTH")
         if reply.type != "HELLO":
             raise Refused(reply.headers.get("code", "?"), "AUTH")
         self.hello = dict(reply.headers)
+        # ARMED ON THE ANSWER, never on the offer. A machine that does not
+        # know the header leaves it absent, which reads as 0 and keeps the
+        # link raw in both directions.
+        if self.hello.get("deflate") == "1":
+            # Level 1 upward: the guest pays for what it inflates and this
+            # end pays for what it deflates, and the slow end is the guest.
+            self._zip_out = StreamCompressor(LEVEL_UP)
+            self._zip_in = StreamDecompressor()
         self.acp = codepage(self.hello.get("acp", ""))
         self.oemcp = codepage(self.hello.get("oemcp", ""))
         self._pinger = threading.Thread(target=self._ping_loop,
@@ -538,8 +569,19 @@ class Remote:
         sock = self._sock
         if sock is None:
             raise Disconnected(self._failure or "not connected")
-        data = frame.encode()
+        # Under the lock with the send, because the stream is PERSISTENT:
+        # the dictionary carries across frames and the peer inflates them in
+        # order, so two threads compressing concurrently would interleave
+        # two halves of one stream. The heartbeat is the other thread.
         with self._send_lock:
+            zip_out = self._zip_out
+            if (zip_out is not None and frame.body
+                    and len(frame.body) >= MIN_WORTH_COMPRESSING
+                    and frame.headers.get("enc") is None):
+                frame = Frame(frame.type,
+                              dict(frame.headers, enc=ENC_DEFLATE),
+                              zip_out.compress(frame.body))
+            data = frame.encode()
             try:
                 sock.sendall(data)
             except OSError as e:
@@ -581,6 +623,18 @@ class Remote:
                 if not data:
                     break
                 for frame in reader.feed(data):
+                    if frame.headers.get("enc") == ENC_DEFLATE:
+                        zip_in = self._zip_in
+                        if zip_in is None:
+                            # The machine compressed on a link we never armed.
+                            # Saying so beats a stream error three frames on.
+                            raise ValueError(
+                                "a compressed %s on a raw link" % frame.type)
+                        frame = Frame(
+                            frame.type,
+                            {k: v for k, v in frame.headers.items()
+                             if k != "enc"},
+                            zip_in.decompress(frame.body))
                     self._dispatch(frame)
         except OSError as e:
             why = f"the link failed: {e}"

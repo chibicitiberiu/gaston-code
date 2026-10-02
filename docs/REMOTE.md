@@ -998,6 +998,15 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
    to a non-compressing one drops the link rather than degrading, and the only
    repair path is `ship()`, which needs the link -- so arming on send would
    brick a box reachable by CD.
+   *Measured 2026-10-03* (`docs/measurements/deflate-gremote-vm-20261003.txt`):
+   the new Python against the OLD gremote kept a raw link and `self_update()`
+   travelled over it, so the compatibility case is the path the upgrade itself
+   took. A 220KB round trip is byte-exact both ways; the host-to-guest half is
+   2.7x faster compressed, and the guest-to-host half barely moves because
+   `shouldCompress` is `linkBps < deflateBps / 2` and declines on a LAN --
+   correctly, since 220KB raw at LAN speed beats compressing it first. The
+   client is untouched: `Connection` still starts both halves unless a caller
+   defers, and only gremote does.
    **Two desktop drivers is a documented hazard, not a guarded one.** The
    client and gremote can both run and both drive; `Input::isOurs` compares PID
    and so refuses only its own process. It is a dev box driven by one person
