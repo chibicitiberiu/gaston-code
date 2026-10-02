@@ -38,6 +38,7 @@ from ..wire import fold
 from ..wire.uiview import render_tree, to_png
 from . import prompts
 from . import toolnotes as notes
+from .selectors import render_candidates, split_steps
 
 log = logging.getLogger("bridge.tools")
 
@@ -60,33 +61,19 @@ MAX_TIMEOUT_MS = 120_000
 
 
 def _selector_part(target: str, step: str) -> str:
-    """The `step`-th component of a `>` selector, or "".
+    """The `step`-th step of a selector, or "".
 
     THE SPLIT IS HERE AND NOT ON THE GUEST, which sends only the index. The
     guest would be re-rendering a string it was handed, and getting the
     spacing subtly different from what the caller wrote -- so it names the
-    position and this names the text.
-
-    `>` INSIDE A QUOTED VALUE IS NOT A SEPARATOR: `Button[text="a > b"]` is one
-    component. Without this the count slips and the message blames the wrong
-    part, which is the whole failure being fixed.
+    position and this names the text. Steps end at `>` and at whitespace,
+    as the guest counts them (selectors.split_steps).
     """
     try:
         want = int(step)
     except (TypeError, ValueError):
         return ""
-    parts: list[str] = []
-    cur: list[str] = []
-    depth = 0
-    for ch in target:
-        if ch == '"':
-            depth ^= 1
-        if ch == ">" and not depth:
-            parts.append("".join(cur).strip())
-            cur = []
-            continue
-        cur.append(ch)
-    parts.append("".join(cur).strip())
+    parts = split_steps(target)
     return parts[want] if 0 <= want < len(parts) else ""
 
 
@@ -140,6 +127,17 @@ def _ui_explain(exc: UiError, target: str = "") -> str:
         if part:
             fields["part"] = part
             status = "not_found_part"
+    #: WHO collided, not just how many: the guest names up to three matches
+    #: with their parent and top-level window, and each gets a selector that
+    #: narrows by its window. A count alone sent agents to `:nth`, which picks
+    #: by position and silently changes meaning when a window opens.
+    if status == "ambiguous":
+        listed = render_candidates(exc.headers, target)
+        if listed:
+            base = prompts.text("tools.ui.refused.ambiguous_listed",
+                                count=exc.detail or "several controls match",
+                                candidates=listed)
+            return base
     try:
         base = prompts.text(f"tools.ui.refused.{status}", **fields)
     except KeyError:
@@ -476,7 +474,10 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             )
             return _text(render_tree(nodes, headers))
         except UiError as exc:
-            return _text(_ui_explain(exc, str(a.get("target") or "")),
+            # The selector the guest was matching: a wait's, when there was
+            # no target -- which is the only way `ui` reaches `ambiguous`.
+            return _text(_ui_explain(exc, str(a.get("target")
+                                              or a.get("wait_for") or "")),
                          error=True)
         except Exception:
             log.exception("mcp__machine__ui failed: %r", args)

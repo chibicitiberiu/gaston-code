@@ -104,11 +104,11 @@ With `inproc`, read the rows of lists and trees. On by default, since it is the 
 description = '''
 Click one control on the machine, named by the `sel=` value that `ui` reported for it.
 
-If more than one control matches, nothing is clicked and you are told how many -- add `:nth(2)` to the selector to pick one deliberately. It is a real mouse click at the control's position, refused if something else covers it.'''
+If more than one control matches, nothing is clicked and you are told which ones -- narrow the selector with the window they are in. It is a real mouse click at the control's position, refused if something else covers it.'''
 
 [click.args]
 target = '''
-The selector, copied from the `sel=` field of the control you want. For example `[class="#32770"] > Button[text="OK"]`.'''
+The selector, copied from the `sel=` field of the control you want, or written by hand: `[class="#32770"][text~="save*"] Button[text~="ok"]`. `~=` matches ignoring case and the `&` of a mnemonic, with `*` and `?` as wildcards; a space means "anywhere inside".'''
 double = '''
 Double-click instead of single. For opening an icon in a list.'''
 settle = '''
@@ -171,7 +171,13 @@ Height of the area, from `y`. Default 0, meaning the whole screen.'''
 # that. Keyed by the status the guest sends in its UIEND.
 [ui.refused]
 ambiguous = '''
-More than one control matches that selector, so nothing was done. Add :nth(n) to pick one deliberately -- the count is above.'''
+Multiple results found, so the control can't be uniquely identified and nothing was done. Narrow the selector with an ancestor -- the window it is in, written before it with a space: `[class="#32770"][text~="save as*"] Button[text~="ok"]`. Use :nth(n) only as a last resort; it picks by position, and positions change when a window opens.'''
+# The same, with the guest's list of WHICH controls matched. Each line carries
+# a selector that names the control through its own window.
+ambiguous_listed = '''
+Multiple results found ({count}), so the control can't be uniquely identified and nothing was done. These matched:
+{candidates}
+Narrow the selector with an ancestor -- the window it is in, written before it with a space -- as suggested above. Use :nth(n) only as a last resort; it picks by position, and positions change when a window opens.'''
 not_found = '''
 Nothing on screen matches that selector. Read the screen again -- it may have changed, or the window may not be open. This program's own window never matches anything.'''
 # WHICH PART was missing, when the selector has more than one. The message

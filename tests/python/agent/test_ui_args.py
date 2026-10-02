@@ -245,9 +245,9 @@ def test_an_ambiguous_wait_is_not_reported_as_nothing_found():
     from bridge.agent.tools import _ui_explain
     from bridge.services.ui import UiError
     out = _ui_explain(UiError("ambiguous", "3 controls match after 5005ms"))
-    assert "More than one control" in out
+    assert "Multiple results found" in out
     assert "Nothing on screen" not in out
-    assert ":nth(" in out            # and what to do about it
+    assert "ancestor" in out         # and what to do about it
 
 
 def test_a_target_without_inproc_is_refused():
