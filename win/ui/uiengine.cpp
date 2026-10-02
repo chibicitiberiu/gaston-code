@@ -101,7 +101,20 @@ void rc_ui_base_options(WalkOptions &o, UiLink &link, DWORD selfPid,
     }
     else if (scope && !strcmp(scope, "pid"))
     {
-        o.pid = (DWORD)rc_ui_header_num(f, "pid", 0, 0, 0x7FFFFFFF);
+        /* UNSIGNED, and not through header_num, because a 9x process id is
+         * an obfuscated pointer with the high bit set: 0xffffba15 as a
+         * signed long is negative, and a [0, 0x7FFFFFFF] clamp turns it into
+         * 0 -- which the walker reads as "no filter" and answers with the
+         * WHOLE DESKTOP. Silently, which is worse than refusing.
+         *
+         * Found 2026-10-03 driving `scope=pid` through gremote, and it is
+         * the shipping client's bug too: bridge/wire/protocol.py sends the
+         * pid as a decimal string and this is the only thing that reads it.
+         * strtoul with base 0 takes that, and takes 0xffffba15 as well, so
+         * neither side has to change to be fixed. */
+        const char *pidText = rc_frame_get(f, "pid");
+        o.pid = pidText && pidText[0]
+              ? (DWORD)strtoul(pidText, NULL, 0) : 0;
     }
 }
 

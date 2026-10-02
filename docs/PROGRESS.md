@@ -3981,3 +3981,90 @@ folder tree and its toolbar. `wait_text` now matches by the selector's rules
 list failing with a key down leaves nothing held. The client is 512,377 bytes;
 the cap went up two pages for about 1.5KB of code, both sections having
 crossed a page boundary. docs/UIAUTOMATION.md describes the `input` surface.
+
+## gremote drives the desktop, and the client is no longer required (2026-10-03)
+
+**REMOTE.md step 6.** `gremote.exe` answers `TREE`, `SHOT` and `RUN`, plus a
+`STOP` that is new here. Until now a desktop measurement on real hardware
+meant compiling an `autocheck` mode, shipping it and parsing its stdout; the
+host-side probes do reach `UITREE`, but each is a bridge stub waiting for the
+*client* to dial out, so every one of them needs a working `gaston.exe`.
+
+**The case it exists for is in the screenshot.**
+`docs/measurements/ui-lane-vm-20261003.png` is the guest's desktop,
+photographed by gremote, with the client in the middle of it saying "Cannot
+reach 10.0.2.2:7890 - retrying". The wedge, the GPF and the shutdown hang
+were each diagnosed over QMP, and the Athlon has none.
+
+**One engine, two wires.** `win/ui/uirpc.cpp` was 919 lines coupled to
+`rc_net` in six places, so the handlers moved to `win/ui/uiengine.cpp` behind
+`UiLink` (`win/ui/uilink.h`) and each exe supplies the framing. It made the
+client SMALLER -- 512,377 to 511,353 -- because `ui_end` and the two header
+helpers existed in two files. `uisteps.cpp` was absorbed rather than renamed
+beside it, keeping the translation-unit count at two and the ~2,144 bytes of
+`-xs` machinery a new one costs unpaid.
+
+Three members of that interface are review corrections rather than design:
+`end()` carries no body (a 32KB report down a non-bulk path would eat the
+out-queue reserve the heartbeat depends on, so it goes through `report()`);
+`automationLevel()` returns the enum and not a bool, because
+`RC_AUTOMATION_SCREEN` means read-only and gremote's ini is the first thing
+that can ask for it; and `limits()` exists because the clamps were literals
+inside the handlers, which would have made `[ui] max_tree_nodes` dead config.
+
+**STOP is not CANCEL, and both exist.** CANCEL is 9P's `Tflush`: its ack
+promises the request will never be answered. A step list needs the opposite,
+because one that failed at step 5 still ran four steps the caller has to hear
+about. Both raise the same flag and differ only in whether the reply is
+suppressed -- and it has to be both, or a cancelled walk runs its whole
+deadline with its replies dropped while every request behind it is answered
+`busy`.
+
+**BACKLOG 26 has its number at last.** The flag reaches the walk and the
+capture, not just step lists, and the client's `UICANCEL` now raises it for
+all three. Measuring it found a second bug: eight attempts to cancel a walk
+lost the race, because `g_run_id` was only written when the desktop worker
+picked the frame up and `UICANCEL` is answered on the reader. A cancel for a
+still-queued request was logged and dropped -- a window open since UICANCEL
+was built, invisible while only long step lists could be cancelled.
+
+**Deflate came on with it**, armed from the handshake rather than at
+construction: the Python offers on AUTH, gremote starts its outbound half,
+and the Python arms only on *reading* `HELLO deflate=1`. A compressing peer
+talking to a non-compressing one drops the link rather than degrading, and
+the repair path is `ship()`, which needs the link. The new Python against the
+OLD gremote kept a raw link and `self_update()` travelled over it, so the
+compatibility case is the path the upgrade itself took.
+
+**Two bugs that only a real machine could show.** A 640x480 `SHOT` answered
+`failed` with an EMPTY out queue -- every bulk frame reserves 8KB for the
+control lane and 63,488 + 8,192 cannot fit a 65,536-byte queue however long
+you drain, so `bodyCap()` is per-caller now. And `scope=pid` answered with
+the whole desktop: a 9x process id is an obfuscated pointer with the high bit
+set, which no signed `[0, 0x7FFFFFFF]` clamp can carry, so it arrived as 0
+and the walker read that as "no filter". **That one was the shipping client's
+bug too** and is fixed for both.
+
+**Memory.** `check-gremote` 264,000 -> 372,000, measured at 359,609. The
+earmark was ~10KB and this is ten times it, because gremote links
+libautomation -- 96,768 bytes of object code before any of its own. The
+user's call was to raise it and optimise separately; that round is BACKLOG 29,
+which lists what to look at and in what order. `gaston.exe` ended at 511,913,
+below where this work started.
+
+**Verified on the QEMU guest, eleven of eleven**
+(`docs/measurements/ui-lane-verify-vm-20261003.txt`,
+`tools/probe/uilaneprobe.py`): a desktop tree and a per-process one, `inproc`
+refused rather than quietly served, focus-type-and-read-back in one list, a
+failing list that still reports what ran, a held key released after a
+failure, a malformed list refused before it is sent, a screenshot as BMP and
+as PNG, a ceiling that fires while the frames arrive, STOP answering and
+CANCEL staying silent, and a 1.4MB GET with the heartbeat answered after it.
+Plus `test_ui_lane.py` under Wine, and `uicheck` 52 cases for the parts that
+need no desktop at all.
+
+**The Athlon run is still owed** -- the box was switched off for the night.
+What it alone can settle: `SPI_SETFOREGROUNDLOCKTIMEOUT` from a process with
+no window, started before logon; whether retail 98 carries `oleacc.dll`
+(`HELLO msaa=` says 1 on the VM); BACKLOG 26's cost on a slower machine; and
+what `shouldCompress` decides for a screenshot on real hardware.

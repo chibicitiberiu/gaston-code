@@ -52,7 +52,13 @@ pytestmark = conftest.needs_guest
 #: step list, which is the mechanism BACKLOG 26 has been waiting for -- a
 #: cancelled enumeration used to run to completion on a single-threaded
 #: worker and the next request queued behind it.
-CASE_COUNT = 50
+#:
+#: 50 -> 52 the same day: a Windows 98 process id has the high bit set and
+#: cannot survive the signed clamp every other numeric header goes through.
+#: It came out 0, which the walker reads as "no filter" -- so `scope=pid`
+#: answered with the WHOLE DESKTOP, silently, on the shipping client as well
+#: as on gremote. Both spellings are pinned now, decimal and hex.
+CASE_COUNT = 52
 
 
 @pytest.fixture(scope="module")

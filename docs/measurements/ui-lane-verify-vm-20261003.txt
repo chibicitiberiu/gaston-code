@@ -1,0 +1,58 @@
+REMOTE.md step 6's verification list, on the QEMU guest
+=======================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE 4.10.2222 A, 32MB
+Date    : 2026-10-03
+Driven  : gremote/ over hostfwd 7401 -- no bridge, no client, no model.
+Script  : the list in REMOTE.md step 6, run end to end.
+
+HELLO {'machine': 'RETRO98', 'automation': '2', 'keys': '1', 'msaa': '1', 'deflate': '1', 'os': 'Windows 4.10 build 2222 A '}
+[PASS] 1a tree of the desktop                         42 nodes, 42 selectors
+[PASS] 1b tree of one process                         explorer pid ffffc769 -> 15 of 42
+[PASS] 1c inproc refused, not served                  inproc_unsupported
+[PASS] 2  focus, type and read back in one list       3 steps, last=ok
+[PASS] 3  a failing list reports the steps that ran   status=timeout steps=['ok', 'timeout']
+[PASS] 4  nothing stays held after a failure          released=True status=timeout
+[PASS] 5  a list that cannot run never leaves here    step 1: a step names exactly one action: click, close, down,
+[PASS] 6  a screenshot of the screen and of a rect    481078 bytes BMP, 2387 bytes PNG
+[PASS] 7  a shot over the ceiling is stopped          SHOT sent more than the 4096 bytes asked for
+[PASS] 8a STOP: the target still answers              cancelled
+[PASS] 8b CANCEL: the target never answers            silence
+[PASS] 9  automation is declared                      2
+[PASS] 10 a large GET, and a PING answered after it   1400832 bytes in 0.5s
+[PASS] 11 the box still answers afterwards            1016 KB physical free of 32288
+
+ALL PASS
+
+
+What the list found
+-------------------
+
+TWO bugs, and both were only reachable from a real machine.
+
+1. `scope=pid` answered with the WHOLE DESKTOP.
+
+   A Windows 98 process id is an obfuscated pointer with the high bit set --
+   EXPLORER.EXE was 0xffffc769 on this run. Every numeric header goes
+   through a signed `[0, 0x7FFFFFFF]` clamp, so that value came out 0, and
+   `WalkOptions.pid` of 0 means "no filter". The caller got everything and
+   nothing said so.
+
+   It is the SHIPPING CLIENT'S bug as well: bridge/wire/protocol.py sends
+   the pid as a decimal string and win/ui/uiengine.cpp is the only thing
+   that reads it. `strtoul` with base 0 takes the decimal the bridge sends
+   and the hex `PS` reports, so neither side had to change to be fixed.
+
+   After:  EXPLORER.EXE 15 nodes, NOTEPAD.EXE 2, out of a 106-node desktop.
+
+2. SHOT answered `failed` with an empty out queue.
+
+   Recorded in ui-lane-vm-20261003.txt: every bulk frame gremote sends
+   reserves 8KB for the control lane, so a 63,488-byte body cannot fit a
+   65,536-byte queue beside it however long you drain. `UiLink::bodyCap()`
+   is per-caller now.
+
+And one thing that is not a bug and reads like one: a step list against a
+desktop with TWO Notepads open is `ambiguous`, every time. That is the
+engine refusing to pick, which is what it is for -- the fixture was wrong,
+not the answer.

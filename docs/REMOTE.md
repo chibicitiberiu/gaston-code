@@ -990,6 +990,12 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 6. **libautomation.** Screenshot, window list, focus and input, control tree,
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.
+   **Step 6 is complete on the VM (2026-10-03)** and owes only the real
+   machine -- `docs/measurements/ui-lane-verify-vm-20261003.txt` is eleven of
+   eleven on the guest, `ui-lane-vm-20261003.png` is the screenshot it took
+   while the client sat beside it unable to reach its bridge, and
+   `tools/probe/uilaneprobe.py` re-runs the list. What the Athlon alone can
+   settle is listed at the bottom of PROGRESS.md's entry.
    *Scoped 2026-10-02.* The library landed in step 5a's wake and was proven in
    the client first, as every lib here is, so this step is the **lane**, not
    the library: `TREE`, `SHOT`, `RUN` and `STOP`, per the op table above.

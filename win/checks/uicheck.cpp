@@ -754,6 +754,51 @@ static void refusals(void)
             "one flag, read by the walk, the capture and the step runner");
     }
 
+    /* A Windows 98 process id has the HIGH BIT SET -- it is an obfuscated
+     * pointer into the process database -- so it cannot survive the signed
+     * [0, 0x7FFFFFFF] clamp every other numeric header goes through. It used
+     * to come out 0, which the walker reads as "no filter" and answers with
+     * the whole desktop: a silently wrong answer rather than a refusal.
+     * Found driving `scope=pid` through gremote on the guest, 2026-10-03,
+     * and it was the shipping client's bug too. */
+    {
+        k[0] = "id";    v[0] = "u8";
+        k[1] = "scope"; v[1] = "pid";
+        const char *k3[3] = { "id", "scope", "pid" };
+        const char *v3[3] = { "u8", "pid", "4294949389" };   /* 0xffffba0d */
+        if (mkFrame(f, raw, sizeof(raw), "UITREE", k3, v3, 3, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            WalkOptions o;
+            memset(&o, 0, sizeof(o));
+            rc_ui_base_options(o, link, GetCurrentProcessId(), &f);
+            rc_strf(detail, sizeof(detail), "0x%08lx", (unsigned long)o.pid);
+            say("a-9x-pid-survives-the-header", o.pid == 0xffffba0dUL, detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("a-9x-pid-survives-the-header", false, "no frame");
+    }
+
+    /* ...and hexadecimal too, because PS reports pids that way and a caller
+     * passing one straight back should not have to know. */
+    {
+        const char *k3[3] = { "id", "scope", "pid" };
+        const char *v3[3] = { "u9", "pid", "0xffffba0d" };
+        if (mkFrame(f, raw, sizeof(raw), "UITREE", k3, v3, 3, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            WalkOptions o;
+            memset(&o, 0, sizeof(o));
+            rc_ui_base_options(o, link, GetCurrentProcessId(), &f);
+            rc_strf(detail, sizeof(detail), "0x%08lx", (unsigned long)o.pid);
+            say("a-hex-pid-is-read-too", o.pid == 0xffffba0dUL, detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("a-hex-pid-is-read-too", false, "no frame");
+    }
+
     /* The limits come from the LINK, not from the handlers. A caller's
      * ceiling has to be what clamps a header, or gremote's [ui] section is
      * dead config -- so a request asking for more nodes than the caller
