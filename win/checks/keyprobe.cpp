@@ -325,7 +325,8 @@ int main(int argc, char **argv)
     GetModuleFileNameA(NULL, path, sizeof(path));
     char *slash = strrchr(path, '\\');
     if (slash)
-        strcpy(slash + 1, "KEYPROBE.TXT");
+        rc_strf(slash + 1, (unsigned)(sizeof(path) - (slash + 1 - path)),
+                "KEYPROBE.TXT");
     g_out = fopen(path, "w");
 
     if (argc > 1)
