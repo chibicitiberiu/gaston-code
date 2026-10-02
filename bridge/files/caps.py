@@ -183,6 +183,10 @@ DEFLATE_STREAM = 1
 #: capture them, is a third and a fourth value and no new header.
 AUTOMATION_NONE = 0
 AUTOMATION_SCREEN = 1
+#: SCREEN plus UIRUN: a whole list of steps in one request, run on the guest
+#: with its own timeouts, the focus check and held-key release. A client that
+#: declares it gets the `input` tool in place of `click`, `keys` and `focus`.
+AUTOMATION_STEPS = 2
 
 #: What a Win32 GetACP() number means to Python. Only the pages a machine of
 #: this era can actually be set to; anything else is refused rather than
@@ -313,6 +317,10 @@ class Caps:
     #: way round costs one refused round trip with a sentence attached, plus
     #: the 1,576 tokens the five schemas occupy.
     automation: int = AUTOMATION_SCREEN
+    #: Which version of the frozen key-name table (agent/keynames.py) the
+    #: guest resolves. 0 for a client that never said -- it has only the
+    #: named keys inside `keys`' own bracket syntax, and no `input` tool.
+    keys: int = 0
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -343,7 +351,7 @@ class Caps:
                 f"shortnames={'8.3' if self.shortnames else 'long'} "
                 f"manifest=v{self.manifest} "
                 f"deflate={'stream' if self.deflate else 'none'} "
-                f"automation={'screen' if self.automation else 'off'}")
+                f"automation={('off', 'screen', 'steps')[self.automation]}")
 
 
 class CapsError(Exception):
@@ -402,7 +410,7 @@ def from_hello(h: dict) -> Caps:
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
-        "maxfiles", "deflate", "automation"))
+        "maxfiles", "deflate", "automation", "keys"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -437,8 +445,13 @@ def from_hello(h: dict) -> Caps:
         # can be driven in a way this bridge has no tool for, and both guesses
         # are wrong -- NONE throws away a capability it has, SCREEN offers five
         # tools shaped for a screen it may not have.
-        automation=_enum(h, "automation", (AUTOMATION_NONE, AUTOMATION_SCREEN),
+        automation=_enum(h, "automation", (AUTOMATION_NONE, AUTOMATION_SCREEN,
+                                           AUTOMATION_STEPS),
                          AUTOMATION_SCREEN),
+        # A version, so a number with a ceiling: a guest claiming a table
+        # newer than this bridge knows is refused like any unknown enum,
+        # because the names it would accept are names nobody here can check.
+        keys=_num(h, "keys", 0, 0, 1),
         declared=declared,
     )
 

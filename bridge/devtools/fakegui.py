@@ -102,6 +102,10 @@ FAKE_CAPS = {
     # under test here, answering the ops is win/ui/uirpc.cpp's job and is
     # checked on the guest.
     "automation": "1",
+    # Key-name table version (agent/keynames.py). Declared so FakeGui says
+    # every header the real client does; automation stays SCREEN, since
+    # FakeGui answers no UIRUN.
+    "keys": "1",
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a

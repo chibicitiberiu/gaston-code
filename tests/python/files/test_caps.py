@@ -297,7 +297,7 @@ def test_an_automation_value_the_bridge_does_not_know_is_refused():
     capability the client says it has, SCREEN offers five tools shaped for a
     screen it may not have -- which is exactly when a handshake refuses."""
     with pytest.raises(C.CapsError) as e:
-        C.from_hello({"automation": "2"})
+        C.from_hello({"automation": "3"})
     assert "automation" in str(e.value)
     with pytest.raises(C.CapsError):
         C.from_hello({"automation": "yes"})
@@ -332,3 +332,15 @@ def test_the_summary_says_whether_the_screen_can_be_driven():
     like every other capability question."""
     assert "automation=off" in C.from_hello({"automation": "0"}).summary()
     assert "automation=screen" in C.from_hello({"automation": "1"}).summary()
+
+
+def test_steps_is_a_known_automation_level():
+    """2 since the `input` step list (2026-10-02): SCREEN plus UIRUN."""
+    assert C.from_hello({"automation": "2"}).automation == C.AUTOMATION_STEPS
+
+
+def test_the_key_table_version_is_declared_and_bounded():
+    assert C.from_hello({}).keys == 0
+    assert C.from_hello({"keys": "1"}).keys == 1
+    with pytest.raises(C.CapsError):
+        C.from_hello({"keys": "2"})
