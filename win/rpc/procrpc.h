@@ -9,5 +9,6 @@
 
 void rc_procrpc_list(rc_net *net, const rc_frame *f);
 void rc_procrpc_kill(rc_net *net, const rc_frame *f);
+void rc_procrpc_launch(rc_net *net, const rc_frame *f);
 
 #endif

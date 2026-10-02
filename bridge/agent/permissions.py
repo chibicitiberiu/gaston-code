@@ -249,6 +249,11 @@ def _machine_detail(tool_name: str, args: dict) -> str:
     # list -- focus this, type that, press Enter, close the other -- so the
     # bar is the one place the person sees what is about to happen to their
     # keyboard and mouse, and a bare tool name there would be a blank cheque.
+    # Both ends: "move: C:\\WORK\\A.TXT" alone hides where it is going.
+    if tool_name == "mcp__machine__move" and args.get("path"):
+        return f"{args['path']} -> {args.get('to', '')}"
+    if tool_name == "mcp__machine__launch" and args.get("command"):
+        return str(args["command"])
     if tool_name == "mcp__machine__input" and args.get("steps"):
         from .steps import summary as steps_summary
         return steps_summary(args["steps"])
@@ -279,7 +284,12 @@ def summary(tool_name: str, ctx, args: dict | None = None) -> str:
                  "list_dir": "List a folder on your machine",
                  "ps": "List the programs running on your machine",
                  "kill": "End a program on your machine",
-                 "input": "Use your machine's keyboard and mouse"}
+                 "input": "Use your machine's keyboard and mouse",
+                 "mkdir": "Make a folder on your machine",
+                 "move": "Move or rename on your machine",
+                 "delete": "Delete a file on your machine",
+                 "rmdir": "Remove a folder on your machine",
+                 "launch": "Start a program on your machine"}
         bare = display.lower().replace("mcp__machine__", "")
         display = plain.get(bare, display)
     desc = getattr(ctx, "description", None) or getattr(ctx, "title", None)

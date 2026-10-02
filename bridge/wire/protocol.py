@@ -547,6 +547,15 @@ def fs_putend(fs_id: str, crc: int) -> Frame:
     return Frame("FSPUTEND", {"id": fs_id, "crc": str(crc)})
 
 
+def fs_op(fs_id: str, op: str, path: str, to: str = "") -> Frame:
+    """One of the four mutations: FSMKDIR, FSRM, FSRMDIR, FSMV (`to` only
+    for FSMV). Each is answered by one FSOPEND."""
+    h = {"id": fs_id, "path": truncate_header_value(path)}
+    if to:
+        h["to"] = truncate_header_value(to)
+    return Frame(op, h)
+
+
 def fs_ls(fs_id: str, path: str, *, max_entries: int = 0) -> Frame:
     """One level of one directory on the connected machine, at any path.
 
@@ -624,6 +633,19 @@ def ps_list(ps_id: str) -> Frame:
     """Every process on the machine. Answered on the guest's reader thread,
     so it works while an EXEC is stuck -- which is when it is needed."""
     return Frame("PSLIST", {"id": ps_id})
+
+
+def ps_launch(ps_id: str, command: str, *, cwd: str = "",
+              show: str = "") -> Frame:
+    """Start a program and do not wait for it. `show` is "", "min" or "max".
+    The command can exceed a header's 255 bytes only by being a command
+    nobody should be launching; it is clipped like any other header."""
+    h = {"id": ps_id, "command": truncate_header_value(command)}
+    if cwd:
+        h["cwd"] = truncate_header_value(cwd)
+    if show:
+        h["show"] = show
+    return Frame("PSLAUNCH", h)
 
 
 def ps_kill(ps_id: str, pid: str, *, force: bool = False) -> Frame:

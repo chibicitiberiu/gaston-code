@@ -11,6 +11,7 @@ const rc_lane_row RC_LANE_TABLE[] = {
      * the first one.) */
     { "PSLIST",   RC_LANE_IMMEDIATE },
     { "PSKILL",   RC_LANE_IMMEDIATE },
+    { "PSLAUNCH", RC_LANE_IMMEDIATE },
     { "ATTGET",   RC_LANE_STREAM },
     /* Phase 6. Listed one by one rather than matched on a "UI" prefix: the
      * SYNC* wildcard below exists because that family was already a dozen
@@ -38,7 +39,12 @@ const rc_lane_row RC_LANE_TABLE[] = {
     /* FSLS joins them (2026-10-02). One level of one directory, capped at
      * 2,000 entries, so it is bounded the same way FSGET is -- which is the
      * property that makes sharing the worker safe. */
-    { "FSLS",     RC_LANE_STREAM }
+    { "FSLS",     RC_LANE_STREAM },
+    /* The four mutations (2026-10-02): one syscall each, the same bound. */
+    { "FSMKDIR",  RC_LANE_STREAM },
+    { "FSMV",     RC_LANE_STREAM },
+    { "FSRM",     RC_LANE_STREAM },
+    { "FSRMDIR",  RC_LANE_STREAM }
 };
 const int RC_LANE_TABLE_N = sizeof(RC_LANE_TABLE) / sizeof(RC_LANE_TABLE[0]);
 

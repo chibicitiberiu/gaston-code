@@ -676,6 +676,17 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             lines += [f"{p.pid:<8} {p.ppid:<8} {p.threads:>3}  {p.exe}"
                       for p in rows]
             body = "\n".join(lines)
+            # MEMORY, AS IT IS NOW. On a 32MB machine "why is it slow" is
+            # usually the swap line, and the agent deciding what to end
+            # needs the figure while it decides, not HELLO's from startup.
+            mem = await proc.memory(guest)
+            if "mem_kb" in mem and "mem_free_kb" in mem:
+                body += "\n\n" + prompts.text(
+                    "tools.ps.view.memory", free=mem["mem_free_kb"] // 1024,
+                    total=mem["mem_kb"] // 1024,
+                    swap_used=max(0, mem.get("swap_kb", 0)
+                                  - mem.get("swap_free_kb", 0)) // 1024,
+                    load=mem.get("mem_load", 0))
             if truncated:
                 body += "\n" + prompts.text("tools.ps.view.truncated")
             return _text(body)
@@ -1071,6 +1082,209 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__put_file failed: %r", args)
             raise
 
+    def _ops_ready() -> str:
+        """Why the operations added with `input` cannot be offered to this
+        client right now, or "" -- read from the LIVE caps, since a session
+        outlives a reconnect to an older client."""
+        if fs is None or guest is None:
+            return prompts.text("tools.fs.refused.unavailable")
+        live = getattr(guest, "caps", None)
+        if getattr(live, "ops", 0) < 1:
+            return prompts.text("tools.fs.refused.client_too_old")
+        return ""
+
+    async def _mirror_refusal(path: str, *, creates: bool = False,
+                              is_dir: bool = False) -> str:
+        """Why a change at `path` must not be made, if it is inside the
+        mirrored folder -- "" otherwise.
+
+        A change there reaches the host on the next sync pass exactly as one
+        made by `put_file` does, and that pass updates the baseline; nothing
+        is done to the baseline here. What IS done here: a path the sync
+        layer is holding in conflict (or anything under one) is refused
+        while the halt is up -- the person's copy is what is being protected
+        -- and a name sync would later refuse to carry is not created.
+        """
+        root = getattr(guest, "work_guest", "") if getattr(
+            guest, "work_dir", "") else ""
+        if not root:
+            return ""
+        norm = path.replace("/", "\\").rstrip("\\")
+        r = root.replace("/", "\\").rstrip("\\")
+        if norm.lower() != r.lower() and not norm.lower().startswith(
+                r.lower() + "\\"):
+            return ""
+        rel = norm[len(r):].lstrip("\\").replace("\\", "/")
+        if any(part in ("..", ".") for part in rel.split("/")):
+            return _fs_refused("bad_path", path)
+        if rel.split("/")[0].lower() == ".gaston":
+            return prompts.text("tools.fs.refused.sync_own", path=path)
+        caps = getattr(guest, "caps", None) or P.DEFAULT
+        if creates and rel:
+            skip = P.check(rel, guest_root=root, caps=caps, is_dir=is_dir)
+            if skip is not None:
+                return prompts.text("tools.fs.refused.unsyncable", path=path,
+                                    why=str(skip))
+        if sync is None:
+            return ""
+        key = P.canonical(rel, caps=caps) if rel else ""
+        async with sync.baseline_lock(guest):
+            base = sync.load_baseline(guest)
+            held = set(base.latched) | set(base.prev)
+        for k in held:
+            if not key or k == key or k.startswith(key + "/") \
+                    or key.startswith(k + "/"):
+                return prompts.text("tools.fs.refused.in_conflict", path=path,
+                                    held=k)
+        return ""
+
+    async def _fs_change(name: str, op: str, path: str, to: str = "", *,
+                         creates_at: str = "", is_dir: bool = False) -> dict:
+        why = _ops_ready()
+        if why:
+            return _text(why, error=True)
+        path = path.strip()
+        if not path or (op == "FSMV" and not to.strip()):
+            return _text(_fs_refused("bad_path", path), error=True)
+        for p_, made in ((path, False), (to.strip(), True)):
+            if not p_:
+                continue
+            refusal = await _mirror_refusal(
+                p_, creates=made or bool(creates_at), is_dir=is_dir)
+            if refusal:
+                return _text(refusal, error=True)
+        try:
+            await fs.op(guest, op, path, to.strip())
+        except FsError as exc:
+            return _text(_fs_refused(exc.status, path), error=True)
+        return _text(prompts.text(f"tools.{name}.view.done", path=path,
+                                  to=to.strip()))
+
+    @tool(
+        "mkdir",
+        prompts.text("tools.mkdir.description"),
+        {"type": "object",
+         "properties": {"path": {"type": "string",
+                                 "description": prompts.text(
+                                     "tools.mkdir.args.path")}},
+         "required": ["path"]},
+    )
+    async def machine_mkdir(args: dict) -> dict:
+        try:
+            return await _fs_change("mkdir", "FSMKDIR",
+                                    str((args or {}).get("path", "")),
+                                    creates_at="self", is_dir=True)
+        except Exception:
+            log.exception("mcp__machine__mkdir failed: %r", args)
+            raise
+
+    @tool(
+        "move",
+        prompts.text("tools.move.description"),
+        {"type": "object",
+         "properties": {
+             "path": {"type": "string",
+                      "description": prompts.text("tools.move.args.path")},
+             "to": {"type": "string",
+                    "description": prompts.text("tools.move.args.to")}},
+         "required": ["path", "to"]},
+    )
+    async def machine_move(args: dict) -> dict:
+        try:
+            a = args or {}
+            return await _fs_change("move", "FSMV", str(a.get("path", "")),
+                                    str(a.get("to", "")))
+        except Exception:
+            log.exception("mcp__machine__move failed: %r", args)
+            raise
+
+    @tool(
+        "delete",
+        prompts.text("tools.delete.description"),
+        {"type": "object",
+         "properties": {"path": {"type": "string",
+                                 "description": prompts.text(
+                                     "tools.delete.args.path")}},
+         "required": ["path"]},
+    )
+    async def machine_delete(args: dict) -> dict:
+        try:
+            return await _fs_change("delete", "FSRM",
+                                    str((args or {}).get("path", "")))
+        except Exception:
+            log.exception("mcp__machine__delete failed: %r", args)
+            raise
+
+    @tool(
+        "rmdir",
+        prompts.text("tools.rmdir.description"),
+        {"type": "object",
+         "properties": {"path": {"type": "string",
+                                 "description": prompts.text(
+                                     "tools.rmdir.args.path")}},
+         "required": ["path"]},
+    )
+    async def machine_rmdir(args: dict) -> dict:
+        try:
+            return await _fs_change("rmdir", "FSRMDIR",
+                                    str((args or {}).get("path", "")))
+        except Exception:
+            log.exception("mcp__machine__rmdir failed: %r", args)
+            raise
+
+    @tool(
+        "launch",
+        prompts.text("tools.launch.description"),
+        {"type": "object",
+         "properties": {
+             "command": {"type": "string",
+                         "description": prompts.text(
+                             "tools.launch.args.command")},
+             "cwd": {"type": "string",
+                     "description": prompts.text("tools.launch.args.cwd")},
+             "show": {"type": "string",
+                      "description": prompts.text("tools.launch.args.show")}},
+         "required": ["command"]},
+    )
+    async def machine_launch(args: dict) -> dict:
+        try:
+            if proc is None or guest is None:
+                return _text(prompts.text("tools.ps.refused.unavailable"),
+                             error=True)
+            why = _ops_ready()
+            if why:
+                return _text(why, error=True)
+            a = args or {}
+            command = str(a.get("command", "")).strip()
+            show = str(a.get("show") or "").strip().lower()
+            if show not in ("", "normal", "min", "max"):
+                return _text(prompts.text("tools.launch.refused.bad_show"),
+                             error=True)
+            try:
+                h = await proc.launch(guest, command,
+                                      cwd=str(a.get("cwd") or "").strip(),
+                                      show="" if show == "normal" else show)
+            except ProcError as exc:
+                return _text(_proc_refused(exc.status), error=True)
+            status = h.get("status", "") or "no_status"
+            if status == "ok":
+                return _text(prompts.text("tools.launch.view.started",
+                                          command=command,
+                                          pid=h.get("pid", "?")))
+            try:
+                return _text(prompts.text(f"tools.launch.refused.{status}",
+                                          command=command,
+                                          error=h.get("error", "")),
+                             error=True)
+            except KeyError:
+                return _text(prompts.text("tools.launch.refused.failed",
+                                          command=command,
+                                          error=h.get("error", status)),
+                             error=True)
+        except Exception:
+            log.exception("mcp__machine__launch failed: %r", args)
+            raise
+
     @tool(
         "list_dir",
         prompts.text("tools.list_dir.description"),
@@ -1110,9 +1324,12 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         same wire shape.
         """
         try:
-            if fs is None or guest is None:
-                return _text(prompts.text("tools.fs.refused.unavailable"),
-                             error=True)
+            # GATED on the client saying it answers FSLS: one that predates
+            # it routed the frame to its UI thread as "unhandled", and the
+            # call waited out four minutes before saying anything.
+            why = _ops_ready()
+            if why:
+                return _text(why, error=True)
             path = str(args.get("path", "")).strip()
             if not path:
                 return _text(_fs_refused("bad_path"), error=True)
@@ -1349,6 +1566,12 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     if not automation:
         log.info("machine: screen tools withheld -- the client declares no "
                  "automation support")
+    # The fs mutations and `launch`, for a client that answers them. One
+    # that does not is not told they exist -- and list_dir refuses on the
+    # live caps, since it was registered before the gate existed.
+    ops_ok = _caps is not None and getattr(_caps, "ops", 0) >= 1
+    ops = ([machine_mkdir, machine_move, machine_delete, machine_rmdir,
+            machine_launch] if ops_ok else [])
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
                                    tools=[machine_exec, machine_sync_status,
                                           machine_sync_resolve,
@@ -1357,6 +1580,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                                           machine_kill,
                                           machine_get_file,
                                           machine_list_dir,
+                                          *ops,
                                           machine_put_file,
                                           machine_drives,
                                           machine_toolnote])

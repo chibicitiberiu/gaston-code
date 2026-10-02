@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from ..guest import FsCall, GuestSession
 from ..wire import fold
-from ..wire.protocol import fs_drives, fs_get, fs_ls, fs_put, fs_putend
+from ..wire.protocol import fs_drives, fs_get, fs_ls, fs_op, fs_put, fs_putend
 
 log = logging.getLogger("bridge.fs")
 
@@ -224,6 +224,21 @@ class GuestFsService:
             raise FsError(status or "no_status")
         return Listing(entries=list(wait.rows),
                        truncated=headers.get("truncated") == "1")
+
+    async def op(self, guest: GuestSession, op: str, path: str,
+                 to: str = "") -> None:
+        """FSMKDIR / FSRM / FSRMDIR / FSMV. Raises FsError on a refusal."""
+        fs_id, wait = self._begin(guest, "op")
+        try:
+            await self.connection.send(guest, fs_op(fs_id, op, path, to))
+            headers = await asyncio.wait_for(wait.future, timeout=BUDGET_S)
+        except TimeoutError as exc:
+            raise FsError("timeout") from exc
+        finally:
+            guest.fs_pending.pop(fs_id, None)
+        status = headers.get("status", "")
+        if status != "ok":
+            raise FsError(status or "no_status")
 
     async def drives(self, guest: GuestSession, *,
                      probe: bool = False) -> list[Drive]:

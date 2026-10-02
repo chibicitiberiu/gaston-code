@@ -9,12 +9,13 @@ futures keyed by `p`-prefixed ids, the same shape as the ui service.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 
 from ..guest import GuestSession
 from ..wire import fold
-from ..wire.protocol import ps_kill, ps_list
+from ..wire.protocol import ps_kill, ps_launch, ps_list
 
 log = logging.getLogger("bridge.proc")
 
@@ -39,6 +40,8 @@ class ProcError(Exception):
 class ProcService:
     def __init__(self, connection) -> None:
         self.connection = connection
+        #: The memory figures the last listing carried, per guest.
+        self._last_memory: dict[int, dict[str, int]] = {}
 
     async def _call(self, guest: GuestSession, frame) -> tuple[dict, bytes]:
         guest.proc_seq += 1
@@ -60,6 +63,12 @@ class ProcService:
         status = headers.get("status", "")
         if status != "ok":
             raise ProcError(status or "no_status")
+        mem = {}
+        for k in ("mem_kb", "mem_free_kb", "swap_kb", "swap_free_kb",
+                  "mem_load"):
+            with contextlib.suppress(KeyError, ValueError):
+                mem[k] = int(headers[k])
+        self._last_memory[id(guest)] = mem
         text = fold.decode(body, _acp(guest))
         out: list[Proc] = []
         for line in text.splitlines():
@@ -72,6 +81,20 @@ class ProcService:
                 threads = 0
             out.append(Proc(parts[0], parts[1], threads, parts[3]))
         return out, headers.get("truncated") == "1"
+
+    async def memory(self, guest: GuestSession) -> dict[str, int]:
+        """Live memory, from the PSRESULT a listing just carried: mem_kb,
+        mem_free_kb, swap_kb, swap_free_kb, mem_load. Empty for a client too
+        old to send it."""
+        return dict(self._last_memory.get(id(guest), {}))
+
+    async def launch(self, guest: GuestSession, command: str, *,
+                     cwd: str = "", show: str = "") -> dict:
+        """Start a program, do not wait. The guest's headers: status (ok,
+        not_found, bad_cwd, too_long, failed, bad_command), pid, error."""
+        headers, _ = await self._call(guest, ps_launch("", command, cwd=cwd,
+                                                       show=show))
+        return headers
 
     async def kill(self, guest: GuestSession, pid: str, *,
                    force: bool = False) -> str:

@@ -71,10 +71,79 @@ void rc_procrpc_list(rc_net *net, const rc_frame *f)
     bool ok = ps.list(lines, false);
     rc_strf(count, sizeof(count), "%d", lines.m_count);
     rc_strf(trunc, sizeof(trunc), "%d", lines.m_truncated);
-    keys[1] = "status";    vals[1] = ok ? "ok" : "failed";
-    keys[2] = "count";     vals[2] = count;
-    keys[3] = "truncated"; vals[3] = trunc;
-    rc_net_send(net, "PSRESULT", keys, vals, 4, buf.get(), lines.m_len);
+
+    /* MEMORY, NOW -- not HELLO's figure from when the client started. On a
+     * 32MB box the question "why is it slow" is usually answered by the swap
+     * line, and an agent deciding what to end needs the number as it is
+     * while it decides. GlobalMemoryStatus: everything here, every OS. */
+    MEMORYSTATUS ms;
+    char memKb[16], memFree[16], swapKb[16], swapFree[16], load[8];
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatus(&ms);
+    rc_strf(memKb, sizeof(memKb), "%lu", (unsigned long)(ms.dwTotalPhys / 1024));
+    rc_strf(memFree, sizeof(memFree), "%lu",
+            (unsigned long)(ms.dwAvailPhys / 1024));
+    rc_strf(swapKb, sizeof(swapKb), "%lu",
+            (unsigned long)(ms.dwTotalPageFile / 1024));
+    rc_strf(swapFree, sizeof(swapFree), "%lu",
+            (unsigned long)(ms.dwAvailPageFile / 1024));
+    rc_strf(load, sizeof(load), "%lu", (unsigned long)ms.dwMemoryLoad);
+
+    const char *k[9]; const char *v[9];
+    k[0] = "id";           v[0] = id;
+    k[1] = "status";       v[1] = ok ? "ok" : "failed";
+    k[2] = "count";        v[2] = count;
+    k[3] = "truncated";    v[3] = trunc;
+    k[4] = "mem_kb";       v[4] = memKb;
+    k[5] = "mem_free_kb";  v[5] = memFree;
+    k[6] = "swap_kb";      v[6] = swapKb;
+    k[7] = "swap_free_kb"; v[7] = swapFree;
+    k[8] = "mem_load";     v[8] = load;
+    rc_net_send(net, "PSRESULT", k, v, 9, buf.get(), lines.m_len);
+}
+
+/* PSLAUNCH: start a program and DO NOT wait for it.
+ *
+ * What `exec` cannot do. A live session (2026-10-02) ran `exec notepad`:
+ * EXEC waits for the process it started, so the turn sat out the whole
+ * timeout -- and then the timeout killed the Notepad it had just opened.
+ * Processes::launch hands the program nothing of ours (no handles, no
+ * console) and returns its pid at once. On the reader, like PSLIST: a
+ * CreateProcess is all it is. */
+void rc_procrpc_launch(rc_net *net, const rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    const char *command = rc_frame_get(f, "command");
+    const char *cwd = rc_frame_get(f, "cwd");
+    const char *showText = rc_frame_get(f, "show");
+    const char *keys[4]; const char *vals[4];
+    char pidText[16], errText[16];
+    DWORD pid = 0, err = 0;
+    int show = SW_SHOWNORMAL;
+    int n = 0;
+
+    if (!id) { rc_log("rpc: PSLAUNCH with no id -- dropped"); return; }
+    if (showText && !strcmp(showText, "min")) show = SW_SHOWMINNOACTIVE;
+    else if (showText && !strcmp(showText, "max")) show = SW_SHOWMAXIMIZED;
+    keys[n] = "id"; vals[n++] = id;
+    if (!command || !*command) {
+        keys[n] = "status"; vals[n++] = "bad_command";
+    } else if (!Processes::launch(command, cwd && *cwd ? cwd : NULL, show,
+                                  pid, err)) {
+        rc_strf(errText, sizeof(errText), "%lu", (unsigned long)err);
+        keys[n] = "status"; vals[n++] =
+            err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND
+                ? "not_found"
+            : err == ERROR_DIRECTORY ? "bad_cwd"
+            : err == ERROR_FILENAME_EXCED_RANGE ? "too_long" : "failed";
+        keys[n] = "error"; vals[n++] = errText;
+    } else {
+        rc_strf(pidText, sizeof(pidText), "%08lX", (unsigned long)pid);
+        keys[n] = "status"; vals[n++] = "ok";
+        keys[n] = "pid";    vals[n++] = pidText;
+    }
+    rc_log("rpc: PSLAUNCH %s -> %s", id, vals[1]);
+    rc_net_send(net, "PSLAUNCHED", keys, vals, n, NULL, 0);
 }
 
 void rc_procrpc_kill(rc_net *net, const rc_frame *f)

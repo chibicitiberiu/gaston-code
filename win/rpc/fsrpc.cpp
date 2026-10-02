@@ -10,6 +10,7 @@
 #include "fs/dir.h"
 #include "fs/drives.h"
 #include "fs/file.h"
+#include "fs/ops.h"
 #include "fs/xfer.h"
 #include "miniz.h"
 
@@ -433,7 +434,24 @@ static void do_fsls(rc_net *net, rc_frame *f)
          * The count alone cannot tell them apart and the caller acts on it. */
         if (!statPath(path, info) || info.type == 0)
                                               status = "missing";
-        else if (info.type != 'd')            status = "not_a_directory";
+        else if (info.type != 'd') {
+            /* A FILE answers with itself: one row, the same shape as a
+             * directory's, so `list_dir` on a path is also the `stat` the
+             * agent would otherwise have had to spend a tool on. The name
+             * is the last component, as a listing's would be. */
+            UniqueObj<FsEntRows> rows(new FsEntRows(net, id, 1));
+            const char *base = strrchr(path, '\\');
+            const char *slash = strrchr(path, '/');
+            if (slash && (!base || slash > base)) base = slash;
+            base = base ? base + 1 : path;
+            if (!rows.valid()) status = "no_memory";
+            else {
+                rows->onEntry(base, info);
+                rows->flush();
+                n = rows->count();
+                gone = rows->stopped();
+            }
+        }
         else {
             /* ON THE HEAP: FsEntRows carries an 8KB buffer and the build gate
              * refuses any stack frame reaching one page. */
@@ -553,6 +571,38 @@ static void do_fsdrives(rc_net *net, rc_frame *f)
     rc_net_send(net, "FSDRIVEEND", keys, vals, 2, NULL, 0);
 }
 
+/* --- the four mutations -------------------------------------------------- */
+
+/* MKDIR (with parents, an existing directory is fine), MV, RM and RMDIR, each
+ * answered with one FSOPEND carrying libfs's reason (fs/ops.h) -- the same
+ * words gremote sends for the same failures, classified once. Bounded: one
+ * syscall each, plus a one-entry listing when RMDIR has to tell "not empty"
+ * from "denied". */
+static void do_fsop(rc_net *net, rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    const char *path = rc_frame_get(f, "path");
+    const char *why;
+    const char *keys[2];
+    const char *vals[2];
+
+    if (!id) {
+        rc_log("%s: frame carries no id -- dropped", f->type);
+        return;
+    }
+    if (strcmp(f->type, "FSMKDIR") == 0)
+        why = fsMakeDirectory(path, true);
+    else if (strcmp(f->type, "FSRM") == 0)
+        why = fsRemoveFile(path);
+    else if (strcmp(f->type, "FSRMDIR") == 0)
+        why = fsRemoveDirectory(path);
+    else
+        why = fsMovePath(path, rc_frame_get(f, "to"));
+    keys[0] = "id";     vals[0] = id;
+    keys[1] = "status"; vals[1] = why ? why : "ok";
+    rc_net_send(net, "FSOPEND", keys, vals, 2, NULL, 0);
+}
+
 int rc_fsrpc_handle(rc_net *net, rc_frame *f)
 {
     if (strcmp(f->type, "FSGET") == 0)          do_fsget(net, f);
@@ -560,6 +610,9 @@ int rc_fsrpc_handle(rc_net *net, rc_frame *f)
     else if (strcmp(f->type, "FSPUTEND") == 0)  do_fsputend(net, f);
     else if (strcmp(f->type, "FSLS") == 0)      do_fsls(net, f);
     else if (strcmp(f->type, "FSDRIVES") == 0)  do_fsdrives(net, f);
+    else if (strcmp(f->type, "FSMKDIR") == 0 || strcmp(f->type, "FSMV") == 0
+             || strcmp(f->type, "FSRM") == 0
+             || strcmp(f->type, "FSRMDIR") == 0) do_fsop(net, f);
     else return 0;
     return 1;
 }

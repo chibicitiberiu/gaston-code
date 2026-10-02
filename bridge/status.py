@@ -140,15 +140,12 @@ class SyncStatus(str, Enum):
     `test_sync_status_vocabulary_matches_the_guest` to extract from both files
     is what found it.
 
-      * ls (FSENTEND):         OK, BAD_PATH, MISSING, NOT_A_DIRECTORY,
-                                LOCKED, NO_MEMORY
+      * ls (FSENTEND):         OK, BAD_PATH, MISSING, LOCKED, NO_MEMORY
+                                (a file answers as itself since 2026-10-02,
+                                so there is no "not a directory" any more)
     """
 
     OK = "ok"
-    #: FS LANE ONLY. The mirror of IS_DIRECTORY: you asked for a listing and
-    #: the path names a file. Both exist because a count of zero cannot tell
-    #: "empty directory" from "not a directory", and the caller acts on it.
-    NOT_A_DIRECTORY = "not_a_directory"
     #: FS LANE ONLY, and it predates this enum naming it: the listing sink
     #: carries an 8KB buffer and is heap-allocated because the build gate
     #: refuses a stack frame reaching one page, so `new` failing is a real
@@ -181,6 +178,16 @@ class SyncStatus(str, Enum):
     IS_FILE = "is_file"
     IS_DIRECTORY = "is_directory"
     MISSING = "missing"
+    #: The fs mutations (FSMKDIR/FSMV/FSRM/FSRMDIR, fs/ops.cpp, 2026-10-02):
+    #: a drive root is never removed or moved; RMDIR's directory was not
+    #: empty -- or, measured on 98, ACCESS_DENIED and the disk said empty --
+    #: or it is somebody's current directory; MOVE across volumes, which
+    #: MoveFileA cannot and the NT-only MoveFileExA is not allowed to.
+    DRIVE_ROOT = "drive_root"
+    NOT_EMPTY = "not_empty"
+    DENIED = "denied"
+    IS_CWD = "is_cwd"
+    CROSS_VOLUME = "cross_volume"
     #: NOT one of the guest's own tokens -- what `parse` returns for a value
     #: that is not. See `parse`'s docstring for why this exists instead of
     #: falling back to OK the way `ExecStatus.parse` does.

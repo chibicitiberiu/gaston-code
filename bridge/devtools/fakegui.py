@@ -106,6 +106,9 @@ FAKE_CAPS = {
     # every header the real client does; automation stays SCREEN, since
     # FakeGui answers no UIRUN.
     "keys": "1",
+    # The fs mutations, launch and live memory: declared for parity with the
+    # real client's HELLO; FakeGui answers none of those frames.
+    "ops": "1",
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a

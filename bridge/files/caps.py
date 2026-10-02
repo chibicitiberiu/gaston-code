@@ -321,6 +321,12 @@ class Caps:
     #: guest resolves. 0 for a client that never said -- it has only the
     #: named keys inside `keys`' own bracket syntax, and no `input` tool.
     keys: int = 0
+    #: The operations added with `input` (win/net/caps.h RC_CAP_OPS): FSLS
+    #: with a file answering as itself, the fs mutations, PSLAUNCH and live
+    #: memory on PSRESULT. 0 for a client that never said: none of their
+    #: tools are offered, because an FSLS sent to a client that predates it
+    #: is answered by nobody and `list_dir` waited out four minutes.
+    ops: int = 0
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -410,7 +416,7 @@ def from_hello(h: dict) -> Caps:
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
-        "maxfiles", "deflate", "automation", "keys"))
+        "maxfiles", "deflate", "automation", "keys", "ops"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -452,6 +458,7 @@ def from_hello(h: dict) -> Caps:
         # newer than this bridge knows is refused like any unknown enum,
         # because the names it would accept are names nobody here can check.
         keys=_num(h, "keys", 0, 0, 1),
+        ops=_num(h, "ops", 0, 0, 1),
         declared=declared,
     )
 

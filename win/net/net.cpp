@@ -521,6 +521,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                       ? RC_STR(RC_AUTOMATION_SCREEN)
                       : RC_STR(RC_AUTOMATION_NONE));
     HDR("keys",       RC_STR(RC_CAP_KEYS));
+    HDR("ops",        RC_STR(RC_CAP_OPS));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the

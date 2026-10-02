@@ -139,6 +139,8 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
             rc_procrpc_list(g_net, f);
         else if (strcmp(f->type, "PSKILL") == 0)
             rc_procrpc_kill(g_net, f);
+        else if (strcmp(f->type, "PSLAUNCH") == 0)
+            rc_procrpc_launch(g_net, f);
         rc_frame_delete(f);
         return RC_ROUTE_TAKEN;
 

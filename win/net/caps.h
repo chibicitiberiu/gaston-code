@@ -86,6 +86,15 @@ extern "C" {
  * sent to a guest that would refuse it. */
 #define RC_CAP_KEYS 1
 
+/* Which of the operations added with the `input` work this client answers,
+ * as one version (2026-10-02): FSLS -- a file answering as itself -- and the
+ * four fs mutations FSMKDIR, FSMV, FSRM and FSRMDIR; PSLAUNCH; and live
+ * memory on PSRESULT. A client that never says has none of them and the
+ * bridge offers none of the tools: an FSLS sent to a client that predates it
+ * lands on the UI thread as "unhandled", and `list_dir` waited out four
+ * minutes. */
+#define RC_CAP_OPS 1
+
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits
  * inside; Unix reserves none. A NUMBER, not a flag, so a client with a

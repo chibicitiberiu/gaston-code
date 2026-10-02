@@ -46,7 +46,12 @@ class FakeFs:
 
 
 class FakeGuest:
-    caps = None
+    #: A client that declares the operations added with `input` -- list_dir
+    #: is gated on it (an older client hung it for four minutes).
+    from bridge.files import caps as _C
+    caps = _C.Caps(ops=1)
+    work_dir = ""
+    work_guest = ""
 
 
 def _server(fs=None, workdir=""):
@@ -506,11 +511,11 @@ def test_max_entries_reaches_the_machine():
 
 def test_a_refusal_comes_back_as_a_refusal():
     fs = _fs_listing([])
-    fs.raise_status = "not_a_directory"
+    fs.raise_status = "missing"
     res = _call(_server(fs), "list_dir", {"path": r"C:\W\F.TXT"})
     bad = res["isError"] if isinstance(res, dict) else res.is_error
     assert bad
-    assert "is a file, not a folder" in _body(res)
+    assert "There is nothing at" in _body(res)
 
 
 def test_a_name_with_spaces_survives_the_wire_format():

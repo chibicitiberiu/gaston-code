@@ -329,6 +329,8 @@ description = '''
 List the programs running on the connected machine: process id (hex), parent id, thread count and program path. For finding a program that has hung, or seeing what a command left running; it works while a command is still running, so you can look for what is stuck. Changes nothing.'''
 
 [ps.view]
+memory = '''
+Memory: {free} MB free of {total} MB, {swap_used} MB in the swap file, {load}% in use.'''
 truncated = '''
 (The list was cut short; it had more processes than one reply carries.)'''
 
@@ -392,8 +394,6 @@ missing = '''
 There is nothing at "{path}" on the machine.'''
 is_directory = '''
 "{path}" is a folder, not a file.'''
-not_a_directory = '''
-"{path}" is a file, not a folder, so there is nothing to list. Its size and date are in the listing of the folder it is in.'''
 locked = '''
 "{path}" could not be read or written just now -- another program on the machine is probably holding it. Worth trying again.'''
 readonly = '''
@@ -412,8 +412,110 @@ timeout = '''
 The machine did not answer in time. It is slow, and a large file over a slow link can take minutes.'''
 disconnected = '''
 The machine disconnected before the transfer finished.'''
+exists = '''
+Something is already at the destination of "{path}"; nothing was moved. Moving never replaces -- delete the other one first if that is what you mean.'''
+is_file = '''
+"{path}" is a file, not a folder.'''
+drive_root = '''
+"{path}" is a whole drive; that is never removed or moved.'''
+not_empty = '''
+The folder "{path}" is not empty, so it was not removed. Removing folders is never recursive: delete what is inside first, after looking at it.'''
+denied = '''
+The machine refused the change to "{path}" -- it may be in use, or protected.'''
+is_cwd = '''
+"{path}" is some program's current folder, so it cannot be removed while that program runs.'''
+cross_volume = '''
+"{path}" cannot be moved to another drive on this machine -- a move only renames, within one drive. Copy it instead: get_file, put_file at the new place, then delete the old one.'''
+client_too_old = '''
+The client on this machine is too old for this tool. Update Gaston Code on the machine; until then, `exec` can do it.'''
+sync_own = '''
+"{path}" belongs to the sync layer's own folder; it is not changed by hand.'''
+unsyncable = '''
+"{path}" is inside the mirrored folder, and sync could not carry that name ({why}), so it was not created. Choose another name.'''
+in_conflict = '''
+"{path}" is inside the mirrored folder and the sync layer is holding "{held}" in conflict, so nothing there is changed until that is resolved (sync_status, then sync_resolve).'''
 unknown = '''
 The machine answered "{status}" for "{path}", which this bridge does not recognise.'''
+
+[mkdir]
+description = '''
+Create a folder on the machine, and any folders above it that are missing. A folder that is already there is fine -- it is what you asked for.'''
+
+[mkdir.args]
+path = '''
+The full path of the folder, for example `C:\\WORK\\NEW\\SUB`.'''
+
+[mkdir.view]
+done = '''
+"{path}" exists now.'''
+
+[move]
+description = '''
+Move or rename a file or a folder on the machine, within one drive. It never replaces something already at the destination, and it does not cross drives.'''
+
+[move.args]
+path = '''
+What to move: the full path of a file or folder.'''
+to = '''
+The full new path, including the name -- `C:\\WORK\\OLD.TXT` to `C:\\WORK\\ARCHIVE\\OLD.TXT`.'''
+
+[move.view]
+done = '''
+"{path}" is now "{to}".'''
+
+[delete]
+description = '''
+Delete one file on the machine. Not a folder (use rmdir), and no wildcards: one named file. A write-protected file is deleted too -- it is the file you named.'''
+
+[delete.args]
+path = '''
+The full path of the file.'''
+
+[delete.view]
+done = '''
+"{path}" is deleted.'''
+
+[rmdir]
+description = '''
+Remove an EMPTY folder on the machine. It never removes what is inside: list it, delete the files you mean to, then remove it.'''
+
+[rmdir.args]
+path = '''
+The full path of the folder.'''
+
+[rmdir.view]
+done = '''
+"{path}" is removed.'''
+
+[launch]
+description = '''
+Start a program on the machine and come straight back -- for anything with a window (Notepad, a setup program, a game). `exec` waits for its command to finish, so a program that stays open would hold it until it times out, and the timeout ends the program. Gives back the program's pid, for `ps` and `kill`.'''
+
+[launch.args]
+command = '''
+The program and its arguments: `notepad C:\\WORK\\README.TXT`, `C:\\GAMES\\SETUP.EXE /q`.'''
+cwd = '''
+The folder to start it in. Optional.'''
+show = '''
+"normal" (default), "min" to start it minimised without taking the front, or "max".'''
+
+[launch.view]
+started = '''
+Started `{command}`, pid {pid}. It is running on its own; it may take a moment to show its window -- `ui` with `wait_for` will see it arrive.'''
+
+[launch.refused]
+not_found = '''
+The machine could not find the program in `{command}`. Give its full path.'''
+bad_cwd = '''
+The folder to start `{command}` in does not exist.'''
+too_long = '''
+That command line is longer than the machine accepts.'''
+bad_command = '''
+No command was given.'''
+bad_show = '''
+`show` is "normal", "min" or "max".'''
+failed = '''
+`{command}` did not start (error {error}).'''
 
 [get_file]
 description = '''

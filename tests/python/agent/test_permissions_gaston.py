@@ -194,6 +194,16 @@ def test_an_input_call_is_described_step_by_step():
     assert "<ol>" in html and "close Notepad" in html
 
 
+def test_a_move_names_both_ends_and_a_launch_its_command():
+    line = summary("mcp__machine__move", _NoCtx(),
+                   {"path": r"C:\A.TXT", "to": r"C:\B\A.TXT"})
+    assert "Move or rename" in line and r"C:\B\A.TXT" in line
+    line = summary("mcp__machine__launch", _NoCtx(), {"command": "notepad"})
+    assert "Start a program" in line and "notepad" in line
+    line = summary("mcp__machine__delete", _NoCtx(), {"path": r"C:\X"})
+    assert "Delete a file" in line and r"C:\X" in line
+
+
 # --- MAX_BODY --------------------------------------------------------------
 
 

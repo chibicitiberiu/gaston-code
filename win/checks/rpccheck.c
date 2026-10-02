@@ -126,6 +126,12 @@ static void lane_table_cases(void)
     check_lane("FSPUT",      RC_LANE_STREAM);
     check_lane("FSPUTEND",   RC_LANE_STREAM);
     check_lane("FSDRIVES",   RC_LANE_STREAM);
+    check_lane("FSMKDIR",    RC_LANE_STREAM);
+    check_lane("FSMV",       RC_LANE_STREAM);
+    check_lane("FSRM",       RC_LANE_STREAM);
+    check_lane("FSRMDIR",    RC_LANE_STREAM);
+    /* Started on the reader like PSLIST: CreateProcess, nothing waited on. */
+    check_lane("PSLAUNCH",   RC_LANE_IMMEDIATE);
     /* And the replies, which the guest SENDS and must never route back in.
      * FSDAT is the one that would hurt: it carries file bytes, and a lane
      * rule that claimed it would hand a chunk of somebody's file to a
