@@ -392,6 +392,49 @@ void PermissionBar::pop(int kind, const char *id)
     }
 }
 
+/* ASK FOR ATTENTION when the bar needs an answer and we are not in front.
+ *
+ * The `input` tool hands the keyboard to another program, so after a list
+ * runs that program is in front and the next permission bar is behind it --
+ * measured on the VM (2026-10-02), the turn sat "waiting for you" with
+ * nothing on screen saying so. Flashing the taskbar button is the polite
+ * signal; raising ourselves would take the keyboard from whoever has it.
+ * FlashWindowEx (98 and later) flashes until we are brought forward; it is
+ * resolved, never imported, and plain FlashWindow stands in without it. */
+typedef struct
+{
+    UINT  cbSize;
+    HWND  hwnd;
+    DWORD dwFlags;
+    UINT  uCount;
+    DWORD dwTimeout;
+} RcFlashInfo;
+typedef BOOL (WINAPI *FlashExFn)(RcFlashInfo *);
+
+static void ask_attention(HWND any)
+{
+    HWND top = any;
+    while (top && (GetWindowLongA(top, GWL_STYLE) & WS_CHILD))
+        top = GetParent(top);
+    if (!top || GetForegroundWindow() == top)
+        return;
+    HMODULE u32 = GetModuleHandleA("user32.dll");
+    FlashExFn ex = u32 ? (FlashExFn)GetProcAddress(u32, "FlashWindowEx") : 0;
+    if (ex)
+    {
+        RcFlashInfo fi;
+        fi.cbSize = sizeof(fi);
+        fi.hwnd = top;
+        fi.dwFlags = 0x00000002 /* FLASHW_TRAY */
+                   | 0x0000000C /* FLASHW_TIMERNOFG */;
+        fi.uCount = 0;
+        fi.dwTimeout = 0;
+        ex(&fi);
+    }
+    else
+        FlashWindow(top, TRUE);
+}
+
 bool PermissionBar::frame(rc_frame *f)
 {
     if (strcmp(f->type, "PERMREQ") == 0 || strcmp(f->type, "PERMSTATE") == 0) {
@@ -402,6 +445,7 @@ bool PermissionBar::frame(rc_frame *f)
         const char *allows = rc_frame_get(f, "allows");
         push(BAR_PERM, id ? id : "", f->body ? f->body : "",
              allows && *allows == '1');
+        ask_attention(m_text);
         return true;
     }
     if (strcmp(f->type, "HALT") == 0) {
@@ -417,6 +461,7 @@ bool PermissionBar::frame(rc_frame *f)
         const char *txt = f->body && *f->body
                           ? f->body : "Stopped: a conflicting edit was found";
         push(BAR_HALT, id ? id : "", txt, 0);
+        ask_attention(m_text);
         return true;
     }
     if (strcmp(f->type, "PERMWAIT") == 0) {
