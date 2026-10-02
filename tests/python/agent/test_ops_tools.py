@@ -90,7 +90,7 @@ def test_a_refusal_is_the_guests_reason_in_words():
     assert err and "not empty" in text and "never recursive" in text
     fs = FakeFs("cross_volume")
     text, err = _call(Guest(), "move", {"path": r"C:\A", "to": r"D:\A"}, fs=fs)
-    assert err and "get_file" in text
+    assert err and "folders cannot" in text   # files can, measured
 
 
 def test_move_needs_both_ends():
