@@ -167,6 +167,22 @@ def test_render_request_and_summary_use_the_same_fallback_argument():
     assert "*.log" in line
 
 
+class _NoCtx:
+    display_name = None
+    title = None
+    description = None
+
+
+def test_kill_names_the_process_it_will_end():
+    """The bar read "kill" and nothing else: approving the end of a program
+    without being told which one."""
+    line = summary("mcp__machine__kill", _NoCtx(), {"pid": "FFF1A2B3"})
+    assert "End a program" in line and "FFF1A2B3" in line
+    forced = summary("mcp__machine__kill", _NoCtx(),
+                     {"pid": "FFF1A2B3", "force": True})
+    assert "forced" in forced
+
+
 # --- MAX_BODY --------------------------------------------------------------
 
 
