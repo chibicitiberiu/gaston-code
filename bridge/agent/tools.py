@@ -519,11 +519,25 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             if not text:
                 return _text(prompts.text("tools.ui.refused.no_text"),
                              error=True)
-            await ui.keys(guest, text, target=str(a.get("target") or ""),
-                          settle=max(0, min(int(a.get("settle") or 0), 5000)))
+            headers = await ui.keys(
+                guest, text, target=str(a.get("target") or ""),
+                settle=max(0, min(int(a.get("settle") or 0), 5000)))
             where = a.get("target") or "the focused control"
+            # KEYSTROKES AS THE GUEST COUNTED THEM, not the length of the
+            # string. With named keys the two parted company: `[Enter]` is
+            # seven characters and one keypress, and this said "Typed 7
+            # characters" (real hardware, 2026-10-02, where
+            # `[Down]x6[Enter]` was reported as 43). `len(text)` survives as
+            # the fallback for a client too old to send the count, where it is
+            # still the only number available and was always what was meant.
+            n = len(text)
+            try:
+                if headers and headers.get("keys"):
+                    n = int(headers["keys"])
+            except (TypeError, ValueError):
+                pass
             return _text(_ctrl_a_note(text) + prompts.text("tools.ui.view.typed",
-                                      n=len(text), where=where))
+                                      n=n, where=where))
         except UnicodeEncodeError:
             # fold.encode_exact refuses rather than approximating. Typing an
             # approximation of what was asked for is how the wrong thing

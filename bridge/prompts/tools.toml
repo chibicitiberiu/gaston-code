@@ -274,8 +274,11 @@ clicked = '''
 Clicked {target}.'''
 focused = '''
 Brought the window containing {target} to the front.'''
+# KEYSTROKES, not characters. `[Enter]` is one keypress and seven characters,
+# and saying "characters" meant the agent could not tell how many keys had
+# actually gone in -- `[Down][Down][Down][Down][Down][Down][Enter]` reported 43.
 typed = '''
-Typed {n} characters into {where}.'''
+Sent {n} keystrokes to {where}.'''
 
 
 [ps]

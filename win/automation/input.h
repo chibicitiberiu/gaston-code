@@ -104,8 +104,15 @@ public:
      * is what used to happen: the brackets went into the user's text box and
      * the call reported success. Pass NULL for `badKey` if the name is not
      * wanted. */
+    /* `sent`, when given, receives the number of KEYSTROKES delivered -- not
+     * the length of `text`. With named keys the two stopped being the same
+     * thing: `[Enter]` is seven characters and one keypress, and the caller's
+     * reply said "Typed 7 characters" (measured on real hardware,
+     * 2026-10-02, where `[Down][Down][Down][Down][Down][Down][Enter]` was
+     * reported as 43). */
     InputResult typeText(HWND target, const char *text,
-                         char *badKey = 0, unsigned badKeySize = 0);
+                         char *badKey = 0, unsigned badKeySize = 0,
+                         unsigned *sent = 0);
     InputResult pressKey(HWND target, int vk);
 
     bool usingSendInput() const { return m_sendInput != 0; }

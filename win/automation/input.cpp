@@ -435,8 +435,12 @@ static unsigned parseKeyToken(const char *p, int &vk, int &mods)
 }
 
 InputResult Input::typeText(HWND target, const char *text,
-                            char *badKey, unsigned badKeySize)
+                            char *badKey, unsigned badKeySize,
+                            unsigned *sent)
 {
+    unsigned keys = 0;
+    if (sent)
+        *sent = 0;
     if (badKey && badKeySize)
         badKey[0] = '\0';
     if (!text)
@@ -542,6 +546,9 @@ InputResult Input::typeText(HWND target, const char *text,
          * through a string, and the rest would go to whatever inherited the
          * foreground -- which is exactly how a DELTREE ended up half in a
          * DOS box and half in a chat input on this project's own VM. */
+        keys++;
+        if (sent)
+            *sent = keys;
         if (GetForegroundWindow() != rootOf(target))
             return INPUT_NOT_FOREGROUND;
         p += used;

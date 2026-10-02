@@ -184,3 +184,67 @@ def test_it_is_a_note_and_not_a_refusal():
     a sentence and leaves the capability alone."""
     from bridge.agent.tools import _ctrl_a_note
     assert _ctrl_a_note("[Ctrl+A]x").strip().startswith("Note:")
+
+
+# --- the reply has to say what actually happened ---------------------------
+
+class CountingUi(FakeUi):
+    def __init__(self, headers=None):
+        super().__init__()
+        self._headers = headers or {}
+
+    async def keys(self, guest, text, *, target="", settle=0, timeout_ms=8000):
+        self.calls.append({"text": text, "target": target})
+        return dict(self._headers)
+
+
+def _keys_server(ui):
+    return machine_tools.build(None, None, None, AutomationGuest(),
+                               ui=ui)["machine"]["instance"]
+
+
+def test_the_reply_counts_keystrokes_not_characters():
+    """`[Enter]` is seven characters and ONE keypress. Measured on real
+    hardware 2026-10-02: `[Down][Down][Down][Down][Down][Down][Enter]` came
+    back as "Typed 43 characters", which is the length of the string and tells
+    the agent nothing about what went in."""
+    ui = CountingUi({"keys": "7"})
+    out = _body(_call(_keys_server(ui), "keys",
+                      {"text": "[Down][Down][Down][Down][Down][Down][Enter]"}))
+    assert "7 keystrokes" in out
+    assert "43" not in out
+
+
+def test_one_named_key_is_one_keystroke():
+    ui = CountingUi({"keys": "1"})
+    out = _body(_call(_keys_server(ui), "keys", {"text": "[Enter]"}))
+    assert "1 keystrokes" in out      # grammar is not worth a branch here
+
+
+def test_a_client_too_old_to_count_still_gets_a_number():
+    """The count arrives in a header a previous client does not send. Falling
+    back to the string length is what this always did, and for plain text it
+    is still exactly right."""
+    ui = CountingUi({})
+    out = _body(_call(_keys_server(ui), "keys", {"text": "hello"}))
+    assert "5 keystrokes" in out
+
+
+def test_a_nonsense_count_does_not_break_the_reply():
+    ui = CountingUi({"keys": "banana"})
+    out = _body(_call(_keys_server(ui), "keys", {"text": "hello"}))
+    assert "5 keystrokes" in out
+
+
+def test_an_ambiguous_wait_is_not_reported_as_nothing_found():
+    """THE ONE THAT SENT AN AGENT LOOKING FOR AN OPEN WINDOW. `ui
+    wait_for='[text="Control Panel"]'` came back `end=3 ... matched=3` and the
+    bridge rendered it "Nothing on screen matches that selector ... the window
+    may not be open". Three things matched; the title appears on the frame, the
+    toolbar and the address bar. The guest sends `ambiguous` for that now."""
+    from bridge.agent.tools import _ui_explain
+    from bridge.services.ui import UiError
+    out = _ui_explain(UiError("ambiguous", "3 controls match after 5005ms"))
+    assert "More than one control" in out
+    assert "Nothing on screen" not in out
+    assert ":nth(" in out            # and what to do about it
