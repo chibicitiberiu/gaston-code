@@ -149,3 +149,38 @@ def test_an_unknown_key_is_reported_with_the_token():
     assert "[Frobnicate]" in out
     assert "NOTHING was typed" in out
     assert "Delete" in out          # and what it could have written instead
+
+
+# --- Ctrl+A is not select-all on this machine -------------------------------
+#
+# Measured twice on 2026-10-02: on a custom Win32 edit control, and on Notepad,
+# where `[Ctrl+A]goodbye` against a box holding "hello" produced "hellogoodbye".
+# It does nothing and nothing reports that it did nothing.
+#
+# THE ARGUMENT DESCRIPTION ALREADY SAID SO AND THE AGENT DID IT ANYWAY, in the
+# live VM run this was added during. An argument description is the part of a
+# schema a model attends to least.
+
+def test_ctrl_a_is_called_out_on_the_result():
+    from bridge.agent.tools import _ctrl_a_note
+    for text in ("[Ctrl+A]goodbye", "{control+a}x", "[ctrl + A]", "[CTRL+A]"):
+        assert _ctrl_a_note(text), text
+    note = _ctrl_a_note("[Ctrl+A]x")
+    assert "did nothing" in note
+    assert "[Home][Shift+End]" in note      # and what to do instead
+
+
+def test_nothing_else_trips_it():
+    """A note on every call would be noise, and `[Ctrl+Alt+A]` is a different
+    key combination that nothing has measured."""
+    from bridge.agent.tools import _ctrl_a_note
+    for text in ("hello", "[Shift+A]", "[Ctrl+Alt+A]", "[Ctrl+B]", "a[[b"):
+        assert not _ctrl_a_note(text), text
+
+
+def test_it_is_a_note_and_not_a_refusal():
+    """Two apps are not every app. An application that implements the
+    accelerator itself would be blocked by a refusal for no reason; this costs
+    a sentence and leaves the capability alone."""
+    from bridge.agent.tools import _ctrl_a_note
+    assert _ctrl_a_note("[Ctrl+A]x").strip().startswith("Note:")

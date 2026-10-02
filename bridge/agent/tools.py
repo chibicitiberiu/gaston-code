@@ -23,6 +23,7 @@ import base64
 import logging
 import os
 import pathlib
+import re
 from typing import Annotated
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -73,6 +74,32 @@ def _selector_part(target: str, step: str) -> str:
         cur.append(ch)
     parts.append("".join(cur).strip())
     return parts[want] if 0 <= want < len(parts) else ""
+
+
+#: `[Ctrl+A]` as select-all, in any of the spellings the parser accepts.
+_CTRL_A = re.compile(r"[\[{]\s*(?:ctrl|control)\s*\+\s*a\s*[\]}]", re.I)
+
+
+def _ctrl_a_note(text: str) -> str:
+    """Said on the RESULT, not refused, and not left to the argument text.
+
+    Ctrl+A is not select-all on this machine -- measured twice on 2026-10-02,
+    on a custom Win32 edit control and on Notepad, where `[Ctrl+A]goodbye`
+    against a box holding "hello" produced "hellogoodbye". It does nothing and
+    nothing reports that it did nothing, which is exactly the shape of failure
+    the tool notes exist for.
+
+    THE ARGUMENT DESCRIPTION ALREADY SAID SO AND THE AGENT DID IT ANYWAY, in
+    the very session this was added for. An argument description is the part of
+    a schema a model attends to least; a line in the result arrives after the
+    act, when it is the only thing between the agent and a wrong conclusion
+    about what is in the box.
+
+    A NOTE AND NOT A REFUSAL. Two apps are not every app, and an application
+    that implements the accelerator itself would be blocked by a refusal for no
+    reason. This costs a sentence and leaves the capability alone.
+    """
+    return prompts.text("tools.ui.view.ctrl_a") + "\n" if _CTRL_A.search(text) else ""
 
 
 def _ui_explain(exc: UiError, target: str = "") -> str:
@@ -495,7 +522,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             await ui.keys(guest, text, target=str(a.get("target") or ""),
                           settle=max(0, min(int(a.get("settle") or 0), 5000)))
             where = a.get("target") or "the focused control"
-            return _text(prompts.text("tools.ui.view.typed",
+            return _text(_ctrl_a_note(text) + prompts.text("tools.ui.view.typed",
                                       n=len(text), where=where))
         except UnicodeEncodeError:
             # fold.encode_exact refuses rather than approximating. Typing an

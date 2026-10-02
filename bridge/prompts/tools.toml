@@ -233,6 +233,13 @@ The machine refused: {status}.'''
 # output, because a short list read as a complete one is how an agent
 # concludes a control is not there.
 [ui.view]
+# Ctrl+A is not select-all on this machine: measured twice on 2026-10-02,
+# on a custom Win32 edit control and on Notepad, where `[Ctrl+A]goodbye`
+# against a box holding "hello" gave "hellogoodbye". Said on the RESULT
+# because the ARGUMENT description already said it and the agent used
+# Ctrl+A anyway, in the session this was added for.
+ctrl_a = '''
+Note: Ctrl+A is not select-all on this machine and did nothing. To replace what is in a box, select it with `[Home][Shift+End]` and type over that.'''
 empty = '''
 Nothing on screen answered. Either no windows match, or this program draws itself rather than using controls -- try `shot`.'''
 incomplete = '''

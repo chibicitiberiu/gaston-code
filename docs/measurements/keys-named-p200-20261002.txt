@@ -101,7 +101,50 @@ the end -- which is correct, and only visible because the expected string was
 written down before the run.
 
 
-5. The modifier bits were nearly wrong in silence
+5. The whole thing, end to end, in the QEMU guest -- before and after
+----------------------------------------------------------------------
+
+Machine : the QEMU Win98 guest (32MB, `GenuineIntel x86 family 6 model 5`),
+          driven through the real client over QMP, with a bridge on the host's
+          loopback. One prompt, typed into the client's own input box:
+
+    Start notepad on the machine, type hello into it, then replace all that
+    text with goodbye. Use the ui tools and tell me what the box says at the
+    end.
+
+BEFORE, on a bridge built before the note below existed. The agent read the
+argument description -- which already said Ctrl+A is not select-all -- and used
+Ctrl+A anyway:
+
+    [Ctrl+A]goodbye        -> Notepad held "hellogoodbye"
+    [Ctrl+A][Delete]       -> no change
+    goodbye                -> "hellogoodbyegoodbye"
+
+That is the user's original report reproduced exactly: "pressing special keys
+like delete (or Ctrl+A Delete) didn't work properly". And it confirms the
+measurement generalises -- Notepad is a second, unrelated application, and
+Ctrl+A does nothing there either. Win98's Notepad has no Ctrl+A accelerator;
+that arrived in a later Windows.
+
+AFTER, with the same prompt, same guest, and the note added to the RESULT of a
+`keys` call rather than only to the argument description:
+
+    Typed 32 characters into Notepad > Edit.
+    Notepad held "goodbye"
+
+32 characters is `[Home][Shift+End][Delete]goodbye` exactly. The agent used the
+documented idiom and got it right the first time.
+
+WHY THE NOTE IS ON THE RESULT. The argument description is the part of a tool
+schema a model attends to least, and the before-run proves it: the warning was
+there and was ignored. A line in the result arrives after the act, when it is
+the only thing standing between the agent and a wrong conclusion about what is
+in the box. It is a note and not a refusal, because two applications are not
+every application and one that implements the accelerator itself should not be
+blocked for no reason.
+
+
+6. The modifier bits were nearly wrong in silence
 -------------------------------------------------
 
 `MOD_SHIFT`, `MOD_CONTROL` and `MOD_ALT` are already macros in winuser.h for

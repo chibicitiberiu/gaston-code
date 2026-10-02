@@ -40,7 +40,17 @@ rm -f "$VM/qmp.sock"
 # Hardware choices, all from the compatibility notes in docs/PLAN.md:
 #   i440fx    -- not q35; Win98 predates it
 #   pentium2  -- matches the target class and avoids the fast-CPU loop bug
-#   pcnet     -- the NIC most consistently reported working on Win98
+#   pcnet     -- the NIC most consistently reported working on Win98, AND NOT
+#                THE ONE vm/win98.qcow2 HAS A DRIVER FOR. The libvirt domain
+#                `retroclaude-win98` gives that disk an `ne2k_isa` at
+#                iobase=0x200 irq=0x3, hand-configured once, and the installed
+#                driver matches THAT. Booting the same disk through this script
+#                comes up to "Your network adapter NE2000 Compatible (0000) is
+#                not working properly" and has no network at all (measured
+#                2026-10-02). Use `virsh -c qemu:///session start
+#                retroclaude-win98` for anything that needs the bridge; this
+#                script is for a guest that only needs a screen. Both open the
+#                same qcow2, so never run both.
 #   cirrus    -- has an in-box Win98 driver
 #   usb-tablet is NOT used: Win98 has no HID tablet driver, so absolute
 #   positioning would silently do nothing. PS/2 mouse it is.
