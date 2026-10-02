@@ -17,6 +17,7 @@ static void beginReport(WaitReport &out, bool polled)
     out.everMatched = false;
     out.haveNode = false;
     memset(&out.node, 0, sizeof(out.node));
+    out.sampleN = 0;
 }
 
 /* One scan. True when the selector resolved to exactly one control, with
@@ -28,6 +29,9 @@ bool UiWaiter::scan(const Selector &sel, const WalkOptions &opt,
     outcome = r.resolve(opt, m_walker);
     out.rechecks++;
     out.matchCount = r.matchCount();
+    out.sampleN = 0;
+    for (int i = 0; i < r.sampleCount() && i < RC_SAMPLE_MAX; i++)
+        out.samples[out.sampleN++] = r.sample(i)->hwnd;
     if (outcome == RESOLVE_OK && r.match())
     {
         out.node = *r.match();

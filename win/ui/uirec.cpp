@@ -239,3 +239,85 @@ unsigned rc_uirec_item(char *out, unsigned cap, const char *text,
     return emit(out, cap, RC_SRC_ACC, path, parent, 0L, index, r,
                 RC_NF_VISIBLE, t);
 }
+
+/* ---- ambiguity candidates ------------------------------------------- */
+
+static unsigned encodedCost(unsigned char c)
+{
+    return (c < 0x20 || c >= 0x7F || c == '%') ? 3u : 1u;
+}
+
+/* Append `<len>:<bytes>` for as much of `s` (at most `fieldMax` bytes) as
+ * fits in what is left of the encoded budget. The length and colon are
+ * ASCII and cost what they are. */
+static void putField(char *out, unsigned cap, unsigned &n, unsigned &spent,
+                     const char *s, unsigned fieldMax)
+{
+    unsigned take = 0, cost = 0;
+    char num[12];
+    unsigned numLen;
+    /* The prefix is at most three digits and a colon at these sizes. */
+    while (s[take] && take < fieldMax)
+    {
+        unsigned c = encodedCost((unsigned char)s[take]);
+        if (spent + 4 + cost + c > RC_CAND_BUDGET)
+            break;
+        cost += c;
+        take++;
+    }
+    rc_strf(num, sizeof(num), "%u:", take);
+    numLen = (unsigned)strlen(num);
+    if (n + numLen + take + 1 > cap)
+        return;
+    memcpy(out + n, num, numLen);
+    memcpy(out + n + numLen, s, take);
+    n += numLen + take;
+    out[n] = '\0';
+    spent += numLen + cost;
+}
+
+static HWND candidateRoot(HWND h)
+{
+    while (h && (GetWindowLongA(h, GWL_STYLE) & WS_CHILD))
+    {
+        HWND p = GetParent(h);
+        if (!p || p == h)
+            break;
+        h = p;
+    }
+    return h;
+}
+
+unsigned rc_uirec_candidate(char *out, unsigned cap, HWND h)
+{
+    char cls[RC_CLASS_MAX];
+    char text[64];
+    HWND chain[3];
+    unsigned n = 0, spent = 0;
+    int i;
+
+    if (!out || !cap)
+        return 0;
+    out[0] = '\0';
+    chain[0] = h;
+    chain[1] = (GetWindowLongA(h, GWL_STYLE) & WS_CHILD) ? GetParent(h) : 0;
+    chain[2] = candidateRoot(h);
+    /* No ancestor to tell apart: say so with empty fields rather than
+     * repeating the control as its own parent. */
+    if (chain[2] == h)
+        chain[2] = 0;
+    if (chain[1] == chain[2])
+        chain[1] = 0;
+    for (i = 0; i < 3; i++)
+    {
+        cls[0] = text[0] = '\0';
+        if (chain[i] && IsWindow(chain[i]))
+        {
+            GetClassNameA(chain[i], cls, sizeof(cls));
+            GetWindowTextA(chain[i], text, sizeof(text));
+        }
+        putField(out, cap, n, spent, cls, sizeof(cls));
+        putField(out, cap, n, spent, text, 48);
+    }
+    return n;
+}

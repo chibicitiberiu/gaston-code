@@ -46,6 +46,10 @@ struct WaitReport
     bool    everMatched; /* the control was seen at least once */
     bool    haveNode;
     Node    node;        /* the match, when haveNode */
+    /* On ambiguity, which controls collided -- handles only, this session's,
+     * so the reply can name them without a Node apiece on the stack. */
+    int     sampleN;
+    HWND    samples[RC_SAMPLE_MAX];
 };
 
 /* How often a wait rescans when there is no event feed to ride. Only

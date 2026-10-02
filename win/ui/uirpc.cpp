@@ -83,6 +83,30 @@ static void ui_end(rc_net *net, const char *id, const char *status,
     rc_net_send(net, "UIEND", k, v, n, NULL, 0);
 }
 
+/* "More than one matched", with WHO matched: up to RC_SAMPLE_MAX
+ * candidates, each with the ancestors the agent can narrow by. A count alone
+ * sent the agent to `:nth`, which picks by position -- the one choice that
+ * silently changes meaning when a window opens. */
+static void ui_end_ambiguous(rc_net *net, const char *id, const char *detail,
+                             const HWND *cand, int candN)
+{
+    static const char *const CAND_KEYS[RC_SAMPLE_MAX] =
+        { "cand1", "cand2", "cand3" };
+    char vals[RC_SAMPLE_MAX][RC_CAND_BUDGET + 16];
+    const char *k[1 + RC_SAMPLE_MAX];
+    const char *v[1 + RC_SAMPLE_MAX];
+    int n = 0, i;
+
+    k[n] = "detail"; v[n++] = detail;
+    for (i = 0; i < candN && i < RC_SAMPLE_MAX; i++)
+    {
+        if (!rc_uirec_candidate(vals[i], sizeof(vals[i]), cand[i]))
+            continue;
+        k[n] = CAND_KEYS[i]; v[n++] = vals[i];
+    }
+    ui_end(net, id, "ambiguous", k, v, n);
+}
+
 void rc_uirpc_refuse(rc_net *net, rc_frame *f, const char *why)
 {
     const char *id = rc_frame_get(f, "id");
@@ -490,6 +514,11 @@ static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
                         (unsigned long)rep.ms, rep.rechecks,
                         rep.everMatched ? "it appeared and then went"
                                         : "it never appeared");
+            if (rep.end == UIWAIT_AMBIGUOUS)
+            {
+                ui_end_ambiguous(net, id, detail, rep.samples, rep.sampleN);
+                return;
+            }
             k[0] = "detail"; v[0] = detail;
             ui_end(net, id, why, k, v, 1);
             return;
@@ -567,9 +596,12 @@ static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
     if (out == RESOLVE_AMBIGUOUS)
     {
         char detail[64];
+        HWND cand[RC_SAMPLE_MAX];
+        int candN = 0;
         rc_strf(detail, sizeof(detail), "%d controls match", r.matchCount());
-        k[0] = "detail"; v[0] = detail;
-        ui_end(net, id, "ambiguous", k, v, 1);
+        for (int i = 0; i < r.sampleCount() && i < RC_SAMPLE_MAX; i++)
+            cand[candN++] = r.sample(i)->hwnd;
+        ui_end_ambiguous(net, id, detail, cand, candN);
         return NULL;
     }
     if (out == RESOLVE_TRUNCATED)

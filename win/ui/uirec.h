@@ -92,4 +92,21 @@ unsigned rc_uirec_inproc(char *out, unsigned cap, const RcInNode &n,
 unsigned rc_uirec_item(char *out, unsigned cap, const char *text,
                        const char *path, const char *parent, long index);
 
+/* One control a selector matched when it should have matched one, as a
+ * HEADER VALUE for an `ambiguous` reply: its class and caption, its parent's,
+ * and its top-level window's -- the ancestors the agent can narrow by.
+ *
+ * Six netstring fields, `<len>:<bytes>` each, because a caption may hold any
+ * byte and a separator would split on the first one that held it. Sized by
+ * what it ENCODES to, not what it is: a header value is refused past 255
+ * encoded bytes and every non-ASCII byte is three, so a German caption
+ * counted raw would lose the whole reply. Captions are cut to fit; the
+ * bridge suggests a prefix glob, which a cut caption still matches.
+ *
+ * GetWindowText, never WM_GETTEXT: for another process's window it reads
+ * the caption USER already holds and sends nothing, so a hung program costs
+ * the reply nothing. */
+#define RC_CAND_BUDGET 240
+unsigned rc_uirec_candidate(char *out, unsigned cap, HWND h);
+
 #endif
