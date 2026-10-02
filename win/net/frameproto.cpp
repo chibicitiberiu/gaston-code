@@ -21,6 +21,11 @@ const rc_lane_row RC_LANE_TABLE[] = {
     { "UIKEYS",   RC_LANE_DESKTOP },
     { "UISHOT",   RC_LANE_DESKTOP },
     { "UIFOCUS",  RC_LANE_DESKTOP },
+    /* The `input` step list, and its stop. UICANCEL is IMMEDIATE because
+     * the desktop worker is the thread running the list it is meant to
+     * stop -- queued behind it, it would arrive when the list had ended. */
+    { "UIRUN",    RC_LANE_DESKTOP },
+    { "UICANCEL", RC_LANE_IMMEDIATE },
     /* The fs lane (step 5a). STREAM, alongside the sync frames, because that
      * is what they are: bounded file I/O on the worker that already blocks on
      * the disk. REMOTE.md gives gremote a thread of its own for these, and

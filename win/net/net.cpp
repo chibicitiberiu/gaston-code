@@ -192,8 +192,9 @@ void rc_net_set_automation(rc_net *n, int mode)
      * passed through: the bridge refuses a value it does not know, and a
      * refused handshake over a mistyped setting would take the whole client
      * down rather than one capability. */
-    n->automation = (mode == RC_AUTOMATION_SCREEN) ? RC_AUTOMATION_SCREEN
-                                                   : RC_AUTOMATION_NONE;
+    n->automation = (mode == RC_AUTOMATION_SCREEN
+                     || mode == RC_AUTOMATION_STEPS) ? mode
+                                                     : RC_AUTOMATION_NONE;
 }
 
 /* The only way to add a HELLO header. Drops rather than overruns, and says so.
@@ -514,9 +515,12 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      *
      * A literal either way, so no buffer: rc_net_set_automation has already
      * reduced whatever was configured to one of the two values. */
-    HDR("automation", n->automation == RC_AUTOMATION_SCREEN
+    HDR("automation", n->automation == RC_AUTOMATION_STEPS
+                      ? RC_STR(RC_AUTOMATION_STEPS)
+                      : n->automation == RC_AUTOMATION_SCREEN
                       ? RC_STR(RC_AUTOMATION_SCREEN)
                       : RC_STR(RC_AUTOMATION_NONE));
+    HDR("keys",       RC_STR(RC_CAP_KEYS));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the

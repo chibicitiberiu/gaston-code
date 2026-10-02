@@ -133,6 +133,8 @@ int rc_rpc_route(rc_frame *f, volatile LONG *running)
             if (kid) cancel_job(kid);
             else rc_log("rpc: EXECKILL with no id -- ignored");
         }
+        else if (strcmp(f->type, "UICANCEL") == 0)
+            rc_uirpc_cancel(rc_frame_get(f, "id"));
         else if (strcmp(f->type, "PSLIST") == 0)
             rc_procrpc_list(g_net, f);
         else if (strcmp(f->type, "PSKILL") == 0)

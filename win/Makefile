@@ -180,7 +180,7 @@ AUTOMATION_SRCS = automation/tree.cpp automation/select.cpp \
                   automation/resolve.cpp automation/watch.cpp \
                   automation/wait.cpp automation/calldeadline.cpp \
                   automation/input.cpp automation/msaa.cpp \
-                  automation/shot.cpp
+                  automation/shot.cpp automation/steps.cpp
 LIBAUTOMATION = $(LIBDIR)/libautomation.lib
 
 # A target's inputs are objects, libraries and (for the client) a .res; this
@@ -196,7 +196,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
        rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
        sync/syncrpc.cpp \
-       ui/uiservice.cpp ui/uirpc.cpp ui/uirec.cpp ui/inject.cpp
+       ui/uiservice.cpp ui/uirpc.cpp ui/uisteps.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libexec before libcore: the first three
 # call into libcore, and wlink resolves in the order the libraries are named.
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
@@ -522,7 +522,7 @@ all: msgids $(BUILD)/gaston.exe gremote gupdate synccheck inicheck idcheck inifi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
-                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uisteps.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
@@ -537,7 +537,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
-                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uirec.cpp \
+                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uisteps.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
@@ -647,6 +647,15 @@ $(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 $(OBJ)/fs/path.o $(OBJ)/fs/file.o $(OBJ)/fs/dir.o $(OBJ)/fs/list.o \
 $(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o $(OBJ)/fs/freespace.o \
 $(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+
+# The `input` step list and the code it drives, for the same reason as
+# app/: a step is a resolve, a syscall and a refusal, and its cost is the
+# target program's -- never a loop of ours over bytes. Measured 2026-10-02:
+# steps.o was 22.5 KB of code at -otexan with its helpers inlined into one
+# 6.7 KB `run`. select.o and the walker keep -otexan; the matcher runs over
+# every node of every scan.
+$(OBJ)/automation/steps.o $(OBJ)/automation/input.o $(OBJ)/ui/uisteps.o \
+$(OBJ)/ui/uirpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # And the same now applies to most of sync/. The note above says sync/ keeps
 # -otexan for "the codec, the CRC pass and the transfer loops"; after step 5a

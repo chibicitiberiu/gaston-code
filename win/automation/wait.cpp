@@ -3,7 +3,7 @@
 #include <string.h>
 
 UiWaiter::UiWaiter(UiWatch &watch, TreeWalker &walker, MsaaSource *msaa)
-    : m_watch(watch), m_walker(walker), m_msaa(msaa)
+    : m_watch(watch), m_walker(walker), m_msaa(msaa), m_cancel(0)
 {
 }
 
@@ -90,6 +90,12 @@ void UiWaiter::loop(WaitMode mode, const Selector &sel, const char *substring,
                 break;
 
             m_watch.settle(sliceFor(polled, left));
+            if (cancelled())
+            {
+                out.end = UIWAIT_CANCELLED;
+                out.ms = GetTickCount() - t0;
+                return;
+            }
 
             /* Two reasons to look again, and only two. An event says the
              * desktop changed. The backstop says we have not looked for a
@@ -224,6 +230,12 @@ void UiWaiter::forIdle(DWORD quietMs, DWORD budgetMs, WaitReport &out)
             need = left;
 
         m_watch.settle((DWORD)need);
+        if (cancelled())
+        {
+            out.end = UIWAIT_CANCELLED;
+            out.ms = GetTickCount() - t0;
+            return;
+        }
 
         unsigned now = m_watch.anySeq();
         if (now != seq)

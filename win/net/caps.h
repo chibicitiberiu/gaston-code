@@ -75,6 +75,16 @@ extern "C" {
  * no screen to drive) declares the safe thing by construction. */
 #define RC_AUTOMATION_NONE   0  /* no screen: the five ui tools do not exist */
 #define RC_AUTOMATION_SCREEN 1  /* read the screen, click, type, shoot, focus */
+/* SCREEN plus UIRUN: a list of steps in one request, run on the guest with
+ * held-key release, the focus check and its own timeouts. A client that
+ * declares it is offered the `input` tool in place of click/keys/focus. */
+#define RC_AUTOMATION_STEPS  2
+
+/* Which key NAMES this client resolves -- the version of the bridge's
+ * frozen, append-only table (bridge/agent/keynames.py, KEYS_V1). A name
+ * newer than this is refused on the bridge, naming the step, rather than
+ * sent to a guest that would refuse it. */
+#define RC_CAP_KEYS 1
 
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits

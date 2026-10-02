@@ -216,7 +216,7 @@ bool ClientApp::initializeServices()
      * connection service exists, so the very first HELLO carries it -- the
      * bridge builds the tool list from it, and a capability that arrived
      * after the handshake would arrive after the session it has to shape. */
-    rc_net_set_automation(&m_net, m_config.automation ? RC_AUTOMATION_SCREEN
+    rc_net_set_automation(&m_net, m_config.automation ? RC_AUTOMATION_STEPS
                                                       : RC_AUTOMATION_NONE);
 
     return initService(m_window, new MainWindow(instance(), m_show, this,

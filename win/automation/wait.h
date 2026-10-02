@@ -33,7 +33,8 @@ enum WaitEnd
     UIWAIT_SETTLED,       /* became true while we watched */
     UIWAIT_TIMEOUT,       /* the budget ran out, and it never did */
     UIWAIT_AMBIGUOUS,     /* matched, but more than once; see matchCount */
-    UIWAIT_TRUNCATED      /* a walk kept ending early; the answer is not known */
+    UIWAIT_TRUNCATED,     /* a walk kept ending early; the answer is not known */
+    UIWAIT_CANCELLED      /* the caller's stop flag went up mid-wait */
 };
 
 struct WaitReport
@@ -98,7 +99,15 @@ public:
      * tree scans at all. */
     void forIdle(DWORD quietMs, DWORD budgetMs, WaitReport &out);
 
+    /* A flag another thread may raise to end a wait early. Looked at once
+     * per slice -- at most RC_WAIT_BACKSTOP_MS apart -- so a ten-minute wait
+     * the bridge has given up on stops within a second rather than sitting
+     * out its budget on a lane nothing else can use. NULL: never. */
+    void setCancel(volatile LONG *flag) { m_cancel = flag; }
+
 private:
+    bool cancelled() const { return m_cancel && *m_cancel; }
+
     /* All four waits are one loop with a different question at the bottom.
      * Keeping them one loop is what stops the backstop, the ordering and the
      * truncation rule from being got right in two places out of three. */
@@ -112,6 +121,7 @@ private:
     UiWatch    &m_watch;
     TreeWalker &m_walker;
     MsaaSource *m_msaa;
+    volatile LONG *m_cancel;
 
     UiWaiter(const UiWaiter &);
     UiWaiter &operator=(const UiWaiter &);

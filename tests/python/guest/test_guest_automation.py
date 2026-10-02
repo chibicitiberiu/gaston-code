@@ -36,7 +36,13 @@ def test_every_case_passes(verdicts):
 #: 147 -> 164 later the same day: the `~=` glob, mnemonic `&` ignored in
 #: captions and names, and `*` as an any-class step -- an agent rarely knows
 #: a caption to the letter, and "&OK" missed an exact "OK".
-CASE_COUNT = 164
+#:
+#: 164 -> 179: the `input` step runner -- a pause, a wait ending at its own
+#: timeout, the script's ceiling, a cancel, a bad key and a bad selector by
+#: name, KEYS_V1 resolving with right-hand modifiers by side, and text inside
+#: an Edit found, refused when twice, picked by text_nth, globbed, and refused
+#: on a control that is not an Edit.
+CASE_COUNT = 179
 
 
 def test_every_case_ran(verdicts):

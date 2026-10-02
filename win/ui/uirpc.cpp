@@ -985,5 +985,6 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
     else if (strcmp(f->type, "UIKEYS")  == 0) do_keys(net, ctx, f);
     else if (strcmp(f->type, "UISHOT")  == 0) do_shot(net, ctx, f);
     else if (strcmp(f->type, "UIFOCUS") == 0) do_focus(net, ctx, f);
+    else if (strcmp(f->type, "UIRUN")   == 0) rc_uirpc_run(net, ctx, f);
     else rc_log("desktop: unhandled frame %s", f->type);
 }

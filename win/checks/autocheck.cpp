@@ -18,6 +18,7 @@
 #include "automation/msaa.h"
 #include "automation/calldeadline.h"
 #include "automation/shot.h"
+#include "automation/steps.h"
 #include "core/rc_cpp.h"
 #include "core/str.h"
 
@@ -1825,12 +1826,234 @@ static int writeShot(const char *path)
     return 0;
 }
 
+
+/* --- the `input` step list ------------------------------------------- */
+
+/* Records what the runner reported, step by step. */
+class StepLog : public StepSink
+{
+public:
+    StepLog() : n(0) {}
+    virtual void onStep(int, const Step &, const StepReport &r)
+    {
+        if (n < 8)
+        {
+            status[n] = r.status;
+            ms[n] = r.ms;
+            rc_strf(detail[n], sizeof(detail[n]), "%s", r.detail);
+            n++;
+        }
+    }
+    int n;
+    const char *status[8];
+    DWORD ms[8];
+    char detail[8][160];
+};
+
+static int runSteps(Step *steps, int count, DWORD scriptMs,
+                    volatile LONG *cancel, StepLog &log, StepReport &failed)
+{
+    static TreeWalker walker;
+    static UiWatch watch;
+    static Input input;
+    StepRunner runner(walker, NULL, watch, input, NULL);
+    WalkOptions o;
+    o.visibleOnly = false;
+    o.deadlineMs = 2000;
+    StepLimits lim;
+    lim.scriptMs = scriptMs;
+    lim.stepMs = 1500;
+    runner.setCancel(cancel);
+    return runner.run(steps, count, o, lim, log, failed);
+}
+
+void stepping(void)
+{
+    static Step s[4];
+    static StepLog log;
+    static StepReport failed;
+    static char detail[200];
+    volatile LONG cancel = 0;
+    int at;
+
+    /* A pause is a pause, and an empty list is a success. */
+    stepInit(s[0]);
+    s[0].kind = STEP_WAIT;
+    s[0].ms = 60;
+    log.n = 0;
+    at = runSteps(s, 1, 10000, NULL, log, failed);
+    rc_strf(detail, sizeof(detail), "at=%d status=%s ms=%lu", at,
+            log.n ? log.status[0] : "-", log.n ? log.ms[0] : 0);
+    say("steps-wait-runs", at == -1 && log.n == 1 && log.ms[0] >= 50, detail);
+
+    /* A wait for something that never comes ends at the STEP's timeout,
+     * not the script's, and says it never appeared. */
+    stepInit(s[0]);
+    s[0].kind = STEP_WAITFOR;
+    s[0].target.sel = "GastonStepsNeverExists";
+    s[0].timeoutMs = 300;
+    log.n = 0;
+    DWORD t0 = GetTickCount();
+    at = runSteps(s, 1, 10000, NULL, log, failed);
+    DWORD took = GetTickCount() - t0;
+    rc_strf(detail, sizeof(detail), "at=%d status=%s took=%lu (%s)", at,
+            failed.status, took, failed.detail);
+    say("steps-waitfor-times-out-at-its-own-timeout",
+        at == 0 && !strcmp(failed.status, "timeout") && took < 1500,
+        detail);
+
+    /* The list's own clock: the second pause has 40ms of a 100ms script
+     * left and is refused rather than allowed to overrun it. */
+    stepInit(s[0]);
+    s[0].kind = STEP_WAIT;
+    s[0].ms = 60;
+    stepInit(s[1]);
+    s[1].kind = STEP_WAIT;
+    s[1].ms = 500;
+    log.n = 0;
+    t0 = GetTickCount();
+    at = runSteps(s, 2, 100, NULL, log, failed);
+    took = GetTickCount() - t0;
+    rc_strf(detail, sizeof(detail), "at=%d status=%s took=%lu", at,
+            failed.status, took);
+    say("steps-script-timeout-is-a-ceiling", at == 1 && took < 400, detail);
+
+    /* A raised stop flag ends the list before the next step. */
+    cancel = 1;
+    stepInit(s[0]);
+    s[0].kind = STEP_WAIT;
+    s[0].ms = 2000;
+    log.n = 0;
+    t0 = GetTickCount();
+    at = runSteps(s, 1, 10000, &cancel, log, failed);
+    took = GetTickCount() - t0;
+    rc_strf(detail, sizeof(detail), "at=%d status=%s took=%lu", at,
+            failed.status, took);
+    say("steps-cancel-stops-it", at == 0 && !strcmp(failed.status,
+        "cancelled") && took < 500, detail);
+
+    /* An unknown key name is refused by name, and nothing is pressed. */
+    stepInit(s[0]);
+    s[0].kind = STEP_KEYDOWN;
+    s[0].key = "Frobnicate";
+    log.n = 0;
+    at = runSteps(s, 1, 10000, NULL, log, failed);
+    rc_strf(detail, sizeof(detail), "at=%d status=%s detail=%s", at,
+            failed.status, failed.detail);
+    say("steps-bad-key-named", at == 0 && !strcmp(failed.status, "bad_key")
+        && strstr(failed.detail, "Frobnicate") != NULL, detail);
+
+    /* A selector that does not parse says so, with the parser's reason. */
+    stepInit(s[0]);
+    s[0].kind = STEP_CLICK;
+    s[0].target.sel = "[text=";
+    log.n = 0;
+    at = runSteps(s, 1, 10000, NULL, log, failed);
+    rc_strf(detail, sizeof(detail), "status=%s detail=%s", failed.status,
+            failed.detail);
+    say("steps-bad-selector", at == 0 && !strcmp(failed.status,
+        "bad_selector"), detail);
+
+    /* Every KEYS_V1 name resolves, the right-hand modifiers by side. */
+    {
+        static const char *const NAMES[] = {
+            "Enter", "esc", "F24", "LShift", "RShift", "RCtrl", "RAlt",
+            "AltGr", "LWin", "Apps", "NumpadEnter", "Numpad7", "PrtSc",
+            "CapsLock", "Pause"
+        };
+        KeySpec k;
+        bool all = true;
+        for (unsigned i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++)
+            if (!Input::keyByName(NAMES[i], k))
+            {
+                all = false;
+                rc_strf(detail, sizeof(detail), "%s", NAMES[i]);
+            }
+        say("keys-v1-names-resolve", all, all ? "all" : detail);
+        Input::keyByName("RShift", k);
+        say("keys-rshift-by-scan-code", k.vk == VK_SHIFT && k.scan == 0x36,
+            "0x36");
+        Input::keyByName("RCtrl", k);
+        say("keys-rctrl-is-extended", k.vk == VK_CONTROL && k.extended, "E0");
+        Input::keyByName("AltGr", k);
+        say("keys-altgr-is-ctrl-alt", k.altGr, "Ctrl + right Alt");
+    }
+
+    /* TEXT INSIDE AN EDIT: found case-insensitively, and the point lands on
+     * the line it is on. Our own window is fine here -- a MOVE only moves
+     * the pointer, which refuses nothing. */
+    {
+        WNDCLASSA wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = (WNDPROC)sinkProc;
+        wc.hInstance = GetModuleHandleA(NULL);
+        wc.lpszClassName = "GastonStepsTop";
+        RegisterClassA(&wc);
+        HWND top = CreateWindowExA(0, "GastonStepsTop", "steps", WS_POPUP
+                                   | WS_VISIBLE, 10, 10, 300, 80, NULL, NULL,
+                                   wc.hInstance, NULL);
+        HWND edit = CreateWindowExA(0, "Edit", "hello world, hello again",
+                                    WS_CHILD | WS_VISIBLE, 0, 0, 290, 30, top,
+                                    NULL, wc.hInstance, NULL);
+        RECT er;
+        GetWindowRect(edit, &er);
+
+        stepInit(s[0]);
+        s[0].kind = STEP_MOVE;
+        s[0].target.sel = "GastonStepsTop Edit";
+        s[0].target.text = "WORLD";
+        log.n = 0;
+        at = runSteps(s, 1, 10000, NULL, log, failed);
+        POINT p;
+        GetCursorPos(&p);
+        rc_strf(detail, sizeof(detail), "at=%d %s %s cursor=%ld,%ld edit=%ld,"
+                "%ld..%ld,%ld", at, failed.status, failed.detail, p.x, p.y,
+                er.left, er.top, er.right, er.bottom);
+        say("steps-text-target-finds-it", at == -1 && p.x > er.left + 20
+            && p.x < er.right && p.y >= er.top && p.y < er.bottom, detail);
+
+        /* "hello" twice: unique-or-error, and text_nth picks. */
+        s[0].target.text = "hello";
+        log.n = 0;
+        at = runSteps(s, 1, 10000, NULL, log, failed);
+        rc_strf(detail, sizeof(detail), "status=%s", failed.status);
+        say("steps-text-twice-is-ambiguous", at == 0 && !strcmp(
+            failed.status, "ambiguous_text"), detail);
+        s[0].target.textNth = 2;
+        log.n = 0;
+        at = runSteps(s, 1, 10000, NULL, log, failed);
+        rc_strf(detail, sizeof(detail), "at=%d status=%s", at, failed.status);
+        say("steps-text-nth-picks", at == -1, detail);
+
+        /* A glob across words. */
+        s[0].target.text = "w*d,";
+        s[0].target.textNth = 0;
+        log.n = 0;
+        at = runSteps(s, 1, 10000, NULL, log, failed);
+        rc_strf(detail, sizeof(detail), "at=%d status=%s %s", at,
+                failed.status, failed.detail);
+        say("steps-text-glob", at == -1, detail);
+
+        /* Not an Edit: refused, and told what to use instead. */
+        s[0].target.sel = "GastonStepsTop";
+        s[0].target.text = "steps";
+        log.n = 0;
+        at = runSteps(s, 1, 10000, NULL, log, failed);
+        rc_strf(detail, sizeof(detail), "status=%s", failed.status);
+        say("steps-text-needs-an-edit", at == 0 && !strcmp(failed.status,
+            "not_edit"), detail);
+
+        DestroyWindow(top);
+        UnregisterClassA("GastonStepsTop", wc.hInstance);
+    }
+}
+
 typedef void (*Section)(void);
 
 static const Section SECTIONS[] =
 {
     grammar, globbing, matching, walking, resolving, hungWindows, watching,
-    inputRefusals, enrichment, capture
+    inputRefusals, stepping, enrichment, capture
 };
 
 /* --type-into <class> <text> -- DELIVERY, which Wine cannot answer.
