@@ -5,12 +5,6 @@
 #include <process.h>
 #include <new>
 
-UiContext::UiContext()
-{
-    selfPid = GetCurrentProcessId();
-    ready = false;
-}
-
 UiService::UiService(rc_net *net)
     : m_net(net), m_tid(0)
 {

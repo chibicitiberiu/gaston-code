@@ -38,6 +38,7 @@
 #include "remote/control.h"
 #include "remote/reply.h"
 #include "remote/fsops.h"
+#include "remote/uiops.h"
 #include "remote/jobops.h"
 #include "remote/lane.h"
 #include "wire/connection.h"
@@ -49,7 +50,8 @@ class Session : public FrameSink
 {
 public:
     Session(const ServerConfig &cfg, const ExecConfig &exec,
-            unsigned long generation, Processes &procs, App &app);
+            const UiConfig &ui, unsigned long generation, Processes &procs,
+            App &app);
 
     /* Adopt the accepted socket and start the threads. */
     bool begin(SOCKET accepted);
@@ -83,6 +85,7 @@ private:
     void refuse(const char *code, bool fatal);
 
     const ServerConfig *m_cfg;
+    const UiConfig *m_uiCfg;
     const Processes *m_procs;
     unsigned long m_generation;
     /* Declared before m_control, which is handed a reference to it. */
@@ -96,8 +99,13 @@ private:
     LaneWorker m_job;
     FsOps m_fsOps;
     LaneWorker m_fs;
+    UiOps m_uiOps;
+    LaneWorker m_ui;
     volatile LONG m_dead;
     bool m_authed;
+    /* The client said it can inflate, so the outbound half of the codec was
+     * started and HELLO says so. */
+    bool m_deflate;
 };
 
 class ServerService : public Service
@@ -108,7 +116,7 @@ public:
      * long argument for why that is not the remote QUIT docs/REMOTE.md
      * forbids is above ControlOps::update. */
     ServerService(const ServerConfig &cfg, const ExecConfig &exec,
-                  Processes &procs, App &app);
+                  const UiConfig &ui, Processes &procs, App &app);
 
     const char *name() const { return "server"; }
     bool init();
@@ -164,6 +172,7 @@ private:
 
     const ServerConfig *m_cfg;
     const ExecConfig *m_exec;
+    const UiConfig *m_ui;
     Processes *m_procs;
     App *m_app;
     Listener m_listener;

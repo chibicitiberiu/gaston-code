@@ -43,6 +43,18 @@ static const GUID RC_IID_IEnumVARIANT =
     { 0x00020404, 0x0000, 0x0000,
       { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
 
+bool rc_msaa_present(void)
+{
+    HMODULE lib = LoadLibraryA("oleacc.dll");
+    bool got = false;
+    if (lib)
+    {
+        got = GetProcAddress(lib, "AccessibleObjectFromWindow") != 0;
+        FreeLibrary(lib);
+    }
+    return got;
+}
+
 MsaaSource::MsaaSource()
 {
     m_oleacc = LoadLibraryA("oleacc.dll");

@@ -178,4 +178,16 @@ private:
     MsaaSource &operator=(const MsaaSource &);
 };
 
+/* Is oleacc.dll here at all, asked WITHOUT building a MsaaSource.
+ *
+ * The constructor above also initialises COM, and MsaaSource is thread-bound
+ * besides -- so a caller that only wants to answer "does this machine have
+ * accessibility" cannot use it. gremote's handshake is exactly that caller:
+ * it reports `msaa=` from the reader thread, which docs/REMOTE.md says must
+ * touch kernel32 and Winsock only, long before any desktop worker exists.
+ *
+ * LoadLibrary and GetProcAddress and nothing else, and the library is freed
+ * again. Resolve it once at startup rather than per connection. */
+bool rc_msaa_present(void);
+
 #endif

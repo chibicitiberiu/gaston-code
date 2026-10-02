@@ -1,6 +1,7 @@
 #include "ui/uirpc.h"
 #include "ui/uiengine.h"
 #include "ui/uirec.h"
+#include "ui/inject.h"
 #include "automation/resolve.h"
 #include "net/caps.h"
 #include "automation/shot.h"
@@ -29,6 +30,16 @@ static UiContext   *g_ui_ctx;
  * wants. */
 enum { UI_QUEUE_MAX = 4 };
 static volatile LONG g_ui_queued;
+
+/* The in-process tier's controller. It was a member of UiContext until
+ * 2026-10-03, which linked inject.cpp into every program that held one --
+ * and gremote holds one and refuses that tier, so it belongs with the only
+ * handler that uses it.
+ *
+ * A POD pointer owned by attach/detach, exactly like g_ui_ctx above: a
+ * file-scope object with a constructor runs before WinMain, and `make check`
+ * refuses one. */
+static Injector *g_injector;
 
 /* The request that is running, if one is, and its stop flag. A plain buffer
  * the reader compares against: a race here can only miss a cancel for a
@@ -74,12 +85,19 @@ void rc_uirpc_attach(DWORD threadId, rc_net *net, UiContext *ctx)
     g_run_id[0] = '\0';
     g_cancel_id[0] = '\0';
     InterlockedExchange(&g_run_cancel, 0);
+    /* The in-process tier's controller, made on the thread that will use it
+     * and nowhere near a file-scope constructor. A failure here is not fatal:
+     * `inproc` then answers its own `no_dll`, which is what it would have
+     * said anyway on a machine with no HOOKDLL.DLL beside the exe. */
+    g_injector = new Injector;
     InterlockedExchange(&g_ui_tid, (LONG)threadId);
 }
 
 void rc_uirpc_detach(void)
 {
     InterlockedExchange(&g_ui_tid, 0);
+    delete g_injector;
+    g_injector = 0;
 }
 
 int rc_uirpc_post(rc_frame *f)
@@ -219,6 +237,8 @@ void rc_uirpc_refuse(rc_net *net, rc_frame *f, const char *why)
 
 /* ---- the in-process tier, which stays here ---------------------------- */
 
+
+
 /* The in-process tier, behind the same op.
  *
  * Opt-in per request and never the default: this puts our code inside a
@@ -236,9 +256,9 @@ static void do_tree_inproc(UiLink &link, UiContext *ctx, rc_frame *f,
     char nodes[16], items[16], ms[16];
     int nkv = 0;
 
-    if (!ctx->injector.open())
+    if (!g_injector->open())
     {
-        k[0] = "detail"; v[0] = ctx->injector.lastError();
+        k[0] = "detail"; v[0] = g_injector->lastError();
         link.end("inproc_unavailable", k, v, 1);
         return;
     }
@@ -262,7 +282,7 @@ static void do_tree_inproc(UiLink &link, UiContext *ctx, rc_frame *f,
         }
     }
 
-    InjectResult r = ctx->injector.collect(
+    InjectResult r = g_injector->collect(
         win, NULL, rc_ui_header_flag(f, "items", true),
         (DWORD)rc_ui_header_num(f, "timeout_ms", 3000, 200, 20000));
 
@@ -272,12 +292,12 @@ static void do_tree_inproc(UiLink &link, UiContext *ctx, rc_frame *f,
             "ok", "denied", "no_dll", "no_window", "hook_refused",
             "no_reply", "truncated", "failed"
         };
-        k[0] = "detail"; v[0] = ctx->injector.lastError();
+        k[0] = "detail"; v[0] = g_injector->lastError();
         link.end(NAMES[(int)r], k, v, 1);
         return;
     }
 
-    const RcInShm *shm = ctx->injector.shm();
+    const RcInShm *shm = g_injector->shm();
     TreeSink sink(link, ctx, false);
     if (!sink.ready())
     {

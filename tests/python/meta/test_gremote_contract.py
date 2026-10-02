@@ -29,11 +29,14 @@ import conftest
 
 REPO = pathlib.Path(conftest.REPO)
 OPTABLE = REPO / "win" / "remote" / "optable.cpp"
-#: gremote's handlers, and the libfs file whose reasons RM/MKDIR/RMDIR/MV now
-#: return (win/fs/ops.cpp, 2026-10-02) -- shared with the client so the
-#: measured Windows 98 cases are classified once.
+#: gremote's handlers, plus the two shared files whose refusals it returns:
+#: win/fs/ops.cpp (the four fs mutations' reasons, 2026-10-02) and
+#: win/ui/uiengine.cpp (the desktop handlers, 2026-10-03). Both are shared
+#: with the client so a measured Windows 98 case is classified once, and both
+#: have to be in this list or the tokens they send are invisible here.
 REMOTE_CPP = [*sorted((REPO / "win" / "remote").glob("*.cpp")),
-              REPO / "win" / "fs" / "ops.cpp"]
+              REPO / "win" / "fs" / "ops.cpp",
+              REPO / "win" / "ui" / "uiengine.cpp"]
 CLIENT_PY = sorted((REPO / "gremote").glob("*.py"))
 TESTS_PY = sorted((REPO / "tests" / "python" / "remote").glob("test_*.py"))
 
@@ -71,7 +74,12 @@ def guest_codes() -> set[str]:
     test from a contract into a formality.
     """
     codes: set[str] = set()
-    interesting = re.compile(r'err\(|errWith\(|refuse\(|code\s*=|return\s+"')
+    # THE PATTERN LIST IS THE THING THAT HAS TO GROW, and widening the FILE
+    # list is not enough on its own: the shared desktop handlers answer
+    # through a UiLink, so their refusals read `link.end("ambiguous", ...)`
+    # and match none of the older patterns. `end(` joined on 2026-10-03.
+    interesting = re.compile(
+        r'err\(|errWith\(|refuse\(|\.end\(|->end\(|code\s*=|return\s+"')
     for path in REMOTE_CPP:
         for line in path.read_text().splitlines():
             if not interesting.search(line):
@@ -163,12 +171,17 @@ def test_the_control_lane_holds_only_what_may_run_on_the_reader():
     and on the fs lane a stuck GET would be exactly the state in which you
     could not ship the fix for it. Same argument that puts PS and KILL
     here. The list is spelled out rather than derived so that adding to it
-    costs an edit and a sentence."""
+    costs an edit and a sentence.
+
+    STOP joined it on 2026-10-03, and the sentence is the same one CANCEL
+    earns: it exists to interrupt the desktop lane, so queueing it behind
+    that lane would deliver it when the work had already ended. It raises a
+    flag and returns; nothing on this thread touches USER or GDI."""
     text = OPTABLE.read_text()
     body = text[text.index("G_OP_TABLE[]"):]
     body = body[:body.index("};")]
     control = {op for op, lane in
                re.findall(r'\{\s*"([A-Z]+)"\s*,\s*(G_\w+)', body)
                if lane == "G_CONTROL"}
-    assert control == {"AUTH", "PING", "CANCEL", "SYSINFO", "PS", "KILL",
-                       "REBOOT", "UPDATE"}, control
+    assert control == {"AUTH", "PING", "CANCEL", "STOP", "SYSINFO", "PS",
+                       "KILL", "REBOOT", "UPDATE"}, control

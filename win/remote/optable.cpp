@@ -5,7 +5,7 @@
 /* One row per op, spelled out. No prefix rule: the client's SYNC* wildcard
  * earns its place because that family is closed and named, and a prefix rule
  * here would silently claim every future op that happens to start the same
- * way. A linear strcmp over twenty rows costs nothing next to the syscall
+ * way. A linear strcmp over two dozen rows costs nothing next to the syscall
  * each row leads to. */
 const GOpRow G_OP_TABLE[] = {
     { "AUTH",    G_CONTROL, false },
@@ -16,6 +16,9 @@ const GOpRow G_OP_TABLE[] = {
     { "KILL",    G_CONTROL, false },
     { "REBOOT",  G_CONTROL, false },
     { "UPDATE",  G_CONTROL, false },
+    /* STOP is CONTROL and not UI, for the reason CANCEL is: it is answered
+     * on the reader so it does not queue behind the work it is stopping. */
+    { "STOP",    G_CONTROL, false },
 
     { "EXEC",    G_JOB,     false },
     { "LAUNCH",  G_JOB,     false },
@@ -30,7 +33,14 @@ const GOpRow G_OP_TABLE[] = {
     { "MKDIR",   G_FS,      false },
     { "RMDIR",   G_FS,      false },
     { "MV",      G_FS,      false },
-    { "DRIVES",  G_FS,      false }
+    { "DRIVES",  G_FS,      false },
+
+    /* The desktop (docs/REMOTE.md step 6). None of them continues another:
+     * a step list is one frame because a selector clipped to a header would
+     * be a different selector, so the whole list rides the body. */
+    { "TREE",    G_UI,      false },
+    { "SHOT",    G_UI,      false },
+    { "RUN",     G_UI,      false }
 };
 
 const int G_OP_TABLE_N = sizeof(G_OP_TABLE) / sizeof(G_OP_TABLE[0]);

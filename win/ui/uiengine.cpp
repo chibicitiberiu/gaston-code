@@ -129,6 +129,15 @@ void rc_ui_end_ambiguous(UiLink &link, const char *detail,
     link.end("ambiguous", k, v, n);
 }
 
+/* The context both programs' desktop workers hold. Defined here rather than
+ * in the client's service, because gremote has no UiService to put it in and
+ * linking that file would drag the client's whole RPC side across. */
+UiContext::UiContext()
+{
+    selfPid = GetCurrentProcessId();
+    ready = false;
+}
+
 /* ---- TREE ------------------------------------------------------------ */
 
 /* Records are batched into frames. The buffer is HEAP, not a local: the

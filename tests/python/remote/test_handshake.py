@@ -56,10 +56,20 @@ def test_the_handshake_answers_with_hello(server):
         assert r.hello["acp"].isdigit(), r.hello
         assert r.hello["oemcp"].isdigit(), r.hello
         assert r.hello["os"].startswith("Windows "), r.hello
-        # v0 has no ui lane and no compression, and says so rather than
-        # leaving the caller to find out.
-        assert r.hello["msaa"] == "0"
-        assert r.hello["deflate"] == "0"
+        # The capability headers are present and are small integers. The
+        # VALUES are not pinned: `deflate` is negotiated per connection (this
+        # Remote offers it, so it reads 1) and `msaa` depends on whether the
+        # box has oleacc -- Wine does, a stock 98 may not, and saying which
+        # is the whole point of the header. What a handshake test can
+        # honestly assert is that the keys are there and are numbers, which
+        # is what a caller branches on.
+        assert r.hello["msaa"] in ("0", "1"), r.hello
+        assert r.hello["deflate"] in ("0", "1"), r.hello
+        assert r.hello["automation"] in ("0", "1", "2"), r.hello
+        assert r.hello["keys"].isdigit(), r.hello
+        # Which box. Trees and screenshots arrive through gremote from more
+        # than one machine now, and a measurement has to be able to name it.
+        assert r.hello["machine"], r.hello
 
 
 def test_ping_is_answered(server):
@@ -209,3 +219,37 @@ def test_an_unknown_ui_key_refuses_to_start(tmp_path):
     code, log = staged.refusal()
     assert code != 0, log
     assert "automaton" in log or "ui" in log, log
+
+def test_a_client_that_does_not_offer_deflate_gets_a_raw_link(server,
+                                                              tmp_path):
+    """The compatibility rule, and it is not a nicety.
+
+    A compressing peer talking to a non-compressing one DROPS the link rather
+    than degrading, and the only way to repair a machine reached by CD is
+    ship(), which needs the link. So compression is offered on AUTH and only
+    starts when the machine answers -- an older client that never offers it
+    keeps a raw link and keeps working.
+
+    The body is big and compressible on purpose: a server that compressed
+    anyway would not merely be impolite here, it would drop the link, so this
+    passes only if nothing was compressed in either direction."""
+    body = b"raw bytes, no dictionary, nothing to share\n" * 2000
+    with Remote("127.0.0.1", SECRET, port=server.port, deflate=False) as r:
+        assert r.hello["deflate"] == "0", r.hello
+        target = str(tmp_path / "raw.bin")
+        r.put(conftest.wine_path(target), body)
+        assert r.get(conftest.wine_path(target)).data == body
+
+
+def test_an_offered_deflate_is_answered_and_round_trips(server, tmp_path):
+    """Offered, answered, and byte-exact in both directions.
+
+    The payload is compressible on purpose: a round trip that happened to be
+    sent raw would pass a test that only checked the bytes, so the header is
+    asserted too."""
+    body = b"the quick brown fox jumps over the lazy dog 0123456789\n" * 2000
+    with Remote("127.0.0.1", SECRET, port=server.port) as r:
+        assert r.hello["deflate"] == "1", r.hello
+        target = str(tmp_path / "deflate.bin")
+        r.put(conftest.wine_path(target), body)
+        assert r.get(conftest.wine_path(target)).data == body

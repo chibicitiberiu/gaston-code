@@ -366,9 +366,13 @@ $(BUILD)/wirecheck.exe: $(WIRECHECK_OBJS)
 REMOTE_SRCS = remote/main.cpp remote/config.cpp remote/allow.cpp \
               remote/server.cpp remote/optable.cpp remote/reply.cpp \
               remote/control.cpp remote/lane.cpp \
-              remote/jobops.cpp remote/fsops.cpp remote/tray.cpp
-GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBWIRE) $(LIBEXEC) \
-               $(LIBFS) $(LIBCORE)
+              remote/jobops.cpp remote/fsops.cpp remote/uiops.cpp \
+              remote/tray.cpp \
+              ui/uiengine.cpp ui/uirec.cpp
+# libautomation BEFORE libwire before libexec before libcore, the order the
+# client's OBJS uses and the one wlink resolves in.
+GREMOTE_OBJS = $(call objs,$(REMOTE_SRCS) $(MINIZ)) $(LIBAUTOMATION) \
+               $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 gremote: $(BUILD)/gremote.exe
 gremote.exe: $(BUILD)/gremote.exe
 $(BUILD)/gremote.exe: $(GREMOTE_OBJS)
@@ -811,6 +815,27 @@ check: check-sources check-gaston check-gremote check-gupdate \
 # With both landed it measures 250441, 512 over that estimate -- PE section
 # rounding, which is why the estimate was never going to be exact.
 #
+# 264000 -> 372000 on 2026-10-03, by decision, for the ui lane (REMOTE.md
+# step 6). The earmark above was ~10KB and the lane measures 359609 -- about
+# ten times it -- and the reason is not the lane's own code. gremote links
+# libautomation now: the tree walker, the selector grammar and resolver, MSAA,
+# the event feed, the call deadline, the input layer, the screenshot and the
+# step runner, 96,768 bytes of object code before any of win/remote/'s own.
+# Measured, not estimated:
+#
+#     before the lane                  260681
+#     + libautomation and win/ui/      359609      AUTO 274286, DGROUP 65721
+#
+# 372000 is that plus three pages, which is what the remaining work wants
+# (none of it is C++ on this side) and no more.
+#
+# THE REASON THIS NUMBER WAS KEPT TIGHT STILL HOLDS, and raising it does not
+# retire it: gremote runs BESIDE the client being measured, so its footprint
+# is inside every number this project has ever taken of the client on real
+# hardware, and those numbers were taken with a 250KB gremote. The user's
+# call was "just raise it, we'll have a separate round of optimizations" --
+# that round is BACKLOG 29, which lists what to look at and in what order.
+#
 # Worth knowing what this number is and is not. It is the sum of the PE
 # image's sections: the memory Windows commits when it loads the file, on a
 # guest that may have 32MB. It is not a limit on transferring the file, and
@@ -819,7 +844,7 @@ check: check-sources check-gaston check-gremote check-gupdate \
 # footprint is inside every number this project has ever taken of the client
 # on real hardware.
 check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
-check-gremote: CHECK_CAP   = 264000
+check-gremote: CHECK_CAP   = 372000
 # gupdate's budget. It links libcore and nothing else, and it runs for a
 # few seconds beside a gremote that is on its way out -- so this is a cap on
 # a transient, not on a resident, and it is still set tight because the

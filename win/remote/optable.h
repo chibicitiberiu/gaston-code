@@ -7,7 +7,7 @@
  * its own table, which is the whole reason the codec and the lane table were
  * split apart in step 2.
  *
- * Three lanes, and the boundaries are about what an op may BLOCK ON rather
+ * Four lanes, and the boundaries are about what an op may BLOCK ON rather
  * than how quick it looks:
  *
  *   control  the reader thread, inline. kernel32 and Winsock only. Never
@@ -19,6 +19,10 @@
  *            EXEC is allowed.
  *   fs       one disk operation at a time. May block on a platter, a
  *            floppy that is not there, or a file somebody else has open.
+ *   ui       one desktop operation at a time. May block on USER, on GDI,
+ *            and on another application's message loop -- which is why it
+ *            is not the control lane's, and why it is the one lane whose
+ *            handler has thread-bound state to set up (remote/uiops.h).
  *
  * Unknown is not a lane. An op nobody recognises is answered `unknown_op`
  * rather than dropped -- silence costs the caller its whole budget and tells
@@ -35,7 +39,8 @@ enum GLane
 {
     G_CONTROL = 0,
     G_JOB,
-    G_FS
+    G_FS,
+    G_UI
 };
 
 struct GOpRow

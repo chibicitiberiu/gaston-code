@@ -20,7 +20,6 @@
 #include "automation/wait.h"
 #include "automation/input.h"
 #include "automation/calldeadline.h"
-#include "ui/inject.h"
 
 class UiContext
 {
@@ -32,10 +31,12 @@ public:
     UiWatch      watch;
     Input        input;
     CallDeadline deadline;
-    /* Opened lazily and only when a request asks for it: mapping the
-     * section is harmless, but a section that exists and names a target is
-     * what any resident copy of the DLL acts on. */
-    Injector     injector;
+
+    /* THE INJECTOR IS NOT HERE, and it used to be. The in-process tier is
+     * the client's alone -- it needs HOOKDLL.DLL beside the exe and a deny
+     * list with no force escape -- and a member here links inject.cpp into
+     * gremote, which refuses that tier rather than serving it. It lives
+     * beside the handler that uses it (win/ui/uirpc.cpp) instead. */
 
     /* Our own pid, resolved once. Every walk excludes it: the walker sends
      * WM_GETTEXT, and reaching our own windows from in here is reentrancy we

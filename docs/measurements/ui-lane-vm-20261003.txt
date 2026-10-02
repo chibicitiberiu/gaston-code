@@ -1,0 +1,106 @@
+gremote's ui lane on the guest: TREE, SHOT, RUN, and the two promises
+=====================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE 4.10.2222 A, 32MB
+Date    : 2026-10-03
+Driven  : gremote/ over hostfwd 7401, no bridge and no model. The client was
+          running but could NOT reach its bridge -- see the picture.
+Why     : REMOTE.md step 6. The lane exists for the case where the client is
+          the thing that is wrong, and this run happens to be exactly that.
+
+
+The handshake, which answers two standing questions
+---------------------------------------------------
+
+      msaa=1         oleacc.dll IS present on this Windows 98 install, asked
+                     from the READER thread with no COM apartment and no
+                     desktop worker (rc_msaa_present). The P200 checklist has
+                     carried this question since the start.
+      automation=2   the shipped default, from [ui] in gremote.ini
+      keys=1         the frozen key-name table's version
+      deflate=1      negotiated on AUTH, not a constant
+      machine=RETRO98
+
+`machine=` is new and is why: trees and screenshots now arrive through
+gremote from more than one box and nothing in the handshake said which.
+
+
+TREE
+----
+
+      scope=desktop max_nodes=400 msaa=0
+      -> OK nodes=96 walk=complete enriched=0 dropped=0 too_deep=0 self=0
+
+96 records, parsed by the bridge's own `bridge/wire/uirec.py` -- the same
+parser the client's tree goes through, which is the point of sharing the
+encoder rather than writing a second one.
+
+
+SHOT, and a bug it found
+-------------------------
+
+The first attempt answered `failed` with an empty detail, and the log said:
+
+      net: send queue full after 5000ms wait, dropping DATA
+      (body=63488 bytes, outq_bytes=0, reserve=8192)
+
+A full queue with nothing in it. Every bulk frame gremote sends reserves
+RC_OUTQ_RESERVE for the control lane, so a body has to fit the out queue
+ALONGSIDE that reserve: 63,488 + 8,192 against a 65,536-byte queue is
+71,680, which no amount of draining can make room for. The client never
+meets this because its sends pass no reserve at all -- the reserve is a
+server's problem and gremote is the server.
+
+So `UiLink::bodyCap()` is not one number shared by both callers. gremote's
+is RC_OUTQ_MAX_BYTES - RC_OUTQ_RESERVE - 2048. After that:
+
+      x=0 y=0 w=640 h=480 bpp=8
+      -> OK w=640 h=480 bpp=8 bytes=308278, in 6 DATA frames, magic "BM"
+
+308,278 bytes that open as a BMP. docs/measurements/ui-lane-vm-20261003.png
+is that capture: the Win98 desktop with Calculator, the Start menu, and the
+client in the middle saying "Cannot reach 10.0.2.2:7890 - retrying".
+
+That picture is the argument for the whole step. The client is up and
+useless; gremote can still see the screen.
+
+
+RUN
+---
+
+      {"focus": "Progman"}
+      -> OK done=1 | i=0 status=ok ms=60 hit=Progman "Program Manager"
+
+      "{Escape}"
+      -> OK done=1 | i=0 status=ok ms=5
+
+      {"focus": "SciCalc"}
+      -> ERR ambiguous          (several windows match; the engine refusing
+                                 to pick, which is what it is for)
+
+      {"wait_for": "NoSuchClassHere", "timeout": 2000}
+      -> ERR timeout
+
+
+STOP and CANCEL, side by side
+------------------------------
+
+The design decision of this step, on a real guest:
+
+      a 30s wait, then STOP      -> STOP acked OK in 0.00s, and the RUN
+                                    answered `cancelled`
+      a 25s wait, then CANCEL    -> CANCEL acked, and the RUN was NEVER
+                                    answered
+
+Two promises, neither bent. CANCEL is 9P's Tflush and its ack means silence;
+STOP exists because a list that failed at step 5 still ran four steps the
+caller has to hear about, and both raise the same flag.
+
+
+What this run could NOT show
+-----------------------------
+
+`stream()` raises `Refused` on an ERR terminator and discards the DATA
+frames with it, so every failing RUN above lost its per-step report. That is
+the Python half's problem and not the lane's -- the guest sent the report in
+both cases -- and it is what `Remote.run()` has to do differently.

@@ -278,7 +278,7 @@ bool GremoteApp::initializeServices()
      * remote QUIT docs/REMOTE.md forbids is argued above
      * ControlOps::update. */
     if (!initService(m_server,
-                     new ServerService(m_config, m_exec, m_procs, *this)))
+                     new ServerService(m_config, m_exec, m_ui, m_procs, *this)))
         return false;
     /* Dependency order: the tray reads the server's status, so the server
      * exists first. The tray never fails startup -- see TrayService::init

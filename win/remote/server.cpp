@@ -1,6 +1,8 @@
 /* ServerService and Session. See server.h for the shape and the three
  * decisions that are easy to get backwards. */
 #include "remote/server.h"
+#include "automation/msaa.h"
+#include "net/caps.h"
 
 #include <winsock.h>
 #include <stdlib.h>
@@ -33,17 +35,26 @@ enum { BAD_SECRET_PAUSE_MS = 1000 };
 /* ------------------------------------------------------------- Session */
 
 Session::Session(const ServerConfig &cfg, const ExecConfig &exec,
-                 unsigned long generation, Processes &procs, App &app)
-    : m_cfg(&cfg), m_procs(&procs), m_generation(generation),
-      m_conn(this, false), m_control(procs, m_conn, app),
-      m_jobOps(exec, m_conn), m_fsOps(m_conn), m_dead(0),
-      m_authed(false)
+                 const UiConfig &ui, unsigned long generation,
+                 Processes &procs, App &app)
+    : m_cfg(&cfg), m_uiCfg(&ui), m_procs(&procs), m_generation(generation),
+      m_conn(this, true), m_control(procs, m_conn, app),
+      m_jobOps(exec, m_conn), m_fsOps(m_conn), m_uiOps(m_conn, ui), m_dead(0),
+      m_authed(false), m_deflate(false)
 {
-    /* Deflate off in v0 (docs/gremote-plan.md): the only large payload is a
-     * screenshot and the ui lane is step 6, so the 192KB of persistent
-     * scratch buys nothing here. HELLO says deflate=0 and a peer that sends
-     * enc=deflate anyway has the link dropped under it, which is
-     * Connection's behaviour and not something to soften. */
+    /* Deflate was off outright in v0: the only large payload is a screenshot
+     * and the ui lane was step 6. The lane is built now, so the codec is
+     * constructed -- but the OUTBOUND half waits for the client to say it
+     * can inflate.
+     *
+     * That asymmetry is the whole design. A compressing peer talking to a
+     * non-compressing one drops the link rather than degrading, and the only
+     * way to repair a box reachable by CD is ship(), which needs the link.
+     * So an old gremote/ client that never sends `deflate=1` on AUTH keeps a
+     * raw link and keeps working, and the Python arms its own deflater
+     * strictly on READING `HELLO deflate=1` -- never on sending AUTH, which
+     * would put enc=deflate in front of a guest with no inflater. */
+    m_conn.deferDeflate();
 }
 
 bool Session::begin(SOCKET accepted)
@@ -61,6 +72,11 @@ bool Session::begin(SOCKET accepted)
      * per level, and the record buffers are on the heap for exactly this
      * reason. */
     if (!m_fs.start(m_fsOps, "the fs lane", 32u * 1024u))
+        return false;
+    /* 64 KB, twice the others: this thread makes marshalled COM calls, and
+     * the resolver's state is most of 7KB even on the heap. */
+    m_uiOps.setGate(&m_ui);
+    if (!m_ui.start(m_uiOps, "the ui lane", 64u * 1024u))
         return false;
     return m_conn.start();
 }
@@ -97,8 +113,10 @@ void Session::sendHello()
     SystemInfo si;
     char ver[12], memKb[16], memFree[16], acp[12], oemcp[12];
     char os[96], cpu[64], toolhelp[4];
-    const char *keys[10];
-    const char *vals[10];
+    const char *keys[13];
+    const char *vals[13];
+    char automation[8], keysVer[8], machine[32];
+    DWORD machineLen = sizeof(machine);
 
     readSystemInfo(si);
     rc_strf(ver, sizeof ver, "%d", (int)RC_REMOTE_PROTO);
@@ -124,12 +142,40 @@ void Session::sendHello()
     keys[5] = "acp";          vals[5] = acp;
     keys[6] = "oemcp";        vals[6] = oemcp;
     /* Capabilities, each a small integer with room to grow rather than a
-     * bit field, the same rule the client's HELLO follows. msaa and deflate
-     * are 0 because the ui lane is step 6 and compression is off in v0. */
-    keys[7] = "msaa";         vals[7] = "0";
+     * bit field, the same rule the client's HELLO follows.
+     *
+     * `deflate` is the NEGOTIATED value, not a constant: it is 1 only when
+     * this client said on AUTH that it can inflate, so the header describes
+     * the link that exists rather than what the program is capable of.
+     * `msaa` is still a literal until the ui lane answers for it. */
+    /* Asked without a COM apartment and without a desktop worker: this is
+     * the reader thread. It is also the answer to a question the P200
+     * checklist has had open since the start -- whether retail 98 carries
+     * oleacc at all -- said on every connection rather than guessed. */
+    keys[7] = "msaa";         vals[7] = rc_msaa_present() ? "1" : "0";
     keys[8] = "toolhelp";     vals[8] = toolhelp;
-    keys[9] = "deflate";      vals[9] = "0";
-    m_conn.send("HELLO", keys, vals, 10, NULL, 0, RC_SEND_WAIT_UI, false, 0);
+    keys[9] = "deflate";      vals[9] = m_deflate ? "1" : "0";
+    rc_strf(automation, sizeof(automation), "%ld", m_uiCfg->automation);
+    keys[10] = "automation";  vals[10] = automation;
+    rc_strf(keysVer, sizeof(keysVer), "%d", RC_CAP_KEYS);
+    keys[11] = "keys";        vals[11] = keysVer;
+    /* WHICH BOX. Trees and screenshots now arrive through gremote from more
+     * than one machine and nothing in the handshake said which; a caller
+     * filing a measurement has to be able to name it. The NetBIOS name, not
+     * the client's MachineId hash -- the two wires are separate namespaces
+     * and this one is read by a person. */
+    if (!GetComputerNameA(machine, &machineLen))
+        rc_strcpy(machine, sizeof(machine), "unknown");
+    keys[12] = "machine";     vals[12] = machine;
+    m_conn.send("HELLO", keys, vals, 13, NULL, 0, RC_SEND_WAIT_UI, false, 0);
+}
+
+/* Did the client say it can inflate? Anything but "0" counts, the same way
+ * every other flag header on this wire is read. */
+static bool deflateAsked(rc_frame *f)
+{
+    const char *s = rc_frame_get(f, "deflate");
+    return s && s[0] && s[0] != '0';
 }
 
 void Session::onAuth(rc_frame *f)
@@ -156,7 +202,14 @@ void Session::onAuth(rc_frame *f)
         return;
     }
     m_authed = true;
-    rc_log("server: client %lu authenticated", m_generation);
+    /* Before HELLO, so what the header says is already true. */
+    if (deflateAsked(f))
+    {
+        m_conn.allowDeflate();
+        m_deflate = true;
+    }
+    rc_log("server: client %lu authenticated%s", m_generation,
+           m_deflate ? ", compressing" : "");
     sendHello();
 }
 
@@ -189,6 +242,22 @@ void Session::onFrame(Connection &c, rc_frame *f)
              * dead. */
             doCancel(r, f);
         }
+        else if (strcmp(f->type, "STOP") == 0)
+        {
+            /* The Session's, like CANCEL and for the same reason -- it is
+             * about the lanes and the Session owns them -- but it is NOT
+             * CANCEL. CANCEL's ack promises the request will never be
+             * answered; STOP's promises only that it will stop. A step list
+             * that failed at step 5 still ran four steps the caller has to
+             * hear about, so the target answers `cancelled` with whatever
+             * it had. Also an UNGATED Responder: a gated one would suppress
+             * this ack along with the target's reply. */
+            const char *target = rc_frame_get(f, "target");
+            if (m_uiOps.stop(target))
+                r.ok();
+            else
+                r.err("no_such_id");
+        }
         else if (strcmp(f->type, "PING") == 0)
         {
             /* The Session's own, not the control lane's: it is about this
@@ -212,9 +281,17 @@ void Session::onFrame(Connection &c, rc_frame *f)
             toLane(m_job, f, row->continues);
             return;             /* the lane owns the frame */
         }
-        else
+        else if (row->lane == G_FS)
         {
             toLane(m_fs, f, row->continues);
+            return;             /* the lane owns the frame */
+        }
+        else
+        {
+            /* Spelled out rather than left as the bare `else` fs used to
+             * be: a new row whose lane nobody branched on would silently
+             * run on whichever lane the fall-through named. */
+            toLane(m_ui, f, row->continues);
             return;             /* the lane owns the frame */
         }
     }
@@ -278,7 +355,7 @@ void Session::toLane(LaneWorker &lane, rc_frame *f, bool continues)
 void Session::doCancel(Responder &r, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "target");
-    CancelResult job, fs;
+    CancelResult job, fs, ui;
 
     /* A different code from `no_such_id`, deliberately: "you did not say
      * what to cancel" and "there is nothing by that name" are different
@@ -291,19 +368,21 @@ void Session::doCancel(Responder &r, rc_frame *f)
     }
     job = m_job.cancel(id);
     fs = m_fs.cancel(id);
-    if (job == CANCEL_NO_SUCH_ID && fs == CANCEL_NO_SUCH_ID)
+    ui = m_ui.cancel(id);
+    if (job == CANCEL_NO_SUCH_ID && fs == CANCEL_NO_SUCH_ID
+        && ui == CANCEL_NO_SUCH_ID)
     {
         /* Nothing by that name. NOT an error worth hiding: a cancel that
          * lost the race against a reply is the ordinary case, and 9P says
          * to ack it anyway -- but the caller asked about a specific id and
          * deserves to know it was already gone. */
-        rc_log("cancel: nothing on either lane is called %s", id);
+        rc_log("cancel: nothing on any lane is called %s", id);
         r.err("no_such_id");
         return;
     }
     rc_log("cancel: %s was %s", id,
-           (job == CANCEL_DROPPED || fs == CANCEL_DROPPED) ? "still queued"
-                                                           : "running");
+           (job == CANCEL_DROPPED || fs == CANCEL_DROPPED
+            || ui == CANCEL_DROPPED) ? "still queued" : "running");
     r.ok();
 }
 
@@ -314,8 +393,16 @@ bool Session::end()
      * a buffer that worker is still sending from. */
     m_job.signalStop();
     m_fs.signalStop();
+    m_ui.signalStop();
+    /* The ui lane is told to STOP before it is joined, not just asked to
+     * finish. It can legitimately be inside an MSAA ladder or a step's wait
+     * for far longer than any join budget, and a join that times out makes
+     * ServerService leak this whole Session -- Connection, UiContext, thread
+     * stack and all -- on a machine that may have 32MB. */
+    m_uiOps.stop(m_uiOps.runningId());
     bool workersGone = m_job.join(5000);
     workersGone = m_fs.join(5000) && workersGone;
+    workersGone = m_ui.join(5000) && workersGone;
     m_conn.drain(1000);
     m_conn.signalStop();
     bool joined = m_conn.join(3000);
@@ -325,8 +412,9 @@ bool Session::end()
 /* ------------------------------------------------------- ServerService */
 
 ServerService::ServerService(const ServerConfig &cfg, const ExecConfig &exec,
-                             Processes &procs, App &app)
-    : m_cfg(&cfg), m_exec(&exec), m_procs(&procs), m_app(&app), m_stop(0),
+                             const UiConfig &ui, Processes &procs, App &app)
+    : m_cfg(&cfg), m_exec(&exec), m_ui(&ui), m_procs(&procs), m_app(&app),
+      m_stop(0),
       m_status(STATUS_BINDING), m_boundPort(0), m_peerAddr(0), m_served(0),
       m_generation(0)
 {
@@ -439,7 +527,7 @@ void ServerService::serve(SocketGuard &s)
     }
 
     m_generation++;
-    m_session.reset(new Session(*m_cfg, *m_exec, m_generation,
+    m_session.reset(new Session(*m_cfg, *m_exec, *m_ui, m_generation,
                                 *m_procs, *m_app));
     if (!m_session.valid() || !m_session->begin(s.get()))
     {
