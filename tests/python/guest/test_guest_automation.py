@@ -32,7 +32,11 @@ def test_every_case_passes(verdicts):
 #: `typeText` -- including three for bracket escaping, asked for by name -- and
 #: four for which part of a compound selector was not found. Both were defects
 #: a live session hit (docs/measurements/keys-named-p200-20261002.txt).
-CASE_COUNT = 147
+#:
+#: 147 -> 164 later the same day: the `~=` glob, mnemonic `&` ignored in
+#: captions and names, and `*` as an any-class step -- an agent rarely knows
+#: a caption to the letter, and "&OK" missed an exact "OK".
+CASE_COUNT = 164
 
 
 def test_every_case_ran(verdicts):

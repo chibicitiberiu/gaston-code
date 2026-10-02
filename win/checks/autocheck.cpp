@@ -72,6 +72,9 @@ void grammar(void)
     checkParses("parse-attr-state",   "[state*=\"checked\"]", true);
     checkParses("parse-combined",     "Notepad > Edit[text^=\"a\"]:visible",
                 true);
+    checkParses("parse-attr-glob",    "[text~=\"*save*\"]", true);
+    checkParses("parse-any-class",    "*[text~=\"*readme*\"] Edit", true);
+    checkParses("reject-bare-star",   "*", false);
 
     /* Refusals. Each of these is a thing somebody will type. */
     checkParses("reject-empty",        "", false);
@@ -137,6 +140,47 @@ static void checkMatch(const char *name, const char *sel, const Node &n,
     }
     bool got = s.matchesLeaf(n, e);
     say(name, got == want, sel);
+}
+
+/* The glob a person means: case does not matter, `&` is not there, and
+ * `*`/`?` are wildcards. Each case is a thing an agent wrote, or will. */
+void globbing(void)
+{
+    static Node ok;   ok   = makeNode("Button", "&OK", 1, true, true, false);
+    static Node save; save = makeNode("#32770", "Save As", 0, true, true, false);
+    static Node amp;  amp  = makeNode("Static", "Fish && &Chips", 2, true, true,
+                                      false);
+    static Node lower; lower = makeNode("Static", "\xC9t\xE9", 3, true, true,
+                                        false);
+
+    checkMatch("glob-ignores-case",      "[text~=\"ok\"]", ok, NULL, true);
+    checkMatch("glob-is-whole-text",     "[text~=\"o\"]", ok, NULL, false);
+    checkMatch("glob-star",              "[text~=\"*as\"]", save, NULL, true);
+    checkMatch("glob-star-middle",       "[text~=\"s*as\"]", save, NULL, true);
+    checkMatch("glob-question",          "[text~=\"save?as\"]", save, NULL,
+               true);
+    checkMatch("glob-star-matches-empty","[text~=\"save as*\"]", save, NULL,
+               true);
+    checkMatch("glob-no-false-tail",     "[text~=\"*save\"]", save, NULL,
+               false);
+    /* The measured miss: an exact match on "OK" against a caption "&OK". */
+    checkMatch("mnemonic-exact",         "[text=\"OK\"]", ok, NULL, true);
+    checkMatch("mnemonic-in-pattern",    "[text=\"&OK\"]", ok, NULL, true);
+    checkMatch("mnemonic-double-amp",    "[text=\"Fish & Chips\"]", amp,
+               NULL, true);
+    checkMatch("exact-still-cased",      "[text=\"ok\"]", ok, NULL, false);
+    /* Above ASCII the fold is the code page's, not a table of our own. */
+    checkMatch("glob-folds-accents",     "[text~=\"\xE9t\xE9\"]", lower, NULL,
+               true);
+    checkMatch("any-class-step",         "*[text~=\"save*\"]", save, NULL,
+               true);
+    {
+        /* MSAA names are captions too, and are compared the same way. */
+        static Enrichment e;
+        memset(&e, 0, sizeof(e));
+        rc_strncpy(e.name, sizeof(e.name), "&Open", 5);
+        checkMatch("glob-on-msaa-name", "[name~=\"open\"]", ok, &e, true);
+    }
 }
 
 void matching(void)
@@ -1785,7 +1829,7 @@ typedef void (*Section)(void);
 
 static const Section SECTIONS[] =
 {
-    grammar, matching, walking, resolving, hungWindows, watching,
+    grammar, globbing, matching, walking, resolving, hungWindows, watching,
     inputRefusals, enrichment, capture
 };
 

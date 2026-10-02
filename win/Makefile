@@ -104,7 +104,17 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # the guest actually cares about is runtime working set on a 32MB box, and this
 # gate cannot see a thread stack at all. If this is hit twice more, measure
 # that instead of raising this again.
-COMMITTED_CAP ?= 478192
+#
+# 478,192 -> 502,768 (six pages) on 2026-10-02, ONCE for a whole feature set
+# rather than a page at a time: the `input` step list, its key/layout and
+# target resolution, and the fs mutation ops (docs/PROGRESS.md, "One input
+# tool"). Its first commit -- the `~=` glob and the ambiguity candidates --
+# already crossed the old line by 1,321 bytes. This is the "hit twice more"
+# the paragraph above warns about, so the runtime number is measured this
+# time and not just this one: free physical memory with the client up,
+# before and after the feature set, on the guest
+# (docs/measurements/workingset-*-20261002.txt).
+COMMITTED_CAP ?= 502768
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a

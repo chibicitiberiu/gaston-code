@@ -99,8 +99,14 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
         s.directChild = pendingDirect;
         pendingDirect = false;
 
-        /* A bare class name, if there is one. */
-        if (isIdentChar(*p))
+        /* A bare class name, if there is one -- or `*`, which says "any
+         * class" out loud, so `*[text~="*readme*"] Edit` reads as meant. */
+        if (*p == '*')
+        {
+            s.anyClass = true;
+            p++;
+        }
+        else if (isIdentChar(*p))
             takeIdent(p, s.cls, sizeof(s.cls));
 
         /* Then any number of #id, [attr], :pseudo, in any order. */
@@ -162,6 +168,7 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
                 if (*p == '^')      { t.op = ATTR_PREFIX;   p++; }
                 else if (*p == '$') { t.op = ATTR_SUFFIX;   p++; }
                 else if (*p == '*') { t.op = ATTR_CONTAINS; p++; }
+                else if (*p == '~') { t.op = ATTR_GLOB;     p++; }
                 else                  t.op = ATTR_EXACT;
                 if (*p != '=')
                 {
@@ -275,20 +282,128 @@ bool Selector::parse(const char *text, char *err, unsigned errCap)
     return true;
 }
 
-static bool testOne(const char *have, const AttrTest &t)
+/* Copy a CAPTION without its mnemonic markers, by USER's rule: a lone `&`
+ * goes, `&&` becomes one `&`. Bounded by `cap`; a text cut short here
+ * compares as the prefix it is, which can only make a match less likely,
+ * never invent one. */
+void selStripMnemonic(const char *in, char *out, unsigned cap)
 {
+    unsigned n = 0;
+    while (*in && n + 1 < cap)
+    {
+        if (*in == '&')
+        {
+            in++;
+            if (*in != '&')
+                continue;
+        }
+        out[n++] = *in++;
+    }
+    out[n] = '\0';
+}
+
+static bool isAlnum(unsigned char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c >= 0x80;
+}
+
+/* The same for what the AGENT wrote, which is not a caption: "Fish & Chips"
+ * means an ampersand, not an underlined space. Only `&` before a letter or
+ * digit is taken as a marker -- "&OK" is someone copying the resource -- and
+ * `&&` still stands for one. */
+static void stripPatternMnemonic(const char *in, char *out, unsigned cap)
+{
+    unsigned n = 0;
+    while (*in && n + 1 < cap)
+    {
+        if (*in == '&' && in[1] == '&')
+        {
+            out[n++] = '&';
+            in += 2;
+            continue;
+        }
+        if (*in == '&' && isAlnum((unsigned char)in[1]))
+        {
+            in++;
+            continue;
+        }
+        out[n++] = *in++;
+    }
+    out[n] = '\0';
+}
+
+/* One character folded to lower case on THIS machine's code page. ASCII
+ * without a call; above it, CharLowerA in its single-character form, so "É"
+ * meets "é" in a German or French caption the way the user reads them. */
+static unsigned char foldChar(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return (unsigned char)(c + ('a' - 'A'));
+    if (c < 0x80)
+        return c;
+    return (unsigned char)(DWORD)(UINT_PTR)CharLowerA((LPSTR)(UINT_PTR)c);
+}
+
+/* `*` any run, `?` any one character, everything else itself ignoring
+ * case. Iterative with a single backtrack point -- the textbook matcher --
+ * so it costs no stack and no allocation whatever the pattern. */
+bool selGlobMatch(const char *have, const char *pat)
+{
+    const char *star = NULL, *resume = NULL;
+    while (*have)
+    {
+        if (*pat == '*')
+        {
+            star = ++pat;
+            resume = have;
+            continue;
+        }
+        if (*pat && (*pat == '?'
+                     || foldChar((unsigned char)*pat)
+                        == foldChar((unsigned char)*have)))
+        {
+            pat++;
+            have++;
+            continue;
+        }
+        if (!star)
+            return false;
+        pat = star;
+        have = ++resume;
+    }
+    while (*pat == '*')
+        pat++;
+    return *pat == '\0';
+}
+
+static bool testOne(const char *have, const AttrTest &t, bool caption)
+{
+    /* The size of the widest thing compared here: a walked Node's text. An
+     * enrichment field is narrower. */
+    char plainHave[RC_TEXT_MAX];
+    char plainWant[RC_SEL_VAL];
+    const char *want = t.value;
     unsigned hn, vn;
     if (!have)
         have = "";
+    if (caption)
+    {
+        selStripMnemonic(have, plainHave, sizeof(plainHave));
+        stripPatternMnemonic(want, plainWant, sizeof(plainWant));
+        have = plainHave;
+        want = plainWant;
+    }
     hn = (unsigned)strlen(have);
-    vn = (unsigned)strlen(t.value);
+    vn = (unsigned)strlen(want);
     switch (t.op)
     {
-    case ATTR_EXACT:    return strcmp(have, t.value) == 0;
-    case ATTR_PREFIX:   return vn <= hn && memcmp(have, t.value, vn) == 0;
+    case ATTR_EXACT:    return strcmp(have, want) == 0;
+    case ATTR_PREFIX:   return vn <= hn && memcmp(have, want, vn) == 0;
     case ATTR_SUFFIX:   return vn <= hn
-                            && memcmp(have + hn - vn, t.value, vn) == 0;
-    case ATTR_CONTAINS: return strstr(have, t.value) != NULL;
+                            && memcmp(have + hn - vn, want, vn) == 0;
+    case ATTR_CONTAINS: return strstr(have, want) != NULL;
+    case ATTR_GLOB:     return selGlobMatch(have, want);
     }
     return false;
 }
@@ -370,7 +485,7 @@ bool Selector::matchesStep(int i, const Node &n, const Enrichment *e) const
         case ATTR_ACTION:if (!e) return true; have = e->action; break;
         case ATTR_STATE: if (!e) return true; have = e->state;  break;
         }
-        if (!testOne(have, t))
+        if (!testOne(have, t, t.which == ATTR_TEXT || t.which == ATTR_NAME))
             return false;
     }
     return true;

@@ -16,7 +16,16 @@
  *   #1001                  control id (GetDlgCtrlID)
  *   Notepad > Edit         direct child
  *   Notepad Edit           any descendant
+ *   [text~="*save as*"]    ~= a GLOB, case-insensitive: `*` any run, `?`
+ *                          any one character. The form to reach for first --
+ *                          an agent rarely knows a caption to the letter.
  *   [text^="Untitled"]     ^= prefix, $= suffix, *= contains, = exact
+ *   *[text~="*readme*"]    `*` as a step: any class, said on purpose
+ *
+ * A MNEMONIC `&` IS NOT PART OF ANY TEXT OR NAME. A button captioned "&Save"
+ * matches [text="Save"] and [text~="save"], and "&&" stands for one literal
+ * ampersand, the way USER draws it. Nobody naming a control means the
+ * underline marker; measured, an exact match on "Save" missed the button.
  *   [name="Save"]          MSAA name      ) resolved by the caller, which
  *   [role=pushbutton]      MSAA role      ) enriches only candidates
  *   [action=press]         MSAA default action, lowercased and unspaced
@@ -57,7 +66,8 @@ enum AttrOp
     ATTR_EXACT = 0,   /* =  */
     ATTR_PREFIX,      /* ^= */
     ATTR_SUFFIX,      /* $= */
-    ATTR_CONTAINS     /* *= */
+    ATTR_CONTAINS,    /* *= */
+    ATTR_GLOB         /* ~=  case-insensitive, `*` and `?` */
 };
 
 enum AttrWhich
@@ -87,6 +97,7 @@ struct SelStep
     bool     needEnabled;
     bool     needFocused;
     int      nth;                 /* 0: any, else 1-based */
+    bool     anyClass;            /* written `*`: no class, on purpose */
     AttrTest attrs[RC_SEL_ATTRS];
     int      attrN;
 };
@@ -156,5 +167,12 @@ private:
     Selector(const Selector &);
     Selector &operator=(const Selector &);
 };
+
+/* The matching rules a selector uses, for callers that match a text that
+ * is not a selector attribute -- an MSAA child's name, a substring in an
+ * Edit control. One set of rules, so `item` and `text` cannot drift from
+ * `[name~=...]` and `[text~=...]`. */
+bool selGlobMatch(const char *have, const char *pattern);
+void selStripMnemonic(const char *in, char *out, unsigned cap);
 
 #endif
