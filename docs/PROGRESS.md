@@ -3762,3 +3762,97 @@ FAT will hold, and it refuses rather than sharing a folder. Left alone.
 spent and this is the next one, 297 bytes over on a page-granular gate. If it is
 hit twice more the thing to measure is runtime working set, which this gate
 cannot see at all.
+
+## The GUI tools, and three defects behind one complaint (2026-10-02)
+
+A second live session on the Athlon box. The user's report: "particularly with
+the GUI tools... finding the window failed for some reason, pressing special
+keys like delete (or Ctrl+A Delete) didn't work properly."
+
+Three defects, and the third only surfaced because delivery was measured on the
+machine instead of assumed to work.
+
+### `keys` had no bracket syntax at all
+
+`typeText` iterated characters through `VkKeyScanA` and nothing else, while the
+tool description promised "plain characters plus Tab, Enter, Escape and the
+arrow keys" -- and an arrow key is not a character, so there was no way to send
+one. `Input::pressKey` existed and had no caller. An agent clearing a text box
+sent `[Delete][Delete][Delete][Delete]Tiberiu`, got `John[Delete][Delete][D` in
+the field, and was told "Typed 39 characters".
+
+Now `[Name]` and `{Name}`, case-insensitive, 33 names plus any single
+character, with `Ctrl+`/`Alt+`/`Shift+` in any combination. Doubling escapes;
+a closing `]` is special only inside a name so it needs none. The whole string
+is validated before the first keystroke -- a string half delivered into
+somebody's text box is worse than one refused, and worse again because the
+caller cannot tell how far it got.
+
+Two near-misses on the way. `MOD_SHIFT`, `MOD_CONTROL` and `MOD_ALT` are
+already winuser.h macros for RegisterHotKey and their bits DIFFER (`MOD_ALT` is
+1 there and 4 here); Watcom rejected the enum as a syntax error, which is the
+only reason it was not every modifier silently wrong. And `prompts.text`'s own
+first parameter is named `key`, so a `{key}` placeholder raised `TypeError` at
+runtime in the refusal path -- the parameter is positional-only now.
+
+### Naming a child control did not give it the keyboard
+
+    typeText(edit, "Tiberiu")      -> result=0  text=""
+    click(edit) then the same      -> result=0  text="Tiberiu"
+
+`Input::focus` raised the ROOT window and called `SetFocus` only in its
+fallback branch, the one for a window that refuses to come forward. The
+keystrokes went to whichever child already had focus and the call said OK. The
+live session got away with it by clicking first, which is what the description
+tells you to do -- but the tool also ACCEPTS a child target, which says the text
+goes there.
+
+### "Finding the window failed" -- the window was found
+
+    HelloGuiClass[text="Hello Application"] > Button[text="Close"]
+    -> "Nothing on screen matches that selector ... the window may not be open"
+
+The window was on screen. The program had no Close button; the agent invented
+it. The resolver now reports which component matched nothing -- the
+HIGHEST-indexed step with no hits, because the leaf is tested against every node
+and ancestors only once the leaf matched, so a missing leaf leaves ancestors
+untested and blaming the first of those blames the window for the button.
+
+### Ctrl+A is not select-all, and saying so in the schema did not work
+
+The idiom everyone reaches for does nothing on this platform, and nothing
+reports that it did nothing. Measured on a custom Win32 edit control, then
+again on Notepad -- Win98's Notepad has no Ctrl+A accelerator either. What
+works is `[Home][Shift+End][Delete]`.
+
+The first draft of the fixed description RECOMMENDED `[Ctrl+A][Delete]`. It
+would have shipped the user's own bug back to them as advice; the only reason
+it did not is that delivery was measured rather than reasoned about.
+
+Then the QEMU guest gave a controlled before and after on the same prompt:
+
+  before   `[Ctrl+A]goodbye` -> "hellogoodbye", then `[Ctrl+A][Delete]` -> no
+           change, then "hellogoodbyegoodbye". The argument description already
+           said Ctrl+A was useless and the agent used it anyway.
+  after    "Typed 32 characters" -- `[Home][Shift+End][Delete]goodbye` exactly
+           -- and Notepad held "goodbye". First try.
+
+So the fact moved onto the RESULT of a `keys` call. An argument description is
+the part of a tool schema a model attends to least, and the before-run is the
+proof. A note and not a refusal: two applications are not every application.
+
+### What the same guest run also proved
+
+`exec x1: notepad (via C:\WINDOWS\TEMP\GEXEC.bat)` -- the exit-code wrapper in
+a live turn, using the `temp` header. `C:\WORK\STARTNOT` -- the work directory
+named from the conversation title. And `GenuineIntel x86 family 6 model 5` --
+the CPUID no-brand-string fallback, which until then had only been claimed.
+
+### Two VM facts that cost time
+
+`tools/vm/runvm.sh` emulates a pcnet while `vm/win98.qcow2` has the driver for
+the libvirt domain's `ne2k_isa`, so booting that disk through the script comes
+up with no network at all. Both open the same qcow2, so they must never run
+together. Recorded in the script. And the VM had no gremote: `D:\SETUP.BAT` off
+the tools ISO installs it, with autostart deliberately opt-in because it opens
+a port.
