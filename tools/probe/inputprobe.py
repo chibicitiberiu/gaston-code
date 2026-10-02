@@ -22,14 +22,12 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import probelib  # noqa: E402
-import toolkit  # noqa: E402
+import probelib
+import toolkit
 
 toolkit.on_path()
 
