@@ -42,7 +42,9 @@ def test_every_case_passes(verdicts):
 #: name, KEYS_V1 resolving with right-hand modifiers by side, and text inside
 #: an Edit found, refused when twice, picked by text_nth, globbed, and refused
 #: on a control that is not an Edit.
-CASE_COUNT = 179
+#:
+#: 179 -> 180: wait_text by the selector's rules, ignoring case.
+CASE_COUNT = 180
 
 
 def test_every_case_ran(verdicts):

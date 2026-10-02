@@ -1107,6 +1107,14 @@ void watching(void)
                 (int)rep.end, (int)miss.end, (int)miss.everMatched);
         say("wait-for-text-separates-absent-from-silent",
             sawIt && miss.end == UIWAIT_TIMEOUT && miss.everMatched, detail);
+
+        /* By the selector's rules: case does not matter. A wait for "LATE"
+         * sat out its budget beside "late arrival" while this was strstr. */
+        static WaitReport loud;
+        waiter.forText(sel, "LATE ARR", o, 1500, loud);
+        rc_strf(detail, sizeof(detail), "end=%d", (int)loud.end);
+        say("wait-for-text-ignores-case", loud.end == UIWAIT_ALREADY
+            || loud.end == UIWAIT_SETTLED, detail);
     }
 
     {

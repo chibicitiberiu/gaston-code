@@ -66,6 +66,15 @@ CASES = [
      [CLEAR, {"down": "Shift"}, "abc", {"up": "Shift"}, "d",
       {"wait_text": EDIT, "text": "ABCd", "timeout": 3000}], "ok", None),
 
+    # A list that FAILS while Shift is down -- the wait times out before the
+    # `up` -- must leave nothing held. The next list types "x", and the probe
+    # reads the Edit back exactly: wait_text ignores case, so it cannot tell.
+    ("released-after-failure",
+     "Shift held, then the list fails; nothing stays held",
+     [{"focus": "Notepad"}, CLEAR, {"down": "Shift"},
+      {"wait_for": "NoSuchClassAnywhere", "timeout": 500},
+      {"up": "Shift"}], "timeout", "then-lowercase"),
+
     ("context-menu",
      "right-click opens the menu, Escape closes it",
      [{"click": EDIT, "button": "right"},
@@ -146,7 +155,40 @@ def run_case(g: Guest, name, steps, timeout_s, extra, remote) -> Frame:
     t0 = time.monotonic()
     end = g.recv_until(ui_id, timeout_s)
     end.headers["_took"] = f"{time.monotonic() - t0:.1f}s"
+    if extra == "then-lowercase":
+        follow = S.compile_steps([{"focus": "Notepad"}, "x"])
+        g.seq += 1
+        fid = f"p{g.seq}"
+        g.conn.sendall(PR.ui_run(fid, follow.body,
+                                 timeout_ms=follow.timeout_ms,
+                                 step_ms=S.STEP_TIMEOUT_DEFAULT).encode())
+        g.recv_until(fid, timeout_s)
+        text = edit_text(g)
+        end.headers["_edit"] = repr(text)
+        if text != "x":
+            end.headers["status"] = f"stuck (edit holds {text!r})"
     return end
+
+
+def edit_text(g: Guest) -> str:
+    """What Notepad's Edit holds, read with UITREE -- exact, case and all."""
+    from bridge.wire import uirec
+    g.seq += 1
+    uid = f"p{g.seq}"
+    g.conn.sendall(PR.ui_tree(uid, scope="foreground", max_nodes=20).encode())
+    recs = bytearray()
+    g.conn.settimeout(20)
+    while True:
+        for f in g.reader.feed(g.conn.recv(65536)):
+            if f.type == "UIENT" and f.headers.get("id") == uid:
+                recs += f.body
+            elif f.type == "UIEND" and f.headers.get("id") == uid:
+                for n in uirec.parse_records(bytes(recs), "cp1252"):
+                    if n.cls == "Edit":
+                        return n.text
+                return ""
+            elif f.type == "UIEND":
+                g.pending.append(f)
 
 
 def main() -> int:

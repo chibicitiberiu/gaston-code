@@ -7,6 +7,20 @@ UiWaiter::UiWaiter(UiWatch &watch, TreeWalker &walker, MsaaSource *msaa)
 {
 }
 
+/* `wait_text`'s test, by the selector's own rules: case does not matter and
+ * a mnemonic `&` is not text (select.h) -- "Done" is seen in "&Done!". It
+ * was strstr, so a wait for "done" sat out its budget beside a control
+ * that said "Done". */
+static bool containsLoose(const char *text, const char *want)
+{
+    char t[RC_TEXT_MAX], w[RC_TEXT_MAX];
+    selStripMnemonic(text, t, sizeof(t));
+    selStripMnemonic(want, w, sizeof(w));
+    CharLowerBuffA(t, (DWORD)strlen(t));
+    CharLowerBuffA(w, (DWORD)strlen(w));
+    return strstr(t, w) != NULL;
+}
+
 static void beginReport(WaitReport &out, bool polled)
 {
     out.end = UIWAIT_TIMEOUT;
@@ -125,7 +139,7 @@ void UiWaiter::loop(WaitMode mode, const Selector &sel, const char *substring,
             satisfied = found;
             break;
         case MODE_TEXT:
-            satisfied = found && strstr(out.node.text, substring) != NULL;
+            satisfied = found && containsLoose(out.node.text, substring);
             break;
         case MODE_GONE:
             /* Gone means nothing matched, and a walk that ended early does
