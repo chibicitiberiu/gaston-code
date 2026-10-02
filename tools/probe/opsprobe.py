@@ -48,10 +48,18 @@ def cases(cd: str):
         ("move-onto-existing", lambda i: PR.fs_op(i, "FSMV", BASE + "\\Q1",
                                                   BASE + "\\DEL.TXT"),
          "exists"),
-        ("move-across-drives", lambda i: PR.fs_op(i, "FSMV",
-                                                  BASE + "\\DEL.TXT",
-                                                  cd + "\\DEL.TXT"),
-         ("cross_volume", "denied", "locked")),
+        # Across drives, MEASURED on the Athlon: a FILE moves (98 copies it)
+        # and a FOLDER does not. `--cd` may be somebody's data disk, so the
+        # file goes to a distinctive name and comes straight back. On a
+        # read-only CD as `--cd` the file move is refused instead.
+        ("move-file-across-drives", lambda i: PR.fs_op(
+            i, "FSMV", BASE + "\\DEL.TXT", cd + "\\GOPSPRB.TMP"),
+         ("ok", "denied")),
+        ("move-file-back", lambda i: PR.fs_op(
+            i, "FSMV", cd + "\\GOPSPRB.TMP", BASE + "\\DEL.TXT"),
+         ("ok", "missing")),
+        ("move-folder-across-drives", lambda i: PR.fs_op(
+            i, "FSMV", BASE + "\\Q1", cd + "\\GOPSDIR.TMP"), "cross_volume"),
         ("rmdir-not-empty", lambda i: PR.fs_op(i, "FSRMDIR", BASE + "\\Q1"),
          "not_empty"),
         ("rmdir-drive-root", lambda i: PR.fs_op(i, "FSRMDIR", "C:\\"),
@@ -152,6 +160,13 @@ def main() -> int:
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: status={status} "
               f"want={'/'.join(wanted)}{extra}", flush=True)
 
+    if remote:
+        with contextlib.suppress(Exception):
+            remote.rm(a.cd + "\\GOPSPRB.TMP")
+            print(f"(removed a stray {a.cd}\\GOPSPRB.TMP)")
+        with contextlib.suppress(Exception):
+            remote.rmtree(a.cd + "\\GOPSDIR.TMP")
+            print(f"(removed a stray {a.cd}\\GOPSDIR.TMP)")
     print(f"\n{len(cases(a.cd)) - fails}/{len(cases(a.cd))} as expected")
     if remote:
         remote.close()

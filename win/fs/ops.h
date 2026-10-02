@@ -36,8 +36,9 @@ const char *fsMakeDirectory(const char *path, bool existingOk);
  * loop that would make it so belongs where it can be read. */
 const char *fsRemoveDirectory(const char *path);
 
-/* MoveFileA: never replaces (`exists`), never crosses a volume
- * (`cross_volume` -- MoveFileExA's copy is NT-only and on the deny list). */
+/* MoveFileA: never replaces (`exists`). Across drives, a FILE moves -- 98
+ * copies it, measured -- and a FOLDER is refused with `cross_volume`
+ * (MoveFileExA's copy is NT-only and on the deny list). */
 const char *fsMovePath(const char *from, const char *to);
 
 #endif

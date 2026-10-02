@@ -425,7 +425,7 @@ The machine refused the change to "{path}" -- it may be in use, or protected.'''
 is_cwd = '''
 "{path}" is some program's current folder, so it cannot be removed while that program runs.'''
 cross_volume = '''
-"{path}" cannot be moved to another drive on this machine -- a move only renames, within one drive. Copy it instead: get_file, put_file at the new place, then delete the old one.'''
+The folder "{path}" cannot be moved to another drive on this machine -- files can, folders cannot. Make the folder there with mkdir and move its files one by one.'''
 client_too_old = '''
 The client on this machine is too old for this tool. Update Gaston Code on the machine; until then, `exec` can do it.'''
 sync_own = '''
@@ -451,7 +451,7 @@ done = '''
 
 [move]
 description = '''
-Move or rename a file or a folder on the machine, within one drive. It never replaces something already at the destination, and it does not cross drives.'''
+Move or rename a file or a folder on the machine. It never replaces something already at the destination. A file can move to another drive; a folder cannot.'''
 
 [move.args]
 path = '''

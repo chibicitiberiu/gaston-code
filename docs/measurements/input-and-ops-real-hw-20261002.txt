@@ -1,0 +1,104 @@
+The input step list, the fs mutations and launch, on the machine they are for
+============================================================================
+
+Machine : Athlon (family 6 model 10), 256MB, Windows 98 SE 4.10.2222 A, real
+          hardware 10.0.0.125, driven through gremote on port 7401
+Date    : 2026-10-02
+Client  : build of 4a73cdf + the cross-volume fix in this commit, run from
+          C:\GTEST beside the user's own C:\GASTON (stopped for the run and
+          restarted afterwards); the probes stood in for the bridge on
+          10.0.0.45:7893.
+
+1. inputprobe.py -- 12/12
+-------------------------
+Every test character typed exactly into Notepad on the US layout (accents and
+EURO by Alt+Numpad); drag-select and click by `text` inside Notepad's Edit;
+Shift held across letters; the context menu opened and Escaped; a selector
+that matched four controls refused with candidates; a wait timing out on its
+own clock; an `item` on the desktop list view; UICANCEL mid-wait; focus_lost
+when Calculator took the front mid-list; `close` answered `prompted` by the
+save dialog; that dialog answered by the next list.
+
+2. opsprobe.py -- 21/21, after one fix
+--------------------------------------
+The first run found that MOVE ACROSS DRIVES DOES NOT FAIL FOR A FILE on 98:
+MoveFileA from C: to D: (two FAT hard disks, D: is the user's DATA volume)
+moved the file -- the OS copies it. The tool and libfs had said moves never
+cross drives. A FOLDER does fail, and with ERROR_ACCESS_DENIED -- the number
+alone read as "denied". fsMovePath now names a failed folder move between two
+drive letters `cross_volume`; the descriptions say files can, folders cannot.
+The stray test file was removed from D: and D: was checked afterwards.
+
+  mkdir with parents, and again (fine); mkdir on a file (is_file); a file
+  listed as itself (one row); move a folder; move onto an existing name
+  (exists); a file to D: and back (ok, ok); a folder to D: (cross_volume);
+  rmdir non-empty (not_empty); rmdir C:\ (drive_root); rm a folder
+  (is_directory); rm missing (missing); rm a file; rmdir leaf to root; launch
+  Notepad (pid back, seen running); launch a missing program (not_found); ps
+  with memory: 261,588 KB, 169,344 free, 1,835,560 swap, load 24%.
+
+The same probe on the VM, where D: is the read-only tools CD: 21/21, with the
+file move to the CD refused (denied) and the folder move named cross_volume.
+
+3. keyprobe -- the layouts this machine has
+-------------------------------------------
+This box carries Central European layout files (KBDRO, KBDHU, KBDPL, KBDCZ)
+typing into code page 1252. By key, Hungarian, Polish and Czech typed 20/20,
+dead keys included (Polish `^`, `~`, `` ` ``); Czech needs Shift for '1', the
+chord rule again. Romanian and US typed 19/20 by key: EURO is "Ctrl+2" there
+too, ToAsciiEx says it produces nothing, and the step runner sends it by
+Alt+Numpad -- which typed all 20 on every layout, NumLock on and off.
+
+Raw keyprobe output (US, then Romanian/Hungarian/Polish/Czech):
+installed 04090409
+layout 00000409 -> hkl 04090409
+chord 00000409 '1' vk=0x31 mods=0; 'z' vk=0x5A mods=0
+type 00000409 vk/numlock-on summary 19/20
+type 00000409 vk/numlock-on whole "aZ@é^ê{}|\~`'"üß§1&" WRONG
+type 00000409 altnum/numlock-on summary 20/20
+type 00000409 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000409 altnum/numlock-off summary 20/20
+type 00000409 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 00000407 -> hkl 00000000
+layout 0000040C -> hkl 00000000
+layout 00020409 -> hkl 00000000
+stuck after: shift=0 ctrl=0 alt=0
+layout 00000418 -> hkl 04180418
+ask 00000418 0x5E dead; space-flush toascii=1 out=0x5E 0x00
+chord 00000418 '1' vk=0x31 mods=0; 'z' vk=0x5A mods=0
+type 00000418 vk/numlock-on summary 19/20
+type 00000418 vk/numlock-on whole "aZ@é^ê{}|\~`'"üß§1&" WRONG
+type 00000418 altnum/numlock-on summary 20/20
+type 00000418 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000418 altnum/numlock-off summary 20/20
+type 00000418 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 0000040E -> hkl 040E040E
+ask 0000040E 0x5E dead; space-flush toascii=1 out=0x5E 0x00
+chord 0000040E '1' vk=0x31 mods=0; 'z' vk=0x5A mods=0
+type 0000040E vk/numlock-on summary 20/20
+type 0000040E vk/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 0000040E altnum/numlock-on summary 20/20
+type 0000040E altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 0000040E altnum/numlock-off summary 20/20
+type 0000040E altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 00000415 -> hkl 04150415
+ask 00000415 0x5E dead; space-flush toascii=1 out=0x5E 0x00
+ask 00000415 0x7E dead; space-flush toascii=1 out=0x7E 0x00
+ask 00000415 0x60 dead; space-flush toascii=1 out=0x60 0x00
+chord 00000415 '1' vk=0x31 mods=0; 'z' vk=0x5A mods=0
+type 00000415 vk/numlock-on summary 20/20
+type 00000415 vk/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000415 altnum/numlock-on summary 20/20
+type 00000415 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000415 altnum/numlock-off summary 20/20
+type 00000415 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 00000405 -> hkl 04050405
+ask 00000405 0x5E dead; space-flush toascii=1 out=0x5E 0x00
+chord 00000405 '1' vk=0x31 mods=1; 'z' vk=0x5A mods=0
+type 00000405 vk/numlock-on summary 20/20
+type 00000405 vk/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000405 altnum/numlock-on summary 20/20
+type 00000405 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000405 altnum/numlock-off summary 20/20
+type 00000405 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+stuck after: shift=0 ctrl=0 alt=0

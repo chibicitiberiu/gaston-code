@@ -155,6 +155,8 @@ const char *fsMovePath(const char *from, const char *to)
         return "drive_root";
     if (!statPath(from, info) || info.type == 0)
         return fsWhyNoStat();
+    /* Taken now: the destination check below reuses `info`. */
+    bool isDir = info.type == 'd';
     /* MoveFileA refuses an existing target, and that refusal is the useful
      * one: a move that silently replaced something would be a delete nobody
      * asked for. Checked first so the answer says so. */
@@ -162,7 +164,18 @@ const char *fsMovePath(const char *from, const char *to)
         return "exists";
     if (!movePath(from, to))
     {
-        switch (GetLastError())
+        DWORD err = GetLastError();
+        /* A FOLDER CANNOT CROSS A DRIVE; a file can. MEASURED on the
+         * Athlon, Windows 98 SE, 2026-10-02: MoveFileA from C: to D: (two
+         * FAT disks) moved a FILE -- the OS copies it -- and refused a
+         * FOLDER with ERROR_ACCESS_DENIED, which the number alone would
+         * have called "denied" and sent the caller looking for a lock. So
+         * a failed folder move between two drive letters is named by
+         * inspection, the way whyNoRmdir asks the disk. */
+        if (isDir && from[1] == ':' && to[1] == ':'
+            && (from[0] | 0x20) != (to[0] | 0x20))
+            return "cross_volume";
+        switch (err)
         {
         case ERROR_NOT_SAME_DEVICE:      return "cross_volume";
         case ERROR_PATH_NOT_FOUND:       return "no_parent";
