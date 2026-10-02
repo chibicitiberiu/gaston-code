@@ -980,12 +980,14 @@ Things only the real box can answer, collected so the first session covers them:
   is whether Windows 98 asks an application's permission when its OWN standby
   timer expires. Three runs answer it, in this order:
 
-  1. `probe power`, with `gremote` up. One line says whether this KERNEL32
-     exports `SetThreadExecutionState` -- Microsoft documents a minimum of XP,
-     but the Windows 2000 Application Specification made "indicate busy
-     application status properly" mandatory for *98*, so it is worth asking the
-     machine rather than the docs. The other two lines send both veto messages
-     at `gremote`'s window and print what came back.
+  1. ~~`probe power`~~ **-- DONE 2026-10-02 on the Athlon XP**
+     (`docs/measurements/sleep-mechanisms-p200-20261002.txt`).
+     `SetThreadExecutionState` is **PRESENT** on Windows 98 SE and returned
+     `80000000`, so the nudge is available and the input-faking fallback is not
+     needed. Both veto handlers answer correctly: `WM_POWERBROADCAST` ->
+     `BROADCAST_QUERY_DENY`, `WM_POWER` -> `PWR_FAIL`. The probe SYNTHESISES
+     both messages, so this proves the handlers and not that Windows ever sends
+     them -- runs 2 and 3 below are still the ones that matter.
   2. **The clean measurement.** `prevent_sleep=0`, Power Management set to its
      shortest system standby, and leave the box alone past it. `gremote` logs a
      suspend query **even when it is going to say yes**, exactly so this

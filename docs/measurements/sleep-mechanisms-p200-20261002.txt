@@ -1,0 +1,67 @@
+Prevent sleep: which of the four mechanisms this machine actually has
+====================================================================
+
+Machine : Athlon XP 2000+, Windows 98 SE 4.10.2222 A, real hardware 10.0.0.125
+Date    : 2026-10-02
+Run     : `PROBE.EXE power` over gremote, with gremote up and Prevent sleep ON
+Why     : `win/remote/tray.h` argues four mechanisms from the documentation and
+          says plainly that no document settles whether 9x asks permission when
+          its OWN standby timer expires. This is run 1 of the three the P200
+          checklist lists. It needs no settings change and no idle wait.
+
+    SetThreadExecutionState : PRESENT, returned 80000000 -- gremote will use it
+                              and will NOT fake input
+    gremote window          : found
+    WM_POWERBROADCAST reply : 424d5144 -- BROADCAST_QUERY_DENY, so Prevent
+                              sleep is ON and refusing
+    WM_POWER reply          : ffffffff -- PWR_FAIL, so Prevent sleep is ON and
+                              refusing
+
+
+1. SetThreadExecutionState exists on Windows 98 SE
+--------------------------------------------------
+
+Microsoft documents a minimum of Windows XP. It is exported here and it
+answers. The reason to ask the machine rather than the documentation was the
+Windows 2000 Application Specification, which made "indicate busy application
+status properly" mandatory for 98 -- so the API had to be there for an
+application to comply with. It is.
+
+That matters because it is the only one of the four mechanisms that stops a
+suspend being PROPOSED rather than refusing one that has been. With it present,
+gremote does not need the input-faking fallback at all.
+
+
+2. Both veto handlers are wired and answer correctly
+-----------------------------------------------------
+
+`WM_POWERBROADCAST` / `PBT_APMQUERYSUSPEND` -> `BROADCAST_QUERY_DENY`, and the
+obsolete `WM_POWER` / `PWR_SUSPENDREQUEST` -> `PWR_FAIL`. Both reach gremote's
+hidden window and both return the refusal.
+
+
+WHAT THIS DOES NOT SETTLE, and the distinction is the whole point
+------------------------------------------------------------------
+
+The probe SYNTHESISES both messages and sends them at gremote's window. So this
+proves the handlers are correct and reachable. It does not prove Windows ever
+sends them on an idle standby, which is the case the person at the keyboard
+actually hits.
+
+The same morning, with Power Management set to a 1-minute system standby and
+Prevent sleep ON from the tray menu, the box sat for 26 minutes without
+sleeping -- and gremote logged NO suspend query at all. gremote logs one even
+when it is going to say yes, precisely so the measurement does not change the
+behaviour it is measuring, so that silence is real.
+
+Two readings still fit:
+
+  * `SetThreadExecutionState` held the system awake and Windows never proposed
+    a suspend, so there was nothing to veto; or
+  * this machine never proposes an idle standby regardless.
+
+Runs 2 and 3 of the checklist tell them apart and neither has been done:
+`prevent_sleep=0` with a short standby and the box left alone (does it ask at
+all?), then `prevent_sleep=1` with the same wait. Only the first is load-
+bearing -- if nothing asks with the veto off, no veto can ever help and the
+nudge is the only layer doing any work.

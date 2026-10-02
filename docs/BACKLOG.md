@@ -2140,11 +2140,12 @@ why this is written down rather than closed.
   is the first thing to look at -- and `GUPDATE.LOG` records how long the
   image actually survived, precisely so that question has an answer.
 
-## 23. The machine hung on shutdown -- fixed, with three things left open
+## 23. The machine hung on shutdown -- fixed and confirmed; three choices stand
 
-**Status:** the hang is fixed, 2026-10-01. What is written down here is what
-the fix deliberately does *not* do, and the one question only the real box can
-settle.
+**Status:** the hang is fixed, 2026-10-01, and CONFIRMED ON THE REAL MACHINE,
+2026-10-02 -- see item 1, which this entry no longer lists as open. What is
+left below is what the fix deliberately does *not* do, all three of them
+decisions rather than gaps.
 
 **What happened.** The physical Pentium 200 hung on the way down with
 `gremote` running: no desktop, no reboot, two Ctrl+Alt+Dels to force it. The
@@ -2166,12 +2167,22 @@ The handler now signals every service, abandons each *unjoined*, writes and
 closes the log, and returns; `runApp` leaks the App because those threads hold
 pointers into its members. `docs/REMOTE.md` has the rule and the P200 entry.
 
-**1. Wine cannot confirm it, and nothing else here can either.** There is no
-9x shutdown under Wine, no Win16Mutex, and no shell to produce the End Task
-dialog. `appcheck` proves the necessary condition -- the handler returns in
-milliseconds against a service that never wakes, where it used to take the full
-budget -- and that is the whole of what a host test can say. The P200 entry in
-`REMOTE.md` lists the four log lines to look for on the real machine.
+**1. ~~Wine cannot confirm it~~ -- CLOSED 2026-10-02 on the Athlon XP.** Wine
+still cannot: there is no 9x shutdown under it, no Win16Mutex, and no shell to
+produce the End Task dialog, so `appcheck` proves only the necessary condition.
+The real machine has now answered, twice and in both directions
+(`docs/measurements/shutdown-real-hw-20261002.txt`):
+
+  * a shutdown the USER asked for -- the client's handler returned in **12 ms**
+    and gremote's in **9 ms**, with no End Task dialog;
+  * a shutdown THIS PROCESS asked for, which is the case the fix was actually
+    written for -- `REBOOT mode=reboot` over the wire, handler back in **6 ms**
+    logging "this process stays up to drive the shutdown it asked for", and the
+    box answering on its port again 91 seconds later.
+
+The second one also closed two other things in passing: REBOOT over the wire on
+real hardware, and autostart after a programmatic restart rather than a power
+cut.
 
 **2. Nothing is flushed on the way out beyond the log, and that is a choice.**
 The session-ending path drops whatever the client's RPC worker was about to
