@@ -12,6 +12,7 @@
  */
 #include "ui/uirec.h"
 #include "ui/uiengine.h"
+#include "net/caps.h"
 #include "ui/inject.h"
 #include "core/str.h"
 
@@ -516,6 +517,232 @@ static void stepCodec(void)
     }
 }
 
+/* ---- the refusal ladder, with no desktop under it -------------------- */
+
+/* A UiLink that records instead of sending. The handlers moved behind this
+ * interface on 2026-10-02 (REMOTE.md step 6), and the refusals below are
+ * the first part of them reachable without a socket and a live desktop.
+ *
+ * The gate and resolve cases pass a NULL UiContext on purpose. That is not
+ * laziness: it PINS that each refusal is decided before anything touches the
+ * desktop. If a gate ever moves after the first ctx dereference these cases
+ * crash rather than quietly starting to walk windows on a box configured not
+ * to be read -- which is how the clamp case below was caught asking for a
+ * pid through a null pointer, and why rc_ui_base_options takes the pid
+ * itself now. */
+class FakeUiLink : public UiLink
+{
+public:
+    FakeUiLink(int level) : m_level(level), m_ended(false), m_nkv(0),
+                            m_reported(0), m_records(0), m_bytes(0)
+    {
+        m_status[0] = '\0';
+        m_detail[0] = '\0';
+    }
+
+    virtual bool end(const char *status, const char *const *keys,
+                     const char *const *vals, int nkv)
+    {
+        int i;
+        m_ended = true;
+        m_nkv = nkv;
+        rc_strncpy(m_status, sizeof(m_status), status,
+                   (unsigned)strlen(status));
+        for (i = 0; i < nkv; i++)
+            if (!strcmp(keys[i], "detail"))
+                rc_strncpy(m_detail, sizeof(m_detail), vals[i],
+                           (unsigned)strlen(vals[i]));
+        return true;
+    }
+    virtual bool records(const void *, unsigned, int) { m_records++; return true; }
+    virtual bool bytes(const void *, unsigned) { m_bytes++; return true; }
+    virtual bool report(const void *, unsigned len)
+    {
+        m_reported = len;
+        return true;
+    }
+    virtual unsigned bodyCap() const { return RC_MAX_FRAME - 2048; }
+    virtual int automationLevel() const { return m_level; }
+    virtual const UiLimits &limits() const { return m_limits; }
+    virtual volatile LONG *stopFlag() { return &m_stop; }
+
+    const char *status() const { return m_status; }
+    const char *detail() const { return m_detail; }
+    bool ended() const { return m_ended; }
+    int headers() const { return m_nkv; }
+    unsigned reported() const { return m_reported; }
+    int recordFrames() const { return m_records; }
+    int byteFrames() const { return m_bytes; }
+
+private:
+    int      m_level;
+    bool     m_ended;
+    int      m_nkv;
+    unsigned m_reported;
+    int      m_records;
+    int      m_bytes;
+    UiLimits m_limits;
+    volatile LONG m_stop;
+    char     m_status[32];
+    char     m_detail[160];
+};
+
+/* A request frame, built and parsed by the real codec so the headers arrive
+ * the way the wire delivers them. */
+static bool mkFrame(rc_frame &f, char *raw, unsigned rawCap, const char *type,
+                    const char *const *keys, const char *const *vals, int nkv,
+                    const char *body)
+{
+    int n = rc_frame_build(raw, rawCap, type, keys, vals, nkv, body,
+                           body ? (unsigned)strlen(body) : 0);
+    if (n < 0)
+        return false;
+    /* rc_frame_build writes the length prefix too; the parser wants the
+     * payload that follows it. */
+    return rc_frame_parse(raw + 4, (unsigned)n - 4, &f) == 0;
+}
+
+static void refusals(void)
+{
+    static char raw[2048];
+    rc_frame f;
+    const char *k[2];
+    const char *v[2];
+
+    /* TREE at RC_AUTOMATION_NONE. The gate is read LIVE on every request so
+     * turning the capability off takes effect on the next request rather
+     * than the next connection; this is the refusal that proves it is a
+     * refusal and not a bridge-side omission. */
+    {
+        k[0] = "id"; v[0] = "u1";
+        if (mkFrame(f, raw, sizeof(raw), "UITREE", k, v, 1, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_NONE);
+            rc_ui_tree(link, NULL, &f);
+            say("tree-refused-when-automation-is-off",
+                link.ended() && !strcmp(link.status(), "automation_off")
+                && link.recordFrames() == 0,
+                link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("tree-refused-when-automation-is-off", false, "no frame");
+    }
+
+    /* A step list at RC_AUTOMATION_SCREEN. SCREEN means "read the screen,
+     * do not drive it", and a step list types -- so this is the one the
+     * middle capability value exists for. No client can declare it today;
+     * gremote's [ui] automation is an integer off a file and will. */
+    {
+        k[0] = "id"; v[0] = "u2";
+        if (mkFrame(f, raw, sizeof(raw), "UIRUN", k, v, 1, "focus\tsel=X\n"))
+        {
+            FakeUiLink link(RC_AUTOMATION_SCREEN);
+            rc_ui_run(link, NULL, &f);
+            say("run-refused-at-screen-only",
+                link.ended() && !strcmp(link.status(), "automation_off")
+                && link.reported() == 0, link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("run-refused-at-screen-only", false, "no frame");
+    }
+
+    /* ...and a step list AT steps is not refused by the gate. Without this
+     * the case above would pass with a gate that refused everything. */
+    {
+        k[0] = "id"; v[0] = "u3";
+        if (mkFrame(f, raw, sizeof(raw), "UIRUN", k, v, 1, "wiggle\n"))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            rc_ui_run(link, NULL, &f);
+            say("run-at-steps-passes-the-gate",
+                link.ended() && !strcmp(link.status(), "bad_steps"),
+                link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("run-at-steps-passes-the-gate", false, "no frame");
+    }
+
+    /* A malformed list is refused with the parser's own reason. The agent
+     * reads `detail`, so a refusal that carries none is a dead end. */
+    {
+        k[0] = "id"; v[0] = "u4";
+        if (mkFrame(f, raw, sizeof(raw), "UIRUN", k, v, 1, "wiggle\tsel=X\n"))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            rc_ui_run(link, NULL, &f);
+            say("bad-steps-says-why",
+                !strcmp(link.status(), "bad_steps") && link.detail()[0]
+                && strstr(link.detail(), "unknown verb") != NULL,
+                link.detail());
+            rc_frame_free(&f);
+        }
+        else
+            say("bad-steps-says-why", false, "no frame");
+    }
+
+    /* `target=` missing, and `target=` unparseable. Both are decided before
+     * the resolver walks anything, which is why a NULL context is safe. */
+    {
+        k[0] = "id"; v[0] = "u5";
+        if (mkFrame(f, raw, sizeof(raw), "UITREE", k, v, 1, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            WalkOptions o;
+            HWND h = rc_ui_resolve_target(link, NULL, &f, o);
+            say("resolve-with-no-target-refused",
+                h == NULL && !strcmp(link.status(), "no_target"),
+                link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("resolve-with-no-target-refused", false, "no frame");
+    }
+
+    {
+        k[0] = "id";     v[0] = "u6";
+        k[1] = "target"; v[1] = "Button[text=";     /* unterminated */
+        if (mkFrame(f, raw, sizeof(raw), "UITREE", k, v, 2, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            WalkOptions o;
+            HWND h = rc_ui_resolve_target(link, NULL, &f, o);
+            say("resolve-with-a-bad-selector-says-why",
+                h == NULL && !strcmp(link.status(), "bad_selector")
+                && link.detail()[0], link.detail());
+            rc_frame_free(&f);
+        }
+        else
+            say("resolve-with-a-bad-selector-says-why", false, "no frame");
+    }
+
+    /* The limits come from the LINK, not from the handlers. A caller's
+     * ceiling has to be what clamps a header, or gremote's [ui] section is
+     * dead config -- so a request asking for more nodes than the caller
+     * allows must come back at the caller's number. */
+    {
+        k[0] = "id";        v[0] = "u7";
+        k[1] = "max_nodes"; v[1] = "999999";
+        if (mkFrame(f, raw, sizeof(raw), "UITREE", k, v, 2, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            WalkOptions o;
+            char d[64];
+            memset(&o, 0, sizeof(o));
+            rc_ui_base_options(o, link, GetCurrentProcessId(), &f);
+            rc_strf(d, sizeof(d), "asked 999999, got %d, ceiling %d",
+                    o.maxNodes, link.limits().maxNodesTop);
+            say("a-header-is-clamped-to-the-links-ceiling",
+                o.maxNodes == link.limits().maxNodesTop, d);
+            rc_frame_free(&f);
+        }
+        else
+            say("a-header-is-clamped-to-the-links-ceiling", false, "no frame");
+    }
+}
+
 int main(int argc, char **argv)
 {
     static char buf[4096];
@@ -634,5 +861,6 @@ int main(int argc, char **argv)
     inprocRecords();
     paths();
     stepCodec();
+    refusals();
     return 0;
 }

@@ -38,7 +38,16 @@ pytestmark = conftest.needs_guest
 #: pointing into the caller's own body, an unknown verb refused, the
 #: RC_RUN_MAX ceiling and exactly-the-ceiling, blank lines, a field with no
 #: `=`, a malformed coordinate pair, and mods masked to three bits.
-CASE_COUNT = 41
+#:
+#: 41 -> 48 the same day: seven `refusals()` cases against a FakeUiLink, which
+#: is the first time the handlers' refusal ladder has been reachable without a
+#: socket and a live desktop. Five of them pass a NULL UiContext on purpose,
+#: to pin that each refusal is decided before anything touches the screen --
+#: TREE at automation=off, a step list at screen-only, a step list at steps
+#: NOT refused by the gate, a malformed list carrying the parser's reason, a
+#: missing `target=`, an unparseable one, and a header clamped to the link's
+#: own ceiling rather than a literal.
+CASE_COUNT = 48
 
 
 @pytest.fixture(scope="module")

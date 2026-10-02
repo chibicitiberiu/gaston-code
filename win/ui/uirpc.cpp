@@ -1,7 +1,5 @@
 #include "ui/uirpc.h"
 #include "ui/uiengine.h"
-#include "ui/uilink.h"
-#include "ui/uicontext.h"
 #include "ui/uirec.h"
 #include "automation/resolve.h"
 #include "net/caps.h"
@@ -61,64 +59,6 @@ int rc_uirpc_post(rc_frame *f)
         return -1;
     }
     return 0;
-}
-
-/* ---- replies -------------------------------------------------------- */
-
-/* Every request ends in exactly one of these, whatever happened. A request
- * that produces no UIEND costs the bridge its whole timeout and tells it
- * nothing, which is the failure `rpc.cpp`'s reject_busy exists to avoid. */
-static void ui_end(rc_net *net, const char *id, const char *status,
-                   const char *const *keys, const char *const *vals, int nkv)
-{
-    const char *k[8];
-    const char *v[8];
-    int n = 0, i;
-
-    k[n] = "id";     v[n++] = id ? id : "";
-    k[n] = "status"; v[n++] = status;
-    for (i = 0; i < nkv && n < 8; i++)
-    {
-        k[n] = keys[i];
-        v[n++] = vals[i];
-    }
-    rc_net_send(net, "UIEND", k, v, n, NULL, 0);
-}
-
-/* "More than one matched", with WHO matched: up to RC_SAMPLE_MAX
- * candidates, each with the ancestors the agent can narrow by. A count alone
- * sent the agent to `:nth`, which picks by position -- the one choice that
- * silently changes meaning when a window opens. */
-static void ui_end_ambiguous(rc_net *net, const char *id, const char *detail,
-                             const HWND *cand, int candN)
-{
-    static const char *const CAND_KEYS[RC_SAMPLE_MAX] =
-        { "cand1", "cand2", "cand3" };
-    char vals[RC_SAMPLE_MAX][RC_CAND_BUDGET + 16];
-    const char *k[1 + RC_SAMPLE_MAX];
-    const char *v[1 + RC_SAMPLE_MAX];
-    int n = 0, i;
-
-    k[n] = "detail"; v[n++] = detail;
-    for (i = 0; i < candN && i < RC_SAMPLE_MAX; i++)
-    {
-        if (!rc_uirec_candidate(vals[i], sizeof(vals[i]), cand[i]))
-            continue;
-        k[n] = CAND_KEYS[i]; v[n++] = vals[i];
-    }
-    ui_end(net, id, "ambiguous", k, v, n);
-}
-
-void rc_uirpc_refuse(rc_net *net, rc_frame *f, const char *why)
-{
-    const char *id = rc_frame_get(f, "id");
-    if (!id)
-    {
-        rc_log("%s: no id -- dropped, and the bridge will wait out its "
-               "timeout", f->type);
-        return;
-    }
-    ui_end(net, id, why, NULL, NULL, 0);
 }
 
 /* ---- the step list's stop, and this exe's end of the seam ------------ */
@@ -221,172 +161,22 @@ private:
     char        m_id[64];
 };
 
-/* ---- shared helpers -------------------------------------------------- */
-
-static long header_num(rc_frame *f, const char *key, long dflt,
-                       long lo, long hi)
+void rc_uirpc_refuse(rc_net *net, rc_frame *f, const char *why)
 {
-    const char *s = rc_frame_get(f, key);
-    long v;
-    if (!s || !s[0])
-        return dflt;
-    v = atol(s);
-    if (v < lo) v = lo;
-    if (v > hi) v = hi;
-    return v;
-}
-
-static bool header_flag(rc_frame *f, const char *key, bool dflt)
-{
-    const char *s = rc_frame_get(f, key);
-    if (!s || !s[0])
-        return dflt;
-    return s[0] != '0';
-}
-
-/* Fill the walk options every op shares. */
-static void base_options(WalkOptions &o, UiContext *ctx, rc_frame *f)
-{
-    const char *scope = rc_frame_get(f, "scope");
-
-    o.visibleOnly = header_flag(f, "hidden", false) ? false : true;
-    o.wantText = header_flag(f, "text", true);
-    o.maxNodes = (int)header_num(f, "max_nodes", 400, 1, 4000);
-    o.callTimeoutMs = (DWORD)header_num(f, "call_ms", 200, 20, 2000);
-    o.deadlineMs = (DWORD)header_num(f, "timeout_ms", 8000, 200, 60000);
-    /* Never our own windows. The walker sends WM_GETTEXT and a same-thread
-     * SendMessage is a direct call; this worker is a different thread from
-     * the window's, but the HTML control's reentrancy is not the only
-     * reason -- an agent has no business reading the transcript it is
-     * writing into. */
-    o.excludePid = ctx->selfPid;
-
-    if (scope && !strcmp(scope, "foreground"))
+    const char *id = rc_frame_get(f, "id");
+    if (!id)
     {
-        o.root = GetForegroundWindow();
-        if (o.root && GetWindowThreadProcessId(o.root, NULL))
-        {
-            DWORD pid = 0;
-            GetWindowThreadProcessId(o.root, &pid);
-            if (pid == ctx->selfPid)
-                o.root = NULL;      /* it is us; fall back to the desktop */
-        }
+        rc_log("%s: no id -- dropped, and the bridge will wait out its "
+               "timeout", f->type);
+        return;
     }
-    else if (scope && !strcmp(scope, "pid"))
     {
-        o.pid = (DWORD)header_num(f, "pid", 0, 0, 0x7FFFFFFF);
+        NetUiLink link(net, id);
+        link.end(why, NULL, NULL, 0);
     }
 }
 
-/* ---- TREE ------------------------------------------------------------ */
-
-/* Records are batched into frames. The buffer is HEAP, not a local: the
- * worker thread gets the image's stack commit and a 62KB frame on the stack
- * is the fault that crashed AUTOCHK on the P200. syncrpc.cpp's manifest does
- * the same for the same reason. */
-struct TreeSink : public NodeSink
-{
-    TreeSink(rc_net *n, const char *sid, UiContext *c, bool wantMsaa)
-        : net(n), ctx(c), buf((char *)HeapAlloc(GetProcessHeap(), 0, CAP)),
-          len(0), batch(0), total(0), enriched(0), dropped(0),
-          msaa(wantMsaa), cap(0)
-    {
-        rc_strncpy(id, sizeof(id), sid, (unsigned)strlen(sid));
-    }
-    ~TreeSink() { if (buf) HeapFree(GetProcessHeap(), 0, buf); }
-
-    enum { CAP = RC_MAX_FRAME - 2048 };
-
-    bool ready() const { return buf != 0; }
-    void limit(int n) { cap = n; }
-
-    void flush()
-    {
-        const char *k[2];
-        const char *v[2];
-        char nbuf[16];
-        if (!len)
-            return;
-        rc_strf(nbuf, sizeof(nbuf), "%d", batch);
-        k[0] = "id"; v[0] = id;
-        k[1] = "n";  v[1] = nbuf;
-        rc_net_send(net, "UIENT", k, v, 2, buf, len);
-        len = 0;
-        batch = 0;
-    }
-
-    virtual bool onNode(const Node &n)
-    {
-        const Enrichment *e = 0;
-        Enrichment got;
-
-        /* Only when asked. Each field is a marshalled call into another
-         * process and a tree is hundreds of nodes; this is the difference
-         * between a tree that reads in a second and one that does not read
-         * at all. */
-        if (msaa && ctx->msaa.available())
-        {
-            int want = Selector::WANT_NAME | Selector::WANT_STATE
-                     | Selector::WANT_ACTION;
-            if (!n.role[0])
-                want |= Selector::WANT_ROLE;
-            if (ctx->msaa.enrich(n.hwnd, want, got))
-            {
-                e = &got;
-                enriched++;
-            }
-        }
-
-        unsigned w = rc_uirec_window(buf + len, CAP - len, n, e);
-        if (!w)
-        {
-            /* Full: flush and try once more. A record that still will not
-             * fit an empty buffer is absurd rather than unlucky, and is
-             * counted rather than silently lost. */
-            flush();
-            w = rc_uirec_window(buf + len, CAP - len, n, e);
-            if (!w)
-            {
-                dropped++;
-                return true;
-            }
-        }
-        len += w;
-        batch++;
-        total++;
-        return cap <= 0 || total < cap;
-    }
-
-    rc_net    *net;
-    UiContext *ctx;
-    char      *buf;
-    unsigned   len;
-    int        batch;
-    int        total;
-    int        enriched;
-    int        dropped;
-    bool       msaa;
-    int        cap;
-    char       id[64];
-};
-
-static const char *walk_end_name(WalkEnd e)
-{
-    switch (e)
-    {
-    case WALK_COMPLETE: return "complete";
-    case WALK_DEADLINE: return "deadline";
-    case WALK_MAXNODES: return "maxnodes";
-    case WALK_STOPPED:  return "stopped";
-    }
-    return "unknown";
-}
-
-/* Defined below, beside the other target-resolving code: CLICK and KEYS
- * use it too, and the in-process tier still needs the out-of-process walk
- * to know which window to go to. */
-static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
-                           const char *id, const WalkOptions &o);
+/* ---- the in-process tier, which stays here ---------------------------- */
 
 /* The in-process tier, behind the same op.
  *
@@ -396,8 +186,8 @@ static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
  * answers and only one of them can read a list box, so a caller has to be
  * able to tell which one it got. `status=` says so either way.
  */
-static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
-                           const char *id, const WalkOptions &o)
+static void do_tree_inproc(UiLink &link, UiContext *ctx, rc_frame *f,
+                           const WalkOptions &o)
 {
     const char *target = rc_frame_get(f, "target");
     const char *k[6];
@@ -408,7 +198,7 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
     if (!ctx->injector.open())
     {
         k[0] = "detail"; v[0] = ctx->injector.lastError();
-        ui_end(net, id, "inproc_unavailable", k, v, 1);
+        link.end("inproc_unavailable", k, v, 1);
         return;
     }
 
@@ -417,7 +207,7 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
     HWND win = NULL;
     if (target && target[0])
     {
-        win = resolve_target(net, ctx, f, id, o);
+        win = rc_ui_resolve_target(link, ctx, f, o);
         if (!win)
             return;             /* already answered */
     }
@@ -426,14 +216,14 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
         win = GetForegroundWindow();
         if (!win)
         {
-            ui_end(net, id, "no_window", NULL, NULL, 0);
+            link.end("no_window", NULL, NULL, 0);
             return;
         }
     }
 
     InjectResult r = ctx->injector.collect(
-        win, NULL, header_flag(f, "items", true),
-        (DWORD)header_num(f, "timeout_ms", 3000, 200, 20000));
+        win, NULL, rc_ui_header_flag(f, "items", true),
+        (DWORD)rc_ui_header_num(f, "timeout_ms", 3000, 200, 20000));
 
     if (r != INJECT_OK && r != INJECT_TRUNCATED)
     {
@@ -442,15 +232,15 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
             "no_reply", "truncated", "failed"
         };
         k[0] = "detail"; v[0] = ctx->injector.lastError();
-        ui_end(net, id, NAMES[(int)r], k, v, 1);
+        link.end(NAMES[(int)r], k, v, 1);
         return;
     }
 
     const RcInShm *shm = ctx->injector.shm();
-    TreeSink sink(net, id, ctx, false);
+    TreeSink sink(link, ctx, false);
     if (!sink.ready())
     {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        link.end("no_memory", NULL, NULL, 0);
         return;
     }
 
@@ -471,7 +261,7 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
         GetProcessHeap(), 0, sizeof(RcPathBuilder)));
     if (!ps.valid())
     {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        link.end("no_memory", NULL, NULL, 0);
         return;
     }
     rc_path_reset(*ps.get());
@@ -484,16 +274,19 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
 
         rc_path_next(*ps.get(), n.depth, path, parent);
 
-        unsigned w = rc_uirec_inproc(sink.buf + sink.len, TreeSink::CAP - sink.len,
-                                     n, path, parent);
+        /* Through the sink's own accessors, not its fields. It has two
+         * writers -- this tier and the MSAA item walk in the engine -- and
+         * reaching in to move `len` and `batch` from both is how the batch
+         * count and the buffer get out of step. */
+        unsigned w = rc_uirec_inproc(sink.room(), sink.left(), n, path,
+                                     parent);
         if (!w)
         {
             sink.flush();
-            w = rc_uirec_inproc(sink.buf + sink.len,
-                                TreeSink::CAP - sink.len, n, path, parent);
+            w = rc_uirec_inproc(sink.room(), sink.left(), n, path, parent);
         }
-        if (w) { sink.len += w; sink.batch++; sink.total++; }
-        else   { sink.dropped++; }
+        if (w) sink.took(w);
+        else   sink.dropped++;
 
         /* The rows. THE reason this tier exists: LB_GETTEXT and friends
          * take a pointer and nothing marshals it across a process boundary
@@ -505,17 +298,16 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
             if (idx < 0 || idx >= shm->itemN)
                 break;
             rc_strf(ipath, sizeof(ipath), "%s/i%ld", path, it);
-            w = rc_uirec_item(sink.buf + sink.len, TreeSink::CAP - sink.len,
+            w = rc_uirec_item(sink.room(), sink.left(),
                               shm->items[idx].text, ipath, path, it);
             if (!w)
             {
                 sink.flush();
-                w = rc_uirec_item(sink.buf + sink.len,
-                                  TreeSink::CAP - sink.len,
+                w = rc_uirec_item(sink.room(), sink.left(),
                                   shm->items[idx].text, ipath, path, it);
             }
-            if (w) { sink.len += w; sink.batch++; sink.total++; }
-            else   { sink.dropped++; }
+            if (w) sink.took(w);
+            else   sink.dropped++;
         }
     }
     sink.flush();
@@ -529,7 +321,7 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
     k[nkv] = "walk";   v[nkv++] = (r == INJECT_TRUNCATED) ? "maxnodes"
                                                           : "complete";
     k[nkv] = "took_ms"; v[nkv++] = ms;
-    ui_end(net, id, "ok", k, v, nkv);
+    link.end("ok", k, v, nkv);
 }
 
 /* ---- ITEMS: the accessible children of one control ------------------
@@ -540,312 +332,6 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
  * had no way to learn their names but a screenshot. One control's MSAA
  * subtree, streamed as 'a' records through the same UIENT batches a tree
  * uses. Bounded: 400 elements, 3 levels, the request's deadline. */
-struct AccRecords : public AccSink
-{
-    AccRecords(TreeSink &t, RcPathBuilder &p) : tree(t), paths(p), total(0)
-    {
-        rc_path_reset(paths);
-    }
-
-    virtual bool onAcc(const AccNode &n)
-    {
-        char path[RC_PATH_MAX], parent[RC_PATH_MAX];
-        if (n.depth == 0)
-            return true;                    /* the control itself: listed */
-        rc_path_next(paths, n.depth - 1, path, parent);
-        unsigned w = rc_uirec_acc(tree.buf + tree.len, TreeSink::CAP
-                                  - tree.len, n, path, parent);
-        if (!w)
-        {
-            tree.flush();
-            w = rc_uirec_acc(tree.buf + tree.len, TreeSink::CAP - tree.len,
-                             n, path, parent);
-            if (!w)
-                return true;
-        }
-        tree.len += w;
-        tree.batch++;
-        total++;
-        return true;
-    }
-
-    TreeSink      &tree;
-    RcPathBuilder &paths;               /* on the heap: most of a page */
-    int            total;
-};
-
-static void do_items(rc_net *net, UiContext *ctx, rc_frame *f, const char *id,
-                     const WalkOptions &o)
-{
-    const char *k[2];
-    const char *v[2];
-    char nodes[16];
-    if (!ctx->msaa.available())
-    {
-        ui_end(net, id, "no_msaa", NULL, NULL, 0);
-        return;
-    }
-    HWND h = resolve_target(net, ctx, f, id, o);
-    if (!h)
-        return;                             /* resolve_target answered */
-    UniqueObj<TreeSink> tree(new TreeSink(net, id, ctx, false));
-    if (!tree.valid() || !tree->ready())
-    {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
-        return;
-    }
-    HeapPtr<RcPathBuilder> paths((RcPathBuilder *)HeapAlloc(
-        GetProcessHeap(), 0, sizeof(RcPathBuilder)));
-    if (!paths.valid())
-    {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
-        return;
-    }
-    UniqueObj<AccRecords> recs(new AccRecords(*tree.get(), *paths.get()));
-    if (!recs.valid())
-    {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
-        return;
-    }
-    AccWalkOptions ao;
-    ao.want = Selector::WANT_NAME | Selector::WANT_ROLE
-            | Selector::WANT_STATE;
-    ao.maxNodes = 400;
-    ao.maxDepth = 3;
-    ao.deadlineMs = o.deadlineMs;
-    ctx->deadline.arm(o.deadlineMs);
-    AccEnd end = ctx->msaa.enumerateFrom(h, ao, *recs.get());
-    ctx->deadline.disarm();
-    tree->flush();
-    if (end == ACC_NO_OBJECT)
-    {
-        ui_end(net, id, "no_msaa", NULL, NULL, 0);
-        return;
-    }
-    rc_strf(nodes, sizeof(nodes), "%d", recs->total);
-    k[0] = "nodes"; v[0] = nodes;
-    k[1] = "walk";
-    v[1] = end == ACC_COMPLETE ? "complete"
-         : end == ACC_DEADLINE ? "deadline" : "maxnodes";
-    ui_end(net, id, "ok", k, v, 2);
-}
-
-static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
-{
-    const char *id = rc_frame_get(f, "id");
-    const char *waitFor = rc_frame_get(f, "wait_for");
-    const char *k[6];
-    const char *v[6];
-    char nodes[16], enr[16], drop[16], deep[16], self[16];
-    WalkOptions o;
-    int nkv = 0;
-
-    if (!id)
-    {
-        rc_log("UITREE: no id -- dropped");
-        return;
-    }
-    base_options(o, ctx, f);
-
-    /* One control's items, not the window tree. */
-    if (header_flag(f, "acc", false))
-    {
-        do_items(net, ctx, f, id, o);
-        return;
-    }
-
-    /* Opt-in, off by default, and it does not fall back. A caller that
-     * asked for the in-process answer and quietly got the out-of-process
-     * one would conclude a list box is empty. */
-    if (header_flag(f, "inproc", false))
-    {
-        do_tree_inproc(net, ctx, f, id, o);
-        return;
-    }
-
-    TreeSink sink(net, id, ctx, header_flag(f, "msaa", false));
-    if (!sink.ready())
-    {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
-        return;
-    }
-    sink.limit(o.maxNodes);
-
-    /* The wait is a PARAMETER, not a separate op: the loop an agent runs is
-     * "do a thing, then look", and folding the wait into the look turns two
-     * round trips into one. On a 200MHz machine behind a socket the round
-     * trip is the expensive part. */
-    if (waitFor && waitFor[0])
-    {
-        Selector sel;
-        char err[128];
-        if (!sel.parse(waitFor, err, sizeof(err)))
-        {
-            k[0] = "detail"; v[0] = err;
-            ui_end(net, id, "bad_selector", k, v, 1);
-            return;
-        }
-        WaitReport rep;
-        UiWaiter waiter(ctx->watch, ctx->walker, &ctx->msaa);
-        DWORD budget = (DWORD)header_num(f, "wait_ms", 5000, 100, 60000);
-        ctx->deadline.arm(budget + o.deadlineMs);
-        waiter.forControl(sel, o, budget, rep);
-        ctx->deadline.disarm();
-        if (rep.end != UIWAIT_ALREADY && rep.end != UIWAIT_SETTLED)
-        {
-            char detail[96];
-            /* THE WAITER'S OWN ANSWER, not "not_found" for all four.
-             *
-             * Every non-settled end used to go out as `not_found`, whose
-             * sentence begins "Nothing on screen matches that selector" -- so
-             * a wait that matched THREE controls and could not choose between
-             * them told the caller nothing matched. Measured on real hardware
-             * 2026-10-02: `ui wait_for='[text="Control Panel"]'` after opening
-             * Control Panel came back `end=3 after 5005ms, 5 scans, matched=3`
-             * rendered as "nothing matches ... the window may not be open",
-             * and the agent believed it and went looking for the window with a
-             * screenshot. The window was open; the title just appears three
-             * times, on the frame, the toolbar and the address bar.
-             *
-             * The statuses already exist and the bridge already has the right
-             * sentence for each; this stopped throwing the distinction away. */
-            const char *why = "not_found";
-            if (rep.end == UIWAIT_AMBIGUOUS)      why = "ambiguous";
-            else if (rep.end == UIWAIT_TRUNCATED) why = "truncated";
-            rc_strf(detail, sizeof(detail),
-                    "%d controls match after %lums and %d scans",
-                    rep.matchCount, (unsigned long)rep.ms, rep.rechecks);
-            if (rep.end == UIWAIT_TIMEOUT)
-                rc_strf(detail, sizeof(detail),
-                        "waited %lums over %d scans; %s",
-                        (unsigned long)rep.ms, rep.rechecks,
-                        rep.everMatched ? "it appeared and then went"
-                                        : "it never appeared");
-            if (rep.end == UIWAIT_AMBIGUOUS)
-            {
-                ui_end_ambiguous(net, id, detail, rep.samples, rep.sampleN);
-                return;
-            }
-            k[0] = "detail"; v[0] = detail;
-            ui_end(net, id, why, k, v, 1);
-            return;
-        }
-    }
-
-    {
-        DWORD settle = (DWORD)header_num(f, "settle_ms", 0, 0, 5000);
-        if (settle)
-        {
-            WaitReport rep;
-            UiWaiter waiter(ctx->watch, ctx->walker, &ctx->msaa);
-            waiter.forIdle(settle, settle * 4, rep);
-        }
-    }
-
-    ctx->deadline.arm(o.deadlineMs);
-    WalkEnd end = ctx->walker.walk(o, sink);
-    ctx->deadline.disarm();
-    sink.flush();
-
-    rc_strf(nodes, sizeof(nodes), "%d", sink.total);
-    rc_strf(enr, sizeof(enr), "%d", sink.enriched);
-    rc_strf(drop, sizeof(drop), "%d", sink.dropped);
-    rc_strf(deep, sizeof(deep), "%d", ctx->walker.tooDeep());
-    rc_strf(self, sizeof(self), "%d", ctx->walker.selfSkipped());
-    k[nkv] = "nodes";    v[nkv++] = nodes;
-    k[nkv] = "walk";     v[nkv++] = walk_end_name(end);
-    k[nkv] = "enriched"; v[nkv++] = enr;
-    k[nkv] = "dropped";  v[nkv++] = drop;
-    k[nkv] = "too_deep"; v[nkv++] = deep;
-    /* Our own windows are never walked, and the bridge has to be able to
-     * SAY that rather than hand back a list they are merely absent from. */
-    k[nkv] = "self";     v[nkv++] = self;
-    ui_end(net, id, "ok", k, v, nkv);
-}
-
-/* ---- resolving a target --------------------------------------------- */
-
-/* Shared by CLICK and KEYS. Answers the request itself on any failure and
- * returns NULL, so a caller that gets NULL is done. */
-static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
-                           const char *id, const WalkOptions &o)
-{
-    const char *target = rc_frame_get(f, "target");
-    const char *k[1];
-    const char *v[1];
-    char err[128];
-    Selector sel;
-
-    if (!target || !target[0])
-    {
-        ui_end(net, id, "no_target", NULL, NULL, 0);
-        return NULL;
-    }
-    if (!sel.parse(target, err, sizeof(err)))
-    {
-        k[0] = "detail"; v[0] = err;
-        ui_end(net, id, "bad_selector", k, v, 1);
-        return NULL;
-    }
-
-    Resolver r(sel, ctx->msaa.available() ? &ctx->msaa : 0);
-    ctx->deadline.arm(o.deadlineMs);
-    ResolveOutcome out = r.resolve(o, ctx->walker);
-    ctx->deadline.disarm();
-
-    if (out == RESOLVE_OK && r.match())
-        return r.match()->hwnd;
-
-    /* Ambiguity is reported WITH THE COUNT, because the count is what tells
-     * the caller whether the :nth(n) it is about to write exists. Silently
-     * clicking the first of four buttons called OK is the failure this
-     * whole layer refuses to have. */
-    if (out == RESOLVE_AMBIGUOUS)
-    {
-        char detail[64];
-        HWND cand[RC_SAMPLE_MAX];
-        int candN = 0;
-        rc_strf(detail, sizeof(detail), "%d controls match", r.matchCount());
-        for (int i = 0; i < r.sampleCount() && i < RC_SAMPLE_MAX; i++)
-            cand[candN++] = r.sample(i)->hwnd;
-        ui_end_ambiguous(net, id, detail, cand, candN);
-        return NULL;
-    }
-    if (out == RESOLVE_TRUNCATED)
-    {
-        ui_end(net, id, "truncated", NULL, NULL, 0);
-        return NULL;
-    }
-    if (out == RESOLVE_NO_MEMORY)
-    {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
-        return NULL;
-    }
-    /* WHICH PART was not there, when the selector has more than one.
-     * `A > B` failing says nothing about whether A was present, and a caller
-     * told only "nothing matches" reads it as the window being gone: in a live
-     * session `HelloGuiClass[text="Hello Application"] > Button[text="Close"]`
-     * was answered that way while the window was on screen and only the button
-     * did not exist -- the program had no Close button at all (2026-10-02).
-     *
-     * The INDEX, not the text. The caller has the selector it sent and can
-     * split it; sending the component back would be this side re-rendering a
-     * string it was given, and getting the spacing subtly wrong. */
-    {
-        int step = r.unmatchedStep();
-        char stepText[16];
-        if (step >= 0 && sel.stepCount() > 1)
-        {
-            rc_strf(stepText, sizeof(stepText), "%d", step);
-            k[0] = "step"; v[0] = stepText;
-            ui_end(net, id, "not_found", k, v, 1);
-            return NULL;
-        }
-    }
-    ui_end(net, id, "not_found", NULL, NULL, 0);
-    return NULL;
-}
-
 /* CLICK, FOCUS and KEYS lived here until 2026-10-02. A client that runs
  * step lists is offered `input` instead (ui/uiengine.cpp), which does all
  * three in one round trip with the focus check and held-key release they
@@ -861,15 +347,13 @@ static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
 class ShotFrames : public ByteSink
 {
 public:
-    ShotFrames(rc_net *n, const char *sid)
-        : m_net(n), m_buf((char *)HeapAlloc(GetProcessHeap(), 0, CAP)),
+    ShotFrames(UiLink &link)
+        : m_link(link), m_cap(link.bodyCap()),
+          m_buf((char *)HeapAlloc(GetProcessHeap(), 0, link.bodyCap())),
           m_len(0), m_sent(0), m_ok(true)
     {
-        rc_strncpy(m_id, sizeof(m_id), sid, (unsigned)strlen(sid));
     }
     ~ShotFrames() { if (m_buf) HeapFree(GetProcessHeap(), 0, m_buf); }
-
-    enum { CAP = RC_MAX_FRAME - 2048 };
 
     bool ready() const { return m_buf != 0; }
     bool ok() const { return m_ok; }
@@ -880,14 +364,14 @@ public:
         const char *p = (const char *)data;
         while (len)
         {
-            unsigned take = CAP - m_len;
+            unsigned take = m_cap - m_len;
             if (take > len)
                 take = len;
             memcpy(m_buf + m_len, p, take);
             m_len += take;
             p += take;
             len -= take;
-            if (m_len == CAP && !flush())
+            if (m_len == m_cap && !flush())
                 return false;
         }
         return true;
@@ -895,12 +379,9 @@ public:
 
     bool flush()
     {
-        const char *k[1];
-        const char *v[1];
         if (!m_len)
             return true;
-        k[0] = "id"; v[0] = m_id;
-        if (rc_net_send(m_net, "UIDAT", k, v, 1, m_buf, m_len) != 0)
+        if (!m_link.bytes(m_buf, m_len))
         {
             /* The connection has gone. Stop rather than produce a megabyte
              * for nobody -- which is what ByteSink's false is for. */
@@ -913,17 +394,19 @@ public:
     }
 
 private:
-    rc_net  *m_net;
+    UiLink  &m_link;
+    unsigned m_cap;
     char    *m_buf;
     unsigned m_len;
     unsigned m_sent;
     bool     m_ok;
-    char     m_id[64];
+
+    ShotFrames(const ShotFrames &);
+    ShotFrames &operator=(const ShotFrames &);
 };
 
-static void do_shot(rc_net *net, UiContext *ctx, rc_frame *f)
+static void do_shot(UiLink &link, UiContext *ctx, rc_frame *f)
 {
-    const char *id = rc_frame_get(f, "id");
     const char *k[5];
     const char *v[5];
     char w[16], h[16], bpp[16], bytes[16];
@@ -931,26 +414,21 @@ static void do_shot(rc_net *net, UiContext *ctx, rc_frame *f)
     int nkv = 0;
 
     (void)ctx;
-    if (!id)
-    {
-        rc_log("UISHOT: no id -- dropped");
-        return;
-    }
 
-    o.maxBpp = (int)header_num(f, "bpp", 8, 4, 32);
-    o.rect.left   = (LONG)header_num(f, "x", 0, 0, 0x4000);
-    o.rect.top    = (LONG)header_num(f, "y", 0, 0, 0x4000);
-    o.rect.right  = (LONG)header_num(f, "w", 0, 0, 0x4000);
-    o.rect.bottom = (LONG)header_num(f, "h", 0, 0, 0x4000);
+    o.maxBpp = (int)rc_ui_header_num(f, "bpp", 8, 4, 32);
+    o.rect.left   = (LONG)rc_ui_header_num(f, "x", 0, 0, 0x4000);
+    o.rect.top    = (LONG)rc_ui_header_num(f, "y", 0, 0, 0x4000);
+    o.rect.right  = (LONG)rc_ui_header_num(f, "w", 0, 0, 0x4000);
+    o.rect.bottom = (LONG)rc_ui_header_num(f, "h", 0, 0, 0x4000);
     /* A width and a height, not a right and a bottom: a caller says "100
      * wide", and making it say "left plus 100" is an arithmetic trap. */
     if (o.rect.right)  o.rect.right  += o.rect.left;
     if (o.rect.bottom) o.rect.bottom += o.rect.top;
 
-    ShotFrames sink(net, id);
+    ShotFrames sink(link);
     if (!sink.ready())
     {
-        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        link.end("no_memory", NULL, NULL, 0);
         return;
     }
 
@@ -962,7 +440,7 @@ static void do_shot(rc_net *net, UiContext *ctx, rc_frame *f)
     if (!got)
     {
         k[0] = "detail"; v[0] = sink.ok() ? shot.error() : "connection lost";
-        ui_end(net, id, "failed", k, v, 1);
+        link.end("failed", k, v, 1);
         return;
     }
 
@@ -974,7 +452,7 @@ static void do_shot(rc_net *net, UiContext *ctx, rc_frame *f)
     k[nkv] = "h";     v[nkv++] = h;
     k[nkv] = "bpp";   v[nkv++] = bpp;
     k[nkv] = "bytes"; v[nkv++] = bytes;
-    ui_end(net, id, "ok", k, v, nkv);
+    link.end("ok", k, v, nkv);
 }
 
 /* ---- the table ------------------------------------------------------- */
@@ -1014,28 +492,47 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
         return;
     }
 
-    if      (strcmp(f->type, "UITREE")  == 0) do_tree(net, ctx, f);
-    else if (strcmp(f->type, "UISHOT")  == 0) do_shot(net, ctx, f);
-    else if (strcmp(f->type, "UIRUN")   == 0) rc_uirpc_run(net, ctx, f);
-    else rc_log("desktop: unhandled frame %s", f->type);
-}
-
-void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
-{
-    const char *id = rc_frame_get(f, "id");
-    if (!id)
     {
-        rc_log("UIRUN: no id -- dropped");
-        return;
-    }
-    /* Armed before the decode, not after it, so a UICANCEL that arrives
-     * while the list is still being parsed is not lost: the runner sees the
-     * flag on its first step instead. */
-    InterlockedExchange(&g_run_cancel, 0);
-    rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
-    {
+        const char *id = rc_frame_get(f, "id");
+        if (!id)
+        {
+            rc_log("%s: no id -- dropped, and the bridge will wait out its "
+                   "timeout", f->type);
+            return;
+        }
         NetUiLink link(net, id);
-        rc_ui_run(link, ctx, f);
+
+        if (strcmp(f->type, "UITREE") == 0)
+        {
+            /* The in-process branch is OURS, and is taken before the shared
+             * handler sees the frame. gremote does not carry that tier --
+             * it needs HOOKDLL.DLL beside the exe -- and a shared handler
+             * that fell through to the out-of-process walk would answer a
+             * caller who asked for the in-process answer with the other
+             * one. An empty list box reads the same either way, which is
+             * why the two tiers have never been allowed to substitute. */
+            if (rc_ui_header_flag(f, "inproc", false))
+            {
+                WalkOptions o;
+                rc_ui_base_options(o, link, ctx->selfPid, f);
+                do_tree_inproc(link, ctx, f, o);
+            }
+            else
+                rc_ui_tree(link, ctx, f);
+        }
+        else if (strcmp(f->type, "UISHOT") == 0)
+            do_shot(link, ctx, f);
+        else if (strcmp(f->type, "UIRUN") == 0)
+        {
+            /* Armed before the decode, not after it, so a UICANCEL that
+             * arrives while the list is still being parsed is not lost: the
+             * runner sees the flag on its first step instead. */
+            InterlockedExchange(&g_run_cancel, 0);
+            rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
+            rc_ui_run(link, ctx, f);
+            g_run_id[0] = '\0';
+        }
+        else
+            rc_log("desktop: unhandled frame %s", f->type);
     }
-    g_run_id[0] = '\0';
 }
