@@ -50,18 +50,14 @@ one.** Write in the folder the notice names, once it names one.'''
 # an agent told only "nothing is mirrored" picked the root of C: (2026-10-01).
 no_sync = '''
 Your file editing tools operate on the working copy at `{workdir}` on this
-proxy, which exists to stage files for the user's machine. Use them normally
-within it. **These files are NOT copied to the connected machine on their
-own** -- synchronisation is not switched on for this session, so nothing here
-moves by itself.
+proxy. **Nothing here is copied to the connected machine on its own** --
+synchronisation is not switched on for this session.
 {declared}
 
-**One file at a time you can still move**, with `put_file`, which writes to a
-path you name on the user's machine and needs no synchronisation. It is the
-right answer for a handful of files and the wrong one for a folder: there is
-no baseline, so nothing notices later edits on either side -- and no staged
-copy either, so a file you replace over there is simply gone. Say which file
-is going where and what it replaces, and let the user approve it.
+**One file at a time still moves**, with `put_file`, to a path you name. Right
+for a handful of files, wrong for a folder: no baseline, so nothing notices
+later edits on either side, and no staged copy, so a file you replace over
+there is gone. Say what is going where and what it replaces.
 {where}'''
 
 # the machine shares a folder AND this conversation has its own folder inside
@@ -96,32 +92,21 @@ not a fault -- do not go looking for a synchronisation problem.'''
 no_sync_where_folder = '''
 
 **USE `{folder}` AS YOUR WORKING DIRECTORY ON THAT MACHINE.** It belongs to
-this conversation, it sits inside the folder the machine shares, and the
-client creates it the first time you use a tool -- so if a tool call is the
-first thing you do, it is being made as that call runs. Put files there,
-make subdirectories there, and name the path in what you say so the user
-knows where to look. A file the user asked for goes there unless they name
-somewhere else.
-
-**Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
-drive root is the user's own top-level disk, nothing sweeps it, and a scratch
-file dropped there outlives the conversation that made it.'''
+this conversation, inside the folder the machine shares, and is created the
+first time you use a tool. Put files and subdirectories there and name the
+path in what you say. A file the user asked for goes there unless they name
+somewhere else.'''
 
 # where a file put on the machine should land, when it named a folder
 no_sync_where = '''
 
-**This conversation gets its own folder under `{home}`, and that folder is
-your working directory on that machine.** `{home}` is what their machine
-shares; the folder inside it is named after what you were asked for and is
-created by their machine the first time you use a tool on it. Its path
-arrives in an automatic message at the top of a turn -- use it, and name it
-in what you say so the user knows where to look.
+**This conversation gets its own folder under `{home}`, which their machine
+shares.** It is named after what you were asked for, created by that machine
+the first time you use a tool, and its path arrives in an automatic message at
+the top of a turn. Use it, and name it in what you say.
 
-If you have not been given a path, make a folder under `{home}` yourself and
-write inside that. **Never the root of a drive.** `C:\YOURFILE.TXT` is not a
-destination: a drive root is the user's own top-level disk, nothing sweeps
-it, and a scratch file dropped there outlives the conversation that made
-it.'''
+If you have not been given a path, make a folder under `{home}` and write
+inside that -- never a drive root.'''
 
 # prepended to the user's message, once, when a conversation commits to a
 # folder on a machine this bridge is not mirroring.
@@ -244,6 +229,10 @@ proxy. Assume it every time, without asking.
 The proxy is infrastructure, not the subject of the conversation. **Do not
 read, list, search or modify anything on it outside the working copy at
 `{workdir}`**; attempts are refused automatically.
+
+And on THEIR machine, **never write to the root of a drive**. `C:\YOURFILE.TXT`
+is not a destination: nothing sweeps a drive root, so a scratch file left there
+outlives the conversation that made it.
 
 A path that cannot exist on their machine -- `/etc/hostname` on a Windows box
 -- is simply not valid for their machine. It is not an invitation to read the

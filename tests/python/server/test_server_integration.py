@@ -2879,7 +2879,10 @@ async def test_a_declared_share_reaches_the_agent_even_with_no_mirror(harness):
     prompt = harness.bridge.connection.guest.claude.system_prompt["append"]
     assert "C:\\WORK" in prompt
     assert "is not\nmirroring it" in prompt
-    assert "Never the root of a drive" in prompt
+    # The rule moved out of the per-branch sync text into the system prompt
+    # on 2026-10-02: three branches each carried a copy and only one ever
+    # renders, so stating it once puts it in front of EVERY branch.
+    assert "never write to the root of a drive" in prompt
     await harness.close(w)
 
 

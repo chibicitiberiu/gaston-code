@@ -9,7 +9,7 @@
 
 [exec]
 description = '''
-Run one command on the connected machine (the old computer the user is sitting at) and return its output. It runs through that machine's system shell by default. Output comes back in the console codepage, capped at 32KB. The user approves every call on their own screen, so prefer one command that answers the question over several that explore.
+Run one command on the connected machine (the old computer the user is sitting at) and return its output, through that machine's system shell by default. Output is capped at 32KB. The user approves every call on their own screen, so prefer one command that answers the question over several that explore.
 
 To see or end running programs use `ps` and `kill`, not a command: the machine may have no command for that at all.
 
@@ -59,9 +59,9 @@ Writing a file always succeeds here; whether it reached the user's machine is a 
 description = '''
 Resolve one halted synchronisation decision, after the user has confirmed they are finished with the file.
 
-When you and the user both change the same file, their copy wins and yours is moved aside -- and the path then REFUSES your writes until this is called. You cannot usefully react to a conflict during the turn it happened in, so the bridge stops you rather than asking you to stop.
+When you and the user both change the same file, their copy wins, yours is moved aside, and the path REFUSES your writes until this is called.
 
-Do not call this to make an error go away: call it once you have read the preserved copy and merged what you need. The user approves every call on their own screen.'''
+Do not call it to make an error go away: call it once you have read the preserved copy and merged what you need.'''
 
 [sync_resolve.args]
 action = '''
@@ -374,25 +374,26 @@ The machine answered "{status}" for "{path}", which this bridge does not recogni
 
 [get_file]
 description = '''
-Read a file from anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into.
+Read a file from anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into. Prefer it to printing a file through the shell, which mangles anything that is not plain text and truncates it.
 
-Use this rather than printing a file through the shell, which mangles anything that is not plain text, truncates it, and returns it in the console's own character set. This returns the file.
-
-Text comes back as text, converted to the endings you are used to, and the reply says which endings the file actually has on that machine -- the one thing you cannot see by looking at it. Anything that is not text is saved here, beside your folder, and the reply says where.'''
+SHORT TEXT comes back inline, with the endings you are used to and a note saying which endings the file has on that machine -- the one thing you cannot see by looking. ANYTHING ELSE -- a long file, or any file that is not text -- is downloaded to this proxy and the reply gives only the path. Read it with your own file tools, which can seek and search; this one does not take a line range because they already do it better.'''
 
 [get_file.args]
 path = '''
 The full path on the connected machine, written the way that machine writes paths.'''
 max_bytes = '''
-Stop after this many bytes; the machine enforces it while reading, so a huge file costs only what you asked for. There is a ceiling in any case and the reply says when either one bit.'''
+Stop after this many bytes; the machine enforces it while reading, so a huge file costs only what you asked for. There is a ceiling in any case and the reply says when either one bit. It does not change what comes back inline -- a long file is downloaded whether or not you cap it.'''
 # RESIDENT, so two sentences. The second is the only part that is load-bearing:
 # it names the cases where off is the right answer, which is a short list.
 translation = '''
 Omit it. False returns the bytes exactly as they are on that machine, saved to a local file rather than shown.'''
 
 [get_file.view]
-binary = '''
-{path} is {bytes} bytes and is not text. It has been saved here as:
+# WHAT IT IS, HOW BIG, AND WHERE. Said for a long text file and a binary
+# alike: the path is what the agent acts on, and the type and size are what
+# tell it whether to Read the thing, Grep it, or leave it alone.
+downloaded = '''
+{kind}, {size}. Downloaded to:
   {local}'''
 truncated = '''
 
@@ -420,9 +421,9 @@ cr = '''CR'''
 
 [put_file]
 description = '''
-Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into. There is no other way to do that: the shell cannot write anything but plain short text, and the mirrored folder reaches one place only.
+Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into. Nothing else can: the shell writes only plain short text, and the mirrored folder reaches one place.
 
-This overwrites whatever is at that path. The user approves every call and sees the destination, so say what you are about to replace and why. Write into a folder, never into the top level of a drive or volume: nothing ever clears that, so a file left there outlives the conversation.'''
+It overwrites whatever is there. The user approves every call and sees the destination, so say what you are replacing and why. Write into a folder, never the top level of a drive.'''
 
 [put_file.args]
 path = '''

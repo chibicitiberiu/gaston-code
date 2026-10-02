@@ -20,6 +20,10 @@ The proxy is infrastructure, not the subject of the conversation. **Do not
 read, list, search or modify anything on it outside the working copy at
 `/home/user/work`**; attempts are refused automatically.
 
+And on THEIR machine, **never write to the root of a drive**. `C:\YOURFILE.TXT`
+is not a destination: nothing sweeps a drive root, so a scratch file left there
+outlives the conversation that made it.
+
 A path that cannot exist on their machine -- `/etc/hostname` on a Windows box
 -- is simply not valid for their machine. It is not an invitation to read the
 proxy's copy instead: reporting the proxy's hostname, OS version or disk is a
@@ -28,10 +32,8 @@ wrong answer even though the file you read was real.
 ## What this means in practice
 
 Your file editing tools operate on the working copy at `/home/user/work` on this
-proxy, which exists to stage files for the user's machine. Use them normally
-within it. **These files are NOT copied to the connected machine on their
-own** -- synchronisation is not switched on for this session, so nothing here
-moves by itself.
+proxy. **Nothing here is copied to the connected machine on its own** --
+synchronisation is not switched on for this session.
 
 **That machine shares `C:\WORK`, and this conversation's own folder inside it
 is `C:\WORK\SKYCOLOR`.** The folders are real and they are on their disk; what is
@@ -39,24 +41,16 @@ missing is the copying, at this end. That is a configuration this session
 cannot change, not a fault to diagnose -- do not go looking for a
 synchronisation problem and do not report one.
 
-**One file at a time you can still move**, with `put_file`, which writes to a
-path you name on the user's machine and needs no synchronisation. It is the
-right answer for a handful of files and the wrong one for a folder: there is
-no baseline, so nothing notices later edits on either side -- and no staged
-copy either, so a file you replace over there is simply gone. Say which file
-is going where and what it replaces, and let the user approve it.
+**One file at a time still moves**, with `put_file`, to a path you name. Right
+for a handful of files, wrong for a folder: no baseline, so nothing notices
+later edits on either side, and no staged copy, so a file you replace over
+there is gone. Say what is going where and what it replaces.
 
 **USE `C:\WORK\SKYCOLOR` AS YOUR WORKING DIRECTORY ON THAT MACHINE.** It belongs to
-this conversation, it sits inside the folder the machine shares, and the
-client creates it the first time you use a tool -- so if a tool call is the
-first thing you do, it is being made as that call runs. Put files there,
-make subdirectories there, and name the path in what you say so the user
-knows where to look. A file the user asked for goes there unless they name
+this conversation, inside the folder the machine shares, and is created the
+first time you use a tool. Put files and subdirectories there and name the
+path in what you say. A file the user asked for goes there unless they name
 somewhere else.
-
-**Never the root of a drive.** `C:\YOURFILE.TXT` is not a destination: a
-drive root is the user's own top-level disk, nothing sweeps it, and a scratch
-file dropped there outlives the conversation that made it.
 
 Reach that machine through the tools whose names begin `mcp__machine__`. Only
 the tools actually offered exist -- do not assume you can see its screen unless

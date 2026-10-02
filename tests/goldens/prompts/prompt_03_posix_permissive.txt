@@ -20,6 +20,10 @@ The proxy is infrastructure, not the subject of the conversation. **Do not
 read, list, search or modify anything on it outside the working copy at
 `/home/user/work`**; attempts are refused automatically.
 
+And on THEIR machine, **never write to the root of a drive**. `C:\YOURFILE.TXT`
+is not a destination: nothing sweeps a drive root, so a scratch file left there
+outlives the conversation that made it.
+
 A path that cannot exist on their machine -- `/etc/hostname` on a Windows box
 -- is simply not valid for their machine. It is not an invitation to read the
 proxy's copy instead: reporting the proxy's hostname, OS version or disk is a

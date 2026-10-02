@@ -49,7 +49,7 @@ def test_prompt_does_not_promise_file_sync_when_there_is_none():
     """
     out = system_prompt(HELLO, "/work")
     assert "/work" in out
-    assert "NOT copied to the connected machine on their\nown" in out
+    assert "Nothing here is copied to the connected machine on its own" in out
     # And the third correction, for the same reason as the first two: the
     # prompt used to say "there is no tool that transfers them", which stopped
     # being true when put_file shipped. Refusing a thing it can do is the same
@@ -679,7 +679,7 @@ def test_a_declared_share_with_no_mirror_is_named_as_a_disagreement():
     assert "C:\\WORK" in out
     assert "is not\nmirroring it" in out
     # And still the truth about the copying, which has not changed.
-    assert "NOT copied to the connected machine on their\nown" in out
+    assert "Nothing here is copied to the connected machine on its own" in out
 
 
 def test_the_disagreement_is_not_reported_as_a_fault():
@@ -705,7 +705,7 @@ def test_a_drive_root_is_named_as_the_destination_that_is_never_right():
     """
     out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
                         home="C:\\WORK")
-    assert "Never the root of a drive" in out
+    assert "never write to the root of a drive" in out
     assert "a folder under `C:\\WORK`" in out
 
 
@@ -717,7 +717,7 @@ def test_the_conversations_own_folder_is_the_destination_with_no_mirror():
     out = system_prompt(HELLO, "/work", sync_dir=None, guest_root=None,
                         home="C:\\WORK", planned="C:\\WORK\\SKYCOLOR")
     assert "USE `C:\\WORK\\SKYCOLOR` AS YOUR WORKING DIRECTORY" in out
-    assert "Never the root of a drive" in out
+    assert "never write to the root of a drive" in out
     # And it must not ALSO tell the agent to go and invent one.
     assert "make a folder under" not in out
 
