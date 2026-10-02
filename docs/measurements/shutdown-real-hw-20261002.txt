@@ -1,0 +1,67 @@
+The session-end fix, on the machine it was written for
+======================================================
+
+Machine : Athlon XP 2000+, Windows 98 SE, real hardware 10.0.0.125
+Date    : 2026-10-02, 01:40 -- an ordinary Shut Down by the user, not a test
+Why     : the fix (ccfc2d1) went 8-for-8 on the QEMU guest and had never once
+          been exercised on this machine. The user shut the box down to sleep;
+          these are the two logs afterwards.
+
+gaston.log
+
+  01:40:46.960 app: Windows asks whether the session may end (a shutdown or
+               restart); yes
+  01:40:47.790 app: Windows is ending the session (a shutdown or restart);
+               signalling every service and leaving this handler WITHOUT
+               joining any of them
+  01:40:47.840 app: the session-end handler is returning to Windows after
+               12 ms; nothing below this line is ours
+
+gremote.prv  (the run that was alive at shutdown)
+
+  01:40:46.960 app: Windows asks whether the session may end; yes
+  01:40:48.230 app: Windows is ending the session; signalling every service and
+               leaving this handler WITHOUT joining any of them
+  01:40:48.230 tray: Prevent sleep OFF (gremote is stopping); 0 suspend
+               requests refused while it was on
+  01:40:48.230 app: the session is ending; abandoning server unjoined
+  01:40:48.230 === gremote exiting ===
+  01:40:48.230 app: the session-end handler is returning to Windows after 9 ms
+
+12 ms and 9 ms. Neither process held the shutdown and the user reported no
+"End Task" dialog, which is what BACKLOG 23 asked for and what the VM could
+only suggest.
+
+REBOOT over the wire, the same morning, 09:46
+---------------------------------------------
+
+The case above was Windows-initiated: the user chose Shut Down. THIS one is the
+case ccfc2d1 was actually written for -- a session end THIS PROCESS asked for,
+which is where the VM hung before the fix and where `PostQuitMessage` had to
+stop being sent.
+
+  09:46:13.900 control: REBOOT mode=reboot
+  09:46:13.900 system: ExitWindowsEx(2)
+  09:46:14.010 app: Windows asks whether the session may end; yes
+  09:46:15.600 app: Windows is ending the session; signalling every service and
+               leaving this handler WITHOUT joining any of them
+  09:46:15.600 === gremote exiting ===
+  09:46:15.600 app: the session-end handler is returning to Windows after 6 ms;
+               this process stays up to drive the shutdown it asked for
+
+The `gremote.reboot()` call returned in under a tenth of a second and the box
+was answering on 7401 again 91 seconds later -- POST, boot, logon and autostart
+included. Three things close together: REBOOT over the wire on real hardware,
+the self-initiated session-end branch on real hardware, and autostart after a
+programmatic restart rather than a power cut.
+
+What this does NOT settle: the QUERYENDSESSION answer above is the one Windows
+asks, not the one a hung application forces. A process that refuses, or that
+takes seconds in its handler, is still only measured on the VM.
+
+And the sleep question is not settled either, in a way worth stating plainly:
+"0 suspend requests refused while it was on" means Prevent sleep was enabled
+and NOTHING EVER ASKED. That is consistent with the mechanism working and
+equally consistent with this machine never raising a suspend query at all --
+which is exactly what the three deferred sleep measurements exist to tell
+apart. A zero here is not evidence either way.
