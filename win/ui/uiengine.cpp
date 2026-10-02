@@ -1,27 +1,41 @@
-/* uisteps.cpp -- UIRUN: the `input` tool's step list, on the desktop lane.
+/* uiengine.cpp -- the desktop handlers, with no wire under them.
  *
- * The adapter between the wire and libautomation's StepRunner, and nothing
- * more: it decodes the body into Steps, runs them, and encodes one result
- * line per step that ran plus a UIEND that says how the list ended.
+ * Two programs run these: the client answers UIENT/UIDAT/UIEND through
+ * rc_net, and gremote.exe answers DATA/OK/ERR through a Responder
+ * (docs/REMOTE.md step 6). Everything they disagree about is behind
+ * `UiLink` (ui/uilink.h), so neither op namespace is spelled in here --
+ * REMOTE.md is explicit that the two must not drift into each other, and a
+ * shared handler that knew either spelling is how they would.
  *
- * BODY IN: one step per line, `verb` then TAB-separated `key=value` fields,
- * every value percent-encoded by the bridge (bridge/agent/steps.py) so a
- * selector or a typed string may hold any byte, TABs and newlines included.
- * Steps ride the BODY and not headers because a header value is capped at
- * 255 encoded bytes, and a selector clipped to fit is a different selector.
+ * Moved out of ui/uisteps.cpp and ui/uirpc.cpp on 2026-10-02, unchanged
+ * except for the seam. uisteps.cpp was ABSORBED rather than renamed beside
+ * this file: a new translation unit costs ~2,144 bytes of -xs machinery
+ * before any of its own code (win/Makefile), and the client had 2,679 bytes
+ * of its committed-at-load budget left.
+ *
+ * UIRUN, the `input` tool's step list:
+ *
+ * BODY IN: one step per line, `verb` then TAB-separated `key=value`, every
+ * value percent-encoded by the bridge (bridge/agent/steps.py) so a selector
+ * or a typed string may hold any byte, TABs and newlines included. Steps
+ * ride the BODY and not headers because a header value is capped at 255
+ * encoded bytes, and a selector clipped to fit is a different selector.
  *
  * BODY OUT: the same shape, one line per step that ran:
  *     i=<n> status=<word> ms=<n> hit=<window> detail=<text> part=<n>
  * and a last line `released=1` when the list ended with something still
- * held, which the runner released.
+ * held, which the runner released. It goes through UiLink::report() rather
+ * than on the terminator: see uilink.h for why a terminal frame may not
+ * carry a body.
  *
- * UICANCEL id=... arrives on the READER thread (rpc.cpp, the immediate
- * lane), because the desktop worker is the thread busy running the list it
- * is meant to stop. It raises a flag the runner looks at between steps and
- * inside every wait.
+ * The stop flag is the caller's -- UiLink::stopFlag(). The client raises it
+ * from UICANCEL on the reader thread; gremote from STOP or CANCEL. The
+ * runner looks at it between steps and inside every wait.
  */
-#include "ui/uirpc.h"
+#include "ui/uiengine.h"
+#include "ui/uilink.h"
 #include "ui/uicontext.h"
+#include "net/caps.h"
 #include "ui/uirec.h"
 #include "automation/steps.h"
 #include "core/log.h"
@@ -30,23 +44,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-
-/* The list that is running, if one is, and its stop flag. A plain buffer
- * the reader compares against: a race here can only miss a cancel for a
- * list that is finishing anyway, or arrive for none, and both are logged. */
-static volatile LONG g_run_cancel;
-static char          g_run_id[48];
-
-void rc_uirpc_cancel(const char *id)
-{
-    if (!id || !g_run_id[0] || strcmp(id, g_run_id) != 0)
-    {
-        rc_log("desktop: UICANCEL %s matches no running list -- ignored",
-               id ? id : "(no id)");
-        return;
-    }
-    InterlockedExchange(&g_run_cancel, 1);
-}
 
 /* ---- decoding, in place --------------------------------------------- */
 
@@ -144,9 +141,7 @@ static void setField(Step &s, const char *key, const char *v, unsigned vlen)
  * 64KB. False with a reason for anything malformed -- the bridge validated
  * it, so a bad line here is a version skew worth refusing loudly rather
  * than running a different list from the one sent. */
-#define RC_RUN_MAX 64
-
-static int decodeSteps(char *body, unsigned len, Step *out, char *why,
+int rc_ui_decode_steps(char *body, unsigned len, Step *out, char *why,
                        unsigned whyCap)
 {
     int n = 0;
@@ -280,32 +275,16 @@ static long headerNum(rc_frame *f, const char *key, long dflt, long lo,
     return v < lo ? lo : v > hi ? hi : v;
 }
 
-static void sendEnd(rc_net *net, const char *id, const char *status,
-                    const char *const *k, const char *const *v, int n,
-                    const LineSink *body)
+void rc_ui_run(UiLink &link, UiContext *ctx, rc_frame *f)
 {
-    const char *keys[10];
-    const char *vals[10];
-    int m = 0;
-    keys[m] = "id";     vals[m++] = id;
-    keys[m] = "status"; vals[m++] = status;
-    for (int i = 0; i < n && m < 10; i++)
-    {
-        keys[m] = k[i];
-        vals[m++] = v[i];
-    }
-    rc_net_send(net, "UIEND", keys, vals, m,
-                body && body->ok() ? body->data() : NULL,
-                body && body->ok() ? body->size() : 0);
-}
-
-void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
-{
-    const char *id = rc_frame_get(f, "id");
     char why[96];
-    if (!id)
+    if (link.automationLevel() < RC_AUTOMATION_STEPS)
     {
-        rc_log("UIRUN: no id -- dropped");
+        /* SCREEN is read-only: a box that may be photographed and
+         * enumerated but not typed into. The client never declares that
+         * middle value -- it sends STEPS or NONE -- so this refusal is
+         * reachable for the first time through gremote's [ui] section. */
+        link.end("automation_off", NULL, NULL, 0);
         return;
     }
     HeapPtr<Step> steps((Step *)HeapAlloc(GetProcessHeap(), 0,
@@ -313,18 +292,24 @@ void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
     LineSink sink;
     if (!steps.valid() || !sink.ok())
     {
-        sendEnd(net, id, "no_memory", NULL, NULL, 0, NULL);
+        link.end("no_memory", NULL, NULL, 0);
         return;
     }
-    int count = f->body ? decodeSteps(f->body, f->body_len, steps.get(),
-                                      why, sizeof(why)) : 0;
+    int count = f->body ? rc_ui_decode_steps(f->body, f->body_len,
+                                         steps.get(), why,
+                                         sizeof(why)) : 0;
     if (count < 0)
     {
         const char *k[1] = { "detail" };
         const char *v[1] = { why };
-        sendEnd(net, id, "bad_steps", k, v, 1, NULL);
+        link.end("bad_steps", k, v, 1);
         return;
     }
+
+    /* Defaults and ceilings from the caller, floors from here: a floor is
+     * a sanity bound on a number off the wire, not policy a deployment gets
+     * to choose, and a configurable one is a way to ask for a 1ms step. */
+    const UiLimits &L = link.limits();
 
     /* The walk every step shares: the whole desktop, never our own windows,
      * and per-message timeouts small enough that one hung program costs a
@@ -332,25 +317,24 @@ void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
     WalkOptions o;
     o.visibleOnly = true;
     o.wantText = true;
-    o.maxNodes = 400;
-    o.callTimeoutMs = 200;
-    o.deadlineMs = 8000;
+    o.maxNodes = L.maxNodes;
+    o.callTimeoutMs = L.callMs;
+    o.deadlineMs = L.treeMs;
     o.excludePid = ctx->selfPid;
 
     StepLimits lim;
-    lim.scriptMs = (DWORD)headerNum(f, "timeout_ms", 120000, 100, 600000);
-    lim.stepMs = (DWORD)headerNum(f, "step_ms", 30000, 100, 120000);
+    lim.scriptMs = (DWORD)headerNum(f, "timeout_ms", (long)L.scriptMs, 100,
+                                    (long)L.scriptMsTop);
+    lim.stepMs = (DWORD)headerNum(f, "step_ms", (long)L.stepMs, 100,
+                                  (long)L.stepMsTop);
     lim.settleMs = (DWORD)headerNum(f, "settle", 0, 0, 5000);
 
     StepRunner runner(ctx->walker, ctx->msaa.available() ? &ctx->msaa : 0,
                       ctx->watch, ctx->input, &ctx->deadline);
-    InterlockedExchange(&g_run_cancel, 0);
-    rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
-    runner.setCancel(&g_run_cancel);
+    runner.setCancel(link.stopFlag());
 
     StepReport failed;
     int at = runner.run(steps.get(), count, o, lim, sink, failed);
-    g_run_id[0] = '\0';
     if (runner.releasedAtEnd())
         sink.put("released=1\n");
 
@@ -360,7 +344,8 @@ void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
     {
         const char *k[1] = { "done" };
         const char *v[1] = { done };
-        sendEnd(net, id, "ok", k, v, 1, &sink);
+        link.report(sink.data(), sink.size());
+        link.end("ok", k, v, 1);
         return;
     }
 
@@ -389,5 +374,6 @@ void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
         k[n] = CAND_KEYS[i];
         v[n++] = cand.get()[i];
     }
-    sendEnd(net, id, failed.status, k, v, n, &sink);
+    link.report(sink.data(), sink.size());
+    link.end(failed.status, k, v, n);
 }

@@ -26,7 +26,7 @@
  *     its own timeout and what the list has left; a cancel flag, raised from
  *     another thread, stops it between steps and inside any wait.
  *
- * Knows nothing of the wire: the client's adapter (ui/uisteps.cpp) decodes
+ * Knows nothing of the wire: the shared adapter (ui/uiengine.cpp) decodes
  * the frame into these and encodes the reports, and gremote's UI lane can do
  * the same with its own framing. See docs/REMOTE.md.
  */

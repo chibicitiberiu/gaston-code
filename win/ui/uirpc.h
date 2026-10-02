@@ -52,7 +52,7 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f);
  * timeout and tells it nothing. */
 void rc_uirpc_refuse(rc_net *net, rc_frame *f, const char *why);
 
-/* UIRUN, the `input` tool's step list (ui/uisteps.cpp), on the desktop
+/* UIRUN, the `input` tool's step list (ui/uiengine.cpp), on the desktop
  * worker like every other UI op. */
 void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f);
 

@@ -11,6 +11,7 @@
  * long for the buffer.
  */
 #include "ui/uirec.h"
+#include "ui/uiengine.h"
 #include "ui/inject.h"
 #include "core/str.h"
 
@@ -326,6 +327,195 @@ static void paths(void)
     }
 }
 
+/* ---- the step list's wire format ------------------------------------- */
+
+/* The `input` tool's body, which nothing could reach without a socket and a
+ * desktop until the handlers moved behind UiLink (REMOTE.md step 6). It is a
+ * format, so the interesting inputs are the ugly ones: a value with a TAB in
+ * it, one with a newline, a verb that does not exist, one step too many.
+ *
+ * The decode is IN PLACE, so every case needs its own writable copy -- which
+ * is also the property worth asserting: a Step's strings point into the
+ * caller's buffer and must still be there after the call. */
+/* rc_strf returns 1 for "it fit", not a length, so appending needs its own
+ * cursor. Writing `len += rc_strf(...)` advances by one byte a call and
+ * silently overwrites -- which is what the first run of these cases did. */
+static int append(char *out, unsigned cap, int at, const char *s)
+{
+    unsigned n = (unsigned)strlen(s);
+    if ((unsigned)at + n + 1 > cap)
+        return at;
+    memcpy(out + at, s, n + 1);
+    return at + (int)n;
+}
+
+static void stepCodec(void)
+{
+    static Step steps[RC_RUN_MAX + 2];
+    static char body[8192];
+    static char why[96];
+    static char detail[200];
+    int n;
+
+    /* Every verb, one per line, in the table's own order. A verb that stops
+     * being recognised is a list the bridge can send and the guest cannot
+     * run, and the failure would be a refusal nobody could explain. */
+    {
+        static const char *const VERBS[] = {
+            "focus", "click", "close", "kd", "ku", "bd", "bu", "mv",
+            "mvr", "tap", "type", "wait", "waitfor", "waitgone",
+            "waittext", "idle"
+        };
+        const int want = (int)(sizeof(VERBS) / sizeof(VERBS[0]));
+        int len = 0, i, bad = -1;
+        for (i = 0; i < want; i++)
+        {
+            len = append(body, sizeof(body), len, VERBS[i]);
+            len = append(body, sizeof(body), len, "\n");
+        }
+        n = rc_ui_decode_steps(body, (unsigned)len, steps, why, sizeof(why));
+        for (i = 0; i < n && i < want; i++)
+            if ((int)steps[i].kind != i)
+                bad = i;
+        rc_strf(detail, sizeof(detail), "%d of %d, kinds in order: %s",
+                n, want, bad < 0 ? "yes" : VERBS[bad]);
+        say("steps-every-verb-decodes", n == want && bad < 0, detail);
+    }
+
+    /* A percent-encoded value carrying the two bytes the line format uses
+     * as separators. Getting this wrong splits one step into three. */
+    {
+        const char *line = "type\tin=Notepad\ttext=a%09b%0Ac";
+        rc_strf(body, sizeof(body), "%s\n", line);
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        bool ok = n == 1 && steps[0].kind == STEP_TYPE
+               && steps[0].text != NULL
+               && !strcmp(steps[0].text, "a\tb\nc")
+               && steps[0].textLen == 5
+               && steps[0].in != NULL && !strcmp(steps[0].in, "Notepad");
+        /* The detail may NOT carry the decoded bytes: a verdict row is
+         * `verdict TAB name TAB detail` and this text is a TAB and a
+         * newline on purpose, so printing it raw splits one row into two
+         * and the hard case count in test_uirec_agreement.py fails -- which
+         * is how this was caught. */
+        rc_strf(detail, sizeof(detail), "n=%d len=%u bytes=%d,%d,%d,%d,%d",
+                n, n == 1 ? steps[0].textLen : 0u,
+                ok ? (int)(unsigned char)steps[0].text[0] : -1,
+                ok ? (int)(unsigned char)steps[0].text[1] : -1,
+                ok ? (int)(unsigned char)steps[0].text[2] : -1,
+                ok ? (int)(unsigned char)steps[0].text[3] : -1,
+                ok ? (int)(unsigned char)steps[0].text[4] : -1);
+        say("steps-tab-and-newline-survive-escaped", ok, detail);
+    }
+
+    /* The strings are BORROWED, not copied -- the whole reason Step is plain
+     * data (the std::string version cost 22KB of code). So a selector read
+     * back after the call must still be the caller's bytes. */
+    {
+        rc_strf(body, sizeof(body), "click\tsel=Button%%5Btext%%3D%%22OK%%22%%5D\n");
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        bool inside = n == 1 && steps[0].target.sel >= body
+                   && steps[0].target.sel < body + sizeof(body);
+        bool ok = inside && !strcmp(steps[0].target.sel, "Button[text=\"OK\"]");
+        rc_strf(detail, sizeof(detail), "sel=%s, %s the caller's buffer",
+                n == 1 && steps[0].target.sel ? steps[0].target.sel : "(none)",
+                inside ? "inside" : "OUTSIDE");
+        say("steps-strings-point-into-the-body", ok, detail);
+    }
+
+    /* A verb that does not exist is a version skew: refuse loudly rather
+     * than run a different list from the one that was sent. */
+    {
+        rc_strf(body, sizeof(body), "focus\tsel=X\nwiggle\tsel=Y\n");
+        why[0] = '\0';
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        say("steps-unknown-verb-refused",
+            n < 0 && strstr(why, "unknown verb") != NULL, why);
+    }
+
+    /* RC_RUN_MAX is the bridge's own ceiling. One past it is refused with
+     * the number in the reason, because "too many" alone does not say how
+     * many the caller may send. */
+    {
+        int len = 0, i;
+        for (i = 0; i < RC_RUN_MAX + 1; i++)
+            len = append(body, sizeof(body), len, "wait\tms=1\n");
+        why[0] = '\0';
+        n = rc_ui_decode_steps(body, (unsigned)len, steps, why, sizeof(why));
+        say("steps-over-the-ceiling-refused",
+            n < 0 && strstr(why, "64") != NULL, why);
+    }
+
+    /* Exactly RC_RUN_MAX is not one too many. The off-by-one here would be
+     * invisible until a long list arrived. */
+    {
+        int len = 0, i;
+        for (i = 0; i < RC_RUN_MAX; i++)
+            len = append(body, sizeof(body), len, "wait\tms=1\n");
+        n = rc_ui_decode_steps(body, (unsigned)len, steps, why, sizeof(why));
+        rc_strf(detail, sizeof(detail), "n=%d", n);
+        say("steps-exactly-the-ceiling-runs", n == RC_RUN_MAX, detail);
+    }
+
+    /* Blank lines are skipped rather than counted: the bridge joins with a
+     * trailing newline, so the body always ends in one. */
+    {
+        rc_strf(body, sizeof(body), "focus\tsel=A\n\n\nclick\tsel=B\n");
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        rc_strf(detail, sizeof(detail), "n=%d", n);
+        say("steps-blank-lines-skipped", n == 2
+            && steps[0].kind == STEP_FOCUS && steps[1].kind == STEP_CLICK,
+            detail);
+    }
+
+    /* A field with no `=` is skipped, not fatal, and the rest of the line
+     * still decodes -- the bridge validated the list, so a stray token is
+     * skew to tolerate rather than a list to throw away. */
+    {
+        rc_strf(body, sizeof(body), "tap\tjunk\tkey=Enter\tmods=2\n");
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        bool ok = n == 1 && steps[0].key && !strcmp(steps[0].key, "Enter")
+               && steps[0].mods == 2;
+        rc_strf(detail, sizeof(detail), "n=%d key=%s mods=%d", n,
+                n == 1 && steps[0].key ? steps[0].key : "(none)",
+                n == 1 ? steps[0].mods : -1);
+        say("steps-field-without-equals-skipped", ok, detail);
+    }
+
+    /* `at` and `screen` are pairs. A pair that does not parse leaves the
+     * flag false rather than landing a click at 0,0 -- which is a real
+     * screen position and would be a silent wrong answer. */
+    {
+        rc_strf(body, sizeof(body), "mv\tat=4,9\nmv\tat=nonsense\n");
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        bool ok = n == 2 && steps[0].target.hasAt
+               && steps[0].target.atX == 4 && steps[0].target.atY == 9
+               && !steps[1].target.hasAt;
+        rc_strf(detail, sizeof(detail), "first %d,%d; second hasAt=%d",
+                n == 2 ? steps[0].target.atX : -1,
+                n == 2 ? steps[0].target.atY : -1,
+                n == 2 ? (int)steps[1].target.hasAt : -1);
+        say("steps-a-bad-pair-is-no-pair", ok, detail);
+    }
+
+    /* mods is masked to the three that exist. A wire value of 255 would
+     * otherwise reach Input as a modifier set nobody can hold down. */
+    {
+        rc_strf(body, sizeof(body), "tap\tkey=a\tmods=255\n");
+        n = rc_ui_decode_steps(body, (unsigned)strlen(body), steps, why,
+                               sizeof(why));
+        rc_strf(detail, sizeof(detail), "mods=%d", n == 1 ? steps[0].mods : -1);
+        say("steps-mods-masked-to-three-bits", n == 1 && steps[0].mods == 7,
+            detail);
+    }
+}
+
 int main(int argc, char **argv)
 {
     static char buf[4096];
@@ -443,5 +633,6 @@ int main(int argc, char **argv)
     injection();
     inprocRecords();
     paths();
+    stepCodec();
     return 0;
 }

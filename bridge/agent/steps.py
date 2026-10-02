@@ -3,7 +3,7 @@
 The agent sends JSON -- a list where a string is text to type (with the
 `[Ctrl+S]` chord syntax `keys` always had) and an object is any other step.
 This module turns that into the UIRUN body the guest executes
-(win/ui/uisteps.cpp), and refuses, BEFORE anything is sent, every list that
+(win/ui/uiengine.cpp), and refuses, BEFORE anything is sent, every list that
 would do something other than what it says:
 
   * a key name that is not in the frozen table, or newer than the guest's;
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from ..wire import fold
 from . import keynames as K
 
-#: The guest's own ceiling (RC_RUN_MAX in uisteps.cpp). A string step can
+#: The guest's own ceiling (RC_RUN_MAX in ui/uiengine.h). A string step can
 #: expand to several lines -- one per chord and per run of text -- and it is
 #: the LINES that are counted.
 MAX_LINES = 64

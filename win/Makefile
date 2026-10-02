@@ -207,7 +207,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
        rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp sync/putpath.cpp sync/scanner.cpp sync/verify.cpp \
        sync/syncrpc.cpp \
-       ui/uiservice.cpp ui/uirpc.cpp ui/uisteps.cpp ui/uirec.cpp ui/inject.cpp
+       ui/uiservice.cpp ui/uirpc.cpp ui/uiengine.cpp ui/uirec.cpp ui/inject.cpp
 # libautomation before libwire before libexec before libcore: the first three
 # call into libcore, and wlink resolves in the order the libraries are named.
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
@@ -411,8 +411,9 @@ $(BUILD)/windowcheck.exe: $(WINDOWCHECK_OBJS)
 # libautomation's selector grammar and tree walker. Links the library, so
 # what is tested is what would ship. Wine settles the grammar completely
 # (it is string work) and only proves the walk does not crash.
-UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp ui/inject.cpp) \
-               $(LIBAUTOMATION) $(LIBCORE)
+UICHECK_OBJS = $(call objs,checks/uicheck.cpp ui/uirec.cpp ui/uiengine.cpp \
+                ui/inject.cpp) \
+               $(LIBAUTOMATION) $(LIBWIRE) $(LIBCORE)
 uicheck: $(BUILD)/uicheck.exe
 $(BUILD)/uicheck.exe: $(UICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0, \
@@ -533,7 +534,7 @@ all: msgids $(BUILD)/gaston.exe gremote gupdate synccheck inicheck idcheck inifi
 # the build breaks with unresolved externals.
 NETCHECK_OBJS = $(call objs,checks/netcheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
-                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uisteps.cpp ui/uirec.cpp \
+                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uiengine.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 netcheck: $(BUILD)/netcheck.exe
@@ -548,7 +549,7 @@ $(BUILD)/netcheck.exe: $(NETCHECK_OBJS)
 # safe no-op here.
 RPCCHECK_OBJS = $(call objs,checks/rpccheck.c net/net.cpp net/frameproto.cpp \
                 $(MINIZ) rpc/rpc.cpp rpc/procrpc.cpp rpc/fsrpc.cpp sync/manifest.cpp \
-                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uisteps.cpp ui/uirec.cpp \
+                sync/putpath.cpp sync/scanner.cpp sync/verify.cpp sync/syncrpc.cpp ui/uirpc.cpp ui/uiengine.cpp ui/uirec.cpp \
                 ui/inject.cpp) \
                 $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) $(LIBFS) $(LIBCORE)
 rpccheck: $(BUILD)/rpccheck.exe
@@ -665,7 +666,7 @@ $(OBJ)/fs/drives.o $(OBJ)/fs/ops.o $(OBJ)/fs/tree.o: CFLAGS := $(subst -otexan,-
 # steps.o was 22.5 KB of code at -otexan with its helpers inlined into one
 # 6.7 KB `run`. select.o and the walker keep -otexan; the matcher runs over
 # every node of every scan.
-$(OBJ)/automation/steps.o $(OBJ)/automation/input.o $(OBJ)/ui/uisteps.o \
+$(OBJ)/automation/steps.o $(OBJ)/automation/input.o $(OBJ)/ui/uiengine.o \
 $(OBJ)/ui/uirpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # And the same now applies to most of sync/. The note above says sync/ keeps

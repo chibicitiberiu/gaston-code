@@ -1,4 +1,6 @@
 #include "ui/uirpc.h"
+#include "ui/uiengine.h"
+#include "ui/uilink.h"
 #include "ui/uicontext.h"
 #include "ui/uirec.h"
 #include "automation/resolve.h"
@@ -118,6 +120,106 @@ void rc_uirpc_refuse(rc_net *net, rc_frame *f, const char *why)
     }
     ui_end(net, id, why, NULL, NULL, 0);
 }
+
+/* ---- the step list's stop, and this exe's end of the seam ------------ */
+
+/* The list that is running, if one is, and its stop flag. A plain buffer
+ * the reader compares against: a race here can only miss a cancel for a
+ * list that is finishing anyway, or arrive for none, and both are logged. */
+static volatile LONG g_run_cancel;
+static char          g_run_id[48];
+
+void rc_uirpc_cancel(const char *id)
+{
+    if (!id || !g_run_id[0] || strcmp(id, g_run_id) != 0)
+    {
+        rc_log("desktop: UICANCEL %s matches no running list -- ignored",
+               id ? id : "(no id)");
+        return;
+    }
+    InterlockedExchange(&g_run_cancel, 1);
+}
+
+/* The client's UiLink: the engine's calls as the frames the bridge parses.
+ *
+ * `report()` stashes rather than sends, because the client's wire puts the
+ * step report in the UIEND's own body -- one frame, which is what
+ * bridge/agent/steps.py has always parsed. gremote's link sends it as DATA
+ * instead; the engine does not know or care which. */
+class NetUiLink : public UiLink
+{
+public:
+    NetUiLink(rc_net *net, const char *id)
+        : m_net(net), m_body(0), m_bodyLen(0)
+    {
+        rc_strncpy(m_id, sizeof(m_id), id ? id : "",
+                   (unsigned)strlen(id ? id : ""));
+    }
+
+    virtual bool end(const char *status, const char *const *keys,
+                     const char *const *vals, int nkv)
+    {
+        const char *k[8];
+        const char *v[8];
+        int n = 0, i;
+        k[n] = "id";     v[n++] = m_id;
+        k[n] = "status"; v[n++] = status;
+        for (i = 0; i < nkv && n < 8; i++)
+        {
+            k[n] = keys[i];
+            v[n++] = vals[i];
+        }
+        rc_net_send(m_net, "UIEND", k, v, n, m_body, m_bodyLen);
+        return true;
+    }
+
+    virtual bool records(const void *body, unsigned len, int n)
+    {
+        const char *k[2];
+        const char *v[2];
+        char nbuf[16];
+        rc_strf(nbuf, sizeof(nbuf), "%d", n);
+        k[0] = "id"; v[0] = m_id;
+        k[1] = "n";  v[1] = nbuf;
+        rc_net_send(m_net, "UIENT", k, v, 2, body, len);
+        return true;
+    }
+
+    virtual bool bytes(const void *body, unsigned len)
+    {
+        const char *k[1];
+        const char *v[1];
+        k[0] = "id"; v[0] = m_id;
+        rc_net_send(m_net, "UIDAT", k, v, 1, body, len);
+        return true;
+    }
+
+    virtual bool report(const void *body, unsigned len)
+    {
+        m_body = body;
+        m_bodyLen = len;
+        return true;
+    }
+
+    virtual unsigned bodyCap() const { return RC_MAX_FRAME - 2048; }
+
+    /* Live, not captured: turning the capability off takes effect on the
+     * next request rather than the next connection. */
+    virtual int automationLevel() const
+    {
+        return m_net ? m_net->automation : RC_AUTOMATION_NONE;
+    }
+
+    virtual const UiLimits &limits() const { return m_limits; }
+    virtual volatile LONG *stopFlag() { return &g_run_cancel; }
+
+private:
+    rc_net     *m_net;
+    const void *m_body;
+    unsigned    m_bodyLen;
+    UiLimits    m_limits;
+    char        m_id[64];
+};
 
 /* ---- shared helpers -------------------------------------------------- */
 
@@ -745,7 +847,7 @@ static HWND resolve_target(rc_net *net, UiContext *ctx, rc_frame *f,
 }
 
 /* CLICK, FOCUS and KEYS lived here until 2026-10-02. A client that runs
- * step lists is offered `input` instead (ui/uisteps.cpp), which does all
+ * step lists is offered `input` instead (ui/uiengine.cpp), which does all
  * three in one round trip with the focus check and held-key release they
  * never had, so the single-shot ops were retired with their bridge tools.
  * The library calls they made -- Input::clickWindow, focus, typeText -- stay,
@@ -916,4 +1018,24 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
     else if (strcmp(f->type, "UISHOT")  == 0) do_shot(net, ctx, f);
     else if (strcmp(f->type, "UIRUN")   == 0) rc_uirpc_run(net, ctx, f);
     else rc_log("desktop: unhandled frame %s", f->type);
+}
+
+void rc_uirpc_run(rc_net *net, UiContext *ctx, rc_frame *f)
+{
+    const char *id = rc_frame_get(f, "id");
+    if (!id)
+    {
+        rc_log("UIRUN: no id -- dropped");
+        return;
+    }
+    /* Armed before the decode, not after it, so a UICANCEL that arrives
+     * while the list is still being parsed is not lost: the runner sees the
+     * flag on its first step instead. */
+    InterlockedExchange(&g_run_cancel, 0);
+    rc_strf(g_run_id, sizeof(g_run_id), "%s", id);
+    {
+        NetUiLink link(net, id);
+        rc_ui_run(link, ctx, f);
+    }
+    g_run_id[0] = '\0';
 }

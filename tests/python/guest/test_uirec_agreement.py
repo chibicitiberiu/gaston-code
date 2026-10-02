@@ -23,6 +23,23 @@ from bridge.wire import uirec
 EXE_NAME = "uicheck.exe"
 pytestmark = conftest.needs_guest
 
+#: Asserted EXACTLY, not as a minimum, because a case that stops running
+#: prints nothing and `test_every_case_passes` is satisfied by an empty set --
+#: so the count is the only thing that catches a case which silently went
+#: away. This was a bare `31` with no name until 2026-10-02; it is a constant
+#: now because the project has twice been bitten by a hardcoded count nobody
+#: could find (test_guest_execjob.py 24->29, test_guest_automation.py
+#: 129->147).
+#:
+#: 31 -> 41 on 2026-10-02: ten `steps-*` cases for the step list's wire
+#: format, which moved into ui/uiengine.cpp behind UiLink and became reachable
+#: without a socket and a desktop for the first time (REMOTE.md step 6) --
+#: every verb in order, TAB and newline surviving the escaping, the strings
+#: pointing into the caller's own body, an unknown verb refused, the
+#: RC_RUN_MAX ceiling and exactly-the-ceiling, blank lines, a field with no
+#: `=`, a malformed coordinate pair, and mods masked to three bits.
+CASE_COUNT = 41
+
 
 @pytest.fixture(scope="module")
 def verdicts():
@@ -35,9 +52,7 @@ def test_every_case_passes(verdicts):
 
 
 def test_every_case_ran(verdicts):
-    #: A hard count, so a case that stops being emitted fails rather than
-    #: vanishing. Raise it deliberately when cases are added.
-    assert len(verdicts) == 31, sorted(verdicts)
+    assert len(verdicts) == CASE_COUNT, sorted(verdicts)
 
 
 @pytest.fixture(scope="module")
