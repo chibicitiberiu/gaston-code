@@ -202,7 +202,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
 OBJS = $(call objs,$(CLIENT_SRCS)) $(LIBAUTOMATION) $(LIBWIRE) $(LIBEXEC) \
        $(LIBFS) $(LIBCORE)
 
-.PHONY: gremote gupdate fscheck execcheck execprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
+.PHONY: gremote gupdate fscheck execcheck execprobe keyprobe focusprobe uicheck autocheck hookdll msgids synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck all clean check check-sources run netcheck rpccheck probe htmlspike capscheck workcheck toolcheck
 
 # Without this, make's default goal is the FIRST target in the file, which is
 # htmlspike -- a Phase 0 spike. `make -C win` therefore printed "Nothing to be
@@ -288,6 +288,17 @@ $(BUILD)/execprobe.exe: $(EXECPROBE_OBJS)
 # whether a BACKGROUND process can raise another process's window on 9x.
 # Wine cannot answer it, because Wine's foreground rules are the host window
 # manager's. Prints to the console; the box it runs on has no serial port.
+# keyprobe: how 98 produces a character on a non-US layout -- VkKeyScanEx on
+# a loaded layout, ToAsciiEx as a dead-key test, AltGr as Ctrl+Alt, and
+# Alt+Numpad -- measured into its own edit control. Wine's layouts are the
+# host's, so only the guest answers. Writes KEYPROBE.TXT beside itself.
+KEYPROBE_OBJS = $(call objs,checks/keyprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
+keyprobe: $(BUILD)/keyprobe.exe
+$(BUILD)/keyprobe.exe: $(KEYPROBE_OBJS)
+	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
+	  $(LINKIN)
+	@echo "built $@"
+
 FOCUSPROBE_OBJS = $(call objs,checks/focusprobe.cpp) $(LIBAUTOMATION) $(LIBCORE)
 focusprobe: $(BUILD)/focusprobe.exe
 $(BUILD)/focusprobe.exe: $(FOCUSPROBE_OBJS)
@@ -503,7 +514,7 @@ gaston: $(BUILD)/gaston.exe
 gaston.exe: $(BUILD)/gaston.exe
 
 all: msgids $(BUILD)/gaston.exe gremote gupdate synccheck inicheck idcheck inifilecheck appcheck windowcheck wirecheck cppcheck framecheck autocheck hookdll \
-     netcheck rpccheck probe execprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck
+     netcheck rpccheck probe execprobe keyprobe focusprobe execcheck uicheck htmlspike capscheck workcheck toolcheck fscheck
 
 # Headless conformance check: links the REAL net.c/frameproto.c so it exercises
 # the same code the GUI does, without needing GUI automation.

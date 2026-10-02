@@ -1,0 +1,335 @@
+Keyboard layouts: how Windows 98 produces a character that is not on the key
+==========================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE 4.10.2222 A, 32MB
+Date    : 2026-10-02
+Driven  : `KEYPROBE.EXE` (win/checks/keyprobe.cpp), shipped and launched over
+          gremote, its KEYPROBE.TXT fetched back. It types into its OWN edit
+          control after ActivateKeyboardLayout on its own thread, and reads the
+          control back with GetWindowText.
+Setup   : the guest had only KBDUS.KBD. KBDGR.KBD, KBDFR.KBD and KBDUSX.KBD were
+          extracted from the Win98 SE CD (WIN98_*.CAB) and copied into
+          C:\WINDOWS\SYSTEM. Nothing was added to the user's layout list; the
+          probe loads them with LoadKeyboardLayoutA, which needs only the files.
+Why     : the `input` tool types text on whatever layout the TARGET window has,
+          and Wine's layouts are the host's. Everything below decided the
+          character strategy in win/automation/input.cpp before it was written.
+
+Findings
+--------
+
+1. VkKeyScanExA on a LOADED but not active layout answers for that layout.
+   German '@' is vk 0x51 (Q) with mods 6 -- Ctrl+Alt is how AltGr is reported
+   and sent on 98, and typing it that way produced '@', '{', '}', '|', '\', '~'
+   and EURO on both German and French: 20/20 on each.
+
+2. VkKeyScanExA CAN LIE. On US English it answers EURO (0x80) with vk 0x32 and
+   mods 2 -- Ctrl+2 -- and ToAsciiEx for that combination returns 0: no
+   character. Typed, it produced nothing at all. So a key is only trusted when
+   ToAsciiEx says it produces exactly the character wanted; otherwise the
+   character goes by Alt+Numpad.
+
+3. Dead keys are detected by ToAsciiEx returning < 0: '^' and '`' on German,
+   '^', '~' and '`' on French. Asking LEAVES THE DEAD KEY PENDING in the
+   calling thread; a second ToAsciiEx with VK_SPACE flushes it (returns 1 and
+   the bare accent). With the flush in place the whole test string typed as one
+   run came back exact on both layouts -- no accent combined with the next
+   character. Delivery is the dead key, then Space.
+
+4. Alt+Numpad 0nnn (ANSI, the leading 0) delivered all 20 test characters on
+   every layout, with NumLock ON and with NumLock OFF -- keybd_event with
+   VK_NUMPADn is the keypad key whatever NumLock says. It is the universal
+   fallback for a character no key produces (e-acute and e-circumflex on US).
+
+5. Chords: on French AZERTY '1' is vk 0x31 WITH SHIFT. An accelerator for
+   Ctrl+1 is registered against VK_1, so a chord's letter or digit is the VK,
+   never the character's shift state. ('z' is VK_Z on all three.)
+
+6. US-International (00020409) did not load from the file alone: its id needs
+   the registry entry the layout dialog writes. Not pursued; the strategy does
+   not depend on any one layout.
+
+7. Nothing stuck: Shift, Ctrl and Alt all up after the run (GetAsyncKeyState).
+
+Test string (code page 1252): a Z @ EURO e-acute ^ e-circumflex { } | \ ~ ` ' "
+u-umlaut sharp-s section 1 &
+
+Raw output, second run (with the German and French files present)
+------------------------------------------------------------------
+keyprobe: active layout at start 04090409, numlock on
+installed 04090409
+layout 00000409 -> hkl 04090409
+ask 00000409 0x61 vk=0x41 mods=0 toascii=1 out=0x61
+ask 00000409 0x5A vk=0x5A mods=1 toascii=1 out=0x5A
+ask 00000409 0x40 vk=0x32 mods=1 toascii=1 out=0x40
+ask 00000409 0x80 vk=0x32 mods=2 toascii=0 out=0x00
+ask 00000409 0xE9 vk=none
+ask 00000409 0x5E vk=0x36 mods=1 toascii=1 out=0x5E
+ask 00000409 0xEA vk=none
+ask 00000409 0x7B vk=0xDB mods=1 toascii=1 out=0x7B
+ask 00000409 0x7D vk=0xDD mods=1 toascii=1 out=0x7D
+ask 00000409 0x7C vk=0xDC mods=1 toascii=1 out=0x7C
+ask 00000409 0x5C vk=0xDC mods=0 toascii=1 out=0x5C
+ask 00000409 0x7E vk=0xC0 mods=1 toascii=1 out=0x7E
+ask 00000409 0x60 vk=0xC0 mods=0 toascii=1 out=0x60
+ask 00000409 0x27 vk=0xDE mods=0 toascii=1 out=0x27
+ask 00000409 0x22 vk=0xDE mods=1 toascii=1 out=0x22
+ask 00000409 0xFC vk=none
+ask 00000409 0xDF vk=none
+ask 00000409 0xA7 vk=none
+ask 00000409 0x31 vk=0x31 mods=0 toascii=1 out=0x31
+ask 00000409 0x26 vk=0x37 mods=1 toascii=1 out=0x26
+chord 00000409 '1' vk=0x31 mods=0; 'z' vk=0x5A mods=0
+activated: thread layout now 04090409
+type 00000409 vk/numlock-on 0x61 -> "a" (1 bytes, first 0x61) OK
+type 00000409 vk/numlock-on 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 00000409 vk/numlock-on 0x40 -> "@" (1 bytes, first 0x40) OK
+type 00000409 vk/numlock-on 0x80 -> "" (0 bytes, first 0x00) WRONG
+type 00000409 vk/numlock-on 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 00000409 vk/numlock-on 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 00000409 vk/numlock-on 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 00000409 vk/numlock-on 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 00000409 vk/numlock-on 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 00000409 vk/numlock-on 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 00000409 vk/numlock-on 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 00000409 vk/numlock-on 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 00000409 vk/numlock-on 0x60 -> "`" (1 bytes, first 0x60) OK
+type 00000409 vk/numlock-on 0x27 -> "'" (1 bytes, first 0x27) OK
+type 00000409 vk/numlock-on 0x22 -> """ (1 bytes, first 0x22) OK
+type 00000409 vk/numlock-on 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 00000409 vk/numlock-on 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 00000409 vk/numlock-on 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 00000409 vk/numlock-on 0x31 -> "1" (1 bytes, first 0x31) OK
+type 00000409 vk/numlock-on 0x26 -> "&" (1 bytes, first 0x26) OK
+type 00000409 vk/numlock-on summary 19/20
+type 00000409 vk/numlock-on whole "aZ@é^ê{}|\~`'"üß§1&" WRONG
+type 00000409 altnum/numlock-on 0x61 -> "a" (1 bytes, first 0x61) OK
+type 00000409 altnum/numlock-on 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 00000409 altnum/numlock-on 0x40 -> "@" (1 bytes, first 0x40) OK
+type 00000409 altnum/numlock-on 0x80 -> "€" (1 bytes, first 0x80) OK
+type 00000409 altnum/numlock-on 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 00000409 altnum/numlock-on 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 00000409 altnum/numlock-on 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 00000409 altnum/numlock-on 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 00000409 altnum/numlock-on 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 00000409 altnum/numlock-on 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 00000409 altnum/numlock-on 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 00000409 altnum/numlock-on 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 00000409 altnum/numlock-on 0x60 -> "`" (1 bytes, first 0x60) OK
+type 00000409 altnum/numlock-on 0x27 -> "'" (1 bytes, first 0x27) OK
+type 00000409 altnum/numlock-on 0x22 -> """ (1 bytes, first 0x22) OK
+type 00000409 altnum/numlock-on 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 00000409 altnum/numlock-on 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 00000409 altnum/numlock-on 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 00000409 altnum/numlock-on 0x31 -> "1" (1 bytes, first 0x31) OK
+type 00000409 altnum/numlock-on 0x26 -> "&" (1 bytes, first 0x26) OK
+type 00000409 altnum/numlock-on summary 20/20
+type 00000409 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000409 altnum/numlock-off 0x61 -> "a" (1 bytes, first 0x61) OK
+type 00000409 altnum/numlock-off 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 00000409 altnum/numlock-off 0x40 -> "@" (1 bytes, first 0x40) OK
+type 00000409 altnum/numlock-off 0x80 -> "€" (1 bytes, first 0x80) OK
+type 00000409 altnum/numlock-off 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 00000409 altnum/numlock-off 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 00000409 altnum/numlock-off 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 00000409 altnum/numlock-off 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 00000409 altnum/numlock-off 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 00000409 altnum/numlock-off 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 00000409 altnum/numlock-off 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 00000409 altnum/numlock-off 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 00000409 altnum/numlock-off 0x60 -> "`" (1 bytes, first 0x60) OK
+type 00000409 altnum/numlock-off 0x27 -> "'" (1 bytes, first 0x27) OK
+type 00000409 altnum/numlock-off 0x22 -> """ (1 bytes, first 0x22) OK
+type 00000409 altnum/numlock-off 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 00000409 altnum/numlock-off 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 00000409 altnum/numlock-off 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 00000409 altnum/numlock-off 0x31 -> "1" (1 bytes, first 0x31) OK
+type 00000409 altnum/numlock-off 0x26 -> "&" (1 bytes, first 0x26) OK
+type 00000409 altnum/numlock-off summary 20/20
+type 00000409 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 00000407 -> hkl 04070407
+ask 00000407 0x61 vk=0x41 mods=0 toascii=1 out=0x61
+ask 00000407 0x5A vk=0x5A mods=1 toascii=1 out=0x5A
+ask 00000407 0x40 vk=0x51 mods=6 toascii=1 out=0x40
+ask 00000407 0x80 vk=0x45 mods=6 toascii=1 out=0x80
+ask 00000407 0xE9 vk=none
+ask 00000407 0x5E vk=0xDC mods=0 toascii=-1 out=0x5E
+ask 00000407 0x5E dead; space-flush toascii=1 out=0x5E 0x00
+ask 00000407 0xEA vk=none
+ask 00000407 0x7B vk=0x37 mods=6 toascii=1 out=0x7B
+ask 00000407 0x7D vk=0x30 mods=6 toascii=1 out=0x7D
+ask 00000407 0x7C vk=0xE2 mods=6 toascii=1 out=0x7C
+ask 00000407 0x5C vk=0xDB mods=6 toascii=1 out=0x5C
+ask 00000407 0x7E vk=0xBB mods=6 toascii=1 out=0x7E
+ask 00000407 0x60 vk=0xDD mods=1 toascii=-1 out=0x60
+ask 00000407 0x60 dead; space-flush toascii=1 out=0x60 0x00
+ask 00000407 0x27 vk=0xBF mods=1 toascii=1 out=0x27
+ask 00000407 0x22 vk=0x32 mods=1 toascii=1 out=0x22
+ask 00000407 0xFC vk=0xBA mods=0 toascii=1 out=0xFC
+ask 00000407 0xDF vk=0xDB mods=0 toascii=1 out=0xDF
+ask 00000407 0xA7 vk=0x33 mods=1 toascii=1 out=0xA7
+ask 00000407 0x31 vk=0x31 mods=0 toascii=1 out=0x31
+ask 00000407 0x26 vk=0x36 mods=1 toascii=1 out=0x26
+chord 00000407 '1' vk=0x31 mods=0; 'z' vk=0x5A mods=0
+activated: thread layout now 04070407
+type 00000407 vk/numlock-on 0x61 -> "a" (1 bytes, first 0x61) OK
+type 00000407 vk/numlock-on 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 00000407 vk/numlock-on 0x40 -> "@" (1 bytes, first 0x40) OK
+type 00000407 vk/numlock-on 0x80 -> "€" (1 bytes, first 0x80) OK
+type 00000407 vk/numlock-on 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 00000407 vk/numlock-on 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 00000407 vk/numlock-on 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 00000407 vk/numlock-on 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 00000407 vk/numlock-on 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 00000407 vk/numlock-on 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 00000407 vk/numlock-on 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 00000407 vk/numlock-on 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 00000407 vk/numlock-on 0x60 -> "`" (1 bytes, first 0x60) OK
+type 00000407 vk/numlock-on 0x27 -> "'" (1 bytes, first 0x27) OK
+type 00000407 vk/numlock-on 0x22 -> """ (1 bytes, first 0x22) OK
+type 00000407 vk/numlock-on 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 00000407 vk/numlock-on 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 00000407 vk/numlock-on 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 00000407 vk/numlock-on 0x31 -> "1" (1 bytes, first 0x31) OK
+type 00000407 vk/numlock-on 0x26 -> "&" (1 bytes, first 0x26) OK
+type 00000407 vk/numlock-on summary 20/20
+type 00000407 vk/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000407 altnum/numlock-on 0x61 -> "a" (1 bytes, first 0x61) OK
+type 00000407 altnum/numlock-on 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 00000407 altnum/numlock-on 0x40 -> "@" (1 bytes, first 0x40) OK
+type 00000407 altnum/numlock-on 0x80 -> "€" (1 bytes, first 0x80) OK
+type 00000407 altnum/numlock-on 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 00000407 altnum/numlock-on 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 00000407 altnum/numlock-on 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 00000407 altnum/numlock-on 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 00000407 altnum/numlock-on 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 00000407 altnum/numlock-on 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 00000407 altnum/numlock-on 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 00000407 altnum/numlock-on 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 00000407 altnum/numlock-on 0x60 -> "`" (1 bytes, first 0x60) OK
+type 00000407 altnum/numlock-on 0x27 -> "'" (1 bytes, first 0x27) OK
+type 00000407 altnum/numlock-on 0x22 -> """ (1 bytes, first 0x22) OK
+type 00000407 altnum/numlock-on 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 00000407 altnum/numlock-on 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 00000407 altnum/numlock-on 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 00000407 altnum/numlock-on 0x31 -> "1" (1 bytes, first 0x31) OK
+type 00000407 altnum/numlock-on 0x26 -> "&" (1 bytes, first 0x26) OK
+type 00000407 altnum/numlock-on summary 20/20
+type 00000407 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 00000407 altnum/numlock-off 0x61 -> "a" (1 bytes, first 0x61) OK
+type 00000407 altnum/numlock-off 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 00000407 altnum/numlock-off 0x40 -> "@" (1 bytes, first 0x40) OK
+type 00000407 altnum/numlock-off 0x80 -> "€" (1 bytes, first 0x80) OK
+type 00000407 altnum/numlock-off 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 00000407 altnum/numlock-off 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 00000407 altnum/numlock-off 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 00000407 altnum/numlock-off 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 00000407 altnum/numlock-off 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 00000407 altnum/numlock-off 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 00000407 altnum/numlock-off 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 00000407 altnum/numlock-off 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 00000407 altnum/numlock-off 0x60 -> "`" (1 bytes, first 0x60) OK
+type 00000407 altnum/numlock-off 0x27 -> "'" (1 bytes, first 0x27) OK
+type 00000407 altnum/numlock-off 0x22 -> """ (1 bytes, first 0x22) OK
+type 00000407 altnum/numlock-off 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 00000407 altnum/numlock-off 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 00000407 altnum/numlock-off 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 00000407 altnum/numlock-off 0x31 -> "1" (1 bytes, first 0x31) OK
+type 00000407 altnum/numlock-off 0x26 -> "&" (1 bytes, first 0x26) OK
+type 00000407 altnum/numlock-off summary 20/20
+type 00000407 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 0000040C -> hkl 040C040C
+ask 0000040C 0x61 vk=0x41 mods=0 toascii=1 out=0x61
+ask 0000040C 0x5A vk=0x5A mods=1 toascii=1 out=0x5A
+ask 0000040C 0x40 vk=0x30 mods=6 toascii=1 out=0x40
+ask 0000040C 0x80 vk=0x45 mods=6 toascii=1 out=0x80
+ask 0000040C 0xE9 vk=0x32 mods=0 toascii=1 out=0xE9
+ask 0000040C 0x5E vk=0xDD mods=0 toascii=-1 out=0x5E
+ask 0000040C 0x5E dead; space-flush toascii=1 out=0x5E 0x00
+ask 0000040C 0xEA vk=none
+ask 0000040C 0x7B vk=0x34 mods=6 toascii=1 out=0x7B
+ask 0000040C 0x7D vk=0xBB mods=6 toascii=1 out=0x7D
+ask 0000040C 0x7C vk=0x36 mods=6 toascii=1 out=0x7C
+ask 0000040C 0x5C vk=0x38 mods=6 toascii=1 out=0x5C
+ask 0000040C 0x7E vk=0x32 mods=6 toascii=-1 out=0x7E
+ask 0000040C 0x7E dead; space-flush toascii=1 out=0x7E 0x00
+ask 0000040C 0x60 vk=0x37 mods=6 toascii=-1 out=0x60
+ask 0000040C 0x60 dead; space-flush toascii=1 out=0x60 0x00
+ask 0000040C 0x27 vk=0x34 mods=0 toascii=1 out=0x27
+ask 0000040C 0x22 vk=0x33 mods=0 toascii=1 out=0x22
+ask 0000040C 0xFC vk=none
+ask 0000040C 0xDF vk=none
+ask 0000040C 0xA7 vk=0xDF mods=1 toascii=1 out=0xA7
+ask 0000040C 0x31 vk=0x31 mods=1 toascii=1 out=0x31
+ask 0000040C 0x26 vk=0x31 mods=0 toascii=1 out=0x26
+chord 0000040C '1' vk=0x31 mods=1; 'z' vk=0x5A mods=0
+activated: thread layout now 040C040C
+type 0000040C vk/numlock-on 0x61 -> "a" (1 bytes, first 0x61) OK
+type 0000040C vk/numlock-on 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 0000040C vk/numlock-on 0x40 -> "@" (1 bytes, first 0x40) OK
+type 0000040C vk/numlock-on 0x80 -> "€" (1 bytes, first 0x80) OK
+type 0000040C vk/numlock-on 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 0000040C vk/numlock-on 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 0000040C vk/numlock-on 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 0000040C vk/numlock-on 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 0000040C vk/numlock-on 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 0000040C vk/numlock-on 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 0000040C vk/numlock-on 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 0000040C vk/numlock-on 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 0000040C vk/numlock-on 0x60 -> "`" (1 bytes, first 0x60) OK
+type 0000040C vk/numlock-on 0x27 -> "'" (1 bytes, first 0x27) OK
+type 0000040C vk/numlock-on 0x22 -> """ (1 bytes, first 0x22) OK
+type 0000040C vk/numlock-on 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 0000040C vk/numlock-on 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 0000040C vk/numlock-on 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 0000040C vk/numlock-on 0x31 -> "1" (1 bytes, first 0x31) OK
+type 0000040C vk/numlock-on 0x26 -> "&" (1 bytes, first 0x26) OK
+type 0000040C vk/numlock-on summary 20/20
+type 0000040C vk/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 0000040C altnum/numlock-on 0x61 -> "a" (1 bytes, first 0x61) OK
+type 0000040C altnum/numlock-on 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 0000040C altnum/numlock-on 0x40 -> "@" (1 bytes, first 0x40) OK
+type 0000040C altnum/numlock-on 0x80 -> "€" (1 bytes, first 0x80) OK
+type 0000040C altnum/numlock-on 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 0000040C altnum/numlock-on 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 0000040C altnum/numlock-on 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 0000040C altnum/numlock-on 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 0000040C altnum/numlock-on 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 0000040C altnum/numlock-on 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 0000040C altnum/numlock-on 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 0000040C altnum/numlock-on 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 0000040C altnum/numlock-on 0x60 -> "`" (1 bytes, first 0x60) OK
+type 0000040C altnum/numlock-on 0x27 -> "'" (1 bytes, first 0x27) OK
+type 0000040C altnum/numlock-on 0x22 -> """ (1 bytes, first 0x22) OK
+type 0000040C altnum/numlock-on 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 0000040C altnum/numlock-on 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 0000040C altnum/numlock-on 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 0000040C altnum/numlock-on 0x31 -> "1" (1 bytes, first 0x31) OK
+type 0000040C altnum/numlock-on 0x26 -> "&" (1 bytes, first 0x26) OK
+type 0000040C altnum/numlock-on summary 20/20
+type 0000040C altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+type 0000040C altnum/numlock-off 0x61 -> "a" (1 bytes, first 0x61) OK
+type 0000040C altnum/numlock-off 0x5A -> "Z" (1 bytes, first 0x5A) OK
+type 0000040C altnum/numlock-off 0x40 -> "@" (1 bytes, first 0x40) OK
+type 0000040C altnum/numlock-off 0x80 -> "€" (1 bytes, first 0x80) OK
+type 0000040C altnum/numlock-off 0xE9 -> "é" (1 bytes, first 0xE9) OK
+type 0000040C altnum/numlock-off 0x5E -> "^" (1 bytes, first 0x5E) OK
+type 0000040C altnum/numlock-off 0xEA -> "ê" (1 bytes, first 0xEA) OK
+type 0000040C altnum/numlock-off 0x7B -> "{" (1 bytes, first 0x7B) OK
+type 0000040C altnum/numlock-off 0x7D -> "}" (1 bytes, first 0x7D) OK
+type 0000040C altnum/numlock-off 0x7C -> "|" (1 bytes, first 0x7C) OK
+type 0000040C altnum/numlock-off 0x5C -> "\" (1 bytes, first 0x5C) OK
+type 0000040C altnum/numlock-off 0x7E -> "~" (1 bytes, first 0x7E) OK
+type 0000040C altnum/numlock-off 0x60 -> "`" (1 bytes, first 0x60) OK
+type 0000040C altnum/numlock-off 0x27 -> "'" (1 bytes, first 0x27) OK
+type 0000040C altnum/numlock-off 0x22 -> """ (1 bytes, first 0x22) OK
+type 0000040C altnum/numlock-off 0xFC -> "ü" (1 bytes, first 0xFC) OK
+type 0000040C altnum/numlock-off 0xDF -> "ß" (1 bytes, first 0xDF) OK
+type 0000040C altnum/numlock-off 0xA7 -> "§" (1 bytes, first 0xA7) OK
+type 0000040C altnum/numlock-off 0x31 -> "1" (1 bytes, first 0x31) OK
+type 0000040C altnum/numlock-off 0x26 -> "&" (1 bytes, first 0x26) OK
+type 0000040C altnum/numlock-off summary 20/20
+type 0000040C altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
+layout 00020409 -> hkl 00000000
+stuck after: shift=0 ctrl=0 alt=0
+keyprobe: done
