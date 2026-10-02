@@ -102,6 +102,24 @@ heartbeat_timeout_s=30
 [exec]
 max_timeout_ms=120000
 max_output_kb=1024
+; The desktop lane (docs/REMOTE.md step 6). This section is written out in
+; full on purpose: the default is permissive, and a box that can be driven
+; should say so on its own disk rather than only in a document. gremote
+; never adds a missing key to an ini that already exists, so what is here is
+; what a fresh install gets and what somebody with EDIT.COM can change.
+[ui]
+; 2 the whole lane (TREE, SHOT, RUN); 1 read-only -- trees and screenshots,
+; no input; 0 off, every ui request refused with automation_off on the NEXT
+; request rather than the next connection.
+automation=2
+; 0 skips oleacc.dll even if it is present; the walk falls back to the
+; window tree and HELLO says msaa=0.
+msaa=1
+; Ceilings a request is clamped to, not fixed values.
+max_tree_nodes=4000
+call_timeout_ms=2000
+script_ms=600000
+step_ms=120000
 INI
 sed -i 's/$/\r/' "$STAGE/GREMOTE.INI"
 cp "$HERE/vm/gremote.ini" "$STAGE/GREMOTE.INI" 2>/dev/null || true

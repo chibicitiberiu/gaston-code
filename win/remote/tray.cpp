@@ -15,7 +15,9 @@
 enum { TRAY_ICON_ID = 1 };
 
 /* The commands on the menu. */
-enum { TRAY_CMD_EXIT = 100, TRAY_CMD_SLEEP = 101 };
+enum { TRAY_CMD_EXIT = 100, TRAY_CMD_SLEEP = 101,
+       TRAY_CMD_AUTO_OFF = 110, TRAY_CMD_AUTO_READ = 111,
+       TRAY_CMD_AUTO_STEPS = 112 };
 
 /* Prevent sleep's nudge: see tray.h, mechanism 4.
  *
@@ -66,9 +68,9 @@ static HICON stockIcon()
 
 TrayService::TrayService(App &app, HINSTANCE instance,
                          const ServerConfig &cfg, const MachineConfig &machine,
-                         const ServerService &server)
+                         UiConfig &ui, const ServerService &server)
     : m_app(&app), m_instance(instance), m_cfg(&cfg), m_machine(&machine),
-      m_server(&server), m_notify(0), m_icon(0), m_taskbarCreated(0),
+      m_ui(&ui), m_server(&server), m_notify(0), m_icon(0), m_taskbarCreated(0),
       m_shown(false), m_warned(false), m_preventSleep(false),
       m_heldAwake(false), m_nudged(false), m_denied(0), m_loggedKinds(0),
       m_window(*this)
@@ -276,6 +278,28 @@ void TrayService::showMenu()
                 MF_STRING | (m_preventSleep ? MF_CHECKED : MF_UNCHECKED),
                 TRAY_CMD_SLEEP, "Prevent &sleep");
     AppendMenuA(menu.get(), MF_SEPARATOR, 0, NULL);
+
+    /* THREE ITEMS AND NOT A TICK, because this is not a two-state thing and
+     * the middle value is the interesting one: a box that may be read and
+     * photographed but not typed into. A cycling item would make somebody
+     * click twice to find out where they were.
+     *
+     * The lane reads this on every request, so choosing here takes effect on
+     * the next one -- which is the asymmetry the client's own capability was
+     * built with: the safe direction should never wait for a reconnect. */
+    AppendMenuA(menu.get(),
+                MF_STRING | (m_ui->automation == 0 ? MF_CHECKED
+                                                   : MF_UNCHECKED),
+                TRAY_CMD_AUTO_OFF, "Screen: &off");
+    AppendMenuA(menu.get(),
+                MF_STRING | (m_ui->automation == 1 ? MF_CHECKED
+                                                   : MF_UNCHECKED),
+                TRAY_CMD_AUTO_READ, "Screen: &read only");
+    AppendMenuA(menu.get(),
+                MF_STRING | (m_ui->automation == 2 ? MF_CHECKED
+                                                   : MF_UNCHECKED),
+                TRAY_CMD_AUTO_STEPS, "Screen: read and &drive");
+    AppendMenuA(menu.get(), MF_SEPARATOR, 0, NULL);
     /* EXIT IS NOT THE REMOTE QUIT, and nobody should "fix" this by adding
      * one. docs/REMOTE.md omits a QUIT op on purpose -- "stopping gremote
      * remotely is EXEC of something that kills it, which is deliberate
@@ -300,6 +324,9 @@ void TrayService::showMenu()
 
     if (cmd == TRAY_CMD_SLEEP)
         setPreventSleep(!m_preventSleep, "the menu");
+    else if (cmd == TRAY_CMD_AUTO_OFF || cmd == TRAY_CMD_AUTO_READ
+             || cmd == TRAY_CMD_AUTO_STEPS)
+        setAutomation(cmd - TRAY_CMD_AUTO_OFF);
     else if (cmd == TRAY_CMD_EXIT)
     {
         rc_log("tray: Exit chosen at the keyboard; stopping");
@@ -359,6 +386,21 @@ void TrayService::nudge()
     m_nudged = true;
     rc_log("tray: the first nudge went out, so the timer is running; no more "
            "of these will be logged");
+}
+
+void TrayService::setAutomation(long level)
+{
+    static const char *const WHAT[] = {
+        "off; every ui request is refused",
+        "read only; trees and screenshots, no input",
+        "read and drive; step lists too"
+    };
+    if (level < 0 || level > 2 || level == m_ui->automation)
+        return;
+    m_ui->automation = level;
+    rc_log("tray: screen automation set to %ld at the keyboard -- %s",
+           level, WHAT[level]);
+    refreshTip();
 }
 
 void TrayService::setPreventSleep(bool on, const char *why)

@@ -299,8 +299,14 @@ level=info
   Services never read the INI.
 - **`[ui] automation` is the control, not an optimisation.** It is read on
   every request rather than captured at connect, so turning it off takes
-  effect on the next request instead of the next connection, and the tray
-  menu can make that immediate. The default is **2**, because there is nobody
+  effect on the next request instead of the next connection -- and the tray
+  menu does exactly that, with **three items and not a tick**, because the
+  middle value is the interesting one and a cycling item would make somebody
+  click twice to find out where they were. Like **Prevent sleep**, the menu
+  is NOT written back to the ini: the menu is "for now", the file is "from
+  boot", and the log records the change and where it came from. That menu is
+  the only control a person at this keyboard has over whether the box can be
+  driven. The default is **2**, because there is nobody
   at this keyboard to surprise and a box you cannot see is the problem the
   lane exists to fix -- but the section is written into the ISO's
   `GREMOTE.INI` with every key, so a fresh install has a line on its own disk

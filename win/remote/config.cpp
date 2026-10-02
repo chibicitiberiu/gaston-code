@@ -25,11 +25,25 @@ static const long DEFAULT_MAX_OUTPUT_KB = 1024;
  * come up behaving exactly as it did before. */
 static const bool DEFAULT_PREVENT_SLEEP = false;
 
+/* 2, and the argument is in config.h beside the field. The other defaults
+ * are the handlers' own numbers, so a gremote with no [ui] section behaves
+ * exactly as the client does. */
+static const long DEFAULT_AUTOMATION = 2;
+static const bool DEFAULT_MSAA = true;
+static const long DEFAULT_MAX_TREE_NODES = 4000;
+static const long DEFAULT_CALL_TIMEOUT_MS = 2000;
+static const long DEFAULT_SCRIPT_MS = 600000;
+static const long DEFAULT_STEP_MS = 120000;
+
 static const char *const SERVER_KEYS[] = {
     "bind", "port", "secret", "allow", "heartbeat_timeout_s"
 };
 static const char *const EXEC_KEYS[] = { "max_timeout_ms", "max_output_kb" };
 static const char *const MACHINE_KEYS[] = { "prevent_sleep" };
+static const char *const UI_KEYS[] = {
+    "automation", "msaa", "max_tree_nodes", "call_timeout_ms",
+    "script_ms", "step_ms"
+};
 
 /* Fills m_path for IniFile's constructor. A truncated path becomes "",
  * which IniFile refuses, rather than a valid-looking path to another file. */
@@ -64,7 +78,7 @@ bool ServerConfigStore::fail(const char *why)
 }
 
 bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
-                             MachineConfig *machine)
+                             MachineConfig *machine, UiConfig *ui)
 {
     rc_strcpy(cfg->bind, sizeof cfg->bind, DEFAULT_BIND);
     cfg->port = DEFAULT_PORT;
@@ -74,6 +88,12 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
     exec->maxTimeoutMs = DEFAULT_MAX_TIMEOUT_MS;
     exec->maxOutputKb = DEFAULT_MAX_OUTPUT_KB;
     machine->preventSleep = DEFAULT_PREVENT_SLEEP;
+    ui->automation = DEFAULT_AUTOMATION;
+    ui->msaa = DEFAULT_MSAA;
+    ui->maxTreeNodes = DEFAULT_MAX_TREE_NODES;
+    ui->callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS;
+    ui->scriptMs = DEFAULT_SCRIPT_MS;
+    ui->stepMs = DEFAULT_STEP_MS;
     m_error[0] = '\0';
 
     if (!m_ini.ok())
@@ -105,7 +125,24 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
                      1, 16384, &exec->maxOutputKb) &&
         m_ini.checkKeys("machine", MACHINE_KEYS, 1) &&
         m_ini.getBool("machine", "prevent_sleep", DEFAULT_PREVENT_SLEEP,
-                      &machine->preventSleep);
+                      &machine->preventSleep) &&
+        m_ini.checkKeys("ui", UI_KEYS, 6) &&
+        /* 0..2 and REFUSED outside it, not clamped. An unrecognised level
+         * means the file knows something this build does not, and both
+         * guesses are wrong: NONE throws away a capability somebody asked
+         * for, SCREEN or STEPS grants one they may not have meant. The
+         * handshake follows the same rule for the same reason. */
+        m_ini.getInt("ui", "automation", DEFAULT_AUTOMATION, 0, 2,
+                     &ui->automation) &&
+        m_ini.getBool("ui", "msaa", DEFAULT_MSAA, &ui->msaa) &&
+        m_ini.getInt("ui", "max_tree_nodes", DEFAULT_MAX_TREE_NODES,
+                     1, 20000, &ui->maxTreeNodes) &&
+        m_ini.getInt("ui", "call_timeout_ms", DEFAULT_CALL_TIMEOUT_MS,
+                     20, 30000, &ui->callTimeoutMs) &&
+        m_ini.getInt("ui", "script_ms", DEFAULT_SCRIPT_MS,
+                     1000, 3600000, &ui->scriptMs) &&
+        m_ini.getInt("ui", "step_ms", DEFAULT_STEP_MS,
+                     100, 600000, &ui->stepMs);
 
     /* ONLY WHEN THE FILE IS NOT THERE AT ALL, and a new key is NOT backfilled
      * into one that is. That distinction was tested the hard way on 2026-10-01,
@@ -149,6 +186,12 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
         m_ini.setInt("exec", "max_timeout_ms", exec->maxTimeoutMs);
         m_ini.setInt("exec", "max_output_kb", exec->maxOutputKb);
         m_ini.setBool("machine", "prevent_sleep", machine->preventSleep);
+        m_ini.setInt("ui", "automation", ui->automation);
+        m_ini.setBool("ui", "msaa", ui->msaa);
+        m_ini.setInt("ui", "max_tree_nodes", ui->maxTreeNodes);
+        m_ini.setInt("ui", "call_timeout_ms", ui->callTimeoutMs);
+        m_ini.setInt("ui", "script_ms", ui->scriptMs);
+        m_ini.setInt("ui", "step_ms", ui->stepMs);
         m_ini.flush();
         rc_log("config: wrote a starting %s", m_ini.path());
     }
@@ -169,5 +212,8 @@ bool ServerConfigStore::load(ServerConfig *cfg, ExecConfig *exec,
     if (cfg->heartbeatS && cfg->heartbeatS < 5)
         return fail("[server] heartbeat_timeout_s: 0 to disable, or 5 or "
                     "more");
+    if (ui->stepMs > ui->scriptMs)
+        return fail("[ui] step_ms: longer than script_ms, so no step could "
+                    "ever use it");
     return true;
 }

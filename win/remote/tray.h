@@ -204,7 +204,8 @@ public:
      * is read for its status only, through the four scalars ServerService
      * exposes for exactly this. */
     TrayService(App &app, HINSTANCE instance, const ServerConfig &cfg,
-                const MachineConfig &machine, const ServerService &server);
+                const MachineConfig &machine, UiConfig &ui,
+                const ServerService &server);
     ~TrayService();
 
     const char *name() const { return "tray"; }
@@ -249,6 +250,14 @@ private:
      * because "it is on" and "somebody turned it on" are different lines to
      * read back afterwards. Idempotent. */
     void setPreventSleep(bool on, const char *why);
+
+    /* RC_AUTOMATION_NONE / _SCREEN / _STEPS, chosen at the keyboard.
+     *
+     * NOT written back to the ini, for the reason the sleep toggle is not:
+     * the menu is "for now" and the file is "from boot", and a program that
+     * edits its own config leaves "did I set this, or did it?" with no
+     * answer. The log records the change and where it came from. */
+    void setAutomation(long level);
     /* The answer to one WM_POWERBROADCAST or one WM_POWER -- both, because
      * which of them 9x really sends is not documented and the log names it.
      * Logs what arrived EVEN WHEN THE OPTION IS OFF: on the real machine this
@@ -270,6 +279,11 @@ private:
     HINSTANCE m_instance;
     const ServerConfig *m_cfg;
     const MachineConfig *m_machine;
+    /* NOT const: the menu changes it, and the desktop lane reads it live on
+     * every request so "off" takes effect on the next one rather than the
+     * next connection. This menu is the only control a person at this
+     * keyboard has over whether the box can be driven. */
+    UiConfig            *m_ui;
     const ServerService *m_server;
     Dll m_shell32;
     NotifyFn m_notify;

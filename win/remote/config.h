@@ -60,6 +60,42 @@ struct MachineConfig
     bool preventSleep;
 };
 
+/* The desktop lane (docs/REMOTE.md step 6).
+ *
+ * Its own section rather than part of ServerConfig for the reason
+ * MachineConfig has one: this is not about the socket. It says what this
+ * program may do to a screen somebody may be sitting in front of.
+ */
+struct UiConfig
+{
+    /* RC_AUTOMATION_NONE / _SCREEN / _STEPS. An enum and not a bool because
+     * the middle value is real: a box that may be read and photographed but
+     * not typed into. The client can never emit that value -- it sends STEPS
+     * or NONE -- so this file is the first thing that can ask for it.
+     *
+     * Default 2, which is the opposite of how the client argued its own
+     * setting. There the default is ON because OFF would REMOVE something an
+     * upgrade already had; here there is nobody at the keyboard to surprise,
+     * and a box you cannot see is the problem this lane exists to fix. What
+     * keeps that from being quiet is that the shipped GREMOTE.INI carries
+     * this section with every key, so a fresh install has a line on its own
+     * disk saying the screen can be driven, and the level is logged at
+     * startup. */
+    long automation;
+
+    /* 0 skips oleacc.dll even when it is there: the walk falls back to the
+     * window tree and HELLO says msaa=0. */
+    bool msaa;
+
+    /* CEILINGS a request's headers are clamped to, not fixed values. The
+     * handlers are shared with the client, whose numbers are compiled in;
+     * these reach them through UiLink::limits(). */
+    long maxTreeNodes;
+    long callTimeoutMs;
+    long scriptMs;
+    long stepMs;
+};
+
 struct ExecConfig
 {
     /* The ceiling a caller's timeout_ms is clamped to, and it is CLAMPED
@@ -84,7 +120,8 @@ public:
      * value's business (an unset secret, an unparseable range). A missing
      * file is written with the defaults so there is something to edit --
      * and that file does not start, which is the intent. */
-    bool load(ServerConfig *cfg, ExecConfig *exec, MachineConfig *machine);
+    bool load(ServerConfig *cfg, ExecConfig *exec, MachineConfig *machine,
+              UiConfig *ui);
 
     const char *error() const;
     const char *path() const;

@@ -28,7 +28,7 @@ SECRET = "not-the-default"
 
 
 def ini(port: int, *, secret: str = SECRET, allow: str = "",
-        heartbeat: int = 30) -> str:
+        heartbeat: int = 30, ui: str = "") -> str:
     return (
         "[server]\n"
         "bind=127.0.0.1\n"
@@ -36,6 +36,7 @@ def ini(port: int, *, secret: str = SECRET, allow: str = "",
         f"secret={secret}\n"
         f"allow={allow}\n"
         f"heartbeat_timeout_s={heartbeat}\n"
+        + (f"[ui]\n{ui}\n" if ui else "")
     )
 
 
@@ -163,3 +164,48 @@ def test_an_unreadable_setting_refuses_to_start(tmp_path):
     code, log = staged.refusal()
     assert code != 0, log
     assert "allow" in log, log
+
+
+def test_an_unknown_automation_level_refuses_to_start(tmp_path):
+    """0, 1 and 2 and nothing else, REFUSED rather than clamped.
+
+    The handshake follows this rule for every capability and the reason is
+    the same here: a level this build does not know means the file knows
+    something the program does not, and both guesses are wrong. Rounding down
+    throws away a capability somebody asked for; rounding up grants one they
+    may not have meant, on the one program that can move somebody's mouse."""
+    port = conftest.free_port()
+    staged = conftest.GuestServer("gremote.exe", tmp_path,
+                                  ini(port, ui="automation=3"), port)
+    code, log = staged.refusal()
+    assert code != 0, log
+    assert "automation" in log, log
+
+
+def test_a_step_longer_than_the_whole_list_refuses_to_start(tmp_path):
+    """A pair of settings that cannot both be meant.
+
+    No single getter can catch it: each number is in range on its own. A step
+    ceiling above the list ceiling describes a step no step could ever use,
+    which is the kind of thing that looks like it worked until a long list
+    ends early and nothing says why."""
+    port = conftest.free_port()
+    staged = conftest.GuestServer(
+        "gremote.exe", tmp_path,
+        ini(port, ui="script_ms=5000\nstep_ms=60000"), port)
+    code, log = staged.refusal()
+    assert code != 0, log
+    assert "step_ms" in log, log
+
+
+def test_an_unknown_ui_key_refuses_to_start(tmp_path):
+    """checkKeys, so a typo is an error rather than a silent default.
+
+    `automaton=2` would otherwise leave the shipped default in place and look
+    exactly like a setting that had been applied."""
+    port = conftest.free_port()
+    staged = conftest.GuestServer("gremote.exe", tmp_path,
+                                  ini(port, ui="automaton=2"), port)
+    code, log = staged.refusal()
+    assert code != 0, log
+    assert "automaton" in log or "ui" in log, log

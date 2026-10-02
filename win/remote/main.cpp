@@ -147,6 +147,7 @@ private:
     ServerConfig m_config;
     ExecConfig m_exec;
     MachineConfig m_machine;
+    UiConfig      m_ui;
     /* Toolhelp, resolved once: HELLO reports whether this machine has it,
      * and the control lane's PS and KILL will want the same object. */
     Processes m_procs;
@@ -249,11 +250,19 @@ bool GremoteApp::parseArgs(const char *cmdLine)
     m_store.reset(new ServerConfigStore(m_exeDir));
     if (!m_store.valid())
         return false;
-    if (!m_store->load(&m_config, &m_exec, &m_machine))
+    if (!m_store->load(&m_config, &m_exec, &m_machine, &m_ui))
     {
         refuse(m_store->error());
         return false;
     }
+    /* Said at startup, because the ini is not the only way this gets set and
+     * because a box answering ui ops should say so somewhere a person can
+     * read without opening a file. "steps" is the shipped default. */
+    rc_log("config: automation=%ld (%s), msaa=%d", m_ui.automation,
+           m_ui.automation == 2 ? "step lists, trees and screenshots"
+         : m_ui.automation == 1 ? "read-only: trees and screenshots, no input"
+         : "off: every ui request refused",
+           (int)m_ui.msaa);
     stayRunningAfterLogoff();
     if (!m_procs.init())
         rc_log("gremote: no Toolhelp on this machine; PS and KILL will "
@@ -278,7 +287,7 @@ bool GremoteApp::initializeServices()
      * with no shell has already logged the one line that explains why
      * there is no icon. */
     return initService(m_tray,
-                       new TrayService(*this, instance(), m_config, m_machine,
+                       new TrayService(*this, instance(), m_config, m_machine, m_ui,
                                        *m_server.get()));
 }
 
