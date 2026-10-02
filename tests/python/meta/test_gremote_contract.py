@@ -29,7 +29,11 @@ import conftest
 
 REPO = pathlib.Path(conftest.REPO)
 OPTABLE = REPO / "win" / "remote" / "optable.cpp"
-REMOTE_CPP = sorted((REPO / "win" / "remote").glob("*.cpp"))
+#: gremote's handlers, and the libfs file whose reasons RM/MKDIR/RMDIR/MV now
+#: return (win/fs/ops.cpp, 2026-10-02) -- shared with the client so the
+#: measured Windows 98 cases are classified once.
+REMOTE_CPP = [*sorted((REPO / "win" / "remote").glob("*.cpp")),
+              REPO / "win" / "fs" / "ops.cpp"]
 CLIENT_PY = sorted((REPO / "gremote").glob("*.py"))
 TESTS_PY = sorted((REPO / "tests" / "python" / "remote").glob("test_*.py"))
 

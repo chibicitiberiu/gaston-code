@@ -170,7 +170,7 @@ LIBEXEC = $(LIBDIR)/libexec.lib
 # client wants free space for one volume and never enumerates drives, so
 # splitting them keeps the enumeration out of gaston.exe's image.
 FS_SRCS = fs/path.cpp fs/file.cpp fs/dir.cpp fs/list.cpp fs/reader.cpp \
-          fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp
+          fs/writer.cpp fs/xfer.cpp fs/freespace.cpp fs/drives.cpp fs/ops.cpp
 LIBFS = $(LIBDIR)/libfs.lib
 
 # Reading and driving the desktop (docs/UIAUTOMATION.md, REMOTE.md step 6).
@@ -646,7 +646,7 @@ $(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 # total to the byte, so it is here for honesty rather than for the bytes.
 $(OBJ)/fs/path.o $(OBJ)/fs/file.o $(OBJ)/fs/dir.o $(OBJ)/fs/list.o \
 $(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o $(OBJ)/fs/freespace.o \
-$(OBJ)/fs/drives.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+$(OBJ)/fs/drives.o $(OBJ)/fs/ops.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
 
 # The `input` step list and the code it drives, for the same reason as
 # app/: a step is a resolve, a syscall and a refusal, and its cost is the

@@ -7,6 +7,7 @@
 #include "fs/dir.h"
 #include "fs/drives.h"
 #include "fs/file.h"
+#include "fs/ops.h"
 #include "fs/path.h"
 #include "fs/writer.h"
 #include "fs/xfer.h"
@@ -89,33 +90,8 @@ static WorkNames putNames()
     return WorkNames(".gaston-put", "", 11, false);
 }
 
-/* Why a stat did not answer, from the error the platform left behind.
- *
- * statPath returns false when there is nothing at the path -- but "nothing
- * at the path" and "I was not allowed to look" arrive the same way through
- * GetFileAttributesA, and the caller needs them apart: told `locked` about a
- * file that simply is not there, it retries until its budget runs out.
- * Called immediately after the failure, before anything else can overwrite
- * GetLastError. */
-static const char *whyNoStat()
-{
-    switch (GetLastError())
-    {
-    case ERROR_FILE_NOT_FOUND:
-    case ERROR_PATH_NOT_FOUND:
-    case ERROR_BAD_NETPATH:
-    case ERROR_NOT_READY:           /* an empty floppy bay is not a lock */
-        return "missing";
-    case ERROR_FILENAME_EXCED_RANGE:
-    case ERROR_BUFFER_OVERFLOW:
-        return "too_long";
-    case ERROR_INVALID_NAME:
-    case ERROR_INVALID_DRIVE:
-        return "bad_path";
-    default:
-        return "locked";
-    }
-}
+/* Why a stat failed: fsWhyNoStat (fs/ops.h), shared with the client since
+ * it grew the same four mutations. */
 
 /* Lines of "type size mtime attrs name", flushed every FS_CHUNK. The name
  * is LAST because it is the only field that can contain a space; a Windows
@@ -196,7 +172,7 @@ void FsOps::ls(Responder &r, rc_frame *f)
      * different answers rather than both being an empty listing. */
     if (!statPath(path, info) || info.type == 0)
     {
-        r.err(whyNoStat());
+        r.err(fsWhyNoStat());
         return;
     }
     if (info.type != 'd')
@@ -220,7 +196,7 @@ void FsOps::ls(Responder &r, rc_frame *f)
          * count of zero is indistinguishable from the truth, and the caller
          * acts on it. Classified here, immediately, before flush() or
          * anything else can overwrite GetLastError. */
-        r.err(whyNoStat());
+        r.err(fsWhyNoStat());
         return;
     }
     rows->flush();
@@ -248,7 +224,7 @@ void FsOps::stat(Responder &r, rc_frame *f)
     }
     if (!statPath(path, info) || info.type == 0)
     {
-        r.err(whyNoStat());
+        r.err(fsWhyNoStat());
         return;
     }
     rc_strf(type, sizeof type, "%c", info.type);
@@ -452,7 +428,7 @@ void FsOps::get(Responder &r, rc_frame *f)
     }
     if (!statPath(path, info) || info.type == 0)
     {
-        r.err(whyNoStat());
+        r.err(fsWhyNoStat());
         return;
     }
     if (info.type == 'd')
@@ -657,163 +633,30 @@ void FsOps::putEnd(Responder &r, rc_frame *f)
 
 void FsOps::rm(Responder &r, rc_frame *f)
 {
-    const char *path = rc_frame_get(f, "path");
-    FileInfo info;
-
-    if (!path || !*path)
-    {
-        r.err("bad_path");
-        return;
-    }
-    if (!statPath(path, info) || info.type == 0)
-    {
-        r.err(whyNoStat());
-        return;
-    }
-    if (info.type == 'd')
-    {
-        /* Removing a directory is not the same operation and is not one of
-         * the eight. Saying so beats deleting the wrong thing. */
-        r.err("is_directory");
-        return;
-    }
-    /* libfs clears FILE_ATTRIBUTE_READONLY first: a read-only file the
-     * caller asked to delete is a file the caller asked to delete. */
-    if (!removeFile(path))
-    {
-        r.err(GetLastError() == ERROR_ACCESS_DENIED ? "readonly" : "locked");
-        return;
-    }
-    r.ok();
+    /* libfs refuses a directory (`is_directory`) and clears read-only
+     * first: a read-only file the caller asked to delete is a file the
+     * caller asked to delete. */
+    const char *why = fsRemoveFile(rc_frame_get(f, "path"));
+    if (why)
+        r.err(why);
+    else
+        r.ok();
 }
 
 void FsOps::mkdir(Responder &r, rc_frame *f)
 {
-    const char *path = rc_frame_get(f, "path");
-    FileInfo info;
-
-    if (!path || !*path)
-    {
-        r.err("bad_path");
-        return;
-    }
-    /* makeDirectory is happy to find one already there -- it creates
-     * parents, so that is the normal case for every level but the last.
-     * REMOTE.md wants the last level distinguished, so it is checked here
-     * rather than by weakening libfs. */
-    if (statPath(path, info) && info.type != 0)
-    {
-        r.err(info.type == 'd' ? "exists" : "is_file");
-        return;
-    }
-    if (!makeDirectory(path))
-    {
-        switch (GetLastError())
-        {
-        case ERROR_PATH_NOT_FOUND:      r.err("no_parent"); return;
-        case ERROR_FILENAME_EXCED_RANGE:
-        case ERROR_BUFFER_OVERFLOW:     r.err("too_long");  return;
-        case ERROR_INVALID_NAME:
-        case ERROR_INVALID_DRIVE:       r.err("bad_path");  return;
-        default:                        r.err("locked");    return;
-        }
-    }
-    r.ok();
+    /* REMOTE.md wants the last level distinguished, so a directory already
+     * there is `exists` here -- the client's `mkdir` passes true instead. */
+    const char *why = fsMakeDirectory(rc_frame_get(f, "path"), false);
+    if (why)
+        r.err(why);
+    else
+        r.ok();
 }
 
-/* True for "C:", "C:\", "C:\\" and the like -- a drive letter, a colon, and
- * nothing after it but separators. Checked by inspection, the same way
- * isContainedRelative is: refusing a drive root outright costs nothing and
- * there is no caller for whom deleting one was ever the intent. */
-static bool isDriveRoot(const char *path)
-{
-    size_t i;
 
-    if (path[1] != ':')
-        return false;
-    for (i = 2; path[i]; i++)
-    {
-        if (path[i] != '\\' && path[i] != '/')
-            return false;
-    }
-    return true;
-}
 
-/* A sink that stops at the first entry. listDirectory already skips "."
- * and ".." (fsIsDotEntry, win/fs/list.cpp), so the first callback at all
- * means there is something real in there. */
-class AnyEntry : public DirSink
-{
-public:
-    AnyEntry() : m_found(false) {}
 
-    bool onEntry(const char *, const FileInfo &)
-    {
-        m_found = true;
-        return false;            /* one is enough; stop the walk */
-    }
-
-    bool found() const { return m_found; }
-
-private:
-    bool m_found;
-};
-
-/* Asks the disk directly whether `path` holds anything. Used only to tell a
- * non-empty directory apart from a merely-denied one when the error code
- * alone cannot -- see whyNoRmdir. Any failure to even read it (the
- * directory vanished, a lock) answers false rather than claim bytes it did
- * not see. */
-static bool hasAnyEntry(const char *path)
-{
-    AnyEntry probe;
-    listDirectory(path, probe);
-    return probe.found();
-}
-
-/* Why RemoveDirectoryA refused.
- *
- * MEASURED on Windows 98 SE, 2026-10-01: a directory holding one file
- * refused with ERROR_ACCESS_DENIED, not ERROR_DIR_NOT_EMPTY -- the latter
- * is an NT-era code this platform does not appear to send. Trusting the
- * error number alone here answered `readonly` for the single most likely
- * failure and reserved `not_empty` for a code that never actually arrives,
- * which is worse than not classifying it at all. The same run found a
- * directory with the read-only attribute SET removed without complaint,
- * so there is no read-only-directory case to name either -- `readonly` was
- * wrong on both counts and is gone.
- *
- * So ERROR_ACCESS_DENIED is no longer trusted on its own: this asks the
- * disk which case it actually is. ERROR_DIR_NOT_EMPTY is kept and answered
- * directly, in case a platform that really does send it shows up later. */
-static const char *whyNoRmdir(const char *path)
-{
-    DWORD err = GetLastError();
-
-    switch (err)
-    {
-    case ERROR_DIR_NOT_EMPTY:
-        return "not_empty";
-    case ERROR_ACCESS_DENIED:
-        return hasAnyEntry(path) ? "not_empty" : "denied";
-    case ERROR_CURRENT_DIRECTORY:
-        /* DEFENSIVE, NOT MEASURED. The one attempt to produce this --
-         * COMMAND.COM /K launched with this directory as its cwd -- proved
-         * nothing: `ps` showed zero COMMAND.COM processes alive by the time
-         * RMDIR ran, so it had already exited and this branch was never
-         * actually reached. Kept because Win32 documents the code, not
-         * because it has been observed here. */
-        return "is_cwd";
-    case ERROR_FILENAME_EXCED_RANGE:
-    case ERROR_BUFFER_OVERFLOW:
-        return "too_long";
-    case ERROR_INVALID_NAME:
-    case ERROR_INVALID_DRIVE:
-        return "bad_path";
-    default:
-        return "locked";
-    }
-}
 
 /* The mirror of mkdir: that one creates a directory and is happy to find one
  * already there; this one removes a directory and only an EMPTY one --
@@ -824,77 +667,21 @@ static const char *whyNoRmdir(const char *path)
  * the Linux side, where it can be read (gremote/client.py's rmtree). */
 void FsOps::rmdir(Responder &r, rc_frame *f)
 {
-    const char *path = rc_frame_get(f, "path");
-    FileInfo info;
-
-    if (!path || !*path)
-    {
-        r.err("bad_path");
-        return;
-    }
-    if (isDriveRoot(path))
-    {
-        r.err("drive_root");
-        return;
-    }
-    if (!statPath(path, info) || info.type == 0)
-    {
-        r.err(whyNoStat());
-        return;
-    }
-    if (info.type != 'd')
-    {
-        /* Same spelling MKDIR uses for the reverse case (something there
-         * and it is not a directory), whether it is a file or 'u'. */
-        r.err("is_file");
-        return;
-    }
-    if (!RemoveDirectoryA(path))
-    {
-        r.err(whyNoRmdir(path));
-        return;
-    }
-    r.ok();
+    const char *why = fsRemoveDirectory(rc_frame_get(f, "path"));
+    if (why)
+        r.err(why);
+    else
+        r.ok();
 }
 
 void FsOps::mv(Responder &r, rc_frame *f)
 {
-    const char *from = rc_frame_get(f, "from");
-    const char *to = rc_frame_get(f, "to");
-    FileInfo info;
-
-    if (!from || !*from || !to || !*to)
-    {
-        r.err("bad_path");
-        return;
-    }
-    if (!statPath(from, info) || info.type == 0)
-    {
-        r.err(whyNoStat());
-        return;
-    }
-    /* MoveFileA refuses an existing target, and that refusal is the useful
-     * one: a move that silently replaced something would be a delete
-     * nobody asked for. Checked first so the answer says `exists` rather
-     * than a bare failure. */
-    if (statPath(to, info) && info.type != 0)
-    {
-        r.err("exists");
-        return;
-    }
-    /* movePath is MoveFileA and never MoveFileExA, which is NT-only and on
-     * the import deny list -- so a move across volumes fails here rather
-     * than copying. */
-    if (!movePath(from, to))
-    {
-        switch (GetLastError())
-        {
-        case ERROR_FILENAME_EXCED_RANGE: r.err("too_long"); return;
-        case ERROR_INVALID_NAME:         r.err("bad_path"); return;
-        default:                         r.err("locked");   return;
-        }
-    }
-    r.ok();
+    const char *why = fsMovePath(rc_frame_get(f, "from"),
+                                 rc_frame_get(f, "to"));
+    if (why)
+        r.err(why);
+    else
+        r.ok();
 }
 
 void FsOps::handle(rc_frame *f)
