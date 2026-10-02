@@ -231,3 +231,29 @@ def test_sync_resolve_does_not_require_a_path():
     tools = listed.root.tools if hasattr(listed, "root") else listed.tools
     schema = next(t.input_schema for t in tools if t.name == "sync_resolve")
     assert "path" not in schema.get("required", [])
+
+
+def test_items_of_asks_for_one_controls_items():
+    """What `input`'s `item` targets, listed: the tree service is asked for
+    the accessible children of the one control named."""
+    ui = FakeUi()
+    out = _body(_call(_server(ui), "ui", {"items_of": "SysListView32"}))
+    assert ui.calls[0]["acc"] is True
+    assert ui.calls[0]["target"] == "SysListView32"
+    assert "Items inside" in out
+
+
+def test_an_item_line_says_the_name_to_pass():
+    from bridge.wire.uirec import UiNode
+    from bridge.wire.uiview import render_tree
+    n = UiNode(src="a", path="0", parent="", ctrl=0, child=3,
+               rect=(10, 20, 60, 36), flags=1, cls="", text="", role="list item",
+               name="readme.txt", value="", state="selectable", action="")
+    out = render_tree([n], {"nodes": "1", "walk": "complete"})
+    assert 'item="readme.txt"' in out
+
+
+def test_the_frame_for_items_carries_the_control():
+    from bridge.wire import protocol as P
+    f = P.ui_tree("u1", acc=True, target="SysListView32")
+    assert f.headers["acc"] == "1" and f.headers["target"] == "SysListView32"

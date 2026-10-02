@@ -120,7 +120,12 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # overwritten unless asked (fs/tree.h) -- measured at 506,233. Written as
 # plain data first; the std::string version was 11KB. The runtime number is
 # re-measured on the guest with it (docs/measurements/workingset-*).
-COMMITTED_CAP ?= 506864
+#
+# 506,864 -> 515,056 (two pages), the same day: the `ui` listing of one
+# control's items -- what `input`'s `item` targets. About 1.5KB of code and no
+# new static data (the bss symbol lists are identical), but it pushed both AUTO
+# and DGROUP over a page boundary, and the gate charges whole pages.
+COMMITTED_CAP ?= 515056
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a

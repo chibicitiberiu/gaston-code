@@ -98,6 +98,12 @@ def render_tree(nodes: list[UiNode], headers: dict) -> str:
         line = "  " * _depth(n) + head + "  " + "  ".join(bits)
         if n.sel:
             line += f"  sel={n.sel}"
+        # An accessible element has no selector -- it is not a window. What
+        # addresses it is its NAME, passed as `input`'s `item` beside the
+        # control's selector; said here in the form to copy.
+        if n.src == "a" and label:
+            line += f'  item="{label}"'
+
         out.append(line)
 
     detail = headers.get("enriched", "0") or "0"

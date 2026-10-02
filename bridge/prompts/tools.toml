@@ -76,6 +76,8 @@ Prefer this over `shot`: far cheaper, exact, and it gives you something you can 
 Start with `scope="foreground"`, the window the person is looking at, and widen to `desktop` only to find something else.'''
 
 [ui.args]
+items_of = '''
+A selector for ONE control: lists the items inside it instead of the windows -- list rows, tree nodes, tabs, toolbar buttons, desktop icons. Each line ends `item="..."`; pass that with the control's selector to `input`: `{"click": "SysListView32", "item": "readme.txt"}`.'''
 scope = '''
 `foreground` for the active window and its controls, `desktop` for everything on screen, or `pid` with a process id. Default `desktop`.'''
 pid = '''
@@ -123,7 +125,7 @@ The steps, in order. A STRING is text to type, with named keys and chords in squ
 - `{"down": KEY}` / `{"up": KEY}` -- hold and release a key (`Shift`, `Ctrl`, `Alt`, `AltGr`, ...) or a mouse button (`LButton`, `RButton`, `MButton`; a button takes `"where": SEL` and the same `item`/`text`/`at` as click).
 - `{"move": SEL}` (same targets as click), `{"move_by": [dx, dy]}` -- move the pointer; with a button held this is a drag.
 - `{"wait": MS}` -- pause.
-- `{"wait_for": SEL}`, `{"wait_gone": SEL}`, `{"wait_text": SEL, "text": "Done"}` -- wait for a control to appear, to go, or to say something. A wait that times out stops the list.
+- `{"wait_for": SEL}`, `{"wait_gone": SEL}`, `{"wait_text": SEL, "text": "Done"}` -- wait for a control to appear, to go, or to contain some text (ignoring case and the `&` of a mnemonic). A wait that times out stops the list.
 - `{"idle": MS}` -- wait until the screen has been still for this long.
 
 Any step takes `"timeout": MS` (default 30000, at most 120000).
@@ -272,6 +274,8 @@ The machine refused: {status}.'''
 # output, because a short list read as a complete one is how an agent
 # concludes a control is not there.
 [ui.view]
+items_of = '''
+Items inside `{sel}`:'''
 # Ctrl+A is not select-all on this machine: measured twice on 2026-10-02,
 # on a custom Win32 edit control and on Notepad, where `[Ctrl+A]goodbye`
 # against a box holding "hello" gave "hellogoodbye". Said on the RESULT

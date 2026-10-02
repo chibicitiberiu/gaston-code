@@ -493,6 +493,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 "target": {
                     "type": "string",
                     "description": prompts.text("tools.ui.args.target")},
+                "items_of": {
+                    "type": "string",
+                    "description": prompts.text("tools.ui.args.items_of")},
             },
             "required": [],
         },
@@ -521,6 +524,16 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             if pid > 0 and scope != "pid":
                 return _text(prompts.text("tools.ui.view.pid_unused",
                                           scope=scope, pid=pid), error=True)
+            # ONE CONTROL'S ITEMS: list rows, tree nodes, toolbar buttons,
+            # desktop icons -- the names `input`'s `item` takes.
+            items_of = str(a.get("items_of") or "").strip()
+            if items_of:
+                nodes, headers = await ui.tree(
+                    guest, target=items_of, acc=True,
+                    max_nodes=max(1, min(int(a.get("max_nodes") or 400), 400)))
+                return _text(prompts.text("tools.ui.view.items_of",
+                                          sel=items_of)
+                             + "\n" + render_tree(nodes, headers))
             # `target` WITHOUT `inproc` WAS DROPPED ON THE WAY OUT
             # (protocol.ui_tree only sends it on the inproc branch), so the
             # agent got the whole scope back and no word that the control it
@@ -546,6 +559,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             # The selector the guest was matching: a wait's, when there was
             # no target -- which is the only way `ui` reaches `ambiguous`.
             return _text(_ui_explain(exc, str(a.get("target")
+                                              or a.get("items_of")
                                               or a.get("wait_for") or "")),
                          error=True)
         except Exception:

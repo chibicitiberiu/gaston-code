@@ -430,6 +430,104 @@ static void do_tree_inproc(rc_net *net, UiContext *ctx, rc_frame *f,
     ui_end(net, id, "ok", k, v, nkv);
 }
 
+/* ---- ITEMS: the accessible children of one control ------------------
+ *
+ * What `item` targets (`input`'s `{"click": SEL, "item": "readme.txt"}`):
+ * list rows, tree nodes, tab and toolbar buttons, desktop icons -- the
+ * things that have no HWND, so the window walk cannot see them and the agent
+ * had no way to learn their names but a screenshot. One control's MSAA
+ * subtree, streamed as 'a' records through the same UIENT batches a tree
+ * uses. Bounded: 400 elements, 3 levels, the request's deadline. */
+struct AccRecords : public AccSink
+{
+    AccRecords(TreeSink &t, RcPathBuilder &p) : tree(t), paths(p), total(0)
+    {
+        rc_path_reset(paths);
+    }
+
+    virtual bool onAcc(const AccNode &n)
+    {
+        char path[RC_PATH_MAX], parent[RC_PATH_MAX];
+        if (n.depth == 0)
+            return true;                    /* the control itself: listed */
+        rc_path_next(paths, n.depth - 1, path, parent);
+        unsigned w = rc_uirec_acc(tree.buf + tree.len, TreeSink::CAP
+                                  - tree.len, n, path, parent);
+        if (!w)
+        {
+            tree.flush();
+            w = rc_uirec_acc(tree.buf + tree.len, TreeSink::CAP - tree.len,
+                             n, path, parent);
+            if (!w)
+                return true;
+        }
+        tree.len += w;
+        tree.batch++;
+        total++;
+        return true;
+    }
+
+    TreeSink      &tree;
+    RcPathBuilder &paths;               /* on the heap: most of a page */
+    int            total;
+};
+
+static void do_items(rc_net *net, UiContext *ctx, rc_frame *f, const char *id,
+                     const WalkOptions &o)
+{
+    const char *k[2];
+    const char *v[2];
+    char nodes[16];
+    if (!ctx->msaa.available())
+    {
+        ui_end(net, id, "no_msaa", NULL, NULL, 0);
+        return;
+    }
+    HWND h = resolve_target(net, ctx, f, id, o);
+    if (!h)
+        return;                             /* resolve_target answered */
+    UniqueObj<TreeSink> tree(new TreeSink(net, id, ctx, false));
+    if (!tree.valid() || !tree->ready())
+    {
+        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        return;
+    }
+    HeapPtr<RcPathBuilder> paths((RcPathBuilder *)HeapAlloc(
+        GetProcessHeap(), 0, sizeof(RcPathBuilder)));
+    if (!paths.valid())
+    {
+        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        return;
+    }
+    UniqueObj<AccRecords> recs(new AccRecords(*tree.get(), *paths.get()));
+    if (!recs.valid())
+    {
+        ui_end(net, id, "no_memory", NULL, NULL, 0);
+        return;
+    }
+    AccWalkOptions ao;
+    ao.want = Selector::WANT_NAME | Selector::WANT_ROLE
+            | Selector::WANT_STATE;
+    ao.maxNodes = 400;
+    ao.maxDepth = 3;
+    ao.deadlineMs = o.deadlineMs;
+    ctx->deadline.arm(o.deadlineMs);
+    AccEnd end = ctx->msaa.enumerateFrom(h, ao, *recs.get());
+    ctx->deadline.disarm();
+    tree->flush();
+    if (end == ACC_NO_OBJECT)
+    {
+        ui_end(net, id, "no_msaa", NULL, NULL, 0);
+        return;
+    }
+    rc_strf(nodes, sizeof(nodes), "%d", recs->total);
+    k[0] = "nodes"; v[0] = nodes;
+    k[1] = "walk";
+    v[1] = end == ACC_COMPLETE ? "complete"
+         : end == ACC_DEADLINE ? "deadline" : "maxnodes";
+    ui_end(net, id, "ok", k, v, 2);
+}
+
 static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
 {
     const char *id = rc_frame_get(f, "id");
@@ -446,6 +544,13 @@ static void do_tree(rc_net *net, UiContext *ctx, rc_frame *f)
         return;
     }
     base_options(o, ctx, f);
+
+    /* One control's items, not the window tree. */
+    if (header_flag(f, "acc", false))
+    {
+        do_items(net, ctx, f, id, o);
+        return;
+    }
 
     /* Opt-in, off by default, and it does not fall back. A caller that
      * asked for the in-process answer and quietly got the out-of-process

@@ -93,14 +93,15 @@ class UiService:
                    hidden: bool = False, wait_for: str = "",
                    wait_ms: int = 5000, settle_ms: int = 0,
                    timeout_ms: int = 8000, inproc: bool = False,
-                   target: str = "") -> tuple[list, dict]:
+                   target: str = "", acc: bool = False) -> tuple[list, dict]:
         budget = timeout_ms + (wait_ms if wait_for else 0) + settle_ms * 4
         headers, call = await self._call(
             guest,
             P.ui_tree("", scope=scope, pid=pid, max_nodes=max_nodes,
                       msaa=msaa, hidden=hidden, wait_for=wait_for,
                       wait_ms=wait_ms, settle_ms=settle_ms,
-                      timeout_ms=timeout_ms, inproc=inproc, target=target),
+                      timeout_ms=timeout_ms, inproc=inproc, target=target,
+                      acc=acc),
             "tree", budget)
 
         nodes = uirec.parse_records(bytes(call.records), _acp(guest))
