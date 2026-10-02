@@ -579,6 +579,49 @@ This is the gap `A5` does *not* cover. A5 wedges a thread and proves the
 window walk survives it, which is worth having; the walk was never the
 unbounded part.
 
+### Two callers, one engine (2026-10-02, REMOTE.md step 6)
+
+The handlers are no longer the client's. `gremote.exe` answers the same three
+ops on its own wire, so `win/ui/uirpc.cpp`'s TREE and RUN moved into
+`win/ui/uiengine.cpp` behind an abstract `UiLink` (`win/ui/uilink.h`) and each
+exe supplies the framing: the client's `NetUiLink` sends `UIENT`/`UIDAT`/
+`UIEND` through `rc_net`, gremote's `RespUiLink` sends `DATA`/`OK`/`ERR`
+through a `Responder`. Nothing above the seam spells either vocabulary.
+
+What the engine may now assume about its caller, because it is the only thing
+two different programs can both promise:
+
+- **A thread with a message queue, an STA, and a pump.** Both callers force
+  the queue into existence before publishing the thread, `CoInitialize` on it,
+  and dispatch anything they do not own -- the client in `UiService::body`,
+  gremote in `UiOps::onThreadStart` plus the drain in `LaneHandler::idle`.
+  Drop the dispatch and `CallDeadline` silently stops working, because
+  `MessagePending` is only consulted when a message arrives.
+- **A `UiContext` built and destroyed on that same thread.** Every member is
+  apartment- or thread-bound; this was already true and is now a contract
+  rather than an arrangement.
+- **Limits from the caller, not from the file.** The clamps used to be
+  literals inside `base_options` and `StepLimits`. They come through
+  `UiLink::limits()` now, so the client keeps its compiled-in ceilings and
+  gremote's `[ui]` section is not dead config.
+- **An automation LEVEL, not a flag.** `UiLink::automationLevel()` returns the
+  capability enum, because `RC_AUTOMATION_SCREEN` means read-only and a bool
+  would let a step list type into a box configured not to be driven. The
+  client never emits that middle value; gremote's ini can.
+- **A stop flag it must poll.** `UiLink::stopFlag()` is read between steps,
+  inside every wait, at every node of a walk and at every strip of a capture.
+  `NodeSink::onNode` and `ByteSink::write` already returned `bool` for this.
+- **No `Injector`.** The in-process tier is the client's alone: the member
+  moved out of `UiContext` and the `inproc` branch out of the shared `do_tree`
+  into each exe's own dispatcher, so gremote neither links `inject.cpp` nor
+  pretends to answer for it -- it refuses `inproc` rather than silently
+  serving the out-of-process answer, which would read a full list box as
+  empty.
+
+`SHOT` is deliberately **not** shared: 55 lines of header clamping over a sink
+that has to be per-exe anyway, and a virtual call to save it costs more than
+the duplication.
+
 
 ## What is built, and what the guest still has to answer
 

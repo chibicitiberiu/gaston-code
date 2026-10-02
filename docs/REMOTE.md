@@ -273,10 +273,16 @@ max_output_kb=1024
 prevent_sleep=0
 
 [ui]
+; 2 the full lane (TREE, SHOT, RUN); 1 read-only (TREE and SHOT, no input);
+; 0 off -- every ui op refused with automation_off, on the NEXT request
+automation=2
 ; 0 skips oleacc.dll even if present
 msaa=1
 max_tree_nodes=2000
 call_timeout_ms=2000
+; a whole step list, and one step that names no timeout of its own
+script_ms=120000
+step_ms=30000
 
 [log]
 file=gremote.log
@@ -291,6 +297,16 @@ level=info
 - **The composition root loads the INI once into per-service config structs**
   (`ServerConfig`, `ExecConfig`, `UiConfig`) and hands each service its struct.
   Services never read the INI.
+- **`[ui] automation` is the control, not an optimisation.** It is read on
+  every request rather than captured at connect, so turning it off takes
+  effect on the next request instead of the next connection, and the tray
+  menu can make that immediate. The default is **2**, because there is nobody
+  at this keyboard to surprise and a box you cannot see is the problem the
+  lane exists to fix -- but the section is written into the ISO's
+  `GREMOTE.INI` with every key, so a fresh install has a line on its own disk
+  saying the screen can be driven, and the effective level is logged at
+  startup. It is also an enum and not a bool because the middle value is
+  real: a box that may be read and photographed but not typed into.
 - **`[machine]` is the box, not the socket.** `prevent_sleep` is the only key
   so far. It is **off by default**: it changes how the hardware behaves, so an
   install that predates the option has to come up exactly as it did before. The
@@ -371,7 +387,7 @@ protocol and must not drift into it.
 
 | Lane | Thread | Ops | May block on |
 |---|---|---|---|
-| control | reader, inline | `AUTH`, `PING`, `CANCEL`, `SYSINFO`, `PS`, `KILL`, `REBOOT`, `UPDATE` | nothing: kernel32 and Winsock only |
+| control | reader, inline | `AUTH`, `PING`, `CANCEL`, `STOP`, `SYSINFO`, `PS`, `KILL`, `REBOOT`, `UPDATE` | nothing: kernel32 and Winsock only |
 | job | job worker | `EXEC`, `LAUNCH` | the child |
 | fs | fs worker | `LS`, `STAT`, `GET`, `PUT`, `RM`, `MKDIR`, `RMDIR`, `MV`, `DRIVES` | the disk |
 | ui | ui worker (message queue, `CoInitialize`d) | `SHOT`, `TREE`, `RUN` (a step list: `StepRunner`, win/automation/steps.h, as the client's `UIRUN`) | USER/GDI, other apps |
@@ -454,17 +470,73 @@ table.
   9x critical-error handler, which is a modal dialog on the user's screen
   raised by a read-only call, blocking the worker until someone dismisses it.
 
-The ui lane, **as built in the client** (`win/ui/`). These are the frame
-types the shipping client answers today; `gremote` will reuse the same
-handlers behind the shorter names in the lane table above.
+The **ui lane, as gremote answers it** (step 6, written 2026-10-02 at the start
+of the step as this section's preamble requires). Three ops plus a stop, over
+the same handlers the client runs: `win/ui/uiengine.cpp` is shared and knows
+nothing of either wire, and each exe supplies a `UiLink` that turns the
+engine's calls into its own frames (`win/ui/uilink.h`).
 
 | Op | Request headers / body | Reply | Errors |
 |---|---|---|---|
-| `UITREE` | `scope=desktop\|foreground\|pid`, `pid`, `max_nodes`, `text`, `msaa`, `hidden`, `call_ms`, `timeout_ms`, optional `wait_for=` + `wait_ms`, optional `settle_ms` | `UIENT` records (see below) with `n=` per frame; `UIEND nodes=, walk=complete\|deadline\|maxnodes\|stopped, enriched=, dropped=, too_deep=` | `bad_selector`, `not_found` (a `wait_for` that never came true), `no_memory`, `busy` |
-| `UICLICK` | `target=` selector, optional `double=1`, optional `settle=` | `UIEND` | `no_target`, `bad_selector`, `ambiguous` (with `detail=` carrying the **count**), `not_found`, `truncated`, `refused_self`, `no_window`, `not_foreground`, `occluded`, `failed` |
-| `UIKEYS` | optional `target=` selector, optional `settle=`; **body is the text** | `UIEND` | `no_text`, plus every `UICLICK` error |
-| `UISHOT` | `x`, `y`, `w`, `h` (a width and a height, not a right and a bottom), `bpp` | `UIDAT` chunks of a native-bpp DIB; `UIEND w=, h=, bpp=, bytes=` | `no_memory`, `failed` (`detail=` says which) |
-| `UIFOCUS` | `target=` selector, optional `settle=` | `UIEND` | every `UICLICK` error except `occluded` |
+| `TREE` | as `UITREE`, minus `inproc` | `DATA` records, then `OK nodes=, walk=, enriched=, dropped=, too_deep=, self=` | as `UITREE`, plus `inproc_unsupported` |
+| `SHOT` | as `UISHOT` | `DATA` chunks of a BMP, then `OK w=, h=, bpp=, bytes=` | `no_memory`, `failed` |
+| `RUN` | as `UIRUN`; **body is the step list** | `DATA` lines, one per step that ran, then `OK done=` or `ERR code= step= done= detail=` | as `UIRUN` |
+| `STOP` | `target=` the id to stop | `OK` -- and the target still answers, with `cancelled` | `no_such_id` |
+
+- **`STOP` is not `CANCEL`, and both exist.** `CANCEL` is 9P's `Tflush`: its
+  ack promises the request will never be answered. A step list needs the
+  opposite -- a list that failed at step 5 still ran four steps the caller has
+  to hear about -- so `STOP` acks and the target answers `cancelled` with its
+  partial report. **Both raise the same stop flag**; they differ only in
+  whether the reply is suppressed. If `STOP` alone raised it, a cancelled walk
+  would run to its full deadline with its replies dropped and every ui request
+  behind it answered `busy`, which is `BACKLOG.md` 26 reproduced here.
+- **`STOP` is the Session's, not the control lane's**, for the reason `CANCEL`
+  already is: it is about the lanes and the Session owns them, and it needs an
+  ungated `Responder` or the ack is suppressed along with the target. The id is
+  compared against `LaneWorker`'s `m_inFlightId` under the lane's lock, which
+  also covers a request that is queued but not yet started.
+- **The stop flag reaches all three ops**, not just the step list.
+  `NodeSink::onNode` and `ByteSink::write` already return `bool` and
+  `TreeWalker` already has `WALK_STOPPED`, so a stopped walk or capture ends at
+  the next node or strip instead of finishing for nobody.
+- **One request in flight, and `ERR busy` otherwise**, as the other lanes. The
+  ui worker is a `LaneWorker` with `onThreadStart`/`onThreadStop` hooks: it
+  forces its message queue into existence, `CoInitialize`s, installs the call
+  deadline, and builds its `UiContext` on that thread, because every member of
+  it is apartment- or thread-bound. There is no pump mode -- `idle()` drains
+  the queue with `PeekMessage` on every pass of the loop the lane already runs.
+- **The event feed starts lazily and stops when the lane goes quiet.** A
+  system-wide `SetWinEventHook` left installed would wake gremote on every
+  window event on the machine, forever, with no request pending -- which is the
+  opposite of `win/remote/tray.h`'s "nothing polls" rule for a program that
+  runs beside the thing being measured.
+- **`inproc` is refused rather than ignored.** gremote does not carry the
+  in-process tier: it needs `HOOKDLL.DLL` beside the exe and a deny list with
+  no force escape, and a caller who asked for that tier and silently got the
+  out-of-process one would read an empty list box as empty.
+
+
+The ui lane, **as built in the client** (`win/ui/`). These are the frame
+types the shipping client answers today; `gremote` reuses the same handlers
+behind the shorter names in the lane table above.
+
+*Rewritten 2026-10-02.* `UICLICK`, `UIKEYS` and `UIFOCUS` were retired for one
+`UIRUN` step list -- a list of actions and waits run in order, so "focus, type,
+Ctrl+S, wait for Save As, type a name, Enter, wait for it to go" is one round
+trip to a 200MHz machine instead of seven. `UICANCEL` arrived with it.
+
+| Op | Request headers / body | Reply | Errors |
+|---|---|---|---|
+| `UITREE` | `scope=desktop\|foreground\|pid`, `pid`, `max_nodes`, `text`, `msaa`, `hidden`, `call_ms`, `timeout_ms`, optional `wait_for=` + `wait_ms`, optional `settle_ms`; or `acc=1` + `target=` for one control's MSAA items; or `inproc=1` + `target=` + `items=` for the in-process tier | `UIENT` records (see below) with `n=` per frame; `UIEND nodes=, walk=complete\|deadline\|maxnodes\|stopped, enriched=, dropped=, too_deep=, self=` | `bad_selector`, `not_found` (+`step=`), `ambiguous` (+`detail=` and up to three `cand1..3=`), `truncated`, `no_target`, `no_msaa`, `no_memory`, `busy`, `automation_off` |
+| `UISHOT` | `x`, `y`, `w`, `h` (a width and a height, not a right and a bottom), `bpp` | `UIDAT` chunks of a native-bpp BMP; `UIEND w=, h=, bpp=, bytes=` | `no_memory`, `failed` (`detail=` says which) |
+| `UIRUN` | `timeout_ms`, `step_ms`, optional `settle`; **body is the step list** -- one step per line, `verb` then TAB-separated `key=value`, every value percent-encoded | `UIEND status=, done=, step=, detail=, cand1..3=`, and a **body** of one `i= status= ms= hit= detail= part=` line per step that ran, plus `released=1` when the list left something held | `bad_steps` (+`detail=`), `cancelled`, `script_timeout`, `timeout`, `focus_lost`, `bad_key`, `bad_char`, `refused_self`, `no_window`, `not_foreground`, `occluded`, `not_visible`, `not_edit`, `no_item`, `ambiguous_item`, `no_text_match`, `ambiguous_text`, `prompted`, `still_open`, plus every `UITREE` error for the resolution it does |
+| `UICANCEL` | `id=` of the running list | none of its own -- the run's `UIEND` carries `cancelled` | ignored and logged when `id` is not the one running |
+
+**`UICANCEL` is `RC_LANE_IMMEDIATE`, not `RC_LANE_DESKTOP`**, because the
+desktop worker is the thread running the list it is meant to stop: queued
+behind it, the cancel would arrive when the list had ended. It raises a flag
+the runner reads between steps and inside every wait.
 
 - **Every request ends in exactly one `UIEND`**, including the ones refused
   before they run and the ones still queued when the worker stops. Silence
@@ -486,11 +558,13 @@ handlers behind the shorter names in the lane table above.
   because the count is what tells the caller whether the `:nth(n)` it is
   about to write exists. Clicking the first of four buttons called OK is the
   outcome this lane exists to refuse.
-- **The waits are headers, not ops.** `wait_for`/`settle_ms` on `UITREE` and
-  `settle` on `UICLICK`/`UIKEYS`. The loop an agent runs is "do a thing, then
-  look", and folding the wait into both ends turns three round trips into
-  one — behind a socket to a 200MHz machine the round trip is the expensive
-  part.
+- **The waits are headers and steps, not ops.** `wait_for`/`settle_ms` on
+  `UITREE`, `settle` on `UIRUN`, and `waitfor`/`waitgone`/`waittext`/`idle` as
+  verbs inside a step list. The loop an agent runs is "do a thing, then look",
+  and folding the wait in turns three round trips into one -- behind a socket
+  to a 200MHz machine the round trip is the expensive part. A failed wait IS
+  the guard: a list has no branching, and the agent is the control flow
+  between lists.
 - **One worker, one request.** The desktop worker services its queue
   serially, so "one in flight per lane" holds without a separate gate; a
   caller more than four requests ahead gets `busy`.
@@ -533,12 +607,14 @@ handlers behind the shorter names in the lane table above.
   `win/remote/tray.cpp` makes that argument at the `AppendMenu` call, so
   nobody later "fixes" it by adding a remote `QUIT` to match.
 
-`UIFOCUS` raises the window containing `target` and does nothing else.
-`UICLICK` and `UIKEYS` already raise what they need, so it exists for the case
-where pressing something would be wrong -- a `UISHOT` of a window that is
-behind another. It cannot be quiet: on 9x a window cannot be raised across a
-process boundary without being activated, measured in
-`docs/measurements/focus-vm-20260927.txt`.
+A step list's `focus` verb raises the window containing `target` and does
+nothing else. `click` and the typing verbs already raise what they need, so
+`focus` exists for the case where pressing something would be wrong -- a
+`UISHOT` of a window that is behind another. It cannot be quiet: on 9x a window
+cannot be raised across a process boundary without being activated, measured in
+`docs/measurements/focus-vm-20260927.txt`. `Input::focus` relaxes
+`SPI_SETFOREGROUNDLOCKTIMEOUT` around that one call and puts it back, because
+leaving it at 0 is a change to somebody's machine that outlives us.
 
 ### UI details decided now
 
@@ -888,6 +964,41 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 6. **libautomation.** Screenshot, window list, focus and input, control tree,
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.
+   *Scoped 2026-10-02.* The library landed in step 5a's wake and was proven in
+   the client first, as every lib here is, so this step is the **lane**, not
+   the library: `TREE`, `SHOT`, `RUN` and `STOP`, per the op table above.
+   **What it is for, and it is not tidiness.** A desktop measurement on this
+   hardware is currently a *build*: `keys-named-p200-20261002.txt` was taken by
+   shipping `autocheck.exe` to the box and parsing its stdout over the job
+   lane. The host-side probes do reach `UITREE`, but each is a bridge stub that
+   waits for the *client* to dial out -- so every one needs a working
+   `gaston.exe`. The case that has no answer at all is the client being the
+   thing that is wrong: the wedge, the GPF and the shutdown hang were each
+   diagnosed over QMP, and the Athlon has none. gremote is the only process
+   still answering then, and until this step it could not look at the screen.
+   **The engine is shared, not copied.** `win/ui/uirpc.cpp`'s coupling to
+   `rc_net` was six places in 919 lines; the handlers moved to
+   `win/ui/uiengine.cpp` behind `UiLink` (`win/ui/uilink.h`) and each exe
+   supplies the wire. `uisteps.cpp` was absorbed rather than renamed beside it,
+   so the client's translation-unit count did not change and the ~2,144 bytes
+   of `-xs` machinery a new TU costs was not paid twice. `SHOT` is the one
+   handler deliberately duplicated: 55 lines of header clamping over a sink
+   that has to be per-exe anyway.
+   **Deflate turns on here**, which step 4 deferred because the only large
+   payload is a screenshot. It is armed from the handshake, not at
+   construction: the Python declares `deflate=1` on `AUTH`, gremote calls
+   `Connection::allowDeflate()` before `HELLO`, and the Python arms its own
+   deflater strictly on *reading* `HELLO deflate=1`. A compressing peer talking
+   to a non-compressing one drops the link rather than degrading, and the only
+   repair path is `ship()`, which needs the link -- so arming on send would
+   brick a box reachable by CD.
+   **Two desktop drivers is a documented hazard, not a guarded one.** The
+   client and gremote can both run and both drive; `Input::isOurs` compares PID
+   and so refuses only its own process. It is a dev box driven by one person
+   who knows which tool they are holding, and gremote can already `EXEC`
+   anything, so this grants no power it did not have. A named
+   `GastonDesktopDriver` mutex is the fix if it ever bites. See
+   `BACKLOG.md` 19.
 
 ### The client is the first consumer (decided 2026-09-25)
 
@@ -956,7 +1067,13 @@ The Phase 6 agent tools then need only handlers and bridge work.
 Things only the real box can answer, collected so the first session covers them:
 
 - `oleacc.dll` present, and its version.
-- Foreground lock: does `SPI_SETFOREGROUNDLOCKTIMEOUT` = 0 work from a background process.
+- Foreground lock: does `SPI_SETFOREGROUNDLOCKTIMEOUT` = 0 work from a
+  background process. *Narrowed 2026-10-02:* the lock is real on 98 and
+  measured at 15000 ms, and `Input::focus` already relaxes it around the one
+  call that needs it and puts it back (`win/automation/input.cpp`). What is
+  untested is whether that works from a process with **no window on screen,
+  started before anyone logged on** -- which is exactly what gremote is, and
+  what its ui lane now asks on every `focus` step.
 - `COMMAND.COM /c` exit codes: is the child's errorlevel returned. *Answered
   on the VM (2026-09-26, `docs/measurements/execprobe-vm-gui-20260926.txt`):
   no, always 0, even for a program that does not exist; a direct spawn

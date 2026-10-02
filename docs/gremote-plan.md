@@ -21,7 +21,8 @@ at a time, a 30-second heartbeat, a shared secret and a CIDR allow-list.
   landed the library and 5b (`ship()`) is blocked only on this exe. Folding fs
   in is what makes the loop work: without `PUT` a new `gaston.exe` still
   travels by CD.
-- **The ui lane waits for step 6.** `win/automation/` is already a library,
+- **The ui lane waits for step 6.** *Taken up 2026-10-02; see REMOTE.md step
+  6 for what it became.* `win/automation/` is already a library,
   but `ui/uiservice.h` is built on `rc_net` and gremote needs a `Connection`
   twin with its own COM and message-queue worker.
 - **Deflate is off.** REMOTE.md's own open decision leans that way -- the only
@@ -323,9 +324,20 @@ rather than at the desk:
 
 ### Still open
 
-- The P200 itself, and the two things nothing records about it: a configured
-  TCP/IP stack, and how `GREMOTE.EXE` gets there the first time.
 - `REBOOT mode=reboot`, and `REBOOT` with force against an open DOS box.
   Neither was run: the first ends the session doing the measuring, and the
   second is the one that can lose somebody's work.
-- The ui lane, which is step 6 and unchanged by any of this.
+
+### Closed since
+
+- **The real box, and how `GREMOTE.EXE` reaches it.** Both were open here as
+  "two things nothing records about it: a configured TCP/IP stack, and how
+  `GREMOTE.EXE` gets there the first time." Answered by use: the Athlon XP
+  2000+ at 10.0.0.125 has been driven over gremote since 2026-10-01, and
+  `tools/probe/treeprobe.py` documents the `--remote 10.0.0.125:<secret>`
+  form. The floppy bootstrap in `tools/gen/mkw98kit.sh` was never needed.
+- **The ui lane**, which was "step 6 and unchanged by any of this" -- it is
+  now step 6 and built. Its own plan is REMOTE.md step 6 plus the op table in
+  that file; what it changed about *this* document is only that
+  `Connection(sink, false)` became "inflate always, deflate when AUTH asks"
+  (the screenshot is the large payload deflate was deferred for).

@@ -1861,6 +1861,41 @@ status pane is harder to justify when the screen is visibly flapping, and it
 is an argument for the feature being off unless someone has chosen it -- which
 is now something they can choose.
 
+### Known and accepted: two programs can drive one desktop
+
+**Recorded 2026-10-02 with gremote's ui lane (REMOTE.md step 6), accepted by
+the user rather than guarded.** `gaston.exe` and `gremote.exe` hold different
+single-instance mutexes (`GastonSingleInstance`, `GastonRemoteSingleInstance`),
+so both run; and since gremote now answers `TREE`, `SHOT` and `RUN`, both can
+drive the same screen at the same time.
+
+Nothing stops them. `Input::isOurs` compares the target's **process** against
+our own (`win/automation/input.cpp`) -- deliberately, because a child control
+is a different HWND on the same thread -- so each program refuses only its own
+windows. gremote will focus and type into the client's window, including its
+permission bar; the client will do the same to gremote's tray window. And
+`AttachThreadInput` from two foreign threads onto one target has no defined
+interleaving.
+
+**Why it is accepted.** It is a development box driven by one person who knows
+which tool they are holding, and gremote can already `EXEC` anything on that
+machine -- so clicking the client's own Allow button is not a capability it
+gained here. The foreground flap above is the same class of problem with one
+driver, and it was accepted on the same grounds.
+
+**What would close it:** a named `GastonDesktopDriver` mutex held across any
+focus change or step list, taken by both `win/ui/uiservice.cpp` and
+`win/remote/uiops.cpp`, with a timeout and an abandoned-mutex path. Not built,
+because it is new shared state between two programs bought against a collision
+nobody has had.
+
+**One nearby hazard that did get code.** `TrackPopupMenu` on gremote's tray
+icon runs a modal loop that captures the input queue, so a step list running
+while somebody opens that menu loses its keystrokes to the menu and
+`Input::focus` reports `not_foreground` for a reason nothing would otherwise
+log. The tray owns the loop, so it says so, and the ui lane refuses while the
+menu is up.
+
 ## 20. `DRIVES` spins the floppy motor -- CLOSED 2026-10-01
 
 **Found 2026-10-01**, on the first real-hardware run, by the person sitting
@@ -2317,6 +2352,25 @@ That measurement has not been taken, and a cancel path built against a cost
 nobody has measured is a third lane's worth of generation bookkeeping bought on
 a guess. Take the measurement first.
 
+**Partly closed, and the measurement now has an instrument (2026-10-02).**
+`UICANCEL` landed with the `input` step list and stops a running list between
+steps and inside any wait -- but only a list. `UITREE` and `UISHOT` still run
+to completion, which is what this entry is actually about.
+
+gremote's ui lane (REMOTE.md step 6) needed a stop for its step lists anyway,
+so the bookkeeping is paid; the marginal cost of stopping a walk turned out to
+be two polls on functions that already return `bool` (`NodeSink::onNode`, with
+`WALK_STOPPED` already in `TreeWalker`, and `ByteSink::write`, whose own
+docstring lists "the request was cancelled" as a reason). So the flag reaches
+all three ops there, and **the client's `UICANCEL` now raises it for all three
+too** rather than for step lists alone.
+
+What is still owed is this entry's original demand: the number. Cancel a tree
+walk on the Athlon, start another immediately, and say what the old behaviour
+was costing. Until that is written down, the fix is a cheap one taken on a
+guess -- which is better than an expensive one taken on a guess, but it is not
+the same as knowing.
+
 ## 27. Prevent sleep works in practice, and three of its four mechanisms are untested
 
 **Status, 2026-10-02:** accepted by the user as working -- "from my pov, it
@@ -2408,3 +2462,43 @@ now reached. These were decided against, or deferred, on purpose:
 - **gremote's UI lane** (REMOTE.md step 6) should be a thin adapter over
   `StepRunner` (win/automation/steps.h), exactly as `win/ui/uisteps.cpp` is
   for the client -- the runner knows nothing of either wire.
+  **Taken up 2026-10-02**, and it turned out to be more than `StepRunner`:
+  `uisteps.cpp`'s own 393 lines were three `rc_net` references away from
+  shareable, so the step codec moved too, into `win/ui/uiengine.cpp` behind
+  `UiLink`. See REMOTE.md step 6.
+
+## 29. gremote's image grew by a third for the ui lane, and nobody has trimmed it
+
+**Opened 2026-10-02, by decision, while raising the cap.** The user's words:
+*"just raise it, we'll have a separate round of optimizations"*. This entry is
+that round, written at the moment of the raise so the number is not later
+mistaken for an endorsement of it.
+
+`check-gremote`'s cap had been held tight on a stated principle --
+`win/Makefile`: *"It stays tight rather than being dropped because gremote runs
+BESIDE the client being measured, so its footprint is inside every number this
+project has ever taken of the client on real hardware."* Linking
+`libautomation` plus the shared `win/ui/` objects is the largest single
+addition the program has had.
+
+**What to look at when the round comes**, in the order the evidence points:
+
+- `-os` versus `-otexan` on the new objects. The client's `ui/uirpc.o`,
+  `ui/uiengine.o`, `automation/steps.o` and `automation/input.o` are already
+  compiled for size by an override list in `win/Makefile`; gremote compiles
+  the same objects through the same rule, but `win/remote/`'s own sources are
+  not all on it.
+- Whether gremote needs every object in `libautomation`. It links the library,
+  and wlink pulls what is referenced -- but `uiengine.cpp` references nearly
+  all of it, including the MSAA path on a box where `HELLO msaa=` may say 0.
+- The `-xs` exception machinery, ~2,144 bytes per translation unit before any
+  of its own code. The ui lane added two to gremote.
+- The runtime number rather than the image. `COMMITTED_CAP`'s own comment says
+  that once the gate has been hit repeatedly the working set is what to
+  measure, and `workingset-vm-20261002.txt` has the method -- free physical
+  memory read through gremote `SYSINFO`.
+
+**What this entry is not.** It is not a claim that the image is too large for
+the box; a 32MB guest pages code from disk and the resident cost is a fraction
+of the PE sections. It is a claim that the number was taken on trust once and
+should be earned back.
