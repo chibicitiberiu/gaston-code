@@ -3969,3 +3969,15 @@ to D: and back whole, a folder in C:\RECYCLED; fscheck's nine tree cases under
 Wine; the reviewer against the real model (approved a build folder the person
 asked to clear, sent C:\WINDOWS\SYSTEM to the person). The client's load size
 rose one page, to 506,233 of 506,864.
+
+### And the last of the plan: listing what `item` targets
+
+`ui items_of=<selector>` lists one control's accessible children -- UITREE
+with `acc=1`, MSAA's `enumerateFrom` on the guest, records the bridge already
+parsed -- each line ending `item="..."` for `input` to take. Measured
+answering on both machines for desktop icons, an Explorer file list, its
+folder tree and its toolbar. `wait_text` now matches by the selector's rules
+(case and mnemonic `&` ignored), and inputprobe proves on both machines that a
+list failing with a key down leaves nothing held. The client is 512,377 bytes;
+the cap went up two pages for about 1.5KB of code, both sections having
+crossed a page boundary. docs/UIAUTOMATION.md describes the `input` surface.

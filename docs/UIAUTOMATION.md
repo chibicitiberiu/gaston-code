@@ -426,6 +426,54 @@ so `shot` is what you reach for when the tree came back empty -- a
 custom-drawn control, a game, an installer that is one big window.
 
 
+### Superseded 2026-10-02: one `input` tool, a list of steps
+
+`click`, `keys` and `focus` are gone. A client that declares `automation=2`
+gets three screen tools:
+
+```
+ui     scope, max_nodes, msaa, wait_for, ... ; items_of=<selector>
+input  steps=[...], timeout, settle
+shot   x, y, w, h
+```
+
+**`input` is a JSON list run in order on the guest** (`win/automation/
+steps.h`, wire op `UIRUN`), stopping at the first failure. A string types
+text with `[Chord]` names; an object is one action: focus, click, close,
+down/up (keys and mouse buttons), move, move_by, wait, wait_for, wait_gone,
+wait_text, idle. The waits are steps now, not parameters -- the list is the
+"do a thing, then look" loop in one round trip.
+
+**Targets, not pixels**, in that order: a control by selector; an `item`
+inside it (an MSAA child by name -- list rows, tree nodes, toolbar buttons,
+desktop icons); `text` inside a plain Edit (EM_POSFROMCHAR); an `at` offset
+from its corner; `screen` pixels last. `ui items_of=<selector>` lists one
+control's items, each ending `item="..."` in the form to copy -- measured
+answering on both machines for the desktop icons, an Explorer file list, its
+folder tree and its toolbar (`docs/measurements/input-and-ops-real-hw-
+20261002.txt`).
+
+**Matching is loose by default.** `~=` is a case-insensitive glob; a mnemonic
+`&` is never text; `*` is any class; `wait_text` and `item`/`text` targets
+follow the same rules. More than one match is an error that names up to three
+candidates with their windows and suggests an ancestor selector -- never a
+guess, and `:nth` only as a last resort.
+
+**The guest keeps three promises.** Nothing stays held: whatever a list
+pressed and did not release is released when it ends, fails or is cancelled
+(measured: a list that failed with Shift down left the next "x" lowercase).
+Typing goes where it was meant: before every key and character the
+foreground must be the window the list put in front, or `focus_lost` stops
+it. Every step is bounded: 30s per step (120s max), 2 minutes per list (10
+max), and `UICANCEL` stops it inside any wait.
+
+**Characters are typed on the TARGET's keyboard layout**: the key
+VkKeyScanEx names only if ToAsciiEx agrees it produces that character, a dead
+key then Space, else Alt+Numpad 0nnn (`docs/measurements/keyboard-layouts-
+vm-20261002.txt`). Key names are a frozen, versioned table
+(`bridge/agent/keynames.py`, HELLO `keys=`).
+
+
 ## The node record, and why it has three identity fields
 
 Settled 2026-09-26, before the first byte went on the wire, because a record

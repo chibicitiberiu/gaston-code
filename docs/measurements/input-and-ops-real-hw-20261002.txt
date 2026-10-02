@@ -102,3 +102,24 @@ type 00000405 altnum/numlock-on whole "aZ@€é^ê{}|\~`'"üß§1&" OK
 type 00000405 altnum/numlock-off summary 20/20
 type 00000405 altnum/numlock-off whole "aZ@€é^ê{}|\~`'"üß§1&" OK
 stuck after: shift=0 ctrl=0 alt=0
+
+
+4. Items inside a control, and the stuck-key check (later the same day)
+-----------------------------------------------------------------------
+itemsprobe.py lists one control's accessible children (UITREE acc=1, `ui
+items_of`) and moves to one by name. Both machines, 5/5:
+
+                        VM (named/items)    Athlon (named/items)
+  desktop icons            19/22               20/23
+  Explorer file list       10/13               11/14
+  Explorer folder tree     42/42               36/36
+  Explorer toolbar         10/14               10/14
+  move to item "Cache"     ok                  ok
+
+C:\WINDOWS is NOT a usable test folder: 98 shows it as a "Modifying the
+contents of this folder ..." web page with a Show Files link and no list
+control at all; the probe uses C:\GTEST.
+
+inputprobe gained `released-after-failure`: a list holds Shift, its wait
+times out before the `up`, and a following list types "x"; the Edit, read
+back exactly, held "x". 13/13 on the VM and on the Athlon.
