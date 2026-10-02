@@ -69,5 +69,22 @@ int rc_frame_compressible(const char *type)
            strcmp(type, "FSDAT") == 0 ||
            /* Rows of text, exactly like SYNCENT's: names, sizes and dates
             * compress well and there are up to 2,000 of them. */
-           strcmp(type, "FSENT") == 0;
+           strcmp(type, "FSENT") == 0 ||
+           /* THE SCREENSHOT, which this list has never carried. shot.h has
+            * always said "Compression is NOT done here ... The wire codec
+            * does it", and the wire codec was never asked: a 640x480 8bpp
+            * capture is 300KB of palettised pixels and every one of them
+            * went out raw. Found 2026-10-03 while turning deflate on for
+            * gremote (REMOTE.md step 6).
+            *
+            * UIENT with it, for SYNCENT's reason: control records are rows
+            * of class names and window text, and a desktop is a hundred of
+            * them.
+            *
+            * Both still go through Codec::shouldCompress, which declines
+            * when the link is faster than half what deflate manages -- so
+            * on a LAN this changes nothing and on a slow link it is the
+            * difference the file was written about. */
+           strcmp(type, "UIDAT") == 0 ||
+           strcmp(type, "UIENT") == 0;
 }

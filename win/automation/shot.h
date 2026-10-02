@@ -14,6 +14,14 @@
  * is NOT done here: measured over four bands of a screen, deflate beat
  * GDI's own RLE at every depth where both exist, and deflate on raw 16bpp
  * beat RLE8 on quantised 8bpp outright. The wire codec does it.
+ *
+ * It did not, for as long as this comment has been here: UIDAT was not in
+ * `rc_frame_compressible` (win/net/frameproto.cpp), so every screenshot the
+ * client ever sent went out raw. Noticed 2026-10-03 while turning deflate on
+ * for gremote and fixed in both. It is still the CODEC's decision per frame
+ * -- `shouldCompress` declines when the link is faster than half what
+ * deflate manages -- so on a LAN this changes nothing, which is the right
+ * answer there.
  */
 #ifndef RC_AUTOMATION_SHOT_H
 #define RC_AUTOMATION_SHOT_H
