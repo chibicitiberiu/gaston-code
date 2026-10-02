@@ -1,0 +1,38 @@
+What the client costs in physical memory, before and after the input step list
+==============================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE, 32MB (32,288 KB)
+Date    : 2026-10-02
+Why     : win/Makefile's COMMITTED_CAP went 478,192 -> 502,768 for the input
+          step list, and its own note says the next time that gate is hit the
+          RUNTIME number is measured instead of the gate being raised a page at
+          a time. This is that measurement.
+Method  : GlobalMemoryStatus's free physical memory (gremote SYSINFO), five
+          samples 2s apart with the client up, then again 15s after ending it.
+          The difference is what the client holds. Both builds were started
+          FRESH from their own folders, idle, pointed at a port nothing listens
+          on -- so no session, no transcript, no MSHTML document grown by use --
+          and alternated twice, because free memory on 98 drifts as the disk
+          cache settles and only a pair taken together compares.
+
+Builds  : old  C:\GASTON\GASTON.EXE as deployed, 462,336 bytes on disk -- from
+               before this session's selector and input work
+          new  build of 6f37f86 + the two fixes in the next commit, 481,792 bytes
+               on disk, 496,505 committed at load (gate 502,768)
+
+Results
+-------
+
+  round 0  old  free up 1,548  down 2,516   holds   968 KB
+  round 0  new  free up 1,320  down 2,316   holds   996 KB
+  round 1  old  free up 1,176  down 2,124   holds   948 KB
+  round 1  new  free up 1,000  down 1,964   holds   964 KB
+
+The new client holds 16-28 KB more, idle: the size of the code it added
+(about 20 KB of image) and nothing else. The step list's buffers -- 64 Steps
+and a 32 KB reply on the heap -- exist only while a list runs.
+
+For scale, the same box earlier the same day with a long-running client and a
+live session showed it holding about 4.1 MB (648 KB free up, 4,816 down): what a
+session costs dwarfs what the feature costs, which is the argument for watching
+that number rather than the image size.

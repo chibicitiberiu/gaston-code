@@ -523,11 +523,15 @@ bool StepRunner::doWait(const Step &s, DWORD budget, StepReport &r)
     case UIWAIT_ALREADY:
     case UIWAIT_SETTLED:
         /* A window that was waited for is the window typing is meant for
-         * next -- the Save As dialog after Ctrl+S. */
+         * next -- the Save As dialog after Ctrl+S -- BUT ONLY IF IT IS IN
+         * FRONT. A menu or a tooltip is a window that never takes the
+         * foreground: its owner keeps it, keystrokes reach the menu through
+         * the owner, and making the menu the expected window refused the
+         * Escape meant to close it (measured on the VM, 2026-10-02). */
         if (s.kind != STEP_WAITGONE && rep.haveNode && rep.node.hwnd)
         {
             HWND top = Input::rootOf(rep.node.hwnd);
-            if (top)
+            if (top && top == Input::rootOf(GetForegroundWindow()))
                 m_expectTop = top;
             describeTop(rep.node.hwnd, r.hit, sizeof(r.hit));
         }

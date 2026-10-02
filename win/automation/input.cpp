@@ -125,6 +125,30 @@ InputResult Input::focus(HWND target)
         }
     }
 
+    /* STILL NOT: the foreground lock. A program that started a moment ago
+     * holds the front against everybody for SPI_GETFOREGROUNDLOCKTIMEOUT
+     * after the last input, and the plain call and the attach both lose to
+     * it -- measured on the VM 2026-10-02: `focus Notepad` refused with
+     * not_foreground right after Calculator launched, and the same call
+     * minutes later succeeded. The 2026-09-27 focus measurement found this
+     * step redundant because nothing had just started. Relaxed for this one
+     * call and put back: leaving it at 0 is a change to somebody's machine
+     * that outlives us. */
+    if (GetForegroundWindow() != top)
+    {
+        DWORD prev = relaxForegroundLock();
+        DWORD me = GetCurrentThreadId();
+        DWORD theirs = GetWindowThreadProcessId(top, NULL);
+        bool attached = theirs && theirs != me
+                     && AttachThreadInput(me, theirs, TRUE);
+        SetForegroundWindow(top);
+        if (target != top)
+            SetFocus(target);
+        if (attached)
+            AttachThreadInput(me, theirs, FALSE);
+        restoreForegroundLock(prev);
+    }
+
     /* Verified, not assumed. If focus did not land, saying so is the whole
      * reason TYPE never types into the wrong window. */
     if (GetForegroundWindow() != top)
