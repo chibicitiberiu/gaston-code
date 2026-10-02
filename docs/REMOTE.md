@@ -371,10 +371,10 @@ protocol and must not drift into it.
 
 | Lane | Thread | Ops | May block on |
 |---|---|---|---|
-| control | reader, inline | `AUTH`, `PING`, `CANCEL`, `SYSINFO`, `PS`, `KILL`, `REBOOT` | nothing: kernel32 and Winsock only |
+| control | reader, inline | `AUTH`, `PING`, `CANCEL`, `SYSINFO`, `PS`, `KILL`, `REBOOT`, `UPDATE` | nothing: kernel32 and Winsock only |
 | job | job worker | `EXEC`, `LAUNCH` | the child |
-| fs | fs worker | `LS`, `STAT`, `GET`, `PUT`, `RM`, `MKDIR`, `MV`, `DRIVES` | the disk |
-| ui | ui worker (message queue, `CoInitialize`d) | `SHOT`, `WINDOWS`, `TREE`, `CLICK`, `KEYS`, `TYPE`, `FOCUS`, `CLOSEWIN` | USER/GDI, other apps |
+| fs | fs worker | `LS`, `STAT`, `GET`, `PUT`, `RM`, `MKDIR`, `RMDIR`, `MV`, `DRIVES` | the disk |
+| ui | ui worker (message queue, `CoInitialize`d) | `SHOT`, `TREE`, `RUN` (a step list: `StepRunner`, win/automation/steps.h, as the client's `UIRUN`) | USER/GDI, other apps |
 
 - **The control lane never touches USER or GDI.** On 9x a hung 16-bit app
   holding Win16Mutex blocks USER/GDI calls from every 32-bit thread; the reader
@@ -409,8 +409,11 @@ settled; fs and ui tables are written at the start of steps 5 and 6.
 | `LAUNCH` | `cwd`, `show`; body is the command line | `OK pid=` | `spawn_failed` |
 
 The fs lane. The client answers these as `FS*` frames (`win/rpc/fsrpc.cpp`,
-step 5a); `gremote` reuses the same handlers behind the shorter names in the
-lane table above. Every error token here is one `win/sync/syncrpc.cpp` already
+step 5a) and `gremote` as the shorter names in the lane table above. They are
+TWO sets of handlers sharing libfs, not one set: what is shared is libfs's
+calls -- and, since 2026-10-02, the four mutations' reasons
+(`win/fs/ops.h`), so RM/MKDIR/RMDIR/MV and the client's FSRM/FSMKDIR/FSRMDIR/
+FSMV classify Windows 98's errors once. Every error token here is one `win/sync/syncrpc.cpp` already
 produces, which is a constraint and not a coincidence -- see the note after the
 table.
 
@@ -422,7 +425,8 @@ table.
 | `PUT` | `path` on the first frame and `off` on every one; the body is raw bytes and nothing else. `END crc=` closes it | `OK bytes=, crc=` | `bad_path`, `too_long`, `no_parent`, `no_space`, `locked`, `readonly`, `out_of_order`, `crc_mismatch`, `busy` |
 | `RM` | `path` | `OK` | `bad_path`, `missing`, `is_directory`, `readonly`, `locked` |
 | `MKDIR` | `path` | `OK` | `bad_path`, `too_long`, `no_parent`, `exists`, `is_file` |
-| `MV` | `from`, `to` | `OK` | `bad_path`, `too_long`, `missing`, `exists`, `locked` |
+| `RMDIR` | `path` (an EMPTY directory) | `OK` | `bad_path`, `drive_root`, `missing`, `is_file`, `not_empty`, `denied`, `is_cwd`, `locked` |
+| `MV` | `from`, `to` | `OK` | `bad_path`, `too_long`, `missing`, `exists`, `no_parent`, `cross_volume` (a FOLDER to another drive -- a file moves, measured on the Athlon), `denied`, `locked` |
 | `DRIVES` | none | `DATA` records `letter`, `type`, `label`, `serial`, `total`, `free`; `END count=` | none |
 
 - **The path travels in a header, not in the body.** `SYNCPUT` puts it in

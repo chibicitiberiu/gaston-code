@@ -3856,3 +3856,78 @@ up with no network at all. Both open the same qcow2, so they must never run
 together. Recorded in the script. And the VM had no gremote: `D:\SETUP.BAT` off
 the tools ISO installs it, with autostart deliberately opt-in because it opens
 a port.
+
+## One input tool, and the gaps it closed (2026-10-02)
+
+**Why.** A survey of the client's libraries against the `machine` tools found
+calls no tool reached -- `Input::clickAt` at a point, `pressKey`, `forGone`,
+`forText`, `MsaaSource::enumerateFrom`, `Processes::launch`, the four fs
+mutations -- and found that the ones `exec` stood in for could not report
+failure at all: COMMAND.COM exits 0 whatever `del`, `md` or `move` did.
+
+**`input`: a JSON list of steps, run on the guest.** Decided with the user:
+not a string mini-language and not Python (agent-written Python would run on
+the host, and the agent is already the control flow); one tool replacing
+`click`, `keys` and `focus`, with observation (`ui`, `shot`) kept separate. A
+string types text with the old `[Chord]` syntax; an object is one action --
+focus, click, close, down/up for keys and buttons, move, move_by, wait,
+wait_for, wait_gone, wait_text, idle. The list stops at the first failure; a
+failed wait is the only condition there is.
+
+- **Targets, not pixels**, in order: a control by selector, an MSAA `item`
+  inside it, `text` inside an Edit (EM_POSFROMCHAR), an `at` offset, and only
+  then `screen` pixels. Selectors gained `~=` (a case-insensitive glob), `*` as
+  any class, and the rule that a mnemonic `&` is never text; ambiguity names
+  up to three candidates with their windows and suggests a selector through
+  an ancestor, not `:nth`.
+- **Nothing stays held, and typing goes where it was meant.** The runner
+  releases whatever a list left down; it tracks the window input is for and
+  stops with `focus_lost` before typing into anything else.
+- **Bounded:** 30s per step (120s max), 2min per list (10min max), refused
+  rather than clamped; UICANCEL stops a list mid-wait; the MCP timeout is 700s
+  so the CLI never abandons a list the guest is still running.
+- **Keys are names, frozen** (agent/keynames.py, append-only, held against the
+  guest's KEY_NAMES both ways, versioned in HELLO `keys=`). Characters are
+  text: the guest types each on the TARGET's layout -- the key VkKeyScanEx
+  names only if ToAsciiEx agrees, a dead key then Space, else Alt+Numpad --
+  which was measured before it was written (keyprobe: German, French, US on
+  the VM; Romanian, Hungarian, Polish, Czech, US on the Athlon). VkKeyScanEx
+  calls EURO "Ctrl+2" on US and Romanian, which types nothing.
+- **What live sessions changed.** Haiku on the VM: a malformed list made the
+  person approve a refusal, so the same compile now runs before the bar; a
+  drag on guessed pixels hit Notepad's MENU BAR and the agent reported text it
+  never typed, so each click reports the control and frame part it landed on
+  and the result says `ok` means delivered, not achieved; a wait that matched
+  a menu made the menu the expected window and refused its Escape; `focus`
+  lost to the foreground lock right after another program started; and the
+  next permission bar hid behind the window the list had just used, so the
+  taskbar button now flashes.
+
+**fs and processes.** `mkdir` (parents, an existing folder is fine), `move`,
+`delete` (one file), `rmdir` (empty), `launch` (pid back at once -- `exec
+notepad` had sat out its timeout and then killed the Notepad it opened),
+`list_dir` on a file answering as itself, and live memory on `ps`; behind one
+HELLO header, `ops=1`, which also stops `list_dir` waiting four minutes on a
+client that never answers FSLS. The reasons for the four mutations moved from
+gremote into libfs (fs/ops.h), shared. A change inside the mirrored folder is
+left to the next sync pass exactly as `put_file`'s is -- the plan had said the
+bridge would edit the baseline "the same way put_file does", and put_file does
+not; what is done here is to refuse paths held in conflict, `.gaston/`, and
+names sync could not carry.
+
+**Measured, not assumed.** The Athlon showed that MoveFileA moves a FILE
+across drives on 98 (the OS copies it) and refuses a FOLDER with
+ACCESS_DENIED; a failed folder move between drive letters is `cross_volume`.
+
+**Memory.** COMMITTED_CAP went up once, 478,192 -> 502,768, for the whole set;
+the step code is compiled for size and Step is plain data borrowing the frame's
+own bytes (the std::string version cost 52KB). Measured on the VM, fresh and
+idle: the client holds 16-28KB more than before (docs/measurements/workingset-
+vm-20261002.txt).
+
+**Verified on both machines.** inputprobe 12/12 (VM twice, Athlon once),
+opsprobe 21/21 (both), a live Haiku turn on each -- "Grüße Welt" typed, the
+word replaced, the result read back with `ui`, Notepad closed through its save
+prompt by selector, and a click on Gaston's own window refused.
+docs/measurements/keyboard-layouts-vm-20261002.txt,
+input-and-ops-real-hw-20261002.txt. Deferred on purpose: BACKLOG 28.

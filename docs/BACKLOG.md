@@ -2377,3 +2377,35 @@ there is, but it was not recorded under controlled conditions.
 the export is absent, or the call turning out to be a stub that returns a
 plausible value. Today it is the entire feature and the other three mechanisms
 are a hypothesis.
+
+## 28. What the `input` work deliberately left out
+
+**Status, 2026-10-02.** The gap survey that started the `input` step list
+(PROGRESS, "One input tool") found library calls no tool reached. Most are
+now reached. These were decided against, or deferred, on purpose:
+
+- **`requestReboot` is not a tool.** A reboot ends the session that asked for
+  it and the person's work with it; gremote's REBOOT is for a test box driven
+  from Linux, not for an agent. If it ever is one, it needs its own bar
+  wording and no Always.
+- **The `UiWatch` event feed** ("what changed since") stays internal.
+  `wait_for`, `wait_gone`, `wait_text` and `idle` cover what an agent asks of
+  it. Low priority.
+- **`text` targets in RichEdit.** RichEdit 1.0's `EM_POSFROMCHAR` takes a
+  `POINTL*` in wParam -- a pointer into our process, meaningless in the
+  target's. Needs the in-process reader (`win/inproc/`) or a shared-memory
+  POINTL. Plain Edit is done.
+- **Text that exists only as pixels** -- owner-drawn controls, canvases. Would
+  be OCR on the bridge (the guest transforms nothing) followed by a `screen`
+  click at the found point. Until then: `at` offsets read off a `shot`.
+- **Recursive delete.** `delete` removes one file and `rmdir` an empty folder.
+  A tree removal is the one fs op that loses data wholesale, and gremote's
+  `rmtree` keeps that loop on the Linux side where it can be read; an agent's
+  version would need a listing in the permission bar of everything it is
+  about to remove.
+- **A folder across drives.** Measured on the Athlon: MoveFileA moves a FILE
+  from C: to D: (98 copies it) and refuses a FOLDER (`cross_volume`). Copying
+  a tree is the agent's loop, file by file, for the same reason as above.
+- **gremote's UI lane** (REMOTE.md step 6) should be a thin adapter over
+  `StepRunner` (win/automation/steps.h), exactly as `win/ui/uisteps.cpp` is
+  for the client -- the runner knows nothing of either wire.

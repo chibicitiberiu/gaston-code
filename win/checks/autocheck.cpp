@@ -2110,6 +2110,39 @@ static int typeInto(const char *cls, const char *text)
     return r == INPUT_OK ? 0 : 1;
 }
 
+/* --click <selector> -- press a control in ANOTHER program, by selector.
+ *
+ * The other half of --type-into, for a real machine with no QMP: Send and
+ * Allow on the client's own window, driven from outside it -- the client
+ * refuses its own windows (Input::isOurs), this process is not the client.
+ * The same Resolver and Input the `input` step list uses. Static, because a
+ * Selector and a Resolver together are most of a guard page. */
+static int clickSel(const char *text)
+{
+    static Selector sel;
+    static TreeWalker walker;
+    static char err[96];
+    if (!sel.parse(text, err, sizeof err))
+    {
+        printf("bad-selector\t%s\n", err);
+        return 2;
+    }
+    WalkOptions o;
+    o.visibleOnly = true;
+    o.deadlineMs = 4000;
+    Resolver r(sel, NULL);
+    ResolveOutcome out = r.resolve(o, walker);
+    if (out != RESOLVE_OK || !r.match())
+    {
+        printf("resolve=%d matches=%d\n", (int)out, r.matchCount());
+        return 3;
+    }
+    Input in;
+    InputResult x = in.clickWindow(r.match()->hwnd);
+    printf("result=%d\n", (int)x);
+    return x == INPUT_OK ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     /* A mode, not a case: it writes a file for the Python side to open, and
@@ -2118,6 +2151,8 @@ int main(int argc, char **argv)
         return writeShot(argv[2]);
     if (argc > 3 && !strcmp(argv[1], "--type-into"))
         return typeInto(argv[2], argv[3]);
+    if (argc > 2 && !strcmp(argv[1], "--click"))
+        return clickSel(argv[2]);
 
     (void)argc; (void)argv;
     for (unsigned i = 0; i < sizeof(SECTIONS) / sizeof(SECTIONS[0]); i++)
