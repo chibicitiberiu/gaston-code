@@ -1,4 +1,5 @@
 #include "automation/wait.h"
+#include "core/rc_cpp.h"
 
 #include <string.h>
 
@@ -19,6 +20,39 @@ static bool containsLoose(const char *text, const char *want)
     CharLowerBuffA(t, (DWORD)strlen(t));
     CharLowerBuffA(w, (DWORD)strlen(w));
     return strstr(t, w) != NULL;
+}
+
+/* containsLoose over a control's WHOLE text, up to Notepad's 64KB, for when
+ * the tree's copy was cut short. False when it cannot be read. */
+static bool fullTextContains(HWND h, const char *want, DWORD budget)
+{
+    DWORD_PTR len = 0;
+    if (!h || !SendMessageTimeoutA(h, WM_GETTEXTLENGTH, 0, 0,
+                                   SMTO_ABORTIFHUNG, budget, &len))
+        return false;
+    if (len > 65535)
+        len = 65535;
+    HeapPtr<char> buf((char *)HeapAlloc(GetProcessHeap(), 0, len + 1));
+    if (!buf.valid())
+        return false;
+    DWORD_PTR got = 0;
+    buf.get()[0] = '\0';
+    if (!SendMessageTimeoutA(h, WM_GETTEXT, len + 1, (LPARAM)buf.get(),
+                             SMTO_ABORTIFHUNG, budget, &got))
+        return false;
+    buf.get()[got <= len ? got : len] = '\0';
+    /* Not containsLoose: that one folds into RC_TEXT_MAX-byte copies, which
+     * would cut this back to the length it is here to get past. Same rules,
+     * done on the heap copy in place. */
+    HeapPtr<char> t((char *)HeapAlloc(GetProcessHeap(), 0, len + 1));
+    if (!t.valid())
+        return false;
+    char w[RC_TEXT_MAX];
+    selStripMnemonic(buf.get(), t.get(), (unsigned)len + 1);
+    selStripMnemonic(want, w, sizeof(w));
+    CharLowerBuffA(t.get(), (DWORD)strlen(t.get()));
+    CharLowerBuffA(w, (DWORD)strlen(w));
+    return strstr(t.get(), w) != NULL;
 }
 
 static void beginReport(WaitReport &out, bool polled)
@@ -140,6 +174,15 @@ void UiWaiter::loop(WaitMode mode, const Selector &sel, const char *substring,
             break;
         case MODE_TEXT:
             satisfied = found && containsLoose(out.node.text, substring);
+            /* The node's text is the first RC_TEXT_MAX-1 bytes. Past that
+             * a wait for text later in the control could never match --
+             * measured: text typed at character 240 of an input box timed
+             * out as absent -- so a full copy is read when the short one
+             * was full and did not match. */
+            if (found && !satisfied
+                && strlen(out.node.text) >= RC_TEXT_MAX - 1)
+                satisfied = fullTextContains(out.node.hwnd, substring,
+                                             opt.callTimeoutMs);
             break;
         case MODE_GONE:
             /* Gone means nothing matched, and a walk that ended early does
