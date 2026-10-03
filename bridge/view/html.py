@@ -143,16 +143,19 @@ def tool_result(body: str, *, error: bool = False) -> str:
     return out + "</div>"
 
 
-#: Where a tool-result line is broken if nothing else breaks it. Measured,
-#: not chosen: the transcript column is 470px (see STYLESHEET below) and the
-#: block is 8pt Courier New, whose advance is 6px at that size, less 12px of
-#: padding and 3px of border -- so 75 characters fit and the 76th does not.
+#: Where a tool-result line is broken if nothing else breaks it. 8pt Courier
+#: New advances 6px. The column was taken as 470px, which made it 75; at the
+#: client's default window the transcript pane is 450px less its scrollbar
+#: and the body's padding, about 416px, so a 75-character move result
+#: scrolled (measured on the Athlon, 2026-10-03). Less 12px of padding and
+#: 3px of border, 66 fit; 64 leaves the slack. A narrower window still
+#: scrolls, and the stylesheet's height expression keeps that readable.
 #:
 #: Fixed rather than read from the guest's screen size, because the number
 #: has to be the same for a page re-read later on a different display as it
 #: was when the block was sealed. A transcript that rewraps when you resize
 #: is a transcript whose stored bytes disagree with what you saw.
-_TOOL_WRAP_COL = 75
+_TOOL_WRAP_COL = 64
 
 
 def _fold_long_lines(text: str, width: int = _TOOL_WRAP_COL) -> str:
@@ -481,7 +484,18 @@ i { font-style: italic; }
 /* Code. The label sits on the block rather than floating above it as the
    bracketed "[c]" used to. */
 .codewrap { margin: 7px 0; border: 1px solid #c0c0c0; background: #f4f4f4;
-             overflow: auto; width: 100%; }
+             overflow: auto; width: 100%;
+             height: expression(this.scrollWidth > this.clientWidth
+                                ? this.scrollHeight + 18 : 'auto'); }
+/* THE HEIGHT EXPRESSION, on this box and on .toolresult below. IE 5.0 sizes
+   an `overflow: auto` box to its content and then draws the horizontal
+   scrollbar INSIDE that height, on top of the only line there is -- with
+   this stylesheet, not in a bare test page (measured on the Athlon,
+   2026-10-03, MSIE 5.0: a code block and a tool result that were nothing
+   but a scrollbar). The expression adds the scrollbar's height only when
+   the box actually scrolls, so a short block keeps its own size. Tried
+   and rejected there: overflow-x/-y alone, `width: auto` (the whole
+   transcript scrolls), and a fixed padding-bottom (every block grows). */
 .lang { font-size: 7pt; color: #808080; background: #ececec;
         border-bottom: 1px solid #d8d8d8; padding: 1px 5px; }
 /* The code block scrolls inside its own box. Without `overflow: auto` on the
@@ -538,7 +552,9 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .toolresult { font: 8pt 'Courier New', monospace; color: #303030;
               background: #f4f4f4; border-left: 3px solid #b0b0b0;
               padding: 2px 6px; margin: 2px 0 6px 0;
-              overflow: auto; width: 100%; }
+              overflow: auto; width: 100%;
+              height: expression(this.scrollWidth > this.clientWidth
+                                 ? this.scrollHeight + 18 : 'auto'); }
 .toolresult pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; }
 .toolresult.err { color: #a00000; background: #fff0f0;
                   border-left-color: #a00000; }
