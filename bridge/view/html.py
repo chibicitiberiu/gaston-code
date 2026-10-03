@@ -143,19 +143,13 @@ def tool_result(body: str, *, error: bool = False) -> str:
     return out + "</div>"
 
 
-#: Where a tool-result line is broken if nothing else breaks it. 8pt Courier
-#: New advances 6px. The column was taken as 470px, which made it 75; at the
-#: client's default window the transcript pane is 450px less its scrollbar
-#: and the body's padding, about 416px, so a 75-character move result
-#: scrolled (measured on the Athlon, 2026-10-03). Less 12px of padding and
-#: 3px of border, 66 fit; 64 leaves the slack. A narrower window still
+#: Where a tool-result line is broken if nothing else breaks it. MEASURED, in
+#: the client's default 640x480 window on the Athlon (2026-10-03): a result
+#: box shows 57 characters of 8pt Courier New before its right edge. The
+#: column was 75 -- taken from a 470px pane -- and then 64 from arithmetic,
+#: and both scrolled. 56 leaves one to spare. A narrower window still
 #: scrolls, and the stylesheet's height expression keeps that readable.
-#:
-#: Fixed rather than read from the guest's screen size, because the number
-#: has to be the same for a page re-read later on a different display as it
-#: was when the block was sealed. A transcript that rewraps when you resize
-#: is a transcript whose stored bytes disagree with what you saw.
-_TOOL_WRAP_COL = 64
+_TOOL_WRAP_COL = 56
 
 
 def _fold_long_lines(text: str, width: int = _TOOL_WRAP_COL) -> str:
