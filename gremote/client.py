@@ -40,7 +40,8 @@ from bridge.wire.compress import (
 )
 from bridge.wire.frame import Frame, FrameReader
 
-from .errors import Cancelled, Disconnected, Refused, RemoteError, Timeout
+from .errors import (Cancelled, Disconnected, Refused, RemoteError,
+                     Timeout, Unencodable)
 from .ops import (
     Drive,
     Entry,
@@ -724,6 +725,10 @@ class Remote:
     # --- plumbing ----------------------------------------------------------
 
     def _send(self, frame: Frame) -> None:
+        for key, value in frame.headers.items():
+            bad = fold.unrepresentable(str(value), self.acp)
+            if bad is not None:
+                raise Unencodable(key, str(value), bad, self.acp)
         sock = self._sock
         if sock is None:
             raise Disconnected(self._failure or "not connected")

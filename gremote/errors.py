@@ -31,6 +31,23 @@ class Refused(RemoteError):
         super().__init__(f"the machine refused{where} with {code!r}{extra}")
 
 
+class Unencodable(RemoteError):
+    """A header value has a character the machine's codepage cannot hold.
+
+    Raised HERE, before anything is sent. The frame codec would otherwise
+    write `?` in its place and the guest would act on a different name --
+    on the Athlon a `PUT` of `日本.txt` came back refused as `readonly`,
+    which is both wrong and the guest being asked about `??.txt`.
+    """
+
+    def __init__(self, key: str, value: str, char: str, acp: str) -> None:
+        self.key = key
+        self.value = value
+        self.char = char
+        super().__init__(f"{key} {value!r}: {char!r} is not in the machine's "
+                         f"codepage ({acp}), so nothing was sent")
+
+
 class Cancelled(RemoteError):
     """Raised in the thread that was waiting for a cancelled request.
 

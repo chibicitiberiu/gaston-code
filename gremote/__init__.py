@@ -25,6 +25,7 @@ from .errors import (
     Refused,
     RemoteError,
     Timeout,
+    Unencodable,
 )
 from .ship import ShipResult, UpdateResult
 
@@ -37,5 +38,6 @@ __all__ = [
     "RemoteError",
     "ShipResult",
     "Timeout",
+    "Unencodable",
     "UpdateResult",
 ]

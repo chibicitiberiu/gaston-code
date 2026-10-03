@@ -514,3 +514,24 @@ def test_a_wrong_crc_refuses_the_commit_and_leaves_nothing(remote,
     assert reply.headers.get("code") == "crc_mismatch", reply.headers
     assert not target.exists(), "a file that failed its CRC was committed"
     assert not list(d.iterdir()), [p.name for p in d.iterdir()]
+
+
+def test_a_name_outside_the_codepage_is_refused_before_it_is_sent():
+    """The frame codec writes `?` for what cp1252 cannot hold, so the guest
+    was asked about `??.txt` and answered `readonly` (the Athlon,
+    2026-10-03). Nothing leaves this side now; no connection is needed to
+    prove it, because the check comes before the socket."""
+    from bridge.wire.frame import Frame
+    from gremote import Unencodable
+
+    r = Remote("127.0.0.1", "unused")
+    r.acp = "cp1252"
+    with pytest.raises(Unencodable) as e:
+        r._send(Frame("PUT", {"id": "1", "path": "C:\\X\\\u65e5\u672c.txt"}))
+    assert e.value.key == "path" and e.value.char == "\u65e5"
+
+
+def test_a_put_to_a_wildcard_name_is_bad_path_not_readonly(remote, tree):
+    with pytest.raises(Refused) as e:
+        remote.put(conftest.wine_path(tree) + "\\a?b.txt", b"x")
+    assert e.value.code == "bad_path"
