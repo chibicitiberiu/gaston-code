@@ -178,6 +178,8 @@ unsigned rc_net_outq_bytes(rc_net *n);
 
 /* Instrumentation for STAT frame: bytes compressed and time spent in mz_deflate. */
 void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long *us);
+/* Bytes and microseconds spent receiving large frames since the last call. */
+void rc_net_get_link_sample(rc_net *n, unsigned long *bytes, unsigned long *us);
 void rc_net_set_link_bps(rc_net *n, unsigned long bps);
 
 #ifdef __cplusplus

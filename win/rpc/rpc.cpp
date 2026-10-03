@@ -226,25 +226,22 @@ static void rpc_maybe_nudge(void)
      *
      * PLAN.md makes adaptive codec selection depend on this -- "the sender
      * picks the codec from the measured link speed" -- and the bridge has
-     * handled STAT since the beginning. The guest had never sent one, so
-     * guest.link_bps was always None and every threshold in compress.py and
-     * coalesce.py was inert: the same code ran on a 10Mbit LAN and a modem,
-     * which is the exact thing the mechanism exists to avoid.
+     * handled STAT since the beginning.
      *
-     * Bytes over wall time since the last sample, from counters net.c already
-     * keeps. Only when something actually moved -- an idle link would
-     * otherwise report a speed of nearly zero and pin the bridge to its
-     * slowest codec for a link that is merely quiet. */
+     * The speed is bytes over the time spent RECEIVING large frames (see
+     * Connection::takeLinkSample), not traffic over wall time. The old
+     * figure was every byte since the last sample over thirty seconds, so
+     * a quiet LAN that carried two pings reported "7 B/s" and the bridge,
+     * whose slow-link line is 250KB/s, treated a 100Mbit link as a modem
+     * (measured on the Athlon, 2026-10-03). Nothing large arrived, nothing
+     * is said: the bridge keeps what it last heard. */
     {
-        static unsigned long last_tx, last_rx;
-        static DWORD last_at;
-        unsigned long moved = (rc_net_tx_bytes(g_net) - last_tx)
-                            + (rc_net_rx_bytes(g_net) - last_rx);
-        DWORD elapsed = last_at ? (now - last_at) : 0;
-
-        if (elapsed >= 1000 && moved > 0) {
+        unsigned long link_bytes = 0, link_us = 0;
+        rc_net_get_link_sample(g_net, &link_bytes, &link_us);
+        if (link_us > 0 && link_bytes > 0) {
             char bps[24];
-            unsigned long cur_bps = (unsigned long)((double)moved * 1000.0 / elapsed);
+            unsigned long cur_bps = (unsigned long)(
+                (double)link_bytes * 1000000.0 / link_us);
             rc_strf(bps, sizeof(bps), "%lu", cur_bps);
             rc_net_set_link_bps(g_net, cur_bps);
             {
@@ -263,9 +260,6 @@ static void rpc_maybe_nudge(void)
                 rc_net_send(g_net, "STAT", k, v, n_stat, NULL, 0);
             }
         }
-        last_tx = rc_net_tx_bytes(g_net);
-        last_rx = rc_net_rx_bytes(g_net);
-        last_at = now;
     }
 
     if (g_sync_root[0])

@@ -392,6 +392,8 @@ Connection::Connection(FrameSink *sink, bool compress)
       m_queued(0),
       m_running(0),
       m_rxBytes(0),
+      m_linkBytes(0),
+      m_linkUs(0),
       m_txBytes(0),
       m_idleMs(0),
       m_readerJoin(WAIT_OBJECT_0),
@@ -659,10 +661,31 @@ void Connection::readerLoop()
             rc_log("net: out of memory for %u byte frame", len);
             break;
         }
+        /* A large frame is the one moment the link is known to be busy, so
+         * it is timed: from the length prefix to its last byte. Small ones
+         * measure latency and scheduling, not the link. QueryPerformance-
+         * Counter rather than GetTickCount, whose 55ms tick on 9x is longer
+         * than a 100KB frame takes on a LAN. */
+        LARGE_INTEGER t0, t1, hz;
+        bool timed = len >= RC_LINK_SAMPLE_MIN
+                     && QueryPerformanceFrequency(&hz) && hz.QuadPart
+                     && QueryPerformanceCounter(&t0);
         if (recvExact(payload, len) != 0)
         {
             HeapFree(GetProcessHeap(), 0, payload);
             break;
+        }
+        if (timed && QueryPerformanceCounter(&t1))
+        {
+            ULONGLONG us = (ULONGLONG)(t1.QuadPart - t0.QuadPart) * 1000000
+                           / (ULONGLONG)hz.QuadPart;
+            ScopedLockIf lock(&m_lock, m_lockUp);
+            if (m_linkUs + us < 0x7fffffffUL
+                && m_linkBytes + len < 0x7fffffffUL)
+            {
+                m_linkBytes += len;
+                m_linkUs += (unsigned long)(us ? us : 1);
+            }
         }
         payload[len] = '\0';
         m_rxBytes += len + 4;
@@ -971,6 +994,17 @@ void Connection::takeDeflateSample(unsigned long *bytesIn, unsigned long *us)
         *bytesIn = 0;
     if (us)
         *us = 0;
+}
+
+void Connection::takeLinkSample(unsigned long *bytes, unsigned long *us)
+{
+    ScopedLockIf lock(&m_lock, m_lockUp);
+    if (bytes)
+        *bytes = m_linkBytes;
+    if (us)
+        *us = m_linkUs;
+    m_linkBytes = 0;
+    m_linkUs = 0;
 }
 
 void Connection::setLinkBps(unsigned long bps)

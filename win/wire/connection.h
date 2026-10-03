@@ -42,6 +42,10 @@
 #include "wire/link.h"
 #include "wire/socket.h"
 
+/* A frame at least this big has its receive timed for the link sample;
+ * see Connection::takeLinkSample. */
+#define RC_LINK_SAMPLE_MIN 8192
+
 class Connection;
 
 /* Where a Connection delivers. Both run on the Connection's threads. */
@@ -148,6 +152,12 @@ public:
     /* The client's STAT frame: deflate's measured throughput, and the
      * link's, which decide whether compressing is worth it. */
     void takeDeflateSample(unsigned long *bytesIn, unsigned long *us);
+    /* Bytes and microseconds spent RECEIVING large frames since the last
+     * call, then reset. The link's speed is these two, not traffic over
+     * wall time: an idle LAN that carried two pings in thirty seconds
+     * measured "7 B/s" that way, and the bridge took it for a modem
+     * (measured on the Athlon, 2026-10-03). */
+    void takeLinkSample(unsigned long *bytes, unsigned long *us);
     void setLinkBps(unsigned long bps);
 
 private:
@@ -219,6 +229,8 @@ private:
     HeapPtr<char> m_build;
     volatile LONG m_running;
     unsigned long m_rxBytes;
+    unsigned long m_linkBytes;   /* takeLinkSample's, under m_lock */
+    unsigned long m_linkUs;
     unsigned long m_txBytes;
     DWORD m_idleMs;
     DWORD m_readerJoin;

@@ -165,6 +165,17 @@ void rc_net_get_deflate_sample(rc_net *n, unsigned long *bytes_in, unsigned long
     if (us) *us = 0;
 }
 
+void rc_net_get_link_sample(rc_net *n, unsigned long *bytes, unsigned long *us)
+{
+    Connection *c = conn_of(n);
+    if (c) {
+        c->takeLinkSample(bytes, us);
+        return;
+    }
+    if (bytes) *bytes = 0;
+    if (us) *us = 0;
+}
+
 void rc_net_set_link_bps(rc_net *n, unsigned long bps)
 {
     Connection *c = conn_of(n);
