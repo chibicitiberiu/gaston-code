@@ -380,7 +380,10 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             # a value the bridge has never been told and cannot derive, which is
             # also why bridge/agent/cmdguard.py has to answer ASK for every
             # relative path when it is unset.
-            cwd = (args or {}).get("cwd") or workspace.guest_work_root(guest)
+            asked = str((args or {}).get("cwd") or "").strip()
+            cwd = _abs(asked) if asked else workspace.guest_work_root(guest)
+            if cwd is None:
+                return _text(_fs_refused("relative", asked), error=True)
 
             return await guest_exec.run_on_guest(
                 command, timeout_ms=timeout_ms, shell=shell, cwd=cwd,
@@ -748,6 +751,16 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__kill failed: %r", args)
             raise
 
+    def _abs(path: str) -> str | None:
+        """A path the agent wrote, made absolute against this conversation's
+        folder on the machine (bridge/files/paths.py on_guest); None if it
+        cannot be. Done here, not only in the fs service, so every reply
+        names the path that was really touched."""
+        resolve = getattr(guest, "on_guest", None)
+        if resolve is None or not path:
+            return path
+        return resolve(path)
+
     def _fs_refused(status: str, path: str = "") -> str:
         try:
             return prompts.text(f"tools.fs.refused.{status}", path=path)
@@ -961,6 +974,10 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             path = str(args.get("path", "")).strip()
             if not path:
                 return _text(_fs_refused("bad_path"), error=True)
+            resolved = _abs(path)
+            if resolved is None:
+                return _text(_fs_refused("relative", path), error=True)
+            path = resolved
             try:
                 got = await fs.get(guest, path,
                                    max_bytes=int(args.get("max_bytes") or 0))
@@ -1045,6 +1062,10 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             from_path = str(args.get("from_path", "") or "").strip()
             if not path:
                 return _text(_fs_refused("bad_path"), error=True)
+            resolved = _abs(path)
+            if resolved is None:
+                return _text(_fs_refused("relative", path), error=True)
+            path = resolved
             # Exactly one source. Both is ambiguous and neither is a mistake;
             # guessing at either is how the wrong bytes reach a real file.
             if (content is None) == (not from_path):
@@ -1164,6 +1185,13 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         path = path.strip()
         if not path or (op in ("FSMV", "FSCOPY") and not to.strip()):
             return _text(_fs_refused("bad_path", path), error=True)
+        resolved_path = _abs(path)
+        resolved_to = _abs(to.strip()) if to.strip() else ""
+        if resolved_path is None:
+            return _text(_fs_refused("relative", path), error=True)
+        if resolved_to is None:
+            return _text(_fs_refused("relative", to.strip()), error=True)
+        path, to = resolved_path, resolved_to
         for p_, made in ((path, False), (to.strip(), True)):
             if not p_:
                 continue
@@ -1337,9 +1365,18 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             if show not in ("", "normal", "min", "max"):
                 return _text(prompts.text("tools.launch.refused.bad_show"),
                              error=True)
+            # Like exec: this conversation's folder unless told otherwise,
+            # and a relative one joined to it -- left empty, the program
+            # started in whatever directory the CLIENT was started from.
+            asked = str(a.get("cwd") or "").strip()
+            cwd = (_abs(asked) if asked else
+                   (workspace.guest_work_root(guest)
+                    if guest is not None and workspace is not None else ""))
+            if cwd is None:
+                return _text(_fs_refused("relative", asked), error=True)
             try:
                 h = await proc.launch(guest, command,
-                                      cwd=str(a.get("cwd") or "").strip(),
+                                      cwd=cwd,
                                       show="" if show == "normal" else show)
             except ProcError as exc:
                 return _text(_proc_refused(exc.status), error=True)
@@ -1410,6 +1447,10 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             path = str(args.get("path", "")).strip()
             if not path:
                 return _text(_fs_refused("bad_path"), error=True)
+            resolved = _abs(path)
+            if resolved is None:
+                return _text(_fs_refused("relative", path), error=True)
+            path = resolved
             try:
                 got = await fs.ls(guest, path,
                                   max_entries=int(args.get("max_entries") or 0))

@@ -147,6 +147,19 @@ def _parse_entries(blob: bytes) -> list:
     return out
 
 
+
+def _resolved(guest: GuestSession, path: str) -> str:
+    """The backstop for every path this service sends: relative is joined
+    to the conversation's folder (paths.on_guest), or refused. The tools
+    resolve first so their replies name the real path; this is what keeps
+    the permission preview and anything else that calls here honest."""
+    if not path:
+        return path
+    got = guest.on_guest(path) if hasattr(guest, "on_guest") else path
+    if got is None:
+        raise FsError("bad_path")
+    return got
+
 class GuestFsService:
     def __init__(self, connection) -> None:
         self.connection = connection
@@ -163,6 +176,7 @@ class GuestFsService:
 
     async def get(self, guest: GuestSession, path: str, *,
                   max_bytes: int = 0) -> FileBytes:
+        path = _resolved(guest, path)
         fs_id, wait = self._begin(guest, "get")
         try:
             await self.connection.send(guest, fs_get(fs_id, path,
@@ -191,6 +205,7 @@ class GuestFsService:
 
     async def put(self, guest: GuestSession, path: str, data: bytes) -> int:
         """Bytes written. Raises FsError on a refusal."""
+        path = _resolved(guest, path)
         fs_id, wait = self._begin(guest, "put")
         try:
             off = 0
@@ -220,6 +235,7 @@ class GuestFsService:
     async def ls(self, guest: GuestSession, path: str, *,
                  max_entries: int = 0) -> Listing:
         """One level of one directory. Raises FsError on a refusal."""
+        path = _resolved(guest, path)
         fs_id, wait = self._begin(guest, "ls")
         try:
             await self.connection.send(guest, fs_ls(fs_id, path,
@@ -242,6 +258,8 @@ class GuestFsService:
         """FSMKDIR / FSRM / FSRMDIR / FSMV / FSCOPY. The reply's headers
         (files, dirs, bytes, how). Raises FsError on a refusal, carrying the
         path a tree operation stopped at in `detail`."""
+        path = _resolved(guest, path)
+        to = _resolved(guest, to)
         headers, _ = await self._op(guest, fs_op(
             "", op, path, to, overwrite=overwrite, permanent=permanent))
         return headers
@@ -250,6 +268,7 @@ class GuestFsService:
                     path: str) -> tuple[dict, list[str]]:
         """What is at `path`: a file, or a folder with its counts and its
         first few names (relative, "/"-separated)."""
+        path = _resolved(guest, path)
         headers, body = await self._op(guest, fs_op("", "FSSTATS", path))
         names = [n for n in fold.decode(body, _acp(guest)).split("\n") if n]
         return headers, names

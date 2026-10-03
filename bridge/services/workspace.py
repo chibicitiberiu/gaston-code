@@ -14,7 +14,7 @@ from typing import Any
 
 from ..agent import sessions as sesslist
 from ..files import paths as P
-from ..guest import GuestSession
+from ..guest import GuestSession, work_root_on_guest
 from ..view import html as H
 from ..wire.protocol import Frame
 from .config import BridgeConfig
@@ -93,10 +93,7 @@ class WorkspaceService:
 
     def guest_work_root(self, guest: GuestSession) -> str:
         r"""Where commands run, spelled the way the guest spells it."""
-        if guest.work_guest:
-            return guest.work_guest
-        return ((guest.hello or {}).get("sync_root")
-                or guest.guest_sync_root or "")
+        return work_root_on_guest(guest)
 
     def sub_of(self, guest: GuestSession) -> str:
         """This conversation's folder name relative to the mirror, or \"\"."""

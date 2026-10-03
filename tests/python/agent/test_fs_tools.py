@@ -584,3 +584,33 @@ def test_an_unrecognised_binary_is_still_described(tmp_path):
     out = _body(_call(_server(FakeFs(data=b"\x00\x01\x02\x03nothing known"),
                               str(workdir)), "get_file", {"path": r"C:\ODD.DAT"}))
     assert "binary data" in out or "octet" in out
+
+
+class _GuestWithAFolder(FakeGuest):
+    work_guest = "C:\\GTWORK\\INYOURWO"
+
+    def on_guest(self, path):
+        from bridge.files.paths import on_guest
+        return on_guest(path, self.work_guest)
+
+
+def test_a_relative_put_lands_in_the_conversation_s_folder():
+    """On the Athlon, 2026-10-03, `proj\\a.txt` went to the guest as written
+    and resolved against the client's current directory -- gremote's install
+    folder -- where the agent then moved and deleted files."""
+    fs = FakeFs()
+    srv = machine_tools.build(None, None, None, _GuestWithAFolder(),
+                              fs=fs)["machine"]["instance"]
+    _call(srv, "put_file", {"path": "proj\\a.txt", "content": "x"})
+    assert fs.put_calls and fs.put_calls[0][0] == "C:\\GTWORK\\INYOURWO\\proj\\a.txt"
+
+
+def test_a_relative_path_with_no_folder_is_refused_not_guessed():
+    class NoFolder(_GuestWithAFolder):
+        work_guest = ""
+    fs = FakeFs()
+    srv = machine_tools.build(None, None, None, NoFolder(),
+                              fs=fs)["machine"]["instance"]
+    res = _call(srv, "put_file", {"path": "proj\\a.txt", "content": "x"})
+    assert not fs.put_calls
+    assert "relative" in _body(res)

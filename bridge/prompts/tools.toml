@@ -388,6 +388,12 @@ Process {pid} was told to end and is still there after a moment. Some programs t
 # nothing.
 
 [fs.refused]
+# A relative path with no folder to resolve it against, or the drive-relative
+# `C:foo`. Relative paths are otherwise joined to the conversation's folder on
+# the bridge, because the guest would resolve them against wherever its client
+# was started -- on 2026-10-03 that was another program's install folder.
+relative = '''
+"{path}" is relative, and there is no folder on the machine to resolve it against yet. Give a full path such as C:\\WORK\\NAME\\FILE.TXT.'''
 unavailable = '''
 No machine is connected, so there is nothing to read or write.'''
 bad_path = '''

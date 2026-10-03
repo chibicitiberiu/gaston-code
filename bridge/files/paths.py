@@ -25,6 +25,7 @@ THREE THINGS THAT ARE NOT NEGOTIABLE:
 
 from __future__ import annotations
 
+import ntpath
 import posixpath
 import re
 from dataclasses import dataclass
@@ -496,3 +497,38 @@ def sub_of(work_dir: str, sync_dir: str) -> str:
     except ValueError:
         return ""
     return "" if rel in (".", "") or rel.startswith("..") else rel
+
+
+_ABS_DRIVE = re.compile(r"^[A-Za-z]:\\")
+_DRIVE_RELATIVE = re.compile(r"^[A-Za-z]:(?![\\])")
+
+
+def on_guest(path: str, base: str) -> str | None:
+    r"""`path` as the guest should be asked for it, or None if it cannot be.
+
+    An agent writes `proj\a.txt` and means its own folder. The guest
+    resolves a relative path against ITS process's current directory,
+    which is wherever the client was started from -- on the Athlon,
+    2026-10-03, gremote's own install folder, where the agent then created,
+    moved and deleted files. So a relative path is joined to `base`, the
+    conversation's folder on the machine, HERE.
+
+    None when there is no base to join to, and for the drive-relative
+    `C:foo`, whose meaning is the guest's per-drive current directory --
+    something nobody on this side knows. A path starting `\` is taken on
+    the base's drive.
+    """
+    p = (path or "").strip().replace("/", "\\")
+    if not p:
+        return None
+    if _ABS_DRIVE.match(p) or p.startswith("\\\\"):
+        return p
+    if len(p) == 2 and p[1] == ":" and p[0].isalpha():
+        return p + "\\"                # the drive itself: its root
+    if _DRIVE_RELATIVE.match(p):
+        return None
+    if not base or not _ABS_DRIVE.match(base):
+        return None
+    if p.startswith("\\"):
+        return ntpath.normpath(base[:2] + p)
+    return ntpath.normpath(base.rstrip("\\") + "\\" + p)

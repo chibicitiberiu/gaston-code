@@ -378,3 +378,18 @@ def test_a_root_written_with_a_forward_slash_is_still_stripped():
     a = P.check("f.txt", guest_root="/home/x")
     b = P.check("f.txt", guest_root="/home/x/")
     assert a is None and b is None
+
+
+def test_on_guest_joins_relative_paths_to_the_conversation_s_folder():
+    from bridge.files.paths import on_guest
+    base = "C:\\WORK\\NOTES"
+    assert on_guest("a\\b.txt", base) == "C:\\WORK\\NOTES\\a\\b.txt"
+    assert on_guest("./a/b.txt", base) == "C:\\WORK\\NOTES\\a\\b.txt"
+    assert on_guest(".", base) == "C:\\WORK\\NOTES"
+    assert on_guest("..\\x", base) == "C:\\WORK\\x"
+    assert on_guest("\\WINDOWS", base) == "C:\\WINDOWS"
+    assert on_guest("D:\\DATA", base) == "D:\\DATA"
+    assert on_guest("\\\\srv\\share", base) == "\\\\srv\\share"
+    assert on_guest("D:", base) == "D:\\"
+    assert on_guest("D:foo", base) is None       # per-drive cwd: unknowable
+    assert on_guest("a.txt", "") is None          # nothing to join to

@@ -307,6 +307,15 @@ class GuestSession:
         """
         return self.hello.get("machine", "")
 
+    def work_root_on_guest(self) -> str:
+        return work_root_on_guest(self)
+
+    def on_guest(self, path: str) -> str | None:
+        """`path` made absolute against work_root_on_guest(), or None.
+        See bridge/files/paths.py on_guest."""
+        from .files.paths import on_guest
+        return on_guest(path, self.work_root_on_guest())
+
     def set_link_speed(self, bps: float | None) -> None:
         """Propagate a measured (or CLI-default) link speed to every live
         coalescer, so a conversation already streaming picks it up too, not
@@ -372,3 +381,12 @@ class GuestSession:
         if self.sync.active:
             parts.append("sync-active")
         return ", ".join(parts) or "idle"
+
+
+def work_root_on_guest(g) -> str:
+    r"""Where a conversation works on the machine, spelled the guest's way:
+    its own folder once committed, else the shared root. A function, not
+    only a method, so a service handed any guest-shaped object can ask."""
+    if g.work_guest:
+        return g.work_guest
+    return ((g.hello or {}).get("sync_root") or g.guest_sync_root or "")
