@@ -40,8 +40,7 @@ from bridge.wire.compress import (
 )
 from bridge.wire.frame import Frame, FrameReader
 
-from .errors import (Cancelled, Disconnected, Refused, RemoteError,
-                     Timeout, Unencodable)
+from .errors import Cancelled, Disconnected, Refused, RemoteError, Timeout, Unencodable
 from .ops import (
     Drive,
     Entry,
