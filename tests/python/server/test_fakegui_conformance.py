@@ -116,8 +116,9 @@ def test_fakegui_hello_headers_match_guest_net_cpp():
     fake_headers = set(hello("test-secret").headers.keys()) | set(FAKE_CAPS.keys()) | set(FAKE_IDENTITY.keys())
 
     # Optional headers that depend on runtime configuration/state:
-    # sync_root (only if configured), sess (only on resume).
-    optional_runtime = {"sync_root", "sess"}
+    # sync_root (only if configured), sess (only on resume), conv (only once
+    # a conversation has been named).
+    optional_runtime = {"sync_root", "sess", "conv"}
     required_keys = hdr_keys - optional_runtime
 
     missing = required_keys - fake_headers

@@ -172,6 +172,7 @@ class FakeGui:
         # guest's g_halt_id. /continue answers it with RESUME.
         self.halt_id: str | None = None
         self.sess: str | None = None
+        self.conv: str = ""
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self._turn_active = False
@@ -224,6 +225,8 @@ class FakeGui:
         # not part of the handshake's shape, only this client's answer to it.
         f.headers.update(FAKE_CAPS)
         f.headers.update(FAKE_IDENTITY)
+        if self.conv:
+            f.headers["conv"] = self.conv
         self.writer.write(f.encode())
         await self.writer.drain()
         if self._sweep is None or self._sweep.done():
@@ -379,6 +382,8 @@ class FakeGui:
 
         if t == "READY":
             self.sess = f.headers.get("sess")
+            if f.headers.get("conv"):
+                self.conv = f.headers["conv"]
             self.page_no = int(f.headers.get("page", "0") or 0)
             self.page_total = int(f.headers.get("total", "0") or 0)
             print(f"{GREEN}connected{RESET} {DIM}sess={self.sess} "
@@ -444,6 +449,7 @@ class FakeGui:
             print(f"{DIM}-- end of chat list --{RESET}")
         elif t == "SWITCHED":
             self.sess = f.headers.get("id") or self.sess
+            self.conv = f.headers.get("id", "")
             self.page_total = int(f.headers.get("total", "0") or 0)
             self.halt_id = None   # a switch rebuilds the session; see below
             print(f"{GREEN}switched{RESET} {DIM}sess={self.sess}{RESET}")
