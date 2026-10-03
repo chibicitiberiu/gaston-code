@@ -502,6 +502,58 @@ static unsigned parseKeyToken(const char *p, int &vk, int &mods)
     return len + 2;
 }
 
+/* Typing keeps THIS thread's queue moving.
+ *
+ * The step runner's thread holds out-of-context WinEvent hooks (UiWatch),
+ * and on Windows 98 each event they catch is queued to this thread to be
+ * called back. Typing into an Edit raises several per keystroke. Nothing
+ * pumped while a long string was sent, and past about 220-250 characters
+ * delivery STOPPED: the rest of the string and every key after it were
+ * dropped, while every keybd_event "succeeded" and the step said all of
+ * them were sent (measured on the Athlon, 2026-10-03, into Notepad and into
+ * Gaston's own input box). It was not the rate -- typing at half speed
+ * stopped at the same place -- and the same string cut into 50-character
+ * steps with a `wait` between them, which pumps, arrived whole.
+ *
+ * So every PUMP_EVERY events the queue is drained exactly as UiWatch's own
+ * drainQueue does it, WM_QUIT put back so a shutdown is not eaten. */
+#define PUMP_EVERY 16
+
+static bool pumpOwnQueue()
+{
+    MSG msg;
+    while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
+    {
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage((int)msg.wParam);
+            return true;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
+    return false;
+}
+
+/* False when the application is quitting: stop typing. */
+static bool pace(unsigned &events, unsigned add)
+{
+    unsigned before = events;
+    events += add;
+    if (before / PUMP_EVERY != events / PUMP_EVERY)
+        return !pumpOwnQueue();
+    return true;
+}
+
+static unsigned eventsFor(int mods)
+{
+    unsigned n = 2;
+    if (mods & KEYMOD_SHIFT) n += 2;
+    if (mods & KEYMOD_CTRL)  n += 2;
+    if (mods & KEYMOD_ALT)   n += 2;
+    return n;
+}
+
 InputResult Input::typeText(HWND target, const char *text,
                             char *badKey, unsigned badKeySize,
                             unsigned *sent)
@@ -557,6 +609,7 @@ InputResult Input::typeText(HWND target, const char *text,
         return r;
 
     /* PASS TWO: send it. */
+    unsigned events = 0;
     for (const char *p = text; *p; )
     {
         int vk, mods;
@@ -619,6 +672,8 @@ InputResult Input::typeText(HWND target, const char *text,
             *sent = keys;
         if (GetForegroundWindow() != rootOf(target))
             return INPUT_NOT_FOREGROUND;
+        if (!pace(events, eventsFor(mods)))
+            return INPUT_FAILED;
         p += used;
     }
     return INPUT_OK;
@@ -861,6 +916,7 @@ InputResult Input::typeChars(const char *text, unsigned len, HKL hkl,
         }
     }
 
+    unsigned events = 0;
     for (unsigned i = 0; i < len; i++)
     {
         if (!stillThere(expectTop))
@@ -871,6 +927,8 @@ InputResult Input::typeChars(const char *text, unsigned len, HKL hkl,
         {
             KeySpec k = { (BYTE)vk, 0, isExtendedVk(vk), false };
             tapKey(k, mods);
+            if (!pace(events, eventsFor(mods)))
+                return INPUT_FAILED;
             break;
         }
         case CW_DEAD:
@@ -879,21 +937,29 @@ InputResult Input::typeChars(const char *text, unsigned len, HKL hkl,
             KeySpec space = { VK_SPACE, 0, false, false };
             tapKey(k, mods);
             tapKey(space, 0);
+            if (!pace(events, eventsFor(mods) + 2))
+                return INPUT_FAILED;
             break;
         }
         case CW_ALTNUM:
             altNumpad(t[i]);
+            if (!pace(events, 10))      /* Alt, four numpad taps, Alt */
+                return INPUT_FAILED;
             break;
         case CW_ENTER:
         {
             KeySpec k = { VK_RETURN, 0, false, false };
             tapKey(k, 0);
+            if (!pace(events, 2))
+                return INPUT_FAILED;
             break;
         }
         case CW_TAB:
         {
             KeySpec k = { VK_TAB, 0, false, false };
             tapKey(k, 0);
+            if (!pace(events, 2))
+                return INPUT_FAILED;
             break;
         }
         case CW_SKIP:
