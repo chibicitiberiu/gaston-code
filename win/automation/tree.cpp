@@ -212,6 +212,20 @@ void TreeWalker::fill(Node &n, HWND h, const WalkOptions &opt,
     if (!opt.wantText)
         return;
 
+    /* A Static that shows a picture has no text: its "text" is the resource
+     * reference it was created with, 0xFF 0xFF and a 16-bit ordinal, which
+     * reached the tree as three bytes of junk on a message box's icon
+     * (measured on the Athlon, 2026-10-03). Not asked, so not reported. */
+    if (lstrcmpiA(n.cls, "Static") == 0)
+    {
+        DWORD kind = n.style & SS_TYPEMASK;
+        if (kind == SS_ICON || kind == SS_BITMAP || kind == SS_ENHMETAFILE)
+        {
+            n.text[0] = '\0';
+            return;
+        }
+    }
+
     /* A thread that has already refused to answer is not asked again at the
      * full budget; it is asked at a token one so the record still carries
      * whatever comes back cheaply. Everything else is asked normally. */
