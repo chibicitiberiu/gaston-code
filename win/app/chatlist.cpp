@@ -75,6 +75,9 @@ void ChatList::fitLabel(char *label, unsigned cap, int availPx, bool bold)
 
 void ChatList::request()
 {
+    /* Every READY lands here, so a SWITCH lost to a dropped link or
+     * refused by the bridge never blocks that chat for good. */
+    m_switching.clear();
     rc_net_send(m_net, "GETSESSIONS", NULL, NULL, 0, NULL, 0);
 }
 
@@ -86,6 +89,7 @@ void ChatList::openSelected()
     if (sel == LB_ERR || sel < 0 || sel >= (int)m_rows.size()) return;
     if (m_rows[sel].header) return;           /* a date header, not a chat */
     if (m_rows[sel].id == m_net->sess) return;   /* already open */
+    if (m_rows[sel].id == m_switching) return;   /* already on its way */
 
     /* Switching closes the live client, which kills a running request. Ask
      * rather than doing it silently -- a click in the list is easy to make by
@@ -106,6 +110,7 @@ void ChatList::openSelected()
      * looking frozen -- that is main.c's title bar and status pane, not
      * this class's, hence the callback. */
     if (m_listener) m_listener->onSwitching();
+    m_switching = m_rows[sel].id;
     m_sender->sendFrame("Switching conversation", "SWITCH", keys, vals, 1, NULL, 0);
 }
 
@@ -257,6 +262,7 @@ void ChatList::endRows()
 
 void ChatList::onSwitchedFrame(rc_frame *f)
 {
+    m_switching.clear();
     /* `m_net->sess` is NOT written here any more. It is rc_net state
      * (net/net.h), read by HELLO's builder on the CONNECT path, and this
      * class writing it made a reconnect racing a SWITCHED able to read a

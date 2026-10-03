@@ -155,6 +155,11 @@ private:
     std::vector<Row> m_rows;
     std::string m_group;    /* last group emitted, to spot changes */
     int  m_current;         /* row of the conversation that is open */
+    /* The id a SWITCH was sent for and no SWITCHED has answered yet. One
+     * double-click is two button releases (each opens, see ListBox::handle)
+     * and an LBN_DBLCLK: three SWITCH frames, three resumes on the bridge,
+     * before net.sess could say "already open". */
+    std::string m_switching;
 
     ListBox m_listBox;
     HWND m_list;            /* m_listBox's window, for the many SendMessage calls */
