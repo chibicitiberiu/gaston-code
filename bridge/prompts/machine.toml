@@ -108,6 +108,14 @@ the top of a turn. Use it, and name it in what you say.
 If you have not been given a path, make a folder under `{home}` and write
 inside that -- never a drive root.'''
 
+# What Continue on the sync halt sends the agent. Two texts because "carry on
+# with what you were doing" is only right when the halt cut a task short: on
+# 2026-10-03 the person pressed Stop on an 80-second command, a conflict
+# halted the idle session, and Continue ran the stopped command again.
+resume = '''Resolve the sync conflict: merge your copy (`mine.N`) with the user's as your instructions say. Then carry on with what you were doing ONLY if the conflict interrupted a task you had not finished; if that task was already done, stop after the merge.'''
+
+resume_after_stop = '''Resolve the sync conflict: merge your copy (`mine.N`) with the user's as your instructions say. The user STOPPED your last task -- do not restart it or anything it was doing. Stop after the merge.'''
+
 # prepended to the user's message, once, when a conversation commits to a
 # folder on a machine this bridge is not mirroring.
 #

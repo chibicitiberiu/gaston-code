@@ -1106,6 +1106,30 @@ async def test_continue_starts_the_agent_with_an_instruction_not_an_echo(
     await harness.close(writer)
 
 
+async def test_continue_after_a_stop_does_not_restart_the_stopped_task(
+        harness, tmp_path):
+    """Measured on the Athlon, 2026-10-03: Stop on a long command, then a
+    conflict halt, then Continue -- and the agent ran the stopped command
+    again, because Continue said "continue with what you were doing"."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    guest = harness.bridge.connection.guest
+    harness.bridge.connection.synccoord.halt_id = "h124"
+    guest.last_turn_stopped = True
+
+    sent = []
+    guest.claude = _FakeClaude(sent)
+    await harness.send(writer, Frame("RESUME", {"id": "h124"}))
+    for _ in range(40):
+        if sent:
+            break
+        await asyncio.sleep(0.05)
+
+    assert sent and "STOPPED your last task" in sent[0]
+    assert "carry on" not in sent[0]
+    await harness.close(writer)
+
+
 async def test_a_stale_resume_is_ignored(harness, tmp_path):
     """A RESUME can lose a race with a halt the bridge cleared itself -- the
     agent called sync_resolve, say. Acting on it would start a turn nobody

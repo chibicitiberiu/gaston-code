@@ -103,6 +103,10 @@ class GuestSession:
     #: both counts after a deliberate Stop, since things ran and the user
     #: asked for it to end. Set by on_interrupt, reset when a turn starts.
     turn_stopped: bool = False
+    #: The LAST finished turn was ended by Stop. Outlives the turn, unlike
+    #: turn_stopped: Continue on a later sync halt reads it, so that the
+    #: agent is not told to carry on with work the person stopped.
+    last_turn_stopped: bool = False
 
     #: A stable per-connection handle. Set once, here, and never overwritten:
     #: nothing reads it but READY's header and logging, so a stale value is

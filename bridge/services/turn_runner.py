@@ -219,8 +219,9 @@ class TurnRunner:
                 log.info("sync: released %d latched path(s) on Continue", freed)
             await self.run_turn_locked(
                 guest,
-                "Resolve the sync conflict, then continue with what you "
-                "were doing.",
+                prompts.text("machine.sync.resume_after_stop"
+                             if guest.last_turn_stopped
+                             else "machine.sync.resume"),
                 echo=False,
             )
 
@@ -324,6 +325,7 @@ class TurnRunner:
         degraded = guest.turn_degraded
         guest.turn_degraded = ""
         stopped, guest.turn_stopped = guest.turn_stopped, False
+        guest.last_turn_stopped = stopped
         ok, subtype = turn_verdict(
             turn.ok, degraded, guest.turn_produced, turn.subtype, stopped
         )
