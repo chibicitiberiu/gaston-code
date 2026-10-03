@@ -342,7 +342,7 @@ class TurnRunner:
             guest,
             turn_end(
                 ok, subtype, turn.cost_usd, turn.duration_ms, ctx_pct,
-                conv=guest.conv_id,
+                conv=getattr(guest, "conv_id", ""),
             ),
         )
 
