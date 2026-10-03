@@ -28,6 +28,10 @@ def test_a_string_splits_into_text_and_chords():
 
 def test_a_doubled_bracket_is_a_literal():
     assert _lines(S.compile_steps(["a[[b"])) == ["type\ttext=a[b"]
+    # Closers double too, so an agent's `{{}}` is `{}`, not `{}}`.
+    assert _lines(S.compile_steps(["@#{{}}|~"])) == ["type\ttext=@#{}|~"]
+    assert _lines(S.compile_steps(["x[[1]]"])) == ["type\ttext=x[1]"]
+    assert _lines(S.compile_steps(["a}b]c"])) == ["type\ttext=a}b]c"]
 
 
 def test_text_is_sent_in_the_guests_code_page_and_escaped():

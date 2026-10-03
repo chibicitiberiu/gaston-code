@@ -117,7 +117,7 @@ Nothing was done -- the list was refused before it reached the machine: {why}'''
 
 [input.args]
 steps = '''
-The steps, in order. A STRING is text to type, with named keys and chords in square brackets: `"notes.txt[Enter]"`, `"[Ctrl+S]"`, `"[Home][Shift+End]"`; `[[` types a literal `[`. Every other step is an OBJECT naming one action:
+The steps, in order. A STRING is text to type, with named keys and chords in square brackets: `"notes.txt[Enter]"`, `"[Ctrl+S]"`, `"[Home][Shift+End]"`; `[[` types a literal `[`, `]]` a `]`, and `{{`/`}}` braces. Every other step is an OBJECT naming one action:
 
 - `{"focus": SEL}` -- bring a window or control to the front.
 - `{"click": SEL}` -- click a control. Add `"item": "readme.txt"` for a row or icon inside it, `"text": "hello"` for some text inside a text box (`"edge": "end"` lands after it), or `"at": [x, y]` for an offset from its top-left. `"button": "right"` or `"middle"`, `"double": true`. Pixels only as `{"click": {"screen": [x, y]}}`.
@@ -212,7 +212,7 @@ No text was given.'''
 # is that some of it went in. The whole string is checked before the first
 # keystroke for exactly that reason.
 bad_key = '''
-`{key}` is not a key this knows, so NOTHING was typed. The key names are listed in the `input` tool's description (Enter, Tab, Escape, Delete, Backspace, F1-F24, Shift, Ctrl, Alt, AltGr, the arrows, ...), with optional `Ctrl+`, `Alt+` and `Shift+` in a chord. Write `[[` for a literal bracket.'''
+`{key}` is not a key this knows, so NOTHING was typed. The key names are listed in the `input` tool's description (Enter, Tab, Escape, Delete, Backspace, F1-F24, Shift, Ctrl, Alt, AltGr, the arrows, ...), with optional `Ctrl+`, `Alt+` and `Shift+` in a chord. Write `[[`/`]]` or `{{`/`}}` for a literal bracket or brace.'''
 no_memory = '''
 The machine ran out of memory doing that.'''
 busy = '''

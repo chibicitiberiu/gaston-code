@@ -241,7 +241,11 @@ class _Compiler:
         """Text with `[Chord]` tokens, split into type and tap lines.
 
         The syntax `keys` always had: `[Name]` or `{Name}` for a key,
-        `[Ctrl+Shift+S]` for a chord, `[[` and `{{` for a literal bracket."""
+        `[Ctrl+Shift+S]` for a chord, `[[` and `{{` for a literal bracket.
+        The closers double too: `]]` and `}}` type ONE `]` or `}`. A lone
+        closer is literal as well, but an agent escaping `{}` writes
+        `{{}}`, and that used to type `{}}` -- measured on the Athlon,
+        reported as success."""
         run: list[str] = []
         said: list[str] = []
 
@@ -256,7 +260,7 @@ class _Compiler:
         i = 0
         while i < len(s):
             ch = s[i]
-            if ch in "[{" and i + 1 < len(s) and s[i + 1] == ch:
+            if ch in "[{]}" and i + 1 < len(s) and s[i + 1] == ch:
                 run.append(ch)
                 i += 2
                 continue
