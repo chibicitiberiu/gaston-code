@@ -199,8 +199,18 @@ def test_a_directory_deleted_on_the_machine_is_not_silently_recreated():
     answered this with REPORT and directories skipped past them."""
     b = Baseline(rows={"build": d()})
     dec = only({}, {"build": d()}, b)
-    assert dec.act is Act.REPORT
+    # Since 2026-10-03 the bridge FOLLOWS the deletion (rmdir here, which
+    # refuses a non-empty folder) rather than reporting it: a report left
+    # empty folders behind every agent `delete`, and they went back.
+    assert dec.act is Act.RMDIR_HERE
     assert "deleted on the machine" in dec.reason
+
+
+def test_rmdir_here_runs_deepest_first_and_after_the_files():
+    from bridge.files.sync import Decision, order
+    ds = order([Decision("p", Act.RMDIR_HERE), Decision("p/s/l", Act.RMDIR_HERE),
+                Decision("p/s", Act.RMDIR_HERE), Decision("p/a.txt", Act.TOMBSTONE)])
+    assert [x.key for x in ds] == ["p/a.txt", "p/s/l", "p/s", "p"]
 
 
 def test_a_directory_deleted_on_the_bridge_is_not_silently_adopted_back():

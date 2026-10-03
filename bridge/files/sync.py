@@ -81,6 +81,7 @@ class Act(str, Enum):
     SKIP = "skip"
     TOMBSTONE = "tombstone"
     CLEAR_TOMBSTONE = "clear_tombstone"
+    RMDIR_HERE = "rmdir_here"        # gone on the guest; rmdir here if empty
 
 
 @dataclass
@@ -443,11 +444,21 @@ def diff(guest: dict[str, Entry], bridge: dict[str, Entry],
             else:
                 # g is falsy, so the outer `or` matched through b: b is not None.
                 assert b is not None
+                # With an ancestor the MACHINE deleted it -- the person, or the
+                # agent's own `delete`. A directory has no content to lose, so
+                # follow it: rmdir here, after the files below it have gone
+                # (RMDIR_HERE sorts last, deepest first). Reporting it instead
+                # left empty folders on the bridge after every agent delete,
+                # sent the agent sync notices it could not resolve, and once it
+                # `forget`-ed them the folders went BACK to the machine as new
+                # (measured on the Athlon, 2026-10-03). rmdir refuses a folder
+                # that is not empty, and the executor reports that case.
                 out.append(Decision(key, Act.MKDIR, "directory only on the bridge",
                                     display=b.display)
                            if a is None else
-                           Decision(key, Act.REPORT,
-                                    "directory deleted on the machine, kept here"))
+                           Decision(key, Act.RMDIR_HERE,
+                                    "directory deleted on the machine",
+                                    display=b.display))
             continue
 
         # 4-6. Tombstoned.
@@ -545,6 +556,10 @@ def order(decisions: list[Decision]) -> list[Decision]:
     """
     rank = {Act.CONFLICT: 0, Act.MKDIR: 1, Act.REPORT: 2, Act.SKIP: 2,
             Act.TOMBSTONE: 3, Act.CLEAR_TOMBSTONE: 3, Act.ADOPT: 3,
-            Act.PULL: 4, Act.PUSH: 4, Act.NOTHING: 5}
-    return sorted(decisions, key=lambda d: (rank.get(d.act, 9), d.key.count("/"),
-                                            d.key))
+            Act.PULL: 4, Act.PUSH: 4, Act.NOTHING: 5, Act.RMDIR_HERE: 6}
+    # RMDIR_HERE goes deepest FIRST: a parent is only empty once its
+    # children are gone. Everything else is shallowest first.
+    return sorted(decisions, key=lambda d: (
+        rank.get(d.act, 9),
+        -d.key.count("/") if d.act is Act.RMDIR_HERE else d.key.count("/"),
+        d.key))

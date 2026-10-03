@@ -716,6 +716,54 @@ async def test_guest_deletion_modified_preserves_bridge_file_and_reports(
     await harness.close(writer)
 
 
+async def test_a_folder_deleted_on_the_machine_goes_here_too(harness, tmp_path):
+    """The agent's `delete` of a whole tree, measured on the Athlon
+    2026-10-03: the files followed, the folders stayed here as "kept here"
+    reports, and once forgotten they went back to the machine as new."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    os.makedirs(os.path.join(p.root, "proj", "src", "lib"))
+    with open(os.path.join(p.root, "proj", "src", "main.c"), "wb") as f:
+        f.write(b"int main;\n")
+    b_entries = p.scan_bridge()
+    p.base.rows.update(b_entries)
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {})
+    await asyncio.wait_for(task, 10)
+
+    assert not os.path.exists(os.path.join(p.root, "proj"))
+    assert not any(k.startswith("proj") for k in p.base.rows)
+    assert not any("kept here" in r for r in p.reports)
+    await harness.close(writer)
+
+
+async def test_a_folder_deleted_on_the_machine_stays_if_it_holds_new_files(
+        harness, tmp_path):
+    """rmdir refuses a folder with something in it that the machine never
+    had, and that is the one case still worth a report."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    p = a_pass(harness, tmp_path)
+    os.makedirs(os.path.join(p.root, "proj"))
+    p.base.rows.update(p.scan_bridge())
+    # A name the machine cannot hold: SKIPped, so the pass needs no PUT
+    # from this fake guest, and the folder is not empty when rmdir runs.
+    with open(os.path.join(p.root, "proj", "new?.txt"), "wb") as f:
+        f.write(b"only here\n")
+
+    task = asyncio.create_task(p.run())
+    await fake_scan(harness, reader, writer, {})
+    await asyncio.wait_for(task, 10)
+
+    assert os.path.exists(os.path.join(p.root, "proj", "new?.txt"))
+    assert "proj" in p.base.rows
+    assert any("proj: directory deleted on the machine, kept here" in r
+               for r in p.reports)
+    await harness.close(writer)
+
+
 async def test_a_failed_mkdir_withholds_the_pushes_under_it_without_spam(
         harness, tmp_path):
     """03.45: a directory whose MKDIR the guest refuses used to still get

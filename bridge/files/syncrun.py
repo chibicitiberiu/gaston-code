@@ -849,6 +849,23 @@ class Pass:
                             os.remove(target)
                     except OSError as exc:
                         log.warning("could not remove tombstoned %s: %s", target, exc)
+            elif dec.act is S.Act.RMDIR_HERE:
+                target = os.path.join(self.root, dec.display or dec.key)
+                try:
+                    if os.path.isdir(target) and not os.path.islink(target):
+                        os.rmdir(target)
+                    self.base.rows.pop(dec.key, None)
+                    done["dirs"] += 1
+                except OSError:
+                    # Not empty: something here the machine never had. Keep
+                    # it, and say so -- the old report, now only when true.
+                    reason = "directory deleted on the machine, kept here: it " \
+                             "holds files that are only here"
+                    done["reported"] += 1
+                    standing.add(dec.key)
+                    self.reports.append(f"{dec.key}: {reason}")
+                    if self.reporter.first_report(dec.key, reason, g, b):
+                        self.note(f"SYNC: {dec.key} -- {reason}")
             elif dec.act is S.Act.CLEAR_TOMBSTONE:
                 self.base.tombs.pop(dec.key, None)
                 cleared = g if g is not None else b  # both sides agree; either works
