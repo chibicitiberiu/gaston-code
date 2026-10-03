@@ -446,6 +446,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     }
 
     if (n->sess[0]) HDR("sess", n->sess);
+    if (n->conv[0]) HDR("conv", n->conv);
 
     /* WHICH MACHINE THIS IS, so the bridge can keep one guest's chat list
      * out of another's. `mine` on the bridge says only that THIS BRIDGE

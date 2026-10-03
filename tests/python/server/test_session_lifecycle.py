@@ -600,3 +600,31 @@ async def test_the_guard_judges_by_the_shell_the_call_named(harness):
     assert desk._shell({"shell": "none"}) == "command.com"
     assert desk._shell({}) == "command.com"
     await harness.close(w)
+
+
+async def test_a_restarted_bridge_reopens_the_conversation_the_machine_names(
+    harness, monkeypatch,
+):
+    """Measured on the Athlon, 2026-10-03: the bridge restarted, the client
+    reconnected, and the conversation it had open was gone from the pane --
+    a new, empty one in its place and nothing said. HELLO's `conv` names it;
+    a bridge that lists that id reopens it."""
+    monkeypatch.setattr(srv.sesslist, "history_html",
+                        lambda sid_, limit=2000: [])
+    monkeypatch.setattr(srv.sesslist, "listing",
+                        lambda cwd=None, limit=50: [{"id": "stored-7"}])
+    r, w = await harness.connect(hdrs={"conv": "stored-7"})
+    f = await _recv(harness, r, "SWITCHED")
+    assert f.headers.get("id") == "stored-7"
+    await harness.close(w)
+
+
+async def test_a_conversation_this_bridge_does_not_list_is_not_reopened(
+    harness, monkeypatch,
+):
+    monkeypatch.setattr(srv.sesslist, "listing",
+                        lambda cwd=None, limit=50: [{"id": "other"}])
+    r, w = await harness.connect(hdrs={"conv": "stranger"})
+    await _recv(harness, r, "OPTIONSEND")
+    assert harness.bridge.connection.guest.pending_resume == ""
+    await harness.close(w)

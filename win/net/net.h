@@ -80,6 +80,12 @@ typedef struct {
      * never been written down anywhere. If the bridge ever lengthens them,
      * both buffers move together. (audit 01.38) */
     char          sess[64];
+    /* WHICH CONVERSATION is on screen -- READY's or SWITCHED's id, never
+     * the per-connection handle above. Sent back in HELLO as `conv`, so a
+     * bridge that RESTARTED reopens it instead of starting a new, empty
+     * one with nothing said (measured on the Athlon, 2026-10-03). Same
+     * 64 as `sess`, for the same reason. */
+    char          conv[64];
     /* WHICH MACHINE THIS IS -- HELLO's `machine` header, minted once and
      * kept beside the exe (app/machineid.h). Empty means "not reported",
      * and the bridge then files conversations exactly as it did before this

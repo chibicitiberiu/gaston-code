@@ -356,8 +356,34 @@ class Bridge:
         self.permissions.attach(g, cwd=self.config.cwd)
         return g
 
+    def _conversation_to_reopen(self, guest: GuestSession,
+                                is_reconnect: bool) -> str:
+        """The conversation a FRESH attach should come back to, or "".
+
+        A client keeps the conversation id READY gave it and sends it back
+        in HELLO as `conv`. This bridge only knows its own guest by memory,
+        so after a bridge restart every client used to land in a new, empty
+        conversation with nothing said -- its open chat simply gone from
+        the pane (measured on the Athlon, 2026-10-03). Only an id this
+        bridge lists for its working directory is taken; anything else is
+        a stranger and a new conversation is right.
+        """
+        if is_reconnect:
+            return ""
+        conv = str(guest.hello.get("conv", "") or "").strip()
+        if not conv or conv == guest.conv_id:
+            return ""
+        try:
+            rows = self.session._resolve_sesslist().listing(self.config.cwd)
+        except Exception as exc:          # a listing failure costs the resume
+            log.info("could not list conversations to reopen %s: %s",
+                     conv, exc)
+            return ""
+        return conv if any(r.get("id") == conv for r in rows) else ""
+
     async def _post_attach(self, guest: GuestSession, is_reconnect: bool) -> None:
-        if guest.claude is None and not guest.pending_resume:
+        reopen = self._conversation_to_reopen(guest, is_reconnect)
+        if guest.claude is None and not guest.pending_resume and not reopen:
             guest.claude = await self.session.make_session(guest)
 
         await self.connection.send(guest, ready(
@@ -379,6 +405,12 @@ class Bridge:
             self._spawn(self.sync.run_sync("the machine reconnected"))
 
         log.info("attached sess=%s (reconnect=%s)", guest.sess_id, is_reconnect)
+
+        if reopen:
+            log.info("reopening conversation %s, which the machine was in",
+                     reopen)
+            async with guest.turn_lock:
+                await self.session.switch_locked(guest, reopen)
 
 
     # --- the conversation's own folder -------------------------------------

@@ -428,6 +428,9 @@ void MainWindow::onReady(rc_frame *f)
      * where to put pages, and a reconnect does not send one. */
     v = rc_frame_get(f, "conv");
     if (m_cache) m_cache->open_session(v ? v : "");
+    /* An empty `conv` is a fresh, not-yet-saved conversation: keep the one
+     * we had, which is what HELLO should ask a restarted bridge for. */
+    if (v && v[0]) rc_strf(m_net->conv, sizeof(m_net->conv), "%s", v);
     m_announceConnected = 1;
     /* READY carries page/total for the session as it stands. goto_live()
      * re-requests the live page explicitly, which clears the control
@@ -500,6 +503,8 @@ void MainWindow::onSwitched(rc_frame *f)
      * rest of the connection's state. */
     const char *sid = rc_frame_get(f, "id");
     if (sid) rc_strf(m_net->sess, sizeof(m_net->sess), "%s", sid);
+    /* "" is New chat: nothing to reopen until the first turn names it. */
+    rc_strf(m_net->conv, sizeof(m_net->conv), "%s", sid ? sid : "");
     /* A prompt belongs to the session that raised it, and switching
      * rebuilds the session -- the bridge denies anything pending as
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
