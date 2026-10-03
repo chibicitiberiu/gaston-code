@@ -17,7 +17,7 @@ static HICON load_ico(HINSTANCE inst, int id, int s)
 }
 
 rc_statusbar::rc_statusbar(HWND hwnd, HINSTANCE inst)
-    : m_hwnd(hwnd), m_ico_shown(NULL), m_ctx_pct(-1)
+    : m_hwnd(hwnd), m_ico_shown(NULL), m_ctx_pct(-1), m_bar_since(0)
 {
     int s = GetSystemMetrics(SM_CXSMICON);
     int i;
@@ -130,13 +130,16 @@ void rc_statusbar::refresh(rc_state net_state, const char *host, int port,
     else      buf[0] = '\0';
     set_pane(1, buf);
 
+    if (!bar_active) m_bar_since = 0;
+    else if (!m_bar_since) m_bar_since = GetTickCount();
     if (turn_active && turn_start_ms) {
         const char *what = bar_active ? "waiting for you..."
                          : (m_status_override[0]) ? m_status_override
                          : turn_state == TURN_STREAMING
                                ? "receiving..." : "Claude is thinking...";
+        DWORD since = bar_active ? m_bar_since : turn_start_ms;
         unsigned long secs =
-            (unsigned long)((GetTickCount() - turn_start_ms) / 1000);
+            (unsigned long)((GetTickCount() - since) / 1000);
         rc_strf(buf, sizeof(buf), " %s %lus", what, secs);
         set_pane(2, buf);
 

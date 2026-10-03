@@ -40,6 +40,11 @@ class rc_statusbar {
     HICON m_ico_pie[RC_PIE_STEPS + 1];
     int   m_ctx_pct;
     char  m_status_override[128];
+    /* When the bar last appeared, so "waiting for you... Ns" counts from
+     * THIS question rather than from the start of the turn -- the fifth
+     * prompt of a turn read "161s" when it had been up for three. 0 while
+     * no bar is showing. */
+    DWORD m_bar_since;
 
     rc_statusbar(const rc_statusbar &);
     rc_statusbar &operator=(const rc_statusbar &);
