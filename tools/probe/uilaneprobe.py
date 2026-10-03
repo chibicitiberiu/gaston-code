@@ -41,11 +41,15 @@ with Remote(P, SECRET, port=_a.port) as r:
 
     # 1. a tree of the desktop, of one process, and one control's items
     t = r.tree(max_nodes=400)
-    say("1a tree of the desktop", t.walk == "complete" and len(t.nodes) > 20,
+    # Not "more than 20": the Athlon's whole desktop is 11 nodes (taskbar,
+    # tray, Progman), and the probe was failing a machine for being tidy.
+    say("1a tree of the desktop", t.walk == "complete" and len(t.nodes) >= 3,
         "%d nodes, %d selectors" % (len(t.nodes), len(t.selectors)))
     pid = next((p.pid for p in r.ps() if p.exe.upper().endswith("EXPLORER.EXE")), 0)
     tp = r.tree("pid", pid=pid, max_nodes=400)
-    say("1b tree of one process", 0 < len(tp.nodes) < len(t.nodes),
+    # <=, not <: when every window on the desktop is Explorer's -- the
+    # same tidy machine -- the process tree IS the desktop tree.
+    say("1b tree of one process", 0 < len(tp.nodes) <= len(t.nodes),
         "explorer pid %x -> %d of %d" % (pid, len(tp.nodes), len(t.nodes)))
     with contextlib.suppress(Refused):
         r.stream("TREE", {"inproc": "1", "target": "Progman"})
@@ -160,8 +164,12 @@ with Remote(P, SECRET, port=_a.port) as r:
     say("11 the box still answers afterwards", True,
         "%d KB physical free of %d" % (info.mem_free_kb, info.mem_kb))
 
-    with contextlib.suppress(Refused):
-        r.run([{"close": "Notepad"}])
+    # By pid, like the start: `close` stops at Notepad's own "save
+    # changes?" prompt, and the probe used to leave both on the screen.
+    for p in r.ps():
+        if p.exe.upper().endswith("NOTEPAD.EXE"):
+            with contextlib.suppress(Refused):
+                r.kill(p.pid)
 
 print("\n%s" % ("ALL PASS" if not fails else "%d FAILED" % fails))
 sys.exit(1 if fails else 0)
