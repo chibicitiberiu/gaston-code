@@ -405,13 +405,24 @@ def off_limits(tool_name: str, args: dict, workdir: str | None,
     # Reads only: `_inside_gaston` below still refuses writes wherever
     # `.gaston` sits, since a staged copy is the only remaining copy of the
     # agent's own work.
-    if shared and tool_name not in _WRITE_TOOLS:
-        try:
-            staged = os.path.join(os.path.realpath(shared), ".gaston")
-            if os.path.commonpath([staged, target]) == staged:
-                return None
-        except (OSError, ValueError):
-            pass
+    #
+    # Keyed on where syncrun PUTS it -- the work folder's parent -- and not
+    # only on `shared`: a bridge started with a --cwd apart from its
+    # --sync-dir runs the agent somewhere else entirely, and then the one
+    # directory a conflict notice names was refused as "on the proxy"
+    # (measured 2026-10-03: the agent could not read its own mine.1 and
+    # never merged).
+    if tool_name not in _WRITE_TOOLS:
+        bases = [os.path.dirname(root)]
+        if shared:
+            bases.append(os.path.realpath(shared))
+        for base in bases:
+            try:
+                staged = os.path.join(base, ".gaston")
+                if os.path.commonpath([staged, target]) == staged:
+                    return None
+            except (OSError, ValueError):
+                pass
 
     # NEAR MISS deserves its own answer: `/home/x/work/notes.txt` is just as
     # much "on the proxy" as `/etc/passwd`, so the generic refusal below

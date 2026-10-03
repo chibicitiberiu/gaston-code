@@ -27,6 +27,19 @@ def test_reading_a_conflict_copy_is_allowed(tmp_path):
     assert off_limits("Grep", {"path": os.path.join(wd, ".gaston")}, wd) is None
 
 
+def test_the_staged_copy_beside_the_folder_is_readable_wherever_the_agent_runs(
+        tmp_path):
+    """syncrun stages a conflict at the WORK FOLDER'S PARENT/.gaston. With a
+    bridge --cwd apart from its --sync-dir the agent runs elsewhere, and its
+    own mine.1 was refused as "on the proxy" -- it never merged (measured
+    2026-10-03). Reads only; writes there are still refused."""
+    wd = str(tmp_path / "work" / "RUNEXACT")
+    os.makedirs(wd)
+    mine = str(tmp_path / "work" / ".gaston" / "conflict" / "n.txt" / "mine.1")
+    assert off_limits("Read", {"file_path": mine}, wd) is None
+    assert off_limits("Write", {"file_path": mine}, wd) is not None
+
+
 def test_writing_into_gaston_is_refused(tmp_path):
     wd = str(tmp_path)
     mine = os.path.join(wd, ".gaston", "conflict", "a.txt", "mine.1")
