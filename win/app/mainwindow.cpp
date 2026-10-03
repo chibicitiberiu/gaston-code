@@ -1867,5 +1867,18 @@ bool MainWindow::filter(MSG &msg)
         && m_bar && m_bar->escape()) {
         return true;
     }
+    /* Any other Esc stops HERE. A multiline EDIT that IsDialogMessage has
+     * put in dialog mode (it asked WM_GETDLGCODE with a message) answers
+     * VK_ESCAPE by posting WM_CLOSE to its parent -- it assumes the parent
+     * is a dialog that Esc should dismiss. The input box's parent is this
+     * window, so one Esc in the input box quit the client mid-turn with
+     * no question asked (measured on the Athlon, 2026-10-03). Nothing in
+     * the main window gives Esc a meaning besides the bar above. */
+    if ((msg.message == WM_KEYDOWN || msg.message == WM_KEYUP
+         || msg.message == WM_CHAR) && msg.wParam == VK_ESCAPE
+        && (msg.hwnd == Window::hwnd()
+            || IsChild(Window::hwnd(), msg.hwnd))) {
+        return true;
+    }
     return IsDialogMessageA(Window::hwnd(), &msg) != 0;
 }
