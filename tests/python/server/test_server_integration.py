@@ -3092,3 +3092,24 @@ async def test_a_file_put_in_a_folder_is_not_flagged(harness):
     with contextlib.suppress(asyncio.CancelledError):
         await task
     await harness.close(writer)
+
+
+async def test_cr_cr_lf_from_a_text_mode_program_is_one_line_break(harness):
+    """Windows 98's PING.EXE writes "\\r\\r\\n" to a redirected stdout
+    (measured on the Athlon, 2026-10-03). Passed through, every line came
+    with a blank one after it in the transcript."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    task = asyncio.create_task(harness.bridge.guest_exec.run_on_guest(
+        "ping -n 2 127.0.0.1", timeout_ms=5000, shell="", cwd=""))
+    req = await _recv(harness, reader, "EXEC")
+    eid = req.headers["id"]
+    await harness.send(writer, Frame("EXECOUT", {"id": eid},
+                                     b"Reply one\r\r\nReply two\r\r\n"))
+    await harness.send(writer, Frame("EXECRESULT", {
+        "id": eid, "status": "ok", "code": "0", "truncated": "0"}))
+    got = await asyncio.wait_for(task, 5)
+    text = got["content"][0]["text"]
+    assert "Reply one" in text and "Reply two" in text
+    assert "\r\r" not in text
+    await harness.close(writer)

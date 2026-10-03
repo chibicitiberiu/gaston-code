@@ -301,6 +301,11 @@ class GuestExecService:
         truncated = f.headers.get("truncated", "0") == "1" or entry.capped
 
         text = fold.decode_oem(bytes(entry.out))
+        # A DOS-era program writing "\r\n" through a text-mode CRT gets
+        # "\r\r\n" on a redirected stdout -- Windows 98's own PING.EXE does,
+        # measured on the Athlon 2026-10-03. Left in, every line rendered
+        # with a blank one after it, and the agent read the stray CR too.
+        text = text.replace("\r\r\n", "\r\n")
 
         # THE WRAPPER'S VERDICT, pulled off before anything reads the output.
         # Empty means the line never arrived -- the command killed the shell,
