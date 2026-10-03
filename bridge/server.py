@@ -411,6 +411,16 @@ class Bridge:
                      reopen)
             async with guest.turn_lock:
                 await self.session.switch_locked(guest, reopen)
+                # NOW, not at the first message as a switch from the list
+                # does. The options batch -- models, mode, and the work
+                # folder the guest's sync root comes from -- is only sent
+                # once a client exists or the model list is cached, and a
+                # bridge that has just started has neither: the reopened
+                # conversation sat with sync on "no_root" and stale menus
+                # (measured on the Athlon, 2026-10-03). A fresh attach
+                # starts its session here too, so this costs nothing new.
+                if await self.session.resume_pending(guest):
+                    await self.options.send_options(guest)
 
 
     # --- the conversation's own folder -------------------------------------

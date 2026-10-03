@@ -613,9 +613,17 @@ async def test_a_restarted_bridge_reopens_the_conversation_the_machine_names(
                         lambda sid_, limit=2000: [])
     monkeypatch.setattr(srv.sesslist, "listing",
                         lambda cwd=None, limit=50: [{"id": "stored-7"}])
+    harness.bridge.conv.set_folder("stored-7", "WORKHERE", "C:\\WORK\\WORKHERE")
     r, w = await harness.connect(hdrs={"conv": "stored-7"})
     f = await _recv(harness, r, "SWITCHED")
     assert f.headers.get("id") == "stored-7"
+    # And the options batch, which carries the folder the guest mirrors.
+    # A freshly started bridge has no client and no cached model list, so
+    # it used to send none -- sync sat on "no_root" in the reopened chat.
+    frames = await harness.recv_until(r, ("OPTIONSEND",))
+    work = [x for x in frames
+            if x.type == "OPTION" and x.headers.get("kind") == "work"]
+    assert work and work[-1].headers.get("id") == "C:\\WORK\\WORKHERE"
     await harness.close(w)
 
 
