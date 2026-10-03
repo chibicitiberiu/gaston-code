@@ -250,7 +250,7 @@ def turn_error(msg: str) -> Frame:
 
 
 def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int,
-             ctx_pct: int | None = None) -> Frame:
+             ctx_pct: int | None = None, conv: str = "") -> Frame:
     """`ctx_pct` rides on this frame rather than getting one of its own.
 
     It is one small integer that only changes when a turn ends, and the guest
@@ -269,6 +269,12 @@ def turn_end(ok: bool, subtype: str, cost_usd: float | None, ms: int,
     }
     if ctx_pct is not None:
         h["ctx_pct"] = str(ctx_pct)
+    # Which conversation this turn belongs to. A NEW conversation only gets
+    # an id during its first turn, and READY (empty then) and SWITCHED (not
+    # sent) never said it -- so the guest had nothing to ask a restarted
+    # bridge for, and landed in a fresh conversation (2026-10-03).
+    if conv:
+        h["conv"] = conv
     return Frame("TURN", h)
 
 

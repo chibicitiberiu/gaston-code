@@ -341,7 +341,8 @@ class TurnRunner:
         await self.connection.send(
             guest,
             turn_end(
-                ok, subtype, turn.cost_usd, turn.duration_ms, ctx_pct
+                ok, subtype, turn.cost_usd, turn.duration_ms, ctx_pct,
+                conv=guest.conv_id,
             ),
         )
 

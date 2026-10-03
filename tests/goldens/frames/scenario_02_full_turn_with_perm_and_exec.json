@@ -130,6 +130,7 @@
   },
   {
     "headers": {
+      "conv": "<CONV_ID>",
       "cost_usd": "<COST>",
       "ctx_pct": "42",
       "ms": "<MS>",

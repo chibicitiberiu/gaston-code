@@ -461,6 +461,11 @@ void MainWindow::onTool(rc_frame *f)
 
 void MainWindow::onTurn(rc_frame *f)
 {
+    /* A new conversation is named during its first turn, and only this
+     * frame says so; HELLO's `conv` needs it after a bridge restart. */
+    const char *conv = rc_frame_get(f, "conv");
+    if (conv && conv[0])
+        rc_strf(m_net->conv, sizeof(m_net->conv), "%s", conv);
     if (m_turn) m_turn->onTurn(f);
 }
 
