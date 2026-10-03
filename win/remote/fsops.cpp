@@ -516,13 +516,28 @@ void FsOps::abortPut(const char *why)
     m_putCrc = MZ_CRC32_INIT;
 }
 
+/* A character no FAT name can hold. Win98's CreateFileA does not answer
+ * ERROR_INVALID_NAME for these the way NT does, so the temp-file classifier
+ * below fell to its default: a name with `?` in it -- what a codepage the
+ * name did not fit in leaves behind -- came back `readonly` (measured on the
+ * Athlon, 2026-10-03). Named here, before anything is opened. */
+static bool hasIllegalNameChar(const char *path)
+{
+    const char *p;
+    for (p = path; *p; p++)
+        if (*p == '?' || *p == '*' || *p == '"' || *p == '<' || *p == '>'
+            || *p == '|')
+            return true;
+    return false;
+}
+
 void FsOps::put(Responder &r, rc_frame *f)
 {
     const char *path = rc_frame_get(f, "path");
     const char *off = rc_frame_get(f, "off");
     const char *id = r.id();
 
-    if (!path || !*path)
+    if (!path || !*path || hasIllegalNameChar(path))
     {
         r.err("bad_path");
         return;
