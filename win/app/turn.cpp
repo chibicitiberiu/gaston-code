@@ -36,6 +36,11 @@ void Turn::thinkShow()
 
 void Turn::turnReceiving()
 {
+    /* Only inside a turn. A reconnect, or reopening a conversation, replays
+     * its pages as TEXT frames with no TURN around them, and this left the
+     * title on "receiving..." over an idle session until the next turn
+     * ended (measured on the Athlon, 2026-10-03). */
+    if (!m_active) return;
     if (m_state == TURN_STREAMING) return;
     m_state = TURN_STREAMING;
     SetWindowTextA(m_hwnd, RC_TITLE "  -  receiving...");
