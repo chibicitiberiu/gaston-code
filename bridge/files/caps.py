@@ -327,6 +327,10 @@ class Caps:
     #: tools are offered, because an FSLS sent to a client that predates it
     #: is answered by nobody and `list_dir` waited out four minutes.
     ops: int = 0
+    #: The PREFS frame's version (bridge/prefs.py): 1 means the client sends
+    #: one straight after HELLO, and the handshake waits for it. 0 for a
+    #: client that never said -- and it is never waited for.
+    prefs: int = 0
     #: True when the client declared any of this, rather than being assumed.
     declared: bool = False
 
@@ -416,7 +420,7 @@ def from_hello(h: dict) -> Caps:
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
-        "maxfiles", "deflate", "automation", "keys", "ops"))
+        "maxfiles", "deflate", "automation", "keys", "ops", "prefs"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -459,6 +463,7 @@ def from_hello(h: dict) -> Caps:
         # because the names it would accept are names nobody here can check.
         keys=_num(h, "keys", 0, 0, 1),
         ops=_num(h, "ops", 0, 0, 2),
+        prefs=_num(h, "prefs", 0, 0, 1),
         declared=declared,
     )
 

@@ -18,7 +18,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .. import handshake
-from ..agent import profiles, toolrep, toolrules
+from .. import prefs as prefs_mod
+from ..agent import policy, profiles, toolrep, toolrules
 from ..guest import GuestSession
 from ..synccoord import SyncCoordinator
 from ..view.pages import Paginator
@@ -134,8 +135,46 @@ class ConnectionService:
             )
             return None, []
 
+    async def read_prefs(
+        self,
+        reader: asyncio.StreamReader,
+        frames: FrameReader,
+        writer: asyncio.StreamWriter,
+        early: list,
+    ) -> tuple[Frame | None, list]:
+        """The PREFS frame a client that declared `prefs` sends next, from
+        what came in with HELLO or from the socket, under the same deadline.
+        It MUST be the next frame: settings that arrive after the session
+        is built arrive too late for the tools it was told about."""
+        if early:
+            if early[0].type == "PREFS":
+                return early[0], early[1:]
+            await self.try_send_raw(writer, error(
+                "expected_prefs", f"frame after HELLO was {early[0].type}"))
+            return None, []
+        try:
+            async with asyncio.timeout(self.config.hello_timeout_s):
+                while True:
+                    data = await reader.read(4096)
+                    if not data:
+                        return None, []
+                    batch = frames.feed(data)
+                    if not batch:
+                        continue
+                    if batch[0].type != "PREFS":
+                        await self.try_send_raw(writer, error(
+                            "expected_prefs",
+                            f"frame after HELLO was {batch[0].type}"))
+                        return None, []
+                    return batch[0], batch[1:]
+        except TimeoutError:
+            await self.try_send_raw(
+                writer, error("prefs_timeout", "no PREFS after HELLO"))
+            return None, []
+
     async def attach(
-        self, hello: Frame, writer: asyncio.StreamWriter
+        self, hello: Frame, writer: asyncio.StreamWriter,
+        prefs_frame: Frame | None = None,
     ) -> GuestSession | None:
         """Negotiate HELLO handshake and attach/recover guest session."""
         h = hello.headers
@@ -152,6 +191,21 @@ class ConnectionService:
             await self.try_send_raw(writer, error(exc.code, exc.message))
             return None
 
+        # The client's settings, parsed with ITS codepage, refused like a
+        # bad cap: a list cut short in silence is a place quietly
+        # unprotected.
+        client_prefs = prefs_mod.DEFAULT
+        if prefs_frame is not None:
+            try:
+                client_prefs = prefs_mod.parse(prefs_frame.body or b"",
+                                               neg.caps.acp)
+            except prefs_mod.PrefsError as exc:
+                log.warning("refused %s: bad prefs (%s)",
+                            writer.get_extra_info("peername"), exc)
+                await self.try_send_raw(writer,
+                                        error("bad_prefs", str(exc)[:200]))
+                return None
+
         if self.guest and self.guest.link.connected:
             await self.try_send_raw(
                 writer, error("busy", "another client holds this session")
@@ -159,6 +213,10 @@ class ConnectionService:
             return None
 
         page_bytes, page_blocks, caps = neg.page_bytes, neg.page_blocks, neg.caps
+        # The client's page size: a multiplier on what its memory allows,
+        # clamped by the same ceiling (view/pages.py), never above it.
+        page_bytes, page_blocks = prefs_mod.scaled(
+            client_prefs, page_bytes, page_blocks, neg.mem_kb)
         log.info(
             "guest has %d MB; pages capped at %d bytes / %d blocks",
             neg.mem_kb // 1024,
@@ -241,6 +299,14 @@ class ConnectionService:
         guest.hello = dict(h)
         guest.caps = caps
         fold.use(caps.acp)
+        # WHOLESALE, every handshake: a reconnect is the client's current
+        # answer, and a client that sends none gets the defaults -- never
+        # the previous client's lists and modes (plan review, B2).
+        guest.prefs = client_prefs
+        if not is_reconnect:
+            # A FIRST connection starts in the client's default mode; a
+            # reconnect keeps the open chat's own.
+            guest.mode_id = policy.default_mode(guest)
 
         _facts = toolrep.parse_rows(hello.body or b"", caps)
         guest.tools = toolrules.inventory(_facts)
@@ -401,7 +467,17 @@ class ConnectionService:
             if hello is None:
                 return
 
-            guest = await self.attach(hello, writer)
+            prefs_frame = None
+            if hello.headers.get("prefs", "0") not in ("", "0"):
+                # ONLY WHEN DECLARED. Waiting for a frame a client never
+                # sends would hold every older client for the whole hello
+                # deadline (plan review, B9).
+                prefs_frame, early = await self.read_prefs(
+                    reader, frames, writer, early)
+                if prefs_frame is None:
+                    return
+
+            guest = await self.attach(hello, writer, prefs_frame)
             if guest is None:
                 return
 

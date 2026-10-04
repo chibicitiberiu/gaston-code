@@ -685,11 +685,42 @@ void MainWindow::onBar(rc_frame *f)
         m_html->settle_perm();
 }
 
+void MainWindow::onPrefsAck(rc_frame *f)
+{
+    /* The answer to settings re-sent from Options OK. A refusal names the
+     * line; the settings are still saved here, so the next connection
+     * offers them again. Never an ERROR, which would end the turn's UI for
+     * a setting that did not take. */
+    const char *ok = rc_frame_get(f, "ok");
+    if (ok && strcmp(ok, "1") == 0) {
+        rc_log("prefs: the bridge took them");
+        return;
+    }
+    const char *key = rc_frame_get(f, "key");
+    char line[320];
+    rc_strf(line, sizeof(line), "The bridge did not take a setting (%s): "
+            "%s. It is saved here and will be offered again.",
+            key && *key ? key : "?", f->body ? f->body : "");
+    rc_log("prefs: refused: %s", line);
+    if (m_html) m_html->notice(line);
+}
+
 void MainWindow::onError(rc_frame *f)
 {
     char line[512];
     const char *code = rc_frame_get(f, "code");
     const char *msg = rc_frame_get(f, "msg");
+    /* AN OLDER BRIDGE that does not know a frame this client sends from a
+     * dialog is not a failed turn. Say so once and leave the turn alone --
+     * `abort` below would grey out a reply that is still streaming. */
+    if (code && strcmp(code, "unknown_type") == 0 && msg &&
+        (strncmp(msg, "PREFS", 5) == 0 || strncmp(msg, "GETLISTS", 8) == 0)) {
+        rc_log("bridge does not know %s; settings are saved here only", msg);
+        if (m_html) m_html->notice("This bridge is older than this client "
+                                   "and does not take its settings; they "
+                                   "are saved here only.");
+        return;
+    }
     rc_strf(line, sizeof(line), "[%s] %s", code ? code : "error",
               msg ? msg : "");
     rc_log("bridge error: %s", line);
@@ -769,6 +800,7 @@ void MainWindow::renderFrame(rc_frame *f)
         { "EXPORTDAT",   &MainWindow::onExport },
         { "EXPORTEND",   &MainWindow::onExport },
         { "PONG",        &MainWindow::onPong },
+        { "PREFSACK",    &MainWindow::onPrefsAck },
     };
 
     /* Progress accounting, before anything else looks at the frame -- see

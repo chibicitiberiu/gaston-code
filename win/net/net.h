@@ -105,6 +105,13 @@ typedef struct {
      * live so turning the capability off never waits for a reconnect.
      * (BACKLOG.md 19.) */
     int           automation;
+    /* THE CLIENT'S SETTINGS, sent as the PREFS frame straight after HELLO
+     * (bridge/prefs.py). Not owned: the caller keeps the buffer alive for
+     * as long as the link may start, and rc_net_set_prefs only points at
+     * it. NULL means this client declares no settings and the bridge is not
+     * told to wait for any. */
+    const char   *prefs;
+    unsigned      prefs_len;
 } rc_net;
 
 /* Tell the link which machine it is. Call it BEFORE rc_net_start; the value
@@ -117,6 +124,12 @@ void rc_net_set_machine(rc_net *n, const char *id);
  * calling it later still takes effect for the guest-side refusal, which is
  * how "off" can be immediate while "on" waits for the next HELLO. */
 void rc_net_set_automation(rc_net *n, int mode);
+
+/* The PREFS body to send after each HELLO, `key=value` lines in the ANSI
+ * codepage. The buffer is NOT copied -- see `prefs` above. A body over the
+ * bridge's 16KB cap is refused here with a log line and nothing is
+ * declared, rather than sent to be refused at the handshake. */
+void rc_net_set_prefs(rc_net *n, const char *body, unsigned len);
 
 /* `tools` and `tools_len` are the machine's own inventory, carried as
  * HELLO's BODY rather than as headers -- the header array caps at 32 with

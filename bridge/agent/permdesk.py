@@ -80,6 +80,16 @@ def _bar_line(summary: str, warning: str) -> str:
     return "! " + head + "  -- " + tail
 
 
+def _wait_words(seconds: float) -> str:
+    """"10 minutes", "1 minute", "45 seconds" -- the deadline as the
+    agent is told it, now that the client can choose it."""
+    if seconds < 120:
+        n = max(1, round(seconds))
+        return f"{n} second{'s' if n != 1 else ''}"
+    n = round(seconds / 60)
+    return f"{n} minute{'s' if n != 1 else ''}"
+
+
 #: Categories that stay inside the work folder, and so carry no warning.
 _CONTAINED = (categories.READ, categories.FILES_WORK, categories.RUN_WORK,
               categories.RUN_BUILT)
@@ -194,6 +204,13 @@ class PermissionDesk:
             if k == key:
                 del self._approved[i]
                 return
+
+    def _deadline(self) -> float:
+        """How long a bar waits for an answer: the client's choice (Options
+        > Permissions), else the bridge's ten minutes."""
+        want = getattr(getattr(self._guest, "prefs", None),
+                       "perm_deadline_s", 0)
+        return float(want) if want else perms.DEADLINE_S
 
     # --- classification ----------------------------------------------------
 
@@ -401,7 +418,7 @@ class PermissionDesk:
             try:
                 await self._enqueue(prompt)
                 result = await asyncio.wait_for(prompt.future,
-                                                timeout=perms.DEADLINE_S)
+                                                timeout=self._deadline())
                 if verdict.plan_exit and isinstance(result,
                                                     PermissionResultAllow):
                     return await self._leave_plan()
@@ -409,9 +426,8 @@ class PermissionDesk:
             except TimeoutError:
                 self._finish(prompt, PromptEndReason.TIMEOUT)
                 return PermissionResultDeny(
-                    message=("Nobody answered the permission request on the "
-                             "Windows machine within ten minutes, so it was "
-                             "denied. Ask again if you still need it."),
+                    message=prompts.text(
+                        "policy.timed_out", wait=_wait_words(self._deadline())),
                     interrupt=False)
             except asyncio.CancelledError:
                 # The CLI cancelled us -- the turn was interrupted, or another

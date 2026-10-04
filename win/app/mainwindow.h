@@ -121,6 +121,7 @@ private:
     void onStatus(rc_frame *f);
     void onExport(rc_frame *f);
     void onPong(rc_frame *f);
+    void onPrefsAck(rc_frame *f);
     void renderFrame(rc_frame *f);
     void layout(HWND hwnd);
     void createChildren(HWND hwnd, HINSTANCE inst);

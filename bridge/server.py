@@ -269,6 +269,7 @@ class Bridge:
             "SETMODE":      self.options.on_setmode,
             "EXPORT":       self.session.on_export,
             "RULES":        self.permissions.on_rules,
+            "PREFS":        self.options.on_prefs,
             "SETWORK":      self.workspace.on_setwork,
         }
 

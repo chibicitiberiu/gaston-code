@@ -716,3 +716,13 @@ def optionsend() -> Frame:
 
 def pong() -> Frame:
     return Frame("PONG", {})
+
+
+def prefsack(ok: bool, key: str = "", why: str = "") -> Frame:
+    """The answer to a PREFS re-sent from Options OK. Never an ERROR: an
+    ERROR mid-turn aborts the client's turn UI (mainwindow.cpp onError), and
+    a setting the bridge did not take is not a turn that failed."""
+    h = {"ok": "1" if ok else "0"}
+    if key:
+        h["key"] = key[:64]
+    return Frame("PREFSACK", h, why.encode("utf-8")[:200] if why else b"")

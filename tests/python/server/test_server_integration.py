@@ -1638,7 +1638,9 @@ async def test_permission_deadline_auto_denies_after_timeout(harness, monkeypatc
 
     result = await asyncio.wait_for(task, timeout=2.0)
     assert isinstance(result, PermissionResultDeny)
-    assert "within ten minutes" in result.message
+    # The wait as configured, in words -- the test shortens it.
+    assert "so it was denied" in result.message
+    assert "second" in result.message
     assert result.interrupt is False
 
     end = await _recv(harness, reader, "PERMEND")

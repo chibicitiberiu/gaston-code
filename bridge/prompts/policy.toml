@@ -3,6 +3,21 @@
 # the agent. Rules are SHORT: the bar gives a tag a few dozen characters, and
 # the checker reads them as evidence.
 
+# --- said to the agent or the person, outside any table ---------------------
+# TOP-LEVEL KEYS GO HERE, above the first [table]: TOML files every line after
+# a table header into that table, and a key appended at the end of this file
+# silently became `policy.view.value.timed_out` (found by the deadline test,
+# 2026-10-04).
+
+# To the AGENT, when a call lands in a category this mode turns off.
+off = "This is turned off in the conversation's mode ({mode}): {why}. Do not retry it; do what you can without it, or tell the user what you would need."
+# To the agent, when a bar timed out unanswered.
+timed_out = "Nobody answered the permission request on the user's machine within {wait}, so it was denied. Ask again if you still need it."
+# To the PERSON.
+legacy_auto = "This chat was in Auto before execution modes. Auto now lets the assistant change files and run programs in the work folder without asking or checking; everything else is still checked by a second model. Pick another mode from the Mode menu if that is more than you want."
+protect_held = "Protected places are only ever added to while a chat is open, so these stay protected until Gaston reconnects: {places}."
+mode_gone = "This chat's mode was deleted, so it now uses {now}. Pick another from the Mode menu if you like."
+
 [rule]
 in_work = "{path} is in the work folder"
 elsewhere = "{path} is outside the work folder"
@@ -83,10 +98,7 @@ screen_drive = "clicking and typing on the screen"
 bridge_shell = "running commands on the bridge"
 web = "using the web"
 
-# Said to the AGENT when a call lands in a category this mode turns off.
-off = "This is turned off in the conversation's mode ({mode}): {why}. Do not retry it; do what you can without it, or tell the user what you would need."
 
-legacy_auto = "This chat was in Auto before execution modes. Auto now lets the assistant change files and run programs in the work folder without asking or checking; everything else is still checked by a second model. Pick another mode from the Mode menu if that is more than you want."
 
 # The answer to "What can run without asking..." (permissions.rules_view).
 [view]

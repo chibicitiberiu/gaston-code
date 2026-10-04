@@ -252,10 +252,19 @@ class SessionService:
         await self.send_sessions(guest)
 
     def reset_chat_policy(self, guest: GuestSession) -> None:
-        """The client's default mode, and no grants."""
+        """The client's default mode, and no grants -- and its default model
+        and effort, when it has declared any (Options > General). Without a
+        declared default a new chat keeps what is selected, as before."""
         guest.grants = set()
         guest.mode_before_plan = ""
         guest.mode_id = policy.default_mode(guest)
+        prefs = getattr(guest, "prefs", None)
+        model = str(getattr(prefs, "general_model", "") or "")
+        effort = str(getattr(prefs, "general_effort", "") or "")
+        if model:
+            guest.model = model
+        if effort:
+            guest.effort = effort
 
     def restore_settings(self, guest: GuestSession, session_id: str) -> None:
         """Put back what this conversation was last set to.

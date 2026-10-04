@@ -24,7 +24,7 @@ from claude_agent_sdk import PermissionUpdate
 from bridge import server as srv
 from bridge.server import Bridge
 from bridge.wire.compress import StreamDecompressor
-from bridge.wire.protocol import FrameReader, hello
+from bridge.wire.protocol import Frame, FrameReader, hello
 
 
 @dataclass
@@ -285,7 +285,7 @@ class Harness:
         return b"".join(out)
 
     async def connect(self, secret="s", *, ver=None, cap=None,
-                      sess=None, hdrs=None, tools=None):
+                      sess=None, hdrs=None, tools=None, prefs=None):
         r, w = await asyncio.open_connection("127.0.0.1", self.port)
         # Fresh connection means the bridge resets its compressor, so reset
         # in lockstep. Same for the frame reader.
@@ -308,7 +308,13 @@ class Harness:
         # is what every other test wants.
         if hdrs:
             f.headers.update({k: str(v) for k, v in hdrs.items()})
+        if prefs is not None:
+            # The client's settings: declared in HELLO, sent as the very
+            # next frame, raw (bridge/prefs.py).
+            f.headers["prefs"] = "1"
         w.write(f.encode())
+        if prefs is not None:
+            w.write(Frame("PREFS", {}, prefs).encode())
         await w.drain()
         return r, w
 

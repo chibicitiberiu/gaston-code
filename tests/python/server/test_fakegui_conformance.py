@@ -118,7 +118,9 @@ def test_fakegui_hello_headers_match_guest_net_cpp():
     # Optional headers that depend on runtime configuration/state:
     # sync_root (only if configured), sess (only on resume), conv (only once
     # a conversation has been named).
-    optional_runtime = {"sync_root", "sess", "conv"}
+    # `prefs` only with a PREFS body to follow it (net.cpp): the fake has
+    # no settings to send, and declaring it would make the bridge wait.
+    optional_runtime = {"sync_root", "sess", "conv", "prefs"}
     required_keys = hdr_keys - optional_runtime
 
     missing = required_keys - fake_headers

@@ -13,7 +13,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .agent.session import Session
 from .files.synctransport import GuestSyncState
@@ -186,6 +186,9 @@ class GuestSession:
     legacy_auto: bool = False
     #: `policy.surface` of the live session: what it was told it has.
     surface: tuple | None = None
+    #: The client's declared settings (bridge/prefs.py), replaced wholesale
+    #: at every handshake and on every PREFS. None until the first attach.
+    prefs: Any = None
     #: The person's last few prompts, newest last, for the Auto reviewer.
     recent_prompts: list = field(default_factory=list)
     #: Everything about writing bytes to this guest -- the socket writer, the

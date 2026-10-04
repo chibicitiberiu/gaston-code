@@ -269,11 +269,14 @@ class SyncService:
             g.sync.active = True
             try:
                 transport = SyncTransport(g)
+                prefs = getattr(g, "prefs", None)
                 p = Pass(
                     transport,
                     g.caps,
                     mirror,
                     self.base_path(g),
+                    max_file=getattr(prefs, "sync_max_kb", 0) * 1024,
+                    extra_ignore=getattr(prefs, "sync_ignore", ()),
                 )
                 got = await p.run()
                 g.guest_sync_root = p.guest_root
@@ -576,8 +579,15 @@ class SyncService:
         the guest asked for costs a debug line and nothing else.
         """
         while True:
-            await asyncio.sleep(self.config.sync_sweep_s)
             guest = self._get_guest(None)
+            # The client's own interval (Options > Files), else the bridge's;
+            # -1 means only when the machine reports a change.
+            want = getattr(getattr(guest, "prefs", None), "sync_sweep_s", 0)
+            await asyncio.sleep(want if want > 0
+                                else self.config.sync_sweep_s)
+            guest = self._get_guest(None)
+            if want == -1:
+                continue
             if self.config.sync_dir and guest is not None:
                 # Bound HERE as well as inherited from ConnectionService.
                 # attach's context: this keeps it true once a task started

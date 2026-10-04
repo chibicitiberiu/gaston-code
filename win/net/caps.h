@@ -98,6 +98,16 @@ extern "C" {
  * nothing is overwritten unless `overwrite` (fs/tree.h). */
 #define RC_CAP_OPS 2
 
+/* The PREFS frame (bridge/prefs.py): this client sends its settings as one
+ * frame straight after HELLO -- defaults for new chats, page size, sync
+ * choices, its execution modes and the protected/trusted/dangerous lists --
+ * and the bridge waits for it before building a session. Declared, because
+ * a bridge that waited for a frame a client never sends would hold every
+ * older client for the whole hello deadline. Bumped whenever a key is
+ * added: the bridge refuses a key it does not know rather than half-apply
+ * a setting. */
+#define RC_CAP_PREFS 1
+
 /* How many characters short of the path limit a DIRECTORY must stop.
  * CreateDirectory refuses within 12 of MAX_PATH so an 8.3 name still fits
  * inside; Unix reserves none. A NUMBER, not a flag, so a client with a

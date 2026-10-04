@@ -11,9 +11,10 @@ from collections.abc import Callable
 from typing import Any
 
 from ..agent import policy, review
+from ..agent.prompts import text as prompts_text
 from ..guest import GuestSession
 from ..view import html as H
-from ..wire.protocol import Frame, option, optionsend
+from ..wire.protocol import Frame, option, optionsend, prefsack
 from .config import BridgeConfig
 
 log = logging.getLogger("bridge.options")
@@ -87,14 +88,60 @@ class OptionsService:
         return self._commands_cache
 
     def effective_model(self, guest: GuestSession) -> str:
-        """What model this guest's session actually runs on."""
+        """What model this guest's session actually runs on: the chat's own
+        choice, else the client's default (Options), else the bridge's."""
+        prefs = getattr(guest, "prefs", None)
         fallback = self.config.model if self.config else ""
-        return guest.model or fallback or ""
+        return (guest.model or getattr(prefs, "general_model", "")
+                or fallback or "")
 
     def effective_effort(self, guest: GuestSession) -> str:
         """Effort's counterpart to `effective_model`."""
+        prefs = getattr(guest, "prefs", None)
         fallback = self.config.effort if self.config else ""
-        return guest.effort or fallback or ""
+        return (guest.effort or getattr(prefs, "general_effort", "")
+                or fallback or "")
+
+    async def on_prefs(self, guest: GuestSession, f: Frame) -> None:
+        """The client's settings, re-sent because the person pressed OK.
+
+        Answered with PREFSACK, never ERROR (see `prefsack`). What each
+        setting does on arrival: defaults for new chats wait for a new chat;
+        page size applies to the next page; sync settings to the next pass;
+        lists and modes at once -- except that the protected list never
+        shrinks inside a session (`prefs.floor`), and a chat whose mode was
+        just deleted falls back to the default without forgetting it.
+        """
+        from .. import prefs as P
+        from ..view import pages
+        acp = getattr(getattr(guest, "caps", None), "acp", "") or "cp1252"
+        try:
+            new = P.parse(f.body or b"", acp)
+        except P.PrefsError as exc:
+            log.warning("prefs refused: %s", exc)
+            await self.connection.send(guest, prefsack(False, exc.key,
+                                                       exc.why))
+            return
+        old = getattr(guest, "prefs", None) or P.DEFAULT
+        new, held = P.floor(old, new)
+        guest.prefs = new
+        mem = int((guest.hello or {}).get("mem_kb", 0) or 0)
+        guest.view.page_bytes, guest.view.page_blocks = P.scaled(
+            new, *pages.limits_for(mem), mem)
+        if held and self.write_block:
+            await self.write_block(guest, H.notice(prompts_text(
+                "policy.protect_held", places=", ".join(held))))
+        if policy.lookup(guest.mode_id, new.modes) is None:
+            gone = guest.mode_id
+            guest.mode_id = policy.default_mode(guest)
+            guest.grants = set()
+            log.info("mode %s is gone; this chat now uses %s",
+                     gone, guest.mode_id)
+            if self.write_block:
+                await self.write_block(guest, H.notice(prompts_text(
+                    "policy.mode_gone", now=policy.mode_of(guest).label)))
+        await self.connection.send(guest, prefsack(True))
+        await self.send_options(guest)
 
     def remember_settings(
         self, guest: GuestSession, session_id: str | None = None

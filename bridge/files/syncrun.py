@@ -109,12 +109,17 @@ class Pass:
     caps = C.Caps()
 
     def __init__(self, transport: SyncTransport, caps: C.Caps | None,
-                root: str, state_dir: str):
+                root: str, state_dir: str, *, max_file: int = 0,
+                extra_ignore: tuple = ()):
         # `transport` wraps the one guest connection `Pass` needs (see
         # synctransport.py); `caps` is passed explicitly rather than fished
         # out of a guest that might not be one.
         self.transport = transport
         self.root = root
+        #: The client's own choices (Options > Files): the largest file it
+        #: wants carried, and patterns it never wants copied.
+        self.max_file = max_file or MAX_FILE
+        self.extra_ignore = tuple(extra_ignore or ())
         # `state_dir` may name the FILE rather than the directory: re-deriving
         # a name from a directory here risked disagreeing with the one
         # `SyncService.base_path` (one baseline per guest root) already chose.
@@ -274,9 +279,10 @@ class Pass:
         """Send one file. Returns True when the baseline may advance."""
         full = os.path.join(self.root, rel)
         data = pathlib.Path(full).read_bytes()
-        if len(data) > MAX_FILE:
+        cap = getattr(self, "max_file", MAX_FILE)
+        if len(data) > cap:
             self.reports.append(
-                f"skipped {rel}: {len(data)} bytes exceeds the {MAX_FILE} cap; "
+                f"skipped {rel}: {len(data)} bytes exceeds the {cap} cap; "
                 f"one file must not hold the wire")
             return False
         # The tree's rules, not just the content's: `-text` turns off both
@@ -537,7 +543,8 @@ class Pass:
         would act on it.
         """
         if ignore is None:
-            ignore = I.load(self.root)
+            ignore = I.load(self.root,
+                            extra=getattr(self, "extra_ignore", ()))
 
         # The trailing slash is load-bearing: `build/` matches a DIRECTORY,
         # not the string "build", and a row's type is what knows which to ask.

@@ -208,6 +208,21 @@ void rc_net_set_automation(rc_net *n, int mode)
                                                      : RC_AUTOMATION_NONE;
 }
 
+#define RC_PREFS_MAX (16u * 1024u)
+
+void rc_net_set_prefs(rc_net *n, const char *body, unsigned len)
+{
+    if (!n) return;
+    if (body && len > RC_PREFS_MAX) {
+        rc_log("net: settings are %u bytes, over the %u the bridge takes; "
+               "not declaring any", len, RC_PREFS_MAX);
+        body = NULL;
+        len = 0;
+    }
+    n->prefs = body;
+    n->prefs_len = body ? len : 0;
+}
+
 /* The only way to add a HELLO header. Drops rather than overruns, and says so.
  * A dropped header degrades the bridge's picture of the machine; an overrun
  * corrupts the stack while building the very first frame. */
@@ -534,6 +549,9 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                       : RC_STR(RC_AUTOMATION_NONE));
     HDR("keys",       RC_STR(RC_CAP_KEYS));
     HDR("ops",        RC_STR(RC_CAP_OPS));
+    /* Only with a body to follow: the bridge waits for PREFS when this
+     * says one is coming, and for nothing when it is absent. */
+    if (n->prefs) HDR("prefs", RC_STR(RC_CAP_PREFS));
 
     /* THE BODY IS THE INVENTORY. It rides HELLO rather than a frame of its
      * own because the bridge builds the agent's system prompt inside the
@@ -543,6 +561,17 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
      * connection. A bridge that does not understand it ignores it. */
     if (rc_net_send(n, "HELLO", keys, vals, nkv, tools, tools_len) != 0) {
         rc_log("net: HELLO failed");
+        set_state(n, RC_FAILED);
+        return -1;
+    }
+    /* THE SETTINGS, NEXT AND RAW. Queued before the sender starts, like
+     * HELLO, and never compressed (rc_frame_compressible does not list
+     * PREFS): the bridge reads it inside the handshake, before it has
+     * anything to inflate with. An empty body is still a frame -- it says
+     * "every default", which is different from saying nothing. */
+    if (n->prefs &&
+        rc_net_send(n, "PREFS", NULL, NULL, 0, n->prefs, n->prefs_len) != 0) {
+        rc_log("net: PREFS failed");
         set_state(n, RC_FAILED);
         return -1;
     }
