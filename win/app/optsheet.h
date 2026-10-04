@@ -29,7 +29,8 @@
 #define RC_OPT_FILES       2
 #define RC_OPT_PERMISSIONS 3
 #define RC_OPT_TOOLS       4
-#define RC_OPT_COUNT       5
+#define RC_OPT_MISC        5
+#define RC_OPT_COUNT       6
 
 /* Where the bridge's answers to the Lists inspector go while it is open. */
 class ListsView

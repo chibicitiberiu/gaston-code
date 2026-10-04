@@ -62,6 +62,7 @@ protected:
 private:
     int m_show;
     char m_exeDir[MAX_PATH];
+    char m_logDir[MAX_PATH];
     ClientConfig m_config;
     rc_net m_net;
     UniqueObj<ConfigStore> m_store;
@@ -102,7 +103,24 @@ bool ClientApp::initialize()
      * created" is the primary diagnostic: an NT-only static import kills the
      * process at load, before WinMain, leaving nothing else behind. */
     exeDir(m_exeDir, sizeof(m_exeDir));
-    rc_log_open(m_exeDir, "gaston");
+    /* WHERE: Options > Misc's log folder, read straight from the INI --
+     * ConfigStore is not loaded yet, and this has to run first. Only a
+     * folder that exists is used; otherwise beside the program, which is
+     * where anyone will look first. It applies from the next start. */
+    {
+        char ini[MAX_PATH];
+        m_logDir[0] = 0;
+        if (rc_strf(ini, sizeof ini, "%s\\gaston.ini", m_exeDir))
+            GetPrivateProfileStringA("log", "dir", "", m_logDir,
+                                     sizeof m_logDir, ini);
+        DWORD a = m_logDir[0] ? GetFileAttributesA(m_logDir) : 0xFFFFFFFF;
+        if (a == 0xFFFFFFFF || !(a & FILE_ATTRIBUTE_DIRECTORY))
+            rc_strcpy(m_logDir, sizeof m_logDir, m_exeDir);
+    }
+    /* EARLY: appending, nothing rotated, so a copy that bounces off the
+     * single-instance check below cannot spend the previous run's log
+     * (BACKLOG.md 24). */
+    rc_log_open_early(m_logDir, "gaston");
     rc_log("os version: %08lx", GetVersion());
 
     /* One instance. A second one is not a harmless duplicate: the bridge holds
@@ -141,6 +159,8 @@ bool ClientApp::initialize()
         /* Deliberately never closed: the handle IS the lock, and it is
          * released when the process exits, however it exits. */
     }
+    /* THIS copy runs: now the previous run becomes .prv. */
+    rc_log_begin_run();
 
     memset(&icc, 0, sizeof(icc));
     icc.dwSize = sizeof(icc);

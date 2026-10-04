@@ -35,6 +35,16 @@ extern "C" {
  * and nothing else changes; the return value is still only about whether the
  * log could be opened at all (0, or -1). */
 int  rc_log_open(const char *exe_dir, const char *program);
+
+/* rc_log_open in two halves, for a program with a single-instance check
+ * (BACKLOG.md 24). EARLY opens <dir>\<program>.log APPENDING -- nothing is
+ * renamed, so a copy that bounces off the check adds its few lines to the
+ * run that is still going instead of spending that run's rotation -- and
+ * still writes from the first statement, which is the diagnostic for an
+ * image that dies at load. BEGIN_RUN is called once this copy is the one
+ * that will run: it rotates (.log -> .prv) and starts this run's file. */
+int  rc_log_open_early(const char *dir, const char *program);
+int  rc_log_begin_run(void);
 void rc_log(const char *fmt, ...);
 void rc_log_close(void);
 /* One more line when the log may ALREADY BE CLOSED: writes to the open handle

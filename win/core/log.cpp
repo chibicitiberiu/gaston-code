@@ -168,6 +168,33 @@ static int rotate(const char *exe_dir, const char *program,
     return ROT_NOTHING;
 }
 
+static char g_dir[MAX_PATH];
+
+int rc_log_open_early(const char *dir, const char *program)
+{
+    g_program = (program && *program) ? program : "?";
+    rc_strcpy(g_dir, sizeof(g_dir), dir ? dir : ".");
+    rc_strf(g_path, sizeof(g_path), "%s\\%s.log", g_dir, g_program);
+    if (!g_ready)
+    {
+        InitializeCriticalSection(&g_lock);
+        g_ready = 1;
+    }
+    g_fh = CreateFileA(g_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                       OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (g_fh == INVALID_HANDLE_VALUE) return -1;
+    SetFilePointer(g_fh, 0, NULL, FILE_END);
+    rc_log("=== %s starting (pid %lu); this run's log begins after the "
+           "instance check ===", g_program, (unsigned long)GetCurrentProcessId());
+    return 0;
+}
+
+int rc_log_begin_run(void)
+{
+    if (!g_dir[0]) return -1;
+    return rc_log_open(g_dir, g_program);
+}
+
 int rc_log_open(const char *exe_dir, const char *program)
 {
     char prev[MAX_PATH];

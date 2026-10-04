@@ -913,6 +913,126 @@ void ToolsPage::store()
     m_dirty = false;
 }
 
+/* --- Misc ------------------------------------------------------------- */
+
+#define ID_MLOGDIR  900
+#define ID_MBROWSE  901
+#define ID_MCMDLOG  902
+#define ID_MOPEN    903
+
+/* Explorer on a folder. ShellExecuteA through LoadLibrary, as Open work
+ * directory does: a stripped install loses the button, not the program. */
+typedef HINSTANCE (WINAPI *PFN_SHEXEC)(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR,
+                                       INT);
+void openFolder(const char *dir)
+{
+    Dll sh(LoadLibraryA("shell32.dll"));
+    PFN_SHEXEC run = sh.valid()
+        ? (PFN_SHEXEC)GetProcAddress(sh.get(), "ShellExecuteA") : 0;
+    if (run) run(NULL, "explore", dir, NULL, NULL, SW_SHOWNORMAL);
+}
+
+class MiscPage : public Page
+{
+public:
+    explicit MiscPage(Sheet *s) : Page(s) {}
+    void build(DlgTemplate &t);
+
+protected:
+    void load();
+    void store();
+    bool onKillActive();
+    bool onCommand(WORD id, WORD code, HWND ctl);
+};
+
+void MiscPage::build(DlgTemplate &t)
+{
+    t.begin(RC_DLGT_PAGE, PAGE_W, PAGE_H, "Misc");
+    t.item(BS_GROUPBOX, 4, 4, 222, 72, (WORD)-1, RC_DLGT_BUTTON, "Logs");
+    t.item(0, 10, 16, 210, 8, (WORD)-1, RC_DLGT_STATIC,
+           "&Folder for gaston.log (empty: beside the program):");
+    t.item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 10, 26, 156, 12,
+           ID_MLOGDIR, RC_DLGT_EDIT, "");
+    t.item(WS_TABSTOP, 170, 25, 50, 14, ID_MBROWSE, RC_DLGT_BUTTON,
+           "&Browse...");
+    t.item(0, 10, 42, 210, 18, (WORD)-1, RC_DLGT_STATIC,
+           "It applies from the next start. The previous run is kept as "
+           "gaston.prv.");
+    t.item(WS_TABSTOP, 10, 58, 80, 14, ID_MOPEN, RC_DLGT_BUTTON,
+           "&Open the folder");
+    t.item(BS_GROUPBOX, 4, 82, 222, 58, (WORD)-1, RC_DLGT_BUTTON,
+           "Commands");
+    t.item(BS_AUTOCHECKBOX | WS_TABSTOP, 10, 95, 210, 10, ID_MCMDLOG,
+           RC_DLGT_BUTTON, "&Save every command and its output");
+    t.item(0, 10, 109, 210, 28, (WORD)-1, RC_DLGT_STATIC,
+           "Into CMDLOG\\<date>.CMD in the log folder: the command, where "
+           "it ran, its exit code and what it printed. Thirty days are kept, "
+           "up to 1 MB a day.");
+}
+
+void MiscPage::load()
+{
+    const ClientConfig &c = m_sheet->work();
+    text(ID_MLOGDIR, c.logDir);
+    SendDlgItemMessageA(hwnd(), ID_MLOGDIR, EM_LIMITTEXT,
+                        sizeof c.logDir - 1, 0);
+    CheckDlgButton(hwnd(), ID_MCMDLOG, c.cmdLog ? BST_CHECKED
+                                                : BST_UNCHECKED);
+}
+
+bool MiscPage::onKillActive()
+{
+    char dir[MAX_PATH];
+    const ClientConfig &c = m_sheet->work();
+    getText(ID_MLOGDIR, dir, sizeof dir);
+    if (!dir[0]) return true;
+    DWORD a = GetFileAttributesA(dir);
+    if (a == 0xFFFFFFFF || !(a & FILE_ATTRIBUTE_DIRECTORY))
+        return refuse(ID_MLOGDIR, "That folder does not exist.");
+    /* Not inside the shared folder: the log would be copied to the bridge
+     * and back, and a log of a sync that syncs itself never settles. */
+    unsigned n = (unsigned)strlen(c.syncRoot);
+    if (n && strnicmp(dir, c.syncRoot, n) == 0 &&
+        (dir[n] == 0 || dir[n] == '\\'))
+        return refuse(ID_MLOGDIR, "The log folder cannot be inside the "
+                                  "folder shared with the assistant.");
+    return true;
+}
+
+void MiscPage::store()
+{
+    ClientConfig &c = m_sheet->work();
+    getText(ID_MLOGDIR, c.logDir, sizeof c.logDir);
+    c.cmdLog = IsDlgButtonChecked(hwnd(), ID_MCMDLOG) == BST_CHECKED;
+}
+
+bool MiscPage::onCommand(WORD id, WORD code, HWND ctl)
+{
+    (void)ctl;
+    if (id == ID_MBROWSE && code == BN_CLICKED) {
+        char cur[MAX_PATH], picked[MAX_PATH];
+        getText(ID_MLOGDIR, cur, sizeof cur);
+        if (rc_workdir_browse(GetParent(hwnd()), cur[0] ? cur
+                              : m_sheet->exeDir(), picked, sizeof picked)) {
+            text(ID_MLOGDIR, picked);
+            changed();
+        }
+        return true;
+    }
+    if (id == ID_MOPEN && code == BN_CLICKED) {
+        char cur[MAX_PATH];
+        getText(ID_MLOGDIR, cur, sizeof cur);
+        openFolder(cur[0] ? cur : m_sheet->exeDir());
+        return true;
+    }
+    if ((id == ID_MLOGDIR && code == EN_CHANGE) ||
+        (id == ID_MCMDLOG && code == BN_CLICKED)) {
+        changed();
+        return true;
+    }
+    return false;
+}
+
 /* --- Permissions ---------------------------------------------------------- */
 
 #define ID_MODE      400
@@ -1294,6 +1414,7 @@ bool rc_options_run(HWND parent, HINSTANCE inst, const ClientConfig &cur,
     pages[RC_OPT_FILES].reset(new FilesPage(sheet.get()));
     pages[RC_OPT_PERMISSIONS].reset(new PermissionsPage(sheet.get()));
     pages[RC_OPT_TOOLS].reset(new ToolsPage(sheet.get()));
+    pages[RC_OPT_MISC].reset(new MiscPage(sheet.get()));
 
     memset(psp, 0, sizeof psp);
     for (i = 0; i < RC_OPT_COUNT; i++) {
