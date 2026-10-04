@@ -603,7 +603,7 @@ async def test_the_guard_judges_by_the_shell_the_call_named(harness):
 
 
 async def test_a_restarted_bridge_reopens_the_conversation_the_machine_names(
-    harness, monkeypatch,
+    harness, monkeypatch, tmp_path,
 ):
     """Measured on the Athlon, 2026-10-03: the bridge restarted, the client
     reconnected, and the conversation it had open was gone from the pane --
@@ -613,6 +613,7 @@ async def test_a_restarted_bridge_reopens_the_conversation_the_machine_names(
                         lambda sid_, limit=2000: [])
     monkeypatch.setattr(srv.sesslist, "listing",
                         lambda cwd=None, limit=50: [{"id": "stored-7"}])
+    harness.bridge.config.sync_dir = str(tmp_path / "tree")
     harness.bridge.conv.add("stored-7")
     harness.bridge.conv.set_folder("stored-7", "WORKHERE", "C:\\WORK\\WORKHERE")
     r, w = await harness.connect(hdrs={"conv": "stored-7"})
@@ -625,6 +626,10 @@ async def test_a_restarted_bridge_reopens_the_conversation_the_machine_names(
     work = [x for x in frames
             if x.type == "OPTION" and x.headers.get("kind") == "work"]
     assert work and work[-1].headers.get("id") == "C:\\WORK\\WORKHERE"
+    # And no scan went out before that batch named the folder: the guest
+    # would have answered no_root and sync waited out a retry.
+    early = [x for x in frames if x.type == "SYNCSCAN"]
+    assert not early, "a scan reached the guest before its folder did"
     await harness.close(w)
 
 

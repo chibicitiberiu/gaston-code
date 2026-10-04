@@ -404,10 +404,6 @@ class Bridge:
         await self.coordinator.sync_state_to_guest(guest)
         await self.sync.reconcile_halt(guest)
 
-        if self.config.sync_dir:
-            self.turn_runner.seed_agent_notices()
-            self._spawn(self.sync.run_sync("the machine reconnected"))
-
         log.info("attached sess=%s (reconnect=%s)", guest.sess_id, is_reconnect)
 
         if reopen:
@@ -425,6 +421,14 @@ class Bridge:
                 # starts its session here too, so this costs nothing new.
                 if await self.session.resume_pending(guest):
                     await self.options.send_options(guest)
+
+        # AFTER the reopen. Its options batch is what names the folder the
+        # guest mirrors, and the wire is ordered: a scan sent before it found
+        # the guest with no root ("no_root") and waited out a retry
+        # (2026-10-03). Sent after, the guest has applied the folder first.
+        if self.config.sync_dir:
+            self.turn_runner.seed_agent_notices()
+            self._spawn(self.sync.run_sync("the machine reconnected"))
 
 
     # --- the conversation's own folder -------------------------------------
