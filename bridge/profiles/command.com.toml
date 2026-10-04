@@ -140,11 +140,27 @@ reentry = ["command", "command.com"]
 # `print` LEFT THIS LIST (2026-10-04): it sends files to a device, which is
 # not reading. `date` and `time` moved to `conditional_read`: with an argument
 # they SET the clock.
+#
+# Control flow and console state joined it the same day: a build script is
+# judged line by line now, and `goto end` read as "an unknown program", which
+# put every script with a label in the riskiest tier.
 read = [
-  "cd", "chdir", "cls", "comp", "dir", "echo", "fc",
-  "find", "findstr", "help", "mem", "more", "path", "pause",
-  "rem", "set", "tree", "type", "ver", "vol",
+  "break", "cd", "chdir", "cls", "comp", "dir", "echo", "exit", "fc",
+  "find", "findstr", "goto", "help", "lfnfor", "mem", "more", "path",
+  "pause", "prompt", "rem", "set", "shift", "tree", "truename", "type",
+  "ver", "verify", "vol",
 ]
+
+# Of `write`, the verbs that DESTROY what they name, and of those, the ones
+# that take a whole tree. A delete through this shell is permanent -- there is
+# no Recycle Bin on this path -- so a recursive one, or one whose pattern is
+# "everything", is judged as a permanent delete.
+removes = ["del", "erase", "deltree", "rd", "rmdir"]
+recursive = ["deltree"]
+
+# `conditional_read` verbs whose written form changes the MACHINE rather than
+# a file named on the line: `date 01-01-98` has no path to judge.
+machine_state = ["date", "time"]
 
 # Verbs that write, and whose arguments say where.
 write = [

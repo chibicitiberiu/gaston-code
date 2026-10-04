@@ -189,6 +189,12 @@ class Grammar:
     #: Names of the shell itself, which runs what follows `run_switch`.
     reentry: frozenset = frozenset()
     run_switch: str = ""
+    #: `write` verbs that destroy what they name; of those, the ones that
+    #: take a whole tree.
+    removes: frozenset = frozenset()
+    recursive: frozenset = frozenset()
+    #: `conditional_read` verbs whose written form changes the machine.
+    machine_state: frozenset = frozenset()
 
     @property
     def usable(self) -> bool:
@@ -243,6 +249,8 @@ def _grammar(shell: str) -> Grammar:
         scripts=tuple(str(e).lower() for e in t.get("scripts", ())),
         prefixes=fs("prefixes"), reentry=fs("reentry"),
         run_switch=str(t.get("run_switch", "")).lower(),
+        removes=fs("removes"), recursive=fs("recursive"),
+        machine_state=fs("machine_state"),
     )
 
 

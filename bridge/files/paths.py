@@ -556,3 +556,65 @@ def conflict_dir(workdir: str) -> str:
     w = workdir.rstrip("/").rstrip(os.sep) if workdir else workdir
     return os.path.join(os.path.dirname(w), ".gaston", "conflict",
                         os.path.basename(w))
+
+
+def glob_match(pattern: str, path: str, sep: str, fold: bool) -> bool:
+    r"""Does `path` match `pattern`, component by component?
+
+    `*` and `?` stay inside one component; a component that is exactly `**`
+    matches any number of them, including none. Both sides are expected in
+    the same normal form (the caller runs them through the shell grammar's
+    `norm`, which resolves `..` and folds separators), and nothing here knows
+    what a drive letter is: `C:` is a component like any other.
+
+    GRAMMAR-AGNOSTIC ON PURPOSE. The patterns are the client's (CLAUDE.md:
+    the client declares OS facts), and the bridge matches them as opaque
+    text. `fnmatch` would do for one component but treats `[` as a class,
+    and a folder named `[old]` is a real folder.
+    """
+    if not sep:
+        return False
+    if fold:
+        pattern, path = pattern.upper(), path.upper()
+    pp = [c for c in pattern.split(sep) if c]
+    tp = [c for c in path.split(sep) if c]
+
+    def one(p: str, t: str) -> bool:
+        # Iterative wildcard match with backtracking on the last `*`.
+        i = j = 0
+        star, mark = -1, 0
+        while j < len(t):
+            if i < len(p) and (p[i] == "?" or p[i] == t[j]):
+                i += 1
+                j += 1
+            elif i < len(p) and p[i] == "*":
+                star, mark = i, j
+                i += 1
+            elif star >= 0:
+                i = star + 1
+                mark += 1
+                j = mark
+            else:
+                return False
+        while i < len(p) and p[i] == "*":
+            i += 1
+        return i == len(p)
+
+    # Memoised over (pattern index, path index): `**` makes this a search,
+    # and a pattern with several of them must not go exponential.
+    memo: dict = {}
+
+    def walk(i: int, j: int) -> bool:
+        key = (i, j)
+        if key in memo:
+            return memo[key]
+        if i == len(pp):
+            out = j == len(tp)
+        elif pp[i] == "**":
+            out = walk(i + 1, j) or (j < len(tp) and walk(i, j + 1))
+        else:
+            out = j < len(tp) and one(pp[i], tp[j]) and walk(i + 1, j + 1)
+        memo[key] = out
+        return out
+
+    return walk(0, 0)

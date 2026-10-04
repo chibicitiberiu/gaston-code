@@ -426,3 +426,30 @@ def test_the_agent_s_own_mirror_path_maps_to_the_machine_s():
     assert on("/tmp/vm/work/OTHER/x.txt") is None
     assert on("/etc/passwd") is None
     assert on("rel\\x.txt") == "C:\\WORK\\CONV\\rel\\x.txt"
+
+
+# --- glob_match --------------------------------------------------------------
+
+from bridge.files.paths import glob_match
+
+
+@pytest.mark.parametrize("pat,path,want", [
+    (r"C:\WINDOWS\**", r"C:\WINDOWS\WIN.INI", True),
+    (r"C:\WINDOWS\**", r"C:\WINDOWS", True),            # ** matches none
+    (r"C:\WINDOWS\**", r"C:\WINDOWS\SYSTEM\X.DLL", True),
+    (r"C:\WINDOWS\**", r"C:\WINDOWSX\A", False),
+    (r"C:\*.SYS", r"C:\CONFIG.SYS", True),
+    (r"C:\*.SYS", r"C:\DOS\HIMEM.SYS", False),           # * stays in one
+    (r"C:\WINDOWS\*.INI", r"c:\windows\win.ini", True),  # folded
+    (r"C:\??.SYS", r"C:\IO.SYS", True),
+    (r"C:\??.SYS", r"C:\MSDOS.SYS", False),
+    (r"**\TEMP\**", r"D:\X\TEMP\A.TMP", True),
+    (r"C:\[OLD]\*", r"C:\[OLD]\A", True),                # [ is literal
+])
+def test_glob_match(pat, path, want):
+    assert glob_match(pat, path, "\\", True) is want
+
+
+def test_glob_match_respects_case_when_the_machine_does():
+    assert not glob_match("/etc/**", "/ETC/passwd", "/", False)
+    assert glob_match("/etc/**", "/etc/passwd", "/", False)
