@@ -19,6 +19,14 @@ matters it is a runtime branch, not a name (the bridge picks `command.com` or
 `shell_command()`). `docs/FEASIBILITY.md`'s `win98_*` sketch is
 superseded.
 
+**The client declares OS facts; the bridge holds none.** Protected system paths,
+trusted and dangerous programs, and anything else that is true of one OS are
+compiled into the client (or its INIs) and sent at handshake; the bridge
+matches them as opaque patterns. The per-shell grammar in
+`bridge/profiles/<shell>.toml` is the one accepted exception: shell data the
+bridge already selects from the HELLO inventory. Do not add Windows paths,
+8.3 rules or program names to bridge Python. `docs/OPTIONS-PLAN.md`.
+
 **A tool earns its place only if `exec` does the job badly.** Every tool costs
 context on every request. See "the exec test" in `docs/PLAN.md` §3.1.
 
