@@ -275,3 +275,89 @@ def test_ask_first_does_not_ask_to_read(monkeypatch):
         ("mcp__machine__drives", {}),
     ], monkeypatch)
     assert bars == 0
+
+
+# --- "Allow for this chat" ---------------------------------------------------
+
+
+def test_grant_keys_are_offered_only_for_grantable_placed_findings():
+    m = P.preset("manual")
+    assert P.grant_keys(P.decide(m, verdict(hit(K.FILES_WORK)))) == [
+        "files_work"]
+    assert P.grant_keys(P.decide(m, verdict(
+        hit(K.RUN_BUILT, subject="C:\\W\\A.EXE")))) == [
+        "run_built:C:\\W\\A.EXE"]
+    for cat in (K.RUN_SYS, K.FILES_SYS, K.PURGE, K.RUN_ELSE, K.FILES_ELSE,
+                K.SCREEN_DRIVE, K.BRIDGE_SHELL):
+        assert P.grant_keys(P.decide(m, verdict(hit(cat)))) == [], cat
+    assert P.grant_keys(P.decide(m, verdict(
+        hit(K.FILES_WORK, doubt=True)))) == []
+    # One ungrantable finding among them and there is no button.
+    assert P.grant_keys(P.decide(m, verdict(
+        hit(K.FILES_WORK), hit(K.FILES_ELSE)))) == []
+
+
+def test_a_grant_settles_the_bars_queued_behind_it(monkeypatch):
+    """Two writes in the work folder arrive together; the person answers
+    the first with "Allow for this chat". The second must not ask again."""
+    sent = []
+    guest = Guest("manual")
+    remembered = []
+
+    async def write_block(html):
+        pass
+
+    async def send(frame):
+        sent.append(frame)
+
+    async def on_mode():
+        remembered.append(set(guest.grants))
+
+    desk = PermissionDesk(guest, cwd="/tmp", write_block=write_block,
+                          send=send, spawn=asyncio.ensure_future,
+                          on_mode=on_mode)
+
+    class Ctx2(Ctx):
+        tool_use_id = "toolu_2"
+
+    async def go():
+        cb = desk.callback()
+        a = asyncio.ensure_future(cb("mcp__machine__put_file",
+                                     {"path": "a.c", "content": "x"}, Ctx()))
+        b = asyncio.ensure_future(cb("mcp__machine__put_file",
+                                     {"path": "b.c", "content": "y"},
+                                     Ctx2()))
+        await asyncio.sleep(0.05)
+        assert desk.pending is not None and len(desk.queue) == 1
+        await desk.reply("toolu_1", "always")
+        return await asyncio.wait_for(asyncio.gather(a, b), 2)
+
+    ra, rb = asyncio.run(go())
+    assert isinstance(ra, PermissionResultAllow)
+    assert isinstance(rb, PermissionResultAllow)
+    assert sum(1 for f in sent if f.type == "PERMREQ") == 1
+    assert remembered and "files_work" in remembered[-1]
+
+
+def test_a_grant_is_kept_with_the_chat_and_only_for_its_machine(tmp_path):
+    from bridge.agent.conversations import Conversations
+    conv = Conversations(tmp_path / "c.json")
+    conv.remember("c1", grants=["run_work", "run_sys"],
+                  grants_machine="BOX-A")
+    from unittest.mock import MagicMock
+
+    from bridge.services.session import SessionService
+
+    svc = SessionService(MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+                         MagicMock(), conv)
+    g = Guest("manual")
+    g.machine = "BOX-A"
+    g.model = g.effort = ""
+    svc.restore_settings(g, "c1")
+    # run_sys was never grantable: data from disk is not a licence.
+    assert g.grants == {"run_work"}
+    g2 = Guest("manual")
+    g2.machine = "BOX-B"
+    g2.model = g2.effort = ""
+    svc.restore_settings(g2, "c1")
+    assert g2.grants == set()

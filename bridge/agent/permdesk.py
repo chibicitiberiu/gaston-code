@@ -389,8 +389,11 @@ class PermissionDesk:
                 suggestions=list(getattr(ctx, "suggestions", None) or []),
                 body=render_request(tool_name, bar_args, ctx,
                                     warning=warning or ""),
-                allows=perms.allows_always(
-                    tool_name, getattr(ctx, "suggestions", None) or []),
+                # "Allow for this chat", not the CLI's Always: a grant of
+                # this call's CATEGORY, kept with the conversation, offered
+                # only where policy.GRANTABLE says one click may buy it.
+                grants=(keys := policy.grant_keys(decision)),
+                allows=bool(keys),
                 summary=_bar_line(perms.summary(tool_name, ctx, bar_args),
                                   warning or ""),
             )
@@ -500,11 +503,20 @@ class PermissionDesk:
             return
 
         result: PermissionResultAllow | PermissionResultDeny
+        granted = False
         if action == "allow":
             result = PermissionResultAllow()
+        elif action == "always" and prompt.grants:
+            # NOTHING IS FORWARDED TO THE CLI. Its own rules would keep
+            # approving after the mode changed, whatever the new table said
+            # (the plan's review, finding 6); a grant lives here, beside the
+            # mode it was given under, and goes when that mode does.
+            self._guest.grants = set(getattr(self._guest, "grants", ())
+                                     or ()) | set(prompt.grants)
+            granted = True
+            result = PermissionResultAllow()
         elif action == "always":
-            result = PermissionResultAllow(
-                updated_permissions=perms.session_scoped(prompt.suggestions))
+            result = PermissionResultAllow()
         else:
             result = PermissionResultDeny(
                 message=("The user declined this on the Windows machine. "
@@ -516,7 +528,30 @@ class PermissionDesk:
         self.pending = None
         log.info("permission %s for %s (%s)", action, prompt.tool_name, want)
         await self._send(permend(want, PromptEndReason.ANSWERED.value))
+        if granted:
+            self._settle_granted()
+            if self._on_mode is not None:
+                await self._on_mode()          # remember it with the chat
         await self._pump()
+
+    def _covered(self, prompt: PendingPrompt) -> bool:
+        have = set(getattr(self._guest, "grants", ()) or ())
+        return bool(prompt.grants) and all(
+            k in have or k.partition(":")[0] in have for k in prompt.grants)
+
+    def _settle_granted(self) -> None:
+        """Queued bars the grant just given covers are answered with it --
+        the person said "this kind, for this chat", and making them press
+        it again for the next one in line is asking twice."""
+        keep: deque = deque()
+        while self.queue:
+            p = self.queue.popleft()
+            if not p.future.done() and self._covered(p):
+                p.future.set_result(PermissionResultAllow())
+                log.info("granted for this chat: %s", p.tool_name)
+            else:
+                keep.append(p)
+        self.queue = keep
 
     async def reissue(self) -> None:
         """P1: after a reconnect, put the bar back."""

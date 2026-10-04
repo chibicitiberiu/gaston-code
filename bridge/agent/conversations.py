@@ -102,7 +102,11 @@ class Conversations:
     #: `mode` is the LEGACY key -- the CLI's permission-mode name -- still
     #: written so a rolled-back bridge finds something it understands;
     #: `mode_id` is the execution mode this bridge reads first.
-    SETTINGS = ("model", "effort", "mode", "mode_id")
+    #: `grants` are "Allow for this chat" (policy.py), with the machine
+    #: that gave them in `grants_machine`: a licence given at one keyboard
+    #: is not one the person at another gave.
+    SETTINGS = ("model", "effort", "mode", "mode_id", "grants",
+                "grants_machine")
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else default_path()

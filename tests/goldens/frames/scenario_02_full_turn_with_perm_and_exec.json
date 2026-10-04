@@ -68,7 +68,7 @@
   {
     "body": "! Bash: vol c:  -- runs a command on the bridge computer",
     "headers": {
-      "allows": "1",
+      "allows": "0",
       "id": "toolu_test_1",
       "tool": "Bash",
       "waiting": "0"

@@ -284,6 +284,12 @@ class SessionService:
             guest.mode_id = mode_id
             if not saved.get("mode_id") and mode_id == "auto":
                 guest.legacy_auto = True
+        # Grants only from the SAME machine, and only the kinds a grant may
+        # name today -- a stored grant is data from disk, not a licence.
+        if (saved.get("grants")
+                and saved.get("grants_machine", "") == (guest.machine or "")):
+            guest.grants = {g for g in saved["grants"]
+                            if str(g).partition(":")[0] in policy.GRANTABLE}
         log.info("restored settings for %s: %s", session_id, saved)
 
 

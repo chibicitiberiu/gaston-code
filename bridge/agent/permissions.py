@@ -21,7 +21,6 @@ deleted work:
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
@@ -93,44 +92,9 @@ class PendingPrompt:
     # The bar's one-line STATIC text, declared as a real field so readers
     # never need a defensive getattr(prompt, "summary", prompt.tool_name).
     summary: str = ""
-
-
-def session_scoped(suggestions: list) -> list:
-    """Force every suggested rule to session scope.
-
-    PermissionUpdate.destination can name userSettings or projectSettings, and
-    a dialog on a Win98 box quietly rewriting the developer's settings files is
-    a surprise nobody asked for. The CLI already proposed "session" in every
-    case measured, so this is usually a no-op -- but nothing promises that, and
-    the failure mode is silent and permanent.
-    """
-    out = []
-    for s in suggestions or []:
-        try:
-            out.append(dataclasses.replace(s, destination="session"))
-        except Exception:
-            # An unknown shape is still better forwarded than dropped: the CLI
-            # authored it and the user pressed Always.
-            out.append(s)
-    return out
-
-
-def allows_always(tool_name: str, suggestions: list) -> bool:
-    """Whether the Always button should be offered at all.
-
-    MCP rule names cannot carry specifiers -- the CLI rejects them with "MCP
-    rules do not support patterns in parentheses" -- so the only rule that can
-    be expressed for mcp__machine__exec is the WHOLE TOOL. `suggestions` is
-    non-empty regardless, so keying the button off it would light it up, and
-    one press on "run vol c:" would grant silent arbitrary command execution on
-    the user's computer for the rest of the session.
-
-    For a built-in like Bash the suggestion is scoped to one command shape, so
-    Always means what it appears to mean and is offered.
-    """
-    if tool_name.startswith("mcp__machine__"):
-        return False
-    return bool(suggestions)
+    # What "Allow for this chat" grants for this call (policy.grant_keys);
+    # empty means the button is not offered.
+    grants: list = field(default_factory=list)
 
 
 def _clip(text: str, cap: int = MAX_VALUE) -> str:

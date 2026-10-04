@@ -158,7 +158,14 @@ def summary(mode: Mode) -> str:
 #: Categories a per-chat grant may lift. Never the system tier, a permanent
 #: delete or an unknown program: one click must not buy a standing licence
 #: for those (BACKLOG 11b, and the shell profile's `unbounded` note).
-GRANTABLE = (K.FILES_WORK, K.RUN_WORK, K.RUN_BUILT, K.SCREEN_DRIVE)
+#:
+#: SCREEN_DRIVE IS NOT, YET. The plan keyed a typing grant to the target
+#: window's process, so typing into a different window would ask again; the
+#: bridge does not know which window a step list will reach until the guest
+#: resolves it, and a grant over every window is the blanket licence the
+#: red team warned about. Until the guest reports the target, it asks.
+GRANTABLE = (K.FILES_WORK, K.RUN_WORK, K.RUN_BUILT)
+
 
 
 @dataclass(frozen=True)
@@ -215,3 +222,20 @@ def decide(mode: Mode, verdict: K.Verdict, grants: Iterable = ()) -> Decision:
         elif v == best:
             deciding.append(h)
     return Decision(best, deciding[0] if deciding else None, tuple(deciding))
+
+
+def grant_keys(decision: Decision) -> list:
+    """What "Allow for this chat" would grant for this decision, or [] when
+    it may not be offered. Every finding that decided it must be grantable
+    and placed: one doubtful or system finding and there is no button."""
+    if decision.value not in (ASK, CHECK) or not decision.hits:
+        return []
+    keys = []
+    for h in decision.hits:
+        if h.cat not in GRANTABLE or h.doubt:
+            return []
+        key = f"{h.cat}:{h.subject}" if h.cat == K.RUN_BUILT and h.subject \
+            else h.cat
+        if key not in keys:
+            keys.append(key)
+    return keys

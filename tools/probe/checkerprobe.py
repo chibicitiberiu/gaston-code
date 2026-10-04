@@ -13,10 +13,12 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import toolkit
 
-from bridge.agent import review
+toolkit.on_path()
+
+from bridge.agent import review  # noqa: E402
 
 
 class G:

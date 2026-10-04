@@ -1590,8 +1590,9 @@ async def test_permission_request_reaches_the_guest(harness):
     f = await _recv(harness, reader, "PERMREQ")
     assert f.headers["id"] == "toolu_test_1"
     assert f.headers["tool"] == "Bash"
-    # A built-in with a scoped suggestion may offer Always.
-    assert f.headers["allows"] == "1"
+    # A command on the bridge is never grantable: one click must not buy a
+    # standing licence for a shell (policy.GRANTABLE).
+    assert f.headers["allows"] == "0"
     assert b"vol c:" in f.body
     task.cancel()
     await harness.close(writer)
@@ -1645,18 +1646,31 @@ async def test_permission_deadline_auto_denies_after_timeout(harness, monkeypatc
     await harness.close(writer)
 
 
-async def test_always_forces_session_scope(harness):
-    """PermissionUpdate.destination can name userSettings. A dialog on a Win98
-    box quietly rewriting the developer's settings files is a surprise nobody
-    asked for."""
-    reader, writer, task = await _connect_and_ask(harness)
-    await _recv(harness, reader, "PERMREQ")
+async def test_always_grants_for_this_chat_and_forwards_nothing(harness):
+    """"Allow for this chat" is a grant of the CATEGORY, kept beside the
+    mode it was given under. Nothing goes to the CLI: its own rules would
+    keep approving after the mode changed, whatever the new table said."""
+    reader, writer = await harness.connect()
+    await _recv(harness, reader, "OPTIONSEND")
+    g = harness.bridge.connection.guest
+    g.work_guest = "C:\\WORK"
+    args = {"path": "notes.txt", "content": "x"}
+    task = g.claude.ask("mcp__machine__put_file", args)
+    f = await _recv(harness, reader, "PERMREQ")
+    assert f.headers["allows"] == "1"
     await harness.send(writer, Frame("PERMREPLY",
-                               {"id": "toolu_test_1", "action": "always"}))
+                                     {"id": f.headers["id"],
+                                      "action": "always"}))
     result = await asyncio.wait_for(task, 5)
     assert isinstance(result, PermissionResultAllow)
-    assert result.updated_permissions
-    assert all(u.destination == "session" for u in result.updated_permissions)
+    assert not result.updated_permissions
+    assert "files_work" in g.grants
+
+    # The next write in the work folder needs no bar.
+    again = await asyncio.wait_for(
+        g.claude.ask("mcp__machine__put_file", {"path": "b.txt",
+                                                "content": "y"}), 5)
+    assert isinstance(again, PermissionResultAllow)
     await harness.close(writer)
 
 

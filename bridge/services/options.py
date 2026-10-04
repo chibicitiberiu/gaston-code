@@ -109,6 +109,8 @@ class OptionsService:
             effort=guest.effort,
             mode=policy.AS_LEGACY.get(guest.mode_id, "default"),
             mode_id=guest.mode_id,
+            grants=sorted(getattr(guest, "grants", ()) or ()),
+            grants_machine=getattr(guest, "machine", "") or "",
         )
 
     async def send_options(self, guest: GuestSession) -> None:
