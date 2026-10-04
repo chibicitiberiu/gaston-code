@@ -17,6 +17,7 @@ import textwrap
 
 from . import profiles, prompts, toolrules
 from . import toolnotes as notes
+from ..files.paths import conflict_dir
 
 
 def describe(h: dict) -> str:
@@ -158,8 +159,7 @@ def _sync_paragraph(workdir: str, sync_dir: str | None,
     # staged away from. A bare relative `.gaston/conflict/...` resolves from
     # the agent's cwd to a directory nothing creates -- naming the absolute
     # path here is what makes it readable.
-    conflicts = os.path.join(
-        os.path.dirname(workdir.rstrip(os.sep)), ".gaston", "conflict")
+    conflicts = conflict_dir(workdir)
     return prompts.text("machine.sync.mirrored", workdir=workdir,
                         inside=inside, where=where, conflicts=conflicts)
 

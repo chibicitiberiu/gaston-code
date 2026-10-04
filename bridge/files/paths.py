@@ -26,6 +26,7 @@ THREE THINGS THAT ARE NOT NEGOTIABLE:
 from __future__ import annotations
 
 import ntpath
+import os
 import posixpath
 import re
 from dataclasses import dataclass
@@ -532,3 +533,19 @@ def on_guest(path: str, base: str) -> str | None:
     if p.startswith("\\"):
         return ntpath.normpath(base[:2] + p)
     return ntpath.normpath(base.rstrip("\\") + "\\" + p)
+
+
+def conflict_dir(workdir: str) -> str:
+    """Where a conflict in the tree mirrored at `workdir` is staged.
+
+    One level ABOVE the working directory, so a staged copy never syncs back
+    to the machine it was staged away from -- and then under the working
+    directory's own name. Without that last part every conversation under
+    one mirror staged into the same `.gaston/conflict/<path>/`, and two
+    conversations each with a `notes.txt` shared one folder of `mine.N`s:
+    numbering kept them from overwriting each other, not from being
+    mistaken for each other.
+    """
+    w = workdir.rstrip("/").rstrip(os.sep) if workdir else workdir
+    return os.path.join(os.path.dirname(w), ".gaston", "conflict",
+                        os.path.basename(w))

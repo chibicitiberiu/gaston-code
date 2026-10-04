@@ -229,7 +229,7 @@ def test_the_conflict_path_is_the_one_that_exists():
     """
     out = system_prompt(HELLO, "/work/CHAT", sync_dir="/work/CHAT",
                         guest_root="C:\\Gaston\\CHAT")
-    assert "/work/.gaston/conflict/<path>/mine.N" in out, out[:0] or "wrong path"
+    assert "/work/.gaston/conflict/CHAT/<path>/mine.N" in out, out[:0] or "wrong path"
     assert "`.gaston/conflict/<path>/mine.N`" not in out
 
 

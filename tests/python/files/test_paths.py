@@ -393,3 +393,13 @@ def test_on_guest_joins_relative_paths_to_the_conversation_s_folder():
     assert on_guest("D:", base) == "D:\\"
     assert on_guest("D:foo", base) is None       # per-drive cwd: unknowable
     assert on_guest("a.txt", "") is None          # nothing to join to
+
+
+def test_two_conversations_stage_conflicts_apart():
+    """Both used to stage into <mirror>/../.gaston/conflict/<path>/, so two
+    conversations with a notes.txt shared one folder of mine.N copies."""
+    from bridge.files.paths import conflict_dir
+    a = conflict_dir("/sync/CHATONE")
+    b = conflict_dir("/sync/CHATTWO/")
+    assert a == "/sync/.gaston/conflict/CHATONE"
+    assert b == "/sync/.gaston/conflict/CHATTWO"

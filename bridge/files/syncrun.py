@@ -155,8 +155,7 @@ class Pass:
         #: Inside the agent's reach so it can read a conflict and its ancestor
         #: without a new permission path -- unlike the baseline itself, which
         #: lives outside cwd because off_limits does not cover Bash.
-        self._conflict_dir = os.path.join(
-            os.path.dirname(root.rstrip("/")), ".gaston", "conflict")
+        self._conflict_dir = P.conflict_dir(root)
 
     # --- the guest's half --------------------------------------------------
 

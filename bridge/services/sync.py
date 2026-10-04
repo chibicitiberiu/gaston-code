@@ -725,7 +725,7 @@ class SyncService:
             out.append(
                 "\nREFUSING YOUR WRITES -- these conflicted and the "
                 "user's copy won. Your version is preserved under "
-                f"{mirror.rstrip('/')}/../.gaston/conflict/ with "
+                f"{P.conflict_dir(mirror)}/ with "
                 "the common ancestor beside it. Read it, merge, ask the "
                 "user whether they have finished with the file, and "
                 "only then call sync_resolve:"

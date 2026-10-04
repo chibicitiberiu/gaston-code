@@ -55,7 +55,7 @@ A message at the start of a turn tells you, from the synchronisation layer and
 not from the user. By then:
 
 1. The user's version is the one here too. Theirs is never lost.
-2. Yours is at `/home/user/retro/.gaston/conflict/<path>/mine.N`, with `base.N` beside it -- the
+2. Yours is at `/home/user/retro/.gaston/conflict/project/<path>/mine.N`, with `base.N` beside it -- the
    common ancestor, so a real three-way merge. Absolute, and one level ABOVE
    your working directory.
 3. The path is refusing your writes: the bridge drops them.
