@@ -27,12 +27,16 @@
 #include "app/pillbar.h"
 #include "app/optmenu.h"
 #include "app/workdlg.h"
+#include "app/optsheet.h"
 
 #include "app/title.h"
 
 /* The children MainWindow holds by pointer; their headers stay out of this
  * one. */
 class rc_html;
+/* app/protect.h. Opaque here, so this header -- included by half the
+ * program -- does not drag <string> into every file (25KB, measured). */
+class PrefsBody;
 class rc_xferstat;
 class rc_toolbar;
 class rc_export;
@@ -48,11 +52,12 @@ class MainWindow : public Service, public Window, public ReconnectListener, publ
                    public FrameSender, public ChatListListener,
                    public ComposeListener, public PermissionBarListener,
                    public AttachmentBarListener, public OptionMenusListener,
-                   public WorkDirProposer
+                   public WorkDirProposer, public OptionsSink
 {
 public:
     MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
-               ConfigStore *store, const char *exeDir, rc_net *net);
+               ConfigStore *store, const char *exeDir, rc_net *net,
+               PrefsBody *prefs);
     ~MainWindow();
 
     const char *name() const;
@@ -67,6 +72,10 @@ public:
     /* ReconnectListener */
     void refreshStatus();
     void restoreCache();
+    void beforeStart();
+
+    /* OptionsSink */
+    void optionsApply(const ClientConfig &next);
 
     /* TurnListener */
     void setBusy(bool busy);
@@ -155,6 +164,9 @@ private:
     HFONT m_uiFont;
     HFONT m_uiFontBold;
     const char *m_exeDir;
+    /* The PREFS body the link points at (net.h: not copied), owned by the
+     * app; rebuilt here when Options applies. */
+    PrefsBody *m_prefs;
 };
 
 #endif

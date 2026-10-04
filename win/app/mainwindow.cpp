@@ -35,7 +35,7 @@
 #include "app/optmenu.h"
 #include "app/input.h"
 #include "app/resource.h"
-#include "app/hostdlg.h"
+#include "app/protect.h"
 #include "app/toolbar.h"
 #include "app/export.h"
 #include "app/cache.h"
@@ -205,7 +205,7 @@ void MainWindow::buildMenu(HWND hwnd)
     AppendMenuA(file, MF_SEPARATOR, 0, NULL);
     AppendMenuA(file, MF_STRING, IDM_CLOSE, "&Close");
 
-    AppendMenuA(cfg, MF_STRING, IDM_HOST, "&Server Host...");
+    AppendMenuA(cfg, MF_STRING, IDM_OPTIONS, "&Options...");
     AppendMenuA(cfg, MF_STRING, IDM_PERMS, "&What can run without asking...");
 
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "&About...");
@@ -1615,36 +1615,11 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
-        case IDM_HOST:
-            if (rc_hostdlg_run(hwnd, m_inst, m_cfg)) {
-                char line[192];
-                if (!m_store->save(*m_cfg) && m_html)
-                    m_html->error("That setting could not be saved to "
-                                  "gaston.ini and will not survive a "
-                                  "restart. The drive may be full or "
-                                  "write-protected.");
-
-                /* Resetting the backoff globals is NOT enough, and a draft of
-                 * this said it was.
-                 *
-                 * SetTimer captured its interval when the retry was armed, so
-                 * after a bad host has backed off to 15 seconds, setting
-                 * g_backoff_ms = 1000 changes nothing -- the armed timer
-                 * still has to expire first. Fixing a typo'd host would still
-                 * mean waiting out the old wait, which is the entire point of
-                 * the dialog. Kill it, reset, and reconnect now. */
-                if (m_reconnector) m_reconnector->reset();
-
-                /* The host is user-supplied text going into an HTML
-                 * document. main.cpp:930's notice already escapes it for
-                 * that reason; this is the second, more direct way in. */
-                if (m_html) {
-                    rc_strf(line, sizeof(line), "Now connecting to %s:%ld.",
-                            m_cfg->host, m_cfg->port);
-                    m_html->notice(line);   /* notice() escapes */
-                }
-                if (m_reconnector) m_reconnector->tryConnect();
-            }
+        case IDM_OPTIONS:
+            /* Everything a person can set, per client (docs/OPTIONS-PLAN.md).
+             * optionsApply below does the saving and the telling. */
+            rc_options_run(hwnd, m_inst, *m_cfg, m_exeDir, this,
+                           RC_OPT_CONNECTION);
             return 0;
 
         case IDM_ABOUT: {
@@ -1742,13 +1717,14 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
 /* --- MainWindow ----------------------------------------------------------- */
 
 MainWindow::MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
-                       ConfigStore *store, const char *exeDir, rc_net *net)
+                       ConfigStore *store, const char *exeDir, rc_net *net,
+                       PrefsBody *prefs)
     : m_inst(inst), m_show(show), m_cfg(cfg), m_store(store), m_app(app),
       m_net(net), m_html(0), m_bar(0), m_chats(0), m_xfer(0), m_input(0),
       m_attachments(0), m_toolbar(0), m_export(0), m_cache(0),
       m_cacheShown(0), m_accel(0), m_options(0), m_pageBar(0),
       m_announceConnected(0), m_status(0), m_reconnector(0), m_turn(0),
-      m_uiFont(0), m_uiFontBold(0), m_exeDir(exeDir)
+      m_uiFont(0), m_uiFontBold(0), m_exeDir(exeDir), m_prefs(prefs)
 {
 }
 
@@ -1923,4 +1899,77 @@ bool MainWindow::filter(MSG &msg)
         return true;
     }
     return IsDialogMessageA(Window::hwnd(), &msg) != 0;
+}
+
+/* --- Options ----------------------------------------------------------- */
+
+void MainWindow::beforeStart()
+{
+    /* What the next HELLO declares, applied while no thread is reading it.
+     * The automation setting also gates the guest's own refusal, live; the
+     * work root is what a conversation's folder is made under. */
+    rc_net_set_automation(m_net, m_cfg->automation ? RC_AUTOMATION_STEPS
+                                                   : RC_AUTOMATION_NONE);
+    rc_syncrpc_set_home(m_cfg->syncRoot);
+    if (m_cfg->syncRoot[0] &&
+        GetFileAttributesA(m_cfg->syncRoot) == 0xFFFFFFFF &&
+        !rc_mkpath(m_cfg->syncRoot))
+        rc_log("sync: cannot create %s (%lu)", m_cfg->syncRoot,
+               (unsigned long)GetLastError());
+    if (m_prefs)
+        rc_net_set_prefs(m_net, m_prefs->text.c_str(),
+                         (unsigned)m_prefs->text.size());
+}
+
+void MainWindow::optionsApply(const ClientConfig &next)
+{
+    /* What only a new handshake can change: where the bridge is, and what
+     * HELLO itself declares. Everything else rides a re-sent PREFS. */
+    bool reconnect = strcmp(next.host, m_cfg->host) != 0 ||
+                     next.port != m_cfg->port ||
+                     strcmp(next.secret, m_cfg->secret) != 0 ||
+                     next.automation != m_cfg->automation ||
+                     strcmp(next.syncRoot, m_cfg->syncRoot) != 0;
+
+    *m_cfg = next;
+    if (!m_store->save(*m_cfg) && m_html)
+        m_html->error("Those settings could not be saved to gaston.ini and "
+                      "will not survive a restart. The drive may be full or "
+                      "write-protected.");
+    if (m_prefs) {
+        m_prefs->text = rc_prefs_body(*m_cfg, m_exeDir);
+        rc_net_set_prefs(m_net, m_prefs->text.c_str(),
+                         (unsigned)m_prefs->text.size());
+    }
+    rc_log("options: applied (%u bytes of settings, %s)",
+           m_prefs ? (unsigned)m_prefs->text.size() : 0u,
+           reconnect ? "reconnecting" : "re-sent");
+
+    if (reconnect) {
+        /* A reply streaming now would be cut off. Ask, once, rather than
+         * drop it unannounced; "No" keeps the settings for the next
+         * connection, which is when they would apply anyway. */
+        if (m_turn && m_turn->active() &&
+            MessageBoxA(hwnd(), "These settings need a new connection, "
+                        "which stops the current reply.\n\nReconnect now?",
+                        "Options", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+            if (m_html) m_html->notice("Saved. They take effect at the next "
+                                       "connection.");
+            return;
+        }
+        if (m_reconnector) m_reconnector->reset();
+        if (m_html) {
+            char line[192];
+            rc_strf(line, sizeof line, "Now connecting to %s:%ld.",
+                    m_cfg->host, m_cfg->port);
+            m_html->notice(line);              /* notice() escapes */
+        }
+        if (m_reconnector) m_reconnector->tryConnect();
+        return;
+    }
+    if (m_prefs && m_net->state == RC_CONNECTED &&
+        rc_net_send_ui(m_net, "PREFS", NULL, NULL, 0, m_prefs->text.c_str(),
+                       (unsigned)m_prefs->text.size()) != 0 && m_html)
+        m_html->notice("The settings are saved, but the link was busy; they "
+                       "will reach the bridge at the next connection.");
 }

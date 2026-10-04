@@ -67,7 +67,7 @@
 #define IDM_NEW      1099
 #define IDM_EXPORT   1100
 #define IDM_CLOSE    1101
-#define IDM_HOST     1110
+#define IDM_OPTIONS  1110      /* was Server Host...; same id */
 #define IDM_PERMS    1111
 #define IDM_AUTOSCRL 1112
 #define IDM_ABOUT    1120

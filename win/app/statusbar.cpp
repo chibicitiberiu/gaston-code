@@ -158,7 +158,7 @@ int rc_statusbar::notify(NMHDR *nh, HWND parent)
 {
     if (nh && nh->hwndFrom == m_hwnd && nh->code == NM_DBLCLK) {
         if (((NMMOUSE *)nh)->dwItemSpec == 0) {
-            SendMessageA(parent, WM_COMMAND, IDM_HOST, 0);
+            SendMessageA(parent, WM_COMMAND, IDM_OPTIONS, 0);
             return 1;
         }
     }

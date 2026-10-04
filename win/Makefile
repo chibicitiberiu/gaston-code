@@ -134,8 +134,11 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # TextList now (core/textlist.h). As in 2026-10-02 the runtime number gets
 # measured for the whole set when its last client commit lands, against the
 # deployed build of 91b6b76 kept as ~/backups/gaston-baseline-91b6b76.exe,
-# and this line is then set once to what that justifies.
-COMMITTED_CAP ?= 536576
+# and this line is then set once to what that justifies. Raised again
+# provisionally to 569,344 for the rest of the set: the property sheet's own
+# machinery (core/dialogpage, core/dlgtemplate, app/optsheet) measured
+# 8.7KB with one page, and five more pages and the lists inspector follow.
+COMMITTED_CAP ?= 569344
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -165,6 +168,7 @@ MINIZ = third_party/miniz/miniz.c
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
 CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp core/textlist.cpp \
+            core/dlgtemplate.cpp core/dialogpage.cpp \
             core/app.cpp core/window.cpp core/heap.cpp core/thread.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 # libwire (docs/REMOTE.md, step 2): the frame codec and Connection, the
@@ -209,7 +213,7 @@ LIBAUTOMATION = $(LIBDIR)/libautomation.lib
 LINKIN = file {$(filter %.o,$^)} $(foreach l,$(filter %.lib,$^),library $(l))
 
 CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
-       app/pagebar.cpp app/optmenu.cpp app/input.cpp app/hostdlg.cpp \
+       app/pagebar.cpp app/optmenu.cpp app/input.cpp app/optsheet.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/modes.cpp app/protect.cpp \

@@ -52,6 +52,15 @@ void rc_list_danger(const ClientConfig &cfg, std::vector<ListEntry> &out);
 void rc_list_trust(const ClientConfig &cfg, const char *exeDir,
                    std::vector<ListEntry> &out);
 
+/* The PREFS body the link points at (net.h: not copied): owned by the app,
+ * rebuilt by the main window when Options applies. A class of its own so
+ * headers can name it without <string>. */
+class PrefsBody
+{
+public:
+    std::string text;
+};
+
 /* The PREFS body for this configuration (bridge/prefs.py's keys). */
 std::string rc_prefs_body(const ClientConfig &cfg, const char *exeDir);
 

@@ -62,6 +62,7 @@ void Reconnector::tryConnect()
      * senders on one socket and corrupted the queue. rc_net_stop is a no-op
      * when there is nothing to stop. */
     rc_net_stop(m_net);
+    if (m_listener) m_listener->beforeStart();
     /* WHAT THIS MACHINE HAS, carried on HELLO so the bridge can tell the
      * agent before it writes the system prompt. Cached: this function runs
      * again every few seconds while the bridge is down, and a rescan per

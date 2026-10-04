@@ -72,7 +72,7 @@ private:
     MachineId m_machine;
     /* The PREFS body the link points at (net.h: not copied). A member, so
      * it lives exactly as long as the link that may send it. */
-    std::string m_prefs;
+    PrefsBody m_prefs;
     /* Services, in dependency order: OLE before the window that hosts
      * MSHTML, the window before the connection that posts to it. */
     UniqueObj<OleService> m_ole;
@@ -229,13 +229,14 @@ bool ClientApp::initializeServices()
      * An empty body is a real answer -- "every default" -- and still makes
      * the bridge wait for it, which is what keeps a future setting from
      * arriving after the session it has to shape. */
-    m_prefs = rc_prefs_body(m_config, m_exeDir);
-    rc_log("prefs: %u bytes declared", (unsigned)m_prefs.size());
-    rc_net_set_prefs(&m_net, m_prefs.c_str(), (unsigned)m_prefs.size());
+    m_prefs.text = rc_prefs_body(m_config, m_exeDir);
+    rc_log("prefs: %u bytes declared", (unsigned)m_prefs.text.size());
+    rc_net_set_prefs(&m_net, m_prefs.text.c_str(),
+                     (unsigned)m_prefs.text.size());
 
     return initService(m_window, new MainWindow(instance(), m_show, this,
                                                 &m_config, m_store.get(),
-                                                m_exeDir, &m_net)) &&
+                                                m_exeDir, &m_net, &m_prefs)) &&
            initService(m_connection, new ConnectionService(&m_net)) &&
            initService(m_ui, new UiService(&m_net));
 }

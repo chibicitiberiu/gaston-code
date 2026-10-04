@@ -31,6 +31,11 @@ public:
     virtual void refreshStatus() = 0;
     /* Show the cached transcript while the bridge is unreachable. */
     virtual void restoreCache() = 0;
+    /* Between tearing the old link down and starting the new one: the only
+     * moment settings the HELLO carries -- automation, the work root, the
+     * PREFS body -- can change without a thread reading them mid-write
+     * (rc_syncrpc's home is unlocked, mem-audit F7). */
+    virtual void beforeStart() {}
 };
 
 class Reconnector
