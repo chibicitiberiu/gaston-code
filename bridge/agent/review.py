@@ -24,6 +24,7 @@ Two jobs, both in front of the permission bar:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -99,16 +100,53 @@ async def preview(fs, guest, tool_name: str, args: dict) -> str:
     return "; ".join(parts)
 
 
+#: Arguments that carry DATA rather than a choice -- what a file will hold,
+#: what will be typed. Fenced as untrusted and the only thing ever cut short.
+#: The old serialisation, `json.dumps(args)[:1500]`, cut wherever 1500 fell,
+#: and the model picks key order: a `put_file` with its content first hid
+#: the destination from the reviewer entirely (red team, 2026-10-04).
+CONTENT_KEYS = ("content", "new_string", "old_string", "steps", "text")
+CONTENT_CAP = 1500
+VALUE_CAP = 400
+
+
+def action_text(tool_name: str, args: dict, finding: str = "",
+                category: str = "") -> str:
+    """The action as the reviewer reads it: what the classifier found, then
+    every argument on its own line, then the data, fenced."""
+    lines = [prompts.text("review.tool", tool=tool_name.replace(
+        "mcp__machine__", ""))]
+    if category:
+        lines.append(prompts.text("review.category", category=category))
+    if finding:
+        lines.append(prompts.text("review.finding", finding=finding))
+    data = []
+    for key, value in (args or {}).items():
+        if key.startswith("_"):
+            continue
+        if key in CONTENT_KEYS:
+            text = (value if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False))
+            data.append((key, text[:CONTENT_CAP]))
+            continue
+        text = value if isinstance(value, str) else json.dumps(
+            value, ensure_ascii=False)
+        lines.append(f"{key}: {text[:VALUE_CAP]}")
+    for key, text in data:
+        lines.append(prompts.text("review.fenced", key=key, text=text))
+    return "\n".join(lines)
+
+
 async def review(guest, tool_name: str, args: dict,
-                 preview_text: str = "") -> tuple[bool, str]:
+                 preview_text: str = "", *, finding: str = "",
+                 category: str = "") -> tuple[bool, str]:
     """(approved, reason). Never raises; any failure is (False, why)."""
     requests: list[str] = [str(r) for r in
                            getattr(guest, "recent_prompts", ()) or ()]
     first = str(getattr(guest, "first_prompt", "") or "")
     if not requests and first:
         requests = [first]
-    action = (tool_name.replace("mcp__machine__", "") + " "
-              + json.dumps(args, ensure_ascii=False)[:1500])
+    action = action_text(tool_name, args, finding, category)
     parts = [prompts.text("review.requests", requests="\n".join(
                  f"- {r[:600]}" for r in requests[-3:])),
              prompts.text("review.action", action=action)]
@@ -127,15 +165,71 @@ async def review(guest, tool_name: str, args: dict,
     return False, reason or prompts.text("review.unsure")
 
 
-async def _ask(prompt: str) -> str:
-    """One answer from a model with no tools. Separate so tests replace it."""
-    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
-    opts = ClaudeAgentOptions(model=REVIEW_MODEL,
+def _options():
+    from claude_agent_sdk import ClaudeAgentOptions
+    return ClaudeAgentOptions(model=REVIEW_MODEL,
                               system_prompt=prompts.text("review.system"),
                               tools=[], allowed_tools=[], max_turns=1,
                               setting_sources=[], strict_mcp_config=True)
-    out: list[str] = []
-    async for msg in query(prompt=prompt, options=opts):
-        if isinstance(msg, AssistantMessage):
-            out += [b.text for b in msg.content if isinstance(b, TextBlock)]
-    return "\n".join(out)
+
+
+class _Warm:
+    """One reviewer process started AHEAD of need.
+
+    Every review used to be a fresh `query()`: a CLI cold start, several
+    seconds, before the model read a word -- and Auto sends every call it
+    does not allow outright through here. A connected client waits idle
+    instead; each review uses it for ONE question and then it is closed and
+    the next one started in the background, so no review ever sees another
+    review's conversation.
+    """
+
+    def __init__(self) -> None:
+        self._next: asyncio.Task | None = None
+
+    def _start(self) -> asyncio.Task:
+        async def connect():
+            from claude_agent_sdk import ClaudeSDKClient
+            client = ClaudeSDKClient(options=_options())
+            await client.connect()
+            return client
+        return asyncio.ensure_future(connect())
+
+    async def ask(self, prompt: str) -> str:
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        task, self._next = self._next or self._start(), None
+        client = await task
+        try:
+            await client.query(prompt)
+            out: list[str] = []
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    out += [b.text for b in msg.content
+                            if isinstance(b, TextBlock)]
+            return "\n".join(out)
+        finally:
+            self._next = self._start()
+            try:
+                await client.disconnect()
+            except Exception:                     # it answered; that is all
+                log.debug("reviewer disconnect", exc_info=True)
+
+    def warm(self) -> None:
+        """Start the next reviewer now, if none is starting."""
+        if self._next is None:
+            self._next = self._start()
+
+
+_WARM = _Warm()
+
+
+def warm() -> None:
+    """Called when a mode that checks is chosen, so the first check of the
+    session does not pay the cold start either."""
+    with contextlib.suppress(RuntimeError):       # no running loop (tests)
+        _WARM.warm()
+
+
+async def _ask(prompt: str) -> str:
+    """One answer from a model with no tools. Separate so tests replace it."""
+    return await _WARM.ask(prompt)

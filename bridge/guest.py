@@ -169,12 +169,21 @@ class GuestSession:
     #: between the switch and the first message `claude` is None and this
     #: holds the id the client will resume from. Ask `conv_id`, not this.
     pending_resume: str = ""
-    #: The permission mode the next session is built with, and the one the
-    #: live client is currently in. Per guest for the same reason model and
+    #: The conversation's EXECUTION MODE (bridge/agent/policy.py): a preset
+    #: id or one of the client's own. Per guest for the same reason model and
     #: effort are: a switch, a new session and the effort fork all rebuild
-    #: the Session, and a mode the user chose must not quietly revert to
-    #: "default" because the object holding it was thrown away.
-    perm_mode: str = "default"
+    #: the Session, and a mode the user chose must not quietly revert
+    #: because the object holding it was thrown away. The SDK's own
+    #: permission mode is derived from it (`policy.Mode.sdk`), never stored.
+    mode_id: str = "manual"
+    #: The mode to return to when Plan first's plan is approved.
+    mode_before_plan: str = ""
+    #: "Allow for this chat" grants, `cat` or `cat:subject` (policy.py).
+    #: Cleared on a switch and on a mode change.
+    grants: set = field(default_factory=set)
+    #: A reopened chat saved as the CLI's "auto", which did less on its own
+    #: than this bridge's Auto does; said once, then cleared.
+    legacy_auto: bool = False
     #: The person's last few prompts, newest last, for the Auto reviewer.
     recent_prompts: list = field(default_factory=list)
     #: Everything about writing bytes to this guest -- the socket writer, the

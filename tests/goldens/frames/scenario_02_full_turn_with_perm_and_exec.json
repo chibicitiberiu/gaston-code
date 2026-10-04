@@ -55,18 +55,18 @@
     "type": "TEXT"
   },
   {
-    "body": "<div class=\"perm\" id=\"perm\"><div class=\"permhead\">Permission required</div><div class=\"permdonehead\">Answered</div><p><b>Bash</b> &mdash; vol c:</p><table><tr><th>command</th><td>vol c:</td></tr></table></div>",
+    "body": "<div class=\"perm\" id=\"perm\"><div class=\"permhead\">Permission required</div><div class=\"permdonehead\">Answered</div><p><b>Bash</b> &mdash; vol c:</p><p class=\"permwarn\"><b>Check this one:</b> runs a command on the bridge computer</p><table><tr><th>command</th><td>vol c:</td></tr></table></div>",
     "headers": {
       "enc": "deflate",
       "mode": "append",
       "off": "0",
       "page": "1",
-      "total": "209"
+      "total": "293"
     },
     "type": "TEXT"
   },
   {
-    "body": "Bash: vol c:",
+    "body": "! Bash: vol c:  -- runs a command on the bridge computer",
     "headers": {
       "allows": "1",
       "id": "toolu_test_1",

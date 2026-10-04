@@ -499,7 +499,7 @@ def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
 # --- what can run without asking --------------------------------------------
 #
 # NOT a rules table read from `.claude/settings*.json`: `Session` runs with
-# `setting_sources=[]` on purpose -- the tool set a Win98 client gets must not
+# `setting_sources=[]` on purpose -- the tool set a client gets must not
 # depend on whose laptop runs the bridge -- so the operator's rules ARE NOT IN
 # EFFECT here, and listing them would answer "what can happen?" with rules
 # that cannot happen at all.
@@ -510,88 +510,33 @@ def _inside_gaston(tool_name: str, raw, root: str, target: str) -> str | None:
 # that listed only what reaches the prompt would read as complete when it is
 # already known to be false.
 
-_MODE_MEANS = {
-    "default": "every tool call that reaches this bridge is shown to you "
-               "first.",
-    "acceptEdits": "file edits inside the working copy are applied without "
-                   "asking. Commands on your machine still ask.",
-    "plan": "the model researches and proposes rather than acting. Tool "
-            "calls that would change something are refused by the CLI "
-            "before they reach here.",
-    # Auto here means "the permission prompt still asks", not "something
-    # smarter is watching" -- measured below, since that measurement is the
-    # actual answer.
-    "auto": "every tool call that reaches this bridge is still shown to you "
-            "first. Auto does not add a second opinion -- measured on this "
-            "bridge, the model's own danger classifier is not consulted once "
-            "the permission prompt is installed: `git reset --hard` on a "
-            "repo with uncommitted work ran unchanged in Auto and in Manual.",
-}
 
+def rules_view(mode, lists=None, guest_root: str = "") -> str:
+    """A read-only answer to "what can run without asking?": the
+    conversation's execution mode, its table, and the client's lists that
+    decide which row a call lands in."""
+    from . import categories as K
+    from . import policy, prompts
 
-def rules_view(mode: str, tools: list[str], guest_root: str = "") -> str:
-    """A read-only answer to "what can run without asking?".
+    def t(key: str, **kw) -> str:
+        return prompts.text("policy.view." + key, **kw)
 
-    Written as prose with a short table rather than as a settings dump,
-    because the honest answer has three parts and only one of them is a list.
-    """
     p = ['<div class="perm">',
-         '<div class="permhead">What can run without asking</div>']
-
-    p.append("<p><b>Mode: " + H.esc(_MODE_LABELS.get(mode, mode)) + "</b>"
-             " &mdash; " + H.esc(_MODE_MEANS.get(mode, "")) + "</p>")
-
-    p.append("<p>Anything that runs a command on your computer asks first, "
-             "every time, and cannot be turned off from here. If the folder "
-             "it touches is outside ")
-    p.append(H.esc(guest_root) if guest_root
-             else "the mirrored folder (which is not configured)")
-    p.append(", the prompt says so.</p>")
-
-    p.append("<p><b>This list is not complete, and that is not a bug.</b> "
-             "Claude Code answers some of its own tool calls locally and "
-             "never tells this bridge about them &mdash; reading and "
-             "searching files inside its own working folder, for instance. "
-             "Those happen on the machine running the bridge, never on "
-             "yours, and nothing here can show them.</p>")
-
-    p.append("<p>The permission rules in the operator's "
-             "<code>.claude/settings.json</code> do <b>not</b> apply to this "
-             "connection. The bridge starts every session with settings "
-             "inheritance switched off, so what the connected machine is "
-             "allowed to do does not depend on whose computer is running "
-             "the bridge.</p>")
-
-    if tools:
-        p.append("<p>Tools this session can use at all:</p><table>")
-        for t in sorted(tools):
-            p.append("<tr><th>" + H.esc(t) + "</th><td>"
-                     + H.esc(_TOOL_NOTES.get(t, "")) + "</td></tr>")
-        p.append("</table>")
+         '<div class="permhead">' + H.esc(t("head")) + "</div>",
+         "<p><b>" + H.esc(mode.label) + "</b> &mdash; "
+         + H.esc(policy.summary(mode)) + "</p>",
+         "<table>"]
+    for cat in K.CATS:
+        p.append("<tr><th>" + H.esc(prompts.text(f"policy.cat.{cat}"))
+                 + "</th><td>" + H.esc(t("value." + mode.value(cat)))
+                 + "</td></tr>")
+    p.append("</table>")
+    p.append("<p>" + H.esc(t("work", root=guest_root or t("no_root")))
+             + "</p>")
+    protect = tuple(getattr(lists, "protect", ()) or ())
+    p.append("<p>" + H.esc(t("protected", places=", ".join(protect))
+                           if protect else t("no_protected")) + "</p>")
+    p.append("<p>" + H.esc(t("honest")) + "</p>")
+    p.append("<p>" + H.esc(t("unseen")) + "</p>")
     p.append("</div>")
     return "".join(p)
-
-
-#: Mode names as the menus spell them, duplicated from bridge/server.py's
-#: MODE_LABEL rather than imported (this module is imported BY the server, so
-#: an import back would be a cycle). Drifting apart is a test failure, not a
-#: judgement call: tests/python/meta/test_mode_descriptions.py walks
-#: MODE_ORDER and asserts every mode has a label and a meaning here.
-_MODE_LABELS = {"default": "Manual", "acceptEdits": "Accept edits",
-                "plan": "Plan", "auto": "Auto"}
-
-_TOOL_NOTES = {
-    "Read": "reads a file on the bridge's working copy",
-    "Write": "writes one; it reaches you through the folder mirror",
-    "Edit": "changes one, the same way",
-    "Glob": "finds files by name",
-    "Grep": "searches inside them",
-    "Bash": "runs a command ON THE BRIDGE, not on your computer",
-    "WebFetch": "fetches a page from the internet",
-    "WebSearch": "searches the web",
-    "mcp__machine__exec": "RUNS A COMMAND ON YOUR COMPUTER. Always asks.",
-    "mcp__machine__put_file":
-        "WRITES A FILE ANYWHERE ON YOUR COMPUTER, replacing what is there. "
-        "Always asks.",
-    "mcp__machine__get_file": "reads a file from anywhere on your computer",
-}

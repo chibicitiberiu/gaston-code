@@ -10,6 +10,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from ..agent import policy, review
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import Frame, option, optionsend
@@ -28,22 +29,11 @@ EFFORT_LABEL = {
     "max": "Maximum",
 }
 
-# Permission modes offered to the guest, in menu order.
-MODE_ORDER = ["default", "acceptEdits", "plan", "auto"]
-MODE_LABEL = {
-    "default": "Manual",
-    "acceptEdits": "Accept edits",
-    "plan": "Plan",
-    "auto": "Auto",
-}
-MODE_CAVEAT = {
-    "auto": (
-        "Auto lets the agent go ahead without asking you for most tools. "
-        "Deleting, moving and copying on your machine still gets a second "
-        "opinion: a reviewer reads what you asked for and what the call "
-        "touches, and when it is not sure, you are asked."
-    ),
-}
+# Execution modes offered to the guest, in menu order: the presets, then the
+# client's own (bridge/agent/policy.py). The CLI's permission-mode names are
+# no longer on the wire -- they were a description of somebody else's
+# behaviour (see policy.py's module note).
+MODE_ORDER = list(policy.PRESET_ORDER)
 
 # Slash commands offered on the Commands menu, in menu order.
 COMMAND_MENU = ["/compact", "/rename", "/init"]
@@ -117,7 +107,8 @@ class OptionsService:
             conv_id,
             model=guest.model,
             effort=guest.effort,
-            mode=guest.perm_mode,
+            mode=policy.AS_LEGACY.get(guest.mode_id, "default"),
+            mode_id=guest.mode_id,
         )
 
     async def send_options(self, guest: GuestSession) -> None:
@@ -190,16 +181,11 @@ class OptionsService:
             ),
         )
 
-        for mode in MODE_ORDER:
+        user = getattr(getattr(guest, "prefs", None), "modes", None) or {}
+        current = policy.mode_of(guest).id
+        for m in [*policy.presets(), *user.values()]:
             await self.connection.send(
-                guest,
-                option(
-                    "mode",
-                    mode,
-                    MODE_LABEL.get(mode, mode),
-                    mode == guest.perm_mode,
-                ),
-            )
+                guest, option("mode", m.id, m.label, m.id == current))
 
         have = {}
         for c in await self._commands(guest):
@@ -248,57 +234,48 @@ class OptionsService:
         await self.set_mode(guest, f.headers.get("mode", ""))
 
     async def set_mode(self, guest: GuestSession, mode: str) -> None:
-        """Change the permission mode live.
+        """Change the conversation's execution mode.
 
-        BACKLOG 18: there is no SDK-reported list of which permission modes a
-        given model accepts (unlike `supportedEffortLevels` for effort), so
-        the menu cannot honestly refuse to offer one up front without
-        hardcoding a per-model guess -- exactly the kind of table
-        `send_options`'s effort handling goes out of its way to avoid. So the
-        fix here is the other honest option: accept the refusal, put
-        `guest.perm_mode` back to the mode actually in force, and resend the
-        menu so the guest agrees with the bridge instead of showing a tick
-        next to a mode that was never applied.
+        Bookkeeping, mostly: the desk reads the mode on every call, so the
+        new table applies to the next one. The SDK hears about it only at
+        the Plan boundary -- the one place its own permission mode differs
+        between modes -- and a refusal there is put back the way BACKLOG 18
+        settled: accept it, restore what is in force, resend the menu.
         """
-        if mode not in MODE_ORDER:
-            log.warning("ignoring unknown permission mode %r", mode)
+        user = getattr(getattr(guest, "prefs", None), "modes", None)
+        new = policy.lookup(mode, user)
+        if new is None:
+            log.warning("ignoring unknown execution mode %r", mode)
+            await self.send_options(guest)
             return
-        was = guest.perm_mode
-        guest.perm_mode = mode
+        old = policy.mode_of(guest)
+        was, was_before = guest.mode_id, guest.mode_before_plan
+        guest.mode_id = new.id
+        if new.sdk == "plan" and old.sdk != "plan":
+            guest.mode_before_plan = old.id
+        # A grant was given under the old table; it means nothing under the
+        # new one, and must not carry a licence across.
+        guest.grants = set()
         self.remember_settings(guest)
-        label = MODE_LABEL.get(mode, mode)
-        if guest.claude:
+        if guest.claude and new.sdk != old.sdk:
             try:
-                await guest.claude.set_permission_mode(mode)
+                await guest.claude.set_permission_mode(new.sdk)
             except Exception as exc:
-                # A model refusing a mode it cannot run (Haiku has no Auto)
-                # is an expected outcome, not a bridge bug -- one line naming
-                # the model and mode, not a traceback. `guest.claude`'s own
-                # `_opts.permission_mode` was never updated on this path (the
-                # assignment there runs only after the await succeeds), so
-                # the Session and `guest.perm_mode` are both put back in
-                # sync with what is actually running.
-                log.warning(
-                    "permission mode -> %s refused for model %s: %s",
-                    mode, self.effective_model(guest) or "(default)", exc,
-                )
-                guest.perm_mode = was
+                log.warning("execution mode -> %s refused by the CLI for %s: "
+                            "%s", new.id,
+                            self.effective_model(guest) or "(default)", exc)
+                guest.mode_id, guest.mode_before_plan = was, was_before
                 self.remember_settings(guest)
                 if self.write_block:
-                    await self.write_block(
-                        guest,
-                        H.error(
-                            "Could not set permission mode to " + label + ": "
-                            + str(exc)[:160]
-                        ),
-                    )
+                    await self.write_block(guest, H.error(
+                        "Could not switch to " + new.label + ": "
+                        + str(exc)[:160]))
                 await self.send_options(guest)
                 return
-        log.info("permission mode -> %s", mode)
-        note = "Permission mode set to " + label + "."
-        caveat = MODE_CAVEAT.get(mode)
-        if caveat:
-            note += " " + caveat
+        log.info("execution mode -> %s", new.id)
+        if any(new.value(c) == policy.CHECK for c in new.values):
+            review.warm()
         if self.write_block:
-            await self.write_block(guest, H.notice(note))
+            await self.write_block(guest, H.notice(
+                new.label + ": " + policy.summary(new)))
         await self.send_options(guest)

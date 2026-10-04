@@ -21,7 +21,10 @@ class DummyGuest:
         self.conv_id = "conv-1"
         self.model = "claude-sonnet-4-6"
         self.effort = "high"
-        self.perm_mode = "manual"
+        self.mode_id = "manual"
+        self.mode_before_plan = ""
+        self.grants = set()
+        self.prefs = None
         self.work_dir = "/tmp/work"
         self.work_guest = "C:\\WORK"
         self.first_prompt = "hello"
@@ -101,7 +104,29 @@ def test_restore_settings(mock_deps):
     svc.restore_settings(guest, "conv-1")
     assert guest.model == "opus"
     assert guest.effort == "low"
-    assert guest.perm_mode == "plan"
+    assert guest.mode_id == "plan"
+
+
+def test_a_chat_saved_with_the_clis_names_comes_back_as_an_execution_mode(
+        mock_deps):
+    """Rows from before 2026-10-04 carry `acceptEdits`; they are mapped on
+    read and never rewritten, so an older bridge still understands them."""
+    conn, pres, ws, opt, ge, conv = mock_deps
+    svc = SessionService(conn, pres, ws, opt, ge, conv)
+    guest = DummyGuest()
+    conv.remember("conv-2", mode="acceptEdits")
+    svc.restore_settings(guest, "conv-2")
+    assert guest.mode_id == "workfolder"
+    assert conv.settings("conv-2")["mode"] == "acceptEdits"
+
+
+def test_mode_id_wins_over_the_legacy_key(mock_deps):
+    conn, pres, ws, opt, ge, conv = mock_deps
+    svc = SessionService(conn, pres, ws, opt, ge, conv)
+    guest = DummyGuest()
+    conv.remember("conv-3", mode="default", mode_id="auto")
+    svc.restore_settings(guest, "conv-3")
+    assert guest.mode_id == "auto"
 
 
 def test_abandon_pending(mock_deps):

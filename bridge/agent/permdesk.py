@@ -37,7 +37,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from ..status import PromptEndReason
 from ..view import html as H
 from ..wire.protocol import permend, permreq, permstate, permwait
-from . import cmdguard, prompts, review, toolrules
+from . import categories, policy, prompts, review, toolrules
 from . import permissions as perms
 from .permissions import PendingPrompt, render_request
 
@@ -63,8 +63,9 @@ def _bar_line(summary: str, warning: str) -> str:
         ! no folder is mirrored from this machine, so nothing on it can be re...
 
     and nothing whatever of the command they were being asked to approve. The
-    other half of that fix is `_announce_gap`, which stops the commonest
-    warning from being on every prompt in the first place.
+    other half of that fix was saying the deployment gap once rather than on
+    every prompt; the classifier (categories.py) now says what a call
+    touches instead of what it might reach.
 
     The marker stays at the front because two characters cost nothing and are
     what tells a reader there is something to read; the warning itself goes
@@ -79,6 +80,11 @@ def _bar_line(summary: str, warning: str) -> str:
     return "! " + head + "  -- " + tail
 
 
+#: Categories that stay inside the work folder, and so carry no warning.
+_CONTAINED = (categories.READ, categories.FILES_WORK, categories.RUN_WORK,
+              categories.RUN_BUILT)
+
+
 class PermissionDesk:
     """What is on the guest's screen right now, and what is queued behind it.
 
@@ -90,8 +96,16 @@ class PermissionDesk:
     """
 
     def __init__(self, guest, *, cwd: str | None, write_block, send,
-                spawn, ensure_work=None, preview=None) -> None:
+                spawn, ensure_work=None, preview=None, fetch=None,
+                on_mode=None) -> None:
         self._guest = guest
+        #: `async (kind, path) -> names | bytes | None`: what the classifier
+        #: asks to see before it can judge a program ("ls" a folder, "get"
+        #: a script). None: anything it asks for is doubt.
+        self._fetch = fetch
+        #: `async () -> None`: the mode changed from here (Plan first was
+        #: approved), so remember it and resend the menu.
+        self._on_mode = on_mode
         #: `async (tool_name, args) -> str`: what a delete, copy or move is
         #: about to touch, counted on the guest (agent/review.py). Optional:
         #: a desk without one shows the bar without the count.
@@ -125,64 +139,6 @@ class PermissionDesk:
         #: request tools in parallel, so the rest wait rather than racing for
         #: it.
         self.queue: deque = deque()
-        #: The DEPLOYMENT-level gap last announced, or None -- see 02.4 and
-        #: `cmdguard.deployment_gap`. Held by value rather than as a flag so
-        #: it is said again if it changes and stops being said the moment it
-        #: is fixed (committing a work folder mid-conversation does exactly
-        #: that).
-        self._gap_said: str | None = None
-
-    def _shell(self, args: dict | None = None) -> str:
-        """Which shell's rules to judge a command by.
-
-        THE ONE THE CALL NAMED, first. A machine has as many shells as it
-        has, the model picks one per `exec` from the list the machine
-        reported, and judging by any other is judging a grammar the command
-        will not run under -- which is how a guard comes to be confidently
-        wrong. `run_on_guest` refuses a name the machine does not have, so a
-        name that gets here is one of its own.
-
-        Falling back to the machine's first reported shell is what `exec`
-        itself falls back to, so the two agree by construction.
-
-        02.5: there is no guess left to defend here. The machine says which
-        shells it has, the model says which one it wants, and only a machine
-        that reported nothing and a call that named nothing reaches the
-        profile count (`cmdguard._default_shell`) at all.
-        """
-        named = str((args or {}).get("shell") or "").strip()
-        if named and named.lower() != "none":
-            return named
-        return toolrules.shell_of(getattr(self._guest, "tools", None))
-
-    async def _announce_gap(self, root: str, shell: str) -> None:
-        """Say ONCE why no command here can be judged. See 02.4.
-
-        Both sentences `cmdguard.deployment_gap` returns are facts about the
-        connection, not about any command line, and they used to come back
-        from `reason()` on EVERY prompt -- 73 characters in front of a bar
-        the guest draws as one clipped line, so the user read the warning and
-        none of the command. A bridge started without `--sync-dir` is in that
-        state for every exec it will ever show.
-
-        `shell` is per call now, because the model picks one, so "this bridge
-        has no rules for that shell" is a state the connection can move in
-        and out of. Held by value rather than as a flag for exactly that
-        reason: it is said again when it becomes true of a different shell,
-        and stops being said the moment a call names one that is covered.
-        """
-        gap = cmdguard.deployment_gap(
-            guest_root=root, shell=shell,
-            caps=getattr(self._guest, "caps", None))
-        if gap == self._gap_said:
-            return
-        self._gap_said = gap
-        if gap:
-            log.info("guard is not deciding anything here: %s", gap)
-            await self._write_block(H.notice(
-                "Commands on your machine cannot be checked against a "
-                "mirrored folder: " + gap + ". You will still be asked "
-                "before each one runs."))
 
     @property
     def busy(self) -> bool:
@@ -239,6 +195,61 @@ class PermissionDesk:
                 del self._approved[i]
                 return
 
+    # --- classification ----------------------------------------------------
+
+    def _ctx(self) -> categories.Ctx:
+        g = self._guest
+        prefs = getattr(g, "prefs", None)
+        return categories.Ctx(
+            caps=getattr(g, "caps", None),
+            shells=tuple(getattr(f, "name", "") for f in
+                         toolrules.shells_of(getattr(g, "tools", None))),
+            work_root=str(getattr(g, "work_guest", "") or ""),
+            bridge_dir=str(getattr(g, "work_dir", "") or ""),
+            lists=getattr(prefs, "lists", None) or categories.Lists(),
+            resolve=getattr(g, "on_guest", None))
+
+    async def classify(self, tool_name: str, args: dict) -> categories.Verdict:
+        """`categories.classify`, answering what it asks for from the guest.
+
+        FROM THE GUEST, not the mirror: a script an exec wrote a moment ago
+        is on the machine before it is in the mirror, and judging the
+        mirror's older copy would judge a file that is not the one about to
+        run. Anything that cannot be fetched is doubt, never a pass.
+        """
+        ctx = self._ctx()
+        v = categories.classify(ctx, tool_name, args)
+        for _ in range(categories.MAX_DEPTH + 2):
+            if not v.wants:
+                return v
+            got: dict = {}
+            for kind, path, _key in v.wants:
+                got[(kind, path)] = (await self._fetch(kind, path)
+                                     if self._fetch is not None else None)
+            categories.fill(ctx, v.wants, got)
+            v = categories.classify(ctx, tool_name, args)
+        if v.wants:
+            v.add(categories.RUN_ELSE, prompts.text(
+                "policy.rule.unread", program=v.wants[0][1]), doubt=True)
+            v.wants = []
+        return v
+
+    async def _leave_plan(self):
+        """The plan was approved: back to the mode the chat was in before
+        Plan first, and tell the CLI it is no longer planning. The setMode
+        update is the ONLY `updated_permissions` this bridge forwards."""
+        from claude_agent_sdk.types import PermissionUpdate
+        g = self._guest
+        back = str(getattr(g, "mode_before_plan", "") or "")
+        if policy.lookup(back, getattr(getattr(g, "prefs", None), "modes",
+                                       None)) is None or back == "plan":
+            back = policy.DEFAULT
+        g.mode_id = back
+        if self._on_mode is not None:
+            await self._on_mode()
+        return PermissionResultAllow(updated_permissions=[PermissionUpdate(
+            type="setMode", mode="default", destination="session")])
+
     # --- the callback claude_agent_sdk calls into ---------------------------
 
     def callback(self):
@@ -256,11 +267,13 @@ class PermissionDesk:
     def _callback(self):
         """Build the can_use_tool callback for this guest.
 
-        Everything that reaches here gets a bar. There is deliberately no
-        auto-allow branch: measured against the real CLI, a Read or Grep
-        inside cwd never reaches this callback at all, and a Bash command its
-        sandbox can contain is approved without asking us either. The policy
-        the plan carried would have been dead code.
+        What reaches here is decided by the conversation's execution mode
+        (policy.py) on what the call touches (categories.py). Measured
+        against the real CLI, a Read or Grep inside cwd never reaches this
+        callback at all, and a Bash command its sandbox can contain is
+        approved without asking us either -- which is why the bridge's own
+        reads sit outside the matrix and `bridge_shell` only ever sees the
+        commands the sandbox could NOT contain.
         """
 
         async def can_use_tool(tool_name: str, args: dict, ctx):
@@ -300,72 +313,36 @@ class PermissionDesk:
                         message=prompts.text("tools.input.refused", why=why),
                         interrupt=False)
 
-            # What this command reaches outside the mirrored folder, if
-            # anything. It ONLY EVER ADDS A WARNING, never a reassurance: the
-            # bar clips at 160 characters, so a truncated "stays in the
-            # mirrored folder" tag on a contained command would be
-            # manufactured reassurance, less honest than today's bare
-            # command. It also gates nothing yet -- displayed, not acted on,
-            # until it earns its way onto real traffic.
-            warning = None
-            if tool_name.startswith("mcp__machine__"):
-                if self._ensure_work is not None:
-                    await self._ensure_work()
-                # THE LIVE FOLDER, not HELLO's `sync_root` (the machine's
-                # CONFIGURED root). Containment must be measured against the
-                # tree actually mirrored for THIS conversation, which is
-                # narrower -- the parent would call a sibling conversation's
-                # folder "inside the mirror". An empty root means nothing is
-                # mirrored; cmdguard.reason refuses outright on one rather
-                # than letting `"".startswith("")` call every path contained.
-                #
-                # Shell and caps are both passed: without the shell, the
-                # guard picked one by counting profiles, so a second shell
-                # disabled it entirely; without caps it folded case
-                # unconditionally, calling `/WORK/x` contained in a mirror
-                # rooted at `/work` on a case-sensitive machine.
-                # THE MIRRORED FOLDER, which is not the same thing as the
-                # conversation's folder on the machine. Since 2026-10-01 a
-                # conversation gets a folder over there whether or not this
-                # bridge mirrors anything, so `work_guest` alone would answer
-                # "yes, there is a folder" to a question that is really "is
-                # there a copy of it here to restore from". `work_dir` is the
-                # tree on THIS side and is set only with a `--sync-dir`, so it
-                # is what the containment judgement -- and the gap sentence
-                # underneath it -- actually depend on.
-                root = (str(getattr(self._guest, "work_guest", "") or "")
-                        if getattr(self._guest, "work_dir", "") else "")
-                # THE SHELL THIS CALL NAMED. Judging by any other is judging
-                # a grammar the command will not run under.
-                shell = self._shell(args)
-                # Said once per connection-state, not once per command (02.4).
-                await self._announce_gap(root, shell)
-                warning = cmdguard.reason(
-                    str((args or {}).get("command") or ""),
-                    cwd=str((args or {}).get("cwd") or ""),
-                    guest_root=root,
-                    shell=shell,
-                    caps=getattr(self._guest, "caps", None),
-                    announce_gaps=False)
-                # A FILE WRITE IS NOT A COMMAND, so `reason` never looked at
-                # one: it reads `args["command"]`, which `put_file` does not
-                # have, and answered None for every destination it was ever
-                # given. That hole is 2026-10-01's second half -- an agent
-                # with no mirror wrote into the root of C: on real hardware,
-                # and the only thing the person saw was "Write a file on
-                # your machine". Judged here rather than refused in the tool
-                # for the reason the rest of this module is judged here: it
-                # is a warning on the bar, not a boundary, and the person
-                # reading it is the one who can tell C:\AUTOEXEC.BAT from
-                # scratch. Independent of the mirror, so it fires whether or
-                # not `--sync-dir` was given.
-                if not warning and tool_name.endswith("__put_file"):
-                    warning = cmdguard.drive_root_write(
-                        str((args or {}).get("path") or ""),
-                        shell=shell,
-                        caps=getattr(self._guest, "caps", None))
-                if warning:
-                    log.info("guard: %s -- %s", warning, str(args)[:80])
+            # WHAT IT TOUCHES, AND WHAT THIS CONVERSATION'S MODE SAYS. One
+            # analysis (categories.py), one table (policy.py): the bar, the
+            # checker and the log all explain the same finding.
+            if tool_name.startswith("mcp__machine__") and \
+                    self._ensure_work is not None:
+                await self._ensure_work()
+            verdict = await self.classify(tool_name, args)
+            mode = policy.mode_of(self._guest)
+            decision = policy.decide(mode, verdict,
+                                     getattr(self._guest, "grants", ()))
+            log.info("%s under %s: %s (%s)", tool_name, mode.id,
+                     decision.value, decision.why or "-")
+            if decision.value == policy.REFUSE:
+                return PermissionResultDeny(message=decision.why,
+                                            interrupt=False)
+            if decision.value == policy.OFF:
+                return PermissionResultDeny(
+                    message=prompts.text(
+                        "policy.off", mode=mode.label,
+                        why=decision.why or tool_name),
+                    interrupt=False)
+            if decision.value == policy.ALLOW:
+                return PermissionResultAllow()
+            # A WARNING ONLY FOR WHAT LEAVES THE WORK FOLDER. A contained
+            # call reads on the bar exactly as its command does: a "stays in
+            # the work folder" tag would be reassurance, and the bar clips --
+            # a truncated reassurance is less honest than none.
+            warning = (decision.why if decision.hit is not None
+                       and (decision.hit.doubt
+                            or decision.hit.cat not in _CONTAINED) else "")
 
             # WHAT IT TOUCHES, counted on the guest, for a delete, copy or
             # move: the person approving "delete C:\\WORK\\OLD" needs to know
@@ -377,25 +354,32 @@ class PermissionDesk:
                 if preview_text:
                     bar_args = {**(args or {}), "_preview": preview_text}
 
-            # AUTO: A SECOND OPINION INSTEAD OF A BAR -- the user's own words,
-            # "in auto mode, literally asking an agent if this is safe". The
-            # reviewer can approve; it cannot refuse. Unsure, unreachable or
-            # slow, it hands the question to the person with its reason.
-            if (tool_name.startswith("mcp__machine__")
-                    and getattr(self._guest, "perm_mode", "") == "auto"):
-                approved, why = await review.review(self._guest, tool_name,
-                                                    args, preview_text)
+            # CHECK: A SECOND OPINION INSTEAD OF A BAR. The checker can
+            # approve; it cannot refuse. Unsure, unreachable or slow, it hands
+            # the question to the person with its reason.
+            if decision.value == policy.CHECK:
+                cat = decision.hit.cat if decision.hit is not None else ""
+                approved, why = await review.review(
+                    self._guest, tool_name, args, preview_text,
+                    finding="; ".join(h.rule for h in verdict.hits),
+                    category=(prompts.text(f"policy.cat.{cat}")
+                              if cat else ""))
                 if approved:
-                    log.info("reviewer approved %s: %s", tool_name, why)
+                    log.info("checker approved %s: %s", tool_name, why)
                     await self._write_block(H.notice(prompts.text(
                         "review.approved",
                         what=perms.summary(tool_name, ctx, bar_args),
                         why=why)))
                     return PermissionResultAllow()
-                log.info("reviewer asks the person about %s: %s",
+                log.info("checker asks the person about %s: %s",
                          tool_name, why)
+                # The checker's reason FIRST: the bar has room for one
+                # clause after the command, and "why the checker could not
+                # decide" is what the person needs to decide themselves.
+                # The classifier's finding follows, and is in full in the
+                # transcript block.
                 note = prompts.text("review.asks", why=why)
-                warning = f"{warning} {note}" if warning else note
+                warning = f"{note} ({warning})" if warning else note
 
             loop = asyncio.get_running_loop()
             prompt = PendingPrompt(
@@ -413,8 +397,12 @@ class PermissionDesk:
 
             try:
                 await self._enqueue(prompt)
-                return await asyncio.wait_for(prompt.future,
-                                              timeout=perms.DEADLINE_S)
+                result = await asyncio.wait_for(prompt.future,
+                                                timeout=perms.DEADLINE_S)
+                if verdict.plan_exit and isinstance(result,
+                                                    PermissionResultAllow):
+                    return await self._leave_plan()
+                return result
             except TimeoutError:
                 self._finish(prompt, PromptEndReason.TIMEOUT)
                 return PermissionResultDeny(

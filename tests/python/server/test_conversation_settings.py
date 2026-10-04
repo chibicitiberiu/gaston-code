@@ -169,14 +169,15 @@ async def test_the_mode_and_effort_travel_with_the_model(harness):
     conv = guest.conv_id
 
     saved = _saved(harness, conv)
-    assert saved.get("mode") == "plan"
+    assert saved.get("mode_id") == "plan"
+    assert saved.get("mode") == "plan"          # the legacy key, for rollback
     assert saved.get("model") == "opus"
 
     await bridge.coordinator.new_session(guest, "")
-    await bridge.options.set_mode(guest, "default")
+    await bridge.options.set_mode(guest, "manual")
     await bridge.turn_runner.run_turn(guest, "elsewhere")
 
     await bridge.coordinator.switch(guest, conv)
-    assert guest.perm_mode == "plan"
+    assert guest.mode_id == "plan"
     assert guest.model == "opus"
     await harness.close(w)

@@ -16,10 +16,11 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from ..agent import machine
+from ..agent import machine, policy
 from ..agent import permissions as perms
 from ..agent import sessions as sesslist
 from ..agent import tools as machine_tools
+from ..agent.prompts import text as policy_text
 from ..agent.session import Session
 from ..guest import GuestSession
 from ..view import html as H
@@ -33,7 +34,7 @@ from ..wire.protocol import (
     sessions_start,
     switched,
 )
-from .options import EFFORT_LABEL, MODE_ORDER
+from .options import EFFORT_LABEL
 
 log = logging.getLogger("bridge.session")
 
@@ -250,6 +251,12 @@ class SessionService:
     async def on_getsessions(self, guest: GuestSession, f: Frame) -> None:
         await self.send_sessions(guest)
 
+    def reset_chat_policy(self, guest: GuestSession) -> None:
+        """The client's default mode, and no grants."""
+        guest.grants = set()
+        guest.mode_before_plan = ""
+        guest.mode_id = policy.default_mode(guest)
+
     def restore_settings(self, guest: GuestSession, session_id: str) -> None:
         """Put back what this conversation was last set to.
 
@@ -268,9 +275,15 @@ class SessionService:
             guest.model = saved["model"]
         if "effort" in saved:
             guest.effort = saved["effort"]
-        mode = saved.get("mode")
-        if mode in MODE_ORDER:
-            guest.perm_mode = mode
+        # The execution mode first; a row from before 2026-10-04 has only
+        # the CLI's name for it, mapped on read and never rewritten here.
+        mode_id = saved.get("mode_id") or policy.LEGACY.get(
+            str(saved.get("mode") or ""), "")
+        user = getattr(getattr(guest, "prefs", None), "modes", None)
+        if mode_id and policy.lookup(mode_id, user) is not None:
+            guest.mode_id = mode_id
+            if not saved.get("mode_id") and mode_id == "auto":
+                guest.legacy_auto = True
         log.info("restored settings for %s: %s", session_id, saved)
 
 
@@ -408,7 +421,7 @@ class SessionService:
             },
             model=self.options.effective_model(guest),
             effort=self.options.effective_effort(guest),
-            permission_mode=guest.perm_mode,
+            permission_mode=policy.mode_of(guest).sdk,
             resume=resume,
             fork=fork,
             can_use_tool=can_use_tool_cb,
@@ -471,6 +484,7 @@ class SessionService:
         if guest.claude:
             await guest.claude.close()
         guest.pending_resume = ""
+        self.reset_chat_policy(guest)
         guest.work_dir = ""
         guest.work_guest = ""
         guest.work_planned = ""
@@ -500,7 +514,16 @@ class SessionService:
             await guest.claude.close()
         guest.claude = None
         guest.pending_resume = session_id
+        # A CHAT STARTS FROM THE CLIENT'S DEFAULT MODE AND NO GRANTS, and only
+        # then takes what it saved: "allow programs here, this chat" from the
+        # last conversation must not follow the person into the next one,
+        # and `restore_settings` returns early for a chat that saved nothing.
+        self.reset_chat_policy(guest)
         self.restore_settings(guest, session_id)
+        if getattr(guest, "legacy_auto", False):
+            guest.legacy_auto = False
+            await self.presentation.write_block(
+                guest, H.notice(policy_text("policy.legacy_auto")))
 
         conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
         name = conv_store.folder(session_id) if conv_store is not None else None

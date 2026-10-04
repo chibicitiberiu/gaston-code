@@ -101,6 +101,12 @@ TOOLS = [
     "Glob", "Grep",               # deferred by default; named here so they exist
     "Bash",
     "WebFetch", "WebSearch",      # finding period drivers and documentation
+    # Plan first's way out. Offered in every mode -- the tool list is fixed
+    # when a session is built and the mode is not -- and harmless outside
+    # Plan: the desk asks, and approving it changes nothing there. Measured
+    # 2026-10-04: in plan mode it reaches `can_use_tool` with the plan text,
+    # which is what makes the bar the approval.
+    "ExitPlanMode",
 ]
 
 # Deliberately NOT offered, and why -- so the next person does not "restore"
@@ -109,8 +115,8 @@ TOOLS = [
 #   Task            parallel subagents raise parallel permission prompts, and
 #                   the guest has one bar on a 640x480 screen
 #   NotebookEdit    there is no Jupyter on Windows 98
-#   AskUserQuestion } need a UI the guest does not have
-#   EnterPlanMode   }
+#   AskUserQuestion } need a UI the guest does not have; the Mode menu is how
+#   EnterPlanMode   } Plan first is entered
 #   Skill, Workflow, Cron*, Monitor, SendMessage, PushNotification,
 #   RemoteTrigger, ScheduleWakeup, ListAgents, Task{Output,Stop},
 #   Enter/ExitWorktree, DesignSync, ReportFindings

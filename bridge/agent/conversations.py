@@ -99,7 +99,10 @@ class Conversations:
 
     #: What `remember` will store. Named here so a typo is a KeyError in a
     #: test rather than a field that silently never persists.
-    SETTINGS = ("model", "effort", "mode")
+    #: `mode` is the LEGACY key -- the CLI's permission-mode name -- still
+    #: written so a rolled-back bridge finds something it understands;
+    #: `mode_id` is the execution mode this bridge reads first.
+    SETTINGS = ("model", "effort", "mode", "mode_id")
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else default_path()

@@ -596,9 +596,15 @@ async def test_the_guard_judges_by_the_shell_the_call_named(harness):
     harness.bridge.connection.guest.tools = [
         srv.Found("command.com", "shell", r"C:\WINDOWS\COMMAND.COM", True)]
 
-    assert desk._shell({"shell": "zzsh"}) == "zzsh"
-    assert desk._shell({"shell": "none"}) == "command.com"
-    assert desk._shell({}) == "command.com"
+    harness.bridge.connection.guest.work_guest = "C:\\WORK"
+    # The machine's shell: its grammar places `copy a b` in the work folder.
+    v = await desk.classify("mcp__machine__exec", {"command": "copy a b"})
+    assert {h.cat for h in v.hits} == {"files_work"}
+    # A shell this bridge has no grammar for: nothing can be placed, so it
+    # is doubt -- never judged by command.com's grammar it will not run under.
+    v = await desk.classify("mcp__machine__exec",
+                            {"command": "copy a b", "shell": "zzsh"})
+    assert v.doubtful
     await harness.close(w)
 
 

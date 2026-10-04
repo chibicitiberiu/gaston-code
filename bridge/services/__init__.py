@@ -13,8 +13,6 @@ from bridge.services.options import (
     COMMAND_MENU,
     EFFORT_LABEL,
     EFFORT_ORDER,
-    MODE_CAVEAT,
-    MODE_LABEL,
     MODE_ORDER,
     OptionsService,
 )
@@ -29,8 +27,6 @@ __all__ = [
     "COMMAND_MENU",
     "EFFORT_LABEL",
     "EFFORT_ORDER",
-    "MODE_CAVEAT",
-    "MODE_LABEL",
     "MODE_ORDER",
     "AttachmentService",
     "BridgeConfig",

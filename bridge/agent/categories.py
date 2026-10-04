@@ -273,10 +273,12 @@ class _Classifier:
             return "work", resolved
         if where == cmdguard.UNRESOLVED:
             return "doubt", token
-        return "else", resolved              # OUTSIDE, or a DEVICE name
+        if where == cmdguard.DEVICE:
+            return "device", resolved
+        return "else", resolved
 
     def files_hit(self, token: str, cwd: str, *, removes: bool = False,
-                  verb: str = "") -> None:
+                  verb: str = "", a_file: bool = False) -> None:
         """A write, move or delete of `token`."""
         where, what = self.tier(token, cwd)
         if where == "work":
@@ -300,6 +302,17 @@ class _Classifier:
                        "client")
         elif where == "doubt":
             self.v.add(FILES_ELSE, _t("unresolved", path=token), doubt=True)
+        elif where == "device":
+            # A device name is reserved in every folder, so the write never
+            # lands in the work folder -- but it is not "outside" it either,
+            # and saying so is a claim the person can check and find false.
+            self.v.add(FILES_ELSE, _t("device", path=token))
+        elif a_file and cmdguard.drive_root_write(what, shell=self.shell,
+                                                  caps=self.ctx.caps):
+            # Only for a FILE being written: `deltree C:\\WINDOWS` names a
+            # folder at the top level, and "not in any folder" would be
+            # false of it.
+            self.v.add(FILES_ELSE, _t("top_level", path=token))
         else:
             self.v.add(FILES_ELSE, _t("elsewhere", path=token))
 
@@ -731,7 +744,7 @@ def classify(ctx: Ctx, tool: str, args: dict | None) -> Verdict:
         if verb == "sync_resolve" and not p:
             v.add(FILES_WORK, _t("sync_resolve"))
             return v
-        c.files_hit(p or "?", ctx.work_root)
+        c.files_hit(p or "?", ctx.work_root, a_file=verb == "put_file")
         return v
     if verb == "copy":
         c.files_hit(path_of("to") or "?", ctx.work_root)

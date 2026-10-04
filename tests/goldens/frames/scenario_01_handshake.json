@@ -63,18 +63,18 @@
   {
     "headers": {
       "current": "1",
-      "id": "default",
+      "id": "manual",
       "kind": "mode",
-      "label": "Manual"
+      "label": "Ask first"
     },
     "type": "OPTION"
   },
   {
     "headers": {
       "current": "0",
-      "id": "acceptEdits",
+      "id": "workfolder",
       "kind": "mode",
-      "label": "Accept edits"
+      "label": "Free in work folder"
     },
     "type": "OPTION"
   },
@@ -83,7 +83,7 @@
       "current": "0",
       "id": "plan",
       "kind": "mode",
-      "label": "Plan"
+      "label": "Plan first"
     },
     "type": "OPTION"
   },

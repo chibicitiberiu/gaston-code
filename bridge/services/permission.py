@@ -11,10 +11,9 @@ import asyncio
 import logging
 from typing import Any
 
+from ..agent import categories, policy, review
 from ..agent import permissions as perms
-from ..agent import review
 from ..agent.permdesk import PermissionDesk
-from ..agent.session import TOOLS
 from ..guest import GuestSession
 from ..wire.protocol import Frame
 
@@ -32,8 +31,11 @@ class PermissionService:
         workspace: Any = None,
         spawn: Any = None,
         guest_fs: Any = None,
+        on_mode: Any = None,
     ) -> None:
         self.connection = connection
+        #: `async (guest) -> None` when the desk changes a chat's mode.
+        self.on_mode = on_mode
         #: For the bar's preview of what a delete, copy or move touches.
         self.guest_fs = guest_fs
         self.presentation = presentation
@@ -63,9 +65,29 @@ class PermissionService:
                 ),
                 preview=lambda tool, args: review.preview(
                     self.guest_fs, guest, tool, args),
+                fetch=lambda kind, path: self._fetch(guest, kind, path),
+                on_mode=((lambda: self.on_mode(guest))
+                         if self.on_mode else None),
             )
         return guest.perms
 
+
+    async def _fetch(self, guest: GuestSession, kind: str, path: str):
+        """What the classifier asked to see: a folder's names, or a script's
+        bytes. None for anything that cannot be had -- which the classifier
+        treats as doubt, never as a pass."""
+        if self.guest_fs is None:
+            return None
+        try:
+            if kind == "ls":
+                listing = await self.guest_fs.ls(guest, path)
+                return [e.name for e in listing.entries]
+            got = await self.guest_fs.get(guest, path,
+                                          max_bytes=categories.MAX_SCRIPT)
+            return None if got.truncated else got.data
+        except Exception as exc:
+            log.info("classifier could not %s %s: %s", kind, path, exc)
+            return None
 
     async def on_rules(self, guest: GuestSession, f: Frame) -> None:
         """What can run without asking, as a transcript block.
@@ -75,10 +97,11 @@ class PermissionService:
         need scrolling it does not have. It also belongs in the transcript --
         the answer depends on the mode, and the mode changes.
         """
-        tools = [*list(TOOLS), "mcp__machine__exec"]
-        root = (guest.hello or {}).get("sync_root", "") or ""
+        prefs = getattr(guest, "prefs", None)
         await self.presentation.write_block(
-            guest, perms.rules_view(guest.perm_mode, tools, root))
+            guest, perms.rules_view(policy.mode_of(guest),
+                                    getattr(prefs, "lists", None),
+                                    guest.work_guest or ""))
 
     async def reply(self, guest: GuestSession, f: Frame) -> None:
         """Answer from the guest's prompt bar."""

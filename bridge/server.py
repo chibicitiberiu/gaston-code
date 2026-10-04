@@ -33,7 +33,6 @@ from .services.coordinator import SessionCoordinator
 from .services.guest_exec import GuestExecService
 from .services.guest_fs import GuestFsService
 from .services.options import (
-    MODE_LABEL,
     MODE_ORDER,
     OptionsService,
 )
@@ -63,7 +62,6 @@ from .wire.protocol import (
 #: they are dead.
 __all__ = [
     "APPEND",
-    "MODE_LABEL",
     "MODE_ORDER",
     "Bridge",
     "ExecCall",
@@ -164,12 +162,19 @@ class Bridge:
             pre_exec=self._pre_exec,
             fs=self.guest_fs,
         )
+        async def mode_changed(g):
+            # The desk changed the mode itself (Plan first approved):
+            # remember it for the chat and put the tick where it now is.
+            self.options.remember_settings(g)
+            await self.options.send_options(g)
+
         self.permissions = PermissionService(
             connection=self.connection,
             presentation=self.presentation,
             workspace=self.workspace,
             spawn=self._spawn,
             guest_fs=self.guest_fs,
+            on_mode=mode_changed,
         )
         self.sync = SyncService(
             config=self.config,

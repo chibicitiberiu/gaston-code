@@ -12,6 +12,8 @@ work_root = "{path} is the work folder itself"
 sync_rules = "{path} decides what syncs"
 gaston = "{path} is inside .gaston, which belongs to the sync layer"
 share = "{path} is on another computer"
+device = "{path} is a device name, reserved in every folder"
+top_level = "{path} is in the top level of a disk, not in any folder"
 no_destination = "{program} with no destination that can be placed"
 bulk_delete = "{path}: a delete through the shell cannot be undone"
 permanent = "{path} is deleted without the Recycle Bin"
@@ -40,3 +42,64 @@ screen_see = "looks at the screen"
 screen_drive = "clicks and types on the screen"
 kill = "ends process {pid}"
 sync_resolve = "settles a sync conflict in the work folder"
+
+# --- the modes ---------------------------------------------------------------
+# Labels are what the Mode menu shows; summaries are what the person is told
+# when they pick one, and what the rules view opens with.
+
+[mode.manual]
+label = "Ask first"
+summary = "Reading and looking at the screen just happen; everything that changes something on your machine asks you first."
+
+[mode.workfolder]
+label = "Free in work folder"
+summary = "Changes files and runs trusted programs freely in this chat's work folder, and uses the web. Everything else asks you first."
+
+[mode.plan]
+label = "Plan first"
+summary = "The assistant reads and plans, then shows you the plan; nothing changes until you approve it. Afterwards the chat returns to the mode it was in."
+
+[mode.auto]
+label = "Auto"
+summary = "Works freely in the work folder and runs what it built there. A second model checks everything else -- other folders, system files, permanent deletes, your screen -- and asks you only when it is unsure."
+
+[summary]
+allows = "Allowed without asking: {cats}."
+checks = "Checked by a second model first: {cats}."
+asks = "Everything that changes something asks you first."
+
+[cat]
+files_work = "changing files in the work folder"
+files_else = "changing files elsewhere"
+files_sys = "changing protected system files"
+run_work = "running trusted programs in the work folder"
+run_built = "running programs built in the work folder"
+run_else = "running other programs"
+run_sys = "running dangerous programs"
+read = "reading files"
+purge = "deleting without the Recycle Bin"
+screen_see = "looking at the screen"
+screen_drive = "clicking and typing on the screen"
+bridge_shell = "running commands on the bridge"
+web = "using the web"
+
+# Said to the AGENT when a call lands in a category this mode turns off.
+off = "This is turned off in the conversation's mode ({mode}): {why}. Do not retry it; do what you can without it, or tell the user what you would need."
+
+legacy_auto = "This chat was in Auto before execution modes. Auto now lets the assistant change files and run programs in the work folder without asking or checking; everything else is still checked by a second model. Pick another mode from the Mode menu if that is more than you want."
+
+# The answer to "What can run without asking..." (permissions.rules_view).
+[view]
+head = "What can run without asking"
+work = "\"Work folder\" means this chat's folder on your machine: {root}."
+no_root = "not chosen yet -- it is made at the first thing the assistant does there"
+protected = "Protected places this machine declared: {places}."
+no_protected = "This machine declared no protected places, so nothing is treated as a system file -- dangerous programs such as format are still recognised by the shell's own rules."
+honest = "Where a command reaches is judged from its command line. It can be wrong, and a path that cannot be placed counts as the riskier of \"elsewhere\" and \"system\". A trusted build tool still runs whatever its makefile says."
+unseen = "Claude Code answers some of its own calls without telling this bridge -- reading and searching its copy of the work folder, and shell commands its sandbox can contain. Those happen on the bridge computer, never on yours. The permission rules in the operator's .claude settings do not apply to this connection."
+
+[view.value]
+off = "Off"
+ask = "Ask me"
+check = "Checker decides"
+allow = "Allow"

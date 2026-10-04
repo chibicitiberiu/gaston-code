@@ -14,7 +14,9 @@ from bridge.view.transcript import TranscriptView
 
 class Guest:
     def __init__(self, mode):
-        self.perm_mode = mode
+        # The CLI's names, as these tests were written with, mapped to the
+        # execution modes that replaced them.
+        self.mode_id = {"default": "manual"}.get(mode, mode)
         self.caps = C.Caps(ops=2)
         self.work_dir = ""
         self.work_guest = ""
@@ -50,8 +52,9 @@ def _desk(guest, blocks, sent):
 def _run(mode, verdict, monkeypatch):
     seen = {}
 
-    async def fake_review(guest, tool, args, preview_text=""):
+    async def fake_review(guest, tool, args, preview_text="", **kw):
         seen["preview"] = preview_text
+        seen.update(kw)
         return verdict
 
     monkeypatch.setattr(review, "review", fake_review)
@@ -116,7 +119,7 @@ def test_manual_never_consults_the_reviewer(monkeypatch):
 
 
 def test_a_call_the_desk_approved_passes_the_gate_once(monkeypatch):
-    async def fake_review(guest, tool, args, preview_text=""):
+    async def fake_review(guest, tool, args, preview_text="", **kw):
         return True, "asked for"
 
     monkeypatch.setattr(review, "review", fake_review)
@@ -138,7 +141,7 @@ def test_a_call_that_came_round_the_desk_is_reviewed_in_the_tool(
     The gate puts the reviewer back in front of it."""
     seen = []
 
-    async def fake_review(guest, tool, args, preview_text=""):
+    async def fake_review(guest, tool, args, preview_text="", **kw):
         seen.append(tool)
         return True, "asked for"
 
@@ -150,7 +153,7 @@ def test_a_call_that_came_round_the_desk_is_reviewed_in_the_tool(
 
 
 def test_an_unsure_reviewer_in_the_gate_asks_the_person(monkeypatch):
-    async def fake_review(guest, tool, args, preview_text=""):
+    async def fake_review(guest, tool, args, preview_text="", **kw):
         return False, "not what was asked"
 
     monkeypatch.setattr(review, "review", fake_review)

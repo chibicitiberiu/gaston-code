@@ -1031,8 +1031,9 @@ async def test_the_rules_view_says_what_it_cannot_see(harness):
     await harness.send(w, Frame("RULES", {}))
     frames = await harness.recv_until(r, {"TEXT"}, 10.0)
     body = harness.body(frames).decode("cp1252")
-    assert "not complete" in body
-    assert "mcp__machine__exec" in body
+    assert "without telling this bridge" in body
+    # Every category the mode decides is listed, by what it means.
+    assert "running other programs" in body
     await harness.close(w)
 
 
@@ -1047,7 +1048,7 @@ async def test_the_rules_view_does_not_promise_the_operators_settings(
     await harness.send(w, Frame("RULES", {}))
     frames = await harness.recv_until(r, {"TEXT"}, 10.0)
     body = harness.body(frames).decode("cp1252")
-    assert "settings.json" in body and "do <b>not</b> apply" in body
+    assert ".claude settings do not apply" in body
     await harness.close(w)
 
 
@@ -1055,11 +1056,13 @@ async def test_the_rules_view_follows_the_mode(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
-    await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
+    # ONE deflate stream: the mode notice is compressed too, so its frames
+    # must be inflated in order before the rules view's can be.
+    before = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     await harness.send(w, Frame("RULES", {}))
     frames = await harness.recv_until(r, {"TEXT"}, 10.0)
-    body = harness.body(frames).decode("cp1252")
-    assert "Mode: Plan" in body
+    body = harness.body(before + frames).decode("cp1252")
+    assert "Plan first" in body
     await harness.close(w)
 
 
@@ -1279,13 +1282,13 @@ async def test_bypass_permissions_is_never_on_the_menu(harness):
     frames = await harness.recv_until(r, {"OPTIONSEND"})
     modes = [f.headers["id"] for f in frames if f.type == "OPTION"
              and f.headers.get("kind") == "mode"]
-    assert modes == ["default", "acceptEdits", "plan", "auto"]
+    assert modes == ["manual", "workfolder", "plan", "auto"]
     assert "bypassPermissions" not in modes
     assert "dontAsk" not in modes
     ticked = [f.headers["id"] for f in frames if f.type == "OPTION"
               and f.headers.get("kind") == "mode"
               and f.headers.get("current") == "1"]
-    assert ticked == ["default"], "a fresh guest starts in Manual"
+    assert ticked == ["manual"], "a fresh guest starts in Ask first"
     await harness.close(w)
 
 
@@ -1297,23 +1300,24 @@ async def test_choosing_auto_says_what_it_does_not_do(harness):
     await harness.send(w, Frame("SETMODE", {"mode": "auto"}))
     frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     body = harness.body(frames).decode("cp1252")
-    assert "Permission mode set to Auto" in body
-    # Since 2026-10-02 Auto does add something for the dangerous machine
-    # tools -- the reviewer -- and the caveat says what, and when it asks.
-    assert "second opinion" in body and "you are asked" in body
+    assert "Auto:" in body
+    # What Auto does on its own, and when it still asks -- said once, to
+    # the person choosing it.
+    assert "second model" in body and "asks you" in body
     await harness.close(w)
 
 
 async def test_setmode_changes_the_live_session_and_the_menu(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+    await harness.send(w, Frame("SETMODE", {"mode": "workfolder"}))
     frames = await harness.recv_until(r, {"OPTIONSEND"})
     ticked = [f.headers["id"] for f in frames if f.type == "OPTION"
               and f.headers.get("kind") == "mode"
               and f.headers.get("current") == "1"]
-    assert ticked == ["acceptEdits"]
-    assert harness.bridge.connection.guest.claude.permission_mode == "acceptEdits"
+    assert ticked == ["workfolder"]
+    # The desk decides; the CLI stays in its own default mode.
+    assert harness.bridge.connection.guest.claude.permission_mode == "default"
     await harness.close(w)
 
 
@@ -1324,29 +1328,33 @@ async def test_setmode_refuses_a_mode_that_is_not_on_the_menu(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("SETMODE", {"mode": "bypassPermissions"}))
-    await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+    await harness.send(w, Frame("SETMODE", {"mode": "workfolder"}))
     await harness.recv_until(r, {"OPTIONSEND"})
-    assert harness.bridge.connection.guest.perm_mode == "acceptEdits", (
+    await harness.recv_until(r, {"OPTIONSEND"})
+    assert harness.bridge.connection.guest.mode_id == "workfolder", (
         "the refused mode must not have been applied, and must not have "
         "swallowed the valid one that followed"
     )
     await harness.close(w)
 
 
-async def test_the_chosen_mode_survives_a_rebuilt_session(harness):
-    """A new session throws the Session object away. The mode the user picked
-    is on the guest, not on that object, precisely so it comes back -- and it
-    has to survive all the way to the client the FIRST MESSAGE builds, since
-    New chat no longer builds one."""
+async def test_a_new_chat_starts_in_the_default_mode_and_keeps_its_own(
+        harness):
+    """A NEW CHAT starts in the client's default mode (Options), not in
+    whatever the last chat was using -- the mode is per conversation. A mode
+    picked for the new chat before its first message has to survive all the
+    way to the client that message builds, since New chat builds none."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
-    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.send(w, Frame("SETMODE", {"mode": "auto"}))
     await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("NEWSESSION", {}))
     await harness.recv_until(r, {"OPTIONSEND"})
     assert harness.bridge.connection.guest.claude is None, "New chat spawns nothing"
-    assert harness.bridge.connection.guest.perm_mode == "plan"
+    assert harness.bridge.connection.guest.mode_id == "manual"
 
+    await harness.send(w, Frame("SETMODE", {"mode": "plan"}))
+    await harness.recv_until(r, {"OPTIONSEND"})
     await harness.send(w, Frame("INPUT", {}, b"hello"))
     await harness.recv_until(r, {"TURN"}, 10.0)
     assert harness.bridge.connection.guest.claude.permission_mode == "plan", (
@@ -1393,26 +1401,28 @@ async def test_a_conversation_gets_its_own_settings_back(harness, tmp_path,
     try:
         await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w,
                          sid="other")
-        await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+        await harness.send(w, Frame("SETMODE", {"mode": "workfolder"}))
         await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
-        assert b.connection.guest.perm_mode == "acceptEdits"
+        assert b.connection.guest.mode_id == "workfolder"
 
         # ...and back. The first conversation's own choices return.
         await _switch_to(harness, monkeypatch=_NoPatch(), r=r, w=w, sid=first)
     finally:
         srv.sesslist.listing = orig
 
-    assert b.connection.guest.perm_mode == "plan", "its own mode, not the other chat's"
+    assert b.connection.guest.mode_id == "plan", "its own mode, not the other chat's"
     assert b.connection.guest.model == "haiku"
     await harness.close(w)
 
 
-async def test_a_conversation_with_nothing_saved_is_left_alone(
+async def test_a_conversation_with_nothing_saved_starts_in_the_default_mode(
     harness, tmp_path, monkeypatch,
 ):
     """"I have not chosen for this chat" and "I chose the default for this
-    chat" are different, and only the second is written down. A chat from
-    before this existed must not reset what is currently selected."""
+    chat" are different, and only the second is written down. For the MODE
+    a chat with nothing saved takes the client's default rather than the
+    last chat's: a mode is a licence, and it must not follow the person from
+    one conversation into another."""
     import bridge.server as srv
     from bridge.agent.conversations import Conversations
 
@@ -1433,7 +1443,7 @@ async def test_a_conversation_with_nothing_saved_is_left_alone(
                          sid="ancient")
     finally:
         srv.sesslist.listing = orig
-    assert b.connection.guest.perm_mode == "plan"
+    assert b.connection.guest.mode_id == "manual"
     await harness.close(w)
 
 
@@ -1484,7 +1494,7 @@ async def test_settings_chosen_before_the_first_message_are_not_refused(
     g = harness.bridge.connection.guest
     assert g.claude is None
 
-    await harness.send(w, Frame("SETMODE", {"mode": "acceptEdits"}))
+    await harness.send(w, Frame("SETMODE", {"mode": "workfolder"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
     await harness.send(w, Frame("SETMODEL", {"model": "haiku"}))
     await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
@@ -1492,7 +1502,7 @@ async def test_settings_chosen_before_the_first_message_are_not_refused(
     frames = await harness.recv_until(r, {"OPTIONSEND"}, 10.0)
 
     # Recorded, and said so rather than refused.
-    assert g.perm_mode == "acceptEdits"
+    assert g.mode_id == "workfolder"
     assert g.model == "haiku"
     assert g.effort == "low"
     body = harness.body(frames).lower()
@@ -1501,7 +1511,7 @@ async def test_settings_chosen_before_the_first_message_are_not_refused(
     # And all three reach the client the first message builds.
     await harness.send(w, Frame("INPUT", {}, b"hello"))
     await harness.recv_until(r, {"TURN"}, 10.0)
-    assert g.claude.permission_mode == "acceptEdits"
+    assert g.claude.permission_mode == "default"
     assert g.claude.model == "haiku"
     assert g.claude.effort == "low"
     await harness.close(w)
@@ -1658,7 +1668,8 @@ async def test_always_is_suppressed_for_machine_tools(harness):
     button off it would light it up."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
-    task = harness.bridge.connection.guest.claude.ask(tool_name="mcp__machine__exec")
+    task = harness.bridge.connection.guest.claude.ask(
+        tool_name="mcp__machine__exec", args={"command": "someprog.exe"})
     f = await _recv(harness, reader, "PERMREQ")
     assert f.headers["tool"] == "mcp__machine__exec"
     assert f.headers["allows"] == "0", "Always must not be offered"
@@ -2463,7 +2474,7 @@ async def test_a_command_reaching_outside_the_mirror_is_announced(harness):
     # characters -- so a user approving a command saw the guard's sentence,
     # an ellipsis, and nothing at all of what they were approving.
     assert body.startswith("! ")
-    assert body.index("writes outside the mirrored folder") > 10
+    assert body.index("outside the work folder") > 10
     # The path keeps the case the model wrote it in -- only the marker is
     # ours. Shouting the path back loses information for no gain.
     assert "c:\\windows" in body
@@ -2497,7 +2508,7 @@ async def test_the_warning_is_readable_in_the_transcript_not_just_the_bar(
 
     blocks = "".join(harness.bridge.connection.guest.view.pages.all_text())
     assert "permwarn" in blocks
-    assert "writes outside the mirrored folder" in blocks
+    assert "outside the work folder" in blocks
     task.cancel()
     await harness.close(writer)
 
@@ -2523,50 +2534,33 @@ async def test_a_device_inside_the_mirror_is_not_called_outside_it(harness):
     body = frame.body.decode("cp1252")
 
     assert body.startswith("! ")
-    assert "outside the mirrored folder" not in body
+    assert "outside the work folder" not in body
     assert "device name" in body
     task.cancel()
     await harness.close(writer)
 
 
-async def test_a_bridge_with_no_mirror_says_so_once_not_on_every_command(
+async def test_without_a_work_folder_a_program_is_judged_as_elsewhere(
     harness,
 ):
-    """02.4's other half, and the state every sync-disabled bridge is in.
-
-    `cmdguard.reason` answered "no folder is mirrored from this machine, so
-    nothing on it can be restored" -- 73 characters -- for EVERY command
-    whenever `work_guest` is empty, which is what a bridge started without
-    --sync-dir looks like, and what any guest whose INI has no sync root
-    looks like. Prefixing 100% of prompts with it is the defect this module's
-    own docstring names ("someone who learns the guard's phrasing is wrong
-    stops reading it"), with the added cost that it displaced the command.
-
-    Both existing guard tests set `work_guest` by hand, so neither could see
-    this.
-    """
+    """The deployment-gap sentence ("no folder is mirrored") is gone with
+    the guard that needed it: containment is measured against the
+    conversation's folder on the machine, mirror or not. With no folder at
+    all every program runs somewhere that is not one, and the bar says
+    where -- per command, because it is a fact about the command."""
     reader, writer = await harness.connect()
     await _recv(harness, reader, "OPTIONSEND")
     assert not harness.bridge.connection.guest.work_guest
 
-    bodies = []
-    for cmd in ("dir c:\\", "vol c:"):
-        task = harness.bridge.connection.guest.claude.ask(
-            "mcp__machine__exec", {"command": cmd, "cwd": "C:\\"})
-        frame = await _recv(harness, reader, "PERMREQ")
-        bodies.append(frame.body.decode("cp1252"))
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    # Not on the bar, either time.
-    for body in bodies:
-        assert "no folder is mirrored" not in body
-        assert not body.startswith("!")
-
-    # Said once, in the transcript, where there is room for it.
-    transcript = "".join(harness.bridge.connection.guest.view.pages.all_text())
-    assert transcript.count("no folder is mirrored") == 1
+    task = harness.bridge.connection.guest.claude.ask(
+        "mcp__machine__exec", {"command": "wcl386 a.c", "cwd": "C:\\"})
+    frame = await _recv(harness, reader, "PERMREQ")
+    body = frame.body.decode("cp1252")
+    assert "no folder is mirrored" not in body
+    assert "outside the work folder" in body
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
     await harness.close(writer)
 
 
@@ -2584,7 +2578,7 @@ async def test_a_contained_command_gets_no_added_reassurance(harness, tmp_path):
 
     task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__exec",
-        {"command": "dir c:\\work", "cwd": "C:\\WORK"})
+        {"command": "copy a.c b.c", "cwd": "C:\\WORK"})
     frame = await _recv(harness, reader, "PERMREQ")
     body = frame.body.decode("cp1252")
 
@@ -2594,33 +2588,6 @@ async def test_a_contained_command_gets_no_added_reassurance(harness, tmp_path):
     assert "mirror" not in body.lower()
     assert not body.startswith("!")
     task.cancel()
-    await harness.close(writer)
-
-
-async def test_an_unmirrored_folder_does_not_silence_the_gap(harness):
-    """A FOLDER ON THE MACHINE IS NOT A MIRROR. The conversation has its own
-    folder over there now even with no `--sync-dir`, and if the guard read
-    that as "something is mirrored" it would stop saying the one true thing
-    about this deployment -- nothing a command changes can be restored -- and
-    would start judging containment against a tree that has no copy here."""
-    reader, writer = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
-    await _recv(harness, reader, "OPTIONSEND")
-    g = harness.bridge.connection.guest
-    await harness.send(writer, Frame("INPUT", {}, b"Sky colour"))
-    await harness.recv_until(reader, {"TURN"}, 10.0)
-    await g.claude.use_tool()
-    assert g.work_guest == "C:\\WORK\\SKYCOLOU"
-    assert g.work_dir == ""
-
-    task = g.claude.ask("mcp__machine__exec",
-                        {"command": "dir", "cwd": "C:\\WORK\\SKYCOLOU"})
-    await _recv(harness, reader, "PERMREQ")
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-
-    transcript = "".join(g.view.pages.all_text())
-    assert "no folder is mirrored" in transcript
     await harness.close(writer)
 
 
@@ -2642,12 +2609,14 @@ async def test_asking_permission_is_early_enough_to_commit_the_folder(
     assert g.work_guest == ""
 
     task = g.claude.ask("mcp__machine__exec",
-                        {"command": "dir", "cwd": "C:\\Gaston\\SKYCOLOR"})
+                        {"command": "copy a.c b.c",
+                         "cwd": "C:\\Gaston\\SKYCOLOR"})
     frame = await _recv(harness, reader, "PERMREQ")
     body = frame.body.decode("cp1252")
 
     assert g.work_guest == "C:\\Gaston\\SKYCOLOR", "committed by the ask"
-    assert "no folder is mirrored" not in body.lower()
+    # Measured against the folder just committed: contained, so no warning.
+    assert not body.startswith("!"), body
     task.cancel()
     await harness.close(writer)
 
@@ -3080,9 +3049,11 @@ async def test_a_file_put_in_a_folder_is_not_flagged(harness):
     reader, writer = await harness.connect(hdrs={"sync_root": "C:\\WORK"})
     await _recv(harness, reader, "OPTIONSEND")
 
+    # Relative: it lands in this conversation's own folder, wherever the
+    # first tool call committed that to be.
     task = harness.bridge.connection.guest.claude.ask(
         "mcp__machine__put_file",
-        {"path": "C:\\WORK\\NOTES.TXT", "content": "x"})
+        {"path": "NOTES.TXT", "content": "x"})
     frame = await _recv(harness, reader, "PERMREQ")
     body = frame.body.decode("cp1252")
 
