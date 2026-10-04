@@ -265,3 +265,35 @@ def test_the_precheck_refuses_what_the_tool_would():
     assert S.precheck({"steps": [{"move": {"at": [81, 21]}}]})
     assert S.precheck({"steps": ["x", {"down": "Shift"}]})
     assert S.precheck({"steps": [{"focus": "Notepad"}, "x"]}) is None
+
+
+def test_a_mode_that_turns_screen_driving_off_does_not_offer_input():
+    """Off means not offered: the model is never told `input` exists."""
+    from bridge.agent import categories as K
+    from bridge.agent import policy
+    m = policy.Mode("u", "u", values={**policy.preset("auto").values,
+                                      K.SCREEN_DRIVE: policy.OFF},
+                    builtin=False)
+    srv = machine_tools.build(None, None, None,
+                              _Guest(C.AUTOMATION_STEPS), ui=object(),
+                              mode=m)
+    inst = srv["machine"]["instance"]
+    listed = asyncio.run(inst._request_handlers["tools/list"].handler(
+        None, None))
+    tools = listed.root.tools if hasattr(listed, "root") else listed.tools
+    names = {t.name for t in tools}
+    assert "input" not in names and {"ui", "shot"} <= names
+
+
+def test_every_machine_tool_has_a_category():
+    """Off can only hide a tool policy.TOOL_CATS knows, and the classifier
+    asks about one it does not -- so every tool the fullest client is
+    offered must be in the table, or outside the matrix on purpose."""
+    from bridge.agent import policy
+    guest = _Guest(C.AUTOMATION_STEPS)
+    guest.caps = C.Caps(automation=C.AUTOMATION_STEPS, keys=1, ops=2)
+    names = _names(guest)
+    outside = {"toolnote", "sync_status"}
+    missing = {n for n in names - outside
+               if "mcp__machine__" + n not in policy.TOOL_CATS}
+    assert not missing

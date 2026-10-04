@@ -361,3 +361,21 @@ def test_a_grant_is_kept_with_the_chat_and_only_for_its_machine(tmp_path):
     g2.model = g2.effort = ""
     svc.restore_settings(g2, "c1")
     assert g2.grants == set()
+
+
+def test_a_tool_is_hidden_only_when_every_category_it_can_land_in_is_off():
+    m = P.Mode("u", "u", values={**P.preset("manual").values,
+                                 K.RUN_ELSE: P.OFF}, builtin=False)
+    assert not P.offered(m, "mcp__machine__kill")     # only run_else
+    assert P.offered(m, "mcp__machine__exec")         # can still read
+    assert P.offered(m, "mcp__machine__toolnote")     # outside the matrix
+    assert P.offered(m, "SomethingNew")               # unknown: offered
+
+
+def test_every_tool_the_session_offers_has_categories():
+    """A tool missing from TOOL_CATS is always offered, so Off could never
+    hide it -- the gap this test closes. Bridge reads and ExitPlanMode are
+    deliberately outside the matrix."""
+    from bridge.agent.session import TOOLS
+    outside = {"Read", "Glob", "Grep", "ExitPlanMode"}
+    assert {t for t in TOOLS if t not in outside} <= set(P.TOOL_CATS)

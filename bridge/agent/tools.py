@@ -239,7 +239,7 @@ def _text(body: str, *, error: bool = False) -> dict:
 
 
 def build(guest_exec, sync, workspace, guest=None, ui=None,
-          proc=None, fs=None, workdir: str = "") -> dict:
+          proc=None, fs=None, workdir: str = "", mode=None) -> dict:
     """Create the `machine` server bound to THREE SERVICES and ONE GUEST.
 
     Named one by one rather than reached through something that has them. It
@@ -1714,18 +1714,22 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     ops_ok = _caps is not None and getattr(_caps, "ops", 0) >= 2
     ops = ([machine_mkdir, machine_copy, machine_move, machine_delete,
             machine_rmdir, machine_launch] if ops_ok else [])
+    offered = [machine_exec, machine_sync_status, machine_sync_resolve,
+               *screen, machine_ps, machine_kill, machine_get_file,
+               machine_list_dir, *ops, machine_put_file, machine_drives,
+               machine_toolnote]
+    # OFF MEANS NOT OFFERED (policy.py). A tool every one of whose
+    # categories the conversation's mode turns Off is not registered at
+    # all, so the model is never told it exists; the desk still refuses one
+    # that arrives from a session built before the mode changed.
+    from . import policy
+    kept = offered if mode is None else [
+        t for t in offered if policy.offered(mode, "mcp__machine__" + t.name)]
+    if len(kept) != len(offered):
+        log.info("machine: off in this mode: %s", ", ".join(
+            t.name for t in offered if t not in kept))
     server = create_sdk_mcp_server(name="machine", version="0.1.0",
-                                   tools=[machine_exec, machine_sync_status,
-                                          machine_sync_resolve,
-                                          *screen,
-                                          machine_ps,
-                                          machine_kill,
-                                          machine_get_file,
-                                          machine_list_dir,
-                                          *ops,
-                                          machine_put_file,
-                                          machine_drives,
-                                          machine_toolnote])
+                                   tools=kept)
     # THE OUTERMOST OF THREE TIMEOUTS, and it has to be the largest.
     #
     # Without it the CLI uses MCP_TOOL_TIMEOUT, which defaults to 30s -- below

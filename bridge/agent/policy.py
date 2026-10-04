@@ -239,3 +239,46 @@ def grant_keys(decision: Decision) -> list:
         if key not in keys:
             keys.append(key)
     return keys
+
+
+# --- what a mode offers -------------------------------------------------------
+
+_F = (K.FILES_WORK, K.FILES_ELSE, K.FILES_SYS)
+#: Every category a tool can land in (categories.classify). A tool whose
+#: categories a mode turns Off EVERY ONE of is not offered to the model at
+#: all -- that is what Off means, as opposed to a refusal it would retry.
+#: A tool missing here is always offered: forgetting one must never hide it.
+TOOL_CATS = {
+    "Bash": (K.BRIDGE_SHELL,),
+    "WebFetch": (K.WEB,), "WebSearch": (K.WEB,),
+    "Write": (K.FILES_WORK, K.FILES_ELSE),
+    "Edit": (K.FILES_WORK, K.FILES_ELSE),
+    "mcp__machine__get_file": (K.READ, K.FILES_ELSE),
+    "mcp__machine__list_dir": (K.READ, K.FILES_ELSE),
+    "mcp__machine__drives": (K.READ,), "mcp__machine__ps": (K.READ,),
+    "mcp__machine__put_file": _F, "mcp__machine__mkdir": _F,
+    "mcp__machine__copy": _F, "mcp__machine__sync_resolve": _F,
+    "mcp__machine__move": (*_F, K.PURGE),
+    "mcp__machine__delete": (*_F, K.PURGE),
+    "mcp__machine__rmdir": (*_F, K.PURGE),
+    "mcp__machine__exec": (K.READ, *_F, K.PURGE, K.RUN_WORK, K.RUN_BUILT,
+                           K.RUN_ELSE, K.RUN_SYS),
+    "mcp__machine__launch": (K.RUN_WORK, K.RUN_BUILT, K.RUN_ELSE,
+                             K.RUN_SYS),
+    "mcp__machine__kill": (K.RUN_ELSE,),
+    "mcp__machine__ui": (K.SCREEN_SEE,), "mcp__machine__shot": (K.SCREEN_SEE,),
+    "mcp__machine__input": (K.SCREEN_DRIVE,),
+}
+
+
+def offered(mode: Mode, tool: str) -> bool:
+    cats = TOOL_CATS.get(tool)
+    return not cats or any(mode.value(c) != OFF for c in cats)
+
+
+def surface(mode: Mode, caps) -> tuple:
+    """What a session built now would be told it has: the tools this mode
+    offers, and the two caps that also decide it. A session built with a
+    different surface is rebuilt before its next turn."""
+    return (tuple(sorted(t for t in TOOL_CATS if not offered(mode, t))),
+            getattr(caps, "automation", None), getattr(caps, "ops", None))

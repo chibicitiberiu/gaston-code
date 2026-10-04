@@ -21,7 +21,7 @@ from ..agent import permissions as perms
 from ..agent import sessions as sesslist
 from ..agent import tools as machine_tools
 from ..agent.prompts import text as policy_text
-from ..agent.session import Session
+from ..agent.session import TOOLS, Session
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire import fold
@@ -403,7 +403,13 @@ class SessionService:
         can_use_tool_cb = guest.perms.callback() if guest.perms else None
 
         session_cls = self._resolve_session_cls()
+        mode = policy.mode_of(guest)
+        # What this session is told it has. Recorded so a turn after a mode
+        # change (or a reconnect that changed the caps) can tell the session
+        # it is about to use was built for a different surface.
+        guest.surface = policy.surface(mode, getattr(guest, "caps", None))
         s = session_cls(
+            tools=[t for t in TOOLS if policy.offered(mode, t)],
             cwd=work_dir,
             system_prompt={
                 "type": "preset",
@@ -427,14 +433,14 @@ class SessionService:
             },
             model=self.options.effective_model(guest),
             effort=self.options.effective_effort(guest),
-            permission_mode=policy.mode_of(guest).sdk,
+            permission_mode=mode.sdk,
             resume=resume,
             fork=fork,
             can_use_tool=can_use_tool_cb,
             mcp_servers=machine_tools.build(
                 self.guest_exec, self.sync, self.workspace, guest,
                 ui=self.ui, proc=self.proc, fs=self.guest_fs,
-                workdir=work_dir),
+                workdir=work_dir, mode=mode),
             on_text=on_text,
             on_thinking=on_thinking,
             on_tool=on_tool,
@@ -573,6 +579,36 @@ class SessionService:
         await self.connection.send(guest, switched(session_id, guest.view.pages.count))
         await self.presentation.send_page(guest, "live")
         await self.options.send_options(guest)
+
+    async def match_surface_locked(self, guest: GuestSession) -> None:
+        """Rebuild the session if what it was told it has is no longer what
+        this conversation's mode offers -- a tool turned Off, or back on, or
+        the screen tools after a reconnect that changed the caps.
+
+        RESUMED, NOT FORKED: the conversation is the same one, only the tool
+        list changes, and a fork would print a new session id and a notice
+        for something the person did not ask about. Before a turn, under the
+        turn lock, so nothing is mid-call when the session is replaced.
+        """
+        assert guest.turn_lock.locked()
+        if guest.claude is None:
+            return
+        want = policy.surface(policy.mode_of(guest),
+                              getattr(guest, "caps", None))
+        if getattr(guest, "surface", want) == want:
+            return
+        old = guest.claude.session_id
+        log.info("tool surface changed (%s -> %s); reopening %s",
+                 getattr(guest, "surface", None), want, old)
+        self.abandon_pending(guest)
+        await guest.claude.close()
+        guest.claude = None
+        try:
+            guest.claude = await self.make_session(guest, resume=old)
+        except Exception as exc:
+            log.exception("reopening for a new tool surface failed")
+            await self.presentation.write_block(guest, H.error(
+                "Could not reopen the session: " + str(exc)[:160]))
 
     async def set_effort_locked(
         self, guest: GuestSession, effort: str

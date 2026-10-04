@@ -184,6 +184,8 @@ class GuestSession:
     #: A reopened chat saved as the CLI's "auto", which did less on its own
     #: than this bridge's Auto does; said once, then cleared.
     legacy_auto: bool = False
+    #: `policy.surface` of the live session: what it was told it has.
+    surface: tuple | None = None
     #: The person's last few prompts, newest last, for the Auto reviewer.
     recent_prompts: list = field(default_factory=list)
     #: Everything about writing bytes to this guest -- the socket writer, the

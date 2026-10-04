@@ -64,6 +64,10 @@ class FakeSession:
         # switching a chat built NOTHING and that the first message built the
         # right thing.
         self.resume = kw.get("resume")
+        # What the session was told it has: the built-in list and the
+        # machine server (execution modes leave Off tools out of both).
+        self.tools = kw.get("tools")
+        self.mcp_servers = kw.get("mcp_servers")
         # Where the bridge said to work. A conversation with its own folder
         # has to actually RUN in it, not merely be labelled with it.
         self.cwd = kw.get("cwd")

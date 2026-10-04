@@ -245,6 +245,11 @@ class TurnRunner:
         if not guest.claude:
             return
         async with guest.turn_lock:
+            match = getattr(self.session, "match_surface_locked", None)
+            if match is not None:
+                await match(guest)
+            if not guest.claude:
+                return
             await self.run_turn_locked(
                 guest,
                 text,

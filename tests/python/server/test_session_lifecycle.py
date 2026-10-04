@@ -648,3 +648,39 @@ async def test_a_conversation_this_bridge_does_not_list_is_not_reopened(
     await _recv(harness, r, "OPTIONSEND")
     assert harness.bridge.connection.guest.pending_resume == ""
     await harness.close(w)
+
+
+async def test_off_is_not_offered_and_a_mode_change_rebuilds_before_the_turn(
+        harness):
+    """Off means the model is never told the tool exists. A session is told
+    what it has when it is BUILT, so after the mode changes the next turn
+    reopens it -- resumed, not forked: the same conversation, a new list."""
+    from bridge.agent import categories as K
+    from bridge.agent import policy
+
+    r, w = await harness.connect()
+    await _recv(harness, r, "OPTIONSEND")
+    g = harness.bridge.connection.guest
+    quiet = policy.Mode("u-quiet", "Quiet",
+                        values={**policy.preset("manual").values,
+                                K.BRIDGE_SHELL: policy.OFF,
+                                K.WEB: policy.OFF}, builtin=False)
+    g.prefs = type("Prefs", (), {"modes": {"u-quiet": quiet},
+                                 "lists": None, "general_mode": ""})()
+    await harness.send(w, Frame("SETMODE", {"mode": "u-quiet"}))
+    await harness.recv_until(r, {"OPTIONSEND"})
+    await harness.send(w, Frame("INPUT", {}, b"hello"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    first = g.claude
+    assert "Bash" not in first.tools and "WebFetch" not in first.tools
+    assert "Read" in first.tools
+
+    await harness.send(w, Frame("SETMODE", {"mode": "manual"}))
+    await harness.recv_until(r, {"OPTIONSEND"})
+    assert g.claude is first, "nothing is rebuilt until the next turn"
+    await harness.send(w, Frame("INPUT", {}, b"again"))
+    await harness.recv_until(r, {"TURN"}, 10.0)
+    assert g.claude is not first
+    assert "Bash" in g.claude.tools
+    assert g.claude.resume and not g.claude.fork
+    await harness.close(w)
