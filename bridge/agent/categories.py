@@ -41,6 +41,7 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Literal
 
 from ..files.paths import glob_match
 from . import cmdguard, profiles, prompts
@@ -465,7 +466,7 @@ class _Classifier:
 
     # --- programs ------------------------------------------------------
 
-    def _listing(self, folder: str) -> frozenset | bool | None:
+    def _listing(self, folder: str) -> frozenset | Literal[False] | None:
         """The folder's names, None if it could not be listed, or False if
         it has not been fetched yet (and is now wanted)."""
         key = self._norm(folder)
@@ -474,7 +475,7 @@ class _Classifier:
             return False
         return self.ctx.listings[key]
 
-    def _file(self, path: str) -> bytes | bool | None:
+    def _file(self, path: str) -> bytes | Literal[False] | None:
         key = self._norm(path)
         if key not in self.ctx.files:
             self.v.want("get", path, key)
