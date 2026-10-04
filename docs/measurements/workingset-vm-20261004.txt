@@ -1,0 +1,40 @@
+What the client costs in physical memory, before and after the Options dialog
+=============================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE, 32MB
+Date    : 2026-10-04
+Why     : win/Makefile's COMMITTED_CAP went 515,056 -> 585,728 for the
+          Options feature set (docs/OPTIONS-PLAN.md): per-client settings,
+          the PREFS frame, the property sheet and its six pages, the Lists
+          inspector, the protected/dangerous/trusted lists and the command
+          log. As on 2026-10-02 the RUNTIME number is measured for the whole
+          set rather than the gate raised a page at a time.
+Method  : tools/probe/wsprobe.py -- each build started FRESH from its own
+          folder, idle, pointed at a port nothing listens on; GlobalMemoryStatus
+          free physical memory (gremote SYSINFO), median of five samples 2s
+          apart with the client up and again 15s after ending it; the two
+          builds alternated twice.
+
+Builds  : old  91b6b76 as deployed (the PREFS handshake, before the client
+               declared anything), 499,200 bytes, 514,457 committed at load
+          new  e49b99c, 580,649 committed at load
+
+Results
+-------
+
+  round 0  old  free up 2,908  down 3,852  holds 944 KB
+  round 0  new  free up 2,864  down 3,844  holds 980 KB
+  round 1  old  free up 2,900  down 3,828  holds 928 KB
+  round 1  new  free up 2,860  down 3,824  holds 964 KB
+
+The new client holds 36 KB more, idle, in both rounds: less than the 66 KB
+the image grew, because the sheet's pages and the inspector are code that is
+not touched until Options is opened. Their working memory -- one heap
+template per page (under 2 KB each), the list rows -- exists only while the
+sheet is open.
+
+What it took to get here, so the next trim starts from it: a
+std::vector<std::string> in app/config.h (included by half the program) cost
+25 KB on its own and was replaced by core/textlist.h's TextList; std::string
+in protect.cpp's temporaries and a struct with std::string members, about
+5 KB more, were replaced by char buffers.

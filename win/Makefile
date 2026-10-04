@@ -125,22 +125,16 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # control's items -- what `input`'s `item` targets. About 1.5KB of code and no
 # new static data (the bss symbol lists are identical), but it pushed both AUTO
 # and DGROUP over a page boundary, and the gate charges whole pages.
-# 515,056 -> 536,576 (five pages), 2026-10-04, PROVISIONAL: the Options
-# dialog's feature set -- per-client settings, execution modes, the client's
-# protected/dangerous/trusted lists and the PREFS body (docs/OPTIONS-PLAN.md).
-# Its first commit measured 531,881: about 11KB of code and 4KB of data, all
-# of it the feature's own. Already trimmed once: a std::vector<std::string>
-# in config.h (included by half the program) cost 25KB more and is a
-# TextList now (core/textlist.h). As in 2026-10-02 the runtime number gets
-# measured for the whole set when its last client commit lands, against the
-# deployed build of 91b6b76 kept as ~/backups/gaston-baseline-91b6b76.exe,
-# and this line is then set once to what that justifies. Raised again
-# provisionally to 569,344 for the rest of the set: the property sheet's own
-# machinery (core/dialogpage, core/dlgtemplate, app/optsheet) measured
-# 8.7KB with one page, and five more pages and the lists inspector follow.
-# And to 598,016 when the Tools page crossed it at 575,993, with the Misc
-# page and the command log still to come.
-COMMITTED_CAP ?= 598016
+# 515,056 -> 585,728, 2026-10-04, ONCE for the Options feature set --
+# per-client settings and the PREFS frame, the property sheet and its six
+# pages, the Lists inspector, the protected/dangerous/trusted lists and the
+# command log (docs/OPTIONS-PLAN.md) -- measured at 580,649 with one page of
+# room. Trimmed first: a std::vector<std::string> in config.h, included by
+# half the program, cost 25KB and is a TextList (core/textlist.h). The
+# runtime number was measured for the whole set: idle, the client holds
+# 36KB more than before it (docs/measurements/workingset-vm-20261004.txt,
+# tools/probe/wsprobe.py).
+COMMITTED_CAP ?= 585728
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
