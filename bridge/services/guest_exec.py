@@ -219,6 +219,7 @@ class GuestExecService:
                     timeout_ms=timeout_ms,
                     shell=prefix,
                     cwd=cwd,
+                    shown=command,
                 ),
             )
             # BOTH, when they differ. The user approved `command` and the guard

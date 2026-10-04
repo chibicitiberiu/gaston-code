@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "rpc/cmdlog.h"
 #include "rpc/rpc.h"
 #include "exec/execjob.h"
 #include "rpc/procrpc.h"
@@ -431,17 +432,20 @@ static int send_out(exec_ctx *c, const char *data, unsigned len)
 class ExecOut : public OutputSink
 {
 public:
-    explicit ExecOut(exec_ctx *c) : m_ctx(c) {}
+    ExecOut(exec_ctx *c, CmdLog *log) : m_ctx(c), m_log(log) {}
     /* A full queue loses a chunk (marked truncated); a dead link loses the
      * reader, and the command is stopped rather than left running to its
-     * timeout for no one. */
+     * timeout for no one. The command log (Options > Misc) gets every
+     * chunk first -- it is the record, whatever the wire did. */
     bool onOutput(const char *data, unsigned len)
     {
+        if (m_log) m_log->chunk(data, len);
         return send_out(m_ctx, data, len) != RC_SEND_DEAD;
     }
 
 private:
     exec_ctx *m_ctx;
+    CmdLog *m_log;
 };
 
 static void run_one(rc_frame *f)
@@ -532,8 +536,14 @@ static void run_one(rc_frame *f)
     opt.cwd = cwd;
     opt.timeoutMs = timeout_ms;
     opt.maxOutput = RPC_EXEC_MAX_OUT;
+    /* What the agent asked for, which is not the body when the bridge
+     * wrapped it for its exit code (a `cmd` header beside it). */
+    const char *shown = rc_frame_get(f, "cmd");
+    CmdLog record;
+    record.begin(ctx.id, shown && *shown ? shown : (f->body ? f->body : ""),
+                 cwd);
     {
-        ExecOut out(&ctx);
+        ExecOut out(&ctx, &record);
         job->run(f->body ? f->body : "", opt, out, r);
     }
     {
@@ -573,6 +583,8 @@ static void run_one(rc_frame *f)
      * where "produced" is exactly the number worth having. */
     keys[nkv] = "truncated"; vals[nkv++] = trunc;
     rc_net_send(g_net, "EXECRESULT", keys, vals, nkv, NULL, 0);
+    record.end(status, (unsigned long)r.exitCode,
+               r.truncated || ctx.lost);
 
     if (r.stopLeaked)
         rc_log("rpc: exec %s was stopped but its process is still there; "

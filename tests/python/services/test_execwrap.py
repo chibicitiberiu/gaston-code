@@ -167,3 +167,18 @@ def test_a_find_planted_in_the_cwd_is_never_run():
     assert ":run" in lines and lines.index(":run") > probe
     assert lines.index(":run") < next(i for i, ln in enumerate(lines)
                                       if "javac" in ln)
+
+
+def test_a_wrapped_command_still_names_what_was_asked_for():
+    """The client's command log (Options > Misc) records the command the
+    agent ran, not the wrapper file that ran it for its exit code -- a
+    header beside the body, cut at the header cap. The BODY is what runs."""
+    from bridge.wire.protocol import exec_cmd
+    f = exec_cmd("x1", "C:\\WINDOWS\\TEMP\\GEXEC.bat", timeout_ms=1000,
+                 shell="C:\\WINDOWS\\COMMAND.COM /c", shown="mem /c")
+    assert f.headers["cmd"] == "mem /c"
+    assert f.body == b"C:\\WINDOWS\\TEMP\\GEXEC.bat"
+    plain = exec_cmd("x2", "ver", timeout_ms=1000, shown="ver")
+    assert "cmd" not in plain.headers
+    long = exec_cmd("x3", "w.bat", timeout_ms=1000, shown="x" * 400)
+    assert len(long.headers["cmd"]) <= 255

@@ -36,6 +36,7 @@
 #include "app/input.h"
 #include "app/resource.h"
 #include "app/protect.h"
+#include "rpc/cmdlog.h"
 #include "app/toolbar.h"
 #include "app/export.h"
 #include "app/cache.h"
@@ -1941,6 +1942,9 @@ void MainWindow::optionsApply(const ClientConfig &next, bool force)
                      next.automation != m_cfg->automation ||
                      strcmp(next.syncRoot, m_cfg->syncRoot) != 0;
 
+    /* The command log takes effect at once; gaston.log's own folder only
+     * at the next start (it is open now). */
+    rc_cmdlog_configure(next.logDir[0] ? next.logDir : m_exeDir, next.cmdLog);
     bool scrolled = next.autoscroll != m_cfg->autoscroll;
     *m_cfg = next;
     if (scrolled) {

@@ -429,7 +429,7 @@ def export_end(ok: bool, *, bytes_: int = 0, reason: str = "") -> Frame:
 
 
 def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: str = "",
-             cwd: str = "") -> Frame:
+             cwd: str = "", shown: str = "") -> Frame:
     """The command goes in the BODY, never a header: a header value is
     truncated at 255 bytes silently, and a truncated command is still
     EXECUTED -- `del c:\\temp\\*.tmp` cut short becomes `del c:\\temp\\*`.
@@ -452,6 +452,12 @@ def exec_cmd(exec_id: str, command: str, *, timeout_ms: int, shell: str = "",
                "shell": shell or ""}
     if cwd:
         headers["cwd"] = cwd
+    # WHAT THE AGENT ASKED FOR, when the body is the exit-code wrapper that
+    # runs it: the client's command log (Options > Misc) records this, not
+    # "C:\WINDOWS\TEMP\GEXEC.bat". A header, so it is CUT at 255 -- which
+    # is fine for a record and is why the body, never this, is what runs.
+    if shown and shown != command:
+        headers["cmd"] = shown[:MAX_HEADER_VALUE - 5]
     return Frame("EXEC", headers, fold.encode_exact(command))
 
 
