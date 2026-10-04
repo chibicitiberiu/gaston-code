@@ -1253,11 +1253,12 @@ has known work left.
   it into `client_id` plus a bridge-owned `conv_id` is R7's job
   (`BACKLOG.md` §7), not this stage's.
 
-- **Settings.** *Shipped:* an INI read with `GetPrivateProfileString`, not the
-  registry.
-  *Still to do:* **Configure -> Server Host...** is a message box telling the
-  user to edit the file. It wants a real dialog -- `wrc` is available for a
-  resource, or a runtime `DialogBoxIndirectParam` template.
+- **Settings. [R -- 2026-10-04] Done: Configure > Options...** One property
+  sheet for every per-client setting -- Connection, General, Files,
+  Permissions, Tools, Misc -- stored in gaston.ini and declared to the bridge
+  at every handshake in a PREFS frame; the CLI's permission modes replaced by
+  execution modes the bridge's own desk enforces. Design, review rounds and
+  decisions: docs/OPTIONS-PLAN.md; what was left out: BACKLOG.md 30.
 
 - **Opening a chat starts nothing. [R -- 2026-09-19] Done (4.1i).** `_switch`
   used to spawn a full CLI subprocess with `--resume` just to READ a

@@ -4068,3 +4068,56 @@ What it alone can settle: `SPI_SETFOREGROUNDLOCKTIMEOUT` from a process with
 no window, started before logon; whether retail 98 carries `oleacc.dll`
 (`HELLO msaa=` says 1 on the VM); BACKLOG 26's cost on a slower machine; and
 what `shouldCompress` decides for a screenshot on real hardware.
+
+## Options, and execution modes of our own (2026-10-04)
+
+**Configure > Options... replaced Server Host.** One property sheet, six
+pages: Connection, General, Files, Permissions, Tools, Misc. Everything is
+per client, in gaston.ini, and reaches the bridge in a PREFS frame right
+after HELLO (cap `prefs=1`). The bridge replaces `guest.prefs` wholesale at
+every handshake, so one machine's settings never leak to the next, and a
+re-send on OK is answered with PREFSACK rather than ERROR so a running turn
+is not aborted. The design and its three review rounds are in
+docs/OPTIONS-PLAN.md; what was left out is BACKLOG 30.
+
+**The CLI's permission modes are gone from the decision.** The SDK runs in
+`default` (or `plan` for Plan first) and our desk decides every call, from
+`categories.classify` and the chat's mode: thirteen categories, each Off,
+Ask, Check or Allow. Auto is an allowlist plus the checker, so it works with
+Haiku, which refused the CLI's Auto. Measured on the guest: Haiku in Auto
+built and ran hello world with no bar, and `put_file C:\AUTOEXEC.BAT` went
+to the checker. The checker is a warm client fed a fixed header from the
+classifier, the untrusted content fenced; after tuning it was unsure on
+2 of 13 risky calls and approved none of 7 it should not
+(docs/measurements/checker-haiku-20261004.txt).
+
+**The OS facts stay on the client.** Protected places, dangerous programs
+and trusted programs are compiled into `app/protect.cpp`, expanded from the
+machine (`{WINDIR}`, the boot drive, 8.3 aliases), editable in the Lists
+inspector, and sent as opaque patterns. A tool's trusted programs come from
+`trustN=` in tools_detect.ini, so disabling Watcom on the Tools page also
+stops trusting `wcl386`.
+
+**A live hole found while planning**: the exit-code wrapper ran a bare
+`find`, and COMMAND.COM searches the current folder first, so a FIND.BAT the
+agent wrote in the work folder ran after every command, in every mode. It
+now skips the pipe when one is there.
+
+**Two things only the VM showed.** The page array must be
+`PROPSHEETPAGEA_V1`: with the full struct the stride was wrong and comctl32
+silently dropped the second page. And a never-copy pattern let a `.bak`
+come back from the guest, because client patterns only filtered the
+bridge's side; they now filter guest rows too, case-folded.
+
+**Logs.** The app log rotates only after the single-instance check (BACKLOG
+24), and its folder is a setting. "Save every command and its output" writes
+`CMDLOG\YYYYMMDD.CMD` on the machine, chunk by chunk on the RPC worker,
+1 MB a day, thirty days kept; the bridge sends the command as asked in a
+`cmd` header so the log does not just say GEXEC.bat.
+
+**Memory.** The whole set cost 66 KB of committed image (515,056 to
+580,649; cap 585,728) and 36 KB of idle working set on the guest
+(docs/measurements/workingset-vm-20261004.txt, tools/probe/wsprobe.py).
+25 KB of that image was one `std::vector<std::string>` in config.h before it
+became a TextList.
+

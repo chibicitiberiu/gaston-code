@@ -831,7 +831,15 @@ would catch a violation already runs.
 
 ## 10. The Phase 4 settings dialog -- three layers, in a real order
 
-**Status:** layers 1-3 CLOSED (4.0 and 4.1h); layer 4 open. Recorded
+**Status:** CLOSED 2026-10-04. Layers 1-3 closed in 4.0 and 4.1h; the
+dialog itself shipped as Configure > Options... (docs/OPTIONS-PLAN.md). Layer 4
+-- the settings-dispatch shape -- was overtaken rather than refactored: the
+person's settings now arrive together in one PREFS frame (bridge/prefs.py,
+`OptionsService.on_prefs`), validated against one registry and answered with
+PREFSACK, so a new setting is a key, not a fourth hand-written SET* branch.
+SETMODEL/SETEFFORT/SETMODE stay as the per-chat menu path; they were not
+merged into PREFS, because they change the OPEN chat and PREFS sets defaults.
+Previously: layers 1-3 CLOSED (4.0 and 4.1h); layer 4 open. Recorded
 2026-09-18, from audits 01.34, 04.13, 04.17 and 02.31. `IDM_HOST` WAS a
 `MessageBoxA` telling the user to edit the INI by hand; it is
 `rc_hostdlg_run` now (`win/app/hostdlg.cpp`). `IDM_EXPORT` is a sibling case
@@ -972,6 +980,15 @@ baseline per root, so the multi-client question in §7 is untouched. It makes
 one machine able to change where it works without losing what it knows.
 
 ## 11b. "Always" still does not survive a session rebuild -- and would not
+
+**CLOSED 2026-10-04 by execution modes.** The CLI's Always is gone: the bar's
+button is "This chat", a grant of the call's CATEGORY (bridge/agent/policy.py
+`GRANTABLE`: changing files and running trusted programs in the work folder,
+and one exact program built there), kept in the conversation's settings for
+the machine that gave it, so it survives rebuilds and forks, and cleared when
+the mode changes. The whole-tool objection below does not apply to a
+category. No CLI `updated_permissions` is forwarded any more, except Plan
+first's setMode on approval. The original entry follows.
 help the case it was written for
 
 **Status:** open, recorded 2026-09-19. Listed in the Phase 4.1j plan as "make
@@ -1636,6 +1653,11 @@ Still open -- see the "not done" item just above.
 
 ## 19. UI automation should be opt-in, and say when it is driving -- CLOSED 2026-10-01
 
+**2026-10-04:** the `automation` cap stays the hard ceiling (the client's
+"Let it see and use this screen" box on Options > Permissions), and execution
+modes add a policy on top: "Look at the screen" and "Click and type" are two
+rows of every mode, Off leaving the tools out of the session entirely.
+
 **Asked for by the user 2026-09-27 after §16 landed. Closed 2026-10-01**, with
 two parts deliberately not done and recorded below rather than dropped.
 
@@ -2264,6 +2286,11 @@ about.
 
 ## 24. The log rotation is consumed before the single-instance check
 
+**CLOSED 2026-10-04**, the lazy shape below: the client opens its log
+appending at the first statement (`rc_log_open_early`) and rotates `.log` to
+`.prv` only after the single-instance check passes (`rc_log_begin_run`).
+Verified on the VM: a bounced second copy left GASTON.PRV byte-identical.
+
 `rc_log_open` renames `<program>.log` to `<program>.prv` as its first act, and
 `App::initialize()` reaches the single-instance mutex check only afterwards. So a
 second copy that bounces off the mutex has **already spent the rotation**: it
@@ -2520,3 +2547,30 @@ addition the program has had.
 the box; a 32MB guest pages code from disk and the resident cost is a fraction
 of the PE sections. It is a claim that the number was taken on trust once and
 should be earned back.
+
+## 30. What the execution modes and the Options dialog left out
+
+Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
+
+- **Allowed or preferred models per mode.** Asked for while planning because
+  Haiku refused the CLI's Auto; our own Auto removed that reason (it never
+  asks the CLI for a mode), so this waits for a reason of its own. The likely
+  shape is "preferred model for this mode", not an allow-list.
+- **"Allow for this chat" for screen input.** The plan keyed a typing grant
+  to the target window's process; the bridge does not know which window a
+  step list reaches until the guest resolves it, and a grant over every
+  window is the blanket licence the red team warned about. So `screen_drive`
+  is not in `policy.GRANTABLE` until the guest reports the target.
+- **The checker's SAFE cache was not built.** With the red team's exclusions
+  (never for run_*, purge, files_sys, input, launch) and invalidation on any
+  write, it could never hit. Latency is the warm client's job (review.py).
+- **Large Fonts.** The pages are 230x170 DLU so that the sheet fits 640x480
+  at Large Fonts, which was computed, not seen: the VM runs 800x600 small
+  fonts, and switching needs a reboot of the shared VM.
+- **The command log shows the exit-code wrapper's `.gaston-rc` line** at the
+  end of a wrapped command's output: the log records output raw, and the
+  bridge strips that line only from what the agent sees.
+- **A Windows 95 comctl32 4.00 run.** The sheet uses the V1 structures for
+  it (and found the array-stride bug that way on 98); no 95 machine was run.
+- **The Tools page's Add asks four one-line questions** rather than one form,
+  and has no Browse for the marker file.

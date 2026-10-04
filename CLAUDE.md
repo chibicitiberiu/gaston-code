@@ -77,7 +77,9 @@ dependencies passed to the constructor; no registry, no runtime lookup.
 Config comes from the exe's INI via `IniFile`, loaded once into typed
 structs; an invalid value refuses startup. Windows derive from `Window` or
 `SubclassedWindow` (`core/window.h`), never a static proc with a global
-instance. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libautomation`) know
+instance; a window someone else creates and destroys (a property sheet
+page) derives from `DialogPage` (`core/dialogpage.h`), which holds its HWND
+without owning it. Libraries (`libcore`, `libwire`, `libexec`, `libfs`, `libautomation`) know
 nothing of each other's ops or of the wire, except `libwire`. See
 `docs/REMOTE.md`.
 
@@ -88,6 +90,12 @@ where a Win32 call fills a fixed buffer (the OS limit is real there). No
 `<iostream>`/`<fstream>`: static constructors and size. `operator new`
 throws `std::bad_alloc` (`core/heap.cpp`); only `App::run` and thread entry
 points catch it, and nothing else uses exceptions for control flow.
+
+**Keep `<string>` and `<vector>` out of widely included headers.** Each
+function that copies a class with a `std::string` member grows exception
+tables: one `std::vector<std::string>` in `app/config.h` cost 25 KB of
+image. Use `TextList` (`core/textlist.h`) or plain char buffers there, and
+forward-declare a class that wraps the string (`PrefsBody`).
 
 **Watcom is C++98: `new T()` does not zero a class.** A class with any
 private member is a non-POD, and C++98 gives a non-POD with no constructor
