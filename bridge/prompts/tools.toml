@@ -394,6 +394,10 @@ Process {pid} was told to end and is still there after a moment. Some programs t
 # was started -- on 2026-10-03 that was another program's install folder.
 relative = '''
 "{path}" is relative, and there is no folder on the machine to resolve it against yet. Give a full path such as C:\\WORK\\NAME\\FILE.TXT.'''
+# A POSIX path outside this conversation's mirror: the proxy's, not the
+# machine's. One inside the mirror is mapped to the machine's spelling instead.
+proxy_path = '''
+"{path}" is a path on this proxy, not on the machine. Give the machine's own path, such as C:\\WORK\\NAME\\FILE.TXT, or one relative to your folder.'''
 unavailable = '''
 No machine is connected, so there is nothing to read or write.'''
 bad_path = '''

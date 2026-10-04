@@ -519,7 +519,14 @@ def on_guest(path: str, base: str) -> str | None:
     something nobody on this side knows. A path starting `\` is taken on
     the base's drive.
     """
-    p = (path or "").strip().replace("/", "\\")
+    p = (path or "").strip()
+    # A POSIX absolute path is the PROXY's, never the guest's. Turned into
+    # `\tmp\...` it named a folder on the guest's C: that nothing should
+    # create -- and put_file then made it (measured on the VM, 2026-10-04).
+    # GuestSession.on_guest maps one that is inside the mirror first.
+    if p.startswith("/"):
+        return None
+    p = p.replace("/", "\\")
     if not p:
         return None
     if _ABS_DRIVE.match(p) or p.startswith("\\\\"):

@@ -312,9 +312,29 @@ class GuestSession:
 
     def on_guest(self, path: str) -> str | None:
         """`path` made absolute against work_root_on_guest(), or None.
-        See bridge/files/paths.py on_guest."""
+        See bridge/files/paths.py on_guest.
+
+        One more spelling is understood: the agent's own mirror of this
+        conversation, as a path on the proxy. It runs in that folder, so
+        `/tmp/.../work/CONV/x.txt` is what it naturally writes for
+        `C:\\WORK\\CONV\\x.txt` -- and it is mapped to exactly that. Any
+        other POSIX path is the proxy's and comes back None."""
+        import ntpath
+        import posixpath
+
         from .files.paths import on_guest
-        return on_guest(path, self.work_root_on_guest())
+        p = (path or "").strip()
+        if p.startswith("/"):
+            wd, wg = self.work_dir, self.work_guest
+            if not wd or not wg:
+                return None
+            rp, root = posixpath.normpath(p), posixpath.normpath(wd)
+            if rp != root and not rp.startswith(root + "/"):
+                return None
+            rel = posixpath.relpath(rp, root)
+            return wg if rel == "." else ntpath.normpath(
+                wg.rstrip("\\") + "\\" + rel.replace("/", "\\"))
+        return on_guest(p, self.work_root_on_guest())
 
     def set_link_speed(self, bps: float | None) -> None:
         """Propagate a measured (or CLI-default) link speed to every live

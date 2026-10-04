@@ -384,7 +384,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             asked = str((args or {}).get("cwd") or "").strip()
             cwd = _abs(asked) if asked else workspace.guest_work_root(guest)
             if cwd is None:
-                return _text(_fs_refused("relative", asked), error=True)
+                return _text(_unresolved(asked), error=True)
 
             return await guest_exec.run_on_guest(
                 command, timeout_ms=timeout_ms, shell=shell, cwd=cwd,
@@ -762,6 +762,11 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             return path
         return resolve(path)
 
+    def _unresolved(path: str) -> str:
+        """Why `path` could not be made a path on the machine."""
+        return _fs_refused("proxy_path" if path.strip().startswith("/")
+                           else "relative", path)
+
     def _fs_refused(status: str, path: str = "") -> str:
         try:
             return prompts.text(f"tools.fs.refused.{status}", path=path)
@@ -977,7 +982,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 return _text(_fs_refused("bad_path"), error=True)
             resolved = _abs(path)
             if resolved is None:
-                return _text(_fs_refused("relative", path), error=True)
+                return _text(_unresolved(path), error=True)
             path = resolved
             try:
                 got = await fs.get(guest, path,
@@ -1065,7 +1070,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 return _text(_fs_refused("bad_path"), error=True)
             resolved = _abs(path)
             if resolved is None:
-                return _text(_fs_refused("relative", path), error=True)
+                return _text(_unresolved(path), error=True)
             path = resolved
             # Exactly one source. Both is ambiguous and neither is a mistake;
             # guessing at either is how the wrong bytes reach a real file.
@@ -1207,9 +1212,9 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
         resolved_path = _abs(path)
         resolved_to = _abs(to.strip()) if to.strip() else ""
         if resolved_path is None:
-            return _text(_fs_refused("relative", path), error=True)
+            return _text(_unresolved(path), error=True)
         if resolved_to is None:
-            return _text(_fs_refused("relative", to.strip()), error=True)
+            return _text(_unresolved(to.strip()), error=True)
         path, to = resolved_path, resolved_to
         for p_, made in ((path, False), (to.strip(), True)):
             if not p_:
@@ -1392,7 +1397,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                    (workspace.guest_work_root(guest)
                     if guest is not None and workspace is not None else ""))
             if cwd is None:
-                return _text(_fs_refused("relative", asked), error=True)
+                return _text(_unresolved(asked), error=True)
             try:
                 h = await proc.launch(guest, command,
                                       cwd=cwd,
@@ -1468,7 +1473,7 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
                 return _text(_fs_refused("bad_path"), error=True)
             resolved = _abs(path)
             if resolved is None:
-                return _text(_fs_refused("relative", path), error=True)
+                return _text(_unresolved(path), error=True)
             path = resolved
             try:
                 got = await fs.ls(guest, path,

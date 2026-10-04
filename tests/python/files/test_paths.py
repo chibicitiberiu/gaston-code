@@ -403,3 +403,26 @@ def test_two_conversations_stage_conflicts_apart():
     b = conflict_dir("/sync/CHATTWO/")
     assert a == "/sync/.gaston/conflict/CHATONE"
     assert b == "/sync/.gaston/conflict/CHATTWO"
+
+
+def test_a_posix_path_is_never_a_path_on_the_guest():
+    """`/tmp/gaston-vm/work/...` became `C:\\tmp\\gaston-vm\\work\\...` and
+    put_file made that folder on the guest (the VM, 2026-10-04)."""
+    from bridge.files.paths import on_guest
+    assert on_guest("/tmp/gaston-vm/work/x.txt", "C:\\WORK\\CONV") is None
+
+
+def test_the_agent_s_own_mirror_path_maps_to_the_machine_s():
+    import types
+
+    from bridge.guest import GuestSession, work_root_on_guest
+    g = types.SimpleNamespace(work_dir="/tmp/vm/work/CONV",
+                              work_guest="C:\\WORK\\CONV", hello={},
+                              guest_sync_root="")
+    g.work_root_on_guest = lambda: work_root_on_guest(g)
+    on = lambda p: GuestSession.on_guest(g, p)  # noqa: E731
+    assert on("/tmp/vm/work/CONV/new/x.txt") == "C:\\WORK\\CONV\\new\\x.txt"
+    assert on("/tmp/vm/work/CONV") == "C:\\WORK\\CONV"
+    assert on("/tmp/vm/work/OTHER/x.txt") is None
+    assert on("/etc/passwd") is None
+    assert on("rel\\x.txt") == "C:\\WORK\\CONV\\rel\\x.txt"
