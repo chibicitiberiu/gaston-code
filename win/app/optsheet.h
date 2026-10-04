@@ -28,7 +28,8 @@
 #define RC_OPT_GENERAL     1
 #define RC_OPT_FILES       2
 #define RC_OPT_PERMISSIONS 3
-#define RC_OPT_COUNT       4
+#define RC_OPT_TOOLS       4
+#define RC_OPT_COUNT       5
 
 /* Where the bridge's answers to the Lists inspector go while it is open. */
 class ListsView
@@ -43,8 +44,10 @@ class OptionsSink
 {
 public:
     virtual ~OptionsSink() {}
-    /* The person pressed OK or Apply; `next` is the whole configuration. */
-    virtual void optionsApply(const ClientConfig &next) = 0;
+    /* The person pressed OK or Apply; `next` is the whole configuration.
+     * `reconnect` when something HELLO carries changed outside it -- the
+     * tools this machine reports (Options > Tools). */
+    virtual void optionsApply(const ClientConfig &next, bool reconnect) = 0;
     /* GETLISTS to the bridge. False when the link cannot take it now. */
     virtual bool listsSend(const char *const *keys, const char *const *vals,
                            int nkv, const char *body, unsigned len) = 0;

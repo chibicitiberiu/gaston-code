@@ -254,6 +254,11 @@ int row_sink(void *ctx, const char *name, const char *kind, const char *value)
 
 }  /* namespace */
 
+void rc_tooldet_forget()
+{
+    g_done = 0;
+}
+
 const char *rc_tooldet_cached(const char *exe_dir, unsigned *len)
 {
     if (!g_done) {
@@ -338,4 +343,79 @@ int rc_tooldet_trust(const char *exe_dir, rc_tooldet_trust_sink sink,
     trust_ini(&t, t.user_ini);
     SetErrorMode(old);
     return t.count;
+}
+
+
+/* --- one row per section, for the Tools page --------------------------------- */
+
+namespace {
+
+struct first_fact {
+    char value[MAX_PATH + 40];
+    int found;
+};
+
+int first_sink(void *ctx, const char *name, const char *kind,
+               const char *value)
+{
+    first_fact *f = (first_fact *)ctx;
+    (void)name; (void)kind;
+    if (!f->found) rc_strcpy(f->value, sizeof f->value, value);
+    f->found++;
+    return 1;
+}
+
+void section_rows(const char *ini, const char *other, const char *user_ini,
+                  int user, rc_tooldet_section_sink sink, void *ctx)
+{
+    const char *p;
+    int n = 0;
+    if (GetFileAttributesA(ini) == 0xFFFFFFFF) return;
+    if (!read_sections(ini, g_sections, sizeof(g_sections))) return;
+    for (p = g_sections; *p; p += strlen(p) + 1) {
+        scan probe;
+        first_fact f;
+        char key[16], prog[64], trusted[600];
+        int i;
+        if (++n > RC_TOOLDET_MAX_SECTIONS) return;
+        /* In both files: report it once, from the user's, which wins. */
+        if (!user && other &&
+            GetPrivateProfileStringA(p, NULL, "", key, sizeof key, other))
+            continue;
+        f.value[0] = 0;
+        f.found = 0;
+        probe.sink = first_sink; probe.ctx = &f; probe.emitted = 0;
+        probe.stop = 0; probe.user_ini = "";     /* ask even if switched off */
+        do_section(&probe, ini, p);
+        trusted[0] = 0;
+        for (i = 1; i <= RC_TOOLDET_MAX_N; i++) {
+            rc_strf(key, sizeof key, "trust%d", i);
+            GetPrivateProfileStringA(p, key, "", prog, sizeof prog, ini);
+            if (!prog[0]) continue;
+            {
+                unsigned used = (unsigned)strlen(trusted);
+                rc_strf(trusted + used, sizeof trusted - used, "%s%s",
+                        used ? ", " : "", prog);
+            }
+        }
+        sink(ctx, p, user, f.found ? 1 : 0, f.value,
+             enabled(user_ini, p) ? 1 : 0, trusted);
+    }
+}
+
+}  /* namespace */
+
+void rc_tooldet_sections(const char *exe_dir, rc_tooldet_section_sink sink,
+                         void *ctx)
+{
+    char ini[MAX_PATH], user[MAX_PATH];
+    UINT old;
+    if (!sink) return;
+    if (!rc_strf(ini, sizeof ini, "%s\\tools_detect.ini", exe_dir) ||
+        !rc_strf(user, sizeof user, "%s\\tools.ini", exe_dir))
+        return;
+    old = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    section_rows(ini, user, user, 0, sink, ctx);
+    section_rows(user, NULL, user, 1, sink, ctx);
+    SetErrorMode(old);
 }

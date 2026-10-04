@@ -1931,11 +1931,11 @@ void MainWindow::beforeStart()
                          (unsigned)m_prefs->text.size());
 }
 
-void MainWindow::optionsApply(const ClientConfig &next)
+void MainWindow::optionsApply(const ClientConfig &next, bool force)
 {
     /* What only a new handshake can change: where the bridge is, and what
      * HELLO itself declares. Everything else rides a re-sent PREFS. */
-    bool reconnect = strcmp(next.host, m_cfg->host) != 0 ||
+    bool reconnect = force || strcmp(next.host, m_cfg->host) != 0 ||
                      next.port != m_cfg->port ||
                      strcmp(next.secret, m_cfg->secret) != 0 ||
                      next.automation != m_cfg->automation ||

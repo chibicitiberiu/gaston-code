@@ -13,6 +13,10 @@
 #include "core/str.h"
 #include "app/modes.h"
 #include "app/workdir.h"
+#include "app/tooldet.h"
+#include "wire/frame.h"
+
+#include <vector>
 
 /* Page geometry, in dialog units. 230x170 so the sheet still fits a
  * 640x480 screen at Large Fonts (the plan's platform review). */
@@ -72,9 +76,11 @@ class Sheet
 public:
     Sheet(const ClientConfig &cur, const char *exeDir, OptionsSink *sink)
         : m_work(cur), m_exeDir(exeDir), m_sink(sink), m_inited(0),
-          m_applies(0), m_applied(false)
+          m_applies(0), m_applied(false), m_reconnect(false)
     {
     }
+    /* A page changed something HELLO carries outside the configuration. */
+    void needReconnect() { m_reconnect = true; }
 
     ClientConfig &work() { return m_work; }
     const char *exeDir() const { return m_exeDir; }
@@ -86,7 +92,8 @@ public:
         if (++m_applies < m_inited) return;
         m_applies = 0;
         m_applied = true;
-        if (m_sink) m_sink->optionsApply(m_work);
+        if (m_sink) m_sink->optionsApply(m_work, m_reconnect);
+        m_reconnect = false;
     }
     bool applied() const { return m_applied; }
 
@@ -97,6 +104,7 @@ private:
     int m_inited;
     int m_applies;
     bool m_applied;
+    bool m_reconnect;
 };
 
 void Page::onInit()
@@ -610,6 +618,301 @@ bool FilesPage::onCommand(WORD id, WORD code, HWND ctl)
     return false;
 }
 
+/* --- Tools ------------------------------------------------------------ */
+
+#define ID_TROWS    800
+#define ID_TFOOT    801
+#define ID_TTOGGLE  802
+#define ID_TADD     803
+#define ID_TREMOVE  804
+#define ID_TRESCAN  805
+
+struct ToolRow
+{
+    char name[48];
+    char evidence[MAX_PATH + 40];
+    char trusted[200];
+    /* For a new entry: what to write. */
+    char env[64];
+    char file[MAX_PATH];
+    int user, found, enabled, wasEnabled;
+    int added, removed;
+};
+
+/* The Tools page: what this machine's detection finds, switched on or off,
+ * and the person's own entries -- written to tools.ini, which an install
+ * never overwrites. A change reconnects: the tool list rides HELLO. */
+class ToolsPage : public Page, public ListsView
+{
+public:
+    explicit ToolsPage(Sheet *s) : Page(s), m_dirty(false) {}
+    ~ToolsPage() { if (m_sheet->sink()) m_sheet->sink()->listsWatch(0); }
+    void build(DlgTemplate &t);
+    void listsFrame(void *frame);
+    static void sectionSink(void *ctx, const char *name, int user, int found,
+                            const char *evidence, int enabled,
+                            const char *trusted);
+
+protected:
+    void load();
+    void store();
+    bool onCommand(WORD id, WORD code, HWND ctl);
+
+private:
+    void fill();
+    void select();
+    void add();
+    int  current();
+
+    std::vector<ToolRow> m_rows;
+    TextList m_known;           /* profile names the bridge has */
+    bool m_dirty;
+};
+
+void ToolsPage::build(DlgTemplate &t)
+{
+    t.begin(RC_DLGT_PAGE, PAGE_W, PAGE_H, "Tools");
+    t.item(0, 7, 4, 216, 18, (WORD)-1, RC_DLGT_STATIC,
+           "Compilers, shells and the like found on this computer. Changes "
+           "apply when Gaston reconnects.");
+    t.item(LBS_NOTIFY | LBS_USETABSTOPS | WS_VSCROLL | WS_BORDER |
+           WS_TABSTOP | LBS_NOINTEGRALHEIGHT, 7, 24, 216, 84, ID_TROWS,
+           RC_DLGT_LISTBOX, "");
+    t.item(0, 7, 111, 216, 34, ID_TFOOT, RC_DLGT_STATIC, "");
+    t.item(WS_TABSTOP, 7, 150, 48, 14, ID_TTOGGLE, RC_DLGT_BUTTON,
+           "Turn o&ff");
+    t.item(WS_TABSTOP, 59, 150, 40, 14, ID_TADD, RC_DLGT_BUTTON, "&Add...");
+    t.item(WS_TABSTOP, 103, 150, 44, 14, ID_TREMOVE, RC_DLGT_BUTTON,
+           "&Remove");
+    t.item(WS_TABSTOP, 175, 150, 48, 14, ID_TRESCAN, RC_DLGT_BUTTON,
+           "Re&scan");
+}
+
+void ToolsPage::sectionSink(void *ctx, const char *name, int user, int found,
+                            const char *evidence, int enabled,
+                            const char *trusted)
+{
+    ToolsPage *self = (ToolsPage *)ctx;
+    ToolRow r;
+    memset(&r, 0, sizeof r);
+    rc_strcpy(r.name, sizeof r.name, name);
+    rc_strcpy(r.evidence, sizeof r.evidence, evidence);
+    rc_strcpy(r.trusted, sizeof r.trusted, trusted);
+    r.user = user;
+    r.found = found;
+    r.enabled = r.wasEnabled = enabled;
+    self->m_rows.push_back(r);
+}
+
+void ToolsPage::fill()
+{
+    int keep = current();
+    SendDlgItemMessageA(hwnd(), ID_TROWS, LB_RESETCONTENT, 0, 0);
+    for (unsigned i = 0; i < m_rows.size(); i++) {
+        const ToolRow &r = m_rows[i];
+        char line[400];
+        if (r.removed) continue;
+        rc_strf(line, sizeof line, "%s %s\t%s\t%s",
+                r.enabled ? "[x]" : "[  ]", r.name,
+                r.found ? r.evidence : "not found",
+                r.user ? "Your entry" : "Built in");
+        int at = (int)SendDlgItemMessageA(hwnd(), ID_TROWS, LB_ADDSTRING, 0,
+                                          (LPARAM)line);
+        SendDlgItemMessageA(hwnd(), ID_TROWS, LB_SETITEMDATA, at, i);
+    }
+    if (keep >= 0) {
+        int n = (int)SendDlgItemMessageA(hwnd(), ID_TROWS, LB_GETCOUNT, 0, 0);
+        for (int j = 0; j < n; j++)
+            if ((int)SendDlgItemMessageA(hwnd(), ID_TROWS, LB_GETITEMDATA, j,
+                                         0) == keep)
+                SendDlgItemMessageA(hwnd(), ID_TROWS, LB_SETCURSEL, j, 0);
+    }
+    select();
+}
+
+int ToolsPage::current()
+{
+    if (!hwnd()) return -1;
+    int at = (int)SendDlgItemMessageA(hwnd(), ID_TROWS, LB_GETCURSEL, 0, 0);
+    if (at < 0) return -1;
+    return (int)SendDlgItemMessageA(hwnd(), ID_TROWS, LB_GETITEMDATA, at, 0);
+}
+
+void ToolsPage::select()
+{
+    int i = current();
+    char foot[600];
+    if (i < 0 || i >= (int)m_rows.size()) {
+        text(ID_TFOOT, "");
+        EnableWindow(GetDlgItem(hwnd(), ID_TTOGGLE), FALSE);
+        EnableWindow(GetDlgItem(hwnd(), ID_TREMOVE), FALSE);
+        return;
+    }
+    const ToolRow &r = m_rows[i];
+    rc_strf(foot, sizeof foot, "%s -- %s.\r\nFound by: %s\r\n"
+            "Trusted programs: %s", r.name,
+            m_known.has(r.name) ? "the bridge knows how to use it"
+                                : "reported to the bridge only",
+            r.found ? r.evidence : "nothing matched on this computer",
+            r.trusted[0] ? r.trusted : "none");
+    text(ID_TFOOT, foot);
+    SetDlgItemTextA(hwnd(), ID_TTOGGLE, r.enabled ? "Turn o&ff" : "Turn o&n");
+    EnableWindow(GetDlgItem(hwnd(), ID_TTOGGLE), TRUE);
+    EnableWindow(GetDlgItem(hwnd(), ID_TREMOVE), r.user);
+}
+
+void ToolsPage::load()
+{
+    m_rows.clear();
+    rc_tooldet_sections(m_sheet->exeDir(), sectionSink, this);
+    INT stops[2] = { 70, 180 };
+    SendDlgItemMessageA(hwnd(), ID_TROWS, LB_SETTABSTOPS, 2, (LPARAM)stops);
+    fill();
+    /* Which of these the bridge has a profile for: asked once. */
+    if (m_sheet->sink()) {
+        const char *k[1] = { "list" };
+        const char *v[1] = { "profiles" };
+        m_sheet->sink()->listsWatch(this);
+        m_sheet->sink()->listsSend(k, v, 1, "", 0);
+    }
+}
+
+void ToolsPage::listsFrame(void *frame)
+{
+    rc_frame *f = (rc_frame *)frame;
+    const char *list = rc_frame_get(f, "list");
+    if (!hwnd() || !list || strcmp(list, "profiles") != 0) return;
+    if (strcmp(f->type, "LISTENT") == 0) {
+        unsigned off = 0;
+        while (off < f->body_len) {
+            char name[64];
+            unsigned end = off, n = 0;
+            while (end < f->body_len && f->body[end] != '\n') end++;
+            while (off + n < end && f->body[off + n] != '\t' &&
+                   n < sizeof name - 1)
+                n++;
+            memcpy(name, f->body + off, n);
+            name[n] = 0;
+            m_known.add(name);
+            off = end + 1;
+        }
+        return;
+    }
+    select();
+}
+
+bool ToolsPage::onCommand(WORD id, WORD code, HWND ctl)
+{
+    (void)ctl;
+    int i = current();
+    if (id == ID_TROWS && code == LBN_SELCHANGE) { select(); return true; }
+    if (id == ID_TTOGGLE && code == BN_CLICKED && i >= 0) {
+        ToolRow &r = m_rows[i];
+        if (r.enabled && strcmp(r.name, "command.com") == 0) {
+            /* The bridge runs every command through a shell. */
+            MessageBoxA(hwnd(), "The command interpreter stays on: every "
+                        "command the assistant runs goes through it.",
+                        "Options", MB_OK | MB_ICONINFORMATION);
+            return true;
+        }
+        r.enabled = !r.enabled;
+        m_dirty = true;
+        fill();
+        changed();
+        return true;
+    }
+    if (id == ID_TREMOVE && code == BN_CLICKED && i >= 0 && m_rows[i].user) {
+        m_rows[i].removed = 1;
+        m_dirty = true;
+        fill();
+        changed();
+        return true;
+    }
+    if (id == ID_TADD && code == BN_CLICKED) { add(); return true; }
+    if (id == ID_TRESCAN && code == BN_CLICKED) {
+        /* Look again now, and report it at the next connection. */
+        m_dirty = true;
+        load();
+        changed();
+        return true;
+    }
+    return false;
+}
+
+void ToolsPage::add()
+{
+    ToolRow r;
+    char trust[200];
+    memset(&r, 0, sizeof r);
+    if (!askLine(hwnd(), "Add a tool", "A short name (a bridge profile name "
+                 "if it has one):", r.name, sizeof r.name) || !r.name[0])
+        return;
+    askLine(hwnd(), "Add a tool", "A file that is there when it is "
+            "installed (full path):", r.file, sizeof r.file);
+    askLine(hwnd(), "Add a tool", "An environment variable naming where it "
+            "is (or leave empty):", r.env, sizeof r.env);
+    trust[0] = 0;
+    askLine(hwnd(), "Add a tool", "Its programs that may run without a "
+            "second look, comma-separated:", trust, sizeof trust);
+    rc_strcpy(r.trusted, sizeof r.trusted, trust);
+    r.user = 1;
+    r.enabled = r.wasEnabled = 1;
+    r.added = 1;
+    r.found = r.file[0] && GetFileAttributesA(r.file) != 0xFFFFFFFF;
+    rc_strcpy(r.evidence, sizeof r.evidence, r.file);
+    m_rows.push_back(r);
+    m_dirty = true;
+    fill();
+    changed();
+}
+
+void ToolsPage::store()
+{
+    char ini[MAX_PATH];
+    if (!m_dirty) return;
+    if (!rc_strf(ini, sizeof ini, "%s\\tools.ini", m_sheet->exeDir())) return;
+    for (unsigned i = 0; i < m_rows.size(); i++) {
+        ToolRow &r = m_rows[i];
+        if (r.removed) {
+            WritePrivateProfileStringA(r.name, NULL, NULL, ini);
+            continue;
+        }
+        if (r.added) {
+            char key[16];
+            char prog[64];
+            char *p;
+            char *q;
+            int n = 0;
+            if (r.env[0]) WritePrivateProfileStringA(r.name, "env1", r.env, ini);
+            if (r.file[0]) WritePrivateProfileStringA(r.name, "file1", r.file,
+                                                      ini);
+            for (p = r.trusted; *p && n < 8; p = q) {
+                while (*p == ' ' || *p == ',') p++;
+                q = p;
+                while (*q && *q != ',') q++;
+                unsigned len = (unsigned)(q - p);
+                while (len && p[len - 1] == ' ') len--;
+                if (!len || len >= sizeof prog) continue;
+                memcpy(prog, p, len);
+                prog[len] = 0;
+                rc_strf(key, sizeof key, "trust%d", ++n);
+                WritePrivateProfileStringA(r.name, key, prog, ini);
+            }
+            r.added = 0;
+        }
+        if (r.enabled != r.wasEnabled) {
+            /* Off is `enabled=0` in the user's file; on is its absence. */
+            WritePrivateProfileStringA(r.name, "enabled",
+                                       r.enabled ? NULL : "0", ini);
+            r.wasEnabled = r.enabled;
+        }
+    }
+    WritePrivateProfileStringA(NULL, NULL, NULL, ini);   /* flush */
+    rc_tooldet_forget();
+    m_sheet->needReconnect();
+    m_dirty = false;
+}
+
 /* --- Permissions ---------------------------------------------------------- */
 
 #define ID_MODE      400
@@ -990,6 +1293,7 @@ bool rc_options_run(HWND parent, HINSTANCE inst, const ClientConfig &cur,
     pages[RC_OPT_GENERAL].reset(new GeneralPage(sheet.get()));
     pages[RC_OPT_FILES].reset(new FilesPage(sheet.get()));
     pages[RC_OPT_PERMISSIONS].reset(new PermissionsPage(sheet.get()));
+    pages[RC_OPT_TOOLS].reset(new ToolsPage(sheet.get()));
 
     memset(psp, 0, sizeof psp);
     for (i = 0; i < RC_OPT_COUNT; i++) {

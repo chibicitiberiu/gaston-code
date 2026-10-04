@@ -138,7 +138,9 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # provisionally to 569,344 for the rest of the set: the property sheet's own
 # machinery (core/dialogpage, core/dlgtemplate, app/optsheet) measured
 # 8.7KB with one page, and five more pages and the lists inspector follow.
-COMMITTED_CAP ?= 569344
+# And to 598,016 when the Tools page crossed it at 575,993, with the Misc
+# page and the command log still to come.
+COMMITTED_CAP ?= 598016
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a

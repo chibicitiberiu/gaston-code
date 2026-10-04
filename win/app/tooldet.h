@@ -85,4 +85,20 @@ typedef void (*rc_tooldet_trust_sink)(void *ctx, const char *section,
 int rc_tooldet_trust(const char *exe_dir, rc_tooldet_trust_sink sink,
                      void *ctx);
 
+/* One row per tool section, for Options > Tools: its name, which file
+ * declares it (0 tools_detect.ini, 1 tools.ini), whether it was FOUND, the
+ * first evidence that matched ("WATCOM=C:\WATCOM" or a path), whether it
+ * is switched on, and its trusted programs, comma-separated. A section in
+ * both files is reported once, from the user's (it wins). */
+typedef void (*rc_tooldet_section_sink)(void *ctx, const char *name,
+                                        int user, int found,
+                                        const char *evidence, int enabled,
+                                        const char *trusted);
+void rc_tooldet_sections(const char *exe_dir, rc_tooldet_section_sink sink,
+                         void *ctx);
+
+/* Forget the cached report, so the next connection looks again -- after a
+ * tool is switched on or off or added in Options. */
+void rc_tooldet_forget();
+
 #endif

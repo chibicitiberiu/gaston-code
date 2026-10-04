@@ -75,7 +75,7 @@ public:
     void beforeStart();
 
     /* OptionsSink */
-    void optionsApply(const ClientConfig &next);
+    void optionsApply(const ClientConfig &next, bool reconnect);
     bool listsSend(const char *const *keys, const char *const *vals, int nkv,
                    const char *body, unsigned len);
     void listsWatch(ListsView *view);
