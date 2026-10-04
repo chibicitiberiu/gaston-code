@@ -2412,9 +2412,22 @@ almost always arrives after the worker has started. A 0.16 s walk is not.
 `rc_uirpc_cancel` now remembers an id it could not stop and the worker starts
 that request already stopped: cancelled on attempt 1, in 0.00 s.
 
-What is still owed is this entry's original demand on a machine slow enough to
-care. 0.71 s is the floor, not the answer; the Athlon and the P200 are where
-the motivation would show.
+**The Athlon's number, 2026-10-04**
+(`docs/measurements/ui-lane-real-hw-20261004.txt`): a full MSAA-enriched walk
+of a freshly booted desktop, hidden windows included, is **36-37 ms**, and the
+request after a cancelled one is answered in 44 ms. This entry guessed "on the
+Athlon box a desktop tree is tens of milliseconds and on the Pentium 200 it is
+not" -- tens of milliseconds, confirmed.
+
+So on that machine **the problem does not arise**: eight threaded attempts to
+race a STOP against the walk, from the moment the id existed, caught none. The
+walk finishes before the round trip asking it to stop can land. The mechanism
+is built and proved (the VM caught it on attempt 1, and STOP on a step list
+works on the Athlon), and what is left is the motivation -- a slower box, or
+this one with a working desktop rather than sixteen windows on a fresh boot.
+
+**This entry can be closed when the P200 says so, and not before.** It is the
+machine the entry was written about.
 
 ## 27. Prevent sleep works in practice, and three of its four mechanisms are untested
 

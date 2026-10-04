@@ -990,8 +990,17 @@ with `make check`, `make test-fast`, `make wine-smoke` and a guest run.
 6. **libautomation.** Screenshot, window list, focus and input, control tree,
    MSAA, in that order. Each verified on the P200, not just Wine: window trees,
    focus and input are exactly where Wine lies.
-   **Step 6 is complete on the VM (2026-10-03)** and owes only the real
-   machine -- `docs/measurements/ui-lane-verify-vm-20261003.txt` is eleven of
+   **Step 6 is complete (2026-10-04), on the VM and on the Athlon XP** --
+   `docs/measurements/ui-lane-real-hw-20261004.txt` is 12 of 12 on real
+   hardware and `ui-lane-real-hw-20261004.png` is a 1280x720 capture of that
+   machine's desktop, the first non-VM image in that directory. It answered
+   the two questions the P200 checklist had carried since the start (a
+   process with no window CAN take the foreground; retail 98 does carry
+   oleacc and returns real roles and names), gave BACKLOG 26 its number
+   (37 ms, below the cost of asking for a stop), and **reversed** this
+   file's own prediction about compression: `shouldCompress` declines on the
+   emulator and fires on the hardware, where a 922KB screenshot goes twice
+   as fast compressed. The VM run -- `docs/measurements/ui-lane-verify-vm-20261003.txt` is eleven of
    eleven on the guest, `ui-lane-vm-20261003.png` is the screenshot it took
    while the client sat beside it unable to reach its bridge, and
    `tools/probe/uilaneprobe.py` re-runs the list. What the Athlon alone can
@@ -1107,9 +1116,17 @@ The Phase 6 agent tools then need only handlers and bridge work.
 
 Things only the real box can answer, collected so the first session covers them:
 
-- `oleacc.dll` present, and its version.
-- Foreground lock: does `SPI_SETFOREGROUNDLOCKTIMEOUT` = 0 work from a
-  background process. *Narrowed 2026-10-02:* the lock is real on 98 and
+- `oleacc.dll` present, and its version. **ANSWERED 2026-10-04: present on
+  the Athlon XP's retail 98**, and it answers properly rather than merely
+  loading -- the walk comes back with roles (list, pagetablist, pushbutton,
+  text, toolbar) and names ("Start"), where Wine's returns the generic client
+  object for every class. `HELLO msaa=` says so on every connection.
+- Foreground lock: **ANSWERED 2026-10-04 on the Athlon XP, yes**
+  (`docs/measurements/ui-lane-real-hw-20261004.txt`). With Progman in front,
+  a `focus` step asked for by gremote -- a process with no window of its own
+  on the screen -- put Notepad in the foreground, and `Input::focus`'s
+  AttachThreadInput fallback was not needed. The P200 itself is still a
+  different machine. *Narrowed 2026-10-02:* the lock is real on 98 and
   measured at 15000 ms, and `Input::focus` already relaxes it around the one
   call that needs it and puts it back (`win/automation/input.cpp`). What is
   untested is whether that works from a process with **no window on screen,

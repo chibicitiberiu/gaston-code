@@ -49,15 +49,30 @@ with Remote(P, SECRET, port=_a.port) as r:
     tp = r.tree("pid", pid=pid, max_nodes=400)
     # <=, not <: when every window on the desktop is Explorer's -- the
     # same tidy machine -- the process tree IS the desktop tree.
+    # `<=` and not `<`: on a freshly booted box every visible window can
+    # belong to Explorer, and then the filtered walk IS the whole walk.
     say("1b tree of one process", 0 < len(tp.nodes) <= len(t.nodes),
         "explorer pid %x -> %d of %d" % (pid, len(tp.nodes), len(t.nodes)))
+
+    # ...which on its own cannot tell a filter that worked from one that was
+    # IGNORED, and `scope=pid` was silently returning the whole desktop until
+    # 2026-10-03 (a 9x pid has the high bit set and no signed clamp carries
+    # it). gremote's own pid is the discriminator: every walk excludes this
+    # process, so a filter that is applied returns nothing and a filter that
+    # is dropped returns everything. A node record carries no pid of its own
+    # -- no handle crosses this wire -- so the count is the evidence.
+    me = next(p.pid for p in r.ps() if p.exe.upper().endswith("GREMOTE.EXE"))
+    mine = r.tree("pid", pid=me, max_nodes=400)
+    say("1c the pid filter is applied, not dropped", len(mine.nodes) == 0,
+        "our own pid %x -> %d nodes (the desktop has %d)"
+        % (me, len(mine.nodes), len(t.nodes)))
     with contextlib.suppress(Refused):
         r.stream("TREE", {"inproc": "1", "target": "Progman"})
     try:
         r.stream("TREE", {"inproc": "1", "target": "Progman"})
-        say("1c inproc refused, not served", False, "it answered")
+        say("1d inproc refused, not served", False, "it answered")
     except Refused as e:
-        say("1c inproc refused, not served", e.code == "inproc_unsupported", e.code)
+        say("1d inproc refused, not served", e.code == "inproc_unsupported", e.code)
 
     # 2. a real step list: open Notepad, type, read it back.
     #    Exactly ONE Notepad, killed by pid rather than closed by selector --

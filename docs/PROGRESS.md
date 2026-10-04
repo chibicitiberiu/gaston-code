@@ -4063,11 +4063,38 @@ CANCEL staying silent, and a 1.4MB GET with the heartbeat answered after it.
 Plus `test_ui_lane.py` under Wine, and `uicheck` 52 cases for the parts that
 need no desktop at all.
 
-**The Athlon run is still owed** -- the box was switched off for the night.
-What it alone can settle: `SPI_SETFOREGROUNDLOCKTIMEOUT` from a process with
-no window, started before logon; whether retail 98 carries `oleacc.dll`
-(`HELLO msaa=` says 1 on the VM); BACKLOG 26's cost on a slower machine; and
-what `shouldCompress` decides for a screenshot on real hardware.
+**The Athlon run, 2026-10-04: 12 of 12**
+(`docs/measurements/ui-lane-real-hw-20261004.txt`,
+`ui-lane-real-hw-20261004.png` -- a 1280x720 capture of that machine's
+desktop, the first non-VM image in that directory). Four questions, and three
+of the answers differ from the emulator's:
+
+- **A process with no window of its own CAN take the foreground.** Open since
+  2026-09-27. With Progman in front, a `focus` step asked for by gremote put
+  Notepad there, and `Input::focus`'s AttachThreadInput fallback was not
+  needed.
+- **Retail 98 carries oleacc, and it answers properly** rather than merely
+  loading: real roles (list, pagetablist, pushbutton, text, toolbar) and real
+  names ("Start"). Wine has oleacc too and returns the generic client object
+  for every class, so this is the stronger answer.
+- **BACKLOG 26's number is 37 ms**, and the consequence is that the problem
+  does not arise on this machine: eight threaded attempts to race a STOP
+  against the walk caught none, because the walk ends before the round trip
+  does. The entry stays open for the P200, which is what it was written
+  about.
+- **`shouldCompress` fires here, and this reverses what the plan predicted.**
+  From the VM it looked as though a LAN would always decline -- 300KB raw at
+  link speed beating a compress first. On the Athlon a 922KB screenshot is
+  0.046 s compressed against 0.090 s raw, repeatably. The rule did not
+  change; the machine it was measured on did. A QEMU guest's deflate
+  throughput is the host's emulation speed, not a 1998 CPU's, and that is the
+  number `linkBps < deflateBps / 2` turns on.
+
+The pid fix was confirmed on the hardware it was about: Notepad's
+`0xfffdf1e3` gives 2 nodes of 18. And `uilaneprobe` gained the case that
+would have caught it -- a walk filtered to gremote's OWN pid, which every
+walk excludes, so the answer must be zero nodes and a dropped filter shows up
+as the whole desktop.
 
 ## Options, and execution modes of our own (2026-10-04)
 

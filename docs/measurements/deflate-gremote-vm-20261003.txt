@@ -49,9 +49,16 @@ The GET is guest -> host and barely moved, which is the predicted answer and
 not a disappointment. `Connection::Codec::shouldCompress` is
 `linkBps < deflateBps / 2`, so on a fast link against a CPU that compresses
 slowly the guest declines -- correctly: 220KB raw at LAN speed beats
-compressing it first. Where `deflate=1` earns its keep upward is a slow link,
-which is BACKLOG 1's `tc netem` gate and an ISA NE2000, neither of which this
-emulator is.
+compressing it first. Where `deflate=1` earns its keep upward was expected to be a slow link --
+BACKLOG 1's `tc netem` gate and an ISA NE2000.
+
+**That expectation was wrong, and the hardware said so on 2026-10-04**
+(`ui-lane-real-hw-20261004.txt`). On the Athlon XP over 100Mbit, a 922KB
+screenshot goes 0.046 s compressed against 0.090 s raw -- `shouldCompress`
+fires, repeatably, twice as fast. The rule is the same on both machines;
+what differs is the number it turns on. A QEMU guest's deflate throughput is
+the host's emulation speed, not a 1998 CPU's, so `linkBps < deflateBps / 2`
+lands on the other side here. This is what the hardware gate is for.
 
 
 3. What it cost in the image

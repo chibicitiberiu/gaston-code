@@ -1,0 +1,115 @@
+The ui lane on real hardware, and the four questions only it could answer
+=========================================================================
+
+Machine : Athlon XP 2000+ (x86 family 6 model 10), 256MB, Windows 98 SE
+          4.10.2222 A, real hardware 10.0.0.125, HELLO machine=TIBI
+Date    : 2026-10-04
+Driven  : gremote/ over the LAN. No bridge, no client, no model.
+Why     : REMOTE.md step 6 was complete on the VM and owed this. Three of the
+          four answers below differ from the emulator's, and one of them
+          reverses a prediction this project wrote down.
+
+
+The list: 11 of 11
+------------------
+
+`tools/probe/uilaneprobe.py --remote 10.0.0.125:<secret>`, the same script
+the VM ran, all passing. The self-update that put this build on the box went
+over the link first, which is the compatibility path exercising itself.
+
+
+Q1. Can a process with no window take the foreground? YES
+----------------------------------------------------------
+
+Open since 2026-09-27 (REMOTE.md's P200 checklist, BACKLOG 16's residue).
+98 introduced the foreground lock -- measured at 15000 ms -- and the worry
+was that `SetForegroundWindow` from a background process would only flash a
+taskbar button.
+
+      before the step   Progman, SHELLDLL_DefView, SysListView32
+      focus Notepad     ok, hit Notepad "Untitled - Notepad"
+      after the step    Notepad, Edit
+
+`Input::focus` relaxes SPI_SETFOREGROUNDLOCKTIMEOUT around the one call that
+needs it and puts it back, and that is enough from a program with no window
+of its own on the screen. The AttachThreadInput fallback was not needed.
+
+
+Q2. Does retail 98 carry oleacc.dll? YES, and it answers properly
+------------------------------------------------------------------
+
+      HELLO msaa=1
+
+asked from the reader thread by `rc_msaa_present` -- LoadLibrary,
+GetProcAddress, FreeLibrary, no COM apartment anywhere near it.
+
+This is a stronger answer than Wine's. Wine HAS oleacc and returns the
+generic client object for every window class, so a green MSAA result there
+proves only that the call did not fail. Here the walk comes back with real
+roles and real names:
+
+      roles   list, pagetablist, pushbutton, text, toolbar
+      names   ToolbarWindow32 "Application", Button "Start"
+
+so `[name=...]` and `[role=...]` selectors address what they say they do.
+
+
+Q3. BACKLOG 26's number: 37 ms, which is below the cost of asking
+------------------------------------------------------------------
+
+A full MSAA-enriched walk of this desktop, hidden windows included:
+
+      0.036 s, 0.037 s
+
+and the request after a cancelled one is answered in 0.044 s.
+
+26 guessed "on the Athlon box a desktop tree is tens of milliseconds and on
+the Pentium 200 it is not". Tens of milliseconds, confirmed.
+
+The honest consequence: a STOP cannot catch a walk here at all. Eight
+threaded attempts, racing the stop against the walk from the moment the id
+exists, caught none -- the walk finishes before the round trip lands. So the
+problem 26 describes does not arise on this machine. The mechanism is
+proved (the VM caught it on attempt 1, and STOP on a step list works here --
+uilaneprobe 8a), and the motivation is still a slower box with a busier
+desktop. This desktop was freshly booted: 16 to 18 visible windows.
+
+
+Q4. What shouldCompress decides for a screenshot: IT COMPRESSES
+----------------------------------------------------------------
+
+A 1280x720 8bpp capture, 922,678 bytes, four alternating runs of three:
+
+      deflate=1    0.046  0.087  0.046   best 0.046 s
+      deflate=0    0.093  0.090  0.091   best 0.090 s
+      deflate=1    0.046  0.046  0.084   best 0.046 s
+      deflate=0    0.096  0.093  0.097   best 0.093 s
+
+Byte-identical either way. Twice as fast compressed, repeatably.
+
+THIS REVERSES WHAT THIS PROJECT PREDICTED. The plan for step 6 said, from
+the VM, that `Connection::Codec::shouldCompress` -- `linkBps < deflateBps/2`
+-- would decline on a LAN, "correctly, since 300KB raw at LAN speed beats
+compressing it first", and `deflate-gremote-vm-20261003.txt` says the same.
+On the emulator it did decline. On this hardware it does not: an Athlon XP
+deflates fast enough at level 1 that half its throughput is still above what
+100Mbit carries, so the comparison lands the other way and the screenshot
+goes compressed.
+
+The prediction was not wrong about the rule, it was wrong about the machine
+it was made on -- which is the whole argument for this gate. A QEMU guest's
+deflate throughput is the host's emulation speed, not a 1998 CPU's, and that
+is exactly the number this heuristic turns on.
+
+
+And the pid bug, on the hardware it was about
+----------------------------------------------
+
+`scope=pid` with a 9x process id -- an obfuscated pointer with the high bit
+set, which no signed clamp can carry:
+
+      NOTEPAD.EXE, pid 0xfffdf1e3   ->  2 nodes of the desktop's 18
+                                        Notepad, Edit
+
+Before the fix this answered with the whole desktop, silently, on the
+shipping client as well as on gremote.
