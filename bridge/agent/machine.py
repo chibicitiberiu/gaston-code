@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 import textwrap
 
+from ..files.paths import conflict_dir
 from . import profiles, prompts, toolrules
 from . import toolnotes as notes
-from ..files.paths import conflict_dir
 
 
 def describe(h: dict) -> str:
