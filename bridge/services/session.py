@@ -8,6 +8,7 @@ session creation with tool bindings and event callbacks (make_session), deferred
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as _dt
 import logging
 import os
@@ -163,6 +164,52 @@ class SessionService:
         log.info("export: %d bytes for %r", len(data), title)
         await guest.link.send_export(guest, data)
 
+    def _homes(self) -> list[str]:
+        """The directories this bridge runs conversations under: --cwd and
+        --sync-dir, resolved. Empty when neither is known (a test double)."""
+        cfg = getattr(self.workspace, "config", None)
+        out = []
+        for d in (getattr(cfg, "cwd", None), getattr(cfg, "sync_dir", None)):
+            if isinstance(d, str) and d:
+                with contextlib.suppress(OSError, ValueError):
+                    out.append(os.path.realpath(d))
+        return out
+
+    def ours(self, rows: list[dict], guest: GuestSession) -> list[dict]:
+        """The listing narrowed to what THIS guest should be offered here.
+
+        Three questions. Started by a bridge, for this machine -- the store's
+        `filter`. And started by THIS bridge: the store is one file in $HOME
+        shared by every bridge on the host, so a second bridge with its own
+        --cwd and --sync-dir listed the first one's conversations, and
+        opening one resumed it in the other bridge's folders (measured
+        2026-10-03: 87 rows on a bridge that had started none). Answered
+        from where each session RAN, which every row already carries -- so
+        conversations from before this check are sorted correctly too. A
+        row with no cwd is kept: unknown is not foreign.
+        """
+        conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
+        if conv_store is not None:
+            rows = conv_store.filter(rows, guest.machine)
+        homes = self._homes()
+        if not homes:
+            return rows
+
+        def inside(cwd: str) -> bool:
+            if not cwd:
+                return True
+            try:
+                c = os.path.realpath(cwd)
+            except (OSError, ValueError):
+                return True
+            for h in homes:
+                with contextlib.suppress(ValueError):
+                    if os.path.commonpath([h, c]) == h:
+                        return True
+            return False
+
+        return [r for r in rows if inside(r.get("cwd", ""))]
+
     async def send_sessions(self, guest: GuestSession) -> None:
         """The chat list. Only conversations this bridge started -- the rest
         belong to a machine with a different way of working.
@@ -186,10 +233,7 @@ class SessionService:
         every path (BACKLOG.md §21). A guest that sends no `machine` header
         gets the old, wider list rather than an empty one.
         """
-        conv_store = self.conv if self.conv is not None else getattr(self.connection, "conv", None)
-        listing = self._resolve_sesslist().listing()
-        rows = (conv_store.filter(listing, guest.machine)
-                if conv_store is not None else listing)
+        rows = self.ours(self._resolve_sesslist().listing(), guest)
         hidden = 0
         if len(rows) > DISPLAY_LIMIT:
             hidden = len(rows) - DISPLAY_LIMIT

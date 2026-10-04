@@ -373,8 +373,12 @@ class Bridge:
         conv = str(guest.hello.get("conv", "") or "").strip()
         if not conv or conv == guest.conv_id:
             return ""
+        # The chat list's own rule (SessionService.ours), not a listing of
+        # --cwd alone: a conversation's session runs in its own folder under
+        # --sync-dir, which a one-directory listing never finds.
         try:
-            rows = self.session._resolve_sesslist().listing(self.config.cwd)
+            rows = self.session.ours(
+                self.session._resolve_sesslist().listing(), guest)
         except Exception as exc:          # a listing failure costs the resume
             log.info("could not list conversations to reopen %s: %s",
                      conv, exc)

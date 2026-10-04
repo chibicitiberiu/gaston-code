@@ -56,6 +56,8 @@ def mock_deps(tmp_path):
     workspace.ensure_work_dir = AsyncMock()
     workspace.config = MagicMock()
     workspace.config.sync_dir = str(tmp_path / "sync")
+    # The rows below ran in /tmp: this bridge's own, by SessionService.ours.
+    workspace.config.cwd = "/tmp"
     options = MagicMock()
     options.clear_cache = MagicMock()
     options.effective_model = MagicMock(return_value="claude-sonnet-4-6")
@@ -163,7 +165,8 @@ def _machine_listing(mine_at, total=400):
     rows = []
     for i in range(total):
         rows.append({"id": ("ours" if i == mine_at else f"theirs-{i}"),
-                     "title": f"unrelated work {i}", "cwd": "/home/dev/other",
+                     "title": f"unrelated work {i}",
+                     "cwd": "/tmp" if i == mine_at else "/home/dev/other",
                      "group": "Today"})
     return rows
 
@@ -359,3 +362,23 @@ async def test_the_machine_filter_runs_before_the_cap_not_after(mock_deps):
     assert len(sent) == session_service.DISPLAY_LIMIT, \
         "the cap is applied last, to OUR rows"
     assert sent == [f"real-{i}" for i in range(session_service.DISPLAY_LIMIT)]
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_another_bridge_ran_is_not_listed(mock_deps):
+    """The conversation store is one file in $HOME for every bridge on the
+    host. A second bridge with its own --cwd/--sync-dir listed the first
+    one's conversations and resumed them in the wrong folders (2026-10-03).
+    Where a session RAN decides; a row with no cwd is kept."""
+    conn, pres, ws, opt, ge, conv = mock_deps
+    svc = SessionService(conn, pres, ws, opt, ge, conv)
+    for i in ("here", "there", "unknown"):
+        conv.add(i)
+    rows = [{"id": "here", "title": "a", "cwd": "/tmp/x/CONV", "group": ""},
+            {"id": "there", "title": "b", "cwd": "/srv/other-bridge/work",
+             "group": ""},
+            {"id": "unknown", "title": "c", "cwd": "", "group": ""}]
+    with patch("bridge.agent.sessions.listing",
+               lambda cwd=None, limit=sesslist.FETCH_LIMIT: rows):
+        await svc.send_sessions(DummyGuest())
+    assert _rows_sent(conn) == ["here", "unknown"]

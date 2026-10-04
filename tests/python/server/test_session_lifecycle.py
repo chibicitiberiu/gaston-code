@@ -613,6 +613,7 @@ async def test_a_restarted_bridge_reopens_the_conversation_the_machine_names(
                         lambda sid_, limit=2000: [])
     monkeypatch.setattr(srv.sesslist, "listing",
                         lambda cwd=None, limit=50: [{"id": "stored-7"}])
+    harness.bridge.conv.add("stored-7")
     harness.bridge.conv.set_folder("stored-7", "WORKHERE", "C:\\WORK\\WORKHERE")
     r, w = await harness.connect(hdrs={"conv": "stored-7"})
     f = await _recv(harness, r, "SWITCHED")
