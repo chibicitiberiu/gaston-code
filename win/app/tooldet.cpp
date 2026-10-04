@@ -53,7 +53,19 @@ struct scan {
     void           *ctx;
     int             emitted;
     int             stop;
+    /* The user's tools.ini, where `[name] enabled=0` switches a tool off
+     * whichever file declares it (Options > Tools). */
+    const char     *user_ini;
 };
+
+/* Not switched off in the user's tools.ini. A tool switched off is not
+ * reported at all -- the agent is not told about it and gets no note for
+ * it -- and its programs are not trusted. */
+bool enabled(const char *user_ini, const char *name)
+{
+    if (!user_ini || !*user_ini) return true;
+    return GetPrivateProfileIntA(name, "enabled", 1, user_ini) != 0;
+}
 
 int emit(scan *s, const char *name, const char *kind, const char *value)
 {
@@ -72,6 +84,8 @@ void do_section(scan *s, const char *ini, const char *name)
     char key[16];
     char val[MAX_PATH];
     int i;
+
+    if (!enabled(s->user_ini, name)) return;
 
     for (i = 1; i <= RC_TOOLDET_MAX_N && !s->stop; i++) {
         char env[MAX_PATH];
@@ -142,8 +156,12 @@ int rc_tooldet_run(const char *exe_dir, rc_tooldet_sink sink, void *ctx)
     scan s;
     UINT old;
 
+    char user[MAX_PATH];
+
     if (!sink) return -1;
     s.sink = sink; s.ctx = ctx; s.emitted = 0; s.stop = 0;
+    s.user_ini = rc_strf(user, sizeof(user), "%s\\tools.ini", exe_dir)
+                 ? user : "";
 
     /* NO CRITICAL-ERROR DIALOGS, for the whole scan.
      *
@@ -246,4 +264,78 @@ const char *rc_tooldet_cached(const char *exe_dir, unsigned *len)
     }
     if (len) *len = g_rows_len;
     return g_rows;
+}
+
+
+/* --- what may run without a second look ------------------------------------ */
+
+namespace {
+
+struct trust_scan {
+    rc_tooldet_trust_sink sink;
+    void *ctx;
+    const char *user_ini;
+    int found;
+    int count;
+};
+
+/* Counts facts for one section without reporting them anywhere. */
+int count_sink(void *ctx, const char *name, const char *kind,
+               const char *value)
+{
+    (void)name; (void)kind; (void)value;
+    ((trust_scan *)ctx)->found++;
+    return 1;
+}
+
+void trust_ini(trust_scan *t, const char *ini)
+{
+    const char *p;
+    int n = 0;
+
+    if (GetFileAttributesA(ini) == 0xFFFFFFFF) return;
+    if (!read_sections(ini, g_sections, sizeof(g_sections))) return;
+    for (p = g_sections; *p; p += strlen(p) + 1) {
+        scan probe;
+        char key[16], prog[64];
+        int i;
+
+        if (++n > RC_TOOLDET_MAX_SECTIONS) return;
+        if (!enabled(t->user_ini, p)) continue;
+        /* FOUND, by the same two questions the report asks: a tool that
+         * is not on this machine trusts nothing. */
+        t->found = 0;
+        probe.sink = count_sink; probe.ctx = t; probe.emitted = 0;
+        probe.stop = 0; probe.user_ini = t->user_ini;
+        do_section(&probe, ini, p);
+        if (!t->found) continue;
+        for (i = 1; i <= RC_TOOLDET_MAX_N; i++) {
+            rc_strf(key, sizeof(key), "trust%d", i);
+            GetPrivateProfileStringA(p, key, "", prog, sizeof(prog), ini);
+            if (!prog[0]) continue;
+            t->sink(t->ctx, p, prog);
+            t->count++;
+        }
+    }
+}
+
+}  /* namespace */
+
+int rc_tooldet_trust(const char *exe_dir, rc_tooldet_trust_sink sink,
+                     void *ctx)
+{
+    char ini[MAX_PATH], user[MAX_PATH];
+    trust_scan t;
+    UINT old;
+
+    if (!sink) return -1;
+    t.sink = sink; t.ctx = ctx; t.found = 0; t.count = 0;
+    t.user_ini = rc_strf(user, sizeof(user), "%s\\tools.ini", exe_dir)
+                 ? user : "";
+    old = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    if (rc_strf(ini, sizeof(ini), "%s\\tools_detect.ini", exe_dir))
+        trust_ini(&t, ini);
+    trust_ini(&t, t.user_ini);
+    SetErrorMode(old);
+    return t.count;
 }

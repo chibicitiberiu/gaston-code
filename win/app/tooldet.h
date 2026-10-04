@@ -74,4 +74,15 @@ int rc_tooldet_run(const char *exe_dir, rc_tooldet_sink sink, void *ctx);
  * `len` when that is not NULL. Empty when nothing was found. */
 const char *rc_tooldet_cached(const char *exe_dir, unsigned *len);
 
+/* The programs this machine's tools let run without a second look: every
+ * `trustN=` of a section that is FOUND (the same env/file questions the
+ * report asks) and not switched off (`[name] enabled=0` in tools.ini).
+ * Called once per section/program; returns how many. These become the
+ * `trust=` lines of PREFS -- a client fact, the bridge holds no program
+ * names (CLAUDE.md). */
+typedef void (*rc_tooldet_trust_sink)(void *ctx, const char *section,
+                                      const char *program);
+int rc_tooldet_trust(const char *exe_dir, rc_tooldet_trust_sink sink,
+                     void *ctx);
+
 #endif

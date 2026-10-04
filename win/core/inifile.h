@@ -77,10 +77,23 @@ public:
      * failed write is still caught by the setter that made it. */
     void flush();
 
+    /* Remove one key, or a whole section (WritePrivateProfileString with
+     * NULL, which Win95 already had). setString cannot do it: it writes ""
+     * for a NULL value, which is a key that is PRESENT and empty. */
+    bool deleteKey(const char *section, const char *key);
+    bool dropSection(const char *section);
+
     /* False if `section` holds a key not in `known`: a typo such as `prot=`
      * would otherwise leave `port` at its default without a word. */
     bool checkKeys(const char *section, const char *const *known,
                    unsigned count);
+
+    /* The same, for a section of NUMBERED keys: `add01`..`add32` for each
+     * prefix. The profile API cannot hold two keys of one name -- a second
+     * `add=` overwrites the first -- so a list in an INI is numbered, and
+     * this is how an unknown one is still refused. */
+    bool checkNumbered(const char *section, const char *const *prefixes,
+                       unsigned count, unsigned max);
 
     /* The last failure, "[section] key: reason". Empty if none. */
     const char *error() const;

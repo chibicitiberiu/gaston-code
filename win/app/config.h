@@ -16,8 +16,24 @@
 #error "app/config.h is C++"
 #endif
 
+#include "app/modes.h"
 #include "core/inifile.h"
+#include "core/textlist.h"
 #include "core/rc_cpp.h"
+
+/* Bounds on everything a person can add in Options. Refused past these,
+ * never truncated: a list cut short in silence is a place unprotected. */
+#define RC_LIST_MAX     32      /* each of protect / danger / trust, +/- */
+#define RC_IGNORE_MAX   64
+
+#define RC_PAGE_SMALL   0
+#define RC_PAGE_NORMAL  1
+#define RC_PAGE_LARGE   2
+
+/* What to do when a new work folder already holds files. ASK is the old
+ * behaviour, the dialog in app/workdlg.cpp; the other three answer it in
+ * advance with workcopy.h's RC_WORK_* (KEEP 0, REPLACE 1, MERGE 2). */
+#define RC_EXISTING_ASK (-1)
 
 struct ClientConfig
 {
@@ -34,6 +50,37 @@ struct ClientConfig
      * five tools from every install that upgrades, with no error anywhere to
      * say why the agent had stopped being able to see anything. */
     bool automation;
+
+    /* --- General: defaults for NEW chats (an open one keeps its own) --- */
+    char defaultModel[64];      /* "" = the bridge's */
+    char defaultEffort[16];
+    char defaultMode[RC_MODE_ID];
+    int  pageSize;              /* RC_PAGE_* */
+
+    /* --- Files ---------------------------------------------------------- */
+    long sweepMin;              /* 0 = bridge default, -1 = only on change */
+    long maxFileKb;             /* 0 = bridge default */
+    int  existing;              /* RC_EXISTING_ASK or an RC_WORK_* */
+    /* TextList, not std::vector<std::string> (core/textlist.h): this
+     * header is included by half the program, and STL here cost the image
+     * about 25KB with 600 bytes of budget left (measured 2026-10-04). */
+    TextList ignore;
+
+    /* --- Permissions ---------------------------------------------------- */
+    long deadlineMin;           /* 0 = bridge default (ten minutes) */
+    ModeDef modes[RC_MODES_MAX];/* the person's own */
+    int  modeCount;
+    /* Additions to, and removals from, the built-in lists (app/protect.cpp).
+     * `danger` additions are "program reason". */
+    TextList protectAdd, protectRem;
+    TextList dangerAdd, dangerRem;
+    TextList trustAdd, trustRem;
+
+    /* --- Misc ----------------------------------------------------------- */
+    char logDir[MAX_PATH];      /* "" = beside the exe; applies next start */
+    bool cmdLog;                /* save every command and its output */
+
+    ClientConfig();
 };
 
 class ConfigStore
@@ -55,6 +102,11 @@ public:
     const char *path() const;
 
 private:
+    bool loadOptions(ClientConfig *cfg);
+    bool loadModes(ClientConfig *cfg);
+    bool saveOptions(const ClientConfig &cfg);
+    bool saveModes(const ClientConfig &cfg);
+
     ConfigStore(const ConfigStore &);
     ConfigStore &operator=(const ConfigStore &);
 

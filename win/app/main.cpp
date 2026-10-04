@@ -22,6 +22,7 @@
 #include "app/machineid.h"
 #include "app/mainwindow.h"
 #include "app/oleservice.h"
+#include "app/protect.h"
 #include "core/app.h"
 #include "core/log.h"
 #include "core/path.h"
@@ -228,7 +229,8 @@ bool ClientApp::initializeServices()
      * An empty body is a real answer -- "every default" -- and still makes
      * the bridge wait for it, which is what keeps a future setting from
      * arriving after the session it has to shape. */
-    m_prefs.clear();
+    m_prefs = rc_prefs_body(m_config, m_exeDir);
+    rc_log("prefs: %u bytes declared", (unsigned)m_prefs.size());
     rc_net_set_prefs(&m_net, m_prefs.c_str(), (unsigned)m_prefs.size());
 
     return initService(m_window, new MainWindow(instance(), m_show, this,

@@ -224,6 +224,13 @@ class ConnectionService:
             page_blocks,
         )
         log.info("client rules: %s", caps.summary())
+        if client_prefs.declared:
+            log.info("client settings: %d protected, %d dangerous, %d "
+                     "trusted, %d own modes, default mode %s",
+                     len(client_prefs.lists.protect),
+                     len(client_prefs.lists.danger),
+                     len(client_prefs.lists.trust), len(client_prefs.modes),
+                     client_prefs.general_mode or "(bridge's)")
         # WHICH machine, so "why is my chat list empty" and "why am I seeing
         # the other box's chats" are both one grep away. An absent id is a
         # client from before 2026-10-01, and the wide list that comes with

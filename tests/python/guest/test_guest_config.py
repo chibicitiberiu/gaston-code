@@ -75,3 +75,16 @@ def test_an_unusable_automation_value_refuses_startup(tmp_path):
     in silence, for the one setting whose entire purpose is to say no."""
     out = _run(str(tmp_path))
     assert "ok   automation-invalid" in out.stdout, out.stdout
+
+
+def test_the_options_settings_round_trip_and_refuse(tmp_path):
+    """The Options dialog's settings, the same mechanical way: lists as
+    numbered keys (the profile API cannot hold two of one name), a mode as
+    its own section, a shortened list leaving no tail and a deleted mode no
+    orphan section, and the bad values refused by name."""
+    out = _run(str(tmp_path))
+    for line in ("ok   ignore2", "ok   protect+", "ok   danger+",
+                 "ok   trust-", "ok   mode.values", "ok   shrunk",
+                 "ok   mode-gone", "ok   no-orphan", "ok   unnumbered",
+                 "ok   bad-mode-value"):
+        assert line in out.stdout, (line, out.stdout)

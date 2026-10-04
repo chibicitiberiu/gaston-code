@@ -261,3 +261,55 @@ bool IniFile::checkKeys(const char *section, const char *const *known,
     }
     return good;
 }
+
+bool IniFile::deleteKey(const char *section, const char *key)
+{
+    if (!m_ok)
+        return fail(section, key, "no usable ini path");
+    /* FALSE when the key was not there is still not an error worth
+     * reporting -- absent is what the caller asked for. */
+    WritePrivateProfileStringA(section, key, NULL, m_path.str());
+    return true;
+}
+
+bool IniFile::dropSection(const char *section)
+{
+    if (!m_ok)
+        return fail(section, "*", "no usable ini path");
+    WritePrivateProfileStringA(section, NULL, NULL, m_path.str());
+    return true;
+}
+
+bool IniFile::checkNumbered(const char *section, const char *const *prefixes,
+                            unsigned count, unsigned max)
+{
+    if (!m_ok)
+        return fail(section, "*", "no usable ini path");
+
+    UniqueArr<char> list(new char[KEY_LIST]);
+    if (!list.valid())
+        return fail(section, "*", "out of memory");
+    DWORD n = GetPrivateProfileStringA(section, 0, "", list.get(), KEY_LIST,
+                                       m_path.str());
+    if (n >= KEY_LIST - 2)
+        return fail(section, "*", "too many keys to check");
+
+    for (const char *k = list.get(); *k; k += strlen(k) + 1)
+    {
+        bool found = false;
+        for (unsigned i = 0; i < count && !found; i++)
+        {
+            size_t plen = strlen(prefixes[i]);
+            const char *d = k + plen;
+            if (strnicmp(k, prefixes[i], plen) != 0)
+                continue;
+            if (d[0] < '0' || d[0] > '9' || d[1] < '0' || d[1] > '9' || d[2])
+                continue;
+            unsigned v = (unsigned)((d[0] - '0') * 10 + (d[1] - '0'));
+            found = v >= 1 && v <= max;
+        }
+        if (!found)
+            return fail(section, k, "unknown key");
+    }
+    return true;
+}

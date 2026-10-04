@@ -125,7 +125,17 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # control's items -- what `input`'s `item` targets. About 1.5KB of code and no
 # new static data (the bss symbol lists are identical), but it pushed both AUTO
 # and DGROUP over a page boundary, and the gate charges whole pages.
-COMMITTED_CAP ?= 515056
+# 515,056 -> 536,576 (five pages), 2026-10-04, PROVISIONAL: the Options
+# dialog's feature set -- per-client settings, execution modes, the client's
+# protected/dangerous/trusted lists and the PREFS body (docs/OPTIONS-PLAN.md).
+# Its first commit measured 531,881: about 11KB of code and 4KB of data, all
+# of it the feature's own. Already trimmed once: a std::vector<std::string>
+# in config.h (included by half the program) cost 25KB more and is a
+# TextList now (core/textlist.h). As in 2026-10-02 the runtime number gets
+# measured for the whole set when its last client commit lands, against the
+# deployed build of 91b6b76 kept as ~/backups/gaston-baseline-91b6b76.exe,
+# and this line is then set once to what that justifies.
+COMMITTED_CAP ?= 536576
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -154,7 +164,7 @@ MINIZ = third_party/miniz/miniz.c
 # the full source path the compiler recorded (`/.../win/core/str.c`), not the
 # object's basename, so a/x.o and b/x.o coexist (verified 2026-09-25).
 LIBDIR = $(BUILD)/lib
-CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp \
+CORE_SRCS = core/log.cpp core/str.c core/path.c core/inifile.cpp core/textlist.cpp \
             core/app.cpp core/window.cpp core/heap.cpp core/thread.cpp
 LIBCORE = $(LIBDIR)/libcore.lib
 # libwire (docs/REMOTE.md, step 2): the frame codec and Connection, the
@@ -202,6 +212,7 @@ CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/x
        app/pagebar.cpp app/optmenu.cpp app/input.cpp app/hostdlg.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
+       app/modes.cpp app/protect.cpp \
        app/screenshot.cpp app/statusbar.cpp app/reconnect.cpp app/turn.cpp \
        app/config.cpp app/machineid.cpp app/oleservice.cpp app/connservice.cpp \
        net/net.cpp net/frameproto.cpp app/htmlview.cpp $(MINIZ) \
@@ -245,7 +256,7 @@ $(BUILD)/synccheck.exe: $(SYNCCHECK_OBJS)
 # Asserts save() and load() agree on the field list. Two bugs of that exact
 # shape have shipped (font_size, then the sync root), and neither was visible
 # from reading the code.
-INICHECK_OBJS = $(call objs,checks/inicheck.cpp app/config.cpp) $(LIBCORE)
+INICHECK_OBJS = $(call objs,checks/inicheck.cpp app/config.cpp app/modes.cpp) $(LIBCORE)
 inicheck: $(BUILD)/inicheck.exe
 $(BUILD)/inicheck.exe: $(INICHECK_OBJS)
 	@$(WLINK) system nt option quiet, osversion=4.0 $(LIBS) name $@ \
