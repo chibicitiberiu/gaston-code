@@ -186,6 +186,170 @@ bool ConnectionPage::onCommand(WORD id, WORD code, HWND ctl)
     return false;
 }
 
+/* --- General ----------------------------------------------------------- */
+
+#define ID_GMODE   600
+#define ID_GMODEL  601
+#define ID_GEFFORT 602
+#define ID_GFOLLOW 603
+#define ID_GPAGE   604
+
+const char *const EFFORTS[] = { "", "low", "medium", "high", "xhigh", "max" };
+const char *const EFFORT_LABELS[] = {
+    "(the bridge's)", "Low", "Medium", "High", "Extra high", "Maximum",
+};
+const char *const PAGE_LABELS[] = { "Small", "Normal", "Large" };
+
+class GeneralPage : public Page
+{
+public:
+    explicit GeneralPage(Sheet *s) : Page(s) {}
+    void build(DlgTemplate &t);
+
+protected:
+    void load();
+    void store();
+    bool onCommand(WORD id, WORD code, HWND ctl);
+
+private:
+    TextList m_modelIds;
+    TextList m_modeIds;
+};
+
+void GeneralPage::build(DlgTemplate &t)
+{
+    t.begin(RC_DLGT_PAGE, PAGE_W, PAGE_H, "General");
+    t.item(BS_GROUPBOX, 4, 4, 222, 74, (WORD)-1, RC_DLGT_BUTTON,
+           "New chats start with");
+    t.item(SS_RIGHT, 10, 19, 44, 8, (WORD)-1, RC_DLGT_STATIC, "M&ode:");
+    t.item(CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 58, 17, 160, 100,
+           ID_GMODE, RC_DLGT_COMBOBOX, "");
+    t.item(SS_RIGHT, 10, 35, 44, 8, (WORD)-1, RC_DLGT_STATIC, "&Model:");
+    t.item(CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 58, 33, 160, 100,
+           ID_GMODEL, RC_DLGT_COMBOBOX, "");
+    t.item(SS_RIGHT, 10, 51, 44, 8, (WORD)-1, RC_DLGT_STATIC, "&Effort:");
+    t.item(CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 58, 49, 160, 100,
+           ID_GEFFORT, RC_DLGT_COMBOBOX, "");
+    t.item(0, 10, 65, 212, 10, (WORD)-1, RC_DLGT_STATIC,
+           "The Mode, Model and Effort menus change the open chat only.");
+    t.item(BS_GROUPBOX, 4, 84, 222, 66, (WORD)-1, RC_DLGT_BUTTON,
+           "The conversation");
+    t.item(BS_AUTOCHECKBOX | WS_TABSTOP, 10, 97, 210, 10, ID_GFOLLOW,
+           RC_DLGT_BUTTON, "&Follow new text as it arrives");
+    t.item(SS_RIGHT, 10, 115, 44, 8, (WORD)-1, RC_DLGT_STATIC, "&Page size:");
+    t.item(CBS_DROPDOWNLIST | WS_TABSTOP, 58, 113, 70, 60, ID_GPAGE,
+           RC_DLGT_COMBOBOX, "");
+    t.item(0, 10, 129, 212, 18, (WORD)-1, RC_DLGT_STATIC,
+           "How much of a conversation one page holds. Large needs more "
+           "memory; it applies from the next page.");
+}
+
+void GeneralPage::load()
+{
+    const ClientConfig &c = m_sheet->work();
+    TextList labels;
+    char id[96], label[96];
+    unsigned ip = 0, lp = 0;
+    int i, at;
+
+    /* Modes: the presets and the person's own, by their labels. */
+    m_modeIds.clear();
+    at = 0;
+    for (i = 0; i < RC_PRESETS_N; i++) {
+        m_modeIds.push(RC_PRESETS[i].id);
+        SendDlgItemMessageA(hwnd(), ID_GMODE, CB_ADDSTRING, 0,
+                            (LPARAM)RC_PRESETS[i].label);
+        if (strcmp(c.defaultMode, RC_PRESETS[i].id) == 0) at = i;
+    }
+    for (i = 0; i < c.modeCount; i++) {
+        m_modeIds.push(c.modes[i].id);
+        SendDlgItemMessageA(hwnd(), ID_GMODE, CB_ADDSTRING, 0,
+                            (LPARAM)c.modes[i].label);
+        if (strcmp(c.defaultMode, c.modes[i].id) == 0) at = RC_PRESETS_N + i;
+    }
+    SendDlgItemMessageA(hwnd(), ID_GMODE, CB_SETCURSEL, at, 0);
+
+    /* Models: what the bridge last offered, plus "the bridge's own". */
+    m_modelIds.clear();
+    m_modelIds.push("-");
+    SendDlgItemMessageA(hwnd(), ID_GMODEL, CB_ADDSTRING, 0,
+                        (LPARAM)"(the bridge's)");
+    TextList ids;
+    if (m_sheet->sink()) m_sheet->sink()->optionsChoices(0, ids, labels);
+    at = 0;
+    for (i = 1; ids.next(&ip, id, sizeof id) &&
+                labels.next(&lp, label, sizeof label); i++) {
+        m_modelIds.push(id);
+        SendDlgItemMessageA(hwnd(), ID_GMODEL, CB_ADDSTRING, 0,
+                            (LPARAM)label);
+        if (strcmp(c.defaultModel, id) == 0) at = i;
+    }
+    if (c.defaultModel[0] && !at) {
+        /* Set before, not offered now (no connection yet): keep it. */
+        m_modelIds.push(c.defaultModel);
+        SendDlgItemMessageA(hwnd(), ID_GMODEL, CB_ADDSTRING, 0,
+                            (LPARAM)c.defaultModel);
+        at = i;
+    }
+    SendDlgItemMessageA(hwnd(), ID_GMODEL, CB_SETCURSEL, at, 0);
+
+    at = 0;
+    for (i = 0; i < 6; i++) {
+        SendDlgItemMessageA(hwnd(), ID_GEFFORT, CB_ADDSTRING, 0,
+                            (LPARAM)EFFORT_LABELS[i]);
+        if (strcmp(c.defaultEffort, EFFORTS[i]) == 0) at = i;
+    }
+    SendDlgItemMessageA(hwnd(), ID_GEFFORT, CB_SETCURSEL, at, 0);
+
+    CheckDlgButton(hwnd(), ID_GFOLLOW, c.autoscroll ? BST_CHECKED
+                                                    : BST_UNCHECKED);
+    for (i = 0; i < 3; i++)
+        SendDlgItemMessageA(hwnd(), ID_GPAGE, CB_ADDSTRING, 0,
+                            (LPARAM)PAGE_LABELS[i]);
+    SendDlgItemMessageA(hwnd(), ID_GPAGE, CB_SETCURSEL,
+                        c.pageSize >= 0 && c.pageSize < 3 ? c.pageSize : 1, 0);
+}
+
+/* The n'th entry of a TextList, into `out`. */
+bool nth(const TextList &l, int n, char *out, unsigned cap)
+{
+    unsigned pos = 0;
+    for (int i = 0; l.next(&pos, out, cap); i++)
+        if (i == n) return true;
+    out[0] = 0;
+    return false;
+}
+
+void GeneralPage::store()
+{
+    ClientConfig &c = m_sheet->work();
+    char id[96];
+    int at = (int)SendDlgItemMessageA(hwnd(), ID_GMODE, CB_GETCURSEL, 0, 0);
+    nth(m_modeIds, at, id, sizeof id);
+    rc_strcpy(c.defaultMode, sizeof c.defaultMode, id);
+    at = (int)SendDlgItemMessageA(hwnd(), ID_GMODEL, CB_GETCURSEL, 0, 0);
+    nth(m_modelIds, at, id, sizeof id);
+    rc_strcpy(c.defaultModel, sizeof c.defaultModel,
+              strcmp(id, "-") == 0 ? "" : id);
+    at = (int)SendDlgItemMessageA(hwnd(), ID_GEFFORT, CB_GETCURSEL, 0, 0);
+    rc_strcpy(c.defaultEffort, sizeof c.defaultEffort,
+              at >= 0 && at < 6 ? EFFORTS[at] : "");
+    c.autoscroll = IsDlgButtonChecked(hwnd(), ID_GFOLLOW) == BST_CHECKED;
+    at = (int)SendDlgItemMessageA(hwnd(), ID_GPAGE, CB_GETCURSEL, 0, 0);
+    c.pageSize = at >= 0 && at < 3 ? at : RC_PAGE_NORMAL;
+}
+
+bool GeneralPage::onCommand(WORD id, WORD code, HWND ctl)
+{
+    (void)ctl;
+    if ((code == CBN_SELCHANGE && id >= ID_GMODE && id <= ID_GPAGE) ||
+        (code == BN_CLICKED && id == ID_GFOLLOW)) {
+        changed();
+        return true;
+    }
+    return false;
+}
+
 /* --- a one-line question ---------------------------------------------------- */
 
 struct AskState { char *buf; unsigned cap; };
@@ -618,6 +782,7 @@ bool rc_options_run(HWND parent, HINSTANCE inst, const ClientConfig &cur,
     int i;
 
     pages[RC_OPT_CONNECTION].reset(new ConnectionPage(sheet.get()));
+    pages[RC_OPT_GENERAL].reset(new GeneralPage(sheet.get()));
     pages[RC_OPT_PERMISSIONS].reset(new PermissionsPage(sheet.get()));
 
     memset(psp, 0, sizeof psp);

@@ -25,8 +25,9 @@
 
 /* The pages, in tab order. */
 #define RC_OPT_CONNECTION  0
-#define RC_OPT_PERMISSIONS 1
-#define RC_OPT_COUNT       2
+#define RC_OPT_GENERAL     1
+#define RC_OPT_PERMISSIONS 2
+#define RC_OPT_COUNT       3
 
 /* Where the bridge's answers to the Lists inspector go while it is open. */
 class ListsView
@@ -48,6 +49,10 @@ public:
                            int nkv, const char *body, unsigned len) = 0;
     /* Route LISTENT/LISTEND to `view` while it is open; NULL stops. */
     virtual void listsWatch(ListsView *view) = 0;
+    /* What the bridge last offered: kind 0 models, 1 modes, as ids and
+     * labels in step. Empty before the first connection. */
+    virtual void optionsChoices(int kind, TextList &ids,
+                                TextList &labels) = 0;
 };
 
 /* A one-line question, owned by `parent`'s top-level window. `buf` holds

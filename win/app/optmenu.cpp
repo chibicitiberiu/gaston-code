@@ -309,3 +309,27 @@ bool OptionMenus::command(int id)
     }
     return false;
 }
+
+int OptionMenus::choiceCount(int kind) const
+{
+    return (int)(kind == 0 ? m_models.size() : m_modes.size());
+}
+
+const char *OptionMenus::choiceId(int kind, int i) const
+{
+    const std::vector<std::string> &v = kind == 0 ? m_models : m_modes;
+    return i >= 0 && i < (int)v.size() ? v[i].c_str() : "";
+}
+
+void OptionMenus::choiceLabel(int kind, int i, char *buf, unsigned cap) const
+{
+    HMENU m = kind == 0 ? m_modelMenu : m_modeMenu;
+    UINT id = (kind == 0 ? IDM_MODEL0 : IDM_MODE0) + i;
+    buf[0] = 0;
+    if (!m || GetMenuStringA(m, id, buf, (int)cap, MF_BYCOMMAND) <= 0)
+        rc_strcpy(buf, cap, choiceId(kind, i));
+    /* The model menu's label carries the description after a tab or a
+     * dash; the dialog wants the name. */
+    for (char *p = buf; *p; p++)
+        if (*p == '\t') { *p = 0; break; }
+}

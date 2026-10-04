@@ -1941,7 +1941,14 @@ void MainWindow::optionsApply(const ClientConfig &next)
                      next.automation != m_cfg->automation ||
                      strcmp(next.syncRoot, m_cfg->syncRoot) != 0;
 
+    bool scrolled = next.autoscroll != m_cfg->autoscroll;
     *m_cfg = next;
+    if (scrolled) {
+        /* Both halves, as at start-up: the view's behaviour and the page
+         * bar's toggle, so the two never disagree about it. */
+        if (m_html) m_html->set_autoscroll(m_cfg->autoscroll);
+        if (m_pageBar) m_pageBar->set_follow(m_cfg->autoscroll);
+    }
     if (!m_store->save(*m_cfg) && m_html)
         m_html->error("Those settings could not be saved to gaston.ini and "
                       "will not survive a restart. The drive may be full or "
@@ -1994,4 +2001,17 @@ bool MainWindow::listsSend(const char *const *keys, const char *const *vals,
 void MainWindow::listsWatch(ListsView *view)
 {
     m_listsView = view;
+}
+
+void MainWindow::optionsChoices(int kind, TextList &ids, TextList &labels)
+{
+    char label[96];
+    ids.clear();
+    labels.clear();
+    if (!m_options) return;
+    for (int i = 0; i < m_options->choiceCount(kind); i++) {
+        m_options->choiceLabel(kind, i, label, sizeof label);
+        ids.push(m_options->choiceId(kind, i));
+        labels.push(label[0] ? label : m_options->choiceId(kind, i));
+    }
 }

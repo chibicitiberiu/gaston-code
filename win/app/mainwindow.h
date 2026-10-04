@@ -79,6 +79,7 @@ public:
     bool listsSend(const char *const *keys, const char *const *vals, int nkv,
                    const char *body, unsigned len);
     void listsWatch(ListsView *view);
+    void optionsChoices(int kind, TextList &ids, TextList &labels);
 
     /* TurnListener */
     void setBusy(bool busy);

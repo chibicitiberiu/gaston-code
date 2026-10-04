@@ -34,6 +34,9 @@ public:
     /* False when it was empty, already there, contained a newline, or
      * memory ran out -- the list is then unchanged. */
     bool add(const char *entry);
+    /* The same without the duplicate check, for two lists kept in step
+     * (ids and their labels) where a repeated label is still a row. */
+    bool push(const char *entry);
     void remove(const char *entry);
     void clear();
     bool empty() const { return m_len == 0; }

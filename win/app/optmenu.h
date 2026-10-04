@@ -187,6 +187,13 @@ public:
     const char *modeLabel() const   { return m_curMode.c_str(); }
     bool hasEffort() const { return m_effortOk != 0; }
 
+    /* What the bridge last offered, for the Options dialog's defaults:
+     * kind 0 the models, 1 the execution modes. The label is read back
+     * from the menu item, the one place it is kept. */
+    int choiceCount(int kind) const;
+    const char *choiceId(int kind, int i) const;
+    void choiceLabel(int kind, int i, char *buf, unsigned cap) const;
+
     /* Advance to the next permission mode and tell the bridge, for the
      * keyboard shortcut. Wraps. Does nothing when the list is empty, which
      * is the disconnected case. The menus and the toolbar update when the

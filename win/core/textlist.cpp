@@ -79,7 +79,13 @@ bool TextList::has(const char *entry) const
 
 bool TextList::add(const char *entry)
 {
-    if (!entry || !*entry || strchr(entry, '\n') || has(entry)) return false;
+    if (!entry || !*entry || has(entry)) return false;
+    return push(entry);
+}
+
+bool TextList::push(const char *entry)
+{
+    if (!entry || !*entry || strchr(entry, '\n')) return false;
     unsigned n = (unsigned)strlen(entry);
     if (!reserve(m_len + n + 2)) return false;
     if (m_len) m_buf[m_len++] = '\n';
