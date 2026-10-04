@@ -178,6 +178,18 @@ class Grammar:
     #: verb -> the form in which a `conditional_read` verb writes.
     write_if: dict = field(default_factory=dict)
 
+    # --- how a bare name finds its program --------------------------------
+    #: The shell looks in the current directory before PATH.
+    cwd_first: bool = False
+    #: Of `exts`, the ones that are lists of commands, read and judged line
+    #: by line rather than trusted or distrusted by name.
+    scripts: tuple = ()
+    #: Words that run the rest of the line as a command of its own.
+    prefixes: frozenset = frozenset()
+    #: Names of the shell itself, which runs what follows `run_switch`.
+    reentry: frozenset = frozenset()
+    run_switch: str = ""
+
     @property
     def usable(self) -> bool:
         """Can this grammar decide anything at all?
@@ -227,6 +239,10 @@ def _grammar(shell: str) -> Grammar:
         safe_if=_cpat(t, "safe_if"),
         ask_only_if=_cpat(t, "ask_only_if"),
         write_if=_cpat(t, "write_if"),
+        cwd_first=bool(t.get("cwd_first", False)),
+        scripts=tuple(str(e).lower() for e in t.get("scripts", ())),
+        prefixes=fs("prefixes"), reentry=fs("reentry"),
+        run_switch=str(t.get("run_switch", "")).lower(),
     )
 
 

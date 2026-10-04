@@ -499,3 +499,23 @@ def test_a_shell_with_no_rules_answers_nothing():
     """Same discipline as the rest of the module: an unusable grammar
     decides nothing, and None was never a grant."""
     assert drive_root_write(r"C:\OUTPUT.TXT", shell="no-such-shell") is None
+
+
+def test_the_grammar_knows_how_a_bare_name_finds_its_program():
+    """The classifier resolves a bare name the way the shell does: current
+    directory first, scripts read rather than trusted, and the words that
+    start a second command peeled off before judging the first word."""
+    g = G.grammar_for("command.com")
+    assert g.cwd_first
+    assert g.scripts == (".bat",)
+    assert {"call", "lh", "loadhigh", "start"} <= g.prefixes
+    assert "command" in g.reentry and g.run_switch == "/c"
+
+
+def test_date_and_time_with_an_argument_are_not_reads():
+    """They set the clock. Bare, they only print it."""
+    g = G.grammar_for("command.com")
+    assert "date" not in g.read and "time" not in g.read
+    assert g.write_if["date"].search("date 01-01-98")
+    assert not g.write_if["date"].search("date")
+    assert "print" not in g.read

@@ -116,11 +116,34 @@ oem_codepage = "cp437"
 # irrelevant here because none is a suffix of another.
 exts = [".exe", ".com", ".bat"]
 
+# WHERE A BARE NAME IS LOOKED FOR. This shell searches the CURRENT DIRECTORY
+# before PATH, and among the files there it takes the first of `exts` in that
+# order -- so a `WCL386.BAT` written into the work folder runs in place of the
+# compiler on PATH when the command says `wcl386`. The classifier resolves a
+# bare name the way the shell does, which is the only way "a trusted program"
+# can mean the program that will actually run.
+cwd_first = true
+# Of `exts`, the ones that are a list of commands rather than a program. The
+# classifier reads these and judges every line, because what a script does is
+# written down in it.
+scripts = [".bat"]
+# Words that run the REST of the line as a command of its own: `call x.bat`,
+# `lh mouse`, `start prog`. What a command starts with is judged after these
+# are taken off.
+prefixes = ["call", "lh", "loadhigh", "start"]
+# The shell itself, which runs whatever follows its `run_switch`. `command /c
+# format c:` is `format c:`.
+reentry = ["command", "command.com"]
+
 # Verbs that only read.
+#
+# `print` LEFT THIS LIST (2026-10-04): it sends files to a device, which is
+# not reading. `date` and `time` moved to `conditional_read`: with an argument
+# they SET the clock.
 read = [
-  "cd", "chdir", "cls", "comp", "date", "dir", "echo", "fc",
-  "find", "findstr", "help", "mem", "more", "path", "pause", "print",
-  "rem", "set", "time", "tree", "type", "ver", "vol",
+  "cd", "chdir", "cls", "comp", "dir", "echo", "fc",
+  "find", "findstr", "help", "mem", "more", "path", "pause",
+  "rem", "set", "tree", "type", "ver", "vol",
 ]
 
 # Verbs that write, and whose arguments say where.
@@ -142,7 +165,7 @@ move_like = [
 
 # Verbs that only read in SOME forms, so each needs its own test.
 conditional_read = [
-  "attrib",
+  "attrib", "date", "time",
 ]
 
 # Interpreters and shells. Not dangerous -- UNBOUNDED, the same class as an
@@ -279,6 +302,10 @@ start = "launches a program detached from the timeout"
 # attribute letters. Matched case-insensitively.
 [shell.write_if]
 attrib = "[-+][RSHA]"
+# Any argument at all sets the clock. Bare, they print it (and wait for a
+# line on stdin, which an exec never gets -- harmless, it times out).
+date = "^\\s*\\S+\\s+\\S"
+time = "^\\s*\\S+\\s+\\S"
 
 # The form in which an `always_ask` verb only READS, and so is not worth
 # nagging about. These were `if stem == "fdisk" and "/STATUS" in upper` in
