@@ -544,7 +544,9 @@ class Pass:
         """
         if ignore is None:
             ignore = I.load(self.root,
-                            extra=getattr(self, "extra_ignore", ()))
+                            extra=getattr(self, "extra_ignore", ()),
+                            fold_extra=bool(getattr(getattr(self, "caps", None),
+                                                    "case", 0)))
 
         # The trailing slash is load-bearing: `build/` matches a DIRECTORY,
         # not the string "build", and a row's type is what knows which to ask.
@@ -637,6 +639,16 @@ class Pass:
         """
         guest_rows = await self.scan_guest()
         ignore = await asyncio.to_thread(self._ignores, ignore)
+        extra = tuple(getattr(self, "extra_ignore", ()) or ())
+        if extra:
+            # The client's "Never copy" holds for what the MACHINE makes too.
+            # The same patterns already froze any baseline row they match
+            # (_ignores), so a row dropped here is not read as a deletion.
+            mine = I.client_patterns(extra, bool(getattr(self.caps, "case",
+                                                          0)))
+            guest_rows = {k: r for k, r in guest_rows.items()
+                          if not mine(r.display + ("/" if r.type is S.Type.DIR
+                                                   else ""))}
         self.attrs = await asyncio.to_thread(A.load, self.root)
         # ONE decision, for both sides -- overriding here and not there would
         # compare them as different classes, a permanent disagreement.

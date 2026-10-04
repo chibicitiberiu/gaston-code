@@ -1620,7 +1620,7 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             if (m_options)
                 runWorkDirDialog(hwnd, m_inst, rc_workdir_current(),
                                  RC_CAP_MAXPATH, this,
-                                 picked, sizeof(picked));
+                                 picked, sizeof(picked), m_cfg->existing);
             return 0;
         }
 

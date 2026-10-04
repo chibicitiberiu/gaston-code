@@ -26,8 +26,9 @@
 /* The pages, in tab order. */
 #define RC_OPT_CONNECTION  0
 #define RC_OPT_GENERAL     1
-#define RC_OPT_PERMISSIONS 2
-#define RC_OPT_COUNT       3
+#define RC_OPT_FILES       2
+#define RC_OPT_PERMISSIONS 3
+#define RC_OPT_COUNT       4
 
 /* Where the bridge's answers to the Lists inspector go while it is open. */
 class ListsView

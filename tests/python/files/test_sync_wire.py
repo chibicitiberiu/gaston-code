@@ -2439,3 +2439,39 @@ async def test_absent_root_in_syncend_is_refused(harness, tmp_path):
         await asyncio.wait_for(task, 5)
     await harness.close(writer)
 
+
+
+def test_a_never_copy_pattern_holds_for_what_the_machine_makes(tmp_path):
+    """Options > Files > Never copy is the person's word that these files
+    stay where they are -- BOTH ways. Measured on the VM before this: an
+    IGN_TEST.BAK made on the machine was pulled to the bridge although
+    `*.bak` was in the list, because ignores only ever filtered this side.
+    The machine folds case, so `*.bak` is IGN_TEST.BAK, and a file already
+    agreed is frozen at its last content -- never read as a deletion."""
+    from bridge.files import ignores as I
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    p = Pass.__new__(Pass)
+    p.root = str(root)
+    p.state = str(state / "base.json")
+    p.base = S.Baseline()
+    p.reports = []
+    p.caps = type("Caps", (), {"case": 1})()
+    p.extra_ignore = ("*.bak",)
+    p.base.rows["old.bak"] = Entry(type=Type.FILE, crc=7, display="OLD.BAK")
+
+    m = p._ignores(None)
+    assert m("IGN_TEST.BAK") and m("old.bak")
+    assert "old.bak" not in p.base.rows
+    assert p.base.ignored["old.bak"].crc == 7, "frozen, not deleted"
+
+    mine = I.client_patterns(("*.bak",), True)
+    assert mine("IGN_TEST.BAK") and not mine("IGN_TEST.TXT")
+    # On a machine whose names do NOT fold, the pattern means what it says.
+    assert not I.client_patterns(("*.bak",), False)("X.BAK")
+    # The bridge's own defaults keep their host-side meaning: an .obj made
+    # on the machine is not swept up by them.
+    assert not I.client_patterns((), True)("HELLO.OBJ")

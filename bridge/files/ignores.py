@@ -46,7 +46,7 @@ DEFAULTS = (
 ALWAYS = ("*.gaston-tmp", "*.gaston-old")
 
 
-def _translate(pat: str) -> re.Pattern:
+def _translate(pat: str, flags: int = 0) -> re.Pattern:
     """One gitignore pattern to a regex over a `/`-separated relative path.
 
     Written out rather than leaning on `fnmatch`, which gets the two cases that
@@ -89,13 +89,13 @@ def _translate(pat: str) -> re.Pattern:
         else:
             out.append(re.escape(c))
             i += 1
-    return re.compile("".join(out) + r"\Z")
+    return re.compile("".join(out) + r"\Z", flags)
 
 
 class _Rule:
     __slots__ = ("anchored", "base", "dir_only", "negate", "rx")
 
-    def __init__(self, pattern: str, base: str):
+    def __init__(self, pattern: str, base: str, fold: bool = False):
         self.base = base
         self.negate = pattern.startswith("!")
         if self.negate:
@@ -107,7 +107,10 @@ class _Rule:
         # against every basename below it. That distinction is the whole
         # difference between `build/` and `*/build/`.
         self.anchored = "/" in pattern
-        self.rx = _translate(pattern.lstrip("/"))
+        # FOLDED for the client's own patterns on a machine whose names
+        # fold: `*.bak` written in Options means IGN_TEST.BAK too, and it
+        # must mean it identically wherever it is applied (see syncrun).
+        self.rx = _translate(pattern.lstrip("/"), re.IGNORECASE if fold else 0)
 
     def matches(self, rel: str, is_dir: bool) -> bool:
         if self.base:
@@ -167,14 +170,16 @@ class Ignores:
         return len(self._rules)
 
 
-def load(root: str, *, extra: tuple[str, ...] = ()) -> Ignores:
+def load(root: str, *, extra: tuple[str, ...] = (),
+         fold_extra: bool = False) -> Ignores:
     """Collect the rules for a tree.
 
     Nested files are read too, because git applies them that way and a tree
     whose `src/.gitignore` is ignored would push build output from exactly the
     directory the user was most careful about.
     """
-    rules = [_Rule(p, "") for p in DEFAULTS + ALWAYS + tuple(extra)]
+    rules = [_Rule(p, "") for p in DEFAULTS + ALWAYS]
+    rules += [_Rule(p, "", fold_extra) for p in extra]
     sources: list[str] = []
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -199,3 +204,12 @@ def load(root: str, *, extra: tuple[str, ...] = ()) -> Ignores:
                     continue
                 rules.append(_Rule(line, base))
     return Ignores(rules, sources)
+
+
+def client_patterns(extra: tuple, fold: bool) -> Ignores:
+    """Only the client's own patterns (Options > Files, "Never copy"), as
+    a matcher. Applied to the MACHINE's rows as well as this side's: the
+    person asked for these never to be copied, in either direction. The
+    bridge's DEFAULTS above stay what they were -- host clutter kept off the
+    machine -- and are not applied to what the machine makes."""
+    return Ignores([_Rule(p, "", fold) for p in extra], [])

@@ -12,6 +12,7 @@
 #include "core/rc_cpp.h"
 #include "core/str.h"
 #include "app/modes.h"
+#include "app/workdir.h"
 
 /* Page geometry, in dialog units. 230x170 so the sheet still fits a
  * 640x480 screen at Large Fonts (the plan's platform review). */
@@ -405,6 +406,210 @@ bool askLine(HWND parent, const char *title, const char *prompt,
                                    (DLGPROC)askProc, (LPARAM)&st) == 1;
 }
 
+/* --- Files ------------------------------------------------------------ */
+
+#define ID_FROOT    700
+#define ID_FBROWSE  701
+#define ID_FSHARE   702
+#define ID_FSWEEP   703
+#define ID_FMAXKB   704
+#define ID_FIGNORE  705
+#define ID_FIGADD   706
+#define ID_FIGREM   707
+#define ID_FEXIST   708
+
+const long SWEEPS[] = { 0, -1, 1, 5, 15 };
+const char *const SWEEP_LABELS[] = {
+    "When files change (the bridge's pace)", "Only when files change",
+    "Every minute", "Every 5 minutes", "Every 15 minutes",
+};
+const long MAXKBS[] = { 0, 256, 4096, 16384 };
+const char *const MAXKB_LABELS[] = {
+    "The bridge's (1 MB)", "256 KB", "4 MB", "16 MB",
+};
+const char *const EXIST_LABELS[] = {
+    "Ask me each time", "Keep theirs", "Replace them", "Merge (assistant)",
+};
+
+class FilesPage : public Page
+{
+public:
+    explicit FilesPage(Sheet *s) : Page(s) { m_root[0] = 0; }
+    void build(DlgTemplate &t);
+
+protected:
+    void load();
+    void store();
+    bool onKillActive();
+    bool onCommand(WORD id, WORD code, HWND ctl);
+
+private:
+    void fillIgnore();
+    char m_root[128];           /* kept while sharing is off */
+};
+
+void FilesPage::build(DlgTemplate &t)
+{
+    t.begin(RC_DLGT_PAGE, PAGE_W, PAGE_H, "Files");
+    t.item(BS_AUTOCHECKBOX | WS_TABSTOP, 7, 6, 216, 10, ID_FSHARE,
+           RC_DLGT_BUTTON, "S&hare files with the assistant (reconnects)");
+    t.item(0, 7, 20, 120, 8, (WORD)-1, RC_DLGT_STATIC,
+           "Each chat gets a folder &under:");
+    t.item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 7, 30, 160, 12, ID_FROOT,
+           RC_DLGT_EDIT, "");
+    t.item(WS_TABSTOP, 171, 29, 52, 14, ID_FBROWSE, RC_DLGT_BUTTON,
+           "&Browse...");
+    t.item(SS_RIGHT, 7, 50, 44, 8, (WORD)-1, RC_DLGT_STATIC, "&Sync:");
+    t.item(CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 55, 48, 168, 80,
+           ID_FSWEEP, RC_DLGT_COMBOBOX, "");
+    t.item(SS_RIGHT, 7, 66, 44, 8, (WORD)-1, RC_DLGT_STATIC, "&Largest:");
+    t.item(CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 55, 64, 100, 70,
+           ID_FMAXKB, RC_DLGT_COMBOBOX, "");
+    t.item(0, 7, 82, 160, 8, (WORD)-1, RC_DLGT_STATIC,
+           "&Never copy (patterns, * and ?):");
+    t.item(LBS_NOTIFY | WS_VSCROLL | WS_BORDER | WS_TABSTOP |
+           LBS_NOINTEGRALHEIGHT, 7, 92, 160, 40, ID_FIGNORE, RC_DLGT_LISTBOX,
+           "");
+    t.item(WS_TABSTOP, 171, 92, 52, 14, ID_FIGADD, RC_DLGT_BUTTON, "&Add...");
+    t.item(WS_TABSTOP, 171, 108, 52, 14, ID_FIGREM, RC_DLGT_BUTTON,
+           "&Remove");
+    t.item(0, 7, 138, 216, 8, (WORD)-1, RC_DLGT_STATIC,
+           "When a new work folder already has files:");
+    t.item(CBS_DROPDOWNLIST | WS_TABSTOP, 7, 148, 120, 60, ID_FEXIST,
+           RC_DLGT_COMBOBOX, "");
+}
+
+void FilesPage::fillIgnore()
+{
+    char p[264];
+    unsigned pos = 0;
+    SendDlgItemMessageA(hwnd(), ID_FIGNORE, LB_RESETCONTENT, 0, 0);
+    while (m_sheet->work().ignore.next(&pos, p, sizeof p))
+        SendDlgItemMessageA(hwnd(), ID_FIGNORE, LB_ADDSTRING, 0, (LPARAM)p);
+}
+
+void FilesPage::load()
+{
+    const ClientConfig &c = m_sheet->work();
+    int i, at;
+    rc_strcpy(m_root, sizeof m_root, c.syncRoot[0] ? c.syncRoot
+                                                   : "C:\\Gaston");
+    text(ID_FROOT, m_root);
+    SendDlgItemMessageA(hwnd(), ID_FROOT, EM_LIMITTEXT, sizeof m_root - 1, 0);
+    CheckDlgButton(hwnd(), ID_FSHARE, c.syncRoot[0] ? BST_CHECKED
+                                                    : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(hwnd(), ID_FROOT), c.syncRoot[0] != 0);
+    EnableWindow(GetDlgItem(hwnd(), ID_FBROWSE), c.syncRoot[0] != 0);
+    at = 0;
+    for (i = 0; i < 5; i++) {
+        SendDlgItemMessageA(hwnd(), ID_FSWEEP, CB_ADDSTRING, 0,
+                            (LPARAM)SWEEP_LABELS[i]);
+        if (SWEEPS[i] == c.sweepMin) at = i;
+    }
+    SendDlgItemMessageA(hwnd(), ID_FSWEEP, CB_SETCURSEL, at, 0);
+    at = 0;
+    for (i = 0; i < 4; i++) {
+        SendDlgItemMessageA(hwnd(), ID_FMAXKB, CB_ADDSTRING, 0,
+                            (LPARAM)MAXKB_LABELS[i]);
+        if (MAXKBS[i] == c.maxFileKb) at = i;
+    }
+    SendDlgItemMessageA(hwnd(), ID_FMAXKB, CB_SETCURSEL, at, 0);
+    for (i = 0; i < 4; i++)
+        SendDlgItemMessageA(hwnd(), ID_FEXIST, CB_ADDSTRING, 0,
+                            (LPARAM)EXIST_LABELS[i]);
+    SendDlgItemMessageA(hwnd(), ID_FEXIST, CB_SETCURSEL,
+                        c.existing + 1 >= 0 && c.existing + 1 < 4
+                            ? c.existing + 1 : 0, 0);
+    fillIgnore();
+}
+
+bool FilesPage::onKillActive()
+{
+    char root[128];
+    if (IsDlgButtonChecked(hwnd(), ID_FSHARE) != BST_CHECKED) return true;
+    getText(ID_FROOT, root, sizeof root);
+    if (!(root[0] && root[1] == ':' && root[2] == '\\'))
+        return refuse(ID_FROOT, "The work folder root is a full path, such "
+                                "as C:\\Gaston.");
+    return true;
+}
+
+void FilesPage::store()
+{
+    ClientConfig &c = m_sheet->work();
+    int at;
+    if (IsDlgButtonChecked(hwnd(), ID_FSHARE) == BST_CHECKED)
+        getText(ID_FROOT, c.syncRoot, sizeof c.syncRoot);
+    else
+        c.syncRoot[0] = 0;
+    at = (int)SendDlgItemMessageA(hwnd(), ID_FSWEEP, CB_GETCURSEL, 0, 0);
+    c.sweepMin = at >= 0 && at < 5 ? SWEEPS[at] : 0;
+    at = (int)SendDlgItemMessageA(hwnd(), ID_FMAXKB, CB_GETCURSEL, 0, 0);
+    c.maxFileKb = at >= 0 && at < 4 ? MAXKBS[at] : 0;
+    at = (int)SendDlgItemMessageA(hwnd(), ID_FEXIST, CB_GETCURSEL, 0, 0);
+    c.existing = at >= 0 && at < 4 ? at - 1 : RC_EXISTING_ASK;
+}
+
+bool FilesPage::onCommand(WORD id, WORD code, HWND ctl)
+{
+    (void)ctl;
+    if (id == ID_FSHARE && code == BN_CLICKED) {
+        bool on = IsDlgButtonChecked(hwnd(), ID_FSHARE) == BST_CHECKED;
+        EnableWindow(GetDlgItem(hwnd(), ID_FROOT), on);
+        EnableWindow(GetDlgItem(hwnd(), ID_FBROWSE), on);
+        changed();
+        return true;
+    }
+    if (id == ID_FBROWSE && code == BN_CLICKED) {
+        char cur[128], picked[MAX_PATH];
+        getText(ID_FROOT, cur, sizeof cur);
+        if (rc_workdir_browse(GetParent(hwnd()), cur, picked, sizeof picked)) {
+            if (strlen(picked) >= sizeof m_root) {
+                MessageBoxA(hwnd(), "That path is too long for a work "
+                            "folder root.", "Options", MB_OK);
+                return true;
+            }
+            text(ID_FROOT, picked);
+            changed();
+        }
+        return true;
+    }
+    if (id == ID_FIGADD && code == BN_CLICKED) {
+        char p[200];
+        p[0] = 0;
+        if (m_sheet->work().ignore.count() >= RC_IGNORE_MAX) {
+            MessageBoxA(hwnd(), "That list is full.", "Options", MB_OK);
+            return true;
+        }
+        if (askLine(hwnd(), "Never copy", "A pattern, such as *.bak or "
+                    "build/:", p, sizeof p) && p[0]) {
+            m_sheet->work().ignore.add(p);
+            fillIgnore();
+            changed();
+        }
+        return true;
+    }
+    if (id == ID_FIGREM && code == BN_CLICKED) {
+        char p[264];
+        int at = (int)SendDlgItemMessageA(hwnd(), ID_FIGNORE, LB_GETCURSEL,
+                                          0, 0);
+        if (at >= 0 && SendDlgItemMessageA(hwnd(), ID_FIGNORE, LB_GETTEXT,
+                                           at, (LPARAM)p) > 0) {
+            m_sheet->work().ignore.remove(p);
+            fillIgnore();
+            changed();
+        }
+        return true;
+    }
+    if ((code == EN_CHANGE && id == ID_FROOT) ||
+        (code == CBN_SELCHANGE && (id == ID_FSWEEP || id == ID_FMAXKB ||
+                                   id == ID_FEXIST))) {
+        changed();
+        return true;
+    }
+    return false;
+}
+
 /* --- Permissions ---------------------------------------------------------- */
 
 #define ID_MODE      400
@@ -783,6 +988,7 @@ bool rc_options_run(HWND parent, HINSTANCE inst, const ClientConfig &cur,
 
     pages[RC_OPT_CONNECTION].reset(new ConnectionPage(sheet.get()));
     pages[RC_OPT_GENERAL].reset(new GeneralPage(sheet.get()));
+    pages[RC_OPT_FILES].reset(new FilesPage(sheet.get()));
     pages[RC_OPT_PERMISSIONS].reset(new PermissionsPage(sheet.get()));
 
     memset(psp, 0, sizeof psp);

@@ -47,8 +47,11 @@ public:
  *
  * `maxpath` is what the machine declared at handshake; it is what the
  * pre-flight measures destination paths against. */
+/* `answer` is the person's standing answer to "the new folder already has
+ * files" (Options > Files): an RC_WORK_* used without asking, or negative
+ * to ask every time. */
 bool runWorkDirDialog(HWND parent, HINSTANCE inst, const char *current,
                       unsigned maxpath, WorkDirProposer *proposer,
-                      char *out, unsigned cap);
+                      char *out, unsigned cap, int answer = -1);
 
 #endif

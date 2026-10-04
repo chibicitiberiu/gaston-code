@@ -635,7 +635,7 @@ INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 
 bool runWorkDirDialog(HWND parent, HINSTANCE inst, const char *current,
                       unsigned maxpath, WorkDirProposer *proposer,
-                   char *out, unsigned cap)
+                      char *out, unsigned cap, int answer)
 {
     State st;
     Tmpl t;
@@ -739,7 +739,9 @@ bool runWorkDirDialog(HWND parent, HINSTANCE inst, const char *current,
 
         mode = RC_WORK_KEEP;
         if (s.collisions) {
-            mode = ask_clash(parent, inst, &s, out);
+            /* Answered in advance when the person chose so in Options;
+             * the summary after the copy still says what happened. */
+            mode = answer >= 0 ? answer : ask_clash(parent, inst, &s, out);
             if (mode < 0) return false;
         }
 
