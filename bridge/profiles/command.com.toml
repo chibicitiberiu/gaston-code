@@ -207,8 +207,22 @@ lost = true
 # If FIND.EXE is missing, the line fails to run, errorlevel stays 0 and this
 # degrades to the behaviour it had before -- a missing program reads as success.
 # Worse than working, no worse than not having the wrapper.
+#
+# THE `if exist` LINES ARE A SECURITY FIX, NOT TIDINESS. This shell looks in
+# the CURRENT DIRECTORY before PATH, and the command runs with its cwd in the
+# work folder -- where the agent can write. A FIND.BAT put there would run in
+# place of FIND.EXE on every wrapped exec, under every permission mode, without
+# appearing in any command the user approved. So if the cwd holds anything
+# that would answer to `find`, the probe is skipped and the wrapper degrades to
+# the no-FIND behaviour above. The full path of FIND.EXE would be the cleaner
+# fix, but it is a fact about the OS install, and the bridge holds none
+# (CLAUDE.md); the shell's own search order is shell data, which this file is.
 wrapper = '''@echo off
+if exist find.com goto run
+if exist find.exe goto run
+if exist find.bat goto run
 echo x| find "y" > nul
+:run
 {call}{command}
 if errorlevel 1 echo {sentinel} fail
 if not errorlevel 1 echo {sentinel} ok

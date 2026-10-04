@@ -140,8 +140,9 @@ def test_errorlevel_is_forced_before_the_command_runs():
     lines = out.decode().split("\r\n")
     # Before the command, not after: after it would overwrite the answer.
     assert lines[0] == "@echo off"
-    assert "find" in lines[1]
-    assert lines[2] == "javac A.java"
+    probe = next(i for i, ln in enumerate(lines) if ln.startswith("echo x|"))
+    assert "find" in lines[probe]
+    assert lines.index("javac A.java") > probe
 
 
 def test_the_preset_prints_nothing_into_the_users_output():
@@ -149,3 +150,20 @@ def test_the_preset_prints_nothing_into_the_users_output():
     found - nosuchfile.xyz", which would land in the output as though the
     command had said it."""
     assert "> nul" in W.body(SHELL, "javac A.java").decode()
+
+
+def test_a_find_planted_in_the_cwd_is_never_run():
+    """The shell searches the current directory before PATH, and a wrapped
+    command runs with its cwd in the work folder, where the agent can write.
+    A FIND.BAT there would run on every wrapped exec, under every mode, inside
+    a command the user never saw. The probe is skipped instead, and every
+    spelling the shell would accept for `find` is checked before it."""
+    text = W.body(SHELL, "javac A.java").decode("ascii")
+    lines = [ln.strip().lower() for ln in text.splitlines()]
+    probe = next(i for i, ln in enumerate(lines) if ln.startswith("echo x|"))
+    for ext in ("com", "exe", "bat"):
+        guard = f"if exist find.{ext} goto run"
+        assert guard in lines and lines.index(guard) < probe
+    assert ":run" in lines and lines.index(":run") > probe
+    assert lines.index(":run") < next(i for i, ln in enumerate(lines)
+                                      if "javac" in ln)
