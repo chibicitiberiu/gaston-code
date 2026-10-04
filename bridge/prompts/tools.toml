@@ -622,7 +622,7 @@ cr = '''CR'''
 description = '''
 Write a file to anywhere on the connected machine, by its full path, including outside the folder your files are mirrored into. Nothing else can: the shell writes only plain short text, and the mirrored folder reaches one place.
 
-It overwrites whatever is there. The user approves every call and sees the destination, so say what you are replacing and why. Write into a folder, never the top level of a drive.'''
+It overwrites whatever is there, and makes any folders on the way that do not exist yet. The user approves every call and sees the destination, so say what you are replacing and why. Write into a folder, never the top level of a drive.'''
 
 [put_file.args]
 path = '''
@@ -656,6 +656,8 @@ Wrote {bytes} bytes to {path} on the machine.'''
 # byte-identical to the one here -- and so a later `get_file` showing CRLF is
 # not a mystery.
 converted = ''' Line endings converted, so it is not byte-identical to your copy.'''
+# Appended to `wrote` when the folder had to be made first.
+made_folder = ''' The folder {folder} did not exist, so it was made first.'''
 
 # WHY A TOOL AND NOT `dir`. The bar is CLAUDE.md's: a tool earns its place only
 # if `exec` does the job badly. Measured on real Windows 98, twelve files in one

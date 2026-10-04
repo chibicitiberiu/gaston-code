@@ -23,6 +23,7 @@ import base64
 import hashlib
 import logging
 import mimetypes
+import ntpath
 import os
 import pathlib
 import re
@@ -1110,7 +1111,25 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             try:
                 n = await fs.put(guest, path, data)
             except FsError as exc:
-                return _text(_fs_refused(exc.status, path), error=True)
+                # MISSING FOLDERS ARE MADE, like any editor's Save does. The
+                # agent wrote `proj\\src\\main.c` into a new folder, was
+                # told the folder did not exist, and spent a turn and a
+                # permission prompt per level on `mkdir` before writing the
+                # same file again (2026-10-03). FSMKDIR makes parents too.
+                # A client without it (ops < 1) gets the refusal as before.
+                parent = ntpath.dirname(path)
+                if (exc.status != "no_parent" or not parent
+                        or _ops_ready(1)
+                        or await _mirror_refusal(parent, creates=True,
+                                                 is_dir=True)):
+                    return _text(_fs_refused(exc.status, path), error=True)
+                try:
+                    await fs.op(guest, "FSMKDIR", parent)
+                    n = await fs.put(guest, path, data)
+                except FsError as exc2:
+                    return _text(_fs_refused(exc2.status, path), error=True)
+                converted += prompts.text("tools.put_file.view.made_folder",
+                                          folder=parent)
             return _text(prompts.text("tools.put_file.view.wrote",
                                       path=path, bytes=n) + converted)
         except Exception:

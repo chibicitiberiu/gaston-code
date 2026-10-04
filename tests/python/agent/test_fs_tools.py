@@ -614,3 +614,46 @@ def test_a_relative_path_with_no_folder_is_refused_not_guessed():
     res = _call(srv, "put_file", {"path": "proj\\a.txt", "content": "x"})
     assert not fs.put_calls
     assert "relative" in _body(res)
+
+
+class _NoParentOnce(FakeFs):
+    """The guest's answer to a put into a folder that is not there yet."""
+
+    def __init__(self):
+        super().__init__()
+        self.made = []
+
+    async def put(self, guest, path, data):
+        if not self.made:
+            raise FsError("no_parent")
+        return await super().put(guest, path, data)
+
+    async def op(self, guest, op, path, to="", **kw):
+        self.made.append((op, path))
+        return {"status": "ok"}
+
+
+def test_put_file_makes_a_missing_folder_and_writes():
+    """2026-10-03: a write into a new folder was refused, and the agent spent
+    a turn and a permission prompt per level on mkdir before writing the
+    same file again."""
+    fs = _NoParentOnce()
+    srv = machine_tools.build(None, None, None, _GuestWithAFolder(),
+                              fs=fs)["machine"]["instance"]
+    res = _call(srv, "put_file", {"path": "C:\\W\\proj\\src\\main.c",
+                                  "content": "x"})
+    assert fs.made == [("FSMKDIR", "C:\\W\\proj\\src")]
+    assert fs.put_calls and fs.put_calls[0][0] == "C:\\W\\proj\\src\\main.c"
+    assert "was made first" in _body(res)
+
+
+def test_put_file_on_an_old_client_still_says_the_folder_is_missing():
+    class Old(_GuestWithAFolder):
+        from bridge.files import caps as _C
+        caps = _C.Caps(ops=0)
+    fs = _NoParentOnce()
+    srv = machine_tools.build(None, None, None, Old(),
+                              fs=fs)["machine"]["instance"]
+    res = _call(srv, "put_file", {"path": "C:\\W\\new\\a.txt", "content": "x"})
+    assert not fs.made and not fs.put_calls
+    assert "does not exist" in _body(res)
