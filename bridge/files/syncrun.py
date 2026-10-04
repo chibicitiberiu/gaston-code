@@ -644,11 +644,11 @@ class Pass:
             # The client's "Never copy" holds for what the MACHINE makes too.
             # The same patterns already froze any baseline row they match
             # (_ignores), so a row dropped here is not read as a deletion.
-            mine = I.client_patterns(extra, bool(getattr(self.caps, "case",
-                                                          0)))
+            never = I.client_patterns(extra, bool(getattr(self.caps, "case",
+                                                           0)))
             guest_rows = {k: r for k, r in guest_rows.items()
-                          if not mine(r.display + ("/" if r.type is S.Type.DIR
-                                                   else ""))}
+                          if not never(r.display + ("/" if r.type is S.Type.DIR
+                                                    else ""))}
         self.attrs = await asyncio.to_thread(A.load, self.root)
         # ONE decision, for both sides -- overriding here and not there would
         # compare them as different classes, a permanent disagreement.
