@@ -1507,12 +1507,12 @@ LRESULT MainWindow::handle(UINT msg, WPARAM wp, LPARAM lp)
             return 0;
 
         case IDM_PERMS:
-            /* Answered by the BRIDGE, because the answer is about the
-             * session it is running -- which mode, which tools, which folder
-             * -- and half of it (what Claude Code resolves locally and never
-             * reports) is knowledge this side does not have and must not
-             * invent. */
-            sendFrame("The permissions view", "RULES", NULL, NULL, 0, NULL, 0);
+            /* The Permissions page: every mode's table, editable, with the
+             * lists behind it. (It used to ask the bridge for a read-only
+             * RULES view; the bridge still answers that for older clients,
+             * and this client's mode tables are its own now.) */
+            rc_options_run(hwnd, m_inst, *m_cfg, m_exeDir, this,
+                           RC_OPT_PERMISSIONS);
             return 0;
 
         case IDM_WORKOPEN: {

@@ -25,7 +25,8 @@
 
 /* The pages, in tab order. */
 #define RC_OPT_CONNECTION  0
-#define RC_OPT_COUNT       1
+#define RC_OPT_PERMISSIONS 1
+#define RC_OPT_COUNT       2
 
 class OptionsSink
 {

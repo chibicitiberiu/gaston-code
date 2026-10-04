@@ -59,6 +59,8 @@ public:
     /* NULL if anything did not fit or memory ran out; the dialog is then
      * not shown, and the caller logs why. */
     const DLGTEMPLATE *get() const;
+    unsigned size() const { return m_len; }
+    unsigned count() const { return m_count; }
 
 private:
     DlgTemplate(const DlgTemplate &);
