@@ -76,6 +76,9 @@ public:
 
     /* OptionsSink */
     void optionsApply(const ClientConfig &next);
+    bool listsSend(const char *const *keys, const char *const *vals, int nkv,
+                   const char *body, unsigned len);
+    void listsWatch(ListsView *view);
 
     /* TurnListener */
     void setBusy(bool busy);
@@ -131,6 +134,7 @@ private:
     void onExport(rc_frame *f);
     void onPong(rc_frame *f);
     void onPrefsAck(rc_frame *f);
+    void onLists(rc_frame *f);
     void renderFrame(rc_frame *f);
     void layout(HWND hwnd);
     void createChildren(HWND hwnd, HINSTANCE inst);
@@ -167,6 +171,8 @@ private:
     /* The PREFS body the link points at (net.h: not copied), owned by the
      * app; rebuilt here when Options applies. */
     PrefsBody *m_prefs;
+    /* The Lists inspector while it is open, for LISTENT/LISTEND. */
+    ListsView *m_listsView;
 };
 
 #endif

@@ -213,7 +213,7 @@ LIBAUTOMATION = $(LIBDIR)/libautomation.lib
 LINKIN = file {$(filter %.o,$^)} $(foreach l,$(filter %.lib,$^),library $(l))
 
 CLIENT_SRCS = app/main.cpp app/mainwindow.cpp app/bar.cpp app/chatlist.cpp app/xferstat.cpp \
-       app/pagebar.cpp app/optmenu.cpp app/input.cpp app/optsheet.cpp \
+       app/pagebar.cpp app/optmenu.cpp app/input.cpp app/optsheet.cpp app/listsdlg.cpp \
        app/toolbar.cpp app/export.cpp app/cache.cpp app/workdir.cpp \
        app/workcopy.cpp app/workdlg.cpp app/tooldet.cpp app/pillbar.cpp \
        app/modes.cpp app/protect.cpp \

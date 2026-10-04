@@ -65,7 +65,7 @@ static const rc_bar_desc g_desc[] = {
      * the button with SetWindowTextA -- so a table entry without one silently
      * removes the mnemonic the constructor set up. Continue takes N, which
      * Deny also uses: the two are never on screen together. */
-    { BAR_PERM, 0, "A&llow",    "Al&ways", "De&ny", 1 },
+    { BAR_PERM, 0, "A&llow",    "&This chat", "De&ny", 1 },
     { BAR_HALT, 1, "Co&ntinue", NULL,      NULL,    0 },
 };
 
@@ -149,7 +149,11 @@ PermissionBar::PermissionBar(HWND parent, HINSTANCE inst, HFONT font,
     m_allow = CreateWindowExA(0, "BUTTON", "A&llow",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALLOW, inst, NULL);
-    m_always = CreateWindowExA(0, "BUTTON", "Al&ways",
+    /* "THIS CHAT", not "Always": the bridge grants the call's category for
+     * this conversation, until its mode changes (bridge/agent/policy.py),
+     * and the request block above the bar says which category that is.
+     * "Always" read as forever and everywhere, which it never was. */
+    m_always = CreateWindowExA(0, "BUTTON", "&This chat",
         WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, parent, (HMENU)ID_PERM_ALWAYS, inst, NULL);
     m_deny = CreateWindowExA(0, "BUTTON", "De&ny",

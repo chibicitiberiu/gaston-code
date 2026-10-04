@@ -718,6 +718,23 @@ def pong() -> Frame:
     return Frame("PONG", {})
 
 
+def listent(list_id: str, rows: list, acp: str = "cp1252") -> Frame:
+    """Rows of one list for the Options inspector: `entry\treason\tsource`
+    lines in the client's codepage. Several frames per list, each well
+    under MAX_FRAME."""
+    return Frame("LISTENT", {"list": list_id},
+                 "".join(r + "\n" for r in rows).encode(acp, "replace"))
+
+
+def listend(list_id: str, hidden: int = 0, **extra) -> Frame:
+    """The end of a list (`hidden` rows past the cap were not sent), or the
+    answer to a test line: `value`, `mode`, and the findings in the body."""
+    h = {"list": list_id, "hidden": str(hidden)}
+    body = extra.pop("body", b"")
+    h.update({k: str(v)[:200] for k, v in extra.items()})
+    return Frame("LISTEND", h, body)
+
+
 def prefsack(ok: bool, key: str = "", why: str = "") -> Frame:
     """The answer to a PREFS re-sent from Options OK. Never an ERROR: an
     ERROR mid-turn aborts the client's turn UI (mainwindow.cpp onError), and

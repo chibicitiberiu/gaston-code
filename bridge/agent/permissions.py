@@ -121,7 +121,7 @@ def _rows(args: dict) -> list[tuple[str, str]]:
 
 
 def render_request(tool_name: str, args: dict, ctx,
-                   warning: str = "") -> str:
+                   warning: str = "", note: str = "") -> str:
     """The HTML block describing one request.
 
     The bar itself only shows a one-line summary, because the transcript is not
@@ -164,6 +164,8 @@ def render_request(tool_name: str, args: dict, ctx,
     if isinstance(args, dict) and args.get("_preview"):
         parts.append("<p><b>What it touches:</b> "
                      + H.esc(_clip(args["_preview"], 600)) + "</p>")
+    if note:
+        parts.append("<p>" + H.esc(_clip(note, 400)) + "</p>")
 
     # A step list, as the numbered steps it will take -- the bar has room
     # for the first few words of that and this block has room for all of

@@ -14,6 +14,8 @@ off = "This is turned off in the conversation's mode ({mode}): {why}. Do not ret
 # To the agent, when a bar timed out unanswered.
 timed_out = "Nobody answered the permission request on the user's machine within {wait}, so it was denied. Ask again if you still need it."
 # To the PERSON.
+grant_note = "This chat: lets {what} happen without asking again, until this chat's mode changes."
+grant_subject = "running {path}"
 legacy_auto = "This chat was in Auto before execution modes. Auto now lets the assistant change files and run programs in the work folder without asking or checking; everything else is still checked by a second model. Pick another mode from the Mode menu if that is more than you want."
 protect_held = "Protected places are only ever added to while a chat is open, so these stay protected until Gaston reconnects: {places}."
 mode_gone = "This chat's mode was deleted, so it now uses {now}. Pick another from the Mode menu if you like."

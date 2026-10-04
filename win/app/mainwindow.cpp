@@ -705,6 +705,13 @@ void MainWindow::onPrefsAck(rc_frame *f)
     if (m_html) m_html->notice(line);
 }
 
+void MainWindow::onLists(rc_frame *f)
+{
+    /* Only while the inspector is open; a late answer after it closed has
+     * nowhere to go and is dropped. */
+    if (m_listsView) m_listsView->listsFrame(f);
+}
+
 void MainWindow::onError(rc_frame *f)
 {
     char line[512];
@@ -801,6 +808,8 @@ void MainWindow::renderFrame(rc_frame *f)
         { "EXPORTEND",   &MainWindow::onExport },
         { "PONG",        &MainWindow::onPong },
         { "PREFSACK",    &MainWindow::onPrefsAck },
+        { "LISTENT",     &MainWindow::onLists },
+        { "LISTEND",     &MainWindow::onLists },
     };
 
     /* Progress accounting, before anything else looks at the frame -- see
@@ -1724,7 +1733,8 @@ MainWindow::MainWindow(HINSTANCE inst, int show, App *app, ClientConfig *cfg,
       m_attachments(0), m_toolbar(0), m_export(0), m_cache(0),
       m_cacheShown(0), m_accel(0), m_options(0), m_pageBar(0),
       m_announceConnected(0), m_status(0), m_reconnector(0), m_turn(0),
-      m_uiFont(0), m_uiFontBold(0), m_exeDir(exeDir), m_prefs(prefs)
+      m_uiFont(0), m_uiFontBold(0), m_exeDir(exeDir), m_prefs(prefs),
+      m_listsView(0)
 {
 }
 
@@ -1972,4 +1982,16 @@ void MainWindow::optionsApply(const ClientConfig &next)
                        (unsigned)m_prefs->text.size()) != 0 && m_html)
         m_html->notice("The settings are saved, but the link was busy; they "
                        "will reach the bridge at the next connection.");
+}
+
+bool MainWindow::listsSend(const char *const *keys, const char *const *vals,
+                           int nkv, const char *body, unsigned len)
+{
+    if (m_net->state != RC_CONNECTED) return false;
+    return rc_net_send_ui(m_net, "GETLISTS", keys, vals, nkv, body, len) == 0;
+}
+
+void MainWindow::listsWatch(ListsView *view)
+{
+    m_listsView = view;
 }

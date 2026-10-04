@@ -77,6 +77,7 @@ public:
 
     ClientConfig &work() { return m_work; }
     const char *exeDir() const { return m_exeDir; }
+    OptionsSink *sink() const { return m_sink; }
     void pageInited() { m_inited++; }
     /* Every opened page writes its fields, then the copy goes out once. */
     void pageApplied()
@@ -219,8 +220,8 @@ BOOL CALLBACK askProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 /* `buf` holds the suggestion going in and the answer coming out. False on
  * Cancel. Owned by `parent`, which for a page is the SHEET, so the sheet's
  * own buttons are disabled under it. */
-bool rc_ask_line(HWND parent, const char *title, const char *prompt,
-                 char *buf, unsigned cap)
+bool askLine(HWND parent, const char *title, const char *prompt,
+             char *buf, unsigned cap)
 {
     DlgTemplate t;
     AskState st;
@@ -316,6 +317,7 @@ void PermissionsPage::build(DlgTemplate &t)
     t.item(WS_TABSTOP, 113, 4, 40, 13, ID_SAVEAS, RC_DLGT_BUTTON,
            "Sa&ve As...");
     t.item(WS_TABSTOP, 155, 4, 32, 13, ID_DELMODE, RC_DLGT_BUTTON, "&Delete");
+    t.item(WS_TABSTOP, 189, 4, 36, 13, ID_LISTS, RC_DLGT_BUTTON, "&Lists...");
     t.item(0, 7, 20, 216, 18, ID_SUMMARY, RC_DLGT_STATIC, "");
     t.item(0, 95, 41, 60, 8, (WORD)-1, RC_DLGT_STATIC, "Change files");
     t.item(0, 160, 41, 60, 8, (WORD)-1, RC_DLGT_STATIC, "Run programs");
@@ -477,8 +479,8 @@ void PermissionsPage::saveAs()
         return;
     }
     rc_strf(name, sizeof name, "My %s", modeLabel(m_sel));
-    if (!rc_ask_line(hwnd(), "Save As", "Name for the new mode:", name,
-                     sizeof name) || !name[0])
+    if (!askLine(hwnd(), "Save As", "Name for the new mode:", name,
+                 sizeof name) || !name[0])
         return;
     ModeDef &m = c.modes[c.modeCount];
     m = ModeDef();
@@ -538,6 +540,16 @@ bool PermissionsPage::onCommand(WORD id, WORD code, HWND ctl)
         return true;
     }
     if (id == ID_SAVEAS && code == BN_CLICKED) { saveAs(); return true; }
+    if (id == ID_LISTS && code == BN_CLICKED) {
+        const char *mode = isPreset(m_sel) ? RC_PRESETS[m_sel].id
+            : m_sheet->work().modes[m_sel - RC_PRESETS_N].id;
+        rc_lists_run(hwnd(), m_sheet->work(), m_sheet->exeDir(),
+                     m_sheet->sink(), mode);
+        /* The lists are saved with the sheet, so the sheet has changed
+         * whether or not anything was edited -- Apply lights either way. */
+        changed();
+        return true;
+    }
     if (id == ID_DELMODE && code == BN_CLICKED) { deleteMode(); return true; }
     if (id == ID_AUTOMATE && code == BN_CLICKED) {
         updateEnabled();
@@ -647,4 +659,10 @@ bool rc_options_run(HWND parent, HINSTANCE inst, const ClientConfig &cur,
                (unsigned long)GetLastError());
     rc_log("options: closed, %s", sheet->applied() ? "applied" : "unchanged");
     return sheet->applied();
+}
+
+bool rc_ask_line(HWND parent, const char *title, const char *prompt,
+                 char *buf, unsigned cap)
+{
+    return askLine(parent, title, prompt, buf, cap);
 }

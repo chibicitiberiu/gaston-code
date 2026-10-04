@@ -80,6 +80,15 @@ def _bar_line(summary: str, warning: str) -> str:
     return "! " + head + "  -- " + tail
 
 
+def _grant_words(key: str) -> str:
+    """What one grant key lets happen, for the request block above the
+    bar -- "This chat" on the button is only as good as this sentence."""
+    cat, _, subject = key.partition(":")
+    if subject:
+        return prompts.text("policy.grant_subject", path=subject)
+    return prompts.text(f"policy.cat.{cat}")
+
+
 def _wait_words(seconds: float) -> str:
     """"10 minutes", "1 minute", "45 seconds" -- the deadline as the
     agent is told it, now that the client can choose it."""
@@ -214,7 +223,7 @@ class PermissionDesk:
 
     # --- classification ----------------------------------------------------
 
-    def _ctx(self) -> categories.Ctx:
+    def _ctx(self, lists=None) -> categories.Ctx:
         g = self._guest
         prefs = getattr(g, "prefs", None)
         return categories.Ctx(
@@ -223,10 +232,12 @@ class PermissionDesk:
                          toolrules.shells_of(getattr(g, "tools", None))),
             work_root=str(getattr(g, "work_guest", "") or ""),
             bridge_dir=str(getattr(g, "work_dir", "") or ""),
-            lists=getattr(prefs, "lists", None) or categories.Lists(),
+            lists=(lists if lists is not None
+                   else getattr(prefs, "lists", None) or categories.Lists()),
             resolve=getattr(g, "on_guest", None))
 
-    async def classify(self, tool_name: str, args: dict) -> categories.Verdict:
+    async def classify(self, tool_name: str, args: dict,
+                       lists=None) -> categories.Verdict:
         """`categories.classify`, answering what it asks for from the guest.
 
         FROM THE GUEST, not the mirror: a script an exec wrote a moment ago
@@ -234,7 +245,7 @@ class PermissionDesk:
         mirror's older copy would judge a file that is not the one about to
         run. Anything that cannot be fetched is doubt, never a pass.
         """
-        ctx = self._ctx()
+        ctx = self._ctx(lists)
         v = categories.classify(ctx, tool_name, args)
         for _ in range(categories.MAX_DEPTH + 2):
             if not v.wants:
@@ -399,17 +410,24 @@ class PermissionDesk:
                 warning = f"{note} ({warning})" if warning else note
 
             loop = asyncio.get_running_loop()
+            keys = policy.grant_keys(decision)
+            grant_note = ""
+            if keys:
+                grant_note = prompts.text(
+                    "policy.grant_note", what="; ".join(
+                        _grant_words(k) for k in keys))
             prompt = PendingPrompt(
                 tool_use_id=tool_use_id,
                 tool_name=tool_name,
                 future=loop.create_future(),
                 suggestions=list(getattr(ctx, "suggestions", None) or []),
                 body=render_request(tool_name, bar_args, ctx,
-                                    warning=warning or ""),
+                                    warning=warning or "",
+                                    note=grant_note),
                 # "Allow for this chat", not the CLI's Always: a grant of
                 # this call's CATEGORY, kept with the conversation, offered
                 # only where policy.GRANTABLE says one click may buy it.
-                grants=(keys := policy.grant_keys(decision)),
+                grants=keys,
                 allows=bool(keys),
                 summary=_bar_line(perms.summary(tool_name, ctx, bar_args),
                                   warning or ""),
