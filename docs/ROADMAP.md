@@ -126,6 +126,29 @@ between 3 and 4.
 
 ---
 
+**Answered 2026-10-10**, and `docs/stage1-plan.md` is the detailed plan:
+
+- **R7 is IN**, the larger reading: several guest machines against one bridge. It
+  becomes its own stage between 3 and 4, and `client_id` as an unauthenticated
+  assertion is accepted. Note while implementing: two guests already exist (the
+  VM and the Athlon, `machine=TIBI`), so `rebind` needs no new hardware.
+- **Export: the guest renders it.** One renderer, no drift, and
+  `win/app/cache.cpp` already holds rendered pages.
+- **The vocabulary capability** is one `HELLO` key, a small integer version, with
+  the bridge refusing an unknown value.
+- **The cache keeps rendered markup**, not blocks, with a format bump so pages
+  written by an older renderer are discarded.
+- **0.15d: the reboot run plus the harness.** Foreign-process GDI capture stays
+  deferred with its reason restated.
+- **The P200 bring-up is out of this stage** by decision; the floppy kit gains
+  `GREMOTE.EXE` anyway, since the kit has room and the box will want it.
+
+Three corrections the stage-1 sweeps found, which this file got wrong above:
+`ExecResult::viaShell` IS sent (on gremote's job lane) and the agent lane has an
+exit-code wrapper that supersedes it; gate 0.15d HAS been re-run with the
+generation word on the VM, though not from cold; and the autostart `.REG` exists,
+ships and is proven pre-logon. `docs/stage1-plan.md` carries the citations.
+
 ## Stage 2 — size, before the thing that spends it
 
 `gaston.exe` is at 580,649 of a 585,728 cap; `gremote.exe` at 363,449 of 372,000.
