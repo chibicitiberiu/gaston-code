@@ -38,6 +38,44 @@ enum InputResult
 
 enum MouseButton { BTN_LEFT = 0, BTN_RIGHT, BTN_MIDDLE };
 
+/* ---- the clipboard -------------------------------------------------------
+ *
+ * Not input, and here anyway. It is the escape hatch for text no message
+ * will surrender -- select all, copy, read it -- so it is reached for in the
+ * same breath as typing, and `PLAN.md` describes the pair that way. Keeping
+ * it in this translation unit rather than a new one is deliberate: `-xs`
+ * costs about 2,144 bytes of exception machinery per TU before any code in
+ * it, and this library links into both exes, so a file of its own would be
+ * charged twice for forty lines.
+ *
+ * CF_TEXT, never CF_UNICODETEXT: `tools/check/imports.py` fails the build on
+ * any W-suffix import outside two allowed names, and the bytes have to pass
+ * through `fold` on the bridge anyway, which is CP1252. The machine's own
+ * code page is what CF_TEXT means and what the bridge already assumes.
+ *
+ * BOUNDED BY THE CALLER. The clipboard is whatever somebody last copied --
+ * a whole document, a bitmap's text alternative -- and this runs on a 32MB
+ * machine, so the caller says how much it can take and gets told how much
+ * there was. */
+enum ClipResult
+{
+    CLIP_OK = 0,
+    CLIP_BUSY,       /* another process holds it; retried and gave up */
+    CLIP_NO_TEXT,    /* something is on it, but not in a text format */
+    CLIP_FAILED
+};
+
+/* Read CF_TEXT. `out` takes at most `cap` bytes and is always NUL-terminated
+ * when CLIP_OK; `len` is what was copied and `total` what was there, so the
+ * caller can say it truncated rather than pretending it did not. An empty
+ * clipboard is CLIP_OK with both zero -- nothing copied is not a failure. */
+ClipResult rc_clip_read(char *out, unsigned cap, unsigned &len,
+                        unsigned &total);
+
+/* Replace the clipboard with `len` bytes of text. The old contents are gone
+ * whatever happens next, which is what EmptyClipboard means. */
+ClipResult rc_clip_write(const char *text, unsigned len);
+
 /* One key by its OS-neutral NAME, resolved to this OS's codes.
  *
  * The names are a contract with the bridge (bridge/agent/keynames.py,

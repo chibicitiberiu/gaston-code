@@ -98,6 +98,22 @@ extern "C" {
  * nothing is overwritten unless `overwrite` (fs/tree.h). */
 #define RC_CAP_OPS 2
 
+/* Whether this client answers UICLIP: the clipboard, read and written as
+ * text (2026-10-10).
+ *
+ * A KEY OF ITS OWN, and that is the whole reason it exists. `automation`
+ * says what this machine ALLOWS, never what this build HAS -- so a client
+ * declaring STEPS that predates this op would be sent UICLIP, drop it as an
+ * unhandled desktop frame, and answer nothing at all, which costs the bridge
+ * its whole budget and tells it nothing. The same trap FSLS set for
+ * `list_dir` (RC_CAP_OPS above), which waited out four minutes.
+ *
+ * Not folded into RC_CAP_OPS either: `bridge/files/caps.py` RAISES on a value
+ * outside a key's declared range rather than clamping, so widening an
+ * existing key refuses every newer client at an older bridge, while an
+ * unknown key is simply ignored. */
+#define RC_CAP_CLIP 1
+
 /* The PREFS frame (bridge/prefs.py): this client sends its settings as one
  * frame straight after HELLO -- defaults for new chats, page size, sync
  * choices, its execution modes and the protected/trusted/dangerous lists --

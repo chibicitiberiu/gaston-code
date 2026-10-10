@@ -113,9 +113,9 @@ void Session::sendHello()
     SystemInfo si;
     char ver[12], memKb[16], memFree[16], acp[12], oemcp[12];
     char os[96], cpu[64], toolhelp[4];
-    const char *keys[13];
-    const char *vals[13];
-    char automation[8], keysVer[8], machine[32];
+    const char *keys[14];
+    const char *vals[14];
+    char automation[8], keysVer[8], machine[32], clipVer[8];
     DWORD machineLen = sizeof(machine);
 
     readSystemInfo(si);
@@ -167,7 +167,18 @@ void Session::sendHello()
     if (!GetComputerNameA(machine, &machineLen))
         rc_strcpy(machine, sizeof(machine), "unknown");
     keys[12] = "machine";     vals[12] = machine;
-    m_conn.send("HELLO", keys, vals, 13, NULL, 0, RC_SEND_WAIT_UI, false, 0);
+    /* The clipboard op, declared for the reason win/net/caps.h gives: the
+     * `automation` level above says what this box ALLOWS, never what this
+     * build HAS, and a caller sent a CLIP an older build does not know would
+     * get `unknown_op` rather than an answer. Said as a version so a later
+     * shape can be added without a flag day.
+     *
+     * The array size, the last index and this count move together -- they are
+     * three places saying one number, which tests/python/meta/test_gremote_hello.py
+     * asserts as one. */
+    rc_strf(clipVer, sizeof(clipVer), "%d", RC_CAP_CLIP);
+    keys[13] = "clip";        vals[13] = clipVer;
+    m_conn.send("HELLO", keys, vals, 14, NULL, 0, RC_SEND_WAIT_UI, false, 0);
 }
 
 /* Did the client say it can inflate? Anything but "0" counts, the same way

@@ -616,6 +616,8 @@ void rc_uirpc_handle(rc_net *net, UiContext *ctx, rc_frame *f)
             do_shot(link, ctx, f);
         else if (strcmp(f->type, "UIRUN") == 0)
             rc_ui_run(link, ctx, f);
+        else if (strcmp(f->type, "UICLIP") == 0)
+            rc_ui_clip(link, f);           /* no context: see uiengine.h */
         else
             rc_log("desktop: unhandled frame %s", f->type);
         g_run_id[0] = '\0';

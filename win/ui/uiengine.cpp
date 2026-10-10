@@ -35,6 +35,7 @@
 #include "ui/uiengine.h"
 #include "ui/uirec.h"
 #include "automation/resolve.h"
+#include "automation/input.h"
 #include "net/caps.h"
 #include "ui/uirec.h"
 #include "automation/steps.h"
@@ -892,4 +893,89 @@ void rc_ui_run(UiLink &link, UiContext *ctx, rc_frame *f)
     }
     link.report(sink.data(), sink.size());
     link.end(failed.status, k, v, n);
+}
+
+/* ---- the clipboard ------------------------------------------------------ */
+
+void rc_ui_clip(UiLink &link, rc_frame *f)
+{
+    const char *op = rc_frame_get(f, "op");
+    bool set = op && !strcmp(op, "set");
+    const char *k[2];
+    const char *v[2];
+    char nbuf[16];
+    int nkv = 0;
+
+    if (link.automationLevel() == RC_AUTOMATION_NONE
+        || (set && link.automationLevel() < RC_AUTOMATION_STEPS))
+    {
+        link.end("automation_off", NULL, NULL, 0);
+        return;
+    }
+    if (op && *op && strcmp(op, "get") && !set)
+    {
+        link.end("bad_request", NULL, NULL, 0);
+        return;
+    }
+
+    if (set)
+    {
+        /* REFUSED, not clipped. A caller that asked to put a document on the
+         * clipboard and got the first 63KB of it has a different document
+         * there and no way to know, and the frame it arrived in already
+         * bounds this -- so the only way to be over the cap is to have been
+         * refused by the wire first. Belt and braces, cheaply. */
+        if (f->body_len > link.bodyCap())
+        {
+            link.end("too_big", NULL, NULL, 0);
+            return;
+        }
+        ClipResult r = rc_clip_write((const char *)f->body, f->body_len);
+        if (r != CLIP_OK)
+        {
+            link.end(r == CLIP_BUSY ? "busy" : "failed", NULL, NULL, 0);
+            return;
+        }
+        rc_strf(nbuf, sizeof(nbuf), "%u", (unsigned)f->body_len);
+        k[nkv] = "bytes"; v[nkv] = nbuf; nkv++;
+        link.end("ok", k, v, nkv);
+        return;
+    }
+
+    unsigned cap = link.bodyCap();
+    HeapPtr<char> buf(new char[cap]);
+    unsigned len = 0, total = 0;
+    ClipResult r = rc_clip_read(buf.get(), cap, len, total);
+    if (r == CLIP_BUSY)
+    {
+        link.end("busy", NULL, NULL, 0);
+        return;
+    }
+    if (r == CLIP_NO_TEXT)
+    {
+        /* Something is on the clipboard and it is not text. Its own status,
+         * not `ok` with nothing: an agent told "ok, 0 bytes" would read an
+         * image on the clipboard as an empty one and copy again. */
+        link.end("no_text", NULL, NULL, 0);
+        return;
+    }
+    if (r != CLIP_OK)
+    {
+        link.end("failed", NULL, NULL, 0);
+        return;
+    }
+
+    /* An empty clipboard sends no body at all -- `report()` is at most once
+     * per request and a zero-length one would spend a frame saying nothing.
+     * `bytes=0` is the answer. */
+    if (len && !link.report(buf.get(), len))
+        return;                 /* the link said no; it has answered already */
+
+    rc_strf(nbuf, sizeof(nbuf), "%u", len);
+    k[nkv] = "bytes"; v[nkv] = nbuf; nkv++;
+    if (total > len)
+    {
+        k[nkv] = "truncated"; v[nkv] = "1"; nkv++;
+    }
+    link.end("ok", k, v, nkv);
 }

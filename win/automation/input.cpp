@@ -1105,3 +1105,109 @@ void Input::releaseAll()
         }
     }
 }
+
+/* ---- the clipboard ------------------------------------------------------ */
+
+/* How hard to try for a clipboard another process is holding. The owner is
+ * usually a program painting a menu or finishing a copy, which is over in
+ * milliseconds; a program that holds it for a second is broken and waiting
+ * longer does not fix it. Five tries over ~100ms, then the honest refusal. */
+enum { CLIP_TRIES = 5, CLIP_WAIT_MS = 20 };
+
+static bool clipOpen(void)
+{
+    for (int i = 0; i < CLIP_TRIES; i++)
+    {
+        if (OpenClipboard(NULL))
+            return true;
+        Sleep(CLIP_WAIT_MS);
+    }
+    return false;
+}
+
+ClipResult rc_clip_read(char *out, unsigned cap, unsigned &len,
+                        unsigned &total)
+{
+    len = 0;
+    total = 0;
+    if (!out || !cap)
+        return CLIP_FAILED;
+    out[0] = '\0';
+
+    /* Asked BEFORE opening, because IsClipboardFormatAvailable does not need
+     * the clipboard open and the answer is what decides whether opening it --
+     * which locks every other program out of it -- is worth doing at all. */
+    if (!IsClipboardFormatAvailable(CF_TEXT))
+        return CLIP_NO_TEXT;
+    if (!clipOpen())
+        return CLIP_BUSY;
+
+    ClipResult r = CLIP_FAILED;
+    HANDLE h = GetClipboardData(CF_TEXT);
+    if (h)
+    {
+        const char *p = (const char *)GlobalLock(h);
+        if (p)
+        {
+            /* GlobalSize rounds up to the allocation granularity, so the NUL
+             * is what says where the text ends -- not the handle's size. */
+            unsigned have = (unsigned)GlobalSize(h);
+            unsigned n = 0;
+            while (n < have && p[n] != '\0')
+                n++;
+            total = n;
+            len = n < cap - 1 ? n : cap - 1;
+            if (len)
+                memcpy(out, p, len);
+            out[len] = '\0';
+            GlobalUnlock(h);
+            r = CLIP_OK;
+        }
+    }
+    else
+    {
+        /* Available and then not readable: the owner is a delayed-render
+         * program that failed to produce it. Nothing to report but the fact. */
+        r = CLIP_NO_TEXT;
+    }
+    CloseClipboard();
+    return r;
+}
+
+ClipResult rc_clip_write(const char *text, unsigned len)
+{
+    if (!text)
+        return CLIP_FAILED;
+    if (!clipOpen())
+        return CLIP_BUSY;
+
+    ClipResult r = CLIP_FAILED;
+    /* EmptyClipboard first, and it is also what takes ownership: without it
+     * SetClipboardData belongs to whoever owned the clipboard before. */
+    if (EmptyClipboard())
+    {
+        HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+        if (h)
+        {
+            char *p = (char *)GlobalLock(h);
+            if (p)
+            {
+                if (len)
+                    memcpy(p, text, len);
+                p[len] = '\0';
+                GlobalUnlock(h);
+                /* ON SUCCESS THE SYSTEM OWNS THE HANDLE and freeing it here
+                 * would hand every later paste freed memory. Only the
+                 * failure path frees. */
+                if (SetClipboardData(CF_TEXT, h))
+                    r = CLIP_OK;
+                else
+                    GlobalFree(h);
+            }
+            else
+                GlobalFree(h);
+        }
+    }
+    CloseClipboard();
+    return r;
+}

@@ -24,6 +24,13 @@ const rc_lane_row RC_LANE_TABLE[] = {
      * stop -- queued behind it, it would arrive when the list had ended. */
     { "UIRUN",    RC_LANE_DESKTOP },
     { "UICANCEL", RC_LANE_IMMEDIATE },
+    /* The clipboard. DESKTOP and not IMMEDIATE even though it is three
+     * syscalls: OpenClipboard is USER, and the immediate lane runs on the
+     * reader thread, which on 9x a hung 16-bit app holding Win16Mutex can
+     * block out of every USER call -- and that thread carries the
+     * heartbeat. A program that holds the clipboard is exactly the kind of
+     * program that is hung. */
+    { "UICLIP",   RC_LANE_DESKTOP },
     /* The fs lane (step 5a). STREAM, alongside the sync frames, because that
      * is what they are: bounded file I/O on the worker that already blocks on
      * the disk. REMOTE.md gives gremote a thread of its own for these, and

@@ -109,6 +109,11 @@ FAKE_CAPS = {
     # The fs mutations, launch and live memory: declared for parity with the
     # real client's HELLO; FakeGui answers none of those frames.
     "ops": "2",
+    # The clipboard op (RC_CAP_CLIP). Same parity rule, and the conformance
+    # test above is what caught its absence the moment net.cpp grew the key --
+    # which is the whole reason that test parses the macro rather than keeping
+    # its own list.
+    "clip": "1",
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a

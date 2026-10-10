@@ -539,6 +539,7 @@ public:
     {
         m_status[0] = '\0';
         m_detail[0] = '\0';
+        m_body[0] = '\0';
     }
 
     virtual bool end(const char *status, const char *const *keys,
@@ -557,9 +558,15 @@ public:
     }
     virtual bool records(const void *, unsigned, int) { m_records++; return true; }
     virtual bool bytes(const void *, unsigned) { m_bytes++; return true; }
-    virtual bool report(const void *, unsigned len)
+    virtual bool report(const void *body, unsigned len)
     {
         m_reported = len;
+        /* The first of it, so a round trip can check the TEXT and not just
+         * that some arrived. Capped because this is a harness, not a sink. */
+        unsigned n = len < sizeof(m_body) - 1 ? len : sizeof(m_body) - 1;
+        if (n)
+            memcpy(m_body, body, n);
+        m_body[n] = '\0';
         return true;
     }
     virtual unsigned bodyCap() const { return RC_MAX_FRAME - 2048; }
@@ -573,6 +580,7 @@ public:
     bool ended() const { return m_ended; }
     int headers() const { return m_nkv; }
     unsigned reported() const { return m_reported; }
+    const char *body() const { return m_body; }
     int recordFrames() const { return m_records; }
     int byteFrames() const { return m_bytes; }
 
@@ -587,6 +595,7 @@ private:
     volatile LONG m_stop;
     char     m_status[32];
     char     m_detail[160];
+    char     m_body[256];
 };
 
 /* A request frame, built and parsed by the real codec so the headers arrive
@@ -602,6 +611,147 @@ static bool mkFrame(rc_frame &f, char *raw, unsigned rawCap, const char *type,
     /* rc_frame_build writes the length prefix too; the parser wants the
      * payload that follows it. */
     return rc_frame_parse(raw + 4, (unsigned)n - 4, &f) == 0;
+}
+
+/* ---- the clipboard ------------------------------------------------------
+ *
+ * `rc_ui_clip` is the one handler that takes no UiContext, so unlike TREE and
+ * RUN the whole of it is reachable here: no apartment, no desktop, no window
+ * to resolve. What cannot be asserted from here is whether the MACHINE has a
+ * working clipboard -- a headless Wine may not -- so the round trip asserts
+ * that the two halves AGREE about that rather than asserting the answer, and
+ * says in its detail which way it went. A real clipboard is the guest's case
+ * (docs/stage1-plan.md), not Wine's.
+ */
+static void clipboard(void)
+{
+    static char raw[2048];
+    static char detail[200];
+    rc_frame f;
+    const char *k[2];
+    const char *v[2];
+
+    /* OFF refuses both halves. The level is read live, as everywhere. */
+    {
+        k[0] = "id"; v[0] = "u1";
+        if (mkFrame(f, raw, sizeof(raw), "UICLIP", k, v, 1, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_NONE);
+            rc_ui_clip(link, &f);
+            say("clip-get-refused-when-automation-is-off",
+                link.ended() && !strcmp(link.status(), "automation_off")
+                && link.reported() == 0,
+                link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("clip-get-refused-when-automation-is-off", false, "no frame");
+    }
+
+    /* THE LEVEL SPLIT, which is the reason this op is two ops. SCREEN means
+     * "read the screen, do not drive it", and replacing what somebody last
+     * copied is driving it. No client can declare this middle value; gremote's
+     * [ui] automation is an integer off a file and can. */
+    {
+        k[0] = "id"; v[0] = "u2";
+        k[1] = "op"; v[1] = "set";
+        if (mkFrame(f, raw, sizeof(raw), "UICLIP", k, v, 2, "nope"))
+        {
+            FakeUiLink link(RC_AUTOMATION_SCREEN);
+            rc_ui_clip(link, &f);
+            say("clip-set-refused-at-read-only-level",
+                link.ended() && !strcmp(link.status(), "automation_off"),
+                link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("clip-set-refused-at-read-only-level", false, "no frame");
+    }
+
+    /* And the other side of that split: the READ is allowed at SCREEN. What
+     * it answers depends on the machine, so the assertion is only that it was
+     * not refused for the capability. */
+    {
+        k[0] = "id"; v[0] = "u3";
+        if (mkFrame(f, raw, sizeof(raw), "UICLIP", k, v, 1, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_SCREEN);
+            rc_ui_clip(link, &f);
+            rc_strf(detail, sizeof(detail), "status=%s", link.status());
+            say("clip-get-allowed-at-read-only-level",
+                link.ended() && strcmp(link.status(), "automation_off") != 0,
+                detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("clip-get-allowed-at-read-only-level", false, "no frame");
+    }
+
+    /* An op this does not know is refused rather than read as `get`. A
+     * caller who meant to write and was quietly given a read would think it
+     * had replaced the clipboard. */
+    {
+        k[0] = "id"; v[0] = "u4";
+        k[1] = "op"; v[1] = "append";
+        if (mkFrame(f, raw, sizeof(raw), "UICLIP", k, v, 2, "x"))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            rc_ui_clip(link, &f);
+            say("clip-refuses-an-op-it-does-not-know",
+                link.ended() && !strcmp(link.status(), "bad_request"),
+                link.status());
+            rc_frame_free(&f);
+        }
+        else
+            say("clip-refuses-an-op-it-does-not-know", false, "no frame");
+    }
+
+    /* Round trip, and what it really asserts is self-consistency: either
+     * this machine has a clipboard and the text comes back, or it has none
+     * and both halves say so. A set that claims success followed by a get
+     * that returns something else is the failure worth catching. */
+    {
+        const char *text = "clip round trip";
+        char got[64];
+        const char *setStatus = "";
+        got[0] = '\0';
+
+        k[0] = "id"; v[0] = "u5";
+        k[1] = "op"; v[1] = "set";
+        if (mkFrame(f, raw, sizeof(raw), "UICLIP", k, v, 2, text))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            rc_ui_clip(link, &f);
+            rc_strncpy(got, sizeof(got), link.status(),
+                       (unsigned)strlen(link.status()));
+            setStatus = got;
+            rc_frame_free(&f);
+        }
+
+        bool wrote = !strcmp(setStatus, "ok");
+        bool agreed = false;
+        const char *readStatus = "no frame";
+        k[0] = "id"; v[0] = "u6";
+        if (mkFrame(f, raw, sizeof(raw), "UICLIP", k, v, 1, NULL))
+        {
+            FakeUiLink link(RC_AUTOMATION_STEPS);
+            rc_ui_clip(link, &f);
+            readStatus = link.status();
+            if (wrote)
+                agreed = !strcmp(readStatus, "ok")
+                         && link.reported() == (unsigned)strlen(text)
+                         && !strcmp(link.body(), text);
+            else
+                /* No clipboard here. The read must not claim text either. */
+                agreed = strcmp(readStatus, "ok") != 0;
+            rc_strf(detail, sizeof(detail), "set=%s get=%s%s", setStatus,
+                    readStatus, wrote ? "" : " (no clipboard on this host)");
+            say("clip-round-trip-agrees-with-itself", agreed, detail);
+            rc_frame_free(&f);
+        }
+        else
+            say("clip-round-trip-agrees-with-itself", false, "no frame");
+    }
 }
 
 static void refusals(void)
@@ -943,5 +1093,6 @@ int main(int argc, char **argv)
     paths();
     stepCodec();
     refusals();
+    clipboard();
     return 0;
 }

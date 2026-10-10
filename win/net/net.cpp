@@ -549,6 +549,7 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
                       : RC_STR(RC_AUTOMATION_NONE));
     HDR("keys",       RC_STR(RC_CAP_KEYS));
     HDR("ops",        RC_STR(RC_CAP_OPS));
+    HDR("clip",       RC_STR(RC_CAP_CLIP));
     /* Only with a body to follow: the bridge waits for PREFS when this
      * says one is coming, and for nothing when it is absent. */
     if (n->prefs) HDR("prefs", RC_STR(RC_CAP_PREFS));

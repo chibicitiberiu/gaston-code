@@ -58,7 +58,18 @@ pytestmark = conftest.needs_guest
 #: It came out 0, which the walker reads as "no filter" -- so `scope=pid`
 #: answered with the WHOLE DESKTOP, silently, on the shipping client as well
 #: as on gremote. Both spellings are pinned now, decimal and hex.
-CASE_COUNT = 52
+#:
+#: 52 -> 57 on 2026-10-10: the clipboard op (`get_clipboard`/`set_clipboard`,
+#: ROADMAP stage 1). `rc_ui_clip` is the one handler that takes no UiContext --
+#: no apartment, no desktop, no window to resolve -- so unlike TREE and RUN the
+#: whole of it is reachable here. Four refusals and a round trip: off refuses
+#: the read, the READ-ONLY level refuses the write while allowing the read
+#: (the level split is the reason this is two tools rather than one), an op it
+#: does not know is refused rather than read as `get`, and a set followed by a
+#: get agrees with itself. The round trip asserts self-consistency rather than
+#: the platform, because a headless host may have no clipboard at all -- this
+#: one does, and the detail says so.
+CASE_COUNT = 57
 
 
 @pytest.fixture(scope="module")

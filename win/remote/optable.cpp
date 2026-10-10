@@ -40,7 +40,12 @@ const GOpRow G_OP_TABLE[] = {
      * be a different selector, so the whole list rides the body. */
     { "TREE",    G_UI,      false },
     { "SHOT",    G_UI,      false },
-    { "RUN",     G_UI,      false }
+    { "RUN",     G_UI,      false },
+    /* The clipboard. G_UI and not G_CONTROL for the reason the lane comment
+     * above gives: OpenClipboard is USER, the control lane runs on the
+     * reader, and the program most likely to be holding the clipboard is a
+     * hung one. `false` like the rest -- it continues nothing. */
+    { "CLIP",    G_UI,      false }
 };
 
 const int G_OP_TABLE_N = sizeof(G_OP_TABLE) / sizeof(G_OP_TABLE[0]);

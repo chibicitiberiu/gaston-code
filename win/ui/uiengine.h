@@ -118,4 +118,22 @@ void rc_ui_tree(UiLink &link, UiContext *ctx, rc_frame *f);
  * types and the middle capability value says not to. */
 void rc_ui_run(UiLink &link, UiContext *ctx, rc_frame *f);
 
+/* ---- the clipboard ---------------------------------------------------- */
+
+/* UICLIP / CLIP: read or replace the machine's clipboard as text.
+ *
+ * `op=get` (the default) answers with the text through `report()` and then
+ * `ok` with `bytes=` and `truncated=`; `op=set` takes the frame's body.
+ *
+ * TAKES NO CONTEXT, unlike the two above: no apartment, no MSAA, no window
+ * resolution -- three USER32 calls on whatever thread the lane runs on. That
+ * also makes it the one handler `uicheck` can drive with nothing built but a
+ * FakeUiLink.
+ *
+ * The LEVEL split mirrors TREE and RUN: reading needs RC_AUTOMATION_SCREEN,
+ * because what somebody last copied is as much "the screen" as a window
+ * title is, and writing needs RC_AUTOMATION_STEPS, because replacing the
+ * clipboard changes the machine under the person at the keyboard. */
+void rc_ui_clip(UiLink &link, rc_frame *f);
+
 #endif

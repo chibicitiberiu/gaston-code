@@ -408,6 +408,8 @@ void UiOps::handle(rc_frame *f)
             rc_ui_run(link, m_ctx, f);
         else if (strcmp(f->type, "SHOT") == 0)
             shot(r, f);
+        else if (strcmp(f->type, "CLIP") == 0)
+            rc_ui_clip(link, f);           /* no context: see uiengine.h */
         else
             r.err("not_implemented");
     }
