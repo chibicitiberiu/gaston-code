@@ -6,7 +6,8 @@ to a Python bridge (`bridge/`) on Linux over one TCP socket.
 `docs/PLAN.md` is the design. `docs/PROGRESS.md` is what is built and why
 decisions were made. `docs/BACKLOG.md` is what was deliberately deferred and
 what it would take to close -- check it before assuming something was
-forgotten, and before starting late-phase work.
+forgotten, and before starting late-phase work. `docs/ROADMAP.md` is the order
+the rest of it gets done in, and which decisions gate which stage.
 
 ## Standing rules
 
