@@ -71,7 +71,9 @@ Exit status unknown for this one: check the output rather than assuming it worke
 description = '''
 Read the text on the connected machine's clipboard -- whatever was last copied there, by the person at the keyboard or by you.
 
-Use it for text nothing else will give you: the contents of a list, a control that reads back empty, a message box that paints its text. Drive a copy first with `input` ([Ctrl+A] then [Ctrl+C]), then read it here.'''
+Use it for text nothing else will give you: the contents of a list, a control that reads back empty, a message box that paints its text. Drive a copy first with `input`, then read it here.
+
+To copy everything in a text box: `[Ctrl+Home]`, `[Ctrl+Shift+End]`, `[Ctrl+C]`. Do not use `[Ctrl+A]` -- on this machine's own text editor it selects nothing at all, and copying an empty selection leaves the clipboard holding whatever was there before, which reads here exactly like a successful copy. If a program's keys differ, its Edit menu works: `[Alt+E]`, then the letter beside Select All.'''
 
 [get_clipboard.view]
 empty = '''

@@ -1,0 +1,89 @@
+The clipboard on a real Windows 98, both directions, 2026-10-10
+================================================================
+
+Machine : QEMU guest, HELLO machine=RETRO98, Windows 4.10 build 2222 A
+Driven  : gremote 7401 over the slirp hostfwd, no client and no bridge
+Build   : the clipboard commits (RC_CAP_CLIP, UICLIP/CLIP), HELLO clip=1
+
+Wine answered every case in uicheck and in tests/python/remote, including a
+set/get round trip. This is the half Wine cannot settle: whether CF_TEXT on
+98 means what the code assumes when the program on the other side of it is
+Notepad rather than ourselves.
+
+
+WHAT PASSED
+-----------
+
+1.  An empty clipboard answers `no_clip_text`, not "ok, 0 bytes". On a
+    freshly booted 98 with nothing ever copied, CF_TEXT is not available at
+    all -- so the distinct status earns its place on the first request of
+    the session rather than in theory.
+
+2.  A write from Linux lands in a foreign process. `r.clipboard("the bridge
+    put this here")`, then Notepad launched and `[Ctrl+V]`, and the Edit
+    control's own text read back through TREE is exactly that string. The
+    bytes crossed the wire, went through GlobalAlloc/SetClipboardData on the
+    guest, and were pasted by a program that knows nothing about us.
+
+3.  A read sees what a foreign process copied -- once something is selected.
+    `[Ctrl+Home] [Ctrl+Shift+End] [Ctrl+C]` in Notepad, then a read, gives
+    `'line one\r\nline two'`. The same via the Edit menu (`[Alt+E]`, `a`,
+    `[Ctrl+C]`) gives the same bytes.
+
+4.  A character CP1252 cannot carry is refused on this side, before the
+    wire: U+2500 raises `UnicodeEncodeError` out of `encode_exact`. A
+    clipboard whose box-drawing character arrived as `?` would be a
+    different clipboard with nothing saying so.
+
+5.  Too big is refused, not clipped. gremote's `bodyCap()` is
+    `RC_OUTQ_MAX_BYTES - RC_OUTQ_RESERVE - 2048` = **55,296 bytes**, so a
+    60,000-byte write comes back `too_big` and the clipboard is untouched.
+    (The client's cap is `RC_MAX_FRAME - 2048` = 63,488; the two links
+    differ because each bounds what its own wire can carry.)
+
+
+WHAT IT CORRECTED, AND THIS IS THE POINT OF THE RUN
+---------------------------------------------------
+
+**`[Ctrl+A]` does not select all in Windows 98's Notepad.** Measured
+directly: type `ORIGINAL TEXT`, press `[Ctrl+A]`, type `X`, and the control
+holds `ORIGINAL TEXTX` -- the X was appended, so nothing had been selected.
+Win98's Notepad lists Select All in its Edit menu with no accelerator wired
+to it.
+
+That cost an hour of looking in the wrong place, and the wrong place is
+instructive. Three copy routes in a row appeared to fail -- `[Ctrl+C]`,
+`[Ctrl+Insert]`, and Edit > Copy by mnemonic -- each reporting `ok` while
+the clipboard kept its previous contents. The obvious reading was that the
+read was stale or that synthesized Ctrl+C does not reach a 9x EDIT control.
+Both were wrong. What settled it was pasting INSIDE the guest: `[Ctrl+V]`
+produced the host's own marker text, which proves the clipboard really did
+still hold it, so the copies had not happened. Copying an empty selection
+leaves the clipboard alone and reports success, which is correct behaviour
+and reads exactly like a broken copy from outside.
+
+`get_clipboard`'s description told the agent to do precisely this -- "select
+all with [Ctrl+A], then [Ctrl+C]" -- which would have failed on the one
+machine it was written for, with the tool reporting the previous clipboard
+as though it were the answer. The description now says `[Ctrl+Home]` then
+`[Ctrl+Shift+End]`, which was measured working here, and names the Edit
+menu as the fallback for a program whose keys differ.
+
+
+METHOD
+------
+
+`tools/probe/clipprobe.py --remote <host>:<secret>` re-runs the list. It
+closes any Notepad already open before launching its own: `Notepad` as a
+selector matches every instance, and the first run of this probe left one
+behind and then reported `ambiguous` for every step afterwards -- which is
+the selector grammar working, and a fixture that does not tidy up being the
+thing at fault.
+
+One state note for whoever boots this image next: `C:\GASTON\GREMOTE.EXE`
+on the VM was NOT a valid Win32 image at the start of this session -- "is
+not a valid Win32 application" from the Run dialog -- and was replaced by
+re-running `D:\SETUP.BAT` off a freshly built tools.iso. Nothing in this
+session wrote it, so it has been carrying a truncated copy since some
+earlier interrupted ship. Worth knowing, because the failure mode of a
+half-written exe here is a box that simply never answers.
