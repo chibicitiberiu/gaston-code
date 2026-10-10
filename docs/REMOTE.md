@@ -863,9 +863,13 @@ directory it writes into -- which is a reason not to have them cohabit.
   would stop checking our own code the moment it moves. They learn that our
   `lib*.lib(...)` modules are owned, and a check fails if lib objects drop out
   of coverage.
-- **The client has 180 bytes of headroom**: 398,820 committed at load against a
-  399,000 budget (measured 2026-09-25). Linking from libs must not grow it;
-  step 1 compares the number before and after.
+- **The client's headroom is whatever the current cap leaves.** This read "180
+  bytes: 398,820 against a 399,000 budget (measured 2026-09-25)" and both
+  numbers are four raises out of date -- `COMMITTED_CAP` is 585,728 and
+  `gaston.exe` measures 580,649 (2026-10-04, the Options set). The rule it was
+  written for stands: linking from libs must not grow the figure, and each step
+  compares before and after. Read the live number out of `win/Makefile`, which
+  carries every raise and its reason, rather than from here.
 
 ## Memory budget
 
@@ -879,7 +883,9 @@ in every measurement taken while it is running.
   The output cap is a parameter (`ExecOptions::maxOutput`; the client passes
   32KB), since the remote shell streams rather than buffers.
 - `make check` gives `gremote.exe` its own committed-at-load cap: 242,761
-  before the tray icon and 250,441 after it, against 264,000 (2026-10-01).
+  before the tray icon and 250,441 after it, against what was then 264,000
+  (2026-10-01). **The cap is 372,000 now** and gremote measures 363,449, raised
+  once on 2026-10-03 for the ui lane with the trim deferred to `BACKLOG.md` 29.
   The icon's +7,680 is about 6KB of real image and the rest PE section
   rounding, and +2,144 of the 6KB is the `-xs` exception machinery a new
   translation unit brings before any of its own code. The `win/Makefile`
@@ -1114,7 +1120,18 @@ The Phase 6 agent tools then need only handlers and bridge work.
 
 ## P200 checklist
 
-Things only the real box can answer, collected so the first session covers them:
+Things only the real box can answer, collected so the first session covers them.
+
+**Which box, though.** Several files in `docs/measurements/` are named
+`*-p200-*.txt` and were taken on the **Athlon XP 2000+** at 10.0.0.125 --
+`keys-named-p200-*`, `exit-codes-via-batch-p200-*`, `sleep-mechanisms-p200-*`,
+`batch-eol-and-dir-b-p200-*`, `inifile-absent-key-p200-*`, the last of which
+calls the Athlon "the P200 checklist box" outright. The actual Pentium 200 MMX
+appears only in `p200-run1-20260926.txt` and `p200-run2-20260926.txt`. The
+filenames were not renamed because four documents cite them; read the machine
+off the file's own header, never off its name. An item below marked answered on
+the Athlon is answered on *real hardware* and not on the slow machine, which
+matters for anything with a clock in it.
 
 - `oleacc.dll` present, and its version. **ANSWERED 2026-10-04: present on
   the Athlon XP's retail 98**, and it answers properly rather than merely

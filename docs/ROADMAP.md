@@ -30,16 +30,17 @@ in stage 1 for that reason.
 
 | # | Stage | Exit condition |
 |---|---|---|
-| 1 | Fruit, bring-up and the decisions that gate stage 3 | the P200 answers on the LAN; nothing in stage 3 is waiting on an answer |
+| 1 | Fruit, the decisions that gate stage 3, and the injection harness | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
 | 2 | Size: the flag decision and the gremote trim | a measured before/after, and room in the caps for stage 3 |
 | 3 | The markup moves to the client | a second client could be written without touching the bridge |
+| 3b | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |
 | 5 | The P200: measurements, and the optimisation they justify | the hardware questions are answered from hardware |
 | 6 | A clean install, and publish | somebody who is not us installs it from the kit and it works |
 
 ---
 
-## Stage 1 — fruit, bring-up, and the decisions stage 3 needs
+## Stage 1 — fruit, the decisions stage 3 needs, and the harness
 
 Four unrelated kinds of thing, grouped because each is small and each unblocks
 something later.
@@ -48,13 +49,16 @@ something later.
 
 - `get_clipboard` / `set_clipboard` (`PLAN.md`, Phase 6 tool table). Two tools
   and about thirty lines of `OpenClipboard`/`CF_TEXT`.
-- Exit codes through `COMMAND.COM` (`BACKLOG.md` 17). `ExecResult::viaShell` is
-  computed and sent nowhere, so the agent is told a wrapped command succeeded.
-  The smallest real fix in the backlog.
-- The `STYLESHEET` comment strip (`BACKLOG.md` 13, "free and separable"). 4,919
-  of 8,445 bytes are CSS comments, `doc()` carries no `enc` header so they are
-  never compressed, and they go out once per connect and again on every
-  reconnect. Needs the DOC goldens regenerated and depends on nothing.
+- Exit codes through `COMMAND.COM` (`BACKLOG.md` 17). The exit-code wrapper
+  already closes this where it applies, and `ExecResult::viaShell` already
+  travels on gremote's job lane -- both of which this file got wrong in its first
+  draft. What is left is the two cases where the wrapper could not speak and the
+  agent is not told: it was skipped (no fs lane, no `temp` header, a failed
+  `put`), or no verdict came back.
+- The `STYLESHEET` comment strip (`BACKLOG.md` 13, "free and separable").
+  **5,574 of 9,375 bytes** are CSS comments -- 58% of the DOC frame -- and `doc()`
+  carries no `enc` header, so they go out verbatim once per connect and again on
+  every reconnect. Needs the five DOC goldens regenerated and depends on nothing.
 - The stale-doc sweep: `PROGRESS.md`'s "Current goal" still says Phase 5; R5 and
   R6 are labelled planned above text saying they shipped; `PLAN.md:1660` says the
   in-process collector has not landed and it has; `BACKLOG.md` 697 asserts Phase
@@ -62,27 +66,28 @@ something later.
   shipping as tools. Phase 6 was never written up as a phase, which is how most
   of these went stale at once.
 
-**The P200 bring-up.** Not the measurements -- stage 5 is those. Just: the box
-is on the LAN and `gremote` answers it. Two preconditions nobody has recorded
-(`BACKLOG.md` 1b): whether it has a NIC with a configured TCP/IP stack, and how
-`GREMOTE.EXE` reaches a cold machine the first time. The only proven channel is a
-1.44MB floppy via `tools/gen/mkw98kit.sh`, where gremote is not yet included.
-Autostart wants a shipped `.REG` for `RunServices` rather than registry calls in
-C, because ADVAPI32 is not on `tools/check/imports.py`'s allow-list.
+**The P200 bring-up is out of this stage**, by decision, and its measurements
+were always stage 5's. Two of the preconditions this file listed turned out to be
+closed already: the autostart `.REG` is generated (`tools/gen/mktools-iso.sh`),
+shipped, and proven answering before anyone logs on
+(`docs/measurements/gremote-vm-20260927.txt`), and first delivery was answered by
+use on the Athlon. What is genuinely open is the Pentium 200 itself -- a
+different machine from the Athlon, whatever the `*-p200-*.txt` filenames say.
 
-It is here, and not in stage 5, because four-plus phases of software have
-accumulated on an emulator and the Athlon has already reversed one prediction
-taken from the VM (`shouldCompress`, `PROGRESS.md`). Every assumption carried
-past this point is carried further.
+One piece of preparation stays here because it is cheap and the box will want it:
+`tools/gen/mkw98kit.sh` stages 356 KB onto a 1.44 MB floppy with no size check at
+all, so `GREMOTE.EXE`, `GREMOTE.INI` and `GREMOTE.REG` join it along with the
+budget the script lacks.
 
-**The injection-safety loose end.** Gate 0.15d was never re-run, and
-`UIAUTOMATION.md:645` says section D should not be scheduled before it. Section D
-shipped anyway. Neither half of the original evidence holds: the GDI patch was
-applied to the probe's own pid, so nothing has ever been captured from a foreign
-process, and the injection verdict read a cumulative counter nothing zeroed. The
-probe is fixed and has never been run. `BACKLOG.md` 15 is the other half -- an
-hour of the guest at 100% of a vCPU after those gates, causation unestablished,
-standing rule attended-only.
+**The injection-safety loose end.** `UIAUTOMATION.md:645` says section D should
+not be scheduled before gate 0.15d is re-run; section D shipped anyway. The probe
+was fixed and **has** been re-run -- `docs/measurements/vm-20260926.txt`, with the
+generation word, `distinct pids 2`, injection confirmed -- which three documents
+still deny. Two caveats survive that run: it was 9.4 hours into an uptime rather
+than from cold, and it was the session that ended with the 0.15h wedge. Foreign-
+process GDI capture remains untested by the probe's own design. `BACKLOG.md` 15 is
+the other half: an hour of the guest at 100% of a vCPU after those gates,
+causation unestablished, standing rule attended-only.
 
 This is shipped code that runs inside other processes' message dispatch, resting
 on a measurement that does not support it. It needs a reboot, a health check at

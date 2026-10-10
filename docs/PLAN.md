@@ -413,7 +413,15 @@ client wants lines, and neither can use a byte of the markup. The *parse* stays 
 "no markdown parser in C" holds -- but what reaches the wire should be blocks and inline
 runs, with each client rendering them: the pre-styled-runs design at the top of this
 section, returning with a vocabulary rich enough for what the parser now produces. Wanted
-by the user, not built: `BACKLOG.md` §31, which also inherits §13's export question.
+by the user, not built: `BACKLOG.md` §31.
+
+Two things §31 needed decided are decided (2026-10-10). **Export is rendered by
+the guest** -- once the markup is the client's, the bridge has nothing to write,
+so the choice was a renderer on the guest or a second one on the bridge, and one
+renderer is the point; `win/app/cache.cpp` already holds the rendered pages
+export would assemble. And **the vocabulary is declared at the handshake** as one
+key with a small integer version, the bridge refusing an unknown value, which is
+the same key §13 needs for the class names.
 
 Markdown needs lookahead, so the bridge buffers to a safe boundary (newline, or ~200 chars
 of unambiguous text). Streaming granularity becomes one line — which is also what a P2
@@ -1670,8 +1678,17 @@ no buffer to place: the pointer already belongs to the process being asked,
 so `LB_GETTEXT`, `LVM_GETITEMTEXT` and `TVM_GETITEM` simply work. This is the
 one thing the in-process collector (`docs/UIAUTOMATION.md`, section D) can do
 that no other tier can, and unlike the speed argument it depends on no
-measurement at all. Until that collector lands the paragraph above is still
-the operative answer.
+measurement at all.
+
+**[R -- 2026-10-10: the collector landed, so the paragraph above is no longer
+the operative answer.]** `win/inproc/` is built -- `shm.h`, `collect.c`,
+`hookdll.c`, with `win/ui/inject.cpp` as the controller -- and it is reachable
+as `ui(inproc=true)`. It was run on the guest on 2026-09-26 and corrected its
+own design twice (`WH_CALLWNDPROC` never fires; `WH_GETMESSAGE` does; eight
+`DrawText*`/`TextOut*` entry points needed patching, not two). List *items* from
+outside the process are still an MSAA-or-OCR problem; from inside they are read
+directly. The safety question that outranks the capability is `BACKLOG.md` 15,
+and until it closes the tier is attended-only.
 
 **Identity.** HWNDs are stable within a session and meaningless across one.
 Every node returns its HWND, its child-index path (`0/3/1`), its control id and
@@ -1920,7 +1937,7 @@ Background sessions were considered and rejected for the same reason the plan
 rejected a warm client pool: one live `ClaudeSDKClient` is a third of the work,
 and a machine with ~10MB free should not be running several at once.
 
-### R5 — icons  *(the application icon is done; the toolbar is not)*
+### R5 — icons  *(done -- the application icon in 4.0, the toolbar in `win/app/toolbar.cpp`)*
 
 Windows 98 is a colourful system and this app is a grey rectangle. At minimum
 an application icon, so the title bar and taskbar are not generic; ideally a
@@ -1933,7 +1950,7 @@ mechanism. Cheap, visible, and currently the largest gap between "works" and
 `win/app/toolbar.cpp` (373 lines) with dropdown arrows and prompt controls,
 resolving R5 and unblocking Phase 5.1's attach UI (`BACKLOG.md` §11).
 
-### R6 — **the file layer is a sync layer, not Samba**  *(planned, replaces Phase 3's share)*
+### R6 — **the file layer is a sync layer, not Samba**  *(done -- Phase 3.3, verified on real Win98 SE)*
 
 This overturns the Samba decision, and the reasons are not only aesthetic:
 
@@ -1969,7 +1986,7 @@ is case-insensitive, has no symlinks, and 8.3 aliasing means a path can arrive
 spelled two ways. Line endings are already a decided policy: CRLF for files the
 guest consumes.
 
-### R7 — the bridge should take multiple clients  *(planned)*
+### R7 — the bridge should take multiple clients  *(IN, 2026-10-10: several guest machines, `ROADMAP.md` stage 3b)*
 
 Today `self._guest` is singular and a second client is rejected. That rejection
 was right for one guest and is wrong as a permanent design.
@@ -1997,7 +2014,7 @@ local CLI provides. `/context` is deliberately excluded because the status bar a
 displays the token gauge, and commands requiring unsupported UI affordances are omitted
 (`bridge/server.py:3868-3887`).
 
-### R9 — `gremote.exe` and the static libraries  *(planned 2026-09-25)*
+### R9 — `gremote.exe` and the static libraries  *(build steps 1-6 done; client step C5+ open, `REMOTE.md`)*
 
 A standalone Win98 server for driving the real P200 out of band from the agent
 client: ssh-like exec, files and processes, plus screenshot, window/control tree
@@ -2055,7 +2072,7 @@ attribution and upstream-diff tool in one.
 | `GetVersion` threaded/select divergence | MinGW artifact; OW has no emutls, so the concern evaporates |
 | Agent as listener | Dial out: ~60 lines written to delete ~700 |
 | UDP discovery, `wmake`, `registry.c` | Fleet feature / GNU make works / INI instead |
-| `UPLOAD`/`MKDIR`/`DELETE` (via Samba), `LAUNCH` | Samba superseded by sync layer (R6); `SYNCMKDIR`/`SYNCPUT` exist; `LAUNCH` drags in JSON builder |
+| `UPLOAD`/`MKDIR`/`DELETE` (via Samba), `LAUNCH` | **[R -- 2026-10-10: un-cut, and shipped.]** The cut was of retro-agent's *lift*, not of the capability: `LAUNCH` dragged in its JSON builder and Samba was superseded by the sync layer (R6). Written fresh they cost neither, and `machine_launch`, `machine_mkdir`, `machine_delete`, `machine_rmdir`, `machine_move` and `machine_copy` are all live on the fs and job lanes. The row stays so the reasoning is not mistaken for a standing decision. |
 | Channel multiplexing over one socket | Process split already separates them |
 | Scrollback trimming, custom-drawn view | Pagination supersedes (MSHTML is the shipping renderer) |
 | Warm multi-session client pool | One live client, switch = close + resume |

@@ -63,7 +63,20 @@ Recorded in commit 1, before any code, because stage 3 reads them.
 
 No code. `PLAN.md` R7 and "The bridge owns markdown"; `BACKLOG.md` 7, 13, 31, 15,
 17, 1b; `ROADMAP.md`'s three wrong lines; `UIAUTOMATION.md:645-653,751`;
-`PROGRESS.md:74` and its stale "Current goal".
+`PROGRESS.md:74` and its stale "Current goal". `ROADMAP.md` also gains R7 as a
+stage between 3 and 4, now that it is in.
+
+**And `ROADMAP.md`'s stage-1 exit condition changes**, which the earlier pass
+missed: it reads "the P200 answers on the LAN; nothing in stage 3 is waiting on
+an answer", and the P200 is now out of this stage by decision. The exit condition
+is the second clause plus "the fruit is picked and an injection run is repeatable
+without risking the guest". Leaving the first clause in would make this stage
+unclosable.
+
+Starts by re-syncing `docs/stage1-plan.md` from this file: the committed copy
+(`8f9dcd4`) predates the three details settled since — the `continues` flag, the
+`FakeUiLink` templates, and the health check moving from the probe to
+`autocheck --health`.
 
 Corrections, each with the citation that settles it:
 
@@ -124,15 +137,23 @@ cannot tell them from success:
 - **The wrapper was skipped** — no fs lane, no `temp` HELLO header, or the `put`
   failed. `guest_exec.py:145-151` logs and carries on, and the agent gets
   `code=0`, which on this shell proves nothing.
-- **The command is a builtin** (`execwrap.applies()` against the profile's
-  `builtins` list). `dir NOSUCHFILE` is success-shaped silence.
 - **No verdict came back** — the output cap bit, or the shell died, so
   `execwrap.split()` returns `""` and nothing is claimed.
 
-All three become one sentence from `tools.toml`, said only when the shell's
-profile has `lost = true`: the status of this command is unknown, not zero. Exact
-exit values stay out of scope by the decision already recorded at
+Both become one sentence from `tools.toml`, said only when the shell's profile
+has `lost = true`: the status of this command is unknown, not zero. Exact exit
+values stay out of scope by the decision already recorded at
 `execwrap.py:22-26`.
+
+**Builtins are deliberately left alone**, which is a change from how this was
+scoped. `execwrap.applies()` skips the profile's `builtins` list, so
+`dir NOSUCHFILE` is success-shaped silence — but `command.com.toml`'s `[note]`
+headline already tells the agent "exit is 0 either way" and that note is
+resident on every request. Saying it again per call would spend context on every
+`echo`, `cd` and `dir` to repeat a fact the agent has already been given, which
+is the opposite of **a tool earns its place only if `exec` does the job badly**.
+If builtins need more than the resident note, the fix is a better note, not a
+per-call line.
 
 `tests/python/services/test_guest_exec.py` has **no coverage of the wrapped
 verdict path at all** today, and none of the `Exit code {code}.` branch. Three
@@ -161,8 +182,31 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   reserve.
 - **Gated by level**, mirroring TREE/RUN: `automationLevel() >= 1` to read,
   `>= 2` to write, both refused at `RC_AUTOMATION_NONE` by the lane's existing
-  gate (`win/ui/uirpc.cpp:564-572`). No new capability, no `caps.py` bump —
-  `RC_CAP_OPS` stays 2 against `bridge/files/caps.py:465`'s ceiling of 2.
+  gate (`win/ui/uirpc.cpp:564-572`).
+- **And declared at the handshake, with a key of its own.** The level says what
+  this machine *allows*, never what this build *has* — a client at
+  `automation=2` that predates this work gets `UICLIP`, falls through
+  `rc_uirpc_handle`'s `else rc_log("desktop: unhandled frame %s")`
+  (`win/ui/uirpc.cpp:619-620`) and **never answers**, so the bridge's call sits
+  until `bridge/services/ui.py`'s budget expires. That is the flag day the
+  handshake exists to prevent. So: `RC_CAP_CLIP` in `win/net/caps.h` and a
+  `clip=` HELLO key, which `tests/python/meta/test_hello_headers.py`'s
+  `test_every_cap_in_caps_h_reaches_the_wire` requires anyway, read in
+  `bridge/files/caps.py` beside `keys`/`prefs`, and the tools offered only when
+  it is 1.
+
+  **Not** by bumping `RC_CAP_OPS` to 3: `caps.py:465`'s `_num(h,"ops",0,0,2)`
+  **raises** outside its range rather than clamping, so a new client would be
+  refused outright by an older bridge. A new key is ignored by an older bridge
+  and costs one of the client's 14 free HELLO slots (`RC_HELLO_MAX` 48, 34 in
+  use), leaving the `cap - sent >= 2` assertion satisfied. gremote declares it
+  too: `win/remote/server.cpp:116`'s `keys[13]` becomes 14 with the index count
+  and the `send(...)` literal moving together, which
+  `tests/python/meta/test_gremote_hello.py:54` asserts as one number.
+- **It passes the exec test** (`CLAUDE.md`, `PLAN.md` §3.1), which every new tool
+  owes an answer to: `exec` cannot read the clipboard at all — there is no DOS
+  command that prints it — so this is not a convenience over a shell command, it
+  is the only route to text that `WM_GETTEXT` will not surrender cross-process.
 - **One frame type, not two.** `UICLIP` with `op=get|set`, body carrying the text
   on a set, reply `UIDAT` + `UIEND`. `UIDAT` is already in
   `rc_frame_compressible` (`win/net/frameproto.cpp:64-89`), fixed last week, so a
@@ -172,8 +216,13 @@ PLAN's own framing: the escape hatch for text no message will surrender —
 - Cap the reply at `bodyCap()` and set `truncated=1` rather than refusing;
   refuse an oversized `set` outright, since a clipped selector-shaped string is a
   different string.
-- `uicheck.exe` gains cases through the existing `FakeUiLink`: round-trip,
-  refusal at each level, an empty clipboard, a body at the cap.
+- `uicheck.exe` gains cases through the existing `FakeUiLink`
+  (`win/checks/uicheck.cpp:533`, with `ended()`, `status()` and
+  `recordFrames()`): round-trip, refusal at each level, an empty clipboard, a
+  body at the cap. Two cases already there are the templates —
+  `tree-refused-when-automation-is-off` (`:623`) and the step list at
+  `RC_AUTOMATION_SCREEN` (`:639`), which is the middle level no client can
+  declare and gremote's INI can.
 
 ### 5. The clipboard's bridge half
 
@@ -206,14 +255,21 @@ PLAN's own framing: the escape hatch for text no message will surrender —
   (`TEST.BAT:48-53`), with nine screen/MSAA steps and the whole `AUTOCHK.EXE`
   battery behind them, so a wedge there costs the rest of the run. Behind a
   prompt, and the `[1/18]` label fixed.
-- **`PROBE.EXE` with no argument runs every section including `inject`**
-  (`win/checks/probe.c:3798`). Exclude the three injection sections from the
-  no-arg sweep and require an explicit name: the no-arg path is what an operator
-  types.
-- **A `health` section** as the run's epilogue, asserting the three things
-  BACKLOG 15 asks for and nothing in the tree does: a keystroke changes a window's
-  text, a window still takes focus (`win/checks/focusprobe.cpp` already measures
-  exactly this and is not wired into `TEST.BAT`), and a write lands.
+- **`PROBE.EXE` with no argument runs every section including `inject`.** The 25
+  sections dispatch as `if (!only || !strcmp(only, "x")) probe_x();`
+  (`win/checks/probe.c:3822-3846`), so excluding the three injection sections
+  from the no-arg sweep is dropping `!only ||` from `:3842-3844`. The no-arg path
+  is what an operator types, and it should not be able to reach the gates that
+  wedged the box by accident.
+- **The health check goes in `autocheck.exe --health`, not in the probe.**
+  `probe.c` has no input injection at all — `PostMessageA` is the most it does
+  (`:217`, `:2689`) — while `autocheck.exe` links libautomation, already has
+  `--shot`, `--type-into` and `--click` (`win/checks/autocheck.cpp:2158-2162`)
+  and already registers its own window classes (`:271-275`, `:455-477`). So all
+  three of BACKLOG 15's assertions fit one exe that is already in the kit: create
+  a window, focus it, type into it with `Input`, read it back with `WM_GETTEXT`,
+  and write a file. `win/checks/focusprobe.cpp` stays what it is — a one-question
+  measurement, not a liveness check — and does not need wiring in.
 - **A rollback script.** `virsh destroy retroclaude-win98`, copy
   `vm/win98.qcow2` to a timestamped known-good, start, run, restore on failure.
   There is no snapshot tooling in the tree today and the eight `vm/*.bak-*` files
@@ -250,36 +306,43 @@ PLAN's own framing: the escape hatch for text no message will surrender —
    `tests/python/agent/test_input_steps.py:288-299` requires every offered
    machine tool to be in `TOOL_CATS`; `test_policy.py:374-381` the same from the
    other side; `tests/python/agent/test_ops_tools.py:78-81` pins what an
-   `ops=0` client is denied; `tests/python/meta/test_gremote_contract.py:149-161`
-   asserts `continuing == {"DATA","END"}` — check whether a `CLIP` row sets
-   `continues` before assuming it is unaffected.
+   `ops=0` client is denied. **Settled:** `test_gremote_contract.py:149-161`'s
+   `continuing == {"DATA","END"}` is safe — the flag means "routes *past* the
+   lane's busy check to the request already open", so a `CLIP` row takes `false`
+   like all three existing `G_UI` rows, whose comment at
+   `win/remote/optable.cpp:37-39` says exactly why.
 2. **`CASE_COUNT` is asserted exactly** because a case that stops running prints
    nothing: `test_uirec_agreement.py:61` is **52** and drives `uicheck.exe`;
    `test_guest_automation.py:47` is **180** for `autocheck.exe`.
 3. **`checkKeys("ui", UI_KEYS, 6)`** (`win/remote/config.cpp:129`) counts with a
    literal that is separate from the array's own length. Nothing here adds an INI
    key, but the gremote ui section is where one would go.
-4. **`check-sources`** (`win/Makefile:916-934`) fails the build on `strcpy`,
+4. **`tests/python/meta/test_no_os_in_code.py:38-44`** fails on `windows 98`,
+   `win98`, `command.com`, `c:\` and more in string literals under `bridge/`.
+   The clipboard's tool description and its refusal keys are the obvious place to
+   reach for "the Windows clipboard"; the surface is OS-neutral and the prose has
+   to be too.
+5. **`check-sources`** (`win/Makefile:916-934`) fails the build on `strcpy`,
    `sprintf` and seven more across all of `win/`. The clipboard's text handling is
    exactly where `sprintf` gets reached for; `rc_strf`/`rc_strcpy` from
    `win/core/str.h`.
-5. **No file-scope object with a constructor** (`win/Makefile:936-941`), and
+6. **No file-scope object with a constructor** (`win/Makefile:936-941`), and
    **no stack frame near a page** (`stackframes.py`) — a clipboard buffer is heap
    or it is a `Buf`.
-6. **Both caps are charged.** The gate sums `max(virtual, raw)` per PE section, so
+7. **Both caps are charged.** The gate sums `max(virtual, raw)` per PE section, so
    it bills a whole 4,096-byte page: a few hundred bytes of clipboard code can
    cost 4 KB of cap in each exe. Measure `check-gaston` and `check-gremote` before
    and after, and if a page tips, that is the moment to reach for BACKLOG 19's
    deferred `COMMITTED_CAP` raise rather than inventing a different number.
-7. **A clipboard op cannot go on the control or immediate lane.**
+8. **A clipboard op cannot go on the control or immediate lane.**
    `win/net/frameproto.h:50-62` and `win/remote/optable.h:21-24`: never USER or
    GDI there, because a hung 16-bit app holding Win16Mutex blocks those calls for
    every 32-bit thread, and that thread carries the heartbeat.
-8. **`UPDATE_GOLDENS=1` writes a missing golden silently.** Regenerate on
+9. **`UPDATE_GOLDENS=1` writes a missing golden silently.** Regenerate on
    purpose and review the diff; never to clear a red test.
-9. **Do not rebuild under a running suite.** `make wine-smoke` runs the built exes
+10. **Do not rebuild under a running suite.** `make wine-smoke` runs the built exes
    for about five and a half minutes, and a rebuild mid-run mixes them.
-10. **Start guest runs from a clean boot.** Killing a console program strands its
+11. **Start guest runs from a clean boot.** Killing a console program strands its
     DOS VM, and a guest carrying stranded VMs produced a measured BSOD in VMM.
 
 ---

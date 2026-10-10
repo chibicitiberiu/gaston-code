@@ -653,12 +653,19 @@ which is what the wait backstop exists for; and it honours
 **Still owed by the real machines**, and section D should not be scheduled
 before the first two:
 
-- **0.15d, re-run after a reboot.** Both halves of it are unsound as
-  evidence today. The GDI patch was applied by the probe to the probe's own
-  pid, so nothing has ever been captured from a foreign process; and the
-  injection verdict read a counter nothing zeroed, in a section no injected
-  copy unmaps, so it was cumulative since boot. Both are fixed in the probe;
-  neither has been re-run.
+- **0.15d, re-run from cold.** *[Corrected 2026-10-10: it HAS been re-run.]*
+  Both halves were unsound as evidence: the GDI patch was applied by the probe
+  to the probe's own pid, so nothing has ever been captured from a foreign
+  process; and the injection verdict read a counter nothing zeroed, in a section
+  no injected copy unmaps, so it was cumulative since boot. Both were fixed, and
+  the fixed probe ran -- `docs/measurements/vm-20260926.txt`, `generation
+  33779831, counters zeroed`, `distinct pids 2 (neither of them us)`,
+  `-> INJECTION WORKS`. Two caveats survive, which is why this line stays: that
+  generation is 9.4 hours into an uptime rather than a cold boot, and it was the
+  session that ended in the 0.15h wedge. The GDI half is still self-captured **by
+  design** -- the probe now says so in its own output and defers foreign-process
+  capture to D4 -- so "nothing has been captured from a foreign process" remains
+  true, and the fix made it honest rather than false.
 - **0.15f, which has never run at all.** D1 asserts that
   `WH_CALLWNDPROC` aimed at one thread maps into one process and nowhere
   else. That is the assumption everything after it rests on.
@@ -748,5 +755,8 @@ been captured in part and reported as the text on screen, which is worse
 than capturing nothing because it looks like an answer. Eight entry points
 are patched now.
 
-What is still owed: `0.15d` re-run after a reboot with the generation word,
-and one end-to-end turn through the bridge.
+What is still owed: `0.15d` **from a cold boot** (it has been re-run with the
+generation word, on the VM, 9.4 hours into an uptime --
+`docs/measurements/vm-20260926.txt`), with the injection gates moved last and a
+health check behind them (`BACKLOG.md` 15, and the check goes in
+`autocheck.exe --health`); and one end-to-end turn through the bridge.

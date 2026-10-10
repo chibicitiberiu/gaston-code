@@ -24,7 +24,7 @@ IF EXIST PROBE.LOG DEL PROBE.LOG
 CLS
 ECHO  PART ONE -- nothing needs to be on screen for these.
 ECHO.
-ECHO  [1/18] platform, CPU and memory
+ECHO  [1/20] platform, CPU and memory
 PROBE.EXE platform
 REM Everything after this point prints to the screen AND appends to
 REM PROBE.LOG, and the screen is not what gets sent back. If the folder is
