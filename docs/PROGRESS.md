@@ -4221,9 +4221,14 @@ Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
 `agent-turn-ui-vm-20261011.txt` and its screenshot. Probes:
 `tools/probe/clipprobe.py`.
 
-**Carried to stage 5:** the clipboard on the Athlon. The plan named it and
-the machine was switched off for the whole of the stage, so it sits with
-the other hardware measurements rather than alone at the end of a software
-one -- `tools/probe/clipprobe.py --remote 10.0.0.125:<secret>`, eight cases,
-two minutes. What it adds over the guest run is a second machine and a LAN;
-what it does not add is the platform facts, which the QEMU guest settled.
+**What stage 1 has not done:** the clipboard on the Athlon. The plan's
+verification named three places and two were used; that machine was
+switched off for the whole stage, and four checks said so. One command once
+it is on, after a `self_update()`:
+`tools/probe/clipprobe.py --remote 10.0.0.125:<secret>`.
+
+Whether it must run before the stage counts as closed, or belongs in stage
+5 with the other hardware measurements, is left open on purpose --
+`docs/stage1-plan.md` argues both sides. The stage is recorded here as
+built and gated rather than finished, because a plan edited to match what
+was achieved is worth less than one that says what it did not reach.
