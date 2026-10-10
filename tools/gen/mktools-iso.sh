@@ -194,6 +194,17 @@ REM COMMAND.COM rejects a trailing backslash on a COPY destination
 REM ("Invalid directory"), so C:\GASTON is written without one below.
 IF NOT EXIST C:\GASTON\NUL MD C:\GASTON
 COPY /Y D:\*.EXE C:\GASTON > NUL
+REM HOOKDLL.DLL is NOT an .EXE and so was not copied by the line above --
+REM for as long as this file has existed. win/ui/inject.cpp loads it BY NAME
+REM from beside the exe, so on every machine installed from this CD the
+REM in-process tier answered `no_dll` and there was nothing on disk to say
+REM why. Found 2026-10-10 by a probe that could not run gate 0.15d on a guest
+REM that had been installed properly. mkw98kit.sh has refused to build a kit
+REM without this DLL since the day it was written, with the reason spelled
+REM out -- an inert hook looks exactly like "injection does not work on this
+REM machine", which is the wrong conclusion -- and the ISO never had the
+REM matching line.
+IF EXIST D:\HOOKDLL.DLL COPY /Y D:\HOOKDLL.DLL C:\GASTON > NUL
 REM gaston.ini is an 8.3 name, so the CD's GASTON.INI IS the file the app
 REM opens. Before the rename the app read retroclaude.ini, and a plain copy of
 REM the CD's RETROCL.INI once left it on compiled-in defaults with an empty

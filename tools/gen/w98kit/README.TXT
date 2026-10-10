@@ -85,3 +85,30 @@ IF SOMETHING GOES WRONG
   most useful failure of the lot: it means the executable would
   not load, and the machine has told us something about itself
   that no amount of emulation would have.
+
+GREMOTE.EXE -- OPTIONAL, AND ONLY IF THIS MACHINE IS ON A NETWORK
+
+  Everything above runs with nobody watching but you, and hands
+  its answers back as files. GREMOTE is the other way round: it
+  opens a port so the machine can be driven and measured from
+  another computer, which is how every later question gets asked
+  without carrying a disk each time.
+
+  It is NOT started by TEST.BAT and nothing here installs it. To
+  try it:
+
+      COPY A:\GREMOTE.EXE C:\GASTON
+      COPY A:\GREMOTE.INI C:\GASTON\gremote.ini
+      C:\GASTON\GREMOTE.EXE
+
+  Edit gremote.ini first: `secret` is a password in plain text on
+  a trusted network, and `allow` is the range of addresses that
+  may connect. Both matter -- whoever has the secret can run
+  anything on this machine.
+
+  To have it start at every boot, before anyone logs on:
+
+      REGEDIT /S A:\GREMOTE.REG
+
+  Deliberately not automatic, and worth undoing with REGEDIT when
+  the measurements are finished: it opens a port on this machine.
