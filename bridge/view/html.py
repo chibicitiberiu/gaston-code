@@ -606,6 +606,31 @@ hr { border: none; border-top: 1px solid #c0c0c0; margin: 10px 0; }
 .permdone p { margin: 0; color: #606050; }
 """
 
+#: What actually goes on the wire: the stylesheet with its comments taken out.
+#:
+#: Half of STYLESHEET is comments -- 5,574 bytes of 9,375 in eleven blocks, the
+#: largest of them the 1,643-byte note about `overflow: auto`. They are the only
+#: record of why several of those rules are the way they are, and three of them
+#: are measurements taken on the guest, so they stay in the source. They have no
+#: business on a 1998 link: `doc()` builds a plain Frame with no `enc` header, so
+#: unlike TEXT and export data the DOC frame is never compressed, and those bytes
+#: go out verbatim once per connect and again on every reconnect. On a 5 KB/s
+#: link that is close to a full second between plugging in and seeing anything.
+#:
+#: Rules are untouched; only comments and the blank lines they leave go. The
+#: guard that every rule survived is tests/python/meta/test_guest_css.py, which
+#: asserts document() still carries every RC_CSS_* class the guest defines.
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def _without_comments(css: str) -> str:
+    stripped = (ln.rstrip() for ln in _CSS_COMMENT.sub("", css).split("\n"))
+    return "\n".join(ln for ln in stripped if ln) + "\n"
+
+
+WIRE_CSS = _without_comments(STYLESHEET)
+
+
 # Three containers: finished blocks accumulate in #t, #l holds the one block
 # still being written (replaced wholesale on each update), and #s is the
 # status line that sits under both. Keeping them separate is what lets the
@@ -637,7 +662,7 @@ def document(css: str | None = None) -> str:
     table than the bytes were written with is mojibake by construction.
     """
     return SKELETON % (C.html_charset(fold.codec()),
-                       css if css is not None else STYLESHEET)
+                       css if css is not None else WIRE_CSS)
 
 
 def export_document(title: str, body: str, when: str = "") -> str:
@@ -649,10 +674,13 @@ def export_document(title: str, body: str, when: str = "") -> str:
     file has heard of is just litter. This has a heading, the conversation,
     and nothing that only makes sense while connected.
 
-    Same STYLESHEET, deliberately: an export that looks different from what
+    Same stylesheet, deliberately: an export that looks different from what
     was on screen invites the question of which one is right. It also has to
     render in IE5 on the machine that saved it, which is the same constraint
-    the stylesheet was already written to.
+    the stylesheet was already written to. WIRE_CSS rather than STYLESHEET for
+    the same reason the live view uses it -- the comments explain the rules to
+    whoever maintains them, not to whoever reads the transcript -- and here it
+    is free either way, since export data is compressed.
     """
     head = '<div class="exporthead"><h1>' + esc(title or "Conversation")
     head += "</h1>"
@@ -664,7 +692,7 @@ def export_document(title: str, body: str, when: str = "") -> str:
             "content=\"text/html; charset=" + C.html_charset(fold.codec())
             + "\">"
             "<title>" + esc(title or "Conversation") + "</title>"
-            "<style>" + STYLESHEET + EXPORT_CSS + "</style></head>"
+            "<style>" + WIRE_CSS + EXPORT_CSS + "</style></head>"
             "<body>" + head + body + "</body></html>")
 
 

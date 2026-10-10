@@ -6,6 +6,8 @@ And a block must stream: the paragraph being written has to be visible before
 it is finished, or streaming reads as a stall.
 """
 
+import re
+
 from bridge.view import html as H
 from bridge.view.html import APPEND, LIVE, HtmlStream, document, esc, inline, user_turn
 
@@ -142,6 +144,31 @@ def test_document_declares_cp1252():
 def test_document_has_both_containers():
     d = document()
     assert 'id="t"' in d and 'id="l"' in d
+
+
+def test_the_wire_stylesheet_carries_no_comments():
+    """Half of STYLESHEET is commentary, and the DOC frame is the one frame
+    with no `enc` header -- so those bytes go out verbatim on every connect
+    and every reconnect. They belong in the source and not on a 1998 link."""
+    assert "/*" not in H.WIRE_CSS
+    assert "/*" not in document()
+    assert len(H.WIRE_CSS) < len(H.STYLESHEET) / 2
+
+
+def test_stripping_the_comments_changes_no_rule():
+    """The saving has to be comments and nothing else. Normalise both to one
+    space and they must be the same stylesheet."""
+    def norm(css):
+        return " ".join(re.sub(r"/\*.*?\*/", " ", css, flags=re.S).split())
+
+    assert norm(H.STYLESHEET) == norm(H.WIRE_CSS)
+
+
+def test_a_comment_sharing_a_line_with_a_rule_takes_only_itself():
+    """The stripper runs over the whole sheet, not line by line, so a rule
+    with a note after it has to survive with its declaration intact."""
+    out = H._without_comments("a { color: red; } /* why */\n/* alone */\nb { x: y; }\n")
+    assert out == "a { color: red; }\nb { x: y; }\n"
 
 
 def test_inline_code_inside_bold_is_parsed_not_escaped():
