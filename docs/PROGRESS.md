@@ -4155,3 +4155,65 @@ bridge's side; they now filter guest rows too, case-folded.
 25 KB of that image was one `std::vector<std::string>` in config.h before it
 became a TextList.
 
+
+## Stage 1 -- the fruit, the decisions, and the harness (2026-10-10/11)
+
+`ROADMAP.md` stage 1, planned in `docs/stage1-plan.md`. Nine commits,
+`bcb523b..7bc7377`, each gated with `make -C win all`, `make -C win check`,
+`make test-fast`, `pytest tests/python/remote`, `make lint` and
+`make wine-smoke`.
+
+| | |
+|---|---|
+| `make test-fast` | 4,159 passed |
+| `make wine-smoke` | 388 passed |
+| `tests/python/remote` | 120 passed |
+| `uicheck.exe` | 57 cases |
+| `gaston.exe` | 582,697 of 585,728 |
+| `gremote.exe` | 364,985 of 372,000 |
+| `autocheck.exe` | 211,816 of 220,000 (raised from 212,000) |
+
+**The documentation was wrong about three things**, each found by reading
+the code it described. `ExecResult::viaShell` is not "sent nowhere" -- it
+rides gremote's job lane, and on the agent lane the exit-code wrapper has
+superseded it. Gate 0.15d **had** been re-run with the generation word.
+The autostart `.REG` exists, ships, and answers before anyone logs on.
+BACKLOG 17, 1b, 15 and UIAUTOMATION all said otherwise.
+
+**What shipped.** `get_clipboard` and `set_clipboard`, behind `UiLink` and
+so on both exes, with a capability of their own -- `automation` says what a
+machine allows and never what a build has, and a UICLIP sent to a client
+that predates it would be dropped as an unhandled desktop frame and never
+answered. The DOC frame lost 5,574 bytes of CSS comments, 59% of a frame
+that is never compressed and is sent on every connect. `exec` says so when
+the shell could not report a status, instead of handing over a 0 that
+proves nothing. `autocheck --health` is BACKLOG 15's epilogue, the
+injection gates moved to the end of `TEST.BAT` behind their own prompt, and
+`tools/vm/vmsnap.sh` is the rollback that was eight hand-made `.bak` files.
+
+**Four decisions recorded** where stage 3 will look for them: R7 is in, as
+stage 3b, several guest machines; export is rendered by the guest; the
+block vocabulary is one versioned HELLO key; the transcript cache keeps
+rendered markup with a format bump.
+
+**What the guest said that Wine could not.** `[Ctrl+A]` does not select all
+in Windows 98's Notepad -- so `get_clipboard`'s own description, which told
+the agent to use it, would have left the previous clipboard in place and
+reported it as the answer. Copying an empty selection succeeds and changes
+nothing, which from outside is indistinguishable from a broken copy; what
+settled it was pasting inside the guest. And the first agent turn through
+the UI tier reported that it could not see the Gaston Code window, which is
+`excludePid` being right and nothing having told the model so.
+
+**Three defects found and recorded rather than chased**: free memory falls
+~16 KB per connection with no plateau (BACKLOG 32), a `type` step with
+`in:` reported ok and typed nothing (BACKLOG 33), and `SETUP.BAT` never
+copied `HOOKDLL.DLL` because it is not an `.EXE` -- so no machine installed
+from the CD has ever had the in-process tier (fixed).
+
+Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
+`agent-turn-ui-vm-20261011.txt` and its screenshot. Probes:
+`tools/probe/clipprobe.py`.
+
+**What stage 1 still owes:** the clipboard on the Athlon, which needs the
+machine switched on.

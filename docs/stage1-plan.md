@@ -1,5 +1,22 @@
 # Stage 1 — fruit, the decisions stage 3 needs, and the harness
 
+## STATUS, 2026-10-11: done but for the Athlon
+
+Nine commits, `bcb523b..7bc7377`. `PROGRESS.md` has the outcome and the
+numbers; the plan below is what was intended, kept as written so the two can
+be compared. Three things it asserts were wrong and were corrected in commit
+1 — `viaShell`, gate 0.15d, and the autostart `.REG` — which is why the
+Context section reads as it does.
+
+Everything here is built and verified on Wine and on the QEMU guest. What is
+left is one item: the clipboard on the Athlon, which needs the machine
+switched on. `tools/probe/clipprobe.py --remote <host>:<secret>` is the run.
+
+Two defects were found along the way and recorded rather than fixed here:
+BACKLOG 32 (free memory falls ~16 KB per connection) and BACKLOG 33 (a
+`type` step reported ok and typed nothing).
+
+
 ## Context
 
 `docs/ROADMAP.md` (committed `fd21924`) splits the rest of the project into six

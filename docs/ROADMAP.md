@@ -30,7 +30,7 @@ in stage 1 for that reason.
 
 | # | Stage | Exit condition |
 |---|---|---|
-| 1 | Fruit, the decisions that gate stage 3, and the injection harness | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
+| 1 | ~~Fruit, the decisions that gate stage 3, and the injection harness~~ **done 2026-10-11 but for the Athlon** | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
 | 2 | Size: the flag decision and the gremote trim | a measured before/after, and room in the caps for stage 3 |
 | 3 | The markup moves to the client | a second client could be written without touching the bridge |
 | 3b | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
