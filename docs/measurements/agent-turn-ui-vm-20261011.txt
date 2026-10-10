@@ -1,0 +1,66 @@
+The first agent turn through the UI tier, 2026-10-11
+=====================================================
+
+Machine : QEMU guest, 6e4fc260-be09-11f1-8c3c-5254005ffe08, Win 4.10.2222 A
+Model   : haiku (the verification model; the tier is what is under test)
+Setup   : bridge on the host, gaston.exe on the guest over slirp 10.0.2.2,
+          the prompt typed at the guest's own keyboard through QMP
+Picture : agent-turn-ui-vm-20261011.png
+
+`UIAUTOMATION.md` has owed this since the tier was built: everything that
+had ever driven `ui`, `input` and `shot` was a probe or gremote. The model
+had never once used the thing. This is the model using it.
+
+    Prompt: "Use the ui tool once to list the windows on this machine.
+             Then tell me the title of the Gaston Code window and how many
+             top-level windows you saw. Do not use exec."
+
+    bridge.permdesk: mcp__machine__ui under manual: allow (looks at the screen)
+    status bar:      done 10s $0.0534
+
+Ten seconds, one tool call, five cents. The control tree came back real --
+`Shell_TrayWnd`, `Notepad "Untitled - Notepad"` with its Edit at 48,86
+592x365, `Progman "Program Manager"` with SHELLDLL_DefView and
+SysListView32 under it, twelve controls in all, each with a `sel=` -- and
+the answer in the transcript names three top-level windows correctly.
+
+No permission bar appeared, which is correct and worth recording: the desk
+classifies `ui` as SCREEN_SEE and the default mode allows looking.
+
+
+WHAT THE TURN FOUND, WHICH IS WHY IT WAS WORTH RUNNING
+-------------------------------------------------------
+
+The model answered, in bold, that it **did not see a "Gaston Code"
+window**, and listed what it did see instead.
+
+That is the walk being right. `excludePid` is the client's own pid, so the
+program the conversation is happening through -- and its hidden App window,
+and its tray window -- is absent from every tree it serves. Nothing told
+the model that, so it did the reasonable thing with what it had and
+reported the window as not on screen, to the person sitting in front of it.
+
+This is the same shape as BACKLOG 16, where an agent was told a control was
+occluded and had no way to act on it: a true fact, delivered so that the
+only available conclusion is a false one. Here the cost would be an agent
+telling somebody their window is closed while they look at it.
+
+`tools.toml`'s `ui` description now says so in two sentences -- the program
+you are talking through is deliberately not in this list, and do not report
+it as closed because it is absent here. One prompt line, found by one
+turn, which is the argument for running the tier the way it is meant to be
+used rather than only the way it is easy to test.
+
+
+METHOD NOTE
+-----------
+
+The prompt was typed with QMP rather than through gremote's step list,
+and not by choice. `{"type": ..., "in": "Edit"}` is correctly `ambiguous`
+with Notepad open. Scoping it to `GastonWnd > Edit` reported **ok** and
+typed nothing: a tree walk immediately afterwards found both Edit controls
+on the desktop empty, the client's and Notepad's. BACKLOG 33 has it.
+
+Driving the guest's own keyboard is also the more honest setup for a first
+turn: nothing about the input reached the client through any part of the
+thing being tested.

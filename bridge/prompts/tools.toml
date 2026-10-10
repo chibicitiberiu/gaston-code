@@ -122,7 +122,9 @@ Read the controls on the machine's screen: windows, buttons, text boxes, menus, 
 
 Prefer this over `shot`: far cheaper, exact, and it gives you something you can click. Reach for `shot` when this comes back with almost nothing, which means the program draws itself rather than using controls.
 
-Start with `scope="foreground"`, the window the person is looking at, and widen to `desktop` only to find something else.'''
+Start with `scope="foreground"`, the window the person is looking at, and widen to `desktop` only to find something else.
+
+The program you are talking through is deliberately not in this list, and neither is anything else it owns. If the person asks about that window, read it back to them from what they tell you -- do not report it as closed because it is absent here.'''
 
 [ui.args]
 items_of = '''

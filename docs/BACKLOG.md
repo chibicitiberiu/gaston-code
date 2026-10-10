@@ -2809,3 +2809,111 @@ capability and answers the export question that this entry also needs. The
 **What it costs to leave open.** Nothing today -- there is one client and it is a
 browser. The bill arrives the first time somebody writes a second one, and it is
 paid by whoever writes it: a terminal client either renders HTML or reverses it.
+
+---
+
+## 32. Free memory falls about 16 KB per connection, and nobody knows whose it is
+
+**Status:** found 2026-10-10 by the watch that BACKLOG 15 asked for, which
+was looking for something else entirely. Measured, reproducible, cause
+unestablished -- and the test that would establish it is five minutes long.
+
+`docs/measurements/inject-cold-vm-20261010.txt` has the run. On the QEMU
+guest, with gremote answering and nothing else happening:
+
+```
+6248 -> 6068 KB over 11 polls, one connection each, 45s apart, linear
+6052 -> 5880 KB over 11 connections made back to back        (-172 KB)
+5880 -> 5868 KB over 60 seconds idle holding one connection   (-12 KB)
+```
+
+It tracks **connections, not time**: eleven in a few seconds cost what
+eleven over eight minutes cost, and idling costs almost nothing. About
+15.6 KB each, with no plateau over 21 connections.
+
+At that rate a few hundred connections is the whole of a 32MB machine's
+headroom. Every probe in `tools/probe/` opens one per run, `ship()` opens
+another after the restart, and the agent's own reconnect loop opens one per
+retry -- so this is not a theoretical number of connections.
+
+**What it does not establish is whose memory it is.** `mem_free_kb` is
+`dwAvailPhys`, and this project has been misled by that field before: §2
+records that the famous "28 KB free after a turn" was the same number and
+never a hard wall. Windows 98 declining to return pages to the free pool
+looks exactly like gremote declining to free them, from outside.
+
+### The test that settles it, and it is cheap
+
+Stop gremote and read free memory again -- through `execprobe.exe`, which
+prints `GlobalMemoryStatus` and does not need the server
+(`win/checks/execprobe.cpp`), for the reason §29 already gives: the
+instrument cannot be the thing being measured. If the ~180 KB comes back,
+it was gremote's and this is a leak. If it does not, it is the VMM's and
+this entry closes as a property of the platform.
+
+### Where to look first if it is ours
+
+The lanes are the **Session's**, not the process's (`win/remote/server.h`),
+so every connection builds and tears down a job, an fs and -- since step 6
+-- a **ui** worker, and the ui one is the only lane with thread-bound state:
+a message queue, a COM apartment, a message filter and a WinEvent hook.
+`Session::end` joins each lane with a 5,000 ms budget and, when that fails,
+`ServerService` takes the `m_session.release()` branch and **leaks the
+Session deliberately** rather than freeing memory a live thread is still
+standing on. That branch is the first thing to check: if a ui worker is
+routinely missing its join, every connection leaks a Session, and the size
+would be the worker's committed stack rather than the whole object -- which
+is the right order of magnitude for 16 KB.
+
+A second candidate costs nothing to rule out: the Win32 heap does not return
+freed pages to the OS, so a connection that allocates and frees cleanly can
+still grow the process's committed memory once and never again. That one
+predicts a plateau, and 21 connections showed none.
+
+---
+
+## 33. A `type` step said ok and typed nothing
+
+**Status:** found 2026-10-11 while setting up the first agent turn
+(`docs/measurements/agent-turn-ui-vm-20261011.txt`). Not chased, because the
+run it was found during was about something else. Reproduced once, clearly.
+
+On the QEMU guest, with the client and one Notepad on screen:
+
+```python
+r.run([{"focus": "GastonWnd"},
+       {"type": PROMPT, "in": "GastonWnd > Edit"}])     # -> status ok
+```
+
+The step list reported `ok`. A tree walk immediately afterwards found
+**both** Edit controls on the desktop empty -- the client's input box and
+Notepad's -- so the characters were not delivered to the named control, nor
+to the window that had focus, nor anywhere else visible.
+
+The same list with `"in": "Edit"` is correctly refused `ambiguous`, which is
+the selector grammar working: two Edits were on screen. So the resolution
+step is not what is wrong, and `GastonWnd > Edit` resolving to exactly one
+control is what makes the silent success worse.
+
+**Why this one matters more than its size.** `input`'s whole design is that
+a string is never half delivered and never falsely claimed: `typeText`
+checks the entire string before the first keystroke, `INPUT_BAD_KEY` is a
+refusal with nothing typed, and the header says so twice. A step that
+reports `ok` having typed nothing is the one failure that design is written
+against, arriving by a different door -- and an agent told `ok` will go on
+to press Send.
+
+### Where to look
+
+The `in` field is the step runner's "type into this control" path, which is
+a different route from a bare string step (that one types wherever the
+focus is). Worth checking, in this order: whether `in` resolves against the
+same walk the `focus` step just changed; whether the resolved HWND is the
+Edit or its parent; and whether `typeChars`'s `expectTop` check silently
+ends the string when the foreground is the client rather than the control's
+own root -- that check returns `INPUT_FOCUS_LOST`, which the step runner
+should be reporting rather than swallowing.
+
+A case belongs in `uicheck` with a `FakeUiLink` once the cause is known:
+"a type step that delivered nothing does not report ok" is assertable
+without a desktop if the primitive's return is the thing at fault.

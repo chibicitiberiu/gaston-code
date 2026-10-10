@@ -1,0 +1,100 @@
+Gate 0.15d from a cold boot, with the gates last and a health check
+====================================================================
+
+Machine : QEMU guest, HELLO machine=RETRO98, Windows 4.10 build 2222 A
+Driven  : gremote 7401 over the job lane -- no keyboard, no floppy
+Why     : BACKLOG 15 and UIAUTOMATION's "still owed by the real machines".
+          0.15d had been re-run with the generation word on 2026-09-26, but
+          9.4 hours into an uptime and in the session that ended with the
+          0.15h wedge. This is the same run from cold, with the three
+          injection gates moved last and a health check behind them.
+
+Preparation (and two things that had to be fixed first):
+
+  * C:\GASTON\HOOKDLL.DLL was NOT INSTALLED. SETUP.BAT copies `D:\*.EXE`
+    and the DLL is not an .EXE, so no machine installed from the CD has
+    ever had it -- `ui(inproc=true)` would answer `no_dll` with nothing on
+    disk to say why. mkw98kit.sh has refused to build a kit without it
+    since the day it was written, for exactly the reason this would have
+    produced: an inert hook looks like "injection does not work on this
+    machine". SETUP.BAT has the line now; the DLL was verified byte-
+    identical to build/win/HOOKDLL.DLL on the guest before the run.
+  * C:\GASTON\GREMOTE.EXE was not a valid Win32 image at the start of the
+    day, carried from some earlier interrupted ship. Replaced from a fresh
+    ISO.
+
+
+AUTOSTART, PRE-LOGON -- re-confirmed on the current build
+----------------------------------------------------------
+
+`REGEDIT /S C:\GASTON\GREMOTE.REG`, then a cold boot, then polled from
+Linux with NOBODY logged in:
+
+    ANSWERED, HELLO machine=RETRO98, free 13,240 KB
+
+This repeats the 2026-09-27 measurement against today's binary and a
+freshly installed copy. After logon, free is 8,872 KB with 8 processes.
+
+
+THE THREE GATES, COLD, IN THEIR NEW ORDER
+------------------------------------------
+
+0.15d  inject
+    attaches 3, hook calls 9, distinct processes that ran the proc: 2
+    (neither of them us) -> INJECTION WORKS.
+    The GDI half is still self-captured BY DESIGN: the probe sets its own
+    pid as the patch target and says so in its own output. Capturing a
+    foreign process's text remains untested, which the probe defers to D4.
+
+0.15f  targeted
+    WH_CALLWNDPROC    +0 calls, +0 pids
+    WH_GETMESSAGE    +22 calls, +1 pid
+    WH_CBT            +0 calls, +0 pids
+    WH_CALLWNDPROCRET +0 calls, +0 pids
+    -> our code ran in the target and in no other process. The plan's
+    documented choice (WH_CALLWNDPROC) still installs and still never
+    fires, exactly as on 2026-09-26.
+
+0.15g  gditext -- the import tables, unchanged:
+    MSHTML.DLL   TextOutW ExtTextOutW ExtTextOutA DrawTextW DrawTextA
+    COMCTL32.DLL ExtTextOutW ExtTextOutA DrawTextExA
+    COMDLG32.DLL DrawTextA ExtTextOutA TextOutA
+    SHELL32.DLL  ExtTextOutA
+    RICHED32.DLL TextOutA ExtTextOutA
+
+0.15h  health (new: autocheck.exe --health), run immediately after:
+    pass  a window takes the foreground
+    pass  a keystroke changes the screen   (typed, read back 'health')
+    pass  a write lands
+    exit 0
+
+Then the machine was left alone and polled every 45 seconds for 13
+minutes: answering every time, 8 processes throughout, no wedge. That is
+not the hour BACKLOG 15 asks for, and the entry stays open for it.
+
+
+WHAT THE WATCH FOUND INSTEAD, AND IT IS NOT THE WEDGE
+------------------------------------------------------
+
+Free physical memory falls about **16 KB per connection** and does not
+come back:
+
+    6248 -> 6068 KB over 11 polls, one connection each, perfectly linear
+    6052 -> 5880 KB over 11 connections made back to back (-172 KB)
+    5880 -> 5868 KB over 60 seconds idle with one connection (-12 KB)
+
+So it tracks CONNECTIONS, not time: eleven in a few seconds cost the same
+as eleven over eight minutes. At that rate a few hundred connections
+would be the whole of a 32MB machine's headroom, and the probes connect
+per run.
+
+What this does NOT establish is where the memory went. `mem_free_kb` is
+`dwAvailPhys`, and this project has already been misled by that number
+once -- BACKLOG 2 records that the famous "28 KB free after a turn" was
+the same field and never a hard wall. Win98 not returning pages to the
+free pool looks identical from here to gremote not freeing them.
+
+The test that settles it costs five minutes and was not run: stop
+gremote, read free memory again. If it comes back, the memory was
+gremote's and this is a leak; if it does not, it is the VMM's. Recorded
+as BACKLOG 32 rather than guessed at here.
