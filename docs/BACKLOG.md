@@ -1312,7 +1312,8 @@ jobs that were never separated, and only one of them is a transform.
 - **Structure** -- markdown to blocks, escaping, pagination, the encoding fold. Needs
   lookahead and a real parser (`PLAN.md`, "The bridge owns markdown"). Writing it in
   C++ would cost image bytes and heap on the one resource the project is tightest on.
-  It belongs on the bridge and is not in question.
+  The *parse* belongs on the bridge and is not in question. **Emitting the markup is a
+  third job this list missed; §31 is where it went, and it is the larger half.**
 - **Decoration** -- `STYLESHEET` (`bridge/view/html.py:448`), inlined into the skeleton
   by `document()` (`:622-630`) and sent once per connect from `server.py:341`. This is
   one client's appearance, written to IE5's constraints, and it ships from the far side
@@ -2587,3 +2588,114 @@ Recorded 2026-10-04 with the work (docs/OPTIONS-PLAN.md has the design).
   it (and found the array-stride bug that way on 98); no 95 machine was run.
 - **The Tools page's Add asks four one-line questions** rather than one form,
   and has no Browse for the marker file.
+
+---
+
+## 31. The bridge renders the markup, so the wire is IE4/5-shaped
+
+**Status:** open, asked for 2026-10-10. Nothing moved. §13 is the stylesheet;
+this is the markup itself, and it is the larger half of the same problem.
+
+§13 split "how a block looks" in two: *structure* (markdown to blocks -- a
+transform, needs lookahead and a parser, belongs on the bridge) and *decoration*
+(`STYLESHEET` -- one client's appearance, shipped from the far side of the wire).
+It then said structure "belongs on the bridge and is not in question". That was
+too generous to the middle of the pipeline. Between the parse and the stylesheet
+sits a third job nobody named -- **emitting the markup** -- and it is as
+client-specific as the CSS is.
+
+`HtmlStream` (`bridge/view/html.py:228`) takes model text and returns finished
+HTML: `<pre class="...">`, `<ul>`, `<table>`, `&amp;`-escaped text, one block per
+element. `TEXT` carries it with `mode=append|live` and the guest hands the bytes
+to MSHTML. That markup is written to IE5's constraints. A terminal client wants
+runs and a width; a DOS client wants lines; neither can use a byte of it, and
+both would have to parse HTML to recover the structure the bridge had already
+worked out and then discarded.
+
+**Three places where the bridge is already deciding things about IE5 it has no
+way to know:**
+
+- `MAX_BLOCKS = 90` (`bridge/view/pages.py:39`) is a pagination cap with an
+  MSHTML reason written beside it: cost scales with element count rather than
+  text length, and a 200-element page took the 32MB guest down to 48 KB free.
+  `limits_for` (`bridge/handshake.py:35`) then scales it to the guest's RAM. A
+  client with no layout engine inherits a limit measured against one.
+- `_TOOL_WRAP_COL = 56` and `_fold_long_lines` (`bridge/view/html.py:152,155`)
+  hard-wrap tool output to the width of one client's window.
+- `_TOOL_RESULT_MAX = 1200` (`:114`) truncates against one client's page budget.
+
+**And the guest is already half of this.** `win/app/statusbar.cpp:146` composes
+`<div class="status">` on the guest, against the class vocabulary in
+`win/app/htmlview.h:53-76` that `tests/python/meta/test_guest_css.py` pins. So
+markup is generated on both sides of the wire today. What is missing is the
+decision that it belongs on one of them.
+
+**This does not reopen "no markdown parser in C."** The parse stays on the
+bridge: lookahead, fence state surviving across feeds, escaping, the encoding
+fold. What moves is the step after it, and `HtmlStream` already has the two in
+separate methods -- `_line()` classifies (`:286`), `_render()` emits (`:401`) --
+so the seam is where the code already folds. By §13's own distinction this is
+decoration, not a transform, which is why **the guest transforms nothing** comes
+through unamended. `PLAN.md`'s "the bridge decides everything about how a block
+looks before it ever reaches the wire" does not.
+
+**The shape, which is a retired design coming back.** The first draft had the
+wire carry pre-styled runs -- `TEXT style=code` -- with the guest looking `style`
+up in a static table (`PLAN.md`, "The bridge owns markdown"). That went with
+RichEdit when MSHTML replaced it, because finished HTML made it unnecessary, not
+because it was wrong. This wants the same idea with a vocabulary rich enough for
+what the parser now produces: the bridge emits blocks and inline runs, and each
+client renders them. `Page`/`PageRun` already carry `(style, text)` pairs
+(`bridge/view/pages.py:48-61`); today `text` is markup, and the change is that it
+stops being.
+
+The vocabulary is a rename of what `html.py` already recognises rather than a new
+design: `_FENCE`, `_HEADING`, `_BULLET`, `_QUOTE`, `_RULE`, `_ROW`/`_SEP` and
+`_INLINE` (`:45-64`) are para, pre(lang), heading(level), bullet/numbered(depth),
+quote, rule, table, plus the inline set code/strong/em/link.
+
+### What it would take to close
+
+1. **Name and version the block vocabulary on the wire.** Per **client rules are
+   declared at handshake, never assumed**, that is a `HELLO` capability saying
+   which vocabulary version this client renders, with the bridge refusing an
+   unknown value rather than guessing. §13 needs the same capability for the
+   class names, so whichever lands first builds it.
+2. **The guest grows a renderer**: block stream in, the markup it receives today
+   out. This is string assembly against a fixed table, not a parser, but it is a
+   new translation unit and `-xs` costs ~2,144 bytes of exception machinery per
+   TU before any code. `gaston.exe` is at 580,649 of 585,728, so measure before
+   committing and expect this to want the cap raise §19 already defers.
+3. **`live` is the hard half, not `append`.** A partial block is re-sent whole as
+   it grows (`html.py:357`'s note), so with rendering client-side the guest
+   re-renders the open block on every update. The bytes do not change; the work
+   moves from the bridge to a 1998 CPU, which makes this a repaint-budget
+   question and therefore a P200 question.
+4. **The pagination caps become the client's to declare.** `Paginator` counts
+   lines, bytes and blocks; the block cap is an MSHTML fact. It is already
+   per-guest through `limits_for`, so the change is that the element cost becomes
+   the *client's* stated reason rather than the bridge's assumption.
+5. **Export is the same awkward constraint as §13, and worse here.**
+   `export_document` (`bridge/view/html.py:643`, called from
+   `bridge/services/session.py:159`) builds a standalone file from
+   `pages.all_text()`. Without the markup the bridge cannot build it at all, not
+   just cannot style it. Same three options as §13 -- the guest renders its own
+   export, the export links a `.css` beside it, or export keeps a deliberate
+   bridge-side renderer and accepts the drift -- and they should be decided once
+   for both entries, not twice.
+6. **The transcript cache holds rendered pages** (`win/app/cache.cpp`,
+   `CACHE_PAGE_MAX`). Decide whether it caches blocks or markup, and bump its
+   format either way so pages written by an older renderer do not come back.
+7. **Goldens and an agreement test.** `tests/python/server/test_frame_goldens.py`
+   pins the `TEXT` and `DOC` frames and would be regenerated wholesale. The
+   vocabulary wants the shape `test_guest_css.py` and `test_uirec_agreement.py`
+   already use: both sides' tables compared, with a count asserted so a dropped
+   case fails loudly.
+
+**Order.** §13 first, for two reasons: it is smaller, and it builds the handshake
+capability and answers the export question that this entry also needs. The
+4,919 bytes of CSS comments noted there are free and depend on neither.
+
+**What it costs to leave open.** Nothing today -- there is one client and it is a
+browser. The bill arrives the first time somebody writes a second one, and it is
+paid by whoever writes it: a terminal client either renders HTML or reverses it.

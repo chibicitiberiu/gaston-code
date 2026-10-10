@@ -402,6 +402,19 @@ class *vocabulary* is already a shared contract (`win/app/htmlview.h:61-76`, pin
 wrong way round. Deferred rather than built -- `BACKLOG.md` §13, where export is the
 awkward constraint.
 
+**[R -- 2026-10-10: and "the bridge decides everything about how a block looks" is the
+sentence that is wrong.]** The seam above names two jobs; there is a third between them,
+which is *emitting the markup*. `HtmlStream` (`bridge/view/html.py:228`) returns finished
+HTML written to IE5's constraints, and three bridge-side numbers are calibrated to MSHTML
+rather than to text: the page's block cap (`view/pages.py:39`, measured -- a 200-element
+page took the 32MB guest to 48 KB free), the tool-output wrap column and the tool-result
+truncation (`view/html.py:152,114`). A terminal client wants runs and a width, a DOS
+client wants lines, and neither can use a byte of the markup. The *parse* stays here --
+"no markdown parser in C" holds -- but what reaches the wire should be blocks and inline
+runs, with each client rendering them: the pre-styled-runs design at the top of this
+section, returning with a vocabulary rich enough for what the parser now produces. Wanted
+by the user, not built: `BACKLOG.md` §31, which also inherits §13's export question.
+
 Markdown needs lookahead, so the bridge buffers to a safe boundary (newline, or ~200 chars
 of unambiguous text). Streaming granularity becomes one line — which is also what a P2
 repaint budget wants.
