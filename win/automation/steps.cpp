@@ -454,9 +454,9 @@ bool StepRunner::pointFor(const StepTarget &t, DWORD budget, HWND &expect,
 bool StepRunner::keyboardTargetOk(const Step &s, DWORD budget, StepReport &r)
 {
     HWND fg = GetForegroundWindow();
+    HWND want = 0;
     if (s.in[0])
     {
-        HWND want;
         if (!resolveOne(s.in, budget, want, r))
             return false;
         m_expectTop = Input::rootOf(want);
@@ -468,7 +468,22 @@ bool StepRunner::keyboardTargetOk(const Step &s, DWORD budget, StepReport &r)
         return true;
     for (HWND h = Input::rootOf(fg); h; h = GetWindow(h, GW_OWNER))
         if (h == m_expectTop)
+        {
+            /* AND THE FOCUS INSIDE IT, which until 2026-10-11 nothing did.
+             * `in` resolved a control and then only checked that the
+             * control's WINDOW was in front; the keystrokes went to
+             * whichever child already had the keyboard focus. With the
+             * client in front and its focus on the transcript view, a step
+             * list typed a whole prompt into nothing and reported `ok`
+             * (BACKLOG 33) -- which is the one outcome `typeText`'s
+             * two-pass validation exists to prevent, arriving by a
+             * different door. Reported as a failure when it does not take,
+             * because the alternative is the silence that hid it. */
+            if (want && !m_input.focusChild(want))
+                return fail(r, "not_foreground", "the control would not "
+                            "take the keyboard focus, so nothing was typed");
             return true;
+        }
     describeTop(fg, r.hit, sizeof(r.hit));
     r.status = "focus_lost";
     rc_strf(r.detail, sizeof(r.detail), "the window in front changed to %s",

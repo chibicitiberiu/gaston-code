@@ -122,6 +122,15 @@ public:
      * INPUT_NOT_FOREGROUND rather than typing somewhere unintended. */
     InputResult focus(HWND target);
 
+    /* Give ONE control the keyboard focus, without touching the z-order.
+     * `focus()` above does this as part of its job; a caller that only
+     * wants the keystrokes to land in a named child -- the step runner's
+     * `type ... in:` -- wants this half on its own, because raising a
+     * window is a different action with its own step. False when the focus
+     * did not move, which the caller must treat as a failure: typing after
+     * it goes wherever the focus already was. */
+    bool focusChild(HWND target);
+
 private:
     void noteBlocker(HWND under);
     char m_blocker[128];

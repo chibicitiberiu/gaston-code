@@ -69,6 +69,43 @@ bool Input::isOurs(HWND target)
     return pid == GetCurrentProcessId();
 }
 
+bool Input::focusChild(HWND target)
+{
+    /* THE KEYBOARD FOCUS INSIDE A WINDOW, which is not the same thing as the
+     * window being in front -- and the difference has now cost two callers.
+     *
+     * `typeText` learned it on 2026-10-02: typing into an edit box by name
+     * left the box empty and reported success, because the window came
+     * forward and the keystrokes went to whichever child already had focus
+     * (docs/measurements/keys-named-p200-20261002.txt). The step runner's
+     * `type ... in:` path had the same hole until 2026-10-11, found when a
+     * step list reported ok and typed nothing anywhere (BACKLOG 33). It is
+     * one function now so the next caller inherits the fix.
+     *
+     * Returns whether the focus actually moved. The answer is only readable
+     * WHILE ATTACHED -- GetFocus reports for the calling thread's input
+     * queue, so asking after the detach would always say no. DETACH ALWAYS:
+     * without it this thread keeps the target's input-queue state for the
+     * rest of its life and poisons every later call. */
+    HWND top = rootOf(target);
+    if (!top || target == top)
+        return true;                /* nothing to do: it IS the window */
+
+    DWORD me = GetCurrentThreadId();
+    DWORD theirs = GetWindowThreadProcessId(top, NULL);
+    if (!theirs || theirs == me)
+    {
+        SetFocus(target);
+        return GetFocus() == target;
+    }
+    if (!AttachThreadInput(me, theirs, TRUE))
+        return false;
+    SetFocus(target);
+    bool took = GetFocus() == target;
+    AttachThreadInput(me, theirs, FALSE);
+    return took;
+}
+
 InputResult Input::focus(HWND target)
 {
     if (!target || !IsWindow(target))
@@ -101,15 +138,7 @@ InputResult Input::focus(HWND target)
      * the target's input-queue state for the rest of its life and poisons
      * every later call. */
     if (target != top)
-    {
-        DWORD me = GetCurrentThreadId();
-        DWORD theirs = GetWindowThreadProcessId(top, NULL);
-        if (theirs && theirs != me && AttachThreadInput(me, theirs, TRUE))
-        {
-            SetFocus(target);
-            AttachThreadInput(me, theirs, FALSE);
-        }
-    }
+        focusChild(target);
 
     if (GetForegroundWindow() != top)
     {

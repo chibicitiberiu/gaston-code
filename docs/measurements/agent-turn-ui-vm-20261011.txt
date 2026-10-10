@@ -59,7 +59,15 @@ The prompt was typed with QMP rather than through gremote's step list,
 and not by choice. `{"type": ..., "in": "Edit"}` is correctly `ambiguous`
 with Notepad open. Scoping it to `GastonWnd > Edit` reported **ok** and
 typed nothing: a tree walk immediately afterwards found both Edit controls
-on the desktop empty, the client's and Notepad's. BACKLOG 33 has it.
+on the desktop empty, the client's and Notepad's.
+
+BACKLOG 33 has it, and it is closed: `in` resolved a control and then only
+checked that the control's WINDOW was in front, never giving the control
+the keyboard focus, so the characters went wherever the focus already was
+-- the transcript view. `Input::focus` had been fixed for exactly this in
+October and the step runner never inherited it. That half is now
+`Input::focusChild` with both callers on it, and a control that will not
+take focus fails the step instead of reporting ok.
 
 Driving the guest's own keyboard is also the more honest setup for a first
 turn: nothing about the input reached the client through any part of the

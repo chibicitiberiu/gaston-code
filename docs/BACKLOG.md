@@ -2872,11 +2872,12 @@ predicts a plateau, and 21 connections showed none.
 
 ---
 
-## 33. A `type` step said ok and typed nothing
+## 33. A `type` step said ok and typed nothing -- CLOSED 2026-10-11
 
-**Status:** found 2026-10-11 while setting up the first agent turn
-(`docs/measurements/agent-turn-ui-vm-20261011.txt`). Not chased, because the
-run it was found during was about something else. Reproduced once, clearly.
+**Status:** found while setting up the first agent turn
+(`docs/measurements/agent-turn-ui-vm-20261011.txt`), **fixed and verified on
+the guest the same day.** The account below is kept because the cause is one
+the project had already paid for once.
 
 On the QEMU guest, with the client and one Notepad on screen:
 
@@ -2914,6 +2915,32 @@ ends the string when the foreground is the client rather than the control's
 own root -- that check returns `INPUT_FOCUS_LOST`, which the step runner
 should be reporting rather than swallowing.
 
-A case belongs in `uicheck` with a `FakeUiLink` once the cause is known:
-"a type step that delivered nothing does not report ok" is assertable
-without a desktop if the primitive's return is the thing at fault.
+### What it was, and it had been fixed once already
+
+`keyboardTargetOk` resolved `in` to a control and then used it for one
+thing only: `m_expectTop = rootOf(want)`, the top-level window the
+foreground had to be. Having checked that, `STEP_TYPE` called `typeChars`,
+which types wherever the **keyboard focus** already is. So `in` named a
+control and then never gave it focus. With the client in front and its
+focus on the transcript view, a whole prompt went nowhere and the step
+reported `ok`.
+
+`Input::focus` has done the right thing since 2026-10-02 and its comment
+describes this exact symptom -- "typing into an edit box by name left the
+box empty and reported success" -- because `typeText` had the same hole and
+it was closed there. The step runner never got that fix: it does not call
+`focus()`, deliberately, since raising a window is a different action with
+a step of its own.
+
+**The fix.** The attach-and-SetFocus half of `focus()` is now
+`Input::focusChild`, one implementation with both callers on it, and
+`keyboardTargetOk` calls it for the control `in` resolved. Whether the
+focus moved is readable only WHILE ATTACHED -- `GetFocus` answers for the
+calling thread's input queue -- so it is checked there and returned. A
+refusal to take focus now **fails the step** with `not_foreground` and a
+detail saying nothing was typed, because the silence is what hid this.
+
+**Verified on the guest**, reproducing the original state: the client in
+front with the keyboard focus parked on its transcript view, then
+`{"type": ..., "in": "GastonWnd > Edit"}` -- which typed nothing before and
+now puts the text in the box.
