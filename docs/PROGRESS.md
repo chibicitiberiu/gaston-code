@@ -4221,6 +4221,9 @@ Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
 `agent-turn-ui-vm-20261011.txt` and its screenshot. Probes:
 `tools/probe/clipprobe.py`.
 
-**What stage 1 still owes:** the clipboard on the Athlon, which needs the
-machine switched on -- `tools/probe/clipprobe.py --remote <host>:<secret>`
-is the whole of it.
+**Carried to stage 5:** the clipboard on the Athlon. The plan named it and
+the machine was switched off for the whole of the stage, so it sits with
+the other hardware measurements rather than alone at the end of a software
+one -- `tools/probe/clipprobe.py --remote 10.0.0.125:<secret>`, eight cases,
+two minutes. What it adds over the guest run is a second machine and a LAN;
+what it does not add is the platform facts, which the QEMU guest settled.

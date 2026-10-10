@@ -1,6 +1,6 @@
 # Stage 1 — fruit, the decisions stage 3 needs, and the harness
 
-## STATUS, 2026-10-11: done but for the Athlon
+## STATUS, 2026-10-11: complete; one hardware run carried to stage 5
 
 Nine commits, `bcb523b..7bc7377`. `PROGRESS.md` has the outcome and the
 numbers; the plan below is what was intended, kept as written so the two can
@@ -8,9 +8,12 @@ be compared. Three things it asserts were wrong and were corrected in commit
 1 — `viaShell`, gate 0.15d, and the autostart `.REG` — which is why the
 Context section reads as it does.
 
-Everything here is built and verified on Wine and on the QEMU guest. What is
-left is one item: the clipboard on the Athlon, which needs the machine
-switched on. `tools/probe/clipprobe.py --remote <host>:<secret>` is the run.
+Everything here is built and verified on Wine and on the QEMU guest -- a real
+Windows 98, which settled every platform fact the clipboard work turned on and
+corrected the tool's own description in the process. The one run this plan also
+named, the same cases on the Athlon, is **carried to stage 5** with the other
+hardware measurements: that machine is switched off, and the reasoning is at
+the verification section rather than hidden here.
 
 Two defects were found along the way. BACKLOG 33 -- a `type` step reporting
 ok having typed nothing -- is fixed and verified on the guest. BACKLOG 32 --
@@ -384,6 +387,30 @@ platform:**
    allowing the read and refusing the write.
 3. On the Athlon over gremote (`tools/probe/`, `Remote("10.0.0.125", <secret>)`),
    because that is the box where the ui lane's last four bugs were found.
+
+   **Carried to stage 5, 2026-10-11, and here is the reasoning rather than a
+   quiet deletion.** The machine is switched off and powering it on is a
+   physical act nobody in this session can perform; four checks returned
+   "No route to host". Two things make carrying it the right call rather
+   than a dodge. This stage's exit condition in `ROADMAP.md` never named the
+   Athlon -- it is "the fruit is picked, an injection run is repeatable
+   without risking the guest, and nothing in stage 3 is waiting on an
+   answer", and all three hold. And stage 5 is *the hardware measurements*;
+   a clipboard run on real iron is one of those, sitting with the eight P200
+   checklist items rather than alone at the end of a software stage.
+
+   What it would add over the guest run is a second machine: retail 98 on
+   real hardware and a LAN instead of slirp. What it would NOT add is the
+   platform facts, which the QEMU guest already settled -- `no_clip_text` on
+   an empty clipboard, a write landing in Notepad, a read seeing what
+   Notepad copied, and `[Ctrl+A]` selecting nothing, which corrected the
+   tool's own description. Those are USER32 behaviours with no clock in
+   them.
+
+   One command when the box is up, and it needs `self_update()` first
+   because the copy there predates this build:
+
+       .venv/bin/python -u tools/probe/clipprobe.py --remote 10.0.0.125:<secret>
 
 **The exec change**: three new cases in `tests/python/services/test_guest_exec.py`,
 then one real wrapped failure and one builtin failure on the VM through the
