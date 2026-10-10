@@ -4211,9 +4211,11 @@ from the CD has ever had the in-process tier; and a `type` step with `in:`
 reported ok and typed nothing, because `in` resolved a control and then
 only checked that its WINDOW was in front -- the same hole `typeText` had
 closed in October, which the step runner never inherited (BACKLOG 33, now
-`Input::focusChild` with both callers on it). One is open: free memory
-falls ~16 KB per connection with no plateau, and whose memory it is has not
-been established (BACKLOG 32).
+`Input::focusChild` with both callers on it). The third was measured rather than
+fixed: free memory falls ~16 KB per connection with no plateau, and exiting
+gremote does not give it back -- so it is not this program's, and
+`mem_free_kb` being `dwAvailPhys` is the likelier story. BACKLOG 32 keeps
+it, because the same field is used as a footprint proxy elsewhere.
 
 Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
 `agent-turn-ui-vm-20261011.txt` and its screenshot. Probes:

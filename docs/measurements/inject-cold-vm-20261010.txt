@@ -94,7 +94,16 @@ once -- BACKLOG 2 records that the famous "28 KB free after a turn" was
 the same field and never a hard wall. Win98 not returning pages to the
 free pool looks identical from here to gremote not freeing them.
 
-The test that settles it costs five minutes and was not run: stop
-gremote, read free memory again. If it comes back, the memory was
-gremote's and this is a leak; if it does not, it is the VMM's. Recorded
-as BACKLOG 32 rather than guessed at here.
+The test that settles it was run the next day, 2026-10-11:
+
+    free before 16 connections        2,956 KB
+    free after                        2,696 KB   (-260, as predicted)
+    gremote exited from its tray menu ("20 served")
+    free from a FRESH gremote         2,416 KB   (-280 further, not +260)
+
+**It did not come back.** None of the memory those twenty connections cost
+was in the process that served them, so it is not a leak in gremote -- the
+thing this was opened to suspect. What is left is the platform or the
+instrument, and `mem_free_kb` is `dwAvailPhys`, which this project has
+already been misled by once. BACKLOG 32 carries it, including what it
+costs for any figure measured the same way.

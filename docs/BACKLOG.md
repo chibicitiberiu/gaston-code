@@ -2812,11 +2812,13 @@ paid by whoever writes it: a terminal client either renders HTML or reverses it.
 
 ---
 
-## 32. Free memory falls about 16 KB per connection, and nobody knows whose it is
+## 32. Free memory falls about 16 KB per connection -- and it is not gremote's
 
-**Status:** found 2026-10-10 by the watch that BACKLOG 15 asked for, which
-was looking for something else entirely. Measured, reproducible, cause
-unestablished -- and the test that would establish it is five minutes long.
+**Status:** found 2026-10-10 by the watch BACKLOG 15 asked for, which was
+looking for something else. **The experiment below was run on 2026-10-11
+and answered the question it was written for: the memory is not gremote's.**
+Open as a caution about the instrument rather than as a defect in this
+program.
 
 `docs/measurements/inject-cold-vm-20261010.txt` has the run. On the QEMU
 guest, with gremote answering and nothing else happening:
@@ -2842,33 +2844,56 @@ records that the famous "28 KB free after a turn" was the same number and
 never a hard wall. Windows 98 declining to return pages to the free pool
 looks exactly like gremote declining to free them, from outside.
 
-### The test that settles it, and it is cheap
+### The test, and what it said
 
-Stop gremote and read free memory again -- through `execprobe.exe`, which
-prints `GlobalMemoryStatus` and does not need the server
-(`win/checks/execprobe.cpp`), for the reason §29 already gives: the
-instrument cannot be the thing being measured. If the ~180 KB comes back,
-it was gremote's and this is a leak. If it does not, it is the VMM's and
-this entry closes as a property of the platform.
+Stop gremote and read free memory again: if the memory comes back, it was
+gremote's. Run 2026-10-11 on the QEMU guest:
 
-### Where to look first if it is ours
+```
+free before 16 connections        2,956 KB
+free after                        2,696 KB   (-260, as predicted)
+gremote exited from its tray menu ("20 served")
+free from a FRESH gremote         2,416 KB   (-280 further, not +260)
+```
 
-The lanes are the **Session's**, not the process's (`win/remote/server.h`),
-so every connection builds and tears down a job, an fs and -- since step 6
--- a **ui** worker, and the ui one is the only lane with thread-bound state:
-a message queue, a COM apartment, a message filter and a WinEvent hook.
-`Session::end` joins each lane with a 5,000 ms budget and, when that fails,
-`ServerService` takes the `m_session.release()` branch and **leaks the
-Session deliberately** rather than freeing memory a live thread is still
-standing on. That branch is the first thing to check: if a ui worker is
-routinely missing its join, every connection leaks a Session, and the size
-would be the worker's committed stack rather than the whole object -- which
-is the right order of magnitude for 16 KB.
+**It did not come back.** Killing the process that served those twenty
+connections returned none of the memory, so none of it was in that
+process's address space -- which is what a user-mode leak in gremote would
+have meant and is the thing this entry was opened to suspect. (The fresh
+server being lower still is consistent: starting a process costs memory and
+nothing was reclaimed.)
 
-A second candidate costs nothing to rule out: the Win32 heap does not return
-freed pages to the OS, so a connection that allocates and frees cleanly can
-still grow the process's committed memory once and never again. That one
-predicts a plateau, and 21 connections showed none.
+So the C++ is not where this lives. What remains is the platform or the
+instrument, and the entry stays open to say which:
+
+* `mem_free_kb` is `dwAvailPhys`, and §2 already records this project
+  being misled by that exact field -- the famous "28 KB free after a turn"
+  was the same number and never a hard wall. A gauge that does not go back
+  up when a process dies is not measuring what a reader assumes.
+* If something really is not being returned, it is kernel-side -- 9x
+  socket or per-connection objects outliving the process that owned them --
+  and no change to gremote's heap touches it.
+
+### What this costs elsewhere, which is the reason to keep the entry
+
+**Free physical memory is used as a proxy for a program's footprint in at
+least two places**: `tools/probe/wsprobe.py` and the method in
+`docs/measurements/workingset-vm-20261002.txt`, which §29 leans on for
+gremote's trim. If the number drifts down with activity and does not
+recover when the process exits, a "working set" read that way is measuring
+the machine's history as much as the program. Any figure §29 relies on
+should be taken against a freshly booted guest, or with a different
+instrument.
+
+### Ruled out by that run
+
+`Session::end`'s deliberate leak branch was the first suspect and is no
+longer one. The lanes are the Session's, not the process's, so a ui worker
+routinely missing its 5,000 ms join would leak a Session per connection --
+but every byte of that is in gremote's address space and would have come
+back when gremote exited. It did not. The same argument retires the Win32
+heap's refusal to return freed pages, which in any case predicts a plateau
+that 21 connections never showed.
 
 ---
 
