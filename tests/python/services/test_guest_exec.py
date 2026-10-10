@@ -155,3 +155,105 @@ async def test_a_bare_spawn_failure_says_there_was_no_shell(mock_conn, mock_gues
     res = await task
     await sim
     assert "reported no shell" in res["content"][0]["text"]
+
+
+# --- when the exit status could not be established -------------------------
+#
+# The wrapper (bridge/services/execwrap.py) recovers zero-versus-non-zero on a
+# shell that loses it. These are the cases where it could not, and where a
+# silent `code=0` would otherwise read as success -- BACKLOG 17.
+
+
+def _seed(guest, **kw):
+    fut = asyncio.get_running_loop().create_future()
+    guest.exec_pending["x1"] = ExecCall(future=fut, **kw)
+    return fut
+
+
+async def _finish(svc, guest, body=b"out\n", code="0"):
+    if body:
+        await svc.exec_out(guest, Frame("EXECOUT", {"id": "x1"}, body))
+    await svc.exec_result(
+        guest, Frame("EXECRESULT", {"id": "x1", "status": "ok", "code": code}))
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_wrapper_says_the_status_is_unknown(mock_conn,
+                                                            mock_guest):
+    """No fs lane, no temp directory, or a failed write: the command still
+    runs and the 0 beside it means nothing. Saying nothing is how the agent
+    reads a silent 0 as success."""
+    svc = GuestExecService(connection=mock_conn)
+    fut = _seed(mock_guest, code_lost=True)
+    await _finish(svc, mock_guest)
+    assert "Exit status unknown" in fut.result()["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_a_wrapper_whose_verdict_never_arrived_says_so(mock_conn,
+                                                             mock_guest):
+    """The wrapper ran, and its line is not in the output -- the command
+    killed the shell, or the cap bit before the sentinel."""
+    svc = GuestExecService(connection=mock_conn)
+    fut = _seed(mock_guest, wrapped=True)
+    await _finish(svc, mock_guest, body=b"half an answer\n")
+    assert "Exit status unknown" in fut.result()["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_that_arrived_claims_nothing_extra(mock_conn,
+                                                           mock_guest):
+    """An `ok` verdict is the one case that says nothing at all: the output
+    is the answer, and a sentence claiming success is a line in every reply
+    saying nothing."""
+    svc = GuestExecService(connection=mock_conn)
+    fut = _seed(mock_guest, wrapped=True)
+    await _finish(svc, mock_guest, body=b"it worked\n.gaston-rc ok\n")
+    text = fut.result()["content"][0]["text"]
+    assert "Exit status unknown" not in text
+    assert ".gaston-rc" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_shell_that_reports_its_code_claims_nothing(mock_conn,
+                                                            mock_guest):
+    """`shell: "none"` spawns the program directly and the code is real, so
+    there is nothing to disclaim."""
+    svc = GuestExecService(connection=mock_conn)
+    fut = _seed(mock_guest)
+    await _finish(svc, mock_guest)
+    assert "Exit status unknown" not in fut.result()["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_no_fs_lane_marks_the_call_as_unverifiable(mock_conn,
+                                                         mock_guest):
+    """The flag is set where the knowledge is -- which shell, and whether the
+    verb is a built-in -- not where the sentence is written."""
+    from types import SimpleNamespace
+
+    # An inventory is a flat list of facts filtered by `kind`, not an object
+    # with a `.shells` attribute -- toolrules.shells_of.
+    mock_guest.tools = [SimpleNamespace(kind="shell", name="command.com",
+                                        path="C:\\WINDOWS\\COMMAND.COM")]
+    mock_guest.hello = {"temp": "C:\\WINDOWS\\TEMP"}
+    svc = GuestExecService(connection=mock_conn)      # fs is None
+
+    async def simulate():
+        for _ in range(400):            # bounded: a hang here is a test bug
+            if mock_guest.exec_pending:
+                break
+            await asyncio.sleep(0.005)
+        assert mock_guest.exec_pending, "exec was never submitted"
+        assert mock_guest.exec_pending["x1"].code_lost is True
+        assert mock_guest.exec_pending["x1"].wrapped is False
+        await svc.exec_result(mock_guest, Frame(
+            "EXECRESULT", {"id": "x1", "status": "ok", "code": "0"}))
+
+    task = asyncio.create_task(svc.run_on_guest(
+        "myprog", timeout_ms=5000, shell="command.com", cwd="",
+        guest=mock_guest))
+    sim = asyncio.create_task(simulate())
+    res = await task
+    await sim
+    assert "Exit status unknown" in res["content"][0]["text"]

@@ -45,6 +45,13 @@ class ExecCall:
     #: whether to look for it, and looking for it when nothing wrote it would
     #: strip a line out of a program's real output.
     wrapped: bool = False
+    #: The wrapper WOULD have told us the exit status and did not run -- no fs
+    #: lane, no `temp` header, or a failed write. Carried because the knowledge
+    #: is at submit time (which shell, and whether the verb is a built-in) and
+    #: the sentence is at reply time. Distinct from `wrapped`: that one says
+    #: whether to look for the sentinel, this one says whether the absence of a
+    #: verdict is worth reporting.
+    code_lost: bool = False
 
 
 @dataclass

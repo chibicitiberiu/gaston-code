@@ -134,14 +134,20 @@ class GuestExecService:
                                   if toolrules.usable_shells(guest.tools)
                                   else "")
         temp_dir = (guest.hello or {}).get("temp", "")
-        if (shell_name and temp_dir and self.fs is not None
-                and execwrap.applies(shell_name, command)):
+        # `applies` is the whole question of whether a verdict was available to
+        # be had: it is false for a shell whose code survives, for an empty
+        # command, and for a built-in. So "it applied and we did not wrap"
+        # is exactly the case where the 0 on the wire means nothing and nobody
+        # has said so.
+        code_lost = bool(shell_name) and execwrap.applies(shell_name, command)
+        if code_lost and temp_dir and self.fs is not None:
             dest = execwrap.path(shell_name, temp_dir)
             try:
                 await self.fs.put(guest, dest,
                                   execwrap.body(shell_name, command))
                 run_command = dest
                 wrapped = True
+                code_lost = False
             except (FsError, TimeoutError, OSError) as exc:
                 # Not fatal and not silent. The command still runs, exactly as
                 # it did before this existed; what is lost is the ability to
@@ -169,7 +175,8 @@ class GuestExecService:
             fut = asyncio.get_running_loop().create_future()
             guest.exec_pending[exec_id] = ExecCall(future=fut,
                                                    no_shell=no_shell,
-                                                   wrapped=wrapped)
+                                                   wrapped=wrapped,
+                                                   code_lost=code_lost)
 
             for label, value in (("command", command), ("cwd", cwd)):
                 bad = fold.unrepresentable(value)
@@ -342,6 +349,15 @@ class GuestExecService:
             pass            # success needs no sentence; the output is the answer
         elif code not in ("", "0") and status == ExecStatus.OK:
             parts.append(f"Exit code {code}.")
+        elif status == ExecStatus.OK and (entry.code_lost
+                                          or (entry.wrapped and not verdict)):
+            # Last, because every branch above it has something more specific
+            # to say. Two ways here: the wrapper never ran (entry.code_lost) or
+            # it ran and its line never came back -- the command killed the
+            # shell, or the output cap bit before the sentinel. Either way the
+            # `code` beside this is the shell's 0, and a silent 0 reads as
+            # success. BACKLOG 17.
+            parts.append(prompts.text("tools.exec.notes.unknown").strip())
         if truncated:
             if entry.capped:
                 parts.append(

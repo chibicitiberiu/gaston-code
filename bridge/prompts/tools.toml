@@ -48,6 +48,18 @@ The machine reported no shell, so this ran as a program directly: shell built-in
 # note already says. 205 characters to say "it failed".
 failed = '''
 Non-zero exit status: this failed.'''
+# AND WHEN THE WRAPPER COULD NOT SPEAK. Three ways that happens: the machine
+# has no fs lane or no temp directory to write the wrapper into, the write
+# failed, or the verdict line never came back because the command killed the
+# shell or the output cap bit first. In each case `code` is this shell's 0,
+# which proves nothing -- and saying nothing lets the agent read a silent 0 as
+# success, which is the defect the wrapper exists to fix, arriving by a
+# different road. Said only when the shell is one whose code is lost AND the
+# command is not a built-in: a built-in has no code to recover on any shell,
+# and the shell's resident note already says exit is 0 either way, so claiming
+# it per call would spend context on every `dir` to repeat a fact already given.
+unknown = '''
+Exit status unknown for this one: check the output rather than assuming it worked.'''
 
 [sync_status]
 description = '''
