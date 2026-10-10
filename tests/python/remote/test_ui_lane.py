@@ -68,6 +68,11 @@ def test_the_handshake_declares_the_lane(remote):
     assert remote.hello["keys"].isdigit(), remote.hello
     assert remote.hello["msaa"] in ("0", "1"), remote.hello
     assert remote.hello["machine"], remote.hello
+    # Its own key, because `automation` says what this box ALLOWS and never
+    # what this build HAS -- a CLIP sent to a gremote that predates the op
+    # comes back `unknown_op`, and a caller has no way to tell that from a
+    # refusal unless the handshake said so first.
+    assert remote.hello["clip"] == "1", remote.hello
 
 
 def test_a_tree_comes_back_with_selectors(remote):
@@ -86,6 +91,36 @@ def test_a_screenshot_is_a_bmp(remote):
     img = remote.shot(w=64, h=48)
     assert img[:2] == b"BM", img[:16]
     assert len(img) > 54, len(img)
+
+
+def test_the_clipboard_round_trips(remote):
+    """Set then get, through the real codec and the real lane. Wine has a
+    clipboard; the guest's own case asserts only self-consistency because a
+    headless host may not."""
+    remote.clipboard("over the wire and back")
+    assert remote.clipboard() == "over the wire and back"
+
+
+def test_an_empty_clipboard_is_an_empty_string_not_a_refusal():
+    """Nothing copied is not an error, and the guest spends no DATA frame
+    saying so -- `bytes=0` is the answer. Its own server, because emptying
+    the clipboard would upset the round trip above whichever order they
+    run in."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        with _server(pathlib.Path(tmp)) as server:
+            with Remote("127.0.0.1", SECRET, port=server.port) as r:
+                r.clipboard("")
+                assert r.clipboard() == ""
+
+
+def test_a_clipboard_read_over_the_ceiling_is_refused(remote):
+    """Half of what somebody copied reads exactly like all of it, so the
+    prefix is not returned."""
+    from gremote.errors import RemoteError
+    remote.clipboard("x" * 4000)
+    with pytest.raises(RemoteError, match=r"more than|arrived"):
+        remote.clipboard(max_bytes=64)
 
 
 def test_a_shot_over_the_ceiling_is_refused_while_it_arrives(remote):
@@ -170,7 +205,9 @@ def test_automation_off_refuses_every_desktop_op(tmp_path):
         with Remote("127.0.0.1", SECRET, port=server.port) as r:
             assert r.hello["automation"] == "0", r.hello
             for call in (lambda: r.tree(),
-                         lambda: r.shot(w=32, h=32)):
+                         lambda: r.shot(w=32, h=32),
+                         lambda: r.clipboard(),
+                         lambda: r.clipboard("nope")):
                 with pytest.raises(Refused) as e:
                     call()
                 assert e.value.code == "automation_off", e.value.code
@@ -187,6 +224,18 @@ def test_read_only_reads_and_photographs_but_does_not_drive(tmp_path):
             assert r.hello["automation"] == "1", r.hello
             r.tree(max_nodes=50)
             assert r.shot(w=32, h=32)[:2] == b"BM"
+            # The clipboard splits along the same line: reading what was
+            # copied is looking, replacing it is driving. The READ may
+            # legitimately refuse `no_clip_text` -- a fresh Wine has nothing
+            # on its clipboard -- so what is asserted is that it was not
+            # refused for the capability.
+            try:
+                r.clipboard()
+            except Refused as e:
+                assert e.code == "no_clip_text", e.code
+            with pytest.raises(Refused) as e:
+                r.clipboard("not at this level")
+            assert e.value.code == "automation_off", e.value.code
             run = r.run([{"focus": "Progman"}])
             assert run.status == "automation_off", run
 

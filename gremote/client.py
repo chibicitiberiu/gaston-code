@@ -462,6 +462,38 @@ class Remote:
                 f"{len(data)} arrived")
         return data
 
+    def clipboard(self, text: str | None = None, *,
+                  max_bytes: int = 256 * 1024,
+                  timeout: float = 15.0) -> str:
+        """Read the machine's clipboard, or replace it when `text` is given.
+
+        Returns the text on a read and "" on a write. A read that came back
+        truncated says so through `RemoteError` rather than handing back a
+        prefix: half of what somebody copied reads exactly like all of it.
+
+        CP1252 both ways, through `fold`, which is what CF_TEXT means on that
+        machine -- and `encode_exact`, so a character it cannot carry is
+        refused here rather than arriving as a question mark nobody notices.
+        """
+        from bridge.wire import fold
+        if text is not None:
+            body = fold.encode_exact(text)
+            self.request("CLIP", {"op": "set"}, body=body, timeout=timeout)
+            return ""
+        end, chunks = self.stream("CLIP", {"op": "get"}, timeout=timeout,
+                                  max_body_bytes=max_bytes)
+        data = b"".join(c.body for c in chunks)
+        declared = int(end.headers.get("bytes", "0"))
+        if declared and len(data) != declared:
+            raise RemoteError(
+                f"the machine said {declared} bytes of text and "
+                f"{len(data)} arrived")
+        if end.headers.get("truncated") == "1":
+            raise RemoteError(
+                "there was more on the clipboard than one read carries; "
+                "nothing is returned rather than a prefix")
+        return fold.decode(data)
+
     def png(self, **kw) -> bytes:
         """`shot`, converted. Needs Pillow on THIS side; the guest sends a
         native-depth BMP because converting is not its job."""
