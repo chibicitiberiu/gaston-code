@@ -12,9 +12,10 @@ Everything here is built and verified on Wine and on the QEMU guest. What is
 left is one item: the clipboard on the Athlon, which needs the machine
 switched on. `tools/probe/clipprobe.py --remote <host>:<secret>` is the run.
 
-Two defects were found along the way and recorded rather than fixed here:
-BACKLOG 32 (free memory falls ~16 KB per connection) and BACKLOG 33 (a
-`type` step reported ok and typed nothing).
+Two defects were found along the way. BACKLOG 33 -- a `type` step reporting
+ok having typed nothing -- is fixed and verified on the guest. BACKLOG 32 --
+free memory falling ~16 KB per connection -- is open, because what it needs
+is a five-minute experiment to say whose memory it is, not a guess.
 
 
 ## Context

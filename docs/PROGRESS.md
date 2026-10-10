@@ -4205,15 +4205,20 @@ settled it was pasting inside the guest. And the first agent turn through
 the UI tier reported that it could not see the Gaston Code window, which is
 `excludePid` being right and nothing having told the model so.
 
-**Three defects found and recorded rather than chased**: free memory falls
-~16 KB per connection with no plateau (BACKLOG 32), a `type` step with
-`in:` reported ok and typed nothing (BACKLOG 33), and `SETUP.BAT` never
-copied `HOOKDLL.DLL` because it is not an `.EXE` -- so no machine installed
-from the CD has ever had the in-process tier (fixed).
+**Three defects found by the testing.** Two were fixed: `SETUP.BAT` never
+copied `HOOKDLL.DLL` because it is not an `.EXE`, so no machine installed
+from the CD has ever had the in-process tier; and a `type` step with `in:`
+reported ok and typed nothing, because `in` resolved a control and then
+only checked that its WINDOW was in front -- the same hole `typeText` had
+closed in October, which the step runner never inherited (BACKLOG 33, now
+`Input::focusChild` with both callers on it). One is open: free memory
+falls ~16 KB per connection with no plateau, and whose memory it is has not
+been established (BACKLOG 32).
 
 Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
 `agent-turn-ui-vm-20261011.txt` and its screenshot. Probes:
 `tools/probe/clipprobe.py`.
 
 **What stage 1 still owes:** the clipboard on the Athlon, which needs the
-machine switched on.
+machine switched on -- `tools/probe/clipprobe.py --remote <host>:<secret>`
+is the whole of it.
