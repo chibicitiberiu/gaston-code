@@ -24,33 +24,27 @@ IF EXIST PROBE.LOG DEL PROBE.LOG
 CLS
 ECHO  PART ONE -- nothing needs to be on screen for these.
 ECHO.
-ECHO  [1/20] platform, CPU and memory
+ECHO  [1/21] platform, CPU and memory
 PROBE.EXE platform
 REM Everything after this point prints to the screen AND appends to
 REM PROBE.LOG, and the screen is not what gets sent back. If the folder is
 REM not writable -- run from the CD, or from a floppy -- every step still
 REM runs, still looks right, and leaves nothing behind. Stop here instead.
 IF NOT EXIST PROBE.LOG GOTO NOLOG
-ECHO  [2/20] threads
+ECHO  [2/21] threads
 PROBE.EXE threads
-ECHO  [3/20] 16-bit EXEC capture
+ECHO  [3/21] 16-bit EXEC capture
 PROBE.EXE exec
-ECHO  [4/20] deflate throughput  -- THE number we cannot fake
+ECHO  [4/21] deflate throughput  -- THE number we cannot fake
 PROBE.EXE deflate
-ECHO  [5/20] which hook APIs exist
+ECHO  [5/21] which hook APIs exist
 PROBE.EXE hooks
-ECHO  [6/20] do they deliver, and whose process (Notepad)
+ECHO  [6/21] do they deliver, and whose process (Notepad)
 PROBE.EXE events
-ECHO  [7/20] event latency and completeness    (Notepad)
+ECHO  [7/21] event latency and completeness    (Notepad)
 PROBE.EXE evlat
-ECHO  [8/20] WaitForControl / WaitForText      (Notepad)
+ECHO  [8/21] WaitForControl / WaitForText      (Notepad)
 PROBE.EXE waitfor
-ECHO  [9/20] can our DLL get into a process    (Notepad)
-PROBE.EXE inject
-ECHO  [10/20] can that be aimed at ONE process (Notepad)
-PROBE.EXE targeted
-ECHO  [11/20] which text call each drawing module makes
-PROBE.EXE gditext
 CLS
 ECHO ==============================================================
 ECHO   PART TWO needs a busy screen.
@@ -73,25 +67,73 @@ ECHO.
 ECHO  Waiting for you. Press a key once the page is up.
 PAUSE
 CLS
-ECHO  [12/20] screen capture and BI_RLE8
+ECHO  [9/21] screen capture and BI_RLE8
 PROBE.EXE screen
-ECHO  [13/20] depth ladder, raw vs deflate vs RLE
+ECHO  [10/21] depth ladder, raw vs deflate vs RLE
 PROBE.EXE depths
-ECHO  [14/20] writing BMPs for off-machine checking
+ECHO  [11/21] writing BMPs for off-machine checking
 PROBE.EXE verify
-ECHO  [15/20] ImageClick, cost of a template scan
+ECHO  [12/21] ImageClick, cost of a template scan
 PROBE.EXE imgfind
-ECHO  [16/20] oleacc, foreground lock, window census
+ECHO  [13/21] oleacc, foreground lock, window census
 PROBE.EXE automation
-ECHO  [17/20] cost of a window walk
+ECHO  [14/21] cost of a window walk
 PROBE.EXE uiwalk
-ECHO  [18/20] what MSAA adds
+ECHO  [15/21] what MSAA adds
 PROBE.EXE msaa
-ECHO  [19/20] reading the browser page as a tree
+ECHO  [16/21] reading the browser page as a tree
 PROBE.EXE dom
-ECHO  [20/20] the automation library itself
+ECHO  [17/21] the automation library itself
 AUTOCHK.EXE > AUTOCHK.TXT
 CLS
+ECHO ==============================================================
+ECHO   PART THREE -- the ones that put our code in other programs.
+ECHO ==============================================================
+ECHO.
+ECHO  These three load a DLL into programs that did not ask for it.
+ECHO  They have killed Explorer once, and one session in September
+ECHO  ended with this machine spinning at full speed and taking no
+ECHO  input, hours after every gate had passed. Nothing proved the
+ECHO  gates did it. Nothing proved they did not.
+ECHO.
+ECHO  So they run LAST and on their own: everything above is
+ECHO  already measured and written down, whatever happens here.
+ECHO  A health check follows them and says whether this machine is
+ECHO  still answering.
+ECHO.
+ECHO  Press Ctrl-C to stop here and keep what you have, or a key
+ECHO  to go on.
+ECHO.
+PAUSE
+CLS
+ECHO  [18/21] can our DLL get into a process    (Notepad)
+PROBE.EXE inject
+ECHO  [19/21] can that be aimed at ONE process  (Notepad)
+PROBE.EXE targeted
+ECHO  [20/21] which text call each drawing module makes
+PROBE.EXE gditext
+ECHO.
+ECHO  [21/21] is this machine still healthy?
+AUTOCHK.EXE --health
+IF ERRORLEVEL 1 GOTO SICK
+ECHO  -- still answering.
+GOTO DONE
+:SICK
+ECHO.
+ECHO  ***********************************************************
+ECHO   THIS MACHINE IS NOT ANSWERING PROPERLY ANY MORE.
+ECHO.
+ECHO   One of the three checks above failed: the keyboard, the
+ECHO   foreground, or the disk. Everything measured before PART
+ECHO   THREE is still good and still in PROBE.LOG -- send it back
+ECHO   and SAY THAT THIS HAPPENED, because it is the thing we have
+ECHO   been trying to catch since September.
+ECHO.
+ECHO   Reboot before using this machine for anything else.
+ECHO  ***********************************************************
+ECHO.
+PAUSE
+:DONE
 CLS
 ECHO ==============================================================
 ECHO   Done. Please send back, from this folder:

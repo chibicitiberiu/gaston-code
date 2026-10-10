@@ -873,7 +873,14 @@ check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
 # and libautomation's new input primitives -- 203,633 measured. A test
 # harness that never ships; the cap is here so it notices growth, not to
 # hold it to the client's budget.
-check-autocheck: CHECK_CAP   = 212000
+# 212,000 -> 220,000 (2026-10-10): `--health`, the epilogue BACKLOG 15 asks
+# for -- a window, a keystroke read back through the control, and a write.
+# 211,816 measured, which left 184 bytes: under the cap, and a cap with 184
+# bytes behind it is a tripwire for whoever writes the next line rather than
+# a budget. Raised to the next round number with room for the mode to grow a
+# fourth question, since the thing it is watching for is a jump, not a
+# kilobyte.
+check-autocheck: CHECK_CAP   = 220000
 
 check-gaston: CHECK_OWNED = $(OBJS)
 check-gaston: CHECK_CAP   = $(COMMITTED_CAP)

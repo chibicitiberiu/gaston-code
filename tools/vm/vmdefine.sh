@@ -22,9 +22,21 @@ if grep -q "boot dev='fd'" "$XML"; then
     echo "REFUSING: $XML boots the floppy first. That reruns Setup over the install." >&2
     exit 1
 fi
+# THE FLOPPY GUARD IS NOW A WARNING, because the thing it refuses is the
+# committed configuration. It was written when a floppy in the XML meant a
+# leftover install disk that would boot ahead of the hard disk; vm/xfer.img
+# was added afterwards as the guest's way to hand files back, and from that
+# day this script could not define vm/win98.xml at all -- it exited 1 on the
+# repo's own file. Booting from a floppy is the real hazard and `boot dev`
+# above still refuses it outright.
+#
+# What it costs is real and is said out loud: a raw floppy means QEMU's
+# internal snapshots (qmp.py save/load) do not work on this domain. The
+# rollback is tools/vm/vmsnap.sh.
 if grep -q "device='floppy'" "$XML"; then
-    echo "REFUSING: $XML still has a floppy device attached." >&2
-    exit 1
+    echo "vmdefine: note: $XML attaches a floppy (vm/xfer.img). That is the
+            guest's return channel and is expected. It does mean QEMU's
+            internal snapshots are unavailable -- use tools/vm/vmsnap.sh."
 fi
 
 virsh define "$XML"

@@ -2151,6 +2151,155 @@ static int clickSel(const char *text)
     return x == INPUT_OK ? 0 : 1;
 }
 
+/* ---- --health: is this machine still alive? ------------------------------
+ *
+ * BACKLOG 15. The injection gates put our code inside programs that did not
+ * ask for it, and one session in 2026-09 ended with the guest spinning at a
+ * full vCPU, taking no input, hours after a battery that passed 158 of 158.
+ * A run that cannot say whether the machine survived it is not finished,
+ * however green its own output is.
+ *
+ * Three questions, which are the three BACKLOG 15 asks for: does a keystroke
+ * still change the screen, does a window still take the foreground, and does
+ * a write still land. Nothing clever -- the failure being looked for is a
+ * machine that has stopped doing ordinary things.
+ *
+ * IT LIVES HERE AND NOT IN probe.c, which is where it was first planned.
+ * `probe.c` has no input injection at all: `PostMessageA` is the furthest it
+ * goes, and a posted message proves a queue is being drained, not that the
+ * input path works. This program links libautomation, already types into
+ * another process for `--type-into`, and is already in the kit.
+ *
+ * THE EXIT CODE IS THE POINT. Every other mode here returns 0 and lets the
+ * verdict rows carry the result, because a check that cannot run is a
+ * different thing from a check that failed. This one is read by a batch file
+ * after a gate that may have damaged the machine, so it returns non-zero when
+ * the machine is not healthy and TEST.BAT branches on ERRORLEVEL.
+ */
+static int health(void)
+{
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = (WNDPROC)sinkProc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "GastonHealth";
+    RegisterClassA(&wc);
+
+    static char detail[200];
+    int bad = 0;
+
+    /* A real window, shown, because the question is whether the DESKTOP
+     * still works -- an invisible one would answer a narrower question than
+     * the one being asked. */
+    HWND top = CreateWindowExA(0, "GastonHealth", "health", WS_OVERLAPPEDWINDOW,
+                               60, 60, 320, 120, NULL, NULL, wc.hInstance, NULL);
+    if (!top)
+    {
+        say("health-window", false, "CreateWindow failed");
+        return 1;
+    }
+    HWND edit = CreateWindowExA(0, "EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
+                                8, 8, 290, 24, top, NULL, wc.hInstance, NULL);
+    ShowWindow(top, SW_SHOW);
+    UpdateWindow(top);
+    Sleep(300);
+
+    /* 1. The foreground still moves.
+     *
+     * NOT `Input::focus`, which refuses a window belonging to this process
+     * on purpose -- `isOurs` compares the PID so the agent cannot type into
+     * our own input box in a self-feeding loop, and the health window is
+     * ours by construction. That guard is right and this is the one caller
+     * it gets in the way of, so this asks the OS directly and checks the
+     * answer the same way focus() would. */
+    Input in;
+    SetForegroundWindow(top);
+    Sleep(200);
+    HWND fg = GetForegroundWindow();
+    bool focused = fg == top || GetParent(fg) == top;
+    rc_strf(detail, sizeof(detail), "foreground=%s",
+            focused ? "ours" : "somebody else's");
+    say("health-a-window-takes-the-foreground", focused, detail);
+    if (!focused)
+        bad++;
+
+    /* 2. A keystroke still reaches a control and changes what is on screen.
+     *    Read back through the control's own text, because that is the thing
+     *    a person would be looking at. */
+    char got[64];
+    got[0] = '\0';
+    bool typed = false;
+    if (edit)
+    {
+        /* The step runner's primitive rather than `typeText`, for the same
+         * reason: that one focuses, and focusing our own window is refused.
+         * This is also the path a step list takes, so it is the one worth
+         * knowing still works. */
+        SetFocus(edit);
+        unsigned sent = 0, badAt = 0;
+        InputResult tr = in.typeChars("health", 6,
+                                      GetKeyboardLayout(0), top, sent, badAt);
+        /* AND THEN PUMP, which `--type-into` never has to do because its
+         * target is another process dispatching its own messages. Here the
+         * Edit control is on this thread: keybd_event posts to the system
+         * queue and returns, and if nothing dispatches, the keys sit there
+         * and the control reads back empty -- measured, `sent=6` with an
+         * empty box. Half a second of draining, which is far more than a
+         * 1.6GHz machine needs for six keys. */
+        for (int ms = 0; ms < 500; ms += 20)
+        {
+            MSG m;
+            while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage(&m);
+                DispatchMessageA(&m);
+            }
+            Sleep(20);
+        }
+        SendMessageA(edit, WM_GETTEXT, (WPARAM)sizeof(got), (LPARAM)got);
+        typed = tr == INPUT_OK && !strcmp(got, "health");
+        rc_strf(detail, sizeof(detail), "typed=%d sent=%u read back '%s'",
+                (int)tr, sent, got);
+    }
+    else
+        rc_strcpy(detail, sizeof(detail), "no edit control");
+    say("health-a-keystroke-changes-the-screen", typed, detail);
+    if (!typed)
+        bad++;
+
+    /* 3. A write still lands, and reads back as what was written. The disk
+     *    is the one of the three that can fail quietly for a different
+     *    reason -- a full volume -- so the file is small and removed. */
+    bool wrote = false;
+    {
+        const char *path = "HEALTH.TMP";
+        FILE *f = fopen(path, "wb");
+        if (f)
+        {
+            size_t n = fwrite("health", 1, 6, f);
+            fclose(f);
+            char buf[16];
+            memset(buf, 0, sizeof(buf));
+            f = fopen(path, "rb");
+            if (f)
+            {
+                size_t r = fread(buf, 1, 6, f);
+                fclose(f);
+                wrote = n == 6 && r == 6 && !memcmp(buf, "health", 6);
+            }
+            remove(path);
+        }
+        rc_strf(detail, sizeof(detail), "%s", wrote ? "written and read back"
+                                                    : "the write did not land");
+    }
+    say("health-a-write-lands", wrote, detail);
+    if (!wrote)
+        bad++;
+
+    DestroyWindow(top);
+    return bad ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     /* A mode, not a case: it writes a file for the Python side to open, and
@@ -2161,6 +2310,10 @@ int main(int argc, char **argv)
         return typeInto(argv[2], argv[3]);
     if (argc > 2 && !strcmp(argv[1], "--click"))
         return clickSel(argv[2]);
+    /* Non-zero when the machine is not healthy -- unlike every other mode
+     * here. See health() for why that difference is deliberate. */
+    if (argc > 1 && !strcmp(argv[1], "--health"))
+        return health();
 
     (void)argc; (void)argv;
     for (unsigned i = 0; i < sizeof(SECTIONS) / sizeof(SECTIONS[0]); i++)

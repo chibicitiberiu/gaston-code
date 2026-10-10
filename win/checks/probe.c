@@ -3839,9 +3839,18 @@ int main(int argc, char **argv)
     if (!only || !strcmp(only, "imgfind"))  probe_imgfind();
     if (!only || !strcmp(only, "events"))   probe_events();
     if (!only || !strcmp(only, "evlat"))    probe_evlat();
-    if (!only || !strcmp(only, "inject"))   probe_inject();
-    if (!only || !strcmp(only, "targeted")) probe_targeted();
-    if (!only || !strcmp(only, "gditext"))  probe_gditext();
+    /* THE THREE INJECTION GATES ARE NOT IN THE NO-ARGUMENT SWEEP, and that
+     * is the one difference in this list. They load a DLL into programs
+     * that did not ask for it; they have killed Explorer once; and one
+     * session ended with the guest spinning at a full vCPU hours after they
+     * had all passed, with causation never established (BACKLOG 15). The
+     * no-argument path is what an operator types to "just run the probe",
+     * and it should not be able to reach them by accident. TEST.BAT runs
+     * them last, on their own, behind a prompt, with a health check after.
+     * Naming one still runs it. */
+    if (only && !strcmp(only, "inject"))   probe_inject();
+    if (only && !strcmp(only, "targeted")) probe_targeted();
+    if (only && !strcmp(only, "gditext"))  probe_gditext();
     if (!only || !strcmp(only, "waitfor"))  probe_waitfor();
     if (!only || !strcmp(only, "power"))    probe_power();
 

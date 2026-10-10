@@ -490,6 +490,13 @@ def main() -> int:
         q.click(int(rest[0]), int(rest[1]), double=True)
     elif verb == "rclick":
         q.click(int(rest[0]), int(rest[1]), button="right")
+    # save/load are QEMU's internal snapshots, and on THIS domain they fail:
+    # vm/xfer.img is attached raw as the floppy and savevm refuses any VM with
+    # a disk that cannot hold a snapshot. Detaching it costs a full stop and
+    # start (libvirt refuses floppy hotplug) and costs the guest's only way to
+    # hand a file back when the network is what is being tested. Use
+    # tools/vm/vmsnap.sh, which copies the qcow2 with the domain off -- that
+    # is what BACKLOG 15's "known-good rollback" means here.
     elif verb == "save":
         print(q.cmd("human-monitor-command",
                     **{"command-line": f"savevm {rest[0]}"}))
