@@ -291,7 +291,11 @@ def test_every_machine_tool_has_a_category():
     offered must be in the table, or outside the matrix on purpose."""
     from bridge.agent import policy
     guest = _Guest(C.AUTOMATION_STEPS)
-    guest.caps = C.Caps(automation=C.AUTOMATION_STEPS, keys=1, ops=2)
+    # THE FULLEST CLIENT, and it has to stay that: a capability missing here
+    # withholds its tools, the loop below then has nothing to check, and the
+    # gate passes while the table it guards has a hole. `clip` joined on
+    # 2026-10-10 for that reason.
+    guest.caps = C.Caps(automation=C.AUTOMATION_STEPS, keys=1, ops=2, clip=1)
     names = _names(guest)
     outside = {"toolnote", "sync_status"}
     missing = {n for n in names - outside

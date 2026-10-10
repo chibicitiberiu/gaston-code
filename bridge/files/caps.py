@@ -327,6 +327,14 @@ class Caps:
     #: tools are offered, because an FSLS sent to a client that predates it
     #: is answered by nobody and `list_dir` waited out four minutes.
     ops: int = 0
+    #: UICLIP, the clipboard read and written as text (win/net/caps.h
+    #: RC_CAP_CLIP). Its own key and not a value of `ops` or of `automation`,
+    #: for the reason that header records: `automation` says what a machine
+    #: ALLOWS and never what a build HAS, and widening an existing key's
+    #: ceiling would make an older bridge refuse a newer client outright --
+    #: `_num` raises outside the range rather than clamping. 0 means the two
+    #: clipboard tools are not offered.
+    clip: int = 0
     #: The PREFS frame's version (bridge/prefs.py): 1 means the client sends
     #: one straight after HELLO, and the handshake waits for it. 0 for a
     #: client that never said -- and it is never waited for.
@@ -420,7 +428,8 @@ def from_hello(h: dict) -> Caps:
         "acp", "oemcp", "case", "devices", "trailing", "illegal", "eol",
         "shortnames", "maxdepth",
         "dirreserve", "workreserve", "maxpath", "maxcomp", "manifest",
-        "maxfiles", "deflate", "automation", "keys", "ops", "prefs"))
+        "maxfiles", "deflate", "automation", "keys", "ops", "clip",
+        "prefs"))
 
     return Caps(
         acp=acp or Caps.acp,
@@ -463,6 +472,7 @@ def from_hello(h: dict) -> Caps:
         # because the names it would accept are names nobody here can check.
         keys=_num(h, "keys", 0, 0, 1),
         ops=_num(h, "ops", 0, 0, 2),
+        clip=_num(h, "clip", 0, 0, 1),
         prefs=_num(h, "prefs", 0, 0, 1),
         declared=declared,
     )

@@ -78,7 +78,10 @@ public:
     /* A batch of node records, `n` of them, already encoded by uirec. */
     virtual bool records(const void *body, unsigned len, int n) = 0;
 
-    /* Raw bytes of a screenshot. */
+    /* Raw bytes of a payload -- a screenshot, or the clipboard's text. The
+     * BULK channel: UIDAT on the client, a reserved DATA on gremote. Anything
+     * that can be large belongs here and not on `end()`, which carries no
+     * body, nor on `report()`, which the client buffers onto its terminator. */
     virtual bool bytes(const void *body, unsigned len) = 0;
 
     /* The step list's per-step report. The client buffers it and hangs it on

@@ -61,6 +61,41 @@ Non-zero exit status: this failed.'''
 unknown = '''
 Exit status unknown for this one: check the output rather than assuming it worked.'''
 
+[get_clipboard]
+# WHY THIS IS A TOOL AT ALL (the exec test, PLAN.md 3.1): there is no command
+# on that machine that prints the clipboard, so this is not a convenience over
+# a shell call -- it is the only route to it. What it is FOR is the text no
+# message will surrender: a list box's items, a control that answers
+# WM_GETTEXT with nothing, a dialog that paints its text rather than holding
+# it. Select all, copy, read it.
+description = '''
+Read the text on the connected machine's clipboard -- whatever was last copied there, by the person at the keyboard or by you.
+
+Use it for text nothing else will give you: the contents of a list, a control that reads back empty, a message box that paints its text. Drive a copy first with `input` ([Ctrl+A] then [Ctrl+C]), then read it here.'''
+
+[get_clipboard.view]
+empty = '''
+That machine's clipboard is empty.'''
+truncated = '''
+Only the first {bytes} characters are shown; there was more on the clipboard than one read will carry.'''
+
+[set_clipboard]
+# Writing is gated harder than reading (RC_AUTOMATION_STEPS, win/net/caps.h):
+# it replaces what the person at the keyboard last copied, which they cannot
+# get back, so it belongs with typing rather than with looking.
+description = '''
+Put text on the connected machine's clipboard, replacing what was there.
+
+The person at the keyboard loses whatever they had copied, so prefer `put_file` for anything they might want to keep, and use this for what is about to be pasted -- a path, a command, a block of text going into a program that has no other way in.'''
+
+[set_clipboard.args]
+text = '''
+The text to put on the clipboard.'''
+
+[set_clipboard.view]
+done = '''
+{chars} characters are on that machine's clipboard now.'''
+
 [sync_status]
 description = '''
 Report the state of file synchronisation with the connected machine: which of your files could not be copied there and why, which are in conflict, and which are refusing your writes.
@@ -227,6 +262,17 @@ bad_key = '''
 `{key}` is not a key this knows, so NOTHING was typed. The key names are listed in the `input` tool's description (Enter, Tab, Escape, Delete, Backspace, F1-F24, Shift, Ctrl, Alt, AltGr, the arrows, ...), with optional `Ctrl+`, `Alt+` and `Shift+` in a chord. Write `[[`/`]]` or `{{`/`}}` for a literal bracket or brace.'''
 no_memory = '''
 The machine ran out of memory doing that.'''
+# The clipboard's own three. `no_clip_text` and not `no_text`: that one is
+# already spelled "No text was given" above, for a typing call with an empty
+# string, which is the opposite end of the same word.
+no_clip_text = '''
+There is something on that machine's clipboard and it is not text -- an image, or a format only the program that copied it understands. Copying the text again from wherever it came from is the only way to read it from here.'''
+too_big = '''
+That is more than one frame will carry, so nothing was put on the clipboard. Put it in a file with `put_file` instead, or send less of it.'''
+bad_request = '''
+That is not something this knows how to do.'''
+short_clip = '''
+The clipboard text arrived incomplete, so it is not being shown rather than shown wrong. Try again.'''
 busy = '''
 The machine is already doing something on screen. Try again.'''
 automation_off = '''

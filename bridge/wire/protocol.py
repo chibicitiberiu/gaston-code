@@ -644,6 +644,23 @@ def ui_run(ui_id: str, body: bytes, *, timeout_ms: int, step_ms: int,
     return Frame("UIRUN", h, body)
 
 
+def ui_clip(ui_id: str, *, text: bytes | None = None) -> Frame:
+    """Read the machine's clipboard, or replace it.
+
+    `text` is None for a read, which comes back as UIDAT bodies and a UIEND
+    carrying `bytes=` and `truncated=`; bytes for a write, which ride the
+    BODY for the reason a step list does -- a header value is capped at 255
+    encoded bytes, and a document clipped to fit one is a different document.
+
+    One frame type with an `op`, not two types: the two halves share every
+    header, the level gate and the refusal vocabulary, and a second row in
+    the lane table buys nothing.
+    """
+    if text is None:
+        return Frame("UICLIP", {"id": ui_id, "op": "get"})
+    return Frame("UICLIP", {"id": ui_id, "op": "set"}, text)
+
+
 def ui_cancel(ui_id: str) -> Frame:
     """Stop a running step list. The guest answers on the run's own UIEND,
     with `cancelled`; this frame has no reply of its own."""

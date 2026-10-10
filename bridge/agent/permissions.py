@@ -255,7 +255,9 @@ _PLAIN = {"exec": "Run on your machine",
          "delete": "Delete on your machine",
          "copy": "Copy on your machine",
          "rmdir": "Remove a folder on your machine",
-         "launch": "Start a program on your machine"}
+         "launch": "Start a program on your machine",
+         "get_clipboard": "Read your machine's clipboard",
+         "set_clipboard": "Replace your machine's clipboard"}
 
 
 def plain_name(tool_name: str, display: str) -> str:

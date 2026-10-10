@@ -534,7 +534,8 @@ class FakeUiLink : public UiLink
 {
 public:
     FakeUiLink(int level) : m_level(level), m_ended(false), m_nkv(0),
-                            m_reported(0), m_records(0), m_bytes(0),
+                            m_reported(0), m_bulk(0),
+                            m_records(0), m_bytes(0),
                             m_stop(0)
     {
         m_status[0] = '\0';
@@ -557,7 +558,16 @@ public:
         return true;
     }
     virtual bool records(const void *, unsigned, int) { m_records++; return true; }
-    virtual bool bytes(const void *, unsigned) { m_bytes++; return true; }
+    virtual bool bytes(const void *body, unsigned len)
+    {
+        m_bytes++;
+        m_bulk = len;
+        unsigned n = len < sizeof(m_body) - 1 ? len : sizeof(m_body) - 1;
+        if (n)
+            memcpy(m_body, body, n);
+        m_body[n] = '\0';
+        return true;
+    }
     virtual bool report(const void *body, unsigned len)
     {
         m_reported = len;
@@ -580,6 +590,7 @@ public:
     bool ended() const { return m_ended; }
     int headers() const { return m_nkv; }
     unsigned reported() const { return m_reported; }
+    unsigned bulk() const { return m_bulk; }
     const char *body() const { return m_body; }
     int recordFrames() const { return m_records; }
     int byteFrames() const { return m_bytes; }
@@ -589,6 +600,7 @@ private:
     bool     m_ended;
     int      m_nkv;
     unsigned m_reported;
+    unsigned m_bulk;
     int      m_records;
     int      m_bytes;
     UiLimits m_limits;
@@ -640,7 +652,7 @@ static void clipboard(void)
             rc_ui_clip(link, &f);
             say("clip-get-refused-when-automation-is-off",
                 link.ended() && !strcmp(link.status(), "automation_off")
-                && link.reported() == 0,
+                && link.byteFrames() == 0,
                 link.status());
             rc_frame_free(&f);
         }
@@ -739,7 +751,8 @@ static void clipboard(void)
             readStatus = link.status();
             if (wrote)
                 agreed = !strcmp(readStatus, "ok")
-                         && link.reported() == (unsigned)strlen(text)
+                         && link.byteFrames() == 1
+                         && link.bulk() == (unsigned)strlen(text)
                          && !strcmp(link.body(), text);
             else
                 /* No clipboard here. The read must not claim text either. */

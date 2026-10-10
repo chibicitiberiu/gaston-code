@@ -268,6 +268,12 @@ TOOL_CATS = {
     "mcp__machine__kill": (K.RUN_ELSE,),
     "mcp__machine__ui": (K.SCREEN_SEE,), "mcp__machine__shot": (K.SCREEN_SEE,),
     "mcp__machine__input": (K.SCREEN_DRIVE,),
+    # Reading what was last copied is seeing the machine; replacing it is
+    # driving it, and the person at the keyboard cannot get back what it
+    # overwrote. SCREEN_DRIVE is also not in GRANTABLE, so "allow for this
+    # chat" never lifts a clipboard write.
+    "mcp__machine__get_clipboard": (K.SCREEN_SEE,),
+    "mcp__machine__set_clipboard": (K.SCREEN_DRIVE,),
 }
 
 

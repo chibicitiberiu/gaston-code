@@ -669,6 +669,68 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
             log.exception("mcp__machine__shot failed: %r", args)
             raise
 
+    @tool(
+        "get_clipboard",
+        prompts.text("tools.get_clipboard.description"),
+        {"type": "object", "properties": {}, "required": []},
+    )
+    async def machine_get_clipboard(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            raw, headers = await ui.clipboard(guest)
+            if not raw:
+                return _text(prompts.text("tools.get_clipboard.view.empty"))
+            text = fold.decode(raw, _acp())
+            if headers.get("truncated") == "1":
+                # The note goes FIRST. After a wall of text the agent has
+                # already decided what it read, and "there was more" arriving
+                # last reads as a footnote rather than a caveat.
+                note = prompts.text("tools.get_clipboard.view.truncated",
+                                    bytes=str(len(text)))
+                return _text(note + "\n\n" + text)
+            return _text(text)
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__get_clipboard failed: %r", args)
+            raise
+
+    @tool(
+        "set_clipboard",
+        prompts.text("tools.set_clipboard.description"),
+        {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string",
+                         "description":
+                             prompts.text("tools.set_clipboard.args.text")},
+            },
+            "required": ["text"],
+        },
+    )
+    async def machine_set_clipboard(args: dict) -> dict:
+        try:
+            why = _ui_ready()
+            if why:
+                return _text(why, error=True)
+            text = str((args or {}).get("text") or "")
+            # encode_exact, never fold.encode: the second transliterates for
+            # DISPLAY, and a clipboard whose euro sign arrived as `?` is a
+            # different clipboard with nothing saying so.
+            body, refused = _encode_text(text)
+            if refused:
+                return _text(refused, error=True)
+            await ui.clipboard(guest, text=body)
+            return _text(prompts.text("tools.set_clipboard.view.done",
+                                      chars=str(len(text))))
+        except UiError as exc:
+            return _text(_ui_explain(exc), error=True)
+        except Exception:
+            log.exception("mcp__machine__set_clipboard failed: %r", args)
+            raise
+
     def _proc_refused(status: str, pid: str = "") -> str:
         try:
             return prompts.text(f"tools.ps.refused.{status}", pid=pid)
@@ -1698,8 +1760,20 @@ def build(guest_exec, sync, workspace, guest=None, ui=None,
     # older client keeps the three it can answer.
     steps_ok = automation and getattr(_caps, "automation",
                                       0) >= C.AUTOMATION_STEPS
-    screen = ([machine_ui, machine_input, machine_shot] if steps_ok
-              else [machine_ui, machine_shot] if automation else [])
+    # The clipboard READ joins the screen tools and the WRITE joins the
+    # drivers, which is the same split win/net/caps.h enforces on the guest:
+    # what was last copied is as much the screen as a window title is, and
+    # replacing it changes the machine under the person at the keyboard. Both
+    # need the client to declare the op -- `automation` says what a machine
+    # ALLOWS, never what a build HAS, and a UICLIP an older client does not
+    # know is dropped as an unhandled desktop frame and never answered.
+    clip_ok = getattr(_caps, "clip", 0) >= 1
+    clip_read = [machine_get_clipboard] if clip_ok else []
+    clip_write = [machine_set_clipboard] if clip_ok else []
+    screen = ([machine_ui, machine_input, machine_shot,
+               *clip_read, *clip_write] if steps_ok
+              else [machine_ui, machine_shot, *clip_read] if automation
+              else [])
     if automation and not steps_ok:
         # click, keys and focus were retired for `input` (2026-10-02). A
         # client too old to run step lists can still be READ, not driven.

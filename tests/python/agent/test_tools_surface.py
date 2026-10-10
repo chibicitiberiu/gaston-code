@@ -231,6 +231,46 @@ def test_turning_the_screen_off_costs_nothing_else():
     assert "exec" in off and "get_file" in off and "drives" in off
 
 
+#: The clipboard pair, gated on TWO things at once: the automation level, like
+#: every screen tool, AND a capability of its own.
+CLIP_TOOLS = ("get_clipboard", "set_clipboard")
+
+
+def test_the_clipboard_needs_its_own_capability_not_just_a_screen():
+    """THE REASON THE KEY EXISTS. `automation` says what a machine ALLOWS; it
+    says nothing about what the build on it HAS. A client declaring step lists
+    but predating this op would be sent UICLIP, drop it as an unhandled
+    desktop frame and answer nothing at all -- costing the bridge its whole
+    budget and telling it nothing, which is what FSLS did to `list_dir` for
+    four minutes."""
+    names = _names(_Guest(C.from_hello({"automation": "2"})))
+    for t in CLIP_TOOLS:
+        assert t not in names, f"{t} offered to a client that never claimed it"
+
+
+def test_a_client_that_claims_the_clipboard_gets_both_halves():
+    names = _names(_Guest(C.from_hello({"automation": "2", "clip": "1"})))
+    for t in CLIP_TOOLS:
+        assert t in names, f"{t} must be offered when the client claims it"
+
+
+def test_read_only_gets_the_read_and_not_the_write():
+    """The level split, which is why this is two tools and not one with a
+    flag. SCREEN means look and do not touch, and replacing what somebody
+    last copied is touching -- they cannot get it back. The guest enforces
+    the same split itself (rc_ui_clip), so this is defence in depth, not
+    the only gate."""
+    names = _names(_Guest(C.from_hello({"automation": "1", "clip": "1"})))
+    assert "get_clipboard" in names
+    assert "set_clipboard" not in names
+
+
+def test_the_clipboard_goes_with_the_screen_when_the_screen_goes():
+    names = _names(_Guest(C.from_hello({"automation": "0", "clip": "1"})))
+    for t in CLIP_TOOLS:
+        assert t not in names, f"{t} survived automation=0"
+
+
 def test_a_client_that_never_said_keeps_what_it_already_had():
     """An absent header means the deployed client, and the deployed client has
     driven a screen since Phase 6. A bridge updated ahead of its client must

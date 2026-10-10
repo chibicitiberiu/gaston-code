@@ -262,3 +262,79 @@ async def test_a_run_the_guest_outlasts_is_cancelled_on_the_guest(
                               b"i=0\tstatus=cancelled\tms=60\n"))
     headers, _ = await task
     assert headers["status"] == "cancelled"
+
+
+# --- the clipboard ---------------------------------------------------------
+
+
+async def test_the_clipboard_comes_back_on_the_bulk_channel():
+    """`bytes()` on the guest, so UIDAT -- the same channel a screenshot
+    uses, with a ceiling of its own, because the honest number for an 8bpp
+    screen is not the honest number for text somebody copied."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.clipboard(g))
+    await reply(svc, g,
+                Frame("UIDAT", {}, b"copied text"),
+                Frame("UIEND", {"status": "ok", "bytes": "11"}))
+    text, headers = await task
+    assert text == b"copied text"
+    assert headers["bytes"] == "11"
+
+
+async def test_an_empty_clipboard_is_ok_and_not_a_refusal():
+    """Nothing copied is not a failure, and the guest spends no frame saying
+    so -- `bytes=0` is the answer."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.clipboard(g))
+    await reply(svc, g, Frame("UIEND", {"status": "ok", "bytes": "0"}))
+    text, headers = await task
+    assert text == b""
+    assert headers["bytes"] == "0"
+
+
+async def test_a_short_clipboard_is_refused_rather_than_returned():
+    """Half the text reads as the whole text, and nothing says otherwise."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.clipboard(g))
+    await reply(svc, g,
+                Frame("UIDAT", {}, b"half"),
+                Frame("UIEND", {"status": "ok", "bytes": "900"}))
+    with pytest.raises(UiError) as got:
+        await task
+    assert got.value.status == "short_clip"
+
+
+async def test_a_write_rides_the_body_and_says_which_op():
+    """A header value caps at 255 encoded bytes, so a document in one would
+    be a different document -- the same reason a step list rides the body."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.clipboard(g, text=b"put this on it"))
+    await reply(svc, g, Frame("UIEND", {"status": "ok", "bytes": "14"}))
+    text, _ = await task
+    assert text == b""
+    sent = svc.connection.sent[0]
+    assert sent.type == "UICLIP"
+    assert sent.headers["op"] == "set"
+    assert sent.body == b"put this on it"
+
+
+async def test_a_read_says_get_and_carries_no_body():
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.clipboard(g))
+    await reply(svc, g, Frame("UIEND", {"status": "ok", "bytes": "0"}))
+    await task
+    sent = svc.connection.sent[0]
+    assert sent.headers["op"] == "get"
+    assert not sent.body
+
+
+async def test_the_guests_refusal_reaches_the_caller_verbatim():
+    """`no_clip_text` -- something is on it and it is not text. Its own
+    status, because an agent told "ok, 0 bytes" would read an image on the
+    clipboard as an empty one and copy again."""
+    g, svc = guest_and_service()
+    task = asyncio.create_task(svc.clipboard(g))
+    await reply(svc, g, Frame("UIEND", {"status": "no_clip_text"}))
+    with pytest.raises(UiError) as got:
+        await task
+    assert got.value.status == "no_clip_text"

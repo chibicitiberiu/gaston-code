@@ -955,8 +955,13 @@ void rc_ui_clip(UiLink &link, rc_frame *f)
     {
         /* Something is on the clipboard and it is not text. Its own status,
          * not `ok` with nothing: an agent told "ok, 0 bytes" would read an
-         * image on the clipboard as an empty one and copy again. */
-        link.end("no_text", NULL, NULL, 0);
+         * image on the clipboard as an empty one and copy again.
+         *
+         * NOT `no_text`, which the bridge already spells "No text was given"
+         * for a typing call with an empty string -- the opposite end of the
+         * same word. A status is read by whoever renders it, so it has to be
+         * unambiguous there and not just here. */
+        link.end("no_clip_text", NULL, NULL, 0);
         return;
     }
     if (r != CLIP_OK)
@@ -965,10 +970,16 @@ void rc_ui_clip(UiLink &link, rc_frame *f)
         return;
     }
 
-    /* An empty clipboard sends no body at all -- `report()` is at most once
-     * per request and a zero-length one would spend a frame saying nothing.
-     * `bytes=0` is the answer. */
-    if (len && !link.report(buf.get(), len))
+    /* `bytes()` and not `report()`, which is where the two links differ.
+     * `report()` is buffered onto the client's single UIEND -- the shape
+     * bridge/agent/steps.py parses for a step list -- and a 63KB clipboard on
+     * a terminal frame is exactly what the out-queue reserve exists to keep
+     * off it. `bytes()` is the bulk channel: UIDAT on the client, a reserved
+     * DATA on gremote, and UIDAT is already in rc_frame_compressible.
+     *
+     * An empty clipboard sends no body at all -- a zero-length frame would
+     * spend a round trip saying what `bytes=0` already says. */
+    if (len && !link.bytes(buf.get(), len))
         return;                 /* the link said no; it has answered already */
 
     rc_strf(nbuf, sizeof(nbuf), "%u", len);

@@ -131,6 +131,31 @@ class UiService:
                           f"the guest sent {claimed} bytes, {len(got)} arrived")
         return got, headers
 
+    #: What the bridge will take off the clipboard in one read. The guest
+    #: caps its own reply at one frame body and says `truncated=1`; this is
+    #: the second belt, for a guest that does not.
+    CLIP_MAX = 256 * 1024
+
+    async def clipboard(self, guest: GuestSession, *, text: bytes | None = None,
+                        timeout_ms: int = 5000) -> tuple[bytes, dict]:
+        """Read the clipboard, or replace it when `text` is given.
+
+        Returns the text and the UIEND headers; `truncated` in those headers
+        is the guest saying there was more than one frame body's worth, which
+        it does not send a second frame for -- the clipboard is not a file
+        and a caller who wants a file should ask for one.
+        """
+        headers, call = await self._call(
+            guest, P.ui_clip("", text=text), "clip", timeout_ms)
+        if text is not None:
+            return b"", headers
+        got = bytes(call.data)
+        claimed = int(headers.get("bytes", "0") or 0)
+        if claimed and len(got) != claimed:
+            raise UiError("short_clip",
+                          f"the guest sent {claimed} bytes, {len(got)} arrived")
+        return got, headers
+
     async def run(self, guest: GuestSession, body: bytes, *,
                   timeout_ms: int, step_ms: int, settle: int = 0
                   ) -> tuple[dict, bytes]:
@@ -205,11 +230,16 @@ class UiService:
             call.records.extend(f.body)
 
         elif f.type == "UIDAT":
-            if call.kind != "shot":
+            # The bulk channel, and two ops arrive on it: a screenshot and
+            # the clipboard. Each has its own ceiling, because the honest
+            # number for an 8bpp screen is not the honest number for text
+            # somebody copied.
+            limit = {"shot": SHOT_MAX, "clip": self.CLIP_MAX}.get(call.kind)
+            if limit is None:
                 log.warning("UIDAT for %s, which is a %s -- ignoring", ui_id,
                             call.kind)
                 return
-            if len(call.data) + len(f.body) > SHOT_MAX:
+            if len(call.data) + len(f.body) > limit:
                 call.capped = True
                 return
             call.data.extend(f.body)
