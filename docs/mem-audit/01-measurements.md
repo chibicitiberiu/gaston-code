@@ -143,6 +143,19 @@ shipping code (`win/`, excluding `third_party/` and `checks/`):
 | 260 | `app/main.cpp:224` | `static char g_exe_dir[MAX_PATH]` |
 | | | **80,668 total** |
 
+> **Superseded 2026-10-11, and the top two rows are gone.** The 66,560-byte
+> buffer moved to the heap, per connection, with the libwire extraction
+> (`win/wire/connection.cpp:925-933`), and `app/main.cpp:224`'s `g_exe_dir`
+> became a member when the app became a lifecycle. Measured on the exes at
+> `01b5254`: gaston's `_BSS` is **13,816 bytes**, not 88,412, with no symbol in
+> it above 2,000. The table below is kept as what was true on 2026-09-21.
+>
+> The warning above it is still exactly right, and `tools/check/mapsize.py`
+> was written to obey it: symbol-gap attribution over-attributes wildly, so
+> that tool reports the data segments as unattributed and splits any single
+> charge over 2 KB into an `unnamed` column rather than crediting it to the
+> module that happens to precede it.
+
 Eleven declarations account for 91% of BSS, and **one of them accounts for
 75%**. `docs/BACKLOG.md` §2 already owns this and names the same two
 buffers; the number there is "86 KB", which is now 88,412 bytes. Nothing in

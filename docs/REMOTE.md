@@ -865,8 +865,9 @@ directory it writes into -- which is a reason not to have them cohabit.
   of coverage.
 - **The client's headroom is whatever the current cap leaves.** This read "180
   bytes: 398,820 against a 399,000 budget (measured 2026-09-25)" and both
-  numbers are four raises out of date -- `COMMITTED_CAP` is 585,728 and
-  `gaston.exe` measures 580,649 (2026-10-04, the Options set). The rule it was
+  numbers are several raises out of date -- as of 2026-10-11 `gaston.exe`
+  measured 582,697 against a `COMMITTED_CAP` of 585,728, and stage 2 then
+  trimmed the image and lowered the cap. The rule it was
   written for stands: linking from libs must not grow the figure, and each step
   compares before and after. Read the live number out of `win/Makefile`, which
   carries every raise and its reason, rather than from here.
@@ -884,8 +885,9 @@ in every measurement taken while it is running.
   32KB), since the remote shell streams rather than buffers.
 - `make check` gives `gremote.exe` its own committed-at-load cap: 242,761
   before the tray icon and 250,441 after it, against what was then 264,000
-  (2026-10-01). **The cap is 372,000 now** and gremote measures 363,449, raised
-  once on 2026-10-03 for the ui lane with the trim deferred to `BACKLOG.md` 29.
+  (2026-10-01). The cap went to **372,000** on 2026-10-03 for the ui lane with
+  the trim deferred to `BACKLOG.md` 29; gremote measured 365,497 on 2026-10-11,
+  and stage 2 then closed that entry, trimmed the image and lowered the cap.
   The icon's +7,680 is about 6KB of real image and the rest PE section
   rounding, and +2,144 of the 6KB is the `-xs` exception machinery a new
   translation unit brings before any of its own code. The `win/Makefile`
@@ -1110,9 +1112,16 @@ first. Each C-step is a small commit that leaves the client working.
   405,976. A stale `main.o` (lost `.d`) crashed the first Wine run; the
   build now rebuilds any object whose `.d` is missing. Verified on the
   guest: start, reconnect, a full turn with Allow.
-- **C5+. `main.cpp`'s statics become objects**, one module per commit:
-  context-free callbacks (`rc_refresh_fn`, `rc_turn_busy_fn`, ...) gain a
-  context, and the state they close over moves into the window service.
+- *C5+ done, recorded 2026-10-11.* It had already happened and this line had
+  not caught up. `win/app/main.cpp` holds **no file-scope static data** -- its
+  only file-scope `static` is the helper function `exeDir()` at `:36`, and the
+  link map shows no `app/main.o` symbol in `_DATA`, `_BSS` or `c_common`. Both
+  callbacks this step named by hand were deleted with the listeners that
+  replaced them: `rc_refresh_fn` in `bdd3c43` (C5b), `rc_turn_busy_fn` in
+  `59a1e65` (C5c). What remains is module state that was never main.cpp's --
+  `ui/uirpc.cpp`'s router statics, which `uirpc.cpp:16-21` argues for in
+  place, and the lane state in `sync/syncrpc.cpp` and `rpc/rpc.cpp`, which
+  belongs to steps 2-3 below.
 - Then **libwire** and **libexec** are extracted from `net.cpp`/`exec.cpp`
   with the client as their first consumer (steps 2-3), and gremote follows.
 

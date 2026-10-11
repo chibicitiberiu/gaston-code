@@ -106,20 +106,36 @@ it as "nothing ran away" rather than a precise delta.
 
 **What to look at when this comes up:**
 
-- **86 KB of BSS is committed at load**, and the single largest item is
-  `rc_net_send`'s frame build buffer at 66,560 bytes (`win/net.c`). Now that
-  the sender thread copies each frame to a heap block anyway, that static
-  buffer may be reducible to the largest frame actually built rather than
-  `RC_MAX_FRAME + 1024`.
+- ~~**86 KB of BSS is committed at load**, the largest item being
+  `rc_net_send`'s 66,560-byte frame build buffer~~ **Stale, closed by the
+  libwire extraction.** That buffer is heap and per-connection now, and
+  `win/wire/connection.cpp:925-933` records why: *"It was a function static --
+  66,560 bytes committed at load, the largest static in the image, and shared
+  by every Connection while each locked only itself."* Measured 2026-10-11 on
+  the exes at `01b5254`: gaston's `_BSS` is **13,816 bytes** with no symbol in
+  it above 2,000, so there is no BSS problem left to find here. What the same
+  comment leaves open is smaller and still real -- `BUILD_CAP` is
+  `RC_MAX_FRAME + 1024` and the largest frame ever built is SYNCENT at 63,488
+  plus headers, so about 1,020 bytes of the per-connection block are never
+  used.
 - `exec.c`'s 8 KB chunk buffer is already the streaming design's whole cost and
   is probably not worth touching.
 - `make check` reports committed-at-load size per section, so a regression is
   visible without guessing. Use it.
-- **The compiler flags are the biggest lever found so far** (measured
-  2026-09-25). The whole client is built with `-otexan` (favour speed, inline
-  expansion, functions padded to 16 bytes). The same client built with `-os`
-  commits **366,552** bytes at load against **398,808**: 32 KB less, more than
-  the whole "free after a turn" figure. For libcore's `App` + `IniFile`, `-os`
+- **The compiler flags were the biggest lever found at the time, and most of
+  that lever has since been pulled** (measured 2026-09-25, re-read
+  2026-10-11). The 32 KB below was measured when the whole client was
+  `-otexan`; it is not now. Six override rules
+  (`win/Makefile:667,676,685,693,698,706`) already compile `app/`, all of
+  `fs/` but `reader.o`, most of `sync/`, `rpc/fsrpc.o`,
+  `automation/steps.o`+`input.o`, `ui/uiengine.o`+`uirpc.o`, all of `remote/`
+  and `core/thread.o` for size, each with its own measured reason. What is
+  still `-otexan` is `core/` (bar `thread.o`), `net/`, `rpc/` (bar
+  `fsrpc.o`), `sync/scanner.o`, `fs/reader.o`, `wire/`, `exec/`,
+  `automation/` (bar `steps`/`input`), `ui/{uiservice,uirec,inject}.o`,
+  `checks/`, `inproc/` and `miniz.c` -- so expect far less than 32 KB, and
+  measure rather than quote. The original figure, for the record: the same
+  client built `-os` committed **366,552** bytes at load against **398,808**. For libcore's `App` + `IniFile`, `-os`
   cut their cost from +6,656 to +4,608. Not applied, because it trades speed
   on a P200. Most of our code is event-driven UI (rendering is MSHTML's), so
   the likely shape is `-os` by default with `-ot` kept for measured hot
@@ -2638,11 +2654,14 @@ addition the program has had.
 
 **What to look at when the round comes**, in the order the evidence points:
 
-- `-os` versus `-otexan` on the new objects. The client's `ui/uirpc.o`,
-  `ui/uiengine.o`, `automation/steps.o` and `automation/input.o` are already
-  compiled for size by an override list in `win/Makefile`; gremote compiles
-  the same objects through the same rule, but `win/remote/`'s own sources are
-  not all on it.
+- ~~`-os` versus `-otexan` on the new objects … `win/remote/`'s own sources
+  are not all on it.~~ **Wrong when it was written, 2026-10-11.** All of
+  `win/remote/` is compiled for size by the pattern rule at
+  `win/Makefile:698`, and `git log -S` on that line returns exactly one
+  commit: `a3b227b` (2026-09-27), the one that created gremote. What is
+  genuinely off the size lists in gremote is `ui/uirec.o` at 2,432 bytes and
+  **`miniz.o` at 61,141** -- the largest module in the exe, with no override
+  rule of its own.
 - Whether gremote needs every object in `libautomation`. It links the library,
   and wlink pulls what is referenced -- but `uiengine.cpp` references nearly
   all of it, including the MSAA path on a box where `HELLO msaa=` may say 0.
@@ -2768,8 +2787,10 @@ quote, rule, table, plus the inline set code/strong/em/link.
 2. **The guest grows a renderer**: block stream in, the markup it receives today
    out. This is string assembly against a fixed table, not a parser, but it is a
    new translation unit and `-xs` costs ~2,144 bytes of exception machinery per
-   TU before any code. `gaston.exe` is at 580,649 of 585,728, so measure before
-   committing and expect this to want the cap raise §19 already defers.
+   TU before any code. `gaston.exe` measured **582,697 of 585,728** on
+   2026-10-11 -- 3,031 bytes -- so measure before committing. Stage 2 then
+   freed about 69 KB of dead library code and lowered the cap to suit, so read
+   the live number out of `win/Makefile` rather than either figure here.
 3. **`live` is the hard half, not `append`.** A partial block is re-sent whole as
    it grows (`html.py:357`'s note), so with rendering client-side the guest
    re-renders the open block on every update. The bytes do not change; the work

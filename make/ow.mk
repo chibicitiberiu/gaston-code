@@ -44,6 +44,15 @@ export WLINK_LNK = $(OWBIN)/wlink.lnk
 #     -5 targets Pentium scheduling and keeps CMOV out of the image (CMOV is
 #     686+; the target is a P200MMX).
 
+# NOT THE LIVE FLAGS, and nothing reads them. Only the root Makefile includes
+# this file, and it never uses OW_CFLAGS, OW_LFLAGS_* or the %.o rule below --
+# it delegates to win/Makefile (root Makefile:36-37,46-47), whose own CFLAGS at
+# win/Makefile:51 is the definition that builds everything. Editing the line
+# below changes no output. It is kept because this file is the Phase 0.2
+# toolchain deliverable (docs/PROGRESS.md:55) and because `export WATCOM` and
+# `export WLINK_LNK` above are read from the root, which win/Makefile:26-27
+# then repeats for a direct `make -C win`. Noted 2026-10-11, after a size
+# stage went looking for the flags and found these first.
 OW_CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
             -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
             -DWIN32_LEAN_AND_MEAN \

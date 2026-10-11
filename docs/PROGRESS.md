@@ -24,10 +24,17 @@ list is closed except for R7 (multiple clients) -- **and R7 is now IN**, as
 Snapshot after each milestone, before anything else touches the disk. A ruined
 Win98 install is an hour to redo; a snapshot is seconds.
 
-    export LIBVIRT_DEFAULT_URI=qemu:///session
-    virsh snapshot-create-as retroclaude-win98 <name> "<description>"
-    virsh snapshot-list       retroclaude-win98
-    virsh snapshot-revert     retroclaude-win98 <name>
+    tools/vm/vmsnap.sh save [label]
+    tools/vm/vmsnap.sh list
+    tools/vm/vmsnap.sh restore <file>
+
+**Not `virsh snapshot-create-as`, and this block used to say otherwise.**
+`tools/vm/vmsnap.sh:9-16` has the reason: libvirt wants every disk in a format
+that can hold a snapshot, and `vm/xfer.img` is attached raw as the floppy --
+which is also the guest's only way to hand a file back when the network is the
+thing being tested. `qmp.py save`/`load` fail for the same reason. So the
+mechanism is a file copy of a domain that is SHUT OFF; copying a qcow2 under a
+running guest captures a torn image.
 
 | Snapshot | When | State |
 |---|---|---|

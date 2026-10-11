@@ -156,24 +156,47 @@ ships and is proven pre-logon. `docs/stage1-plan.md` carries the citations.
 
 ## Stage 2 — size, before the thing that spends it
 
-`gaston.exe` is at 580,649 of a 585,728 cap; `gremote.exe` at 363,449 of 372,000.
-Stage 3 adds a renderer translation unit to the guest, and a new TU costs ~2,144
-bytes of `-xs` exception machinery before any code in it.
+Measured 2026-10-11 at `01b5254`: `gaston.exe` **582,697 of 585,728** -- 3,031
+bytes -- and `gremote.exe` 365,497 of 372,000. (This file said 580,649 and
+363,449, figures taken before the clipboard landed.) Stage 3 adds a renderer
+translation unit to the guest, and a new TU costs ~2,144 bytes of `-xs`
+exception machinery before any code in it.
 
-- **The flag decision** (`BACKLOG.md` 2). `-os` measured 32 KB smaller than
-  `-otexan` across the image. The likely shape is "`-os` by default, `-ot` kept
-  for measured hot modules" -- miniz, the sync CRC pass, the frame codec. Needs a
-  speed/size call, and a before/after on the guest: a timed sync scan and a long
-  transcript page. Recompiling the world smaller before adding translation units
-  pays for stage 3; doing it afterwards is another cap raise.
-- **The gremote trim** (`BACKLOG.md` 29). Already decided when the cap was raised
-  for the ui lane: `-os` over `win/remote/`'s own sources, whether gremote needs
-  every object in `libautomation` (including the MSAA path when `HELLO msaa=0`),
-  and the per-TU `-xs` cost. Measure the **working set**, not just the image.
-- **R9 step C5+** (`REMOTE.md:1109`) belongs here rather than in stage 3: the last
-  C-step with no "done" marker, `main.cpp`'s statics becoming objects and the
-  context-free callbacks gaining a context. It is in the same files stage 3 will
-  touch, so it goes first or it goes much later.
+**What reading the tree changed about this stage.** Two of the three jobs below
+turned out to be largely done, and the room stage 3 needs was somewhere nobody
+had looked. `docs/stage2-plan.md` is the detailed plan and carries the
+citations; the short version:
+
+- **About 69 KB per exe is linked and unreachable**, found by attributing the
+  link map per module (`tools/check/mapsize.py`): `uuid.lib`'s GUID table
+  (31,520 bytes, 1,957 of 1,970 symbols unreferenced, pulled by one
+  `IID_IUnknown` in gremote and thirteen GUIDs in the client), miniz's ZIP
+  archive APIs (~31,400, with no `mz_zip_*` reference anywhere in `win/`), and
+  `math387r.lib`'s float formatter (~6,250, reached by four `(double)` casts
+  computing a bytes-per-second figure). Deleting those pays for stage 3 without
+  trading any speed anywhere.
+- **The flag decision** (`BACKLOG.md` 2) is answered on a measurement rather
+  than on its own premise. "The whole client is built with `-otexan`" stopped
+  being true across six override rules; what is left at `-otexan` is listed in
+  that entry. The speed half is a timed run on the guest -- `probe deflate`, a
+  timed `SCAN`/`MANIFEST` over a fixed corpus, and a `tree` call on a busy
+  desktop -- and never under Wine.
+- **The gremote trim** (`BACKLOG.md` 29) is three written answers and one
+  measurement. Its first bullet was already fixed by `win/Makefile:698` before
+  the entry was written; gremote links all ten `libautomation` members and
+  `HELLO msaa=0` cannot change that (`msaa.o` is reached both by a by-value
+  member and by the handshake itself) at a cost of 3,280 bytes; the `-xs` cost
+  is ~16.9 KB paid once rather than per-TU. The working set is measured, as the
+  entry asks.
+- **R9 step C5+ was already done**, which is why it is no longer listed here:
+  `win/app/main.cpp` holds no file-scope static data and both callbacks the step
+  named were deleted in `bdd3c43` and `59a1e65`. Recorded at `REMOTE.md`'s
+  C-step list. The module state that remains belongs to the libwire/libexec
+  extraction, not to this stage.
+- **The caps come down** rather than up, for the first time in the file's
+  history -- which reverses `win/Makefile:88-101`'s "the page is bought once"
+  policy deliberately, and makes the `COMMITTED_CAP` +4,096 deferred below
+  unnecessary rather than overruled.
 
 ---
 
