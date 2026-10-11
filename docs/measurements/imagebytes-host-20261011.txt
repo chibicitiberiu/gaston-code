@@ -135,3 +135,73 @@ gaston's CONST holds 51,374 bytes with no named symbol in it at all, and
 CONST2 another 54,740 of which 3,008 are not named. Nothing here can say
 what those are. If a later stage needs them broken down, the instrument is
 objdump on the sections, not this map.
+
+
+5. AFTER -- what stage 2 actually removed
+------------------------------------------
+
+Same method, same machine, at commit 21c622c.
+
+                        before      after     delta
+  gaston.exe           582,697    478,249  -104,448  (-17.9%)
+  gremote.exe          365,497    259,497  -106,000  (-29.0%)
+  autocheck.exe        212,328    166,248   -46,080
+  fscheck.exe          112,628    106,996    -5,632
+  gupdate.exe           52,496     51,984      -512
+
+Where it came from, in the order it was taken:
+
+  -31,744 each   uuid.lib's GUID table, in gaston, gremote, autocheck and
+                 uicheck. Thirteen GUIDs spelled out locally; 1,957 that
+                 nothing referenced stopped being linked.
+  -45,056 gaston miniz's ZIP archive APIs, with -DMINIZ_NO_ARCHIVE_APIS.
+  -53,776 gremote  Larger than the 31.4 KB the archive block measures,
+                 because the ZIP code was the only thing in either program
+                 reaching for FILE* and time(): removing it took the C
+                 runtime's stdio with it.
+   -6,656 each   math387r.lib and emu387.lib, after four (double) casts
+                 became 64-bit integer arithmetic in core/rate.h.
+  -20,992 gaston `-os` by default with `-ot` kept for the three modules
+  -13,824 gremote that run over every byte. flags-vm-20261011.txt.
+
+None of it removed a feature, and none of it came from the ui lane that
+BACKLOG 29 was written about.
+
+The caps came down to match -- 585,728 -> 482,345 and 372,000 -> 263,593,
+the first reductions in either ladder, both at measured + one page.
+check-autocheck, check-fscheck and check-gupdate were left loose on
+purpose: they are test and helper programs, where the 2026-10-10 argument
+for a tripwire rather than a budget still stands.
+
+
+6. The runtime number, which is the one the guest cares about
+---------------------------------------------------------------
+
+win/Makefile's own note says the committed-at-load gate is a proxy, and
+that the thing to measure is working set on a 32MB box. So:
+
+  tools/probe/wsprobe.py, QEMU guest, each build fresh from its own folder,
+  idle, pointed at a dead port, five samples 2s apart, median, alternated
+  twice:
+
+    round 0   old 1,056 KB   new 1,028 KB
+    round 1   old 1,040 KB   new 1,008 KB
+    median    old 1,048 KB   new 1,018 KB      -30 KB
+
+**104 KB of image buys 30 KB of resident memory**, and that ratio is the
+most useful thing in this file. It is the same result
+workingset-vm-20261004.txt got in the other direction (66 KB of image cost
+36 KB resident) and the reason BACKLOG 34 declines to make the automation
+tier a DLL: on Win98 code is demand-paged from the image, so code nobody
+touches is already nearly free, and moving it into a DLL would buy the
+gate rather than the machine.
+
+The Athlon XP cannot answer this question at all -- 261,580 KB of RAM with
+141 MB free, where a 100 KB image is four decimal places down. What it
+answered instead is whether the trimmed build works on real hardware:
+gremote self_update'd to 252,416 bytes and reconnected in 1.0s,
+uilaneprobe 15/15 PASS, clipprobe 8 PASS, and MSAA enrichment returning
+real roles from the box's own oleacc -- Start/pushbutton, Tray/pagetablist,
+Desktop/list. The Ctrl+A split reproduced too: SELECTS ALL on that box's
+2005 Notepad against "selects nothing" on the VM's 1999 one, which is
+clipboard-athlon-20261011.txt's finding holding a day later.

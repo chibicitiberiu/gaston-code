@@ -3,8 +3,8 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 2 — size: the flag decision and the
-gremote trim.** Stage 1 closed 2026-10-11. Phase 5 (Attach) shipped; 5.1 is
+**Current goal: `ROADMAP.md` stage 3 — the markup moves to the client.**
+Stages 1 and 2 closed 2026-10-11. Phase 5 (Attach) shipped; 5.1 is
 below, and 5.2/5.3 went in without a write-up of their own. Phase 6 is
 part-built: `ui`, `input`, `shot`, `focus`, `launch`, `ps`, `kill` and the
 clipboard pair are live and measured on real hardware, while `ocr` and the
@@ -4285,3 +4285,111 @@ output went off the moment `nvdisp.drv` loaded. The whole run above, and the
 diagnosis and repair of the video configuration itself, were done over
 gremote with nothing on the screen. That is the fs lane and the ui lane being
 used for what they were built for, on a machine with no usable output device.
+
+
+## Stage 2 -- size, before the thing that spends it (2026-10-11)
+
+`ROADMAP.md` stage 2, planned in `docs/stage2-plan.md`. Eleven commits,
+`6b1bc5d..`, each gated with `make -C win all`, `make -C win check`,
+`make test-fast`, `pytest tests/python/remote`, `make lint` and
+`make wine-smoke`.
+
+| | |
+|---|---|
+| `gaston.exe` | 582,697 -> **478,249** of a cap lowered 585,728 -> 482,345 |
+| `gremote.exe` | 365,497 -> **259,497** of a cap lowered 372,000 -> 263,593 |
+| `autocheck.exe` | 212,328 -> 166,248 (cap left at 220,000, deliberately) |
+| resident, idle, on the 32MB guest | 1,048 KB -> 1,018 KB |
+| `make test-fast` | 4,166 passed |
+| `make wine-smoke` | 391 passed |
+| `tests/python/remote` | 120 passed |
+
+**The stage was planned against three entries and two of them were
+describing a tree that had moved.** BACKLOG 2's "the whole client is built
+with `-otexan`" had stopped being true across six override rules, and its
+largest BSS item -- a 66,560-byte frame buffer -- had gone to the heap with
+the libwire extraction. BACKLOG 29's first bullet had been fixed by the
+commit that created gremote. R9 step C5+ was already done. So the first
+commit was a correction pass, and the second built an instrument
+(`tools/check/mapsize.py`) to ask where the bytes actually were.
+
+**They were in three places nobody had looked**, and none of them was a
+compiler flag:
+
+- **31,744 bytes of GUIDs per exe.** Watcom ships `uuid.lib` as one object
+  module, so the single `IID_IUnknown` in `CallDeadline::QueryInterface`
+  pulled all 1,970 into gremote, uicheck, autocheck and the rest. The
+  codebase had written the fix down twice (`msaa.cpp:25`, `probe.c:566`) and
+  applied it beside the offending line. The thirteen the client needs are
+  spelled out now, read out of the linked image rather than typed, and
+  guarded two ways -- `cppcheck` memcmps them against `uuid.lib`'s own copies
+  at build time, and a meta test diffs the shipping copies against that
+  table.
+- **~45 KB of miniz's ZIP implementation**, which nothing has ever called.
+  Larger than the 31.4 KB the archive block measures, because the ZIP code
+  was the only thing in either program reaching for `FILE*`.
+- **6,656 bytes of long-double formatting** for four `(double)` casts
+  computing a bytes-per-second figure. Watcom pulls the float formatter on
+  float USE, not on `printf` -- `gupdate.map` and `fscheck.map` prove it.
+
+**The flag question then got a real answer** (`flags-vm-20261011.txt`):
+`-os` by default, `-otexan` only for code that runs over every byte --
+miniz, `sync/scanner.o`, `fs/reader.o`. Whole-program `-os` costs **23%** on
+the compressing direction of a 378 KB round trip and nothing on inflate;
+excluding those three gives it all back. Two modules held at `-ot` on an
+argument turned out not to earn it: `automation/select.o`'s matcher is
+invisible beside the cross-process messaging a tree walk is made of (0.045s
+against 0.040s), and `wire/connection.o` was held by "the codec" when the
+codec is miniz. The Makefile's default is inverted to match -- six
+exceptions and a rule pointing the other way was a default that had been
+voted against.
+
+### Decisions and reversals, recorded where they live
+
+- **The caps came down for the first time**, which reverses
+  `win/Makefile:88-101`'s "the page is bought once". That was right while
+  every move was upward; it stops being right at 104 KB of slack, where the
+  gate can no longer see what it exists for.
+- **BACKLOG 19 and ROADMAP stage 4's deferred `COMMITTED_CAP` +4,096** --
+  explicitly the user's call -- is closed on that entry's own second option:
+  it asked for 126 bytes of CONST freed, and this freed 31,520.
+- **`check-autocheck` was left loose on purpose.** Its cap was raised the day
+  before with a stated argument for a tripwire rather than a budget;
+  reversing that a day later would contradict it rather than answer it.
+- **The automation tier does not become a DLL** (BACKLOG 34, new). It would
+  move ~49 KB per exe, but code nobody touches is already demand-paged, the
+  seam is C++ rather than a C ABI, and `gupdate` rolls back one file.
+  This stage's own numbers are the argument: 104 KB of image bought 30 KB of
+  resident memory.
+
+### Found on the way
+
+**`[ui] msaa=0` had never done anything.** `config.h:86` documented it
+exactly -- skip oleacc, fall back to the window tree, report `msaa=0` -- and
+`UiConfig::msaa` was parsed, logged and read by nothing. Fixed and measured
+on the guest: 29 nodes with 16 MSAA names at `msaa=1`, 29 nodes with none at
+`msaa=0`.
+
+**`probe deflate` cannot measure a compiler flag**, and the Makefile now
+says so where the flags are. Its corpus compresses 164:1 and runs in 10-15 ms
+against `GetTickCount`'s ~10 ms, so both builds measure 10-11 ms. The
+instrument that works is a round trip through gremote.
+
+**The first cut of `mapsize.py` was wrong in a way worth keeping.** It
+dropped every symbol-to-symbol gap over 4,096 bytes as "a segment jump",
+which also discarded every symbol genuinely larger than a page and lost 32 KB
+in silence. And Watcom charges unnamed literal runs to whichever symbol
+precedes them -- `ComposeBox::hasFocus()`, about thirty bytes of code, was
+charged 13,559. The tool now reconciles against the map's segment table and
+splits any charge over 2 KB into an `unnamed` column.
+
+### Verified
+
+Under Wine (391 guest checks, including the 13 new GUID comparisons and 5 new
+`rc_bps` cases), on the QEMU guest, and on the Athlon XP. The guest run was a
+**full agent turn**: client shipped, prompt typed over the ui lane, haiku
+calling `mcp__machine__exec`, the command run on the guest, the answer
+rendered in MSHTML and the wire reporting 2.43:1. That turn is also the proof
+for the GUID commit -- every one of the thirteen is exercised by that window
+existing. On the Athlon: self_update, uilaneprobe 15/15, clipprobe 8/8, and
+MSAA returning real roles from the box's own oleacc.

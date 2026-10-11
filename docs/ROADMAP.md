@@ -31,7 +31,7 @@ in stage 1 for that reason.
 | # | Stage | Exit condition |
 |---|---|---|
 | 1 | Fruit, the decisions that gate stage 3, and the injection harness — **DONE 2026-10-11** | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
-| 2 | Size: the flag decision and the gremote trim | a measured before/after, and room in the caps for stage 3 |
+| 2 | Size: the flag decision and the gremote trim — **DONE 2026-10-11** | a measured before/after, and room in the caps for stage 3 |
 | 3 | The markup moves to the client | a second client could be written without touching the bridge |
 | 3b | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
 | 4 | The recorded decisions, the UI inconsistencies, the small repairs | `BACKLOG.md` holds no entry whose only blocker is an unanswered question |

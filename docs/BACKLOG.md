@@ -2668,7 +2668,19 @@ now reached. These were decided against, or deferred, on purpose:
   shareable, so the step codec moved too, into `win/ui/uiengine.cpp` behind
   `UiLink`. See REMOTE.md step 6.
 
-## 29. gremote's image grew by a third for the ui lane, and nobody has trimmed it
+## 29. gremote's image grew by a third for the ui lane -- CLOSED 2026-10-11
+
+**Closed by the round it asked for.** `gremote.exe` went **365,497 ->
+259,497** committed at load, 29% off, and `check-gremote`'s cap came down
+372,000 -> 263,593 -- the first reduction in that ladder. The ui lane this
+entry was written about was not touched. Verified on the Athlon XP, the
+machine the entry is about: self_update to 252,416 bytes, uilaneprobe 15/15,
+clipprobe 8/8, MSAA still returning real roles from the box's own oleacc.
+`docs/measurements/imagebytes-host-20261011.txt` and `flags-vm-20261011.txt`.
+
+The round also found that `[ui] msaa=0` had never done anything, which has
+its own fix. The four bullets below are each marked with what they turned
+out to be worth; the two items that mattered were not among them.
 
 **Opened 2026-10-02, by decision, while raising the cap.** The user's words:
 *"just raise it, we'll have a separate round of optimizations"*. This entry is

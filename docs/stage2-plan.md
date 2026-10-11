@@ -1,6 +1,20 @@
 # Stage 2 — size, before the thing that spends it
 
-## STATUS, 2026-10-11: IN PROGRESS
+## STATUS, 2026-10-11: COMPLETE
+
+Eleven commits, `6b1bc5d..`, each gated with `make -C win all`, `make -C win
+check`, `make test-fast`, `pytest tests/python/remote`, `make lint` and `make
+wine-smoke`. Outcome: **gaston 582,697 -> 478,249** and **gremote 365,497 ->
+259,497** committed at load, the caps lowered to match (the first reductions in
+either ladder), 30 KB less resident on the 32MB guest, and `BACKLOG.md` 2's
+flag half, 19 and 29 closed. Verified under Wine, on the QEMU guest -- including
+a full agent turn through the client -- and on the Athlon XP.
+
+Two things in the plan below were NOT done, both deliberately and both recorded
+where the work is: the `ui/uirec.cpp` split (attempted, declined, `BACKLOG.md`
+34) and lowering `check-autocheck`'s cap (left loose on the argument that raised
+it the day before). One thing was added: `[ui] msaa=0` had never been
+implemented, found while answering BACKLOG 29's second bullet.
 
 `ROADMAP.md` stage 2. Planned 2026-10-11 and reviewed twice before any code: a
 fact-check of every figure and citation against the link maps and git, and an
