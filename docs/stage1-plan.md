@@ -384,6 +384,16 @@ platform:**
    contents via `Ctrl+A`/`Ctrl+C` then a read, which is the case the tool exists
    for; `automation=0` refusing both on the next request, then `automation=1`
    allowing the read and refusing the write.
+
+   **DONE.** The clipboard itself on 2026-10-10
+   (`clipboard-vm-20261010.txt`); the level ladder on 2026-10-11
+   (`harness-repeat-and-levels-vm-20261011.txt`), which is the clause Wine
+   cannot answer because Wine has no clipboard. Four rungs: 2 allows both,
+   0 refuses both `automation_off`, 1 allows the read and refuses the
+   write, 2 again to put the box back. The read at level 1 returns the
+   string level 2 left there, so it is a real clipboard. `clip=1` is
+   declared at every rung including 0 -- the capability is the build's, the
+   level is the machine's.
 3. On the Athlon over gremote (`tools/probe/`, `Remote("10.0.0.125", <secret>)`),
    because that is the box where the ui lane's last four bugs were found.
 
@@ -419,3 +429,17 @@ one thing no test can judge by eye.
 
 **The harness**: the run itself is the verification, and it must be repeatable —
 restore the known-good image and run it twice.
+
+**DONE 2026-10-11**, `harness-repeat-and-levels-vm-20261011.txt`. Two runs,
+each from its own `vmsnap.sh restore` of the same `-pre-inject` file, driven
+end to end over gremote including the logon. Every verdict identical --
+attaches 3, hook calls 9, two distinct pids, targeted injection in the
+target and nowhere else, import tables unchanged, health 3/3 and exit 0.
+The only number that moved was the WH_GETMESSAGE count, 23 against 22,
+which counts a live desktop's messages rather than anything about the hook.
+Neither run wedged the box.
+
+The repeat also found a trap in the procedure: the `-pre-inject` snapshot
+predates `autocheck --health`, so a run that does not ship the current
+binaries first measures the snapshot's and still exits 0. The harness ships
+`autocheck.exe` and `probe.exe` over the fs lane before running.

@@ -1,0 +1,109 @@
+The injection harness, run twice from the same known-good image, and the
+clipboard level ladder
+=========================================================================
+
+Machine : QEMU guest retroclaude-win98, HELLO machine=RETRO98,
+          Windows 4.10 build 2222 A, 32MB
+Date    : 2026-10-11
+Driven  : gremote 7401 over the slirp hostfwd -- no keyboard and no floppy,
+          including the logon, which was answered with a step list
+Why     : `docs/stage1-plan.md` asks two things of this stage that the cold
+          run on 2026-10-10 did not show. The harness must be REPEATABLE:
+          "restore the known-good image and run it twice". And verification
+          item 2's last clause -- automation=0 refusing both clipboard ops,
+          automation=1 allowing the read and refusing the write -- had been
+          checked only under Wine, where there is no clipboard.
+
+
+THE HARNESS, TWICE, EACH FROM A FRESH RESTORE
+----------------------------------------------
+
+    tools/vm/vmsnap.sh save post-stage1          (the live image, first)
+    tools/vm/vmsnap.sh restore ...-pre-inject
+    virsh start / qmp.py hostfwd 7401 / logon / ship / gates
+    virsh destroy
+    tools/vm/vmsnap.sh restore ...-pre-inject    (again, same file)
+    ... the same sequence ...
+
+Both boots reached a desktop in about 6 seconds after the logon step list
+answered the network password dialog, with 8 processes -- the same 8 the
+cold run recorded. Free after logon: 8,844 KB and 9,044 KB.
+
+                                       run 1        run 2
+    0.15d  attaches                        3            3
+           hook calls                      9            9
+           distinct pids that ran it       2            2
+           verdict             INJECTION WORKS   INJECTION WORKS
+    0.15f  WH_CALLWNDPROC             +0 / +0      +0 / +0
+           WH_GETMESSAGE             +23 / +1     +22 / +1
+           WH_CBT                     +0 / +0      +0 / +0
+           WH_CALLWNDPROCRET          +0 / +0      +0 / +0
+           verdict              TARGETED WORKS   TARGETED WORKS
+    0.15g  import tables              unchanged    unchanged
+    0.15h  health                     3/3 pass     3/3 pass, exit 0
+
+The only difference between the two runs is one message in the
+WH_GETMESSAGE count, which counts messages a running desktop delivers and
+is not a property of the hook. Everything that is a verdict is identical.
+Neither run wedged the box; neither needed the rollback it now has.
+
+Free fell 8,844 -> 6,932 KB across run 1's gates and 8,776 -> 7,100 KB
+across run 2's. That is the per-connection cost BACKLOG 32 already carries,
+not something the gates do.
+
+ONE THING THE RESTORE EXPOSED, worth knowing before the next repeat: the
+`-pre-inject` image predates commit e0ca603, so the `AUTOCHK.EXE` on it has
+no `--health` and falls through to the full 180-case battery, exits 0, and
+looks like a pass. The harness ships the current binaries over the fs lane
+before running -- `put` of `build/win/autocheck.exe` and `probe.exe` into
+C:\GASTON -- and both runs above did that. A repeat that skips the ship
+measures the snapshot's binaries, not the build's.
+
+
+THE CLIPBOARD LEVEL LADDER, ON A MACHINE WITH A REAL CLIPBOARD
+---------------------------------------------------------------
+
+`[ui] automation=` in `C:\GASTON\gremote.ini`, then `self_update()` to
+restart the server, then both operations. Four rungs, the last putting the
+box back:
+
+    ini automation=2 -> server declares 2, clip=1
+        get  ok       18 bytes 'level 2 wrote this'
+        set  ok
+    ini automation=0 -> server declares 0, clip=1
+        get  refused  automation_off
+        set  refused  automation_off
+    ini automation=1 -> server declares 1, clip=1
+        get  ok       18 bytes 'level 2 wrote this'
+        set  refused  automation_off
+    ini automation=2 -> server declares 2, clip=1
+        get  ok
+        set  ok
+
+The read at automation=1 returns the string the automation=2 rung put on
+the clipboard, so it is a real read of a real clipboard and not an empty
+success.
+
+**`clip=1` at every rung, including 0.** That is the distinction the
+capability was added for, and this is the evidence for it: the key says
+what this BUILD has, the level says what this MACHINE allows. A client that
+decided whether to offer the tools from the automation level would offer
+nothing at level 0 and be unable to tell a machine that refuses the
+clipboard from one whose server is too old to have it.
+
+THE INI IS READ AT STARTUP, not per request, which the ini's own comment
+can be read as denying -- it says a change takes effect "on the NEXT
+request rather than the next connection". That comment is about the field,
+which `RespUiLink::automationLevel()` reads live so the TRAY MENU takes
+effect immediately (uiops.cpp:102-104). Editing the file needs a restart.
+Both statements are true and the ini is where somebody will look first.
+
+METHOD NOTE, because the first pass of this got a wrong answer:
+the ladder script originally wrote the ini, restarted, and tested, without
+checking either that the write had landed or that the new server had come
+up at the level asked for. One rung ran at the previous level and reported
+a refusal that looked like a result. The script now asserts the level on
+disk after writing and compares the server's declared `automation` against
+what the rung asked for before it believes anything the rung measures. The
+re-run with those checks passed all four rungs; the first answer was the
+instrument, not the machine.

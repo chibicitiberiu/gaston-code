@@ -4249,7 +4249,27 @@ it read the control only at the end, so `BASE` never being typed and `BASE`
 being selected and replaced both looked like `'X'`. It now reads after typing
 and then reports which behaviour the machine has.
 
-**Stage 1 is closed.** All three verification places run.
+**Stage 1 is closed.** All three verification places run, and the two
+things the plan asked for that the cold run had not shown are now shown
+(`harness-repeat-and-levels-vm-20261011.txt`):
+
+* **The harness is repeatable.** Two runs, each from its own `vmsnap.sh
+  restore` of the same pre-inject image, driven over gremote including the
+  logon. Every verdict identical -- attaches 3, hook calls 9, two distinct
+  pids, targeted injection in the target and nowhere else, health 3/3,
+  exit 0. The one number that moved, WH_GETMESSAGE 23 against 22, counts a
+  live desktop's messages. Neither run wedged the box. The repeat also
+  found a trap: the snapshot predates `autocheck --health`, so a repeat
+  that does not ship the current binaries first measures the snapshot's
+  and still exits 0.
+* **The clipboard level ladder on a real clipboard**, which is the clause
+  Wine cannot answer. automation=2 allows both, 0 refuses both
+  `automation_off`, 1 allows the read and refuses the write -- and the
+  read at level 1 returns what level 2 put there, so it is a real
+  clipboard rather than an empty success. `clip=1` is declared at every
+  rung including 0, which is the whole argument for the capability being
+  separate from the level: the key is what the build HAS, the level is
+  what the machine ALLOWS.
 
 One operational note worth keeping: the Athlon's display was dead for this
 entire session -- a monitor swap left nView in single-display mode pointed at
