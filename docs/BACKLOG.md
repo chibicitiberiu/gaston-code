@@ -3056,3 +3056,69 @@ detail saying nothing was typed, because the silence is what hid this.
 front with the keyboard focus parked on its transcript view, then
 `{"type": ..., "in": "GastonWnd > Edit"}` -- which typed nothing before and
 now puts the text in the box.
+
+---
+
+## 34. Load the automation tier on demand, as a DLL
+
+**Asked 2026-10-11, while planning stage 2, and deferred with the numbers
+rather than on a hunch.** The question: the ui tier is only used when an agent
+drives the desktop, so could it be a DLL that is loaded then and not before?
+
+**What it would move.** About 49 KB of code per exe -- `libautomation` 30,912
+plus `ui/uiengine.o` 9,169 in gaston as measured after stage 2's trims, 31,888
+plus 9,300 in gremote -- with each module's read-only data on top and
+unattributable (`tools/check/mapsize.py` reports code only, and says why).
+
+**What it would not buy, which is the reason this is deferred.** On Windows 98
+code is demand-paged from the image, so code nobody touches is already very
+nearly free in RAM. This project has measured exactly that:
+`docs/measurements/workingset-vm-20261004.txt` records 66 KB of added image
+costing 36 KB of resident memory *"because the sheet's pages and the inspector
+are code that is not touched until Options is opened"*. The gain is therefore
+against `COMMITTED_CAP`, and `win/Makefile`'s own note says that gate is a
+proxy for the working set rather than the thing itself. After stage 2 the
+client has about 100 KB of headroom it did not have, so the proxy is not
+pressing either.
+
+**Two blockers, both real, both in the tree.**
+
+- **The seam is not a C ABI.** `win/ui/uiengine.h` publishes C++ across the
+  line: `rc_ui_tree` takes a `UiLink &` that the CALLER implements and a
+  `UiContext *` holding `MsaaSource` by value, and `TreeSink` heap-allocates
+  its own batch buffer. Put that across a module boundary and both sides carry
+  their own `operator new` -- which is the bug `core/heap.cpp` exists to
+  prevent, recorded in `CLAUDE.md`: *"with STL objects crossing files one
+  allocator could free another's memory"*. Doing it properly means opaque
+  handles, caller-supplied buffers and no exception crossing the boundary.
+- **It fights gremote's update path.** `gupdate.exe` replaces ONE image and
+  rolls back by renaming one file (`win/remote/gupdate.cpp:60-65,260-262`). A
+  new `gremote.exe` beside a stale DLL loads, stays up, and fails the first
+  `ui` request -- which is precisely the failure §22 records as *not* covered
+  by the rollback, on the box that is reachable only by CD. Shipping the pair
+  atomically is §22's work, not this entry's.
+
+**And the cheap version of the same idea was tried and declined.**
+`ui/uirec.cpp`'s `rc_uirec_inproc` and `rc_uirec_item` are 928 bytes that
+gremote's map marks unreferenced, because gremote refuses that tier outright
+(`win/remote/uiops.cpp:397-403`). Splitting them into their own translation
+unit so gremote stops linking them is the same instinct at link granularity,
+and `win/ui/uicontext.h:35-39` already did it once for the injector. It does
+not pay here:
+
+- the two functions share file-local helpers with the rest of `uirec.cpp`
+  (`emit`, `put`, the `Tail` type), so the split does not cut cleanly -- tried,
+  and the compiler says so;
+- `uirec.cpp` is linked into gaston, uicheck, netcheck, rpccheck **and**
+  gremote, so a new TU is added to four exes to remove 928 bytes from one, and
+  `-xs` costs about 2,144 bytes of exception machinery per TU;
+- `uirec.h:32`'s `#include "inproc/shm.h"` cannot move with them:
+  `RC_IN_DEPTH_MAX` is used at `uirec.h:63-64` by `RcPathBuilder`, whose
+  `rc_path_reset`/`rc_path_next` **are** referenced in gremote.
+
+So the saving is 928 bytes in the exe with the most headroom, paid for with a
+TU in the exe with the least. Recorded rather than done.
+
+**What would reopen this.** Stage 3's renderer and stage 3b's per-guest state
+spending the headroom stage 2 just created, or a second client that wants the
+automation tier without the rest. Not before.
