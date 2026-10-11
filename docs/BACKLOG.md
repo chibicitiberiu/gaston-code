@@ -2689,15 +2689,54 @@ addition the program has had.
   genuinely off the size lists in gremote is `ui/uirec.o` at 2,432 bytes and
   **`miniz.o` at 61,141** -- the largest module in the exe, with no override
   rule of its own.
-- Whether gremote needs every object in `libautomation`. It links the library,
-  and wlink pulls what is referenced -- but `uiengine.cpp` references nearly
-  all of it, including the MSAA path on a box where `HELLO msaa=` may say 0.
-- The `-xs` exception machinery, ~2,144 bytes per translation unit before any
-  of its own code. The ui lane added two to gremote.
+- ~~Whether gremote needs every object in `libautomation`.~~ **It links all
+  ten of them, `HELLO msaa=0` cannot change that, and it is the smallest item
+  on this list.** The map shows every member of `AUTOMATION_SRCS` present, and
+  `msaa.o` is pulled twice over, both unconditionally: `UiContext` holds
+  `MsaaSource` **by value** (`win/ui/uicontext.h:30`, constructed from
+  `win/remote/uiops.cpp:280`), and the handshake itself calls
+  `rc_msaa_present()` to fill the header (`win/remote/server.cpp:155`) on the
+  reader thread, where there is no context to be lazy about. There is no link
+  configuration in which a box reporting `msaa=0` keeps the object out. It is
+  **3,280 bytes** -- an order of magnitude below the two items this entry did
+  not list, which were 31,520 and ~31,400. `oleacc.dll` itself is already
+  `LoadLibrary`'d rather than imported (`msaa.h:19-21`), so there was never a
+  load-time risk, only image bytes.
+
+  **Found while answering this: `[ui] msaa=0` does nothing at all.** See the
+  commit that fixes it, and `win/remote/config.h:86-88`, which documented
+  behaviour that had no implementation.
+- ~~The `-xs` exception machinery, ~2,144 bytes per translation unit.~~
+  **Not per-TU, and not the lever it looks like.** The runtime is about
+  16.9 KB paid once -- `plbxmt3r`'s `areaexc`, `tsequiv`, `stabadt`,
+  `allocexc`, `stabthrw`, `fsregist` plus clib3r's `excptwnt` -- with another
+  ~2.75 KB of `std::exception` hierarchy landing in `obj/remote/main.o`, which
+  is why a 357-line file reads as 10 KB. The 2,144 figure at
+  `win/Makefile:820` is a measured before/after delta for adding one TU,
+  page rounding included; it is not a constant to multiply by gremote's 47.
+
+  What is worth recording instead: **gremote's entire STL dependency is two
+  `std::vector` out-params**, `win/exec/process.h:77,123`. Dropping `-xs`
+  there would mean rewriting those to caller-supplied storage, making
+  `operator new` non-throwing and removing the `bad_alloc` catches in
+  `core/thread.cpp`, `core/heap.cpp` and `core/app.cpp` -- and the objects are
+  shared with gaston, which needs the STL, so there is no per-exe flag to set.
+  A second object tree is the price, and that is a bigger decision than this
+  entry.
 - The runtime number rather than the image. `COMMITTED_CAP`'s own comment says
   that once the gate has been hit repeatedly the working set is what to
   measure, and `workingset-vm-20261002.txt` has the method -- free physical
   memory read through gremote `SYSINFO`.
+
+**What the round actually found, 2026-10-11.** None of the four bullets above
+was the lever. gremote carried **31,520 bytes of GUIDs** it used one of, and
+**~31,400 bytes of a ZIP implementation** nothing in the project has ever
+called, and 6,277 bytes of long-double formatting for a program with no
+floats. Those three, plus the flag answer in §2, took it from 365,497 to
+259,497 committed at load -- 29% -- without touching the ui lane the entry was
+written about. The method that found them is `tools/check/mapsize.py` and
+`docs/measurements/imagebytes-host-20261011.txt`; the lesson is the entry's own
+closing line, which was right: the number had been taken on trust.
 
 **What this entry is not.** It is not a claim that the image is too large for
 the box; a 32MB guest pages code from disk and the resident cost is a fraction
