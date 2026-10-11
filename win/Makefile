@@ -135,7 +135,26 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # runtime number was measured for the whole set: idle, the client holds
 # 36KB more than before it (docs/measurements/workingset-vm-20261004.txt,
 # tools/probe/wsprobe.py).
-COMMITTED_CAP ?= 585728
+# 585,728 -> 482,345 on 2026-10-11, and this is the FIRST REDUCTION in the
+# ladder above. Stage 2 took 104,448 bytes out of the image without removing
+# a feature: 31,744 of uuid.lib GUIDs that one reference pulled whole, ~45,000
+# of miniz's ZIP implementation and the C runtime stdio it dragged with it,
+# 6,656 of long-double formatting for four (double) casts, and 20,992 from
+# answering BACKLOG 2's flag question. Measured 478,249; the cap is that plus
+# one 4,096-byte page.
+#
+# THIS REVERSES THE POLICY ARGUED ABOVE, deliberately and once. "The page is
+# bought once ... so the next small feature does not re-enact this" was the
+# right call while every move was upward and 126-byte hunts were the
+# alternative. It stops being right at 104 KB of slack, where the gate can no
+# longer see the thing it exists for. A feature that needs a page should ask
+# for it and say why, which is what every line above this one did.
+#
+# It also settles the +4,096 that BACKLOG 19 and ROADMAP stage 4 recorded as
+# deferred "to you explicitly": that entry's own second option was "free 126
+# bytes of CONST or DATA anywhere in gaston.exe", and this freed 31,520 of
+# CONST-class data alone. The raise is not refused, it is unnecessary.
+COMMITTED_CAP ?= 482345
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
@@ -866,7 +885,12 @@ check: check-sources check-gaston check-gremote check-gupdate \
 # footprint is inside every number this project has ever taken of the client
 # on real hardware.
 check-gremote: CHECK_OWNED = $(GREMOTE_OBJS)
-check-gremote: CHECK_CAP   = 372000
+# 372,000 -> 263,593 on 2026-10-11, the first reduction here too, and the
+# answer to BACKLOG 29 -- the entry opened at the moment of the raise so the
+# number would not be mistaken for an endorsement of it. gremote measured
+# 365,497 before the stage and 259,497 after, 29% off, none of it from the ui
+# lane the entry was written about. Cap is measured plus one page.
+check-gremote: CHECK_CAP   = 263593
 # gupdate's budget. It links libcore and nothing else, and it runs for a
 # few seconds beside a gremote that is on its way out -- so this is a cap on
 # a transient, not on a resident, and it is still set tight because the
@@ -891,6 +915,17 @@ check-autocheck: CHECK_OWNED = $(AUTOCHECK_OBJS)
 # a budget. Raised to the next round number with room for the mode to grow a
 # fourth question, since the thing it is watching for is a jump, not a
 # kilobyte.
+# LEFT AT 220,000 while gaston's and gremote's came down, which is a
+# deliberate inconsistency. This was raised 212,000 -> 220,000 on 2026-10-10
+# with a stated argument -- "a cap with 184 bytes behind it is a tripwire for
+# whoever writes the next line rather than a budget ... the thing it is
+# watching for is a jump, not a kilobyte" -- and reversing that one day later
+# would contradict it rather than answer it. Stage 2 took it to 166,248, so
+# the margin is now 54 KB of exactly the room that argument asked for.
+# check-fscheck (106,996 of 200,000) and check-gupdate (51,984 of 64,000) are
+# loose for the same reason and are also left: these three are test and helper
+# programs, where a tripwire is worth more than a budget. The two that ship
+# are the two held tight.
 check-autocheck: CHECK_CAP   = 220000
 
 check-gaston: CHECK_OWNED = $(OBJS)

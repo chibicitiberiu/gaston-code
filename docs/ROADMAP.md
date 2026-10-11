@@ -158,7 +158,8 @@ ships and is proven pre-logon. `docs/stage1-plan.md` carries the citations.
 
 Measured 2026-10-11 at `01b5254`: `gaston.exe` **582,697 of 585,728** -- 3,031
 bytes -- and `gremote.exe` 365,497 of 372,000. (This file said 580,649 and
-363,449, figures taken before the clipboard landed.) Stage 3 adds a renderer
+363,449, figures taken before the clipboard landed.) **Done: gaston ends at
+478,249 of 482,345 and gremote at 259,497 of 263,593.** Stage 3 adds a renderer
 translation unit to the guest, and a new TU costs ~2,144 bytes of `-xs`
 exception machinery before any code in it.
 
@@ -248,9 +249,10 @@ The decisions, as they stand today:
   call: a fourth status pane, a loud transient bar, or both. Turning the
   automation setting on and off from the menu is the same entry, and today it
   needs a restart because the INI is read once.
-- **`COMMITTED_CAP` +4,096** so `gaston.exe` can hold the guest half of the
-  automation gate. The feature's own cost is 404 bytes; the rest is one page of
-  DGROUP alignment. Deferred to you explicitly.
+- ~~**`COMMITTED_CAP` +4,096** so `gaston.exe` can hold the guest half of the
+  automation gate.~~ **Closed 2026-10-11 without being taken.** `BACKLOG.md` 19
+  offered freeing 126 bytes of CONST or DATA as the alternative; stage 2 freed
+  31,520 of CONST alone, and the cap came down rather than up.
 - **What `KILL` means for a stranded console VM** (`BACKLOG.md` 17).
 - **The `rsrc32.dll` question** (`REMOTE.md` P200 checklist, item 9): whether
   `SYSINFO` should report USER/GDI free resources at all, which needs Resource

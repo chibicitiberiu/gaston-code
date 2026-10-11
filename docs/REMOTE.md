@@ -865,9 +865,10 @@ directory it writes into -- which is a reason not to have them cohabit.
   of coverage.
 - **The client's headroom is whatever the current cap leaves.** This read "180
   bytes: 398,820 against a 399,000 budget (measured 2026-09-25)" and both
-  numbers are several raises out of date -- as of 2026-10-11 `gaston.exe`
-  measured 582,697 against a `COMMITTED_CAP` of 585,728, and stage 2 then
-  trimmed the image and lowered the cap. The rule it was
+  numbers are several raises out of date. As of 2026-10-11, after stage 2,
+  `gaston.exe` measures **478,249 against a `COMMITTED_CAP` of 482,345** --
+  and that cap is the first REDUCTION in the ladder, so the rule this bullet
+  states is live again rather than notional. The rule it was
   written for stands: linking from libs must not grow the figure, and each step
   compares before and after. Read the live number out of `win/Makefile`, which
   carries every raise and its reason, rather than from here.
@@ -886,8 +887,8 @@ in every measurement taken while it is running.
 - `make check` gives `gremote.exe` its own committed-at-load cap: 242,761
   before the tray icon and 250,441 after it, against what was then 264,000
   (2026-10-01). The cap went to **372,000** on 2026-10-03 for the ui lane with
-  the trim deferred to `BACKLOG.md` 29; gremote measured 365,497 on 2026-10-11,
-  and stage 2 then closed that entry, trimmed the image and lowered the cap.
+  the trim deferred to `BACKLOG.md` 29. That round ran on 2026-10-11: gremote
+  went 365,497 -> **259,497**, 29% off, and the cap came down to 263,593.
   The icon's +7,680 is about 6KB of real image and the rest PE section
   rounding, and +2,144 of the 6KB is the `-xs` exception machinery a new
   translation unit brings before any of its own code. The `win/Makefile`

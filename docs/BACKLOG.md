@@ -1994,8 +1994,11 @@ unavoidable part alone is past the 2 bytes available.
 The page is paid once. Past it there are 3,970 bytes of data growth already
 bought. So this is a real decision with three answers, none of them taken here:
 
-- raise `COMMITTED_CAP` by 4,096, which buys this and the next 3,970 bytes of
-  static data in one step (the user deferred raising it, so this is theirs);
+- ~~raise `COMMITTED_CAP` by 4,096~~ **settled 2026-10-11 by the second
+  option below, and not by this one.** Stage 2 freed 31,520 bytes of
+  CONST-class data (uuid.lib's unused GUIDs) against the 126 that option asks
+  for, plus about 73 KB more elsewhere, and `COMMITTED_CAP` then came DOWN
+  585,728 -> 482,345. The raise is not refused; it is unnecessary;
 - free **126 bytes** of CONST or DATA anywhere in `gaston.exe`, which puts
   `_BSS` back on `0x46a000` and makes this feature's committed cost ~404 bytes;
 - ship the bridge half alone. It is safe -- the absent-header default is
@@ -2853,10 +2856,11 @@ quote, rule, table, plus the inline set code/strong/em/link.
 2. **The guest grows a renderer**: block stream in, the markup it receives today
    out. This is string assembly against a fixed table, not a parser, but it is a
    new translation unit and `-xs` costs ~2,144 bytes of exception machinery per
-   TU before any code. `gaston.exe` measured **582,697 of 585,728** on
-   2026-10-11 -- 3,031 bytes -- so measure before committing. Stage 2 then
-   freed about 69 KB of dead library code and lowered the cap to suit, so read
-   the live number out of `win/Makefile` rather than either figure here.
+   TU before any code. Stage 2 then freed 104,448 bytes and lowered the cap
+   to match, so `gaston.exe` is **478,249 of 482,345** as of 2026-10-11 --
+   4,096 bytes of slack, deliberately. The renderer will need a raise; ask for
+   it with its measured cost, which is what every raise in `win/Makefile`'s
+   ladder did.
 3. **`live` is the hard half, not `append`.** A partial block is re-sent whole as
    it grows (`html.py:357`'s note), so with rendering client-side the guest
    re-renders the open block on every update. The bytes do not change; the work
