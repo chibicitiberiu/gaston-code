@@ -55,6 +55,22 @@ bool rc_msaa_present(void)
     return got;
 }
 
+void MsaaSource::disable()
+{
+    /* The constructor has already loaded it, so this frees rather than
+     * prevents -- the observable contract (`available()` false, the walk
+     * on the window tree, HELLO saying 0) is the same either way, and the
+     * library does not stay mapped. */
+    if (m_oleacc)
+    {
+        FreeLibrary(m_oleacc);
+        m_oleacc = 0;
+    }
+    m_aofw = 0;
+    m_roleText = 0;
+    m_children = 0;
+}
+
 MsaaSource::MsaaSource()
 {
     m_oleacc = LoadLibraryA("oleacc.dll");

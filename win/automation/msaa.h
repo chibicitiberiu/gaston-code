@@ -105,6 +105,19 @@ public:
      * rather than pretending the fields are empty. */
     bool available() const { return m_aofw != 0; }
 
+    /* Turn this source off for good, and release oleacc with it.
+     *
+     * For `[ui] msaa=0` in GREMOTE.INI, which until 2026-10-11 was parsed,
+     * logged and acted on by nothing (BACKLOG 29). It is a method rather
+     * than a constructor argument because `UiContext` holds a MsaaSource BY
+     * VALUE and its own constructor takes none -- adding one there would
+     * ripple into four exes to pass a flag that only gremote has.
+     *
+     * Everything downstream already handles the off state: `available()`
+     * goes false and callers fall back to the window tree, which is what
+     * they do on a box with no oleacc at all. */
+    void disable();
+
     /* Fill `out` for one window, fetching ONLY the fields in `want`
      * (Selector::WANT_*). Each field is a separate COM call into another
      * process, so asking for three when the selector needs one is three

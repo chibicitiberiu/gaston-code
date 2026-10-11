@@ -279,6 +279,17 @@ bool UiOps::onThreadStart()
 
     m_ctx = new UiContext;
 
+    /* `[ui] msaa=0` means it, as of 2026-10-11. It was parsed, defaulted,
+     * written back and logged, and read by nothing that acted on it
+     * (BACKLOG 29) -- so a box set to skip oleacc loaded it anyway, walked
+     * with it, and reported msaa=1. */
+    if (!m_cfg->msaa)
+    {
+        m_ctx->msaa.disable();
+        rc_log("ui: [ui] msaa=0, so oleacc is released and the walk is "
+               "windows only");
+    }
+
     /* Non-fatal, both. Without the deadline a marshalled IAccessible call
      * against a wedged apartment has no timeout to give it; without the feed
      * a wait polls at its backstop instead. Either is worse than having

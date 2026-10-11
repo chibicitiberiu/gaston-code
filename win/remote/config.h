@@ -83,8 +83,11 @@ struct UiConfig
      * startup. */
     long automation;
 
-    /* 0 skips oleacc.dll even when it is there: the walk falls back to the
-     * window tree and HELLO says msaa=0. */
+    /* 0 means do not use oleacc even when it is there: the ui worker
+     * releases it at startup, the walk falls back to the window tree, and
+     * HELLO says msaa=0. True of the code since 2026-10-11; before that this
+     * comment described behaviour that did not exist, which is why
+     * BACKLOG 29 now carries the find. */
     bool msaa;
 
     /* CEILINGS a request's headers are clamped to, not fixed values. The

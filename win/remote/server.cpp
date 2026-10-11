@@ -147,12 +147,15 @@ void Session::sendHello()
      * `deflate` is the NEGOTIATED value, not a constant: it is 1 only when
      * this client said on AUTH that it can inflate, so the header describes
      * the link that exists rather than what the program is capable of.
-     * `msaa` is still a literal until the ui lane answers for it. */
+     * `msaa` answers for BOTH halves: whether the box has oleacc, and
+     * whether this one was told to use it. Until 2026-10-11 it reported
+     * only the first, so a box configured with `[ui] msaa=0` said 1. */
     /* Asked without a COM apartment and without a desktop worker: this is
      * the reader thread. It is also the answer to a question the P200
      * checklist has had open since the start -- whether retail 98 carries
      * oleacc at all -- said on every connection rather than guessed. */
-    keys[7] = "msaa";         vals[7] = rc_msaa_present() ? "1" : "0";
+    keys[7] = "msaa";
+    vals[7] = (m_uiCfg->msaa && rc_msaa_present()) ? "1" : "0";
     keys[8] = "toolhelp";     vals[8] = toolhelp;
     keys[9] = "deflate";      vals[9] = m_deflate ? "1" : "0";
     rc_strf(automation, sizeof(automation), "%ld", m_uiCfg->automation);
