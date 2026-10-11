@@ -102,16 +102,33 @@ with Remote(P, SECRET, port=_a.port) as r:
     back = r.clipboard()
     say("a-read-sees-what-it-copied", back.strip() == typed, repr(back[:50]))
 
-    # 4. The platform fact that cost an hour, pinned so it stays pinned.
+    # 4. What [Ctrl+A] does HERE -- reported, not asserted. The VM's stock
+    #    1999 Notepad selects nothing; the Athlon's 2005 one selects all
+    #    (clipboard-athlon-20261011.txt). Both are Windows 98 SE, so this is
+    #    a fact about the program, not the platform, and a probe that failed
+    #    on one of the two answers would be wrong half the time.
+    #
+    #    The control is READ AFTER TYPING, because `BASE` never arriving and
+    #    `BASE` being selected and replaced both end with the box holding
+    #    'X'. Without this read the two are indistinguishable, which is
+    #    exactly how the first run of this case was misread.
     r.run([{"focus": pad}, "[Ctrl+Home]", "[Ctrl+Shift+End]", "BASE"])
     time.sleep(1)
+    base = edit_text(r) or ""
+    say("the-typing-lands-before-we-judge-ctrl-a", base == "BASE", repr(base))
     r.run([{"focus": pad}, "[Ctrl+A]"])
     time.sleep(1)
     r.run([{"focus": pad}, "X"])
     time.sleep(1)
     after = edit_text(r) or ""
-    say("ctrl-a-selects-nothing-on-this-notepad", after == "BASEX",
-        repr(after) + "  (appended, so nothing was selected)")
+    if base == "BASE" and after in ("BASEX", "X"):
+        selects = after == "X"
+        print("[ -- ] %-44s %s" % (
+            "ctrl-a-on-this-notepad",
+            "SELECTS ALL" if selects else "selects nothing"))
+    else:
+        say("ctrl-a-on-this-notepad", False,
+            "cannot tell: %r then %r" % (base, after))
 
     # 5. Refused rather than clipped: a document that does not fit is not
     #    silently made into a different document.

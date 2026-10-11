@@ -1,0 +1,119 @@
+The clipboard on real hardware, and what a second 98 changed about Ctrl+A
+=========================================================================
+
+Machine : Athlon XP 2000+, 256MB, Windows 98 SE 4.10.2222 A, real hardware
+          10.0.0.125, driven through gremote on port 7401 over the LAN
+Date    : 2026-10-11
+Driven  : `tools/probe/clipprobe.py --remote 10.0.0.125:<secret>`, after a
+          `self_update()` -- the copy on that box predated the clipboard
+          build and its HELLO carried no `clip` key at all. After the
+          update: `clip=1`, `automation=2`, HELLO machine=TIBI.
+Why     : `docs/stage1-plan.md` names three places the clipboard had to be
+          verified. Wine and the QEMU guest were done on 2026-10-10; this
+          is the third, and the stage was held open for it. The box had
+          been switched off, and four earlier checks got "No route to host".
+
+This is the run that closes stage 1.
+
+
+WHAT PASSED -- SEVEN OF EIGHT
+------------------------------
+
+  reads-whatever-is-there              no_clip_text
+  one-notepad-to-work-with             1
+  a-write-lands-in-another-program     'the bridge put this here'
+  a-read-sees-what-it-copied           'copied by notepad itself'
+  too-big-is-refused                   too_big
+  unencodable-is-refused-here          UnicodeEncodeError
+  tidied-up                            no Notepad left behind
+
+Every one of these agrees with the QEMU guest, on different silicon and
+over a LAN rather than slirp. `bodyCap()` refuses at the same 55,296 bytes,
+CP1252 refuses U+2500 before the wire, and an empty clipboard is still
+`no_clip_text` rather than a zero-length success.
+
+
+THE EIGHTH, WHICH FAILED, AND WHY THAT IS THE USEFUL PART
+----------------------------------------------------------
+
+`ctrl-a-selects-nothing-on-this-notepad` FAILED: the Edit held `'X'` where
+the probe asserted `'BASEX'`.
+
+That result has two readings and the probe could not tell them apart. If
+`[Ctrl+A]` selected everything, `X` replaced it -> `'X'`. If `BASE` had
+never been typed at all, `X` alone would land in an empty control -> also
+`'X'`. The probe only read the control at the end, so both look identical.
+
+Re-run reading the control between every step:
+
+    empty      -> ''
+    typed BASE -> 'BASE'      <-- the discriminator
+    Ctrl+A, X  -> 'X'
+
+`BASE` was there. So **`[Ctrl+A]` DOES select all in Notepad on this
+machine**, and the assertion the VM run produced is not true of Windows 98.
+
+It is not a difference between the machines. It is a difference between two
+Notepads:
+
+    VM      C:\WINDOWS\NOTEPAD.EXE   53,248 bytes   1999-04-23   stock 98 SE
+    Athlon  C:\WINDOWS\NOTEPAD.EXE   57,344 bytes   2005-12-12   a later build
+
+(The VM figure was read offline with `guestfish --ro -a vm/win98.qcow2`, so
+the guest did not have to be booted for it. The Athlon's USER32.DLL is dated
+2007-04-10, so that box has had unofficial updates applied to more than
+Notepad.)
+
+Select All on Ctrl+A is a later Windows convention. The 1999 Notepad lists
+it in the Edit menu with no accelerator wired to it; the 2005 one wires it.
+
+AND THIS DOES NOT CONTRADICT THE 2026-10-02 MEASUREMENT, which was taken on
+THIS SAME BOX: `keys-named-p200-20261002.txt` §3 has `[Ctrl+A][Delete]`
+leaving a Win32 EDIT control unchanged, twice consecutively, with a 500ms
+settle against exactly the read-too-early race that had fooled an earlier
+run. Both are true at once, because they are about different things:
+
+  * the Win98 EDIT control implements no Ctrl+A -- true on both machines,
+    and true of every program that does not add the accelerator itself;
+  * a program MAY add it, and the 2005 Notepad does.
+
+So the fact is about the control, not the machine, and a claim phrased
+"Ctrl+A is not select-all on this machine" is one an agent can watch fail in
+front of it. The prose now says what was actually measured, and the idiom it
+recommends is unchanged because it was never the part that was wrong:
+`[Ctrl+Home]` `[Ctrl+Shift+End]` works in both Notepads and in the EDIT
+control, and `[Home][Shift+End]` clears a single-line box in all three.
+
+`clipprobe.py` case 4 no longer asserts one answer. It reads the control
+after typing -- so a step that did not land is reported as a failure rather
+than mistaken for a selection -- and then REPORTS which of the two
+behaviours this machine's Notepad has.
+
+
+STATE NOTE FOR WHOEVER DRIVES THIS BOX NEXT
+--------------------------------------------
+
+The machine was brought up for this run with a dead display: a monitor swap
+left Windows with no picture, the monitor sleeping from the moment the video
+driver loaded while POST was fine. Everything above was driven over gremote
+with nothing on the screen, which is worth recording as a capability -- the
+ui lane diagnosed and fixed a video configuration on a machine whose only
+output device was switched off.
+
+The cause, found by reading the driver's own keys over the fs lane:
+
+    NVIDIA\NVTweak  "NvCplCurrentConnectedMask"=dword:00000100   TV only
+    NVIDIA\Display  "LastDisplaySetOnLogicalDevice0"="TLV0"      the TV encoder
+                    "NoEDIDDevices"=dword:00000101              no EDID on CRT0
+
+nView was in "Single display" mode pointed at the integrated TV encoder,
+which the driver believes is attached whether or not anything is plugged
+into it, and CRT0 was not in the connected mask -- so the VGA output was
+switched off the instant nvdisp.drv loaded. No S-Video cable was connected.
+Writing `0x1` into both masks and `"CRT0"` into both LastDisplaySet values,
+then rebooting, put the picture back. Resolution was also moved to
+1024x768x32: `MODES\32\800,600` carries an EMPTY default refresh and no rate
+list, while `MODES\32\1024,768` carries `@="60"`.
+
+Pre-change exports of both registry keys are on the box as `C:\DISPBAK.REG`
+and `C:\CONFBAK.REG`.
