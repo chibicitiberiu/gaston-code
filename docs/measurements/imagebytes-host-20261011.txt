@@ -1,0 +1,137 @@
+Where the bytes are, per object module -- stage 2's "before"
+============================================================
+
+Machine : the build host (this is a static read of the PE files and the
+          wlink maps; no guest is involved, hence -host- in the name)
+Date    : 2026-10-11
+Commit  : 01b5254, built from a clean tree (make -C win clean all, 10s)
+Why     : ROADMAP stage 2's exit condition is "a measured before/after, and
+          room in the caps for stage 3". BACKLOG 2 and 29 both propose
+          compiler flags as the lever; neither had ever asked where the
+          bytes actually are. This is that question, asked first.
+Method  : tools/check/mapsize.py <map>, written for this and committed with
+          it. Committed-at-load totals are the gate's own formula from
+          win/Makefile:944-954 -- sum of max(VirtualSize, SizeOfRawData)
+          over the PE section headers.
+
+          READ ITS TWO CAVEATS BEFORE TRUSTING A ROW. Watcom emits string
+          literals with no public symbol and puts read-only data in AUTO
+          beside code, so an unnamed run is charged to whichever symbol
+          precedes it -- in gaston, ComposeBox::hasFocus() (about thirty
+          bytes of code) is charged 13,559. The tool therefore reports the
+          data segments as unattributed and splits any single charge over
+          2 KB into a separate `unnamed` column. docs/mem-audit/
+          01-measurements.md:125-127 warned about exactly this in
+          September; the tool is built to obey that warning rather than
+          rediscover it.
+
+
+1. Committed at load, against the caps
+---------------------------------------
+
+                        committed      cap    slack
+  gaston.exe              582,697  585,728    3,031
+  gremote.exe             365,497  372,000    6,503
+  autocheck.exe           212,328  220,000    7,672
+  fscheck.exe             112,628  200,000   87,372
+  gupdate.exe              52,496   64,000   11,504
+
+  gaston by section: AUTO 408,064  .idata 7,680  DGROUP 132,649
+                     .reloc 26,624  .rsrc 7,680
+
+Four documents quoted 580,649 for gaston and 363,449 or 359,609 for
+gremote -- figures taken before the clipboard landed. PROGRESS.md:4172 had
+the current ones. The planning for this stage was done against the stale
+pair and had to be redone; that is the first thing this file exists to stop
+happening again.
+
+Note what the gate charges and what it does not. AUTO and .reloc are
+512-aligned raw sizes; DGROUP is byte-exact VirtualSize. The only
+4,096-byte effect is _BSS's page alignment inside DGROUP (gaston.map: _BSS
+at 0x484000, the data chain ending at 0x48360e), where 2,546 bytes of
+static data already fit free. A code-only trim moves AUTO and .reloc in
+512-byte steps and does not touch DGROUP at all.
+
+
+2. gaston.exe -- code bytes by module, top of the list
+-------------------------------------------------------
+
+     bytes     +unnamed   unreferenced  module
+     39044                        3077  clib3r.lib
+     31520                       31312  uuid.lib
+     30912         4848           4154  libautomation.lib
+     20864        40320           8512  third_party/miniz/miniz.o
+     16327                         310  libfs.lib
+     14623                        1152  libcore.lib
+     12592                         880  libexec.lib
+     11615                        2128  libwire.lib
+      9559         3260                 app/mainwindow.o
+      8990                              app/main.o
+      8018                              app/htmlview.o
+      7883                              app/pillbar.o
+      7095         2074                 ui/uiengine.o
+      6241                          55  math387r.lib
+
+  code segments 406,086; attributed 405,985; difference 101 bytes.
+
+3. gremote.exe -- the same
+---------------------------
+
+     bytes     +unnamed   unreferenced  module
+     36074                        3829  clib3r.lib
+     31888         4848           4090  libautomation.lib
+     31520                       31504  uuid.lib
+     20821        40320           8469  third_party/miniz/miniz.o
+     13492                         256  libexec.lib
+     12608                        2608  libwire.lib
+     12074                        2016  libcore.lib
+     10511                         347  libfs.lib
+      7226         2074                 ui/uiengine.o
+      6801                              remote/main.o
+      6299         2940            572  plbxmt3r.lib
+      6277                          55  math387r.lib
+
+  code segments 277,343; attributed 277,025; difference 318 bytes.
+
+
+4. What this says, which is not what either entry predicted
+------------------------------------------------------------
+
+Three rows are dead weight, and together they are about 69 KB per exe --
+roughly 12% of gaston and 19% of gremote:
+
+  uuid.lib        31,520 in gaston, gremote, autocheck and uicheck; 31,504
+                  of it unreferenced by the linker's own marking. The
+                  library is ONE object module, so a single reference pulls
+                  all 1,970 GUIDs. gremote and the check exes reference
+                  exactly one, IID_IUnknown, at
+                  win/automation/calldeadline.cpp:92 -- seventy-nine lines
+                  below RC_IID_IMessageFilter, which is spelled out locally
+                  in that same file. The client references thirteen. This
+                  row has NO unnamed runs in it: 1,970 symbols of 16 bytes
+                  each, so the figure is exact rather than attributed.
+
+  miniz's ZIP     The archive block is contiguous, has no reference from
+                  anywhere in win/ (grep for mz_zip_, tdefl_, tinfl_
+                  outside third_party/ is empty), and miniz ships the
+                  switch to remove it. miniz.o is gremote's largest module.
+
+  math387r.lib    6,241 and 6,277 bytes of long-double formatting in a
+                  program with no floating point except four (double) casts
+                  computing a bytes-per-second figure
+                  (wire/connection.cpp:349,360 and rpc/rpc.cpp:245,256).
+                  gupdate.map and fscheck.map settle the mechanism: both
+                  have _vsnprintf_ and clib3r.lib(prtf.c) and no math387r
+                  module at all, so Watcom pulls the formatter through the
+                  ___EFG_printf hook on float USE, not on printf.
+
+And one row is the opposite of dead: libautomation's 30,912 in the client
+and 31,888 in gremote is the ui lane doing its job, with msaa.o only 3,280
+bytes of it -- the item BACKLOG 29 put second on its list is the smallest
+thing on it by an order of magnitude.
+
+The unattributable data is worth stating as a limit rather than a finding:
+gaston's CONST holds 51,374 bytes with no named symbol in it at all, and
+CONST2 another 54,740 of which 3,008 are not named. Nothing here can say
+what those are. If a later stage needs them broken down, the instrument is
+objdump on the sections, not this map.
