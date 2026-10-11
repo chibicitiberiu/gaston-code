@@ -51,6 +51,7 @@ CXXONLY = -xs -wcd=433
 CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
          -DWIN32_LEAN_AND_MEAN -DTDEFL_LESS_MEMORY=1 -DNOMINMAX \
+         -DMINIZ_NO_ARCHIVE_APIS \
          -i="$(CURDIR)" -i="$(CURDIR)/third_party/miniz" \
          -i="$(WATCOM)/h" -i="$(WATCOM)/h/nt"
 
