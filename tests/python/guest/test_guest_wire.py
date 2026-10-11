@@ -24,7 +24,7 @@ pytestmark = conftest.needs_guest
 #: gremote constructs with the inflater running and the deflater waiting --
 #: deferred and never allowed sends plain, allowed after the fact round trips
 #: whole, and both pairs stop clean.
-CASE_COUNT = 27
+CASE_COUNT = 32
 
 
 @pytest.fixture(scope="module")

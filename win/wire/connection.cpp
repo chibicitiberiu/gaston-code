@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include "core/log.h"
+#include "core/rate.h"
 #include "miniz.h"
 
 /* One queued outbound frame: already encoded, owned by the queue. */
@@ -345,8 +346,7 @@ inline const char *Connection::Codec::compressBody(const void *body, unsigned bo
     deflateOut += *outLen;
     deflateUs += us;
     deflateSamples++;
-    if (deflateUs > 0)
-        deflateBps = (unsigned long)((double)deflateIn * 1000000.0 / deflateUs);
+    deflateBps = rc_bps(deflateIn, deflateUs);
     return defScratch;
 }
 
@@ -356,8 +356,7 @@ inline void Connection::Codec::takeSample(unsigned long *bytesIn, unsigned long 
         *bytesIn = deflateIn;
     if (us)
         *us = deflateUs;
-    if (deflateUs > 0)
-        deflateBps = (unsigned long)((double)deflateIn * 1000000.0 / deflateUs);
+    deflateBps = rc_bps(deflateIn, deflateUs);
     deflateIn = 0;
     deflateUs = 0;
 }

@@ -15,6 +15,7 @@
 #include "core/rc_cpp.h"
 #include "core/log.h"
 #include "core/str.h"
+#include "core/rate.h"
 #include "wire/connection.h"
 #include "wire/listener.h"
 
@@ -561,6 +562,50 @@ static void inheritCases()
     say("and-gives-it-back-when-it-goes", freed >= 0, detail);
 }
 
+/* --- rc_bps, because nothing else measures it --------------------------- *
+ *
+ * The bytes-per-second figure rides the STAT frame's `bps` and
+ * `deflate_bps` headers and feeds the bridge's slow-link decision. Before
+ * core/rate.h it was `(double)bytes * 1000000.0 / us` in four places, which
+ * linked 6.6 KB of long-double formatting into two programs that format no
+ * floats. The replacement is integer, so the failure mode moved from "big"
+ * to "wrong": an overflow or a divide-by-zero here does not crash anything,
+ * it silently turns compression on or off at the wrong moment, and
+ * tests/python/wire/test_compress.py feeds the bridge side synthetic
+ * numbers and so cannot see it.
+ *
+ * The case that matters is the third. 2,000,000 bytes times 1,000,000
+ * overflows 32 bits by a factor of 465; the whole reason the old code cast
+ * to double was to avoid exactly that, and an integer version that does not
+ * widen would report about 4.6 MB/s for a 100 MB/s link. */
+static void rateCases()
+{
+    char d[64];
+
+    say("bps-zero-span-is-not-a-division", rc_bps(1000, 0) == 0, "0");
+
+    rc_strf(d, sizeof(d), "%lu", rc_bps(1000, 1000000UL));
+    say("bps-one-second", rc_bps(1000, 1000000UL) == 1000UL, d);
+
+    /* 2 MB in 20 ms = 100 MB/s, and the multiply needs 64 bits. */
+    rc_strf(d, sizeof(d), "%lu", rc_bps(2000000UL, 20000UL));
+    say("bps-does-not-overflow-32-bits",
+        rc_bps(2000000UL, 20000UL) == 100000000UL, d);
+
+    /* A span shorter than a byte count is the normal LAN case, and the
+     * answer must not be truncated to zero by dividing first. */
+    rc_strf(d, sizeof(d), "%lu", rc_bps(64512UL, 100UL));
+    say("bps-sub-millisecond-span", rc_bps(64512UL, 100UL) == 645120000UL, d);
+
+    /* The quiet-LAN case rpc.cpp:235 records: two pings on an idle link
+     * reported 7 B/s and the bridge treated 100Mbit as a modem. The number
+     * is right; it is the sampling that was wrong, and this pins the
+     * arithmetic so the next reader does not blame it. */
+    rc_strf(d, sizeof(d), "%lu", rc_bps(14UL, 2000000UL));
+    say("bps-a-tiny-sample-is-honest-not-clamped",
+        rc_bps(14UL, 2000000UL) == 7UL, d);
+}
+
 int main(int argc, char **argv)
 {
     /* The child half of inheritCases: hold still, holding whatever was
@@ -577,6 +622,7 @@ int main(int argc, char **argv)
         say("listen", false, "open failed; see wirecheck.log");
         return 1;
     }
+    rateCases();
     listenerCases(l);
     traffic(l);
     heartbeat(l);

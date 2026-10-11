@@ -28,6 +28,7 @@
 #include <new>
 #include "core/heap.h"
 #include "core/log.h"
+#include "core/rate.h"
 #include "core/str.h"
 #include "core/rc_cpp.h"
 
@@ -241,8 +242,7 @@ static void rpc_maybe_nudge(void)
         rc_net_get_link_sample(g_net, &link_bytes, &link_us);
         if (link_us > 0 && link_bytes > 0) {
             char bps[24];
-            unsigned long cur_bps = (unsigned long)(
-                (double)link_bytes * 1000000.0 / link_us);
+            unsigned long cur_bps = rc_bps(link_bytes, link_us);
             rc_strf(bps, sizeof(bps), "%lu", cur_bps);
             rc_net_set_link_bps(g_net, cur_bps);
             {
@@ -253,7 +253,7 @@ static void rpc_maybe_nudge(void)
                 char def_bps_str[24];
                 k[0] = "bps"; v[0] = bps;
                 if (def_us > 0) {
-                    unsigned long cur_def_bps = (unsigned long)((double)def_in * 1000000.0 / def_us);
+                    unsigned long cur_def_bps = rc_bps(def_in, def_us);
                     rc_strf(def_bps_str, sizeof(def_bps_str), "%lu", cur_def_bps);
                     k[1] = "deflate_bps"; v[1] = def_bps_str;
                     n_stat = 2;
