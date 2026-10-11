@@ -14,6 +14,18 @@ static const GUID RC_IID_IMessageFilter =
     { 0x00000016, 0x0000, 0x0000,
       { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
 
+/* And IUnknown's, for the same reason the one above is here -- which it was
+ * not, and that cost 31,520 bytes in four exes. Watcom ships uuid.lib as a
+ * SINGLE object module, so the one `IID_IUnknown` in QueryInterface below
+ * pulled all 1,970 GUIDs into gremote, uicheck, autocheck and the rest, with
+ * the linker's own map marking 1,969 of them unreferenced. Measured
+ * 2026-10-11 (docs/measurements/imagebytes-host-20261011.txt). The RC_
+ * prefix is required, not tidiness: unknwn.h already declares the name as
+ * `EXTERN_C const IID`, so a static of the same name would not compile. */
+static const GUID RC_IID_IUnknown =
+    { 0x00000000, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+
 CallDeadline::CallDeadline()
 {
     m_prev = 0;
@@ -89,7 +101,7 @@ HRESULT STDMETHODCALLTYPE CallDeadline::QueryInterface(REFIID riid,
 {
     if (!ppv)
         return E_POINTER;
-    if (IsEqualGUID(riid, IID_IUnknown)
+    if (IsEqualGUID(riid, RC_IID_IUnknown)
         || IsEqualGUID(riid, RC_IID_IMessageFilter))
     {
         *ppv = (void *)this;

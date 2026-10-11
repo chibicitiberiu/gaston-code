@@ -654,6 +654,13 @@ $(OBJ)/%.d: ;
 # one object only.
 $(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 
+# checks/cppcheck.o includes the same mshtml.h, for the same reason and with
+# the same consequence: it compares win/app/htmlview.cpp's spelled-out GUIDs
+# against uuid.lib's own copies, so it needs the toolchain's declarations of
+# them. A check exe may link uuid.lib -- the shipping exes are the ones that
+# must not.
+$(OBJ)/checks/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
+
 # app/ is compiled for SIZE. It is UI code: window procedures, menus,
 # layout, dialogs. The expensive work it triggers happens elsewhere -- in
 # MSHTML, in the disk and network I/O -- so -otexan's speed buys nothing
@@ -776,10 +783,15 @@ $(BUILD)/gaston.exe: $(OBJS) $(BUILD)/gaston.res | msgids
 #
 # So the gate locates each hit instead (tools/check/cmovcheck.py): the linker map
 # says which module a symbol came from, and only a hit inside an object file
-# THIS BUILD COMPILED is something `-5` governs. The current seven are one
-# inside uuid.lib's _GUID_FONTBOLD and six in clib3r.lib's
-# __DefaultExceptionHandler_ padding, and they are printed every run rather
-# than summed into a number nobody can check.
+# THIS BUILD COMPILED is something `-5` governs. They are printed every run
+# rather than summed into a number nobody can check -- which is the point,
+# because the list moves for reasons that have nothing to do with the flag.
+# This used to read "the current seven are one inside uuid.lib's
+# _GUID_FONTBOLD and six in clib3r.lib's __DefaultExceptionHandler_ padding".
+# Then stage 2 stopped linking uuid.lib's 31,744 bytes of unused GUIDs and the
+# data after it slid: as of 2026-10-11 gaston has no hits at all and gremote
+# has one, in miniz.o's tdefl_compressor_alloc_ data. Read the printed list,
+# not a count, and expect it to change whenever the image does.
 PYTHON ?= python3
 
 # Static PE audit. The import table is the gate that matters: a single NT-only

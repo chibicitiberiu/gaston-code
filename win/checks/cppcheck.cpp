@@ -14,8 +14,17 @@
  *     paired-operation bugs RAII is here to remove cannot come back.
  */
 #include <windows.h>
+/* For the GUID table at the end of this file: the toolchain's own
+ * declarations, so the comparison is against uuid.lib rather than against a
+ * second copy of our own numbers. mshtml.h is the one that needs -wcd=146
+ * (see win/Makefile), for a dangling typedef in the shipped header. */
+#define CINTERFACE
+#include <ole2.h>
+#include <exdisp.h>
+#include <mshtml.h>
 #include <stdio.h>
 #include "core/rc_cpp.h"
+#include "core/str.h"
 
 static void say(const char *name, int pass, const char *detail)
 {
@@ -294,6 +303,83 @@ static void owned_cases(void)
     say("uniquearr-destroys-all", g_dtors == 4, "four dtors");
 }
 
+/* --- The OLE GUID table, against the toolchain's own copy ---------------- *
+ *
+ * win/app/htmlview.cpp and win/automation/calldeadline.cpp spell their GUIDs
+ * out rather than linking uuid.lib, because that library is one object module
+ * and a single reference pulls all 1,970 GUIDs: 31,744 bytes of committed
+ * image in four exes, measured 2026-10-11.
+ *
+ * A wrong byte in one of those constants does not fail a gate. It fails
+ * CoCreateInstance on the guest and leaves no transcript at all -- and the
+ * Win32 GUI layer has no headless runner (win/Makefile:60-66), so nothing
+ * else here would catch it. This is a CHECK exe, so it may link uuid.lib and
+ * compare: the names below are the toolchain's, the values are ours, and the
+ * Python side also diffs these literals against the two shipping files so a
+ * copy cannot drift from this table (tests/python/meta/test_ole_guids.py).
+ */
+struct GuidCase
+{
+    const char *name;
+    const GUID *theirs;
+    GUID        ours;
+};
+
+static void guid_cases(void)
+{
+    static const GuidCase CASES[] = {
+    { "IID_IUnknown", &IID_IUnknown,
+      { 0x00000000, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleObject", &IID_IOleObject,
+      { 0x00000112, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleInPlaceObject", &IID_IOleInPlaceObject,
+      { 0x00000113, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleWindow", &IID_IOleWindow,
+      { 0x00000114, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleInPlaceUIWindow", &IID_IOleInPlaceUIWindow,
+      { 0x00000115, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleInPlaceFrame", &IID_IOleInPlaceFrame,
+      { 0x00000116, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleClientSite", &IID_IOleClientSite,
+      { 0x00000118, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "IID_IOleInPlaceSite", &IID_IOleInPlaceSite,
+      { 0x00000119, 0x0000, 0x0000,
+        { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } } },
+    { "CLSID_WebBrowser", &CLSID_WebBrowser,
+      { 0x8856f961, 0x340a, 0x11d0,
+        { 0xa9, 0x6b, 0x00, 0xc0, 0x4f, 0xd7, 0x05, 0xa2 } } },
+    { "IID_IWebBrowser2", &IID_IWebBrowser2,
+      { 0xd30c1661, 0xcdaf, 0x11d0,
+        { 0x8a, 0x3e, 0x00, 0xc0, 0x4f, 0xc9, 0xe2, 0x6e } } },
+    { "IID_IHTMLElement", &IID_IHTMLElement,
+      { 0x3050f1ff, 0x98b5, 0x11cf,
+        { 0xbb, 0x82, 0x00, 0xaa, 0x00, 0xbd, 0xce, 0x0b } } },
+    { "IID_IHTMLElement2", &IID_IHTMLElement2,
+      { 0x3050f434, 0x98b5, 0x11cf,
+        { 0xbb, 0x82, 0x00, 0xaa, 0x00, 0xbd, 0xce, 0x0b } } },
+    { "IID_IHTMLDocument2", &IID_IHTMLDocument2,
+      { 0x332c4425, 0x26cb, 0x11d0,
+        { 0xb4, 0x83, 0x00, 0xc0, 0x4f, 0xd9, 0x01, 0x19 } } },
+    };
+    int i;
+    char name[64];
+
+    for (i = 0; i < (int)(sizeof(CASES) / sizeof(CASES[0])); i++)
+    {
+        int same = memcmp(CASES[i].theirs, &CASES[i].ours,
+                          sizeof(GUID)) == 0;
+        rc_strf(name, sizeof(name), "guid-%s", CASES[i].name);
+        say(name, same, same ? "matches uuid.lib" : "DIFFERS from uuid.lib");
+    }
+}
+
 int main(void)
 {
     buf_cases();
@@ -301,5 +387,6 @@ int main(void)
     unique_cases();
     tempfile_cases();
     owned_cases();
+    guid_cases();
     return 0;
 }

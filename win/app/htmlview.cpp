@@ -39,6 +39,64 @@
 
 #include <string>
 
+/* THE GUIDS ARE SPELLED OUT, not linked from uuid.lib, and that is worth
+ * 31,520 bytes. Watcom ships uuid.lib as a SINGLE object module, so a
+ * reference to any one GUID pulls all 1,970 of them into the image -- the
+ * linker's own map marks 1,957 of them unreferenced. Measured 2026-10-11:
+ * uuid.lib was the second largest module in gaston.exe and the third in
+ * gremote.exe, where a single IID_IUnknown was paying for the lot.
+ *
+ * win/automation/msaa.cpp:25 already did this for oleacc's IID, for a
+ * different reason (a toolchain whose import library lacks it cannot fail
+ * the link), and win/checks/probe.c:566 does it in C. The RC_ prefix is not
+ * decoration: oleidl.h, exdisp.h and mshtml.h already declare these names
+ * as `EXTERN_C const IID`, so a file-scope `static const GUID` of the same
+ * name is a redeclaration with different linkage and will not compile.
+ *
+ * The bytes were read out of the linked image rather than typed, and
+ * win/checks/cppcheck.cpp compares every one of them against uuid.lib's own
+ * copy on each build -- because a wrong byte here does not fail a gate, it
+ * fails CoCreateInstance on the guest and leaves no transcript at all. */
+static const GUID RC_IID_IUnknown =
+    { 0x00000000, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleObject =
+    { 0x00000112, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleInPlaceObject =
+    { 0x00000113, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleWindow =
+    { 0x00000114, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleInPlaceUIWindow =
+    { 0x00000115, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleInPlaceFrame =
+    { 0x00000116, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleClientSite =
+    { 0x00000118, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_IID_IOleInPlaceSite =
+    { 0x00000119, 0x0000, 0x0000,
+      { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+static const GUID RC_CLSID_WebBrowser =
+    { 0x8856f961, 0x340a, 0x11d0,
+      { 0xa9, 0x6b, 0x00, 0xc0, 0x4f, 0xd7, 0x05, 0xa2 } };
+static const GUID RC_IID_IWebBrowser2 =
+    { 0xd30c1661, 0xcdaf, 0x11d0,
+      { 0x8a, 0x3e, 0x00, 0xc0, 0x4f, 0xc9, 0xe2, 0x6e } };
+static const GUID RC_IID_IHTMLElement =
+    { 0x3050f1ff, 0x98b5, 0x11cf,
+      { 0xbb, 0x82, 0x00, 0xaa, 0x00, 0xbd, 0xce, 0x0b } };
+static const GUID RC_IID_IHTMLElement2 =
+    { 0x3050f434, 0x98b5, 0x11cf,
+      { 0xbb, 0x82, 0x00, 0xaa, 0x00, 0xbd, 0xce, 0x0b } };
+static const GUID RC_IID_IHTMLDocument2 =
+    { 0x332c4425, 0x26cb, 0x11d0,
+      { 0xb4, 0x83, 0x00, 0xc0, 0x4f, 0xd9, 0x01, 0x19 } };
+
 typedef struct Host {
     IOleClientSite     site;
     IOleInPlaceSite    place;
@@ -58,13 +116,13 @@ typedef struct Host {
 
 static HRESULT host_qi(Host *h, REFIID riid, void **out)
 {
-    if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IOleClientSite))
+    if (IsEqualIID(riid, RC_IID_IUnknown) || IsEqualIID(riid, RC_IID_IOleClientSite))
         *out = &h->site;
-    else if (IsEqualIID(riid, IID_IOleInPlaceSite))
+    else if (IsEqualIID(riid, RC_IID_IOleInPlaceSite))
         *out = &h->place;
-    else if (IsEqualIID(riid, IID_IOleInPlaceFrame)
-             || IsEqualIID(riid, IID_IOleInPlaceUIWindow)
-             || IsEqualIID(riid, IID_IOleWindow))
+    else if (IsEqualIID(riid, RC_IID_IOleInPlaceFrame)
+             || IsEqualIID(riid, RC_IID_IOleInPlaceUIWindow)
+             || IsEqualIID(riid, RC_IID_IOleWindow))
         *out = &h->frame;
     else { *out = NULL; return E_NOINTERFACE; }
     h->refs++;
@@ -360,7 +418,7 @@ static IHTMLElement *find_id(IHTMLDocument2 *doc, const char *id)
             && disp_raw) {
             disp.reset(disp_raw);
             IHTMLElement *el_raw = NULL;
-            IDispatch_QueryInterface(disp.get(), IID_IHTMLElement, (void **)&el_raw);
+            IDispatch_QueryInterface(disp.get(), RC_IID_IHTMLElement, (void **)&el_raw);
             el.reset(el_raw);
         }
     }
@@ -595,8 +653,8 @@ void rc_html::set_document(const char *doc)
         return;
     }
 
-    hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER,
-                          IID_IOleObject, (void **)d->obj.addr());
+    hr = CoCreateInstance(RC_CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER,
+                          RC_IID_IOleObject, (void **)d->obj.addr());
     if (FAILED(hr)) { rc_log("html: CoCreateInstance %08lX", (unsigned long)hr); return; }
 
     IOleObject_SetClientSite(d->obj.get(), &d->host.site);
@@ -624,7 +682,7 @@ void rc_html::set_document(const char *doc)
         return;
     }
 
-    hr = IOleObject_QueryInterface(d->obj.get(), IID_IWebBrowser2,
+    hr = IOleObject_QueryInterface(d->obj.get(), RC_IID_IWebBrowser2,
                                    (void **)d->web.addr());
     if (FAILED(hr)) {
         rc_log("html: QI IWebBrowser2 %08lX", (unsigned long)hr);
@@ -642,7 +700,7 @@ void rc_html::set_document(const char *doc)
         HWND h = NULL;
         {
             IOleWindow *ow_raw = NULL;
-            if (SUCCEEDED(IOleObject_QueryInterface(d->obj.get(), IID_IOleWindow,
+            if (SUCCEEDED(IOleObject_QueryInterface(d->obj.get(), RC_IID_IOleWindow,
                                                     (void **)&ow_raw)) && ow_raw) {
                 ow.reset(ow_raw);
                 IOleWindow_GetWindow(ow.get(), &h);
@@ -677,7 +735,7 @@ int rc_html::poll()
             return 0;
         disp.reset(disp_raw);
         IHTMLDocument2 *doc_raw = NULL;
-        IDispatch_QueryInterface(disp.get(), IID_IHTMLDocument2, (void **)&doc_raw);
+        IDispatch_QueryInterface(disp.get(), RC_IID_IHTMLDocument2, (void **)&doc_raw);
         d->doc.reset(doc_raw);
     }
     if (!d->doc.valid()) return 0;
@@ -1071,7 +1129,7 @@ void rc_html::scroll_page(int dir)
         body.reset(body_raw);
         ComPtr<IHTMLElement2> b2;
         IHTMLElement2 *b2_raw = NULL;
-        if (FAILED(IHTMLElement_QueryInterface(body.get(), IID_IHTMLElement2,
+        if (FAILED(IHTMLElement_QueryInterface(body.get(), RC_IID_IHTMLElement2,
                                                (void **)&b2_raw)) || !b2_raw)
             return;
         b2.reset(b2_raw);
@@ -1128,7 +1186,7 @@ int rc_html::at_bottom() const
     ComPtr<IHTMLElement2> b2;
     {
         IHTMLElement2 *b2_raw = NULL;
-        if (SUCCEEDED(IHTMLElement_QueryInterface(body.get(), IID_IHTMLElement2,
+        if (SUCCEEDED(IHTMLElement_QueryInterface(body.get(), RC_IID_IHTMLElement2,
                                                   (void **)&b2_raw)) && b2_raw) {
             b2.reset(b2_raw);
             IHTMLElement2_get_scrollTop(b2.get(), &top);
@@ -1150,7 +1208,7 @@ void rc_html::move(int x, int y, int w, int h)
     rc.left = x; rc.top = y; rc.right = x + w; rc.bottom = y + h;
     ComPtr<IOleInPlaceObject> ip;
     IOleInPlaceObject *ip_raw = NULL;
-    if (SUCCEEDED(IOleObject_QueryInterface(d->obj.get(), IID_IOleInPlaceObject,
+    if (SUCCEEDED(IOleObject_QueryInterface(d->obj.get(), RC_IID_IOleInPlaceObject,
                                             (void **)&ip_raw)) && ip_raw) {
         ip.reset(ip_raw);
         IOleInPlaceObject_SetObjectRects(ip.get(), &rc, &rc);
