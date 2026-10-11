@@ -30,7 +30,7 @@ in stage 1 for that reason.
 
 | # | Stage | Exit condition |
 |---|---|---|
-| 1 | Fruit, the decisions that gate stage 3, and the injection harness — **built and gated 2026-10-11; one verification outstanding (the Athlon)** | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
+| 1 | Fruit, the decisions that gate stage 3, and the injection harness — **DONE 2026-10-11** | the fruit is picked, an injection run is repeatable without risking the guest, and nothing in stage 3 is waiting on an answer |
 | 2 | Size: the flag decision and the gremote trim | a measured before/after, and room in the caps for stage 3 |
 | 3 | The markup moves to the client | a second client could be written without touching the bridge |
 | 3b | R7: several guest machines against one bridge | two guests hold two mirrors and two baselines at once |
@@ -246,11 +246,12 @@ sites that ignore a truncation return.
 
 ## Stage 5 — the P200, and the optimisation it justifies
 
-**A candidate to move here, not yet moved:** stage 1's clipboard run on the
-Athlon, `tools/probe/clipprobe.py --remote 10.0.0.125:<secret>`. That box
-was off for the whole of stage 1, so the run never happened, and whether it
-belongs here or stays as stage 1's unfinished business is a decision nobody
-has taken -- `docs/stage1-plan.md` puts both cases.
+**Resolved, and it stayed in stage 1:** the clipboard run on the Athlon ran
+on 2026-10-11 once the box was powered on
+(`docs/measurements/clipboard-athlon-20261011.txt`). Keeping it was right --
+it found that `[Ctrl+A]` selects all in the text editor there and nothing at
+all in the guest's, which the prose had been stating as a property of the
+platform.
 
 The bring-up happened in stage 1, so this is the measurements. Eight of the
 twelve `REMOTE.md` P200-checklist bullets are unanswered:

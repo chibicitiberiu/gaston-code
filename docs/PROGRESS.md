@@ -3,12 +3,12 @@
 Rolling log. Plan is `PLAN.md`; phases 0–2 are executable, 3–6 are a sketch
 that gets re-planned once Phase 0 answers land.
 
-**Current goal: `ROADMAP.md` stage 1 — fruit, the decisions stage 3 needs,
-and the injection harness.** Phase 5 (Attach) shipped; 5.1 is below, and 5.2/5.3
-went in without a write-up of their own. Phase 6 is part-built: `ui`, `input`,
-`shot`, `focus`, `launch`, `ps` and `kill` are live and measured on real
-hardware, while `ocr`, the clipboard pair and the inline transcript screenshot
-are not. `ROADMAP.md` is the order the rest of it goes in.
+**Current goal: `ROADMAP.md` stage 2 — size: the flag decision and the
+gremote trim.** Stage 1 closed 2026-10-11. Phase 5 (Attach) shipped; 5.1 is
+below, and 5.2/5.3 went in without a write-up of their own. Phase 6 is
+part-built: `ui`, `input`, `shot`, `focus`, `launch`, `ps`, `kill` and the
+clipboard pair are live and measured on real hardware, while `ocr` and the
+inline transcript screenshot are not. `ROADMAP.md` is the order the rest of it goes in.
 
 Phases 0–5 are done and demoed on the real guest (the QEMU Win98 SE domain, and
 since 2026-10-01 the Athlon XP box over `gremote`; Phase 1.9's **Pentium 200**
@@ -4218,17 +4218,43 @@ gremote does not give it back -- so it is not this program's, and
 it, because the same field is used as a footprint proxy elsewhere.
 
 Measurements: `clipboard-vm-20261010.txt`, `inject-cold-vm-20261010.txt`,
-`agent-turn-ui-vm-20261011.txt` and its screenshot. Probes:
-`tools/probe/clipprobe.py`.
+`agent-turn-ui-vm-20261011.txt` and its screenshot, `clipboard-athlon-20261011.txt`.
+Probes: `tools/probe/clipprobe.py`.
 
-**What stage 1 has not done:** the clipboard on the Athlon. The plan's
-verification named three places and two were used; that machine was
-switched off for the whole stage, and four checks said so. One command once
-it is on, after a `self_update()`:
-`tools/probe/clipprobe.py --remote 10.0.0.125:<secret>`.
+**The third place, and why holding the stage open for it paid.** The plan's
+verification named three machines and only two had been used; the Athlon was
+switched off for the whole stage and four checks said so. It was powered on
+on 2026-10-11 and the run went in last, after a `self_update()` -- the copy
+there predated this build and declared no `clip` key.
 
-Whether it must run before the stage counts as closed, or belongs in stage
-5 with the other hardware measurements, is left open on purpose --
-`docs/stage1-plan.md` argues both sides. The stage is recorded here as
-built and gated rather than finished, because a plan edited to match what
-was achieved is worth less than one that says what it did not reach.
+Seven of eight cases agreed with the guest: `no_clip_text` on an empty
+clipboard, a write landing in a foreign process, a read seeing what that
+process copied, `too_big` at the same 55,296 bytes, CP1252 refusing U+2500
+before the wire. The eighth disagreed, and it is the one the stage was worth
+holding open for: **`[Ctrl+A]` selects all in the text editor on that box**,
+where on the guest it selects nothing. Same OS build, 4.10.2222 A, on both.
+Different editors -- 53,248 bytes dated 1999 on the guest, 57,344 dated 2005
+on the Athlon -- and only the later one wires the accelerator.
+
+So the fact belongs to the program, not the platform, and three pieces of
+prose that said "on this machine" now say so. This does not overturn the
+2026-10-02 measurement on that same Athlon, where `[Ctrl+A][Delete]` left a
+Win32 EDIT control unchanged twice running: the control has no select-all and
+a program may add one. The result note the agent sees says "may have selected
+nothing" rather than "did nothing", because a note an agent can watch be
+wrong teaches it to discount the next one.
+
+The probe's own case 4 was part of the problem -- it asserted one answer, and
+it read the control only at the end, so `BASE` never being typed and `BASE`
+being selected and replaced both looked like `'X'`. It now reads after typing
+and then reports which behaviour the machine has.
+
+**Stage 1 is closed.** All three verification places run.
+
+One operational note worth keeping: the Athlon's display was dead for this
+entire session -- a monitor swap left nView in single-display mode pointed at
+the integrated TV encoder, with CRT0 out of the connected mask, so the VGA
+output went off the moment `nvdisp.drv` loaded. The whole run above, and the
+diagnosis and repair of the video configuration itself, were done over
+gremote with nothing on the screen. That is the fs lane and the ui lane being
+used for what they were built for, on a machine with no usable output device.

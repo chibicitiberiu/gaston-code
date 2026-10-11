@@ -1,22 +1,18 @@
 # Stage 1 — fruit, the decisions stage 3 needs, and the harness
 
-## STATUS, 2026-10-11: built and gated; ONE VERIFICATION OUTSTANDING
+## STATUS, 2026-10-11: COMPLETE — all three verification places run
 
-Nine commits, `bcb523b..7bc7377`. `PROGRESS.md` has the outcome and the
-numbers; the plan below is what was intended, kept as written so the two can
-be compared. Three things it asserts were wrong and were corrected in commit
-1 — `viaShell`, gate 0.15d, and the autostart `.REG` — which is why the
-Context section reads as it does.
+`PROGRESS.md` has the outcome and the numbers; the plan below is what was
+intended, kept as written so the two can be compared. Three things it asserts
+were wrong and were corrected in commit 1 — `viaShell`, gate 0.15d, and the
+autostart `.REG` — which is why the Context section reads as it does.
 
-Everything here is built and verified on Wine and on the QEMU guest -- a real
-Windows 98, which settled every platform fact the clipboard work turned on and
-corrected the tool's own description in the process.
-
-**The third place this plan's verification names, the Athlon, has not been
-run.** That machine was switched off for the whole stage. The stage is not
-closed until it runs or until somebody decides it does not have to; the
-options are at the verification section, and the decision is the reader's,
-not this file's.
+Verified on Wine, on the QEMU guest, and on the Athlon. The guest settled
+every platform fact the clipboard work turned on and corrected the tool's own
+description in the process; the Athlon, run last once that machine was
+powered on, then corrected one of those corrections -- `[Ctrl+A]` is a fact
+about the program, not the platform. See verification item 3 and
+`docs/measurements/clipboard-athlon-20261011.txt`.
 
 Two defects were found along the way. BACKLOG 33 -- a `type` step reporting
 ok having typed nothing -- is fixed and verified on the guest. BACKLOG 32 --
@@ -391,28 +387,27 @@ platform:**
 3. On the Athlon over gremote (`tools/probe/`, `Remote("10.0.0.125", <secret>)`),
    because that is the box where the ui lane's last four bugs were found.
 
-   **NOT RUN as of 2026-10-11.** The machine was switched off for the whole
-   stage -- four checks, "No route to host" each time -- and powering it on
-   is a physical act no session can perform for itself. One command once it
-   is up, after a `self_update()` because the copy there predates this
-   build:
+   **RUN 2026-10-11, and it earned its place.**
+   `docs/measurements/clipboard-athlon-20261011.txt`. The machine had been
+   switched off for the whole stage -- four checks, "No route to host" each
+   time -- and the open decision recorded here was whether to run it or move
+   it to stage 5. It was run, after a `self_update()`: the copy there
+   predated this build and declared no `clip` key at all.
 
        .venv/bin/python -u tools/probe/clipprobe.py --remote 10.0.0.125:<secret>
 
-   **Whoever picks this up has a decision, and it is deliberately left
-   open.** Either run it, or move it to stage 5 with the other hardware
-   measurements. The case for moving it: this stage's exit condition in
-   `ROADMAP.md` never named the Athlon, and the platform facts the run would
-   check were already settled on the QEMU guest -- `no_clip_text` on an empty
-   clipboard, a write landing in Notepad, a read seeing what Notepad copied,
-   and `[Ctrl+A]` selecting nothing, which corrected this tool's own
-   description. Those are USER32 behaviours with no clock in them, so what
-   the Athlon adds is a second machine and a LAN rather than slirp.
+   Seven of eight agreed with the guest, including both refusals and
+   `no_clip_text` on an empty clipboard. The eighth did not, and that is the
+   argument for having insisted: `[Ctrl+A]` DOES select all in the text
+   editor on that box, where on the guest it selects nothing. Both machines
+   are 98 SE 4.10.2222 A; the editors are different builds, 1999 and 2005,
+   and only the later one wires the accelerator. The prose had generalised
+   one machine's program into a property of the platform, and an agent on
+   the Athlon would have watched that note be wrong in front of it.
 
-   The case against: this plan said three places and only two were used, and
-   a plan amended to match what was achieved is worth less than one that
-   records what it did not reach. That is why this paragraph exists instead
-   of an edit.
+   The case for moving this run had been that the guest already settled
+   these USER32 behaviours and the Athlon only adds a LAN. That case was
+   wrong, and wrong precisely in its strongest clause.
 
 **The exec change**: three new cases in `tests/python/services/test_guest_exec.py`,
 then one real wrapped failure and one builtin failure on the VM through the
