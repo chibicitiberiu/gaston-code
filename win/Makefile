@@ -48,7 +48,7 @@ export WLINK_LNK = $(OWBIN)/wlink.lnk
 # its own code correctly (150 and 350 from a Wine run).
 CXXONLY = -xs -wcd=433
 
-CFLAGS = -bt=nt -bm -zq -otexan -5 -wx \
+CFLAGS = -bt=nt -bm -zq -os -5 -wx \
          -DWINVER=0x0400 -D_WIN32_WINNT=0x0400 \
          -DWIN32_LEAN_AND_MEAN -DTDEFL_LESS_MEMORY=1 -DNOMINMAX \
          -DMINIZ_NO_ARCHIVE_APIS \
@@ -662,56 +662,54 @@ $(OBJ)/app/htmlview.o: CFLAGS += -wcd=146 -wcd=602
 # must not.
 $(OBJ)/checks/cppcheck.o: CFLAGS += -wcd=146 -wcd=602
 
-# app/ is compiled for SIZE. It is UI code: window procedures, menus,
-# layout, dialogs. The expensive work it triggers happens elsewhere -- in
-# MSHTML, in the disk and network I/O -- so -otexan's speed buys nothing
-# measurable there, and it cost a lot of space: the message handler alone
-# was 9 KB larger at -ot once it became a member function, and each STL
-# container instantiated in app/ (vector<Row>, vector<string>, ...) comes
-# out much bigger. Measured with the chat list and option menus on the STL:
-# 458,249 bytes committed at load at -otexan, 438,793 at -os. core/, net/,
-# rpc/ and sync/ keep -otexan: the codec, the CRC pass and the transfer
-# loops are where speed shows. The whole-client question is BACKLOG.md 2.
-$(OBJ)/app/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
-
-# fs/ is mostly not a loop: refusals, one-shot syscalls, a directory
-# enumeration whose cost is the platter, and xfer's per-chunk bookkeeping.
-# fs/reader.o is the one that actually runs over every byte, and it keeps
-# -otexan. Measured: xfer at -os and at -otexan came to the same committed
-# total to the byte, so it is here for honesty rather than for the bytes.
-$(OBJ)/fs/path.o $(OBJ)/fs/file.o $(OBJ)/fs/dir.o $(OBJ)/fs/list.o \
-$(OBJ)/fs/writer.o $(OBJ)/fs/xfer.o $(OBJ)/fs/freespace.o \
-$(OBJ)/fs/drives.o $(OBJ)/fs/ops.o $(OBJ)/fs/tree.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
-
-# The `input` step list and the code it drives, for the same reason as
-# app/: a step is a resolve, a syscall and a refusal, and its cost is the
-# target program's -- never a loop of ours over bytes. Measured 2026-10-02:
-# steps.o was 22.5 KB of code at -otexan with its helpers inlined into one
-# 6.7 KB `run`. select.o and the walker keep -otexan; the matcher runs over
-# every node of every scan.
-$(OBJ)/automation/steps.o $(OBJ)/automation/input.o $(OBJ)/ui/uiengine.o \
-$(OBJ)/ui/uirpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
-
-# And the same now applies to most of sync/. The note above says sync/ keeps
-# -otexan for "the codec, the CRC pass and the transfer loops"; after step 5a
-# the CRC pass is sync/scanner.cpp ALONE, and the rest of the directory is
-# frame handling, refusals and adapters onto libfs. So scanner.cpp keeps the
-# speed and its neighbours stop paying for it.
-$(OBJ)/sync/manifest.o $(OBJ)/sync/putpath.o $(OBJ)/sync/syncrpc.o \
-$(OBJ)/sync/verify.o $(OBJ)/rpc/fsrpc.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
-
-# remote/ is dispatch, refusals, a handshake and config parsing -- the same
-# profile the fs/ and sync/ overrides above were measured for, and none of it
-# is a loop. gremote's own budget is what this protects.
-$(OBJ)/remote/%.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
-
-# core/thread.o: start(), join() and an entry point that catches bad_alloc.
-# Three functions, none of them a loop, and the class exists to SAVE memory
-# -- so it should not cost image to save memory. Measured on the client:
-# 462617 before the class existed, 465177 with it at -otexan, 464665 at -os.
-# 512 bytes back, and the remaining 2048 is what one implementation of the
-# _beginthreadex rules and the bad_alloc catch costs, paid once.
-$(OBJ)/core/thread.o: CFLAGS := $(subst -otexan,-os,$(CFLAGS))
+# THE DEFAULT IS -os AND -ot IS THE EXCEPTION, which is the inversion of how
+# this file read until 2026-10-11 and the answer to BACKLOG.md 2. It used to
+# default to -otexan with six directories overridden to -os, each override
+# measured and argued for separately: app/ (UI code, 458,249 -> 438,793 with
+# the chat list and option menus on the STL), most of fs/ (refusals and
+# one-shot syscalls, with xfer measuring identical either way), most of
+# sync/ (frame handling and adapters, once the CRC pass was scanner.cpp
+# alone), rpc/fsrpc.o, automation/steps.o+input.o (steps.o was 22.5 KB of
+# code at -ot with its helpers inlined into one 6.7 KB `run`),
+# ui/uiengine.o+uirpc.o, all of remote/, and core/thread.o (462,617 before
+# the class existed, 465,177 with it at -ot, 464,665 at -os).
+#
+# Six exceptions and a general rule pointing the other way is a default that
+# has been voted against. So it is turned around, and the four modules
+# nobody had measured came with it. Measured on the QEMU guest,
+# docs/measurements/flags-vm-20261011.txt:
+#
+#   whole program at -os          gaston -26,624   gremote -19,456
+#                                 but the compressing direction of a
+#                                 377,990-byte round trip went 0.177s ->
+#                                 0.219s, +23%, reproduced by alternating
+#   -os except the three below    gaston -20,992   gremote -13,824
+#                                 and 0.182s, back inside the baseline's
+#                                 own spread
+#
+# So -ot is kept for the code that runs over EVERY BYTE, which is all three
+# of these and nothing else:
+#
+#   third_party/miniz/miniz.o   the deflate compressor, and the whole 23%
+#   sync/scanner.o              the CRC pass over every file synced
+#   fs/reader.o                 the one file in libfs that reads every byte
+#
+# And two things that were kept at -ot on an argument turned out not to earn
+# it, which is the part worth remembering. automation/select.o was held at
+# -ot because "the matcher runs over every node of every scan": a 45-node
+# walk measured 0.045s at -ot and 0.040s at -os, because the cost is
+# cross-process messaging and not our string compare. wire/connection.o was
+# held by "the codec" -- but the codec is miniz, and the framing around it
+# is per-frame rather than per-byte. Both are at -os now and the round trip
+# did not notice.
+#
+# `probe deflate` could NOT answer this and the attempt is recorded so it is
+# not repeated: its corpus is one two-line block repeated, compresses 164:1
+# and runs in 10-15 ms against GetTickCount's ~10 ms resolution, so both
+# builds measured 10-11 ms at level 1. probe.c:479 says as much about its own
+# sample. The round trip through gremote is the instrument that works.
+$(OBJ)/third_party/miniz/miniz.o $(OBJ)/sync/scanner.o \
+$(OBJ)/fs/reader.o: CFLAGS := $(subst -os,-otexan,$(CFLAGS))
 
 # The resource script. `wrc -r` compiles only -- it does not touch an EXE --
 # and the .res is then bound at link time by `option resource=` below. The

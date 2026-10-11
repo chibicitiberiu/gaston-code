@@ -1,0 +1,130 @@
+-os or -otexan: the whole-program flag question, answered (BACKLOG.md 2)
+=========================================================================
+
+Machine : QEMU guest retroclaude-win98, Windows 98 SE 4.10.2222 A, 32MB,
+          "x86 family 6 model 5, 1 cpu"
+Date    : 2026-10-11
+Why     : BACKLOG 2 has carried "-os measured 32 KB smaller than -otexan"
+          since 2026-09-25 with "not applied, because it trades speed on a
+          P200" beside it, and ROADMAP stage 2 asks for the speed/size call
+          with a before/after on the guest. The 32 KB was measured when the
+          whole client was -otexan; six directories have moved to -os since,
+          each on its own measurement, so the question had to be re-asked
+          rather than re-quoted.
+Builds  : three, from one tree at commit 0b34a5b, into separate BUILD= dirs
+          so no object is shared between them:
+            otexan      as shipped: -otexan default, six -os overrides
+            all-os      -os everywhere
+            os-but-hot  -os everywhere EXCEPT miniz.o, sync/scanner.o and
+                        fs/reader.o
+Picture : flags-vm-20261011.png (a full agent turn on the chosen build)
+
+
+1. Size
+--------
+
+Committed at load, the gate's own figure (win/Makefile:944-954):
+
+                     otexan      all-os            os-but-hot
+  gaston.exe         499,241     472,617 (-26,624) 478,249 (-20,992)
+  gremote.exe        273,321     253,865 (-19,456) 259,497 (-13,824)
+
+Where it comes from, per module (tools/check/mapsize.py, gaston, -os minus
+-otexan): libcore -4,188, libwire -3,391, libexec -2,942, libautomation
+-1,274, ui/uiservice.o -1,004, libfs -956, miniz -696, ui/inject.o -675,
+rpc/cmdlog.o -522, sync/scanner.o -394. One module GREW: net/net.o, +285.
+
+Note what that list is. The savings are in dispatch, config, logging,
+window plumbing and frame handling -- not in the three or four modules the
+old comments defended as hot.
+
+
+2. Speed, and the instrument that could not see it
+---------------------------------------------------
+
+`probe deflate` CANNOT ANSWER THIS, and the attempt is recorded so it is
+not repeated. Three runs of each build, level 1 and level 6:
+
+  otexan   level 1  10, 11, 10 ms      level 6  14, 15, 14 ms
+  all-os   level 1  10, 11, 17 ms      level 6  16, 15, 10 ms
+
+GetTickCount resolves about 10 ms and the work takes 10-15 ms, so the
+whole difference lies inside one tick. probe.c:479 already says the sample
+is one two-line block repeated, compresses 164:1 and "barely has to
+search". It is measuring the wrong thing, slowly enough to be invisible.
+
+THE INSTRUMENT THAT WORKS is the one deflate-gremote-vm-20261003.txt used:
+a put and a get of the same block through gremote, timed from the host,
+five of each, median reported. Payload 377,990 bytes of this project's own
+prose and code, 2.59:1 compressible, led by a NUL so the fs lane classifies
+it binary and the EOL fold does not rewrite it. Each build was installed
+with self_update() and the first build was measured again at the end,
+because a single pass cannot tell a regression from a drift:
+
+  otexan      put 0.280s   get 0.176s
+  all-os      put 0.261s   get 0.219s
+  os-but-hot  put 0.291s   get 0.182s
+  otexan (2)  put 0.289s   get 0.178s
+
+The GET is guest -> host: the guest COMPRESSES. That direction costs 23%
+at -os (0.177 against 0.219, the baseline reproduced either side of it),
+and os-but-hot gives it all back at 0.182.
+
+The PUT is host -> guest: the guest only inflates, and it does not move
+outside its own spread (0.280, 0.261, 0.291, 0.289). Inflate is table
+lookups; deflate is the search, and the search is what -ot buys.
+
+
+3. Two modules that were kept at -ot on an argument, and did not earn it
+-------------------------------------------------------------------------
+
+Worth more than the bytes, because both arguments sounded right.
+
+  automation/select.o  held at -otexan because "the matcher runs over every
+                       node of every scan" (win/Makefile). A 45-node walk:
+                       0.045s at -ot, 0.040s at -os, seven calls each. The
+                       cost of a tree is cross-process messaging -- about
+                       1 ms per node -- and the matcher's string compare is
+                       not visible beside it.
+
+  wire/connection.o    held by "the codec". But the codec is miniz; the
+                       framing around it is per-frame, not per-byte. The
+                       round trip above did not notice it moving.
+
+So the rule that survives is narrower than "hot modules": -ot is for code
+that runs over EVERY BYTE. That is miniz's compressor, sync/scanner.cpp's
+CRC pass and fs/reader.cpp, and nothing else in this program.
+
+
+4. The answer
+--------------
+
+-os by default; -otexan for miniz.o, sync/scanner.o and fs/reader.o.
+
+win/Makefile is inverted to match: one -ot exception list instead of a
+-otexan default with six -os overrides, which is what the evidence had
+already turned that default into. gaston -20,992, gremote -13,824, and no
+measurable cost in the only direction that showed one.
+
+sync/scanner.o and fs/reader.o are kept on the per-byte rule rather than on
+their own timings. Both are reachable only through a sync scan, whose cost
+on a 1998 platter is the platter; the flag is worth 394 bytes in scanner.o
+and the risk of being wrong is a slower CRC pass over every file synced.
+
+
+5. Verified on the guest, not only measured
+--------------------------------------------
+
+The chosen build was run end to end before this was written: gremote
+self_update'd, uilaneprobe 15/15 PASS, clipprobe 8 PASS (and the VM's stock
+1999 Notepad still selects nothing on Ctrl+A, as clipboard-vm-20261010.txt
+found), then the client shipped and a real turn driven through it with
+haiku -- prompt typed over the ui lane, mcp__machine__exec allowed by the
+desk, `echo %COMPUTERNAME%` run on the guest in 1,815 ms, the answer
+rendered in MSHTML, and the wire reporting deflate 902 -> 371 (2.43:1).
+
+The picture is that turn. It is also the proof for the commit before this
+one: every one of the thirteen OLE and MSHTML GUIDs now spelled out in
+win/app/htmlview.cpp is exercised by that window existing and rendering --
+"html: cold-start document installed", "html: document ready", "html:
+first append ok" in GASTON.LOG.

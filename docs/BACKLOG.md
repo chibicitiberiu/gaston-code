@@ -88,9 +88,36 @@ half-closed when nothing has run on it.
 
 ---
 
-## 2. Memory optimisation
+## 2. Memory optimisation -- the flag half CLOSED 2026-10-11
 
-**Status:** deferred by decision, 2026-09-17.
+**Status:** the compiler-flag question is answered and applied; the rest of
+the entry stays open.
+
+**The answer: `-os` by default, `-otexan` for code that runs over every
+byte** -- `miniz.o`, `sync/scanner.o`, `fs/reader.o`, and nothing else.
+`win/Makefile` is inverted to match. gaston went 499,241 -> 478,249 and
+gremote 273,321 -> 259,497, with no measurable speed cost.
+`docs/measurements/flags-vm-20261011.txt` has the method and the numbers.
+
+Three things that measurement settled, beyond the headline:
+
+- **The speed cost of `-os` is real but narrow.** Whole-program `-os` cost
+  **23%** on the compressing direction of a 377,990-byte round trip through
+  gremote (0.177s -> 0.219s, the baseline reproduced either side of it).
+  Excluding the three modules above gives all of it back at 0.182s. Inflate
+  never moved: it is table lookups, where deflate is the search.
+- **`probe deflate` cannot answer this**, and that is now written in
+  `win/Makefile` so the next reader does not try. Its corpus compresses
+  164:1 and the work takes 10-15 ms against GetTickCount's ~10 ms, so both
+  builds measure 10-11 ms. `probe.c:479` says as much about its own sample.
+- **Two modules kept at `-ot` on an argument did not earn it.**
+  `automation/select.o` was held because "the matcher runs over every node
+  of every scan" -- a 45-node walk measures 0.045s at `-ot` and 0.040s at
+  `-os`, because the cost is cross-process messaging at about 1 ms a node.
+  `wire/connection.o` was held by "the codec", but the codec is miniz and
+  the framing is per-frame. Both are at `-os` now.
+
+**Status of the rest:** deferred by decision, 2026-09-17.
 
 Measured at the end of Phase 3, against the Phase 2 baseline:
 
