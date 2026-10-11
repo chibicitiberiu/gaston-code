@@ -151,11 +151,16 @@ def test_an_unknown_key_is_reported_with_the_token():
     assert "Delete" in out          # and what it could have written instead
 
 
-# --- Ctrl+A is not select-all on this machine -------------------------------
+# --- Ctrl+A is not select-all in the control this OS supplies ---------------
 #
-# Measured twice on 2026-10-02: on a custom Win32 edit control, and on Notepad,
-# where `[Ctrl+A]goodbye` against a box holding "hello" produced "hellogoodbye".
-# It does nothing and nothing reports that it did nothing.
+# Measured 2026-10-02 on a custom Win32 edit control: `[Ctrl+A][Delete]` left it
+# unchanged, twice consecutively, with a settle against the read-too-early race
+# that had fooled an earlier run. It does nothing and nothing reports that.
+#
+# A PROGRAM MAY ADD THE ACCELERATOR, and one measured 2026-10-11 does: two text
+# editors on the same OS, 1999 and 2005, disagree
+# (docs/measurements/clipboard-athlon-20261011.txt). So the note says "may have"
+# -- an agent that watches the note be wrong learns to discount the next one.
 #
 # THE ARGUMENT DESCRIPTION ALREADY SAID SO AND THE AGENT DID IT ANYWAY, in the
 # live VM run this was added during. An argument description is the part of a
@@ -166,7 +171,8 @@ def test_ctrl_a_is_called_out_on_the_result():
     for text in ("[Ctrl+A]goodbye", "{control+a}x", "[ctrl + A]", "[CTRL+A]"):
         assert _ctrl_a_note(text), text
     note = _ctrl_a_note("[Ctrl+A]x")
-    assert "did nothing" in note
+    assert "select-all" in note
+    assert "may have" in note               # not "did nothing": see above
     assert "[Home][Shift+End]" in note      # and what to do instead
 
 

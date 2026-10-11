@@ -73,7 +73,7 @@ Read the text on the connected machine's clipboard -- whatever was last copied t
 
 Use it for text nothing else will give you: the contents of a list, a control that reads back empty, a message box that paints its text. Drive a copy first with `input`, then read it here.
 
-To copy everything in a text box: `[Ctrl+Home]`, `[Ctrl+Shift+End]`, `[Ctrl+C]`. Do not use `[Ctrl+A]` -- on this machine's own text editor it selects nothing at all, and copying an empty selection leaves the clipboard holding whatever was there before, which reads here exactly like a successful copy. If a program's keys differ, its Edit menu works: `[Alt+E]`, then the letter beside Select All.'''
+To copy everything in a text box: `[Ctrl+Home]`, `[Ctrl+Shift+End]`, `[Ctrl+C]`. Do not rely on `[Ctrl+A]`: the text boxes this machine supplies implement no select-all, so whether it does anything is up to the program, and copying an empty selection leaves the clipboard holding whatever was there before -- which reads here exactly like a successful copy. If a program's keys differ, its Edit menu works: `[Alt+E]`, then the letter beside Select All.'''
 
 [get_clipboard.view]
 empty = '''
@@ -185,7 +185,7 @@ SEL is a selector, as `ui` prints them in `sel=`: `Notepad`, `[class="#32770"][t
 
 Key names: Enter, Tab, Escape (Esc), Backspace, Delete, Insert, Home, End, PageUp, PageDown, Up, Down, Left, Right, Space, F1-F24, Shift, Ctrl, Alt, AltGr, LShift, RShift, LCtrl, RCtrl, LAlt, RAlt, LWin, RWin, Apps, CapsLock, NumLock, ScrollLock, PrintScreen, Pause, Numpad0-Numpad9, NumpadEnter. Chords take `Ctrl+`, `Alt+` and `Shift+`: `[Ctrl+Shift+End]`.
 
-Ctrl+A is NOT select-all in this machine's text boxes. To replace what is there, `[Home][Shift+End]` and type over it.'''
+Ctrl+A is not select-all in this machine's own text boxes, and only a program that adds the accelerator itself has it, so do not rely on it. To replace what is there, `[Home][Shift+End]` and type over it.'''
 timeout = '''
 Milliseconds the whole list may take. Default 120000 (2 minutes), at most 600000 (10 minutes).'''
 settle = '''
@@ -338,13 +338,19 @@ The machine refused: {status}.'''
 [ui.view]
 items_of = '''
 Items inside `{sel}`:'''
-# Ctrl+A is not select-all on this machine: measured twice on 2026-10-02,
-# on a custom Win32 edit control and on Notepad, where `[Ctrl+A]goodbye`
-# against a box holding "hello" gave "hellogoodbye". Said on the RESULT
-# because the ARGUMENT description already said it and the agent used
-# Ctrl+A anyway, in the session this was added for.
+# The text control this OS supplies implements no select-all: measured
+# 2026-10-02 on a custom Win32 edit control, `[Ctrl+A][Delete]` leaving it
+# unchanged twice consecutively. Said on the RESULT because the ARGUMENT
+# description already said it and the agent used Ctrl+A anyway, in the
+# session this was added for.
+#
+# It says "may have", not "did nothing", because a program CAN add the
+# accelerator and one measured on 2026-10-11 does -- two text editors on the
+# same OS, one from 1999 and one from 2005, disagreeing
+# (docs/measurements/clipboard-athlon-20261011.txt). A note the agent can
+# watch be wrong in front of it is worse than no note.
 ctrl_a = '''
-Note: Ctrl+A is not select-all on this machine and did nothing. To replace what is in a box, select it with `[Home][Shift+End]` and type over that.'''
+Note: Ctrl+A may have selected nothing -- this machine's own text boxes implement no select-all, and only some programs add it. If that was meant to take the whole text, select it with `[Home][Shift+End]` and type over that.'''
 empty = '''
 Nothing on screen answered. Either no windows match, or this program draws itself rather than using controls -- try `shot`.'''
 incomplete = '''
