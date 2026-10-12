@@ -248,6 +248,19 @@ class Baseline:
     #: that prefix produce the SAME id. Compared here in full instead, since
     #: lengthening the guest's buffer would re-key every existing baseline.
     guest_root: str = ""
+    #: WHICH MACHINE this baseline belongs to, so two of them sharing a root
+    #: do not share a file. Both of this project's machines mirror
+    #: `C:\WORK`, so without this they land on one baseline with two
+    #: different `tree_id`s and `scan_guest` refuses each in turn, every
+    #: pass, forever -- neither syncing and both saying why in a log nobody
+    #: is reading.
+    #:
+    #: EMPTY MEANS UNCLAIMED, which is what every baseline written before
+    #: stage 3c says. The first machine to use such a file keeps it and
+    #: stamps itself on the next save; the second gets a file of its own.
+    #: Nothing is migrated and nothing is deleted, which is the same rule
+    #: §11c set when this file first grew a second name.
+    machine: str = ""
     #: The codepage the matching keys were folded through. Changing it re-keys
     #: every row, so the pass refuses rather than re-keying in place.
     acp: str = ""
@@ -297,6 +310,7 @@ class Baseline:
                 "prev": {k: asdict(v) for k, v in self.prev.items()},
                 "tree_id": self.tree_id,
                 "guest_root": self.guest_root,
+                "machine": self.machine,
                 "acp": self.acp,
                 "generation": self.generation,
                 "pending_notice": self.pending_notice,
@@ -350,6 +364,7 @@ class Baseline:
         out = cls(
             tree_id=d.get("tree_id", ""),
             guest_root=d.get("guest_root", ""),
+            machine=d.get("machine", ""),
             acp=d.get("acp", ""),
             generation=int(d.get("generation", 0)),
             pending_notice=list(d.get("pending_notice", [])),

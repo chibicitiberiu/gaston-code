@@ -374,3 +374,80 @@ async def test_resolve_accept_tree_changes_no_rows(b):
     after = b.sync.load_baseline()
     assert after.rows["src/main.c"].crc == 3
     assert not after.tombs
+
+
+# --- one baseline each, stage 3c D3 -----------------------------------------
+
+
+def _guest_on(machine: str, guest_root: str):
+    from bridge.server import GuestSession, Transcript, TranscriptView
+    g = GuestSession(view=TranscriptView(pages=Transcript()))
+    g.hello = {"machine": machine}
+    g.work_guest = guest_root
+    return g
+
+
+def test_two_machines_on_one_root_get_one_baseline_each(b):
+    """THE DEADLOCK THIS EXISTS TO PREVENT. `base_path` keyed on the guest
+    root alone, and both of this project's machines mirror `C:\\WORK` -- so
+    they landed on one file with two different `tree_id`s, and `scan_guest`
+    refuses a baseline whose tree id is not the machine's. Each refused the
+    other's, every pass, forever: neither syncing, and the reason only in a
+    log (BACKLOG 7).
+    """
+    a = _guest_on("BOX-A", "C:\\WORK\\NOTES")
+    c = _guest_on("BOX-B", "C:\\WORK\\NOTES")
+    pa, pc = b.sync.base_path(a), b.sync.base_path(c)
+    assert pa and pc and pa != pc, (pa, pc)
+
+
+def test_the_machine_already_using_base_json_keeps_it(b, tmp_path):
+    """Nothing is migrated and nothing is deleted -- the same rule 11c set
+    when this file first grew a second name. A baseline written before
+    stage 3c records a root and no machine, and belongs to whichever
+    machine comes back for it; it is only the SECOND that is rehoused, so
+    the live one keeps its rows and does not re-read the whole tree."""
+    import json
+    import os
+
+    a = _guest_on("BOX-A", "C:\\WORK\\NOTES")
+    legacy = b.sync.base_path(a)
+    assert os.path.basename(legacy) == "base.json", legacy
+    os.makedirs(os.path.dirname(legacy), exist_ok=True)
+    with open(legacy, "w", encoding="utf-8") as fh:
+        json.dump({"guest_root": "C:\\WORK\\NOTES", "machine": ""}, fh)
+
+    b.sync.base_paths.clear()
+    assert os.path.basename(b.sync.base_path(a)) == "base.json"
+    b.sync.base_paths.clear()
+    other = b.sync.base_path(_guest_on("BOX-B", "C:\\WORK\\NOTES"))
+    assert os.path.basename(other) != "base.json", other
+
+
+def test_a_claimed_baseline_is_not_handed_to_another_machine(b, tmp_path):
+    """Once a machine has stamped itself, the question has an answer that
+    survives a restart -- which the in-process memo alone would not give."""
+    import json
+    import os
+
+    a = _guest_on("BOX-A", "C:\\WORK\\NOTES")
+    legacy = b.sync.base_path(a)
+    os.makedirs(os.path.dirname(legacy), exist_ok=True)
+    with open(legacy, "w", encoding="utf-8") as fh:
+        json.dump({"guest_root": "C:\\WORK\\NOTES", "machine": "BOX-A"}, fh)
+
+    b.sync.base_paths.clear()
+    assert os.path.basename(b.sync.base_path(a)) == "base.json"
+    b.sync.base_paths.clear()
+    assert os.path.basename(
+        b.sync.base_path(_guest_on("BOX-B", "C:\\WORK\\NOTES"))) != "base.json"
+
+
+def test_one_machine_two_conversations_still_get_one_each(b):
+    """The conversation dimension was already there and stays: the key is
+    the folder as the guest spells it, and a conversation has its own
+    folder under the root (`C:\\WORK\\<name>`, BACKLOG 7's one mirror per
+    chat). Stage 3c added the machine beside it, not instead of it."""
+    one = b.sync.base_path(_guest_on("BOX-A", "C:\\WORK\\NOTES"))
+    two = b.sync.base_path(_guest_on("BOX-A", "C:\\WORK\\OTHER"))
+    assert one != two, (one, two)

@@ -64,6 +64,10 @@ INSTANCE_ATTR_ALLOWLIST = {
     "ConnectionService._warned_ambiguous",
     # What exists before a guest does. D5 deletes it.
     "ConnectionService._preattach_synccoord",
+    # Which (machine, root) holds the legacy base.json this run. A fact
+    # about the STATE DIRECTORY rather than about a guest -- two guests is
+    # exactly what makes it a question -- and it has nowhere else to live.
+    "SyncService._legacy_owner",
 }
 
 

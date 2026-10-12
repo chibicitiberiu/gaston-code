@@ -110,12 +110,16 @@ class Pass:
 
     def __init__(self, transport: SyncTransport, caps: C.Caps | None,
                 root: str, state_dir: str, *, max_file: int = 0,
-                extra_ignore: tuple = ()):
+                extra_ignore: tuple = (), machine: str = ""):
         # `transport` wraps the one guest connection `Pass` needs (see
         # synctransport.py); `caps` is passed explicitly rather than fished
         # out of a guest that might not be one.
         self.transport = transport
         self.root = root
+        #: Whose baseline this is. Stamped on an unclaimed one so that the
+        #: next machine to mirror the same root gets a file of its own
+        #: rather than this one's history (stage 3c).
+        self.machine = machine
         #: The client's own choices (Options > Files): the largest file it
         #: wants carried, and patterns it never wants copied.
         self.max_file = max_file or MAX_FILE
@@ -225,6 +229,12 @@ class Pass:
                 f"one tree against another tree's history.")
         if not self.base.guest_root:
             self.base.guest_root = root
+        # CLAIMED ON FIRST USE, never reassigned. An empty field is a
+        # baseline written before stage 3c; the machine using it keeps it
+        # and says so from here on, which is what stops a second machine
+        # on the same root matching the same file.
+        if not self.base.machine and self.machine:
+            self.base.machine = self.machine
 
         self.guest_root = root
         return rows

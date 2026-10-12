@@ -55,6 +55,8 @@ class SyncService:
         self.presentation = presentation
         self.spawn = spawn or asyncio.create_task
         self.base_paths = {} if base_paths is None else base_paths
+        #: Which (machine, root) holds `base.json` this run. See base_path.
+        self._legacy_owner: tuple | None = None
 
     def _get_guest(self, guest: GuestSession | None) -> GuestSession | None:
         if guest is not None:
@@ -107,34 +109,64 @@ class SyncService:
         root = self.current_guest_root(guest)
         if not root:
             return legacy
-        hit = self.base_paths.get(root)
+        # KEYED ON THE PAIR. The root alone was enough while one machine
+        # could be attached: two of them mirroring `C:\WORK` report the
+        # same root, and would share one baseline with two different
+        # `tree_id`s -- which scan_guest refuses in each direction, every
+        # pass, forever. Neither syncs and the reason is only in a log.
+        g = self._get_guest(guest)
+        machine = getattr(g, "machine", "") or ""
+        key = (machine, root)
+        hit = self.base_paths.get(key)
         if hit:
             return hit
 
-        recorded = None
+        recorded_root = recorded_machine = None
         try:
             with open(legacy, encoding="utf-8") as fh:
-                recorded = json.load(fh).get("guest_root", "")
+                d = json.load(fh)
+                recorded_root = d.get("guest_root", "")
+                recorded_machine = d.get("machine", "")
         except (OSError, ValueError):
-            recorded = None
+            recorded_root = None
 
-        if recorded is None or recorded == "" or recorded == root:
+        # WHO KEEPS base.json. Whoever is already in it: an unwritten or
+        # root-less file is free, a file recording this root and no machine
+        # was written before stage 3c and belongs to the first machine that
+        # comes back for it, and a file naming this machine is plainly its.
+        # Everyone else gets a name of their own. Nothing is migrated and
+        # nothing is deleted -- the machine already using base.json keeps
+        # it and keeps its rows, which is what makes this free for it.
+        mine = (recorded_root is None or recorded_root == ""
+                or (recorded_root == root
+                    and recorded_machine in ("", machine)))
+        # AND NOBODY ELSE HAS TAKEN IT THIS RUN. The stamp in the file
+        # answers this across restarts, but it is only written when a pass
+        # saves -- so on a fresh state directory two machines would both see
+        # "no file, therefore mine" and collide before either had saved. The
+        # first to ask holds it until something is written down.
+        if mine and self._legacy_owner not in (None, key):
+            mine = False
+        if mine:
+            self._legacy_owner = key
             path = legacy
         else:
             import hashlib
 
-            slug = hashlib.sha1(root.encode("utf-8", "replace")).hexdigest()
+            stamp = ("%s\n%s" % (machine, root)).encode("utf-8", "replace")
+            slug = hashlib.sha1(stamp).hexdigest()
             path = os.path.join(
                 state_dir, "base-%s.json" % slug[:10]
             )
             log.info(
-                "baseline for %s is %s (%s belongs to %s)",
+                "baseline for %s on %s is %s (base.json belongs to %s on %s)",
                 root,
+                machine or "(no id)",
                 os.path.basename(path),
-                "base.json",
-                recorded,
+                recorded_root,
+                recorded_machine or "(no id)",
             )
-        self.base_paths[root] = path
+        self.base_paths[key] = path
         return path
 
     def load_baseline(self, guest: GuestSession | None = None) -> Baseline:
@@ -277,6 +309,7 @@ class SyncService:
                     self.base_path(g),
                     max_file=getattr(prefs, "sync_max_kb", 0) * 1024,
                     extra_ignore=getattr(prefs, "sync_ignore", ()),
+                    machine=g.machine,
                 )
                 got = await p.run()
                 g.guest_sync_root = p.guest_root
