@@ -194,9 +194,9 @@ def _table(block: Block) -> str:
     return "".join(out)
 
 
-def _toolresult(block: Block) -> str:
+def _toolresult(block: Block, wrapcol: int = TOOL_WRAP_COL) -> str:
     err = " err" if block.attrs.get("error") else ""
-    body = fold_long_lines("\n".join(block.texts()))
+    body = fold_long_lines("\n".join(block.texts()), wrapcol)
     out = f'<div class="toolresult{err}"><pre>{esc(body)}</pre>'
     dropped = block.attrs.get("clipped", 0)
     if dropped:
@@ -256,13 +256,21 @@ _RENDER = {
 }
 
 
-def render(block: Block) -> str:
+def render(block: Block, wrapcol: int = TOOL_WRAP_COL) -> str:
     """One block, as the HTML MSHTML gets today.
 
     An unknown kind renders as nothing rather than raising. The guest does the
     same, for the same reason: a kind this build has not heard of is a bridge
     newer than the client, and a transcript missing one block beats a
     transcript that stopped.
+
+    `wrapcol` mirrors rc_render's third argument deliberately: the guest
+    takes the column from its window, export uses a fixed one, and the
+    equality proof needs to vary it on both sides at once. It was a DEFAULT
+    ARGUMENT on fold_long_lines, which looks equivalent and is not -- a
+    default is bound when the function is defined, so the module constant
+    could not be overridden at all and the proof silently compared 56
+    against whatever it had asked for.
     """
     fn = _RENDER.get(block.kind)
     if fn is None:
@@ -273,6 +281,8 @@ def render(block: Block) -> str:
     # is a different thing: `rule` is an <hr> and `clip` is its own sentence.
     if not block.payload and KINDS[block.kind][1]:
         return ""
+    if block.kind == "toolresult":
+        return _toolresult(block, wrapcol)
     return fn(block)
 
 

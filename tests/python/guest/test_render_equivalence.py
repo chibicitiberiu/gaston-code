@@ -1,0 +1,274 @@
+"""The guest's renderer and the bridge's emitter produce the same bytes.
+
+THE MOST VALUABLE TEST IN STAGE 3, and the reason the bridge's emitter is
+not deleted until the stage after this one. `ROADMAP.md` says the guest's
+renderer "emits the same HTML MSHTML gets today"; without this that is an
+intention, and the only way to check it would be to look at a screenshot.
+
+It is also what makes regenerating the frame goldens safe. C2 rewrites all
+23 TEXT frames in 12 scenarios, and a golden is only worth what the thing
+that generated it is worth -- so the goldens cannot be the oracle for their
+own rewrite. This can.
+
+It runs the SHIPPED view.tpl, so the file in the repo is proven to produce
+today's markup. An edited copy on somebody's machine is their business, the
+way an edited view.css is; C5 turns this into a checked-in fixture, which
+pins view.tpl byte-for-byte in a way view.css is not.
+
+In guest/ because test_suite_hygiene.py requires the needs_guest mark for
+anything touching the Wine plumbing.
+
+TWO THINGS IT CANNOT PROVE, said here rather than implied:
+
+  * That the markup is RIGHT. Both sides could be wrong together -- they
+    are compared against each other, not against IE5. That is what
+    viewprobe's screenshots on the real guest are for.
+  * That MSHTML parses it the same way. Byte-identical input to the same
+    engine is as close as a test gets, and the remaining risk is zero only
+    because the bytes are identical rather than equivalent.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+
+import conftest
+import pytest
+
+from bridge.view import blocks as B
+from bridge.view.htmlrender import render
+
+pytestmark = conftest.needs_guest
+
+TEMPLATES = os.path.join(conftest.REPO, "win", "resources")
+WRAPCOL = 56
+
+
+def guest_render(data: bytes, wrapcol: int = WRAPCOL) -> bytes:
+    """One frame body through the real renderer under Wine."""
+    exe = conftest.guest_exe("rendercheck.exe")
+    out = subprocess.run(
+        [conftest.WINE, exe, "--template", TEMPLATES, "--render",
+         "--wrapcol", str(wrapcol)],
+        input=data, capture_output=True,
+        env=dict(os.environ, WINEPREFIX=conftest.PREFIX, WINEDEBUG="-all"),
+        timeout=120)
+    assert out.returncode == 0, (
+        f"rendercheck exited {out.returncode}\n"
+        f"stdin: {data[:400]!r}\nstderr: {out.stderr[:800]!r}")
+    return out.stdout
+
+
+def bridge_render(blocks: list, wrapcol: int = WRAPCOL) -> bytes:
+    return "".join(render(b, wrapcol)
+                   for b in blocks).encode("cp1252", "replace")
+
+
+# --- the corpus ---------------------------------------------------------
+#
+# test_html.py's inputs, plus the cases this stage added, plus the LIVE
+# corpus -- which is NOT optional and is easy to miss. test_html.py's five
+# LIVE tests assert on HTML, so they are not among the mechanical parser
+# tests C2's split assumes; a partial block is a different Block from the
+# sealed one (it carries _tail's elision marker and an unterminated run)
+# and nothing else here would exercise one.
+
+MARKDOWN = [
+    "plain text\n",
+    "a\n\nb\n",
+    "# H1\n", "## H2\n", "### H3\n", "###### H6\n", "####### seven\n",
+    "- a\n- b\n", "1. a\n2. b\n", "* a\n+ b\n", "1) x\n",
+    "> quoted\n> more\n",
+    "---\n", "***\n", "___\n",
+    "```c\nint x;\nreturn 0;\n```\n",
+    "```\nno lang\n```\n",
+    "~~~py\nx=1\n~~~\n",
+    "```c\n**not bold** and `not code`\n```\n",
+    "|a|b|\n|--|--|\n|1|2|\n",
+    "|a|b|\n|1|2|\n",
+    "|a & b|<c>|\n|--|--|\n|`x`|**y**|\n",
+    "**bold** and `code` and *em* and _em_\n",
+    "__a *b `c` d* e__\n",
+    "**a****b**\n",
+    "_a *b* c_\n",
+    "BPB_RsvdSecCnt and BPB_NumFATs\n",
+    "`snake_case_here`\n",
+    'a < b & c > d "q"\n',
+    "<script>alert(1)</script>\n",
+    "a\rb\n",
+    "a\tb\n",
+    "text with [link](http://x/) in it\n",
+    "para with **bold `code` inside** and more\n",
+    "an &amp; already escaped\n",
+    "```\n" + "x" * 500 + "\n```\n",
+    "a & b\n\n`c < d`\n\n## head & more\n",
+    "- **a** and `b`\n- <c>\n",
+    "> **quoted bold**\n",
+]
+
+
+def blocks_from(text: str) -> list:
+    s = B.BlockStream()
+    ups = s.feed(text) + s.flush()
+    return [u.block for u in ups
+            if u.mode == B.APPEND and u.block is not None]
+
+
+def live_blocks_from(text: str) -> list:
+    """Every LIVE block the stream produces while the text arrives.
+
+    A partial block is not a sealed one: it carries _tail's "..." elision
+    once it is over LIVE_CAP, and its last inline run can be unterminated
+    because the closing delimiter has not arrived yet.
+    """
+    s = B.BlockStream()
+    out = []
+    for line in text.splitlines(keepends=True):
+        for u in s.feed(line):
+            if u.mode == B.LIVE and u.block is not None:
+                out.append(u.block)
+    return out
+
+
+def one_shots() -> list:
+    import bridge.agent.permissions as P
+    import bridge.agent.policy as POL
+
+    class Ctx:
+        display_name = None
+        title = None
+        description = None
+
+    class CtxT:
+        display_name = "Write"
+        title = "Write a file"
+        description = "to C:\\X"
+
+    return [
+        B.notice("a <b> & c"),
+        B.notice("two\nlines"),
+        B.error("x\ny"),
+        B.error("an error with <angles> & an ampersand"),
+        B.user_turn("a\n\nb"),
+        B.user_turn('say "hi"'),
+        B.user_turn("<img src=x onerror=1>"),
+        B.tool_call("exec", "dir *.c"),
+        B.tool_call("Bash", "command: ls -l | grep '<x>'"),
+        B.tool_result("out"),
+        B.tool_result(""),
+        B.tool_result("   \n "),
+        B.tool_result("x" * 3000),
+        B.tool_result("line\nline2", error=True),
+        B.tool_result("a " * 200),
+        B.tool_result("/a/very/long/path/with/no/spaces/" + "x" * 300),
+        B.tool_result("Volume in drive C is WIN98"),
+        B.thinking("thought\nmore"),
+        B.code_block("int x;", "c"),
+        B.code_block("plain"),
+        B.para("a **b** c"),
+        B.Block("rule"),
+        B.Block("clip", {"dropped": 99}),
+        B.Block("exportheading", {}, [("h", "T & <x>"), ("t", "when")]),
+        B.Block("exportheading", {}, [("h", "")]),
+        P.render_request("Grep", {"pattern": "*.log"}, Ctx()),
+        P.render_request("Write", {"file_path": "C:\\A"}, CtxT(),
+                         warning="careful <&>"),
+        P.render_request("Write", {"file_path": "C:\\A"}, CtxT(),
+                         note="a note"),
+        P.render_request("mcp__machine__input",
+                         {"steps": [{"focus": "Notepad"}, "hi[Enter]",
+                                    {"close": "Notepad"}]}, Ctx()),
+        P.render_request("mcp__machine__delete",
+                         {"path": "C:\\T", "_preview": "3 files"}, Ctx(),
+                         warning="w"),
+        P.render_request("Write", {f"a{i}": "x" * 400 for i in range(40)},
+                         CtxT(), warning="over budget"),
+    ] + [P.rules_view(POL.preset(m), None, guest_root="C:\\WORK")
+         for m in ("manual", "workfolder", "plan", "auto")] \
+      + [P.rules_view(POL.preset("manual"), None, guest_root="")]
+
+
+# --- the proof ----------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def corpus():
+    out = []
+    for text in MARKDOWN:
+        out.extend(blocks_from(text))
+    out.extend(one_shots())
+    return out
+
+
+def test_the_corpus_is_as_large_as_it_claims(corpus):
+    """A corpus that quietly shrank would make every assertion below pass
+    while proving less. The same reason CASE_COUNT is exact next door."""
+    assert len(corpus) >= 70, len(corpus)
+
+
+def test_the_corpus_covers_every_kind(corpus):
+    """Otherwise a kind is proved by nothing and nobody notices. The two
+    that no natural input produces are built by hand above."""
+    assert {b.kind for b in corpus} == set(B.KINDS), (
+        set(B.KINDS) - {b.kind for b in corpus})
+
+
+def test_the_whole_corpus_renders_identically(corpus):
+    """One call, all the records: a frame body holds several and the
+    concatenation is what the guest actually receives."""
+    body = b"".join(B.encode(b) for b in corpus)
+    assert guest_render(body) == bridge_render(corpus)
+
+
+@pytest.mark.parametrize("text", MARKDOWN, ids=lambda t: t[:24])
+def test_each_markdown_sample_renders_identically(text):
+    """Per sample as well as in bulk, so a failure names the input rather
+    than handing back two 40 KB strings to diff by eye."""
+    blocks = blocks_from(text)
+    if not blocks:
+        pytest.skip("no sealed block")
+    body = b"".join(B.encode(b) for b in blocks)
+    assert guest_render(body) == bridge_render(blocks)
+
+
+def test_the_live_path_renders_identically():
+    """The half that is easy to forget. A partial block carries _tail's
+    elision marker and can end mid-run, and the bridge re-sends the whole
+    open block on every flush -- so this is the shape the renderer sees ten
+    times a second for the length of an answer, and the only one whose cost
+    stage 3 had to measure."""
+    text = "```c\n" + "".join(f"    line {i};\n" for i in range(400)) + "```\n"
+    live = live_blocks_from(text)
+    assert len(live) > 50, len(live)
+    sample = live[::20]
+    body = b"".join(B.encode(b) for b in sample)
+    assert guest_render(body) == bridge_render(sample)
+
+
+def test_an_unterminated_inline_run_renders_identically():
+    """Mid-write, the closing delimiter has not arrived. The bridge closes
+    the span when it renders and so must the guest, or MSHTML keeps the
+    styling for everything appended after it."""
+    s = B.BlockStream()
+    live = [u.block for u in s.feed("a **bold and then")
+            if u.mode == B.LIVE and u.block is not None]
+    assert live
+    body = b"".join(B.encode(b) for b in live)
+    assert guest_render(body) == bridge_render(live)
+
+
+@pytest.mark.parametrize("wrapcol", [0, 20, 56, 200])
+def test_the_wrap_agrees_at_every_column(wrapcol):
+    """Including 0, where the bridge's helper used to hang: rfind(" ", 0, 0)
+    is -1, the cut lands at 0 and the line never advances. The guest can
+    reach it because wrapcol comes from a window, so both sides gained the
+    same guard and this is what keeps them in step."""
+    blocks = [
+        B.tool_result("a " * 120),
+        B.tool_result("x" * 300),
+        B.tool_result("short"),
+        B.tool_result("<" + "y" * 200 + ">"),
+    ]
+    body = b"".join(B.encode(b) for b in blocks)
+    assert guest_render(body, wrapcol) == bridge_render(blocks, wrapcol)

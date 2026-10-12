@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/bytesink.h"
@@ -456,12 +457,20 @@ int main(int argc, char **argv)
 {
     const char *dir = 0;
     bool doRender = false, doDump = false;
+    unsigned wrapcol = 56;
     int i;
 
     for (i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "--template") == 0 && i + 1 < argc)
             dir = argv[++i];
+        else if (strcmp(argv[i], "--wrapcol") == 0 && i + 1 < argc)
+            /* The column a literal block breaks at. 56 by default, which is
+             * what the bridge measured in a 640x480 window and therefore
+             * what the equality proof has to use; the view passes its own
+             * window's column and export a fixed one. 0 means do not wrap,
+             * which is a case of its own. */
+            wrapcol = (unsigned)strtoul(argv[++i], 0, 10);
         else if (strcmp(argv[i], "--render") == 0)
             doRender = true;
         else if (strcmp(argv[i], "--dump-templates") == 0)
@@ -469,7 +478,8 @@ int main(int argc, char **argv)
         else
         {
             fprintf(stderr, "usage: rendercheck [--template DIR] "
-                            "[--render [--wrapcol N]] [--dump-templates]\n");
+                            "[--render] [--wrapcol N] "
+                            "[--dump-templates]\n");
             return 2;
         }
     }
@@ -520,7 +530,7 @@ int main(int argc, char **argv)
             return 2;
         }
         n = (unsigned)fread(buf, 1, cap, stdin);
-        rc = rc_render(buf, n, 56, out) ? 0 : 1;
+        rc = rc_render(buf, n, wrapcol, out) ? 0 : 1;
         HeapFree(GetProcessHeap(), 0, buf);
         return rc;
     }
