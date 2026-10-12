@@ -29,47 +29,99 @@ survive this stage**. What dies is the bridge deciding them.
 
 ---
 
+## STATUS: REPLANNED 2026-10-12, after five commits had landed
+
+The first draft of this file was written from `ROADMAP.md`'s three sentences and the stage
+was started against it. It was then put through one adversarial review round against the
+code -- **27 defects, three of which killed a decision** -- and the decisions below are what
+came out. Where the first draft was wrong, this says so; that is the cheapest documentation
+available and it is how stage 3 was planned.
+
+The three that were killed:
+
+- **Deleting the PREFS `view.page` key would have refused every connection.** `prefs.py`'s
+  key chain ends in `raise PrefsError`, and on the HELLO path that is fatal.
+- **The guest asking after `SWITCHED` would have hung off a control that may be NULL**, and
+  would have fired *during a streaming turn*, clearing the transcript.
+- **A `GREW` frame per block** roughly doubles the frame count of a long turn on a link
+  deliberately throttled to 5 KB/s.
+
 ## 1. The decisions
 
-1. **The page stays, and becomes the client's own.** The client computes how many blocks a
-   page holds from its own memory and its own Small/Normal/Large setting, and asks for that
-   many. `Page %d/%d (Live)` is unchanged on screen; the arithmetic behind it stops being
-   the bridge's.
-2. **The wire carries `offset` and `limit`.** `GETBLOCKS` replaces `GETPAGE`. `offset` is a
-   block index or the literal `live`; `limit` is a count. The bridge has no opinion about
-   what a page is, which is the whole point of the client declaring its own caps.
-3. **Three frames replace four.** `RANGE` (`offset`, `count`, `total`, `live`) and
-   `RANGEEND` replace `PAGESTART`/`PAGEEND`; `GREW` (`total`) replaces `PAGESEALED`;
-   `ANCHOR` dies with nothing in its place.
-4. **The page-size preference stops crossing the wire.** `view.page` stays in `gaston.ini`
-   and the options sheet, because the person still chooses how much a page holds. It stops
-   being a PREFS key, and `limits_for`, `prefs.scaled`, `PAGE_SCALE`, the ceiling constants
-   and `Handshake.page_bytes/page_blocks` all die with it. This is `CLAUDE.md`'s *the
-   client declares OS facts; the bridge holds none*, applied to the last place it was not.
-5. **The cache's format does not change**, and that is a decision rather than an accident
-   (§4).
-6. **The oracle dies, and the equality proof becomes a checked-in fixture** in the same
-   commit, so there is never a window with neither.
+1. **The page becomes the client's own**, computed from its own memory and its own
+   Small/Normal/Large setting. `Page %d/%d (Live)` is unchanged on screen.
+2. **The wire carries `offset` and `limit`** (§2). `GETBLOCKS` replaces `GETPAGE`.
+3. **`RANGE` + `RANGEEND` replace `PAGESTART`/`PAGEEND`; `GREW` replaces `PAGESEALED`.**
+   Three for three -- `ANCHOR` already died. `RANGE`'s `count` must have a guest-side
+   reader or it is the same decoration this stage is deleting: the page bar uses it to tell
+   a short last window from one the bridge refused a record out of (`link.py:145-154`).
+4. **After a switch the guest asks; the bridge does not push.** No new HELLO key; the count
+   stays at 39. An earlier draft of this stage added a `pageblocks` key so the bridge could
+   push a window after a switch, and removing it is what makes "the guest asks for blocks by
+   range" literally true. **Two guards, without which this decision is wrong:**
+   - **The ask may not hang off the chat list.** `SWITCHED` is dispatched to
+     `MainWindow::onChats` and reaches `onSwitched` only through `if (m_chats)`
+     (`mainwindow.cpp:542`). `m_chats` is allowed to be NULL -- controls do fail to create on
+     a 64KB USER heap. Today a NULL chat list costs a page total; under this decision it
+     would cost the whole transcript after every switch, forever. The ask goes in the
+     dispatch wrapper, beside the handler, not inside the control.
+   - **The ask fires only when the conversation actually changed.** `SWITCHED` is not only
+     an attach frame: `session.py:492-494` sends it from `resume_pending` on the FIRST
+     MESSAGE of a new conversation, and `turn_runner.py:236-240` calls that *before* taking
+     `turn_lock`. An unconditional ask would put a `RANGE` -- which runs `turnDone()` and
+     `clear()` -- into the middle of a streaming turn.
+5. **`offset=live` aligns to the grid the request's own `limit` implies** --
+   `(count - 1) // limit * limit`. It cannot mean "the last `limit` records": with 200
+   records and a limit of 90 that window starts at 110, which is not where any of the
+   guest's pages begin. The arithmetic follows from the limit the guest supplied, so it is
+   not an opinion about what a page is.
+6. **The page-size preference stops being READ by the bridge. It does not stop being
+   ACCEPTED.** `bridge/prefs.py:161-163` ends its key chain with `raise PrefsError(key, "not
+   a setting this bridge knows")`, and on the HELLO path that is fatal --
+   `connection.py:203-207` answers `bad_prefs` and drops the socket. The client sends
+   `view.page` unconditionally (`win/app/protect.cpp:221`). Deleting the branch would refuse
+   every connection from any guest not reflashed in lockstep, permanently, and a PREFS key
+   can therefore never be removed -- only ignored. `limits_for`, `prefs.scaled`,
+   `PAGE_SCALE`, the ceiling constants and `Handshake.page_bytes/page_blocks` do die (§5).
+7. **`PROTO_VERSION` is bumped to 3.** Both sides are `2` today
+   (`bridge/wire/protocol.py:36`, `win/net/frameproto.h:13`) and `handshake.py:87-90`
+   refuses a mismatch cleanly. Without a bump an un-reflashed guest connects, sends
+   `GETPAGE`, gets `unknown_type`, and shows a transcript that appends but cannot page --
+   working badly rather than refusing. This stage breaks the wire; the version says so.
+8. **How the guest learns the transcript grew -- two cases, not one.** Following live, an
+   APPEND TEXT frame is already going out, so the count rides on it as a `total` header:
+   `page` and `off` die, `total` returns meaning *how many records the transcript holds*,
+   which is a different quantity from the page count it used to carry. Paged back, no TEXT
+   is sent (`write_block` streams only when `view_live`), so `GREW` goes on its own.
+   A `GREW` in both cases was the first draft, measured at roughly double the frame count of
+   a long turn, each frame its own `write` + `drain`, and one `SetWindowTextA` plus five
+   `EnableWindow` calls on the guest per block to redraw the same string. The guest counting
+   its own records is rejected in the other direction: a count that drifts from the bridge's
+   is wrong SILENTLY, and this tree has paid once for an invisible divergence in `.thinking`.
+9. **A window is delivered under a lock, and `view_live` is set after it.** `on_getblocks`
+   runs in the reader task and `write_block` in the turn task (`server.py:456`), and
+   `send_range` awaits per chunk -- so a block appended mid-delivery is streamed BETWEEN the
+   window's own records, on screen and into the cache file. The per-frame page tag that
+   would have made that diagnosable is being deleted in this same stage, which is the
+   argument for fixing it here rather than meeting it later.
+10. **An empty WINDOW is not an empty CONVERSATION.** `view_live = offset + limit >= count`
+    is true for every offset past the end, which would put "Type a message below to start
+    this conversation" on a conversation that has records in it. The notice fires on
+    `count == 0` only; a window's emptiness is reported by `count=0` and nothing else.
+11. **The cache keeps `P%03d.HT2`** (§4) and gains two honesty fixes the byte cap used to
+    hide: `end_page` refuses to publish a page over `CACHE_PAGE_MAX`, and `restoreCache`
+    stops claiming the file it shows is the last page of the conversation.
+12. **`send_range` chunks on record boundaries**, like the export: a window is `limit`
+    records of up to `maxblock` bytes each, so it is not frame-bounded the way a 16KB page
+    was. 90 blocks of 60KB is 5MB.
 
-### Why `ANCHOR` gets no replacement
+### Why `ANCHOR` got no replacement
 
-`anchor_frame(page, off, preview)` (`protocol.py:284-291`) exists so the guest can jump
-back to a user turn. The guest's handler is `MainWindow::onAnchor`
-(`win/app/mainwindow.cpp:662-668`) and it **writes a log line**. Nothing else in `win/`
-touches it. An anchor keyed on `page` + a byte offset *within that page* has no meaning
-once the client picks the page, and rebuilding it as a block index would be building a
-feature nobody has asked for in the stage that is removing one. It goes, and
-`BACKLOG.md` gets the entry: a block index is the shape it would come back in.
-
-### What a `GREW` frame is for
-
-Today `PAGESEALED` does two jobs: on the live page it follows the seal forward
-(`pagebar.cpp:236`), and on an older page it is the only signal that new content exists.
-The first job disappears — there are no seals. The second is real: without it, "Page 3/7"
-stays "3/7" while the conversation grows, and the person cannot tell. `GREW` carries one
-header and is sent only when the guest is not following live.
-
----
+`anchor_frame(page, off, preview)` existed so the guest could jump back to a user turn. The
+guest's handler wrote a log line and nothing else. An anchor keyed on a page plus a byte
+offset within that page has no meaning once the client picks the page, and rebuilding it as
+a block index would be adding a feature in the stage that is removing one. `BACKLOG.md` gets
+the shape it would come back in.
 
 ## 2. The wire
 
@@ -78,7 +130,11 @@ guest  -> GETBLOCKS  offset=<n>|live  limit=<k>
 bridge -> RANGE      offset=<n> count=<c> total=<t> live=0|1
 bridge -> TEXT       mode=append  (zero or more frames of whole records)
 bridge -> RANGEEND
-bridge -> GREW       total=<t>              (only while the guest is paged back)
+
+  then, as the transcript grows -- one of these, never both:
+
+bridge -> TEXT       mode=append total=<t>  (the guest is following live)
+bridge -> GREW       total=<t>              (the guest has paged back)
 ```
 
 - **`offset` is a block index, zero-based.** Zero-based because it is an index into a list
@@ -91,10 +147,18 @@ bridge -> GREW       total=<t>              (only while the guest is paged back)
 - **`live=1`** means this range ends at the current end of the transcript, so new blocks
   will stream into it. The bridge sets it; the guest does not infer it from the
   arithmetic, because the transcript can grow between the request and the answer.
-- **`TEXT` keeps `mode` and loses `page`.** `total` and `off` were already dead and go
-  with it. `text_frame`'s signature loses three parameters.
+- **`TEXT` loses `page` and `off` and keeps `total` with a new meaning.** `page` was sent
+  on every frame and `Turn::onText` never read it; `off` was dead from stage 3 C2. `total`
+  comes back as **how many records the transcript holds** -- a different quantity from the
+  page count it used to carry, which the docstring has to say out loud, because a header
+  that keeps its name and changes its meaning is the worst kind of wire change. It is on
+  APPEND only: a LIVE frame replaces the open block and does not grow the transcript.
 - **Nothing is sealed**, so a record that does not fit a frame is the same case the export
   already handles: `link.py` sends it in a frame of its own.
+
+- **`GREW` carries one header and is sent only to a guest that has paged back.** It is
+  what `PAGESEALED` did, without the page: the only way a reader who is not following live
+  learns the conversation moved on, because no TEXT goes to them at all.
 
 **`maxblock` still bounds one record** (`win/net/caps.h:163-173`) and keeps its meaning.
 The comment there says it bounds "the arm that replaces the paginator's mid-run split"; the
@@ -144,9 +208,18 @@ page size becomes. So:
 - **No format change, no new version, no discard.** `P%03d.HT2` keeps its name.
 - **A page-size change does not invalidate the cache.** The boundaries of the cached files
   may no longer match the size the client now wants; the only consumer of those boundaries
-  is `restoreCache` (`mainwindow.cpp:583-629`), which shows the *last* cached file and says
-  so. Showing a slightly differently-sized last page in an outage is not worth deleting a
-  conversation over.
+  is `restoreCache` (`mainwindow.cpp:583-629`). Showing a differently-sized page in an
+  outage is not worth deleting a conversation over -- but `page_count()` is a CONTIGUOUS
+  scan from `P001` (`cache.cpp:234-246`), so after a size change it returns a file written
+  at the old size while the notice says "This is the last page of your conversation as it
+  was cached here". **The notice stops claiming that**, and names what it is instead. The
+  cache was always allowed to be stale; it was not allowed to lie about it.
+- **`end_page` refuses to publish a page over `CACHE_PAGE_MAX`** (64KB, `cache.cpp:19`).
+  With `MAX_BYTES` gone (§5) a window is bounded only by record COUNT -- up to 360 -- times
+  record size, up to 64,512 each, and `load_page` already refuses an oversize file at READ
+  time (`cache.cpp:215-218`). Without this the cache would write pages it can never read
+  back, and `restoreCache` would promise a page and show nothing. Refusing at write keeps
+  the cache readable and the gap visible to `page_count`.
 - **What moves is the write trigger.** `begin_page`/`end_page` hang off PAGESTART/PAGEEND
   today (`mainwindow.cpp:639-652`); they hang off RANGE/RANGEEND after, with the page
   number the client's own.
@@ -160,6 +233,17 @@ to [1,4]. `prefs.scaled` then applies Small 0.5 / Normal 1.0 / Large 2.0 and cla
 ceiling of four times the 32MB page. The client knows `mem_kb` — it is the one that
 measured it (`win/net/net.cpp:348-352`) — and it knows the preference, so **both
 computations move into the client unchanged**, as one function in `win/app/pagebar.cpp`.
+
+**The declaration does not move with it.** An earlier draft of this stage sent the result
+as a `pageblocks` HELLO key so the bridge could push a window after a conversation switch;
+decision 4 made the guest ask instead, which is what leaves the bridge with no page-size
+number at all. Every `GETBLOCKS` carries its own `limit`, and `offset=live` aligns to the
+grid that limit implies -- so the only arithmetic left on the bridge follows from the
+request in front of it.
+
+**One behaviour changes and the options tooltip has to say so:** `rc_net_page_blocks`
+returns a value filled in `rc_net_start` (`win/net/net.cpp:300-304`), so changing
+Small/Normal/Large takes effect at the next connect rather than at the next page.
 
 The byte half (`MAX_BYTES`) does not move. It existed because a page was a string of HTML
 and MSHTML had to hold it; a range is a count of blocks and the bound that matters is
@@ -191,61 +275,36 @@ proof that passed, so there is never a commit where neither exists.
 
 ## 7. Commits
 
-**Phase A — nothing on the wire changes.**
+Five landed before the replan: the plan doc, `rendercheck` joining `guest-checks`,
+`Transcript`, the dead export loop, and the anchors. What is left:
 
-- **A0** this plan, and the stage numbers stage 3's renumbering left stale (R7 is 3c, not
-  3b, in five places). No code.
-- **A1** **`rendercheck` joins `guest-checks`.** It is in `win/Makefile`'s `all`
-  (`:629`) and has its own target (`:431`), but it is **not** in the root `Makefile`'s
-  `guest-checks` list (`:93-95`) — so `make clean && make wine-smoke` does not build it and
-  `conftest.guest_exe` fails all 69 tests in `test_render_equivalence.py` and
-  `test_guest_render.py`. It passes today only because somebody ran `make -C win all`.
-  This is the same hand-maintained-list gap the comment at `Makefile:77-80` was written
-  about, and the same class as stage 3's `capscheck` break. It goes first, because
-  everything after it leans on those two suites.
-- **A2** `Transcript` lands beside `Paginator`, which delegates to it. Behaviour identical.
-- **A3** `Paginator.all_text` deleted, its two callers re-pointed
-  (`test_server_integration.py:2617`, `test_session.py:39`). No production caller, and it
-  is one of the two remaining production imports of the oracle.
-- **A4** `link.send_export` deleted — the byte-oriented chunk loop, no caller anywhere.
-
-**Phase B — the wire changes, one deletion at a time.**
-
-- **B1** anchors die: `Anchor`, `mark_user_turn`, `anchor_frame`, `turn_runner`'s send,
-  the guest's `onAnchor` and its dispatch row, fakegui's handler, the `ANCHOR` frames in
-  goldens 02/03/08/11, and `golden_utils.py:42-45`'s preview mask.
-  `test_protocol.py:314-338` uses `Frame("ANCHOR", ...)` only as a vehicle for four
-  header-encoding tests — the frame name changes, the tests do not.
-- **B2** **the cutover, one commit because the two sides cannot disagree for even one.**
-  `GETBLOCKS`/`RANGE`/`RANGEEND`/`GREW`; `Transcript.range`; `send_page` becomes
-  `send_range`; `text_frame` loses `page`/`total`/`off`; `pagebar.cpp` computes its own
-  pages and asks by range; the cache's write trigger moves; `fakegui` moves; **all 12
-  goldens regenerate** (23 TEXT frames lose `page=`, READY's `page`/`total` go in five, and
-  `scenario_06_page_request_and_seal` is rewritten as a range request).
-  `test_server_integration.py:279-460`'s six end-to-end pagination tests are rewritten
-  against ranges — they are the behavioural proof and they do not die.
-- **B3** the paginator's remains: `Page`, `PageRun`, `_seal`, the three `over_*`,
-  `message_boundary`, `HARD_*`, `MAX_*`, `limits_for`, `prefs.scaled`, `PAGE_SCALE`,
-  `Handshake.page_bytes/page_blocks`, the PREFS `view.page` key on both sides, and
-  `test_pages.py`'s 29 tests — of which the ones that are about *the transcript* rather
-  than about cutting it (forward numbering, whole records, an oversize record) move to a
-  new `test_transcript.py` rather than dying.
-
-**Phase C — the seam closes.**
-
-- **C1** the oracle dies. `htmlrender.py`, `HtmlStream`, `Update`, the `html.py`
-  re-exports, `test_html.py`'s 35 tests (the parser half already lives in
-  `test_blocks.py`'s 58), the allowlist and its two guard tests, and the five function-local
-  oracle imports in `test_guest_css.py`/`test_mode_descriptions.py`/`test_block_vocab.py`/
-  `test_permissions_gaston.py`, which re-point at `rendercheck` or at the record payload.
-  **The fixture is generated in this commit, from a passing run, before the file goes** —
-  ~72 KB over five blobs, the LIVE sample dominating. It does **not** use
-  `golden_utils.assert_matches_golden`: that writes a missing golden silently
-  (`golden_utils.py:99`), which for this fixture would mean a deleted file is re-blessed
-  from the guest against itself. `bridge/server.py:__all__` loses `H`, `APPEND`,
-  `Paginator`, and `test_suite_hygiene.py:174-215` is what catches it if they are missed.
-- **C2** docs: `ROADMAP.md` 3b done with its numbers, `BACKLOG.md` the anchor entry and
-  §13/§31 final, `PROGRESS.md` the stage entry, the measurement from §8.
+- **B2 -- the cutover.** One commit, because the two sides cannot disagree for even one.
+  It is a rework of work that was already written: remove the `pageblocks` HELLO key and
+  `Caps.pageblocks` (decision 4), keep `rc_page_blocks` but stop declaring it, put the ask
+  on a real conversation change from the dispatch wrapper (decision 4's guards), ride
+  `total` on APPEND TEXT (decision 8), add the delivery lock (decision 9), fix the empty
+  notice (decision 10), bump `PROTO_VERSION` (decision 7).
+  **B2 also owns everything decision 6 touches**: `page_bytes`/`page_blocks`/`limits_for`/
+  `prefs.scaled` and BOTH production callers -- the handshake and `options.py:129-130`, the
+  PREFS handler, which the first draft left unassigned and which has a test written to catch
+  exactly that (`test_presentation.py:139`).
+  **Nine goldens regenerate, not twelve**; 03, 07 and 09 carry no page headers. While there:
+  `scenario_07_conversation_switch` is a DEAD golden -- a lone `unknown_type` ERROR, because
+  the test sends `Frame("NEW", {})` against a dispatch table that says `NEWSESSION`
+  (`test_frame_goldens.py:300`). It is the one scenario that should cover decision 4's new
+  switch flow and it asserts nothing.
+- **B3 -- the paginator's remains.** It owns `Paginator`'s production importers too
+  (`server.py:49,63-71,359`, `connection.py:25,294`, `transcript.py:30,51,93`): the first
+  draft deferred them and would have made this commit an `ImportError` at `import
+  bridge.server`. Three test files construct it, not one. Of `test_pages.py`'s 30 tests the
+  ones about the transcript rather than about cutting it move to `test_transcript.py`.
+- **C1 -- the oracle dies** (§6). Seven imports across six files, two module-level, and the
+  48-test file the commit exists for is `test_render_equivalence.py`. `html.py`'s block
+  constructors STAY -- nine production modules and 32 `H.x(...)` calls hang off them, and
+  moving those is a different commit. The fixture is generated here, from a passing run,
+  before the oracle goes, and does not use `golden_utils.assert_matches_golden`, which
+  writes a missing golden silently (`golden_utils.py:95`).
+- **C2 -- docs and the measurements.**
 
 ## 8. Verification
 

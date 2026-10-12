@@ -325,6 +325,49 @@ Two things stage 3 was forced into that belong here:
 
 ---
 
+## Stage 3c — several guest machines against one bridge
+
+R7. `BACKLOG.md` §7 (`:576`) is the decision record, §21 (`:2172`) the question it defers
+here. This section exists because the stage had a table row and nothing else, which is how
+it came to be postponed twice; `docs/stage3b-plan.md`'s sibling covers it in full.
+
+**What it is.** Two machines, two *different* conversations, at the same time. §7's answer
+is one mirror per conversation, so "two people work at once by working on different
+conversations". One conversation is never driven from two machines, and the tool surface
+forbids it anyway: the MCP server is named `machine` with no target argument
+(`bridge/agent/tools.py:1805`). Saying so matters because "several clients" reads like the
+other thing.
+
+**What is in the way.** `ConnectionService.guest` (`bridge/services/connection.py:57`) is a
+single slot. A second *simultaneous* connection is refused process-wide rather than per
+machine (`:209-213`) -- and a second *sequential* one silently inherits the first machine's
+session, because `is_reconnect` is `self.guest is not None` (`:280`) and nothing compares
+HELLO's `machine`. Attach replaces the link, caps, prefs and tools and leaves the live
+conversation, work folder, grants, permission desk and transcript belonging to the previous
+machine. **Both of this project's machines connect to the same bridge, so that is reachable
+today**; the keying change is what makes it impossible rather than guarded against.
+
+**Two decisions, both of which the backlog asked for in writing.**
+
+- **The machine id and the sync baseline's identity stay separate** -- §21's open question,
+  answered. `machine` is a persistent GUID saying *who*; `tree_id` is volume-derived and
+  exists to refuse a swapped or reformatted disk (`bridge/files/syncrun.py:204-208`).
+  Unifying them would mean deciding which of the two behaviours the one id has and
+  rebuilding the other. Baselines key on **(machine, guest_root)** instead, which is the
+  actual defect: today two machines whose INI root is `C:\WORK` share one baseline file with
+  different `tree_id`s, and `scan_guest` then refuses both ways forever. The legacy
+  `base.json` rule stays, so nothing is migrated and nothing is deleted.
+- **`machine` as the reconnect identity is an unauthenticated assertion, accepted as such**
+  -- which is what audit 04.21 asked for rather than a per-client secret bolted on later.
+  There is one shared secret and it already grants everything; a client claiming another's
+  id inherits its transcript and its pending prompts.
+
+**Exit condition:** two guests hold two mirrors and two baselines at once -- on the real
+hardware, the QEMU guest and the Athlon, in two conversations, writing into two mirrors,
+concurrently.
+
+---
+
 ## Stage 4 — the recorded decisions, the inconsistencies, the small repairs
 
 The stage where `BACKLOG.md` stops holding entries whose only blocker is a
