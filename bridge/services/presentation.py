@@ -232,12 +232,16 @@ class PresentationService:
             # conversation that has a hundred of them in it.
             live = offset <= t.count and offset + limit >= t.count
 
-        records = t.range(offset, limit)
-        # SET AFTER THE WINDOW IS BUILT, not before: between the two there
-        # is no await, so a block appended in that gap cannot be streamed
-        # into the middle of this answer.
-        guest.view.view_live = live
+        # EVERYTHING FROM HERE UNDER THE LOCK, including reading the
+        # records and setting the flag. Taking it later leaves a gap where
+        # an appended block is both absent from the window being built and
+        # streamed as live -- and RANGE begins with a clear(), so that block
+        # would be wiped by the window that did not contain it. Under the
+        # lock, write_block runs either wholly before (its record is in the
+        # window) or wholly after (it arrives as an append). Never between.
         async with guest.view.deliver:
+            records = t.range(offset, limit)
+            guest.view.view_live = live
             await self._deliver(guest, offset, records, t.count, live)
 
         # AN EMPTY TRANSCRIPT, not an empty window. A window can be empty

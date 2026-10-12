@@ -1,9 +1,12 @@
 [
   {
+    "body": "user\nt Run vol c:\n.\n",
     "headers": {
+      "enc": "raw",
+      "mode": "append",
       "total": "1"
     },
-    "type": "GREW"
+    "type": "TEXT"
   },
   {
     "headers": {

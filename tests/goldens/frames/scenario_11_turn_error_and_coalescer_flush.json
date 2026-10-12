@@ -1,9 +1,12 @@
 [
   {
+    "body": "user\nt Fail this turn\n.\n",
     "headers": {
+      "enc": "raw",
+      "mode": "append",
       "total": "1"
     },
-    "type": "GREW"
+    "type": "TEXT"
   },
   {
     "headers": {

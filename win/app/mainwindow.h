@@ -92,6 +92,7 @@ public:
     /* ComposeListener */
     bool isSendBlocked();
     void onSent();
+    void returnToLive();
 
     /* PermissionBarListener */
     void onBarChanged();

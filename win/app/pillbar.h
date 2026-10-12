@@ -79,7 +79,6 @@ public:
      * in the same order, for INPUT. */
     void externalAttachments(std::string *ids, std::string *names) const;
     /* "[Attached: a, b]" for the local echo; empty if nothing is staged. */
-    std::string echoString() const;
 
     /* For the sync worker thread, which reaches this object through
      * rc_syncrpc_set_attachment_hooks with it as the context. Both take the

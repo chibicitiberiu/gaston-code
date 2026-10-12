@@ -293,6 +293,20 @@ void MainWindow::onAttachmentsChanged()
     if (Window::hwnd()) layout(Window::hwnd());
 }
 
+void MainWindow::returnToLive()
+{
+    /* Typing is a way of saying "I am done reading back", and it is also
+     * what makes the turn visible at all: the bridge streams a block only
+     * to a reader who is following live, so a message sent from page 2 of 7
+     * would otherwise go into the transcript and show up nowhere.
+     *
+     * The request and the INPUT that follows race on the bridge, and both
+     * orders are right: whichever takes the view lock first either puts the
+     * user turn in the window being built or streams it after that window
+     * has landed. Exactly once, either way. */
+    if (m_pageBar && !m_pageBar->isLive()) m_pageBar->goto_live();
+}
+
 void MainWindow::onSent()
 {
     if (m_turn) m_turn->noteInput();

@@ -156,6 +156,11 @@ public:
      * works that number out, so asking the bar for it keeps one answer
      * rather than two that can disagree. */
     int  page() const { return view; }
+
+    /* Whether the window on screen is the one new blocks stream into. The
+     * compose box asks before echoing: a message typed while paged back
+     * belongs at the end, not in the window being read. */
+    int  isLive() const { return is_live; }
 };
 
 #endif

@@ -40,27 +40,6 @@ static void check_child(const char *what, HWND h)
                what, (unsigned long)GetLastError());
 }
 
-/* Echo the user's own line, meant to match bridge/view/html.py's user_turn()
- * (not bridge/markdown.py -- that module is a .bak and user_block() does not
- * exist): the bridge records that same string into the paginator so that
- * paging back to a sealed page still shows the question above the answer.
- * Echoing locally rather than waiting for the bridge to send it back is what
- * keeps typing responsive on a dialup link.
- *
- * They do NOT in fact match: user_turn() does text.strip().splitlines()
- * before escaping (html.py:102), and this side's esc_into() (htmlview.cpp)
- * escapes the raw text without stripping -- so a message with a trailing
- * blank line renders one line taller here than it does in the paginator-
- * sealed copy shown after paging back. Recorded as audit finding 01.29;
- * left as found rather than fixed here. */
-void ComposeBox::echoUserBlock(const char *text)
-{
-    /* Was twenty lines of escaping and heap juggling here, with a buffer that
-     * silently cut the echo at 4095 bytes while the full text went to the
-     * model. The view owns its markup now, and sizes from the input. */
-    if (m_html) m_html->user(text);
-}
-
 void ComposeBox::doSend()
 {
     char *buf;
@@ -135,7 +114,7 @@ bool ComposeBox::sendText(const char *text)
     const char *keys[4];
     const char *vals[4];
     int nkv = 0;
-    std::string workspace, extIds, extNames, echo;
+    std::string workspace, extIds, extNames;
 
     if (m_pillbar && m_pillbar->active()) {
         workspace = m_pillbar->workspaceAttachments();
@@ -153,19 +132,25 @@ bool ComposeBox::sendText(const char *text)
             vals[nkv] = extNames.c_str();
             nkv++;
         }
-        echo = m_pillbar->echoString();
     }
 
-    /* Echoed BEFORE the send attempt, matching bridge transcript. */
-    if (!echo.empty()) {
-        if (n > 0) {
-            echo += "\r\n";
-            echo += text;
-        }
-        echoUserBlock(echo.c_str());
-    } else {
-        echoUserBlock(text ? text : "");
-    }
+    /* NO LOCAL ECHO. The bridge sends the user turn like every other block
+     * from stage 3b, and the attachment names reach it in `attach_name`
+     * above, so it can build the same line this side used to.
+     *
+     * It was echoed here, before the send, so typing felt responsive on a
+     * dialup link. The copy went into whatever window was on screen, which
+     * after this stage can be one the reader has paged back to -- where
+     * that record does not belong and where the bridge, having recorded it
+     * at the end, will never put it. It also never quite matched the
+     * bridge's own copy: user_turn strips before escaping and this side's
+     * escaper did not, so a trailing blank line rendered one line taller
+     * here than in the copy shown after paging back (audit 01.29).
+     *
+     * What that cost: two small frames of round trip. What it bought: one
+     * source for the transcript, one escaper, and a block that can only
+     * land where it belongs. */
+    if (m_listener) m_listener->returnToLive();
 
     if (m_xfer) m_xfer->note_tx_start((unsigned long)n);
     int sent = (rc_net_send(m_net, "INPUT", keys, vals, nkv, text ? text : "", n) == 0);

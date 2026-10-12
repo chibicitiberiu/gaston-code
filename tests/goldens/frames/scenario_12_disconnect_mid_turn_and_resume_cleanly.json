@@ -115,6 +115,14 @@
     "type": "OPTIONSEND"
   },
   {
+    "body": "para\nt Pre-disconnect stream...\n.\n",
+    "headers": {
+      "enc": "raw",
+      "mode": "live"
+    },
+    "type": "TEXT"
+  },
+  {
     "body": "para\nt Pre-disconnect stream...\nt Post-reconnect stream...\n.\n",
     "headers": {
       "enc": "raw",

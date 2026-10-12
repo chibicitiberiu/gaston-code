@@ -51,6 +51,14 @@ public:
     virtual ~ComposeListener() {}
     virtual bool isSendBlocked() = 0;
     virtual void onSent() = 0;
+    /* Put the transcript back at the live end before a message goes out.
+     *
+     * Typing is a way of saying "I am done reading back": the reply is
+     * going to the end of the transcript and the sender wants to see it.
+     * It also has to happen, or the user turn never appears at all -- the
+     * bridge streams a block only to a reader who is following live. A
+     * no-op when already there, which is every send but one. */
+    virtual void returnToLive() = 0;
 };
 
 class ComposeBox
@@ -135,7 +143,6 @@ private:
     ComposeBox(const ComposeBox &);
     ComposeBox &operator=(const ComposeBox &);
 
-    void echoUserBlock(const char *text);
     void doSend();
     void doStop();
 

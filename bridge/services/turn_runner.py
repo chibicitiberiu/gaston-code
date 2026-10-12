@@ -274,7 +274,17 @@ class TurnRunner:
         display_text = self.attachment.format_display_text(text, display_names)
         if echo:
             await self.presentation.write_block(
-                guest, H.user_turn(display_text), stream=False
+                # STREAMED, like every other block. The guest echoed this
+                # locally until stage 3b, which is why it was recorded and
+                # not sent -- and that local copy was written into whatever
+                # window happened to be on screen, including one the reader
+                # had paged back to, where the record does not belong. It
+                # also never quite matched: user_turn strips before escaping
+                # and the guest's escaper did not, so a trailing blank line
+                # rendered one line taller locally than in the copy shown
+                # after paging back (audit 01.29). One source, one escaper,
+                # one place it can land.
+                guest, H.user_turn(display_text)
             )
         guest.turn_produced = False
         guest.turn_degraded = ""

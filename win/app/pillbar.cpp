@@ -420,17 +420,7 @@ void AttachmentBar::externalAttachments(std::string *ids,
     }
 }
 
-std::string AttachmentBar::echoString() const
-{
-    if (m_pills.empty()) return std::string();
-    std::string out = "[Attached: ";
-    for (unsigned i = 0; i < m_pills.size(); i++) {
-        if (i > 0) out += ", ";
-        out += m_pills[i].name;
-    }
-    out += ']';
-    return out;
-}
+
 
 /* WORKER THREAD. Both tables are shared with the UI thread, so the lookup
  * holds the lock -- it did not, before the tables were containers. */
