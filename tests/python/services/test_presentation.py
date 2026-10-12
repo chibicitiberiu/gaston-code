@@ -94,12 +94,12 @@ async def test_an_empty_live_body_is_sent_because_it_clears_the_slot(svc):
 
 
 @pytest.mark.asyncio
-async def test_send_page_is_the_third_producer(svc):
+async def test_send_range_is_the_third_producer(svc):
     s, guest, conn = svc
     await s.write_block(guest, PROSE)
     conn.send_records.reset_mock()
 
-    await s.send_page(guest, "live")
+    await s.send_range(guest, "live", "")
     sent = b"".join(c.args[1] for c in conn.send_records.await_args_list)
     assert RECORD in sent
 

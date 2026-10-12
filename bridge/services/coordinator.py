@@ -108,7 +108,7 @@ class SessionCoordinator:
 
     async def sync_state_to_guest(self, guest: GuestSession) -> None:
         """Sync guest UI state (permissions, sync halt bar, turn status) after reconnect."""
-        guest.view.view_page = None
+        guest.view.view_live = True
         if guest.perms:
             await guest.perms.reissue()
         await self.reissue_halt(guest)

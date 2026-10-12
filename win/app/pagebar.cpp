@@ -36,10 +36,23 @@ void rc_pagebar::update_ui()
     EnableWindow(live,  !is_live);
 }
 
-void rc_pagebar::goto_page(const char *which)
+/* How many records go on one page of this machine. The net layer computed
+ * it at the handshake from this machine's memory and the user's page-size
+ * setting, and declared it; asking it back is what keeps the number the
+ * client asks for and the number the client declared the same number. */
+int rc_pagebar::per_page() const
 {
-    const char *keys[1]; const char *vals[1];
-    keys[0] = "page"; vals[0] = which;
+    unsigned n = rc_net_page_blocks(net);
+    return n ? (int)n : 90;
+}
+
+void rc_pagebar::goto_offset(const char *which)
+{
+    const char *keys[2]; const char *vals[2];
+    char lim[16];
+    rc_strf(lim, sizeof(lim), "%d", per_page());
+    keys[0] = "offset"; vals[0] = which;
+    keys[1] = "limit";  vals[1] = lim;
     /* THROUGH ui_send, like the bar and the chat list.
      *
      * This was a bare rc_net_send with its return discarded -- the only
@@ -48,52 +61,55 @@ void rc_pagebar::goto_page(const char *which)
      * into silence: the press looks accepted, nothing happens, and there is
      * nothing on screen to explain it." Pressing Next on a link that had just
      * dropped did exactly nothing, with no message and no log line. */
-    if (sender) sender->sendFrame("that page", "GETPAGE", keys, vals, 1, NULL, 0);
-    else rc_net_send(net, "GETPAGE", keys, vals, 1, NULL, 0);
+    if (sender) sender->sendFrame("that page", "GETBLOCKS", keys, vals, 2,
+                                  NULL, 0);
+    else rc_net_send(net, "GETBLOCKS", keys, vals, 2, NULL, 0);
 }
 
-/* A page count off the wire. Clamped where it is PARSED, once, rather than
- * at each of the six places that used it: atoi of an absent or non-numeric
- * header is 0 and atoi("-5") is -5, and this is the only integer in the UI
- * that drives arithmetic straight off the wire. A tree always has at least
- * one page -- the live one. (audit 01.37) */
-static int wire_total(const char *v, int fallback)
+/* A BLOCK COUNT off the wire. Clamped where it is PARSED, once, rather
+ * than at each of the places that use it: atoi of an absent or non-numeric
+ * header is 0 and atoi("-5") is -5, and these are the only integers in the
+ * UI that drive arithmetic straight off the wire. (audit 01.37)
+ *
+ * Zero is LEGAL here where a page count could not be: an empty conversation
+ * has no blocks at all, and before stage 3b that was a transcript of one
+ * empty page. The floor is on the PAGE count below, which is still at least
+ * one, because the live page exists whether or not anything is on it. */
+static int wire_count(const char *v, int fallback)
 {
     int n;
     if (!v) return fallback;
     n = atoi(v);
-    return n >= 1 ? n : 1;
+    return n >= 0 ? n : 0;
 }
 
-/* The same, for a page NUMBER: at least 1, and never past the total. */
-static int wire_page(const char *v, int total, int fallback)
+/* The page count this machine's own window size implies. At least one. */
+int rc_pagebar::pages() const
 {
-    int n;
-    if (!v) return fallback;
-    n = atoi(v);
-    if (n > total) n = total;
+    int per = per_page();
+    int n = (blocks + per - 1) / per;
     return n >= 1 ? n : 1;
 }
 
 void rc_pagebar::goto_n(int n)
 {
     char buf[16];
-    /* CLAMP HIGH FIRST, THEN LOW. The other order lets a bad `total` win:
-     * `total` is atoi of a wire header, and atoi of an absent or
-     * non-numeric value is 0 while atoi("-5") is -5 -- so with total == 0,
-     * goto_n(1) clamped to n = 0 and put `GETPAGE page=0` on the wire.
-     * set_total() below refuses a total under 1 at the point it is parsed,
-     * which is the real fix; this order means a future parser bug cannot
-     * reach the wire either. */
-    if (n > total) n = total;
+    /* CLAMP HIGH FIRST, THEN LOW, which is a rule this file learned the
+     * hard way: with a total of 0, goto_n(1) clamped the other way round
+     * put `page=0` on the wire. The arithmetic is the client's now and
+     * `pages()` cannot return less than 1, so the order is belt and braces
+     * -- kept, because the cost is one comparison and the thing it prevents
+     * reached the wire once. */
+    int top = pages();
+    if (n > top) n = top;
     if (n < 1) n = 1;
-    rc_strf(buf, sizeof(buf), "%d", n);
-    goto_page(buf);
+    rc_strf(buf, sizeof(buf), "%d", (n - 1) * per_page());
+    goto_offset(buf);
 }
 
 rc_pagebar::rc_pagebar(HWND parent, HINSTANCE inst, HFONT font, rc_net *net_,
                         rc_html *html_, FrameSender *send_)
-    : view(1), total(1), is_live(1), loading_page(0), net(net_), html(html_),
+    : view(1), total(1), blocks(0), is_live(1), loading_page(0), net(net_), html(html_),
       sender(send_), follow_bmp(NULL)
 {
     /* Deliberately NO WS_TABSTOP on any of these six.
@@ -206,22 +222,47 @@ void rc_pagebar::move(int x, int y)
 
 int rc_pagebar::frame(rc_frame *f)
 {
-    if (strcmp(f->type, "PAGESTART") == 0) {
+    if (strcmp(f->type, "RANGE") == 0) {
         const char *v;
-        v = rc_frame_get(f, "total"); total = wire_total(v, total);
-        v = rc_frame_get(f, "page");  view  = wire_page(v, total, view);
-        v = rc_frame_get(f, "live");  is_live = (v && *v == '1');
+        int per = per_page();
+        v = rc_frame_get(f, "total");  blocks = wire_count(v, blocks);
+        v = rc_frame_get(f, "live");   is_live = (v && *v == '1');
+        /* WHERE IT LANDED, not where it was asked for. `offset=live` is
+         * resolved by the bridge against the grid this client's own limit
+         * implies, and the transcript can have grown between the ask and
+         * the answer -- so the page number is derived from what came back.
+         * The division is exact for every window this client asks for,
+         * because every one of them starts at a multiple of `per`. */
+        v = rc_frame_get(f, "offset");
+        view = (v ? wire_count(v, 0) : 0) / (per > 0 ? per : 1) + 1;
+        total = pages();
+        if (view > total) view = total;
+        /* `count` IS READ, and this is what it is for. A window is short
+         * for two reasons that look identical on screen: it is the last one
+         * and the transcript ends there, or the bridge refused a record out
+         * of the middle of it (wire/link.py's oversize branch, which logs
+         * and drops). A short window that is NOT the last page is the
+         * second case, and saying so in the log is the difference between a
+         * missing block somebody can chase and one they cannot.
+         *
+         * Without a reader this header would be exactly the decoration this
+         * stage deleted from TEXT. */
+        v = rc_frame_get(f, "count");
+        if (v) {
+            int got = wire_count(v, per);
+            if (got < per && view < total)
+                rc_log("page: window %d of %d came back short -- %d blocks "
+                       "of %d; the bridge refused one", view, total, got,
+                       per);
+        }
         loading_page = 1;
-        /* One page in, one page out: clear before rendering, so the control
-         * never holds two. */
+        /* One window in, one window out: clear before rendering, so the
+         * control never holds two. */
         if (html) html->clear();
-        v = rc_frame_get(f, "continued");
-        if (v && *v == '1' && html)
-            html->notice("continued from the previous page");
         update_ui();
         return 1;
     }
-    if (strcmp(f->type, "PAGEEND") == 0) {
+    if (strcmp(f->type, "RANGEEND") == 0) {
         if (loading_page) {
             loading_page = 0;
             if (html) html->scroll_bottom();
@@ -229,10 +270,15 @@ int rc_pagebar::frame(rc_frame *f)
         update_ui();
         return 1;
     }
-    if (strcmp(f->type, "PAGESEALED") == 0) {
-        const char *v = rc_frame_get(f, "total"); total = wire_total(v, total);
-        /* On the live page, follow the seal forward. On an older page, the
-         * counter simply ticks up -- that IS the new-content notification. */
+    if (strcmp(f->type, "GREW") == 0) {
+        const char *v = rc_frame_get(f, "total");
+        blocks = wire_count(v, blocks);
+        total = pages();
+        /* Following the end, stay at the end: a block that starts a new
+         * page moves the reader onto it, which is what a transcript that
+         * is being written under you should do. Paged back, the count
+         * simply ticks up -- that IS the new-content notification, and it
+         * is the whole reason this frame exists. */
         if (is_live) view = total;
         update_ui();
         return 1;
@@ -244,7 +290,7 @@ int rc_pagebar::command(int id)
 {
     /* ONE PAGE IN FLIGHT AT A TIME.
      *
-     * Holding Next on a slow link queued N GETPAGEs, and every PAGESTART that
+     * Holding Next on a slow link queued N requests, and every RANGE that
      * came back called html->clear() -- N page loads of bandwidth on a wire
      * that may be 5 KB/s, and a transcript that flickered through each one to
      * land on the last. The bar already tracks loading_page for its own UI;
@@ -252,7 +298,7 @@ int rc_pagebar::command(int id)
      * a page request is lost, so it must never be gated behind one. */
     if (loading_page && id != ID_LIVE) return 1;
     switch (id) {
-    case ID_LIVE:  goto_page("live");   return 1;
+    case ID_LIVE:  goto_offset("live"); return 1;
     case ID_FIRST: goto_n(1);           return 1;
     case ID_PREV:  goto_n(view - 1);    return 1;
     case ID_NEXT:  goto_n(view + 1);    return 1;
@@ -275,20 +321,33 @@ int rc_pagebar::follow_on() const
 
 void rc_pagebar::note_ready(rc_frame *f)
 {
-    const char *v;
-    v = rc_frame_get(f, "total"); total = wire_total(v, total);
-    v = rc_frame_get(f, "page");  view  = wire_page(v, total, view);
+    /* READY stopped carrying a position at stage 3b. It is still where the
+     * bar learns it is back on the live end, and the RANGE that goto_live()
+     * asks for immediately after supplies the numbers. */
+    (void)f;
     is_live = 1;
     update_ui();
 }
 
 void rc_pagebar::note_total(rc_frame *f)
 {
+    /* ONLY IF THE HEADER IS THERE. Every APPEND that grew the transcript
+     * carries it; a LIVE replace does not, because it rewrites the open
+     * block and grows nothing, and neither does an APPEND replayed into a
+     * window the reader asked for. `wire_count`'s fallback keeps the last
+     * known figure in both of those cases. */
     const char *v = rc_frame_get(f, "total");
-    total = wire_total(v, total);
+    if (!v) return;
+    blocks = wire_count(v, blocks);
+    total = pages();
+    /* Following the end, stay at the end -- the same rule GREW applies, and
+     * for the same reason: a block that starts a new page moves the reader
+     * onto it, because a transcript being written under you should. */
+    if (is_live) view = total;
+    update_ui();
 }
 
 void rc_pagebar::goto_live()
 {
-    goto_page("live");
+    goto_offset("live");
 }

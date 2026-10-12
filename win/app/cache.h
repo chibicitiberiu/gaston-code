@@ -18,7 +18,8 @@
  * given, and rendering it back is the same call.
  *
  * WHAT IT DOES NOT CACHE: the live page while it is still being written. A
- * page is written to disk when the bridge says it is complete (PAGEEND), so
+ * page is written to disk when the bridge says the window is complete
+ * (RANGEEND), so
  * a half-streamed answer is never restored as though it were finished.
  *
  * DISK: a page is capped at the guest's page budget (16KB on a 32MB box), so
@@ -91,7 +92,7 @@ public:
 
     /* Render a cached page into `html`, or return zero if it is not there.
      * The caller is expected to have cleared the view first, exactly as
-     * PAGESTART does on the live path.
+     * RANGE does on the live path.
      *
      * `wrapcol` because the pages hold RECORDS from stage 3 C2 and this is
      * a render. A page cached at one window size and replayed at another

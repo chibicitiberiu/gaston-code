@@ -61,6 +61,11 @@ typedef struct {
     unsigned long rx_bytes;
     unsigned long tx_bytes;
     int           started;      /* rc_net_start ran; rc_net_stop has work */
+    /* How many records this client puts on a page, declared in HELLO and
+     * kept so the page bar can ask for exactly that many without redoing
+     * the arithmetic. Computed from this machine's memory and the user's
+     * Small/Normal/Large setting; 0 until rc_net_start has run. */
+    unsigned      page_blocks;
     /* A PREVIOUS rc_net_stop GAVE UP. Set when a thread failed to join, which
      * is the case where the Connection deliberately leaks the socket, the
      * critical section and both events rather than free them under a live
@@ -137,7 +142,22 @@ void rc_net_set_prefs(rc_net *n, const char *body, unsigned len);
  * capability enum nor twenty bytes. NULL and 0 are fine and mean "nothing
  * to say", which is what every client built before this sent. */
 int  rc_net_start(rc_net *n, HWND notify, const char *host, int port,
-                 const char *secret, const void *tools, unsigned tools_len);
+                 const char *secret, const void *tools, unsigned tools_len,
+                 int page_size);
+
+/* How many records fit on one page of THIS machine, from its memory and the
+ * user's RC_PAGE_* setting.
+ *
+ * It lives here rather than in app/ because the memory figure is read here,
+ * and because stage 3b moved this arithmetic across the wire: the bridge
+ * computed it from HELLO's mem_kb and scaled it by a PREFS key, which made
+ * how much the CLIENT can hold a thing the client had to be told. Two
+ * callers: the HELLO header, and the page bar's `limit`.
+ */
+unsigned rc_page_blocks(unsigned long mem_kb, int page_size);
+
+/* What was declared at the last handshake, or the default before one. */
+unsigned rc_net_page_blocks(rc_net *n);
 /* 1 if everything stopped and was freed (or there was nothing to stop); 0
  * if a thread would not stop, its Connection was left alive and `leaked` is
  * now set. */

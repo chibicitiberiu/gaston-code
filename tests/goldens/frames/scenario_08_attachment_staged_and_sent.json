@@ -1,6 +1,12 @@
 [
   {
     "headers": {
+      "total": "1"
+    },
+    "type": "GREW"
+  },
+  {
+    "headers": {
       "state": "start"
     },
     "type": "TURN"
@@ -17,7 +23,7 @@
     "headers": {
       "enc": "deflate",
       "mode": "append",
-      "page": "1"
+      "total": "2"
     },
     "type": "TEXT"
   },
@@ -26,7 +32,7 @@
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "page": "1"
+      "total": "3"
     },
     "type": "TEXT"
   },
@@ -34,8 +40,7 @@
     "body": "para\nt Inspect this file\n.\n",
     "headers": {
       "enc": "raw",
-      "mode": "live",
-      "page": "1"
+      "mode": "live"
     },
     "type": "TEXT"
   },
@@ -44,15 +49,14 @@
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "page": "1"
+      "total": "4"
     },
     "type": "TEXT"
   },
   {
     "headers": {
       "enc": "raw",
-      "mode": "live",
-      "page": "1"
+      "mode": "live"
     },
     "type": "TEXT"
   },

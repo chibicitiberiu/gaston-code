@@ -92,7 +92,7 @@ class PendingPrompt:
     #
     # Note for anyone reading this next to the replay path: there is NO
     # settleable-on-replay hazard here. rc_html::settle_perm clears the id
-    # as well as swapping the class, and send_page issues PAGESTART ->
+    # as well as swapping the class, and send_range issues RANGE ->
     # clear() first, so two elements carrying id="perm" cannot coexist. An
     # earlier draft of the stage-3 plan proposed setting settleable=0 on a
     # replay to fix it, which would have applied to THIS field -- the live

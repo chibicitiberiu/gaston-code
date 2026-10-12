@@ -38,9 +38,12 @@ MAX_LIST = 64
 MAX_MODES = 8
 MAX_LABEL = 31
 
+#: The three the client may send. The MULTIPLIERS that used to sit beside
+#: them are win/net/net.cpp's rc_page_blocks since stage 3b: the client
+#: scales its own window by its own memory and its own setting, and does not
+#: send the answer either, because every GETBLOCKS carries the limit it
+#: wants. These names survive only so a nonsense value is still refused.
 PAGE_SIZES = ("small", "normal", "large")
-#: Multipliers on the memory-scaled page limits (view/pages.py limits_for).
-PAGE_SCALE = {"small": 0.5, "normal": 1.0, "large": 2.0}
 
 #: A user mode's id: random hex from the client, so deleting gaston.ini and
 #: making a new mode can never inherit an old chat's choice of a different one.
@@ -64,7 +67,6 @@ class Prefs:
     general_model: str = ""
     general_effort: str = ""
     general_mode: str = ""
-    page: str = "normal"
     #: Seconds between the bridge's own sync sweeps; 0 = the bridge's
     #: default, -1 = only when the machine reports a change.
     sync_sweep_s: int = 0
@@ -131,9 +133,20 @@ def parse(body: bytes, acp: str = "cp1252") -> Prefs:
         elif key == "general.mode":
             out["general_mode"] = value
         elif key == "view.page":
+            # ACCEPTED AND IGNORED since stage 3b, and it can never be
+            # anything else. The client sizes its own window now (the page
+            # is the client's, win/net/net.cpp rc_page_blocks) so nothing
+            # here reads this -- but the chain below ends in `raise
+            # PrefsError`, and on the HELLO path that is fatal
+            # (services/connection.py answers bad_prefs and drops the
+            # socket). The client sends this key unconditionally
+            # (win/app/protect.cpp), so DELETING THE BRANCH WOULD REFUSE
+            # EVERY CONNECTION from any guest not reflashed in lockstep,
+            # permanently. A PREFS key can be stopped being read; it cannot
+            # be removed. The value is still validated, because accepting
+            # nonsense would be a different bug.
             if value not in PAGE_SIZES:
                 raise PrefsError(key, f"unknown size {value!r}")
-            out["page"] = value
         elif key == "sync.sweep_s":
             out["sync_sweep_s"] = _int(key, value, -1, 86400)
         elif key == "sync.max_kb":
@@ -176,7 +189,6 @@ def parse(body: bytes, acp: str = "cp1252") -> Prefs:
         general_model=out.get("general_model", ""),
         general_effort=out.get("general_effort", ""),
         general_mode=out.get("general_mode", ""),
-        page=out.get("page", "normal"),
         sync_sweep_s=out.get("sync_sweep_s", 0),
         sync_max_kb=out.get("sync_max_kb", 0),
         sync_ignore=tuple(ignore),
@@ -230,17 +242,3 @@ def floor(old: Prefs, new: Prefs) -> tuple[Prefs, list]:
     lists = K.Lists(protect=new.lists.protect + tuple(kept),
                     danger=new.lists.danger, trust=new.lists.trust)
     return Prefs(**{**new.__dict__, "lists": lists}), kept
-
-
-def scaled(p: Prefs, page_bytes: int, page_blocks: int,
-           mem_kb: int = 0) -> tuple[int, int]:
-    """Page caps after the client's page size. Small halves what its memory
-    allows and Large doubles it, never past the ceiling every machine
-    shares (view/pages.py: four times the 32MB page) and never below a
-    page that can hold one long answer."""
-    from .view import pages
-    f = PAGE_SCALE.get(p.page, 1.0)
-    if f == 1.0:
-        return page_bytes, page_blocks
-    return (max(4 * 1024, min(int(page_bytes * f), pages.MAX_BYTES * 4)),
-            max(20, min(int(page_blocks * f), pages.MAX_BLOCKS * 4)))

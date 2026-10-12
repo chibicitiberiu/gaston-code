@@ -16,7 +16,6 @@ from ..agent import prompts
 from ..guest import GuestSession
 from ..view import html as H
 from ..wire.protocol import (
-    pagesealed,
     turn_end,
     turn_error,
     turn_start,
@@ -309,11 +308,6 @@ class TurnRunner:
             conv_store = self.conv
             if conv_store is not None:
                 conv_store.add(guest.claude.session_id, guest.machine)
-        sealed = guest.view.pages.message_boundary()
-        if sealed:
-            await self.connection.send(
-                guest, pagesealed(sealed.number, guest.view.pages.count)
-            )
         raw, comp = guest.link.zip_out.stats
         if comp:
             log.info(

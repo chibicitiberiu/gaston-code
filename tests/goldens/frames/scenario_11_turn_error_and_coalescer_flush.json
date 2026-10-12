@@ -1,6 +1,12 @@
 [
   {
     "headers": {
+      "total": "1"
+    },
+    "type": "GREW"
+  },
+  {
+    "headers": {
       "state": "start"
     },
     "type": "TURN"
@@ -9,8 +15,7 @@
     "body": "para\nt Partial output before error.\n.\n",
     "headers": {
       "enc": "raw",
-      "mode": "live",
-      "page": "1"
+      "mode": "live"
     },
     "type": "TEXT"
   },
@@ -19,15 +24,14 @@
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "page": "1"
+      "total": "2"
     },
     "type": "TEXT"
   },
   {
     "headers": {
       "enc": "raw",
-      "mode": "live",
-      "page": "1"
+      "mode": "live"
     },
     "type": "TEXT"
   },

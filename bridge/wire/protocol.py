@@ -33,7 +33,14 @@ from .frame import (  # noqa: F401  -- re-exported: the bridge imports these fro
     TextCodec,
 )
 
-PROTO_VERSION = 2
+#: 3 since stage 3b, which replaced GETPAGE/PAGESTART/PAGEEND/PAGESEALED
+#: with GETBLOCKS/RANGE/RANGEEND/GREW and changed what TEXT's `total` means.
+#: The bump is the point: handshake.negotiate refuses a mismatch cleanly,
+#: where without it an un-reflashed guest would connect, send GETPAGE, get
+#: `unknown_type` back, and show a transcript that appends but cannot page.
+#: Working badly is worse than refusing, because only one of the two says
+#: what to do about it.
+PROTO_VERSION = 3
 
 
 class _FoldText(TextCodec):
@@ -143,8 +150,7 @@ def error(code: str, msg: str) -> Frame:
 # --- session lifecycle --------------------------------------------------
 
 
-def ready(sess: str, model: str, page: int, total: int,
-          conv: str = "") -> Frame:
+def ready(sess: str, model: str, conv: str = "") -> Frame:
     """First frame after HELLO succeeds, carrying the session id.
 
     `sess` and `conv` are two different things and the difference matters
@@ -155,13 +161,17 @@ def ready(sess: str, model: str, page: int, total: int,
     nothing told a freshly connected guest which conversation it was looking
     at unless a SWITCHED happened to follow -- which it does after a switch
     and does not after a plain reconnect.
+
+    IT NO LONGER CARRIES A POSITION. `page` and `total` were the page the
+    guest should start on; since stage 3b the guest asks for a window as
+    soon as it sees this frame and learns where it landed from RANGE, so a
+    position here would be a second source for one fact and stale by the
+    time it was read.
     """
     h = {
         "sess": sess,
         "ver": str(PROTO_VERSION),
         "model": model,
-        "page": str(page),
-        "total": str(total),
     }
     if conv:
         h["conv"] = conv
@@ -176,10 +186,13 @@ def ready(sess: str, model: str, page: int, total: int,
 # whose body no longer exists anywhere on this side.
 
 
-def switched(session_id: str, total: int) -> Frame:
+def switched(session_id: str) -> Frame:
     """A different conversation is now live: NEWSESSION, SWITCH or an effort
-    fork all land here."""
-    return Frame("SWITCHED", {"id": session_id, "total": str(total)})
+    fork all land here.
+
+    The page total went with stage 3b: the range the bridge pushes right
+    after this says how long the transcript is."""
+    return Frame("SWITCHED", {"id": session_id})
 
 
 def sessions_start(count: int) -> Frame:
@@ -330,37 +343,71 @@ def haltend(halt_id: str) -> Frame:
 # --- transcript paging -------------------------------------------------
 
 
-def pagesealed(page: int, total: int) -> Frame:
-    return Frame("PAGESEALED", {"page": str(page), "total": str(total)})
+def range_start(offset: int, count: int, total: int, live: bool) -> Frame:
+    """The answer to GETBLOCKS: `count` records follow, starting at `offset`.
 
+    `offset` is a BLOCK INDEX, zero-based, into a transcript of `total`
+    records. The page NUMBERS the guest shows are one-based and its own
+    business: it asked for this window, it knows how wide its pages are, and
+    mixing the two conventions in one head is how off-by-ones happen. So
+    they are kept apart by being different words.
 
-def pagestart(page: int, total: int, live: bool, continued: bool) -> Frame:
-    return Frame("PAGESTART", {
-        "page": str(page),
+    `count` is how many records actually follow, which is not always the
+    `limit` that was asked for -- the last window is short, and an offset at
+    or past the end gives zero.
+
+    `live` means this window ends at the current end of the transcript, so
+    new blocks will stream into it. The BRIDGE decides it, because the
+    transcript can grow between the request and the answer and the guest
+    cannot tell from the arithmetic.
+    """
+    return Frame("RANGE", {
+        "offset": str(offset),
+        "count": str(count),
         "total": str(total),
         "live": "1" if live else "0",
-        "continued": "1" if continued else "0",
     })
 
 
-def pageend(page: int) -> Frame:
-    return Frame("PAGEEND", {"page": str(page)})
+def range_end() -> Frame:
+    """The window is complete. No headers: everything worth saying was said
+    by RANGE, and the guest needs exactly one thing from this frame, which
+    is that it has arrived."""
+    return Frame("RANGEEND", {})
 
 
-def text_frame(mode: str, enc: str, page: int, body: bytes = b"", *,
-               total: int | None = None, off: int | None = None) -> Frame:
-    """One TEXT frame -- either a LIVE replace or one chunk of an APPEND
-    block. `total`/`off` are set together, only when this is a chunk of a
-    larger send.
+def grew(total: int) -> Frame:
+    """The transcript is `total` records long now.
 
-    UNUSED BY TEXT from stage 3 C2. A body is zero or more whole records
-    and nothing chunks one, so nothing sets these on a TEXT frame any more;
-    the export's own family still does. They stay on the signature because
-    removing them is pagination's commit to make, not this one's."""
-    h = {"mode": mode, "enc": enc, "page": str(page)}
+    What PAGESEALED did, without the page. It is how a guest that has paged
+    back learns that the conversation moved on -- without it "Page 3 of 7"
+    stays "3 of 7" while the agent works and there is no way to tell. It is
+    sent on every appended block, including to a guest following live, so
+    that the total is one fact from one place rather than something the
+    guest also derives by counting what it rendered.
+    """
+    return Frame("GREW", {"total": str(total)})
+
+
+def text_frame(mode: str, enc: str, body: bytes = b"",
+               total: int | None = None) -> Frame:
+    """One TEXT frame -- either a LIVE replace or an APPEND of whole records.
+
+    `page` and `off` are gone. `page` was sent on every frame and
+    `Turn::onText` never read it; `off` stopped being set at stage 3 C2,
+    when a body became zero or more whole records and nothing chunked one.
+
+    `total` IS KEPT AND MEANS SOMETHING ELSE, which is the kind of change
+    worth saying out loud rather than discovering: it used to be the number
+    of PAGES and it is now the number of RECORDS the transcript holds. It
+    rides on an APPEND going to a guest that is following live, which is the
+    one moment the count changes and a frame is already on its way -- so the
+    guest learns it for free, and `GREW` is left for the reader who has
+    paged back and is getting no APPENDs at all. A LIVE frame never carries
+    it: it replaces the open block and grows nothing."""
+    h = {"mode": mode, "enc": enc}
     if total is not None:
         h["total"] = str(total)
-        h["off"] = str(off)
     return Frame("TEXT", h, body)
 
 

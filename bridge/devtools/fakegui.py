@@ -129,8 +129,10 @@ FAKE_CAPS = {
 }
 
 # The rest of what rc_net_start reports about the machine itself -- not a
-# capability, but read by bridge/view/pages.py's limits_for (mem_kb) and by
-# bridge/machine.py's system prompt (os/cpu/screen). 32MB/2420KB match the
+# capability, but read by bridge/machine.py's system prompt. Until stage 3b
+# the bridge also sized pages from mem_kb; the client declares `pageblocks`
+# now and this is only
+# what the machine is (os/cpu/screen). 32MB/2420KB match the
 # floor CLAUDE.md's "Memory is the binding constraint" section measures
 # against, so a page-sizing bug that only shows up on the 32MB guest still
 # shows up here. No sync_root: fakegui answers every SYNC* frame the way a
@@ -200,8 +202,11 @@ class FakeGui:
         self.zip_out: StreamCompressor | None = None
         self._live_lines = 0   # terminal lines the current LIVE block occupies
         self._doc_seen = False
-        self.page_no = 0
-        self.page_total = 0
+        #: Where the last window started and how many records exist. The
+        #: page NUMBERS are a client's own business (stage 3b) and fakegui,
+        #: having no pages, simply does not have any.
+        self.offset = 0
+        self.blocks = 0
         # The one command the RPC worker runs at a time, mirroring
         # win/rpc/rpc.cpp's one queued job slot: a second EXEC arriving while
         # this is set is answered `busy`, never queued.
@@ -401,8 +406,6 @@ class FakeGui:
             self.sess = f.headers.get("sess")
             if f.headers.get("conv"):
                 self.conv = f.headers["conv"]
-            self.page_no = int(f.headers.get("page", "0") or 0)
-            self.page_total = int(f.headers.get("total", "0") or 0)
             print(f"{GREEN}connected{RESET} {DIM}sess={self.sess} "
                   f"model={f.headers.get('model')}{RESET}")
         elif t == "DOC":
@@ -467,21 +470,26 @@ class FakeGui:
         elif t == "SWITCHED":
             self.sess = f.headers.get("id") or self.sess
             self.conv = f.headers.get("id", "")
-            self.page_total = int(f.headers.get("total", "0") or 0)
             self.halt_id = None   # a switch rebuilds the session; see below
             print(f"{GREEN}switched{RESET} {DIM}sess={self.sess}{RESET}")
-        elif t == "PAGESTART":
-            self.page_no = int(f.headers.get("page", "0") or 0)
-            self.page_total = int(f.headers.get("total", "0") or 0)
-            cont = " (continued from the previous page)" \
-                if f.headers.get("continued") == "1" else ""
-            print(f"{DIM}-- page {self.page_no}/{self.page_total}{cont} --{RESET}")
-        elif t == "PAGEEND":
-            print(f"{DIM}-- end of page {self.page_no} --{RESET}")
-        elif t == "PAGESEALED":
-            self.page_total = int(f.headers.get("total", "0") or 0)
-            print(f"{DIM}[page {f.headers.get('page')} sealed; "
-                  f"{self.page_total} pages total]{RESET}")
+            # ASK FOR THE TRANSCRIPT. The bridge stopped pushing one after a
+            # switch in stage 3b, so a client that wants to see the
+            # conversation it just moved to has to say so -- which is the
+            # whole point, and fakegui is a client.
+            self._spawn(self.send(Frame(
+                "GETBLOCKS", {"offset": "live", "limit": "90"})))
+        elif t == "RANGE":
+            self.offset = int(f.headers.get("offset", "0") or 0)
+            self.blocks = int(f.headers.get("total", "0") or 0)
+            n = int(f.headers.get("count", "0") or 0)
+            live = f.headers.get("live") == "1"
+            print(f"{DIM}-- {n} blocks from {self.offset} of {self.blocks}"
+                  f"{' (live)' if live else ''} --{RESET}")
+        elif t == "RANGEEND":
+            print(f"{DIM}-- end of window --{RESET}")
+        elif t == "GREW":
+            self.blocks = int(f.headers.get("total", "0") or 0)
+            print(f"{DIM}[{self.blocks} blocks]{RESET}")
         elif t == "NOTICE":
             print(f"{YELLOW}[{f.headers.get('kind')}] {text}{RESET}")
         elif t == "RESYNC":

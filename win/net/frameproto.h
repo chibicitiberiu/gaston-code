@@ -10,7 +10,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RC_PROTO_VERSION 2
+/* 3 since stage 3b: GETBLOCKS/RANGE/RANGEEND/GREW replaced the four page
+ * frames and TEXT's `total` changed meaning. A bridge that speaks 2 refuses
+ * this client at the handshake, which is the outcome worth having -- the
+ * alternative is a transcript that appends and will not page, with one
+ * `unknown_type` in a log nobody is reading. */
+#define RC_PROTO_VERSION 3
 
 /* THE FOUR LANES.
  *

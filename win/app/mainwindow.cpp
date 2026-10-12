@@ -103,14 +103,14 @@
  * before it.
  *
  * on_ready used to write the notice and then call goto_live(), which
- * re-requests the live page -- and PAGESTART clears the control. So the one
+ * re-requests the live window -- and RANGE clears the control. So the one
  * line confirming the connection was wiped by the next thing the same
  * handler did, every time, and a fresh connection said nothing in the
  * transcript at all.
  *
  * On a FIRST connect it was worse and in a different way: the document does
  * not exist yet, so the notice goes into the pre-ready queue, and clear()
- * zeroes that queue too. Announcing after PAGEEND is the one point that is
+ * zeroes that queue too. Announcing after RANGEEND is the one point that is
  * past both. */
 /* The page bar's own HWNDs and pagination state moved to app/pagebar.cpp --
  * see app/pagebar.h. The permission/halt bar's own HWNDs, id, pending state
@@ -436,7 +436,7 @@ void MainWindow::onReady(rc_frame *f)
     m_announceConnected = 1;
     /* READY carries page/total for the session as it stands. goto_live()
      * re-requests the live page explicitly, which clears the control
-     * (PAGESTART) and repopulates it from what the bridge now has -- cheap
+     * (RANGE) and repopulates it from what the bridge now has -- cheap
      * and correct on a fresh session too, where it is a no-op over an empty
      * page.
      *
@@ -449,6 +449,13 @@ void MainWindow::onReady(rc_frame *f)
 void MainWindow::onText(rc_frame *f)
 {
     if (m_turn) m_turn->onText(f);
+    /* HOW LONG THE TRANSCRIPT IS NOW, when this append is one that grew it.
+     * It rides on the APPEND rather than arriving as its own GREW frame
+     * because a frame was already on its way and the bar needs the number to
+     * say "Page 3/7" truthfully -- see bridge/wire/protocol.py text_frame.
+     * Turn::onText reads `mode` and the body; the count is the bar's, and
+     * routing it here keeps turn.cpp from needing to know the bar exists. */
+    if (m_pageBar) m_pageBar->note_total(f);
 }
 
 void MainWindow::onTool(rc_frame *f)
@@ -512,10 +519,9 @@ void MainWindow::onSwitched(rc_frame *f)
      * "rebuild". Leaving the bar up would offer Allow/Deny for a request
      * that no longer exists, on a conversation the user has left. */
     if (m_bar) m_bar->hideAll();
-    /* The page total is app/pagebar.cpp's state now -- see app/pagebar.h's
-     * rc_pagebar::note_total. No button refresh here, matching what this
-     * call site always did. */
-    if (m_pageBar) m_pageBar->note_total(f);
+    /* SWITCHED stopped carrying a page total at stage 3b: the bridge pushes
+     * a window right after it, and that RANGE is where the bar learns how
+     * long the new conversation is. */
     /* SWITCHED is the only frame that names the conversation now on screen,
      * so it is where the cache learns which folder its pages belong in. The
      * pages themselves arrive immediately afterwards. */
@@ -541,6 +547,33 @@ void MainWindow::onSwitched(rc_frame *f)
 void MainWindow::onChats(rc_frame *f)
 {
     if (m_chats) m_chats->frame(f);
+
+    /* THE TRANSCRIPT FOR THE CONVERSATION WE JUST MOVED TO, asked for here
+     * rather than pushed by the bridge -- which is what leaves the bridge
+     * with no opinion about how big a window is (stage 3b).
+     *
+     * TWO THINGS ABOUT WHERE THIS LINE IS, both of them bugs if got wrong.
+     *
+     * It is NOT inside the `if (m_chats)` above. m_chats is allowed to be
+     * NULL -- controls do fail to create on a 64KB USER heap, which is why
+     * check_child exists -- and before this stage a missing chat list cost a
+     * page total. Behind that `if`, it would cost the whole transcript after
+     * every switch, for the rest of the session, on exactly the machine that
+     * was already short of handles.
+     *
+     * And it fires only on a REAL change of conversation. SWITCHED is not
+     * only an attach frame: the bridge sends one from resume_pending on the
+     * first message of a new conversation, before it takes the turn lock. An
+     * unconditional ask there would answer with a RANGE in the middle of a
+     * streaming turn, and RANGE means turnDone() and clear() -- the reply
+     * being written would vanish as it arrived. */
+    if (strcmp(f->type, "SWITCHED") == 0) {
+        const char *id = rc_frame_get(f, "id");
+        if (id && strcmp(id, m_net->conv) != 0) {
+            rc_strf(m_net->conv, sizeof(m_net->conv), "%s", id);
+            if (m_pageBar) m_pageBar->goto_live();
+        }
+    }
 
     if (strcmp(f->type, "SESSIONS") == 0) {
         if (m_cache) m_cache->begin_chats();
@@ -619,38 +652,49 @@ void MainWindow::restoreCache()
     pages = m_cache->page_count();
     if (pages <= 0) return;
     if (m_html) {
-        m_html->notice("The bridge is not reachable. This is the last page "
-                       "of your conversation as it was cached here; it is "
-                       "not live, and nothing typed now will be sent.");
+        /* "A page", not "the last page". page_count() is a contiguous scan
+         * from P001 and the files are numbered by the window size that was
+         * in force when each was written -- so after the page-size setting
+         * changes, the highest number is a file from the old size and not
+         * necessarily the end of the conversation. The cache was always
+         * allowed to be stale; it was never allowed to say otherwise. */
+        m_html->notice("The bridge is not reachable. This is a page of your "
+                       "conversation as it was cached here; it is not live, "
+                       "and nothing typed now will be sent.");
         m_cache->load_page(pages, m_html,
                            m_turn ? m_turn->wrapCol() : 56);
     }
     rc_log("cache: showed page %d of %d for %s", pages, pages, sess);
 }
 
-/* PAGESTART, PAGEEND, PAGESEALED -- all three owned by app/pagebar.cpp now;
- * see rc_pagebar::frame's own comments there for what each one does. Two
- * things about PAGESTART/PAGEEND are not app/pagebar.cpp's business and stay
- * here, the same split on_chats already makes around ChatList::frame:
- * resetting main.c's own turn-state enum (the control is about to be
- * cleared) and log_mem, main.c's memory-milestone diagnostic. */
+/* RANGE, RANGEEND, GREW -- all three owned by app/pagebar.cpp now; see
+ * rc_pagebar::frame's own comments there for what each one does. Two things
+ * about RANGE/RANGEEND are not app/pagebar.cpp's business and stay here, the
+ * same split on_chats already makes around ChatList::frame: resetting
+ * main.c's own turn-state enum (the control is about to be cleared) and
+ * log_mem, main.c's memory-milestone diagnostic. */
 void MainWindow::onPageBar(rc_frame *f)
 {
-    if (strcmp(f->type, "PAGESTART") == 0) {
-        if (m_turn) m_turn->turnDone();
-        /* Cache the page the bridge is about to send. Only a page it says is
-         * complete is kept -- see app/cache.h -- so this opens a temporary
-         * file that PAGEEND renames and anything else throws away. */
-        if (m_cache) {
-            const char *n = rc_frame_get(f, "page");
-            m_cache->begin_page(n ? atoi(n) : 0);
-        }
-    }
+    int isRange = strcmp(f->type, "RANGE") == 0;
+    if (isRange && m_turn) m_turn->turnDone();
     if (m_pageBar) m_pageBar->frame(f);
-    if (strcmp(f->type, "PAGEEND") == 0) {
+    if (isRange && m_cache && m_pageBar) {
+        /* AFTER the bar, not before, which is the one ordering change stage
+         * 3b forced here. RANGE carries a block OFFSET; the page number the
+         * cache names its file after is this client's own arithmetic over
+         * that offset and its window size, and the bar is where that
+         * arithmetic lives. Asking it afterwards keeps one answer instead
+         * of two that can disagree.
+         *
+         * Only a window the bridge says is complete is kept -- see
+         * app/cache.h -- so this opens a temporary file that RANGEEND
+         * renames and anything else throws away. */
+        m_cache->begin_page(m_pageBar->page());
+    }
+    if (strcmp(f->type, "RANGEEND") == 0) {
         if (m_cache) m_cache->end_page();
         rc_log_mem("page loaded");
-        /* Past PAGESTART's clear() and past the pre-ready queue, so this is
+        /* Past RANGE's clear() and past the pre-ready queue, so this is
          * the first moment the line can be written and survive. */
         if (m_announceConnected) {
             m_announceConnected = 0;
@@ -779,9 +823,9 @@ void MainWindow::renderFrame(rc_frame *f)
         { "SESSION",     &MainWindow::onChats },
         { "SESSIONSEND", &MainWindow::onChats },
         { "SWITCHED",    &MainWindow::onChats },
-        { "PAGESTART",   &MainWindow::onPageBar },
-        { "PAGEEND",     &MainWindow::onPageBar },
-        { "PAGESEALED",  &MainWindow::onPageBar },
+        { "RANGE",       &MainWindow::onPageBar },
+        { "RANGEEND",    &MainWindow::onPageBar },
+        { "GREW",        &MainWindow::onPageBar },
         { "PERMREQ",     &MainWindow::onBar },
         { "PERMSTATE",   &MainWindow::onBar },
         { "PERMWAIT",    &MainWindow::onBar },

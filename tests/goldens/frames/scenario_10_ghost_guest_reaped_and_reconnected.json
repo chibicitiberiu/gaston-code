@@ -2,10 +2,8 @@
   {
     "headers": {
       "model": "fake-model",
-      "page": "1",
       "sess": "<SESS_ID>",
-      "total": "1",
-      "ver": "2"
+      "ver": "3"
     },
     "type": "READY"
   },

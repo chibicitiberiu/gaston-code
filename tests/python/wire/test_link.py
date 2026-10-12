@@ -145,7 +145,7 @@ async def test_send_records_sends_one_frame_of_whole_records(link):
     body = B.encode(B.Block("para", {}, [("t", "a")])) \
         + B.encode(B.Block("rule"))
 
-    await link.send_records(None, body, APPEND, page_no=1)
+    await link.send_records(None, body, APPEND)
 
     assert _body_of(writer) == body
     assert B.decode(_body_of(writer))          # and it parses
@@ -158,7 +158,7 @@ async def test_an_empty_body_is_still_sent(link):
     and it was easy to lose."""
     writer = FakeWriter()
     link.writer = writer
-    await link.send_records(None, b"", LIVE, page_no=1)
+    await link.send_records(None, b"", LIVE)
     assert len(writer.written) > 0
     assert _body_of(writer) == b""
 
@@ -169,8 +169,7 @@ async def test_an_oversized_live_body_is_dropped(link):
     meaningless; the APPEND that follows carries the whole thing."""
     writer = FakeWriter()
     link.writer = writer
-    await link.send_records(None, b"x" * (MAX_FRAME - 1024 + 1), LIVE,
-                            page_no=1)
+    await link.send_records(None, b"x" * (MAX_FRAME - 1024 + 1), LIVE)
     assert len(writer.written) == 0
 
 
@@ -180,7 +179,7 @@ async def test_an_oversized_append_body_is_refused_and_logged(link, caplog):
 
     Two things upstream prevent it: write_block refuses a record larger
     than the client declared it can hold, and the paginator gives an
-    oversize record a page of its own rather than cutting it. An
+    oversize record a window of its own rather than cutting it. An
     unreachable branch that fires is worth more than one that was deleted
     -- it names both of the things that should have stopped it, which is
     the whole of the debugging.
@@ -194,8 +193,7 @@ async def test_an_oversized_append_body_is_refused_and_logged(link, caplog):
     writer = FakeWriter()
     link.writer = writer
     with caplog.at_level(logging.ERROR, logger="bridge.link"):
-        await link.send_records(None, b"x" * (MAX_FRAME - 1024 + 1), APPEND,
-                                page_no=1)
+        await link.send_records(None, b"x" * (MAX_FRAME - 1024 + 1), APPEND)
     assert len(writer.written) == 0
     assert any("maxblock" in r.message or "paginator" in r.message
                for r in caplog.records), caplog.records

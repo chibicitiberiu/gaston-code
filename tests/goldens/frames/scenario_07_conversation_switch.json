@@ -1,9 +1,106 @@
 [
   {
     "headers": {
-      "code": "unknown_type",
-      "msg": "NEW"
+      "id": ""
     },
-    "type": "ERROR"
+    "type": "SWITCHED"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "id": "opus",
+      "kind": "model",
+      "label": "Opus"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "1",
+      "desc": "Fastest for quick answers",
+      "id": "haiku",
+      "kind": "model",
+      "label": "Haiku"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "disabled": "1",
+      "id": "",
+      "kind": "effort",
+      "label": "(not available for this model)"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "id": "",
+      "kind": "work",
+      "label": "<unset>"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "1",
+      "id": "manual",
+      "kind": "mode",
+      "label": "Ask first"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "id": "workfolder",
+      "kind": "mode",
+      "label": "Free in work folder"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "id": "plan",
+      "kind": "mode",
+      "label": "Plan first"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "id": "auto",
+      "kind": "mode",
+      "label": "Auto"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "hint": "1",
+      "id": "/compact",
+      "kind": "command",
+      "label": "/compact <options>"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {
+      "current": "0",
+      "hint": "1",
+      "id": "/rename",
+      "kind": "command",
+      "label": "/rename [name]"
+    },
+    "type": "OPTION"
+  },
+  {
+    "headers": {},
+    "type": "OPTIONSEND"
   }
 ]

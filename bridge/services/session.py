@@ -492,8 +492,8 @@ class SessionService:
             return False
         guest.pending_resume = ""
         if not resuming:
-            await self.connection.send(guest, switched(guest.claude.session_id or "",
-                                             guest.view.pages.count))
+            await self.connection.send(
+                guest, switched(guest.claude.session_id or ""))
         return True
 
     async def new_session_locked(
@@ -515,8 +515,13 @@ class SessionService:
         self.workspace.retarget_perms(guest)
         await guest.view.reset()
         guest.claude = None
-        await self.connection.send(guest, switched("", guest.view.pages.count))
-        await self.presentation.send_page(guest, "live")
+        # SWITCHED AND NOTHING ELSE. The bridge used to push the transcript
+        # straight after this; stage 3b made the guest ask, which is what
+        # leaves this side with no opinion about how big a window is -- it
+        # would have had to be told, as a HELLO key, to push one. The guest
+        # asks on a real change of conversation id (win/app/mainwindow.cpp
+        # onChats), which costs one round trip of two small frames.
+        await self.connection.send(guest, switched(""))
         await self.options.send_options(guest)
 
     async def switch_locked(
@@ -583,11 +588,8 @@ class SessionService:
 
         for block in self._resolve_sesslist().history_blocks(session_id):
             await self.presentation.write_block(guest, block, stream=False, notify=False)
-            if guest.view.pages.live.over_soft_cap():
-                guest.view.pages.message_boundary()
 
-        await self.connection.send(guest, switched(session_id, guest.view.pages.count))
-        await self.presentation.send_page(guest, "live")
+        await self.connection.send(guest, switched(session_id))
         await self.options.send_options(guest)
 
     async def match_surface_locked(self, guest: GuestSession) -> None:

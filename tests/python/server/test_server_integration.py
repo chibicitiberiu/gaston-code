@@ -57,7 +57,12 @@ async def test_happy_handshake(harness):
     ready = [f for f in frames if f.type == "READY"]
     assert ready, [f.type for f in frames]
     assert ready[0].headers["ver"] == str(PROTO_VERSION)
-    assert ready[0].headers["page"] == "1"
+    # No position. READY carried `page`/`total` until stage 3b; the guest
+    # asks for a window the moment it sees this frame and learns where it
+    # landed from RANGE, so a position here would be a second source for
+    # one fact and stale by the time it was read.
+    assert "page" not in ready[0].headers
+    assert "total" not in ready[0].headers
     await harness.close(w)
 
 
@@ -276,187 +281,193 @@ async def test_a_reconnect_resets_the_compressor_and_keeps_the_session(
     await harness.close(w2)
 
 
-# --- pagination -------------------------------------------------------------
+# --- ranges, which is what pagination became ---------------------------------
+#
+# Stage 3b: the guest asks for blocks by offset and limit, and decides for
+# itself where a page begins. These six are the behavioural proof of that --
+# they were the pagination tests and they did not die with it.
 
 
-async def test_pagination_round_trip(harness):
+def _fill(guest, n: int, fmt: str = "line {:04d} padding padding padding\n"):
+    """n records straight into the transcript. Faster and more
+    deterministic than persuading a model to emit them."""
+    for i in range(n):
+        guest.view.pages.add(_rec(fmt.format(i)))
+    return guest.view.pages.transcript.count
+
+
+async def test_a_window_comes_back_whole(harness):
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-
-    # Fill several pages directly -- faster and more deterministic than
-    # persuading a model to emit 600 lines.
     guest = harness.bridge.connection.guest
-    for i in range(600):
-        guest.view.pages.add(_rec(f"line {i:04d} padding padding padding\n"))
-        if i % 100 == 0:
-            guest.view.pages.message_boundary()
-    total = guest.view.pages.count
-    assert total > 2, f"expected several pages, got {total}"
+    total = _fill(guest, 600)
 
-    # Ask for page 1 and check it comes back whole.
-    await harness.send(w, Frame("GETPAGE", {"page": "1"}))
-    frames = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "0", "limit": "90"}))
+    frames = await harness.recv_until(r, {"RANGEEND"}, timeout=5)
 
-    starts = [f for f in frames if f.type == "PAGESTART"]
+    starts = [f for f in frames if f.type == "RANGE"]
     assert starts, [f.type for f in frames]
-    assert starts[0].headers["page"] == "1"
+    assert starts[0].headers["offset"] == "0"
+    assert starts[0].headers["count"] == "90"
     assert starts[0].headers["total"] == str(total)
-    assert starts[0].headers["live"] == "0", "page 1 is history, not live"
+    assert starts[0].headers["live"] == "0", "the first 90 of 600 is history"
 
     body = harness.body(frames)
     assert b"line 0000" in body
-    assert b"line 0599" not in body, "page 1 must not contain the last line"
+    assert b"line 0089" in body
+    assert b"line 0090" not in body, "the window must stop at its limit"
     await harness.close(w)
 
 
-async def test_getpage_live_returns_to_following(harness):
+async def test_live_aligns_to_the_grid_the_limit_implies(harness):
+    """`offset=live` cannot mean "the last `limit` records": with 200
+    records and a limit of 90 that window would start at 110, which is not
+    where any of the guest's pages begin. It means the last window on the
+    grid the request's own limit implies."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
-    for i in range(400):
-        guest.view.pages.add(_rec(f"line {i}\n"))
-        if i % 100 == 0:
-            guest.view.pages.message_boundary()
+    _fill(guest, 200)
 
-    await harness.send(w, Frame("GETPAGE", {"page": "1"}))
-    await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    assert guest.view.view_page == 1
-
-    await harness.send(w, Frame("GETPAGE", {"page": "live"}))
-    frames = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    starts = [f for f in frames if f.type == "PAGESTART"]
-    assert starts[0].headers["live"] == "1"
-    assert guest.view.view_page is None, "live means follow, not a fixed page"
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "live", "limit": "90"}))
+    frames = await harness.recv_until(r, {"RANGEEND"}, timeout=5)
+    start = next(f for f in frames if f.type == "RANGE")
+    assert start.headers["offset"] == "180", (
+        "180 is where page 3 begins on a 90-record grid; 110 is where "
+        "nothing begins")
+    assert start.headers["count"] == "20"
+    assert start.headers["live"] == "1"
+    assert guest.view.view_live is True
     await harness.close(w)
 
 
-async def test_bad_page_number_errors(harness):
+async def test_a_window_past_the_end_is_empty_and_is_not_an_error(harness):
+    """A stale page button asks for a window that no longer exists. That is
+    a race, not a bug on the asking side, so it answers with an empty
+    window rather than an ERROR -- and it must NOT say the conversation is
+    empty, which is what `offset + limit >= count` alone would have done
+    for every offset past the end."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
-    await harness.send(w, Frame("GETPAGE", {"page": "9999"}))
+    guest = harness.bridge.connection.guest
+    _fill(guest, 50)
+
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "9000", "limit": "90"}))
+    frames = await harness.recv_until(r, {"RANGEEND"}, timeout=5)
+    start = next(f for f in frames if f.type == "RANGE")
+    assert start.headers["count"] == "0"
+    assert start.headers["total"] == "50"
+    assert not [f for f in frames if f.type == "ERROR"]
+    assert not [f for f in frames if f.type == "NOTICE"
+                and f.headers.get("kind") == "empty"], (
+        "a window past the end is not an empty conversation")
+    await harness.close(w)
+
+
+async def test_a_malformed_offset_is_an_error(harness):
+    """Negative or non-numeric is a bug on the asking side with nothing to
+    race, so it is told so."""
+    r, w = await harness.connect()
+    await harness.recv_until(r, {"READY"})
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "-5", "limit": "90"}))
     frames = await harness.recv_until(r, {"ERROR"})
-    assert frames[-1].headers["code"] == "no_such_page"
+    assert frames[-1].headers["code"] == "bad_offset"
     await harness.close(w)
 
 
-async def test_history_mode_suppresses_live_streaming(harness):
-    """While reading an old page, new text must NOT be injected into it."""
+async def test_reading_back_suppresses_live_streaming(harness):
+    """While reading an older window, new text must not be injected into
+    it. The reader learns the conversation moved on from GREW instead."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
-    for i in range(400):
-        guest.view.pages.add(_rec(f"line {i}\n"))
-        if i % 100 == 0:
-            guest.view.pages.message_boundary()
+    _fill(guest, 400)
 
-    await harness.send(w, Frame("GETPAGE", {"page": "1"}))
-    await harness.recv_until(r, {"PAGEEND"}, timeout=5)
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "0", "limit": "90"}))
+    await harness.recv_until(r, {"RANGEEND"}, timeout=5)
+    assert guest.view.view_live is False
 
     await harness.send(w, Frame("INPUT", {}, b"while reading history"))
     frames = await harness.recv_until(r, {"TURN"}, timeout=5)
     frames += await harness.recv_until(r, {"TURN"}, timeout=5)
 
-    text_pages = {f.headers.get("page") for f in frames if f.type == "TEXT"}
-    assert "1" not in text_pages, (
-        "new text leaked onto the history page the reader is looking at"
-    )
+    assert not [f for f in frames if f.type == "TEXT"], (
+        "new text leaked into the window the reader is looking at")
+    assert [f for f in frames if f.type == "GREW"], (
+        "a reader who is paged back has no other way to learn the "
+        "conversation grew")
     await harness.close(w)
 
 
-async def test_view_page_resets_on_reconnect(harness):
-    """02.25: _attach reset zip_out and lost_at on a reconnect but never
-    view_page, so a guest that reconnected while paged back stayed in
-    HISTORY mode bridge-side forever. _write_block kept buffering new text
-    into the paginator silently -- the transcript looked frozen and the
-    bridge had no reason to think anything was wrong, because the flag that
-    says "the reader is watching an old page" was never cleared. The guest
-    itself has no memory of which page it was on across a reconnect (it
-    redraws from the fresh DOC just sent), so it is looking at LIVE again
-    regardless."""
+async def test_the_view_returns_to_live_on_reconnect(harness):
+    """02.25: attach reset zip_out and lost_at on a reconnect but never the
+    view flag, so a guest that reconnected while paged back stayed in
+    history mode bridge-side forever -- new text buffered silently, the
+    transcript looked frozen, and nothing on this side had reason to think
+    anything was wrong. The guest has no memory of which window it was on
+    across a reconnect: it asks for `live` the moment it sees READY."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
-    for i in range(400):
-        guest.view.pages.add(_rec(f"line {i}\n"))
-        if i % 100 == 0:
-            guest.view.pages.message_boundary()
+    _fill(guest, 400)
 
-    await harness.send(w, Frame("GETPAGE", {"page": "1"}))
-    await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    assert guest.view.view_page == 1, "test setup: guest must be paged back"
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "0", "limit": "90"}))
+    await harness.recv_until(r, {"RANGEEND"}, timeout=5)
+    assert guest.view.view_live is False, "test setup: must be paged back"
 
     await harness.close(w)
     r2, w2 = await harness.connect()
     await harness.recv_until(r2, {"READY"})
 
-    assert guest.view.view_page is None, (
-        "a reconnect must drop back to LIVE, not keep buffering into a page "
-        "nobody -- guest-side -- is still looking at"
-    )
+    assert guest.view.view_live is True, (
+        "a reconnect must drop back to live, not keep buffering into a "
+        "window nobody -- guest-side -- is still looking at")
 
     await harness.send(w2, Frame("INPUT", {}, b"after reconnect"))
     frames = await harness.recv_until(r2, {"TURN"}, timeout=5)
     frames += await harness.recv_until(r2, {"TURN"}, timeout=5)
     assert any(f.type == "TEXT" for f in frames), (
-        "text must stream live again after a reconnect"
-    )
+        "text must stream live again after a reconnect")
     await harness.close(w2)
 
 
-async def test_what_streams_live_is_what_landed_on_that_page(harness):
-    """02.33, and the bug class is gone rather than merely fixed.
+async def test_a_streamed_block_carries_the_new_count(harness):
+    """02.33's property, restated for ranges.
 
-    `_write_block` captured `page_no` before `pages.add`, then streamed the
-    WHOLE html as a live APPEND tagged with that one page number. A block
-    long enough to split mid-run had its tail land on the next page AND go
-    out inside the bytes streamed under the old page's number -- so paging
-    forward re-sent it and the reader saw it twice.
-
-    A record is never split now, so a block cannot be in two places at
-    once. What is left to check is the property the fix established: the
-    live stream carries exactly the records that landed on the page it is
-    tagged with, and the record pushed onto a new page is NOT in it. That
-    still has to hold, because write_block still captures page_no before
-    the write and the paginator can still seal underneath it.
+    `write_block` captured the page number before the write and matched
+    chunks against it, so a block that forced a seal landed on the NEXT
+    page and was never streamed at all -- a reader following live simply
+    never saw it. There are no pages to seal now, and what has to hold
+    instead is that a block streamed live carries the count AFTER it
+    landed, so the page bar can move the reader onto a new page at the
+    moment the block that starts it arrives.
     """
     r, w = await harness.connect()
     await harness.recv_until(r, {"READY"})
     guest = harness.bridge.connection.guest
 
-    # hard_bytes is 2x the default page_bytes (16384) with no mem_kb
-    # header, so the second of these cannot share a page with the first.
     first = blocks.Block("code", {}, [("t", "A" * 30000)])
     second = blocks.Block("code", {}, [("t", "B" * 10000)])
 
     await harness.bridge.presentation.write_block(guest, first)
     seen = await harness.recv_until(r, {"TEXT"}, timeout=5)
     await harness.bridge.presentation.write_block(guest, second)
-    seen += await harness.recv_until(r, {"PAGESEALED"}, timeout=5)
+    seen += await harness.recv_until(r, {"TEXT"}, timeout=5)
 
-    sealed = [f for f in seen if f.type == "PAGESEALED"]
-    assert sealed and sealed[0].headers["page"] == "1", (
-        "test setup: the second record must force a seal")
-    assert guest.view.pages.count == 2, "test setup: expected two pages"
-
-    # Inflated in stream ORDER, every TEXT: one persistent deflate stream
-    # per connection, exactly the constraint the guest is under. Decoding
-    # a subset is what the guest would be doing if it dropped a frame.
     texts = [f for f in seen if f.type == "TEXT"]
-    assert len(texts) == 2, [f.headers["page"] for f in texts]
+    assert len(texts) == 2, [f.headers for f in texts]
+    # The count AFTER each landed, on the frame that carried it -- not a
+    # GREW of its own, which would be a second frame per block on a link
+    # measured in single digits of KB/s.
+    assert [f.headers.get("total") for f in texts] == ["1", "2"]
+    # Inflated in stream ORDER, every TEXT: one persistent deflate stream
+    # per connection, exactly the constraint the guest is under.
     assert harness.body(seen) == blocks.encode(first) + blocks.encode(second)
 
-    # The second went out under page 2, which is where it LANDED -- not
-    # under page 1, which is the number write_block was holding when it
-    # started. Tagging it with page 1 was survivable only while a run
-    # could be split; with records it meant the block was never streamed
-    # at all and a reader following LIVE never saw it.
-    assert [f.headers["page"] for f in texts] == ["1", "2"]
-
-    await harness.send(w, Frame("GETPAGE", {"page": "2"}))
-    frames2 = await harness.recv_until(r, {"PAGEEND"}, timeout=5)
-    assert harness.body(frames2) == blocks.encode(second), (
-        "page 2 must hold exactly the record that landed on it, with "
-        "nothing repeated from page 1")
+    # And the window that holds the second record holds exactly it.
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "1", "limit": "1"}))
+    frames2 = await harness.recv_until(r, {"RANGEEND"}, timeout=5)
+    assert harness.body(frames2) == blocks.encode(second)
     await harness.close(w)
 
 

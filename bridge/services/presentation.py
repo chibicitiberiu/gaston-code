@@ -1,7 +1,7 @@
 """PresentationService: coalescing, rendering, pagination, and page delivery.
 
 Operates on guest.view (TranscriptView) and manages text streaming, HTML block
-recording into paginator, and sending PAGESTART/PAGEEND and HTML frames.
+recording into the transcript, and sending RANGE/RANGEEND and TEXT frames.
 """
 
 from __future__ import annotations
@@ -14,7 +14,15 @@ from ..view import html as H
 from ..view.blocks import KINDS, MAX_RECORD, Block, encode
 from ..view.html import APPEND, LIVE
 from ..wire.coalesce import Coalescer
-from ..wire.protocol import Frame, error, notice, pageend, pagesealed, pagestart
+from ..wire.protocol import (
+    MAX_FRAME,
+    Frame,
+    error,
+    grew,
+    notice,
+    range_end,
+    range_start,
+)
 
 log = logging.getLogger("bridge.presentation")
 
@@ -79,11 +87,17 @@ class PresentationService:
             if u.mode == APPEND:
                 if u.block is not None:
                     await self.write_block(guest, u.block)
-            else:
+            elif guest.view.view_live:
+                # ONLY TO A READER WHO IS AT THE END. The open block belongs
+                # to the end of the transcript, and a reader who has paged
+                # back asked for a window that does not include it -- so
+                # streaming it there puts a half-written answer underneath
+                # whatever they went back to read, and spends a frame every
+                # 100ms on a link measured in single digits of KB/s doing
+                # it. This arm bypasses write_block, which is where the
+                # same test lives for finished blocks, so it needs its own.
                 body = encode(u.block) if u.block is not None else b""
-                await self.connection.send_records(
-                    guest, body, LIVE, guest.view.pages.live.number
-                )
+                await self.connection.send_records(guest, body, LIVE)
 
     async def write_block(
         self,
@@ -122,7 +136,7 @@ class PresentationService:
                         "declared it can hold; it was not sent",
                         len(record), self._maxblock(guest))
             return
-        sealed, chunks = guest.view.pages.write(record)
+        guest.view.pages.write(record)
 
         # TAGGED WITH THE PAGE IT LANDED ON, which is the fix for a bug
         # this rewrite exposed and did not introduce. The old code captured
@@ -138,22 +152,24 @@ class PresentationService:
         # rare by sealing between blocks instead, which made the hole the
         # common case without anyone noticing. Records cannot split at all.
         #
-        # Safe to send under a page the guest is not showing: Turn::onText
-        # ignores the page header entirely and appends what arrives. A
-        # reader following LIVE wants continuous text, and one who has
-        # paged away is excluded by the view_page test below.
-        landed = chunks[0][0] if chunks else guest.view.pages.live.number
-        if stream and (guest.view.view_page is None
-                       or guest.view.view_page == landed):
-            await self.connection.send_records(
-                guest, record, APPEND, landed
-            )
-
-        if notify:
-            for pg in sealed:
-                await self.connection.send(
-                    guest, pagesealed(pg.number, guest.view.pages.count)
+        # A reader following LIVE wants continuous text; one who has paged
+        # back is excluded by the view_live test below and learns that the
+        # conversation moved on from the GREW that follows.
+        # ONE OF THESE, NEVER BOTH. A reader following live is getting an
+        # APPEND anyway, so the new count rides on it; a reader who has paged
+        # back is getting nothing, so the count is the whole message. Sending
+        # GREW in both cases was the first draft of this stage and roughly
+        # doubles the frame count of a long turn, each frame its own write
+        # and drain on a link measured in single digits of KB/s, to redraw
+        # the same string in the page bar.
+        total = guest.view.pages.transcript.count
+        async with guest.view.deliver:
+            if stream and guest.view.view_live:
+                await self.connection.send_records(
+                    guest, record, APPEND, total if notify else None
                 )
+            elif notify:
+                await self.connection.send(guest, grew(total))
 
     @staticmethod
     def _maxblock(guest: GuestSession) -> int:
@@ -167,52 +183,108 @@ class PresentationService:
         declared = getattr(caps, "maxblock", 0) or 0
         return declared or MAX_RECORD
 
-    async def on_getpage(self, guest: GuestSession, f: Frame) -> None:
-        await self.send_page(guest, f.headers.get("page", ""))
+    async def on_getblocks(self, guest: GuestSession, f: Frame) -> None:
+        """GETBLOCKS offset=<n>|live limit=<k>."""
+        await self.send_range(guest, f.headers.get("offset", "live"),
+                              f.headers.get("limit", ""))
 
-    async def send_page(self, guest: GuestSession, want: str) -> None:
-        """Render one page to the guest. LIVE is requested as page=live."""
+    async def send_range(self, guest: GuestSession, want: str,
+                         limit_s: str) -> None:
+        """Send one window of the transcript. LIVE is asked for as offset=live.
+
+        THE ALIGNMENT IS THE GUEST'S, DERIVED. `offset=live` cannot simply
+        mean "the last `limit` records": with 200 records and a limit of 90
+        that window starts at 110, which is not where any of the guest's
+        pages begin. It means the last window on the guest's own grid --
+        `(count - 1) // limit * limit` -- and that arithmetic follows from
+        the limit the guest supplied rather than from any opinion here about
+        what a page is.
+        """
+        t = guest.view.pages.transcript
+        limit = guest.view.block_limit
+        if limit_s:
+            try:
+                limit = int(limit_s)
+            except ValueError:
+                await self.connection.send(guest, error("bad_limit", limit_s))
+                return
+            if limit <= 0:
+                await self.connection.send(guest, error("bad_limit", limit_s))
+                return
+
         if want == "live":
-            number = guest.view.pages.live.number
-            guest.view.view_page = None
+            offset = max(0, t.count - 1) // limit * limit
+            live = True
         else:
             try:
-                number = int(want)
+                offset = int(want)
             except ValueError:
-                await self.connection.send(guest, error("bad_page", want))
+                await self.connection.send(guest, error("bad_offset", want))
                 return
-            guest.view.view_page = (
-                None if number == guest.view.pages.live.number else number
-            )
+            if offset < 0:
+                await self.connection.send(guest, error("bad_offset", want))
+                return
+            # Following live means this window reaches the end AND starts
+            # inside the transcript. `offset + limit >= count` alone is true
+            # for every offset past the end, which would have made a stale
+            # request look like a live one and -- with no records to show --
+            # put "type a message to start this conversation" on a
+            # conversation that has a hundred of them in it.
+            live = offset <= t.count and offset + limit >= t.count
 
-        page = guest.view.pages.page(number)
-        if page is None:
-            await self.connection.send(guest, error("no_such_page", want))
-            return
+        records = t.range(offset, limit)
+        # SET AFTER THE WINDOW IS BUILT, not before: between the two there
+        # is no await, so a block appended in that gap cannot be streamed
+        # into the middle of this answer.
+        guest.view.view_live = live
+        async with guest.view.deliver:
+            await self._deliver(guest, offset, records, t.count, live)
 
-        await self.connection.send(
-            guest,
-            pagestart(
-                page.number,
-                guest.view.pages.count,
-                guest.view.view_page is None,
-                page.continued,
-            ),
-        )
-        for run in page.runs:
-            await self.connection.send_records(
-                guest, run.body, APPEND, page.number
-            )
-            await self.connection.wire_yield(guest)
-        await self.connection.send(guest, pageend(page.number))
-
-        if guest.view.view_page is None and not page.runs:
+        # AN EMPTY TRANSCRIPT, not an empty window. A window can be empty
+        # because the reader asked for one past the end -- which a stale page
+        # button does -- and telling them to start a conversation they are
+        # already having is worse than saying nothing. `count=0` on the RANGE
+        # is how an empty window is reported; this is for a transcript with
+        # nothing in it at all.
+        if live and t.count == 0:
             await self.connection.send(
                 guest,
                 notice(
                     "empty", "Type a message below to start this conversation."
                 ),
             )
+
+    async def _deliver(self, guest: GuestSession, offset: int,
+                       records: list, total: int, live: bool) -> None:
+        """RANGE, the records, RANGEEND -- with nothing else between them.
+
+        Called under `guest.view.deliver`, which is what keeps a block
+        finished mid-delivery from being streamed into the middle of this.
+        """
+        await self.connection.send(
+            guest, range_start(offset, len(records), total, live)
+        )
+        # CHUNKED ON RECORD BOUNDARIES, like the export. A window is `limit`
+        # records and a record can be `maxblock` bytes, so a joined window is
+        # not bounded by the frame cap the way a page used to be -- 90 blocks
+        # of 60KB is 5MB. The guest appends whatever whole records arrive in
+        # a frame, so several frames read the same as one.
+        budget = MAX_FRAME - 1024
+        chunk: list[bytes] = []
+        size = 0
+        for rec in records:
+            if chunk and size + len(rec) > budget:
+                await self.connection.send_records(
+                    guest, b"".join(chunk), APPEND
+                )
+                await self.connection.wire_yield(guest)
+                chunk, size = [], 0
+            chunk.append(rec)
+            size += len(rec)
+        if chunk:
+            await self.connection.send_records(guest, b"".join(chunk), APPEND)
+            await self.connection.wire_yield(guest)
+        await self.connection.send(guest, range_end())
 
     async def reset_transcript(self, guest: GuestSession) -> None:
         """Reset the guest's transcript view."""

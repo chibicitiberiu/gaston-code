@@ -71,7 +71,7 @@ void Reconnector::tryConnect()
      * which matters because we are on the thread that pumps messages. */
     tools = rc_tooldet_cached(m_exeDir, &tools_len);
     if (rc_net_start(m_net, m_hwnd, m_cfg->host, (int)m_cfg->port, m_cfg->secret,
-                     tools, tools_len) != 0) {
+                     tools, tools_len, m_cfg->pageSize) != 0) {
         /* Say it ONCE per outage, not once per retry.
          *
          * Appending on every attempt filled the transcript with hundreds of

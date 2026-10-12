@@ -178,9 +178,34 @@ void rc_cache::add(const void *body, unsigned len)
 void rc_cache::end_page()
 {
     char tmp[MAX_PATH], dest[MAX_PATH];
+    long written;
 
     if (!page_fp.valid()) return;
+    /* HOW BIG IT GOT, before the handle is dropped. */
+    written = ftell(page_fp.get());
     page_fp.reset();
+
+    /* A PAGE THIS CACHE WILL NOT READ BACK IS NOT WORTH PUBLISHING.
+     *
+     * load_page refuses anything over CACHE_PAGE_MAX, and until stage 3b
+     * nothing could reach it: the bridge capped a page at 16KB of text on a
+     * 32MB box and twice that at the hard cap. The client picks the window
+     * now and picks it in BLOCKS -- up to 360 of them, each allowed to be
+     * maxblock bytes -- so the product is no longer bounded by anything
+     * near 64KB. Writing one anyway would leave a file that reads back as
+     * nothing, after restoreCache had already told the reader it was about
+     * to show them the conversation.
+     *
+     * Dropped rather than truncated, for the reason the temporary name
+     * exists at all: half a page is not a smaller page. */
+    if (written < 0 || (unsigned long)written > CACHE_PAGE_MAX) {
+        rc_log("cache: page %d is %ld bytes, over the %u this cache can "
+               "read back; not keeping it", page_no, written,
+               (unsigned)CACHE_PAGE_MAX);
+        if (rc_strf(tmp, sizeof(tmp), "%s\\P%03d.TMP", dir, page_no))
+            DeleteFileA(tmp);
+        return;
+    }
 
     /* Both checked: a truncated pair can alias a DIFFERENT page's file, and
      * the next two lines delete and rename. */

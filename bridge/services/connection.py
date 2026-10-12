@@ -212,17 +212,15 @@ class ConnectionService:
             )
             return None
 
-        page_bytes, page_blocks, caps = neg.page_bytes, neg.page_blocks, neg.caps
-        # The client's page size: a multiplier on what its memory allows,
-        # clamped by the same ceiling (view/pages.py), never above it.
-        page_bytes, page_blocks = prefs_mod.scaled(
-            client_prefs, page_bytes, page_blocks, neg.mem_kb)
-        log.info(
-            "guest has %d MB; pages capped at %d bytes / %d blocks",
-            neg.mem_kb // 1024,
-            page_bytes,
-            page_blocks,
-        )
+        caps = neg.caps
+        # UNSCALED. The page size used to be worked out here, from HELLO's
+        # mem_kb and the client's view.page preference. Stage 3b moved both
+        # halves to the client and did not replace them with a declaration:
+        # a window is whatever the GETBLOCKS in front of the bridge asks
+        # for. What is left is the paginator's own constructor arguments,
+        # which go when the paginator does.
+        page_bytes, page_blocks = neg.page_bytes, neg.page_blocks
+        log.info("guest has %d MB", neg.mem_kb // 1024)
         log.info("client rules: %s", caps.summary())
         if client_prefs.declared:
             log.info("client settings: %d protected, %d dangerous, %d "
@@ -362,8 +360,8 @@ class ConnectionService:
             await self.handle_frame(guest, f)
 
     async def send_records(self, guest: GuestSession, body: bytes,
-                           mode: str, page_no: int) -> None:
-        await guest.link.send_records(guest, body, mode, page_no)
+                           mode: str, total: int | None = None) -> None:
+        await guest.link.send_records(guest, body, mode, total)
 
     async def wire_yield(self, guest: GuestSession) -> None:
         await guest.link.wire_yield(guest)

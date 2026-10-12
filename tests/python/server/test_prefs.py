@@ -25,7 +25,7 @@ def test_a_full_body_parses():
                 b"protect=C:\\WINDOWS\\**\ntrust=wcl386\n"
                 b"danger.format=erases a disk\n"
                 b"mode.u-0a1b2c3d.label=Mine\nmode.u-0a1b2c3d.c.run_else=off\n")
-    assert p.general_mode == "auto" and p.page == "large"
+    assert p.general_mode == "auto"
     assert p.sync_sweep_s == -1 and p.sync_max_kb == 2048
     assert p.sync_ignore == ("*.obj", "a=b")      # split on the FIRST =
     assert p.lists.protect == ("C:\\WINDOWS\\**",)
@@ -76,13 +76,30 @@ def test_the_protected_list_never_shrinks_inside_a_session():
     assert held == ["A"]
 
 
-def test_page_size_scales_within_the_ceiling():
-    from bridge.view import pages
-    big = P.parse(b"view.page=large")
-    b, k = P.scaled(big, pages.MAX_BYTES * 4, pages.MAX_BLOCKS * 4)
-    assert b == pages.MAX_BYTES * 4 and k == pages.MAX_BLOCKS * 4
-    small = P.parse(b"view.page=small")
-    assert P.scaled(small, 16384, 90) == (8192, 45)
+def test_the_page_size_key_is_still_accepted_though_nothing_reads_it():
+    """Stage 3b moved the page size to the client and left this key
+    PARSED. It has to stay parsed forever.
+
+    `parse`'s key chain ends in `raise PrefsError`, and on the HELLO path a
+    PrefsError is fatal: services/connection.py answers `bad_prefs` and
+    drops the socket. The client sends `view.page` unconditionally
+    (win/app/protect.cpp), so deleting the branch would refuse every
+    connection from any guest not reflashed in lockstep -- permanently, and
+    for a setting the bridge no longer even uses.
+
+    A PREFS key can stop being READ. It can never be removed."""
+    for size in (b"small", b"normal", b"large"):
+        p = P.parse(b"view.page=" + size)
+        assert p is not None
+        assert not hasattr(p, "page"), (
+            "nothing should read this back; the client owns the page size")
+
+
+def test_a_nonsense_page_size_is_still_refused():
+    """Accepted and ignored is not the same as unvalidated: a client
+    sending rubbish has a bug and should hear about it."""
+    with pytest.raises(P.PrefsError):
+        P.parse(b"view.page=enormous")
 
 
 # --- at the handshake -----------------------------------------------------------

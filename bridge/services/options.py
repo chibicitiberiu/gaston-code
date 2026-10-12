@@ -113,7 +113,6 @@ class OptionsService:
         just deleted falls back to the default without forgetting it.
         """
         from .. import prefs as P
-        from ..view import pages
         acp = getattr(getattr(guest, "caps", None), "acp", "") or "cp1252"
         try:
             new = P.parse(f.body or b"", acp)
@@ -125,9 +124,6 @@ class OptionsService:
         old = getattr(guest, "prefs", None) or P.DEFAULT
         new, held = P.floor(old, new)
         guest.prefs = new
-        mem = int((guest.hello or {}).get("mem_kb", 0) or 0)
-        guest.view.page_bytes, guest.view.page_blocks = P.scaled(
-            new, *pages.limits_for(mem), mem)
         if held and self.write_block:
             await self.write_block(guest, H.notice(prompts_text(
                 "policy.protect_held", places=", ".join(held))))

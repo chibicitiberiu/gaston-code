@@ -257,8 +257,8 @@ async def test_golden_05_reconnect_while_halted(harness, tmp_path):
     await harness.close(w2)
 
 
-async def test_golden_06_page_request_and_seal(harness):
-    """Scenario 6: A page request and a seal."""
+async def test_golden_06_window_request(harness):
+    """Scenario 6: the guest asks for a window of blocks."""
     r, w = await harness.connect()
     await harness.recv_until(r, {"OPTIONSEND"})
 
@@ -267,17 +267,15 @@ async def test_golden_06_page_request_and_seal(harness):
     for i in range(600):
         guest.view.pages.add(blocks.encode(blocks.Block(
             "para", {}, [("t", f"line {i:04d} padding padding")])))
-        if i % 100 == 0:
-            guest.view.pages.message_boundary()
 
     collector = FrameCollector(r, harness)
 
-    # Request page 1
-    await harness.send(w, Frame("GETPAGE", {"page": "1"}))
-    await collector.recv_until({"PAGEEND"})
+    # Ask for the first window
+    await harness.send(w, Frame("GETBLOCKS", {"offset": "0", "limit": "90"}))
+    await collector.recv_until({"RANGEEND"})
 
     golden_file = os.path.join(
-        FRAME_GOLDENS_DIR, "scenario_06_page_request_and_seal.json"
+        FRAME_GOLDENS_DIR, "scenario_06_window_request.json"
     )
     assert_matches_golden(golden_file, collector.serialized())
     await harness.close(w)
@@ -296,8 +294,12 @@ async def test_golden_07_conversation_switch(harness):
 
     collector = FrameCollector(r, harness)
 
-    # Request fresh session
-    await harness.send(w, Frame("NEW", {}))
+    # A fresh conversation. This said Frame("NEW", {}) until stage 3b and
+    # the dispatch table says NEWSESSION, so every run of this scenario
+    # collected one `unknown_type` ERROR and the golden froze it -- the one
+    # scenario that covers a switch asserted nothing about one. The switch
+    # flow is also what decision 4 changed, so it is worth having.
+    await harness.send(w, Frame("NEWSESSION", {}))
     await collector.recv_until({"OPTIONSEND"})
 
     golden_file = os.path.join(

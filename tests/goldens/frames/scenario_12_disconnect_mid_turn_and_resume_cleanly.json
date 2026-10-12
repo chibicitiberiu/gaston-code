@@ -3,10 +3,8 @@
     "headers": {
       "conv": "<CONV_ID>",
       "model": "fake-model",
-      "page": "1",
       "sess": "<SESS_ID>",
-      "total": "1",
-      "ver": "2"
+      "ver": "3"
     },
     "type": "READY"
   },
@@ -120,8 +118,7 @@
     "body": "para\nt Pre-disconnect stream...\nt Post-reconnect stream...\n.\n",
     "headers": {
       "enc": "raw",
-      "mode": "live",
-      "page": "1"
+      "mode": "live"
     },
     "type": "TEXT"
   },
@@ -130,15 +127,14 @@
     "headers": {
       "enc": "raw",
       "mode": "append",
-      "page": "1"
+      "total": "2"
     },
     "type": "TEXT"
   },
   {
     "headers": {
       "enc": "raw",
-      "mode": "live",
-      "page": "1"
+      "mode": "live"
     },
     "type": "TEXT"
   },

@@ -260,7 +260,7 @@ class Bridge:
             "FSOPEND":      self.guest_fs.fs_frame,
             "PERMREPLY":    self.permissions.reply,
             "GETSESSIONS":  self.session.on_getsessions,
-            "GETPAGE":      self.presentation.on_getpage,
+            "GETBLOCKS":    self.presentation.on_getblocks,
             "STAT":         self.connection.on_stat,
             "PING":         self.connection.on_ping,
             "SETMODEL":     self.options.on_setmodel,
@@ -400,7 +400,6 @@ class Bridge:
             guest.sess_id,
             (guest.claude.model if guest.claude else guest.model)
             or "(default)",
-            guest.view.pages.live.number, guest.view.pages.count,
             conv=guest.conv_id))
 
         await self.options.send_options(guest)

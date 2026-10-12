@@ -57,6 +57,11 @@
 
 class rc_pagebar {
     int view, total;       /* page currently displayed; pages that exist */
+    /* How many RECORDS the transcript holds, which is what the wire carries
+     * now. `total` is derived from it and this machine's own window size,
+     * because stage 3b made the page the client's idea: the bridge counts
+     * blocks and has no opinion about where one page ends. */
+    int blocks;
     int is_live;
     int loading_page;
 
@@ -74,11 +79,14 @@ class rc_pagebar {
                rc_html *html_, FrameSender *send_);
 
     void update_ui();
-    void goto_page(const char *which);
+    /* The window this machine asks for, and the page count it implies. */
+    int  per_page() const;
+    int  pages() const;
+    void goto_offset(const char *which);
     void goto_n(int n);
 
 public:
-    /* net: kept for the fallback path only. This module used to send GETPAGE
+    /* net: kept for the fallback path only. This module used to send GETBLOCKS
      *      through it directly, with the return discarded, on the reasoning
      *      that "there is no larger 'what the user asked for' wrapper this
      *      needs beyond the raw send." That was wrong on its own terms --
@@ -87,7 +95,7 @@ public:
      *      in the tree that failed in silence.
      * send: main.cpp's ui_send. A page request either goes out or the user is
      *      told why not.
-     * html: PAGESTART/PAGEEND clear, notice and scroll the transcript --
+     * html: RANGE/RANGEEND clear and scroll the transcript --
      *      that is what those two frames mean, not a policy question to hand
      *      back to main.c the way chatlist.h's confirm/switching/switched
      *      are. May be NULL (the view failed to create); every call is
@@ -103,10 +111,10 @@ public:
      * active() to gate this on. */
     void move(int x, int y);
 
-    /* PAGESTART, PAGEEND, PAGESEALED -- the three frame types this module
-     * owns. Returns non-zero if `f->type` was one of those. Resetting
-     * main.c's own turn-state enum on PAGESTART, and log_mem on PAGEEND, are
-     * not this module's business and stay in main.c's own wrapper around
+    /* RANGE, RANGEEND, GREW -- the three frame types this module owns. Returns non-zero if `f->type` was one of those. Resetting
+     * main.c's own turn-state enum on RANGE, and log_mem on RANGEEND, are
+     * Resetting main.c's own turn-state enum on RANGE, and log_mem on
+     * RANGEEND, are not this module's business and stay in its wrapper around
      * this call -- the same split on_chats already makes around
      * ChatList::frame. */
     int frame(rc_frame *f);
@@ -121,13 +129,18 @@ public:
      * 01.11): main.c owns the frame, this module owns the state the frame
      * updates.
      *
-     * note_ready: READY's page/total (each updated only if the header is
-     * present) and marks the session live, then refreshes the buttons --
-     * everything on_ready's four lines used to do to these globals directly.
-     * note_total: SWITCHED's total only, exactly as chats_switched did -- no
-     * button refresh, matching that call site's existing behaviour
-     * precisely.
-     * goto_live: on_ready's trailing page_goto("live"). */
+     * note_ready: marks the session live and refreshes the buttons. READY
+     * stopped carrying a position at stage 3b -- the RANGE that goto_live()
+     * asks for right after is where the numbers come from, and a position
+     * here would be a second source for one fact, stale by the time it was
+     * read. SWITCHED lost its total for the same reason.
+     * note_total: the record count off an APPEND TEXT frame, which is where
+     * it travels for a reader following live -- a frame was going out
+     * anyway, so a GREW of its own would be a second frame per block on a
+     * link measured in single digits of KB/s. A frame without the header
+     * leaves the count alone.
+     * goto_live: on_ready's trailing page_goto("live"), and the same ask
+     * after a real conversation switch. */
     /* The autoscroll toggle's state, pushed in at creation and read back
      * when it is clicked. Kept here rather than in main.cpp's config so the
      * button and the setting cannot disagree about which is true. */
@@ -137,6 +150,12 @@ public:
     void note_ready(rc_frame *f);
     void note_total(rc_frame *f);
     void goto_live();
+
+    /* Which page is on screen, for the cache's filename. The cache keys a
+     * file on the page NUMBER and always did; stage 3b only changed who
+     * works that number out, so asking the bar for it keeps one answer
+     * rather than two that can disagree. */
+    int  page() const { return view; }
 };
 
 #endif

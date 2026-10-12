@@ -2,12 +2,12 @@
 
 docs/audit/02-bridge-python.md 02.2 groups `GuestSession`'s 30 fields into
 seven, by who reads them; this is the "View" group -- `pages`, `parse`,
-`coalescers`, `view_page` and the two page-size limits scaled to the
+`coalescers`, `view_live` and the window size the client declared,
 guest's RAM at handshake. `GuestLink` (bridge/wire/link.py) already moved
 the "Link" group out the same way; this follows it.
 
 Deliberately NOT the "paginate, stream only if live, then seal" rule
-itself (02.18): that stays on `PresentationService.write_block`/`send_page`, because
+itself (02.18): that stays on `PresentationService.write_block`/`send_range`, because
 enforcing it here would mean this class sending frames, which means it
 needs the guest's `GuestLink` -- and `GuestLink.send(guest, frame)` takes
 the owning `GuestSession` back on purpose, to keep `GuestLink` reachable
@@ -23,6 +23,7 @@ still reaches `.pages` directly, now through `guest.view.pages` rather than
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from ..wire.coalesce import Coalescer
@@ -36,6 +37,11 @@ from .pages import Paginator
 #: twice in this file.
 DEFAULT_PAGE_BYTES = 16384
 DEFAULT_PAGE_BLOCKS = 90
+#: What a client that did not declare one gets. The same 90 the bridge used
+#: to compute for a 32MB guest -- a floor, not a policy: every real client
+#: says, and stage 3b's point is that the one with the memory constraint is
+#: the one that should.
+DEFAULT_BLOCK_LIMIT = 90
 
 
 @dataclass
@@ -56,11 +62,17 @@ class TranscriptView:
     #: batches rather than single tokens -- which is what lets it close
     #: blocks properly and keeps the number of DOM updates on the guest down.
     coalescers: dict[str, Coalescer] = field(default_factory=dict)
-    #: Which page the guest is showing. None means LIVE (follow the last
-    #: page). In HISTORY mode the bridge keeps buffering silently, and the
-    #: page counter ticking up in the status bar is the new-content
-    #: notification.
-    view_page: int | None = None
+    #: Whether the window the guest last asked for reaches the end of the
+    #: transcript. True means new blocks stream to it; False means the guest
+    #: has paged back, the bridge keeps buffering silently, and the total in
+    #: GREW ticking up is the new-content notification.
+    view_live: bool = True
+    #: What a GETBLOCKS that names no limit gets. Not a declaration and not
+    #: a policy: every real request carries its own `limit`, because the
+    #: client is the one with the memory constraint. This is the floor under
+    #: a malformed or truncated request, and it is the same 90 the bridge
+    #: used to compute for a 32MB guest.
+    block_limit: int = DEFAULT_BLOCK_LIMIT
     #: Page caps for THIS guest, scaled to the RAM it reported in HELLO.
     page_bytes: int = 0
     page_blocks: int = 0
@@ -68,6 +80,15 @@ class TranscriptView:
     #: handshake from stage 3 C1. 0 means it did not say and blocks.py
     #: chooses; blocks.NO_TOOL_CAP means all of it.
     toolmax: int = 0
+    #: Held while a window is being delivered, and while an appended block is
+    #: being streamed. `on_getblocks` runs in the reader task and
+    #: `write_block` in the turn task, and a window is sent as several frames
+    #: with a `wire_yield` between them -- so without this a block finished
+    #: mid-delivery is written BETWEEN the window's own records, on screen
+    #: and into the guest's cache file. The frame tag that would have made
+    #: that diagnosable is what stage 3b deleted, which is the argument for
+    #: the lock rather than for noticing it later.
+    deliver: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def reset(self) -> None:
         """Start over: a fresh paginator and parser, every live coalescer
@@ -85,4 +106,4 @@ class TranscriptView:
         for c in self.coalescers.values():
             await c.stop()
         self.coalescers.clear()
-        self.view_page = None
+        self.view_live = True

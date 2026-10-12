@@ -74,7 +74,7 @@ def coordinator_deps():
     guest.perms = MagicMock()
     guest.perms.reissue = AsyncMock()
     connection.synccoord = guest.synccoord
-    guest.view.view_page = 1
+    guest.view.view_live = False
     guest.turn_produced = True
     guest.turn_degraded = "rate_limit"
 
@@ -202,7 +202,7 @@ async def test_sync_state_to_guest(coordinator_deps):
     connection.synccoord.halt_text = "Halt notice"
 
     await coord.sync_state_to_guest(guest)
-    assert guest.view.view_page is None
+    assert guest.view.view_live is True
     guest.perms.reissue.assert_called_once()
     assert connection.send.call_count == 2
 

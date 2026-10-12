@@ -154,11 +154,11 @@ def test_bridge_never_sends_more_headers_than_the_guest_can_hold():
     # 2. Dynamic check: invoke constructors with all optional fields populated
     test_frames = [
         P.hello("sec", sess="s1"),
-        P.ready("s1", "claude", 1, 5, conv="c1"),
+        P.ready("s1", "claude", conv="c1"),
         P.turn_end(ok=True, subtype="done", cost_usd=0.05, ms=1200, ctx_pct=42),
         P.exec_cmd("e1", "cmd", cwd="C:\\", timeout_ms=5000, shell="cmd.exe"),
         P.option("m", "model1", "Model 1", current=True, disabled=True, hint=True, desc="desc"),
-        P.text_frame("append", "raw", 1, b"hello", total=5, off=0),
+        P.text_frame("append", "raw", b"hello", total=5),
         P.export_end(ok=True, bytes_=123, reason="done"),
     ]
     for frame in test_frames:

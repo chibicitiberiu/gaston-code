@@ -264,8 +264,47 @@ static int start_failed(rc_net *n)
     return -1;
 }
 
+/* The page-window arithmetic that used to live on the bridge.
+ *
+ * `bridge/view/pages.py`'s limits_for scaled 90 blocks by mem_kb/32MB,
+ * clamped to [1,4]; `bridge/prefs.py`'s scaled() then applied Small 0.5,
+ * Normal 1.0 or Large 2.0 and clamped to [20, 360]. Both are here, in
+ * sixteenths so the fraction survives integer division, and the floating
+ * point stays where it was: nowhere near this image (core/rate.h:8 --
+ * ~6.2 KB of long-double formatting for four casts).
+ *
+ * A 32MB guest reporting 32,288 KB lands on exactly 90, which is what the
+ * bridge computed for it, so nothing moves on the machine this was
+ * measured for.
+ */
+unsigned rc_page_blocks(unsigned long mem_kb, int page_size)
+{
+    unsigned long scale16, blocks;
+
+    if (mem_kb == 0) {
+        scale16 = 16;               /* it did not say: assume the 32MB box */
+    } else {
+        scale16 = (mem_kb * 16UL) / (32UL * 1024UL);
+        if (scale16 < 16) scale16 = 16;
+        if (scale16 > 64) scale16 = 64;
+    }
+    blocks = (90UL * scale16) / 16UL;
+    if (page_size == 0)         blocks /= 2;    /* RC_PAGE_SMALL  */
+    else if (page_size == 2)    blocks *= 2;    /* RC_PAGE_LARGE  */
+    if (blocks < 20)  blocks = 20;
+    if (blocks > 360) blocks = 360;
+    return (unsigned)blocks;
+}
+
+unsigned rc_net_page_blocks(rc_net *n)
+{
+    if (!n || !n->page_blocks) return 90;
+    return n->page_blocks;
+}
+
 int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
-                 const char *secret, const void *tools, unsigned tools_len)
+                 const char *secret, const void *tools, unsigned tools_len,
+                 int page_size)
 {
     char maxframe[16], ver[16], memkb[16], memfree[16], disk[24], acp[16];
     char oemcp[16];
@@ -347,9 +386,10 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
     HDR("max_frame", maxframe);
     /* What this machine actually is.
      *
-     * Two consumers. The bridge sizes pages from mem_kb -- a 128MB box can
-     * hold a far bigger page than a 32MB one, and there is no other way for it
-     * to know which it is talking to. And the rest goes into the agent's
+     * ONE consumer now. The bridge sized pages from mem_kb until stage 3b
+     * moved that arithmetic to this side (rc_page_blocks below, which reads
+     * the same figure and does not send its answer anywhere). What is left
+     * goes into the agent's
      * system prompt, because a model that thinks it is on a modern machine
      * cannot make good decisions about which tool to reach for: "just install
      * this 400MB toolchain" is a wrong answer here however right it is
@@ -382,6 +422,15 @@ int rc_net_start(rc_net *n, HWND notify, const char *host, int port,
 
         rc_strf(memkb, sizeof(memkb), "%lu", (unsigned long)sys.memKb);
         HDR("mem_kb", memkb);
+        /* HOW MANY BLOCKS A PAGE OF THIS MACHINE HOLDS, computed here from
+         * the memory just read and the user's page-size setting, and NOT
+         * DECLARED. The bridge used to work this out from mem_kb and a
+         * PREFS key; stage 3b made it the client's, and then took the
+         * declaration out too -- every GETBLOCKS carries its own `limit`
+         * and `offset=live` aligns to the grid that limit implies, so
+         * there is nothing left for the far side to know. It is kept on
+         * `n` because the page bar asks for it on every request. */
+        n->page_blocks = rc_page_blocks((unsigned long)sys.memKb, page_size);
         rc_strf(memfree, sizeof(memfree), "%lu", (unsigned long)sys.memFreeKb);
         HDR("mem_free_kb", memfree);
 

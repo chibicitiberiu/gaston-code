@@ -108,7 +108,7 @@ class GuestLink:
         return True
 
     async def send_records(self, guest, body: bytes, mode: str,
-                           page_no: int) -> None:
+                           total: int | None = None) -> None:
         """One frame of whole records. Compress if worthwhile, never split.
 
         WHAT REPLACED send_html, and the shape is simpler by one whole
@@ -125,8 +125,9 @@ class GuestLink:
         of that applies now. A body is zero or more WHOLE records; the
         caller (PresentationService.write_block) refuses a record larger
         than the client declared it can hold, before it ever gets here; and
-        the paginator gives an oversize record a page of its own rather
-        than cutting it. There is nothing left to chunk.
+        the caller sends whole records and never more than a frame's
+        worth; `send_range` chunks a window on record boundaries before it
+        gets here, the same way the export does.
 
         ZERO IS REAL and is not an early return: an empty LIVE body is what
         clears `#l` at the end of a turn.
@@ -152,7 +153,7 @@ class GuestLink:
                       "own-page rule should both have prevented it",
                       len(body))
             return
-        await self.send(guest, text_frame(mode, ENC_RAW, page_no, body),
+        await self.send(guest, text_frame(mode, ENC_RAW, body, total),
                         compress=True)
 
     async def send_export_records(self, guest, records: list) -> None:
