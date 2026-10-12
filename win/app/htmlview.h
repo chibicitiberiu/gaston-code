@@ -54,10 +54,14 @@
  * and is replaced wholesale as it grows. */
 #define RC_SLOT_DONE   "t"
 #define RC_SLOT_LIVE   "l"
-/* The status line under both. OPTIONAL, unlike the other two: the bridge's
- * DOC is authoritative and may be an older build than this guest, and a
- * missing status line is a cosmetic loss where a missing #t is a dead
- * transcript. See rc_html::poll. */
+/* The status line under both. OPTIONAL, unlike the other two, and the
+ * reason is now historical: the bridge's DOC used to be authoritative and
+ * could be an older build than this guest, so insisting on #s would have
+ * meant refusing to render a transcript at all against an older bridge.
+ * Stage 3 C4 killed DOC and the guest writes its own skeleton, so the two
+ * cannot disagree any more. Still optional, because a missing status line
+ * is a cosmetic loss where a missing #t is a dead transcript, and that
+ * argument never depended on the first one. See rc_html::poll. */
 #define RC_SLOT_STATUS "s"
 
 #define RC_CSS_STATUS  "status"
@@ -110,8 +114,18 @@ public:
      * arrives. */
     int  poll();
 
-    /* `doc` is the whole skeleton, stylesheet included, as the bridge sent
-     * it. */
+    /* `doc` is the whole skeleton with the stylesheet inlined.
+     *
+     * ONE CALLER from stage 3 C4: boot_local, which composes it from
+     * win/resources/view.css. It took the bridge's DOC frame until then,
+     * and the re-navigation logic below exists because that frame arrived
+     * on every connect -- identical content had to be a no-op or a
+     * reconnect would throw the transcript away.
+     *
+     * That path is gone and the logic is kept anyway, because it is what
+     * makes it safe to call this more than once, and because a CSS edit
+     * landing on a reconnect was the one thing DOC bought that nothing
+     * replaces: an edit now lands on the next START. */
     void set_document(const char *doc);
 
     /* Install the cold-start document shipped beside the exe (view.htm).

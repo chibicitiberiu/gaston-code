@@ -168,9 +168,12 @@ def ready(sess: str, model: str, page: int, total: int,
     return Frame("READY", h)
 
 
-def doc(html: str) -> Frame:
-    """The document skeleton and stylesheet, sent once per connection."""
-    return Frame("DOC", {}, fold.encode(html))
+# DOC is gone (stage 3 C4). It carried the document skeleton and the whole
+# stylesheet, once per connection and again on every reconnect, with no
+# `enc` header -- 9,557 bytes uncompressed on a link measured in single
+# digits of KB/s. The client composes its own document now from
+# win/resources/view.css, so there is nothing left to send: a frame type
+# whose body no longer exists anywhere on this side.
 
 
 def switched(session_id: str, total: int) -> Frame:

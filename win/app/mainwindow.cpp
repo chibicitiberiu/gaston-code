@@ -446,11 +446,6 @@ void MainWindow::onReady(rc_frame *f)
     refreshStatus();
 }
 
-void MainWindow::onDoc(rc_frame *f)
-{
-    if (m_turn) m_turn->onDoc(f);
-}
-
 void MainWindow::onText(rc_frame *f)
 {
     if (m_turn) m_turn->onText(f);
@@ -783,7 +778,6 @@ void MainWindow::renderFrame(rc_frame *f)
     /* Function-local so it can name this class's private handlers. */
     static const struct { const char *type; FrameHandler fn; } g_dispatch[] = {
         { "READY",       &MainWindow::onReady },
-        { "DOC",         &MainWindow::onDoc },
         { "TEXT",        &MainWindow::onText },
         { "TOOL",        &MainWindow::onTool },
         { "TURN",        &MainWindow::onTurn },

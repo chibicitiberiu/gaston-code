@@ -252,7 +252,6 @@ def test_unrepresentable_names_the_character():
 import pytest
 
 from bridge.files import caps as C
-from bridge.view import html as H
 from bridge.wire import fold as foldmod
 
 
@@ -310,22 +309,28 @@ def test_the_console_codepage_is_a_separate_question(cp1251):
     assert foldmod.decode_oem(b"\x90", "cp437") == "É"
 
 
-def test_the_live_charset_matches_the_bytes_it_declares(cp1251):
+def test_the_charset_name_and_the_fold_table_come_from_one_place(cp1251):
     """Two independent hardcodings of one assumption: `fold.encode` said
     cp1252 and the <meta> tag said windows-1252. Correctly paired by
     accident, wrong together on any other machine.
 
-    This checked the EXPORT until stage 3 C3, which moved that document to
-    the guest -- it derives the charset from its own GetACP() now, and
-    tests/python/meta/test_guest_css.py compares that derivation against
-    this one. The live DOC is the half still built here, and it makes the
-    same pairing, so the property has somewhere to live until C4 takes
-    that too.
+    BOTH DOCUMENTS LEFT THIS MACHINE in stage 3 -- the export at C3, the
+    live view at C4 -- and the guest derives the name from its own
+    GetACP() now. So there is no <meta> here to check against.
+
+    What is still here is the half that makes the pairing possible:
+    html_charset and the fold table are driven by the SAME codec, so the
+    name this bridge would give and the bytes it actually writes cannot
+    come apart. tests/python/meta/test_guest_css.py compares this
+    function against the guest's switch, which is the other half, and is
+    a stronger check than the one it replaces -- two derivations in two
+    languages rather than one value used twice.
     """
-    doc = H.document()
-    assert "charset=windows-1251" in doc
-    data = foldmod.encode(doc)
-    assert b"windows-1251" in data
+    from bridge.files.caps import html_charset
+
+    assert foldmod.codec() == "cp1251"
+    assert html_charset(foldmod.codec()) == "windows-1251"
+    assert CYRILLIC.encode("cp1251") == foldmod.encode(CYRILLIC)
 
 
 def test_a_folded_header_uses_one_table_both_ways(cp1251):

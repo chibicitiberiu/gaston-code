@@ -1,18 +1,22 @@
-"""The class names AND container ids the guest hard-codes must exist on the bridge.
+"""The class names, ids and charset the guest hard-codes must match its files.
 
-The bridge renders the transcript and owns the stylesheet, which the guest
-receives whole in the DOC frame. But the guest builds three blocks itself --
-its own echo of what you typed, a notice, an error -- and hard-codes their
-class names.
+Until stage 3 the BRIDGE owned the stylesheet and sent it in a DOC frame,
+and this file guarded a contract between two languages across a wire. C4
+killed DOC: the stylesheet is win/resources/view.css, the markup is
+view.tpl, and both ship beside the exe.
 
-That is a contract between two files in two languages with nothing linking
-them. Rename `.notice` on the bridge and the guest's notices silently become
-unstyled text: no error, no log line, nothing to notice until someone looks
-at a screenshot.
+The contract did not go with it, it moved. The guest still hard-codes
+class names in C -- the two that are DOM operations, written with
+put_className onto an element that already exists -- and still looks up
+three container ids by literal in a document it now writes itself. Rename
+`.notice` in view.css and the guest's notices silently become unstyled
+text: no error, no log line, nothing until someone looks at a screenshot.
+Mistype a slot id and find_id returns NULL, every append goes nowhere, and
+the transcript is blank forever on a machine with no console to say so.
 
-This is a pure-Python test on purpose -- it reads the C header rather than
-running the guest, so it works on a machine with no Open Watcom and no Wine
-and cannot be one of the checks that skips silently.
+This is a pure-Python test on purpose -- it reads the C and the resource
+files rather than running the guest, so it works on a machine with no Open
+Watcom and no Wine and cannot be one of the checks that skips silently.
 """
 
 import os
@@ -37,8 +41,8 @@ def guest_classes() -> dict:
     return found
 
 
-def test_every_class_the_guest_emits_is_in_the_bridge_s_stylesheet():
-    css = H.document()
+def test_every_class_the_guest_emits_is_in_its_stylesheet():
+    css = repo_css("view.css")
     for macro, name in guest_classes().items():
         for cls in name.split():
             assert f".{cls}" in css, (
@@ -68,19 +72,34 @@ def guest_slots() -> dict:
     return found
 
 
-def test_the_container_ids_the_guest_looks_up_exist_in_the_skeleton():
-    """03.21: the guest finds #t and #l by literal in a document the bridge wrote.
+def test_the_container_ids_cannot_be_mistyped_into_the_skeleton():
+    """03.21, and the failure mode is gone rather than guarded.
 
-    This one is worse than an unstyled block. `find_id` returning NULL is not
-    an error anywhere -- every append then goes nowhere and the transcript is
-    blank forever, on a machine with no console to say so.
+    The guest found #t and #l by literal in a document the BRIDGE wrote,
+    so a typo on either side meant find_id returned NULL, every append
+    went nowhere, and the transcript was blank forever on a machine with
+    no console. This test compared the two literals.
+
+    From stage 3 C4 the guest writes the skeleton and writes it with the
+    SAME MACROS it looks the ids up with, so the two cannot disagree: the
+    compiler would have to be wrong. What is left to check is that the
+    arrangement holds -- that the skeleton still interpolates the macros
+    rather than having grown a literal back.
     """
-    doc = H.document()
-    for macro, ident in guest_slots().items():
-        assert f'id="{ident}"' in doc, (
-            f'{macro} is "{ident}" and the bridge\'s skeleton has no '
-            f'element with that id -- the guest would find nothing and every '
-            f'append would land in no element at all')
+    src = open(os.path.join(HERE, "win", "app", "htmlview.cpp"),
+               encoding="utf-8").read()
+    tail = re.search(r'static const char SKELETON_TAIL\[\] =(.*?);', src,
+                     re.S)
+    assert tail, "SKELETON_TAIL moved"
+    body = tail.group(1)
+    for macro in guest_slots():
+        assert macro in body, (
+            f"{macro} is looked up by find_id but the skeleton no longer "
+            f"interpolates it -- if that is a literal now, the two can "
+            f"drift and nothing will say so")
+    assert 'id="t"' not in body, (
+        "the skeleton grew a literal id back; use the macro, which is "
+        "what makes a typo impossible rather than merely detectable")
 
 
 def test_the_two_slots_are_distinct():
@@ -161,7 +180,7 @@ def test_every_class_the_renderer_emits_has_a_rule():
     # so the split is asserted too, below.
     # The repo's export.css, because the bridge's copy went at C3 with
     # export_document. The live sheet is still the bridge's until C4.
-    css = H.STYLESHEET + repo_css("export.css")
+    css = repo_css("view.css") + repo_css("export.css")
     missing = sorted(c for c in rendered_classes() if f".{c}" not in css)
     assert not missing, (
         f"the renderer emits {missing} and no stylesheet has a rule for "
@@ -174,7 +193,7 @@ def test_only_the_export_heading_depends_on_the_export_only_sheet():
     would be unstyled on screen and fine in a saved file -- which is the
     hardest version of this bug to notice, because the export looks right."""
     live_only = {c for c in rendered_classes()
-                 if f".{c}" not in H.STYLESHEET}
+                 if f".{c}" not in repo_css("view.css")}
     assert live_only == {"exporthead"}, (
         f"{sorted(live_only - {'exporthead'})} are emitted into the live "
         f"view but only styled in EXPORT_CSS")
@@ -190,18 +209,17 @@ def test_the_two_sweeps_overlap_where_they_should():
     assert {"notice", "err", "you"} <= rendered_classes()
 
 
-# --- two copies, briefly ----------------------------------------------------
+# --- one copy, finally ------------------------------------------------------
 #
-# Stage 3 B3 ships win/resources/view.css and export.css beside the exe, and
-# the bridge keeps STYLESHEET and EXPORT_CSS until C4 deletes DOC. So there
-# ARE two copies of the stylesheet for the length of four commits -- exactly
-# the drift the generator in mktools-iso.sh existed to prevent, and its
-# comment said so: "two copies of a stylesheet drift".
+# B3 shipped win/resources/view.css beside the exe while the bridge still
+# had STYLESHEET, so for four commits there were two copies -- exactly the
+# drift mktools-iso.sh's generator existed to prevent ("two copies of a
+# stylesheet drift"). A test stood in for the generator over that stretch
+# and asserted the two were the same modulo comments.
 #
-# The generator could not survive, because after C4 the bridge has no
-# stylesheet to generate from. This test is what stands in its place, and it
-# DIES WITH THE BRIDGE'S COPY at C4 rather than being carried forward: once
-# there is one copy there is nothing to compare.
+# BOTH ARE GONE AT C4, and that is the end state rather than a gap: there
+# is one stylesheet and nothing to compare it against. What is left below
+# reads the repo file, which is the file that ships.
 
 def repo_css(name: str) -> str:
     path = os.path.join(HERE, "win", "resources", name)
@@ -221,10 +239,6 @@ def rules_of(css: str) -> list:
     out = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     out = re.sub(r"\s+", " ", out)
     return [r.strip() + "}" for r in out.split("}") if r.strip()]
-
-
-def test_the_shipped_stylesheet_is_the_bridge_s_modulo_comments():
-    assert rules_of(repo_css("view.css")) == rules_of(H.STYLESHEET)
 
 
 def test_the_export_sheet_holds_only_what_the_live_view_lacks():

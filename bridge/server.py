@@ -50,7 +50,6 @@ from .view.pages import Paginator
 from .view.transcript import TranscriptView
 from .wire.protocol import (
     Frame,
-    doc,
     error,
     notice,
     ready,
@@ -404,7 +403,6 @@ class Bridge:
             guest.view.pages.live.number, guest.view.pages.count,
             conv=guest.conv_id))
 
-        await self.connection.send(guest, doc(H.document()))
         await self.options.send_options(guest)
 
         guest.lost_at = None

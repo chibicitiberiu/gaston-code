@@ -120,7 +120,6 @@ private:
     void buildMenu(HWND hwnd);
     void refreshEnables();
     void onReady(rc_frame *f);
-    void onDoc(rc_frame *f);
     void onText(rc_frame *f);
     void onTool(rc_frame *f);
     void onTurn(rc_frame *f);

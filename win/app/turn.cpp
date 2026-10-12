@@ -176,13 +176,6 @@ void Turn::onTurn(rc_frame *f)
     }
 }
 
-void Turn::onDoc(rc_frame *f)
-{
-    if (m_html) m_html->set_document(f->body);
-    SendMessageA(m_hwnd, WM_SIZE, 0, 0);
-    SetTimer(m_hwnd, TIMER_HTMLPOLL, 100, NULL);
-}
-
 void Turn::onText(rc_frame *f)
 {
     const char *mode = rc_frame_get(f, "mode");

@@ -6,18 +6,10 @@ And a block must stream: the paragraph being written has to be visible before
 it is finished, or streaming reads as a stall.
 """
 
-import re
 
 from bridge.view import html as H
 from bridge.view.blocks import clean, runs
-from bridge.view.html import (
-    APPEND,
-    LIVE,
-    HtmlStream,
-    document,
-    render,
-    user_turn,
-)
+from bridge.view.html import APPEND, LIVE, HtmlStream, render, user_turn
 from bridge.view.htmlrender import TOOL_WRAP_COL, esc, spans
 
 
@@ -154,54 +146,28 @@ def test_flush_closes_an_unterminated_block():
     assert appended(s.flush()) == ["<p>no trailing newline</p>"]
 
 
-# --- the document -----------------------------------------------------------
-
-
-def test_document_declares_cp1252():
-    """The bridge folds text to CP1252, so the document has to say so."""
-    assert "windows-1252" in document()
-
-
-def test_document_has_both_containers():
-    d = document()
-    assert 'id="t"' in d and 'id="l"' in d
-
-
-def test_the_wire_stylesheet_carries_no_comments():
-    """Half of STYLESHEET is commentary, and the DOC frame is the one frame
-    with no `enc` header -- so those bytes go out verbatim on every connect
-    and every reconnect. They belong in the source and not on a 1998 link."""
-    assert "/*" not in H.WIRE_CSS
-    assert "/*" not in document()
-    assert len(H.WIRE_CSS) < len(H.STYLESHEET) / 2
-
-
-def test_stripping_the_comments_changes_no_rule():
-    """The saving has to be comments and nothing else. Normalise both to one
-    space and they must be the same stylesheet."""
-    def norm(css):
-        return " ".join(re.sub(r"/\*.*?\*/", " ", css, flags=re.S).split())
-
-    assert norm(H.STYLESHEET) == norm(H.WIRE_CSS)
-
-
-def test_a_comment_sharing_a_line_with_a_rule_takes_only_itself():
-    """The stripper runs over the whole sheet, not line by line, so a rule
-    with a note after it has to survive with its declaration intact."""
-    out = H._without_comments("a { color: red; } /* why */\n/* alone */\nb { x: y; }\n")
-    assert out == "a { color: red; }\nb { x: y; }\n"
-
-
-def test_inline_code_inside_bold_is_parsed_not_escaped():
-    """`code` inside **bold** is common in model output. Escaping the inner
-    span instead of parsing it puts literal backticks on screen."""
-    out = inline("**bold with `code` in it**")
-    assert "<b>bold with <code>code</code> in it</b>" == out
-    assert "`" not in out
-
-
-def test_inline_code_inside_italics_too():
-    assert "<code>x</code>" in inline("*see `x` here*")
+# --- the document --------------------------------------------------------
+#
+# FIVE TESTS WENT FROM HERE AT C4, with the thing they tested. The bridge
+# built the transcript's document and owned its stylesheet; it builds
+# neither now, so there is nothing here to assert about either.
+#
+# Where each property went, because "deleted" and "moved" look the same in
+# a diff:
+#
+#   the charset the document declares matches the bytes it is encoded with
+#     -> tests/python/meta/test_guest_css.py, which compares the guest's
+#        derivation from GetACP() against caps.html_charset. Two
+#        derivations of one fact in two languages, which is a stronger
+#        check than the single-source version could be.
+#   the skeleton holds #t and #l
+#     -> the same file, against the SKELETON_TAIL the guest writes. Same
+#        failure as before if it breaks: find_id returns NULL, every
+#        append goes nowhere, and the transcript is blank forever.
+#   the wire stylesheet carries no comments, and stripping them changes no
+#   rule
+#     -> gone with WIRE_CSS. The comments live in win/resources/view.css
+#        and reach nobody over a wire, so there is nothing left to strip.
 
 
 # --- tables and ordered lists -----------------------------------------------

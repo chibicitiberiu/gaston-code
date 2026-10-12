@@ -91,9 +91,24 @@ def test_every_frame_type_bridge_sends_is_handled_by_guest():
 def test_guest_handles_expected_core_vocabulary():
     """Sanity check that the guest handles all standard frames."""
     guest_types = guest_handled_types()
+    # DOC left this set at stage 3 C4, with the frame. It carried the
+    # document skeleton and the whole stylesheet, once per connection and
+    # again on every reconnect, with no `enc` header -- 9,557 bytes
+    # uncompressed on a link measured in single digits of KB/s. The client
+    # composes its own document from win/resources/view.css now, so there
+    # is nothing left to send and no handler left to require.
+    #
+    # It is in this file because the guest's dispatch table and the
+    # bridge's senders are two lists with nothing linking them, and a
+    # frame deleted on one side and not the other is silent on both. That
+    # is exactly why this edit belongs in the SAME commit as the deletion:
+    # the test sees both halves move at once or it sees a bug.
     required = {
-        "READY", "DOC", "TEXT", "TURN", "OPTION", "OPTIONSEND", "ERROR", "NOTICE",
+        "READY", "TEXT", "TURN", "OPTION", "OPTIONSEND", "ERROR", "NOTICE",
         "EXEC", "EXECKILL", "SYNCSCAN", "SYNCPUT", "SYNCPUTEND", "SYNCMKDIR", "SYNCGET"
     }
     missing = required - guest_types
     assert not missing, f"Guest missing handlers for core frames: {missing}"
+    assert "DOC" not in guest_types, (
+        "the guest still handles DOC, which the bridge no longer sends; "
+        "one of the two halves of C4 did not land")

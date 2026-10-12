@@ -50,7 +50,6 @@ public:
     void abort();
 
     void onTurn(rc_frame *f);
-    void onDoc(rc_frame *f);
     void onText(rc_frame *f);
     /* The column a literal block breaks at, from this window's width.
      * Stage 3: the bridge no longer wraps, and the number it used was
