@@ -580,7 +580,7 @@ class SessionService:
 
         await guest.view.reset()
 
-        for block in self._resolve_sesslist().history_html(session_id):
+        for block in self._resolve_sesslist().history_blocks(session_id):
             await self.presentation.write_block(guest, block, stream=False, notify=False)
             if guest.view.pages.live.over_soft_cap():
                 guest.view.pages.message_boundary()

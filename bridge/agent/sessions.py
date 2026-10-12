@@ -16,8 +16,7 @@ import logging
 from claude_agent_sdk import get_session_messages, list_sessions
 
 from ..view import html as H
-from ..view.blocks import Block
-from ..view.html import APPEND, HtmlStream
+from ..view.blocks import APPEND, Block, BlockStream
 from . import permissions as _perms
 
 # How a piece of a stored message is tagged on the way to the renderer. These
@@ -214,18 +213,18 @@ def _text_of(message) -> list[tuple[str, str]]:
     return runs
 
 
-def history_html(session_id: str, limit: int = 2000) -> list[str | Block]:
+def history_blocks(session_id: str, limit: int = 2000) -> list[Block]:
     """Replay a stored session as blocks, for repopulating the pages.
 
-    MIXED, from stage 3 A7 until A9: the constructors return a Block and the
-    two hand-built branches below still return markup. write_block takes
-    either, so the mixture is safe rather than merely tolerated -- but it is
-    a mixture, and saying so in the type is what stops the next reader
-    assuming one or the other. A9 makes it uniform and renames this.
-
-    Deliberately the same renderer the live path uses. Replaying stored text
+    Deliberately the same PARSER the live path uses. Replaying stored text
     through a different one is exactly how an old conversation ended up flat
     while the conversation you were having had bullets, bold and code blocks.
+    The emphasis moved from "renderer" to "parser" at stage 3 A9 and the
+    argument survives the move intact: nothing here renders any more.
+
+    Was history_html until A9, when the last two hand-built markup branches
+    went and the list stopped being mixed. The old name is kept as an alias
+    below, because it is the kind of thing somebody greps for.
     """
     try:
         msgs = get_session_messages(session_id, limit=limit)
@@ -233,7 +232,7 @@ def history_html(session_id: str, limit: int = 2000) -> list[str | Block]:
         log.exception("get_session_messages failed for %s", session_id)
         return []
 
-    blocks: list[str | Block] = []
+    blocks: list[Block] = []
     for m in msgs:
         msg = getattr(m, "message", None)
 
@@ -250,17 +249,17 @@ def history_html(session_id: str, limit: int = 2000) -> list[str | Block]:
                 "the assistant and not shown here)." % len(summary)))
             continue
 
-        # A fresh renderer per message: a stored message is complete, and
+        # A fresh parser per message: a stored message is complete, and
         # fence state must not leak from one into the next.
-        md = HtmlStream()
+        md = BlockStream()
         for style, text in _text_of(msg):
             if not text:
                 continue
             if style == STYLE_USER:
                 blocks.append(H.user_turn(text))
             elif style == STYLE_PLAIN:
-                blocks.extend(u.html for u in md.feed(text)
-                              if u.mode == APPEND and u.html)
+                blocks.extend(u.block for u in md.feed(text)
+                              if u.mode == APPEND and u.block is not None)
             elif style == STYLE_TOOL:
                 # Split back into the renderer's (name, summary) shape, so a
                 # replayed call is the same markup as a live one -- the tool
@@ -269,10 +268,18 @@ def history_html(session_id: str, limit: int = 2000) -> list[str | Block]:
                 name, _, rest = text.partition(" ")
                 blocks.append(H.tool_call(name, rest))
             elif style == STYLE_CODE:
-                blocks.append('<div class="codewrap"><pre>'
-                              + H.esc(text) + "</pre></div>")
+                blocks.append(H.code_block(text))
             else:
-                blocks.append("<p>" + H.esc(text) + "</p>")
-        blocks.extend(u.html for u in md.flush()
-                      if u.mode == APPEND and u.html)
+                # Defensive: _text_of only produces the four styles above.
+                # An unknown one now gets paragraph treatment -- inline runs
+                # and line breaks -- rather than one escaped lump, which is
+                # an improvement for a style nobody has defined yet.
+                blocks.append(H.para(text))
+        blocks.extend(u.block for u in md.flush()
+                      if u.mode == APPEND and u.block is not None)
     return blocks
+
+
+#: The name this had before stage 3 A9. It never returned HTML after A7 and
+#: does not now; kept because it is what somebody greps for.
+history_html = history_blocks
