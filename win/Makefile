@@ -154,7 +154,36 @@ LFLAGS = system nt_win option quiet, osversion=4.0
 # deferred "to you explicitly": that entry's own second option was "free 126
 # bytes of CONST or DATA anywhere in gaston.exe", and this freed 31,520 of
 # CONST-class data alone. The raise is not refused, it is unnecessary.
-COMMITTED_CAP ?= 482345
+# 482,345 -> 498,425 on 2026-10-12, for stage 3: the markup moves to the
+# client. Measured 494,329; the cap is that plus one 4,096-byte page, which
+# is the shape every line above uses and the policy stage 2 settled on --
+# a feature that needs a page asks for it and says why.
+#
+# This is what it bought, attributed with mapsize.py against the build one
+# commit earlier (480,329):
+#
+#   ~3,300  libview: the record parser, the emitters and the template
+#           substituter. 2,017 attributed plus 1,320 the linker could not
+#           reach from a named symbol.
+#   +1,041  app/htmlview.o -- rendering and inserting PER RECORD rather
+#           than per frame, which is the memory mitigation and not a
+#           style: a page replay is 90 blocks and one buffer for all of
+#           them would hold the page's markup and MSHTML's UTF-16 copy of
+#           it at once, on a box measured at 28KB free after a turn.
+#   +2,904  the C runtime drawn in with it (strtol and friends) and the
+#           -xs exception tables for two new translation units -- which
+#           is why libview is two TUs and not four.
+#     +491  statusbar, turn and cache: the status row's template, the
+#           window's wrap column, the cache's record path.
+#   ~2,000  CONST and CONST2: the kind names, the fallback markup and the
+#           log lines that say which record was refused.
+#   ~3,800  section padding. The gate charges whole pages and three
+#           sections crossed a boundary.
+#
+# What it does NOT buy is the stylesheet: 9,375 bytes of CSS and ~5,400 of
+# markup templates are FILES beside the exe, not image. Had they been
+# compiled in, this raise would have been four pages rather than four.
+COMMITTED_CAP ?= 498425
 
 # wsock32 rather than ws2_32: we use the Winsock 1.1 API surface, and
 # wsock32.dll is present on every target from Win95 onward (on Win98 it is a
